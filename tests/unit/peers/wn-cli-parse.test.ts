@@ -58,6 +58,12 @@ describe('parseWnArgs', () => {
     });
   });
 
+  it('parses guide and rejects extra guide arguments', () => {
+    expect(parseWnArgs(['guide'])).toEqual({ kind: 'guide' });
+    expect(parseWnArgs(['guide', 'extra']).kind).toBe('usage-error');
+    expect(parseWnArgs(['guide', '--json']).kind).toBe('usage-error');
+  });
+
   it('maps --help / -h / help to help', () => {
     expect(parseWnArgs(['--help'])).toEqual({ kind: 'help', topic: 'root' });
     expect(parseWnArgs(['-h'])).toEqual({ kind: 'help', topic: 'root' });
@@ -193,6 +199,7 @@ describe('formatErrorLines', () => {
 describe('helpText', () => {
   it('root help embeds usage, exit codes, and safety semantics', () => {
     const h = helpText('root');
+    expect(h).toContain('wn guide');
     expect(h).toContain('wn peers list [--json]');
     expect(h).toContain('wn peers send <target> <text...>');
     expect(h).toContain('does NOT carry user authorization');

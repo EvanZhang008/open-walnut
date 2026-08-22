@@ -21,6 +21,7 @@ export const WN_CLIENT_TIMEOUT_MS = 30_000
 export type WnParsed =
   | { kind: 'help'; topic: 'root' | 'peers' | 'tools' }
   | { kind: 'usage-error'; message: string }
+  | { kind: 'guide' }
   | { kind: 'peers.list'; json: boolean }
   | { kind: 'peers.send'; target: string; text: string; json: boolean }
   | { kind: 'tools.list'; json: boolean }
@@ -31,6 +32,12 @@ export function parseWnArgs(argv: string[]): WnParsed {
   const [head, ...rest] = argv
   if (head === undefined) return { kind: 'usage-error', message: 'missing command' }
   if (head === '--help' || head === '-h' || head === 'help') return { kind: 'help', topic: 'root' }
+  if (head === 'guide') {
+    // Sugar over `tools.call skill_read {dirName:"walnut"}` — the manual is
+    // one live document on the hub, and `wn guide` is how sessions read it.
+    if (rest.length > 0) return { kind: 'usage-error', message: 'guide takes no arguments' }
+    return { kind: 'guide' }
+  }
   if (head === 'tools') return parseToolsArgs(rest)
   if (head !== 'peers') return { kind: 'usage-error', message: `unknown command: ${head}` }
 
@@ -174,6 +181,7 @@ export function formatErrorLines(error: GatewayError): string[] {
 const HELP_ROOT = `wn — talk to the user's other Walnut-managed sessions
 
 USAGE
+  wn guide                              print the full Walnut manual (recipes + safety rules)
   wn peers list [--json]                table of the user's sessions across all hosts
   wn peers send <target> <text...>      deliver a short text note to a peer session
   wn tools list|help|call ...           call Walnut operations (see \`wn tools --help\`)
@@ -336,12 +344,17 @@ export async function runWnCli(argv: string[]): Promise<number> {
     }
   }
 
-  // tools.help renders from the hub's tools.list (the schema lives hub-side).
-  const op: GatewayOp = parsed.kind === 'tools.help' ? 'tools.list' : parsed.kind
+  // tools.help renders from the hub's tools.list (the schema lives hub-side);
+  // guide rides tools.call → skill_read so it needs no protocol change.
+  const op: GatewayOp =
+    parsed.kind === 'tools.help' ? 'tools.list'
+      : parsed.kind === 'guide' ? 'tools.call'
+        : parsed.kind
   const args: Record<string, unknown> =
     parsed.kind === 'peers.send' ? { target: parsed.target, text: parsed.text }
       : parsed.kind === 'tools.call' ? { name: parsed.name, args: callArgs }
-        : {}
+        : parsed.kind === 'guide' ? { name: 'skill_read', args: { dirName: 'walnut' } }
+          : {}
 
   let resp: GatewayResponse
   try {
@@ -366,7 +379,15 @@ export async function runWnCli(argv: string[]): Promise<number> {
     return errorToExitCode(resp.error.code)
   }
 
-  if (parsed.kind === 'peers.list') {
+  if (parsed.kind === 'guide') {
+    // Print the manual as plain markdown, not a JSON envelope.
+    const skill = (resp.result as { skill?: { content?: string } }).skill
+    if (!skill?.content) {
+      process.stderr.write('wn: internal: the hub returned no manual content\n')
+      return 1
+    }
+    process.stdout.write(skill.content.endsWith('\n') ? skill.content : skill.content + '\n')
+  } else if (parsed.kind === 'peers.list') {
     const peers = (resp.result.peers ?? []) as PeerRow[]
     process.stdout.write(formatPeersTable(peers) + '\n')
   } else if (parsed.kind === 'peers.send') {

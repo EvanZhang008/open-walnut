@@ -28,8 +28,7 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { log } from '../logging/index.js'
-import { getDaemonSource } from './daemon-source.js'
-import { computeExpectedDaemonVersion } from './daemon-version-check.js'
+import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { DAEMON_BINARIES_DIR, IS_EPHEMERAL } from '../constants.js'
 import { buildRemotePreamble } from './session-io.js'
@@ -1490,17 +1489,19 @@ export class DaemonConnection {
 
   /**
    * The daemon version this server expects on the remote host.
-   * Source-of-truth: hash of the daemon source tree (identical to what
-   * build-daemon.sh bakes into binaries AND what getDaemonSource() stamps
-   * into source deploys). Sidecar fallback covers installs without src/.
+   *
+   * MUST be the same value getDaemonSource() stamps into a deploy, so it
+   * delegates to resolveDaemonSourceVersion(): a bundled server expects the
+   * version of the template ITS OWN build carries (the .version sidecar), a
+   * source-run server expects the worktree hash. Computing the worktree hash
+   * here while deploying the bundle's template let a stale server label old
+   * bytes with the new version — after which no server ever saw a mismatch
+   * again (clouddev, 2026-08-22).
    */
   private getExpectedDaemonVersion(): string | null {
-    const computed = computeExpectedDaemonVersion()
-    if (computed) return computed
     try {
-      const localBinary = path.join(DAEMON_BINARIES_DIR, 'daemon-linux-x64')
-      const v = fs.readFileSync(localBinary + '.version', 'utf-8').trim()
-      return v || null
+      const v = resolveDaemonSourceVersion()
+      return v && v !== 'dev-source' ? v : null
     } catch {
       return null
     }

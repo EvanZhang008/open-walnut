@@ -3,7 +3,7 @@
  *
  * The injected context is a short identity note, in a fixed order: who opened
  * the session (Walnut, one sentence), what it is working on (task + project,
- * only when the task resolves), how to reach Walnut (`wn` CLI + skill_read),
+ * only when the task resolves), how to reach Walnut (`wn` CLI + `wn guide`),
  * and the peer-authorization safety line. These tests pin that contract from
  * both sides — each piece is present, task lookup failures only drop the task
  * line, and the old blanket preamble stays gone (size guard fails first if
@@ -60,15 +60,16 @@ describe('buildSessionContext (identity note)', () => {
     expect(systemPrompt).not.toContain('You are working on')
   })
 
-  it('lists the capabilities and the skill_read pointer (single source of truth)', async () => {
+  it('lists the capabilities and the wn guide pointer (CLI is self-describing)', async () => {
     const { systemPrompt } = await buildSessionContext('')
-    // Capabilities by name, not call syntax — the skill carries the how.
+    // Capabilities by name, not call syntax — the CLI carries the how
+    // (`wn tools list` + `wn guide`); no skill_read incantation to memorize.
     expect(systemPrompt).toMatch(/read and update your task/i)
     expect(systemPrompt).toMatch(/search/i)
     expect(systemPrompt).toMatch(/transcripts/i)
     expect(systemPrompt).toContain('wn tools list')
-    expect(systemPrompt).toContain('skill_read')
-    expect(systemPrompt).toContain('"dirName":"walnut"')
+    expect(systemPrompt).toContain('wn guide')
+    expect(systemPrompt).not.toContain('skill_read')
     expect(systemPrompt).toContain('wn peers')
   })
 
@@ -85,7 +86,7 @@ describe('buildSessionContext (identity note)', () => {
     expect(systemPrompt).not.toContain('<notes_context>')
     expect(systemPrompt).not.toContain('<task>')
     // An identity note, not a blanket preamble — anything bigger belongs in
-    // the walnut skill (pulled live via skill_read).
+    // the manual (pulled live with `wn guide`).
     expect(systemPrompt.length).toBeLessThan(1100)
   })
 })

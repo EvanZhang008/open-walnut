@@ -46,17 +46,34 @@ import { foldLine, initialFoldState, assembleSnapshot, snapshotDiffers } from '.
 
 /**
  * Version stamped into a source-deployed daemon, resolved at string-build time
- * on the local machine. Priority:
- *   1. sha256 of the daemon source tree (dev checkout — matches the binaries)
- *   2. DAEMON_VERSION env (compile-time define passthrough)
- *   3. `walnut-daemon-pkg-<version>` from the installed package.json — the
- *      published-npm-package case, where src/ doesn't ship so (1) is null.
+ * on the local machine.
+ *
+ * INVARIANT: the version must describe the TEMPLATE BYTES THIS MODULE CARRIES,
+ * never the worktree. A long-running server whose bundle predates a source
+ * edit still holds the OLD template; hashing the worktree would label those
+ * stale bytes with the NEW version, and every later server then sees "version
+ * match" and skips the upgrade forever (clouddev ran a mislabeled stale daemon
+ * exactly this way, 2026-08-22). So:
+ *   1. Bundled run (this module lives under dist/): the .version sidecar
+ *      written by the SAME build as this bundle — build-daemon.sh and tsup run
+ *      back-to-back, so sidecar and baked template share one tree.
+ *   2. Source run (tsx/vitest — the template IS the worktree): sha256 of the
+ *      daemon source tree, same algorithm the binaries bake in.
+ *   3. DAEMON_VERSION env (compile-time define passthrough)
+ *   4. `walnut-daemon-pkg-<version>` from the installed package.json — the
+ *      published-npm-package case, where src/ doesn't ship so (2) is null.
  *      Package version identifies the shipped code exactly, so the local
  *      fallback daemon and its .version sidecar agree, and a package upgrade
  *      changes the version → daemon auto-restarts with the new code.
- *   4. 'dev-source' — nothing else resolvable (should not happen in practice).
+ *   5. 'dev-source' — nothing else resolvable (should not happen in practice).
  */
 export function resolveDaemonSourceVersion(): string {
+  const here = fileURLToPath(import.meta.url)
+  const bundled = here.split(path.sep).includes('dist')
+  if (bundled) {
+    const sidecar = readSidecarDaemonVersion(here)
+    if (sidecar) return sidecar
+  }
   const computed = computeExpectedDaemonVersion()
   if (computed) return computed
   if (process.env.DAEMON_VERSION) return process.env.DAEMON_VERSION
@@ -76,6 +93,28 @@ export function resolveDaemonSourceVersion(): string {
     dir = parent
   }
   return 'dev-source'
+}
+
+/**
+ * Read the daemon .version sidecar that sits next to this bundle
+ * (dist/daemon-binaries/*.version). Pure path-walk from the module location so
+ * a unit test can pin it; returns null when no sidecar is readable (e.g. the
+ * binaries were never built) — callers fall back to the worktree hash.
+ */
+export function readSidecarDaemonVersion(fromPath: string): string | null {
+  let dir = path.dirname(fromPath)
+  for (let i = 0; i < 5; i++) {
+    for (const name of ['daemon-darwin-arm64.version', 'daemon-linux-x64.version', 'daemon-linux-arm64.version']) {
+      try {
+        const v = fs.readFileSync(path.join(dir, 'daemon-binaries', name), 'utf-8').trim()
+        if (v) return v
+      } catch { /* keep walking */ }
+    }
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
 }
 
 export function getDaemonSource(): string {
@@ -113,10 +152,10 @@ export function getDaemonSource(): string {
   // `process.env.DAEMON_VERSION || 'dev-source'` to be evaluated at RUNTIME on
   // the remote host, where the env var is never set — so every source deploy
   // reported 'dev-source' and could never match the binary sidecar version,
-  // feeding the shouldUpgradeDaemon stop/redeploy loop. The hash here is the
-  // same sha256-of-daemon-sources that scripts/build-daemon.sh bakes into the
-  // binaries, so a source deploy and a binary built from the same tree report
-  // the SAME version.
+  // feeding the shouldUpgradeDaemon stop/redeploy loop. The version comes from
+  // resolveDaemonSourceVersion(), which describes the template bytes this
+  // bundle actually carries (see its doc comment) — a source deploy and a
+  // binary from the same build report the SAME version.
   const versionPlaceholder = '__DAEMON_VERSION__'
   const versionMatches = DAEMON_SOURCE.split(versionPlaceholder).length - 1
   if (versionMatches !== 1) {
@@ -274,9 +313,9 @@ process.umask(0o077);
 function runWnMinimal(argv) {
   var out = function (s) { process.stdout.write(s + '\\n'); };
   var errOut = function (s) { process.stderr.write(s + '\\n'); };
-  var usage = 'usage: wn peers list [--json] | wn peers send <target> <text...> | wn tools list|call <op> [json]';
+  var usage = 'usage: wn guide | wn peers list [--json] | wn peers send <target> <text...> | wn tools list|call <op> [json]';
   if (argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') { out(usage); process.exit(0); }
-  if (argv[0] !== 'peers' && argv[0] !== 'tools') { errOut('wn: unknown command; ' + usage); process.exit(2); }
+  if (argv[0] !== 'peers' && argv[0] !== 'tools' && argv[0] !== 'guide') { errOut('wn: unknown command; ' + usage); process.exit(2); }
   // Mirror wn-cli.ts: --json is recognized only BEFORE positional args, so
   // message text can legitimately contain the token '--json'.
   var json = false;
@@ -286,7 +325,15 @@ function runWnMinimal(argv) {
   var sub = rest.shift();
   while (rest.length && rest[0] === '--json') { json = true; rest.shift(); }
   var op, args;
-  if (head === 'tools') {
+  var guide = false;
+  if (head === 'guide') {
+    // Sugar over tools.call skill_read {dirName:'walnut'} — mirrors wn-cli.ts.
+    if (sub !== undefined) { errOut('wn: guide takes no arguments'); process.exit(2); }
+    guide = true;
+    op = 'tools.call';
+    args = { name: 'skill_read', args: { dirName: 'walnut' } };
+  }
+  else if (head === 'tools') {
     // Minimal tools twin: list + call (+ help via list). Same hub capabilities
     // as the full wn-cli.ts; keep in sync.
     if (sub === 'list' && rest.length === 0) { op = 'tools.list'; args = {}; }
@@ -363,7 +410,11 @@ function runWnMinimal(argv) {
           out('  ' + ops[j].name + '  ' + (ops[j].title || '') + (ops[j].readonly ? ' (read)' : ' (write)'));
         }
       } else if (op === 'tools.call') {
-        out(JSON.stringify(resp.result, null, 2));
+        if (guide) {
+          var sk = resp.result && resp.result.skill;
+          if (!sk || !sk.content) { errOut('wn: internal: the hub returned no manual content'); process.exit(1); }
+          out(String(sk.content).replace(/\\n$/, ''));
+        } else out(JSON.stringify(resp.result, null, 2));
       } else {
         var r = resp.result || {};
         out('sent to ' + String(r.targetSid || '').slice(0, 8) + ' "' + (r.targetTitle || '') + '" (queue depth ' + (r.queueDepth || 0) + ')');
