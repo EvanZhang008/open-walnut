@@ -62,7 +62,7 @@ const LAST_RUN_FILE = 'walnut-last-maintenance';
 export interface MaintenanceResult {
   repo: string;
   ran: boolean;
-  reason?: 'interval' | 'size' | 'forced';
+  reason?: 'interval' | 'size' | 'debris' | 'forced';
   sweptFiles: number;
   packBytesBefore: number;
   packBytesAfter: number;
@@ -174,9 +174,30 @@ function writeLastRun(gitDir: string): void {
   } catch { /* best-effort */ }
 }
 
+/**
+ * Count stale receive-pack quarantine dirs — the debris class packDirBytes is
+ * blind to. 2026-08-21 incident: 519 of them (30GB!) piled up in 9 days while
+ * the pack dir sat at 1.3GB, so the size trigger never fired and the disk hit
+ * the 90% write-block watermark. Counting is O(readdir), no du needed.
+ */
+export function staleQuarantineDirs(gitDir: string, now = Date.now()): number {
+  let count = 0;
+  try {
+    const objDir = path.join(gitDir, 'objects');
+    for (const e of fs.readdirSync(objDir, { withFileTypes: true })) {
+      if (e.isDirectory() && e.name.startsWith('tmp_objdir-') && isStale(path.join(objDir, e.name), now)) count++;
+    }
+  } catch { /* unreadable */ }
+  return count;
+}
+
+/** Stale quarantine dirs above this force a maintenance pass regardless of pack size. */
+export const DEBRIS_COUNT_TRIGGER = 10;
+
 /** Why maintenance should run now, or null if it shouldn't. Exported for tests. */
-export function maintenanceDue(gitDir: string, now = Date.now()): 'interval' | 'size' | null {
+export function maintenanceDue(gitDir: string, now = Date.now()): 'interval' | 'size' | 'debris' | null {
   if (packDirBytes(gitDir) >= SIZE_TRIGGER_BYTES) return 'size';
+  if (staleQuarantineDirs(gitDir, now) >= DEBRIS_COUNT_TRIGGER) return 'debris';
   const last = readLastRun(gitDir);
   if (now - last >= MAINTENANCE_INTERVAL_DAYS * 86_400_000) return 'interval';
   return null;

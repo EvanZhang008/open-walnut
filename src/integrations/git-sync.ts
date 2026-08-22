@@ -832,6 +832,138 @@ export function isGitSurgeryInProgress(repoDir = WALNUT_HOME): boolean {
   );
 }
 
+/**
+ * Surgery state older than this is ORPHANED: no live process owns it. The only
+ * rebase creator on the data repo is our own `pull --rebase` (PULL_TIMEOUT=60s),
+ * so 30 minutes is 30× past any legitimate lifetime; a human mid-rebase keeps
+ * the dir's mtime fresh by advancing through picks.
+ */
+export const ORPHAN_SURGERY_MIN_AGE_MS = 30 * 60_000;
+
+export interface OrphanRecoveryResult {
+  recovered: boolean;
+  kind?: 'rebase' | 'merge' | 'marker';
+  rescueBranch?: string;
+  mergedBack?: boolean;
+  error?: string;
+}
+
+/**
+ * Recover from an ORPHANED rebase/merge in the data repo — the 2026-08-22
+ * incident: a server restart mid-`pull --rebase` left `.git/rebase-merge`
+ * behind, the surgery guard then (correctly) froze every auto-commit, and
+ * nothing ever cleaned the state up: sync stayed frozen for 22 hours across
+ * FIVE server restarts while local commits piled 365 deep.
+ *
+ * The guard must stay conservative (a LIVE rebase is untouchable), so this
+ * runs only when the surgery state is provably orphaned: stale mtime, and by
+ * construction at startup no previous in-process git can still own it.
+ *
+ * Rebase recovery preserves BOTH sides:
+ *   1. snapshot the live worktree as a commit on the detached HEAD
+ *      (server writes since the freeze — the newest data on the machine),
+ *      parked on a rescue branch;
+ *   2. `checkout -f <branch>` back to the pre-rebase tip (all local commits);
+ *   3. `rebase --quit` to drop the dead state;
+ *   4. merge the rescue branch back with `-X theirs` (live disk wins), and
+ *      resolve any modify/delete leftovers the same way. If the merge cannot
+ *      complete it is aborted — main is unfrozen either way and the rescue
+ *      branch keeps the data recoverable.
+ *
+ * An orphaned MERGE (MERGE_HEAD, no owner) is simply aborted: lwwMerge always
+ * commits within its own tick, so a leftover merge is half-applied state whose
+ * remote side is still safe in origin/<branch> — the next pull redoes it.
+ */
+export async function recoverOrphanedGitSurgery(
+  repoDir = WALNUT_HOME,
+  minAgeMs = ORPHAN_SURGERY_MIN_AGE_MS,
+): Promise<OrphanRecoveryResult> {
+  const gitDir = path.join(repoDir, '.git');
+  const opts = { cwd: repoDir };
+  const stale = (p: string): boolean => {
+    try { return Date.now() - fs.statSync(p).mtimeMs > minAgeMs; } catch { return false; }
+  };
+
+  for (const dirName of ['rebase-merge', 'rebase-apply']) {
+    const stateDir = path.join(gitDir, dirName);
+    if (!fs.existsSync(stateDir)) continue;
+    if (!stale(stateDir)) return { recovered: false };
+
+    const headNamePath = path.join(stateDir, 'head-name');
+    if (!fs.existsSync(headNamePath)) {
+      // No head-name = not a real rebase (e.g. a leftover pause marker) — debris.
+      try { fs.rmSync(stateDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      log.git.warn('git-sync removed an orphaned surgery marker dir', { dir: stateDir });
+      return { recovered: true, kind: 'marker' };
+    }
+
+    const branch = fs.readFileSync(headNamePath, 'utf-8').trim().replace(/^refs\/heads\//, '');
+    const rescueBranch = `rescue-orphaned-rebase-${new Date().toISOString().slice(0, 10)}`;
+    log.git.warn('git-sync recovering from an ORPHANED rebase — sync has been frozen since it died', {
+      dir: stateDir, branch, rescueBranch,
+    });
+
+    // 1. Snapshot the live worktree on the detached HEAD (newest data on disk).
+    await gitSafeAsync('add -A', opts);
+    await gitSafeAsync('commit -q -m "rescue: live worktree at orphaned-rebase recovery"', opts);
+    const rescueTip = await gitSafeAsync('rev-parse HEAD', opts);
+    if (rescueTip) await gitSafeAsync(`branch -f ${rescueBranch} ${rescueTip}`, opts);
+
+    // 2. Back to the pre-rebase branch tip (keeps every un-replayed local commit).
+    if (await gitSafeAsync(`checkout -f ${branch}`, { ...opts, timeout: PULL_TIMEOUT }) === null) {
+      return { recovered: false, kind: 'rebase', rescueBranch, error: `checkout -f ${branch} failed` };
+    }
+    // 3. Drop the dead rebase state (quit keeps refs; fall back to rm).
+    if (await gitSafeAsync('rebase --quit', opts) === null) {
+      try { fs.rmSync(stateDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
+
+    // 4. Merge the live snapshot back — live disk wins content conflicts.
+    let mergedBack = false;
+    if (rescueTip) {
+      const merge = await gitSafeAsync(`merge --no-edit -X theirs ${rescueBranch}`, { ...opts, timeout: PULL_TIMEOUT });
+      if (merge !== null) {
+        mergedBack = true;
+      } else {
+        // -X theirs does not cover modify/delete — resolve leftovers toward the
+        // rescue side (it IS the live disk), then commit; abort if truly stuck.
+        const unmerged = (await gitSafeAsync('diff --name-only --diff-filter=U', opts)) ?? '';
+        let resolvedAll = unmerged.length > 0;
+        for (const file of unmerged.split('\n').filter(Boolean)) {
+          const take = await gitSafeAsync(`checkout ${rescueBranch} -- "${file}"`, opts);
+          if (take === null && await gitSafeAsync(`rm -q -- "${file}"`, opts) === null) resolvedAll = false;
+          else if (take !== null) await gitSafeAsync(`add -- "${file}"`, opts);
+        }
+        if (resolvedAll
+          && await gitSafeAsync('commit -q --no-edit -m "rescue: merge orphaned-rebase live snapshot"', opts) !== null) {
+          mergedBack = true;
+        } else {
+          await gitSafeAsync('merge --abort', opts);
+          log.git.error('git-sync orphaned-rebase recovery could not merge the live snapshot — kept on the rescue branch', {
+            rescueBranch,
+          });
+        }
+      }
+    }
+    log.git.warn('git-sync orphaned-rebase recovery complete — sync unfrozen', {
+      branch, rescueBranch, mergedBack,
+    });
+    return { recovered: true, kind: 'rebase', rescueBranch, mergedBack };
+  }
+
+  const mergeHead = path.join(gitDir, 'MERGE_HEAD');
+  if (fs.existsSync(mergeHead) && stale(mergeHead)) {
+    await gitSafeAsync('merge --abort', opts);
+    if (fs.existsSync(mergeHead)) {
+      try { fs.unlinkSync(mergeHead); } catch { /* best-effort */ }
+    }
+    log.git.warn('git-sync aborted an ORPHANED merge — remote side is safe in origin, next pull redoes it');
+    return { recovered: true, kind: 'merge' };
+  }
+
+  return { recovered: false };
+}
+
 /** Re-log the ongoing surgery refusal at most this often (first hit is always loud). */
 const SURGERY_RELOG_MS = 10 * 60_000;
 let lastSurgeryWarnLog = 0;
@@ -1028,7 +1160,13 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
   // rebase (verified: abort succeeds against a conflicted rebase-merge). And git
   // itself refuses to pull mid-rebase anyway, so there is nothing to gain.
   if (isGitSurgeryInProgress()) {
-    logSurgerySkip('sync');
+    // Self-heal an ORPHANED rebase/merge (stale state no process owns) instead
+    // of freezing forever: the 2026-08-22 incident froze sync for 22 hours
+    // across five restarts because nothing ever recovered the dead rebase.
+    // Age-gated inside (30 min) so a live rebase is never touched; on the tick
+    // that recovers, we still stand down and let the NEXT tick sync normally.
+    const recovery = await recoverOrphanedGitSurgery();
+    if (!recovery.recovered) logSurgerySkip('sync');
     return { pulled: 0, pushed: 0, conflicts: 0 };
   }
 

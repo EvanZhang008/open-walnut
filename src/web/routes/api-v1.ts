@@ -166,6 +166,23 @@ apiV1Router.get('/status', async (_req: Request, res: Response) => {
   })
 })
 
+// GET /api/v1/canary — "would a phone send work right now, and if not, why?"
+// Evaluates the exact gates a real send passes (disk-guard 507, bridge
+// sockets, banked queue) — see core/send-path-canary.ts. `?fresh=1` forces an
+// immediate re-poll instead of the last timer tick. Additive; REPLICA-only
+// content (a LIVE box answers healthy with a note).
+apiV1Router.get('/canary', async (req: Request, res: Response) => {
+  if (!CLOUD_MODE) {
+    res.json({ healthy: true, note: 'primary box — sends are local, no relay path to monitor' })
+    return
+  }
+  const { getSendPathCanaryState } = await import('../../core/send-path-canary.js')
+  const { getCanaryHandle } = await import('../server.js')
+  const handle = getCanaryHandle()
+  const state = req.query.fresh === '1' && handle ? await handle.poll() : getSendPathCanaryState()
+  res.status(state.healthy ? 200 : 503).json(state)
+})
+
 // ─── Agents (additive) ─────────────────────────────────────────────────────
 
 // GET /api/v1/agents — console agents the mobile client can chat with.

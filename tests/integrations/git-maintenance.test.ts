@@ -22,8 +22,10 @@ import {
   maintainRepo,
   resolveGitDir,
   packDirBytes,
+  staleQuarantineDirs,
   SIZE_TRIGGER_BYTES,
   DEBRIS_MAX_AGE_MS,
+  DEBRIS_COUNT_TRIGGER,
 } from '../../src/integrations/git-maintenance.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 
@@ -135,6 +137,42 @@ describe('maintenanceDue', () => {
     await fd.close();
     expect(packDirBytes(gitDir)).toBeGreaterThan(SIZE_TRIGGER_BYTES);
     expect(maintenanceDue(gitDir)).toBe('size');
+  });
+
+  // 2026-08-21 incident: 519 quarantine dirs (30GB) while the pack dir sat at
+  // 1.3GB — neither the size trigger nor the weekly calendar fired for 9 days
+  // and the disk crossed the 90% write-block watermark.
+  it('debris-count trigger fires inside the calendar window when quarantine dirs pile up', async () => {
+    await maintainRepo(repo, { force: true }); // stamp last-run = now
+    for (let i = 0; i < DEBRIS_COUNT_TRIGGER; i++) {
+      await mkdirStale(path.join(gitDir, 'objects', `tmp_objdir-incoming-x${i}`));
+    }
+    expect(staleQuarantineDirs(gitDir)).toBe(DEBRIS_COUNT_TRIGGER);
+    expect(maintenanceDue(gitDir)).toBe('debris');
+    // And a maintenance pass actually clears them (sweep runs before gc).
+    const result = await maintainRepo(repo);
+    expect(result.reason).toBe('debris');
+    expect(result.sweptFiles).toBeGreaterThanOrEqual(DEBRIS_COUNT_TRIGGER);
+    expect(staleQuarantineDirs(gitDir)).toBe(0);
+  });
+
+  it('debris trigger ignores FRESH quarantine dirs (in-flight pushes) and stays quiet below threshold', async () => {
+    await maintainRepo(repo, { force: true });
+    // Fresh dirs: may belong to a live receive-pack — never counted.
+    for (let i = 0; i < DEBRIS_COUNT_TRIGGER + 5; i++) {
+      await fsp.mkdir(path.join(gitDir, 'objects', `tmp_objdir-incoming-fresh${i}`), { recursive: true });
+    }
+    expect(staleQuarantineDirs(gitDir)).toBe(0);
+    // Stale but below threshold: the daily sweep-with-gc is not worth it yet.
+    for (let i = 0; i < DEBRIS_COUNT_TRIGGER - 1; i++) {
+      await mkdirStale(path.join(gitDir, 'objects', `tmp_objdir-incoming-old${i}`));
+    }
+    expect(staleQuarantineDirs(gitDir)).toBe(DEBRIS_COUNT_TRIGGER - 1);
+    expect(maintenanceDue(gitDir)).toBeNull();
+  });
+
+  it('staleQuarantineDirs is safe on a repo with no objects dir', () => {
+    expect(staleQuarantineDirs('/nonexistent/repo/.git')).toBe(0);
   });
 });
 
