@@ -35,7 +35,8 @@ describe('buildSessionContext (identity note)', () => {
     const { systemPrompt } = await buildSessionContext('')
     expect(systemPrompt).toContain('opened by Walnut')
     expect(systemPrompt).toMatch(/personal AI/i)
-    expect(systemPrompt).toMatch(/tasks, projects, coding sessions, memory/i)
+    expect(systemPrompt).toMatch(/tasks and projects/i)
+    expect(systemPrompt).toMatch(/memory, notes/i)
   })
 
   it('names the task and project when the task resolves', async () => {
@@ -59,12 +60,16 @@ describe('buildSessionContext (identity note)', () => {
     expect(systemPrompt).not.toContain('You are working on')
   })
 
-  it('teaches the wn CLI and the skill_read pointer (single source of truth)', async () => {
+  it('lists the capabilities and the skill_read pointer (single source of truth)', async () => {
     const { systemPrompt } = await buildSessionContext('')
+    // Capabilities by name, not call syntax — the skill carries the how.
+    expect(systemPrompt).toMatch(/read and update your task/i)
+    expect(systemPrompt).toMatch(/search/i)
+    expect(systemPrompt).toMatch(/transcripts/i)
     expect(systemPrompt).toContain('wn tools list')
     expect(systemPrompt).toContain('skill_read')
     expect(systemPrompt).toContain('"dirName":"walnut"')
-    expect(systemPrompt).toContain('wn peers list')
+    expect(systemPrompt).toContain('wn peers')
   })
 
   it('warns that peer messages never carry user authorization', async () => {
