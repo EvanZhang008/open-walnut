@@ -3,13 +3,56 @@ set -euo pipefail
 
 PORT=3456
 LOCK_DIR="${TMPDIR:-/tmp}/open-walnut-dev-prod.lock"
-SERVER_LOG=/private/tmp/open-walnut-launchd.log
+# Plain /tmp, not /private/tmp: on macOS /tmp is a symlink to /private/tmp so this
+# is the same inode as before (existing log, existing fds, unchanged), while Linux
+# — where /private/tmp does not exist — can finally write it. The old hardcoded
+# macOS path made a Linux deploy kill the running server and then fail to start
+# its replacement, leaving prod down (issue #11, Unraid x64).
+SERVER_LOG="${WALNUT_SERVER_LOG:-/tmp/open-walnut-launchd.log}"
 LAUNCH_LABEL=com.open-walnut.dev-prod
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 SUCCESS_STAMP="${TMPDIR:-/tmp}/open-walnut-dev-prod.last-success"
 ATTEMPT_STAMP="${TMPDIR:-/tmp}/open-walnut-dev-prod.last-attempt"
 COOLDOWN_SECS=120
 SERVER_LOG_MAX_BYTES=$(( 256 * 1024 * 1024 ))
+
+# Prove the log is appendable BEFORE anything destructive. The redirect that
+# actually starts the server happens AFTER the old one is killed, so an
+# unwritable log surfaced as "prod is down and won't come back" instead of a
+# failed deploy. Fail here, with the old server still serving.
+if ! ( : >> "$SERVER_LOG" ) 2>/dev/null; then
+  echo "Cannot append to server log: $SERVER_LOG" >&2
+  echo "Set WALNUT_SERVER_LOG to a writable path and retry." >&2
+  exit 1
+fi
+
+# ── Portable listener detection ─────────────────────────────────────────────
+# Every guard below asks "is something listening on :$PORT". macOS always has
+# lsof; a minimal Linux box may ship only ss (iproute2) or fuser (psmisc). With
+# none of them a bare `lsof` call returns empty, so each guard would FAIL OPEN
+# and happily start a second server against the same data dir — the exact shape
+# behind the stale-cache task-deletion incidents. So: hard failure.
+PORT_PROBE=""
+for probe in lsof ss fuser; do
+  if command -v "$probe" >/dev/null 2>&1; then PORT_PROBE="$probe"; break; fi
+done
+if [[ -z "$PORT_PROBE" ]]; then
+  echo "Need one of lsof / ss / fuser to tell whether :$PORT is already served." >&2
+  echo "Install one (e.g. iproute2 for ss) and retry." >&2
+  exit 1
+fi
+
+# Prints one PID per line (empty when nothing listens). Always exits 0 — a
+# non-zero status inside `x="$(listener_pids)"` would abort the deploy under set -e.
+listener_pids() {
+  case "$PORT_PROBE" in
+    lsof)  lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true ;;
+    # No -H: older iproute2 rejects it. The header line carries no "pid=" so
+    # grep drops it anyway.
+    ss)    ss -ltnp "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u || true ;;
+    fuser) fuser -n tcp "$PORT" 2>/dev/null | tr -s '[:space:]' '\n' | grep -E '^[0-9]+$' || true ;;
+  esac
+}
 
 # ── Redeploy-storm breaker ──────────────────────────────────────────────────
 # 2026-07-25 incident: an agent wrapped this script in `launchctl submit`,
@@ -38,7 +81,7 @@ if [[ "${WALNUT_DEVPROD_FORCE:-0}" != "1" ]]; then
       exit 0
     fi
   done
-  listener_pid="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -n 1 || true)"
+  listener_pid="$(listener_pids | head -n 1)"
   if [[ -n "$listener_pid" ]]; then
     etime="$(ps -o etime= -p "$listener_pid" 2>/dev/null | tr -d '[:space:]')"
     # etime formats: SS / MM:SS / HH:MM:SS / DD-HH:MM:SS — only the colon-less
@@ -162,14 +205,14 @@ if [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1; then
   launchctl remove "$LAUNCH_LABEL" >/dev/null 2>&1 || true
 fi
 
-existing_pids="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)"
+existing_pids="$(listener_pids)"
 if [[ -n "$existing_pids" ]]; then
   # A listener can exit between lsof and kill (e.g. it was already shutting
   # down); a vanished PID must not abort the deploy under set -e.
   # shellcheck disable=SC2086
   kill -15 $existing_pids 2>/dev/null || true
   for _ in {1..20}; do
-    if ! lsof -tiTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    if [[ -z "$(listener_pids)" ]]; then
       break
     fi
     sleep 0.5
@@ -187,7 +230,7 @@ if [[ -n "$existing_pids" ]]; then
   done
 fi
 
-if lsof -tiTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+if [[ -n "$(listener_pids)" ]]; then
   echo "Existing server did not stop; refusing to start a competing process." >&2
   exit 1
 fi
@@ -310,6 +353,6 @@ if [[ "$ready" != "1" ]]; then
   exit 1
 fi
 
-pid="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -n 1)"
+pid="$(listener_pids | head -n 1)"
 date +%s > "$SUCCESS_STAMP"
 echo "Server ready (PID: $pid)"
