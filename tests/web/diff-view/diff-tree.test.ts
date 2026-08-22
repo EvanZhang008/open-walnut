@@ -9,7 +9,7 @@
  * Runs under vitest.diff-view.config.ts (web-rooted, for the `@/` alias).
  */
 import { describe, it, expect } from 'vitest';
-import { buildDiffTree, flattenFiles, allContainerIds, isMarkdownPath } from '@/components/sessions/diffTree';
+import { buildDiffTree, flattenFiles, allContainerIds, isMarkdownPath, shortRepoLabels } from '@/components/sessions/diffTree';
 import type { SessionRepoGroup, SessionFileChange } from '@/api/session-changes';
 
 function file(relPath: string, status: SessionFileChange['status'] = 'modified'): SessionFileChange {
@@ -81,6 +81,41 @@ describe('buildDiffTree', () => {
     ]);
     expect(tree.map((r) => r.repoKind)).toEqual(['cwd', 'submodule', 'other']);
     expect(tree.map((r) => r.fileCount)).toEqual([1, 1, 1]);
+  });
+
+  it('gives each repo a name-only shortLabel while keeping the full label', () => {
+    const deep = 'context/by-team/acme/gizmo/subparts/anvil/src/AnvilTests';
+    const tree = buildDiffTree([group(deep, 'submodule', [file('a.ts')])]);
+    expect(tree[0]!.shortLabel).toBe('AnvilTests');
+    expect(tree[0]!.label).toBe(deep); // full path survives for the tooltip
+  });
+});
+
+describe('shortRepoLabels', () => {
+  it('keeps only the last segment', () => {
+    expect(shortRepoLabels(['a/b/c/Widget', 'Solo'])).toEqual(['Widget', 'Solo']);
+  });
+
+  it('deepens ONLY the colliding labels until they differ', () => {
+    expect(shortRepoLabels([
+      'x/one/src/Widget',
+      'x/two/src/Widget',
+      'x/three/src/Other',
+    ])).toEqual(['one/src/Widget', 'two/src/Widget', 'Other']);
+  });
+
+  it('keeps deepening past a second collision', () => {
+    // Both end in `one/src/Widget`, so one more segment is needed to separate them.
+    expect(shortRepoLabels(['a/one/src/Widget', 'b/one/src/Widget']))
+      .toEqual(['a/one/src/Widget', 'b/one/src/Widget']);
+  });
+
+  it('terminates on genuinely identical paths instead of looping', () => {
+    expect(shortRepoLabels(['same/path', 'same/path'])).toEqual(['same/path', 'same/path']);
+  });
+
+  it('survives odd labels (empty, trailing slash, no separator)', () => {
+    expect(shortRepoLabels(['', 'a/b/', 'plain'])).toEqual(['', 'b', 'plain']);
   });
 
   it('flattenFiles returns every file leaf in tree order', () => {

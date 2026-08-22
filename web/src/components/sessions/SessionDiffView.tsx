@@ -12,6 +12,7 @@ import { languageForPath, diffRefractor } from '@/components/sessions/diffHighli
 import { buildCommentMessage, buildReviewMessage } from '@/components/sessions/diffPrefill';
 import { markdownBlocksWithLines, markdownCommentRange, type MarkdownBlock } from '@/components/sessions/diffMarkdownBlocks';
 import { computeExpandGaps, oldSourceLineCount, UNFOLD_CHUNK } from '@/components/sessions/diffExpand';
+import { functionContext, splitSourceLines } from '@/components/sessions/diffFuncContext';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { SelectionAskPill } from '@/components/common/SelectionAskPill';
@@ -182,8 +183,12 @@ function TreeRow({
         title={isRepo ? `${node.label} (${node.repoKind})` : node.name}
       >
         <span className="session-diff-tree-caret">{isOpen ? '▾' : '▸'}</span>
-        <span className="session-diff-tree-dir-name">{isRepo ? node.label : node.name}</span>
-        {isRepo && <span className={`session-diff-tree-repokind kind-${node.repoKind}`}>{node.repoKind === 'cwd' ? 'cwd' : node.repoKind}</span>}
+        <span className="session-diff-tree-dir-name">{isRepo ? node.shortLabel : node.name}</span>
+        {/* No pill for a submodule: the deep path in the tooltip already says so,
+            and the pill only ate width the name needs in a narrow column. */}
+        {isRepo && node.repoKind !== 'submodule' && (
+          <span className={`session-diff-tree-repokind kind-${node.repoKind}`}>{node.repoKind}</span>
+        )}
         <span className="session-diff-tree-count">{node.fileCount}</span>
       </button>
       {isOpen && node.children.map((child) => (
@@ -299,8 +304,11 @@ function PendingCommentCard({ loc, code, comment, onCopy, onRemove }: {
  *  adjacent hunk (↓ = just below the hunk above, ↑ = just above the hunk below).
  *  `onUp`/`onDown` are omitted at the file's head/tail where only one direction
  *  makes sense. Pure presentational — the parent supplies the expand callbacks. */
-function ExpandRow({ lines, onAll, onUp, onDown }: {
+function ExpandRow({ lines, funcCtx, onAll, onUp, onDown }: {
   lines: number;
+  /** Enclosing definition of the code just BELOW this bar (git hunk-header
+   *  style) — so a collapsed stretch still says which function you're in. */
+  funcCtx?: string | null;
   onAll: () => void;
   onUp?: () => void;
   onDown?: () => void;
@@ -324,6 +332,9 @@ function ExpandRow({ lines, onAll, onUp, onDown }: {
             <button className="session-diff-expand-btn is-dir" onClick={onUp} title={`Show ${UNFOLD_CHUNK} lines above`}>↑ {UNFOLD_CHUNK}</button>
           )}
         </>
+      )}
+      {funcCtx && (
+        <span className="session-diff-expand-func" title={funcCtx}>@ {funcCtx}</span>
       )}
     </div>
   );
@@ -743,6 +754,8 @@ function FileDiffPane({
 
   // Number of lines in the OLD source (= the ceiling expansion can draw from).
   const oldLineCount = useMemo(() => oldSourceLineCount(change.before), [change.before]);
+  // Old-side lines, split once per file, for the expand bars' function context.
+  const oldLines = useMemo(() => splitSourceLines(change.before), [change.before]);
 
   // Render the hunks with a GitHub-style "unfold" bar (Decoration) wherever the
   // diff hides a block of unchanged lines: above the first hunk, between hunks,
@@ -759,6 +772,9 @@ function FileDiffPane({
       <Decoration key={`exp-${g.hunkIndex}`}>
         <ExpandRow
           lines={g.lines}
+          // Context of the code just below the bar: the next hunk's start, or
+          // (trailing gap) the gap's own first hidden line.
+          funcCtx={functionContext(oldLines, g.hunkIndex < rendered.length ? rendered[g.hunkIndex]!.oldStart : g.all[0])}
           onAll={() => expandRange(g.all[0], g.all[1])}
           onDown={g.down ? () => expandRange(g.down![0], g.down![1]) : undefined}
           onUp={g.up ? () => expandRange(g.up![0], g.up![1]) : undefined}
@@ -773,7 +789,7 @@ function FileDiffPane({
     const tail = gapByIndex.get(rendered.length);
     if (tail) emit(tail);
     return out;
-  }, [expandRange, oldLineCount]);
+  }, [expandRange, oldLineCount, oldLines]);
 
   return (
     <div className="session-diff-filepane" data-file-path={change.filePath}>
@@ -841,6 +857,30 @@ function savePendingReview(sessionId: string, pending: PendingComment[]): void {
     if (pending.length === 0) localStorage.removeItem(REVIEW_STORAGE_PREFIX + sessionId);
     else localStorage.setItem(REVIEW_STORAGE_PREFIX + sessionId, JSON.stringify(pending));
   } catch { /* quota exceeded / storage disabled — non-fatal */ }
+}
+
+// ── Changed-tab view-state persistence ────────────────────────────────────────
+// Re-entering the tab must land you where you left it (same contract as the
+// Files tab's remembered selection): the compare base, scope, and the file you
+// had open, keyed per session.
+const DIFF_STATE_PREFIX = 'open-walnut-diff-state:';
+
+interface DiffViewMemory { base?: SessionDiffBase; scope?: SessionDiffScope; selectedId?: string }
+
+function loadDiffMemory(sessionId: string): DiffViewMemory {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DIFF_STATE_PREFIX + sessionId) ?? '{}');
+    if (!parsed || typeof parsed !== 'object') return {};
+    const out: DiffViewMemory = {};
+    if (BASE_OPTIONS.some((o) => o.value === parsed.base)) out.base = parsed.base;
+    if (parsed.scope === 'all' || parsed.scope === 'session') out.scope = parsed.scope;
+    if (typeof parsed.selectedId === 'string') out.selectedId = parsed.selectedId;
+    return out;
+  } catch { return {}; }
+}
+
+function saveDiffMemory(sessionId: string, mem: DiffViewMemory): void {
+  try { localStorage.setItem(DIFF_STATE_PREFIX + sessionId, JSON.stringify(mem)); } catch { /* non-fatal */ }
 }
 
 // ── Compare schematic ─────────────────────────────────────────────────────────
@@ -996,11 +1036,17 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     try { return (localStorage.getItem('open-walnut-diff-view') as DiffViewType) || 'split'; } catch { return 'split'; }
   });
   const [rendered, setRendered] = useState(false);
-  const [base, setBase] = useState<SessionDiffBase>('session');
+  // Base/scope/selected file are remembered per session — coming back to the
+  // Changed tab restores the exact view you left (loadDiffMemory above).
+  const [base, setBase] = useState<SessionDiffBase>(() => loadDiffMemory(sessionId).base ?? 'session');
   // Default to the files THIS session changed; 'all' widens to every change in
   // the repos it touched (never untouched repos). See computeSessionGitDiff.
-  const [scope, setScope] = useState<SessionDiffScope>('session');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [scope, setScope] = useState<SessionDiffScope>(() => loadDiffMemory(sessionId).scope ?? 'session');
+  const [selectedId, setSelectedId] = useState<string | null>(() => loadDiffMemory(sessionId).selectedId ?? null);
+  // The remembered file to restore once data arrives. Held in a ref because the
+  // on-data effect below runs with an EMPTY tree first (data still loading) and
+  // nulls selectedId — the ref survives that so the restore still happens.
+  const pendingRestoreRef = useRef<string | null>(loadDiffMemory(sessionId).selectedId ?? null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [treeCollapsed, setTreeCollapsed] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1097,14 +1143,43 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     try { localStorage.setItem('open-walnut-diff-view', viewType); } catch { /* ignore */ }
   }, [viewType]);
 
+  // If this component instance is reused for ANOTHER session (no remount),
+  // reload that session's remembered view instead of leaking this one's.
+  const memSessionRef = useRef(sessionId);
+  useEffect(() => {
+    if (memSessionRef.current === sessionId) return;
+    memSessionRef.current = sessionId;
+    const mem = loadDiffMemory(sessionId);
+    setBase(mem.base ?? 'session');
+    setScope(mem.scope ?? 'session');
+    setSelectedId(null);
+    pendingRestoreRef.current = mem.selectedId ?? null;
+  }, [sessionId]);
+
+  // Persist the remembered view. While selectedId is still null (initial data
+  // load) keep the STORED selection instead of overwriting it — otherwise a
+  // slow fetch wipes it before the restore effect can validate it against the
+  // arriving file list.
+  useEffect(() => {
+    saveDiffMemory(sessionId, {
+      base, scope,
+      selectedId: selectedId ?? loadDiffMemory(sessionId).selectedId,
+    });
+  }, [sessionId, base, scope, selectedId]);
+
   const tree2 = useMemo<DiffTreeRepoNode[]>(() => buildDiffTree(data?.groups ?? []), [data]);
   const files = useMemo(() => flattenFiles(tree2), [tree2]);
 
-  // On data change: expand all containers + select the first file.
+  // On data change: expand all containers + select the remembered file if it's
+  // still in the list, else the first file.
   useEffect(() => {
     if (!tree2.length) { setSelectedId(null); return; }
     setExpanded(new Set(allContainerIds(tree2)));
-    setSelectedId((prev) => (prev && files.some((f) => f.id === prev)) ? prev : (files[0]?.id ?? null));
+    setSelectedId((prev) => {
+      const want = prev ?? pendingRestoreRef.current;
+      pendingRestoreRef.current = null;
+      return (want && files.some((f) => f.id === want)) ? want : (files[0]?.id ?? null);
+    });
   }, [tree2, files]);
 
   const selectedChangeRaw = useMemo(

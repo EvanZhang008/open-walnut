@@ -25623,6 +25623,18 @@ a.file-link:hover {
   justify-content: center;
 }
 .session-diff-expand-glyph { font-size: 12px; line-height: 1; }
+/* Enclosing-definition context on the unfold bar (git hunk-header style):
+   says which function the code below the bar lives in, even while collapsed. */
+.session-diff-expand-func {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 46%;
+  flex: 0 1 auto;
+}
 
 /* Inline comment box (rendered under a line via react-diff-view widgets) */
 .session-diff-comment-box {

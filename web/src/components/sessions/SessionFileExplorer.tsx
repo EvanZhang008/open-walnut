@@ -412,7 +412,10 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
           const repoRoot = g.repoRoot.replace(/\/+$/, '');
           if (repoRoot && !seen.has(repoRoot)) {
             seen.add(repoRoot);
-            roots.push({ path: repoRoot, label: g.label || lastSegment(repoRoot), kind: 'changed', fileCount: g.files.length });
+            // Name only — g.label is a submodule's whole path under the
+            // superproject, which clips from the right and hides the name.
+            // The header's title already carries the full path for hover.
+            roots.push({ path: repoRoot, label: lastSegment(repoRoot) || g.label, kind: 'changed', fileCount: g.files.length });
           }
         }
         setChangedRoots(roots);

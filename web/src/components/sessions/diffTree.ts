@@ -31,7 +31,10 @@ export interface DiffTreeDirNode {
 
 export interface DiffTreeRepoNode {
   kind: 'repo';
+  /** Full label from the API (a submodule's whole path under the superproject). */
   label: string;
+  /** What the header ROW shows — see shortRepoLabels. Full label goes in the tooltip. */
+  shortLabel: string;
   id: string;
   repoKind: SessionRepoGroup['kind'];
   children: DiffTreeNode[];
@@ -96,9 +99,41 @@ function buildChildren(dir: MutableDir, idPrefix: string): DiffTreeNode[] {
   return [...dirNodes, ...fileNodes];
 }
 
+/**
+ * Row labels for the repo headers: the package/submodule NAME only.
+ *
+ * A submodule's label is its whole path from the superproject root, which in a
+ * deep monorepo is long enough to fill the row and get clipped from the RIGHT —
+ * clipping away the one segment that says WHICH submodule it is. So show the
+ * last segment; the full path stays on the row's tooltip.
+ *
+ * Two groups can end in the same segment (the same package name under two
+ * parents) and two identical headers are worse than one long header, so a
+ * collision prepends parent segments until the labels differ.
+ */
+export function shortRepoLabels(labels: string[]): string[] {
+  const segs = labels.map((l) => l.split('/').filter(Boolean));
+  const depth = segs.map(() => 1);
+  const render = () => segs.map((s, i) => s.slice(Math.max(0, s.length - depth[i]!)).join('/') || labels[i]!);
+  // Bounded: each round deepens at least one colliding label, and a label can't
+  // grow past its own segment count.
+  for (;;) {
+    const cur = render();
+    const dupes = new Set(cur.filter((v, i) => cur.indexOf(v) !== i));
+    if (!dupes.size) break;
+    let grew = false;
+    cur.forEach((v, i) => {
+      if (dupes.has(v) && depth[i]! < segs[i]!.length) { depth[i]! += 1; grew = true; }
+    });
+    if (!grew) break; // genuinely identical paths — nothing left to disambiguate
+  }
+  return render();
+}
+
 /** Build the full tree (repos at the top level) from the API's repo groups. */
 export function buildDiffTree(groups: SessionRepoGroup[]): DiffTreeRepoNode[] {
-  return groups.map((group) => {
+  const shortLabels = shortRepoLabels(groups.map((g) => g.label));
+  return groups.map((group, groupIdx) => {
     const root = emptyDir();
     for (const change of group.files) {
       const parts = change.relPath.split('/').filter(Boolean);
@@ -117,6 +152,7 @@ export function buildDiffTree(groups: SessionRepoGroup[]): DiffTreeRepoNode[] {
     return {
       kind: 'repo' as const,
       label: group.label,
+      shortLabel: shortLabels[groupIdx] ?? group.label,
       id: group.repoRoot,
       repoKind: group.kind,
       children,
