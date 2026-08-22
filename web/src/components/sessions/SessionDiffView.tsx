@@ -299,43 +299,51 @@ function PendingCommentCard({ loc, code, comment, onCopy, onRemove }: {
 
 /** A clickable bar rendered (via `Decoration`) in place of a collapsed block of
  *  unchanged lines, letting the user reveal the surrounding context that the diff
- *  hides by default. Small gaps get a single "expand all" button; larger gaps add
- *  directional chevrons that reveal one UNFOLD_CHUNK-sized slice nearest the
- *  adjacent hunk (↓ = just below the hunk above, ↑ = just above the hunk below).
- *  `onUp`/`onDown` are omitted at the file's head/tail where only one direction
- *  makes sense. Pure presentational — the parent supplies the expand callbacks. */
-function ExpandRow({ lines, funcCtx, onAll, onUp, onDown }: {
+ *  hides by default.
+ *
+ *  Layout is FIXED so nothing jumps between bars: function context on the left
+ *  (git hunk-header style), compact controls docked right in constant slots —
+ *  ↓/↑ reveal one UNFOLD_CHUNK slice nearest the adjacent hunk, `↕ N` reveals
+ *  the whole gap. Directions that don't apply render disabled, not absent, so
+ *  every bar's buttons sit in exactly the same place.
+ *
+ *  The old and new sides of a split diff can be inside DIFFERENT functions
+ *  (code moved/renamed between them) — when the two contexts differ, both are
+ *  shown (−old / +new); when equal they collapse to one label. */
+function ExpandRow({ lines, funcOld, funcNew, onAll, onUp, onDown }: {
   lines: number;
-  /** Enclosing definition of the code just BELOW this bar (git hunk-header
-   *  style) — so a collapsed stretch still says which function you're in. */
-  funcCtx?: string | null;
+  /** Enclosing definition of the code just below this bar, per diff side. */
+  funcOld?: string | null;
+  funcNew?: string | null;
   onAll: () => void;
   onUp?: () => void;
   onDown?: () => void;
 }) {
-  const small = lines <= UNFOLD_CHUNK;
+  const big = lines > UNFOLD_CHUNK;
+  const same = (funcOld ?? null) === (funcNew ?? null);
   return (
     <div className="session-diff-expander">
-      {small ? (
-        <button className="session-diff-expand-btn is-all" onClick={onAll} title={`Show ${lines} hidden line${lines === 1 ? '' : 's'}`}>
-          <span className="session-diff-expand-glyph">↕</span> Expand {lines} hidden line{lines === 1 ? '' : 's'}
+      <span className="session-diff-expand-ctx">
+        {same ? (
+          funcOld && <span className="session-diff-expand-func" title={funcOld}>@ {funcOld}</span>
+        ) : (
+          <>
+            {funcOld && <span className="session-diff-expand-func is-old" title={`old side: ${funcOld}`}>− {funcOld}</span>}
+            {funcNew && <span className="session-diff-expand-func is-new" title={`new side: ${funcNew}`}>+ {funcNew}</span>}
+          </>
+        )}
+      </span>
+      <span className="session-diff-expand-controls">
+        {big && (
+          <>
+            <button className="session-diff-expand-btn is-dir" onClick={onDown} disabled={!onDown} title={`Show ${UNFOLD_CHUNK} lines below`}>↓ {UNFOLD_CHUNK}</button>
+            <button className="session-diff-expand-btn is-dir" onClick={onUp} disabled={!onUp} title={`Show ${UNFOLD_CHUNK} lines above`}>↑ {UNFOLD_CHUNK}</button>
+          </>
+        )}
+        <button className="session-diff-expand-btn is-all" onClick={onAll} title={`Show all ${lines} hidden line${lines === 1 ? '' : 's'}`}>
+          ↕ {lines}
         </button>
-      ) : (
-        <>
-          {onDown && (
-            <button className="session-diff-expand-btn is-dir" onClick={onDown} title={`Show ${UNFOLD_CHUNK} lines below`}>↓ {UNFOLD_CHUNK}</button>
-          )}
-          <button className="session-diff-expand-btn is-all" onClick={onAll} title={`Show all ${lines} hidden lines`}>
-            Expand all {lines} hidden lines
-          </button>
-          {onUp && (
-            <button className="session-diff-expand-btn is-dir" onClick={onUp} title={`Show ${UNFOLD_CHUNK} lines above`}>↑ {UNFOLD_CHUNK}</button>
-          )}
-        </>
-      )}
-      {funcCtx && (
-        <span className="session-diff-expand-func" title={funcCtx}>@ {funcCtx}</span>
-      )}
+      </span>
     </div>
   );
 }
@@ -754,8 +762,10 @@ function FileDiffPane({
 
   // Number of lines in the OLD source (= the ceiling expansion can draw from).
   const oldLineCount = useMemo(() => oldSourceLineCount(change.before), [change.before]);
-  // Old-side lines, split once per file, for the expand bars' function context.
+  // Both sides' lines, split once per file, for the expand bars' function
+  // context — old and new can be inside DIFFERENT functions.
   const oldLines = useMemo(() => splitSourceLines(change.before), [change.before]);
+  const newLines = useMemo(() => splitSourceLines(change.after), [change.after]);
 
   // Render the hunks with a GitHub-style "unfold" bar (Decoration) wherever the
   // diff hides a block of unchanged lines: above the first hunk, between hunks,
@@ -768,19 +778,27 @@ function FileDiffPane({
     const gaps = computeExpandGaps(rendered, oldLineCount);
     const gapByIndex = new Map(gaps.map((g) => [g.hunkIndex, g]));
     const out: ReactElement[] = [];
-    const emit = (g: typeof gaps[number]) => out.push(
-      <Decoration key={`exp-${g.hunkIndex}`}>
-        <ExpandRow
-          lines={g.lines}
-          // Context of the code just below the bar: the next hunk's start, or
-          // (trailing gap) the gap's own first hidden line.
-          funcCtx={functionContext(oldLines, g.hunkIndex < rendered.length ? rendered[g.hunkIndex]!.oldStart : g.all[0])}
-          onAll={() => expandRange(g.all[0], g.all[1])}
-          onDown={g.down ? () => expandRange(g.down![0], g.down![1]) : undefined}
-          onUp={g.up ? () => expandRange(g.up![0], g.up![1]) : undefined}
-        />
-      </Decoration>,
-    );
+    const emit = (g: typeof gaps[number]) => {
+      // Context of the code just below the bar, per side: the next hunk's
+      // old/new start, or (trailing gap) the first hidden line after the last
+      // hunk on each side.
+      const next = g.hunkIndex < rendered.length ? rendered[g.hunkIndex]! : null;
+      const last = rendered[rendered.length - 1];
+      const oldAt = next ? next.oldStart : g.all[0];
+      const newAt = next ? next.newStart : (last ? last.newStart + last.newLines : 1);
+      out.push(
+        <Decoration key={`exp-${g.hunkIndex}`}>
+          <ExpandRow
+            lines={g.lines}
+            funcOld={functionContext(oldLines, oldAt)}
+            funcNew={functionContext(newLines, newAt)}
+            onAll={() => expandRange(g.all[0], g.all[1])}
+            onDown={g.down ? () => expandRange(g.down![0], g.down![1]) : undefined}
+            onUp={g.up ? () => expandRange(g.up![0], g.up![1]) : undefined}
+          />
+        </Decoration>,
+      );
+    };
     rendered.forEach((hunk, i) => {
       const g = gapByIndex.get(i);
       if (g) emit(g);

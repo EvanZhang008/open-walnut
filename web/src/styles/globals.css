@@ -25590,9 +25590,9 @@ a.file-link:hover {
 .session-diff-expander {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between; /* ctx left, controls docked right — fixed slots */
   gap: 8px;
-  padding: 2px 6px;
+  padding: 2px 8px;
   background: color-mix(in srgb, var(--accent) 5%, var(--bg-subtle, transparent));
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
@@ -25624,7 +25624,17 @@ a.file-link:hover {
 }
 .session-diff-expand-glyph { font-size: 12px; line-height: 1; }
 /* Enclosing-definition context on the unfold bar (git hunk-header style):
-   says which function the code below the bar lives in, even while collapsed. */
+   says which function the code below the bar lives in, even while collapsed.
+   Left-docked in a fixed slot; when old/new sides sit in DIFFERENT functions
+   both are shown (−old / +new) with diff colors. */
+.session-diff-expand-ctx {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-width: 0; /* let the labels ellipsize instead of pushing the controls */
+  overflow: hidden;
+}
 .session-diff-expand-func {
   font-size: 11px;
   font-family: var(--font-mono);
@@ -25632,8 +25642,21 @@ a.file-link:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 46%;
   flex: 0 1 auto;
+}
+.session-diff-expand-func.is-old { color: var(--error, #cf222e); opacity: 0.85; }
+.session-diff-expand-func.is-new { color: var(--success, #1a7f37); opacity: 0.9; }
+/* Right-docked control cluster — constant order (↓ ↑ ↕), so buttons never move. */
+.session-diff-expand-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.session-diff-expand-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
 }
 
 /* Inline comment box (rendered under a line via react-diff-view widgets) */

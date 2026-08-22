@@ -130,9 +130,17 @@ export function shortRepoLabels(labels: string[]): string[] {
   return render();
 }
 
+/** The server decorates submodule labels with a " (submodule)" suffix. The
+ *  row shouldn't show it (kind is already rendered on hover via the tooltip's
+ *  `(${repoKind})`), so strip it for display. */
+function undecorateLabel(label: string): string {
+  return label.replace(/ \(submodule\)$/, '');
+}
+
 /** Build the full tree (repos at the top level) from the API's repo groups. */
 export function buildDiffTree(groups: SessionRepoGroup[]): DiffTreeRepoNode[] {
-  const shortLabels = shortRepoLabels(groups.map((g) => g.label));
+  const labels = groups.map((g) => undecorateLabel(g.label));
+  const shortLabels = shortRepoLabels(labels);
   return groups.map((group, groupIdx) => {
     const root = emptyDir();
     for (const change of group.files) {
@@ -151,8 +159,8 @@ export function buildDiffTree(groups: SessionRepoGroup[]): DiffTreeRepoNode[] {
     const children = buildChildren(root, group.repoRoot);
     return {
       kind: 'repo' as const,
-      label: group.label,
-      shortLabel: shortLabels[groupIdx] ?? group.label,
+      label: labels[groupIdx] ?? group.label,
+      shortLabel: shortLabels[groupIdx] ?? labels[groupIdx] ?? group.label,
       id: group.repoRoot,
       repoKind: group.kind,
       children,

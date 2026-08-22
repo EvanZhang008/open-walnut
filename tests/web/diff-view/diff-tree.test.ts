@@ -89,6 +89,13 @@ describe('buildDiffTree', () => {
     expect(tree[0]!.shortLabel).toBe('AnvilTests');
     expect(tree[0]!.label).toBe(deep); // full path survives for the tooltip
   });
+
+  it('strips the server\'s " (submodule)" label decoration — kind carries it', () => {
+    const tree = buildDiffTree([group('vendor/widget (submodule)', 'submodule', [file('a.ts')])]);
+    expect(tree[0]!.shortLabel).toBe('widget');
+    expect(tree[0]!.label).toBe('vendor/widget');
+    expect(tree[0]!.repoKind).toBe('submodule');
+  });
 });
 
 describe('shortRepoLabels', () => {
