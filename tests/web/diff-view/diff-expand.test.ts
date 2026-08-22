@@ -51,10 +51,11 @@ describe('computeExpandGaps — which hidden lines each unfold button reveals', 
   });
 
   it('a single change in a long file yields a LEADING gap (above) and a TRAILING gap (below)', () => {
-    // 60-line file; change only line 30 → diff shows ~lines 27-33, hiding 1-26 above
-    // and 34-60 below. Both gaps are bigger than one chunk → both get directional.
-    const before = numbered(60);
-    const after = before.replace('L30\n', 'L30-edited\n');
+    // 120-line file; change only line 60 → with PATCH_CONTEXT=20 the diff shows
+    // ~lines 40-80, hiding 1-39 above and 81-120 below. Both gaps are bigger
+    // than one chunk → both get directional buttons.
+    const before = numbered(120);
+    const after = before.replace('L60\n', 'L60-edited\n');
     const file = buildFileData(change(before, after))!;
     const gaps = computeExpandGaps(file.hunks, oldSourceLineCount(before));
 
@@ -82,11 +83,11 @@ describe('computeExpandGaps — which hidden lines each unfold button reveals', 
   });
 
   it('a small gap between two nearby changes → "expand all" only (no directional chunks)', () => {
-    // Edit line 5 and line 18 of a 30-line file. With 3 context lines each the two
-    // hunks (L2-L8, L15-L21) stay separate, leaving a small hidden block (L9-L14,
-    // ≤ UNFOLD_CHUNK) between them → a single "expand all" button, no chunks.
-    const before = numbered(30);
-    const after = before.replace('L5\n', 'L5x\n').replace('L18\n', 'L18x\n');
+    // Edit line 30 and line 80 of a 120-line file. With PATCH_CONTEXT=20 the two
+    // hunks (L10-L50, L60-L100) stay separate, leaving a small hidden block
+    // (L51-L59, ≤ UNFOLD_CHUNK) between them → a single "expand all", no chunks.
+    const before = numbered(120);
+    const after = before.replace('L30\n', 'L30x\n').replace('L80\n', 'L80x\n');
     const file = buildFileData(change(before, after))!;
     expect(file.hunks.length).toBe(2); // two separate hunks with a real gap between
     const gaps = computeExpandGaps(file.hunks, oldSourceLineCount(before));
@@ -134,8 +135,10 @@ describe('end-to-end reveal — the computed ranges actually un-hide the right s
   });
 
   it('directional "↑ N" reveals only the chunk abutting the hunk, not the whole gap', () => {
-    const before = numbered(60);
-    const after = before.replace('L40\n', 'L40-edited\n');
+    // Change deep enough (L80 of 120) that the leading gap (L1-L59) stays bigger
+    // than one chunk even with PATCH_CONTEXT=20 — directional ↑ only exists then.
+    const before = numbered(120);
+    const after = before.replace('L80\n', 'L80-edited\n');
     const file = buildFileData(change(before, after))!;
     const gaps = computeExpandGaps(file.hunks, oldSourceLineCount(before));
     const leading = gaps.find((g) => g.hunkIndex === 0)!;

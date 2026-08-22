@@ -19,8 +19,14 @@ import type { SessionFileChange } from '@/api/session-changes';
  * normalizes without mangling. Returns null when there are no hunks (identical
  * content shouldn't reach here, but be safe).
  */
+/** Context lines around each change. git's default 3 was too stingy for code
+ *  review — you could see THAT a line changed but not the function around it,
+ *  and kept clicking expand. 20 gives real surroundings, and nearby hunks
+ *  (≤40 lines apart) merge into one continuous block via context overlap. */
+export const PATCH_CONTEXT = 20;
+
 export function toGitStylePatch(relPath: string, before: string, after: string): string | null {
-  const raw = createPatch(relPath, before, after, '', '', { context: 3 });
+  const raw = createPatch(relPath, before, after, '', '', { context: PATCH_CONTEXT });
   const lines = raw.split('\n');
   const hunkIdx = lines.findIndex((l) => l.startsWith('@@'));
   if (hunkIdx < 0) return null;
