@@ -284,19 +284,50 @@ export class SyncReconciler {
         continue;
       }
       const aliasOwner = localByAlias.get(remoteId);
-      if (aliasOwner && !isPushInflight(aliasOwner.id)) {
-        // The remote item wears an id this task USED to have — adopt it back
-        // (re-point ext to the current remote id) instead of forking a copy.
-        toAdopt.push({ local: aliasOwner, remote });
-        adoptedTaskIds.add(aliasOwner.id);
+      if (aliasOwner) {
+        if (adoptedTaskIds.has(aliasOwner.id)) {
+          // This task already adopted ANOTHER remote item this cycle (a task
+          // can carry several former ids). A second adoption would overwrite
+          // the first — ext.id can only point at one remote — leaving the
+          // other item unowned and re-creatable next cycle. Leave this one
+          // for the next reconcile, after the first adoption has settled.
+          unchanged++;
+          continue;
+        }
+        const ownerCurrentId = extractId(aliasOwner);
+        if (ownerCurrentId && remoteMap.has(ownerCurrentId)) {
+          // BOTH ids are present remotely: the owner is already matched by its
+          // CURRENT id; this item is a stale twin wearing a former id (the
+          // re-key DELETE never landed). Adopting would steal the identity
+          // back to the old id and orphan the new one — next cycle the new id
+          // mints a duplicate. Don't adopt, don't create; just skip.
+          log.web.debug('sync-reconciler: skipped stale twin wearing a former id', {
+            pluginId: plugin.id, taskId: aliasOwner.id, staleRemoteId: remoteId, currentRemoteId: ownerCurrentId,
+          });
+          unchanged++;
+        } else if (!isPushInflight(aliasOwner.id)) {
+          // The remote item wears an id this task USED to have — adopt it back
+          // (re-point ext to the current remote id) instead of forking a copy.
+          toAdopt.push({ local: aliasOwner, remote });
+          adoptedTaskIds.add(aliasOwner.id);
+        } else {
+          // Push in flight for the owner: neither adopt (racing the push's own
+          // ext write) nor create (that forks a copy for an id we know is
+          // owned). Revisit next cycle.
+          unchanged++;
+        }
         continue;
       }
       toCreate.push(remote);
     }
 
-    // local - remote → candidate for removal (adopted tasks are matched)
+    // local - remote → candidate for removal (adopted tasks are matched).
+    // Push-inflight tasks are exempt: a re-key push (remote DELETE old id →
+    // POST new id → local ext updated) has a window where the local ext still
+    // wears the just-deleted id — a full pull landing inside it would read
+    // "remote gone" and delete a task that is mid-flight, not gone.
     for (const [remoteId, local] of localByRemoteId) {
-      if (!remoteMap.has(remoteId) && !adoptedTaskIds.has(local.id)) {
+      if (!remoteMap.has(remoteId) && !adoptedTaskIds.has(local.id) && !isPushInflight(local.id)) {
         toRemove.push(local);
       }
     }

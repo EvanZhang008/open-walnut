@@ -388,6 +388,13 @@ let diskWatermarkHandle: { stop: () => void; poll: () => Promise<unknown> } | nu
 let backupSchedulerHandle: import('../core/backup/backup-scheduler.js').BackupSchedulerHandle | null = null
 let keepAwakeHandle: import('../core/keep-awake.js').KeepAwakeHandle | null = null
 let gitMaintenanceHandle: { stop: () => void } | null = null
+let sendPathCanaryHandle: import('../core/send-path-canary.js').SendPathCanaryHandle | null = null
+
+/** For GET /api/v1/canary's ?fresh=1 forced re-poll. */
+export function getCanaryHandle(): import('../core/send-path-canary.js').SendPathCanaryHandle | null {
+  return sendPathCanaryHandle
+}
+
 /** Tests only: force a watermark poll through the SERVER's own notify/onRecovered
  *  wiring, rather than re-implementing that wiring in the test (which is how a
  *  test can pass while the real seam is unwired). */
@@ -1870,6 +1877,18 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // was exactly this debris accumulating with no one ever gc'ing.
     const { startGitMaintenance } = await import('../integrations/git-maintenance.js')
     gitMaintenanceHandle = startGitMaintenance()
+
+    // Send-path canary (cloud box only — returns null elsewhere): evaluates
+    // the exact gates a phone send passes (disk-guard 507, bridge sockets,
+    // banked queue) every 5 min and notifies on degradation TRANSITIONS,
+    // naming the failing hop. Born from 2026-08-21: the disk crossed the 90%
+    // watermark and the user discovered it by watching their sends fail.
+    const { startSendPathCanary } = await import('../core/send-path-canary.js')
+    sendPathCanaryHandle = startSendPathCanary({
+      notify: (title, body, dedupScope) => {
+        void publishErrorNotification({ title, body, dedupScope })
+      },
+    })
 
     // Task projection export (primary box only): tasks.sqlite is machine-
     // local, so a slim projection is written to cache/projections/ and
@@ -4471,6 +4490,10 @@ export async function stopServer(): Promise<void> {
   if (gitMaintenanceHandle) {
     gitMaintenanceHandle.stop()
     gitMaintenanceHandle = null
+  }
+  if (sendPathCanaryHandle) {
+    sendPathCanaryHandle.stop()
+    sendPathCanaryHandle = null
   }
   if (taskProjectionHandle) {
     taskProjectionHandle.stop()

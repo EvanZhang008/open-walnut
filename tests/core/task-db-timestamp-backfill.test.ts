@@ -98,4 +98,99 @@ describe('timestamp backfill on open', () => {
     ).get();
     expect(table).toBeTruthy();
   });
+
+  it('treats EMPTY-STRING timestamps like NULL (both zero the LWW threshold)', () => {
+    const raw = new Database(TASK_DB_PATH);
+    raw.exec(`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, project TEXT, status TEXT,
+        phase TEXT, priority TEXT, source TEXT, parent_task_id TEXT,
+        due_date TEXT, start_date TEXT, created_at TEXT, updated_at TEXT,
+        completed_at TEXT, sprint TEXT, focus_tier TEXT, pinned INTEGER DEFAULT 0,
+        ext TEXT, tags TEXT, depends_on TEXT, session_ids TEXT, note TEXT,
+        summary TEXT, description TEXT, conversation_log TEXT, sync_error TEXT,
+        _synced_at TEXT, payload TEXT
+      );
+    `);
+    raw.prepare(
+      `INSERT INTO tasks (id, title, source, created_at, updated_at, _synced_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run('mntq37r5-eeee', 'empty strings', 'some-provider', '', '', '');
+    raw.pragma('user_version = ' + SCHEMA_VERSION);
+    raw.close();
+
+    const db = getDb()!;
+    const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get('mntq37r5-eeee') as any;
+    expect(row.created_at).toBe('2026-04-11T02:35:42.977Z');
+    expect(row.updated_at).toBe('2026-04-11T02:35:42.977Z');
+    expect(row._synced_at).toBe('2026-04-11T02:35:42.977Z');
+  });
+
+  it('falls back to updated_at when the id is not a generateId shape, then to now', () => {
+    const raw = new Database(TASK_DB_PATH);
+    raw.exec(`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, project TEXT, status TEXT,
+        phase TEXT, priority TEXT, source TEXT, parent_task_id TEXT,
+        due_date TEXT, start_date TEXT, created_at TEXT, updated_at TEXT,
+        completed_at TEXT, sprint TEXT, focus_tier TEXT, pinned INTEGER DEFAULT 0,
+        ext TEXT, tags TEXT, depends_on TEXT, session_ids TEXT, note TEXT,
+        summary TEXT, description TEXT, conversation_log TEXT, sync_error TEXT,
+        _synced_at TEXT, payload TEXT
+      );
+    `);
+    // Foreign-shaped id (e.g. imported): no decodable timestamp, but it HAS
+    // an updated_at — created_at must inherit that, not "now".
+    raw.prepare(
+      `INSERT INTO tasks (id, title, source, created_at, updated_at, _synced_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run('EXT-42', 'imported row', 'local', null, '2026-03-01T00:00:00Z', null);
+    // Worst case: nothing usable at all → both stamped "now" (non-null).
+    raw.prepare(
+      `INSERT INTO tasks (id, title, source, created_at, updated_at, _synced_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run('EXT-43', 'bare row', 'local', null, null, null);
+    raw.pragma('user_version = ' + SCHEMA_VERSION);
+    raw.close();
+
+    const db = getDb()!;
+    const imported = db.prepare('SELECT * FROM tasks WHERE id = ?').get('EXT-42') as any;
+    expect(imported.created_at).toBe('2026-03-01T00:00:00Z');
+    expect(imported.updated_at).toBe('2026-03-01T00:00:00Z');
+
+    const bare = db.prepare('SELECT * FROM tasks WHERE id = ?').get('EXT-43') as any;
+    expect(bare.created_at).toBeTruthy();
+    expect(bare.updated_at).toBeTruthy();
+    // Stamped "now", i.e. within this test run — not some decoded garbage.
+    expect(Math.abs(Date.now() - new Date(bare.created_at).getTime())).toBeLessThan(60_000);
+  });
+
+  it('is idempotent: a second open changes nothing', () => {
+    const raw = new Database(TASK_DB_PATH);
+    raw.exec(`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, project TEXT, status TEXT,
+        phase TEXT, priority TEXT, source TEXT, parent_task_id TEXT,
+        due_date TEXT, start_date TEXT, created_at TEXT, updated_at TEXT,
+        completed_at TEXT, sprint TEXT, focus_tier TEXT, pinned INTEGER DEFAULT 0,
+        ext TEXT, tags TEXT, depends_on TEXT, session_ids TEXT, note TEXT,
+        summary TEXT, description TEXT, conversation_log TEXT, sync_error TEXT,
+        _synced_at TEXT, payload TEXT
+      );
+    `);
+    raw.prepare(
+      `INSERT INTO tasks (id, title, source, created_at, updated_at, _synced_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run('mntq37r5-abcd', 'fix me once', 'some-provider', null, null, null);
+    raw.pragma('user_version = ' + SCHEMA_VERSION);
+    raw.close();
+
+    const first = getDb()!.prepare('SELECT * FROM tasks WHERE id = ?').get('mntq37r5-abcd') as any;
+    closeDb();
+    const second = getDb()!.prepare('SELECT * FROM tasks WHERE id = ?').get('mntq37r5-abcd') as any;
+
+    expect(second.created_at).toBe(first.created_at);
+    expect(second.updated_at).toBe(first.updated_at);
+    expect(second._synced_at).toBe(first._synced_at);
+  });
 });

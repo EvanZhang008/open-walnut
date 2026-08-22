@@ -1536,6 +1536,15 @@ export function isPushInflight(taskId: string): boolean {
   return pushInflight.has(taskId);
 }
 
+/** @internal Test seam: hold a task in the push-inflight window without a real
+ *  push. Returns a release function. The reconciler's mid-push guards (skip
+ *  update / skip adopt / skip removal) key on this map, and the window is
+ *  otherwise impossible to hold open deterministically in a test. */
+export function markPushInflightForTesting(taskId: string): () => void {
+  pushInflight.set(taskId, Promise.resolve({ success: true }));
+  return () => { pushInflight.delete(taskId); };
+}
+
 /**
  * Full task push — calls createTask for new tasks or pushes all fields for existing.
  * Replaces the old integration-specific autoPushIfConfigured().
@@ -3992,11 +4001,21 @@ export async function mergeTaskInto(
     if (!survivor) throw new Error(`mergeTaskInto: survivor "${survivorId}" not found`);
     if (!victim) throw new Error(`mergeTaskInto: victim "${victimId}" not found`);
 
-    // Union session history; fill empty slots from the victim.
-    survivor.session_ids = [...new Set([...(survivor.session_ids ?? []), ...(victim.session_ids ?? [])])];
+    // Union session history; fill empty slots from the victim. A victim slot
+    // the survivor can't take (its own slot is occupied) must still land in
+    // session_ids — the UI joins on that array, and a slot id is not
+    // guaranteed to also appear there. Dropping it would lose the link this
+    // function exists to preserve.
+    const spilledSlots: string[] = [];
     if (!survivor.session_id && victim.session_id) survivor.session_id = victim.session_id;
+    else if (victim.session_id) spilledSlots.push(victim.session_id);
     if (!survivor.plan_session_id && victim.plan_session_id) survivor.plan_session_id = victim.plan_session_id;
+    else if (victim.plan_session_id) spilledSlots.push(victim.plan_session_id);
     if (!survivor.exec_session_id && victim.exec_session_id) survivor.exec_session_id = victim.exec_session_id;
+    else if (victim.exec_session_id) spilledSlots.push(victim.exec_session_id);
+    survivor.session_ids = [...new Set([
+      ...(survivor.session_ids ?? []), ...(victim.session_ids ?? []), ...spilledSlots,
+    ])];
     // Keep the earliest birth time so the merged task's history stays honest.
     if (victim.created_at && (!survivor.created_at || victim.created_at < survivor.created_at)) {
       survivor.created_at = victim.created_at;
