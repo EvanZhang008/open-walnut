@@ -1243,8 +1243,28 @@ function CompareHelp({ base }: { base: SessionDiffBase }) {
 
 // ── Main view ─────────────────────────────────────────────────────────────────
 
+// Last result per session|base, module-level so it SURVIVES the tab switch
+// (the panel unmounts this view). Re-entering paints the previous list
+// instantly and refreshes behind it — without this, every visit started at
+// `data=null` → a full spinner, and git bases re-ran their whole (possibly
+// remote, 10-30s) diff while the user stared at it. LRU-capped: git-base
+// results carry before/after content and a monorepo entry can be MBs.
+const lastChangesCache = new Map<string, SessionChangesResult>();
+const LAST_CHANGES_CACHE_MAX = 24;
+function rememberChanges(key: string, res: SessionChangesResult): void {
+  lastChangesCache.delete(key);
+  lastChangesCache.set(key, res);
+  if (lastChangesCache.size > LAST_CHANGES_CACHE_MAX) {
+    const oldest = lastChangesCache.keys().next().value;
+    if (oldest !== undefined) lastChangesCache.delete(oldest);
+  }
+}
+
 export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCode, onComment, barRightSlot }: SessionDiffViewProps) {
-  const [data, setData] = useState<SessionChangesResult | null>(null);
+  const [data, setData] = useState<SessionChangesResult | null>(() => {
+    const mem = loadDiffMemory(sessionId);
+    return lastChangesCache.get(`${sessionId}|${mem.base ?? 'session'}|session`) ?? null;
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [viewType, setViewType] = useState<DiffViewType>(() => {
@@ -1303,15 +1323,17 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   // Changing the comparison (base/scope) invalidates the shown data OUTRIGHT:
   // keeping the old list while the new fetch runs (10-30s for remote git bases)
   // rendered a light session-base row under a git base — empty content, bogus
-  // "No textual diff", stale file count. Clear to the spinner instead.
+  // "No textual diff", stale file count. Reseed from the new base's cached
+  // result when we have one (instant), else clear to the spinner.
   const baseKey = `${base}|${scope}`;
+  const cacheKey = `${sessionId}|${baseKey}`;
   const prevBaseKey = useRef(baseKey);
   useEffect(() => {
     if (prevBaseKey.current === baseKey) return;
     prevBaseKey.current = baseKey;
-    setData(null);
+    setData(lastChangesCache.get(cacheKey) ?? null);
     fileContentRef.current.clear();
-  }, [baseKey]);
+  }, [baseKey, cacheKey]);
 
   const load = useCallback((refresh = false) => {
     setLoading(true);
@@ -1339,6 +1361,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               else setRefreshingBg(false);
               return;
             }
+            rememberChanges(cacheKey, res);
             setData(res);
             fileContentRef.current.clear();
             setContentVersion((v) => v + 1);
@@ -1349,6 +1372,9 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     };
     fetchSessionChanges(sessionId, { refresh, base, scope, light, swr: light && !refresh, signal: ctrl.signal })
       .then((res) => {
+        // Cache stale results too — a stale list is exactly what a re-entry
+        // wants to paint first; the background poll upgrades it in place.
+        rememberChanges(cacheKey, res);
         setData(res);
         if (refresh) {
           fileContentRef.current.clear();
@@ -1364,7 +1390,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       })
       .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
     return () => { ctrl.abort(); if (pollTimer) clearTimeout(pollTimer); };
-  }, [sessionId, base, scope, isSessionBase]);
+  }, [sessionId, base, scope, isSessionBase, cacheKey]);
 
   useEffect(() => {
     const cancel = load(false);
@@ -1383,6 +1409,10 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     memSessionRef.current = sessionId;
     const mem = loadDiffMemory(sessionId);
     setBase(mem.base ?? 'session');
+    // Seed the NEW session's cached list (or clear) — without this the old
+    // session's files linger under the new session while its fetch runs.
+    setData(lastChangesCache.get(`${sessionId}|${mem.base ?? 'session'}|session`) ?? null);
+    fileContentRef.current.clear();
     setSelectedId(null);
     pendingRestoreRef.current = mem.selectedId ?? null;
   }, [sessionId]);
@@ -1598,7 +1628,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         </button>
         <span className="session-diff-toolbar-title">
           {data ? (empty ? 'No file changes' : `${data.fileCount} file${data.fileCount === 1 ? '' : 's'} changed`) : (loading ? 'Loading…' : 'Changes')}
-          {refreshingBg && <span className="session-diff-refreshing" title="List served from cache — re-scanning in the background">↻</span>}
+          {(refreshingBg || (loading && !!data)) && <span className="session-diff-refreshing" title="List served from cache — re-scanning in the background">↻</span>}
         </span>
         <div className="session-diff-base-wrap">
           <label className="session-diff-base-select" title="Choose what the diff compares against">
@@ -1665,7 +1695,9 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     );
   }
 
-  if (error) {
+  // A failed refresh must not blank a list we already have (cached view stays
+  // useful); the full error pane is for having NOTHING to show.
+  if (error && !data) {
     return (
       <div className="session-diff-view session-diff-error" ref={containerRef}>
         {toolbar}
@@ -1687,6 +1719,15 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   return (
     <div className="session-diff-view" ref={containerRef} onMouseUp={handleMouseUp}>
       {toolbar}
+
+      {/* Refresh failed but the cached list is still on screen — say so in a
+          slim strip instead of blanking the view. */}
+      {error && (
+        <div className="session-diff-error-strip">
+          {ICON_WARNING} <span>Refresh failed: {error}</span>
+          <button className="btn btn-sm" onClick={() => load(true)}>Retry</button>
+        </div>
+      )}
 
       {empty ? (
         <div className="session-diff-empty">

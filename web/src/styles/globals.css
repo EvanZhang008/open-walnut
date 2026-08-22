@@ -24757,6 +24757,19 @@ a.file-link:hover {
   font-size: 13px;
 }
 
+/* Slim inline variant: refresh failed while a cached list is still showing. */
+.session-diff-error-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  color: var(--error);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--error) 6%, transparent);
+  flex: 0 0 auto;
+}
+
 .session-diff-toolbar {
   display: flex;
   align-items: center;
