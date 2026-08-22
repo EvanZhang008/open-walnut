@@ -114,10 +114,11 @@ export interface FileChangeSummary {
 
 /**
  * Fetch the AI summary for one changed file. Server is cache-first; a cold
- * call takes a few seconds (one cheap model call), so the timeout is generous
- * and callers show a skeleton meanwhile. 35s = the route's own 30s overall
- * deadline + margin; while pending this holds one of the browser's 6 fetch
- * slots, which is safe only because callers abort on unmount/file-switch.
+ * call asks the session's own CLI via a hidden side question (a few seconds),
+ * so the timeout is generous and callers show a skeleton meanwhile. 45s = the
+ * route's own 40s overall deadline + margin; while pending this holds one of
+ * the browser's 6 fetch slots, which is safe only because callers abort on
+ * unmount/file-switch.
  */
 export async function fetchFileChangeSummary(
   sessionId: string,
@@ -129,7 +130,7 @@ export async function fetchFileChangeSummary(
     // Browser locale rides along so the summary matches the user's language
     // (server-side config agent.language overrides it when set).
     { path: filePath, lang: navigator.language || 'en' },
-    { signal: opts?.signal, timeoutMs: 35_000 },
+    { signal: opts?.signal, timeoutMs: 45_000 },
   );
 }
 

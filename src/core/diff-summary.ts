@@ -1,18 +1,33 @@
 /**
- * AI summaries for the Changed tab — one short "what did this file's change do,
- * and where does it fit in the overall changeset" blurb per changed file.
+ * AI summaries for the Changed tab — one ultra-short "what did this file's
+ * change do, and where does it fit" blurb per changed file.
  *
- * Design (mirrors fork-title.ts / project-summary.ts):
- * - Cheap one-shot call via fastModelFor() — this is a labeling task, not an
- *   Opus job. NEVER a CLI session fork: a fork costs seconds-to-minutes and a
- *   whole process per summary; this is one non-streaming Haiku call.
+ * HOW IT GENERATES — through the session's own Claude Code CLI, NOT Walnut's
+ * model API. The question rides the CLI's hidden side-question channel
+ * (`sessionRunner.requestTurnCompleteSelfReport`: native Claude = the
+ * stream-json `side_question` control request, ACP/codex = the equivalent
+ * hidden report). Why this path (product decision, 2026-08-22):
+ * - The session ALREADY HAS the context: it wrote the diff, it knows why. A
+ *   fresh model call has to be told everything; the session just answers.
+ * - No separate API credential needed — every Walnut user has a working
+ *   Claude Code login; not everyone configures Walnut's own provider key.
+ *   The direct-API path (sendMessage/fastModelFor) is deliberately NOT a
+ *   fallback here — it is being retired as an active path.
+ * - Side questions can NOT use tools, so the question embeds the (truncated)
+ *   diff as a reminder; the "why / role in the changeset" half comes from the
+ *   session's own memory.
+ * Consequences to keep in mind: generation needs a LIVE CLI (idle-reaped
+ * sessions → 503, the UI degrades to Retry; already-cached summaries still
+ * serve forever). A `--resume --fork-session` one-shot for dead sessions is a
+ * known follow-up, not built yet.
+ *
  * - Content-hash cached on disk (~/.open-walnut/cache/diff-summaries/), so a
- *   summary regenerates only when the file's diff actually changes. The cache
- *   lives in Walnut's data dir — never inside the user's repo.
+ *   summary generates at most once per diff content. The cache lives in
+ *   Walnut's data dir — never inside the user's repo.
  * - Best-effort: every failure path throws DiffSummaryError with an HTTP-ish
  *   status; the route degrades (the UI hides the strip) and nothing blocks.
  * - Concurrency: in-flight dedup per file + a small global gate so a user
- *   clicking through 50 files can't stampede the provider.
+ *   clicking through 50 files can't stampede the CLIs.
  * - Summaries always describe the SESSION-base diff (getSessionFileChange with
  *   no base param). If a git base ever gets summarized, the cache entries must
  *   grow a base component in their key or the two bases will thrash each other.
@@ -24,18 +39,17 @@ import path from 'node:path';
 import { structuredPatch } from 'diff';
 import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
-import { fastModelFor } from './cheap-model.js';
 import { SessionControlError } from './sessions/session-controls.js';
 
-/** Bump when the prompt changes shape (diffSummarySystem, buildDiffText, or
- *  the MAX_* budgets) — invalidates every cached summary. */
-const PROMPT_V = 'v4';
+/** Bump when the prompt changes shape (buildDiffSummaryQuestion, buildDiffText,
+ *  or the MAX_* budgets) — invalidates every cached summary. */
+const PROMPT_V = 'v5';
 
-/** Diff text budget for the prompt. Beyond this the model gets a truncated
- *  patch plus a note — a 5000-line diff summarized from its head is still far
- *  more useful than a timeout. */
-const MAX_DIFF_CHARS = 12_000;
-const MAX_DIFF_LINES = 350;
+/** Diff text budget for the question. The diff is only a REMINDER (the session
+ *  has the full edit history in context), so this can stay small — a truncated
+ *  patch plus a note beats a timeout. */
+const MAX_DIFF_CHARS = 8_000;
+const MAX_DIFF_LINES = 250;
 
 /** Combined before+after size beyond which we skip structuredPatch entirely.
  *  Myers diff is synchronous CPU on the web server's ONE event loop; a
@@ -44,22 +58,15 @@ const MAX_DIFF_LINES = 350;
  *  summary input for files that size. */
 const MAX_PATCH_INPUT_CHARS = 300_000;
 
-/** At most this many sibling paths ride along as changeset context. */
-const MAX_CONTEXT_FILES = 60;
-
-/** Per-stage deadlines. The model call gets LLM_TIMEOUT_MS of MODEL time (the
- *  queue slot is acquired first — queue wait must never eat the budget). The
- *  content fetch can fall through to a cold daemon compute, so it gets its own
- *  cap; siblings are optional context and get a short one. The route adds a
- *  30s overall cap on top. */
-const LLM_TIMEOUT_MS = 20_000;
+/** Per-stage deadlines. The side question runs on the session's own model with
+ *  its full context (cold prompt-cache can be slow); the content fetch can
+ *  fall through to a cold daemon compute. The route adds a 40s overall cap. */
+const SIDE_QUESTION_TIMEOUT_MS = 30_000;
 const FILE_FETCH_TIMEOUT_MS = 15_000;
-const SIBLINGS_TIMEOUT_MS = 2_500;
-const MAX_OUTPUT_TOKENS = 200;
 
-/** Global gate: at most N model calls in flight across all sessions, and a
+/** Global gate: at most N side questions in flight across all sessions, and a
  *  bounded queue behind them — a click-through-everything burst gets a fast
- *  429 instead of a pile of jobs the user already navigated away from. */
+ *  429 instead of a pile of questions the user already navigated away from. */
 const MAX_CONCURRENT_CALLS = 2;
 const MAX_QUEUED_CALLS = 8;
 
@@ -93,19 +100,14 @@ interface FileForSummary {
   partial?: boolean;
 }
 
-interface ContextFile {
-  relPath: string;
-  status: string;
-}
-
 // ── Pure helpers (unit-tested) ───────────────────────────────────────────────
 
 /** Content hash: same diff → same summary, forever. Includes the output
  *  language — switching languages must regenerate, not serve the old tongue.
- *  DELIBERATELY excludes the sibling list: folding it in would regenerate
- *  EVERY file's summary each time any file joins the changeset — the cache
- *  would never hit during active work. Cost: the changeset-role words can go
- *  stale as the changeset grows. Accepted trade-off. */
+ *  DELIBERATELY excludes any changeset-state signal: the session's answer
+ *  about a file's role can go stale as the changeset grows, but folding
+ *  changeset state in would regenerate EVERY summary on every new file — the
+ *  cache would never hit during active work. Accepted trade-off. */
 export function diffSummaryHash(
   file: Pick<FileForSummary, 'before' | 'after' | 'status'>,
   lang = 'en',
@@ -137,7 +139,7 @@ const LANG_NAMES: Record<string, string> = {
   pt: 'Portuguese',
 };
 
-/** Filenames whose content we never ship to a model provider, even though the
+/** Filenames whose content we never ship into a prompt, even though the
  *  session itself may have touched them. Matched on the basename. */
 const SENSITIVE_BASENAME_RE = /^(\.env(\..*)?|\.npmrc|\.netrc|credentials(\..*)?|secrets?\..*|id_(rsa|ed25519|ecdsa|dsa)(\..*)?)$|\.(pem|key|p12|pfx|keystore|jks)$/i;
 
@@ -160,9 +162,9 @@ function clip(text: string): { text: string; truncated: boolean } {
   return { text: out, truncated };
 }
 
-/** The diff text the model sees. Unified patch for modifications; head of the
- *  content for pure adds/deletes (a patch of all-+ lines wastes half the budget
- *  on `+` prefixes and tells the model nothing extra). */
+/** The diff text embedded in the question. Unified patch for modifications;
+ *  head of the content for pure adds/deletes (a patch of all-+ lines wastes
+ *  half the budget on `+` prefixes and tells the model nothing extra). */
 export function buildDiffText(file: FileForSummary): string {
   const caveat = file.partial ? 'NOTE: this diff was partially reconstructed and may be incomplete.\n' : '';
   if (file.status === 'added') {
@@ -200,44 +202,24 @@ export function buildDiffText(file: FileForSummary): string {
   return `${caveat}${moved}${text}${truncated ? '\n…(truncated)' : ''}`;
 }
 
-/** EXTREMELY short by design (user feedback: "几个词几句话 + 一个 simple
- *  diagram 就够了") — the reader is mid-review and wants a glance, not prose. */
-export function diffSummarySystem(lang: string): string {
+/**
+ * The side question sent to the session's own CLI. The session has the full
+ * edit history in context — the diff below is only a reminder/anchor. EXTREMELY
+ * short output by design (user feedback: "几个词几句话 + 一个 simple diagram
+ * 就够了") — the reader glances mid-review, not reads. Exported for tests.
+ */
+export function buildDiffSummaryQuestion(file: FileForSummary, lang: string): string {
   const langName = LANG_NAMES[lang] ?? `the language with ISO 639-1 code '${lang}'`;
-  return (
-    'You caption code diffs in as FEW words as possible — the reader glances, not reads.\n' +
-    'Output:\n' +
-    '- Line 1: what this change does. A few words up to ONE short sentence; only a genuinely complex change may use two.\n' +
-    '- Optional line 2, only for a real multi-step flow: ONE tiny arrow diagram like `parse → cache → render` (nothing else on the line).\n' +
-    '- If sibling files are listed, you may end line 1 with the file\'s changeset role in ≤4 words, in parentheses, written in the SAME output language as the rest.\n' +
-    `- Write in ${langName}. Keep identifiers, file names, and technical terms in their original form, in \`backticks\`.\n` +
-    '- No preamble, no headings, no bullets, no code blocks.\n' +
-    '- Never invent behavior not visible in the diff.'
-  );
-}
-
-/** The user message for one file. `siblings === null` means the changeset list
- *  could not be fetched — say so, instead of the confidently-false "only
- *  changed file" an empty list would imply. Exported for tests. */
-export function buildDiffSummaryPrompt(file: FileForSummary, siblings: ContextFile[] | null): string {
-  let contextBlock: string;
-  if (siblings === null) {
-    contextBlock = '  (changeset context unavailable — omit the changeset-role words)';
-  } else {
-    const others = siblings.filter((s) => s.relPath !== file.relPath);
-    const shown = others.slice(0, MAX_CONTEXT_FILES);
-    const hidden = others.length - shown.length;
-    contextBlock = shown.map((s) => `  ${s.status.padEnd(8)} ${s.relPath}`).join('\n')
-      || '  (none — this is the only changed file)';
-    if (hidden > 0) contextBlock += `\n  …and ${hidden} more files`;
-  }
   return [
-    `File: ${file.relPath} (${file.status})`,
+    `Caption YOUR change to \`${file.relPath}\` (${file.status}) in as FEW words as possible — you made this change, so you know why.`,
+    'Output (nothing else):',
+    '- Line 1: what it does. A few words up to ONE short sentence; only a genuinely complex change may use two.',
+    '- Optional line 2, only for a real multi-step flow: ONE tiny arrow diagram like `parse → cache → render` (nothing else on the line).',
+    '- You may end line 1 with this file\'s role in the overall change, ≤4 words, in parentheses, in the SAME output language.',
+    `- Write in ${langName}. Keep identifiers, file names, and technical terms in their original form, in \`backticks\`.`,
+    '- No preamble, no headings, no bullets, no code blocks. Never invent behavior not in the diff.',
     '',
-    'Other files in this changeset:',
-    contextBlock,
-    '',
-    'Diff:',
+    'Diff (truncated reminder — you have the full history):',
     buildDiffText(file),
   ].join('\n');
 }
@@ -307,7 +289,7 @@ function queueCacheUpdate(
 // ── Generation ───────────────────────────────────────────────────────────────
 
 // In-flight dedup: a double-click / two tabs asking for the same file share one
-// model call instead of racing two.
+// side question instead of racing two.
 const inflight = new Map<string, Promise<DiffSummaryResult>>();
 
 // Tiny semaphore for the global call gate. Shape note: activeCalls += 1 happens
@@ -343,14 +325,15 @@ function withTimeout<T>(p: Promise<T>, ms: number, onTimeout: () => Error): Prom
 }
 
 /**
- * Summarize one changed file of a session. Cache-first; on miss, ONE cheap
- * model call. Throws DiffSummaryError / SessionControlError (404/422/429/
- * 502/503) — every stage has a deadline (see the *_TIMEOUT_MS constants).
+ * Summarize one changed file of a session, by asking THE SESSION ITSELF.
+ * Cache-first; on miss, ONE hidden side question to the session's live CLI.
+ * Throws DiffSummaryError / SessionControlError (404/422/429/502/503) — every
+ * stage has a deadline (see the *_TIMEOUT_MS constants).
  *
  * Dedup is the OUTERMOST layer, registered synchronously: a double-click or a
  * second tab asking for the same file joins the whole pipeline (session
- * lookup, content fetch, cache read, model call) instead of repeating any of
- * it. A rejected run clears its entry in the finally, so a failure never
+ * lookup, content fetch, cache read, side question) instead of repeating any
+ * of it. A rejected run clears its entry in the finally, so a failure never
  * poisons later requests.
  *
  * ⚠️ Keep this wrapper non-async and keep the inflight get/set BEFORE any
@@ -388,7 +371,7 @@ async function summarizeInner(
 
   // Reuse the Changed tab's own retrieval chain (cache → daemon → compute).
   // The cold path can be a whale recompute — cap it and answer degraded.
-  const { getSessionFileChange, getSessionChanges } = await import('./sessions/session-lifecycle.js');
+  const { getSessionFileChange } = await import('./sessions/session-lifecycle.js');
   const fileRes = await withTimeout(
     getSessionFileChange(sessionId, filePath),
     FILE_FETCH_TIMEOUT_MS,
@@ -403,9 +386,9 @@ async function summarizeInner(
     return { filePath, relPath: file.relPath, summary: hit.summary, model: hit.model, cached: true, hash };
   }
 
-  // Content the model must never see: secret-shaped filenames and binaries.
-  // 422 = "will never summarize this file"; the client hides the strip without
-  // a retry (retrying can't succeed).
+  // Content that must never enter a prompt: secret-shaped filenames and
+  // binaries. 422 = "will never summarize this file"; the client hides the
+  // strip without a retry (retrying can't succeed).
   if (isSensitivePath(file.relPath)) {
     throw new DiffSummaryError('File may contain secrets — not summarized', 422);
   }
@@ -413,9 +396,9 @@ async function summarizeInner(
     throw new DiffSummaryError('Binary file — not summarized', 422);
   }
 
-  // Degenerate diffs get a deterministic caption — a model call would spend
-  // money to describe nothing (and could invent something). These skip the AI
-  // gate below on purpose: no model is involved.
+  // Degenerate diffs get a deterministic caption — a side question would spend
+  // a model turn describing nothing (and could invent something). These skip
+  // the AI gate below on purpose: no model is involved.
   if (file.before === file.after) {
     const summary = file.status === 'renamed' && file.oldRelPath
       ? (lang === 'zh' ? `从 \`${file.oldRelPath}\` 移动过来,内容未变。` : `Moved from \`${file.oldRelPath}\` — content unchanged.`)
@@ -432,65 +415,46 @@ async function summarizeInner(
     throw new DiffSummaryError('AI summaries disabled in this environment', 503, { code: 'ai_disabled' });
   }
 
-  // Sibling list for the "where does it fit" half — best-effort, short
-  // deadline (optional context must not stall the summary). null = unknown;
-  // the prompt distinguishes that from a genuinely-single-file changeset.
-  let siblings: ContextFile[] | null = null;
+  // Ask the session itself. getOrAttachLiveSession first: the runner's
+  // in-memory map misses a genuinely-alive CLI after a server restart, and
+  // requestTurnCompleteSelfReport does not attach-on-demand for native
+  // sessions (it does for ACP). Attach failure is fine — the self-report call
+  // below gives the authoritative "not live" error.
+  const { sessionRunner } = await import('../providers/claude-code-session.js');
   try {
-    const list = await withTimeout(
-      getSessionChanges(sessionId, { light: true, swr: true }),
-      SIBLINGS_TIMEOUT_MS,
-      () => new Error('sibling list timed out'),
-    ) as unknown as { groups?: Array<{ files: Array<{ relPath: string; status: string }> }> };
-    siblings = (list.groups ?? []).flatMap((g) => g.files.map((f) => ({ relPath: f.relPath, status: f.status })));
-  } catch (err) {
-    log.web.debug('diff-summary sibling list unavailable (context omitted)', {
-      sessionId, error: err instanceof Error ? err.message : String(err),
-    });
-  }
+    await sessionRunner.getOrAttachLiveSession(sessionId);
+  } catch { /* not attachable → requestTurnCompleteSelfReport reports it */ }
 
-  const model = fastModelFor(config); // undefined → sendMessage uses main_model
-
-  const { sendMessage } = await import('../agent/model.js');
-  // Slot FIRST, then the abort timer: queue wait behind the 2-call gate must
-  // not eat the model's 20s budget (a queued job would otherwise reach
-  // sendMessage with an already-aborted signal and 502 for no reason).
   await acquireCallSlot();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
-  let result;
+  let answer: string;
   try {
-    result = await sendMessage({
-      system: diffSummarySystem(lang),
-      messages: [{ role: 'user', content: buildDiffSummaryPrompt(file, siblings) }],
-      // Small cap keeps this a fast NON-streaming call (the catalog default of
-      // 64K trips the SDK's "streaming required" rejection — see fork-title.ts).
-      config: { maxTokens: MAX_OUTPUT_TOKENS, ...(model ? { model } : {}) },
-      signal: controller.signal,
-    });
+    answer = await sessionRunner.requestTurnCompleteSelfReport(
+      sessionId,
+      buildDiffSummaryQuestion(file, lang),
+      SIDE_QUESTION_TIMEOUT_MS,
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.web.warn('diff-summary model call failed', { sessionId, relPath: file.relPath, error: msg });
+    log.web.warn('diff-summary side question failed', { sessionId, relPath: file.relPath, error: msg });
+    // "No live session" = the CLI was idle-reaped; a retry after relaunching
+    // the session works, so this is 503 (transient), not a hard failure.
+    if (/no live session/i.test(msg)) {
+      throw new DiffSummaryError('Session not running — summaries generate while it is live', 503);
+    }
     throw new DiffSummaryError('Summary generation failed', 502);
   } finally {
-    clearTimeout(timer);
     releaseCallSlot();
   }
 
-  const summary = (result.content ?? [])
-    .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
-    .join('')
-    .trim();
-  if (!summary) throw new DiffSummaryError('Model returned an empty summary', 502);
+  const summary = answer.trim();
+  if (!summary) throw new DiffSummaryError('Session returned an empty summary', 502);
 
-  const usedModel = model ?? config.agent?.main_model ?? 'default';
-  // A max_tokens stop means the text ends mid-sentence — show it once but
-  // never cache it under a valid hash (it would serve truncated forever).
-  if (result.stopReason !== 'max_tokens') {
-    await queueCacheUpdate(sessionId, record.host, (fresh) => {
-      fresh.entries[filePath] = { hash, summary, model: usedModel, at: new Date().toISOString() };
-    });
-  }
+  // The session answered with its own model; mirror session-extras' precedence.
+  const rec = record as { cliModel?: string; model?: string };
+  const usedModel = (rec.cliModel ?? rec.model)?.trim() || 'session';
+  await queueCacheUpdate(sessionId, record.host, (fresh) => {
+    fresh.entries[filePath] = { hash, summary, model: usedModel, at: new Date().toISOString() };
+  });
 
   return { filePath, relPath: file.relPath, summary, model: usedModel, cached: false, hash };
 }
