@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
+import { buildTitleQuestion, cleanTitleAnswer } from '../session-title-backend.js';
 import type {
   SessionHookDefinition,
   OnTurnCompletePayload,
@@ -958,10 +959,38 @@ export const messageSendTriageHook: SessionHookDefinition = {
 // while the exact placeholder is still in place.
 
 /** Re-asks on later sends while the placeholder survives, but caps total tries
- *  so a session whose CLI never answers doesn't burn a control request forever. */
+ *  so a session whose CLI never answers doesn't burn a control request forever.
+ *  The cap DECAYS: an entry older than the TTL resets, so a burst of failures
+ *  (wedged daemon, missing credentials) can never permanently exhaust titling —
+ *  once conditions recover, the next trigger (hook or reconciler sweep) gets a
+ *  fresh budget. Worst-case spend stays bounded at maxAttempts per TTL window. */
 const AUTO_TITLE_MAX_ATTEMPTS = 3;
-const autoTitleAttempts = new Map<string, number>();
+const AUTO_TITLE_ATTEMPTS_TTL_MS = 60 * 60_000;
+const autoTitleAttempts = new Map<string, { count: number; lastAt: number }>();
 const autoTitleInFlight = new Set<string>();
+
+function autoTitleAttemptCount(sessionId: string): number {
+  const entry = autoTitleAttempts.get(sessionId);
+  if (!entry) return 0;
+  if (Date.now() - entry.lastAt > AUTO_TITLE_ATTEMPTS_TTL_MS) {
+    autoTitleAttempts.delete(sessionId);
+    return 0;
+  }
+  return entry.count;
+}
+
+function bumpAutoTitleAttempts(sessionId: string): void {
+  autoTitleAttempts.set(sessionId, {
+    count: autoTitleAttemptCount(sessionId) + 1,
+    lastAt: Date.now(),
+  });
+  // Bounded: prune the oldest entries past a generous cap (same pattern as
+  // lastNotifiedSignal) — sessions title once and leave, so growth means leaks.
+  if (autoTitleAttempts.size > 500) {
+    const first = autoTitleAttempts.keys().next().value;
+    if (first) autoTitleAttempts.delete(first);
+  }
+}
 /** Pause before the in-dispatch retry (cold-resume: the first control write can
  *  fail before the FIFO exists). Mutable so tests don't sleep for real. */
 let autoTitleRetryDelayMs = 4_000;
@@ -979,31 +1008,9 @@ interface TitleCapableSession {
   generateSessionTitle?: (description: string, timeoutMs?: number) => Promise<string | null>;
 }
 
-/** The shared "hidden main-model prompt" question. One prompt for every
- *  provider — the provider-specific part is only HOW it's delivered. */
-function buildTitleQuestion(message: string, placeholder: string, requirement: string | null): string {
-  return [
-    'Generate a title for this session (it appears in the user\'s session list).',
-    'Concise, 2-6 words, sentence case. Name the SPECIFIC subject — the thing being worked on — not the activity around it.',
-    'NEVER use filler verbs that restate that work is happening: "Handle", "Process", "Address", "Work on", "Look into", "Deal with". "Handle Slack thread request" says nothing; "CoreDNS OOM Slack thread" says which one.',
-    'Pull the most identifying nouns from the message (component, error, feature, ticket). If the message is only a pointer ("check this thread") with no identifiable subject yet, keep whatever concrete nouns exist and stay SHORT — a vague 3-word title beats a vague 7-word one.',
-    ...(requirement ? [
-      `MANDATORY RULE from the task system: ${requirement}`,
-      'Obey this rule even if it conflicts with the language or style of the message below (translate, don\'t mirror).',
-    ] : []),
-    `Current placeholder title: ${placeholder}`,
-    `User's first message: ${message.slice(0, 2000)}`,
-    'Reply with ONLY the title — no quotes, no commentary.',
-  ].join('\n');
-}
-
-/** Main models sometimes wrap the answer — take the first non-empty line,
- *  strip quotes, cap like every other title write. */
-function cleanTitleAnswer(answer: string): string | null {
-  const firstLine = answer.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
-  const cleaned = firstLine.replace(/^["']|["']$/g, '').trim();
-  return cleaned ? cleaned.slice(0, 200) : null;
-}
+// buildTitleQuestion / cleanTitleAnswer live in ../session-title-backend.ts —
+// shared with the backend (Walnut-side fast model) channel, which must not
+// import this hooks module.
 
 /**
  * PRIMARY title channel: side_question, answered by the session's MAIN model
@@ -1105,15 +1112,32 @@ async function titleViaCliTitler(
 
 /**
  * Shared titling core — ask the session's own CLI for a title and apply it
- * while the placeholder still holds. Used by both the onMessageSend hook
- * (path-first) and autoTitleFromLaunch (text-first). Returns true when a
- * title was written. Never throws.
+ * while the placeholder still holds. Used by the onMessageSend hook
+ * (path-first), autoTitleFromLaunch (text-first), the observed-message
+ * trigger, and the durable sweep (session-title-reconciler.ts). Returns true
+ * when a title was written. Never throws.
+ *
+ * Options:
+ *  - `maxAttempts` bounds how many full channel passes this session may burn
+ *    (default AUTO_TITLE_MAX_ATTEMPTS); the sweep passes a larger budget since
+ *    it is the last line of defense and paces itself with backoff.
+ *  - `noColdAttach`: only use session channels that are ALREADY live — never
+ *    cold-attach an ACP worker (a full worker spawn per attempt) and never
+ *    dispatch into a stray native wrapper holding a codex sid. Set by the
+ *    background sweep, whose whole premise is that the session may be dead;
+ *    the backend channel does the work there.
+ *  - `preferBackend`: try Walnut's fast model FIRST, live channels only as the
+ *    fallback (for zero-Walnut-credential setups). Set by the sweep: a
+ *    background pass must spend a bounded 15s fast-model call, not minutes of
+ *    main-model side_questions per stuck task.
  */
 async function askAndApplyTitle(
   sessionId: string, taskId: string, message: string, placeholder: string,
+  opts: { maxAttempts?: number; noColdAttach?: boolean; preferBackend?: boolean } = {},
 ): Promise<boolean> {
+  const maxAttempts = opts.maxAttempts ?? AUTO_TITLE_MAX_ATTEMPTS;
   if (autoTitleInFlight.has(sessionId)) return false;
-  if ((autoTitleAttempts.get(sessionId) ?? 0) >= AUTO_TITLE_MAX_ATTEMPTS) return false;
+  if (autoTitleAttemptCount(sessionId) >= maxAttempts) return false;
   autoTitleInFlight.add(sessionId);
 
   try {
@@ -1128,11 +1152,29 @@ async function askAndApplyTitle(
     // the live map is empty but the worker is still alive. For native sids the
     // ACP lookup is one cheap record read that misses. Both providers expose a
     // hidden main-model prompt — the ONE capability titling actually needs.
-    // No live session of either kind → nothing to ask (deliberately does NOT
-    // burn an attempt: the process may attach later).
-    const acp = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined);
-    const live = acp ? undefined : sessionRunner.findSessionByClaudeId(sessionId);
-    if (!acp && (!live || (!live.askSideQuestion && !live.generateSessionTitle))) return false;
+    // noColdAttach: peek the live ACP map only (findAcpSession is a pure map
+    // lookup) — findOrAttachAcpSession would SPAWN a whole worker for a dead
+    // codex session, which a background sweep must never pay for.
+    const acp = opts.noColdAttach
+      ? sessionRunner.findAcpSession(sessionId)
+      : await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined);
+    let live = acp ? undefined : sessionRunner.findSessionByClaudeId(sessionId);
+    if (opts.noColdAttach && !acp && live) {
+      // A native wrapper holding a codex sid is a misroute (2026-08-10
+      // incident) — without the durable-record consult that findOrAttach
+      // performs, verify the engine ourselves before dispatching into it.
+      try {
+        const { getSessionByClaudeId } = await import('../session-tracker.js');
+        if ((await getSessionByClaudeId(sessionId))?.engine === 'codex') live = undefined;
+      } catch { live = undefined; }
+    }
+    // No session-delivered channel AND the backend channel is gated off →
+    // nothing to ask. When the backend IS available we proceed even with no
+    // live session at all: that is exactly the wedged-daemon / dead-wrapper
+    // failure mode the backend channel exists for (2026-08-23 repro).
+    const { backendTitleAvailable, titleViaBackendModel } = await import('../session-title-backend.js');
+    const haveCliChannel = !!acp || !!(live && (live.askSideQuestion || live.generateSessionTitle));
+    if (!haveCliChannel && !backendTitleAvailable()) return false;
 
     // The caller's task snapshot can be stale (hook payload cache is up to
     // 10s old) — re-read before spending a CLI round-trip, so a send that
@@ -1140,7 +1182,7 @@ async function askAndApplyTitle(
     const { getTask, updateTask } = await import('../task-manager.js');
     if (((await getTask(taskId)).title ?? '') !== placeholder) return false;
 
-    autoTitleAttempts.set(sessionId, (autoTitleAttempts.get(sessionId) ?? 0) + 1);
+    bumpAutoTitleAttempts(sessionId);
     const { ContentValidationError, validatePluginContent, pluginContentRequirement } =
       await import('../task-manager.js');
     // The plugin's content requirement (contentRequirement) ships in the FIRST
@@ -1153,22 +1195,35 @@ async function askAndApplyTitle(
     // authors both the requirement and the validator.
     const requirement = pluginContentRequirement(await getTask(taskId), 'title');
 
-    let title: string | null;
-    let channel: string;
-    if (acp) {
+    let title: string | null = null;
+    let channel = '';
+    // preferBackend (the sweep): bounded fast-model call first.
+    if (opts.preferBackend) {
+      title = await titleViaBackendModel(message, placeholder, requirement);
+      channel = 'backend_model';
+    }
+    if (!title && acp) {
       title = await titleViaAcpSelfReport(acp, message, placeholder, requirement);
       channel = 'acp_self_report';
-    } else {
-      title = await titleViaSideQuestion(live!, message, placeholder, requirement);
+    } else if (!title && live) {
+      title = await titleViaSideQuestion(live, message, placeholder, requirement);
       channel = 'side_question';
       if (!title) {
-        title = await titleViaCliTitler(live!, message, placeholder, requirement);
+        title = await titleViaCliTitler(live, message, placeholder, requirement);
         channel = 'cli_titler';
       }
+    }
+    // Backend fallback: Walnut's own fast model. Fires when the session
+    // channels failed (wedged daemon control pipe) or no live session exists
+    // (dead wrapper). Result goes through the same plugin validation below.
+    if (!title && !opts.preferBackend) {
+      title = await titleViaBackendModel(message, placeholder, requirement);
+      channel = 'backend_model';
     }
     if (!title) {
       log.session.warn('session-auto-title: no title from any channel — placeholder kept', {
         sessionId, taskId, provider: acp ? 'acp' : 'native',
+        hadLiveSession: !!(acp || live), backendAvailable: backendTitleAvailable(),
       });
       return false;
     }
@@ -1216,18 +1271,23 @@ async function askAndApplyTitle(
     }
     autoTitleAttempts.delete(sessionId); // done — free the entry
 
-    // Mirror onto the session record (same placeholder guard) so the session
-    // panel header and search index pick it up too.
+    // Mirror onto the session record so the session panel header and search
+    // index pick it up too. Guard: only replace a record title that carries no
+    // human signal — the exact placeholder or empty ("Untitled session" in the
+    // UI is a render-time fallback for empty, never a stored value; a stored
+    // "untitled" would be user-typed and must be kept). A record the user (or
+    // another writer) titled is never clobbered.
     try {
       const { getSessionByClaudeId, updateSessionRecord } = await import('../session-tracker.js');
       const record = await getSessionByClaudeId(sessionId);
-      if (record && (record.title ?? '') === placeholder) {
+      const recordTitle = (record?.title ?? '').trim();
+      if (record && (recordTitle === '' || recordTitle === placeholder)) {
         await updateSessionRecord(sessionId, { title });
       }
     } catch { /* record mirror is best-effort; the task title is the visible one */ }
 
-    log.session.info('session-auto-title: applied CLI-generated title', {
-      sessionId, taskId, title,
+    log.session.info('session-auto-title: applied generated title', {
+      sessionId, taskId, title, channel,
     });
     return true;
   } catch (err) {
@@ -1272,10 +1332,14 @@ export async function autoTitleFromLaunch(
     await new Promise((r) => setTimeout(r, 1_000));
   }
   if (!found) {
-    log.session.warn('session-auto-title: launch kick expired — no live session in 60s', {
+    // Do NOT bail: askAndApplyTitle's backend (Walnut-side model) channel works
+    // without a live session — a spawn that is still cold (or failed outright,
+    // 2026-08-23 wedged-daemon repro) gets its title anyway. When the backend is
+    // gated off too, askAndApplyTitle no-ops and the onMessageSend hook / the
+    // title reconciler sweep cover the task later.
+    log.session.warn('session-auto-title: launch kick found no live session in 60s — trying backend channel', {
       sessionId, taskId,
     });
-    return; // the onMessageSend hook still covers the user's next send
   }
   await askAndApplyTitle(sessionId, taskId, trimmed, placeholder);
 }
@@ -1295,20 +1359,21 @@ export async function autoTitleFromLaunch(
  */
 export async function autoTitleFromObservedMessage(
   sessionId: string, taskId: string, rawMessage: string,
-): Promise<void> {
+  opts: { maxAttempts?: number; noColdAttach?: boolean; preferBackend?: boolean } = {},
+): Promise<boolean> {
   // Strip the "[Images attached …]\n- <path>…" prefix the send routes prepend —
   // file paths carry no titling signal. An image-only message leaves nothing.
   const message = rawMessage
     .replace(/^\[Images attached[^\]]*\]\n(?:- \S[^\n]*\n)*\n?/, '')
     .trim();
-  if (!message) return;
-  if (/^\/[a-z][\w-]*(\s|$)/i.test(message)) return; // slash command
+  if (!message) return false;
+  if (/^\/[a-z][\w-]*(\s|$)/i.test(message)) return false; // slash command
 
   // Cheap placeholder gate before spending anything (same both-cwds logic as
   // the hook — cwd-rename-detector can move cwd after launch).
   const { getTask } = await import('../task-manager.js');
   let task;
-  try { task = await getTask(taskId); } catch { return; }
+  try { task = await getTask(taskId); } catch { return false; }
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId).catch(() => undefined);
   const { defaultSessionTaskTitle } = await import('../sessions/quick-start.js');
@@ -1316,9 +1381,9 @@ export async function autoTitleFromObservedMessage(
     .filter((c): c is string => !!c)
     .map(defaultSessionTaskTitle)
     .find((ph) => (task.title ?? '') === ph);
-  if (!placeholder) return;
+  if (!placeholder) return false;
 
-  await askAndApplyTitle(sessionId, taskId, message, placeholder);
+  return askAndApplyTitle(sessionId, taskId, message, placeholder, opts);
 }
 
 export const sessionAutoTitleHook: SessionHookDefinition = {

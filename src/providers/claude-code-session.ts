@@ -7191,6 +7191,17 @@ export class SessionRunner {
         }
       }
     })
+
+    // Durable placeholder-title sweep — retries titling from disk state when
+    // every event-driven trigger failed (wedged daemon at launch, dead
+    // wrapper). No-op in tests and on cloud replicas; see the module header.
+    import('../core/session-title-reconciler.js')
+      .then(({ startSessionTitleReconciler }) => startSessionTitleReconciler())
+      .catch((err) => {
+        log.session.warn('title reconciler failed to start', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
   }
 
   /**
