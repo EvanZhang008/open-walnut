@@ -616,8 +616,10 @@ function AiFileSummary({ sessionId, change }: { sessionId: string; change: Sessi
             return;
           }
           // 422 = this file is never summarizable (secrets/binary) → no strip,
-          // no retry (retrying can't succeed).
-          if (err.status === 422) {
+          // no retry (retrying can't succeed). 404 = the session never touched
+          // this file (git bases can list files outside the session changeset)
+          // — equally unretryable, hide quietly.
+          if (err.status === 422 || err.status === 404) {
             setState('hidden');
             return;
           }
@@ -1124,6 +1126,10 @@ function FileDiffPane({
 
   return (
     <div className="session-diff-filepane" data-file-path={change.filePath}>
+      {/* Sticky wrapper keeps the header AND the ✦ strip pinned while the diff
+          scrolls (a fixed pixel `top` on the strip breaks at other zoom/font
+          sizes; the head's own sticky is inert inside this wrapper). */}
+      <div className="session-diff-filepane-sticky">
       <div className="session-diff-filepane-head">
         <span className="session-diff-filepane-path" title={change.filePath}>{change.relPath}</span>
         {change.status === 'renamed' && change.oldRelPath && (
@@ -1140,6 +1146,7 @@ function FileDiffPane({
         </span>
       </div>
       {aiSummaryOn && <AiFileSummary sessionId={sessionId} change={change} />}
+      </div>
       {rendered && renderedBlocks != null ? (
         <RenderedMarkdown blocks={renderedBlocks} dragging={mdDragRange != null} renderRow={renderMarkdownRow} />
       ) : file && hybridBody ? (
@@ -1576,10 +1583,12 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   // not on every keystroke of ongoing edits.
   const [criticalMap, setCriticalMap] = useState<Map<string, string>>(() => new Map());
   const triageKey = useMemo(() => {
-    if (!isSessionBase || !files.length) return '';
+    // Runs under every base (git bases too — the server derives the real
+    // session changeset itself; the displayed file list is only a memo key).
+    if (!files.length) return '';
     const shape = files.map((f) => `${f.change.status}\t${f.change.filePath}`).sort().join('\n');
     return `${sessionId}:${contentDigest(shape)}`;
-  }, [sessionId, isSessionBase, files]);
+  }, [sessionId, files]);
   useEffect(() => {
     if (!triageKey || !aiSummaryOn || aiSummaryUnavailable) { setCriticalMap(new Map()); return; }
     const memoHit = triageMemo.get(triageKey);
@@ -2052,7 +2061,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
                     onToggle={toggleDir}
                     selectedId={selectedId}
                     onSelectFile={selectFile}
-                    critical={aiSummaryOn && isSessionBase ? criticalMap : undefined}
+                    critical={aiSummaryOn ? criticalMap : undefined}
                   />
                 ))}
                 {ghost && (
@@ -2106,10 +2115,10 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
                 sessionCwd={sessionCwd}
                 sessionHost={sessionHost}
                 sessionId={sessionId}
-                // Summaries describe the SESSION-base diff (that's what the
-                // server endpoint reads) — hide the strip under git bases so it
-                // can never caption a different comparison's diff.
-                aiSummaryOn={aiSummaryOn && isSessionBase}
+                // Summaries always describe the SESSION's change to this file
+                // (that's what the server reads) — shown under git bases too as
+                // context; files the session never touched 404 → strip hides.
+                aiSummaryOn={aiSummaryOn}
                 pending={pendingForFile}
                 onAddComment={addComment}
                 onSendNow={sendMessage}

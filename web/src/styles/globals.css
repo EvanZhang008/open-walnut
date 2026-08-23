@@ -25174,6 +25174,8 @@ a.file-link:hover {
   background: var(--bg);
 }
 .session-diff-filepane { display: flex; flex-direction: column; }
+/* Pins the file header + ✦ AI strip together while the diff scrolls. */
+.session-diff-filepane-sticky { position: sticky; top: 0; z-index: 2; }
 .session-diff-filepane-head {
   position: sticky;
   top: 0;

@@ -35,10 +35,13 @@ const lightList = {
   light: true,
 }
 
+// FILE_A's diff is long on purpose: the sticky-strip test scrolls it.
+const LONG_AFTER = 'const x = 2\n' + Array.from({ length: 300 }, (_, i) => `export const filler${i} = ${i};`).join('\n') + '\n'
+
 const fullFile: Record<string, unknown> = {
   [FILE_A]: {
     sessionId: SESSION_ID, repoRoot: '/repo',
-    file: { filePath: FILE_A, relPath: 'src/alpha.ts', before: 'const x = 1\n', after: 'const x = 2\n', status: 'modified', ops: 2, partial: false },
+    file: { filePath: FILE_A, relPath: 'src/alpha.ts', before: 'const x = 1\n', after: LONG_AFTER, status: 'modified', ops: 2, partial: false },
   },
   [FILE_B]: {
     sessionId: SESSION_ID, repoRoot: '/repo',
@@ -86,6 +89,24 @@ async function stubChangesApi(page: Page, opts: StubOpts): Promise<{ summaryCall
           cached: false, hash: 'th1',
         }),
       })
+      return
+    }
+    // Git bases (?base=uncommitted/remote) get FULL contents, light session
+    // lists otherwise — mirrors the real endpoint's contract.
+    if (url.searchParams.get('base')) {
+      const gitList = {
+        ...lightList,
+        light: false,
+        groups: [{
+          ...lightList.groups[0],
+          files: lightList.groups[0].files.map((f) => ({
+            ...f,
+            before: (fullFile[f.filePath] as { file: { before: string } }).file.before,
+            after: (fullFile[f.filePath] as { file: { after: string } }).file.after,
+          })),
+        }],
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(gitList) })
       return
     }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(lightList) })
@@ -142,14 +163,17 @@ test('✦ AI toggle hides the strip and stops fetching; sticky via localStorage'
   const panel = await openChangedTab(page)
   await expect(panel.locator('.session-diff-ai-summary')).toBeVisible({ timeout: 10_000 })
 
-  const before = summaryCalls.length
+  // Pin the real contract: selecting a file with the toggle OFF must not fetch
+  // THAT file's summary. (Not a global count freeze — a late ui-prefs merge or
+  // StrictMode remount can land a stray call for the already-open file under
+  // machine load; that race is not the behavior under test.)
+  const betaBefore = summaryCalls.filter((p) => p === FILE_B).length
   await panel.locator('.session-diff-ai-toggle').click()
   await expect(panel.locator('.session-diff-ai-summary')).toHaveCount(0)
 
-  // Switching files with the toggle off must not fetch.
   await panel.locator('.session-diff-tree-file', { hasText: 'beta.ts' }).click()
   await expect(panel.locator('.session-diff-filepane-path')).toContainText('beta.ts')
-  expect(summaryCalls.length).toBe(before)
+  expect(summaryCalls.filter((p) => p === FILE_B).length).toBe(betaBefore)
 
   // Preference persisted.
   const stored = await page.evaluate(() => localStorage.getItem('open-walnut-diff-ai-summary'))
@@ -171,6 +195,41 @@ test('failed generation shows a quiet error with a working Retry', async ({ page
   await expect(strip).toContainText('AI summary unavailable', { timeout: 10_000 })
   await strip.locator('.session-diff-ai-retry').click()
   await expect(strip).toContainText('Recovered summary.', { timeout: 10_000 })
+})
+
+test('strip stays pinned to the top of the scroller while the diff scrolls', async ({ page }) => {
+  await stubChangesApi(page, { summary: () => ({ summary: 'Pinned summary.' }) })
+  const panel = await openChangedTab(page)
+  const strip = panel.locator('.session-diff-ai-summary')
+  await expect(strip).toContainText('Pinned summary.', { timeout: 10_000 })
+
+  const scroller = panel.locator('.session-diff-main')
+  await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight })
+  // Sticky = the strip's box hugs the scroller's top edge even when scrolled
+  // (the header sits directly above it inside the same sticky wrapper).
+  await expect(strip).toBeVisible()
+  const [stripBox, scrollerBox, headBox] = await Promise.all([
+    strip.boundingBox(), scroller.boundingBox(),
+    panel.locator('.session-diff-filepane-head').boundingBox(),
+  ])
+  expect(stripBox && scrollerBox && headBox).toBeTruthy()
+  expect(Math.abs(headBox!.y - scrollerBox!.y)).toBeLessThan(2)
+  expect(Math.abs(stripBox!.y - (headBox!.y + headBox!.height))).toBeLessThan(2)
+})
+
+test('strip and ✦ star persist under git bases (Uncommitted)', async ({ page }) => {
+  await stubChangesApi(page, { summary: () => ({ summary: 'Session-authored change.' }) })
+  const panel = await openChangedTab(page)
+  await expect(panel.locator('.session-diff-ai-summary')).toBeVisible({ timeout: 10_000 })
+
+  await panel.locator('.session-diff-base-select select').selectOption('uncommitted')
+  // The summary still describes the session's own change to this file.
+  await expect(panel.locator('.session-diff-ai-summary')).toContainText('Session-authored change.', { timeout: 10_000 })
+  await expect(panel.locator('.session-diff-tree-critical')).toHaveCount(1, { timeout: 10_000 })
+
+  // Base choice is remembered per session (ui-prefs) — reset for other specs.
+  await panel.locator('.session-diff-base-select select').selectOption('session')
+  await expect(panel.locator('.session-diff-ai-summary')).toBeVisible({ timeout: 10_000 })
 })
 
 test('triage stars the critical file in the tree with a reason tooltip', async ({ page }) => {
