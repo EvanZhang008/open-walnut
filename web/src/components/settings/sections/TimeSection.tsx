@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { fetchTimeSummary, type DayTime, type TimeSummary, type TimeHumanKind } from '@/api/time';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { log } from '@/utils/log';
+import { TimeTimeline } from './TimeTimeline';
+import { formatDuration } from './time-timeline';
 import '@/styles/time-page.css';
 
 /**
@@ -9,6 +11,9 @@ import '@/styles/time-page.css';
  *
  * "My time" answers "where did my attention go?" and shows HUMAN time only.
  * "Agents" answers "what did my agents run?" and shows AGENT time only.
+ * "Timeline" answers "how did my day actually go?" and plots ONE day as blocks
+ * on an hour axis — human lane and agent lane in physically separate columns,
+ * agents off by default (TimeTimeline.tsx).
  *
  * Why they are split (a real misread, 2026-08-23): the first cut put a small human
  * number and a big agent number in the same row and stacked both into one bar. The
@@ -26,7 +31,7 @@ const TREND_DAYS = 7;
 
 type RangeKey = 'today' | 'yesterday' | '7d';
 type KindKey = 'all' | TimeHumanKind;
-type TabKey = 'mine' | 'agents';
+type TabKey = 'mine' | 'agents' | 'timeline';
 
 const RANGES: Array<{ value: RangeKey; label: string }> = [
   { value: 'today', label: 'Today' },
@@ -147,49 +152,61 @@ export function TimeSection() {
         >
           Agents
         </button>
+        <button
+          role="tab"
+          aria-selected={tab === 'timeline'}
+          data-testid="time-tab-timeline"
+          className={`usage-period-tab${tab === 'timeline' ? ' active' : ''}`}
+          onClick={() => setTab('timeline')}
+        >
+          Timeline
+        </button>
       </div>
 
-      <div className="time-filters">
-        <div className="usage-period-tabs" role="group" aria-label="Date range">
-          {RANGES.map((r) => (
-            <button
-              key={r.value}
-              data-testid={`time-range-${r.value}`}
-              className={`usage-period-tab${range === r.value ? ' active' : ''}`}
-              onClick={() => setRange(r.value)}
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
-
-        <label className="time-filter-field">
-          <span className="time-filter-label">Project</span>
-          <select
-            data-testid="time-project-filter"
-            value={project}
-            onChange={(e) => setProject(e.target.value)}
-          >
-            <option value="">All projects</option>
-            {projectOptions.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
-        </label>
-
-        {tab === 'mine' && (
-          <div className="usage-period-tabs" role="group" aria-label="Activity kind">
-            {KINDS.map((k) => (
+      {/* The timeline owns its own day nav; the range/kind pills would fight it. */}
+      {tab !== 'timeline' && (
+        <div className="time-filters">
+          <div className="usage-period-tabs" role="group" aria-label="Date range">
+            {RANGES.map((r) => (
               <button
-                key={k.value}
-                data-testid={`time-kind-${k.value}`}
-                className={`usage-period-tab${kind === k.value ? ' active' : ''}`}
-                onClick={() => setKind(k.value)}
+                key={r.value}
+                data-testid={`time-range-${r.value}`}
+                className={`usage-period-tab${range === r.value ? ' active' : ''}`}
+                onClick={() => setRange(r.value)}
               >
-                {k.label}
+                {r.label}
               </button>
             ))}
           </div>
-        )}
-      </div>
+
+          <label className="time-filter-field">
+            <span className="time-filter-label">Project</span>
+            <select
+              data-testid="time-project-filter"
+              value={project}
+              onChange={(e) => setProject(e.target.value)}
+            >
+              <option value="">All projects</option>
+              {projectOptions.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </label>
+
+          {tab === 'mine' && (
+            <div className="usage-period-tabs" role="group" aria-label="Activity kind">
+              {KINDS.map((k) => (
+                <button
+                  key={k.value}
+                  data-testid={`time-kind-${k.value}`}
+                  className={`usage-period-tab${kind === k.value ? ' active' : ''}`}
+                  onClick={() => setKind(k.value)}
+                >
+                  {k.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {error && <div className="time-degraded">Error: {error}</div>}
       {summary?.degraded && (
@@ -198,21 +215,34 @@ export function TimeSection() {
         </div>
       )}
 
-      {tab === 'mine'
-        ? (
-          <MyTimeView
-            rows={humanRows}
-            rangeLabel={rangeLabel}
-            loading={loading && !summary}
-            trendDays={summary?.days ?? []}
-            today={summary?.today ?? ''}
-            keep={keep}
-            kind={kind}
-          />
-        )
-        : (
-          <AgentsView rows={agentRows} rangeLabel={rangeLabel} loading={loading && !summary} />
-        )}
+      {tab === 'mine' && (
+        <MyTimeView
+          rows={humanRows}
+          rangeLabel={rangeLabel}
+          loading={loading && !summary}
+          trendDays={summary?.days ?? []}
+          today={summary?.today ?? ''}
+          keep={keep}
+          kind={kind}
+        />
+      )}
+      {tab === 'agents' && (
+        <AgentsView rows={agentRows} rangeLabel={rangeLabel} loading={loading && !summary} />
+      )}
+      {tab === 'timeline' && (
+        // Mounted only once the window is known: the day nav is bounded by the
+        // days the summary fetched, so rendering it against an empty list would
+        // disable both arrows for a frame.
+        summary
+          ? (
+            <TimeTimeline
+              dates={summary.days.map((d) => d.date)}
+              today={summary.today}
+              titleFor={meta.titleFor}
+            />
+          )
+          : <p className="time-empty">Loading…</p>
+      )}
     </div>
   );
 }
@@ -437,20 +467,4 @@ function foldRows(
     }
   }
   return [...byTask.values()].sort((a, b) => b.ms - a.ms || a.title.localeCompare(b.title));
-}
-
-/**
- * Under a minute → "42s"; under an hour → "42m"; otherwise "2h 07m".
- *
- * Seconds matter: rounding to minutes printed a real 4-second window as "0m",
- * which reads as "nothing was recorded" — the same "this data is wrong" reaction
- * the two-tab split was made to prevent.
- */
-export function formatDuration(ms: number): string {
-  if (ms < 60_000) return `${Math.max(0, Math.round(ms / 1000))}s`;
-  const totalMinutes = Math.round(ms / 60_000);
-  if (totalMinutes < 60) return `${totalMinutes}m`;
-  const h = Math.floor(totalMinutes / 60);
-  const m = totalMinutes % 60;
-  return `${h}h ${String(m).padStart(2, '0')}m`;
 }

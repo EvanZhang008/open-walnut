@@ -28,8 +28,17 @@ export interface HeartbeatSample {
 
 /** A validated, day-keyed record — the JSONL line shape and the fold input. */
 export interface TimeRecord {
-  /** Local YYYY-MM-DD, assigned server-side from `ts`. */
+  /**
+   * Local YYYY-MM-DD. Assigned server-side from `ts` for human samples; for an
+   * agent turn it is the day the result ARRIVED, which can differ from `ts` by
+   * the length of a turn that straddled midnight.
+   */
   date: string;
+  /**
+   * START of the counted window, for every kind — an agent turn is therefore
+   * stamped `durationMs` before the result arrived. `[ts, ts + durationMs)` is
+   * the interval the day timeline draws (blocks.ts).
+   */
   ts: string;
   durationMs: number;
   kind: TimeKind;

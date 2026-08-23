@@ -15,6 +15,8 @@
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 
 const SHOT_DIR = '/tmp/action-cards-time'
 
@@ -238,5 +240,225 @@ test.describe('time tracking', () => {
     await timePanel.locator('[data-testid="time-tab-mine"]').click()
     await expect(mine).toBeVisible()
     await expect(timeRow).toBeVisible()
+  })
+})
+
+// ── The Timeline tab: the day as blocks, human and agent in separate lanes ──
+
+/** Total wall span of the seeded windows. Wide enough to draw a labelled block. */
+const SEED_SPAN_MS = 40 * 60_000
+/** One heartbeat sample can carry at most ten minutes (the server clamps). */
+const SEED_SAMPLE_MS = 10 * 60_000
+
+function localDate(ms: number): string {
+  const d = new Date(ms)
+  return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-')
+}
+
+/**
+ * Where to seed the day being drawn.
+ *
+ * Two constraints collide: every window must land inside ONE local day (blocks
+ * clip at midnight) and none may be in the future (the server rejects those).
+ * Within the first 40 minutes after local midnight neither holds for a 40-minute
+ * span on today, so seed yesterday afternoon and let the test walk one day back.
+ */
+function seedAnchor(): { startMs: number; date: string } {
+  const now = Date.now()
+  const start = now - SEED_SPAN_MS
+  if (localDate(start) === localDate(now)) return { startMs: start, date: localDate(now) }
+  const midnight = new Date()
+  midnight.setHours(0, 0, 0, 0)
+  const yesterdayAfternoon = midnight.getTime() - 8 * 60 * 60_000
+  return { startMs: yesterdayAfternoon, date: localDate(yesterdayAfternoon) }
+}
+
+interface Block { taskId: string; kind: string; ms: number }
+
+/**
+ * Wait for the shell, not for the network to go quiet.
+ *
+ * `networkidle` needs 500ms with nothing in flight; on a loaded machine this app
+ * never gets there inside a test budget (it polls status routes on mount), and the
+ * first run of this test burned its whole timeout on the wait after a reload. The
+ * sidebar being visible is the real precondition for every click that follows.
+ */
+async function appReady(page: Page): Promise<void> {
+  await page.waitForLoadState('domcontentloaded')
+  await expect(page.locator('.sidebar-nav')).toBeVisible({ timeout: 90_000 })
+}
+
+async function blocksFor(request: APIRequestContext, date: string, taskId: string): Promise<Block[]> {
+  const res = await request.get('/api/time/blocks', { params: { date } })
+  expect(res.ok()).toBe(true)
+  const body = await res.json() as { blocks: Block[] }
+  return body.blocks.filter((b) => b.taskId === taskId)
+}
+
+/**
+ * Append ONE agent interval to the fixture server's own day file.
+ *
+ * Agent time is derived from a real `session:result` bus event, which needs a
+ * live CLI turn this fixture has no session for — so the record is written where
+ * the store keeps it, and the route reads it back through its normal path. The
+ * dir is found by CONTENT (the run's unique task id), so a leftover fixture dir
+ * from another run can never be picked by mistake.
+ */
+async function seedAgentInterval(date: string, startMs: number, taskId: string, durationMs: number): Promise<boolean> {
+  const base = os.tmpdir()
+  const dirs = (await fs.readdir(base).catch(() => [] as string[])).filter((d) => d.startsWith('walnut-pw-'))
+  for (const dir of dirs) {
+    const file = path.join(base, dir, 'time-tracking', `${date}.jsonl`)
+    const text = await fs.readFile(file, 'utf-8').catch(() => '')
+    if (!text.includes(taskId)) continue
+    const rec = {
+      date,
+      ts: new Date(startMs).toISOString(),
+      durationMs,
+      kind: 'agent',
+      taskId,
+      sessionId: `sess-timeline-${taskId}`,
+    }
+    await fs.appendFile(file, `${JSON.stringify(rec)}\n`, 'utf-8')
+    return true
+  }
+  return false
+}
+
+test.describe('time timeline', () => {
+  test('plots the day as blocks, keeps agents in their own lane, and remembers the toggle', async ({ page, request }) => {
+    // Long on purpose: this is one whole user journey (seed → plot → toggle →
+    // reload → empty day → today → dark theme) and every step is a real click.
+    test.setTimeout(420_000)
+
+    const token = stamp()
+    const title = `Timeline fixture ${token}`
+    const taskId = await createTask(request, title)
+    const anchor = seedAnchor()
+
+    // Seed HUMAN time through the real route: four adjacent ten-minute windows,
+    // which the server folds into ONE forty-minute block.
+    const samples = Array.from({ length: SEED_SPAN_MS / SEED_SAMPLE_MS }, (_, i) => ({
+      ts: new Date(anchor.startMs + i * SEED_SAMPLE_MS).toISOString(),
+      durationMs: SEED_SAMPLE_MS,
+      kind: 'session',
+      taskId,
+    }))
+    const posted = await request.post('/api/time/heartbeats', { data: { samples } })
+    expect(posted.status()).toBe(204)
+
+    // The fold really produced one block before the UI is touched at all.
+    await expect.poll(async () => (await blocksFor(request, anchor.date, taskId)).map((b) => b.ms), {
+      timeout: 30_000,
+      intervals: [500, 500, 1_000],
+      message: 'four adjacent windows should fold into one 40-minute block',
+    }).toEqual([SEED_SPAN_MS])
+
+    const agentSeeded = await seedAgentInterval(anchor.date, anchor.startMs, taskId, 25 * 60_000)
+    expect(agentSeeded, 'the fixture day file should have been found by task id — check the walnut-pw tmp layout').toBe(true)
+
+    await page.goto('/')
+    await appReady(page)
+    await openTimeSection(page)
+    const panel = page.locator('#time.time-page')
+    await expect(panel).toBeVisible({ timeout: 20_000 })
+
+    await panel.locator('[data-testid="time-tab-timeline"]').click()
+    const tl = panel.locator('[data-testid="time-view-timeline"]')
+    await expect(tl).toBeVisible({ timeout: 20_000 })
+    if (anchor.date !== localDate(Date.now())) {
+      await tl.locator('[data-testid="time-timeline-prev"]').click()
+    }
+
+    // The toggle is persisted (ui-prefs mirrors it server-side), so a rerun of
+    // this spec against the same fixture server would inherit the ON state.
+    // Put it back to its documented default before asserting the default.
+    const agentsToggle = tl.locator('[data-testid="time-timeline-agents-toggle"]')
+    if (await agentsToggle.isChecked()) await agentsToggle.uncheck()
+    await expect(agentsToggle).not.toBeChecked()
+
+    // ── A block, in the human lane, labelled with the task's own title.
+    const humanLane = tl.locator('[data-testid="time-timeline-lane-human"]')
+    const block = humanLane.locator(`.tt-block[data-time-task-id="${taskId}"]`)
+    await expect(block).toHaveCount(1, { timeout: 20_000 })
+    await expect(block).toHaveAttribute('data-time-kind', 'session')
+    await expect(block).toContainText(title)
+    // The legend decodes the colors without hovering anything.
+    await expect(tl.locator('[data-testid="time-timeline-legend"]')).toContainText(title)
+    // Agents OFF: no second lane, and no agent rectangle anywhere on the page.
+    await expect(tl.locator('[data-testid="time-timeline-lane-agent"]')).toHaveCount(0)
+    await expect(tl.locator('.tt-block[data-time-kind="agent"]')).toHaveCount(0)
+    await expect(tl.locator('[data-testid="time-timeline-agent-total"]')).toHaveCount(0)
+
+    // Hover reads out the task, the clock range, the duration and the kind.
+    await block.hover()
+    const detail = tl.locator('[data-testid="time-timeline-detail"]')
+    await expect(detail).toContainText(title)
+    await expect(detail).toContainText('40m')
+    await expect(detail).toContainText('Session')
+    await expect(detail).toContainText(/\d{1,2}:\d{2} [AP]M – \d{1,2}:\d{2} [AP]M/)
+    await panel.scrollIntoViewIfNeeded()
+    await shoot(page, 'timeline-01-day-with-data')
+
+    // ── Agents ON: a SEPARATE lane. Never the same lane, never the same block.
+    // Assertions are scoped to THIS run's task id: other tests in the same fixture
+    // server earn their own time on the same day, and a bare count would then be a
+    // test that fails for reasons the feature has nothing to do with.
+    await agentsToggle.check()
+    const agentLane = tl.locator('[data-testid="time-timeline-lane-agent"]')
+    await expect(agentLane).toBeVisible()
+    const agentBlock = agentLane.locator(`.tt-block[data-time-kind="agent"][data-time-task-id="${taskId}"]`)
+    await expect(agentBlock).toHaveCount(1)
+    await expect(agentLane.locator(`.tt-block[data-time-kind="session"]`)).toHaveCount(0)
+    await expect(humanLane.locator('.tt-block[data-time-kind="agent"]')).toHaveCount(0)
+    // The human block did not move, change lane, or absorb the agent's 25 minutes.
+    await expect(block).toHaveCount(1)
+    await expect(tl.locator('[data-testid="time-timeline-human-total"]')).toBeVisible()
+    await expect(tl.locator('[data-testid="time-timeline-agent-total"]')).toBeVisible()
+    // The agent's own turn reads as 25 minutes of AGENT time, never as yours.
+    await agentBlock.hover()
+    await expect(detail).toContainText('25m')
+    await expect(detail).toContainText('Agent')
+    await panel.scrollIntoViewIfNeeded()
+    await shoot(page, 'timeline-02-agents-on')
+
+    // ── The choice survives a reload (a preference, not a session toggle).
+    await page.reload()
+    await appReady(page)
+    await openTimeSection(page)
+    await panel.locator('[data-testid="time-tab-timeline"]').click()
+    await expect(tl).toBeVisible({ timeout: 20_000 })
+    await expect(tl.locator('[data-testid="time-timeline-agents-toggle"]')).toBeChecked()
+
+    // ── A day with nothing on it explains itself instead of drawing an empty grid.
+    const empty = tl.locator('[data-testid="time-timeline-empty"]')
+    for (let i = 0; i < 4 && (await empty.count()) === 0; i++) {
+      await tl.locator('[data-testid="time-timeline-prev"]').click()
+      await page.waitForTimeout(400)
+    }
+    await expect(empty).toBeVisible({ timeout: 20_000 })
+    await expect(empty).toContainText('Nothing tracked')
+    await panel.scrollIntoViewIfNeeded()
+    await shoot(page, 'timeline-03-empty-day')
+
+    // ── "Today" comes back to the day with the work on it.
+    await tl.locator('[data-testid="time-timeline-today"]').click()
+    if (anchor.date !== localDate(Date.now())) {
+      await tl.locator('[data-testid="time-timeline-prev"]').click()
+    }
+    await expect(block).toHaveCount(1, { timeout: 20_000 })
+
+    // ── Dark theme, through the real theme picker.
+    await page.locator('#general .theme-picker-btn', { hasText: 'Dark' }).click()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+    await panel.scrollIntoViewIfNeeded()
+    await expect(block).toBeVisible()
+    await shoot(page, 'timeline-04-dark')
+    await page.locator('#general .theme-picker-btn', { hasText: 'System' }).click()
+
+    // Leave the persisted preference at its default for the next run.
+    await panel.locator('[data-testid="time-tab-timeline"]').click()
+    const finalToggle = tl.locator('[data-testid="time-timeline-agents-toggle"]')
+    if (await finalToggle.isChecked()) await finalToggle.uncheck()
   })
 })

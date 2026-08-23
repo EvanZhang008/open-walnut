@@ -1,0 +1,437 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   Time Tracking → Timeline tab: the day as blocks on an hour axis.
+
+   Scoped entirely under .tt (imported by TimeTimeline.tsx). Do NOT move any
+   of this into globals.css. It leans on the same tokens the settings and
+   usage cards use (--bg-elevated, --border, --radius-*), so light and dark
+   both come out right without a second palette.
+
+   HUMAN vs AGENT is a hard visual split: human blocks carry a per-task hue
+   (--tt-block-color, set inline from a stable hash) and agent blocks are
+   always the purple --time-agent, hatched and muted. No task hue is ever
+   purple, so the two lanes can't be confused — not even in grayscale.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.tt {
+  --tt-gutter: 54px;
+  --tt-lane-gap: 10px;
+  outline: none;
+}
+
+.tt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--radius-md);
+}
+
+/* ── Day nav ── */
+
+.tt-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.tt-nav-btn,
+.tt-nav-reset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  min-width: 28px;
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.tt-nav-btn { font-size: 15px; line-height: 1; }
+
+.tt-nav-btn:hover:not(:disabled),
+.tt-nav-reset:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.tt-nav-btn:disabled,
+.tt-nav-reset:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.tt-nav-date {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 132px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.tt-nav-today {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tt-agents-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+
+/* ── Totals strip ── */
+
+.tt-totals {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.tt-total {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.tt-unplaced { color: var(--fg-muted); }
+
+.tt-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+.tt-swatch-human { background: var(--time-human); }
+
+.tt-swatch-agent {
+  background: var(--time-agent);
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.55) 0 2px,
+    transparent 2px 4px
+  );
+}
+
+/* ── Body: axis + lanes on the left, legend on the right ── */
+
+.tt-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 230px);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 720px) {
+  .tt-body { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* One grid child holding the lane titles + the scroller. .tt-body has exactly
+   two children (plot, legend) — a third one wrapped onto a second row and left
+   the plot rendering inside the 230px legend column. */
+.tt-plot { min-width: 0; }
+
+/* Lane titles sit OUTSIDE the scroller so they never scroll away. The gutter
+   column keeps them aligned with the lanes below. */
+.tt-lane-heads {
+  display: grid;
+  grid-template-columns: var(--tt-gutter) 1fr;
+  gap: 0;
+  margin-bottom: 4px;
+}
+
+.tt-lane-heads[data-agents='on'] {
+  grid-template-columns: var(--tt-gutter) 1fr 1fr;
+}
+
+.tt-lane-head-agent {
+  border-left: 1px solid var(--border);
+  padding-left: 8px;
+}
+
+.tt-lane-head {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+}
+
+.tt-lane-head-agent { color: var(--time-agent); }
+
+.tt-grid {
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.tt-canvas {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--tt-gutter) 1fr;
+}
+
+/* ── Hour ruler ── */
+
+.tt-ruler {
+  position: relative;
+  border-right: 1px solid var(--border);
+}
+
+.tt-hour {
+  position: relative;
+  box-sizing: border-box;
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.tt-hour:first-child { border-top-color: transparent; }
+
+.tt-hour-label {
+  position: absolute;
+  top: -7px;
+  right: 6px;
+  font-size: 10px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  background: var(--bg-elevated);
+  padding: 0 2px;
+}
+
+/* ── Lanes ── */
+
+.tt-lanes {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr;
+  /* Hour lines continue under the blocks; the gradient repeats per hour so it
+     stays aligned however tall the axis is. */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--border) 55%, transparent) 0 1px,
+    transparent 1px 48px
+  );
+}
+
+.tt-lanes[data-agents='on'] { grid-template-columns: 1fr 1fr; }
+
+.tt-lane {
+  position: relative;
+  min-width: 0;
+}
+
+.tt-lanes[data-agents='on'] .tt-lane + .tt-lane {
+  border-left: 1px solid var(--border);
+}
+
+/* ── Blocks ── */
+
+.tt-block {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 4px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition: opacity 120ms ease, box-shadow 120ms ease;
+}
+
+.tt-block-human {
+  background: color-mix(in srgb, var(--tt-block-color, var(--time-human)) 78%, transparent);
+  border-left: 3px solid var(--tt-block-color, var(--time-human));
+}
+
+/* Agents: the purple lane, muted and hatched so it can never read as your own
+   time even at a glance or in a grayscale screenshot. */
+.tt-block-agent {
+  background:
+    repeating-linear-gradient(
+      45deg,
+      color-mix(in srgb, var(--time-agent) 42%, transparent) 0 3px,
+      color-mix(in srgb, var(--time-agent) 18%, transparent) 3px 6px
+    );
+  border-left: 3px solid color-mix(in srgb, var(--time-agent) 70%, transparent);
+  opacity: 0.85;
+}
+
+/* Sub-5-minute work: a thin tick, visible but never shouting. */
+.tt-block.is-tick {
+  border-radius: 2px;
+  padding: 0;
+  border-left-width: 0;
+  min-height: 3px;
+}
+
+.tt-block:hover,
+.tt-block.is-hover,
+.tt-block:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+  outline: none;
+  z-index: 2;
+}
+
+.tt-block.is-dimmed { opacity: 0.22; }
+
+.tt-block-label {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.25;
+  color: #fff;
+  /* The block hues are mid-saturation, so white text needs a shadow to stay
+     legible on the lighter ones (amber, lime) in light theme. */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* ── Now line ── */
+
+.tt-now {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px solid var(--error);
+  z-index: 3;
+  pointer-events: none;
+}
+
+.tt-now-dot {
+  position: absolute;
+  left: -3px;
+  top: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--error);
+}
+
+.tt-now-label {
+  position: absolute;
+  right: 4px;
+  top: -15px;
+  /* A solid chip: the line can cross a block, and red-on-blue is unreadable. */
+  background: var(--bg-elevated);
+  padding: 0 3px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--error);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Legend ── */
+
+.tt-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tt-legend-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tt-legend-row.tt-legend-static { cursor: default; }
+
+.tt-legend-row:hover:not(.tt-legend-static) { background: var(--bg-elevated); }
+
+.tt-legend-row.is-picked {
+  background: var(--bg-elevated);
+  border-color: var(--accent);
+}
+
+.tt-legend-name {
+  font-size: 12px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tt-legend-ms {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Detail readout (a fixed strip, deliberately not a floating tooltip: an
+      overlay here would need placement rules and could clip at the card edge) ── */
+
+.tt-detail {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  min-height: 26px;
+  padding: 6px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.tt-detail-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tt-detail-meta { font-variant-numeric: tabular-nums; }
+
+.tt-detail-kind {
+  margin-left: auto;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.tt-detail-hint { color: var(--fg-muted); }

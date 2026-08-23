@@ -127,9 +127,19 @@ async function bank(ev: ResultLike, ms: number): Promise<void> {
     // The ACP/SDK emitter does not carry taskId — one indexed lookup fills it.
     const taskId = ev.taskId || await resolveTaskId(sessionId);
     const now = new Date();
+    // `ts` is the START of the counted window for EVERY kind (types.ts), and a
+    // turn result arrives at its END — so the interval opened `ms` ago. Recording
+    // the arrival instant instead drew a turn on the day timeline entirely after
+    // it had already finished. `ms` is capped at MAX_TURN_MS upstream, so this
+    // can never reach back further than that.
+    const startedAt = new Date(now.getTime() - ms);
     const rec: TimeRecord = {
+      // The DAY key stays the arrival day, unlike `ts`: it is the bucket the
+      // rollup already publishes, and moving a midnight-straddling turn to the
+      // previous day would silently restate totals the user has seen. The
+      // timeline clips such a turn to the day it is filed under.
       date: localDateKey(now),
-      ts: now.toISOString(),
+      ts: startedAt.toISOString(),
       durationMs: ms,
       kind: 'agent',
       sessionId,

@@ -3,11 +3,12 @@
  *
  *   POST /api/time/heartbeats  — the browser banks closed lease windows here.
  *   GET  /api/time/summary?days=N — per-day per-task human + agent time.
+ *   GET  /api/time/blocks?date=&kinds= — ONE day as intervals, for the timeline.
  *
- * Both answer fast or answer DEGRADED, never hang: the summary races a deadline
- * and returns whatever the in-memory rollup already holds (flagged
- * `degraded: true`) rather than pinning a connection while disk/store work
- * finishes. One stalled response starves the browser's 6-connection pool.
+ * All three answer fast or answer DEGRADED, never hang: the reads race a
+ * deadline and return whatever is already in hand (flagged `degraded: true`)
+ * rather than pinning a connection while disk/store work finishes. One stalled
+ * response starves the browser's 6-connection pool.
  *
  * Not `/api/timeline` — that path belongs to the screen-activity Life Tracker.
  */
@@ -16,9 +17,10 @@ import { Router, type Request, type Response } from 'express';
 import { CLOUD_MODE } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import {
-  getIndex, hydrate, localDateKey, recentDateKeys, recordTime, resetTimeStore,
-  sanitizeSamples, startAgentTimeCollector, stopAgentTimeCollector, summarize, withLedgerBackfill,
-  type RollupIndex, type TimeRecord, type TimeSummary,
+  dayBoundsMs, foldDayBlocks, getIndex, hydrate, localDateKey, readDayRecords, recentDateKeys,
+  recordTime, resetTimeStore, sanitizeSamples, startAgentTimeCollector, stopAgentTimeCollector,
+  summarize, withLedgerBackfill,
+  type DayBlocks, type RollupIndex, type TimeKind, type TimeRecord, type TimeSummary,
 } from '../../core/time-tracking/index.js';
 
 export const timeRouter = Router();
@@ -27,6 +29,11 @@ const DEFAULT_DAYS = 7;
 const MAX_DAYS = 90;
 /** Budget for the whole summary (hydrate + focus tiers + ledger backfill). */
 const SUMMARY_DEADLINE_MS = 2_000;
+/** Budget for one day of blocks (one file read + one title join). */
+const BLOCKS_DEADLINE_MS = 2_000;
+/** Distinct tasks whose titles one day's answer will join. */
+const MAX_TITLE_LOOKUPS = 200;
+const ALL_KINDS: readonly TimeKind[] = ['session', 'triage', 'chat', 'agent'];
 
 /** Start the collectors. Idempotent; safe to call on every server boot. */
 export function startTimeTracking(): void {
@@ -160,5 +167,79 @@ async function readFocusTaskIds(): Promise<string[]> {
     return split.focus_tasks ?? [];
   } catch {
     return [];
+  }
+}
+
+// ── GET /api/time/blocks?date=YYYY-MM-DD&kinds=session,chat ──
+// ONE day as intervals: what the day timeline draws. The fold (merge, threshold,
+// midnight clipping) lives in core/time-tracking/blocks.ts and is unit tested
+// there; this route only reads the day file and joins task titles.
+
+export interface DayBlocksResponse extends DayBlocks {
+  /** taskId → title, for the blocks in this answer. Missing = unknown/deleted. */
+  titles: Record<string, string>;
+  /** True when the answer had to be given up on before it was complete. */
+  degraded?: boolean;
+}
+
+timeRouter.get('/blocks', async (req: Request, res: Response) => {
+  if (CLOUD_MODE) {
+    res.status(501).json({ error: 'not_supported_cloud', message: 'time tracking lives on the primary box only' });
+    return;
+  }
+  const raw = typeof req.query.date === 'string' && req.query.date ? req.query.date : localDateKey(new Date());
+  // A bad date is rejected, NOT quietly answered for today: silently drawing a
+  // different day than the one asked for is worse than an error. dayBoundsMs also
+  // rejects a well-formed-but-unreal date, which keeps the store's `${date}.jsonl`
+  // path from ever seeing anything but a real calendar day.
+  if (!dayBoundsMs(raw)) {
+    res.status(400).json({ error: 'invalid_date', message: 'date must be a real YYYY-MM-DD' });
+    return;
+  }
+  const date = raw;
+  const kinds = parseKinds(req.query.kinds);
+
+  const empty = (): DayBlocksResponse => ({ date, blocks: [], titles: {}, unplacedMs: 0, degraded: true });
+  const bail = deadline(BLOCKS_DEADLINE_MS);
+  // The loser of the race keeps running, so absorb its failure here rather than
+  // letting it become an unhandled rejection after the response is sent.
+  const build = buildBlocks(date, kinds).catch((err: unknown) => {
+    log.web.warn('time blocks failed', { date, error: err instanceof Error ? err.message : String(err) });
+    return empty();
+  });
+
+  try {
+    res.json(await Promise.race([build, bail.promise.then(empty)]));
+  } finally {
+    bail.cancel();
+  }
+});
+
+/** `kinds=session,chat` → the valid subset; absent/junk → undefined (all kinds). */
+function parseKinds(raw: unknown): TimeKind[] | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  const wanted = raw.split(',').map((s) => s.trim());
+  const kinds = ALL_KINDS.filter((k) => wanted.includes(k));
+  return kinds.length > 0 ? [...kinds] : undefined;
+}
+
+async function buildBlocks(date: string, kinds: TimeKind[] | undefined): Promise<DayBlocksResponse> {
+  const records = await readDayRecords(date);
+  const day = foldDayBlocks(records, { date, ...(kinds ? { kinds } : {}) });
+  const ids = [...new Set(day.blocks.map((b) => b.taskId).filter(Boolean))];
+  return { ...day, titles: await readTaskTitles(ids) };
+}
+
+/** Join titles so the timeline can label a task the client's list never loaded. */
+async function readTaskTitles(ids: string[]): Promise<Record<string, string>> {
+  if (ids.length === 0) return {};
+  try {
+    const { listTasksByIds } = await import('../../core/task-manager.js');
+    const tasks = await listTasksByIds(ids.slice(0, MAX_TITLE_LOOKUPS));
+    const out: Record<string, string> = {};
+    for (const task of tasks) if (task.id && task.title) out[task.id] = task.title;
+    return out;
+  } catch {
+    return {}; // an unlabelled block still shows WHEN the time went
   }
 }

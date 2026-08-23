@@ -157,16 +157,16 @@ async function readTail(file: string, size: number): Promise<string> {
   }
 }
 
-async function readDay(date: string, index: RollupIndex): Promise<void> {
+/** One day file's text, or '' when there is none. Applies the read cap. */
+async function readDayText(date: string): Promise<string> {
   const file = dayFile(date);
   let stat;
   try {
     stat = await fsp.stat(file);
   } catch {
-    return; // no data that day
+    return ''; // no data that day
   }
-  if (!stat.isFile()) return;
-  let text: string;
+  if (!stat.isFile()) return '';
   if (stat.size > MAX_DAY_FILE_BYTES) {
     // Compaction keeps this from happening going forward; a file written by an
     // older build can still land here.
@@ -175,18 +175,52 @@ async function readDay(date: string, index: RollupIndex): Promise<void> {
       'time-tracking day file over the read cap — reading its tail only',
       { file, size: stat.size, tailBytes: TAIL_READ_BYTES },
     );
-    text = await readTail(file, stat.size);
-  } else {
-    try {
-      text = await fsp.readFile(file, 'utf-8');
-    } catch {
-      return;
-    }
+    return readTail(file, stat.size);
   }
+  try {
+    return await fsp.readFile(file, 'utf-8');
+  } catch {
+    return '';
+  }
+}
+
+async function readDay(date: string, index: RollupIndex): Promise<void> {
+  const text = await readDayText(date);
   for (const line of text.split('\n')) {
     const rec = parseLine(line, date);
     if (rec) addRecord(index, rec);
   }
+}
+
+/**
+ * Every record still on disk for ONE local day, in file order.
+ *
+ * Read-only, and deliberately NOT folded into the live rollup: the day-timeline
+ * view needs the per-record intervals the rollup throws away, and adding these
+ * to the index would count them a second time (see the EXACTLY-ONCE note at the
+ * top of this file). It joins the write chain for the same reason hydrate() does
+ * — a compaction rewrites the very file this reads, and a half-renamed read
+ * would lose the whole day.
+ *
+ * A compacted day answers with its summary lines rather than an error; the fold
+ * reports that time as unplaced instead of drawing it at an invented hour.
+ */
+export function readDayRecords(date: string): Promise<TimeRecord[]> {
+  const st = current();
+  const read = st.tail.catch(() => undefined).then(() => collectDayRecords(date));
+  // Later writes queue behind this read, but must never inherit its value.
+  st.tail = read.then(() => undefined, () => undefined);
+  return read;
+}
+
+async function collectDayRecords(date: string): Promise<TimeRecord[]> {
+  const text = await readDayText(date);
+  const out: TimeRecord[] = [];
+  for (const line of text.split('\n')) {
+    const rec = parseLine(line, date);
+    if (rec) out.push(rec);
+  }
+  return out;
 }
 
 /**

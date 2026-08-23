@@ -1,0 +1,189 @@
+/**
+ * Time tracking — PURE fold from a day's records to display BLOCKS. No fs, no
+ * clock, no imports from the app, so the whole day-timeline contract is unit
+ * testable.
+ *
+ * The rollup answers "how much"; this answers "when". A day file holds one
+ * record per banked lease window (human) or per finished turn (agent), which is
+ * far too granular to draw: a morning of work is ~40 back-to-back 60s windows.
+ * So records of the SAME (taskId, kind) that sit within MERGE_GAP_MS of each
+ * other become one block, and anything still shorter than MIN_BLOCK_MS is
+ * dropped from the picture.
+ *
+ * TWO DURATIONS, on purpose. `ms` is the block's WALL SPAN (endTs - startTs) —
+ * that is what its length on the timeline means. `trackedMs` is the recorded
+ * time inside it, which is smaller whenever the merge bridged a gap. Publishing
+ * only the span would make the timeline visibly disagree with the totals in the
+ * other tabs, and "these numbers contradict each other" is exactly the reaction
+ * this feature area has already been burned by.
+ *
+ * NOTHING IS SILENTLY LOST: time that cannot be drawn (a compaction summary
+ * line, a record whose window falls outside the day, a sub-minute fragment) is
+ * summed into `unplacedMs` so the view can say so instead of showing a quiet,
+ * wrong, empty morning.
+ *
+ * Day keys are LOCAL dates, matching the rest of time-tracking.
+ */
+
+import type { TimeKind, TimeRecord } from './types.js';
+
+/**
+ * The four real lanes. A record with any other kind is a malformed line (a
+ * hand-edited JSONL, an id that smuggled a separator past an older build), and
+ * summarize() already drops it from the totals — so it is skipped SILENTLY here
+ * rather than counted as unplaced, which would claim it is in a total it is not.
+ */
+const KINDS = new Set<string>(['session', 'triage', 'chat', 'agent']);
+
+/** Records of one (task, kind) closer than this become a single block. */
+export const MERGE_GAP_MS = 5 * 60 * 1000;
+/** A merged block shorter than this is noise on a day timeline. */
+export const MIN_BLOCK_MS = 60 * 1000;
+
+export interface TimeBlock {
+  /** '' = no task (Inbox / taskless session / main-agent chat). */
+  taskId: string;
+  kind: TimeKind;
+  startTs: string;
+  endTs: string;
+  /** Wall span: endTs - startTs. The block's LENGTH means this. */
+  ms: number;
+  /** Recorded time inside the span. Equals `ms` unless a gap was merged over. */
+  trackedMs: number;
+}
+
+export interface DayBlocks {
+  date: string;
+  /** Ascending by start. Never overlapping within one (taskId, kind). */
+  blocks: TimeBlock[];
+  /** Tracked ms in this day's records that no block could carry. */
+  unplacedMs: number;
+}
+
+/**
+ * Local midnight bounds of a YYYY-MM-DD, or null when it is not a real date.
+ *
+ * Whole-day arithmetic through Date fields, never `+ 86_400_000`: a DST day is
+ * 23 or 25 hours long, and a fixed 24h window would clip an hour of a real
+ * evening off one day a year.
+ */
+export function dayBoundsMs(date: string): { startMs: number; endMs: number } | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  const start = new Date(y, mo - 1, d, 0, 0, 0, 0);
+  // Date rolls 2026-02-31 forward to March; compare the fields back to reject it.
+  if (start.getFullYear() !== y || start.getMonth() !== mo - 1 || start.getDate() !== d) return null;
+  const end = new Date(y, mo - 1, d + 1, 0, 0, 0, 0);
+  return { startMs: start.getTime(), endMs: end.getTime() };
+}
+
+interface Span {
+  startMs: number;
+  endMs: number;
+  trackedMs: number;
+}
+
+/**
+ * Fold one day's records into blocks.
+ *
+ * `kinds` (when given and non-empty) filters BEFORE the merge. Kinds never merge
+ * with each other anyway — the grouping is per kind and then per task, which is
+ * what keeps your own time and an agent's runtime from ever sharing a rectangle.
+ */
+export function foldDayBlocks(
+  records: Iterable<TimeRecord>,
+  opts: { date: string; kinds?: readonly TimeKind[] },
+): DayBlocks {
+  const bounds = dayBoundsMs(opts.date);
+  if (!bounds) return { date: opts.date, blocks: [], unplacedMs: 0 };
+  const wanted = opts.kinds && opts.kinds.length > 0 ? new Set<string>(opts.kinds) : null;
+  /**
+   * The line shape a compacted day collapses to (store.ts compactDay): one
+   * record per (task, kind) carrying the day's TOTAL, stamped at UTC midnight of
+   * the date. It has no interval left, so it can never become a block — its time
+   * is reported as unplaced instead of being drawn at an invented hour.
+   */
+  const compactedTs = `${opts.date}T00:00:00.000Z`;
+
+  // kind → taskId → spans. Nested rather than one composite key: a taskId written
+  // by an older build can contain anything, and a joined key would need a
+  // separator that such an id could smuggle (the bug parseBucketKey now guards).
+  const groups = new Map<TimeKind, Map<string, Span[]>>();
+  let unplacedMs = 0;
+
+  for (const rec of records) {
+    if (!(rec.durationMs > 0)) continue;
+    if (!KINDS.has(rec.kind)) continue;
+    if (wanted && !wanted.has(rec.kind)) continue;
+    if (rec.ts === compactedTs) {
+      unplacedMs += rec.durationMs;
+      continue;
+    }
+    const startedMs = Date.parse(rec.ts);
+    if (!Number.isFinite(startedMs)) {
+      unplacedMs += rec.durationMs;
+      continue;
+    }
+    // Clip to the day. A window that straddles midnight keeps only its share:
+    // the other half belongs to the neighbouring day's timeline, not to this one.
+    const startMs = Math.max(startedMs, bounds.startMs);
+    const endMs = Math.min(startedMs + rec.durationMs, bounds.endMs);
+    if (endMs <= startMs) {
+      unplacedMs += rec.durationMs;
+      continue;
+    }
+    let byTask = groups.get(rec.kind);
+    if (!byTask) {
+      byTask = new Map();
+      groups.set(rec.kind, byTask);
+    }
+    const taskId = rec.taskId ?? '';
+    const span: Span = { startMs, endMs, trackedMs: endMs - startMs };
+    const list = byTask.get(taskId);
+    if (list) list.push(span);
+    else byTask.set(taskId, [span]);
+  }
+
+  const blocks: TimeBlock[] = [];
+  for (const [kind, byTask] of groups) {
+    for (const [taskId, spans] of byTask) {
+      spans.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+
+      const merged: Span[] = [];
+      for (const span of spans) {
+        const last = merged[merged.length - 1];
+        if (last && span.startMs - last.endMs <= MERGE_GAP_MS) {
+          last.endMs = Math.max(last.endMs, span.endMs);
+          last.trackedMs += span.trackedMs;
+        } else {
+          merged.push({ ...span });
+        }
+      }
+
+      for (const span of merged) {
+        const ms = span.endMs - span.startMs;
+        if (ms < MIN_BLOCK_MS) {
+          unplacedMs += span.trackedMs;
+          continue;
+        }
+        blocks.push({
+          taskId,
+          kind,
+          startTs: new Date(span.startMs).toISOString(),
+          endTs: new Date(span.endMs).toISOString(),
+          ms,
+          // Overlapping records of one (task, kind) would sum past the span they
+          // share; capping keeps "tracked" from ever exceeding the block drawn.
+          trackedMs: Math.min(span.trackedMs, ms),
+        });
+      }
+    }
+  }
+
+  blocks.sort((a, b) =>
+    a.startTs.localeCompare(b.startTs) || a.kind.localeCompare(b.kind) || a.taskId.localeCompare(b.taskId));
+  return { date: opts.date, blocks, unplacedMs };
+}
