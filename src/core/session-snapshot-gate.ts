@@ -117,6 +117,9 @@ export function _snapshotRegistrySizeForTests(): number {
 export function unmarkSnapshotCovered(sessionId: string): void {
   snapshotRegistry.delete(sessionId)
   suppressedStatusWrites.delete(sessionId)
+  // Coverage is gone, so the legacy writer will land its own reason from now on —
+  // a stashed diagnosis has no consumer and would only leak.
+  suppressedErrorReasons.delete(sessionId)
 }
 
 /** Registry-only reset (coverage + watermarks + suppression counters). Keeps
@@ -124,6 +127,7 @@ export function unmarkSnapshotCovered(sessionId: string): void {
 export function _clearSnapshotRegistryForTests(): void {
   snapshotRegistry.clear()
   suppressedStatusWrites.clear()
+  suppressedErrorReasons.clear()
 }
 
 export function _resetSnapshotGateForTests(): void {
@@ -147,6 +151,65 @@ export function noteSuppressedStatusWrite(sessionId: string): number {
 
 export function getSuppressedStatusWriteCount(sessionId: string): number {
   return suppressedStatusWrites.get(sessionId) ?? 0
+}
+
+// ── Suppressed ERROR reason hand-off ─────────────────────────────────────────
+// The gate drops a category-① error write WHOLE (all-or-nothing, see
+// applyUpdateToSession). That writer is usually the only one that knows WHY the
+// session died: the health monitor's ('health-monitor','remote_unreachable')
+// pair carries the diagnosis, while the snapshot projection that wins carries
+// no message and explicitly declines to invent one. Net effect before this
+// hand-off: a bare red "Error" with `errorMessage: null` — unreadable for the
+// human AND unrecoverable, because both recovery paths classified a message-less
+// error as "a real user-visible error, don't auto-recover" (2026-08-22 incident
+// inc-1787439819342: a host patch-reboot left 51 sessions permanently stuck).
+//
+// So the dropped write's diagnosis is stashed here and consumed by
+// session-snapshot-apply the next time it projects 'error' for that sid. The
+// STATUS verdict still belongs to the snapshot alone — only the explanation
+// travels.
+export interface SuppressedErrorReason {
+  reason: string
+  message?: string
+  kind?: 'infra' | 'terminal'
+  /** ms epoch — a stale diagnosis must not label a much later, unrelated error. */
+  at: number
+}
+
+/** How long a stashed diagnosis stays valid. The health monitor re-fires its
+ *  gated write every 30s while the divergence lasts, so anything older than a
+ *  few minutes belongs to an outage the projection has already moved past. */
+export const SUPPRESSED_REASON_TTL_MS = 10 * 60 * 1000
+
+const suppressedErrorReasons = new Map<string, SuppressedErrorReason>()
+
+/** Stash the diagnosis from a dropped category-① error write. Last one wins:
+ *  the freshest gated attempt is the closest to the truth. */
+export function noteSuppressedErrorReason(sessionId: string, entry: SuppressedErrorReason): void {
+  putBoundedEntry(suppressedErrorReasons, sessionId, entry, SNAPSHOT_REGISTRY_CAP)
+}
+
+/**
+ * Consume a stashed diagnosis (single use — it explains ONE transition).
+ * Returns null when absent or older than the TTL.
+ */
+export function takeSuppressedErrorReason(sessionId: string, now = Date.now()): SuppressedErrorReason | null {
+  const entry = suppressedErrorReasons.get(sessionId)
+  if (!entry) return null
+  suppressedErrorReasons.delete(sessionId)
+  if (now - entry.at > SUPPRESSED_REASON_TTL_MS) return null
+  return entry
+}
+
+/** Drop a sid's stashed diagnosis without consuming it — called when the record
+ *  converges to a NON-error status, so an old outage can't label a future one. */
+export function clearSuppressedErrorReason(sessionId: string): void {
+  suppressedErrorReasons.delete(sessionId)
+}
+
+/** Stash size — bounded-growth assertions. */
+export function _suppressedReasonSizeForTests(): number {
+  return suppressedErrorReasons.size
 }
 
 // ── Category-① legacy writer table ──────────────────────────────────────────
