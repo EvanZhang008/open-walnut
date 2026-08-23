@@ -77,6 +77,15 @@ export interface ChatEntry {
   sessionId?: string;  // Linked session ID (e.g. embedded triage run ID)
   compacted?: boolean;
   contextHashes?: Record<string, string>;
+  /**
+   * The turn that produced this entry (server-minted uuid). Present on assistant
+   * entries and on the eagerly-persisted user entry of the same turn.
+   *
+   * The only client-visible per-message id in this lane, and the scope for
+   * `<suggest>` action-card receipts: the SAME value rides the live `agent:*`
+   * events, so a card keyed on it has one identity mid-turn and after a reload.
+   */
+  turnId?: string;
 }
 
 /** @deprecated Use ChatEntry instead */

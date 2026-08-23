@@ -16,6 +16,15 @@
  * fail the request that produced it); the in-memory rollup is authoritative for
  * reads within a process and is lazily rehydrated from disk on first use.
  *
+ * EXACTLY-ONCE (the invariant this file exists to keep): every record must be
+ * counted once — either by the hydration read or by the live fold, never both.
+ * Since recordTime both folds into memory AND appends to the day file that
+ * hydrate() reads, the two must not overlap. So hydration always runs FIRST:
+ * recordTime starts it if nobody has, and parks its records until the read is
+ * done (see hydrate / drainPending). A record therefore either predates this
+ * process (it arrives via the read) or was written by it (it arrives via the
+ * fold) — no record can be in both halves.
+ *
  * WALNUT_HOME is re-resolved per call so tests that swap it via mocked
  * constants get isolation without any special hook.
  */
@@ -42,6 +51,13 @@ export const TAIL_READ_BYTES = 2 * 1024 * 1024;
 export const COMPACT_ABOVE_BYTES = 1024 * 1024;
 /** Ceiling on the one full read a fold needs. Above it, only the tail is trusted. */
 const MAX_COMPACT_READ_BYTES = 64 * 1024 * 1024;
+/**
+ * Ceiling on records parked while hydration reads. Hydration is ~90 stats and
+ * settles in milliseconds, but a wedged fs must not grow the heap without bound:
+ * past this, the OLDEST parked records are dropped (losing a minute of old
+ * telemetry beats an OOM on the server every route shares).
+ */
+export const MAX_PENDING_RECORDS = 10_000;
 
 function storeDir(): string {
   return path.join(WALNUT_HOME, 'time-tracking');
@@ -56,9 +72,19 @@ interface StoreState {
   index: RollupIndex;
   hydrated: Promise<void> | null;
   /**
+   * Records handed to recordTime while hydration is still reading. Non-null ONLY
+   * during that window; `null` means the fast path (fold now, append now) is
+   * open. Parking them is what keeps the exactly-once invariant: folding one in
+   * now and appending it would let hydration read it back out of its own day
+   * file and count it a second time.
+   */
+  pending: TimeRecord[] | null;
+  /**
    * Every disk write for this store runs in order. An append and a compaction of
    * the same day must never interleave — compaction rewrites the file it just
-   * read, so a concurrent append would be dropped by the rename.
+   * read, so a concurrent append would be dropped by the rename. The hydration
+   * read joins this chain too, for the mirror-image reason: it must not read a
+   * file mid-rename.
    */
   tail: Promise<void>;
 }
@@ -68,7 +94,7 @@ let state: StoreState | null = null;
 function current(): StoreState {
   const dir = storeDir();
   if (!state || state.dir !== dir) {
-    state = { dir, index: new Map(), hydrated: null, tail: Promise.resolve() };
+    state = { dir, index: new Map(), hydrated: null, pending: null, tail: Promise.resolve() };
   }
   return state;
 }
@@ -166,17 +192,48 @@ async function readDay(date: string, index: RollupIndex): Promise<void> {
 /**
  * Ensure the in-memory rollup reflects the last HYDRATE_DAYS of JSONL.
  * Runs at most once per WALNUT_HOME; concurrent callers share the promise.
+ *
+ * The returned promise settles only once the read AND the replay of anything
+ * recorded during it are done, so a caller that awaits hydrate() (the summary
+ * route) never sees a rollup that is missing a heartbeat it already accepted.
  */
 export function hydrate(now = new Date()): Promise<void> {
   const st = current();
   if (st.hydrated) return st.hydrated;
   const dates = recentDateKeys(localDateKey(now), HYDRATE_DAYS);
-  st.hydrated = (async () => {
+  // Park everything recorded from this instant until the read is done.
+  st.pending = [];
+  const prior = st.tail;
+  const read = (async () => {
+    // Read behind any write already queued: compaction renames the very file
+    // this loop opens, and a half-renamed read would lose a whole day.
+    await prior.catch(() => undefined);
     for (const date of dates) await readDay(date, st.index);
   })().catch((err) => {
     log.web.warn('time-tracking hydrate failed', { error: err instanceof Error ? err.message : String(err) });
   });
+  // Appends queue behind the read for the same reason, mirrored.
+  st.tail = read;
+  st.hydrated = read.then(() => drainPending(st));
   return st.hydrated;
+}
+
+/**
+ * Fold and append everything parked during hydration, then reopen the fast path.
+ *
+ * Loops rather than draining once: an append yields to the event loop, so more
+ * heartbeats can arrive while the drain runs. `pending` is set to null in the
+ * SAME tick as the emptiness check, so no record can be parked into an array
+ * nobody will drain.
+ */
+async function drainPending(st: StoreState): Promise<void> {
+  for (;;) {
+    const batch = st.pending;
+    if (!batch || batch.length === 0) break;
+    st.pending = [];
+    await foldAndAppend(st, batch).catch(() => undefined);
+  }
+  st.pending = null;
 }
 
 /** The live rollup. Call hydrate() first if disk history matters. */
@@ -185,14 +242,39 @@ export function getIndex(): RollupIndex {
 }
 
 /**
- * Fold records into the live rollup immediately and append them to disk.
- * The in-memory update is synchronous, so the caller can answer a read in the
- * same request; the returned promise settles when the append is done and never
- * rejects (telemetry must never fail the operation it records).
+ * Fold records into the live rollup and append them to disk. The in-memory
+ * update is synchronous once hydration has settled, so the caller can answer a
+ * read in the same request; the returned promise settles when the append is done
+ * and never rejects (telemetry must never fail the operation it records).
+ *
+ * While hydration is in flight the records are parked instead: they are folded
+ * and appended together the moment the read finishes, and the promise settles
+ * then. That deferral is the whole fix for the double count — see the
+ * EXACTLY-ONCE note at the top of this file.
  */
 export function recordTime(records: readonly TimeRecord[]): Promise<void> {
   if (records.length === 0) return Promise.resolve();
   const st = current();
+  // Hydration must precede this process's FIRST append, so start it here if
+  // nobody has: an append that lands before the read is counted twice.
+  const hydrated = st.hydrated ?? hydrate();
+  const pending = st.pending;
+  if (pending) {
+    for (const rec of records) pending.push(rec);
+    if (pending.length > MAX_PENDING_RECORDS) {
+      const dropped = pending.length - MAX_PENDING_RECORDS;
+      pending.splice(0, dropped); // oldest first
+      warnOnce('pending-overflow', 'time-tracking dropped parked records while hydrating', {
+        dropped, cap: MAX_PENDING_RECORDS,
+      });
+    }
+    return hydrated;
+  }
+  return foldAndAppend(st, records);
+}
+
+/** Fold into the live rollup now; queue the JSONL append behind the write chain. */
+function foldAndAppend(st: StoreState, records: readonly TimeRecord[]): Promise<void> {
   const byDate = new Map<string, string[]>();
   for (const rec of records) {
     addRecord(st.index, rec);

@@ -12,8 +12,8 @@ import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields, rend
 import { useSelectionFrozen } from '@/utils/selection-guard';
 import { parseAskQuestionInput } from './QuestionPopover';
 import { SubagentBlock } from './SubagentBlock';
-import { SuggestCard } from './SuggestCard';
-import { splitSuggestSegments, type SuggestSegment } from '@/utils/suggest-parse';
+import { SuggestSegments, useSuggestSegments } from './SuggestSegments';
+import { splitSuggestSegments, needsSegments } from '@/utils/suggest-parse';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 export interface RouteInfo {
@@ -42,6 +42,15 @@ interface ChatMessageProps {
   taskLookup?: Map<string, Task>;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
+  /**
+   * Stable per-message id that scopes this message's `<suggest>` card receipts
+   * (the turn's server-minted uuid — ChatMessage.turnId in useChat).
+   *
+   * MUST be the same value while the turn streams and after a reload, or every
+   * receipt in the message is orphaned. Omitting it is safe: cards fall back to
+   * the older text-derived key. See splitSuggestSegments.
+   */
+  cardScope?: string;
 }
 
 // NOTE: the global marked config (setOptions + taskLink/imagePath inline
@@ -736,10 +745,11 @@ function extractMessageToUser(blocks: MessageBlock[]): string | null {
  * ALL content (tool calls, thinking, text, images) collapses by default.
  * Only <MESSAGE-TO-USER> content is shown above the collapsed group.
  */
-function SystemMessageGroup({ blocks, sourceLabel, taskLookup, onTaskClick, onSessionClick, onFileOpen, onContentClick }: {
+function SystemMessageGroup({ blocks, sourceLabel, taskLookup, cardScope, onTaskClick, onSessionClick, onFileOpen, onContentClick }: {
   blocks: MessageBlock[];
   sourceLabel: string;
   taskLookup?: Map<string, Task>;
+  cardScope?: string;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
@@ -776,7 +786,7 @@ function SystemMessageGroup({ blocks, sourceLabel, taskLookup, onTaskClick, onSe
   return (
     <>
       {messageToUser && (
-        <MemoizedTextBlock content={messageToUser} onClick={onContentClick} />
+        <MemoizedTextBlock content={messageToUser} cardScope={cardScope} onClick={onContentClick} />
       )}
       <div className={`chat-tool-group${isStreaming ? ' chat-tool-group-streaming' : errorCount > 0 ? ' chat-tool-group-error' : ''}`}>
         <button className="chat-tool-group-toggle" onClick={handleToggle}>
@@ -796,7 +806,7 @@ function SystemMessageGroup({ blocks, sourceLabel, taskLookup, onTaskClick, onSe
                   if (block.name === 'subagent_create') return <SubagentBlock key={i} block={block} />;
                   return <ToolCallSection key={i} block={block} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
                 case 'text':
-                  return <MemoizedTextBlock key={i} content={block.content} onClick={onContentClick} />;
+                  return <MemoizedTextBlock key={i} content={block.content} cardScope={cardScope} onClick={onContentClick} />;
                 case 'image': {
                   const imgBlock = block as ImageBlock;
                   if (imgBlock.url) {
@@ -819,43 +829,15 @@ function SystemMessageGroup({ blocks, sourceLabel, taskLookup, onTaskClick, onSe
   );
 }
 
-/** Whether the split produced anything other than one plain markdown run. */
-function hasCardSegment(segments: SuggestSegment[]): boolean {
-  return segments.some((s) => s.kind === 'card');
-}
-
-/** Ordered markdown runs + `<suggest>` action cards.
- *  A card is a sibling of the markdown around it, never HTML inside it: only a
- *  real component can hold per-button running/applied state, and DOMPurify would
- *  otherwise reduce the card to loose prose (see @/utils/suggest-parse). */
-function SuggestSegments({ segments, onClick }: {
-  segments: SuggestSegment[];
-  onClick: (e: React.MouseEvent<HTMLDivElement>) => void;
-}) {
-  return (
-    <>
-      {segments.map((seg, i) => seg.kind === 'card' ? (
-        <SuggestCard key={`${seg.card.id}-${i}`} card={seg.card} onContentClick={onClick} />
-      ) : (
-        <div
-          key={i}
-          className="markdown-body"
-          onClick={onClick}
-          dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(seg.text) }}
-        />
-      ))}
-    </>
-  );
-}
-
 /** Memoized text block that caches renderMarkdownWithRefs output (incl. clickable file paths).
  *  Content freezes while a selection lives inside the block (streaming deltas
  *  otherwise swap innerHTML and destroy the selection); catches up on clear.
  *  The split runs on the FROZEN value so the freeze covers the whole message. */
-function MemoizedTextBlock({ content, onClick }: { content: string; onClick: (e: React.MouseEvent<HTMLDivElement>) => void }) {
+function MemoizedTextBlock({ content, cardScope, onClick }: { content: string; cardScope?: string; onClick: (e: React.MouseEvent<HTMLDivElement>) => void }) {
   const { value: displayContent, hostRef } = useSelectionFrozen(content);
-  const segments = useMemo(() => splitSuggestSegments(displayContent), [displayContent]);
-  const cards = hasCardSegment(segments);
+  // `cards` covers a mounted card AND a half-arrived one being hidden: the raw
+  // string path would leak the hidden body as prose (see useSuggestSegments).
+  const { segments, useSegments: cards } = useSuggestSegments(displayContent, cardScope);
   const html = useMemo(() => (cards ? '' : renderMarkdownWithRefs(displayContent)), [cards, displayContent]);
   // Distinct keys, so the mid-stream flip from "plain html" to "segments"
   // REMOUNTS the host instead of asking React to turn a
@@ -878,7 +860,7 @@ function MemoizedTextBlock({ content, onClick }: { content: string; onClick: (e:
   );
 }
 
-function ChatMessageInner({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, errorCount, queued, onCancel, taskLookup, onTaskClick, onSessionClick }: ChatMessageProps) {
+function ChatMessageInner({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, errorCount, queued, onCancel, taskLookup, onTaskClick, onSessionClick, cardScope }: ChatMessageProps) {
   const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
 
   // File path click → open the shared FileViewer overlay. Self-contained so every
@@ -940,8 +922,8 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
   // (user text renders verbatim, and the blocks path goes through
   // MemoizedTextBlock). null = nothing to consider, keep the plain html render.
   const legacySegments = useMemo(
-    () => (html !== null && role !== 'user' ? splitSuggestSegments(content) : null),
-    [html, role, content],
+    () => (html !== null && role !== 'user' ? splitSuggestSegments(content, cardScope) : null),
+    [html, role, content, cardScope],
   );
 
   // System-initiated: only cron and heartbeat — fully collapse (automated, noisy).
@@ -1178,6 +1160,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
                   blocks={blocks}
                   sourceLabel={roleLabel}
                   taskLookup={taskLookup}
+                  cardScope={cardScope}
                   onTaskClick={onTaskClick}
                   onSessionClick={onSessionClick}
                   onFileOpen={handleFileOpen}
@@ -1223,7 +1206,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
                       return <ToolCallSection key={i} block={block} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={handleFileOpen} />;
                     }
                     case 'text':
-                      return <MemoizedTextBlock key={i} content={block.content} onClick={handleContentClick} />;
+                      return <MemoizedTextBlock key={i} content={block.content} cardScope={cardScope} onClick={handleContentClick} />;
                     case 'image': {
                       const imgBlock = block as ImageBlock;
                       if (imgBlock.url) {
@@ -1327,7 +1310,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
               {routeInfo && <RouteInfoSection info={routeInfo} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />}
               {/* History replay arrives without blocks, so cards have to work on
                   this path too — otherwise a reloaded card degrades to prose. */}
-              {legacySegments && hasCardSegment(legacySegments) ? (
+              {legacySegments && needsSegments(legacySegments, content) ? (
                 <SuggestSegments segments={legacySegments} onClick={handleContentClick} />
               ) : (
                 <div
@@ -1375,7 +1358,8 @@ function arePropsEqual(prev: ChatMessageProps, next: ChatMessageProps): boolean 
     prev.onCancel === next.onCancel &&
     prev.taskLookup === next.taskLookup &&
     prev.onTaskClick === next.onTaskClick &&
-    prev.onSessionClick === next.onSessionClick
+    prev.onSessionClick === next.onSessionClick &&
+    prev.cardScope === next.cardScope
   );
 }
 

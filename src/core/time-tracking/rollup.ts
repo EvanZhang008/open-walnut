@@ -224,8 +224,11 @@ export function summarize(
   let focusHumanMs = 0;
   const days: DayTime[] = opts.days.map((date) => {
     const tasks = [...(perDay.get(date) ?? new Map<string, TaskDayTime>()).values()]
-      // Busiest first: the bar chart reads top-down.
-      .sort((a, b) => (b.humanMs + b.agentMs) - (a.humanMs + a.agentMs) || a.taskId.localeCompare(b.taskId));
+      // YOUR time first, agent time only as a tiebreaker. Ordering by the SUM put
+      // a task the user barely touched at the top because an agent ran on it for
+      // hours, and the panel reads top-down as "where my day went" — a reader who
+      // takes the first row as their own biggest effort is then simply wrong.
+      .sort((a, b) => (b.humanMs - a.humanMs) || (b.agentMs - a.agentMs) || a.taskId.localeCompare(b.taskId));
     let humanMs = 0;
     let agentMs = 0;
     for (const t of tasks) {

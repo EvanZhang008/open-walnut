@@ -876,6 +876,14 @@ export function registerChatRpc(): void {
       // ── Eager persist: write user message to disk BEFORE the agent loop.
       // Ensures the message survives page refresh during processing (~5ms write).
       // `history` was captured BEFORE this write, so no duplication in the API call. ──
+      //
+      // The id also travels: it rides every agent:* event of this turn AND the
+      // assistant entries it persists, which makes it the browser's only stable
+      // per-message handle in this lane — `<suggest>` action cards key their
+      // "already clicked" receipts on it, so a card has ONE identity while it
+      // streams and after a reload. It cannot be delivered on the RPC's return
+      // value: that promise resolves only after the turn ends, long after the
+      // first card is clickable.
       const turnId = crypto.randomUUID()
       const userContentForPersist: string | unknown[] = savedImages.length > 0 && Array.isArray(userContent)
         ? (replaceImagesWithPaths(
@@ -959,7 +967,7 @@ export function registerChatRpc(): void {
           const flushThinking = (): void => {
             if (thinkingTimer) { clearTimeout(thinkingTimer); thinkingTimer = undefined }
             if (thinkingBuf.trim()) {
-              broadcastEvent(EventNames.AGENT_THINKING, { text: thinkingBuf, agentId, conversationId })
+              broadcastEvent(EventNames.AGENT_THINKING, { text: thinkingBuf, agentId, conversationId, turnId })
             }
             thinkingBuf = ''
           }
@@ -978,7 +986,7 @@ export function registerChatRpc(): void {
               // No sessionId in the payload: useChat drops agent:text-delta
               // events that carry one (they'd be a session's, not the chat's).
               if (d.delta) {
-                broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta: d.delta, agentId, conversationId })
+                broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta: d.delta, agentId, conversationId, turnId })
               }
             } else if (event.name === EventNames.SESSION_THINKING_DELTA) {
               if (d.delta) {
@@ -991,12 +999,12 @@ export function registerChatRpc(): void {
               // onToolCall does exactly this).
               trackWmToolCall(agentId, conversationId)
               broadcastEvent(EventNames.AGENT_TOOL_CALL, {
-                toolName: d.toolName, input: d.input, toolUseId: d.toolUseId, agentId, conversationId,
+                toolName: d.toolName, input: d.input, toolUseId: d.toolUseId, agentId, conversationId, turnId,
               })
             } else if (event.name === EventNames.SESSION_TOOL_RESULT) {
               // toolName is not on the session event; the client matches by toolUseId.
               broadcastEvent(EventNames.AGENT_TOOL_RESULT, {
-                toolName: '', result: d.result, toolUseId: d.toolUseId, agentId, conversationId,
+                toolName: '', result: d.result, toolUseId: d.toolUseId, agentId, conversationId, turnId,
               })
             }
           }, { global: true, interest: [
@@ -1050,9 +1058,9 @@ export function registerChatRpc(): void {
             const resolvedText = await resolveEntityRefs(resultText)
             await chatHistory.addAIMessages(
               [{ role: 'assistant', content: [{ type: 'text', text: resolvedText }] }] as MessageParam[],
-              { agentId, conversationId },
+              { agentId, conversationId, turnId },
             )
-            broadcastEvent(EventNames.AGENT_RESPONSE, { text: resolvedText, agentId, conversationId })
+            broadcastEvent(EventNames.AGENT_RESPONSE, { text: resolvedText, agentId, conversationId, turnId })
             log.web.info('chat lane turn completed', {
               agentId, conversationId, sessionId, resultLength: resultText.length,
               durationMs: Date.now() - turnStartMs,
@@ -1087,21 +1095,21 @@ export function registerChatRpc(): void {
       try {
         const result = await runAgentLoop(userContent, history, {
           onTextDelta: (delta) => {
-            broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta, agentId, conversationId })
+            broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta, agentId, conversationId, turnId })
           },
           onToolActivity: (activity) => {
-            broadcastEvent(EventNames.AGENT_TOOL_ACTIVITY, { ...activity, agentId, conversationId })
+            broadcastEvent(EventNames.AGENT_TOOL_ACTIVITY, { ...activity, agentId, conversationId, turnId })
           },
           onThinking: (text) => {
-            broadcastEvent(EventNames.AGENT_THINKING, { text, agentId, conversationId })
+            broadcastEvent(EventNames.AGENT_THINKING, { text, agentId, conversationId, turnId })
           },
           onToolCall: (toolName, input, toolUseId) => {
             toolsUsedInTurn.add(toolName)
             trackWmToolCall(agentId, conversationId)
-            broadcastEvent(EventNames.AGENT_TOOL_CALL, { toolName, input, toolUseId, agentId, conversationId })
+            broadcastEvent(EventNames.AGENT_TOOL_CALL, { toolName, input, toolUseId, agentId, conversationId, turnId })
           },
           onToolResult: (toolName, result, toolUseId) => {
-            broadcastEvent(EventNames.AGENT_TOOL_RESULT, { toolName, result, toolUseId, agentId, conversationId })
+            broadcastEvent(EventNames.AGENT_TOOL_RESULT, { toolName, result, toolUseId, agentId, conversationId, turnId })
           },
           onUsage: (usage) => {
             bus.emit('agent:usage', { usage }, ['web-ui'], { source: 'agent' })
@@ -1167,7 +1175,7 @@ export function registerChatRpc(): void {
           }
           if (cleaned.length > 0) {
             const persistMsgs = replaceImagesWithPaths(cleaned, savedImages)
-            await chatHistory.addAIMessages(persistMsgs, { ...(chatSource && { source: chatSource }), agentId, conversationId })
+            await chatHistory.addAIMessages(persistMsgs, { ...(chatSource && { source: chatSource }), agentId, conversationId, turnId })
           }
           // Even if cleaned is empty, user message is safe on disk ✅
           // Auto-append to conversation_log for aborted turns (General only)
@@ -1176,7 +1184,7 @@ export function registerChatRpc(): void {
               log.web.warn('autoAppendConversationLog failed (aborted)', { taskId: taskContext.id, error: err instanceof Error ? err.message : String(err) })
             })
           }
-          broadcastEvent(EventNames.AGENT_RESPONSE, { text: result.response, aborted: true, agentId, conversationId })
+          broadcastEvent(EventNames.AGENT_RESPONSE, { text: result.response, aborted: true, agentId, conversationId, turnId })
           return
         }
 
@@ -1204,6 +1212,7 @@ export function registerChatRpc(): void {
           ...(chatSource && { source: chatSource }),
           agentId,
           conversationId,
+          turnId,
         })
         log.agent.info('agent response persisted', { taskId: taskContext?.id, messageCount: newApiMsgs.length })
 
@@ -1231,7 +1240,7 @@ export function registerChatRpc(): void {
 
         // Signal turn complete to the client (resets isStreaming).
         // This resolves the RPC immediately — compaction runs separately below.
-        broadcastEvent(EventNames.AGENT_RESPONSE, { text: resolvedText, ...(stats ? { stats } : {}), agentId, conversationId })
+        broadcastEvent(EventNames.AGENT_RESPONSE, { text: resolvedText, ...(stats ? { stats } : {}), agentId, conversationId, turnId })
         log.web.info('chat turn completed', { taskId: taskContext?.id, durationMs: Date.now() - turnStartMs, agentId, conversationId })
 
         // Auto-append to conversation_log if a task was focused (General only)

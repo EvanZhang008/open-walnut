@@ -114,6 +114,29 @@ describe('bus collector', () => {
     expect(getIndex().get(key)).toBe(3000);
   });
 
+  it('SUMS two sessions running in parallel on one task — agent time is not wall clock', async () => {
+    // Documented intent, and the reason the panel says "agents can run in
+    // parallel": each session reports the WALL TIME OF ITS OWN TURN
+    // (result.duration_ms), so two agents working the same hour on one task
+    // legitimately bank two hours. This is what made a task read 8h57m of agent
+    // time on a day the human touched it for two minutes — the number is real,
+    // it just is not the human's day, which is why it is labelled and secondary.
+    startAgentTimeCollector();
+    const hour = 60 * 60_000;
+    bus.emit(EventNames.SESSION_RESULT, { sessionId: 'sess-par-1111', taskId: 't_parallel', result: 'ok', duration: hour, turnGen: 1 }, ['web-ui']);
+    bus.emit(EventNames.SESSION_RESULT, { sessionId: 'sess-par-2222', taskId: 't_parallel', result: 'ok', duration: hour, turnGen: 1 }, ['web-ui']);
+    const key = bucketKey(TODAY, 't_parallel', 'agent');
+    const until = Date.now() + 3000;
+    while (Date.now() < until && getIndex().get(key) !== 2 * hour) await new Promise((r) => setTimeout(r, 10));
+    expect(getIndex().get(key)).toBe(2 * hour);
+
+    // …but the SAME turn re-emitted (team-idle re-emit, JSONL replay after a
+    // daemon restart) is not new work, even at an hour a piece.
+    bus.emit(EventNames.SESSION_RESULT, { sessionId: 'sess-par-1111', taskId: 't_parallel', result: 'ok', duration: hour, turnGen: 1 }, ['web-ui']);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(getIndex().get(key)).toBe(2 * hour);
+  });
+
   it('ignores an intermediate result on the bus', async () => {
     startAgentTimeCollector();
     bus.emit(EventNames.SESSION_RESULT, {

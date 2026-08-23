@@ -224,7 +224,13 @@ function parseAction(raw: string, index: number): SuggestAction {
   };
 }
 
-function parseCard(attrRaw: string, inner: string, occurrence: number, before: string): SuggestCardSpec {
+function parseCard(
+  attrRaw: string,
+  inner: string,
+  occurrence: number,
+  before: string,
+  scope: string | undefined,
+): SuggestCardSpec {
   const attrs = parseAttrs(attrRaw);
   const skip = makeSkip(inner);
   const lower = inner.toLowerCase();
@@ -258,20 +264,28 @@ function parseCard(attrRaw: string, inner: string, occurrence: number, before: s
   ].join(' ');
 
   return {
-    // Identity = where the card sits + what it says. The occurrence index keeps
-    // two identical cards in ONE message distinct; `before` (the message text
-    // preceding this card) keeps the same card in DIFFERENT messages distinct —
-    // without it, a repeated suggestion inherited the earlier one's receipt and
-    // rendered already-settled over an op the user never ran.
+    // Identity = whose message it is + where the card sits + what it says.
     //
-    // Both parts stay stable across a reload, which the persisted receipt depends
-    // on: the message text is durable in chat history, and `before` is complete
-    // by the time the card renders, so a still-growing tail never renumbers a
-    // card the user can already click. (The message TIMESTAMP would look like the
-    // obvious identity here and is not usable: a live turn's optimistic message
-    // is stamped by the browser, the stored entry by the server, so mixing it in
-    // would lose every receipt on the next reload.)
-    id: `sc-${digest(`${digest(before)} ${signature}`)}-${occurrence}`,
+    //  · `scope` is the caller's stable per-message id (chat lane: the turn's
+    //    server-minted uuid; session lane: the message's `msg_…`/JSONL uuid). It
+    //    is what tells two messages with BYTE-IDENTICAL text up to the card apart
+    //    — without it a repeated suggestion inherited the earlier one's receipt
+    //    and rendered already-settled over an op the user never ran.
+    //  · `before` (the text preceding this card) stays in the key even with a
+    //    scope: one message can hold several text blocks, each parsed on its own,
+    //    so `occurrence` restarts per block and only `before` separates two
+    //    identical cards sitting in DIFFERENT blocks of the same message.
+    //  · `occurrence` separates two identical cards inside one block.
+    //
+    // Every part has to be identical in the LIVE render and after a reload —
+    // that is the entire contract of the persisted receipt. `before` is complete
+    // by the time a card renders (a card only renders once its closer lands), so
+    // a still-growing tail never renumbers a card the user can already click. A
+    // caller with no stable id passes no scope and keeps the older text-only key.
+    // (The message TIMESTAMP looks like the obvious identity and is NOT usable: a
+    // live turn's optimistic message is stamped by the browser, the stored entry
+    // by the server, so mixing it in would lose every receipt on the next reload.)
+    id: `sc-${digest(`${scope ?? ''} ${digest(before)} ${signature}`)}-${occurrence}`,
     ...(title ? { title } : {}),
     multi: attrFlag(attrs, 'multi'),
     sticky: attrFlag(attrs, 'sticky'),
@@ -326,8 +340,13 @@ function findClose(
  *
  * A message with no card returns a single `md` segment, so the caller's render
  * path is byte-identical for the overwhelmingly common case.
+ *
+ * `scope` is an optional stable per-message id folded into every card id — pass
+ * the SAME value in the live render and after a reload (see parseCard), or none
+ * at all. A value that differs between the two would silently orphan every
+ * receipt in that message, which is worse than not scoping at all.
  */
-export function splitSuggestSegments(text: string): SuggestSegment[] {
+export function splitSuggestSegments(text: string, scope?: string): SuggestSegment[] {
   if (!text) return [];
   if (!text.includes(OPEN_TAG)) return [{ kind: 'md', text }];
 
@@ -366,7 +385,7 @@ export function splitSuggestSegments(text: string): SuggestSegment[] {
     pushMd(segments, text.slice(cursor, open));
     segments.push({
       kind: 'card',
-      card: parseCard(attrRaw, text.slice(openEnd, close.at), occurrence++, text.slice(0, open)),
+      card: parseCard(attrRaw, text.slice(openEnd, close.at), occurrence++, text.slice(0, open), scope),
     });
     cursor = close.at + close.len;
     at = cursor;
@@ -382,4 +401,29 @@ export function splitSuggestSegments(text: string): SuggestSegment[] {
 /** True when the text carries at least one complete card (cheap UI precheck). */
 export function hasSuggestCard(text: string): boolean {
   return text.includes(OPEN_TAG) && splitSuggestSegments(text).some((s) => s.kind === 'card');
+}
+
+/** Whether a split produced anything other than one plain markdown run. */
+export function hasCardSegment(segments: SuggestSegment[]): boolean {
+  return segments.some((s) => s.kind === 'card');
+}
+
+/**
+ * Is the segment list the only faithful render of `text`?
+ *
+ * True for a card to mount, and ALSO true when the split WITHHELD part of the
+ * text — an unterminated card hidden to end-of-text, or a partial open tag
+ * trimmed off the tail. That second case is easy to miss and was a real bug: a
+ * caller that falls back to rendering the raw STRING throws the hiding away,
+ * because DOMPurify drops the unknown `<suggest>`/`<action>` tags but KEEPS the
+ * text between them — so a half-arrived card leaked its body into the answer as a
+ * stray prose line, which then vanished when the closer landed.
+ *
+ * Whitespace-only text is exempt: pushMd skips it, so "no segments" there means
+ * "nothing to render", not "something was hidden".
+ */
+export function needsSegments(segments: SuggestSegment[], text: string): boolean {
+  if (hasCardSegment(segments)) return true;
+  if (text.trim() === '') return false;
+  return segments.length !== 1 || segments[0].kind !== 'md' || segments[0].text !== text;
 }

@@ -647,7 +647,7 @@ export async function getLastContextHashes(agentId?: string, conversationId?: st
  */
 export async function addAIMessages(
   msgs: MessageParam[],
-  options?: { displayText?: string; source?: ChatEntry['source']; contextHashes?: Record<string, string>; taskId?: string; agentId?: string; conversationId?: string },
+  options?: { displayText?: string; source?: ChatEntry['source']; contextHashes?: Record<string, string>; taskId?: string; agentId?: string; conversationId?: string; turnId?: string },
 ): Promise<void> {
   if (msgs.length === 0) return;
   const aid = options?.agentId;
@@ -690,6 +690,22 @@ export async function addAIMessages(
       }
       if (options?.source) {
         entry.source = options.source;
+      }
+      // The turn's id, on the ASSISTANT entries only. It is what lets the browser
+      // recognise a reloaded message as the same message it just streamed:
+      // `<suggest>` action cards key their "already clicked" receipts on it
+      // (web/src/utils/suggest-parse.ts), and a per-turn value is the right
+      // granularity because chatEntriesToMessages folds one turn's entries into
+      // ONE displayed message, reading its metadata off the leading assistant
+      // entry. It never reaches the model — getModelContext projects
+      // `{ role, content }` only.
+      //
+      // Deliberately NOT stamped on the user (tool_result) entries of the batch:
+      // the dedup guard above reads "an `ai` user entry carrying a turnId" as
+      // "eagerly persisted by addUserMessage", and widening that would blur the
+      // one signal it has.
+      if (options?.turnId && role === 'assistant') {
+        entry.turnId = options.turnId;
       }
       store.entries!.push(entry);
     }

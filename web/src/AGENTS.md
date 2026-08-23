@@ -24,6 +24,13 @@ changing search requests, provisional results, stale-response handling, or resul
   (`SessionsRedirect` in `App.tsx` + `utils/open-session.ts`).
 - Use the structured logger `import { log } from '@/utils/log'` — never raw `console.log`;
   never `console.debug` (invisible to the disk forwarder). IDs full, never truncated.
+- **`<suggest>` action cards render in BOTH lanes through one module**
+  (`components/chat/SuggestSegments.tsx`): Personal AI chat (`ChatMessage`) and the session
+  timeline (`SessionMessage` for persisted rows, `StreamingTextBlock` for live deltas). The card
+  id keys a persisted click receipt, so the `scope` you pass to `splitSuggestSegments` must be a
+  SERVER-side per-message id that is byte-identical live and after a reload — chat: `turnId`
+  (rides every `agent:*` event AND the stored entry); session: `msgId`. Never scope on anything
+  the browser stamps (`key`, `timestamp`): that orphans every receipt on the next reload.
 
 ## Files panel — editing & quoting (`components/common/FileContentView.tsx`)
 

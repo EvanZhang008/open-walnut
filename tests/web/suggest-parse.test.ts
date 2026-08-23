@@ -12,8 +12,8 @@
 import { describe, it, expect } from 'vitest';
 import { splitSuggestSegments, hasSuggestCard, type SuggestCardSpec } from '@/utils/suggest-parse';
 
-function onlyCard(text: string): SuggestCardSpec {
-  const cards = splitSuggestSegments(text).filter((s) => s.kind === 'card');
+function onlyCard(text: string, scope?: string): SuggestCardSpec {
+  const cards = splitSuggestSegments(text, scope).filter((s) => s.kind === 'card');
   expect(cards).toHaveLength(1);
   return (cards[0] as { card: SuggestCardSpec }).card;
 }
@@ -369,5 +369,77 @@ describe('card identity', () => {
     const settled = onlyCard(prefix).id;
     expect(onlyCard(`${prefix}\n\nOne more`).id).toBe(settled);
     expect(onlyCard(`${prefix}\n\nOne more thing to note.`).id).toBe(settled);
+  });
+});
+
+// The residual hole the text-only key left open: two messages whose text is
+// byte-identical up to and including the card shared ONE receipt, so clicking the
+// first rendered the second already-settled over an op the user never ran. The fix
+// is a real per-message id (`scope`) folded into the key — the chat lane's turn
+// uuid, the session lane's message uuid.
+//
+// The scope's one hard requirement: it must be the SAME value in the live render
+// and after a reload. These cases pin both directions of that.
+describe('card identity — per-message scope', () => {
+  const card = '<suggest title="Pin this task">'
+    + '<action tool="task_pin_set" args=\'{"id":"t_1","pinned":true}\' label="Pin it" style="primary"/>'
+    + '</suggest>';
+  // Byte-identical text, twice. Before the scope these collided.
+  const message = `Not pinned yet.\n\n${card}`;
+
+  it('separates two messages with byte-identical text', () => {
+    expect(onlyCard(message, 'turn-a').id).not.toBe(onlyCard(message, 'turn-b').id);
+  });
+
+  it('gives the same id for the same scope, so the reloaded card keeps its receipt', () => {
+    // This is the whole persistence contract: the browser renders the streaming
+    // turn under scope X, the server stores it and hands it back under scope X.
+    expect(onlyCard(message, 'turn-a').id).toBe(onlyCard(message, 'turn-a').id);
+  });
+
+  it('still separates two identical cards in DIFFERENT text blocks of ONE message', () => {
+    // One message can hold several text blocks, each split on its own — so
+    // `occurrence` restarts at 0 per block and only the preceding text tells
+    // these apart. Dropping it in favour of the scope alone would re-collide.
+    const blockA = `First take.\n\n${card}`;
+    const blockB = `Second take.\n\n${card}`;
+    expect(onlyCard(blockA, 'turn-a').id).not.toBe(onlyCard(blockB, 'turn-a').id);
+  });
+
+  it('still separates two identical cards inside ONE block', () => {
+    const cards = splitSuggestSegments(`${card}\n${card}`, 'turn-a')
+      .filter((s) => s.kind === 'card')
+      .map((s) => (s as { card: SuggestCardSpec }).card.id);
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).not.toBe(cards[1]);
+  });
+
+  it('keeps a scoped id final while the tail is still streaming', () => {
+    // The user can click the moment the card renders, so its key must already be
+    // the key the finished message will parse to.
+    const settled = onlyCard(message, 'turn-a').id;
+    expect(onlyCard(`${message}\n\nOne more`, 'turn-a').id).toBe(settled);
+    expect(onlyCard(`${message}\n\nOne more thing entirely.`, 'turn-a').id).toBe(settled);
+  });
+
+  it('falls back to the text-only key when no scope is available', () => {
+    // Cron/heartbeat turns and mobile-initiated turns carry no id. Both sides of
+    // the reload see `undefined`, so the fallback has to be self-consistent —
+    // an empty-string scope must not be a different key than no scope at all.
+    expect(onlyCard(message).id).toBe(onlyCard(message, undefined).id);
+    expect(onlyCard(message).id).toBe(onlyCard(message, '').id);
+    expect(onlyCard(message).id).not.toBe(onlyCard(message, 'turn-a').id);
+  });
+
+  it('scopes every card in a multi-card message', () => {
+    const two = `${card}\n\nAnd also:\n\n${card.replace('t_1', 't_2')}`;
+    const a = splitSuggestSegments(two, 'turn-a').filter((s) => s.kind === 'card');
+    const b = splitSuggestSegments(two, 'turn-b').filter((s) => s.kind === 'card');
+    expect(a).toHaveLength(2);
+    for (let i = 0; i < a.length; i++) {
+      const idA = (a[i] as { card: SuggestCardSpec }).card.id;
+      const idB = (b[i] as { card: SuggestCardSpec }).card.id;
+      expect(idA).not.toBe(idB);
+    }
   });
 });

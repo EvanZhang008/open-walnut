@@ -7,6 +7,18 @@
  * path and the ACP/SDK path. A global subscriber with an interest set never
  * wakes on streaming events.
  *
+ * WHAT THE NUMBER MEANS (asked in earnest after a task showed 8h57m of agent time
+ * on a day its human touched it for two minutes): `duration_ms` is the WALL TIME
+ * OF ONE TURN as the CLI measured it — prompt to result, including tool runs and
+ * any stretch the turn sat blocked (a permission prompt, a slow build). It is not
+ * "model thinking time", and it is not the human's time. Turns within one session
+ * are sequential, so one session can never bank more than the clock; several
+ * sessions on the SAME task run in parallel and legitimately sum past it, which
+ * is why the panel labels this lane and says agents can run in parallel.
+ * Double counting is prevented at two points instead: intermediate results
+ * (teamActive / backgroundActive) contribute 0 because the turn is not over, and
+ * replayKey drops a re-emit of a turn already banked.
+ *
  * BACKFILL: days the collector never observed (before this feature shipped, or
  * a server that was down) fall back to the usage ledger, which stores
  * `duration_ms` per billed turn. That ledger only gets a row when a turn cost

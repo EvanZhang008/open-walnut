@@ -19,8 +19,6 @@ export interface EmbedderRuntimeConfig {
   /** transformers.js dtype (default 'q8'). */
   dtype?: string;
   cacheDir?: string;
-  /** Pooling: 'mean' (default; e5 family) or 'last' (Qwen3-Embedding). */
-  pooling?: 'mean' | 'last';
   /** Absolute path/URL of the compiled worker script. Defaults to the sibling
    *  embed-worker.js — correct when this library runs un-bundled; a bundling
    *  caller must pass where its build put the worker entry. */
@@ -85,7 +83,6 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
           dims: config.dims,
           dtype: config.dtype,
           cacheDir: config.cacheDir,
-          pooling: config.pooling,
         },
       });
     } catch (err) {

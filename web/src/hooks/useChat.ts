@@ -43,6 +43,17 @@ export interface ChatMessage {
   notification?: boolean;
   queued?: boolean;
   queueId?: number;
+  /**
+   * The server's turn id (uuid) — the one id that is the SAME while the turn
+   * streams and after a reload, because it rides both the live `agent:*` events
+   * and the persisted history entry. `key` cannot do this job: it is a
+   * per-page-load counter, so every reload renumbers it.
+   *
+   * Used as the `<suggest>` card scope (ChatMessage's `cardScope` prop). Absent
+   * for turns nothing stamps (cron/heartbeat, mobile-initiated), where cards fall
+   * back to the older text-derived key — consistently on both sides.
+   */
+  turnId?: string;
 }
 
 export interface TaskContext {
@@ -272,6 +283,9 @@ function chatEntriesToMessages(entries: ChatEntry[]): ChatMessage[] {
       timestamp: entry.timestamp,
       source: entry.source,
       notification: entry.notification,
+      // From the LEADING assistant entry: one turn = one displayed message here,
+      // and that entry is where addAIMessages stamps the turn id.
+      turnId: entry.turnId,
     });
     i = j;
   }
@@ -338,6 +352,7 @@ function upsertLastAssistant(
   prev: ChatMessage[],
   updater: (blocks: MessageBlock[], content: string) => { blocks: MessageBlock[]; content: string },
   currentSource?: ChatMessage['source'],
+  turnId?: string,
 ): ChatMessage[] {
   const last = prev[prev.length - 1];
   // Only append to existing assistant if source matches
@@ -346,13 +361,17 @@ function upsertLastAssistant(
     : last?.source === currentSource;
   if (last && last.role === 'assistant' && sourceMatch) {
     const { blocks, content } = updater(last.blocks ?? [], last.content);
-    return [...prev.slice(0, -1), { ...last, content, blocks }];
+    // Fill the turn id in only if it is still missing. A card's receipt key is
+    // derived from it, so the value a message was BORN with must never change
+    // under a card the user can already click.
+    return [...prev.slice(0, -1), { ...last, content, blocks, ...(last.turnId ? {} : turnId ? { turnId } : {}) }];
   }
   const { blocks, content } = updater([], '');
   return [...prev, {
     key: nextMessageKey(), role: 'assistant', content, blocks,
     timestamp: new Date().toISOString(),
     ...(currentSource ? { source: currentSource } : {}),
+    ...(turnId ? { turnId } : {}),
   }];
 }
 
@@ -380,6 +399,11 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   const isStreamingRef = useRef(false);
   // Track the current agent turn's source so streaming handlers can separate heartbeat/cron/chat
   const currentSourceRef = useRef<ChatMessage['source'] | undefined>(undefined);
+  // The server's id for the turn now streaming, learned from its own events (the
+  // `chat` RPC cannot supply it — that promise resolves only AFTER the turn).
+  // Stamped onto the optimistic assistant message so a `<suggest>` card keyed on
+  // it survives the reload that replaces the message with the stored one.
+  const currentTurnIdRef = useRef<string | undefined>(undefined);
   // Forward ref for sendRpc to break circular dependency with drainOrStop
   const sendRpcRef = useRef<UseChatReturn['sendMessage'] | undefined>(undefined);
 
@@ -448,6 +472,13 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
     return eventConvId === conversationIdRef.current;
   }, []);
 
+  /** Latch this turn's server id from whichever of its events arrives first. */
+  const noteTurnId = useCallback((data: unknown): string | undefined => {
+    const t = (data as { turnId?: unknown } | undefined)?.turnId;
+    if (typeof t === 'string' && t) currentTurnIdRef.current = t;
+    return currentTurnIdRef.current;
+  }, []);
+
   // Handle thinking blocks — insert before non-thinking blocks so thinking always renders first
   useEvent('agent:thinking', (data) => {
     if (!isMine(data)) return;
@@ -456,6 +487,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
     // whitespace-only text) — those must not create an expandable-but-blank row.
     if (!text || !text.trim()) return;
     const src = currentSourceRef.current;
+    const turnId = noteTurnId(data);
     setMessages((prev) =>
       upsertLastAssistant(prev, (blocks, content) => {
         // Find the insertion point: after existing thinking blocks, before everything else
@@ -464,7 +496,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
         const updated = [...blocks];
         updated.splice(insertAt, 0, { type: 'thinking', content: text });
         return { blocks: updated, content };
-      }, src),
+      }, src, turnId),
     );
   });
 
@@ -492,6 +524,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
       currentSourceRef.current = source as ChatMessage['source'];
     }
 
+    const turnId = noteTurnId(data);
     textDeltaBuffer.current += delta;
 
     if (textDeltaRaf.current === null) {
@@ -515,7 +548,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
               blocks: [...blocks, { type: 'text', content: accumulated }],
               content: content + accumulated,
             };
-          }, src),
+          }, src, turnId),
         );
       });
     }
@@ -526,6 +559,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
     if (!isMine(data)) return;
     const { toolName, input, toolUseId } = data as { toolName: string; input: Record<string, unknown>; toolUseId?: string };
     const src = currentSourceRef.current;
+    const turnId = noteTurnId(data);
     setMessages((prev) => {
       // DUP-DEBUG: detect duplicate agent tool_call rendering. Mirror of the
       // session:tool-use guard in useSessionStream — same UI symptom, different
@@ -546,7 +580,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
       return upsertLastAssistant(prev, (blocks, content) => ({
         blocks: [...blocks, { type: 'tool_call', name: toolName, toolUseId, input, status: 'calling' }],
         content,
-      }), src);
+      }), src, turnId);
     });
 
     // Desktop notification when agent asks a question
@@ -670,8 +704,9 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
       });
     }
 
-    // Clear source ref — this turn is complete
+    // Clear source + turn refs — this turn is complete
     currentSourceRef.current = undefined;
+    currentTurnIdRef.current = undefined;
 
     // If RPC is in flight, .then() will call drainOrStop when it resolves.
     // If no RPC (cron/triage), drain or stop now.

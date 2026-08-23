@@ -5,7 +5,7 @@ const EXPECTED_IDS = [
   'repositories', 'hooks',
   'providers', 'general', 'sessions', 'focus-tiers', 'integrations', 'calendar',
   'permissions', 'plugin-store', 'search', 'stt', 'audio-capture', 'heartbeat',
-  'backup', 'remote-hosts', 'devices', 'cloud', 'advanced', 'usage', 'timeline', 'bug-report',
+  'backup', 'remote-hosts', 'devices', 'cloud', 'advanced', 'usage', 'time', 'timeline', 'bug-report',
 ]
 
 describe('core settings registry', () => {

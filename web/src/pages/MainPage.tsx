@@ -2856,6 +2856,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 cronJobName={'cronJobName' in msg ? msg.cronJobName : undefined}
                 notification={'notification' in msg ? msg.notification : undefined}
                 queued={'queued' in msg ? msg.queued : undefined}
+                cardScope={'turnId' in msg ? msg.turnId : undefined}
                 onCancel={msg.queued && msg.queueId != null ? () => chat.cancelQueuedMessage(msg.queueId!) : undefined}
                 taskLookup={taskMap}
                 onTaskClick={handleFocusTaskById}

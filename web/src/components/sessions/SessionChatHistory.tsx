@@ -21,6 +21,7 @@ import type { ImageAttachment } from '@/api/chat';
 import { respondToPermission } from '@/api/sessions';
 import { parseAskUserQuestionInput, buildAskUserAnswers, allAskUserQuestionsAnswered, toggleAskUserSelection, type AskQuestion } from './ask-user-question';
 import { renderMarkdownWithRefs, findImagePaths, resolveImagePath } from '@/utils/markdown';
+import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
 import { useSelectionScrollGuard, useSelectionFrozen, useSelectionFrozenWith } from '@/utils/selection-guard';
 import { runWhenVisible, visibleInterval } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
@@ -162,23 +163,40 @@ interface SessionChatHistoryProps {
 }
 
 /** Memoized text block that caches renderMarkdownWithRefs output */
-function StreamingTextBlock({ content, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick, onFileOpen }: { content: string; sessionCwd?: string; sessionHost?: string; sessionId?: string; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void; onFileOpen?: (path: string, line?: number) => void }) {
+function StreamingTextBlock({ content, msgId, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick, onFileOpen }: { content: string; msgId?: string; sessionCwd?: string; sessionHost?: string; sessionId?: string; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void; onFileOpen?: (path: string, line?: number) => void }) {
   // Freeze the rendered content while the user is selecting inside this block —
   // each delta otherwise swaps innerHTML and destroys the selection's anchor
   // nodes (the "selection disappears while generating" bug). Catches up the
   // moment the selection clears.
   const { value: displayContent, hostRef } = useSelectionFrozen(content);
-  const html = useMemo(() => renderMarkdownWithRefs(displayContent, sessionCwd), [displayContent, sessionCwd]);
+  // `<suggest>` cards, re-parsed on every delta: the parser HIDES a card whose
+  // `</suggest>` has not landed, so a growing block shows its prose and no card
+  // until the closer arrives — never half a card. Scoped by `msgId` (the same id
+  // the persisted history row carries), so a receipt recorded mid-turn is still
+  // the same key after a reload. Split on the FROZEN value so the selection
+  // freeze covers the card too.
+  const { segments, useSegments } = useSuggestSegments(displayContent, msgId);
+  const html = useMemo(() => (useSegments ? '' : renderMarkdownWithRefs(displayContent, sessionCwd)), [useSegments, displayContent, sessionCwd]);
   const imagePaths = useMemo(() => findImagePaths(displayContent), [displayContent]);
   const handleClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
   return (
     <>
-      <div
-        ref={hostRef}
-        className="markdown-body"
-        onClick={handleClick}
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
+      {/* Distinct keys, so the mid-stream flip from "plain html" to "segments"
+          REMOUNTS the host instead of asking React to turn a
+          dangerouslySetInnerHTML node into a children node in place. */}
+      {useSegments ? (
+        <div key="segments" ref={hostRef}>
+          <SuggestSegments segments={segments} cwd={sessionCwd} onClick={handleClick} />
+        </div>
+      ) : (
+        <div
+          key="html"
+          ref={hostRef}
+          className="markdown-body"
+          onClick={handleClick}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      )}
       {imagePaths.length > 0 && (() => {
         const resolved = imagePaths
           .map((p) => ({ p, abs: resolveImagePath(p, sessionCwd) }))
@@ -417,7 +435,7 @@ function PermissionRequestCard({ sessionId, requestId, toolName, input, reason, 
 const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, sessionCwd, sessionHost, live, onTaskClick, onSessionClick, onFileOpen }: { block: StreamingBlock; sessionId: string; sessionCwd?: string; sessionHost?: string; live?: boolean; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void; onFileOpen?: (path: string, line?: number) => void }) {
   if (block.type === 'text') {
     if (!block.content.trim()) return null;
-    return <StreamingTextBlock content={block.content} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
+    return <StreamingTextBlock content={block.content} msgId={block.msgId} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
   }
 
   if (block.type === 'system') {

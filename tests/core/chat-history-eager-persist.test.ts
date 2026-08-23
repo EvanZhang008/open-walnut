@@ -208,3 +208,72 @@ describe('Full turn flow — eager persist + assistant-only addAIMessages', () =
     expect(userRaw!.turnId).toBe(turnId);
   });
 });
+
+// The turn id is also the browser's only stable per-message handle in this lane:
+// `<suggest>` action cards key their "already clicked" receipts on it, and the
+// same value rides the live agent:* events, so a card renders under one identity
+// mid-turn and after a reload. Two properties matter here — it lands on the
+// assistant entry, and it never reaches the model.
+describe('addAIMessages — turnId on the assistant entry', () => {
+  async function rawEntries(): Promise<Array<Record<string, unknown>>> {
+    const raw = JSON.parse(await fsp.readFile(CHAT_HISTORY_FILE(), 'utf-8'));
+    return raw.entries ?? [];
+  }
+
+  it('stamps every assistant entry of the batch', async () => {
+    const turnId = crypto.randomUUID();
+    await addAIMessages([
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_1', name: 'task_list', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: '3 tasks' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'You have 3 tasks.' }] },
+    ] as MessageParam[], { turnId });
+
+    const entries = await rawEntries();
+    const assistants = entries.filter((e) => e.role === 'assistant');
+    expect(assistants).toHaveLength(2);
+    for (const a of assistants) expect(a.turnId).toBe(turnId);
+  });
+
+  it('leaves the tool_result user entry unstamped, so the dedup guard keeps its one signal', async () => {
+    // "an `ai` user entry carrying a turnId" means "eagerly persisted by
+    // addUserMessage" — widening that would blur the guard that stops the user
+    // message being written twice.
+    const turnId = crypto.randomUUID();
+    await addAIMessages([
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_1', name: 'task_list', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: '3 tasks' }] },
+    ] as MessageParam[], { turnId });
+
+    const toolResult = (await rawEntries()).find((e) => e.role === 'user');
+    expect(toolResult).toBeDefined();
+    expect(toolResult!.turnId).toBeUndefined();
+  });
+
+  it('omits the field entirely when no turnId is given (cron/heartbeat turns)', async () => {
+    await addAIMessages([
+      { role: 'assistant', content: [{ type: 'text', text: 'All clear.' }] },
+    ] as MessageParam[]);
+    const entries = await rawEntries();
+    expect(entries[0].turnId).toBeUndefined();
+    expect('turnId' in entries[0]).toBe(false);
+  });
+
+  it('reaches the display projection but never the model context', async () => {
+    const turnId = crypto.randomUUID();
+    await addAIMessages([
+      { role: 'assistant', content: [{ type: 'text', text: 'You have 3 tasks.' }] },
+    ] as MessageParam[], { turnId });
+
+    // The browser reads it off the display entry (getDisplayEntries returns the
+    // stored rows as-is, which is why no route change was needed).
+    const shown = await getDisplayEntries();
+    const assistant = shown.messages.find((e) => e.role === 'assistant');
+    expect(assistant!.turnId).toBe(turnId);
+
+    // The model sees { role, content } only — an id in the prompt would be noise
+    // it could start echoing.
+    for (const m of await getApiMessages() as Array<Record<string, unknown>>) {
+      expect(m.turnId).toBeUndefined();
+    }
+  });
+});

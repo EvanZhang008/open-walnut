@@ -210,14 +210,18 @@ describe('summarize', () => {
     expect(summarize(index, { days, today: '2026-08-22' }).totalHumanMs).toBe(0);
   });
 
-  it('orders each day busiest first', () => {
+  it('orders each day by HUMAN time first, agent time only as a tiebreaker', () => {
     const index = foldRecords([
       rec({ taskId: 't_small', durationMs: 1000 }),
       rec({ taskId: 't_big', durationMs: 9000 }),
-      rec({ taskId: 't_mid', kind: 'agent', durationMs: 5000 }),
+      // A big agent number must NOT outrank a task the human actually worked on:
+      // the panel reads top-down as "where my day went".
+      rec({ taskId: 't_agent_only', kind: 'agent', durationMs: 5000 }),
+      rec({ taskId: 't_agent_less', kind: 'agent', durationMs: 2000 }),
     ]);
     const out = summarize(index, { days, today: '2026-08-22' });
-    expect(out.days.at(-1)!.tasks.map((t) => t.taskId)).toEqual(['t_big', 't_mid', 't_small']);
+    expect(out.days.at(-1)!.tasks.map((t) => t.taskId))
+      .toEqual(['t_big', 't_small', 't_agent_only', 't_agent_less']);
   });
 
   it('computes focus share over HUMAN time only, and flags focus tasks', () => {

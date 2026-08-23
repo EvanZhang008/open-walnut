@@ -22,7 +22,6 @@ import { SkillsPage } from './pages/SkillsPage';
 import { MemoryPage } from './pages/MemoryPage';
 import { NotesPage } from './pages/NotesPage';
 import { CalendarPage } from './pages/CalendarPage';
-import { TimePage } from './pages/TimePage';
 import { PluginAppPage } from './pages/PluginAppPage';
 
 import { PopoutRoot } from './popout/PopoutRoot';
@@ -95,7 +94,6 @@ export function App() {
         <Route path="/notes" element={<NotesPage />} />
         <Route path="/calendar" element={<CalendarPage />} />
         <Route path="/routines" element={<RoutinesPage />} />
-        <Route path="/time" element={<TimePage />} />
         <Route path="/cron" element={<Navigate to="/routines" replace />} />
         <Route path="/usage" element={<Navigate to="/settings#usage" replace />} />
         <Route path="/agents" element={<AgentsPage />} />
@@ -103,6 +101,7 @@ export function App() {
         <Route path="/skills" element={<SkillsPage />} />
         <Route path="/hooks" element={<Navigate to="/settings#hooks" replace />} />
         <Route path="/repos" element={<Navigate to="/settings#repositories" replace />} />
+        <Route path="/time" element={<Navigate to="/settings#time" replace />} />
         <Route path="/timeline" element={<Navigate to="/settings#timeline" replace />} />
         <Route path="/chat" element={<Navigate to="/" replace />} />
         <Route path="/settings" element={<SettingsPage />} />

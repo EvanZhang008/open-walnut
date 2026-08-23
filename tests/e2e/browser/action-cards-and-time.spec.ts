@@ -63,6 +63,18 @@ async function navigateVia(page: Page, href: string): Promise<void> {
   await page.locator(`.sidebar-nav a[href="${href}"]`).click()
 }
 
+/**
+ * The Time panel is a Settings section, not a left-nav page: reach it the way a
+ * person does — sidebar → Settings → the "Time Tracking" nav entry, which scrolls
+ * the section into view. Two real clicks, no page.goto.
+ */
+async function openTimeSection(page: Page): Promise<void> {
+  await navigateVia(page, '/settings')
+  const navEntry = page.locator('[data-testid="settings-nav-time"]')
+  await expect(navEntry).toBeVisible({ timeout: 20_000 })
+  await navEntry.click()
+}
+
 test.describe('suggest action cards', () => {
   test('card renders, its button runs the real op, and the receipt survives a reload', async ({ page, request }) => {
     test.setTimeout(120_000)
@@ -120,7 +132,7 @@ test.describe('suggest action cards', () => {
 })
 
 test.describe('time tracking', () => {
-  test('real interaction earns human time for the task and the /time page shows it', async ({ page, request }) => {
+  test('real interaction earns human time for the task and the Time settings section shows it', async ({ page, request }) => {
     // The tracker flushes on its own 30s interval; the poll below waits for a
     // real one rather than forging the edge that would make it flush early.
     test.setTimeout(180_000)
@@ -169,13 +181,62 @@ test.describe('time tracking', () => {
       message: 'the 30s heartbeat flush should have recorded human time for the task',
     }).toBeGreaterThan(0)
 
-    // The page renders the row for that task (real SPA nav via the left nav).
-    await navigateVia(page, '/time')
-    await expect(page.locator('.time-page')).toBeVisible({ timeout: 20_000 })
-    const bar = page.locator('.time-bar-row').filter({ hasText: title })
-    await expect(bar).toBeVisible({ timeout: 20_000 })
-    await expect(bar.locator('.time-bar-track')).toBeVisible()
-    await expect(page.locator('.time-stat', { hasText: 'Human today' })).toBeVisible()
-    await shoot(page, 'time-01-page')
+    // The Settings section renders the row for that task (real SPA nav: sidebar →
+    // Settings → the Time Tracking entry).
+    await openTimeSection(page)
+    const timePanel = page.locator('#time.time-page')
+    await expect(timePanel).toBeVisible({ timeout: 20_000 })
+    await timePanel.scrollIntoViewIfNeeded()
+
+    // ── Tab 1: My time. Human time ONLY — an agent number in this view is the
+    // bug the two-tab split exists to prevent (a user read 8h57m of agent time
+    // as their own working day).
+    const mine = timePanel.locator('[data-testid="time-view-mine"]')
+    await expect(mine).toBeVisible({ timeout: 20_000 })
+    await expect(timePanel.locator('[data-testid="time-tab-mine"]')).toHaveClass(/active/)
+    await expect(mine.locator('.time-bar-value-agent')).toHaveCount(0)
+    await expect(mine.locator('.time-stat', { hasText: 'Focus share' })).toBeVisible()
+
+    // The task is not pinned, so it belongs to the "Other" group, with real minutes.
+    const otherGroup = mine.locator('[data-testid="time-group-other"]')
+    const timeRow = otherGroup.locator('.time-bar-row').filter({ hasText: title })
+    await expect(timeRow).toBeVisible({ timeout: 20_000 })
+    // A few seconds of wheeling must read as seconds, never as a rounded "0m"
+    // (which reads as "nothing recorded" — the same wrong-data reaction).
+    await expect(timeRow.locator('.time-bar-value-human')).toHaveText(/^[1-9]\d*(s|m)$|^\d+h/)
+    await shoot(page, 'time-01-my-time')
+
+    // ── A filter interaction, clicked for real. The wheel over a task row earns
+    // TRIAGE time, so the triage filter keeps the row and the chat filter drops it.
+    await timePanel.locator('[data-testid="time-kind-triage"]').click()
+    await expect(timeRow).toBeVisible()
+    await timePanel.locator('[data-testid="time-kind-chat"]').click()
+    await expect(mine.locator('.time-bar-row').filter({ hasText: title })).toHaveCount(0)
+    await timePanel.locator('[data-testid="time-kind-all"]').click()
+    await expect(timeRow).toBeVisible()
+
+    // …and the range filter: nothing was earned yesterday.
+    await timePanel.locator('[data-testid="time-range-yesterday"]').click()
+    await expect(mine.locator('.time-bar-row').filter({ hasText: title })).toHaveCount(0)
+    await timePanel.locator('[data-testid="time-range-today"]').click()
+    await expect(timeRow).toBeVisible()
+
+    // ── Tab 2: Agents. Agent runtime only, with the parallel-runs caption and
+    // never a human number.
+    await timePanel.locator('[data-testid="time-tab-agents"]').click()
+    const agents = timePanel.locator('[data-testid="time-view-agents"]')
+    await expect(agents).toBeVisible({ timeout: 20_000 })
+    await expect(mine).toHaveCount(0)
+    await expect(agents.locator('[data-testid="time-agent-caption"]'))
+      .toContainText('agents can run in parallel')
+    await expect(agents.locator('.time-bar-value-human')).toHaveCount(0)
+    await expect(agents.locator('.time-stat', { hasText: 'Agent runtime' })).toBeVisible()
+    await timePanel.scrollIntoViewIfNeeded()
+    await shoot(page, 'time-02-agents')
+
+    // Back to My time — the tab state is real, not a one-way trip.
+    await timePanel.locator('[data-testid="time-tab-mine"]').click()
+    await expect(mine).toBeVisible()
+    await expect(timeRow).toBeVisible()
   })
 })

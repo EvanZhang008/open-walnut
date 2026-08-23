@@ -12,7 +12,6 @@ import { getAllRepoMemorySummaries } from '../core/repo-memory.js';
 import { listTasks, getStoreProjects } from '../core/task-manager.js';
 import { buildTaskLedger } from '../core/task-ledger.js';
 import { renderSelfKnowledgeContract } from '../core/self-knowledge-contract.js';
-import { renderSuggestActionContract } from '../core/suggest-action-contract.js';
 import { registry } from '../core/integration-registry.js';
 import { log } from '../logging/index.js';
 
@@ -216,9 +215,11 @@ function enforceContextBudget(text: string, budget: number): string {
 
 /** Stable product contract shared by every Main Agent provider. */
 export function buildWorkModesSection(): string {
-  // Both halves are static, so they belong in the cached prefix, never in the
-  // per-turn dynamic block.
-  return `${renderSelfKnowledgeContract()}\n\n${renderSuggestActionContract()}`;
+  // Static text: belongs in the cached prefix, never in the per-turn dynamic
+  // block. The suggest-card syntax deliberately does NOT live here — it loads
+  // on demand via the shipped `suggest-cards` skill (one index line instead of
+  // ~1.1KB in every prompt).
+  return renderSelfKnowledgeContract();
 }
 
 /** Per-plugin cap for a registerAgentContext snippet. */

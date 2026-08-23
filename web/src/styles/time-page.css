@@ -1,13 +1,70 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   /time page — two clocks per task per day (human lease vs agent turns).
-   ALL rules are scoped under .time-page (imported by TimePage.tsx).
-   Do NOT move these into globals.css.
+   Time Tracking panel — TWO separate views ("My time" = human attention,
+   "Agents" = agent runtime). Rendered as the Settings "Time Tracking"
+   section; ALL rules are scoped under .time-page (imported by
+   TimeSection.tsx). Do NOT move these into globals.css.
+
+   The pill controls deliberately reuse the global .usage-period-tab(s)
+   idiom, so the two report cards in Settings read as one family.
    ═══════════════════════════════════════════════════════════════════════ */
 
 .time-page {
   --time-human: var(--accent);
   --time-agent: #af52de; /* iOS purple — reads as "not me" next to the accent */
-  max-width: 1000px;
+}
+
+/* Title + refresh, the shape every settings report card uses. */
+.time-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.time-subtitle {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+/* ── Tabs + filters ── */
+
+.time-tabs {
+  margin-bottom: 12px;
+}
+
+.time-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+/* The filter row's own pill groups sit inline, unlike the tab strip above. */
+.time-filters .usage-period-tabs {
+  margin-bottom: 0;
+}
+
+.time-filter-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.time-filter-label {
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.time-filter-field select {
+  padding: 5px 8px;
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
 }
 
 .time-degraded {
@@ -26,7 +83,7 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
 }
 
 .time-stat {
@@ -37,6 +94,7 @@
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
+  min-width: 0;
 }
 
 .time-stat-value {
@@ -44,6 +102,15 @@
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--fg);
+}
+
+/* A task title, not a number: smaller and clipped to one line. */
+.time-stat-value.time-stat-text {
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .time-stat-human .time-stat-value { color: var(--time-human); }
@@ -59,9 +126,16 @@
   color: var(--fg-muted);
 }
 
-/* ── Sections ── */
+/* The parallel-agents caption. Never a headline number. */
+.time-agent-note {
+  margin: -8px 0 20px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
 
-.time-section { margin-bottom: 28px; }
+/* ── Sections / groups ── */
+
+.time-section { margin-bottom: 24px; }
 
 .time-section-head {
   display: flex;
@@ -71,7 +145,7 @@
 }
 
 .time-section-head h2 {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   margin: 0;
 }
@@ -82,7 +156,8 @@
   color: var(--fg-muted);
 }
 
-/* ── Per-task horizontal bars ── */
+/* ── Per-task rows: ONE lane per view, so a bar can never be misread as a
+      human+agent total (2026-08-23 misread). ── */
 
 .time-bars {
   display: flex;
@@ -92,7 +167,7 @@
 
 .time-bar-row {
   display: grid;
-  grid-template-columns: minmax(120px, 240px) 1fr auto;
+  grid-template-columns: minmax(120px, 260px) 1fr 68px;
   align-items: center;
   gap: 12px;
 }
@@ -112,28 +187,30 @@
   color: var(--fg);
 }
 
-/* Two stacked segments in one track: human first, agent continuing it. */
 .time-bar-track {
-  display: flex;
-  height: 18px;
+  height: 14px;
   background: color-mix(in srgb, var(--border) 60%, transparent);
   border-radius: 4px;
   overflow: hidden;
 }
 
-.time-bar-seg { height: 100%; }
-.time-bar-human { background: var(--time-human); }
-.time-bar-agent { background: var(--time-agent); }
+.time-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+}
 
-.time-bar-values {
-  display: flex;
-  gap: 10px;
-  font-size: 12px;
+.time-bar-fill-human { background: var(--time-human); }
+.time-bar-fill-agent { background: var(--time-agent); }
+
+.time-bar-value {
+  text-align: right;
+  font-size: 13px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
-.time-bar-human-value { color: var(--time-human); }
-.time-bar-agent-value { color: var(--time-agent); }
+.time-bar-value-human { color: var(--time-human); }
+.time-bar-value-agent { color: var(--time-agent); }
 
 /* ── 7-day trend (plain divs, no chart dep) ── */
 
@@ -141,7 +218,7 @@
   display: flex;
   align-items: flex-end;
   gap: 10px;
-  height: 160px;
+  height: 150px;
   padding: 8px 4px 0;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -158,6 +235,7 @@
   gap: 6px;
 }
 
+/* One bar per day; both segments are YOUR time, split focus vs other. */
 .time-trend-stack {
   flex: 1 1 auto;
   width: 100%;
@@ -172,8 +250,8 @@
 }
 
 .time-trend-seg { width: 100%; }
-.time-trend-human { background: var(--time-human); }
-.time-trend-agent { background: var(--time-agent); }
+.time-trend-focus { background: var(--tier-focus); }
+.time-trend-other { background: var(--time-human); }
 
 .time-trend-label {
   flex: 0 0 auto;
@@ -192,6 +270,7 @@
 .time-legend {
   display: flex;
   gap: 16px;
+  margin-top: 10px;
   font-size: 12px;
   color: var(--fg-secondary);
 }

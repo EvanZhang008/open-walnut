@@ -9,6 +9,7 @@ import { useLivePlanContent } from '@/contexts/PlanContentContext';
 import { fetchSubagentHistory } from '@/api/sessions';
 import { getSubagentCache, setSubagentCache } from '@/cache/session-cache';
 import { CopyMessageButtons } from '@/components/common/CopyMessageButtons';
+import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
 import { BashToolCall } from './BashToolCall';
 import { log } from '@/utils/log';
 
@@ -1027,6 +1028,16 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
     return findImagePaths(text);
   }, [text, isUser]);
 
+  // `<suggest>` action cards in a session's own answer: a session's prose can
+  // carry a card just like the Personal AI's — same parser, same invoke endpoint,
+  // same persisted receipts. Rendering never depends on how the author learned
+  // the syntax.
+  // Scope = this message's stable id: `msgId` is the API `message.id` for
+  // assistant messages (else the JSONL line uuid), and the SAME id rides the live
+  // stream deltas, so a card's receipt key is identical mid-turn and after a
+  // reload. User text never parses cards (it renders verbatim).
+  const { segments, useSegments } = useSuggestSegments(isUser ? '' : text, message.msgId);
+
   // Unified click handler for entity ref links + file links in message content
   const handleContentClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
 
@@ -1034,12 +1045,14 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
     <div className={`session-msg ${isUser ? 'session-msg-user' : 'session-msg-assistant'}`}>
       <div className="session-msg-content" onClick={handleContentClick}>
         {thinking && <SessionThinking text={thinking} />}
-        {text && (
+        {text && (useSegments ? (
+          <SuggestSegments segments={segments} cwd={sessionCwd} />
+        ) : (
           <div
             className="markdown-body"
             dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(text, sessionCwd) }}
           />
-        )}
+        ))}
         {tools && tools.length > 0 && (() => {
           // CLI content order is prose first, tool_use blocks after — render
           // in that order. Merge consecutive generic tools into one "Ran 3

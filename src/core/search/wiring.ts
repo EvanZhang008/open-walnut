@@ -60,15 +60,6 @@ const EMBED_MODELS: Record<string, Omit<EmbedderConfig, 'workerPath'>> = {
     queryPrefix: 'query: ',
     passagePrefix: 'passage: ',
   },
-  // A/B alternative (plan Q2): stronger cross-lingual/typo discrimination in
-  // probes, ~30x slower passage embedding (209ms vs 7ms) — measured 2026-08-23.
-  'qwen3-0.6b': {
-    modelId: 'onnx-community/Qwen3-Embedding-0.6B-ONNX',
-    dims: 1024,
-    queryPrefix: 'Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ',
-    passagePrefix: '',
-    pooling: 'last',
-  },
 };
 
 function resolveEmbedWorkerPath(): string | undefined {
