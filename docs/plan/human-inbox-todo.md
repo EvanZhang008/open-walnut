@@ -129,6 +129,6 @@ package.json, src/web/server.ts, src/web/routes/sessions.ts, src/core/keep-awake
 
 ## Commit (main session, after everything)
 
-- [ ] K1. pre-commit sensitive scan; commit scoped to OUR files only (git add by explicit path list); commit message generic, no internal names
-- [ ] K2. update docs/plan/human-inbox.md status line (P1 shipped) + memory
+- [x] K1. committed f3ac873e via `git commit --only -- <30 explicit paths>` (index held other agents' staged work — desktop/, cli.ts, server.ts, instance-lock — all left intact); husky sensitive scan + staged-blob gate passed; `scripts/check-committed-bundle.sh` green on the new HEAD (the J1 closure requirement)
+- [x] K2. status line added to human-inbox.md; memory updated
 - [ ] K3. DEPLOY BLOCKED 2026-08-22: prod :3456 had an outage (deploy duel + tree boot hang) and now runs a HEAD build under launchd; do NOT run dev-prod until the boot-hang owner (search-v2/instance-lock staged changes) confirms a fix — commit only, deploy later

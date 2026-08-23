@@ -1,5 +1,7 @@
 # Human Inbox: letters from agents to the human
 
+> **Status**: P1 (web loop) shipped 2026-08-22, commit f3ac873e — store, ops, routes, notification bridge, web reader with one-click actions, 57 unit/route tests + 3 real-UI Playwright scenarios. P2 (phone) and P3 (wn env-less fallback) not started. Implementation tracker: [human-inbox-todo.md](./human-inbox-todo.md).
+
 ## The experience in one paragraph
 
 Any agent running under Walnut (Claude Code, codex, any provider, on any host with a daemon) can send the human a letter: a well-written, self-contained HTML document with full context, like an email. All letters land in ONE human inbox the human reads from anywhere (web console, phone), each letter can be replied to in place (the reply goes back to the agent that wrote it, and its answer threads under the letter), and letters carry human state: unread, pinned, archived. The human inbox is a new section of the existing notification center, because a letter IS a notification, just one whose body is a document instead of a one-line event. The name is deliberate: "inbox" alone is ambiguous (agent-to-agent inboxes already exist in the peers/teams machinery); THIS inbox has exactly one reader, the human.
