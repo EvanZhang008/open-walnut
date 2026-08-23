@@ -248,7 +248,14 @@ describe('fresh-spawn streamEpoch (real daemon)', () => {
     expect(start2.ok).toBe(true)
 
     const ino2 = fs.statSync(path.join(d.streamsDir, sid + '.jsonl')).ino
-    expect(ino2, 'fresh spawn must recreate the file (new inode), not truncate in place').not.toBe(ino1)
+    // A NEW inode number proves unlink-then-create on APFS, but it is not a
+    // portable proof: ext4 hands the just-freed inode straight back, so on Linux
+    // (where every remote daemon actually runs) a correct unlink can still report
+    // ino2 === ino1. Assert the CONTRACT on every platform — the epoch must
+    // change — and keep the inode check where the filesystem makes it meaningful.
+    if (process.platform === 'darwin') {
+      expect(ino2, 'fresh spawn must recreate the file (new inode), not truncate in place').not.toBe(ino1)
+    }
     const state2 = await rpc(ws, { cmd: 'getState', sid })
     const epoch2 = (state2.snapshot as { streamEpoch?: string | null } | undefined)?.streamEpoch
     expect(typeof epoch2).toBe('string')

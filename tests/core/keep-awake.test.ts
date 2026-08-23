@@ -351,14 +351,6 @@ describe('setup detection and one-click install', () => {
     expect(disableSleepCalls()).toEqual([]); // probe is read-only
   });
 
-  it('poll exposes setupDone so the UI can show installed-vs-needed', async () => {
-    await pollKeepAwakeOnce();
-    expect(getKeepAwakeState().setupDone).toBe(true);
-    world.sudoFails = true;
-    await pollKeepAwakeOnce();
-    expect(getKeepAwakeState().setupDone).toBe(false);
-  });
-
   it('runSudoSetup succeeds via osascript', async () => {
     expect(await runSudoSetup()).toEqual({ ok: true, detail: 'installed' });
     const call = world.execCalls.find((c) => c.cmd === '/usr/bin/osascript');
@@ -369,6 +361,22 @@ describe('setup detection and one-click install', () => {
   it('runSudoSetup reports a user-canceled dialog distinctly', async () => {
     world.osascriptResult = { ok: false, stdout: '', stderr: 'execution error: User canceled. (-128)' };
     expect(await runSudoSetup()).toEqual({ ok: false, detail: 'canceled' });
+  });
+});
+
+// setupDone is published by the POLL, and pollKeepAwakeOnce returns early on any
+// non-darwin host (keep-awake is pmset). It therefore belongs with the other
+// darwinOnly poll suites, not with the exec-level setup tests above, which run
+// anywhere because they call the helpers directly against the fake exec world.
+// Grouped here rather than left in the suite above, where it passed on a Mac and
+// failed on Linux CI for a reason unrelated to the behaviour it checks.
+darwinOnly('setup detection through the poll', () => {
+  it('poll exposes setupDone so the UI can show installed-vs-needed', async () => {
+    await pollKeepAwakeOnce();
+    expect(getKeepAwakeState().setupDone).toBe(true);
+    world.sudoFails = true;
+    await pollKeepAwakeOnce();
+    expect(getKeepAwakeState().setupDone).toBe(false);
   });
 });
 

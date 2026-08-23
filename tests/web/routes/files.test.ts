@@ -20,7 +20,8 @@ vi.mock('node:child_process', async (importOriginal) => {
   return { ...actual, execFile: (...args: unknown[]) => execFileMock(...(args as [string, string[], unknown, ((e: Error | null) => void)?])) };
 });
 
-const { filesRouter } = await import('../../../src/web/routes/files.js');
+const { WALNUT_HOME } = await import('../../../src/constants.js');
+const { filesRouter, isRevealSecretPath } = await import('../../../src/web/routes/files.js');
 const { errorHandler } = await import('../../../src/web/middleware/error-handler.js');
 
 function createApp() {
@@ -129,7 +130,21 @@ describe('GET /api/files/list (local)', () => {
 // app". Every test here asserts a GUARD, or asserts the exact `open` argv — the
 // real spawn is mocked, because a passing test must never actually pop Finder on
 // the developer's machine.
+//
+// The route is macOS-only by design (it hands a path to Finder), so these tests
+// PIN the platform instead of inheriting the host's. Without the pin they passed
+// on a Mac and 400'd on Linux CI — eight failures that said nothing about the
+// code under test. A test for platform-gated behaviour must state which platform
+// it is testing; the gate is what's under test, not an ambient fact.
 describe('POST /api/files/reveal', () => {
+  let platformSpy: ReturnType<typeof vi.spyOn> | undefined;
+  beforeEach(() => {
+    platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin') as never;
+  });
+  afterEach(() => {
+    platformSpy?.mockRestore();
+  });
+
   it('rejects a non-macOS platform', async () => {
     // The route reads process.platform at request time, so a per-test override
     // covers both directions on one machine.
@@ -194,6 +209,10 @@ describe('POST /api/files/reveal', () => {
     const revealed = await request(app).post('/api/files/reveal').send({ path: script, mode: 'finder' });
     expect(revealed.status).toBe(200);
     expect(execFileMock).toHaveBeenCalledWith('open', ['-R', script], expect.anything(), expect.anything());
+  });
+
+  it('refuses every file under the Plugin secret store', () => {
+    expect(isRevealSecretPath(path.join(WALNUT_HOME, 'secrets', 'plugins', 'sample.json'))).toBe(true);
   });
 
   it("refuses a secret path (never hands ~/.aws or a config.yaml to the desktop)", async () => {

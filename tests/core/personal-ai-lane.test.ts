@@ -75,6 +75,10 @@ describe('parseLaneKey', () => {
       .toEqual({ agentId: 'general', conversationId: 'conv-abc' })
     expect(parseLaneKey(personalAiLaneKey('research', 'conv-9f2e-4a')))
       .toEqual({ agentId: 'research', conversationId: 'conv-9f2e-4a' })
+    expect(personalAiLaneKey('sample-plugin:observer', 'conv-plugin'))
+      .toBe('chat:sample-plugin%3Aobserver:conv-plugin')
+    expect(parseLaneKey(personalAiLaneKey('sample-plugin:observer', 'conv-plugin')))
+      .toEqual({ agentId: 'sample-plugin:observer', conversationId: 'conv-plugin' })
   })
 
   it('splits ONCE — a conversation id keeps every colon it contains', () => {
@@ -234,7 +238,11 @@ describe('personalAiProfile', () => {
     const prompt = personalAiProfile('Ada').systemPrompt!
     expect(prompt).toContain('## Walnut operating contract')
     expect(prompt).toContain('Use `delegate`')
-    expect(prompt).toContain('Only a human may set `COMPLETE`')
+    // The 4-phase rewrite (22b34fee) deliberately dropped "Only a human may set
+    // COMPLETE" for "You may set any phase; none is reserved" — assert TODAY's
+    // rule, so this test states the contract rather than a retired one.
+    expect(prompt).toContain('none is reserved')
+    expect(prompt).toContain('AGENT_COMPLETE')
     expect(prompt).not.toContain('/api/')
     expect(prompt).not.toContain('tasks.sqlite')
   })
