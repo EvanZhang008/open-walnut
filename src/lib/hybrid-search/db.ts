@@ -58,6 +58,9 @@ CREATE TABLE IF NOT EXISTS doc (
   UNIQUE(kind, ref)
 );
 CREATE INDEX IF NOT EXISTS doc_kind_updated ON doc(kind, updated_at);
+-- Backfill walk order: lets the missing-vectors keyset cursor resume mid-walk
+-- instead of re-sorting the whole table (with note bodies) on every batch.
+CREATE INDEX IF NOT EXISTS doc_updated_id ON doc(updated_at DESC, id DESC);
 ${FTS_DDL}
 
 CREATE TABLE IF NOT EXISTS doc_vec (

@@ -51,6 +51,20 @@ describe('passagesForDoc', () => {
   it('empty doc yields no passages', () => {
     expect(passagesForDoc({ title: '', note: '' }, false)).toEqual([]);
   });
+
+  it('over the cap, keeps the TAIL of a chunked body (recent turns), not the head', () => {
+    // Distinct markers per chunk so we can see which side survived the cap.
+    const paras: string[] = [];
+    for (let i = 0; i < MAX_CHUNKS_PER_DOC + 20; i++) {
+      paras.push(`marker-${i} ${'x'.repeat(CHUNK_TARGET_CHARS)}`);
+    }
+    const p = passagesForDoc({ title: 'Head', note: paras.join('\n\n') }, true);
+    expect(p.length).toBeLessThanOrEqual(MAX_CHUNKS_PER_DOC);
+    expect(p[0]).toBe('Head');
+    const body = p.slice(1).join('\n');
+    expect(body).not.toContain('marker-0 ');           // oldest dropped
+    expect(body).toContain(`marker-${MAX_CHUNKS_PER_DOC + 19}`); // newest kept
+  });
 });
 
 describe('cosineInt8', () => {
@@ -71,16 +85,16 @@ describe('vector storage', () => {
       kind: 'task', ref: 't1', title: 'Alpha work', note: 'body', updatedAt: 1,
     });
     const w = indexWriterView(index);
-    expect(w.listDocsMissingVectors(10).map((d) => d.id)).toContain(docId);
+    expect(w.listDocsMissingVectors(10).docs.map((d) => d.id)).toContain(docId);
 
     w.writeVectors(docId, [new Int8Array(4).fill(1), new Int8Array(4).fill(2)]);
-    expect(w.listDocsMissingVectors(10)).toHaveLength(0);
+    expect(w.listDocsMissingVectors(10).docs).toHaveLength(0);
     expect(vecCount(index)).toBe(2);
 
     // Content change drops vectors → doc is missing again (self-heal queue).
     index.upsert({ kind: 'task', ref: 't1', title: 'Alpha work v2', note: 'body', updatedAt: 2 });
     expect(vecCount(index)).toBe(0);
-    expect(w.listDocsMissingVectors(10).map((d) => d.id)).toContain(docId);
+    expect(w.listDocsMissingVectors(10).docs.map((d) => d.id)).toContain(docId);
 
     // Timestamp-only change keeps them.
     w.writeVectors(docId, [new Int8Array(4).fill(3)]);
@@ -97,6 +111,29 @@ describe('vector storage', () => {
     expect(vecCount(index)).toBe(0);
     index.close();
   });
+
+  it('keyset cursor resumes the missing-vectors walk without revisiting', () => {
+    const index = createSearchIndex({ dbPath: ':memory:', kinds: KINDS });
+    const ids: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      ids.push(index.upsert({
+        kind: 'task', ref: `t${i}`, title: `Doc ${i}`, updatedAt: 100 + i,
+      }).docId);
+    }
+    const w = indexWriterView(index);
+    const page1 = w.listDocsMissingVectors(2);
+    expect(page1.docs).toHaveLength(2);
+    expect(page1.cursor).not.toBeNull();
+    const page2 = w.listDocsMissingVectors(2, page1.cursor);
+    expect(page2.docs).toHaveLength(2);
+    const page3 = w.listDocsMissingVectors(2, page2.cursor);
+    expect(page3.docs).toHaveLength(1);
+    const all = [...page1.docs, ...page2.docs, ...page3.docs].map((d) => d.id).sort();
+    expect(all).toEqual([...ids].sort()); // every doc exactly once
+    // Walk order is updated_at DESC — newest first.
+    expect(page1.docs.map((d) => d.ref)).toContain('t4');
+    index.close();
+  });
 });
 
 describe('searchSemantic degrade ladder', () => {
@@ -106,7 +143,7 @@ describe('searchSemantic degrade ladder', () => {
     const hits = await index.searchSemantic('retry timeout');
     expect(hits[0].ref).toBe('t1');
     expect(hits[0].semantic).toBe('disabled');
-    expect(await index.backfillVectors()).toEqual({ embedded: 0, drained: true });
+    expect(await index.backfillVectors()).toEqual({ embedded: 0, drained: true, cursor: null });
     index.close();
   });
 
@@ -140,6 +177,23 @@ describe('searchSemantic degrade ladder', () => {
     index.upsert({ kind: 'task', ref: 't1', title: 'retry timeout fix', updatedAt: 1 });
     const hits = await index.searchSemantic('retry', { semanticDeadlineMs: 0 });
     expect(hits[0].semantic).toBe('skipped');
+    index.close();
+  });
+
+  it('a doc whose embed keeps failing is quarantined instead of wedging the backfill', async () => {
+    const index = createSearchIndex({
+      dbPath: ':memory:',
+      kinds: KINDS,
+      embedder: { modelId: 'no/such-model', dims: 4, workerPath: '/nonexistent.js' },
+    });
+    index.upsert({ kind: 'task', ref: 'poison', title: 'never embeds', updatedAt: 1 });
+    // Failure 1: retried next pass; failure 2: quarantined with a zero vector.
+    const first = await index.backfillVectors();
+    expect(first.embedded).toBe(0);
+    const second = await index.backfillVectors();
+    expect(second.embedded).toBe(0);
+    expect(vecCount(index)).toBe(1); // the zero sentinel
+    expect((await index.backfillVectors()).drained).toBe(true);
     index.close();
   });
 });

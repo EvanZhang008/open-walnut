@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import {
   createSearchIndex,
   type EmbedderConfig,
+  type MissingVecCursor,
   type ScoredHit,
   type SearchIndex,
 } from '../../lib/hybrid-search/index.js';
@@ -63,11 +64,14 @@ const EMBED_MODELS: Record<string, Omit<EmbedderConfig, 'workerPath'>> = {
 
 function resolveEmbedWorkerPath(): string | undefined {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  // Bundled: this module lives inside a dist entry (dist/web/server.js etc.);
-  // un-bundled (tsx/vitest): under src/core/search/. Workers can't run .ts,
+  // Bundled: this module lives inside a dist entry — dist/web/server.js (one
+  // level up from dist/lib) or dist/cli.js (same level: argv[1] candidate).
+  // Un-bundled (tsx/vitest): under src/core/search/. Workers can't run .ts,
   // so every candidate points at the tsup-built dist file.
+  const entryDir = process.argv[1] ? path.dirname(process.argv[1]) : undefined;
   const candidates = [
     path.join(here, '..', 'lib', 'hybrid-search', 'embed-worker.js'),
+    ...(entryDir ? [path.join(entryDir, 'lib', 'hybrid-search', 'embed-worker.js')] : []),
     path.join(here, '..', '..', '..', 'dist', 'lib', 'hybrid-search', 'embed-worker.js'),
     path.join(process.cwd(), 'dist', 'lib', 'hybrid-search', 'embed-worker.js'),
   ];
@@ -83,7 +87,10 @@ function buildEmbedderConfig(): EmbedderConfig | undefined {
     log.memory.warn('search-v2: embed worker not built — keyword-only until next build');
     return undefined;
   }
-  return { ...model, workerPath };
+  // Model cache OUTSIDE node_modules: the transformers.js default cache dir
+  // lives inside the package, so every `npm ci` silently discarded the 129MB
+  // model and the next search re-downloaded it inside the web server.
+  return { ...model, workerPath, cacheDir: path.join(WALNUT_HOME, 'models') };
 }
 
 let handle: SearchIndex | null = null;
@@ -299,23 +306,30 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
   let stopped = false;
 
   // Vector backfill: paced batches so a fresh index (~12k docs) embeds over
-  // minutes of idle capacity, never in one event-loop-adjacent burst. All the
-  // heavy work happens in the embed worker thread; the host side per batch is
-  // sub-ms sqlite writes. Self-heals continuously: upsert() drops a changed
-  // doc's vectors, and the next pass re-embeds whatever is missing.
+  // minutes of idle capacity, never in one event-loop-adjacent burst. The
+  // heavy work happens in the embed worker thread; the host side rides the
+  // keyset cursor (one index walk per DRAIN, not a full table scan per batch
+  // — the batches run on the production server's one event loop). A fresh
+  // pass (cursor null) starts after each drain: upsert() drops a changed
+  // doc's vectors, so the periodic pass re-embeds whatever went missing.
   const VEC_BATCH_PAUSE_MS = 100;
   let vecTotal = 0;
+  let vecCursor: MissingVecCursor | null = null;
   const scheduleVectorBackfill = (delayMs: number) => {
     if (stopped) return;
     vecTimer = setTimeout(() => {
       void (async () => {
         try {
-          const { embedded, drained } = await index.backfillVectors({ batchDocs: 16 });
+          const { embedded, drained, cursor } = await index.backfillVectors({
+            batchDocs: 16, cursor: vecCursor,
+          });
+          vecCursor = cursor;
           vecTotal += embedded;
           if (drained) {
             if (vecTotal > 0) log.memory.info('search-v2 vector backfill drained', { embedded: vecTotal });
             vecTotal = 0;
-            scheduleVectorBackfill(FILE_SWEEP_INTERVAL_MS); // periodic self-heal pass
+            vecCursor = null; // next pass rescans from the top (self-heal)
+            scheduleVectorBackfill(FILE_SWEEP_INTERVAL_MS);
             return;
           }
           if (vecTotal > 0 && vecTotal % 800 < 16) {
@@ -326,6 +340,7 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
           log.memory.warn('search-v2 vector backfill failed — retrying next sweep interval', {
             error: err instanceof Error ? err.message : String(err),
           });
+          vecCursor = null;
           scheduleVectorBackfill(FILE_SWEEP_INTERVAL_MS);
         }
       })();

@@ -95,7 +95,11 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
     }
     worker.unref();
     worker.on('message', (msg: { id: number; buf?: ArrayBuffer; dims?: number; error?: string }) => {
-      crashes = 0; // any reply proves the worker is healthy
+      // Only a SUCCESSFUL reply proves health. Resetting on error replies (or
+      // counting any reply) lets a worker that answers a few batches and then
+      // dies on a poison input reload the model forever without ever tripping
+      // the 3-strike containment.
+      if (msg.error === undefined) crashes = 0;
       const p = pending.get(msg.id);
       if (!p) return; // deadline already gave up on this job
       pending.delete(msg.id);
@@ -127,28 +131,41 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
     return worker;
   }
 
-  function submit(texts: string[]): Promise<Int8Array[]> {
+  function submitJob(texts: string[]): { id: number; promise: Promise<Int8Array[]> } | null {
     const w = getWorker();
-    if (!w) return Promise.reject(new Error('embed worker unavailable'));
+    if (!w) return null;
     const id = nextId++;
-    return new Promise<Int8Array[]>((resolve, reject) => {
+    const promise = new Promise<Int8Array[]>((resolve, reject) => {
       pending.set(id, { resolve, reject, count: texts.length });
       w.postMessage({ id, texts });
     });
+    return { id, promise };
+  }
+
+  function submit(texts: string[]): Promise<Int8Array[]> {
+    const job = submitJob(texts);
+    return job ? job.promise : Promise.reject(new Error('embed worker unavailable'));
   }
 
   return {
     async embedQuery(text, deadlineMs = 150) {
       const prefixed = (config.queryPrefix ?? '') + text.slice(0, MAX_EMBED_CHARS);
+      const job = submitJob([prefixed]);
+      if (!job) return null;
+      job.promise.catch(() => {}); // settled after we gave up ≠ unhandled
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
+        // The deadline timer stays REF'd: it is short-lived, cleared in
+        // finally, and it is the only thing guaranteeing this race settles —
+        // an unref'd timer plus the (deliberately) unref'd worker let a
+        // one-shot CLI process exit before the race resolved.
         const rows = await Promise.race([
-          submit([prefixed]),
+          job.promise,
           new Promise<null>((resolve) => {
             timer = setTimeout(() => resolve(null), deadlineMs);
-            timer.unref?.();
           }),
         ]);
+        if (!rows) pending.delete(job.id); // deadline: drop the live closure
         return rows ? rows[0] : null;
       } catch {
         return null;

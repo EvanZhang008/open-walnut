@@ -20,13 +20,13 @@ import {
   type SearchDb,
   type IndexStats,
 } from './db.js';
-import { createWriter, type Doc, type UpsertResult, type Writer } from './writer.js';
+import { createWriter, type Doc, type MissingVecCursor, type UpsertResult, type Writer } from './writer.js';
 import { TOKENIZER_VERSION, tokenize, type TokenStreams } from './tokenizer.js';
 import { searchKeyword, DEFAULT_DF_THRESHOLD, type KeywordHit } from './query.js';
 import { cosineInt8, createEmbedder, type Embedder } from './embedder.js';
 import { passagesForDoc } from './chunk.js';
 
-export type { Doc, UpsertResult, IndexStats, TokenStreams };
+export type { Doc, MissingVecCursor, UpsertResult, IndexStats, TokenStreams };
 export { tokenize, TOKENIZER_VERSION, DEFAULT_DF_THRESHOLD };
 export { cosineInt8, createEmbedder } from './embedder.js';
 export { passagesForDoc } from './chunk.js';
@@ -83,8 +83,11 @@ export interface SearchOptions {
 
 export interface BackfillVectorsResult {
   embedded: number;
-  /** True when no doc is missing vectors anymore. */
+  /** True when this walk reached the end of the missing-vectors list. */
   drained: boolean;
+  /** Pass back into the next call to resume the walk without re-scanning
+   *  already-visited docs. Start a fresh pass with null/undefined. */
+  cursor: MissingVecCursor | null;
 }
 
 export interface StoredDoc {
@@ -112,7 +115,8 @@ export interface ScoredHit {
     cosine?: number;
   };
   updatedAt: number;
-  /** 'ok' | 'timeout' | 'disabled' — state of the semantic blend. */
+  /** State of the semantic blend: 'ok' (rescored), 'cold' (no candidate had
+   *  vectors yet — backfill pending), 'timeout', 'skipped', 'disabled'. */
   semantic?: string;
 }
 
@@ -122,11 +126,17 @@ export interface SearchIndex {
   search(query: string, options?: SearchOptions): ScoredHit[];
   /** Async variant: keyword lanes + semantic rescore over the candidates when
    *  an embedder is configured. Degrades to the keyword order on deadline /
-   *  worker failure — never slower than semanticDeadlineMs, never throws. */
+   *  worker failure. The deadline bounds only the EMBEDDING step — the
+   *  keyword lanes before it run at their own (fast but unbounded) cost, and
+   *  database-level errors (closed handle, corruption) still reject: callers
+   *  on a request path should catch. */
   searchSemantic(query: string, options?: SearchOptions): Promise<ScoredHit[]>;
   /** Embed one batch of vector-less docs (chunked kinds get per-passage
-   *  vectors). Call repeatedly until drained; safe to interleave with writes. */
-  backfillVectors(options?: { batchDocs?: number }): Promise<BackfillVectorsResult>;
+   *  vectors). Call repeatedly until drained, passing each result's `cursor`
+   *  back in; safe to interleave with writes. A doc whose embed fails twice
+   *  is quarantined with a zero vector (upsert clears it, so the next content
+   *  change retries). */
+  backfillVectors(options?: { batchDocs?: number; cursor?: MissingVecCursor | null }): Promise<BackfillVectorsResult>;
   /** Stored raw text of a doc (snippet extraction, rescoring). */
   getDoc(kind: string, ref: string): StoredDoc | null;
   rebuildAll(docs: Iterable<Doc> | AsyncIterable<Doc>): Promise<{ inserted: number }>;
@@ -174,6 +184,10 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
   const embedder: Embedder | null = options.embedder
     ? createEmbedder(options.embedder, log)
     : null;
+  let closed = false;
+  /** Per-process embed-failure counts; at 2 the doc is quarantined with a
+   *  zero vector so ONE poison doc can never wedge the whole backfill. */
+  const vecFailures = new Map<number, number>();
 
   function runKeyword(query: string, searchOptions: SearchOptions, limit?: number): KeywordHit[] {
     return searchKeyword(db, query, {
@@ -221,12 +235,16 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       // it, so give it headroom beyond the page the caller asked for. Floor
       // of 60: a doc reachable ONLY through the gated-pair phrase lane ranks
       // in the 40s of the keyword pool (coverage ~0.5, no rare-term bm25) —
-      // a 30-deep pool never let the rescore see it. Cosine over ≤100
-      // candidates is ~1ms, so depth here is cheap.
-      const pool = runKeyword(query, searchOptions, Math.min(100, Math.max(60, limit * 3)));
+      // a 30-deep pool never let the rescore see it. Never below the caller's
+      // limit, so a large page is at worst unrescored, never truncated.
+      const pool = runKeyword(
+        query,
+        searchOptions,
+        Math.max(limit, Math.min(100, Math.max(60, limit * 3))),
+      );
       if (pool.length === 0) return [];
       const queryVec = await embedder.embedQuery(query, deadline);
-      if (!queryVec) {
+      if (!queryVec || closed) {
         return pool.slice(0, limit).map((h) => toScored(h, 'timeout'));
       }
       // Max cosine over a doc's chunk vectors: the best-matching passage
@@ -238,6 +256,12 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         const cos = cosineInt8(queryVec, vec);
         const prev = bestCos.get(row.doc_id);
         if (prev === undefined || cos > prev) bestCos.set(row.doc_id, cos);
+      }
+      if (bestCos.size === 0) {
+        // No candidate has vectors yet (fresh index mid-backfill): keyword
+        // order, honestly labelled — 'ok' here would make a cold rollout
+        // indistinguishable from a working rescore.
+        return pool.slice(0, limit).map((h) => toScored(h, 'cold'));
       }
       // e5-family cosines live in a compressed band (~0.7-0.95), so the raw
       // value barely discriminates. Normalize within the candidate set, like
@@ -252,7 +276,11 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       const span = max - min;
       const scored = pool.map((h) => {
         const cos = bestCos.get(h.docId);
-        const cosNorm = cos === undefined || span <= 0 ? 0 : (cos - min) / span;
+        // A missing vector means UNKNOWN similarity, not zero: a doc whose
+        // vectors were just dropped by an upsert (i.e. the freshest doc in
+        // the pool) must not be scored as maximally irrelevant. Neutral 0.5,
+        // also used when every cosine ties (span 0 carries no information).
+        const cosNorm = cos === undefined || span <= 0 ? 0.5 : (cos - min) / span;
         const out = toScored(h, 'ok');
         out.components = { ...h.components, cosine: cos };
         out.score = h.score + (kindWeights[h.kind] ?? 1) * W_COSINE * cosNorm;
@@ -262,12 +290,15 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       return scored.slice(0, limit);
     },
     backfillVectors: async (backfillOptions = {}) => {
-      if (!embedder) return { embedded: 0, drained: true };
+      if (!embedder || closed) return { embedded: 0, drained: true, cursor: null };
       const batchDocs = backfillOptions.batchDocs ?? 16;
-      const docs = writer.listDocsMissingVectors(batchDocs);
-      if (docs.length === 0) return { embedded: 0, drained: true };
+      const { docs, cursor } = writer.listDocsMissingVectors(
+        batchDocs, backfillOptions.cursor,
+      );
+      if (docs.length === 0) return { embedded: 0, drained: true, cursor };
       let embedded = 0;
       for (const doc of docs) {
+        if (closed) return { embedded, drained: true, cursor };
         const passages = passagesForDoc(doc, chunkedKinds.has(doc.kind));
         if (passages.length === 0) {
           // Mark empty docs done with one zero vector (cosine 0 = no boost);
@@ -275,15 +306,39 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
           writer.writeVectors(doc.id, [new Int8Array(options.embedder!.dims)]);
           continue;
         }
-        const vectors: Int8Array[] = [];
-        // Sub-batch so one whale doc cannot balloon a single inference call.
-        for (let i = 0; i < passages.length; i += 32) {
-          vectors.push(...await embedder.embedPassages(passages.slice(i, i + 32)));
+        try {
+          const vectors: Int8Array[] = [];
+          // Sub-batch so one whale doc cannot balloon a single inference call.
+          for (let i = 0; i < passages.length; i += 32) {
+            vectors.push(...await embedder.embedPassages(passages.slice(i, i + 32)));
+          }
+          if (closed) return { embedded, drained: true, cursor };
+          writer.writeVectors(doc.id, vectors);
+          vecFailures.delete(doc.id);
+          embedded++;
+        } catch (err) {
+          // One poison doc (worker OOM/crash on its passages) must not stall
+          // the walk: the cursor moves past it either way, and a second
+          // failure quarantines it (zero vector = done, no boost; the next
+          // content change clears it and retries).
+          const fails = (vecFailures.get(doc.id) ?? 0) + 1;
+          vecFailures.set(doc.id, fails);
+          if (fails >= 2) {
+            writer.writeVectors(doc.id, [new Int8Array(options.embedder!.dims)]);
+            vecFailures.delete(doc.id);
+            log('warn', 'hybrid-search: doc quarantined after repeated embed failures', {
+              kind: doc.kind, ref: doc.ref,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          } else {
+            log('warn', 'hybrid-search: embed failed for doc — will retry next pass', {
+              kind: doc.kind, ref: doc.ref,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
-        writer.writeVectors(doc.id, vectors);
-        embedded++;
       }
-      return { embedded, drained: docs.length < batchDocs };
+      return { embedded, drained: docs.length < batchDocs, cursor };
     },
     getDoc: (kind, ref) => {
       const row = db.prepare(
@@ -311,6 +366,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     stats: () => collectStats(db),
     optimize: () => optimizeIndex(db),
     close: () => {
+      closed = true; // in-flight backfill/searches bail instead of touching a closed handle
       void embedder?.dispose();
       db.close();
     },

@@ -53,10 +53,26 @@ export interface Writer {
   /** Replace a doc's vectors (seq = array index). No-op if the doc vanished. */
   writeVectors(docId: number, vectors: Int8Array[]): void;
   /** Docs with no vectors yet — the backfill work queue. upsert() drops a
-   *  changed doc's vectors, so this scan also self-heals staleness. */
-  listDocsMissingVectors(limit: number): Array<{
-    id: number; kind: string; ref: string; title: string; summary: string; note: string;
-  }>;
+   *  changed doc's vectors, so this scan also self-heals staleness.
+   *
+   *  Pass the previous batch's `cursor` back in to resume the walk where it
+   *  stopped: the ids-only keyset query rides the doc_updated_id index, so a
+   *  full drain costs one index walk TOTAL instead of a full table scan (with
+   *  every note body dragged through a sort) per batch — the batches run on
+   *  the host thread of a live web server. Note bodies are fetched by id for
+   *  just the returned batch. */
+  listDocsMissingVectors(limit: number, cursor?: MissingVecCursor | null): {
+    docs: Array<{
+      id: number; kind: string; ref: string; title: string; summary: string; note: string;
+    }>;
+    cursor: MissingVecCursor | null;
+  };
+}
+
+/** Keyset position in the missing-vectors walk (updated_at DESC, id DESC). */
+export interface MissingVecCursor {
+  updatedAt: number;
+  id: number;
 }
 
 function contentHash(doc: Doc): string {
@@ -209,13 +225,37 @@ export function createWriter(db: SearchDb): Writer {
     }
   });
 
-  const missingVecStmt = db.prepare(
-    `SELECT d.id, d.kind, d.ref, d.title, d.summary, d.note
-     FROM doc d
+  const missingVecIdsStmt = db.prepare(
+    `SELECT d.id, d.updated_at FROM doc d
      WHERE NOT EXISTS (SELECT 1 FROM doc_vec v WHERE v.doc_id = d.id)
-     ORDER BY d.updated_at DESC
+     ORDER BY d.updated_at DESC, d.id DESC
      LIMIT ?`,
   );
+  const missingVecIdsAfterStmt = db.prepare(
+    `SELECT d.id, d.updated_at FROM doc d
+     WHERE (d.updated_at < ? OR (d.updated_at = ? AND d.id < ?))
+       AND NOT EXISTS (SELECT 1 FROM doc_vec v WHERE v.doc_id = d.id)
+     ORDER BY d.updated_at DESC, d.id DESC
+     LIMIT ?`,
+  );
+
+  function listDocsMissingVectors(
+    limit: number,
+    cursor?: MissingVecCursor | null,
+  ): ReturnType<Writer['listDocsMissingVectors']> {
+    const idRows = (cursor
+      ? missingVecIdsAfterStmt.all(cursor.updatedAt, cursor.updatedAt, cursor.id, limit)
+      : missingVecIdsStmt.all(limit)) as Array<{ id: number; updated_at: number }>;
+    if (idRows.length === 0) return { docs: [], cursor: cursor ?? null };
+    const last = idRows[idRows.length - 1];
+    const docs = db.prepare(
+      `SELECT id, kind, ref, title, summary, note FROM doc
+       WHERE id IN (${idRows.map(() => '?').join(',')})`,
+    ).all(...idRows.map((r) => r.id)) as Array<{
+      id: number; kind: string; ref: string; title: string; summary: string; note: string;
+    }>;
+    return { docs, cursor: { updatedAt: last.updated_at, id: last.id } };
+  }
 
   function reindexFtsFromDocs(): { reindexed: number } {
     const rows = db.prepare(
@@ -240,8 +280,6 @@ export function createWriter(db: SearchDb): Writer {
     rebuildAll,
     reindexFtsFromDocs,
     writeVectors: (docId, vectors) => writeVectorsTx(docId, vectors),
-    listDocsMissingVectors: (limit) => missingVecStmt.all(limit) as Array<{
-      id: number; kind: string; ref: string; title: string; summary: string; note: string;
-    }>,
+    listDocsMissingVectors,
   };
 }

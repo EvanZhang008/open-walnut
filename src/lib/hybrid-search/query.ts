@@ -205,15 +205,22 @@ export function searchKeyword(
   // (df("load test") ≪ df(load)), matches the sub streams of joined
   // identifiers ("load test" hits load-test's subwords), and each phrase is
   // df-gated itself so a genuinely common collocation stays out.
+  // Each candidate pair costs one bounded df probe on this synchronous path,
+  // so cap the lane: a pasted paragraph must not turn into dozens of probes
+  // (measured +48% on a 30-common-token query with no cap).
+  const MAX_PAIR_PHRASES = 8;
   const termByToken = new Map(terms.map((t) => [t.token, t]));
   const pairPhrases: string[] = [];
-  for (let i = 0; i < origSeq.length - 1; i++) {
+  const seenPhrases = new Set<string>();
+  for (let i = 0; i < origSeq.length - 1 && pairPhrases.length < MAX_PAIR_PHRASES; i++) {
     const a = termByToken.get(origSeq[i]);
     const b = termByToken.get(origSeq[i + 1]);
     if (!a || !b || a === b) continue;
     if (hasCjk(a.token) || hasCjk(b.token)) continue; // CJK is phrase-matched already
     if (!overDf(a) || !overDf(b)) continue; // a rare member already carries the pair
     const phrase = ftsQuote(`${a.token} ${b.token}`);
+    if (seenPhrases.has(phrase)) continue;
+    seenPhrases.add(phrase);
     try {
       if ((dfStmt.get(phrase) as { n: number }).n > dfCap) continue;
     } catch {

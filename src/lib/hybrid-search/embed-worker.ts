@@ -54,6 +54,10 @@ function loadExtractor(): Promise<Extractor> {
       });
       return pipe as unknown as Extractor;
     })();
+    // A transient first-load failure (network blip during the model fetch)
+    // must not be cached as a permanent rejection — clear so the next job
+    // retries the load. The current job still sees the error.
+    extractorPromise.catch(() => { extractorPromise = null; });
   }
   return extractorPromise;
 }

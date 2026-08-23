@@ -31,30 +31,35 @@ export function passagesForDoc(doc: PassageSource, chunked: boolean): string[] {
     return text.trim() ? [text] : [];
   }
 
-  const passages: string[] = [];
-  const h = head(doc);
-  if (h.trim()) passages.push(h);
-
+  const chunks: string[] = [];
   let current = '';
   for (const para of note.split(/\n{2,}/)) {
     if (!para.trim()) continue;
     if (current && current.length + para.length + 2 > CHUNK_TARGET_CHARS) {
-      passages.push(current);
+      chunks.push(current);
       current = '';
-      if (passages.length >= MAX_CHUNKS_PER_DOC) return passages;
     }
     // A single paragraph longer than the target splits hard — transcripts
     // contain unbroken tool-output walls that would otherwise blow the
     // tokenizer's 512 cap.
     if (para.length > CHUNK_TARGET_CHARS) {
       for (let i = 0; i < para.length; i += CHUNK_TARGET_CHARS) {
-        passages.push(para.slice(i, i + CHUNK_TARGET_CHARS));
-        if (passages.length >= MAX_CHUNKS_PER_DOC) return passages;
+        chunks.push(para.slice(i, i + CHUNK_TARGET_CHARS));
       }
       continue;
     }
     current = current ? `${current}\n\n${para}` : para;
   }
-  if (current && passages.length < MAX_CHUNKS_PER_DOC) passages.push(current);
+  if (current) chunks.push(current);
+
+  // Over the cap, keep the TAIL: chunked bodies are chronological transcripts
+  // (the serializer already feeds a tail window), so the newest turns are the
+  // ones a query is most likely about — capping from the head would embed the
+  // oldest text and drop exactly the part that matters.
+  const passages: string[] = [];
+  const h = head(doc);
+  if (h.trim()) passages.push(h);
+  const room = MAX_CHUNKS_PER_DOC - passages.length;
+  passages.push(...(chunks.length > room ? chunks.slice(-room) : chunks));
   return passages;
 }
