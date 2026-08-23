@@ -162,6 +162,11 @@ async function runEphemeralLauncher(): Promise<void> {
   // 5. Copy data snapshot (skip large/lockable files)
   fs.cpSync(WALNUT_HOME, tmpDir, {
     recursive: true,
+    // Keep relative symlinks RELATIVE. The default rewrites them to absolute
+    // paths into the LIVE data dir (measured: notes/CLAUDE.md -> AGENTS.md became
+    // an absolute link back into ~/.open-walnut), so the "isolated" snapshot
+    // silently read and wrote production notes through them.
+    verbatimSymlinks: true,
     filter: (src: string) => {
       // Skip SQLite files (WAL-locked, ephemeral creates fresh ones)
       if (/\.sqlite(-wal|-shm)?$/.test(src)) return false
@@ -177,6 +182,24 @@ async function runEphemeralLauncher(): Promise<void> {
           src.endsWith(path.join(path.sep, 'images'))) return false
       // Skip lock files
       if (src.endsWith('.lock')) return false
+      // Skip anything that isn't a plain file/dir/symlink — cpSync dies on
+      // sockets and FIFOs (ERR_INTERNAL_ASSERTION "Unreachable code" during a
+      // directory walk; typed ERR_FS_CP_SOCKET/ERR_FS_CP_FIFO_PIPE when hit
+      // directly). The tmp/ rule above catches the known FIFOs by path; this
+      // catches the rest by TYPE (e.g. code-server/data/code-server-ipc.sock,
+      // which killed every `web --ephemeral` launch while an embedded VS Code
+      // was running). Symlinks are safe to pass ONLY because cpSync runs with
+      // the default dereference:false (it recreates the link, never stats the
+      // target) — don't add dereference:true without revisiting this.
+      try {
+        const st = fs.lstatSync(src)
+        if (!st.isFile() && !st.isDirectory() && !st.isSymbolicLink()) return false
+      } catch (err) {
+        // Excluding on lstat failure trades a loud cpSync abort for a quietly
+        // incomplete snapshot (a directory here drops its whole subtree) — say so.
+        process.stderr.write(`ephemeral: skipping unstatable ${src}: ${err instanceof Error ? err.message : String(err)}\n`)
+        return false
+      }
       return true
     },
   })
