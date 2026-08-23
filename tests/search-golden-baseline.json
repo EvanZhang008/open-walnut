@@ -1,155 +1,255 @@
 {
-  "backend": "qmd",
-  "generatedAt": "2026-08-22T21:30:54.963Z",
+  "backend": "v2",
+  "generatedAt": "2026-08-23T04:08:19.751Z",
   "aggregate": {
-    "queries": 28,
-    "passed": 1,
-    "recall10": 0.9583333333333334,
-    "mrr": 0.6219,
-    "top1": 1,
-    "p50LatencyMs": 1017,
-    "p90LatencyMs": 1562
+    "queries": 48,
+    "passed": 42,
+    "recall10": 0.8918918918918919,
+    "mrr": 0.7958,
+    "top1": 0.8181818181818182,
+    "p50LatencyMs": 4,
+    "p90LatencyMs": 10
   },
   "perQuery": {
-    "ident-task-id-exact": {
+    "ident-task-ref": {
       "pass": true,
       "rank": null,
-      "ms": 66
+      "ms": 1
+    },
+    "ident-cr-number": {
+      "pass": true,
+      "rank": null,
+      "ms": 0
+    },
+    "ident-commit-sha-prefix": {
+      "pass": true,
+      "rank": 1,
+      "ms": 0
+    },
+    "ident-url": {
+      "pass": true,
+      "rank": null,
+      "ms": 0
+    },
+    "camel-gvr-reconciler": {
+      "pass": true,
+      "rank": 1,
+      "ms": 0
+    },
+    "camel-exact-component": {
+      "pass": true,
+      "rank": 1,
+      "ms": 0
+    },
+    "camel-kebab-channel": {
+      "pass": true,
+      "rank": 1,
+      "ms": 0
+    },
+    "camel-kebab-exact": {
+      "pass": true,
+      "rank": null,
+      "ms": 0
+    },
+    "camel-http-subwords": {
+      "pass": true,
+      "rank": 1,
+      "ms": 0
+    },
+    "cjk-search-index": {
+      "pass": true,
+      "rank": 1,
+      "ms": 0
+    },
+    "cjk-timeout-retry": {
+      "pass": true,
+      "rank": 2,
+      "ms": 0
+    },
+    "cjk-phrase-order": {
+      "pass": true,
+      "rank": 1,
+      "ms": 0
+    },
+    "cjk-deploy-order": {
+      "pass": true,
+      "rank": 1,
+      "ms": 0
+    },
+    "mixed-timeout-retry": {
+      "pass": true,
+      "rank": 1,
+      "ms": 0
+    },
+    "mixed-title-partial": {
+      "pass": true,
+      "rank": 1,
+      "ms": 0
+    },
+    "para-dropped-events": {
+      "pass": true,
+      "rank": 1,
+      "ms": 0
+    },
+    "para-key-rotation": {
+      "pass": true,
+      "rank": 1,
+      "ms": 0
+    },
+    "trap-coverage-long-doc": {
+      "pass": true,
+      "rank": null,
+      "ms": 0
+    },
+    "trap-recency-tiebreak": {
+      "pass": true,
+      "rank": null,
+      "ms": 0
+    },
+    "junk-echo-excluded": {
+      "pass": true,
+      "rank": null,
+      "ms": 0
+    },
+    "ident-task-id-exact": {
+      "pass": false,
+      "rank": null,
+      "ms": 7
     },
     "ident-task-id-prefix": {
       "pass": false,
-      "rank": 1,
-      "ms": 1197
+      "rank": null,
+      "ms": 5
     },
     "ident-commit-sha-full": {
       "pass": false,
-      "rank": 1,
-      "ms": 575
+      "rank": null,
+      "ms": 45
     },
     "ident-commit-sha-prefix-live": {
       "pass": false,
-      "rank": 1,
-      "ms": 779
+      "rank": null,
+      "ms": 16
     },
     "ident-cr-number-live": {
-      "pass": false,
+      "pass": true,
       "rank": 1,
-      "ms": 1285
+      "ms": 3
     },
     "gvr-reconciler-failure": {
-      "pass": false,
-      "rank": 7,
-      "ms": 1407
+      "pass": true,
+      "rank": 1,
+      "ms": 5
     },
     "camel-component-exact": {
-      "pass": false,
-      "rank": null,
-      "ms": 1562
+      "pass": true,
+      "rank": 1,
+      "ms": 2
     },
     "camel-component-subwords": {
-      "pass": false,
-      "rank": 6,
-      "ms": 952
+      "pass": true,
+      "rank": 1,
+      "ms": 6
     },
     "camel-kebab-channel-live": {
-      "pass": false,
+      "pass": true,
       "rank": 3,
-      "ms": 1330
+      "ms": 9
     },
     "camel-kebab-subwords": {
-      "pass": false,
+      "pass": true,
       "rank": 2,
-      "ms": 783
+      "ms": 7
     },
     "cjk-search-index-fix": {
-      "pass": false,
-      "rank": 2,
-      "ms": 883
+      "pass": true,
+      "rank": 1,
+      "ms": 6
     },
     "cjk-search-quality": {
-      "pass": false,
-      "rank": 2,
-      "ms": 772
+      "pass": true,
+      "rank": 1,
+      "ms": 4
     },
     "cjk-orphan-pods": {
-      "pass": false,
+      "pass": true,
       "rank": 1,
-      "ms": 625
+      "ms": 5
     },
     "cjk-calendar-view": {
-      "pass": false,
-      "rank": 5,
-      "ms": 1016
+      "pass": true,
+      "rank": 1,
+      "ms": 3
     },
     "mixed-timeout-retry-live": {
-      "pass": false,
-      "rank": 3,
-      "ms": 1123
+      "pass": true,
+      "rank": 1,
+      "ms": 8
     },
     "mixed-qmd-quality": {
-      "pass": false,
-      "rank": 2,
-      "ms": 908
+      "pass": true,
+      "rank": 1,
+      "ms": 4
     },
     "mixed-reconciler-timeout": {
-      "pass": false,
+      "pass": true,
       "rank": 1,
-      "ms": 894
+      "ms": 4
     },
     "mixed-title-not-indexed": {
-      "pass": false,
+      "pass": true,
       "rank": 1,
-      "ms": 1017
+      "ms": 10
     },
     "para-duplicate-gvr": {
-      "pass": false,
+      "pass": true,
       "rank": 1,
-      "ms": 1665
+      "ms": 6
     },
     "para-slack-cron": {
-      "pass": false,
-      "rank": 3,
-      "ms": 2426
+      "pass": true,
+      "rank": 1,
+      "ms": 11
     },
     "para-client-retry": {
-      "pass": false,
-      "rank": 1,
-      "ms": 959
+      "pass": true,
+      "rank": 9,
+      "ms": 9
     },
     "para-ddb-lambda-timeout": {
-      "pass": false,
-      "rank": 6,
-      "ms": 999
+      "pass": true,
+      "rank": 2,
+      "ms": 5
     },
     "para-stale-pods": {
       "pass": false,
-      "rank": 4,
-      "ms": 1478
+      "rank": null,
+      "ms": 10
     },
     "transcript-bad-record-mac": {
       "pass": false,
       "rank": null,
-      "ms": 1000
+      "ms": 6
     },
     "transcript-tcc-calendar": {
-      "pass": false,
+      "pass": true,
       "rank": 1,
-      "ms": 1313
+      "ms": 5
     },
     "transcript-fifo-wedge": {
-      "pass": false,
-      "rank": 1,
-      "ms": 1098
+      "pass": true,
+      "rank": 2,
+      "ms": 5
     },
     "junk-burst-echo": {
-      "pass": false,
+      "pass": true,
       "rank": null,
-      "ms": 1170
+      "ms": 5
     },
     "junk-echo-token": {
-      "pass": false,
+      "pass": true,
       "rank": null,
-      "ms": 1418
+      "ms": 7
     }
   }
 }

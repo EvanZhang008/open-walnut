@@ -15,6 +15,7 @@ Off-the-shelf engines do not match `operator` against `AcmeEventOperator`, or `è
 - **Write protocol** (`writer.ts`). Single transaction per doc: delete FTS postings, update the row preserving its rowid, reinsert streams, rewrite identifiers, drop stale vectors. A content hash makes unchanged upserts free.
 - **Two query lanes + additive scoring** (`query.ts`). A strict AND lane for precision (CJK via ordered-bigram phrases), a relaxed OR lane for recall with a document-frequency threshold so corpus-wide terms cannot melt latency. Scores are a weighted sum of normalized BM25 (both lanes), term coverage, exact-identifier hits, recency, and (when enabled) cosine similarity, with every component exposed on the hit.
 - **Vectors rescore, never retrieve.** Embeddings (int8 blobs in `doc_vec`) are only compared against the keyword candidate set â€” full-corpus KNN is out of scope by design. Omit the `embedder` option and you have a pure keyword engine; that degraded mode is a supported deployment shape, not an error.
+- **Embedding off the main thread** (`embedder.ts` + `embed-worker.ts`). The ONNX model runs in a `worker_thread`; `searchSemantic()` races the query embed against a deadline and falls back to keyword order with a `semantic: 'timeout'` marker. Three consecutive worker crashes disable the semantic lane for the process. Passages come from `chunk.ts`: kinds marked `chunkVectors` are split at paragraph boundaries (~1400 chars, capped per doc), everything else embeds one head passage; a doc's score uses the max cosine over its chunks. `backfillVectors()` embeds docs missing vectors in small batches so an indexer loop can pace itself.
 
 ## Usage
 
@@ -55,5 +56,7 @@ index.close();
 | `tokenizer.ts` | orig/sub token streams, `TOKENIZER_VERSION` |
 | `db.ts` | schema, version gates, stats, optimize |
 | `writer.ts` | upsert / remove / rebuildAll |
-| `query.ts` | lanes, df threshold, scoring *(next phase)* |
-| `embed-worker.ts` | worker-thread query/passage embedding *(next phase)* |
+| `query.ts` | lanes, df threshold, gated-pair phrase recall, scoring |
+| `embedder.ts` | worker lifecycle, deadlines, crash containment, `cosineInt8` |
+| `embed-worker.ts` | worker-thread query/passage embedding (ONNX, int8) |
+| `chunk.ts` | passage extraction (head passage / paragraph chunks) |

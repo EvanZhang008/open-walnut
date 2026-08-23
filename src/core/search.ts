@@ -645,7 +645,7 @@ async function searchInner(
     } else try {
       if (v2Enabled) {
         const { searchV2Lane } = await import('./search/wiring.js');
-        for (const hit of searchV2Lane(normalizedQuery, { kinds: ['task'], limit })) {
+        for (const hit of await searchV2Lane(normalizedQuery, { kinds: ['task'], limit })) {
           appendTaskResult({
             type: 'task',
             title: hit.title,
@@ -728,7 +728,7 @@ async function searchInner(
       );
       if (v2Enabled) {
         const { searchV2Lane } = await import('./search/wiring.js');
-        for (const hit of searchV2Lane(normalizedQuery, { kinds: ['session'], limit })) {
+        for (const hit of await searchV2Lane(normalizedQuery, { kinds: ['session'], limit })) {
           if (seenSessionIds.has(hit.ref)) continue;
           const ownerTaskId = taskBySession.get(hit.ref);
           results.push({
@@ -797,7 +797,7 @@ async function searchInner(
         // The memory leg has always been the whole file-backed universe (the
         // QMD default sources spanned memory + notes + skills); matchField
         // carries the v2 kind so callers can still tell them apart.
-        for (const hit of searchV2Lane(normalizedQuery, { kinds: ['memory', 'note', 'skill'], limit })) {
+        for (const hit of await searchV2Lane(normalizedQuery, { kinds: ['memory', 'note', 'skill'], limit })) {
           results.push({
             type: 'memory',
             title: hit.title,

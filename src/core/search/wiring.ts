@@ -16,10 +16,13 @@
  * batches.
  */
 
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   createSearchIndex,
+  type EmbedderConfig,
   type ScoredHit,
   type SearchIndex,
 } from '../../lib/hybrid-search/index.js';
@@ -35,7 +38,9 @@ import { iterateAllDocs, readSessionBody } from './build.js';
 export const SEARCH_V2_KIND_WEIGHTS = {
   task: { weight: 1.0 },
   memory: { weight: 1.1 },
-  session: { weight: 0.9 },
+  // Transcripts get per-passage vectors: one 50KB mean-pool buries the 2% of
+  // the text that answers the query.
+  session: { weight: 0.9, chunkVectors: true },
   note: { weight: 1.0 },
   skill: { weight: 1.0 },
 } as const;
@@ -45,6 +50,42 @@ export function isSearchV2Enabled(): boolean {
     && process.env.WALNUT_DISABLE_SEARCH !== '1';
 }
 
+/** Known embedding models (Q2 in the plan: golden-set Chinese recall decides
+ *  between them; the env override exists so the eval can flip without code). */
+const EMBED_MODELS: Record<string, Omit<EmbedderConfig, 'workerPath'>> = {
+  'e5-small': {
+    modelId: 'Xenova/multilingual-e5-small',
+    dims: 384,
+    queryPrefix: 'query: ',
+    passagePrefix: 'passage: ',
+  },
+};
+
+function resolveEmbedWorkerPath(): string | undefined {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  // Bundled: this module lives inside a dist entry (dist/web/server.js etc.);
+  // un-bundled (tsx/vitest): under src/core/search/. Workers can't run .ts,
+  // so every candidate points at the tsup-built dist file.
+  const candidates = [
+    path.join(here, '..', 'lib', 'hybrid-search', 'embed-worker.js'),
+    path.join(here, '..', '..', '..', 'dist', 'lib', 'hybrid-search', 'embed-worker.js'),
+    path.join(process.cwd(), 'dist', 'lib', 'hybrid-search', 'embed-worker.js'),
+  ];
+  return candidates.find((p) => fs.existsSync(p));
+}
+
+function buildEmbedderConfig(): EmbedderConfig | undefined {
+  if (process.env.WALNUT_SEARCH_V2_SEMANTIC === '0') return undefined;
+  const model = EMBED_MODELS[process.env.WALNUT_SEARCH_V2_EMBED_MODEL ?? 'e5-small'];
+  if (!model) return undefined;
+  const workerPath = resolveEmbedWorkerPath();
+  if (!workerPath) {
+    log.memory.warn('search-v2: embed worker not built — keyword-only until next build');
+    return undefined;
+  }
+  return { ...model, workerPath };
+}
+
 let handle: SearchIndex | null = null;
 
 export function getSearchV2Index(): SearchIndex {
@@ -52,6 +93,7 @@ export function getSearchV2Index(): SearchIndex {
     handle = createSearchIndex({
       dbPath: path.join(WALNUT_HOME, 'search.sqlite'),
       kinds: SEARCH_V2_KIND_WEIGHTS,
+      embedder: buildEmbedderConfig(),
       logger: (level, msg, data) => log.memory[level](msg, data),
     });
   }
@@ -69,15 +111,17 @@ export interface SearchV2Hit extends ScoredHit {
   text: string;
 }
 
-/** Keyword lane for walnut callers: hits + raw text for snippets. */
-export function searchV2Lane(
+/** Hybrid lane for walnut callers: keyword lanes + deadline-bounded semantic
+ *  rescore (degrades to keyword order), plus raw doc text for snippets. */
+export async function searchV2Lane(
   query: string,
-  options: { kinds?: string[]; limit?: number } = {},
-): SearchV2Hit[] {
+  options: { kinds?: string[]; limit?: number; semanticDeadlineMs?: number } = {},
+): Promise<SearchV2Hit[]> {
   const index = getSearchV2Index();
-  const hits = index.search(query, {
+  const hits = await index.searchSemantic(query, {
     kinds: options.kinds,
     limit: options.limit,
+    semanticDeadlineMs: options.semanticDeadlineMs,
   });
   return hits.map((hit) => {
     const doc = index.getDoc(hit.kind, hit.ref);
@@ -251,6 +295,44 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
   // Backfill when empty (first run / version-gate wipe); otherwise just sweep
   // files. Delayed off the startup critical path.
   let sweepTimer: ReturnType<typeof setInterval> | null = null;
+  let vecTimer: ReturnType<typeof setTimeout> | null = null;
+  let stopped = false;
+
+  // Vector backfill: paced batches so a fresh index (~12k docs) embeds over
+  // minutes of idle capacity, never in one event-loop-adjacent burst. All the
+  // heavy work happens in the embed worker thread; the host side per batch is
+  // sub-ms sqlite writes. Self-heals continuously: upsert() drops a changed
+  // doc's vectors, and the next pass re-embeds whatever is missing.
+  const VEC_BATCH_PAUSE_MS = 100;
+  let vecTotal = 0;
+  const scheduleVectorBackfill = (delayMs: number) => {
+    if (stopped) return;
+    vecTimer = setTimeout(() => {
+      void (async () => {
+        try {
+          const { embedded, drained } = await index.backfillVectors({ batchDocs: 16 });
+          vecTotal += embedded;
+          if (drained) {
+            if (vecTotal > 0) log.memory.info('search-v2 vector backfill drained', { embedded: vecTotal });
+            vecTotal = 0;
+            scheduleVectorBackfill(FILE_SWEEP_INTERVAL_MS); // periodic self-heal pass
+            return;
+          }
+          if (vecTotal > 0 && vecTotal % 800 < 16) {
+            log.memory.info('search-v2 vector backfill progress', { embedded: vecTotal });
+          }
+          scheduleVectorBackfill(VEC_BATCH_PAUSE_MS);
+        } catch (err) {
+          log.memory.warn('search-v2 vector backfill failed — retrying next sweep interval', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          scheduleVectorBackfill(FILE_SWEEP_INTERVAL_MS);
+        }
+      })();
+    }, delayMs);
+    vecTimer.unref?.();
+  };
+
   const backfillTimer = setTimeout(() => {
     void (async () => {
       try {
@@ -278,13 +360,16 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
         });
       }, FILE_SWEEP_INTERVAL_MS);
       sweepTimer.unref?.();
+      scheduleVectorBackfill(VEC_BATCH_PAUSE_MS);
     })();
   }, 15_000);
   backfillTimer.unref?.();
 
   return {
     async stop() {
+      stopped = true;
       clearTimeout(backfillTimer);
+      if (vecTimer) clearTimeout(vecTimer);
       if (sweepTimer) clearInterval(sweepTimer);
       bus.unsubscribe('search-v2-task-sync');
       bus.unsubscribe('search-v2-session-sync');

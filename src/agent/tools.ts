@@ -1333,9 +1333,9 @@ queries: ["pipeline API allowlisting", "PAPINS SigV4", "pipeline allowlist"]  â†
           if (wiring?.isSearchV2Enabled()) {
             // Search v2: run each query through the keyword lanes, keep each
             // task's best score across queries (same merge the QMD RRF gave).
-            const bestHits = new Map<string, ReturnType<typeof wiring.searchV2Lane>[number]>();
+            const bestHits = new Map<string, Awaited<ReturnType<typeof wiring.searchV2Lane>>[number]>();
             for (const q of semanticQueries) {
-              for (const hit of wiring.searchV2Lane(q, { kinds: ['task'], limit })) {
+              for (const hit of await wiring.searchV2Lane(q, { kinds: ['task'], limit })) {
                 const prev = bestHits.get(hit.ref);
                 if (!prev || hit.score > prev.score) bestHits.set(hit.ref, hit);
               }

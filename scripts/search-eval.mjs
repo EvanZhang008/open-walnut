@@ -71,14 +71,26 @@ const FAMILY = opt('--family', null);
 const DUMP = flag('--dump');
 const WRITE_BASELINE = flag('--write-baseline');
 const CHECK = flag('--check');
+// v2 backend: also run the semantic rescore (needs a vector-backfilled index
+// + the built dist embed worker; the first query pays the model load, so a
+// warmup query runs untimed).
+const SEMANTIC = flag('--semantic');
 
 /** Per-kind score multipliers (kept in sync with the walnut adapter). */
 const KIND_WEIGHTS = {
   task: { weight: 1.0 },
   memory: { weight: 1.1 },
-  session: { weight: 0.9 },
+  session: { weight: 0.9, chunkVectors: true },
   note: { weight: 1.0 },
   skill: { weight: 1.0 },
+};
+
+const EMBEDDER = {
+  modelId: 'Xenova/multilingual-e5-small',
+  dims: 384,
+  queryPrefix: 'query: ',
+  passagePrefix: 'passage: ',
+  workerPath: path.join(ROOT, 'dist', 'lib', 'hybrid-search', 'embed-worker.js'),
 };
 
 // ── load golden files ──
@@ -127,7 +139,15 @@ async function getV2LiveIndex() {
     );
   }
   const { createSearchIndex } = await loadV2();
-  v2LiveIndex = createSearchIndex({ dbPath: INDEX_DB, kinds: KIND_WEIGHTS });
+  v2LiveIndex = createSearchIndex({
+    dbPath: INDEX_DB,
+    kinds: KIND_WEIGHTS,
+    embedder: SEMANTIC ? EMBEDDER : undefined,
+  });
+  if (SEMANTIC) {
+    // Untimed warmup: the first embed pays the ~10s model load.
+    await v2LiveIndex.searchSemantic('warmup query', { semanticDeadlineMs: 30_000 });
+  }
   return v2LiveIndex;
 }
 
@@ -140,7 +160,11 @@ async function getV2FixtureIndex() {
   // applies the same gate so the junk family tests the real contract instead
   // of the engine's ranking of docs production would never index.
   const { isLedgerJunk } = await import('../src/core/task-junk.js');
-  v2FixtureIndex = createSearchIndex({ dbPath: ':memory:', kinds: KIND_WEIGHTS });
+  v2FixtureIndex = createSearchIndex({
+    dbPath: ':memory:',
+    kinds: KIND_WEIGHTS,
+    embedder: SEMANTIC ? EMBEDDER : undefined,
+  });
   for (const doc of pub.corpus) {
     if ((doc.kind === 'task' || doc.kind === 'session')
       && isLedgerJunk({ project: doc.project ?? '', title: doc.title ?? '' })) {
@@ -157,12 +181,17 @@ async function getV2FixtureIndex() {
       identifiers: doc.identifiers,
     });
   }
+  if (SEMANTIC) {
+    while (!(await v2FixtureIndex.backfillVectors({ batchDocs: 32 })).drained) { /* drain */ }
+  }
   return v2FixtureIndex;
 }
 
-function runV2(index, query) {
+async function runV2(index, query) {
   const t0 = performance.now();
-  const hits = index.search(query.query, { limit: LIMIT });
+  const hits = SEMANTIC
+    ? await index.searchSemantic(query.query, { limit: LIMIT, semanticDeadlineMs: 1000 })
+    : index.search(query.query, { limit: LIMIT });
   const ms = performance.now() - t0;
   return {
     hits: hits.map((h) => ({
@@ -374,3 +403,7 @@ if (CHECK) {
   }
   console.log('\nno regression vs baseline ✓');
 }
+
+// The --semantic embed worker (and its ONNX pool) can outlive the event loop
+// bookkeeping; everything is flushed by here, so exit explicitly.
+process.exit(0);

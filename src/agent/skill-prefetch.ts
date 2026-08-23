@@ -29,7 +29,11 @@ export async function buildSkillPrefetchHint(userMessage: string): Promise<strin
     try {
       const { searchV2Lane, isSearchV2Enabled } = await import('../core/search/wiring.js');
       if (isSearchV2Enabled()) {
-        const hits = searchV2Lane(query.slice(0, 500), { kinds: ['skill'], limit: 12 });
+        // semanticDeadlineMs 0: this rides the user's first-token latency, and
+        // keyword subword matching is the whole reason it fits the budget now.
+        const hits = await searchV2Lane(query.slice(0, 500), {
+          kinds: ['skill'], limit: 12, semanticDeadlineMs: 0,
+        });
         const names = [...new Set(
           hits
             .filter((h) => path.basename(h.ref) === 'SKILL.md')

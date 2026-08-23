@@ -130,7 +130,8 @@ export function searchKeyword(
   query: string,
   options: KeywordSearchOptions = {},
 ): KeywordHit[] {
-  const uniqueOrig = [...new Set(tokenize(query).orig)];
+  const origSeq = tokenize(query).orig; // ordered — adjacency feeds the pair lane
+  const uniqueOrig = [...new Set(origSeq)];
   if (uniqueOrig.length === 0) return [];
   const terms = uniqueOrig.map(compileTerm);
 
@@ -176,12 +177,18 @@ export function searchKeyword(
   const dfStmt = db.prepare(
     `SELECT COUNT(*) AS n FROM (SELECT 1 FROM doc_fts WHERE doc_fts MATCH ? LIMIT ${dfCap + 1})`,
   );
+  const dfOver = new Map<string, boolean>();
   const overDf = (term: Term): boolean => {
-    try {
-      return (dfStmt.get(term.anyExpr) as { n: number }).n > dfCap;
-    } catch {
-      return true;
+    let over = dfOver.get(term.token);
+    if (over === undefined) {
+      try {
+        over = (dfStmt.get(term.anyExpr) as { n: number }).n > dfCap;
+      } catch {
+        over = true;
+      }
+      dfOver.set(term.token, over);
     }
+    return over;
   };
 
   // ── lane A: strict AND ──
@@ -189,12 +196,38 @@ export function searchKeyword(
 
   // ── lane B: relaxed OR, high-df terms excluded ──
   let relaxedTerms = terms.filter((t) => !overDf(t));
-  if (relaxedTerms.length === 0) {
+
+  // Gated-pair phrases: the df gate keeps common tokens out of the OR lane,
+  // but a doc whose ONLY overlap with the query is those common tokens (title
+  // "…on load-test cluster" vs "…load test cluster") becomes unreachable
+  // through every lane — semantics can't rescue a doc that never enters the
+  // candidate pool. An ADJACENT PAIR of gated terms is selective again
+  // (df("load test") ≪ df(load)), matches the sub streams of joined
+  // identifiers ("load test" hits load-test's subwords), and each phrase is
+  // df-gated itself so a genuinely common collocation stays out.
+  const termByToken = new Map(terms.map((t) => [t.token, t]));
+  const pairPhrases: string[] = [];
+  for (let i = 0; i < origSeq.length - 1; i++) {
+    const a = termByToken.get(origSeq[i]);
+    const b = termByToken.get(origSeq[i + 1]);
+    if (!a || !b || a === b) continue;
+    if (hasCjk(a.token) || hasCjk(b.token)) continue; // CJK is phrase-matched already
+    if (!overDf(a) || !overDf(b)) continue; // a rare member already carries the pair
+    const phrase = ftsQuote(`${a.token} ${b.token}`);
+    try {
+      if ((dfStmt.get(phrase) as { n: number }).n > dfCap) continue;
+    } catch {
+      continue;
+    }
+    pairPhrases.push(phrase);
+  }
+
+  if (relaxedTerms.length === 0 && pairPhrases.length === 0) {
     const longest = [...terms].sort((a, b) => b.token.length - a.token.length)[0];
     relaxedTerms = [longest];
   }
   const relaxedRows = runLane(
-    relaxedTerms.flatMap((t) => t.relaxedExprs).join(' OR '),
+    [...relaxedTerms.flatMap((t) => t.relaxedExprs), ...pairPhrases].join(' OR '),
   );
 
   // ── exact identifier hits: each token, plus the whole trimmed query.

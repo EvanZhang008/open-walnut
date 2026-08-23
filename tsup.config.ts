@@ -30,6 +30,7 @@ export default defineConfig({
     'src/session-server/index.ts',
     'src/workers/qmd-index-worker.ts',
     'src/workers/git-compaction-worker.ts',
+    'src/lib/hybrid-search/embed-worker.ts',
     ...actionEntries,
     ...pluginEntries,
   ],
@@ -44,5 +45,5 @@ export default defineConfig({
   splitting: false,
   sourcemap: true,
   dts: false,
-  external: ['better-sqlite3', '@anthropic-ai/claude-agent-sdk', 'esbuild', 'screencapturekit-audio-capture', '@homebridge/node-pty-prebuilt-multiarch', '@tobilu/qmd'],
+  external: ['better-sqlite3', '@anthropic-ai/claude-agent-sdk', 'esbuild', 'screencapturekit-audio-capture', '@homebridge/node-pty-prebuilt-multiarch', '@tobilu/qmd', '@huggingface/transformers'],
 });

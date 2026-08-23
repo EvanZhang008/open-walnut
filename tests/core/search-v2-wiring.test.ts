@@ -25,11 +25,15 @@ const originalFlag = process.env.WALNUT_SEARCH_V2;
 
 beforeAll(() => {
   process.env.WALNUT_SEARCH_V2 = '1';
+  // Keyword-only in tests: the semantic lane would spawn a real worker thread
+  // and load the ONNX model. The semantic layer has its own lib tests + eval.
+  process.env.WALNUT_SEARCH_V2_SEMANTIC = '0';
 });
 
 afterAll(() => {
   if (originalFlag === undefined) delete process.env.WALNUT_SEARCH_V2;
   else process.env.WALNUT_SEARCH_V2 = originalFlag;
+  delete process.env.WALNUT_SEARCH_V2_SEMANTIC;
   resetSearchV2IndexForTests();
 });
 
@@ -55,7 +59,7 @@ describe('isSearchV2Enabled', () => {
 });
 
 describe('searchV2Lane', () => {
-  it('returns scored hits with raw doc text for snippets', () => {
+  it('returns scored hits with raw doc text for snippets', async () => {
     const index = getSearchV2Index();
     index.upsert({
       kind: 'task',
@@ -66,14 +70,14 @@ describe('searchV2Lane', () => {
       meta: '',
       updatedAt: Date.now(),
     });
-    const hits = searchV2Lane('event operator reconciler', { kinds: ['task'] });
+    const hits = await searchV2Lane('event operator reconciler', { kinds: ['task'] });
     expect(hits.length).toBeGreaterThan(0);
     expect(hits[0].ref).toBe('t-lane-1');
     expect(hits[0].text).toContain('never converges');
     expect(hits[0].components.coverage).toBeGreaterThan(0);
   });
 
-  it('filters by kind', () => {
+  it('filters by kind', async () => {
     const index = getSearchV2Index();
     index.upsert({
       kind: 'memory',
@@ -81,7 +85,7 @@ describe('searchV2Lane', () => {
       title: 'AcmeEventOperator lore',
       updatedAt: Date.now(),
     });
-    const hits = searchV2Lane('AcmeEventOperator', { kinds: ['memory'] });
+    const hits = await searchV2Lane('AcmeEventOperator', { kinds: ['memory'] });
     expect(hits.every((h) => h.kind === 'memory')).toBe(true);
   });
 });

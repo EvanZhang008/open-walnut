@@ -30,6 +30,8 @@ let previousFlag: string | undefined;
 beforeEach(async () => {
   previousFlag = process.env.WALNUT_SEARCH_V2;
   process.env.WALNUT_SEARCH_V2 = '1';
+  // Keyword-only: don't spawn a real embed worker in route tests.
+  process.env.WALNUT_SEARCH_V2_SEMANTIC = '0';
   _resetForTesting();
   resetSearchV2IndexForTests();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
@@ -38,6 +40,7 @@ beforeEach(async () => {
 afterEach(async () => {
   if (previousFlag === undefined) delete process.env.WALNUT_SEARCH_V2;
   else process.env.WALNUT_SEARCH_V2 = previousFlag;
+  delete process.env.WALNUT_SEARCH_V2_SEMANTIC;
   resetSearchV2IndexForTests();
   _resetForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });

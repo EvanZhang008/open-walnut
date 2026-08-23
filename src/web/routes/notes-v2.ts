@@ -969,6 +969,14 @@ const FOLDER_ONLY_CAP = 5
  */
 const SEMANTIC_RRF_FLOOR = 1 / 6
 
+/**
+ * Same job for the search-v2 leg (WALNUT_SEARCH_V2=1), different scale: v2
+ * scores are additive components in ~[0, 1.3], not 1/rank. Noise-only hits
+ * (one relaxed-lane subword, nothing else) land under ~0.1; a real keyword or
+ * semantic match clears 0.15 comfortably.
+ */
+const SEARCH_V2_NOTE_FLOOR = 0.15
+
 export interface NotesSearchPayload {
   results: SearchResultRow[]
   folders?: FolderGroupRow[]
@@ -1025,16 +1033,35 @@ async function performNotesSearchInner(opts: {
     // search is the cloud answer (same gate as initQmdStores in server.ts).
     const wantString = mode === 'hybrid' || mode === 'string'
     const wantSemantic = !CLOUD_MODE && (mode === 'hybrid' || mode === 'semantic')
+    const v2Active = process.env.WALNUT_SEARCH_V2 === '1'
+      && process.env.WALNUT_DISABLE_SEARCH !== '1'
+      && !CLOUD_MODE
+
+    // The v2 leg maps to the shape the merge loop consumes (filepath/score/
+    // snippet/title — same fields the QMD results carry).
+    const v2SemanticLeg = async () => {
+      const { searchV2Lane } = await import('../../core/search/wiring.js')
+      const { extractSnippet } = await import('../../core/search.js')
+      const hits = await searchV2Lane(q, { kinds: ['note'], limit: limit * 2 })
+      return hits.map((h) => ({
+        filepath: h.ref,
+        score: h.score,
+        snippet: extractSnippet(h.text, q),
+        title: h.title,
+      }))
+    }
 
     const [stringSettled, semanticSettled] = await Promise.allSettled([
       wantString ? Promise.resolve(stringSearch(q, limit * 2, { excludeFolders })) : Promise.resolve([]),
       // rerank:false + overfetch 1 — see SEMANTIC_RRF_FLOOR. This is the
       // difference between a ~60ms and a ~8s notes search.
       wantSemantic
-        ? memoryNotesSearch(q, ['note_vault'], limit * 2, undefined, {
-            rerank: false,
-            overfetchMultiplier: 1,
-          })
+        ? (v2Active
+          ? v2SemanticLeg()
+          : memoryNotesSearch(q, ['note_vault'], limit * 2, undefined, {
+              rerank: false,
+              overfetchMultiplier: 1,
+            }))
         : Promise.resolve([]),
     ])
 
@@ -1082,7 +1109,7 @@ async function performNotesSearchInner(opts: {
           if (!existing.snippet.includes('<mark>') && h.snippet) {
             existing.snippet = cleanSnippetText(h.snippet)
           }
-        } else if (h.score >= SEMANTIC_RRF_FLOOR) {
+        } else if (h.score >= (v2Active ? SEARCH_V2_NOTE_FLOOR : SEMANTIC_RRF_FLOOR)) {
           // Semantic-only: keep only above the relevance floor (drops noise).
           byId.set(id, {
             id,
