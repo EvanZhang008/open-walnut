@@ -277,10 +277,16 @@ final class ChatStore {
             guard isActive, !Task.isCancelled else { return }
             connection?.reportReachability(true, source: "chat-rest", endpoint: "/api/v1/conversations/messages")
             guard id == activeID, agentID == activeAgentID else { return }
-            // Carry local-only bubbles (failed sends, in-flight optimistic)
-            // across the replace — server history doesn't know about them and
-            // a refetch must never erase the user's unsent text.
-            let localOnly = messages.filter { $0.failed == true || $0.pending == true }
+            // Carry local-only bubbles across the replace — server history
+            // doesn't know about them and a refetch must never erase them.
+            // Besides failed/in-flight optimistic bubbles, this keeps
+            // SOLIDIFIED local echoes (the `local-…` user bubble after its 202,
+            // and finalizeTurn's `turn-…` provisional reply) that the fetch
+            // doesn't contain yet: a cloud replica's GET /messages serves a
+            // LAGGING copy until git-sync converges, and adopting that copy
+            // wholesale erased the user's just-sent message AND the fresh
+            // reply right after the turn ended (2026-08-23 dogfood round 10).
+            let localOnly = Self.carryLocalRows(current: messages, fetched: fetched)
             let wasAtBottom = bottomPinned
             let changed = fetched.count + localOnly.count != messages.count
                 || fetched.last?.id != messages.dropLast(localOnly.count).last?.id
@@ -300,6 +306,95 @@ final class ChatStore {
         } catch {
             reportIfNetwork(error)
         }
+    }
+
+    /// How long a solidified local echo (the user bubble after its 202, the
+    /// provisional reply after message-end) survives refetches that don't
+    /// contain its canonical row yet. Replica sync lag is ~30-60s; well past
+    /// that, dropping the echo beats risking a stale duplicate forever.
+    /// Failed/pending bubbles never expire — they are the only copy of the text.
+    static let localEchoTTL: TimeInterval = 10 * 60
+
+    /// Which of the CURRENT rows must survive a canonical refetch. Three classes:
+    ///  - pending/failed bubbles: kept unconditionally (unsent text, no TTL);
+    ///  - solidified `local-…` user echoes whose canonical row the fetch does
+    ///    not carry YET — a cloud replica's GET /messages serves a copy that
+    ///    lags git-sync, and adopting it wholesale erased the user's just-sent
+    ///    message right after every relayed turn (2026-08-23 dogfood);
+    ///  - `turn-…` provisional replies, retired only once the fetch's LAST
+    ///    plain assistant row differs from the last one we already held
+    ///    canonically — proof the canonical reply landed. Matching the reply's
+    ///    text against the echo would be fragile (the server normalizes text —
+    ///    entity-ref stripping etc. — so the SSE fullText and the canonical row
+    ///    need not be byte-identical); two canonical fetches, by contrast, are
+    ///    normalization-consistent with each other.
+    ///
+    /// User-echo matching is COUNT-aware per (role, text): a fetch only absorbs
+    /// an echo when it carries MORE matching rows than the canonical rows we
+    /// already had — an identical older message ("ok", "continue") can never
+    /// absorb the new echo and vanish it. Internal for WalnutTests.
+    nonisolated static func carryLocalRows(
+        current: [ChatMessage], fetched: [ChatMessage], now: Date = Date()
+    ) -> [ChatMessage] {
+        func key(_ m: ChatMessage) -> String { "\(m.role)|\(m.text)" }
+        let isEcho: (ChatMessage) -> Bool = {
+            $0.id.hasPrefix("local-") || $0.id.hasPrefix("turn-")
+        }
+        func lastPlainAssistant(_ rows: [ChatMessage], skipEchoes: Bool) -> ChatMessage? {
+            rows.last(where: {
+                $0.role == "assistant" && $0.kind == nil && (!skipEchoes || !isEcho($0))
+            })
+        }
+        // Budget = canonical rows the fetch ADDS beyond what we already had.
+        var budget: [String: Int] = [:]
+        for row in fetched { budget[key(row), default: 0] += 1 }
+        for row in current where !isEcho(row) {
+            let k = key(row)
+            if let b = budget[k], b > 0 { budget[k] = b - 1 }
+        }
+        // Did the fetch advance past our canonical view of the reply stream?
+        // Positional ids change per fetch, so compare (text, createdAt).
+        let knownReply = lastPlainAssistant(current, skipEchoes: true)
+        let fetchedReply = lastPlainAssistant(fetched, skipEchoes: false)
+        let replyAdvanced: Bool
+        if let fetchedReply {
+            replyAdvanced = knownReply == nil
+                || fetchedReply.text != knownReply!.text
+                || fetchedReply.createdAt != knownReply!.createdAt
+        } else {
+            replyAdvanced = false
+        }
+        var retireBudget = replyAdvanced ? 1 : 0
+        let parseISO = ISO8601DateFormatter()
+        var out: [ChatMessage] = []
+        for row in current {
+            if row.failed == true || row.pending == true {
+                out.append(row)
+                continue
+            }
+            guard isEcho(row) else { continue }
+            // TTL backstop: a stray echo (compaction rewrote history, tail
+            // window slid) must self-heal rather than duplicate forever.
+            if let created = parseISO.date(from: row.createdAt),
+               now.timeIntervalSince(created) > localEchoTTL {
+                continue
+            }
+            if row.id.hasPrefix("turn-") {
+                if retireBudget > 0 {
+                    retireBudget -= 1 // canonical reply landed — echo retires
+                } else {
+                    out.append(row)
+                }
+                continue
+            }
+            let k = key(row)
+            if let b = budget[k], b > 0 {
+                budget[k] = b - 1 // canonical row replaces this echo
+            } else {
+                out.append(row) // fetch is stale — keep the echo
+            }
+        }
+        return out
     }
 
     func loadOlder() async {
@@ -759,16 +854,7 @@ final class ChatStore {
                 // a naive "last is assistant" test.
                 await self.loadMessages(conversationID)
                 guard self.streaming, self.activeID == conversationID else { return }
-                let history = self.messages
-                let turnOver: Bool
-                if let watched = self.watchedUserText,
-                   let userIdx = history.lastIndex(where: { $0.role == "user" && $0.text == watched }) {
-                    turnOver = history[(userIdx + 1)...].contains { $0.role == "assistant" && $0.kind == nil }
-                } else {
-                    // No watched message (409 turn_active path — someone else's
-                    // turn): any trailing plain assistant reply means it ended.
-                    turnOver = history.last?.role == "assistant" && history.last?.kind == nil
-                }
+                let turnOver = Self.turnSettled(history: self.messages, watched: self.watchedUserText)
                 if turnOver {
                     AppLog.error("chat", "turn watchdog reconciled a lost message-end", [
                         "conversationID": conversationID,
@@ -782,6 +868,26 @@ final class ChatStore {
                 }
             }
         }
+    }
+
+    /// Watchdog reconcile verdict: does fetched history PROVE the watched turn
+    /// is over? Assistant messages persist only at turn end, so a plain
+    /// assistant row AFTER our watched user message is proof. When the watched
+    /// user message is MISSING from the fetch, the copy is stale (a replica
+    /// lagging git-sync) or the tail window slid past it — never settle from
+    /// evidence that predates our own send: the PREVIOUS turn's trailing reply
+    /// would satisfy the naive last-is-assistant check and clear `streaming`
+    /// mid-turn (2026-08-23 dogfood round 10). The last-is-assistant fallback
+    /// is only for the 409 turn_active path, where there IS no watched text
+    /// (someone else's turn). Internal for WalnutTests.
+    nonisolated static func turnSettled(history: [ChatMessage], watched: String?) -> Bool {
+        guard let watched else {
+            return history.last?.role == "assistant" && history.last?.kind == nil
+        }
+        guard let userIdx = history.lastIndex(where: { $0.role == "user" && $0.text == watched }) else {
+            return false
+        }
+        return history[(userIdx + 1)...].contains { $0.role == "assistant" && $0.kind == nil }
     }
 
     private func finalizeTurn(conversationID: String, fullText: String) {
