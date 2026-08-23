@@ -25,7 +25,7 @@ import Database, { type Database as DatabaseType } from 'better-sqlite3';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { MEMORY_DIR, CONVERSATIONS_DIR } from '../constants.js';
+import { MEMORY_DIR, CONVERSATIONS_DIR, agentIdFromPathSegment } from '../constants.js';
 import { log } from '../logging/index.js';
 
 const DB_FILENAME = 'history.db';
@@ -239,8 +239,11 @@ export async function rebuildHistoryDb(): Promise<{ conversations: number; messa
     return { conversations, messages }; // no conversations dir yet
   }
 
-  for (const agentId of agents) {
-    const dir = path.join(CONVERSATIONS_DIR, agentId);
+  for (const agentDirName of agents) {
+    let agentId: string;
+    try { agentId = agentIdFromPathSegment(agentDirName); }
+    catch { continue; }
+    const dir = path.join(CONVERSATIONS_DIR, agentDirName);
     let files: string[] = [];
     try {
       files = (await fsp.readdir(dir)).filter((f) => f.startsWith('conv-') && f.endsWith('.json'));

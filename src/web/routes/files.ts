@@ -767,10 +767,11 @@ filesRouter.post('/reveal', async (req: Request, res: Response, next: NextFuncti
 })
 
 /** Secret files/dirs never handed to the desktop (mirrors file-content's denylist). */
-function isRevealSecretPath(resolved: string): boolean {
+export function isRevealSecretPath(resolved: string): boolean {
   const home = os.homedir()
   const denied = [
     path.join(WALNUT_HOME, 'auth.json'),
+    path.join(WALNUT_HOME, 'secrets'),
     path.join(WALNUT_HOME, 'sync', 'bridge-tokens.json'),
     path.join(home, '.aws'),
     path.join(home, '.ssh'),

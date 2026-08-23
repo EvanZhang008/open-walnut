@@ -340,6 +340,9 @@ export interface RegisteredPlugin {
   name: string;
   description?: string;
   version?: string;
+  apiVersion?: number;
+  serverEntry?: string;
+  webEntry?: string;
   config: Record<string, unknown>;
   /**
    * The plugin's sync implementation.
@@ -399,8 +402,15 @@ export interface PluginManifest {
   name: string;
   description?: string;
   version?: string;
-  /** Advisory in v1 — not enforced. e.g. { walnut: ">=0.5" } */
+  /** Unified full-trust Plugin contract. Absent means the legacy loader. */
+  apiVersion?: number;
+  /** Enforced for apiVersion 1 before any Plugin code is imported. */
   engines?: { walnut?: string };
+  /** Server and native Web entrypoints, relative to the Plugin root. */
+  server?: string;
+  web?: string;
+  /** Optional sandboxed HTML surface retained for external/legacy content. */
+  webview?: RegisteredUiApp;
   /** Capability declarations (manifest v2). ABSENT means { sync: {} } — every
    *  pre-v2 manifest is a sync plugin.
    *

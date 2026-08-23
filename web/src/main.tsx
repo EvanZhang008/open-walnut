@@ -13,10 +13,14 @@ import { selectionIntersects } from './utils/selection-guard';
 import { initSessionStatusStore } from './stores/init-session-status-store';
 import { installGlobalAutofillSuppression } from './utils/no-autofill';
 import { initStaleAssetRecovery } from './utils/stale-assets';
+import { initWebPlugins } from './plugins/loader';
+import { installPluginHostRuntime } from './plugins/runtime';
 import './styles/globals.css';
 
 // Persist browser console logs to disk (view with: open-walnut logs -s browser)
 initBrowserLogger();
+installPluginHostRuntime();
+void initWebPlugins();
 // Subscribe before React mounts so the first WS status event cannot race ahead
 // of component hooks.
 tracePhase('boot:session-status-store', initSessionStatusStore);

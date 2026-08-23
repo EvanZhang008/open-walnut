@@ -1495,6 +1495,83 @@ await fs.writeFile(
   }, null, 2),
 )
 
+if (process.env.PW_NATIVE_PLUGIN_FIXTURE === '1') {
+  const { execFile } = await import('node:child_process')
+  const { promisify } = await import('node:util')
+  const execFileAsync = promisify(execFile)
+  const referenceRoot = path.resolve(
+    path.dirname(new URL(import.meta.url).pathname),
+    '../../../examples/plugins/reference-walnut',
+  )
+  const pluginRepo = path.join(tmpBase, 'native-plugin-repo')
+  await fs.cp(referenceRoot, pluginRepo, {
+    recursive: true,
+    filter(source) {
+      const segments = path.relative(referenceRoot, source).split(path.sep)
+      return !segments.some((segment) => segment === '.git' || segment === 'dist' || segment === 'node_modules')
+    },
+  })
+  const { buildPlugin } = await import('../../../packages/plugin-cli/src/build.js')
+  await buildPlugin({ root: pluginRepo })
+  const git = (...args: string[]) => execFileAsync('git', args, { cwd: pluginRepo })
+  await git('init', '--initial-branch=main')
+  await git('add', 'manifest.json', 'package.json', 'tsconfig.json', 'src', 'dist')
+  await git(
+    '-c', 'user.name=Walnut Test',
+    '-c', 'user.email=walnut-test@example.invalid',
+    'commit', '-m', 'Add native Plugin fixture',
+  )
+
+  const npmName = 'walnut-plugin-browser-fixture'
+  const npmVersion = '1.0.0'
+  const npmIntegrity = 'sha512-BROWSER=='
+  const npmTarball = `https://registry.example/${npmName}.tgz`
+  const { setNpmRunner } = await import('../../../src/core/plugin-npm-install.js')
+  setNpmRunner(async (args) => {
+    if (args[0] === 'view') {
+      return {
+        stdout: JSON.stringify({
+          name: npmName,
+          version: npmVersion,
+          'dist.integrity': npmIntegrity,
+          'dist.tarball': npmTarball,
+        }),
+        stderr: '',
+      }
+    }
+    if (args[0] !== 'install') throw new Error(`Unexpected fixture npm command: ${args[0]}`)
+    const prefix = args[args.indexOf('--prefix') + 1]
+    const packageRoot = path.join(prefix, 'node_modules', npmName)
+    await fs.mkdir(packageRoot, { recursive: true })
+    await fs.writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ name: npmName, version: npmVersion }))
+    await fs.writeFile(path.join(packageRoot, 'manifest.json'), JSON.stringify({
+      id: 'npm-browser-fixture',
+      name: 'npm Browser Fixture',
+      version: npmVersion,
+      apiVersion: 1,
+      engines: { walnut: '>=0.3.2' },
+      server: 'server.mjs',
+    }))
+    await fs.writeFile(path.join(packageRoot, 'server.mjs'), `
+export function activate(walnut) {
+  walnut.registry.command({
+    id: 'hello',
+    description: 'Browser fixture command',
+    content: 'Reply with the npm Browser Fixture status.',
+  })
+}
+`)
+    const key = path.relative(prefix, packageRoot).replaceAll(path.sep, '/')
+    await fs.writeFile(path.join(prefix, 'node_modules', '.package-lock.json'), JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        [key]: { version: npmVersion, resolved: npmTarball, integrity: npmIntegrity },
+      },
+    }))
+    return { stdout: 'added 1 package', stderr: '' }
+  })
+}
+
 // Now import server (it reads WALNUT_HOME from constants.ts which checks env var)
 const { startServer, stopServer } = await import('../../../src/web/server.js')
 

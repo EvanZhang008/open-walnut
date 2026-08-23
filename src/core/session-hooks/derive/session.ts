@@ -21,6 +21,7 @@ import type {
   OnTurnErrorPayload,
   OnToolResultPayload,
   OnCronFiredPayload,
+  OnSessionWillReapPayload,
 } from '../types.js';
 import { log } from '../../../logging/index.js';
 
@@ -237,6 +238,27 @@ export function deriveSessionHookPoints(
           createdBySessionId: data.createdBySessionId as string | undefined,
           foreign: data.foreign === true,
         } satisfies Partial<OnCronFiredPayload> & { domain: 'cron' },
+      });
+      break;
+    }
+
+    case EventNames.SESSION_WILL_REAP: {
+      // The idle reaper is about to kill this session's CLI. Unlike
+      // session:ended (per-turn UI refresh, no hook point — see below), this
+      // event comes from the reap decision itself and fires once per idle
+      // episode, so a hook bound here runs once, before the process dies.
+      // Session state is deliberately NOT cleared: the CLI is still alive and
+      // the reap can still be averted by a fresh message.
+      results.push({
+        hookPoint: 'onSessionWillReap',
+        extraPayload: {
+          host: data.host as string | undefined,
+          remainingMs: data.remainingMs as number,
+          idleDurationMs: data.idleDurationMs as number,
+          idleTimeoutMs: data.idleTimeoutMs as number,
+          reason: (data.reason ?? 'idle_timeout') as 'idle_timeout',
+          warnedAt: data.warnedAt as string,
+        } satisfies Partial<OnSessionWillReapPayload>,
       });
       break;
     }

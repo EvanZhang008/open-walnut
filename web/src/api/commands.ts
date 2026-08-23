@@ -4,7 +4,8 @@ export interface CommandDef {
   name: string;
   description: string;
   content: string;
-  source: 'builtin' | 'user';
+  /** 'plugin' commands are named `<pluginId>:<id>` and are read-only (403 on write). */
+  source: 'builtin' | 'user' | 'plugin';
 }
 
 export async function fetchCommands(): Promise<CommandDef[]> {

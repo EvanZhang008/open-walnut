@@ -1,15 +1,21 @@
 /**
  * Core CRUD for markdown-based slash commands.
  *
- * Two storage layers:
+ * Three layers:
  *   1. Built-in commands — dist/data/slash-commands/*.md (read-only). EMPTY since
  *      2026-07: every built-in descriptive command was migrated to a skill
  *      (src/data/skills/<name>/SKILL.md) — skills are the one mental model for
  *      "instructions the Personal AI follows", surfaced in the / palette by
  *      skill-bridge. The layer is kept for back-compat with user-created files.
- *   2. User commands    — stored in ~/.open-walnut/commands/*.md (read-write)
+ *   2. Plugin commands  — registered in-process by an active plugin, always named
+ *      `<pluginId>:<localId>` (see plugins/command-registry.ts). Read-only: they
+ *      live in the plugin's code, not on disk, so update/delete refuse with the
+ *      same "Cannot modify/Cannot delete" contract built-ins use (HTTP 403).
+ *   3. User commands    — stored in ~/.open-walnut/commands/*.md (read-write)
  *
- * Lookup: user dir first, then built-in. User commands override built-in by name.
+ * Priority is strict: user > plugin > builtin. Lookup by an ordinary slug name is
+ * unchanged (user dir, then built-in) — a plugin command is never reachable that
+ * way because its name always carries the `pluginId:` namespace.
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -17,6 +23,11 @@ import yaml from 'js-yaml';
 import { log } from '../logging/index.js';
 import { parseFrontmatter } from '../utils/frontmatter.js';
 import { COMMANDS_DIR, BUILTIN_COMMANDS_DIR } from '../constants.js';
+import {
+  getOwnedCommand,
+  isPluginCommandName,
+  listOwnedCommands,
+} from './plugins/command-registry.js';
 
 async function ensureCommandsDir(): Promise<void> {
   await fsp.mkdir(COMMANDS_DIR, { recursive: true });
@@ -26,7 +37,7 @@ export interface CommandDef {
   name: string;
   description: string;
   content: string;
-  source: 'builtin' | 'user';
+  source: 'builtin' | 'user' | 'plugin';
 }
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
@@ -100,7 +111,7 @@ function serializeCommand(content: string, description?: string): string {
 // ─── public API ──────────────────────────────────────────────────
 
 /**
- * List all commands. User commands override built-in by name. Sorted by name.
+ * List all commands. Priority is strict: user > plugin > builtin. Sorted by name.
  */
 export async function listCommands(): Promise<CommandDef[]> {
   const seen = new Map<string, CommandDef>();
@@ -109,16 +120,22 @@ export async function listCommands(): Promise<CommandDef[]> {
   const userFiles = await readDir(COMMANDS_DIR);
   for (const file of userFiles) {
     const name = nameFromFile(file);
-    if (!name) continue;
+    if (!name || isPluginCommandName(name)) continue;
     const cmd = await readCommandFile(path.join(COMMANDS_DIR, file), 'user');
     if (cmd) seen.set(name, cmd);
   }
 
-  // Built-in commands (lower priority — skip if user already has it)
+  // Plugin commands (middle priority) — in-process, no disk read
+  for (const cmd of listOwnedCommands()) {
+    if (seen.has(cmd.name)) continue;
+    seen.set(cmd.name, cmd);
+  }
+
+  // Built-in commands (lowest priority — skip if user or a plugin already has it)
   const builtinFiles = await readDir(BUILTIN_COMMANDS_DIR);
   for (const file of builtinFiles) {
     const name = nameFromFile(file);
-    if (!name || seen.has(name)) continue;
+    if (!name || isPluginCommandName(name) || seen.has(name)) continue;
     const cmd = await readCommandFile(path.join(BUILTIN_COMMANDS_DIR, file), 'builtin');
     if (cmd) seen.set(name, cmd);
   }
@@ -128,8 +145,13 @@ export async function listCommands(): Promise<CommandDef[]> {
 
 /**
  * Get a single command by name. User dir first, then built-in.
+ *
+ * A `pluginId:localId` name is resolved from the plugin registry BEFORE the slug
+ * validation runs — that pattern has no `:`, so validating first would reject every
+ * plugin command as an invalid name.
  */
 export async function getCommand(name: string): Promise<CommandDef | null> {
+  if (isPluginCommandName(name)) return getOwnedCommand(name);
   validateName(name);
   // Try user dir first
   const userPath = path.join(COMMANDS_DIR, toFilename(name));
@@ -176,6 +198,10 @@ export async function updateCommand(
   name: string,
   updates: { content?: string; description?: string },
 ): Promise<CommandDef> {
+  if (isPluginCommandName(name)) {
+    if (!getOwnedCommand(name)) throw new Error(`Command "${name}" not found.`);
+    throw new Error(`Cannot modify plugin command "${name}". Edit the plugin that registers it.`);
+  }
   validateName(name);
   const existing = await getCommand(name);
   if (!existing) {
@@ -198,6 +224,10 @@ export async function updateCommand(
  * Delete a user command. Rejects if only builtin exists.
  */
 export async function deleteCommand(name: string): Promise<void> {
+  if (isPluginCommandName(name)) {
+    if (!getOwnedCommand(name)) throw new Error(`Command "${name}" not found.`);
+    throw new Error(`Cannot delete plugin command "${name}". Disable the plugin that registers it.`);
+  }
   validateName(name);
   const userPath = path.join(COMMANDS_DIR, toFilename(name));
   try {

@@ -1,0 +1,15 @@
+{
+  "id": "calendar",
+  "name": "Calendar",
+  "description": "Calendar tools backed by the Walnut calendar service",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "engines": {
+    "walnut": ">=0.3.2"
+  },
+  "server": "index.js",
+  "configSchema": {
+    "type": "object",
+    "properties": {}
+  }
+}

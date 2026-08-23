@@ -18,6 +18,8 @@
  */
 
 import { z } from 'zod'
+import { OwnedRegistry } from '../core/plugins/owned-registry.js'
+import type { Disposable } from '../core/plugins/disposable.js'
 
 /** How an op reaches the server when it has no custom handler. */
 export interface HttpBinding {
@@ -89,19 +91,32 @@ export interface WalnutOp {
   }
 }
 
-const ops = new Map<string, WalnutOp>()
+const ops = new OwnedRegistry<WalnutOp>()
 
-/** Declare one op. Throws on duplicate names — names are the public contract. */
-export function defineOp(op: WalnutOp): WalnutOp {
-  if (ops.has(op.name)) throw new Error(`duplicate op name: ${op.name}`)
+function validateOp(op: WalnutOp): void {
   if (!op.bind && !op.handler) throw new Error(`op ${op.name} needs bind or handler`)
-  ops.set(op.name, op)
+}
+
+/** Declare one core op. Throws on duplicate names — names are the public contract. */
+export function defineOp(op: WalnutOp): WalnutOp {
+  validateOp(op)
+  if (ops.has(op.name)) throw new Error(`duplicate op name: ${op.name}`)
+  ops.register('core', op.name, op)
   return op
+}
+
+export function definePluginOp(owner: string, op: WalnutOp): Disposable {
+  validateOp(op)
+  return ops.register(owner, op.name, op)
+}
+
+export function removePluginOps(owner: string): number {
+  return ops.removeOwner(owner)
 }
 
 /** All ops, in declaration order. */
 export function listOps(): WalnutOp[] {
-  return [...ops.values()]
+  return ops.values()
 }
 
 export function getOp(name: string): WalnutOp | undefined {

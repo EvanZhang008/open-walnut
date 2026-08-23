@@ -29236,3 +29236,271 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 /* The same message outside the flex actions row (a failed answer-form submit) —
    flex-basis does nothing there, so it needs its own top margin. */
 .nfc-perm-error--block { margin-top: 6px; }
+
+.plugin-native-page {
+  min-height: 100%;
+}
+
+.plugin-error-boundary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px;
+  border: 1px solid var(--error);
+  border-radius: var(--radius-md);
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 7%, transparent);
+}
+
+.plugin-error-boundary span {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.plugin-error-boundary-compact {
+  padding: 2px;
+  border: 0;
+  background: transparent;
+}
+
+.plugin-file-view,
+.plugin-terminal-view,
+.plugin-session-view,
+.plugin-task-view,
+.plugin-chat-view {
+  height: 100%;
+  min-height: 320px;
+  overflow: hidden;
+}
+
+.plugin-task-view {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.plugin-task-view-loading,
+.plugin-task-view-error {
+  align-items: center;
+  justify-content: center;
+}
+
+.plugin-task-view-error { color: var(--error); }
+
+.plugin-task-view-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.plugin-task-view-toolbar strong { margin-right: auto; }
+.plugin-task-view-toolbar input {
+  min-width: 120px;
+  max-width: 240px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+  color: var(--fg);
+}
+
+.plugin-task-view .tp-table-scroll { flex: 1; min-height: 0; }
+
+.plugin-chat-view {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.plugin-chat-view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.plugin-chat-view-header button {
+  border: 0;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.plugin-chat-view-header button:hover { color: var(--fg); }
+.plugin-chat-view-loading { flex: 1; display: flex; align-items: center; justify-content: center; }
+.plugin-chat-view-empty { padding: 16px; color: var(--fg-muted); font-size: 13px; }
+.plugin-chat-view-input { flex: 0 0 auto; }
+.plugin-chat-view-spinner {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 8px;
+}
+
+.plugin-dashboard-page {
+  min-height: 100%;
+  padding: 28px;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+.plugin-dashboard-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.plugin-dashboard-heading h1 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.plugin-dashboard-heading p {
+  margin: 5px 0 0;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+.plugin-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+
+.plugin-dashboard-cell {
+  min-width: 0;
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.plugin-dashboard-cell-header {
+  flex: 0 0 auto;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.plugin-dashboard-cell-title {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.plugin-dashboard-cell-title strong,
+.plugin-dashboard-cell-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-dashboard-cell-title strong {
+  font-size: 13px;
+}
+
+.plugin-dashboard-cell-title span {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.plugin-dashboard-cell-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.plugin-dashboard-cell-actions button {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.plugin-dashboard-cell-actions button:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+
+.plugin-dashboard-cell-actions button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.plugin-dashboard-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+
+.plugin-dashboard-cell-missing {
+  border-style: dashed;
+}
+
+.plugin-dashboard-missing-body,
+.plugin-dashboard-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--fg-muted);
+  text-align: center;
+}
+
+.plugin-dashboard-missing-body {
+  flex: 1;
+  padding: 24px;
+}
+
+.plugin-dashboard-empty {
+  min-height: 240px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.plugin-dashboard-missing-body strong,
+.plugin-dashboard-empty strong {
+  color: var(--fg);
+}
+
+@media (max-width: 1000px) {
+  .plugin-dashboard-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .plugin-dashboard-cell {
+    grid-column: span 1 !important;
+  }
+}
+
+@media (max-width: 700px) {
+  .plugin-dashboard-page {
+    padding: 16px;
+  }
+
+  .plugin-dashboard-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

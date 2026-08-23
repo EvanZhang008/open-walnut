@@ -74,17 +74,77 @@ describe('IntegrationRegistry', () => {
     });
   });
 
+  describe('unregister / tombstones', () => {
+    it('removes live behavior but retains historical source metadata', () => {
+      registry.register('remote', makePlugin({
+        id: 'remote',
+        name: 'Remote Tasks',
+        version: '1.2.3',
+        capabilities: ['sync', 'tools'],
+        claim: { fn: () => true, priority: 10 },
+      }));
+
+      const tombstone = registry.unregister('remote', 'disabled');
+
+      expect(tombstone).toMatchObject({
+        id: 'remote',
+        name: 'Remote Tasks',
+        version: '1.2.3',
+        capabilities: ['sync', 'tools'],
+        reason: 'disabled',
+      });
+      expect(registry.get('remote')).toBeUndefined();
+      expect(registry.has('remote')).toBe(false);
+      expect(registry.isTaskSource('remote')).toBe(false);
+      expect(registry.getAll().map((plugin) => plugin.id)).not.toContain('remote');
+      expect(registry.getSyncPlugins().map((plugin) => plugin.id)).not.toContain('remote');
+      expect(registry.isKnown('remote')).toBe(true);
+      expect(registry.getTombstone('remote')).toMatchObject({ id: 'remote', reason: 'disabled' });
+    });
+
+    it('revives the same id and clears its tombstone', () => {
+      registry.register('remote', makePlugin({ id: 'remote' }));
+      registry.unregister('remote');
+
+      registry.register('remote', makePlugin({ id: 'remote', name: 'Revived' }));
+
+      expect(registry.get('remote')?.name).toBe('Revived');
+      expect(registry.getTombstone('remote')).toBeUndefined();
+    });
+
+    it('never lets a tombstone claim new projects', async () => {
+      registry.ensureLocalFallback();
+      registry.register('remote', makePlugin({
+        id: 'remote',
+        claim: { fn: () => true, priority: 10 },
+      }));
+      registry.unregister('remote');
+
+      expect((await registry.getForProject('Work')).id).toBe('local');
+    });
+
+    it('protects the local fallback', () => {
+      registry.ensureLocalFallback();
+      expect(() => registry.unregister('local')).toThrow('cannot be unregistered');
+      expect(registry.has('local')).toBe(true);
+    });
+  });
+
   describe('clear', () => {
     it('removes all plugins except local fallback', () => {
       registry.register('a', makePlugin({ id: 'a' }));
       registry.register('b', makePlugin({ id: 'b' }));
       expect(registry.getAll()).toHaveLength(2);
 
+      registry.unregister('a');
+      expect(registry.getTombstone('a')).toBeDefined();
+
       registry.clear();
       // clear() re-registers the local fallback automatically
       expect(registry.getAll()).toHaveLength(1);
       expect(registry.has('local')).toBe(true);
       expect(registry.has('a')).toBe(false);
+      expect(registry.getTombstones()).toEqual([]);
     });
 
     it('allows re-registration after clear', () => {

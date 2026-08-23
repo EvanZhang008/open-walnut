@@ -5,6 +5,9 @@
  * Actions are the "data collection" step; agents are the "analysis" step.
  */
 
+import { OwnedRegistry } from '../plugins/owned-registry.js';
+import type { Disposable } from '../plugins/disposable.js';
+
 export interface ActionResult {
   status: 'ok' | 'error';
   summary?: string;
@@ -19,13 +22,24 @@ interface ActionRegistration {
   description: string;
 }
 
-const registry = new Map<string, ActionRegistration>();
+const registry = new OwnedRegistry<ActionRegistration>();
 
-/**
- * Register a named action.
- */
-export function registerAction(id: string, fn: ActionFn, description: string): void {
-  registry.set(id, { fn, description });
+/** Register a core action. Existing callers may ignore the returned handle. */
+export function registerAction(id: string, fn: ActionFn, description: string): Disposable {
+  return registry.replace('core', id, { fn, description });
+}
+
+export function registerOwnedAction(
+  owner: string,
+  id: string,
+  fn: ActionFn,
+  description: string,
+): Disposable {
+  return registry.register(owner, id, { fn, description });
+}
+
+export function unregisterOwnedActions(owner: string): number {
+  return registry.removeOwner(owner);
 }
 
 /**
@@ -39,7 +53,7 @@ export function getAction(id: string): ActionRegistration | undefined {
  * List all registered actions (for frontend dropdowns).
  */
 export function listActions(): Array<{ id: string; description: string }> {
-  return Array.from(registry.entries()).map(([id, reg]) => ({
+  return registry.entries().map(({ key: id, value: reg }) => ({
     id,
     description: reg.description,
   }));
@@ -64,4 +78,8 @@ export async function runAction(
       error: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+export function _resetActionsForTesting(): void {
+  registry.clear();
 }

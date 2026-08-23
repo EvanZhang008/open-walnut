@@ -8,6 +8,9 @@
  *   4. Emit session:status-changed
  *   5. Check idle timeout: kill sessions whose outputFile mtime exceeds the threshold.
  *      Uses file mtime — persistent on disk, survives server restarts, no state machine dependency.
+ *      Sessions within WILL_REAP_WARN_WINDOW_MS of that kill emit `session:will-reap`
+ *      once per idle episode — the only pre-death signal Walnut can honestly make
+ *      (see docs/decision/no-session-end-gist.md: `session:ended` is per-turn).
  */
 
 import fsp from 'node:fs/promises'
@@ -18,6 +21,7 @@ import { isSessionProcessAlive, isLocalJsonlFresh } from '../utils/session-liven
 import { bus, EventNames } from './event-bus.js'
 import { runPeriodic, type PeriodicHandle, type TickContext } from './periodic-task.js'
 import type { SessionRecord, Task, TaskPhase } from './types.js'
+import type { SessionWillReapEvent } from './event-types.js'
 import { emitSessionStatusChanged } from './session-tracker.js'
 const HEALTH_CHECK_INTERVAL_MS = 30_000
 /** Adaptive slow-down: with an empty active set there is nothing to watch. */
@@ -44,6 +48,15 @@ const DEFAULT_LOCAL_IDLE_TIMEOUT_MS = 60 * 60 * 1000
 const DEFAULT_REMOTE_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000
 /** Cron-armed (/loop) sessions: matches the CLI's 7-day recurring-cron auto-expiry. */
 const CRON_ARMED_IDLE_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000
+/**
+ * How far ahead of an idle reap `session:will-reap` fires.
+ *
+ * 5 min is ~10 ticks of warning — enough for a consumer (plugin, notifier) to
+ * act before the CLI dies, short enough that the session is genuinely on its
+ * way out rather than merely quiet. The warning NEVER changes the reap decision
+ * (thresholds and exemptions below are untouched); it only reports it.
+ */
+const WILL_REAP_WARN_WINDOW_MS = 5 * 60 * 1000
 /**
  * Ceiling on ONE session's daemon probe inside a per-session loop.
  *
@@ -117,6 +130,16 @@ export class SessionHealthMonitor {
   private handle: PeriodicHandle | null = null
   private tickCount = 0
   private emptyTicks = 0
+  /**
+   * sessionId → the last-activity timestamp the pending reap was computed from
+   * ("episode base"), for sessions already warned via `session:will-reap`.
+   *
+   * Dedupe is per idle EPISODE, not per session: the warn window spans ~10
+   * ticks, and a consumer that receives ten identical warnings acts ten times.
+   * Keying on the base timestamp means real activity (which moves the base
+   * forward) re-arms the warning, while a session sitting still stays silent.
+   */
+  private willReapWarnedBase = new Map<string, number>()
 
   start(): void {
     if (this.handle) return
@@ -859,6 +882,35 @@ export class SessionHealthMonitor {
       }
 
       const idleDurationMs = now - lastActiveMs
+
+      // ── session:will-reap (pre-death warning) ────────────────────────────
+      // Emitted from the ONE place that actually decides an idle reap, and only
+      // AFTER every exemption above (team-active / background work / pending
+      // permission / liveness) — a session that any of those spare is not a
+      // candidate and must never be announced as one.
+      //
+      // The deadline is set by the FRESHER of the two clocks the reap consults:
+      // it needs BOTH `idleDurationMs` and the `last_status_change` age past the
+      // threshold (see the freshness guard right below), so a session whose
+      // stream file is stale but whose record just moved is NOT about to die.
+      // Reading only the file mtime here would announce a reap that the guard
+      // then declines to perform — a confident wrong answer.
+      //
+      // Emitting BEFORE the reap below is the point: consumers get the warning
+      // while the CLI is still alive. Nothing here alters the reap decision.
+      const warnStatusChangeMs = session.last_status_change
+        ? Date.parse(session.last_status_change) : Number.NaN
+      const episodeBaseMs = Number.isNaN(warnStatusChangeMs)
+        ? lastActiveMs : Math.max(lastActiveMs, warnStatusChangeMs)
+      const remainingMs = Math.max(0, idleTimeoutMs - (now - episodeBaseMs))
+      if (remainingMs <= WILL_REAP_WARN_WINDOW_MS) {
+        this.emitWillReap(session, { remainingMs, idleDurationMs, idleTimeoutMs, episodeBaseMs })
+      } else {
+        // Out of the window — either activity recovered or this session was
+        // never close. Forget the episode so the NEXT one warns again.
+        this.willReapWarnedBase.delete(session.claudeSessionId)
+      }
+
       if (idleDurationMs < idleTimeoutMs) continue
 
       // Second-line defense: if the session record shows a recent status
@@ -955,7 +1007,57 @@ export class SessionHealthMonitor {
       }
     }
 
+    // Bounded memory: drop warn state for sessions that left the scan set
+    // (same discipline as snapshotPullAt / reconcileAttemptAt).
+    if (this.willReapWarnedBase.size > 200) {
+      const liveIds = new Set(sessions.map((s) => s.claudeSessionId))
+      for (const sid of this.willReapWarnedBase.keys()) {
+        if (!liveIds.has(sid)) this.willReapWarnedBase.delete(sid)
+      }
+    }
+
     return killedIds
+  }
+
+  /**
+   * Announce a pending idle reap — at most once per session per idle episode.
+   *
+   * Deliberately narrow: this is the pre-death signal `session:ended` never
+   * was (that one fires after every turn — docs/decision/no-session-end-gist.md),
+   * so it carries the reap's own numbers and nothing else.
+   */
+  private emitWillReap(
+    session: SessionRecord,
+    info: { remainingMs: number; idleDurationMs: number; idleTimeoutMs: number; episodeBaseMs: number },
+  ): void {
+    const alreadyWarnedBase = this.willReapWarnedBase.get(session.claudeSessionId)
+    // `>=` not `===`: only a base that moved FORWARD (real activity, or a record
+    // write that reset the clock) counts as a new episode. Backward jitter must
+    // not re-announce the same one.
+    if (alreadyWarnedBase !== undefined && alreadyWarnedBase >= info.episodeBaseMs) return
+    this.willReapWarnedBase.set(session.claudeSessionId, info.episodeBaseMs)
+
+    const payload: SessionWillReapEvent = {
+      sessionId: session.claudeSessionId,
+      ...(session.taskId ? { taskId: session.taskId } : {}),
+      ...(session.host ? { host: session.host } : {}),
+      remainingMs: info.remainingMs,
+      idleDurationMs: info.idleDurationMs,
+      idleTimeoutMs: info.idleTimeoutMs,
+      reason: 'idle_timeout',
+      warnedAt: new Date().toISOString(),
+    }
+
+    log.session.info('health monitor: session will be idle-reaped', {
+      sessionId: session.claudeSessionId,
+      taskId: session.taskId,
+      host: session.host,
+      remainingMinutes: Math.round(info.remainingMs / 60_000),
+      idleMinutes: Math.round(info.idleDurationMs / 60_000),
+      thresholdMinutes: Math.round(info.idleTimeoutMs / 60_000),
+    })
+
+    bus.emit(EventNames.SESSION_WILL_REAP, payload, ['*'], { source: 'health-monitor' })
   }
 
 

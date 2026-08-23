@@ -1,4 +1,6 @@
 import { NavLink } from 'react-router-dom';
+import { usePluginUi } from '@/plugins/hooks';
+import { CORE_SETTINGS_CONTRIBUTIONS } from './core-settings-registry';
 
 interface NavItem {
   id: string;
@@ -30,34 +32,13 @@ const MANAGE_PAGES: Array<{ to: string; label: string; testId: string }> = [
   { to: '/memory', label: 'Memory', testId: 'settings-nav-memory' },
 ];
 
-/** Manage entries that are sections on this page, not separate routes. */
-const MANAGE_SECTIONS: NavItem[] = [
-  { id: 'repositories', label: 'Repositories' },
-  { id: 'hooks', label: 'Hooks' },
-];
+const MANAGE_SECTIONS: NavItem[] = CORE_SETTINGS_CONTRIBUTIONS
+  .filter((entry) => entry.group === 'manage')
+  .map(({ id, label, divider }) => ({ id, label, divider }));
 
-const NAV_ITEMS: NavItem[] = [
-  { id: 'providers', label: 'AI Provider' },
-  { id: 'general', label: 'General' },
-  { id: 'sessions', label: 'Tasks & Sessions' },
-  { id: 'focus-tiers', label: 'Focus Tiers' },
-  { id: 'integrations', label: 'Integrations' },
-  { id: 'calendar', label: 'Calendar' },
-  { id: 'permissions', label: 'Permissions' },
-  { id: 'plugin-store', label: 'Plugin Store' },
-  { id: 'search', label: 'Search & Embeddings' },
-  { id: 'stt', label: 'Speech-to-Text' },
-  { id: 'audio-capture', label: 'Audio Capture' },
-  { id: 'heartbeat', label: 'Heartbeat' },
-  { id: 'backup', label: 'S3 Backup' },
-  { id: 'remote-hosts', label: 'Remote Hosts' },
-  { id: 'devices', label: 'Devices' },
-  { id: 'cloud', label: 'Cloud Companion' },
-  { id: 'advanced', label: 'Advanced' },
-  { id: 'usage', label: 'Usage & Costs', divider: true },
-  { id: 'timeline', label: 'Timeline' },
-  { id: 'bug-report', label: 'Bug Report', divider: true },
-];
+const NAV_ITEMS: NavItem[] = CORE_SETTINGS_CONTRIBUTIONS
+  .filter((entry) => entry.group === 'configure')
+  .map(({ id, label, divider }) => ({ id, label, divider }));
 
 interface SettingsNavProps {
   activeSection: string;
@@ -65,6 +46,7 @@ interface SettingsNavProps {
 }
 
 export function SettingsNav({ activeSection, onNavigate }: SettingsNavProps) {
+  const pluginUi = usePluginUi();
   const sectionButton = (item: NavItem) => (
     <span key={item.id}>
       {item.divider && <div className="settings-nav-divider" />}
@@ -96,6 +78,16 @@ export function SettingsNav({ activeSection, onNavigate }: SettingsNavProps) {
       <div className="settings-nav-divider" />
       <span className="settings-nav-group-label">Configure</span>
       {NAV_ITEMS.map(sectionButton)}
+      {pluginUi.settings.length > 0 && (
+        <>
+          <div className="settings-nav-divider" />
+          <span className="settings-nav-group-label">Plugins</span>
+          {pluginUi.settings.map((entry) => sectionButton({
+            id: entry.key,
+            label: entry.value.label,
+          }))}
+        </>
+      )}
     </nav>
   );
 }

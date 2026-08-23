@@ -166,10 +166,14 @@ describe('sync', () => {
 });
 
 describe('auth.json is never synced (data-repo gitignore)', () => {
-  it('fresh initSync writes a .gitignore that excludes auth.json', async () => {
+  it('fresh initSync excludes auth and private Plugin state', async () => {
     initSync();
     const gitignore = await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
-    expect(gitignore.split('\n')).toContain('auth.json');
+    expect(gitignore.split('\n')).toEqual(expect.arrayContaining([
+      'auth.json',
+      'plugin-data/',
+      'secrets/',
+    ]));
   });
 
   it('ensureCriticalIgnores appends auth.json to a pre-existing .gitignore (idempotent)', async () => {
@@ -220,6 +224,34 @@ describe('auth.json is never synced (data-repo gitignore)', () => {
     ensureCriticalIgnores();
     const gitignore = await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
     expect(gitignore.split('\n')).toContain('config.yaml');
+  });
+
+  it('repairs and untracks private Plugin paths on an older install', async () => {
+    initSync();
+    await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'images/\n', 'utf-8');
+    const statePath = path.join(tmpDir, 'plugin-data', 'sample', 'state.json');
+    const secretPath = path.join(tmpDir, 'secrets', 'plugins', 'sample.json');
+    await fsp.mkdir(path.dirname(statePath), { recursive: true });
+    await fsp.mkdir(path.dirname(secretPath), { recursive: true });
+    await fsp.writeFile(statePath, '{"value":1}\n');
+    await fsp.writeFile(secretPath, '{"fixture":"first"}\n');
+    execSync('git add -f plugin-data/sample/state.json secrets/plugins/sample.json && git commit -q -m "legacy plugin state"', { cwd: tmpDir });
+    await fsp.writeFile(secretPath, '{"fixture":"updated"}\n');
+
+    ensureCriticalIgnores();
+    const gitignore = await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
+    expect(gitignore.split('\n')).toEqual(expect.arrayContaining(['plugin-data/', 'secrets/']));
+
+    const untracked = ensureMachineLocalUntracked();
+    expect(untracked).toEqual(expect.arrayContaining([
+      'plugin-data/sample/state.json',
+      'secrets/plugins/sample.json',
+    ]));
+    const tracked = execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' }).split('\n');
+    expect(tracked).not.toContain('plugin-data/sample/state.json');
+    expect(tracked).not.toContain('secrets/plugins/sample.json');
+    await expect(fsp.readFile(statePath, 'utf-8')).resolves.toContain('"value"');
+    await expect(fsp.readFile(secretPath, 'utf-8')).resolves.toContain('"fixture"');
   });
 
   // ── 2026-07-25 incident: a remote deletion of a TRACKED-but-ignored

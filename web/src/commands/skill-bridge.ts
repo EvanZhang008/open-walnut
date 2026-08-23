@@ -1,28 +1,25 @@
 /**
- * Skill bridge: loads skills (workspace / walnut / claude / builtin — every
- * source the server-side skill loader discovers) into the frontend command
+ * Skill bridge: loads skills (workspace / walnut / claude / builtin / plugin-registered
+ * — every source the server-side skill loader discovers) into the frontend command
  * registry so the main-chat "/" palette shows skills alongside commands.
  *
  * Selecting a skill sends the agent an instruction to apply that skill —
  * the agent already has the skill list in its system prompt, so naming it
  * is enough for it to load and follow the SKILL.md.
+ *
+ * Registered under the 'skill' owner, the lowest-priority tier: a command of the same
+ * name always wins, and refreshing skills can never disturb a command.
  */
-import { register, unregister, listCommands } from './registry.js';
+import { registerOwned, removeOwner } from './registry.js';
 import { fetchSkills } from '@/api/skills';
 import type { SlashCommand } from './types.js';
-
-/** Track what we registered so refresh can cleanly unregister only skills. */
-const registeredSkillNames = new Set<string>();
 
 export async function loadSkillCommands(): Promise<void> {
   try {
     const skills = await fetchSkills();
-    const existing = new Set(listCommands().map((c) => c.name));
 
     for (const skill of skills) {
       if (!skill.eligible || !skill.enabled) continue;
-      // Commands win on name collisions — a skill never shadows /help etc.
-      if (existing.has(skill.name) && !registeredSkillNames.has(skill.name)) continue;
 
       const cmd: SlashCommand = {
         name: skill.name,
@@ -35,8 +32,7 @@ export async function loadSkillCommands(): Promise<void> {
           ctx.sendMessage(parts.join(' '));
         },
       };
-      register(cmd);
-      registeredSkillNames.add(skill.name);
+      registerOwned('skill', cmd);
     }
   } catch {
     // Server may not be up yet — palette just shows commands only.
@@ -44,7 +40,6 @@ export async function loadSkillCommands(): Promise<void> {
 }
 
 export async function refreshSkillCommands(): Promise<void> {
-  for (const name of registeredSkillNames) unregister(name);
-  registeredSkillNames.clear();
+  removeOwner('skill');
   await loadSkillCommands();
 }

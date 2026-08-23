@@ -45,6 +45,7 @@ import {
   loadPlugins,
   getUnsupportedPlugins,
   validatePluginAssetPath,
+  validatePluginEntryPath,
   pluginToolName,
   getPluginApps,
   getPluginToolSpecs,
@@ -238,7 +239,8 @@ export default function register(api) {
     const tools = registry.get('toolbox')!.tools!;
     expect(tools.map(t => t.name)).toEqual(['toolbox_echo']);
     expect(await tools[0].execute({ msg: 'hi' })).toBe('echo:hi');
-    expect(getPluginToolSpecs(registry).map(t => t.name)).toEqual(['toolbox_echo']);
+    expect(getPluginToolSpecs(registry).map(t => t.name).filter((name) => name.startsWith('toolbox_')))
+      .toEqual(['toolbox_echo']);
   });
 
   it('rejects a duplicate tool name within one plugin (plugin fails to load)', async () => {
@@ -339,7 +341,8 @@ export default function register(api) {
     // Appended, never interleaved: the static prefix bytes are untouched.
     expect(after.slice(0, builtinTools.length).map(t => t.name))
       .toEqual(builtinTools.map(t => t.name));
-    expect(getPluginTools().map(t => t.name)).toEqual(['agent_tool_shout']);
+    expect(getPluginTools().map(t => t.name).filter((name) => name.startsWith('agent_tool_')))
+      .toEqual(['agent_tool_shout']);
 
     expect(await executeTool('agent_tool_shout', { text: 'hi' })).toBe('HI');
   });
@@ -393,6 +396,20 @@ describe('validatePluginAssetPath', () => {
   it('keeps a filename that merely CONTAINS dots', () => {
     // A substring `..` test would reject this ordinary name.
     expect(validatePluginAssetPath('v1..2/index.html')).toEqual({ ok: true, rel: 'v1..2/index.html' });
+  });
+});
+
+describe('validatePluginEntryPath', () => {
+  it('accepts canonical relative module paths', () => {
+    expect(validatePluginEntryPath('dist/server.mjs')).toEqual({ ok: true, rel: 'dist/server.mjs' });
+    expect(validatePluginEntryPath('./dist/web.js')).toEqual({ ok: true, rel: 'dist/web.js' });
+    expect(validatePluginEntryPath('src\\server.ts')).toEqual({ ok: true, rel: 'src/server.ts' });
+  });
+
+  it('refuses paths that leave or reinterpret the plugin root', () => {
+    for (const bad of ['/tmp/server.mjs', '../server.mjs', 'dist/../../server.mjs', 'C:\\server.mjs', 'https://example.com/plugin.js', '']) {
+      expect(validatePluginEntryPath(bad).ok).toBe(false);
+    }
   });
 });
 
@@ -667,7 +684,7 @@ describe('plugin skills discovery', () => {
     await loadPlugins(globalRegistry);
     expect(globalRegistry.get('skilled')!.hasSkills).toBe(true);
 
-    const expected = path.join(dir, 'skills');
+    const expected = await fsp.realpath(path.join(dir, 'skills'));
     expect(getPluginSkillDirs()).toEqual([expected]);
 
     // LAST in both scopes: first-wins discovery means a workspace / global /

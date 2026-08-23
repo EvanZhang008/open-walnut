@@ -6,14 +6,16 @@ import { useAudioCapture } from '@/hooks/useAudioCapture';
 import { useNotifications } from '@/contexts/notifications';
 import { NotificationPanel } from '@/components/common/NotificationPanel';
 import { VoicePanel } from '@/components/common/VoicePanel';
+import { PluginBoundary } from '@/components/common/PluginBoundary';
+import { usePluginUi } from '@/plugins/hooks';
 import { subscribeVoiceStatus, getVoiceStatus, type VoiceStatus } from '@/utils/voice-status';
 
 const SS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
 const SS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
 const SS_CALENDAR_VISIBLE_KEY = 'open-walnut-home-calendar-visible';
 
-// The sidebar carries ONLY the daily surfaces (panels + Home/Tasks/Notes/Calendar/
-// Routines) plus Settings. Management pages (Agents, Skills, Commands, Memory,
+// The sidebar carries ONLY the daily surfaces (panels + Home/Dashboard/Tasks/Notes/
+// Calendar/Routines) plus Settings. Management pages (Agents, Skills, Commands, Memory,
 // Repositories, Hooks) and audio recording live in the Settings sidebar's Manage
 // group / Audio Capture, so this CORE list can never grow back into an icon wall.
 //
@@ -43,6 +45,7 @@ export function Sidebar({
   const cls = `sidebar${open ? ' open' : ''}${collapsed ? ' collapsed' : ''}`;
   const { hasIssues } = useSystemHealth();
   const { apps } = useApps();
+  const pluginUi = usePluginUi();
   const audio = useAudioCapture();
   const { notify, unreadCount } = useNotifications();
   const [notifOpen, setNotifOpen] = useState(false);
@@ -169,6 +172,10 @@ export function Sidebar({
           <HomeIcon />
           <span className="sidebar-label">Home</span>
         </NavLink>
+        <NavLink to="/dashboard" className={navLinkClass} title={collapsed ? 'Dashboard' : undefined}>
+          <DashboardIcon />
+          <span className="sidebar-label">Dashboard</span>
+        </NavLink>
         <NavLink to="/tasks" className={navLinkClass} title={collapsed ? 'Tasks' : undefined}>
           <TasksIcon />
           <span className="sidebar-label">Tasks</span>
@@ -191,7 +198,32 @@ export function Sidebar({
           <span className="sidebar-label">Routines</span>
         </NavLink>
 
-        {apps.length > 0 && <div className="sidebar-nav-divider" />}
+        {(pluginUi.nav.length > 0 || apps.length > 0) && <div className="sidebar-nav-divider" />}
+        {pluginUi.nav.map((entry) => {
+          const Icon = entry.value.icon;
+          return (
+            <NavLink
+              key={`${entry.key}:${entry.generation}`}
+              to={entry.value.path}
+              className={navLinkClass}
+              title={collapsed ? entry.value.label : undefined}
+              data-testid={`sidebar-plugin-${entry.key}`}
+            >
+              {Icon ? (
+                <PluginBoundary
+                  pluginId={entry.pluginId}
+                  pluginName={entry.pluginName}
+                  resetKey={entry.generation}
+                  compact
+                  fallback={<PuzzleIcon />}
+                >
+                  <Icon size={18} />
+                </PluginBoundary>
+              ) : <PuzzleIcon />}
+              <span className="sidebar-label">{entry.value.label}</span>
+            </NavLink>
+          );
+        })}
         {apps.map((app) => (
           <NavLink
             key={app.id}
@@ -279,6 +311,17 @@ function HomeIcon() {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
       <polyline points="9 22 9 12 15 12 15 22" />
+    </svg>
+  );
+}
+
+function DashboardIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+      <rect x="14" y="14" width="7" height="7" rx="1" />
     </svg>
   );
 }

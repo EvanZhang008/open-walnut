@@ -23,7 +23,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { WALNUT_HOME } from '../../constants.js';
+import { WALNUT_HOME, validateAgentId } from '../../constants.js';
 import { bus, EventNames } from '../event-bus.js';
 import { getConfig } from '../config-manager.js';
 import { getSessionByLane, createSessionRecord } from '../session-tracker.js';
@@ -33,7 +33,7 @@ import { log } from '../../logging/index.js';
 
 /** The lane key a Personal AI conversation's session is bound to. */
 export function personalAiLaneKey(agentId: string, conversationId: string): string {
-  return `chat:${agentId}:${conversationId}`;
+  return `chat:${encodeURIComponent(validateAgentId(agentId))}:${conversationId}`;
 }
 
 /**
@@ -41,23 +41,21 @@ export function personalAiLaneKey(agentId: string, conversationId: string): stri
  * session belongs to. Returns null for anything that is not a Personal AI chat lane
  * (a future lane namespace, a hand-edited record, an empty string).
  *
- * Parse rule, deliberately asymmetric: strip the `chat:` prefix, then split on
- * the FIRST remaining ':' only — agentId is the head, and EVERYTHING after it is
- * the conversationId, colons included. Today neither id can contain ':'
- * (validateAgentId / validateConversationId both reject it), so a naive
- * three-way split would also work; the single-split form is chosen so that if a
- * conversation id ever grows a separator, the agent attribution stays right and
- * the conversation id stays whole instead of being silently truncated.
+ * The agent component is URI-encoded so namespaced Plugin agent ids remain one
+ * lane segment. The conversation id is everything after the first separator.
  */
 export function parseLaneKey(lane: string | undefined | null): { agentId: string; conversationId: string } | null {
   if (!lane || !lane.startsWith('chat:')) return null;
   const rest = lane.slice('chat:'.length);
   const sep = rest.indexOf(':');
-  if (sep <= 0) return null; // no separator, or an empty agentId
-  const agentId = rest.slice(0, sep);
+  if (sep <= 0) return null;
   const conversationId = rest.slice(sep + 1);
   if (!conversationId) return null;
-  return { agentId, conversationId };
+  try {
+    return { agentId: validateAgentId(decodeURIComponent(rest.slice(0, sep))), conversationId };
+  } catch {
+    return null;
+  }
 }
 
 /**

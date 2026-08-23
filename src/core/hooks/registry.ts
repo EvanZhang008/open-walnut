@@ -23,7 +23,7 @@ export interface HookInfo {
   on: string[];
   domains: HookDomain[];
   runtime: 'walnut' | 'daemon';
-  source: 'builtin' | 'config' | 'file' | 'daemon-policy' | 'inline';
+  source: 'builtin' | 'config' | 'file' | 'plugin' | 'daemon-policy' | 'inline';
   enabled: boolean;
   priority: number;
   timeoutMs?: number;

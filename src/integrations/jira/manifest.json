@@ -1,6 +1,11 @@
 {
   "id": "jira",
   "name": "Jira",
+  "apiVersion": 1,
+  "engines": {
+    "walnut": ">=0.3.2"
+  },
+  "server": "index.js",
   "description": "Two-way sync with Jira Cloud/Server",
   "version": "1.0.0",
   "configSchema": {

@@ -208,8 +208,7 @@ one source does not overwhelm the others.
 - **Commands and skills**: Browse and run local or remote Claude Code commands and
   skills from the web app.
 - **Task integrations**: Sync Microsoft To-Do and Jira through built-in plugins.
-- **Custom plugins**: Add private integrations under
-  `~/.open-walnut/plugins/<name>/` without changing the repository.
+- **Custom plugins**: Install trusted Git or npm Plugins that add server logic, native React UI, Tools, Hooks, Agents, Providers, routes, and task sync without changing Walnut.
 - **Notifications**: Send optional Slack notifications for important events.
 
 ## iOS Companion

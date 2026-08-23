@@ -4,6 +4,12 @@
  */
 import type { PluginApi, IntegrationSync, PushResult, RemoteSyncItem } from '../../core/integration-types.js';
 import type { Task } from '../../core/types.js';
+import type { WalnutServerPluginApi } from '../../core/plugins/server-api.js';
+import { createLegacyRegistrationAdapter } from '../../core/plugins/legacy-registration-adapter.js';
+
+export async function activate(walnut: WalnutServerPluginApi): Promise<void> {
+  register(await createLegacyRegistrationAdapter(walnut));
+}
 
 export default function register(api: PluginApi): void {
   const config = api.config;

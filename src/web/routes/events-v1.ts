@@ -53,6 +53,10 @@ const BUS_SUBSCRIBER = 'mobile-events-feed'
 const FEED_INTEREST = [
   'session:started', 'session:ended', 'session:status-changed',
   'session:result', 'session:error',
+  // Pending idle reap — fires at most once per session per idle episode, so it
+  // costs one coalesced projection read and keeps the phone's row current right
+  // before the CLI goes away.
+  'session:will-reap',
   'task:created', 'task:updated', 'task:completed', 'task:deleted',
 ]
 

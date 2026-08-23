@@ -4,8 +4,12 @@ import type { NavigateFunction } from 'react-router-dom';
 import { openSessionOnHome } from './utils/open-session';
 import { AppShell } from './components/layout/AppShell';
 import { DebugCrashProbe } from './components/common/AppErrorBoundary';
+import { PluginBoundary } from './components/common/PluginBoundary';
+import { LoadingSpinner } from './components/common/LoadingSpinner';
+import { usePluginUi, useWebPluginRuntime } from './plugins/hooks';
 import { MainPage } from './pages/MainPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { PluginDashboardPage } from './pages/PluginDashboardPage';
 import { TaskDetailPage } from './pages/TaskDetailPage';
 
 import { SettingsPage } from './pages/SettingsPage';
@@ -22,6 +26,7 @@ import { TimePage } from './pages/TimePage';
 import { PluginAppPage } from './pages/PluginAppPage';
 
 import { PopoutRoot } from './popout/PopoutRoot';
+import { isPopoutPath } from './popout/openPopout';
 
 
 
@@ -52,11 +57,12 @@ function SessionsRedirect() {
 export function App() {
   const location = useLocation();
   const navigate = useNavigate();
+  const pluginUi = usePluginUi();
+  const pluginRuntime = useWebPluginRuntime();
 
   // Pop-out windows render a single view with NO app shell / providers / sidebar.
   // Fork here, before <AppShell>, so they never mount MainPage or TasksProvider.
-  const isPopout = location.pathname.startsWith('/popout');
-  if (isPopout) return <PopoutRoot />;
+  if (isPopoutPath(location.pathname)) return <PopoutRoot />;
 
   const isHome = location.pathname === '/';
 
@@ -103,8 +109,28 @@ export function App() {
         {/* Plugin-provided app pages (sandboxed iframes) — must stay above the
             catch-all, which would otherwise bounce them home. */}
         <Route path="/apps/:appId" element={<PluginAppPage />} />
-        <Route path="/dashboard" element={<Navigate to="/" replace />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        {pluginUi.pages.map((page) => {
+          const PluginPage = page.value.component;
+          return (
+            <Route
+              key={`${page.key}:${page.generation}`}
+              path={page.value.path}
+              element={(
+                <PluginBoundary
+                  pluginId={page.pluginId}
+                  pluginName={page.pluginName}
+                  resetKey={page.generation}
+                >
+                  <div className="plugin-native-page" data-plugin-id={page.pluginId}>
+                    <PluginPage />
+                  </div>
+                </PluginBoundary>
+              )}
+            />
+          );
+        })}
+        <Route path="/dashboard" element={<PluginDashboardPage />} />
+        <Route path="*" element={pluginRuntime.ready ? <Navigate to="/" replace /> : <LoadingSpinner />} />
       </Routes>
     </AppShell>
   );

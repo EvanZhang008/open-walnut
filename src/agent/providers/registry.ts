@@ -11,6 +11,8 @@
  */
 import type { ApiProtocol, ProtocolAdapter, ProviderConfig } from './types.js';
 import type { Config } from '../../core/types.js';
+import type { Disposable } from '../../core/plugins/disposable.js';
+import { OwnedRegistry } from '../../core/plugins/owned-registry.js';
 import { resolveCredentials } from '../../core/credential-resolver.js';
 import { resolveProviderSecrets, autoDetectApiKey } from './secret.js';
 import { KNOWN_PROVIDERS } from './defaults.js';
@@ -25,8 +27,40 @@ import { log } from '../../logging/index.js';
 // ── Adapter factory ──
 
 const adapterCache = new Map<ApiProtocol, ProtocolAdapter>();
+const pluginAdapters = new OwnedRegistry<ProtocolAdapter>();
+const BUILTIN_PROTOCOLS = new Set<ApiProtocol>([
+  'bedrock',
+  'anthropic-messages',
+  'openai-chat',
+  'google-generative-ai',
+  'ollama',
+  'claude-cli',
+]);
+
+export function registerOwnedProviderAdapter(
+  owner: string,
+  protocol: string,
+  adapter: ProtocolAdapter,
+): Disposable {
+  if (!/^[a-z0-9][a-z0-9._:-]{0,127}$/.test(protocol)) {
+    throw new Error(`Invalid Plugin provider protocol: ${JSON.stringify(protocol)}`);
+  }
+  if (BUILTIN_PROTOCOLS.has(protocol)) {
+    throw new Error(`Plugin provider protocol "${protocol}" cannot replace a builtin adapter`);
+  }
+  if (adapter.protocol !== protocol) {
+    throw new Error(`Plugin provider adapter protocol "${adapter.protocol}" does not match "${protocol}"`);
+  }
+  return pluginAdapters.register(owner, protocol, adapter);
+}
+
+export function removeOwnedProviderAdapters(owner: string): number {
+  return pluginAdapters.removeOwner(owner);
+}
 
 function getOrCreateAdapter(protocol: ApiProtocol): ProtocolAdapter {
+  const pluginAdapter = pluginAdapters.get(protocol);
+  if (pluginAdapter) return pluginAdapter;
   let adapter = adapterCache.get(protocol);
   if (adapter) return adapter;
 
@@ -195,9 +229,8 @@ export function synthesizeFromLegacy(config: Config & { agent?: { region?: strin
  * Reset all cached adapter instances. Useful for credential refresh.
  */
 export function resetAllAdapters(): void {
-  for (const adapter of adapterCache.values()) {
-    adapter.resetClient();
-  }
+  for (const adapter of adapterCache.values()) adapter.resetClient();
+  for (const adapter of pluginAdapters.values()) adapter.resetClient();
   adapterCache.clear();
   log.agent.info('all provider adapters reset');
 }

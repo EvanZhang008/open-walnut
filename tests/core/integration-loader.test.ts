@@ -284,6 +284,24 @@ describe('migrateConfigToPlugins', () => {
     expect(result.plugins).toBeUndefined();
   });
 
+  it('keeps top-level calendar config when the Calendar Plugin is installed', async () => {
+    const config = {
+      version: 1,
+      calendar: {
+        enabled: false,
+        hidden_calendar_ids: ['private-calendar'],
+        visible_calendar_ids: ['work-calendar'],
+      },
+    };
+    await fsp.writeFile(CONFIG_FILE, yaml.dump(config));
+
+    expect(await migrateConfigToPlugins()).toBe(false);
+
+    const result = yaml.load(await fsp.readFile(CONFIG_FILE, 'utf-8')) as Record<string, unknown>;
+    expect(result.calendar).toEqual(config.calendar);
+    expect((result.plugins as Record<string, unknown> | undefined)?.calendar).toBeUndefined();
+  });
+
   it('self-heals a mis-migrated plugins.ui back to top-level ui', async () => {
     // Exactly the shape found in a live config: the whole `ui` section moved
     // under plugins with an injected `enabled: true`, so the client read

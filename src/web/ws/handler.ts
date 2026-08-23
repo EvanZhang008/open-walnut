@@ -10,6 +10,8 @@ import type { IncomingMessage } from 'node:http'
 import type { Server as HttpServer } from 'node:http'
 import type { WsFrame } from './protocol.js'
 import { CLOUD_MODE } from '../../constants.js'
+import { toDisposable, type Disposable } from '../../core/plugins/disposable.js'
+import { OwnedRegistry } from '../../core/plugins/owned-registry.js'
 import { log } from '../../logging/index.js'
 
 export type RpcHandler = (payload: unknown, client: WebSocket) => unknown | Promise<unknown>
@@ -36,7 +38,7 @@ interface Client {
 
 let wss: WebSocketServer | null = null
 const clients = new Set<Client>()
-const rpcMethods = new Map<string, RpcHandler>()
+const rpcMethods = new OwnedRegistry<RpcHandler>()
 
 const PING_INTERVAL_MS = 30_000
 
@@ -50,8 +52,9 @@ const disconnectListeners = new Set<(ws: WebSocket) => void>()
  * detach terminals when their attached socket goes away. Registered via a
  * callback (not a direct import) to avoid a circular dependency.
  */
-export function onClientDisconnect(listener: (ws: WebSocket) => void): void {
+export function onClientDisconnect(listener: (ws: WebSocket) => void): Disposable {
   disconnectListeners.add(listener)
+  return toDisposable(() => { disconnectListeners.delete(listener) })
 }
 
 /**
@@ -59,7 +62,19 @@ export function onClientDisconnect(listener: (ws: WebSocket) => void): void {
  * When a client sends `{ type: "req", method: name, ... }`, the handler is called.
  */
 export function registerMethod(name: string, handler: RpcHandler): void {
-  rpcMethods.set(name, handler)
+  rpcMethods.replace('core', name, handler)
+}
+
+export function registerOwnedMethod(owner: string, name: string, handler: RpcHandler): Disposable {
+  return rpcMethods.register(owner, name, handler)
+}
+
+export function removeOwnedMethods(owner: string): number {
+  return rpcMethods.removeOwner(owner)
+}
+
+export function _getRpcMethodForTesting(name: string): RpcHandler | undefined {
+  return rpcMethods.get(name)
 }
 
 /**

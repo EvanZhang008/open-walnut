@@ -29,6 +29,7 @@ const SOURCE_LABELS: Record<string, string> = {
   hardcoded: 'Built-in',   // Local registry: hardcoded commands
   builtin: 'Built-in',     // Local registry: built-in commands
   user: 'User',
+  plugin: 'Plugin',        // Registered by an active plugin (`<pluginId>:<id>`)
   control: 'Control',
 };
 
@@ -58,7 +59,7 @@ export function CommandPalette<T extends PaletteItem = SlashCommand>({ commands,
           >
             <div className="command-palette-row">
               <span className="command-palette-name">/{cmd.name}</span>
-              {(showSource || cmd.source === 'control' || cmd.source === 'skill') && cmd.source && (
+              {(showSource || cmd.source === 'control' || cmd.source === 'skill' || cmd.source === 'plugin') && cmd.source && (
                 <span className={`command-palette-source${cmd.source ? ` command-palette-source-${cmd.source}` : ''}`}>{SOURCE_LABELS[cmd.source] ?? cmd.source}</span>
               )}
             </div>

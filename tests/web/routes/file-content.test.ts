@@ -4,7 +4,8 @@ import path from 'node:path';
 import os from 'node:os';
 import express from 'express';
 import request from 'supertest';
-import { fileContentRouter } from '../../../src/web/routes/file-content.js';
+import { WALNUT_HOME } from '../../../src/constants.js';
+import { fileContentRouter, isSecretPath } from '../../../src/web/routes/file-content.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 
 function createApp() {
@@ -38,6 +39,12 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
+});
+
+describe('file-content secret paths', () => {
+  it('denies every file under the Plugin secret store', () => {
+    expect(isSecretPath(path.join(WALNUT_HOME, 'secrets', 'plugins', 'sample.json'))).toBe(true);
+  });
 });
 
 describe('GET /api/file-content raw media (local)', () => {

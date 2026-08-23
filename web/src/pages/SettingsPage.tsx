@@ -1,7 +1,10 @@
-import { useState, useEffect, useCallback, useRef, Component, type ReactNode, type ErrorInfo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode, type ErrorInfo } from 'react';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { SettingsNav } from '@/components/settings/SettingsNav';
 import { useSettingsConfig } from '@/hooks/useSettingsConfig';
+import { PluginBoundary } from '@/components/common/PluginBoundary';
+import { CORE_SETTINGS_CONTRIBUTIONS } from '@/components/settings/core-settings-registry';
+import { usePluginUi } from '@/plugins/hooks';
 
 // Error boundary to prevent a single section crash from taking down the whole page
 class SectionErrorBoundary extends Component<{ name: string; children: ReactNode }, { error: Error | null }> {
@@ -25,43 +28,16 @@ class SectionErrorBoundary extends Component<{ name: string; children: ReactNode
   }
 }
 
-// Sections
-import { ProvidersSection } from '@/components/settings/sections/ProvidersSection';
-import { GeneralSection } from '@/components/settings/sections/GeneralSection';
-import { SessionsSection } from '@/components/settings/sections/SessionsSection';
-import { FocusTiersSection } from '@/components/settings/sections/FocusTiersSection';
-import { IntegrationsSection } from '@/components/settings/sections/IntegrationsSection';
-import { CalendarSection } from '@/components/settings/sections/CalendarSection';
-import { PermissionsSection } from '@/components/settings/sections/PermissionsSection';
-import { PluginStoreSection } from '@/components/settings/sections/PluginStoreSection';
-import { SearchSection } from '@/components/settings/sections/SearchSection';
-import { HeartbeatSection } from '@/components/settings/sections/HeartbeatSection';
-import { BackupSection } from '@/components/settings/sections/BackupSection';
-import { RemoteHostsSection } from '@/components/settings/sections/RemoteHostsSection';
-import { AdvancedSection } from '@/components/settings/sections/AdvancedSection';
-import { SttSection } from '@/components/settings/sections/SttSection';
-import { AudioCaptureSection } from '@/components/settings/sections/AudioCaptureSection';
-import { ReposSection } from '@/components/settings/sections/ReposSection';
-import { HooksSection } from '@/components/settings/sections/HooksSection';
-import { UsageSection } from '@/components/settings/sections/UsageSection';
-import { TimelineSection } from '@/components/settings/sections/TimelineSection';
-import { DevicesSection } from '@/components/settings/sections/DevicesSection';
-import { CloudSection } from '@/components/settings/sections/CloudSection';
-import { BugReportSection } from '@/components/settings/sections/BugReportSection';
-
-// DOM order — must match the rendered order below, since scroll tracking walks this
-// list backwards to find the topmost section. Repositories/Hooks lead: they belong to
-// the sidebar's "Manage" group, which sits above "Configure".
-const SECTION_IDS = [
-  'repositories', 'hooks',
-  'providers', 'general', 'sessions', 'focus-tiers',
-  'integrations', 'calendar', 'plugin-store', 'search', 'stt', 'audio-capture', 'heartbeat', 'backup', 'remote-hosts', 'devices', 'cloud', 'advanced',
-  'usage', 'timeline', 'bug-report',
-];
+const CORE_SECTION_IDS = CORE_SETTINGS_CONTRIBUTIONS.map((entry) => entry.id);
 
 export function SettingsPage() {
   const { config, loading, error, saveSection, reload } = useSettingsConfig();
-  const [activeSection, setActiveSection] = useState(SECTION_IDS[0]);
+  const pluginUi = usePluginUi();
+  const sectionIds = useMemo(
+    () => [...CORE_SECTION_IDS, ...pluginUi.settings.map((entry) => entry.key)],
+    [pluginUi.settings],
+  );
+  const [activeSection, setActiveSection] = useState(CORE_SECTION_IDS[0]);
   const contentRef = useRef<HTMLDivElement>(null);
 
   // Track active section via scroll position
@@ -72,18 +48,18 @@ export function SettingsPage() {
       const containerRect = container.getBoundingClientRect();
       // Find the last section whose top is above the midpoint of the container
       const threshold = containerRect.top + 80;
-      for (let i = SECTION_IDS.length - 1; i >= 0; i--) {
-        const el = document.getElementById(SECTION_IDS[i]);
+      for (let i = sectionIds.length - 1; i >= 0; i--) {
+        const el = document.getElementById(sectionIds[i]);
         if (el && el.getBoundingClientRect().top <= threshold) {
-          setActiveSection(SECTION_IDS[i]);
+          setActiveSection(sectionIds[i]);
           return;
         }
       }
-      setActiveSection(SECTION_IDS[0]);
+      setActiveSection(sectionIds[0]);
     };
     container.addEventListener('scroll', handleScroll, { passive: true });
     return () => container.removeEventListener('scroll', handleScroll);
-  }, []);
+  }, [sectionIds]);
 
   // Navigate to section
   const handleNavigate = useCallback((id: string) => {
@@ -98,10 +74,10 @@ export function SettingsPage() {
   // On mount, scroll to hash
   useEffect(() => {
     const hash = window.location.hash.slice(1);
-    if (hash && SECTION_IDS.includes(hash)) {
+    if (hash && sectionIds.includes(hash)) {
       setTimeout(() => handleNavigate(hash), 100);
     }
-  }, [handleNavigate]);
+  }, [handleNavigate, sectionIds]);
 
   // Cmd+S to save the focused section
   useEffect(() => {
@@ -131,30 +107,31 @@ export function SettingsPage() {
             <h1 className="page-title">Settings</h1>
             <p className="page-subtitle">Configure everything from one place</p>
           </div>
-          {/* Manage group first — matches the settings sidebar's order, so scrolling
-              and clicking the nav agree. */}
-          <SectionErrorBoundary name="Repositories"><ReposSection /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Hooks"><HooksSection /></SectionErrorBoundary>
-          <SectionErrorBoundary name="AI Provider"><ProvidersSection config={config} onSave={saveSection} /></SectionErrorBoundary>
-          <SectionErrorBoundary name="General"><GeneralSection config={config} onSave={saveSection} /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Tasks & Sessions"><SessionsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Focus Tiers"><FocusTiersSection /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Integrations"><IntegrationsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Calendar"><CalendarSection /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Permissions"><PermissionsSection /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Plugin Store"><PluginStoreSection /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Search"><SearchSection config={config} onSave={saveSection} /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Speech-to-Text"><SttSection config={config} onSave={saveSection} onReload={reload} /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Audio Capture"><AudioCaptureSection config={config} onSave={saveSection} /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Heartbeat"><HeartbeatSection config={config} onSave={saveSection} /></SectionErrorBoundary>
-          <SectionErrorBoundary name="S3 Backup"><BackupSection config={config} onSave={saveSection} /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Remote Hosts"><RemoteHostsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Devices"><DevicesSection /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Cloud Companion"><CloudSection /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Advanced"><AdvancedSection config={config} onSave={saveSection} /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Usage & Costs"><UsageSection /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Timeline"><TimelineSection /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Bug Report"><BugReportSection /></SectionErrorBoundary>
+          {CORE_SETTINGS_CONTRIBUTIONS.map((entry) => (
+            <SectionErrorBoundary key={`${entry.owner}:${entry.id}`} name={entry.title}>
+              {entry.render({ config, saveSection, reload })}
+            </SectionErrorBoundary>
+          ))}
+          {pluginUi.settings.map((entry) => {
+            const PluginSettings = entry.value.component;
+            return (
+              <section
+                id={entry.key}
+                key={`${entry.key}:${entry.generation}`}
+                className="card settings-section plugin-settings-section"
+                data-plugin-id={entry.pluginId}
+              >
+                <h3 className="settings-section-title">{entry.value.label}</h3>
+                <PluginBoundary
+                  pluginId={entry.pluginId}
+                  pluginName={entry.pluginName}
+                  resetKey={entry.generation}
+                >
+                  <PluginSettings />
+                </PluginBoundary>
+              </section>
+            );
+          })}
         </div>
       </div>
     </div>

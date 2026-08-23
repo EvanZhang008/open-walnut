@@ -79,7 +79,6 @@ import { CLAUDE_HOME } from '../constants.js';
 import { execTool } from './tools/exec-tool.js';
 import { slackTool } from './tools/slack-tool.js';
 import { ttsTool } from './tools/tts-tool.js';
-import { calendarTools } from './tools/calendar-tools.js';
 
 import { webFetchTool } from './tools/web-fetch-tool.js';
 import { webSearchTool } from './tools/web-search-tool.js';
@@ -2565,9 +2564,6 @@ defaults (same resolution chain as session_start).`,
   // ── Integration Tools ──
   slackTool,
   ttsTool,
-
-  // ── Calendar Tools (external calendars via EventKit) ──
-  ...calendarTools,
 
   // ── Web Tools ──
   webSearchTool,

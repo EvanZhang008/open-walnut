@@ -1,0 +1,100 @@
+{
+  "name": "@open-walnut/plugin-api",
+  "version": "0.1.0",
+  "description": "Public API and type contracts for Open Walnut plugins (server, web, testing)",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "keywords": [
+    "open-walnut",
+    "walnut",
+    "plugin",
+    "plugin-api",
+    "sdk",
+    "extension",
+    "typescript",
+    "personal-ai"
+  ],
+  "homepage": "https://github.com/EvanZhang008/open-walnut/tree/main/packages/plugin-api#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EvanZhang008/open-walnut.git",
+    "directory": "packages/plugin-api"
+  },
+  "bugs": {
+    "url": "https://github.com/EvanZhang008/open-walnut/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "react": ">=19"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@types/react": "^19.0.0"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js",
+      "default": "./dist/server.js"
+    },
+    "./web": {
+      "types": "./dist/web.d.ts",
+      "import": "./dist/web.js",
+      "default": "./dist/web.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js",
+      "default": "./dist/testing.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js",
+      "default": "./dist/react.js"
+    },
+    "./react-dom": {
+      "types": "./dist/react-dom.d.ts",
+      "import": "./dist/react-dom.js",
+      "default": "./dist/react-dom.js"
+    },
+    "./jsx-runtime": {
+      "types": "./dist/jsx-runtime.d.ts",
+      "import": "./dist/jsx-runtime.js",
+      "default": "./dist/jsx-runtime.js"
+    },
+    "./jsx-dev-runtime": {
+      "types": "./dist/jsx-dev-runtime.d.ts",
+      "import": "./dist/jsx-dev-runtime.js",
+      "default": "./dist/jsx-dev-runtime.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsup --config tsup.config.ts",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

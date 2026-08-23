@@ -1,20 +1,18 @@
 /**
- * Markdown command bridge: loads server-stored .md commands into the frontend
- * command registry so they appear in CommandPalette autocomplete and can be
- * executed via /name in chat input.
+ * Markdown command bridge: loads server-stored commands (user .md, plugin-registered,
+ * shipped builtin) into the frontend command registry so they appear in CommandPalette
+ * autocomplete and can be executed via /name in chat input.
+ *
+ * Everything here is registered under the 'markdown' owner, so the core commands
+ * (/compact, /session, /task, /help …) outrank these on a name collision and a refresh
+ * of this bridge can never remove them.
  */
-import { register, unregister, listCommands } from './registry.js';
+import { registerOwned, removeOwner } from './registry.js';
 import { fetchCommands } from '@/api/commands';
 import type { SlashCommand } from './types.js';
 
-/** Names of hardcoded commands that must never be overridden. */
-const HARDCODED_NAMES = new Set([
-  'compact', 'help', 'plan', 'check-tasks', 'sessions', 'tasks',
-]);
-
 /**
- * Load markdown-based commands from the server and register them
- * in the frontend command registry. Hardcoded commands are never overridden.
+ * Load server commands and register them under the 'markdown' owner.
  * Called once at startup from index.ts.
  */
 export async function loadMarkdownCommands(): Promise<void> {
@@ -22,9 +20,6 @@ export async function loadMarkdownCommands(): Promise<void> {
     const serverCommands = await fetchCommands();
 
     for (const cmd of serverCommands) {
-      // Never override hardcoded commands
-      if (HARDCODED_NAMES.has(cmd.name)) continue;
-
       const slashCmd: SlashCommand = {
         name: cmd.name,
         description: cmd.description || `Run /${cmd.name}`,
@@ -40,7 +35,7 @@ export async function loadMarkdownCommands(): Promise<void> {
         },
       };
 
-      register(slashCmd);
+      registerOwned('markdown', slashCmd);
     }
   } catch {
     // Server may not be available yet at startup — fail silently
@@ -48,20 +43,10 @@ export async function loadMarkdownCommands(): Promise<void> {
 }
 
 /**
- * Refresh markdown commands: unregister all non-hardcoded commands,
- * then re-fetch and re-register from the server.
- * Called after CRUD mutations from the useCommands hook.
+ * Refresh markdown commands: drop this owner's entries only, then re-fetch.
+ * Called after CRUD mutations from the useCommands hook and after a plugin reload.
  */
 export async function refreshMarkdownCommands(): Promise<void> {
-  // Remove all non-hardcoded commands (skills are refreshed separately
-  // by refreshSkillCommands — don't nuke them here)
-  const current = listCommands();
-  for (const cmd of current) {
-    if (cmd.source !== 'hardcoded' && cmd.source !== 'skill') {
-      unregister(cmd.name);
-    }
-  }
-
-  // Re-load from server
+  removeOwner('markdown');
   await loadMarkdownCommands();
 }

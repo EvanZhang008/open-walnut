@@ -22,6 +22,13 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   const tasksDir = path.join(tmpBase, 'tasks');
+  const validateAgentId = (agentId: string) => {
+    const ordinary = /^[a-z0-9_-]{1,64}$/i.test(agentId);
+    const plugin = /^[a-z0-9][a-z0-9._-]{0,63}:[a-z0-9][a-z0-9._/-]{0,127}$/i.test(agentId);
+    if (!ordinary && !plugin) throw new Error(`Invalid agentId: ${JSON.stringify(agentId)}`);
+    return agentId;
+  };
+  const agentPathSegment = (agentId: string) => encodeURIComponent(validateAgentId(agentId));
   return {
     IS_EPHEMERAL: false,
     CLOUD_MODE: false,
@@ -52,31 +59,30 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     CHAT_HISTORY_FILE: path.join(tmpBase, 'chat-history.json'),
     chatHistoryFile: (agentId?: string) => {
       if (!agentId || agentId === 'general') return path.join(tmpBase, 'chat-history.json');
-      return path.join(tmpBase, `chat-history-${agentId}.json`);
+      return path.join(tmpBase, `chat-history-${agentPathSegment(agentId)}.json`);
     },
     // Per-agent conversation registry (multi-conversation model).
     CONVERSATIONS_DIR: path.join(tmpBase, 'conversations'),
-    conversationDir: (agentId: string) => path.join(tmpBase, 'conversations', agentId),
-    conversationIndexFile: (agentId: string) => path.join(tmpBase, 'conversations', agentId, '_index.json'),
+    conversationDir: (agentId: string) => path.join(tmpBase, 'conversations', agentPathSegment(agentId)),
+    conversationIndexFile: (agentId: string) => path.join(tmpBase, 'conversations', agentPathSegment(agentId), '_index.json'),
     conversationFile: (agentId: string, conversationId: string) =>
-      path.join(tmpBase, 'conversations', agentId, `${conversationId}.json`),
+      path.join(tmpBase, 'conversations', agentPathSegment(agentId), `${conversationId}.json`),
     workingMemoryFile: (agentId: string, conversationId: string) =>
-      path.join(tmpBase, 'conversations', agentId, `${conversationId}.working-memory.md`),
+      path.join(tmpBase, 'conversations', agentPathSegment(agentId), `${conversationId}.working-memory.md`),
     validateConversationId: (id: string) => {
       if (!id || !/^conv-[A-Za-z0-9-]+$/.test(id)) throw new Error(`Invalid conversation id: ${id}`);
       return id;
     },
-    validateAgentId: (agentId: string) => {
-      if (!/^[a-z0-9_-]{1,64}$/i.test(agentId)) throw new Error(`Invalid agentId: ${JSON.stringify(agentId)}`);
-      return agentId;
-    },
+    validateAgentId,
+    agentPathSegment,
+    agentIdFromPathSegment: (segment: string) => validateAgentId(decodeURIComponent(segment)),
     agentMemoryDir: (agentId?: string) => {
       if (!agentId || agentId === 'general') return tmpBase;
-      return path.join(tmpBase, 'memory', 'agents', agentId);
+      return path.join(tmpBase, 'memory', 'agents', agentPathSegment(agentId));
     },
     agentDailyDir: (agentId?: string) => {
       if (!agentId || agentId === 'general') return path.join(tmpBase, 'memory', 'daily');
-      return path.join(tmpBase, 'memory', 'agents', agentId, 'daily');
+      return path.join(tmpBase, 'memory', 'agents', agentPathSegment(agentId), 'daily');
     },
     CRON_FILE: path.join(tmpBase, 'cron-jobs.json'),
     PLUGIN_A_SYNC_FILE: path.join(tmpBase, 'sync', 'plugin-a-sync.json'),

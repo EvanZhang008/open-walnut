@@ -12,14 +12,16 @@ export type { ContentBlock, MessageParam, Tool, TextBlockParam };
 
 // ── Protocol identifiers ──
 
-/** Each protocol maps to exactly one adapter implementation. */
-export type ApiProtocol =
+/** Builtin protocols have native adapters; full-trust Plugins may add more. */
+export type BuiltinApiProtocol =
   | 'anthropic-messages'      // Anthropic, MiniMax, Xiaomi, Cloudflare
   | 'openai-chat'             // OpenAI, OpenRouter, Together, DeepSeek, Moonshot, Qwen, ...
   | 'bedrock'                 // AWS Bedrock
   | 'google-generative-ai'    // Google Gemini
   | 'ollama'                  // Local Ollama
   | 'claude-cli';             // Local `claude -p` subprocess (subscription, text-only)
+
+export type ApiProtocol = BuiltinApiProtocol | (string & {});
 
 // ── Per-model quirks ──
 

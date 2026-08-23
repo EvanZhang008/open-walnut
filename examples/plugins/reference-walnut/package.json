@@ -1,0 +1,22 @@
+{
+  "name": "reference-walnut-plugin",
+  "version": "0.1.0",
+  "type": "module",
+  "files": [
+    "manifest.json",
+    "dist",
+    "skills",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "walnut-plugin build",
+    "test": "walnut-plugin test"
+  },
+  "devDependencies": {
+    "@open-walnut/plugin-api": "0.1.0",
+    "@open-walnut/plugin-cli": "0.1.0",
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
+    "typescript": "^5.8.0"
+  }
+}

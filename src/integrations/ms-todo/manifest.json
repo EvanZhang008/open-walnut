@@ -1,6 +1,11 @@
 {
   "id": "ms-todo",
   "name": "Microsoft To-Do",
+  "apiVersion": 1,
+  "engines": {
+    "walnut": ">=0.3.2"
+  },
+  "server": "index.js",
   "description": "Two-way sync with Microsoft To-Do",
   "version": "1.0.0",
   "configSchema": {

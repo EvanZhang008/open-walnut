@@ -17,6 +17,10 @@ export type PopoutView = 'file' | 'global-notes' | 'note' | 'session' | 'task';
 
 export type PopoutParams = Record<string, string | number | null | undefined>;
 
+export function isPopoutPath(pathname: string): boolean {
+  return pathname === '/popout' || pathname.startsWith('/popout/');
+}
+
 /**
  * Build a `/popout` URL for the given view + params and open it in a new tab.
  * Non-empty params are URL-encoded; empty/nullish params are dropped.

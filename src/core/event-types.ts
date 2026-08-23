@@ -364,6 +364,40 @@ export interface SessionSystemEventPayload {
   detail?: string;
 }
 
+/**
+ * The idle reaper is about to kill this session's CLI process.
+ *
+ * Emitted by SessionHealthMonitor.checkIdleTimeout — the authoritative idle
+ * reaper — AFTER every exemption (team-active, background work, pending
+ * permission, liveness) and after the `last_status_change` freshness
+ * protection, so it only fires for a session the CURRENT tick would genuinely
+ * reap. At most once per session per idle episode; real activity re-arms it.
+ *
+ * NOT `session:ended` (that fires after every turn — a UI refresh signal) and
+ * NOT process death (only the daemon's reapSession knows that). See
+ * docs/decision/no-session-end-gist.md.
+ */
+export interface SessionWillReapEvent {
+  sessionId: string;
+  taskId?: string;
+  /** Remote host alias; absent for local sessions. */
+  host?: string;
+  /** ms left before the reap, clamped to ≥ 0. 0 = this tick is reaping it.
+   *  Ranges 0…5 min in practice (30s tick precision on a 5-min warn window). */
+  remainingMs: number;
+  /** How long the session has been idle by its last-activity signal
+   *  (SessionManager.lastEventAt, else the stream file's mtime). */
+  idleDurationMs: number;
+  /** The threshold this session is measured against (local/remote default,
+   *  config override, or the extended cron-armed ceiling). */
+  idleTimeoutMs: number;
+  /** Why the reap is coming. Only one cause today — kept explicit so a future
+   *  pre-death cause (e.g. host teardown) is additive, not ambiguous. */
+  reason: 'idle_timeout';
+  /** ISO timestamp of the warning itself. */
+  warnedAt: string;
+}
+
 /** A CLI scheduled task (cron) fired inside a session (daemon-detected marker). */
 export interface SessionCronFiredEvent {
   sessionId: string;
@@ -829,6 +863,7 @@ export interface EventPayloadMap {
   'session:side-question-done': SessionSideQuestionDoneEvent;
   'session:side-question-error': SessionSideQuestionErrorEvent;
   'session:cron-fired': SessionCronFiredEvent;
+  'session:will-reap': SessionWillReapEvent;
 
   'session:team-info': SessionTeamInfoEvent;
   'session:team-agent-delta': SessionTeamAgentDeltaEvent;

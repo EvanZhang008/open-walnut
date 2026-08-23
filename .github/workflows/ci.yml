@@ -41,6 +41,7 @@ jobs:
       - run: npm install
       - run: npm run lint
       - run: npm run build
+      - run: npm run test:plugin-packages
 
   # ── Gate 2: the test tiers that are genuinely green, so they can BLOCK ──────
   #

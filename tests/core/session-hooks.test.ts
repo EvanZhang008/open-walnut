@@ -198,6 +198,117 @@ describe('SessionHookDispatcher', () => {
       expect(payload.isSessionError).toBe(true);
     });
 
+    it('session:will-reap → onSessionWillReap (payload preserved verbatim)', async () => {
+      // The properly-sourced end-of-life point: emitted by the idle reaper for a
+      // session it is about to kill, so a plugin runtime hook can act ONCE while
+      // the CLI is still alive. See docs/decision/no-session-end-gist.md.
+      const handler = vi.fn();
+      dispatcher.init([makeHook({ hooks: ['onSessionWillReap'], handler })]);
+
+      bus.emit(EventNames.SESSION_WILL_REAP, {
+        sessionId: 's1',
+        taskId: 't1',
+        host: 'devbox',
+        remainingMs: 180_000,
+        idleDurationMs: 3_420_000,
+        idleTimeoutMs: 3_600_000,
+        reason: 'idle_timeout',
+        warnedAt: '2026-08-22T10:00:00.000Z',
+      }, ['*'], { source: 'health-monitor' });
+
+      await tick();
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      const payload = handler.mock.calls[0][0];
+      expect(payload.sessionId).toBe('s1');
+      expect(payload.event).toBe('session:will-reap');
+      expect(payload.host).toBe('devbox');
+      expect(payload.remainingMs).toBe(180_000);
+      expect(payload.idleDurationMs).toBe(3_420_000);
+      expect(payload.idleTimeoutMs).toBe(3_600_000);
+      expect(payload.reason).toBe('idle_timeout');
+      expect(payload.warnedAt).toBe('2026-08-22T10:00:00.000Z');
+    });
+
+    it('onSessionWillReap reaches a RUNTIME-registered hook (the Plugin registration path)', async () => {
+      // Plugins register through dispatcher.addHook (see plugins/server-api.ts
+      // `hooks.hook`), which validates the point against HOOK_POINT_DOMAIN — so
+      // this asserts both the domain mapping and the runtime dispatch.
+      const handler = vi.fn();
+      dispatcher.init([]); // no configured hooks — subscribe only
+      dispatcher.addHook(makeHook({
+        id: 'plugin:demo:reap-warner',
+        hooks: ['onSessionWillReap'],
+        handler,
+        source: 'file',
+      }));
+
+      bus.emit(EventNames.SESSION_WILL_REAP, {
+        sessionId: 's1', remainingMs: 60_000, idleDurationMs: 3_540_000,
+        idleTimeoutMs: 3_600_000, reason: 'idle_timeout',
+        warnedAt: new Date().toISOString(),
+      }, ['*'], { source: 'health-monitor' });
+      await tick();
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][0].remainingMs).toBe(60_000);
+    });
+
+    it('session:will-reap does NOT fire turn hooks, and session:ended does NOT fire onSessionWillReap', async () => {
+      // The two must stay strictly separate: session:ended is a per-turn UI
+      // refresh signal, will-reap is a once-per-episode pre-death warning.
+      const willReap = vi.fn();
+      const turnComplete = vi.fn();
+      dispatcher.init([
+        makeHook({ hooks: ['onSessionWillReap'], handler: willReap }),
+        makeHook({ hooks: ['onTurnComplete'], handler: turnComplete }),
+      ]);
+
+      bus.emit(EventNames.SESSION_ENDED, { sessionId: 's1' }, ['*']);
+      await tick();
+      expect(willReap).not.toHaveBeenCalled();
+
+      bus.emit(EventNames.SESSION_WILL_REAP, {
+        sessionId: 's1', remainingMs: 0, idleDurationMs: 3_700_000,
+        idleTimeoutMs: 3_600_000, reason: 'idle_timeout',
+        warnedAt: new Date().toISOString(),
+      }, ['*'], { source: 'health-monitor' });
+      await tick();
+
+      expect(willReap).toHaveBeenCalledTimes(1);
+      expect(turnComplete).not.toHaveBeenCalled();
+    });
+
+    it('session:will-reap keeps turn state (the CLI is still alive — the reap can be averted)', async () => {
+      const turnStart = vi.fn();
+      dispatcher.init([makeHook({ hooks: ['onTurnStart'], handler: turnStart })]);
+
+      bus.emit(EventNames.SESSION_STARTED, { sessionId: 's1' }, ['*']);
+      await tick();
+      bus.emit(EventNames.SESSION_SEND, { sessionId: 's1', message: 'msg1' }, ['*']);
+      await tick();
+      bus.emit(EventNames.SESSION_TEXT_DELTA, { sessionId: 's1', text: 'resp' }, ['*']);
+      await tick();
+      expect(turnStart.mock.calls[0][0].turnIndex).toBe(1);
+
+      bus.emit(EventNames.SESSION_WILL_REAP, {
+        sessionId: 's1', remainingMs: 120_000, idleDurationMs: 3_480_000,
+        idleTimeoutMs: 3_600_000, reason: 'idle_timeout',
+        warnedAt: new Date().toISOString(),
+      }, ['*'], { source: 'health-monitor' });
+      await tick();
+
+      // A fresh message keeps counting up (state NOT reset, unlike session:ended).
+      bus.emit(EventNames.SESSION_SEND, { sessionId: 's1', message: 'msg2' }, ['*']);
+      await tick();
+      bus.emit(EventNames.SESSION_TEXT_DELTA, { sessionId: 's1', text: 'resp2' }, ['*']);
+      await tick();
+
+      expect(turnStart).toHaveBeenCalledTimes(2);
+      expect(turnStart.mock.calls[1][0].turnIndex).toBe(2);
+      expect(dispatcher['payloadBuilder'].clearSession).not.toHaveBeenCalled();
+    });
+
     it('session:ended maps to NO hook point (it fires per-turn, not on real session end)', async () => {
       // session:ended is a UI-refresh signal emitted after EVERY turn. The
       // 'onSessionEnd' hook point was removed because hooks bound to it ran
@@ -763,6 +874,29 @@ describe('SessionHookDispatcher', () => {
       // Access private hooks array to verify sort order
       const hookIds = (dispatcher as any).hooks.map((h: SessionHookDefinition) => h.id);
       expect(hookIds).toEqual(['b', 'a', 'c']);
+    });
+
+    it('keeps runtime hooks across configured hook reloads', async () => {
+      const runtimeHandler = vi.fn();
+      dispatcher.init([
+        makeHook({ id: 'configured-before', hooks: ['onTurnComplete'] }),
+      ]);
+      dispatcher.addHook(makeHook({
+        id: 'plugin:sample:runtime',
+        hooks: ['onTurnComplete'],
+        handler: runtimeHandler,
+      }));
+
+      dispatcher.reload([
+        makeHook({ id: 'configured-after', hooks: ['onTurnComplete'] }),
+      ]);
+      bus.emit(EventNames.SESSION_RESULT, {
+        sessionId: 's1', result: 'done',
+      }, ['*']);
+      await tick();
+
+      expect(runtimeHandler).toHaveBeenCalledTimes(1);
+      expect(dispatcher.getHooks().map((hook) => hook.id)).toContain('plugin:sample:runtime');
     });
   });
 

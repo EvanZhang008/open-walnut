@@ -284,6 +284,48 @@ export async function execGitGroup(
   });
 }
 
+export async function execGitArgsGroup(
+  args: string[],
+  opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv },
+): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn('git', args, {
+      cwd: opts.cwd,
+      env: opts.env,
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    child.stdout?.setEncoding('utf-8');
+    child.stderr?.setEncoding('utf-8');
+    child.stdout?.on('data', (data: string) => { stdout += data; });
+    child.stderr?.on('data', (data: string) => { stderr += data; });
+
+    const killGroup = (signal: NodeJS.Signals): void => {
+      safeKillProcessGroup(child.pid, signal);
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killGroup('SIGTERM');
+      setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS).unref?.();
+    }, opts.timeout);
+    timer.unref?.();
+
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (timedOut) reject(new Error(`git timed out after ${opts.timeout}ms (process group killed)`));
+      else if (code === 0) resolve(stdout.trim());
+      else reject(new Error(`git exited ${code}: ${stderr.trim() || stdout.trim()}`));
+    });
+  });
+}
+
 export async function gitAsync(args: string, options?: { cwd?: string; timeout?: number; env?: Record<string, string> }): Promise<string> {
   // Async guard resolution: the sync credentialGuardArgs() spawns via execSync and
   // would block the event loop on every network op, defeating this whole path.
@@ -438,9 +480,9 @@ cache/
 # from notes/. Binary, so git stores a FULL copy per change (no delta).
 .walnut-obsidian-search/
 
-# Plugin-store clones. The source of truth is config.yaml plugin_sources, and
-# these are nested git repos — never tracked by the data repo.
+# Plugin-store clones and private Plugin state are machine-local.
 plugin-stores/
+plugin-data/
 
 # Voice recordings + transcripts (machine-local binary). Pre-1a location; new
 # writes go to tmp/stt-recordings/, but old installs still have this dir.
@@ -520,7 +562,27 @@ sessions.json.*
  * gitignored on THIS box while still tracked in the index is the dangerous
  * state — see that function for the incident this prevents.
  */
-const CRITICAL_IGNORES = ['auth.json', 'auth.json.bak', 'cloud-setup-job.json', 'config.yaml', 'config.yaml.bak', 'cron-state.json'];
+const CRITICAL_IGNORE_FILES = ['auth.json', 'auth.json.bak', 'cloud-setup-job.json', 'config.yaml', 'config.yaml.bak', 'cron-state.json'];
+const CRITICAL_IGNORE_DIRS = ['plugin-data/', 'secrets/'];
+const CRITICAL_IGNORES = [...CRITICAL_IGNORE_FILES, ...CRITICAL_IGNORE_DIRS];
+
+function criticalIgnoreTarget(file: string): { path: string; recursive: boolean } | null {
+  if (CRITICAL_IGNORE_FILES.includes(file)) return { path: file, recursive: false };
+  const directory = CRITICAL_IGNORE_DIRS.find((entry) => file.startsWith(entry));
+  return directory ? { path: directory.slice(0, -1), recursive: true } : null;
+}
+
+function criticalTrackedTargets(files: string[]): Map<string, { recursive: boolean; files: string[] }> {
+  const targets = new Map<string, { recursive: boolean; files: string[] }>();
+  for (const file of files) {
+    const target = criticalIgnoreTarget(file);
+    if (!target) continue;
+    const current = targets.get(target.path) ?? { recursive: target.recursive, files: [] };
+    current.files.push(file);
+    targets.set(target.path, current);
+  }
+  return targets;
+}
 
 /**
  * Ignore-only patterns: kept out of the .gitignore drift, but NOT fed to the
@@ -583,16 +645,19 @@ export function ensureMachineLocalUntracked(): string[] {
   // should be ignored. Cheap (~20ms on a 3.7k-file repo).
   const tracked = gitSafe('ls-files -i -c --exclude-standard');
   if (!tracked) return [];
-  const stillTracked = tracked
+  const targets = criticalTrackedTargets(tracked
     .split('\n')
     .map((f) => f.trim())
-    .filter((f) => CRITICAL_IGNORES.includes(path.basename(f)) && CRITICAL_IGNORES.includes(f));
-  if (stillTracked.length === 0) return [];
+    .filter(Boolean));
+  if (targets.size === 0) return [];
 
   const untracked: string[] = [];
-  for (const file of stillTracked) {
-    // --cached: index only. The file on disk is the user's live config.
-    if (gitSafe(`rm --cached --quiet -- "${file}"`) !== null) untracked.push(file);
+  for (const [target, detail] of targets) {
+    const recursive = detail.recursive ? '-r ' : '';
+    // --cached: index only. The files on disk remain untouched.
+    if (gitSafe(`rm --cached --quiet -f ${recursive}-- "${target}"`) !== null) {
+      untracked.push(...detail.files);
+    }
   }
   if (untracked.length > 0) {
     log.git.warn(
@@ -622,15 +687,18 @@ async function ensureMachineLocalUntrackedAsync(): Promise<string[]> {
   try { ensureCriticalIgnores(); } catch { /* best-effort */ }
   const tracked = await gitSafeAsync('ls-files -i -c --exclude-standard');
   if (!tracked) return [];
-  const stillTracked = tracked
+  const targets = criticalTrackedTargets(tracked
     .split('\n')
     .map((f) => f.trim())
-    .filter((f) => CRITICAL_IGNORES.includes(f));
-  if (stillTracked.length === 0) return [];
+    .filter(Boolean));
+  if (targets.size === 0) return [];
 
   const untracked: string[] = [];
-  for (const file of stillTracked) {
-    if (await gitSafeAsync(`rm --cached --quiet -- "${file}"`) !== null) untracked.push(file);
+  for (const [target, detail] of targets) {
+    const recursive = detail.recursive ? '-r ' : '';
+    if (await gitSafeAsync(`rm --cached --quiet -f ${recursive}-- "${target}"`) !== null) {
+      untracked.push(...detail.files);
+    }
   }
   if (untracked.length > 0) {
     log.git.error(

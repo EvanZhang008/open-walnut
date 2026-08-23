@@ -13,9 +13,13 @@ import type { Task, SessionRecord, SessionMode, TaskPhase } from '../types.js';
  * NOTE: there is deliberately NO 'onSessionEnd' / 'onSessionIdle'. The CLI is a
  * long-running process — the bus event `session:ended` fires after EVERY turn
  * (it's a UI-refresh signal from server.ts), so an "end" hook point built on it
- * would fire per-turn (that bug shipped once, as session-summary-gist). The only
- * real end-of-life signals are the daemon's idle reap / process death, which have
- * no hook plumbing today; add a properly-sourced hook point if a need arises. */
+ * would fire per-turn (that bug shipped once, as session-summary-gist).
+ *
+ * 'onSessionWillReap' is the properly-sourced end-of-life point that decision
+ * asked for: it rides `session:will-reap`, emitted by the idle reaper itself
+ * (SessionHealthMonitor.checkIdleTimeout) for a session it is ABOUT to kill —
+ * once per idle episode, never per turn. It is still not process death; that
+ * remains the daemon's reapSession. See docs/decision/no-session-end-gist.md. */
 export type SessionHookPoint =
   | 'onSessionStart'
   | 'onMessageSend'
@@ -25,7 +29,8 @@ export type SessionHookPoint =
   | 'onPlanComplete'
   | 'onModeChange'
   | 'onTurnComplete'
-  | 'onTurnError';
+  | 'onTurnError'
+  | 'onSessionWillReap';
 
 /** Task lifecycle hook points (fired from task: bus events). */
 export type TaskHookPoint =
@@ -55,6 +60,7 @@ export const HOOK_POINT_DOMAIN: Record<HookPoint, HookDomain> = {
   onModeChange: 'session',
   onTurnComplete: 'session',
   onTurnError: 'session',
+  onSessionWillReap: 'session',
   onTaskCreated: 'task',
   onTaskUpdated: 'task',
   onTaskPhaseChanged: 'task',
@@ -161,6 +167,20 @@ export interface OnTurnErrorPayload extends SessionHookContext {
   isSessionError: boolean;
 }
 
+/** onSessionWillReap payload — the idle reaper is about to kill this session's
+ *  CLI process. Fires ONCE per idle episode, from the reaper's own decision
+ *  point, after every exemption; `remainingMs` is 0…5 min (0 = being reaped on
+ *  this tick). NOT process death, NOT per-turn — see the SessionHookPoint note. */
+export interface OnSessionWillReapPayload extends SessionHookContext {
+  /** Remote host alias; absent for local sessions. */
+  host?: string;
+  remainingMs: number;
+  idleDurationMs: number;
+  idleTimeoutMs: number;
+  reason: 'idle_timeout';
+  warnedAt: string;
+}
+
 /** onCronFired payload — a CLI scheduled task fired inside this session. */
 export interface OnCronFiredPayload extends SessionHookContext {
   cronTaskId?: string;
@@ -218,7 +238,7 @@ export interface SessionHookDefinition {
   timeoutMs?: number;
   /** Optional filter — only fire for matching sessions/tasks. */
   filter?: SessionHookFilter;
-  source?: 'builtin' | 'config' | 'file';
+  source?: 'builtin' | 'config' | 'file' | 'plugin';
   /** Where enforcement runs. Default 'walnut'. Daemon policies are inventory
    *  entries only — the dispatcher never executes them. */
   runtime?: 'walnut' | 'daemon';

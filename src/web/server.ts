@@ -76,12 +76,16 @@ import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
 import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
-import { loadPlugins, migrateConfigToPlugins, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
+import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, getPluginLifecycleRecords, loadNewPlugins, loadPlugins, migrateConfigToPlugins, reloadLoadedPlugin, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
 import type { SyncPollContext } from '../core/integration-types.js'
 import { syncReconciler } from '../core/sync-reconciler.js'
 import { integrationsRouter } from './routes/integrations.js'
 import { createPluginSourcesRouter } from './routes/plugin-sources.js'
+import { createPluginRuntimeRouter } from './routes/plugin-runtime.js'
+import { relayPrimaryPluginHttpRequest } from './routes/plugin-runtime-bridge.js'
 import { appsRouter, pluginAppStaticRouter } from './routes/apps.js'
+import { createPluginBodyParser, createPluginRouteDispatcher } from './plugin-route-dispatcher.js'
+import { setPluginApiBase } from '../core/plugins/server-api.js'
 import { systemRouter } from './routes/system.js'
 import { cloudSetupRouter } from './routes/cloud-setup.js'
 import { qmdRouter } from './routes/qmd.js'
@@ -458,16 +462,19 @@ export interface ServerOptions {
 }
 
 let httpServer: HttpServer | null = null
-// Self-rescheduling timers — one active timer per plugin, replaced on each tick.
-// Stored as an array of stop-callbacks so stopServer() can cancel the in-flight one.
-// Each stop() returns a Promise that resolves once any in-flight tick has settled,
-// so stopServer() can `await` it and guarantee no plugin writes happen after shutdown.
-let pluginSyncStops: Array<() => Promise<void>> = []
-// Plugin ids that already have a sync-polling loop — lets startPluginSyncPolling()
-// run again after a plugin-store soft-reload without double-polling existing plugins.
-const pollingPluginIds = new Set<string>()
+// Self-rescheduling timers keyed by owning plugin. A reload stops the old owner
+// before replacing its code, so no tick can retain a stale plugin object.
+const pluginSyncStops = new Map<string, () => Promise<void>>()
 // Set during startup; invoked by the plugin-sources router after add/update.
 let pluginSoftReload: () => Promise<void> = async () => {}
+let pluginMutationTail: Promise<unknown> = Promise.resolve()
+
+function runPluginMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const current = pluginMutationTail.catch(() => undefined).then(operation)
+  pluginMutationTail = current
+  return current
+}
+
 let cronServiceInstance: CronService | null = null
 let healthMonitor: SessionHealthMonitor | null = null
 let changesPrewarmer: import('../core/session-changes-prewarm.js').SessionChangesPrewarmer | null = null
@@ -982,6 +989,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // off error.code). Must sit at app level right here: the parser above
   // raises before any router runs, and Express skips routers in error mode.
   app.use(['/api/v1/stt/transcribe', '/api/stt/transcribe'], sttPayloadTooLargeHandler)
+  app.use('/api/plugins/:pluginId', createPluginBodyParser(registry, CLOUD_MODE))
   app.use(express.json({ limit: '15mb' }))
   // Paste spill-over (>200K chars from the web UI) — needs req.body, so must
   // mount AFTER the json parser above.
@@ -1319,11 +1327,40 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Lazy indirection: pluginSoftReload is assigned later in startup, after the
   // initial loadPlugins — the router must call the CURRENT value, not capture it.
   app.use('/api/plugin-sources', createPluginSourcesRouter(() => pluginSoftReload()))
+  app.use('/api/plugin-runtime', createPluginRuntimeRouter({
+    registry,
+    list: () => getPluginLifecycleRecords(registry),
+    reload: (pluginId) => runPluginMutation(async () => {
+      await stopPluginSyncPolling(pluginId)
+      try {
+        const plugin = await reloadLoadedPlugin(registry, pluginId)
+        bus.emit('plugin:runtime-changed', { pluginId, action: 'reloaded' }, ['web-ui'], { source: 'plugin-runtime' })
+        return plugin
+      } finally { startPluginSyncPolling() }
+    }),
+    disable: (pluginId) => runPluginMutation(async () => {
+      await stopPluginSyncPolling(pluginId)
+      try {
+        const plugin = await disableLoadedPlugin(registry, pluginId)
+        bus.emit('plugin:runtime-changed', { pluginId, action: 'disabled' }, ['web-ui'], { source: 'plugin-runtime' })
+        return plugin
+      } finally { startPluginSyncPolling() }
+    }),
+    clearQuarantine: (pluginId) => runPluginMutation(async () => {
+      await stopPluginSyncPolling(pluginId)
+      try {
+        await clearPluginQuarantine(registry, pluginId)
+        await reloadLoadedPlugin(registry, pluginId)
+        bus.emit('plugin:runtime-changed', { pluginId, action: 'reloaded' }, ['web-ui'], { source: 'plugin-runtime' })
+      } finally { startPluginSyncPolling() }
+    }),
+  }))
 
-  // Plugin routes — mounted as a single router that gets populated after plugin loading.
-  // This router sits before notFoundHandler, so plugin routes registered later still work.
-  const pluginRouter = Router()
-  app.use('/api/plugins', pluginRouter)
+  // Live dispatcher: each request resolves the current owner from the registry, so
+  // disable/reload removes old handlers without mutating Express's private stack.
+  app.use('/api/plugins', createPluginRouteDispatcher(registry, {
+    ...(CLOUD_MODE ? { relay: relayPrimaryPluginHttpRequest } : {}),
+  }))
 
   // Plugin apps: the catalogue (under /api, so it inherits auth) and the static
   // file surface for a plugin's own HTML. Both read the registry live per request,
@@ -1508,6 +1545,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (bound && typeof bound === 'object') {
       const { updateInstanceLockPort } = await import('../core/instance-lock.js')
       updateInstanceLockPort(bound.port)
+      setPluginApiBase(`http://127.0.0.1:${bound.port}`)
     }
   }
 
@@ -3781,22 +3819,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.web.error('failed to load integration plugins', { error: err instanceof Error ? err.message : String(err) })
   }
 
-  // Mount plugin-registered HTTP routes AFTER plugins are loaded.
-  // Routes are added to pluginRouter (already mounted at /api/plugins before notFoundHandler).
-  // Idempotent (tracked by plugin id) so the plugin-store soft-reload can call it again.
-  const mountedPluginRouteIds = new Set<string>()
-  const mountPluginRoutes = () => {
-    for (const plugin of registry.getAll()) {
-      if (!plugin.httpRoutes?.length || mountedPluginRouteIds.has(plugin.id)) continue
-      mountedPluginRouteIds.add(plugin.id)
-      for (const route of plugin.httpRoutes) {
-        pluginRouter.use(`/${plugin.id}${route.path}`, route.handler)
-        log.web.info('mounted plugin route', { plugin: plugin.id, path: `/api/plugins/${plugin.id}${route.path}` })
-      }
-    }
-  }
-  mountPluginRoutes()
-
   // -- Run plugin data migrations (move legacy task fields to ext) --
   try {
     await runPluginMigrations(registry)
@@ -3818,35 +3840,72 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // responsible process (what TCC checks grants against) is unknowable.
   warmLauncherDetection()
 
-  // Soft-reload for the plugin store: after a source is added/updated, load any
-  // NEW plugins without a restart (loadPlugins skips already-registered ids),
-  // mount their routes, run their migrations, and start their sync polling.
-  // Already-loaded plugins keep their in-memory code until a real restart.
-  pluginSoftReload = async () => {
-    await loadPlugins(registry)
-    mountPluginRoutes()
+  // Soft-reload for the Plugin Store: source installs use additive discovery,
+  // while explicit per-Plugin actions use the targeted lifecycle methods above.
+  const loadInstalledPlugins = () => runPluginMutation(async () => {
+    await stopPluginSyncPolling()
     try {
-      await runPluginMigrations(registry)
-    } catch (err) {
-      log.web.error('plugin data migrations failed during soft reload', { error: err instanceof Error ? err.message : String(err) })
+      await loadNewPlugins(registry)
+      try {
+        await runPluginMigrations(registry)
+      } catch (err) {
+        log.web.error('plugin data migrations failed during soft reload', { error: err instanceof Error ? err.message : String(err) })
+      }
+      bus.emit('plugin:runtime-changed', { action: 'reloaded-all' }, ['web-ui'], { source: 'plugin-runtime' })
+      log.web.info('plugin additive load complete', { plugins: registry.getAll().map(p => p.id) })
+    } finally {
+      startPluginSyncPolling()
     }
-    startPluginSyncPolling()
-    log.web.info('plugin soft reload complete', { plugins: registry.getAll().map(p => p.id) })
-  }
+  })
+  pluginSoftReload = loadInstalledPlugins
 
-  // Config saves can complete a previously-unconfigured plugin (Settings →
-  // Integrations fills in a required field). Soft-reload so the plugin
-  // activates without a restart — cheap no-op when nothing new qualifies.
+  // A config save may complete one or more needs-config Plugins. Reload only
+  // those owners; rebuilding the whole manager would interrupt every active Plugin.
   bus.subscribe('plugin-config-reload', async (event) => {
     if (event.name !== EventNames.CONFIG_CHANGED) return
     if (getUnconfiguredPlugins().length === 0) return
-    try {
-      await pluginSoftReload()
-    } catch (err) {
-      log.web.warn('plugin soft reload on config change failed', {
-        error: err instanceof Error ? err.message : String(err),
+
+    await runPluginMutation(async () => {
+      const pending = [...getUnconfiguredPlugins()]
+      if (pending.length === 0) return
+      const { getConfig: readPluginConfig } = await import('../core/config-manager.js')
+      const config = await readPluginConfig()
+      const ready = pending.filter((plugin) => {
+        const pluginConfig = config.plugins?.[plugin.id] ?? {}
+        return plugin.missing.every((field) => field in pluginConfig)
       })
-    }
+      if (ready.length === 0) return
+
+      for (const plugin of ready) await stopPluginSyncPolling(plugin.id)
+      try {
+        let activated = false
+        for (const plugin of ready) {
+          try {
+            const record = await reloadLoadedPlugin(registry, plugin.id)
+            activated ||= record.state === 'active'
+            bus.emit('plugin:runtime-changed', {
+              pluginId: plugin.id,
+              action: 'reloaded',
+            }, ['web-ui'], { source: 'plugin-runtime' })
+          } catch (err) {
+            log.web.warn('Plugin reload after config completion failed', {
+              pluginId: plugin.id,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
+        if (activated) {
+          try { await runPluginMigrations(registry) }
+          catch (err) {
+            log.web.error('Plugin data migrations failed after config completion', {
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
+      } finally {
+        startPluginSyncPolling()
+      }
+    })
   })
 
   // -- Process exit diagnostics --
@@ -4260,6 +4319,18 @@ function yieldToEventLoop(): Promise<void> {
  * so HTTP handlers, WS broadcasts, and session I/O don't starve while we await
  * dozens of serial plugin.sync.createTask() Graph calls.
  */
+async function stopPluginSyncPolling(pluginId?: string): Promise<void> {
+  if (pluginId) {
+    const stop = pluginSyncStops.get(pluginId)
+    pluginSyncStops.delete(pluginId)
+    if (stop) await stop().catch(() => { /* best-effort shutdown */ })
+    return
+  }
+  const stops = [...pluginSyncStops.values()]
+  pluginSyncStops.clear()
+  await Promise.all(stops.map((stop) => stop().catch(() => { /* best-effort shutdown */ })))
+}
+
 function startPluginSyncPolling(): void {
   // External-sync plugins write tasks.json — polling from BOTH the primary box
   // and the cloud companion would double-create synced tasks + churn git-sync.
@@ -4273,8 +4344,7 @@ function startPluginSyncPolling(): void {
   // hasSync === false means a ui/tools/skills-only plugin whose `sync` is an
   // inert stub: polling it would burn a timer forever to call no-ops.
   const plugins = registry.getAll().filter(p =>
-    p.id !== 'local' && p.hasSync !== false && !pollingPluginIds.has(p.id))
-  for (const p of plugins) pollingPluginIds.add(p.id)
+    p.id !== 'local' && p.hasSync !== false && !pluginSyncStops.has(p.id))
   const FIRST_TICK_DELAY_MS = 60_000 // boot grace — let startup quiet down first
   // Yield to the event loop every N sync iterations — a compromise between two
   // failure modes: N=1 adds needless loop overhead on every Graph call, while
@@ -4301,13 +4371,14 @@ function startPluginSyncPolling(): void {
     // without needing to know which specific setTimeout handle is live right now.
     // The callback returns a Promise that resolves once the in-flight tick (if any)
     // has settled — stopServer() awaits it to prevent post-shutdown writes.
-    pluginSyncStops.push(async () => {
+    const stop = async () => {
       stopped = true
       if (timer) clearTimeout(timer)
       if (currentTickPromise) {
         try { await currentTickPromise } catch { /* tick errors already logged */ }
       }
-    })
+    }
+    pluginSyncStops.set(plugin.id, stop)
 
     const tick = async () => {
       if (syncing) {
@@ -4597,10 +4668,11 @@ export async function stopServer(): Promise<void> {
   // Await each stop() so any in-flight plugin tick completes before we tear down
   // the registry and other dependencies. Otherwise a mid-tick ctx.updateTask /
   // ctx.addTask / bus.emit could fire after shutdown.
-  await Promise.all(
-    pluginSyncStops.map(stop => stop().catch(() => { /* best-effort shutdown */ })),
-  )
-  pluginSyncStops = []
+  await pluginMutationTail.catch(() => undefined)
+  await stopPluginSyncPolling()
+  try { await disposeLoadedPlugins(registry) } catch { /* best-effort shutdown */ }
+  pluginSoftReload = async () => {}
+  pluginMutationTail = Promise.resolve()
   registry.clear()
   if (healthMonitor) {
     healthMonitor.stop()

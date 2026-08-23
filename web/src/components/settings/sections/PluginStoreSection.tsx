@@ -1,10 +1,16 @@
 /**
- * Settings → Plugin Store: install plugins from git repos.
+ * Settings → Plugin Store: install plugins from a git repo or an npm package.
  *
- * Paste a git URL → Walnut clones it, scans for plugins (dirs with a
- * manifest.json), and loads new ones immediately (soft reload — no restart).
- * Updating a source whose plugins are already loaded requires a restart to
- * pick up the new code; the UI says so honestly.
+ * One input box takes either: a git URL (cloned), a teammate's share snippet, or
+ * an npm registry spec like `walnut-plugin-foo` / `@scope/name@1.2.3` (installed
+ * with lifecycle scripts disabled). Walnut scans what landed for plugins (dirs
+ * with a manifest.json) and loads new ones immediately (soft reload — no
+ * restart). Updating a source whose plugins are already loaded requires a
+ * restart to pick up the new code; the UI says so honestly.
+ *
+ * Installing a plugin gives it full access to Walnut and this machine, so the
+ * trust checkbox is a deliberate, per-install stop: the button stays disabled
+ * until it is ticked, and it resets after every successful add.
  */
 import { useState, useEffect, useCallback } from 'react';
 import { SectionCard } from '../inputs/SectionCard';
@@ -21,8 +27,15 @@ interface StorePlugin {
 
 interface PluginSource {
   slug: string;
-  url: string;
+  kind?: 'git' | 'npm';
+  type?: 'npm';
+  url?: string;
   ref?: string;
+  spec?: string;
+  resolved?: string;
+  packageName?: string;
+  version?: string;
+  integrity?: string;
   enabled: boolean;
   cloned: boolean;
   lastSha?: string;
@@ -30,6 +43,17 @@ interface PluginSource {
   lastError?: string;
   plugins: StorePlugin[];
   shareSnippet?: string;
+}
+
+/** A git remote the local git can clone; anything else is treated as an npm spec. */
+function looksLikeGitUrl(value: string): boolean {
+  return /^(https?:\/\/|ssh:\/\/|git@[\w.-]+:|file:\/\/)/.test(value);
+}
+
+/** Integrity hashes are long — show enough to compare, not enough to wrap. */
+function shortIntegrity(integrity: string): string {
+  const [algo, digest = ''] = integrity.split('-');
+  return digest.length > 12 ? `${algo}-${digest.slice(0, 12)}…` : integrity;
 }
 
 const STATUS_LABELS: Record<StorePlugin['status'], { label: string; className: string }> = {
@@ -44,6 +68,7 @@ const STATUS_LABELS: Record<StorePlugin['status'], { label: string; className: s
 export function PluginStoreSection() {
   const [sources, setSources] = useState<PluginSource[]>([]);
   const [url, setUrl] = useState('');
+  const [trusted, setTrusted] = useState(false);
   const [busy, setBusy] = useState<string | null>(null); // 'add' | slug
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -67,23 +92,30 @@ export function PluginStoreSection() {
   }, [refresh]);
 
   const handleAdd = async () => {
-    if (!url.trim()) return;
+    const value = url.trim();
+    if (!value || !trusted) return;
     setBusy('add');
     setError(null);
     setNotice(null);
     try {
+      // A share snippet is JSON and a git remote has a scheme; everything else
+      // goes to the npm path so the error message is about the right thing.
+      const isSnippet = value.startsWith('{');
+      const payload = isSnippet || looksLikeGitUrl(value) ? { url: value } : { spec: value };
       const res = await fetch('/api/plugin-sources', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim() }),
+        body: JSON.stringify(payload),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
       setUrl('');
+      setTrusted(false); // trust is granted per install, never sticky
       const count = body.plugins?.length ?? 0;
+      const what = body.resolved ? ` (${body.resolved})` : '';
       setNotice(count > 0
-        ? `Added — found ${count} plugin${count === 1 ? '' : 's'}. New plugins are active now; configure them under Integrations.`
-        : 'Added, but no plugins found in this repo (no manifest.json at root or in top-level folders).');
+        ? `Added${what} — found ${count} plugin${count === 1 ? '' : 's'}. New plugins are active now; configure them under Integrations.`
+        : `Added${what}, but no plugins found (no manifest.json at the root or in top-level folders).`);
       await refresh();
       emitPluginsChanged();
     } catch (err) {
@@ -102,8 +134,10 @@ export function PluginStoreSection() {
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
       if (body.restartRequired) setRestartNeeded(true);
+      // git reports a SHA, npm reports the resolved name@version.
+      const to = body.resolved ?? (body.toSha ?? '').slice(0, 7);
       setNotice(body.updated
-        ? `Updated ${slug} to ${(body.toSha ?? '').slice(0, 7)}${body.restartRequired ? ' — restart Walnut to run the new code.' : '.'}`
+        ? `Updated ${slug} to ${to}${body.restartRequired ? ' — restart Walnut to run the new code.' : '.'}`
         : `${slug} is already up to date.`);
       await refresh();
       if (body.updated) emitPluginsChanged();
@@ -135,7 +169,7 @@ export function PluginStoreSection() {
     <SectionCard
       id="plugin-store"
       title="Plugin Store"
-      description="Install plugins from git repositories. A repo can hold one plugin (manifest.json at the root) or several (one folder per plugin)."
+      description="Install plugins from a git repository or an npm package. A repo can hold one plugin (manifest.json at the root) or several (one folder per plugin); an npm package holds one, at its root."
     >
       {restartNeeded && (
         <p className="text-sm" style={{ color: 'var(--priority-important)' }}>
@@ -144,7 +178,7 @@ export function PluginStoreSection() {
       )}
 
       <div className="form-group">
-        <label htmlFor="plugin-source-url">Git repository URL</label>
+        <label htmlFor="plugin-source-url">Git URL or npm package</label>
         <div style={{ display: 'flex', gap: 8 }}>
           <input
             id="plugin-source-url"
@@ -152,27 +186,56 @@ export function PluginStoreSection() {
             value={url}
             onChange={e => setUrl(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleAdd(); } }}
-            placeholder="Paste a git URL — or a share snippet from a teammate"
+            placeholder="git URL, npm package (name, name@1.2.3, @scope/name), or a teammate's share snippet"
             style={{ flex: 1 }}
           />
-          <button type="button" className="btn btn-sm" disabled={busy === 'add' || !url.trim()} onClick={() => void handleAdd()}>
-            {busy === 'add' ? 'Cloning…' : 'Add'}
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busy === 'add' || !url.trim() || !trusted}
+            onClick={() => void handleAdd()}
+          >
+            {busy === 'add' ? 'Installing…' : 'Add'}
           </button>
         </div>
         <p className="text-xs text-muted" style={{ marginTop: 2 }}>
-          Uses your machine&apos;s git (ssh keys / credential helpers), so any remote your shell can clone works.
-          Plugins run with full access to Walnut and your machine — only add repos you trust.
+          Git uses your machine&apos;s git (ssh keys / credential helpers), so any remote your shell can clone works.
+          npm disables lifecycle scripts, pins an exact version, and verifies the installed tarball receipt.
+          Neither kind ever updates itself: you press Update.
         </p>
+        <label
+          htmlFor="plugin-trust-confirm"
+          className="text-xs"
+          style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: 6 }}
+        >
+          <input
+            id="plugin-trust-confirm"
+            data-testid="plugin-trust-confirm"
+            type="checkbox"
+            checked={trusted}
+            onChange={e => setTrusted(e.target.checked)}
+            style={{ marginTop: 2 }}
+          />
+          <span>
+            I trust this source. Its code runs inside Walnut with full access to my tasks, notes,
+            credentials and this machine.
+          </span>
+        </label>
       </div>
 
       {error && <p className="text-sm" style={{ color: 'var(--priority-immediate)' }}>{error}</p>}
       {notice && <p className="text-sm" style={{ color: 'var(--success)' }}>{notice}</p>}
 
       {sources.map(source => (
-        <div key={source.slug} className="settings-collapsible" style={{ padding: '10px 12px' }}>
+        <div key={`${source.kind ?? 'git'}:${source.slug}:${source.spec ?? source.url ?? ''}`} className="settings-collapsible" style={{ padding: '10px 12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <strong>{source.slug}</strong>
-            <span className="text-xs text-muted">{source.url}</span>
+            <span className="badge badge-none">{source.kind === 'npm' ? 'npm' : 'git'}</span>
+            <span className="text-xs text-muted">{source.spec ?? source.url}</span>
+            {source.resolved && <span className="text-xs text-muted">→ {source.resolved}</span>}
+            {source.integrity && (
+              <span className="text-xs text-muted" title={source.integrity}>{shortIntegrity(source.integrity)}</span>
+            )}
             {source.lastSha && <span className="text-xs text-muted">@ {source.lastSha.slice(0, 7)}</span>}
             <span style={{ flex: 1 }} />
             {source.shareSnippet && (
@@ -198,8 +261,14 @@ export function PluginStoreSection() {
           {source.lastError && (
             <p className="text-xs" style={{ color: 'var(--priority-immediate)', marginTop: 4 }}>{source.lastError}</p>
           )}
-          {source.plugins.length === 0 ? (
-            <p className="text-xs text-muted" style={{ marginTop: 6 }}>No plugins found in this repo.</p>
+          {!source.cloned ? (
+            <p className="text-xs" style={{ color: 'var(--priority-immediate)', marginTop: 6 }}>
+              This source is not installed on this machine. Update to restore it or Remove to clear it.
+            </p>
+          ) : source.plugins.length === 0 ? (
+            <p className="text-xs text-muted" style={{ marginTop: 6 }}>
+              No plugins found in this {source.kind === 'npm' ? 'package' : 'repo'}.
+            </p>
           ) : (
             <ul style={{ listStyle: 'none', padding: 0, margin: '6px 0 0' }}>
               {source.plugins.map(plugin => {
@@ -221,7 +290,7 @@ export function PluginStoreSection() {
         </div>
       ))}
       {sources.length === 0 && (
-        <p className="text-sm text-muted">No plugin sources yet. Paste a git URL above to install plugins.</p>
+        <p className="text-sm text-muted">No plugin sources yet. Paste a git URL or an npm package name above to install plugins.</p>
       )}
     </SectionCard>
   );

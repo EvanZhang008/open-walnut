@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": [
+    "plugin-api-contract.ts",
+    "plugin-web-api-contract.ts",
+    "../../src/types/**/*.d.ts"
+  ],
+  "exclude": [
+    "../../dist"
+  ]
+}

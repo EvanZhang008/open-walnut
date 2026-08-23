@@ -1,0 +1,16 @@
+{
+  "id": "reference-walnut",
+  "name": "Reference Walnut Plugin",
+  "description": "Executable reference for the public Open Walnut Plugin API.",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "engines": {
+    "walnut": ">=0.3.2"
+  },
+  "server": "dist/server.mjs",
+  "web": "dist/web.mjs",
+  "build": {
+    "server": "src/server.ts",
+    "web": "src/web.tsx"
+  }
+}

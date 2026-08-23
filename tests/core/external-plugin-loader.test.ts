@@ -14,11 +14,27 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import express from 'express';
+import request from 'supertest';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 let tmpDir: string;
 
 vi.mock('../../src/constants.js', () => createMockConstants('ext-loader-test'));
+
+const esbuildControl = vi.hoisted(() => ({ delayMs: 0 }));
+vi.mock('esbuild', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('esbuild')>();
+  return {
+    ...actual,
+    async build(...args: Parameters<typeof actual.build>) {
+      if (esbuildControl.delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, esbuildControl.delayMs));
+      }
+      return actual.build(...args);
+    },
+  };
+});
 
 vi.mock('../../src/core/config-manager.js', () => ({
   getConfig: vi.fn(async () => ({
@@ -28,12 +44,14 @@ vi.mock('../../src/core/config-manager.js', () => ({
     provider: { type: 'bedrock' },
     plugins: {},
   })),
+  updatePluginConfig: vi.fn(async (_id: string, patch: Record<string, unknown>) => patch),
 }));
 
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js';
 import { IntegrationRegistry } from '../../src/core/integration-registry.js';
-import { loadPlugins, getUnconfiguredPlugins, getUnsupportedPlugins } from '../../src/core/integration-loader.js';
-import { getConfig } from '../../src/core/config-manager.js';
+import { disableLoadedPlugin, loadNewPlugins, loadPlugins, reloadLoadedPlugin, getPluginLifecycleRecords, getUnconfiguredPlugins, getUnsupportedPlugins, setPluginCodeTimeoutForTesting } from '../../src/core/integration-loader.js';
+import { getConfig, updatePluginConfig } from '../../src/core/config-manager.js';
+import { createPluginRouteDispatcher } from '../../src/web/plugin-route-dispatcher.js';
 
 // ── Helpers ──
 
@@ -67,6 +85,27 @@ async function writePluginTs(pluginDir: string, source: string): Promise<void> {
   await fsp.writeFile(path.join(pluginDir, 'plugin.ts'), source);
 }
 
+async function writeCountingUnifiedPlugin(pluginDir: string, id: string): Promise<void> {
+  await writeManifest(pluginDir, {
+    id,
+    name: id,
+    apiVersion: 1,
+    engines: { walnut: '>=0.0.0' },
+    server: 'dist/server.mjs',
+  });
+  await fsp.mkdir(path.join(pluginDir, 'dist'), { recursive: true });
+  await fsp.writeFile(path.join(pluginDir, 'dist', 'server.mjs'), `
+export async function activate(walnut) {
+  await walnut.storage.updateJson('activations.json', { count: 0 }, (current) => ({ count: current.count + 1 }));
+}
+`);
+}
+
+async function readActivationCount(id: string): Promise<number> {
+  const file = path.join(tmpDir, 'plugin-data', id, 'activations.json');
+  return JSON.parse(await fsp.readFile(file, 'utf8')).count;
+}
+
 // ── Setup / teardown ──
 
 beforeEach(async () => {
@@ -78,6 +117,7 @@ beforeEach(async () => {
   // Ensure tasks.json exists (loadPlugins does not require it, but just in case)
   await fsp.writeFile(TASKS_FILE, JSON.stringify({ version: 1, tasks: [] }));
 
+  vi.mocked(updatePluginConfig).mockClear();
   vi.mocked(getConfig).mockResolvedValue({
     version: 1,
     user: { name: 'test' },
@@ -88,6 +128,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  delete (globalThis as any).__walnutLiveSyncRegistration;
+  esbuildControl.delayMs = 0;
+  setPluginCodeTimeoutForTesting(null);
   await fsp.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -116,6 +159,22 @@ export default function register(api) {
     expect(plugin!.name).toBe('Test External');
     expect(plugin!.sync).toBeDefined();
     expect(typeof plugin!.sync.createTask).toBe('function');
+  });
+
+  it('rejects unsafe ids in legacy manifests before creating Plugin state', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'unsafe-id');
+    await writeManifest(pluginDir, { id: '../escape', name: 'Unsafe' });
+    await writePluginTs(pluginDir, `
+export default function register(api) {
+  api.registerSync(${NOOP_SYNC_SOURCE});
+}
+`);
+
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+
+    expect(registry.has('../escape')).toBe(false);
+    await expect(fsp.access(path.join(tmpDir, 'escape'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('esbuild bundles .ts plugin with parent imports', async () => {
@@ -299,6 +358,369 @@ export default function register(api) {
     // Loaded plugin carries its manifest schema for the settings form
     expect((registry2.get('now-configured')!.configSchema as any)?.required).toEqual(['room_id']);
   });
+
+  it('target-reloads a newly configured Plugin without duplicating diagnostics', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'target-configured');
+    await writeManifest(pluginDir, {
+      id: 'target-configured',
+      name: 'Target Configured',
+      configSchema: {
+        type: 'object',
+        properties: { room_id: { type: 'string' } },
+        required: ['room_id'],
+      },
+    });
+    await writePluginTs(pluginDir, `
+export default function register(api) {
+  api.registerSync(${NOOP_SYNC_SOURCE});
+}
+`);
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+
+    await reloadLoadedPlugin(registry, 'target-configured');
+    await reloadLoadedPlugin(registry, 'target-configured');
+    expect(getUnconfiguredPlugins().filter((plugin) => plugin.id === 'target-configured')).toHaveLength(1);
+
+    vi.mocked(getConfig).mockResolvedValue({
+      version: 1,
+      user: { name: 'test' },
+      defaults: { priority: 'none' },
+      provider: { type: 'bedrock' },
+      plugins: { 'target-configured': { room_id: 'abc-123' } },
+    } as any);
+    await reloadLoadedPlugin(registry, 'target-configured');
+
+    expect(registry.has('target-configured')).toBe(true);
+    expect(getUnconfiguredPlugins().filter((plugin) => plugin.id === 'target-configured')).toHaveLength(0);
+    expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'target-configured', state: 'active' }),
+    ]));
+  });
+
+  it('keeps the current Plugin registered when reload manifest preflight fails', async () => {
+    await writeCountingUnifiedPlugin(path.join(tmpDir, 'plugins', 'preflight'), 'preflight');
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+    await fsp.writeFile(path.join(tmpDir, 'plugins', 'preflight', 'manifest.json'), '{bad json');
+
+    await expect(reloadLoadedPlugin(registry, 'preflight')).rejects.toThrow('manifest cannot be read');
+
+    expect(registry.has('preflight')).toBe(true);
+    expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'preflight', state: 'active' }),
+    ]));
+    expect(await readActivationCount('preflight')).toBe(1);
+  });
+
+  it('reflects mid-life disposal of a singleton contribution', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'live-singleton');
+    await writeManifest(pluginDir, {
+      id: 'live-singleton',
+      name: 'Live Singleton',
+      apiVersion: 1,
+      engines: { walnut: '>=0.0.0' },
+      server: 'dist/server.mjs',
+    });
+    await fsp.mkdir(path.join(pluginDir, 'dist'), { recursive: true });
+    await fsp.writeFile(path.join(pluginDir, 'dist', 'server.mjs'), `
+export function activate(walnut) {
+  globalThis.__walnutLiveSyncRegistration = walnut.registry.sync(${NOOP_SYNC_SOURCE});
+}
+`);
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+    const plugin = registry.get('live-singleton')!;
+    expect(plugin.hasSync).toBe(true);
+
+    await (globalThis as any).__walnutLiveSyncRegistration.dispose();
+
+    expect(plugin.hasSync).toBe(false);
+    expect(plugin.sync).toBeDefined();
+    delete (globalThis as any).__walnutLiveSyncRegistration;
+  });
+
+  it('loads apiVersion 1 through activate(walnut) without legacy capability gates', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'unified-plugin');
+    await writeManifest(pluginDir, {
+      id: 'unified-plugin',
+      name: 'Unified Plugin',
+      apiVersion: 1,
+      engines: { walnut: '>=0.0.0' },
+      server: 'dist/server.mjs',
+    });
+    await fsp.mkdir(path.join(pluginDir, 'dist'), { recursive: true });
+    await fsp.writeFile(path.join(pluginDir, 'dist', 'server.mjs'), `
+export async function activate(walnut) {
+  walnut.registry.tool({
+    name: 'inspect',
+    description: 'Inspect unified Plugin state',
+    async execute() { return { pluginId: walnut.pluginId }; }
+  });
+  walnut.http.route('GET', '/status', async () => ({ json: { active: true } }));
+  await walnut.storage.writeJson('loaded.json', { active: true });
+}
+`);
+
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+
+    const plugin = registry.get('unified-plugin');
+    expect(plugin).toMatchObject({ apiVersion: 1, serverEntry: 'dist/server.mjs', hasSync: false });
+    expect(plugin?.tools?.map((tool) => tool.name)).toEqual(['unified_plugin_inspect']);
+    expect(plugin?.httpRoutes).toHaveLength(1);
+    expect(JSON.parse(await fsp.readFile(path.join(tmpDir, 'plugin-data', 'unified-plugin', 'loaded.json'), 'utf8'))).toEqual({ active: true });
+  });
+
+  it('fails a unified Plugin whose module evaluation exceeds the code deadline', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'module-timeout');
+    await writeManifest(pluginDir, {
+      id: 'module-timeout',
+      name: 'Module Timeout',
+      apiVersion: 1,
+      engines: { walnut: '>=0.0.0' },
+      server: 'plugin.ts',
+    });
+    await writePluginTs(pluginDir, `
+await new Promise(() => {});
+export function activate() {}
+`);
+    setPluginCodeTimeoutForTesting(10);
+    const registry = new IntegrationRegistry();
+
+    await loadPlugins(registry);
+
+    expect(getPluginLifecycleRecords(registry)).toContainEqual(expect.objectContaining({
+      id: 'module-timeout',
+      state: 'failed',
+      error: 'Plugin "module-timeout" module evaluation timed out after 10ms',
+    }));
+    const cacheDir = path.join(import.meta.dirname, '..', '..', '.plugin-cache');
+    const cached = await fsp.readdir(cacheDir).catch(() => [] as string[]);
+    expect(cached.filter((file) => file.startsWith('module-timeout-'))).toEqual([]);
+  });
+
+  it('fails a unified Plugin whose activate function exceeds the code deadline', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'activation-timeout');
+    await writeManifest(pluginDir, {
+      id: 'activation-timeout',
+      name: 'Activation Timeout',
+      apiVersion: 1,
+      engines: { walnut: '>=0.0.0' },
+      server: 'dist/server.mjs',
+    });
+    await fsp.mkdir(path.join(pluginDir, 'dist'), { recursive: true });
+    await fsp.writeFile(path.join(pluginDir, 'dist', 'server.mjs'), `
+export function activate() { return new Promise(() => {}); }
+`);
+    setPluginCodeTimeoutForTesting(10);
+    const registry = new IntegrationRegistry();
+
+    await loadPlugins(registry);
+
+    expect(getPluginLifecycleRecords(registry)).toContainEqual(expect.objectContaining({
+      id: 'activation-timeout',
+      state: 'failed',
+      error: 'Plugin "activation-timeout" activation timed out after 10ms',
+    }));
+  });
+
+  it('does not count external TypeScript bundling against the Plugin code deadline', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'slow-bundle');
+    await writeManifest(pluginDir, {
+      id: 'slow-bundle',
+      name: 'Slow Bundle',
+      apiVersion: 1,
+      engines: { walnut: '>=0.0.0' },
+      server: 'plugin.ts',
+    });
+    await writePluginTs(pluginDir, 'export function activate() {}\n');
+    setPluginCodeTimeoutForTesting(500);
+    esbuildControl.delayMs = 600;
+    const registry = new IntegrationRegistry();
+
+    await loadPlugins(registry);
+
+    expect(registry.has('slow-bundle')).toBe(true);
+    expect(getPluginLifecycleRecords(registry)).toContainEqual(expect.objectContaining({
+      id: 'slow-bundle',
+      state: 'active',
+    }));
+  });
+
+  it('preserves this for object-style activate and deactivate methods', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'object-plugin');
+    await writeManifest(pluginDir, {
+      id: 'object-plugin',
+      name: 'Object Plugin',
+      apiVersion: 1,
+      engines: { walnut: '>=0.0.0' },
+      server: 'dist/server.mjs',
+    });
+    await fsp.mkdir(path.join(pluginDir, 'dist'), { recursive: true });
+    await fsp.writeFile(path.join(pluginDir, 'dist', 'server.mjs'), `
+export default {
+  walnut: null,
+  async activate(walnut) {
+    this.walnut = walnut;
+    await this.walnut.storage.writeJson('state.json', { active: true });
+  },
+  async deactivate() {
+    await this.walnut.storage.writeJson('state.json', { active: false });
+  }
+};
+`);
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+    const stateFile = path.join(tmpDir, 'plugin-data', 'object-plugin', 'state.json');
+    expect(JSON.parse(await fsp.readFile(stateFile, 'utf8'))).toEqual({ active: true });
+
+    await disableLoadedPlugin(registry, 'object-plugin');
+
+    expect(JSON.parse(await fsp.readFile(stateFile, 'utf8'))).toEqual({ active: false });
+  });
+
+  it('keeps contributions registered after activation live', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'late-plugin');
+    await writeManifest(pluginDir, {
+      id: 'late-plugin',
+      name: 'Late Plugin',
+      apiVersion: 1,
+      engines: { walnut: '>=0.0.0' },
+      server: 'dist/server.mjs',
+    });
+    await fsp.mkdir(path.join(pluginDir, 'dist'), { recursive: true });
+    await fsp.writeFile(path.join(pluginDir, 'dist', 'server.mjs'), `
+export async function activate(walnut) {
+  walnut.http.route('POST', '/register-late', async () => {
+    walnut.http.route('GET', '/late', async () => ({ json: { late: true } }));
+    walnut.registry.tool({ name: 'late', description: 'Late tool', async execute() { return 'late'; } });
+    walnut.registry.agentContext('Late contribution is active.');
+    return { json: { registered: true } };
+  });
+}
+`);
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+    const plugin = registry.get('late-plugin')!;
+    const app = express();
+    app.use('/api/plugins', createPluginRouteDispatcher(registry));
+
+    await request(app).get('/api/plugins/late-plugin/late').expect(404);
+    await request(app).post('/api/plugins/late-plugin/register-late').expect(200, { registered: true });
+
+    expect(plugin.tools?.map((tool) => tool.name)).toEqual(['late_plugin_late']);
+    expect(plugin.agentContext).toBe('Late contribution is active.');
+    expect(plugin.httpRoutes).toHaveLength(2);
+    await request(app).get('/api/plugins/late-plugin/late').expect(200, { late: true });
+  });
+
+  it('additive discovery activates only newly installed Plugins', async () => {
+    await writeCountingUnifiedPlugin(path.join(tmpDir, 'plugins', 'existing-plugin'), 'existing-plugin');
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+    expect(await readActivationCount('existing-plugin')).toBe(1);
+
+    await writeCountingUnifiedPlugin(path.join(tmpDir, 'plugins', 'new-plugin'), 'new-plugin');
+    await loadNewPlugins(registry);
+
+    expect(await readActivationCount('existing-plugin')).toBe(1);
+    expect(await readActivationCount('new-plugin')).toBe(1);
+    expect(registry.getAll().filter((plugin) => plugin.id === 'existing-plugin')).toHaveLength(1);
+    expect(registry.getAll().filter((plugin) => plugin.id === 'new-plugin')).toHaveLength(1);
+  });
+
+  it('replaces a loaded plugin on global reload without duplicate contributions', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'reloadable');
+    await writeManifest(pluginDir, { id: 'reloadable', name: 'Before' });
+    await writePluginTs(pluginDir, `
+export default function register(api) {
+  api.registerSync(${NOOP_SYNC_SOURCE});
+}
+`);
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+    expect(registry.get('reloadable')?.name).toBe('Before');
+
+    await writeManifest(pluginDir, { id: 'reloadable', name: 'After' });
+    await loadPlugins(registry);
+
+    expect(registry.get('reloadable')?.name).toBe('After');
+    expect(registry.getAll().filter((plugin) => plugin.id === 'reloadable')).toHaveLength(1);
+    expect(registry.getTombstone('reloadable')).toBeUndefined();
+    expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'reloadable', state: 'active' }),
+    ]));
+  });
+
+  it('reloads only the requested plugin', async () => {
+    await writeCountingUnifiedPlugin(path.join(tmpDir, 'plugins', 'plugin-a'), 'plugin-a');
+    await writeCountingUnifiedPlugin(path.join(tmpDir, 'plugins', 'plugin-b'), 'plugin-b');
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+
+    await reloadLoadedPlugin(registry, 'plugin-a');
+
+    expect(await readActivationCount('plugin-a')).toBe(2);
+    expect(await readActivationCount('plugin-b')).toBe(1);
+    expect(registry.getAll().filter((plugin) => plugin.id === 'plugin-a')).toHaveLength(1);
+    expect(vi.mocked(updatePluginConfig)).toHaveBeenCalledWith('plugin-a', { enabled: true });
+  });
+
+  it('persists disable before a later global reload', async () => {
+    await writeCountingUnifiedPlugin(path.join(tmpDir, 'plugins', 'persistent-disable'), 'persistent-disable');
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+
+    await disableLoadedPlugin(registry, 'persistent-disable');
+    expect(vi.mocked(updatePluginConfig)).toHaveBeenCalledWith('persistent-disable', { enabled: false });
+
+    vi.mocked(getConfig).mockResolvedValue({
+      version: 1,
+      user: { name: 'test' },
+      defaults: { priority: 'none' },
+      provider: { type: 'bedrock' },
+      plugins: { 'persistent-disable': { enabled: false } },
+    } as any);
+    await loadPlugins(registry);
+
+    expect(registry.has('persistent-disable')).toBe(false);
+    expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'persistent-disable', state: 'disabled' }),
+    ]));
+    expect(await readActivationCount('persistent-disable')).toBe(1);
+  });
+
+  it('serializes concurrent global reloads', async () => {
+    await writeCountingUnifiedPlugin(path.join(tmpDir, 'plugins', 'serialized'), 'serialized');
+    const registry = new IntegrationRegistry();
+
+    await Promise.all([loadPlugins(registry), loadPlugins(registry)]);
+
+    expect(registry.getAll().filter((plugin) => plugin.id === 'serialized')).toHaveLength(1);
+    expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'serialized', state: 'active' }),
+    ]));
+    expect(await readActivationCount('serialized')).toBe(2);
+  });
+
+  it('follows a local development symlink and canonicalizes its target', async () => {
+    const target = path.join(tmpDir, 'linked-source');
+    await writeManifest(target, { id: 'linked-plugin', name: 'Linked Plugin' });
+    await writePluginTs(target, `
+export default function register(api) {
+  api.registerSync(${NOOP_SYNC_SOURCE});
+}
+`);
+    const externalDir = path.join(tmpDir, 'plugins');
+    await fsp.mkdir(externalDir, { recursive: true });
+    await fsp.symlink(target, path.join(externalDir, 'linked-plugin'), 'dir');
+
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+
+    expect(registry.get('linked-plugin')?.pluginDir).toBe(await fsp.realpath(target));
+  });
 });
 
 describe('manifest v2 capabilities', () => {
@@ -339,6 +761,51 @@ export default function register(api) {
     const entry = getUnsupportedPlugins().find(p => p.id === 'future-only');
     expect(entry).toBeDefined();
     expect(entry!.capabilities.sort()).toEqual(['hooks', 'routines']);
+  });
+
+  it('rejects unsupported apiVersion before importing plugin code', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'future-api');
+    await writeManifest(pluginDir, {
+      id: 'future-api',
+      name: 'Future API',
+      apiVersion: 99,
+      engines: { walnut: '>=0.0.0' },
+      server: 'dist/server.mjs',
+    });
+    await fsp.mkdir(path.join(pluginDir, 'dist'), { recursive: true });
+    await fsp.writeFile(path.join(pluginDir, 'dist', 'server.mjs'), 'throw new Error("must not import")');
+
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+
+    expect(registry.has('future-api')).toBe(false);
+    expect(getUnsupportedPlugins()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'future-api', apiVersion: 99, reason: expect.stringContaining('Unsupported') }),
+    ]));
+    expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'future-api', state: 'unsupported' }),
+    ]));
+  });
+
+  it('enforces engines.walnut before importing unified plugin code', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'newer-walnut');
+    await writeManifest(pluginDir, {
+      id: 'newer-walnut',
+      name: 'Newer Walnut',
+      apiVersion: 1,
+      engines: { walnut: '>=999.0.0' },
+      server: 'dist/server.mjs',
+    });
+    await fsp.mkdir(path.join(pluginDir, 'dist'), { recursive: true });
+    await fsp.writeFile(path.join(pluginDir, 'dist', 'server.mjs'), 'throw new Error("must not import")');
+
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+
+    expect(registry.has('newer-walnut')).toBe(false);
+    expect(getUnsupportedPlugins()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'newer-walnut', reason: expect.stringContaining('Requires Walnut') }),
+    ]));
   });
 
   it('loads a sync plugin that also declares unknown capabilities (warn + ignore)', async () => {

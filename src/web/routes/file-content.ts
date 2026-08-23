@@ -57,6 +57,7 @@ export function isSecretPath(absPath: string): boolean {
   const home = os.homedir()
   const denied = [
     path.join(WALNUT_HOME, 'auth.json'),
+    path.join(WALNUT_HOME, 'secrets'),
     path.join(WALNUT_HOME, 'sync', 'bridge-tokens.json'),
     path.join(home, '.aws'),
     path.join(home, '.ssh'),

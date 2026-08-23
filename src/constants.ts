@@ -163,15 +163,26 @@ export const LEGACY_MEMORY_FILE = path.join(WALNUT_HOME, 'MEMORY.md');
 export const PROJECTS_MEMORY_DIR = path.join(MEMORY_DIR, 'projects');
 export const CHAT_HISTORY_FILE = path.join(WALNUT_HOME, 'chat-history.json');
 
-/**
- * Validate an agentId from user input to prevent path traversal.
- * Throws if the value is not a safe alphanumeric-dash-underscore string.
- */
+/** Validate a builtin/config agent id or a namespaced Plugin agent id. */
 export function validateAgentId(agentId: string): string {
-  if (!/^[a-z0-9_-]{1,64}$/i.test(agentId)) {
-    throw new Error(`Invalid agentId: ${JSON.stringify(agentId)}`);
-  }
+  const ordinary = /^[a-z0-9_-]{1,64}$/i.test(agentId);
+  const plugin = /^[a-z0-9][a-z0-9._-]{0,63}:[a-z0-9][a-z0-9._/-]{0,127}$/i.test(agentId);
+  if (!ordinary && !plugin) throw new Error(`Invalid agentId: ${JSON.stringify(agentId)}`);
   return agentId;
+}
+
+/** Cross-platform filename component for an already validated agent id. */
+export function agentPathSegment(agentId: string): string {
+  return encodeURIComponent(validateAgentId(agentId));
+}
+
+/** Recover the public agent id while scanning agent-owned directories. */
+export function agentIdFromPathSegment(segment: string): string {
+  try {
+    return validateAgentId(decodeURIComponent(segment));
+  } catch {
+    throw new Error(`Invalid agent path segment: ${JSON.stringify(segment)}`);
+  }
 }
 
 /**
@@ -181,7 +192,7 @@ export function validateAgentId(agentId: string): string {
  */
 export function chatHistoryFile(agentId?: string): string {
   if (!agentId || agentId === 'general') return CHAT_HISTORY_FILE;
-  return path.join(WALNUT_HOME, `chat-history-${agentId}.json`);
+  return path.join(WALNUT_HOME, `chat-history-${agentPathSegment(agentId)}.json`);
 }
 
 // ── Multi-conversation per agent ──
@@ -191,7 +202,7 @@ export const CONVERSATIONS_DIR = path.join(WALNUT_HOME, 'conversations');
 
 /** Per-agent conversation directory. 'general' is used literally (not root). */
 export function conversationDir(agentId: string): string {
-  return path.join(CONVERSATIONS_DIR, validateAgentId(agentId));
+  return path.join(CONVERSATIONS_DIR, agentPathSegment(agentId));
 }
 
 /** The conversation registry (_index.json) for an agent. */
@@ -236,7 +247,7 @@ export function isValidSessionUuid(id: unknown): id is string {
  */
 export function agentMemoryDir(agentId?: string): string {
   if (!agentId || agentId === 'general') return WALNUT_HOME;
-  return path.join(MEMORY_DIR, 'agents', agentId);
+  return path.join(MEMORY_DIR, 'agents', agentPathSegment(agentId));
 }
 
 /**
@@ -246,7 +257,7 @@ export function agentMemoryDir(agentId?: string): string {
  */
 export function agentDailyDir(agentId?: string): string {
   if (!agentId || agentId === 'general') return DAILY_DIR;
-  return path.join(MEMORY_DIR, 'agents', agentId, 'daily');
+  return path.join(MEMORY_DIR, 'agents', agentPathSegment(agentId), 'daily');
 }
 export const GLOBAL_SKILLS_DIR = path.join(WALNUT_HOME, 'skills');
 export const SKILL_SETTINGS_FILE = path.join(WALNUT_HOME, 'skill-settings.json');

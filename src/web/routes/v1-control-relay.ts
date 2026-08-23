@@ -38,9 +38,14 @@ const CONTROL_RELAY_TIMEOUT_MS = 30_000
 /** errorKind from the relay reply → frozen v1 HTTP status. */
 function relayErrorStatus(errorKind: string): number {
   if (errorKind === 'not_found') return 404
+  if (errorKind === 'method_not_allowed') return 405
   if (errorKind === 'conflict') return 409
+  if (errorKind === 'payload_too_large') return 413
+  if (errorKind === 'headers_too_large') return 431
   if (errorKind === 'internal') return 500
   if (errorKind === 'bad_gateway') return 502
+  if (errorKind === 'unavailable') return 503
+  if (errorKind === 'gateway_timeout') return 504
   return 400
 }
 

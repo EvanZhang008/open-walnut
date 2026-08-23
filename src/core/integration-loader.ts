@@ -21,12 +21,19 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import yaml from 'js-yaml';
 import { WALNUT_HOME, CONFIG_FILE } from '../constants.js';
+import { getVersion } from './version.js';
 import { createSubsystemLogger } from '../logging/index.js';
-import { getConfig } from './config-manager.js';
+import { getConfig, updatePluginConfig } from './config-manager.js';
 import { bulkMigrateTasks } from './task-manager.js';
 import { ensureExtIndexes } from './task-db.js';
 import { setExtIndexes } from './ext-index-registry.js';
 import type { IntegrationRegistry } from './integration-registry.js';
+import { PluginBootSentinel, pluginSafeModeEnabled } from './plugins/boot-sentinel.js';
+import { PluginContext } from './plugins/plugin-context.js';
+import { PluginManager, type PluginDefinition, type PluginLifecycleRecord } from './plugins/plugin-manager.js';
+import { satisfiesSemVer } from './plugins/semver.js';
+import { validatePluginId } from './plugins/ids.js';
+import { createServerPluginApi } from './plugins/server-api.js';
 import type {
   PluginManifest,
   PluginApi,
@@ -44,6 +51,205 @@ import type {
 } from './integration-types.js';
 
 const log = createSubsystemLogger('plugin-loader');
+const bootSentinel = new PluginBootSentinel();
+let pluginCodeTimeoutMs = 20_000;
+
+class PluginCodeTimeoutError extends Error {
+  constructor(pluginId: string, phase: string, timeoutMs: number) {
+    super(`Plugin "${pluginId}" ${phase} timed out after ${timeoutMs}ms`);
+    this.name = 'PluginCodeTimeoutError';
+  }
+}
+
+async function withPluginCodeDeadline<T>(
+  pending: Promise<T>,
+  pluginId: string,
+  phase: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new PluginCodeTimeoutError(pluginId, phase, pluginCodeTimeoutMs)),
+          pluginCodeTimeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export function setPluginCodeTimeoutForTesting(timeoutMs: number | null): void {
+  pluginCodeTimeoutMs = Math.max(1, timeoutMs ?? 20_000);
+}
+const pluginManagers = new WeakMap<IntegrationRegistry, PluginManager>();
+const pluginSources = new WeakMap<IntegrationRegistry, Map<string, { dir: string; isBuiltin: boolean }>>();
+const pluginOperationTails = new WeakMap<IntegrationRegistry, Promise<unknown>>();
+
+function runPluginOperation<T>(
+  registry: IntegrationRegistry,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = pluginOperationTails.get(registry) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(operation);
+  pluginOperationTails.set(registry, current);
+  void current.finally(() => {
+    if (pluginOperationTails.get(registry) === current) pluginOperationTails.delete(registry);
+  }).catch(() => undefined);
+  return current;
+}
+
+export function getPluginLifecycleRecords(registry: IntegrationRegistry): PluginLifecycleRecord[] {
+  return pluginManagers.get(registry)?.list() ?? [];
+}
+
+async function refreshPluginDerivedState(registry: IntegrationRegistry): Promise<void> {
+  setExtIndexes(registry.getAll().flatMap((plugin) => plugin.extIndex ? [plugin.extIndex] : []));
+  try {
+    const [{ clearSkillsCache }, { clearPluginWebModuleCache }] = await Promise.all([
+      import('./skill-loader.js'),
+      import('./plugins/plugin-web-module.js'),
+    ]);
+    clearSkillsCache();
+    clearPluginWebModuleCache();
+  } catch { /* best-effort after lifecycle changes */ }
+}
+
+export function disposeLoadedPlugins(registry: IntegrationRegistry): Promise<void> {
+  return runPluginOperation(registry, async () => {
+    const manager = pluginManagers.get(registry);
+    if (!manager) return;
+    pluginManagers.delete(registry);
+    pluginSources.delete(registry);
+    await manager.dispose();
+    await refreshPluginDerivedState(registry);
+  });
+}
+
+export function disableLoadedPlugin(
+  registry: IntegrationRegistry,
+  pluginId: string,
+): Promise<PluginLifecycleRecord> {
+  return runPluginOperation(registry, async () => {
+    if (pluginId === 'local') throw new Error('The local fallback plugin cannot be disabled.');
+    const manager = pluginManagers.get(registry);
+    if (!manager?.get(pluginId)) throw new Error(`Plugin "${pluginId}" is not discovered`);
+    await updatePluginConfig(pluginId, { enabled: false });
+    registry.unregister(pluginId, 'disabled');
+    try {
+      return await manager.disable(pluginId);
+    } finally {
+      await refreshPluginDerivedState(registry);
+    }
+  });
+}
+
+export function reloadLoadedPlugin(
+  registry: IntegrationRegistry,
+  pluginId: string,
+): Promise<PluginLifecycleRecord> {
+  return runPluginOperation(registry, async () => {
+    if (pluginId === 'local') throw new Error('The local fallback plugin cannot be reloaded.');
+    const manager = pluginManagers.get(registry);
+    const source = pluginSources.get(registry)?.get(pluginId);
+    if (!manager?.get(pluginId) || !source) throw new Error(`Plugin "${pluginId}" is not discovered`);
+
+    const manifestPath = path.join(source.dir, 'manifest.json');
+    let manifest: PluginManifest | null = null;
+    try {
+      manifest = validateManifest(JSON.parse(await fsp.readFile(manifestPath, 'utf-8')), manifestPath);
+    } catch (error) {
+      throw new Error(`Plugin "${pluginId}" manifest cannot be read: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!manifest || manifest.id !== pluginId) {
+      throw new Error(`Plugin "${pluginId}" manifest is invalid or changed identity`);
+    }
+
+    await updatePluginConfig(pluginId, { enabled: true });
+    await manager.forget(pluginId);
+    registry.unregister(pluginId, 'unloaded');
+    const config = await getConfig();
+    await loadPlugin(source.dir, source.isBuiltin, config.plugins ?? {}, registry, manager);
+    await refreshPluginDerivedState(registry);
+
+    const record = manager.get(pluginId);
+    if (!record) throw new Error(`Plugin "${pluginId}" was not found after reload`);
+    return record;
+  });
+}
+
+export function clearPluginQuarantine(
+  registry: IntegrationRegistry,
+  pluginId: string,
+): Promise<PluginLifecycleRecord | undefined> {
+  return runPluginOperation(registry, async () => {
+    await bootSentinel.clearQuarantine(pluginId);
+    return pluginManagers.get(registry)?.clearQuarantine(pluginId);
+  });
+}
+
+async function createPluginManager(registry: IntegrationRegistry): Promise<PluginManager> {
+  const previous = pluginManagers.get(registry);
+  if (previous) {
+    try {
+      await previous.dispose();
+    } catch (error) {
+      log.warn('Plugin cleanup before reload failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  const interrupted = await bootSentinel.recoverInterruptedActivations();
+  for (const failure of interrupted) {
+    log.warn('Plugin activation was interrupted during the previous process', { ...failure });
+  }
+
+  const manager = new PluginManager({
+    safeMode: pluginSafeModeEnabled(),
+    createContext: (definition) => new PluginContext({
+      id: definition.id,
+      dataDir: path.join(WALNUT_HOME, 'plugin-data', definition.id),
+      logger: createSubsystemLogger(`plugin/${definition.id}`),
+    }),
+    onStateChange: (record) => {
+      log.debug('Plugin lifecycle changed', { id: record.id, state: record.state });
+    },
+    onActivationStart: async (pluginId) => {
+      try { await bootSentinel.begin(pluginId); }
+      catch (error) {
+        log.warn('Could not persist plugin activation sentinel', {
+          id: pluginId, error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+    onActivationEnd: async (pluginId, outcome) => {
+      try { await bootSentinel.finish(pluginId, outcome); }
+      catch (error) {
+        log.warn('Could not clear plugin activation sentinel', {
+          id: pluginId, error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+  });
+  pluginManagers.set(registry, manager);
+  return manager;
+}
+
+async function discoverManagedPlugin(
+  manager: PluginManager,
+  definition: PluginDefinition,
+): Promise<PluginLifecycleRecord> {
+  const persisted = await bootSentinel.getPluginStatus(definition.id);
+  return manager.discover({
+    ...definition,
+    quarantined: definition.quarantined ?? persisted.quarantined,
+    failureCount: Math.max(definition.failureCount ?? 0, persisted.failureCount),
+  });
+}
 
 // ── On-the-fly bundling for external .ts plugins ──
 // External plugins ship as .ts source with relative imports that reference the
@@ -166,9 +372,25 @@ export function getUnconfiguredPlugins(): UnconfiguredPlugin[] {
 
 /** Plugins skipped because their manifest declares only capabilities this
  *  Walnut version doesn't implement yet (manifest v2 forward-compat). */
-const unsupportedPlugins: Array<{ id: string; name: string; capabilities: string[] }> = [];
+export interface UnsupportedPluginDiagnostic {
+  id: string;
+  name: string;
+  capabilities: string[];
+  reason?: string;
+  apiVersion?: number;
+}
 
-export function getUnsupportedPlugins(): Array<{ id: string; name: string; capabilities: string[] }> {
+const unsupportedPlugins: UnsupportedPluginDiagnostic[] = [];
+
+function removePluginDiagnostics(pluginId: string): void {
+  for (const diagnostics of [unconfiguredPlugins, unsupportedPlugins]) {
+    for (let index = diagnostics.length - 1; index >= 0; index--) {
+      if (diagnostics[index].id === pluginId) diagnostics.splice(index, 1);
+    }
+  }
+}
+
+export function getUnsupportedPlugins(): UnsupportedPluginDiagnostic[] {
   return unsupportedPlugins;
 }
 
@@ -218,6 +440,18 @@ export function validatePluginAssetPath(raw: unknown): { ok: true; rel: string }
   const rel = segments[0] === 'app' ? segments.slice(1).join('/') : segments.join('/');
   if (!rel) return { ok: false, error: 'must name a file inside app/' };
   return { ok: true, rel };
+}
+
+export function validatePluginEntryPath(raw: unknown): { ok: true; rel: string } | { ok: false; error: string } {
+  if (typeof raw !== 'string' || raw.trim() === '') return { ok: false, error: 'must be a non-empty string' };
+  const value = raw.trim().replace(/\\/g, '/');
+  if (value.startsWith('/') || /^[a-zA-Z]:/.test(value)) return { ok: false, error: 'must be a relative path' };
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)) return { ok: false, error: 'must be a file path, not a URL' };
+  if (/["'<>\0]/.test(value)) return { ok: false, error: 'contains unsafe characters' };
+  const segments = value.split('/').filter((segment) => segment !== '' && segment !== '.');
+  if (segments.length === 0) return { ok: false, error: 'must name a file' };
+  if (segments.some((segment) => segment === '..')) return { ok: false, error: 'must not contain ".." segments' };
+  return { ok: true, rel: segments.join('/') };
 }
 
 // ── Basic JSON Schema validation (type-only, no ajv needed) ──
@@ -446,19 +680,28 @@ function createPluginApiBuilder(manifest: PluginManifest, pluginConfig: Record<s
 
 async function discoverPluginDirs(): Promise<Array<{ dir: string; isBuiltin: boolean }>> {
   const results: Array<{ dir: string; isBuiltin: boolean }> = [];
+  const seenRealDirs = new Set<string>();
 
-  // Scan built-in dir
-  try {
-    const entries = await fsp.readdir(BUILTIN_DIR, { withFileTypes: true });
+  const addCandidate = async (candidate: string, isBuiltin: boolean): Promise<void> => {
+    try {
+      const realDir = await fsp.realpath(candidate);
+      if (!(await fsp.stat(realDir)).isDirectory() || seenRealDirs.has(realDir)) return;
+      await fsp.access(path.join(realDir, 'manifest.json'), fs.constants.R_OK);
+      seenRealDirs.add(realDir);
+      results.push({ dir: realDir, isBuiltin });
+    } catch { /* expected: broken link, non-directory, or no readable manifest */ }
+  };
+
+  const scanRoot = async (root: string, isBuiltin: boolean, followLinks: boolean): Promise<void> => {
+    const entries = await fsp.readdir(root, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.isDirectory()) {
-        const manifestPath = path.join(BUILTIN_DIR, entry.name, 'manifest.json');
-        try {
-          await fsp.access(manifestPath, fs.constants.R_OK);
-          results.push({ dir: path.join(BUILTIN_DIR, entry.name), isBuiltin: true });
-        } catch { /* expected: not a plugin directory (no manifest.json) */ }
-      }
+      if (!entry.isDirectory() && !(followLinks && entry.isSymbolicLink())) continue;
+      await addCandidate(path.join(root, entry.name), isBuiltin);
     }
+  };
+
+  try {
+    await scanRoot(BUILTIN_DIR, true, false);
   } catch (err) {
     log.debug('Built-in integrations dir not found', {
       dir: BUILTIN_DIR,
@@ -466,18 +709,10 @@ async function discoverPluginDirs(): Promise<Array<{ dir: string; isBuiltin: boo
     });
   }
 
-  // Scan external dir
   try {
-    const entries = await fsp.readdir(EXTERNAL_DIR, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        const manifestPath = path.join(EXTERNAL_DIR, entry.name, 'manifest.json');
-        try {
-          await fsp.access(manifestPath, fs.constants.R_OK);
-          results.push({ dir: path.join(EXTERNAL_DIR, entry.name), isBuiltin: false });
-        } catch { /* expected: not a plugin directory (no manifest.json) */ }
-      }
-    }
+    // Local development links are intentionally followed. Installing the link is
+    // the trust decision; canonicalizing the target also prevents duplicate loads.
+    await scanRoot(EXTERNAL_DIR, false, true);
   } catch (err) {
     log.debug('external plugins dir not accessible', {
       dir: EXTERNAL_DIR,
@@ -485,15 +720,9 @@ async function discoverPluginDirs(): Promise<Array<{ dir: string; isBuiltin: boo
     });
   }
 
-  // Scan plugin-source clones (the "plugin store" feature). These are real
-  // directories (never symlinks) so the esbuild import-rebase path works
-  // unchanged. Loaded after EXTERNAL_DIR, so a manually installed plugin
-  // shadows a store copy with the same id.
   try {
     const { getStorePluginDirs } = await import('./plugin-sources.js');
-    for (const dir of await getStorePluginDirs()) {
-      results.push({ dir, isBuiltin: false });
-    }
+    for (const dir of await getStorePluginDirs()) await addCandidate(dir, false);
   } catch (err) {
     log.debug('plugin-source scan failed', {
       error: err instanceof Error ? err.message : String(err),
@@ -552,9 +781,24 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
     log.warn('Invalid manifest: missing or empty "id"', { filePath });
     return null;
   }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(obj.id)) {
+    log.warn('Invalid manifest: unsafe "id"', { filePath });
+    return null;
+  }
   if (typeof obj.name !== 'string' || !obj.name) {
     log.warn('Invalid manifest: missing or empty "name"', { filePath });
     return null;
+  }
+  if (obj.apiVersion !== undefined && (!Number.isInteger(obj.apiVersion) || (obj.apiVersion as number) < 1)) {
+    log.warn('Invalid manifest: apiVersion must be a positive integer', { filePath });
+    return null;
+  }
+  if (obj.apiVersion === 1) {
+    try { validatePluginId(obj.id); }
+    catch (error) {
+      log.warn('Invalid unified plugin id', { filePath, error: error instanceof Error ? error.message : String(error) });
+      return null;
+    }
   }
 
   // Manifest v2: capabilities. Parsed leniently — unknown keys warn (they may
@@ -612,14 +856,36 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
     if (taskFields.length === 0) taskFields = undefined;
   }
 
+  let invalidEntry = false;
+  const parseEntry = (field: 'server' | 'web'): string | undefined => {
+    if (obj[field] === undefined) return undefined;
+    const checked = validatePluginEntryPath(obj[field]);
+    if (!checked.ok) {
+      invalidEntry = true;
+      log.warn(`Invalid manifest ${field} entry`, { filePath, error: checked.error });
+      return undefined;
+    }
+    return checked.rel;
+  };
+  const server = parseEntry('server');
+  const web = parseEntry('web');
+  const webview = obj.webview && typeof obj.webview === 'object' && !Array.isArray(obj.webview)
+    ? parseUiApp({ app: obj.webview }, filePath) ?? undefined
+    : undefined;
+  if (invalidEntry) return null;
+
   return {
     id: obj.id,
     name: obj.name,
     description: typeof obj.description === 'string' ? obj.description : undefined,
     version: typeof obj.version === 'string' ? obj.version : undefined,
+    apiVersion: typeof obj.apiVersion === 'number' ? obj.apiVersion : undefined,
     engines: obj.engines && typeof obj.engines === 'object'
       ? obj.engines as { walnut?: string }
       : undefined,
+    server,
+    web,
+    webview,
     capabilities,
     configSchema: obj.configSchema && typeof obj.configSchema === 'object'
       ? obj.configSchema as Record<string, unknown>
@@ -633,11 +899,40 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
 
 // ── Single plugin loader ──
 
+function pluginModuleFunctions(
+  mod: Record<string, any>,
+  unified: boolean,
+): {
+  activate: ((api: unknown) => unknown | Promise<unknown>) | null
+  deactivate: (() => void | Promise<void>) | null
+} {
+  if (!unified) {
+    return {
+      activate: typeof mod.default === 'function' ? mod.default : null,
+      deactivate: null,
+    }
+  }
+  const defaultExport = mod.default
+  const activate = typeof mod.activate === 'function'
+    ? mod.activate
+    : typeof defaultExport?.activate === 'function'
+      ? defaultExport.activate.bind(defaultExport)
+      : null
+  const deactivate = typeof mod.deactivate === 'function'
+    ? mod.deactivate
+    : typeof defaultExport?.deactivate === 'function'
+      ? defaultExport.deactivate.bind(defaultExport)
+      : null
+  return { activate, deactivate }
+}
+
 async function loadPlugin(
   pluginDir: string,
   isBuiltin: boolean,
   pluginConfigs: Record<string, Record<string, unknown> & { enabled?: boolean }>,
   registry: IntegrationRegistry,
+  manager: PluginManager,
+  additive = false,
 ): Promise<void> {
   const manifestPath = path.join(pluginDir, 'manifest.json');
 
@@ -657,37 +952,111 @@ async function loadPlugin(
   const pluginId = manifest.id;
   const isLocal = pluginId === 'local';
 
-  // Skip if already registered (built-in takes precedence over external with same id)
-  if (registry.has(pluginId)) {
+  // Built-ins and earlier discovery roots always win, including when the losing
+  // copy targets a newer API version. An additive scan sees every existing source
+  // again; that same path is a no-op, while a different path is a real duplicate.
+  let sources = pluginSources.get(registry);
+  if (!sources) {
+    sources = new Map();
+    pluginSources.set(registry, sources);
+  }
+  const existingSource = sources.get(pluginId);
+  if ((!isLocal && registry.has(pluginId)) || manager.get(pluginId)) {
     log.debug('Skipping duplicate plugin', { id: pluginId, dir: pluginDir });
-    duplicatePluginIds.push(pluginId);
+    if ((!additive || existingSource?.dir !== pluginDir) && !duplicatePluginIds.includes(pluginId)) {
+      duplicatePluginIds.push(pluginId);
+    }
     return;
+  }
+  removePluginDiagnostics(pluginId);
+  sources.set(pluginId, { dir: pluginDir, isBuiltin });
+
+  if (manifest.apiVersion !== undefined && manifest.apiVersion !== 1) {
+    const reason = `Unsupported Plugin API version ${manifest.apiVersion}`;
+    unsupportedPlugins.push({
+      id: pluginId,
+      name: manifest.name,
+      capabilities: Object.keys(manifest.capabilities ?? {}),
+      reason,
+      apiVersion: manifest.apiVersion,
+    });
+    await discoverManagedPlugin(manager, {
+      id: pluginId,
+      name: manifest.name,
+      builtin: isBuiltin,
+      unsupportedReason: reason,
+      activate: () => undefined,
+    });
+    return;
+  }
+
+  if (manifest.apiVersion === 1) {
+    const requiredRange = manifest.engines?.walnut;
+    const currentVersion = getVersion();
+    const reason = !requiredRange
+      ? 'apiVersion 1 requires engines.walnut'
+      : satisfiesSemVer(currentVersion, requiredRange)
+        ? undefined
+        : `Requires Walnut ${requiredRange}; current version is ${currentVersion}`;
+    if (reason) {
+      unsupportedPlugins.push({
+        id: pluginId,
+        name: manifest.name,
+        capabilities: Object.keys(manifest.capabilities ?? {}),
+        reason,
+        apiVersion: manifest.apiVersion,
+      });
+      await discoverManagedPlugin(manager, {
+        id: pluginId,
+        name: manifest.name,
+        builtin: isBuiltin,
+        unsupportedReason: reason,
+        activate: () => undefined,
+      });
+      return;
+    }
   }
 
   // Check enabled flag from config (local plugin cannot be disabled)
   const configEntry = pluginConfigs[pluginId] ?? {};
   if (!isLocal && configEntry.enabled === false) {
+    await discoverManagedPlugin(manager, {
+      id: pluginId,
+      name: manifest.name,
+      builtin: isBuiltin,
+      enabled: false,
+      activate: () => undefined,
+    });
     log.debug('Plugin disabled in config', { id: pluginId });
     return;
   }
 
-  // Manifest v2: absence of `capabilities` means a sync plugin (back-compat).
-  // A manifest declaring only capabilities we DON'T implement is skipped WITHOUT
-  // importing its code — it targets a newer Walnut.
+  // Legacy manifests use capabilities as gates. apiVersion 1 is full-trust: the
+  // block is descriptive only, and an empty block is a valid Server/Web Plugin.
+  const unified = manifest.apiVersion === 1;
   const declaredCapabilities = manifest.capabilities
     ? Object.keys(manifest.capabilities)
-    : ['sync'];
-  const effectiveCapabilities = declaredCapabilities.filter(c => SUPPORTED_CAPABILITIES.has(c));
-  if (effectiveCapabilities.length === 0) {
+    : unified ? [] : ['sync'];
+  const effectiveCapabilities = unified
+    ? declaredCapabilities
+    : declaredCapabilities.filter(c => SUPPORTED_CAPABILITIES.has(c));
+  if (!unified && effectiveCapabilities.length === 0) {
     log.warn('Plugin not loaded — requires capabilities this Walnut version does not support', {
       id: pluginId, capabilities: declaredCapabilities,
     });
     unsupportedPlugins.push({ id: pluginId, name: manifest.name, capabilities: declaredCapabilities });
+    await discoverManagedPlugin(manager, {
+      id: pluginId,
+      name: manifest.name,
+      builtin: isBuiltin,
+      unsupportedReason: `Unsupported capabilities: ${declaredCapabilities.join(', ')}`,
+      activate: () => undefined,
+    });
     return;
   }
   // `sync` is what makes a plugin a TASK SOURCE — required only when declared
   // (or implied by an absent capabilities block).
-  const expectsSync = effectiveCapabilities.includes('sync');
+  const expectsSync = !unified && effectiveCapabilities.includes('sync');
 
   // Validate config against configSchema
   const { enabled: _enabled, ...pluginConfig } = configEntry;
@@ -716,6 +1085,13 @@ async function loadPlugin(
         configSchema: manifest.configSchema,
         uiHints: manifest.uiHints,
       });
+      await discoverManagedPlugin(manager, {
+        id: pluginId,
+        name: manifest.name,
+        builtin: isBuiltin,
+        missingConfig: missing,
+        activate: () => undefined,
+      });
       return;
     }
   }
@@ -728,11 +1104,23 @@ async function loadPlugin(
     }
   }
 
+  const lifecycle = await discoverManagedPlugin(manager, {
+    id: pluginId,
+    name: manifest.name,
+    builtin: isBuiltin,
+    activate: async (context) => {
   // Dynamic import — find entry point and load it.
   // For external .ts plugins, use esbuild to bundle on-the-fly (resolves parent imports).
   // For built-in plugins, the compiled .js is already in dist/integrations/.
-  let registerFn: ((api: PluginApi) => void | Promise<void>) | null = null;
-  const candidates = ['index.ts', 'plugin.ts', 'index.js', 'plugin.js', 'index.mjs'];
+  let registerFn: ((api: unknown) => unknown | Promise<unknown>) | null = null;
+  let deactivateFn: (() => void | Promise<void>) | null = null;
+  const candidates = unified
+    ? (manifest.server
+        ? [manifest.server, ...(isBuiltin && manifest.server.endsWith('.js')
+          ? [manifest.server.replace(/\.js$/, '.ts')]
+          : [])]
+        : [])
+    : ['index.ts', 'plugin.ts', 'index.js', 'plugin.js', 'index.mjs'];
   let bundledFile: string | null = null;
 
   for (const filename of candidates) {
@@ -744,13 +1132,22 @@ async function loadPlugin(
       if (!isBuiltin && filename.endsWith('.ts')) {
         bundledFile = await bundleExternalPlugin(pluginDir, entryPath);
         if (bundledFile) {
-          const mod = await import(pathToFileURL(bundledFile).href);
-          // Clean up temp bundle — module is cached by Node after import()
-          fsp.unlink(bundledFile).catch(() => {});
-          bundledFile = null;
-          if (typeof mod.default === 'function') {
-            registerFn = mod.default;
-            break;
+          const currentBundle = bundledFile;
+          try {
+            const mod = await withPluginCodeDeadline(
+              import(pathToFileURL(currentBundle).href),
+              pluginId,
+              'module evaluation',
+            );
+            const functions = pluginModuleFunctions(mod, unified);
+            if (functions.activate) {
+              registerFn = functions.activate;
+              deactivateFn = functions.deactivate;
+              break;
+            }
+          } finally {
+            try { await fsp.unlink(currentBundle); } catch { /* best-effort temp cleanup */ }
+            bundledFile = null;
           }
         }
         // Bundling failed or no default export — try next candidate
@@ -758,14 +1155,22 @@ async function loadPlugin(
       }
 
       // Built-in plugins or .js/.mjs: direct import
-      const moduleUrl = pathToFileURL(entryPath).href;
-      const mod = await import(moduleUrl);
-      if (typeof mod.default === 'function') {
-        registerFn = mod.default;
+      const moduleUrl = pathToFileURL(entryPath).href
+        + (!isBuiltin ? `?v=${(await fsp.stat(entryPath)).mtimeMs}-${Date.now()}` : '');
+      const mod = await withPluginCodeDeadline(
+        import(moduleUrl),
+        pluginId,
+        'module evaluation',
+      );
+      const functions = pluginModuleFunctions(mod, unified);
+      if (functions.activate) {
+        registerFn = functions.activate;
+        deactivateFn = functions.deactivate;
         break;
       }
       // File loaded but no default export — try next candidate
     } catch (err) {
+      if (err instanceof PluginCodeTimeoutError) throw err;
       log.debug('plugin entry candidate failed', {
         id: pluginId, filename,
         error: err instanceof Error ? err.message : String(err),
@@ -773,20 +1178,39 @@ async function loadPlugin(
     }
   }
 
-  if (!registerFn || typeof registerFn !== 'function') {
+  if (candidates.length > 0 && (!registerFn || typeof registerFn !== 'function')) {
     log.warn('No valid entry point found', { id: pluginId, dir: pluginDir, tried: candidates });
     if (bundledFile) try { await fsp.unlink(bundledFile); } catch { /* non-critical cleanup */ }
-    return;
+    throw new Error(`Plugin "${pluginId}" has no valid entry point`);
   }
 
-  // Create PluginApi and call the register function
   const builder = createPluginApiBuilder(manifest, pluginConfig);
 
   try {
-    await registerFn(builder.api);
+    if (registerFn) {
+      const injectedApi = unified
+        ? createServerPluginApi({
+            context,
+            pluginName: manifest.name,
+            legacyApi: builder.api,
+            contributions: builder.collected,
+            integrationRegistry: registry,
+          })
+        : builder.api;
+      const activation = Promise.resolve()
+        .then(() => registerFn!(injectedApi))
+        .then((value) => {
+          if (value && typeof value === 'object' && typeof (value as { dispose?: unknown }).dispose === 'function') {
+            context.own(value as { dispose(): void | Promise<void> });
+          }
+          return value;
+        });
+      await withPluginCodeDeadline(activation, pluginId, 'activation');
+      if (deactivateFn) context.onDispose(() => deactivateFn!());
+    }
   } catch (err) {
     log.error('Plugin registration threw an error', { id: pluginId, error: String(err) });
-    return;
+    throw err;
   }
 
   // registerSync is required only of a SYNC plugin. A ui/tools/skills-only
@@ -794,14 +1218,14 @@ async function loadPlugin(
   // would be pure ceremony.
   if (expectsSync && !builder.collected.sync) {
     log.error('Plugin did not call registerSync()', { id: pluginId, capabilities: effectiveCapabilities });
-    return;
+    throw new Error(`Plugin "${pluginId}" did not call registerSync()`);
   }
 
   // A non-sync plugin still gets an inert sync stub so the many
   // `registry.get(source)!.sync.x()` call sites stay total; `hasSync: false` is
   // the signal that it must never be polled or offered as a task source.
-  const hasSync = !!builder.collected.sync;
-  if (!hasSync && builder.collected.claim) {
+  const initialHasSync = !!builder.collected.sync;
+  if (!initialHasSync && builder.collected.claim) {
     // A source claim without sync would make the plugin selectable as a task
     // source and then silently drop every push. Refuse the claim, keep the plugin.
     log.warn('Plugin registered a source claim without the sync capability — claim ignored', {
@@ -812,57 +1236,69 @@ async function loadPlugin(
 
   // Capability-gated collections: a plugin must DECLARE what it contributes, so
   // the manifest stays an honest description of what the plugin does.
-  const uiApp = effectiveCapabilities.includes('ui')
-    ? (manifest.capabilities?.ui as { app?: RegisteredUiApp } | undefined)?.app
-    : undefined;
+  const uiApp = unified
+    ? manifest.webview
+    : effectiveCapabilities.includes('ui')
+      ? (manifest.capabilities?.ui as { app?: RegisteredUiApp } | undefined)?.app
+      : undefined;
 
   let tools = builder.collected.tools;
-  if (tools.length > 0 && !effectiveCapabilities.includes('tools')) {
+  if (!unified && tools.length > 0 && !effectiveCapabilities.includes('tools')) {
     log.warn('Plugin called registerTool without declaring the "tools" capability — tools ignored', {
       id: pluginId, tools: tools.map(t => t.name),
     });
     tools = [];
   }
 
-  const hasSkills = effectiveCapabilities.includes('skills')
+  const declaresSkills = unified || effectiveCapabilities.includes('skills');
+  const hasSkills = declaresSkills
     && await fsp.stat(path.join(pluginDir, 'skills')).then(s => s.isDirectory()).catch(() => false);
-  if (effectiveCapabilities.includes('skills') && !hasSkills) {
+  if (!unified && effectiveCapabilities.includes('skills') && !hasSkills) {
     log.warn('Plugin declares the "skills" capability but has no skills/ directory', { id: pluginId, dir: pluginDir });
   }
 
-  // Build RegisteredPlugin and register
+  // Build RegisteredPlugin and register. Singleton contributions stay live so
+  // their Disposable handles detach immediately without requiring a full reload.
+  const fallbackSync = inertSync();
   const registered: RegisteredPlugin = {
     id: manifest.id,
     name: manifest.name,
     description: manifest.description,
     version: manifest.version,
+    apiVersion: manifest.apiVersion,
+    serverEntry: manifest.server,
+    webEntry: manifest.web,
     config: pluginConfig,
-    sync: builder.collected.sync ?? inertSync(),
-    hasSync,
+    get sync() { return builder.collected.sync ?? fallbackSync; },
+    get hasSync() { return !!builder.collected.sync; },
     capabilities: effectiveCapabilities,
-    claim: builder.collected.claim ?? undefined,
-    display: builder.collected.display ?? undefined,
-    agentContext: builder.collected.agentContext ?? undefined,
+    get claim() { return builder.collected.claim ?? undefined; },
+    get display() { return builder.collected.display ?? undefined; },
+    get agentContext() { return builder.collected.agentContext ?? undefined; },
     migrations: builder.collected.migrations,
     httpRoutes: builder.collected.httpRoutes,
-    extIndex: builder.collected.extIndex ?? undefined,
+    get extIndex() { return builder.collected.extIndex ?? undefined; },
     configSchema: manifest.configSchema,
     uiHints: manifest.uiHints,
     taskFields: manifest.taskFields,
-    tools: tools.length > 0 ? tools : undefined,
+    tools: unified || effectiveCapabilities.includes('tools') ? tools : undefined,
     uiApp,
     pluginDir,
     hasSkills,
   };
 
-  registry.register(pluginId, registered);
+  if (isLocal) registry.replace(pluginId, registered);
+  else {
+    registry.register(pluginId, registered);
+    context.onDispose(() => { registry.unregister(pluginId, 'unloaded'); });
+  }
   log.info('Plugin loaded', {
     id: pluginId,
     name: manifest.name,
     version: manifest.version ?? 'n/a',
     builtin: isBuiltin,
     capabilities: effectiveCapabilities,
-    hasSync,
+    hasSync: initialHasSync,
     hasClaim: !!registered.claim,
     hasDisplay: !!registered.display,
     migrations: registered.migrations.length,
@@ -872,16 +1308,40 @@ async function loadPlugin(
     uiApp: uiApp?.entry,
     hasSkills,
   });
+    },
+  });
+
+  if (lifecycle.state !== 'discovered') {
+    log.info('Plugin activation skipped', { id: pluginId, state: lifecycle.state, reason: lifecycle.reason });
+    return;
+  }
+  try {
+    await manager.activate(pluginId);
+  } catch (error) {
+    log.error('Plugin activation failed', {
+      id: pluginId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 
 // ── Main entry: load all plugins ──
 
-export async function loadPlugins(registry: IntegrationRegistry): Promise<void> {
-  log.info('Loading plugins', { builtinDir: BUILTIN_DIR, externalDir: EXTERNAL_DIR });
-  unconfiguredPlugins.length = 0;
-  unsupportedPlugins.length = 0;
-  duplicatePluginIds.length = 0;
+async function loadPluginsUnlocked(registry: IntegrationRegistry, additive = false): Promise<void> {
+  log.info('Loading plugins', { builtinDir: BUILTIN_DIR, externalDir: EXTERNAL_DIR, additive });
+  const existingManager = pluginManagers.get(registry);
+  const manager = additive && existingManager
+    ? existingManager
+    : await createPluginManager(registry);
+  if (!additive) {
+    pluginSources.set(registry, new Map());
+    unconfiguredPlugins.length = 0;
+    unsupportedPlugins.length = 0;
+    duplicatePluginIds.length = 0;
+  } else if (!pluginSources.has(registry)) {
+    pluginSources.set(registry, new Map());
+  }
 
   // Read plugin configs from config.yaml
   const config = await getConfig();
@@ -899,19 +1359,19 @@ export async function loadPlugins(registry: IntegrationRegistry): Promise<void> 
   const localIdx = builtins.findIndex(d => path.basename(d.dir) === 'local');
   if (localIdx >= 0) {
     const [localDir] = builtins.splice(localIdx, 1);
-    await loadPlugin(localDir.dir, true, pluginConfigs, registry);
+    await loadPlugin(localDir.dir, true, pluginConfigs, registry, manager, additive);
   } else {
     log.error('Local plugin not found in built-in integrations directory', { dir: BUILTIN_DIR });
   }
 
   // Load remaining built-ins
   for (const { dir } of builtins) {
-    await loadPlugin(dir, true, pluginConfigs, registry);
+    await loadPlugin(dir, true, pluginConfigs, registry, manager, additive);
   }
 
   // Load external plugins (esbuild bundles .ts plugins on-the-fly)
   for (const { dir } of externals) {
-    await loadPlugin(dir, false, pluginConfigs, registry);
+    await loadPlugin(dir, false, pluginConfigs, registry, manager, additive);
   }
 
   const loaded = registry.getAll();
@@ -957,6 +1417,15 @@ export async function loadPlugins(registry: IntegrationRegistry): Promise<void> 
     apps: loaded.filter(p => p.uiApp).map(p => p.id),
     skillDirs: loaded.filter(p => p.hasSkills).map(p => p.id),
   });
+}
+
+export function loadPlugins(registry: IntegrationRegistry): Promise<void> {
+  return runPluginOperation(registry, () => loadPluginsUnlocked(registry));
+}
+
+/** Discover and activate only Plugins not already owned by this registry. */
+export function loadNewPlugins(registry: IntegrationRegistry): Promise<void> {
+  return runPluginOperation(registry, () => loadPluginsUnlocked(registry, true));
 }
 
 // ── Deep-capability accessors (tools / apps / skill dirs) ──
@@ -1041,6 +1510,9 @@ async function getInstalledPluginIds(): Promise<Set<string>> {
  */
 const MIS_MIGRATED_CONFIG_KEYS = ['providers', 'ui', 'audio', 'developer'] as const;
 
+// The Calendar Plugin owns tools, while CalendarService still owns this top-level config.
+const CORE_CONFIG_KEYS = new Set(['calendar']);
+
 /**
  * One-time migration: move legacy top-level integration config keys
  * into the new plugins.{id} section.
@@ -1093,7 +1565,7 @@ export async function migrateConfigToPlugins(): Promise<boolean> {
   for (const [key, val] of Object.entries(raw)) {
     // `plugins` is the destination, not a candidate: a plugin dir literally named
     // "plugins" would otherwise fold the whole section into itself.
-    if (key === 'plugins') continue;
+    if (key === 'plugins' || CORE_CONFIG_KEYS.has(key)) continue;
     const pluginId = key.replace(/_/g, '-'); // ms_todo → ms-todo
     // Positive evidence only: a plugin dir of that name exists, or the plugin is
     // gone but the key is known-legacy. Everything else is a config section.

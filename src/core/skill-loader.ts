@@ -8,6 +8,8 @@
  *   dist/data/skills/      — shipped with walnut
  *   ~/.claude/skills/      — claude skills (Claude Code CLI's own store)
  *   <pluginDir>/skills/    — installed plugins declaring the `skills` capability (lowest)
+ *   registered dirs        — directories an active plugin registered at runtime via
+ *                            walnut.registry.skill() (appended last, see below)
  *
  * TWO discovery scopes — do not collapse them:
  *   getPromptSearchDirs() — what the PERSONAL AI's prompt index is built from. Excludes
@@ -29,6 +31,7 @@ import yaml from 'js-yaml';
 import { log } from '../logging/index.js';
 import { isMemorySafetyEnforced, screenMemoryText } from './memory-safety.js';
 import { registry } from './integration-registry.js';
+import { listOwnedSkillDirs } from './plugins/skill-registry.js';
 import { GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR, BUILTIN_SKILLS_DIR, SKILL_SETTINGS_FILE } from '../constants.js';
 
 export type SkillType = 'action' | 'knowledge';
@@ -68,30 +71,56 @@ interface SkillFrontmatter {
 // Preserve existing exports without retaining the retired product name in source.
 const LEGACY_PERSONAL_AI_SKILLS_ENV = `WALNUT_${String.fromCharCode(66, 85, 84, 76, 69, 82)}_CLAUDE_SKILLS`;
 
+function dedupeSkillDirs(dirs: string[]): string[] {
+  const seen = new Set<string>();
+  return dirs.filter((dir) => {
+    const key = path.resolve(dir);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /**
  * `<pluginDir>/skills` for every loaded plugin declaring the `skills`
- * capability. Appended LAST to both scopes, so first-wins discovery lets a
- * workspace / global / shipped skill of the same name override a plugin's.
+ * capability, then every directory an ACTIVE plugin registered at runtime through
+ * `walnut.registry.skill()`. Appended LAST to both scopes, so first-wins discovery
+ * lets a workspace / global / shipped skill of the same name override a plugin's.
  *
  * Read from the registry live (a plugin-store soft reload changes the set) and
  * fully guarded: the skills index is on the prompt path, so a registry that
  * isn't initialised yet must degrade to "no plugin skills", never throw.
  *
+ * With no runtime registration this returns the manifest dirs completely untouched,
+ * so an install without a skill-contributing plugin builds a byte-identical prompt.
+ *
  * Reads integration-REGISTRY, not integration-loader: the registry is a leaf
  * (types only), while the loader pulls in task-manager/task-db/config-manager
- * and would make this a cycle.
+ * and would make this a cycle. Same reason for plugins/skill-registry.ts.
  */
 export function getPluginSkillDirs(): string[] {
+  let manifestDirs: string[] = [];
   try {
-    return registry.getAll()
+    manifestDirs = registry.getAll()
       .filter((p) => p.hasSkills && p.pluginDir)
       .map((p) => path.join(p.pluginDir!, 'skills'));
   } catch (err) {
     log.task.debug('skill-loader: could not read plugin skill dirs', {
       error: err instanceof Error ? err.message : String(err),
     });
-    return [];
   }
+
+  let registeredDirs: string[] = [];
+  try {
+    registeredDirs = listOwnedSkillDirs();
+  } catch (err) {
+    log.task.debug('skill-loader: could not read registered plugin skill dirs', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  if (registeredDirs.length === 0) return manifestDirs;
+
+  return dedupeSkillDirs([...manifestDirs, ...registeredDirs]);
 }
 
 /** Sources the PERSONAL AI's prompt index is built from — no ~/.claude/skills/ (see file header). */

@@ -58,6 +58,9 @@ function domainForEvent(name: string): HookDomain | null {
 
 export class HookDispatcher {
   private hooks: SessionHookDefinition[] = [];
+  private configuredHooks: SessionHookDefinition[] = [];
+  private runtimeHooks = new Map<string, SessionHookDefinition>();
+  private hookConfig: SessionHooksConfig | undefined;
   private sessionState = new Map<string, SessionState>();
   private payloadBuilder = new PayloadBuilder();
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
@@ -126,38 +129,37 @@ export class HookDispatcher {
   }
 
   private setHooks(hookDefs: SessionHookDefinition[], config?: SessionHooksConfig): void {
-    // Merge config overrides
-    this.hooks = hookDefs.map(h => {
-      const override = config?.overrides?.[h.id];
-      if (override) {
-        return {
-          ...h,
-          enabled: override.enabled ?? h.enabled,
-          priority: override.priority ?? h.priority,
-          timeoutMs: override.timeoutMs ?? h.timeoutMs,
-        };
-      }
-      return h;
-    }).filter(h => h.enabled !== false);
+    this.configuredHooks = [...hookDefs];
+    this.hookConfig = config;
+    this.rebuildHooks();
+  }
 
-    // Deduplicate by hook ID (last definition wins — file overrides builtin)
+  private rebuildHooks(): void {
+    const configuredAndRuntime = [
+      ...this.configuredHooks,
+      ...this.runtimeHooks.values(),
+    ];
     const seen = new Map<string, SessionHookDefinition>();
-    for (const h of this.hooks) {
-      seen.set(h.id, h);
+    for (const hook of configuredAndRuntime) {
+      const override = this.hookConfig?.overrides?.[hook.id];
+      const merged = override
+        ? {
+            ...hook,
+            enabled: override.enabled ?? hook.enabled,
+            priority: override.priority ?? hook.priority,
+            timeoutMs: override.timeoutMs ?? hook.timeoutMs,
+          }
+        : hook;
+      if (merged.enabled === false) seen.delete(merged.id);
+      else seen.set(merged.id, merged);
     }
-    this.hooks = [...seen.values()];
+    this.hooks = [...seen.values()]
+      .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
 
-    // Sort by priority (lower = first)
-    this.hooks.sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
-
-    // Recompute the domain gate. Daemon-policy / inventory-only entries never
-    // dispatch, so they don't arm a domain.
     this.domainsInUse.clear();
-    for (const h of this.hooks) {
-      if (h.runtime === 'daemon' || h.enforcedElsewhere) continue;
-      for (const p of h.hooks) {
-        this.domainsInUse.add(HOOK_POINT_DOMAIN[p]);
-      }
+    for (const hook of this.hooks) {
+      if (hook.runtime === 'daemon' || hook.enforcedElsewhere) continue;
+      for (const point of hook.hooks) this.domainsInUse.add(HOOK_POINT_DOMAIN[point]);
     }
   }
 
@@ -166,18 +168,21 @@ export class HookDispatcher {
    */
   addHook(hook: SessionHookDefinition): void {
     if (hook.enabled === false) return;
-    this.hooks.push(hook);
-    this.hooks.sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
-    if (!hook.runtime || hook.runtime === 'walnut') {
-      for (const p of hook.hooks) this.domainsInUse.add(HOOK_POINT_DOMAIN[p]);
+    if (this.runtimeHooks.has(hook.id)) {
+      throw new Error(`Runtime hook "${hook.id}" is already registered`);
     }
+    this.runtimeHooks.set(hook.id, hook);
+    this.rebuildHooks();
   }
 
   /**
    * Remove a hook by ID.
    */
   removeHook(id: string): void {
-    this.hooks = this.hooks.filter(h => h.id !== id);
+    if (!this.runtimeHooks.delete(id)) {
+      this.configuredHooks = this.configuredHooks.filter(hook => hook.id !== id);
+    }
+    this.rebuildHooks();
   }
 
   /**
@@ -189,6 +194,11 @@ export class HookDispatcher {
       clearInterval(this.pruneTimer);
       this.pruneTimer = null;
     }
+    this.hooks = [];
+    this.configuredHooks = [];
+    this.runtimeHooks.clear();
+    this.hookConfig = undefined;
+    this.domainsInUse.clear();
     this.sessionState.clear();
     this.payloadBuilder.clearAll();
   }

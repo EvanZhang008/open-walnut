@@ -287,26 +287,35 @@ Only eligible skills appear in the system prompt as `<available_skills>` XML. Th
 
 ## Plugin System
 
-A plugin is a directory with `manifest.json` plus an entry point (`index.ts`/`plugin.ts`/`index.js`/`plugin.js`/`index.mjs`) that default-exports `(api: PluginApi) => void | Promise<void>`. Full authoring guide: [Plugin development](./docs/reference/plugin-development.md). Types: `src/core/integration-types.ts`. Loader: `src/core/integration-loader.ts`.
+Walnut has one Plugin model. Installing a Plugin means trusting its code. A Plugin can have a full Node server entry, a native React web entry, an optional sandboxed Webview, or any combination. `server`, `web`, and `webview` are entry points, not permission levels. Full authoring details live in [Plugin development](./docs/reference/plugin-development.md).
 
-**Capability model** (`manifest.capabilities`). Implemented: `sync` (task sync, requires `registerSync`), `ui` (an app page in the console), `tools` (`registerTool`, exposed to the Personal AI as `<pluginId>_<name>`), `skills` (`skills/<name>/SKILL.md`, auto-discovered at lowest priority so user skills override). Reserved and not implemented: `hooks`, `routines`. Three load-bearing rules: an ABSENT `capabilities` key means `{ sync: {} }` (every pre-capabilities manifest is a sync plugin); a manifest declaring ONLY reserved capabilities is reported `unsupported` without its code ever being imported, so a plugin written for a newer Walnut degrades instead of crashing; and a capability that is not DECLARED is inert (`registerTool` without `capabilities.tools` is logged and ignored, `skills/` is not scanned without `capabilities.skills`), so the manifest is the contract rather than a hint.
+### Public contract
 
-**Discovery order, first id wins**: built-in (`src/integrations/` in dev, `dist/integrations/` in prod; `local` first and undisablable) → `~/.open-walnut/plugins/` → Plugin Store clones (`~/.open-walnut/plugin-stores/<slug>/`, from any git repo). A shadowed copy is reported `duplicate`, never silently dropped. Per-plugin sequence: manifest → `enabled` flag → capability check → `configSchema` validation (missing `required` = `needs-config`) → import (external `.ts` is esbuild-bundled on the fly, npm packages left external so they resolve from Walnut's `node_modules`) → call the default export → register. Then routes mount at `/api/plugins/<id>`, declared ext indexes open, migrations run. **Soft reload is additive**: a NEW plugin goes live with no restart, but changed code of an already-loaded plugin keeps running until restart (status `pending-restart`).
+An `apiVersion: 1` manifest names `server`, `web`, and optional `webview` artifacts and declares an enforced `engines.walnut` range. The server and web modules export `activate(walnut)`. Authors import only `@open-walnut/plugin-api`; the host injects the runtime services. Legacy manifests without `apiVersion` continue through the old capability adapter.
 
-**Trust model**: plugins run IN-PROCESS with Walnut's full privileges (all tasks, notes, config, network, filesystem). There is no server-side sandbox and no permission prompt; adding the source IS the consent step. No auto-pull either, so remote code changes stay explicit and the current SHA is visible in the UI.
+The Server API has three layers: typed services for common data, stable primitives such as events, ops, HTTP, WebSocket RPC, tools, hooks, cron actions, agents, providers, commands, skills, and sync registration, then an explicitly unstable `unsafe` escape hatch. Full Node access is already available to server code, so Walnut does not pretend these methods are a security boundary.
 
-**App sandbox**: `<pluginDir>/app/` is served static at `/plugin-apps/<pluginId>/app/…` and rendered in a SANDBOXED iframe with no same-origin access (no Walnut cookies, no shared `localStorage`, no direct `fetch` to `/api`). The page reaches Walnut only through the SDK at `/walnut-app-sdk.js`, which wraps a `postMessage` bridge the host owns: the host holds the authenticated origin and makes each REST call on the page's behalf, validating it first (path must start with `/api/`, no `..`, method in GET/POST/PUT/PATCH/DELETE, and config WRITES refused since Settings owns those). Only `app/` is served, so plugin code and manifests are unreachable over HTTP. This protects the BROWSER side only, and says nothing about what the plugin's server-side code can do.
+The Web API runs native Plugin modules in Walnut's browser realm. The host provides the exact React, ReactDOM, and JSX runtime instances used by the console, so Plugin components share one React tree. Live owner-scoped registries feed routes, sidebar items, pages, panels, Dashboard layouts, Settings sections, and stable Views such as `TaskView`, `ChatView`, `SessionView`, `CalendarView`, `FileView`, `NoteView`, and `TerminalView`.
 
-```
-┌──────────────────────────────┐        ┌─────────────────────┐        ┌─────────────┐
-│ plugin app (sandboxed iframe)│        │ host console (SPA)  │        │ Walnut REST │
-│  Walnut.api(method, path) ───┼──post──┤─ bridge: validate  ─┼──fetch─┤─▶ response  │
-│  Walnut.on('task:', cb) ◀────┼─message┤◀ bus events         │        │             │
-│  Walnut.open('/tasks') ──────┼──post──┤─ SPA navigation     │        │             │
-└──────────────────────────────┘        └─────────────────────┘        └─────────────┘
-```
+### Lifecycle and ownership
 
-**Example plugin**: [examples/plugins/hello-walnut](./examples/plugins/hello-walnut) exercises `ui` + `tools` + `skills` with no sync at all, plus one plugin HTTP route.
+`PluginManager` runs discovery, compatibility checks, activation, disposal, reload, quarantine, and Safe Mode. Every registration carries its Plugin owner and returns a token-guarded `Disposable`. A disable or reload removes routes, tools, timers, subscriptions, hooks, commands, skills, agents, providers, RPC methods, and UI contributions in reverse registration order. Historical task sources retain inert tombstones so old tasks remain readable.
+
+A boot sentinel records the Plugin that was activating if the process dies. Repeated activation failures quarantine that Plugin only. `WALNUT_PLUGIN_SAFE_MODE=1` or `--plugin-safe-mode` starts Walnut with external Plugins disabled so the user can recover.
+
+### Loading and distribution
+
+Discovery order is built-in Plugins, linked or copied Plugins under `~/.open-walnut/plugins/`, then Plugin Store sources under `~/.open-walnut/plugin-stores/`. The first active id wins and later copies are reported as duplicates. Git sources are pinned by commit. npm sources are installed with lifecycle scripts disabled and record their resolved version and integrity. Updates are explicit; Walnut does not auto-update trusted code.
+
+Native web modules are fetched from authenticated `/api/plugin-runtime` endpoints, content-addressed by SHA-256, and imported as Blob ESM. A cloud companion relays missing modules from the primary and caches them by hash. Plugin HTTP handlers and module relays have size limits and deadlines.
+
+The older iframe APP path remains available as `webview`. It is useful for external pages or content that specifically needs browser isolation, but it is not the default Plugin UI. Its `postMessage` bridge and static-file guards do not sandbox the Plugin's server entry.
+
+### Kernel direction
+
+The long-term Kernel is small: Plugin discovery and lifecycle, owner registries, Event Bus, storage, auth, transport, and the React shell. First-party integrations already use the same `apiVersion: 1` registration path, and other first-party features move one contribution at a time without breaking legacy routes or stored data.
+
+The executable reference is [examples/plugins/reference-walnut](./examples/plugins/reference-walnut). It exercises server and native web entries, lifecycle cleanup, Tool, Hook, Cron, HTTP, WebSocket RPC, Agent, Provider, Dashboard, Settings, and stable View composition.
 
 ---
 
@@ -372,7 +381,7 @@ Both hooks run silently (no stdout/stderr) and use the Claude Code hook protocol
 
 A pluggable hook system that reacts to session bus events. Replaces hardcoded triage dispatch in `server.ts` with a global bus subscriber pattern.
 
-**Hook points** (11): `onSessionStart`, `onMessageSend`, `onTurnStart` (derived: first response after send), `onToolUse`, `onToolResult`, `onPlanComplete` (derived: ExitPlanMode), `onModeChange` (derived), `onTurnComplete`, `onTurnError`, `onSessionEnd`, `onSessionIdle` (timer-based).
+**Session hook points** (10): `onSessionStart`, `onMessageSend`, `onTurnStart` (derived: first response after send), `onToolUse`, `onToolResult`, `onPlanComplete` (derived: ExitPlanMode), `onModeChange` (derived), `onTurnComplete`, `onTurnError`, `onSessionWillReap` (the idle reaper is about to kill this session: once per idle episode, `remainingMs` 0 to 5 min). There is deliberately no `onSessionEnd` / `onSessionIdle`: `session:ended` fires after every turn, so hooks bound to it ran per-turn. See [no session-end gist](./docs/decision/no-session-end-gist.md).
 
 **Dispatcher** (`dispatcher.ts`): Subscribes as `'session-hooks'` with `{ global: true }`. Fast-path skips non-`session:*` events. Maps events to hook points, builds context via `PayloadBuilder` (10s TTL cache), dispatches matching hooks in parallel with `Promise.allSettled`. Per-handler timeout (30s default, 120s for agents). Error isolation: one failing hook never blocks others. Infinite loop guard: skips `session:result`/`session:error` with `source === 'subagent-runner'`.
 
@@ -382,7 +391,7 @@ A pluggable hook system that reacts to session bus events. Replaces hardcoded tr
 
 **Filtering**: Hooks can specify `filter: { modes, projects }`. Strict mode: denies when filter is specified but context is missing (prevents unintended dispatch).
 
-**Config** (`config.yaml` → `session_hooks`): `overrides` (per-hook enable/disable/priority/timeout), `idleTimeoutMs` (default 5 min).
+**Config** (`config.yaml` → `session_hooks`): `overrides` (per-hook enable/disable/priority/timeout). `idleTimeoutMs` is a deprecated no-op (it configured the removed `onSessionIdle`); the idle reap threshold lives in `session.idle_timeout_minutes`.
 
 **Typed event payloads** (`src/core/event-types.ts`): All 35+ bus events have typed payload interfaces in `EventPayloadMap`. Use `eventData<'event:name'>(event)` instead of manual `as {...}` casts. Re-exported from `event-bus.ts`.
 

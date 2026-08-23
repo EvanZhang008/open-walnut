@@ -54,6 +54,13 @@ export const EventNames = {
   SESSION_CONTENT_UPDATED: 'session:content-updated',
   SESSION_RESULT: 'session:result',
   SESSION_ERROR: 'session:error',
+  /** The idle reaper is about to kill this session's CLI (≤5 min out).
+   *  This is the ONE honest pre-death warning Walnut can make: it comes from
+   *  SessionHealthMonitor.checkIdleTimeout, the code that actually decides an
+   *  idle reap, after every exemption. It is NOT `session:ended` (a per-turn UI
+   *  refresh signal) and NOT process death (the daemon's reapSession) — see
+   *  docs/decision/no-session-end-gist.md before building on either. */
+  SESSION_WILL_REAP: 'session:will-reap',
 
   // Session streaming events (from --output-format stream-json)
   SESSION_TEXT_DELTA: 'session:text-delta',
@@ -224,6 +231,9 @@ const KEY_BUS_EVENTS = new Set([
   'subagent:start', 'subagent:result', 'subagent:error',
   'task:created', 'task:updated', 'task:completed', 'task:deleted', 'task:unblocked',
   'task:phase-changed', 'session:cron-fired',
+  // Rare by construction (once per session per idle episode) and the last thing
+  // logged before a reap — worth an info line for post-mortems.
+  'session:will-reap',
 ]);
 
 // ── Subscriber-failure recovery ────────────────────────────────────────────────

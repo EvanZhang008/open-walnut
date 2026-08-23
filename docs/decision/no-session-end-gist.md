@@ -41,6 +41,12 @@ content was already covered by per-turn conversation indexing.
 - Do not add process-death behavior to session hooks unless the daemon reap
   path explicitly emits a new event with the required semantics.
 
+## Follow-up: `session:will-reap` (2026-08-22)
+
+The properly-sourced pre-death signal this record left open now exists. `SessionHealthMonitor.checkIdleTimeout` is the idle reaper, so it announces its own decision: a session it is about to kill gets one `session:will-reap` event, emitted after every exemption (team-active, background work, pending permission, liveness) and after the `last_status_change` freshness protection, carrying `remainingMs` (0 to 5 minutes), `idleDurationMs`, `idleTimeoutMs` and `reason: 'idle_timeout'`. The matching session-hook point is `onSessionWillReap`, which plugins may register through the normal hook API.
+
+This does not reopen the deleted hook points. It is not process death: only `reapSession()` in the daemon core sees an actual exit. And it is not per-turn: it fires at most once per idle episode, while the CLI is still alive, so a consumer can act before the process goes away. Real activity re-arms it. `session:ended` is still a per-turn UI refresh signal with no hook point, and must never be treated as either one.
+
 ## References
 
 - [Session hook built-ins](../../src/core/session-hooks/builtins.ts)

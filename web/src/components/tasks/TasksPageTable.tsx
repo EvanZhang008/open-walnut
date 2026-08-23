@@ -40,6 +40,7 @@ interface TasksPageTableProps {
   collapsed: Set<string>;
   onToggleGroup: (project: string) => void;
   projectOrder: string[];
+  onOpenTask?: (taskId: string) => void;
 }
 
 const PRIORITY_META: Record<string, { dot: string; labelCls: string; label: string }> = {
@@ -257,9 +258,14 @@ export function TasksPageTable({
   collapsed,
   onToggleGroup,
   projectOrder,
+  onOpenTask,
 }: TasksPageTableProps) {
   const navigate = useNavigate();
   const confirm = useConfirm();
+  const openTask = useCallback((taskId: string) => {
+    if (onOpenTask) onOpenTask(taskId);
+    else navigate(`/tasks/${taskId}`);
+  }, [navigate, onOpenTask]);
   const isAll = activeProject === null;
   const showGroups = isAll && grouped;
   const cols = isAll ? 'tp-cols-5' : 'tp-cols-4';
@@ -364,7 +370,7 @@ export function TasksPageTable({
           <button
             type="button"
             className="tp-row-title"
-            onClick={() => navigate(`/tasks/${t.id}`)}
+            onClick={() => openTask(t.id)}
           >
             {t.title}
           </button>
@@ -388,7 +394,7 @@ export function TasksPageTable({
               isFocused={false}
               isPinned={false}
               isDone={t.status === 'done'}
-              onExpandDetail={(task) => navigate(`/tasks/${task.id}`)}
+              onExpandDetail={(task) => openTask(task.id)}
               onSetPriority={(id, p) => onUpdate(id, { priority: p })}
               onOpenSession={openSession}
               onSetDate={(id, d) => onUpdate(id, { due_date: d ?? '' })}

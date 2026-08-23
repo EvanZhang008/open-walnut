@@ -9,7 +9,11 @@ import { selfHealDataDirJson } from './json-conflict-recovery.js';
 /**
  * Atomically write JSON to a file (write to tmp, then rename).
  */
-export async function writeJsonFile(filePath: string, data: unknown): Promise<void> {
+export async function writeJsonFile(
+  filePath: string,
+  data: unknown,
+  options: { mode?: number } = {},
+): Promise<void> {
   const dir = path.dirname(filePath);
   await fs.mkdir(dir, { recursive: true });
 
@@ -20,8 +24,12 @@ export async function writeJsonFile(filePath: string, data: unknown): Promise<vo
     `.open-walnut-${crypto.randomBytes(8).toString('hex')}.tmp`,
   );
   try {
-    await fs.writeFile(tmpFile, JSON.stringify(data, null, 2) + '\n', 'utf-8');
+    await fs.writeFile(tmpFile, JSON.stringify(data, null, 2) + '\n', {
+      encoding: 'utf-8',
+      ...(options.mode === undefined ? {} : { mode: options.mode }),
+    });
     await fs.rename(tmpFile, filePath);
+    if (options.mode !== undefined) await fs.chmod(filePath, options.mode);
   } catch (err) {
     await fs.rm(tmpFile, { force: true }).catch(() => {});
     throw err;
@@ -110,12 +118,13 @@ export async function updateJsonFile<T>(
   filePath: string,
   fallback: T,
   mutate: (current: T) => T | Promise<T> | undefined | Promise<undefined>,
+  options: { mode?: number } = {},
 ): Promise<T> {
   return withFileLock(filePath, async () => {
     const current = await readJsonFile<T>(filePath, fallback);
     const result = await mutate(current);
     const next = result === undefined ? current : result;
-    await writeJsonFile(filePath, next);
+    await writeJsonFile(filePath, next, options);
     return next;
   });
 }

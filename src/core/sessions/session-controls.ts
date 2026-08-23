@@ -46,7 +46,13 @@ export class SessionControlError extends Error {
 /** HTTP status → relay errorKind (same vocabulary as mobile-launch.ts). */
 export function controlErrorKind(status: number): string {
   if (status === 404) return 'not_found';
+  if (status === 405) return 'method_not_allowed';
   if (status === 409) return 'conflict';
+  if (status === 413) return 'payload_too_large';
+  if (status === 431) return 'headers_too_large';
+  if (status === 502) return 'bad_gateway';
+  if (status === 503) return 'unavailable';
+  if (status === 504) return 'gateway_timeout';
   if (status >= 500) return 'internal';
   return 'bad_request';
 }
@@ -690,6 +696,10 @@ export type SessionControlAction =
   // description/note, so a REPLICA's GET /v1/tasks/:id relays here for the
   // primary's authoritative row when the bridge is up (local row = fallback).
   | 'server.tasks.get'
+  // Native Web Plugin code and server contributions live on the primary.
+  // A cloud replica relays the catalogue, module bytes, ops, HTTP, and lifecycle.
+  | 'server.plugin-runtime' | 'server.plugin-web-module'
+  | 'server.plugin-ops' | 'server.plugin-op' | 'server.plugin-http' | 'server.plugin-manage'
   // Run ONE Personal AI chat turn on the answering box's OWN engine, so a
   // phone talking to a cloud replica gets the Mac's configured engine
   // (claude-code) instead of the replica's in-process fallback loop.
@@ -1058,6 +1068,72 @@ export async function handleSessionControlRelay(
           if (err instanceof FilesOpError) throw new SessionControlError(err.message, err.statusCode);
           throw err;
         }
+        break;
+      }
+      case 'server.plugin-runtime': {
+        const [{ registry }, { getPluginLifecycleRecords }, { listPluginWebModules }] = await Promise.all([
+          import('../integration-registry.js'),
+          import('../integration-loader.js'),
+          import('../plugins/plugin-web-module.js'),
+        ]);
+        result = {
+          ...await listPluginWebModules(
+            registry,
+            getPluginLifecycleRecords(registry),
+          ),
+          plugins: getPluginLifecycleRecords(registry),
+          tombstones: registry.getTombstones(),
+        } as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'server.plugin-web-module': {
+        const rawPluginId = typeof p.pluginId === 'string' ? p.pluginId : '';
+        let pluginId: string;
+        try {
+          const { validatePluginId } = await import('../plugins/ids.js');
+          pluginId = validatePluginId(rawPluginId);
+        } catch (err) {
+          throw new SessionControlError(err instanceof Error ? err.message : String(err), 400);
+        }
+        const expectedHash = p.expectedHash;
+        if (expectedHash !== undefined && (
+          typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedHash)
+        )) {
+          throw new SessionControlError('Invalid Plugin module hash', 400);
+        }
+        const [{ registry }, { getPluginLifecycleRecords }, { readPluginWebModule }] = await Promise.all([
+          import('../integration-registry.js'),
+          import('../integration-loader.js'),
+          import('../plugins/plugin-web-module.js'),
+        ]);
+        const active = getPluginLifecycleRecords(registry)
+          .some((plugin) => plugin.id === pluginId && plugin.state === 'active');
+        const plugin = active ? registry.get(pluginId) : undefined;
+        if (!plugin || plugin.apiVersion !== 1 || !plugin.webEntry) {
+          throw new SessionControlError(`Active native Web Plugin "${pluginId}" was not found`, 404);
+        }
+        const module = await readPluginWebModule(plugin);
+        if (expectedHash && module.hash !== expectedHash) {
+          throw new SessionControlError('Plugin module changed; refresh the Plugin catalogue', 409);
+        }
+        result = {
+          id: module.id,
+          name: module.name,
+          ...(module.version ? { version: module.version } : {}),
+          hash: module.hash,
+          size: module.size,
+          data: module.content.toString('base64'),
+        };
+        break;
+      }
+      case 'server.plugin-ops':
+      case 'server.plugin-op':
+      case 'server.plugin-http':
+      case 'server.plugin-manage': {
+        const { handlePluginControlRelay } = await import('../plugins/plugin-control-relay.js');
+        const outcome = await handlePluginControlRelay(action, p);
+        if (!outcome.ok) throw new SessionControlError(outcome.error, outcome.status);
+        result = outcome.result;
         break;
       }
       // ── Phase 4 box-level family: one cloud task op, applied synchronously ──

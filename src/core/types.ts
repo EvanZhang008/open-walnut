@@ -740,7 +740,7 @@ export interface AgentDefinition {
   skills?: string[];
   /** True for agents that appear in the main chat console (AgentSwitcher). */
   console?: boolean;
-  source: 'builtin' | 'config';
+  source: 'builtin' | 'config' | 'plugin';
   /** True when a config entry overrides (shadows) a builtin agent with the same ID. */
   overrides_builtin?: boolean;
 }
@@ -898,9 +898,18 @@ export interface Config {
     /** Cache TTL / periodic refresh interval. Default: 15. */
     refresh_minutes?: number;
   };
-  /** Git repos to install plugins from ("plugin store"). Each repo is cloned under
-   *  ~/.open-walnut/plugin-stores/ and scanned for plugin dirs (manifest.json). */
-  plugin_sources?: Array<{ url: string; ref?: string; enabled?: boolean }>;
+  /** Where to install plugins from ("plugin store"). Two kinds, one list:
+   *  a git repo `{url, ref?, enabled?}` (cloned) or an npm registry package
+   *  `{type: 'npm', spec, enabled?}` (installed with --ignore-scripts). Both land
+   *  under ~/.open-walnut/plugin-stores/<slug>/ and are scanned for plugin dirs
+   *  (manifest.json). Legacy git entries have no `type`, so an old config keeps
+   *  working unchanged. Only the url/spec the user asked for is recorded here —
+   *  the resolved version, integrity and errors are runtime state in
+   *  plugin-stores/sources.json. */
+  plugin_sources?: Array<
+    | { url: string; ref?: string; enabled?: boolean }
+    | { type: 'npm'; spec: string; enabled?: boolean }
+  >;
   favorites?: {
     projects?: string[];
     /** Vault-relative note paths (WITH .md), e.g. "PARA/foo.md". Toggled from the notes editor/tree. */

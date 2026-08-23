@@ -4,6 +4,7 @@
  */
 
 import type { PluginApi, IntegrationSync, PushResult } from '../../core/integration-types.js';
+import type { WalnutServerPluginApi } from '../../core/plugins/server-api.js';
 
 const noopSync: IntegrationSync = {
   createTask: async () => null,
@@ -23,6 +24,19 @@ const noopSync: IntegrationSync = {
   disassociateSubtask: async () => {},
   syncPoll: async () => {},
 };
+
+export async function activate(walnut: WalnutServerPluginApi): Promise<void> {
+  walnut.registry.sync(noopSync);
+  walnut.registry.sourceClaim(() => true, { priority: -1 });
+  walnut.registry.display({
+    badge: 'L',
+    badgeColor: '#8E8E93',
+    externalLinkLabel: 'Local',
+    getExternalUrl: () => null,
+    isSynced: () => false,
+    syncTooltip: () => 'Local only — not synced to any external service',
+  });
+}
 
 export default function register(api: PluginApi): void {
   api.registerSync(noopSync);

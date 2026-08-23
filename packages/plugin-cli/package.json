@@ -1,0 +1,64 @@
+{
+  "name": "@open-walnut/plugin-cli",
+  "version": "0.1.0",
+  "description": "Scaffold, build, link, and check Open Walnut plugins",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "open-walnut",
+    "walnut",
+    "plugin",
+    "plugin-cli",
+    "cli",
+    "scaffold",
+    "developer-tools",
+    "typescript"
+  ],
+  "homepage": "https://github.com/EvanZhang008/open-walnut/tree/main/packages/plugin-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EvanZhang008/open-walnut.git",
+    "directory": "packages/plugin-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/EvanZhang008/open-walnut/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "walnut-plugin": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsup --config tsup.config.ts",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@open-walnut/plugin-api": "^0.1.0",
+    "commander": "^14.0.0",
+    "esbuild": "^0.27.3"
+  },
+  "walnut": {
+    "engineFloor": ">=0.3.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

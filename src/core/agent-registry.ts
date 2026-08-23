@@ -11,6 +11,8 @@ import { getConfig, updateConfig, _resetWriteLockForTest } from './config-manage
 import { MODEL_CATALOG } from '../agent/providers/model-catalog.js';
 import { ensureProjectDir } from './project-memory.js';
 import type { AgentDefinition } from './types.js';
+import type { Disposable } from './plugins/disposable.js';
+import { OwnedRegistry } from './plugins/owned-registry.js';
 import { log } from '../logging/index.js';
 
 // ── Built-in agents ──
@@ -107,6 +109,25 @@ const BUILTIN_AGENTS = [BUILTIN_GENERAL, BUILTIN_MENTOR, BUILTIN_NOTE];
 
 /** Set of builtin agent IDs for quick lookup. */
 const BUILTIN_ID_SET = new Set(BUILTIN_AGENTS.map(a => a.id));
+const pluginAgents = new OwnedRegistry<AgentDefinition>();
+
+export function registerOwnedAgent(
+  owner: string,
+  definition: Omit<AgentDefinition, 'source' | 'overrides_builtin'>,
+): Disposable {
+  if (BUILTIN_ID_SET.has(definition.id)) {
+    throw new Error(`Plugin agent "${definition.id}" cannot replace a builtin agent`);
+  }
+  const agent: AgentDefinition = { ...definition, source: 'plugin' };
+  if (agent.stateful?.memory_project) {
+    try { ensureProjectDir(agent.stateful.memory_project); } catch { /* best-effort */ }
+  }
+  return pluginAgents.register(owner, agent.id, agent);
+}
+
+export function removeOwnedAgents(owner: string): number {
+  return pluginAgents.removeOwner(owner);
+}
 
 /** Returns the set of builtin agent IDs. */
 export function getBuiltinIds(): ReadonlySet<string> { return BUILTIN_ID_SET; }
@@ -215,7 +236,7 @@ export function migrateToolNames(names: string[] | undefined): string[] | undefi
 }
 
 /**
- * Get all agent definitions, merged by priority (config > builtin).
+ * Get all agent definitions, merged by priority (config > plugin > builtin).
  */
 export async function getAllAgents(): Promise<AgentDefinition[]> {
   const config = await getConfig();
@@ -227,9 +248,10 @@ export async function getAllAgents(): Promise<AgentDefinition[]> {
     denied_tools: migrateToolNames(a.denied_tools),
   }));
 
-  // Merge by ID: builtin first, then config overrides
+  // Merge by ID: builtin first, then Plugin, then user config overrides.
   const merged = new Map<string, AgentDefinition>();
   for (const b of BUILTIN_AGENTS) merged.set(b.id, b);
+  for (const agent of pluginAgents.values()) merged.set(agent.id, agent);
   for (const a of configAgents) merged.set(a.id, a);
 
   // Mark config agents that shadow a builtin
@@ -344,6 +366,10 @@ export async function updateAgent(
     return { ...merged, id, source: 'config' } as AgentDefinition;
   }
 
+  if (pluginAgents.has(id)) {
+    throw new Error(`Agent "${id}" is plugin-defined and cannot be updated through config.`);
+  }
+
   // Check builtin — auto-promote to config override
   const builtin = BUILTIN_AGENTS.find(b => b.id === id);
   if (builtin) {
@@ -389,5 +415,6 @@ export async function deleteAgent(id: string): Promise<void> {
  * write lock to prevent cross-test lock chain stalls.
  */
 export function _resetForTest(): void {
+  pluginAgents.clear();
   _resetWriteLockForTest();
 }

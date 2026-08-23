@@ -519,7 +519,7 @@ The server handles commits, pulls, and pushes automatically.
 
 ### External Plugins
 
-Install additional plugins in `~/.open-walnut/plugins/{plugin-name}/`, or paste a git repo URL into Settings → Plugin Store. Each plugin needs a `manifest.json` and an entry point; a plugin can add task sync, an app page in the console, tools for the Personal AI, and skills. See [Plugin development](docs/reference/plugin-development.md) for the full authoring guide, and [examples/plugins/hello-walnut](examples/plugins/hello-walnut) for a working example.
+Install a trusted Plugin by linking it under `~/.open-walnut/plugins/<plugin-id>/`, or use Settings → Plugin Store with a Git URL or npm spec. A Plugin can add full Node server logic, native React pages, sidebar navigation, Settings, Dashboard panels, Tools, Skills, Commands, Hooks, Cron actions, Agents, Providers, routes, and task sync. See [Plugin development](docs/reference/plugin-development.md) and the executable [reference Plugin](examples/plugins/reference-walnut).
 
 ---
 

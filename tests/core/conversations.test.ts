@@ -82,6 +82,17 @@ describe('main-conversation invariant', () => {
     const list = await listConversations('general');
     expect(countMain(list)).toBe(1);
   });
+
+  it('stores namespaced Plugin agents under a cross-platform path segment', async () => {
+    const agentId = 'sample-plugin:observer';
+    const side = await createConversation(agentId, 'Plugin side chat');
+    const list = await listConversations(agentId);
+
+    expect(list.some((conversation) => conversation.id === side.id)).toBe(true);
+    expect(countMain(list)).toBe(1);
+    expect(conversationIndexFile(agentId)).toContain('sample-plugin%3Aobserver');
+    await expect(fsp.stat(conversationFile(agentId, side.id))).resolves.toBeDefined();
+  });
 });
 
 describe('deleteConversation guards the main', () => {

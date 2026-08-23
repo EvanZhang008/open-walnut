@@ -5,6 +5,17 @@
 
 import type { RegisteredPlugin, ProjectClaimFn, IntegrationSync } from './integration-types.js';
 
+export type PluginTombstoneReason = 'disabled' | 'unloaded' | 'failed' | 'stale-code';
+
+export interface PluginTombstone {
+  id: string;
+  name: string;
+  version?: string;
+  capabilities?: string[];
+  reason: PluginTombstoneReason;
+  at: string;
+}
+
 /** No-op sync used by the local fallback plugin. */
 const noopLocalSync: IntegrationSync = {
   createTask: async () => null,
@@ -27,6 +38,7 @@ const noopLocalSync: IntegrationSync = {
 
 class IntegrationRegistry {
   private plugins = new Map<string, RegisteredPlugin>();
+  private tombstones = new Map<string, PluginTombstone>();
 
   /** Register a plugin. Throws if duplicate ID. */
   register(id: string, plugin: RegisteredPlugin): void {
@@ -34,6 +46,47 @@ class IntegrationRegistry {
       throw new Error(`Plugin "${id}" is already registered.`);
     }
     this.plugins.set(id, plugin);
+    this.tombstones.delete(id);
+  }
+
+  /** Replace an active plugin or revive a tombstoned one without changing order. */
+  replace(id: string, plugin: RegisteredPlugin): void {
+    this.plugins.set(id, plugin);
+    this.tombstones.delete(id);
+  }
+
+  /** Remove live behavior while retaining source metadata for historical tasks. */
+  unregister(id: string, reason: PluginTombstoneReason = 'unloaded'): PluginTombstone | undefined {
+    if (id === 'local') throw new Error('The local fallback plugin cannot be unregistered.');
+    const plugin = this.plugins.get(id);
+    if (!plugin) return this.tombstones.get(id);
+    this.plugins.delete(id);
+    const tombstone: PluginTombstone = {
+      id,
+      name: plugin.name,
+      ...(plugin.version ? { version: plugin.version } : {}),
+      ...(plugin.capabilities ? { capabilities: [...plugin.capabilities] } : {}),
+      reason,
+      at: new Date().toISOString(),
+    };
+    this.tombstones.set(id, tombstone);
+    return tombstone;
+  }
+
+  getTombstone(id: string): PluginTombstone | undefined {
+    const tombstone = this.tombstones.get(id);
+    return tombstone ? { ...tombstone, capabilities: tombstone.capabilities ? [...tombstone.capabilities] : undefined } : undefined;
+  }
+
+  getTombstones(): PluginTombstone[] {
+    return [...this.tombstones.values()].map((tombstone) => ({
+      ...tombstone,
+      capabilities: tombstone.capabilities ? [...tombstone.capabilities] : undefined,
+    }));
+  }
+
+  isKnown(id: string): boolean {
+    return this.plugins.has(id) || this.tombstones.has(id);
   }
 
   /** Get a plugin by ID. Returns undefined if not found. */
@@ -100,6 +153,7 @@ class IntegrationRegistry {
   /** Remove all plugins (useful for testing). Re-registers the local fallback. */
   clear(): void {
     this.plugins.clear();
+    this.tombstones.clear();
     this.ensureLocalFallback();
   }
 

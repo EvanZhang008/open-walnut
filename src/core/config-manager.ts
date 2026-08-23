@@ -370,6 +370,43 @@ export async function updateConfig(partial: Partial<Config>): Promise<void> {
   });
 }
 
+/** Atomically patch one Plugin namespace without replacing sibling settings. */
+export async function updatePluginConfig(
+  pluginId: string,
+  patch: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(pluginId)) throw new Error(`Invalid plugin id: ${pluginId}`);
+  return withWriteLock(async () => {
+    let existing: Record<string, unknown> = {};
+    try {
+      const raw = await readRawConfigContent();
+      existing = raw === null ? {} : ((yaml.load(raw) as Record<string, unknown>) ?? {});
+    } catch (err) {
+      log.session.warn('config-manager: Plugin config patch could not read existing config', {
+        pluginId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    const plugins = existing.plugins && typeof existing.plugins === 'object' && !Array.isArray(existing.plugins)
+      ? { ...(existing.plugins as Record<string, Record<string, unknown>>) }
+      : {};
+    const current = plugins[pluginId] && typeof plugins[pluginId] === 'object'
+      ? plugins[pluginId]
+      : {};
+    const next = { ...current, ...patch };
+    plugins[pluginId] = next;
+    existing.plugins = plugins;
+
+    let content = yaml.dump(existing, { indent: 2, lineWidth: 120 });
+    content = content.replace(
+      /^(\s+)available_models:/m,
+      '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
+    );
+    await writeConfigWithBackup(content);
+    return next;
+  });
+}
+
 /**
  * One-time migration: strip the retired category fields from config.yaml on disk.
  *

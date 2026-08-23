@@ -13,7 +13,9 @@ export function CommandCard({ command, onEdit, onDelete }: CommandCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const isBuiltin = command.source === 'builtin';
+  // Built-in and plugin commands both live outside ~/.open-walnut/commands/ — the API
+  // answers 403 for either, so don't offer an Edit/Delete affordance that can only fail.
+  const isReadOnly = command.source === 'builtin' || command.source === 'plugin';
   const isLong = command.content.length > COLLAPSED_MAX_CHARS;
 
   return (
@@ -22,7 +24,7 @@ export function CommandCard({ command, onEdit, onDelete }: CommandCardProps) {
         <div className="cmd-card-info">
           <div className="cmd-card-name-row">
             <code className="cmd-card-name">/{command.name}</code>
-            <span className={`cmd-source-badge ${isBuiltin ? 'builtin' : 'user'}`}>
+            <span className={`cmd-source-badge ${isReadOnly ? 'builtin' : 'user'}`}>
               {command.source}
             </span>
           </div>
@@ -30,7 +32,7 @@ export function CommandCard({ command, onEdit, onDelete }: CommandCardProps) {
             <span className="cmd-card-desc text-sm text-muted">{command.description}</span>
           )}
         </div>
-        {!isBuiltin && (
+        {!isReadOnly && (
           <div className="cmd-card-actions">
             <div className="cmd-menu-wrapper">
               <button
