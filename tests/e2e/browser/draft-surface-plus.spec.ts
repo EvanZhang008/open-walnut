@@ -17,8 +17,8 @@
  *   GAP-4  pinned tier CARDS rendered no ▶ Start, though the CSS already styled one —
  *          so the pinned area (the most-worked surface) was the one place a task row
  *          could not become a session in one click.
- *   GAP-5  the toolbar "+" still advertised "New session or task", naming a chooser
- *          that no longer exists (task creation moved INSIDE the draft).
+ *   GAP-5  the toolbar visually exposed only a generic "+" while its accessible
+ *          name said "New session", even though both draft actions create a task.
  *   GAP-6  every "+" was `opacity: 0` until hover — a control nobody can see until
  *          they happen to hover the right row may as well not exist.
  *
@@ -362,26 +362,60 @@ test('▶ on a title-only pinned tier card opens a bound draft, exactly like a l
   await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-05-pinned-card-start.png`, fullPage: false })
 })
 
-// ── 5. The toolbar "+" advertises what it actually does (GAP-5) ─────────────
+// ── 5. The toolbar names the task-first verb responsively (GAP-5) ─────────────
 
-test('the toolbar "+" tooltip says "New session" — the task branch it promised is gone', async ({ page }) => {
-  // The button used to open a Session|Task chooser popover, and its tooltip said so.
-  // The popover is gone (task creation moved INSIDE the draft as "◌ Create task for
-  // later"), so the old copy pointed at a chooser that no longer exists. Tooltip AND
-  // aria-label, because the second is the only label a screen reader ever reads.
+test('the toolbar says "New task" until the panel is genuinely narrow', async ({ page }) => {
+  // Both exits from the draft create a task: one remains sessionless and one starts
+  // a session. Name that shared object at normal widths, but keep the create action
+  // reachable as a compact plus when the task panel has almost no horizontal room.
+  // Pin syncable layout prefs before boot: other serial specs drag this same panel,
+  // and the fixture server can otherwise hydrate their saved width into our context.
+  await page.addInitScript(() => {
+    localStorage.setItem('open-walnut-todo-width', '25')
+    localStorage.setItem('open-walnut-sidebar-collapsed', 'true')
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
   await loadHome(page)
 
-  const btn = page.locator('.new-launcher-btn')
+  const toolbar = page.locator('.todo-panel-toolbar')
+  const btn = toolbar.locator('.new-launcher-btn')
+  const label = btn.locator('.new-launcher-label')
+  const search = toolbar.getByPlaceholder(/Search tasks/)
+  const view = toolbar.getByRole('button', { name: 'View options' })
+  const collapsedButtonPx = 28
+  const toolbarContentWidth = () => toolbar.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+  })
+
   await expect(btn).toBeVisible({ timeout: 25_000 })
-  await expect(btn).toHaveAttribute('title', 'New session')
-  await expect(btn).toHaveAttribute('aria-label', 'New session')
-  // Asserted as a pair with the behavior: a tooltip is only correct relative to what
-  // the click does, so this also pins "one click → a draft column, no chooser".
+  await expect(label).toBeVisible()
+  await expect(label).toHaveText('New task')
+  await expect(btn).toHaveAttribute('title', 'New task')
+  await expect(btn).toHaveAttribute('aria-label', 'New task')
+  await expect(search).toBeVisible()
+  await expect(view).toBeVisible()
+  expect(await toolbarContentWidth()).toBeGreaterThan(275)
+  const normalBox = await btn.boundingBox()
+  expect(normalBox?.width ?? 0).toBeGreaterThan(collapsedButtonPx)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-06-toolbar-new-task-wide.png`, fullPage: false })
+
+  // A 900px viewport stays outside the mobile layout while driving the actual
+  // toolbar content box below the 275px container breakpoint.
+  await page.setViewportSize({ width: 900, height: 900 })
+  await expect(label).toBeHidden()
+  await expect(btn).toBeVisible()
+  await expect(search).toBeVisible()
+  await expect(view).toBeVisible()
+  expect(await toolbarContentWidth()).toBeLessThanOrEqual(275)
+  const narrowBox = await btn.boundingBox()
+  expect(narrowBox?.width ?? 0).toBeCloseTo(collapsedButtonPx, 0)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-06-toolbar-new-task-narrow.png`, fullPage: false })
+
+  // Responsive presentation must not change the established one-click behavior.
   await btn.click()
   await expect(draftPanel(page)).toBeVisible({ timeout: 10_000 })
-  await expect(page.locator('.todo-launcher-popover')).toHaveCount(0)
-
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-06-toolbar-tooltip.png`, fullPage: false })
+  await expect(page.locator('.draft-session-panel')).toHaveCount(1)
 })
 
 // ── 6. Every "+" is visible BEFORE you hover it (GAP-6) ────────────────────
