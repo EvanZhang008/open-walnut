@@ -1,0 +1,143 @@
+/**
+ * session-error-kind — is a session's 'error' status the substrate's fault or the
+ * work's fault?
+ *
+ * ZERO runtime imports on purpose (type-only imports vanish at compile time):
+ * session-tracker consults this synchronously inside its write choke point, and
+ * both recovery paths (daemon reconnect + the health monitor's 30s loop) consult
+ * it too. A leaf module keeps those three out of an import cycle.
+ *
+ * WHY THIS FILE EXISTS. Recoverability used to be decided by matching prose:
+ *
+ *     if (!s.errorMessage?.includes('Connection lost')) continue   // skip forever
+ *
+ * in BOTH `DaemonConnection.recoverDisconnectedSessions` and
+ * `SessionHealthMonitor.recoverInfraFailedSessions` (named recoverConnectionLost-
+ * Sessions back when the prose match was the contract). Meanwhile the C2 snapshot
+ * projection became the authoritative status writer, and it writes 'error' with
+ * NO message (by design — it has no richer text to offer). Every
+ * snapshot-projected error therefore failed the prose test and was treated as "a
+ * real user-visible error, don't auto-recover".
+ *
+ * 2026-08-22 (incident inc-1787439819342): a remote dev host took its weekly
+ * patch reboot mid-build. Walnut saw it correctly (`remote_unreachable`), but
+ * that write was a category-① pair, so the gate dropped it whole; the snapshot
+ * then projected a message-less 'error'; both recovery loops skipped the session
+ * for the next 3.5 hours even though the daemon had been back for over an hour.
+ * 51 sessions were sitting in exactly that state. A classification that lives in
+ * a string is not a classification.
+ *
+ * Two tiers, deliberately different bars:
+ *   isRecoverableSessionError  — infra OR unknown. Cheap: re-probe, relabel,
+ *                                clear a scary badge. Being wrong costs nothing.
+ *   shouldAutoResumeSession    — infra ONLY (see session-auto-recover). Spends
+ *                                tokens and runs an agent unattended, so an
+ *                                unknown cause must not qualify.
+ */
+
+import type { SessionErrorKind, SessionRecord, StatusReason } from './types.js'
+
+/**
+ * Reasons that mean "the substrate died under a healthy session". Resuming
+ * re-establishes the process and the work continues.
+ */
+export const INFRA_STATUS_REASONS: ReadonlySet<string> = new Set<StatusReason>([
+  // The Mac could not reach the execution host (tunnel down, host rebooting).
+  'remote_unreachable',
+  // The daemon told us the process is gone, or came back without it.
+  'daemon_reported_exit',
+  // A liveness probe found no process where the record expected one.
+  'liveness_check_failed',
+  'process_exited_no_result',
+  'orphan_no_pid',
+  // The Walnut server itself restarted and the CLI did not survive.
+  'server_restart',
+  // A reconnect/retry path that was already mid-recovery.
+  'retry_reconnect',
+])
+
+/**
+ * Reasons that mean "the work ended the session". Resuming re-asks the same
+ * failing question, so these must never auto-resume.
+ *
+ * `idle_timeout` sits here on purpose: we killed it because nothing was
+ * happening, and reviving it would fight our own reaper.
+ */
+export const TERMINAL_STATUS_REASONS: ReadonlySet<string> = new Set<StatusReason>([
+  'user_stopped',
+  'user_terminated',
+  'expected_teardown',
+  'idle_timeout',
+  'idle_eviction',
+  'normal_completion',
+  'turn_completed',
+])
+
+/**
+ * Infra signatures in free text — the fallback for records written before
+ * `errorKind` existed (and for the legacy 'Connection lost' contract the two
+ * recovery loops used to key off). Lowercased substring match.
+ *
+ * Kept SHORT and specific. A generous list here would re-create the original
+ * bug in the other direction: auto-resuming a session whose real problem was a
+ * refusal or a bad credential, forever.
+ */
+const INFRA_TEXT_SIGNATURES: readonly string[] = [
+  'connection lost',
+  'connection closed',
+  'connection to ',
+  'failed to deploy daemon',
+  'failed to start daemon',
+  'daemon spawn failed',
+  'host unreachable',
+  'no route to host',
+  'ssh tunnel',
+  'broken pipe',
+]
+
+/** Map a status_reason to a cause class. Unknown/absent reasons return undefined. */
+export function classifyStatusReasonKind(reason: unknown): SessionErrorKind | undefined {
+  if (typeof reason !== 'string') return undefined
+  if (INFRA_STATUS_REASONS.has(reason)) return 'infra'
+  if (TERMINAL_STATUS_REASONS.has(reason)) return 'terminal'
+  return undefined
+}
+
+/**
+ * Classify a session record's error cause.
+ *
+ * Order matters: the STRUCTURED field wins over the reason, and the reason wins
+ * over prose. `api_error` deliberately stays 'unknown' here — transient upstream
+ * failures are already owned by the daemon's turn-retry layer and by
+ * session-auto-continue, and the terminal half of that bucket (auth, refusal,
+ * context overflow) must never be resumed by this path.
+ */
+export function classifySessionError(record: Pick<SessionRecord,
+  'errorKind' | 'status_reason' | 'errorMessage'>): SessionErrorKind | 'unknown' {
+  if (record.errorKind === 'infra' || record.errorKind === 'terminal') return record.errorKind
+
+  const byReason = classifyStatusReasonKind(record.status_reason)
+  if (byReason) return byReason
+
+  const text = record.errorMessage?.toLowerCase()
+  if (text && INFRA_TEXT_SIGNATURES.some((sig) => text.includes(sig))) return 'infra'
+
+  return 'unknown'
+}
+
+/**
+ * Worth re-probing and relabelling. Includes 'unknown': a message-less error is
+ * exactly the shape the incident produced, and refusing to look at it is what
+ * stranded 51 sessions. Only a positively TERMINAL cause is left alone.
+ */
+export function isRecoverableSessionError(record: Pick<SessionRecord,
+  'errorKind' | 'status_reason' | 'errorMessage'>): boolean {
+  return classifySessionError(record) !== 'terminal'
+}
+
+/** True when the cause is positively infrastructure — the bar for spending
+ *  tokens on an unattended auto-resume. */
+export function isInfraSessionError(record: Pick<SessionRecord,
+  'errorKind' | 'status_reason' | 'errorMessage'>): boolean {
+  return classifySessionError(record) === 'infra'
+}
