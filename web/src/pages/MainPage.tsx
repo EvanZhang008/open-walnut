@@ -32,17 +32,19 @@ import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import {
   applyDraftParse, clearAiFields, draftComposerKey, withDirLaunchMemory,
-  launchDivergesFromDirMemory, projectForFolderPick, type DraftColumn,
+  launchDivergesFromDirMemory, projectForFolderPick, suggestDiff, type DraftColumn,
 } from '@/components/sessions/draft-column';
 import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
 import { SessionSearchPanel } from '@/components/sessions/SessionSearchPanel';
-import { freshLauncherMeta, readLastLaunchPath, rememberLaunchPath } from '@/components/sessions/task-meta-constants';
+import {
+  LEGACY_LAUNCHER_PIN_TIER_KEY, freshLauncherMeta, readLastLaunchPath, rememberLaunchPath,
+} from '@/components/sessions/task-meta-constants';
 import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
 import { PromoteTaskPopover, type PromoteToTaskInput } from '@/components/chat/PromoteToTaskMenu';
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchSession, fetchSessionsForTask, fetchWorkingDirs, forkSessionInWalnut, quickStartSession } from '@/api/sessions';
 import { fetchProjectDetail } from '@/api/projects';
-import { deleteTask as deleteTaskApi, fetchTask, type QuickTaskParse } from '@/api/tasks';
+import { deleteTask as deleteTaskApi, fetchTask, recordSuggestFeedback, type QuickTaskParse } from '@/api/tasks';
 import { fetchConfig, fetchInstallDir } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { QuickAccessBar } from '@/components/chat/QuickAccessBar';
@@ -1359,6 +1361,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         if (key?.startsWith(prefix)) stale.push(key);
       }
       for (const key of stale) localStorage.removeItem(key);
+      // The launcher's retired sticky-tier pref. Swept here rather than left to
+      // rot: it is an `open-walnut-` key, so ui-prefs-sync mirrors it, and a value
+      // nothing reads would keep syncing between browsers forever. Guarded on
+      // EXISTENCE because removeItem is patched to queue a synced deletion — an
+      // unconditional call would PUT a fresh tombstone on every page load.
+      if (localStorage.getItem(LEGACY_LAUNCHER_PIN_TIER_KEY) !== null) {
+        localStorage.removeItem(LEGACY_LAUNCHER_PIN_TIER_KEY);
+      }
     } catch { /* storage disabled — nothing to sweep */ }
   }, []);
 
@@ -2270,6 +2280,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // still has something to say: the task's own title. Without this the CLI
     // would spawn and idle on a task the user explicitly asked to work on.
     const message = text.trim() || (draft.taskId ? draft.boundTaskTitle ?? '' : text);
+    // What the background parse suggested vs. what this launch actually carries.
+    // Recorded BEFORE forgetDraft (the row is the only place the suggestions live)
+    // and deliberately not awaited — see recordSuggestFeedback.
+    recordSuggestFeedback({
+      surface: 'draft-session',
+      entries: suggestDiff(draft),
+      textLen: message.length,
+    });
     // ONE commit: the strip slot morphs draft:→pending: (inside launchQuickStart)
     // while the draft row + its composer key disappear. Splitting these would
     // render either a `pending:` column still holding a DraftSessionPanel, or a
@@ -2309,6 +2327,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const title = firstLine.trim();
     if (!title) return;   // button is disabled on empty, but a whitespace-only body can still reach here
     const description = rest.join('\n').trim();
+    // Same ledger as Start: the task exit carries the same suggested pills, so its
+    // accuracy is measured the same way (surface tells the two apart).
+    if (draft) {
+      recordSuggestFeedback({
+        surface: 'draft-task',
+        entries: suggestDiff(draft),
+        textLen: text.length,
+      });
+    }
     // Optimistic: the column vanishes on click, before the POST. handleQuickTaskCreate
     // owns the outcome UI (toast + Undo, or the shared operation-error banner).
     closeDraftColumn(draftId);

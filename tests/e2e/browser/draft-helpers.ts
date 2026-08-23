@@ -73,7 +73,7 @@ export function draftPills(panel: Locator): Locator {
 export const draftCwdPill = (panel: Locator): Locator => draftPills(panel).first()
 export const draftProjectPill = (panel: Locator): Locator => draftPills(panel).nth(1)
 
-/** The launch stack (quick chips → engine/pin row → pills), which in v4 lives
+/** The launch stack (quick chips → pin-tier row → pills), which in v4 lives
  *  INSIDE `.session-panel-input` above the composer. Scoped through that wrapper
  *  so the locator itself encodes the placement. */
 export function draftLaunchBar(panel: Locator): Locator {
@@ -81,10 +81,17 @@ export function draftLaunchBar(panel: Locator): Locator {
 }
 
 /** Quick-access folder chips (label = folder BASENAME, title = full path). Up to
- *  FOUR in R6: top 2 by absolute use count + the 2 most recent (see
- *  `quickDirsFor` in web/src/components/sessions/draft-column.ts). */
+ *  EIGHT: top 4 by absolute use count + the 4 most recent (see `quickDirsFor` in
+ *  web/src/components/sessions/draft-column.ts). Scoped to `.draft-quick-chip` so
+ *  the row's leading "Quick" caption is never counted as a chip. */
 export function draftQuickChips(panel: Locator): Locator {
   return draftLaunchBar(panel).locator('.draft-quick-chips .draft-quick-chip')
+}
+
+/** The quick row's KEY caption ("Quick"). A caption, not a control — it exists so
+ *  eight folder chips read as their own zone rather than as more launch buttons. */
+export function draftQuickKey(panel: Locator): Locator {
+  return draftLaunchBar(panel).locator('.draft-quick-chips .draft-quick-key')
 }
 
 /** Full paths of the rendered chips, in row order — the chip row's `title` IS the
@@ -108,8 +115,8 @@ const chipTitle = (d: WorkingDir): string =>
   d.host ? `${d.cwd} (on ${d.hostLabel ?? d.host})` : d.cwd
 
 /**
- * The R6 chip-selection rule, re-derived from the SAME payload the page cached:
- * top 2 by absolute `count` (ties → freshest first), then the 2 most recent of
+ * The chip-selection rule, re-derived from the SAME payload the page cached:
+ * top 4 by absolute `count` (ties → freshest first), then the 4 most recent of
  * the rest. Membership is a pure function of the payload — the draft's current
  * cwd is IN the row (rendered active), never excluded: exclusion made the row
  * reshuffle right after a pick, and a double-click re-picked the folder just left.
@@ -136,9 +143,9 @@ export function expectedChips(dirs: readonly WorkingDir[]): string[] {
     return Number.isNaN(t) ? -Infinity : t
   }
   const byRecent = (a: WorkingDir, b: WorkingDir) => ms(b) - ms(a)
-  const top = [...candidates].sort((a, b) => (b.count - a.count) || byRecent(a, b)).slice(0, 2)
+  const top = [...candidates].sort((a, b) => (b.count - a.count) || byRecent(a, b)).slice(0, 4)
   const taken = new Set(top.map(key))
-  const recent = [...candidates].filter((d) => !taken.has(key(d))).sort(byRecent).slice(0, 2)
+  const recent = [...candidates].filter((d) => !taken.has(key(d))).sort(byRecent).slice(0, 4)
   return [...top, ...recent].map(chipTitle)
 }
 
@@ -161,20 +168,12 @@ export function draftMetaAiSlot(panel: Locator): Locator {
   return draftLaunchBar(panel).locator('.draft-meta-ai-slot')
 }
 
-/** Preset the launcher's STICKY pin tier before the first render, so a spec that
- *  asserts a tier change knows what it started from.
- *
- * Load-bearing for determinism, not tidiness: the key is mirrored to the server by
- * ui-prefs-sync, and the fixture server is SHARED — another spec's pick (e.g.
- * fix-walnut-launcher-parity's 'wait') is merged back into a later page's
- * localStorage at boot. A locally-written value with no sync timestamp WINS that
- * merge (see initUiPrefsSync), which is exactly why writing it here pins it.
- */
-export async function presetStickyTier(page: Page, tier: string): Promise<void> {
-  await page.addInitScript((t) => {
-    try { localStorage.setItem('open-walnut-launcher-pin-tier', t as string) } catch { /* storage off */ }
-  }, tier)
-}
+// NOTE for spec authors: there is no sticky pin-tier pref to preset any more (the
+// old `presetStickyTier` helper went with it). EVERY draft opens on Satellite, so
+// a spec that asserts a tier change knows what it started from without touching
+// localStorage, and one spec's pick can no longer leak into another's through the
+// shared fixture's ui-prefs mirror. To prove a tier SEED was applied, seed a tier
+// that is not Satellite — anything else is indistinguishable from the default.
 
 /** Top edge of an element, for the ordering assertions below. */
 async function topOf(loc: Locator, what: string): Promise<number> {
@@ -234,19 +233,19 @@ export async function expectV4Stack(panel: Locator): Promise<void> {
 
   // 3. Row order, top → bottom (R6): body hint · quick chips · meta row · pills ·
   //    composer. Read as top edges so the assertion survives restyling.
-  //    The chips moved ABOVE the meta row in R6 — that row's CONTENT churns (top-2
-  //    by use + 2 most recent), so it must not sit where the user aims for the
+  //    The chips moved ABOVE the meta row in R6 — that row's CONTENT churns (top-4
+  //    by use + 4 most recent), so it must not sit where the user aims for the
   //    fixed controls; the pills stay glued to the composer.
   const [hintY, chipsY, metaY, pillsY, composerY] = await Promise.all([
     topOf(body.locator('.draft-quick-hint'), 'the body hint'),
     topOf(bar.locator('.draft-quick-chips'), 'the quick-access chips row'),
-    topOf(bar.locator('.sps-meta-footer .sps-meta-row').first(), 'the engine/pin row'),
+    topOf(bar.locator('.sps-meta-footer .sps-meta-row').first(), 'the pin-tier row'),
     topOf(bar.locator('.draft-composer-bar'), 'the cwd/project pills row'),
     topOf(composer, 'the composer'),
   ])
   expect(hintY, 'the body hint sits above the launch stack').toBeLessThan(chipsY)
   expect(chipsY, 'quick-access chips are the TOP row of the stack').toBeLessThan(metaY)
-  expect(metaY, 'the engine/pin row sits between the chips and the pills').toBeLessThan(pillsY)
+  expect(metaY, 'the pin-tier row sits between the chips and the pills').toBeLessThan(pillsY)
   expect(pillsY, 'the pills are the LAST row before the composer').toBeLessThan(composerY)
 
   // 4. The pills are LEFT-ALIGNED as a pair (v4): the cwd pill starts at the row's
@@ -260,16 +259,26 @@ export async function expectV4Stack(panel: Locator): Promise<void> {
   expect(project.x, 'the project pill follows the cwd pill').toBeGreaterThan(cwd.x)
   expect(Math.abs(project.y - cwd.y), 'both pills share one line').toBeLessThan(4)
 
-  // 4b. The three rows share ONE left edge — first chip, engine toggle, cwd pill.
-  //     This is the regression the in-flow ✦ slot shipped (the meta row sat 11px
-  //     right of its neighbours); the slot is an absolute overlay now, and this
-  //     pins that. Compared as first-CONTROL edges, not container edges, because
-  //     a container can be full-width regardless of where its content starts.
+  // 4b. The three rows share ONE left edge — the quick row's KEY, the pin-tier
+  //     row's key, and the cwd pill. This is the regression the in-flow ✦ slot
+  //     shipped (the meta row sat 11px right of its neighbours); the slot is an
+  //     absolute overlay now, and this pins that. Compared as first-CHILD edges,
+  //     not container edges, because a container can be full-width regardless of
+  //     where its content starts. The chips themselves are indented one caption
+  //     width now, which is the whole point of the caption.
+  const quickKey = await bar.locator('.draft-quick-chips .draft-quick-key').boundingBox()
+  const pinKey = await bar.locator('.pin-tier-options .pin-tier-label').boundingBox()
   const firstChip = await bar.locator('.draft-quick-chips .draft-quick-chip').first().boundingBox()
-  const engine = await bar.locator('.sps-engine-toggle').boundingBox()
-  if (!firstChip || !engine) throw new Error('the chips/meta rows did not render')
-  expect(Math.abs(firstChip.x - cwd.x), 'the quick chips share the pills\' left edge').toBeLessThan(3)
-  expect(Math.abs(engine.x - cwd.x), 'the engine toggle shares the pills\' left edge').toBeLessThan(3)
+  if (!quickKey || !pinKey || !firstChip) throw new Error('the chips/meta rows did not render')
+  expect(Math.abs(quickKey.x - cwd.x), 'the "Quick" key shares the pills\' left edge').toBeLessThan(3)
+  expect(Math.abs(pinKey.x - cwd.x), 'the "Pin" key shares the pills\' left edge').toBeLessThan(3)
+  expect(firstChip.x, 'the chips start after their key').toBeGreaterThan(quickKey.x)
+
+  // 4c. The provider question is asked ONCE, in the composer's model picker. The
+  //     meta row's Claude|Codex toggle is gone: the model pill below already opens
+  //     a provider rail, and two segmented controls two rows apart asked the same
+  //     question twice (user feedback).
+  await expect(bar.locator('.sps-engine-toggle')).toHaveCount(0)
 
   // 5. The model select moved into the COMPOSER's controls row, leftmost — the
   //    same place a real session keeps its model pill. Containment through

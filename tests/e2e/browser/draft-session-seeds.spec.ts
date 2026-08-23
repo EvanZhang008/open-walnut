@@ -30,7 +30,7 @@
 import { test, expect } from '@playwright/test'
 import {
   basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftMetaAiSlot, draftPanel,
-  draftProjectPill, draftTierBtn, loadHome, openDraft, openDraftOnCwd, presetStickyTier,
+  draftProjectPill, draftTierBtn, loadHome, openDraft, openDraftOnCwd,
   seedColumns, tasksTitled, watchForbiddenRequests,
 } from './draft-helpers'
 import { openSessionFromPlus, plusControl } from './draft-surface-helpers'
@@ -149,9 +149,8 @@ test('pin-tier header "+" opens a draft with that tier preset in the meta row', 
   // sublabel it lives in is a click-to-collapse row + a dnd-kit drag surface — a
   // "+" that doesn't stop those events folds the section instead of opening a draft.
   //
-  // The tier picked is Backlog: it is NOT the sticky default (Satellite below), so
-  // an active Backlog button can only mean the seed was applied.
-  await presetStickyTier(page, 'satellite')
+  // The tier picked is Backlog: it is NOT the launcher default (every draft opens on
+  // Satellite), so an active Backlog button can only mean the seed was applied.
   // Backlog renders unconditionally, but the whole PINNED wrapper only mounts when
   // some pinned task exists — so pin one (any tier) to make the tier headers real.
   const stamp = Date.now()
@@ -245,7 +244,6 @@ test('typing back-fills the project + tier pills with a ✦ badge, and a user pi
   expect(seed.ok(), await seed.text()).toBe(true)
 
   await page.setViewportSize({ width: 2400, height: 1000 })
-  await presetStickyTier(page, 'satellite')
   await stubParse(page, { title: 'ship the wallet flow', project: AI_PROJECT, pinTier: 'focus' })
   await loadHome(page)
 
@@ -478,7 +476,6 @@ test('a failing quick-parse is a silent no-op — no toast, no pill change, no c
   // DEFAULT experience — a toast or a cleared pill there would be a visible bug in
   // a feature the user never asked for.
   await page.setViewportSize({ width: 2400, height: 1000 })
-  await presetStickyTier(page, 'satellite')
   await stubParse(page, 'error')
   await loadHome(page)
 

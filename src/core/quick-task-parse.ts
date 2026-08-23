@@ -35,6 +35,7 @@ function buildPinTierRule(customTiers: CustomTierRecord[]): string {
     `  · OMIT the field entirely — ${PIN_TIER_NONE_GUIDANCE}`,
     '  Urgency signals (urgent/critical/asap/today/紧急/right now) point at focus; a CONCRETE due date inside the next ~7 days points at satellite even with no urgency word; "waiting on"/"blocked by"/等 points at wait; explicit someday/backlog/later wording (someday, backlog, 以后, 有空再) points at backlog. An explicit "pin to X" always wins.',
     '  Unpinned is still the DEFAULT for things not worth tracking in the pinned working set at all — backlog is for someday work the user DOES want to keep visible.',
+    '  When a signal is AMBIGUOUS, answer with the weaker option: satellite rather than focus, and omission rather than backlog or wait. focus needs stated urgency and wait needs a stated blocker — claiming either without one is the most common mistake, and it is worse than saying nothing, because the surfaces already default to satellite for work that is being started.',
   ].join('\n');
 }
 

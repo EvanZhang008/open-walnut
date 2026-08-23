@@ -1,17 +1,10 @@
 import { test, expect } from '@playwright/test'
 import { openDraft } from './draft-helpers'
 
-const PIN_TIER_KEY = 'open-walnut-launcher-pin-tier'
-
 test('Quick Start footer keeps primary controls visible and opens task settings upward', async ({ page }) => {
-  // The launcher's pin tier is sticky and MIRRORED TO THE SERVER, whose
-  // ui-prefs.json is shared by every spec in the run — so the "defaults to
-  // Satellite" assertion below has to seed its own state rather than inherit
-  // whatever tier another spec last picked. A local value beats the server copy
-  // in ui-prefs-sync's boot merge, so set it before any app code runs.
-  await page.addInitScript((key) => {
-    try { localStorage.setItem(key as string, 'satellite') } catch { /* storage disabled */ }
-  }, PIN_TIER_KEY)
+  // No pin-tier seeding: the tier is no longer sticky (and no longer mirrored to
+  // the shared fixture's ui-prefs), so every launcher opens on Satellite whatever
+  // any other spec picked. That is what makes the assertion below stable.
   await page.goto('/')
 
   // The launcher is reached through a DRAFT session column now: "+" grows the

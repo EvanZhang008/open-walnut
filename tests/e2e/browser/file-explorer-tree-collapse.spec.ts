@@ -9,8 +9,7 @@
  * mirrored to the SHARED fixture server by ui-prefs-sync, so a collapse here
  * would leak into sibling explorer specs booting in parallel (they'd find no
  * tree at all). Every test pins its own starting value via addInitScript — a
- * locally-written value with no sync timestamp wins the boot merge (same
- * pattern + reasoning as presetStickyTier in draft-helpers.ts) — and an
+ * locally-written value with no sync timestamp wins the boot merge — and an
  * afterEach resets the server copy even when an assertion failed mid-test.
  */
 import { test, expect, type Page } from '@playwright/test'

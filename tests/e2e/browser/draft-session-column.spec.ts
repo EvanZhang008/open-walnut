@@ -11,16 +11,17 @@
  *   header             title + Draft badge + (bound task) + ✕
  *   `.draft-session-body`   ONE centered muted line, nothing actionable
  *   `.session-panel-input`  the whole bottom stack:
- *     `.draft-launch-bar`   quick-access basename chips → engine/pin row →
- *                           cwd pill · project pill (left-aligned), with the
- *                           folder picker opening UPWARD from it
+ *     `.draft-launch-bar`   "Quick" key + up to 8 basename chips + divider →
+ *                           labelled pin-tier row → cwd pill · project pill
+ *                           (left-aligned), with the folder picker opening
+ *                           UPWARD from it
  *     the composer          whose controls row holds the model select + two verbs
  *
  * What moved in v4, and therefore what this file asserts POSITIONALLY rather than
  * by mere existence: the launch bar is no longer a strip under the HEADER (it now
  * lives inside `.session-panel-input`, directly above the composer), the model
- * select left the bar's meta row for the composer's controls row, and the body
- * lost its quick-action chips (and the "Fix Walnut" chip with them — the repair
+ * select AND the Claude|Codex toggle left the bar's meta row for the composer's
+ * model picker (one control, one question), and the body lost its quick-action chips (and the "Fix Walnut" chip with them — the repair
  * entry point is the chat pill only). The pills kept their `.draft-composer-bar`
  * container marker through both moves, so the ~12 specs that reach the folder
  * picker through a draft are untouched.
@@ -107,17 +108,20 @@ test('"+" opens a focused draft column with no network in the open path', async 
   // ordering check. Details of each row live in `expectV4Stack`.
   await expectV4Stack(panel)
 
-  // The launch meta the user can see WITHOUT opening the folder picker: engine +
-  // pin tier in the bar's row (the model moved to the composer — see
-  // expectV4Stack). Before the earlier revision these were reachable only by
-  // opening the picker, so a draft's actual launch config was invisible.
+  // The launch meta the user can see WITHOUT opening the folder picker: the pin
+  // tier, labelled (the model AND the provider moved to the composer's model
+  // picker — see expectV4Stack). Before the earlier revision this was reachable
+  // only by opening the picker, so a draft's actual launch config was invisible.
   const meta = draftLaunchBar(panel).locator('.sps-meta-footer')
   await expect(meta.locator('.pin-tier-options')).toBeVisible()
-  await expect(meta.locator('.sps-engine-toggle')).toBeVisible()
-  // …and the model select is NOT in that row any more. Asserted here (not only as
-  // "it is in the composer") because leaving a second copy behind would give the
-  // column two competing model controls.
+  await expect(meta.locator('.pin-tier-label')).toBeVisible()
+  // …and NEITHER the model select nor the engine toggle is in that row any more.
+  // Asserted here (not only as "they are in the composer") because leaving a
+  // second copy behind would give the column two competing controls for one
+  // question — which is exactly what the Claude|Codex toggle became once the
+  // model pill grew its provider rail.
   await expect(meta.locator('.sps-meta-model-select')).toHaveCount(0)
+  await expect(meta.locator('.sps-engine-toggle')).toHaveCount(0)
 
   // The caret is in THIS draft's composer, not the main chat's — a "+" you then
   // have to click into is not the "instant open" being shipped.

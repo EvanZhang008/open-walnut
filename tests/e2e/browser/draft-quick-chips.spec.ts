@@ -4,7 +4,7 @@
  * than a rendering detail.
  *
  * Four claims, none of which the sibling lifecycle spec can make:
- *   1. the row is the R6 MIX — top 2 by absolute use count, then the 2 most recent —
+ *   1. the row is the R6 MIX — top 4 by absolute use count, then the 4 most recent —
  *      in that order, and that this is a DIFFERENT answer from the server's single
  *      frecency order (scenario 1);
  *   2. one click sets BOTH halves of "where does this run" (folder + the project
@@ -51,7 +51,7 @@ const SCREENSHOT_DIR = process.env.DRAFT_SHOT_DIR ?? '/tmp/draft-chips'
  * task-less, so it renders no todo group and no other spec sees it.
  *
  * `wallets` is the fixture's #2 dir by absolute COUNT (24, behind walnut's 25), and
- * R6's first chip group is exactly "top 2 by count" — so it is reliably inside the
+ * R6's first chip group is exactly "top 4 by count" — so it is reliably inside the
  * chip window even on a shared store (a fresh launch enters at count 1 and can only
  * compete for the two RECENCY slots).
  */
@@ -125,25 +125,27 @@ test('the chip row is top-2-by-use then 2-most-recent — a different answer fro
   const paths = await draftChipPaths(panel)
 
   // THE assertion: the R6 mix, in order, over the bytes the page was handed.
-  expect(paths, 'chips are the 2 most-used folders then the 2 most recent, in that order')
+  expect(paths, 'chips are the 4 most-used folders then the 4 most recent, in that order')
     .toEqual(expectedChips(dirs))
-  expect(paths.length, 'at most four chips').toBeLessThanOrEqual(4)
+  expect(paths.length, 'at most eight chips').toBeLessThanOrEqual(8)
   expect(new Set(paths).size, 'no folder appears twice').toBe(paths.length)
 
-  // …and the row's first two ARE the two highest counts — derived here
+  // …and the row's first four ARE the four highest counts — derived here
   // independently of `expectedChips`, so a bug shared by helper and product still
-  // trips something.
+  // trips something. Sliced to what the payload can actually supply: a store with
+  // fewer than four dirs would otherwise fail on the fixture's size, not on order.
   const byCount = [...dirs].sort((a, b) => b.count - a.count)
   const title = (d: WorkingDir) => (d.host ? `${d.cwd} (on ${d.hostLabel ?? d.host})` : d.cwd)
-  expect(paths.slice(0, 2), 'the count group leads the row')
-    .toEqual(byCount.slice(0, 2).map(title))
+  const leadCount = Math.min(4, dirs.length)
+  expect(paths.slice(0, leadCount), 'the count group leads the row')
+    .toEqual(byCount.slice(0, leadCount).map(title))
 
   // The TEETH: with the freshly-launched folder in the store the two orders must
   // disagree, so "the UI echoed the server" is now a failing hypothesis. Conditional
   // on the payload genuinely disagreeing — the fixture store is shared and its
   // counts drift, and a run where the two rules coincide should report that rather
   // than fail — but the annotation makes a silently non-discriminating run visible.
-  const serverOrder = dirs.slice(0, 4).map(title)
+  const serverOrder = dirs.slice(0, 8).map(title)
   const discriminates = JSON.stringify(expectedChips(dirs)) !== JSON.stringify(serverOrder)
   test.info().annotations.push({
     type: 'chip-order',
@@ -198,7 +200,7 @@ test('a quick-access chip is a bare basename and sets cwd AND project in one off
   await expect(chips.first()).toBeVisible({ timeout: 10_000 })
   await expect(panel.locator('.draft-session-body .draft-quick-chip')).toHaveCount(0)
 
-  // ── The R6 mix: top-2-by-use + 2-most-recent, in that ORDER (4 max) ──
+  // ── The R6 mix: top-4-by-use + 4-most-recent, in that ORDER (8 max) ──
   //
   // Not just "≤4, no dupes": the whole reason the row stopped using the server's
   // single frecency order is that a folder touched twice this morning outranked one
@@ -207,13 +209,13 @@ test('a quick-access chip is a bare basename and sets cwd AND project in one off
   // the captured payload rather than hardcoded fixture folder names (the store is
   // SHARED and every other spec's launch reorders it).
   const paths = await draftChipPaths(panel)
-  expect(paths, 'chips are the 2 most-used folders then the 2 most recent, in that order')
+  expect(paths, 'chips are the 4 most-used folders then the 4 most recent, in that order')
     .toEqual(expectedChips(warmed.dirs))
-  expect(paths.length, 'at most four quick-access chips').toBeLessThanOrEqual(4)
+  expect(paths.length, 'at most eight quick-access chips').toBeLessThanOrEqual(8)
   expect(new Set(paths).size, 'no folder appears twice in the row').toBe(paths.length)
 
   // Label = the BASENAME, exactly. The old chips read "Start in <dir>", which
-  // repeated the same three words four times down the column; the full path is
+  // repeated the same three words on every chip down the column; the full path is
   // still there as the title (and is what makes a chip addressable).
   const dirChip = draftQuickChips(panel).and(page.locator(`[title="${cwd}"]`))
   await expect(dirChip, `no chip for ${cwd} — frecency ranking moved it out of the chip window`)

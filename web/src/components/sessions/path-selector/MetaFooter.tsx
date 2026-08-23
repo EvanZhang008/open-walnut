@@ -1,14 +1,14 @@
 /**
  * MetaFooter — task metadata controls in the session path selector footer.
- * The primary row keeps launch-critical choices visible — model, engine, and the
- * pin tier (which tier column the new task lands in, changed often enough that
- * burying it cost a click every launch) — while rarer metadata (star, needs
- * attention, priority) lives in an upward-opening More menu.
+ * The primary row keeps launch-critical choices visible — model + engine (as ONE
+ * pair; see EngineToggle) and the pin tier (which tier column the new task lands
+ * in, changed often enough that burying it cost a click every launch) — while
+ * rarer metadata (dates, unread, priority) lives in an upward-opening More menu.
  */
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { SESSION_MODELS } from '@open-walnut/core';
-import { PRIORITY_OPTIONS, DEFAULT_META, rememberPinTier } from '../task-meta-constants';
+import { PRIORITY_OPTIONS, DEFAULT_META } from '../task-meta-constants';
 import type { QuickStartTaskMeta } from '../SessionPathSelector';
 import { DatePicker } from '@/components/common/DatePicker';
 import { PinTierPicker } from '@/components/common/PinTierPicker';
@@ -25,10 +25,11 @@ interface Props {
   /** Host the session will spawn on (null/undefined = local; drives which
    *  host's model catalog fills the dropdown). */
   host?: string | null;
-  /** Render the row WITHOUT the model select, for a surface that shows the model
-   *  somewhere else (the draft column puts it in the composer, mirroring a real
-   *  session where the model pill lives in the mode bar). Default false — every
-   *  other caller keeps the model in the primary row. */
+  /** Render the row WITHOUT the model select AND without the engine toggle, for a
+   *  surface that shows the model somewhere else (the draft column puts it in the
+   *  composer, mirroring a real session where the model pill lives in the mode
+   *  bar). The provider is part of that control there, so it leaves with it.
+   *  Default false — every other caller keeps both in the primary row. */
   hideModel?: boolean;
 }
 
@@ -101,8 +102,17 @@ export function MetaModelSelect({ meta, onChange, host, className }: Pick<Props,
   );
 }
 
-/** Segmented Claude | Codex engine toggle. Codex is ACP-backed and local-only
- *  for now, so the toggle is disabled (pinned to Claude) on remote host tabs. */
+/** Segmented Claude | Codex engine toggle.
+ *
+ *  Renders ONLY on a surface that also owns the model control (`hideModel` false
+ *  — the folder picker's footer, whose model control is a plain `<select>` with no
+ *  provider rail). Where the model lives elsewhere the provider goes with it: the
+ *  draft column's composer pill opens the shared two-pane provider|models picker,
+ *  which already answers "Claude or Codex", so a second segmented control in the
+ *  meta row was the same question asked twice, two rows apart.
+ *
+ *  Codex is ACP-backed and local-only for now, so the toggle is disabled (pinned
+ *  to Claude) on remote host tabs. */
 function EngineToggle({ meta, onChange, host }: Pick<Props, 'meta' | 'onChange' | 'host'>) {
   const remoteHost = !!host && host !== '__local__';
   // On a remote host tab the session WILL launch as Claude (quick-start drops a
@@ -133,23 +143,16 @@ function EngineToggle({ meta, onChange, host }: Pick<Props, 'meta' | 'onChange' 
 }
 
 /** Pin-tier picker. Lives in the PRIMARY row (not the More menu): which tier the
- *  new task lands in is a per-launch decision, and the pick is remembered as the
- *  next launch's default — so it has to be visible and one click away. The
- *  buttons themselves are the shared PinTierPicker (same control as Quick Task);
- *  the launcher only adds the stickiness. */
+ *  new task lands in is a per-launch decision, so it has to be visible and one
+ *  click away. The buttons are the shared PinTierPicker (same control as Quick
+ *  Task). Deliberately NOT sticky: every fresh launcher opens on Satellite
+ *  (freshLauncherMeta) and a pick applies to this launch only. */
 function TierPicker({ meta, onChange }: Pick<Props, 'meta' | 'onChange'>) {
   return (
     <PinTierPicker
       value={meta.pinTier}
       label="Pin"
-      onChange={(pinTier) => {
-        // Remember it so the next launcher opens on it. undefined = the user
-        // deliberately unpinned, which is remembered as such. Done here (not in
-        // the setState updater) so the localStorage write + queued PUT stay out
-        // of the reducer.
-        rememberPinTier(pinTier);
-        onChange(m => ({ ...m, pinTier }));
-      }}
+      onChange={(pinTier) => onChange(m => ({ ...m, pinTier }))}
     />
   );
 }
@@ -220,8 +223,9 @@ export function MetaFooter({ meta, onChange, compact, host, hideModel = false }:
   return (
     <div className={`sps-meta-footer${compact ? ' compact' : ''}`}>
       <div className="sps-meta-row">
+        {/* Model + provider travel together — see EngineToggle's note. */}
         {!hideModel && <MetaModelSelect meta={meta} onChange={onChange} host={host} />}
-        <EngineToggle meta={meta} onChange={onChange} host={host} />
+        {!hideModel && <EngineToggle meta={meta} onChange={onChange} host={host} />}
         <TierPicker meta={meta} onChange={onChange} />
         <div className="sps-meta-more" ref={moreRef}>
           {moreOpen && createPortal(

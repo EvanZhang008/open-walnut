@@ -77,6 +77,68 @@ export async function quickParseTask(text: string): Promise<QuickTaskParse> {
   return apiPost<QuickTaskParse>('/api/tasks/quick-parse', { text, timeZone });
 }
 
+// ── Suggestion accuracy ledger ───────────────────────────────────────────────
+
+/** A launch field the draft's background parse can propose. Same names as
+ *  `DraftAiField` (web/src/components/sessions/draft-column.ts) and as the
+ *  server's SUGGEST_FIELDS — the server drops anything it doesn't recognise. */
+export type SuggestField = 'project' | 'cwd' | 'pinTier' | 'priority' | 'dueDate' | 'startDate' | 'endDate';
+export type SuggestVerdict = 'kept' | 'changed' | 'dropped';
+
+export interface SuggestFeedbackEntry {
+  field: SuggestField;
+  suggested: string;
+  /** Absent = the launch carried nothing for this field (the suggestion was dropped). */
+  chosen?: string;
+}
+
+export interface SuggestFieldStats {
+  kept: number;
+  changed: number;
+  dropped: number;
+  total: number;
+  /** kept / total, or null with no evidence yet. */
+  accuracy: number | null;
+}
+
+export interface SuggestRecord {
+  at: string;
+  surface: string;
+  textLen?: number;
+  entries: Array<SuggestFeedbackEntry & { verdict: SuggestVerdict }>;
+}
+
+export interface SuggestAccuracySummary {
+  commits: number;
+  fields: Record<SuggestField, SuggestFieldStats>;
+  overall: SuggestFieldStats;
+  recent: SuggestRecord[];
+  since?: string;
+  until?: string;
+}
+
+/**
+ * Record what the background parse suggested against what the launch carried.
+ *
+ * FIRE-AND-FORGET by contract: it rides a Start the user already committed, so it
+ * must never delay or fail that launch. Callers must not await it, and every
+ * failure is swallowed here rather than at each call site.
+ */
+export function recordSuggestFeedback(input: {
+  surface: string;
+  entries: readonly SuggestFeedbackEntry[];
+  textLen?: number;
+}): void {
+  if (input.entries.length === 0) return;   // nothing was suggested — nothing to learn
+  void apiPost('/api/tasks/suggest-feedback', input).catch(() => {
+    /* telemetry — a lost record is strictly better than a disturbed launch */
+  });
+}
+
+export async function fetchSuggestAccuracy(limit = 20): Promise<SuggestAccuracySummary> {
+  return apiGet<SuggestAccuracySummary>(`/api/tasks/suggest-accuracy?limit=${limit}`);
+}
+
 export interface CreateTaskInput {
   title: string;
   priority?: string;

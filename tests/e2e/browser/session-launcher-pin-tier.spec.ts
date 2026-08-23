@@ -1,57 +1,37 @@
 /**
- * Session launcher pin tier — default + stickiness, driven through the real UI.
+ * Session launcher pin tier — the default and its deliberate NON-stickiness,
+ * driven through the real UI.
  *
- * Reported behavior: the launcher always opened pinned to Focus, and the tier
- * picker was buried in the "More" menu, so every launch cost a trip into the
- * menu to move the task out of Focus.
+ * Two reported behaviors, fixed in two rounds. First: the launcher always opened
+ * pinned to Focus with the tier picker buried in "More", so every launch cost a
+ * trip into the menu to move the task out of Focus. Then the fix that replaced it
+ * (remember the last tier picked, mirrored across browsers) turned out to have the
+ * same shape of bug one level up: one Focus pick on a genuinely urgent session made
+ * every later ordinary session open on Focus, and the pinned area filled up again.
  *
  * Asserts what the user sees:
  *   1. the tier picker sits in the launcher's PRIMARY row (no More click),
- *   2. a fresh browser defaults to Satellite,
- *   3. the tier the user picks survives closing + reopening the launcher,
- *   4. that pick is mirrored to the server (PUT /api/ui-prefs) so it follows
- *      the user to another browser.
+ *   2. every launcher defaults to Satellite,
+ *   3. a pick applies to THAT launch only — a fresh "+" is back on Satellite,
+ *   4. the picked tier reaches the quick-start payload,
+ *   5. an explicit unpin reaches it as `null`, not as an omitted field.
  */
 
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { draftPanel, openDraft } from './draft-helpers'
 
-const PREF_KEY = 'open-walnut-launcher-pin-tier'
-
-/**
- * Put the sticky pref into a known state for THIS page load.
- *
- * `localStorage.removeItem` is the WRONG reset for a synced key: ui-prefs-sync's
- * boot merge adopts the server value whenever the local one is null, and the
- * fixture server's ui-prefs.json is shared by every spec in the run (and
- * survives re-runs), so a stale `wait`/`none` from an earlier spec would decide
- * what "a fresh browser" sees. Instead seed a real local value before any app
- * code runs — a local value with no tracked timestamp always wins that merge.
- *
- * Pass null to simulate a never-chose-anything browser: the server entry is
- * tombstoned first (so the merge has nothing to adopt), then the key is cleared.
- */
-async function seedPinTierPref(page: Page, value: 'focus' | 'satellite' | 'backlog' | 'wait' | 'none' | null) {
-  if (value === null) {
-    await page.request.put('/api/ui-prefs', {
-      data: { prefs: { [PREF_KEY]: { v: null, ts: Date.now() } } },
-    })
-  }
-  await page.addInitScript(([key, v]) => {
-    try {
-      if (v === null) localStorage.removeItem(key as string)
-      else localStorage.setItem(key as string, v as string)
-    } catch { /* storage disabled — the app falls back to its default */ }
-  }, [PREF_KEY, value] as const)
-}
-
 /**
  * Open a FRESH launcher: "+" grows a draft session column, and its cwd pill opens
  * the same picker (unchanged `.sps-*` markup, footer included).
  *
- * Both handles are returned because the two live in different places now: the
- * tier picker is inside the popover, while the message that actually launches is
- * typed in the draft column's own composer.
+ * Both handles are returned because the two live in different places: the tier
+ * picker is inside the popover, while the message that actually launches is typed
+ * in the draft column's own composer.
+ *
+ * No pref seeding anywhere in this file any more. That was pure defence against a
+ * synced sticky-tier value the SHARED fixture server carried between specs — with
+ * the stickiness gone there is no such value, which is itself part of the win: one
+ * spec's tier pick can no longer decide what another spec calls "a fresh browser".
  */
 async function openLauncher(page: Page): Promise<{ panel: Locator; selector: Locator }> {
   const panel = await openDraft(page)
@@ -64,12 +44,11 @@ async function openLauncher(page: Page): Promise<{ panel: Locator; selector: Loc
 /**
  * Discard the launcher, popover AND draft column.
  *
- * The column has to go, not just the popover: a draft snapshots the sticky tier
- * ONCE, when it is created (freshLauncherMeta), and the picker is seeded from
- * that snapshot (initialMeta). So re-opening the picker on the SAME draft would
- * replay the snapshot and prove nothing about stickiness — a fresh "+" is the
- * real "open the launcher again". Closing the draft is also the gesture a user
- * has for "never mind", so this stays a real-UI step.
+ * The column has to go, not just the popover: a draft snapshots its launch meta
+ * ONCE, when it is created (freshLauncherMeta), and the picker is seeded from that
+ * snapshot (initialMeta). Re-opening the picker on the SAME draft replays the
+ * snapshot, so only a fresh "+" is really "open the launcher again". Closing the
+ * draft is also the gesture a user has for "never mind", so this stays real UI.
  */
 async function closeLauncher(page: Page) {
   // Dismiss the popout picker FIRST — anchored to the pill it can float over
@@ -86,10 +65,7 @@ async function closeLauncher(page: Page) {
   await expect(page.locator('.draft-session-panel')).toHaveCount(0)
 }
 
-test('launcher defaults to Satellite and remembers the tier the user picks', async ({ page }) => {
-  // A never-chose-anything browser: nothing local AND nothing on the server, so
-  // the app has to fall back to its own default.
-  await seedPinTierPref(page, null)
+test('launcher defaults to Satellite, and a pick lasts exactly one launch', async ({ page }) => {
   await page.goto('/')
 
   let { selector } = await openLauncher(page)
@@ -101,44 +77,33 @@ test('launcher defaults to Satellite and remembers the tier the user picks', asy
   await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'false')
   await page.screenshot({ path: '/tmp/launcher-pin-tier/default-satellite.png' })
 
-  // 4: the pick is mirrored server-side (ui-prefs), which is what makes it
-  // survive a different browser rather than just this localStorage.
-  const prefPut = page.waitForRequest(req =>
-    req.url().includes('/api/ui-prefs')
-    && req.method() === 'PUT'
-    && JSON.stringify(req.postDataJSON()).includes(PREF_KEY), { timeout: 15_000 })
-
+  // The pick lands on THIS draft.
   await tiers.getByRole('button', { name: 'Wait' }).click()
   await expect(tiers.getByRole('button', { name: 'Wait' })).toHaveAttribute('aria-pressed', 'true')
   await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'false')
-  await prefPut
 
-  // 3: reopening the launcher opens on the remembered tier, not the baseline.
+  // 3: THE regression guard. A fresh launcher is back on Satellite — the previous
+  // pick was for that launch, not a preference. This is the assertion that used to
+  // read the other way round (expecting Wait), and flipping it is the whole change.
   await closeLauncher(page)
   ;({ selector } = await openLauncher(page))
   tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
-  await expect(tiers.getByRole('button', { name: 'Wait' })).toHaveAttribute('aria-pressed', 'true')
-  await page.screenshot({ path: '/tmp/launcher-pin-tier/remembered-wait.png' })
-
-  // Clicking the active tier unpins — and "unpinned" is remembered too (it must
-  // not snap back to the default on the next open).
-  await tiers.getByRole('button', { name: 'Wait' }).click()
+  await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'true')
   await expect(tiers.getByRole('button', { name: 'Wait' })).toHaveAttribute('aria-pressed', 'false')
-  await closeLauncher(page)
-  ;({ selector } = await openLauncher(page))
-  tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
-  for (const label of ['Focus', 'Satellite', 'Wait']) {
+  await page.screenshot({ path: '/tmp/launcher-pin-tier/fresh-back-to-satellite.png' })
+
+  // Clicking the active tier unpins — and THAT does not persist either.
+  await tiers.getByRole('button', { name: 'Satellite' }).click()
+  for (const label of ['Focus', 'Satellite', 'Backlog', 'Wait']) {
     await expect(tiers.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'false')
   }
-  // Deliberately NO "restore the pref" click here: the debounced PUT would be
-  // lost when Playwright closes the page, so it never actually restored anything.
-  // Every spec seeds its own state instead (seedPinTierPref).
+  await closeLauncher(page)
+  ;({ selector } = await openLauncher(page))
+  tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
+  await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'true')
 })
 
 test('the launcher sends the picked tier in the quick-start payload', async ({ page }) => {
-  // Seed the tier explicitly — this asserts what the launcher SENDS, so the
-  // starting tier must not depend on what an earlier spec left on the server.
-  await seedPinTierPref(page, 'satellite')
   await page.goto('/')
 
   const { panel, selector } = await openLauncher(page)
@@ -183,7 +148,6 @@ test('the launcher sends the picked tier in the quick-start payload', async ({ p
  * Focus. So unpinning used to be silently overridden back to Focus.
  */
 test('an explicit unpin is sent as null, not dropped from the payload', async ({ page }) => {
-  await seedPinTierPref(page, 'satellite')
   await page.goto('/')
 
   const { panel, selector } = await openLauncher(page)

@@ -42,7 +42,7 @@
 import { test, expect } from '@playwright/test'
 import {
   basenameOf, discoverFixtureRoot, draftCwdPill, draftMetaAiSlot, draftPanel, draftProjectPill,
-  draftTierBtn, loadHome, presetStickyTier, watchForbiddenRequests,
+  draftTierBtn, loadHome, watchForbiddenRequests,
 } from './draft-helpers'
 import {
   navigateToTasksPage, openSessionFromPlus, pinToTier, plusControl, presetTierViewModes,
@@ -103,18 +103,18 @@ async function claimFolder(
 
 // ── 1. A single-tier tab has its own session "+" (GAP-1) ────────────────────
 
-test('the Satellite tab carries a tier "+" that opens a draft preset to Satellite', async ({ page }) => {
+test('the Wait tab carries a tier "+" that opens a draft preset to Wait', async ({ page }) => {
   // The tier TABS were the gap: in the stacked All view each tier owns a sublabel
   // row that carries a "+", but a solo tier tab renders no sublabel (the tab itself
   // names the tier), so there was no route to a session from the tab a user
   // actually works in. The control now lives in that tab's view-mode bar.
   //
-  // The sticky default is preset to 'wait' — NOT the tier under test — so an active
-  // Satellite button can only mean the seed was applied, never that it was already
-  // there. (This is the same trick the sibling spec's Backlog scenario uses.)
-  await presetStickyTier(page, 'wait')
+  // WAIT, not Satellite: every draft now opens on Satellite (there is no sticky
+  // tier pref to preset any more), so a Satellite assertion could not tell "the seed
+  // was applied" from "it was already there". Wait is not the default, so an active
+  // Wait button can only mean the tab's own tier reached meta.pinTier.
   await page.setViewportSize({ width: 2400, height: 1000 })
-  await presetPanelView(page, { section: 'satellite', project: '' })
+  await presetPanelView(page, { section: 'wait', project: '' })
   await loadHome(page)
 
   // The bar exists BECAUSE this is a single-tier tab (the All view has none), so
@@ -143,10 +143,10 @@ test('the Satellite tab carries a tier "+" that opens a draft preset to Satellit
   // The menu closed behind the choice — it must not sit over the fresh column.
   await expect(page.getByTestId('plus-menu')).toHaveCount(0)
 
-  // THE assertion, read off the control the user sees: Satellite is the active tier
-  // in the draft's meta row, and the sticky default it replaced is not.
-  await expect(draftTierBtn(panel, 'satellite')).toHaveAttribute('aria-pressed', 'true')
-  await expect(draftTierBtn(panel, 'wait')).toHaveAttribute('aria-pressed', 'false')
+  // THE assertion, read off the control the user sees: Wait is the active tier in
+  // the draft's meta row, and the Satellite default it replaced is not.
+  await expect(draftTierBtn(panel, 'wait')).toHaveAttribute('aria-pressed', 'true')
+  await expect(draftTierBtn(panel, 'satellite')).toHaveAttribute('aria-pressed', 'false')
   // Not ✦-badged: a "+" seed is the user asking, not an AI suggestion.
   await expect(draftMetaAiSlot(panel)).toHaveText('')
   // A tier seed leaves everything else neutral — this is not a project route.

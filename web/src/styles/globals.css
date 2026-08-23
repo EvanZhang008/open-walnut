@@ -19892,6 +19892,75 @@ td.usage-share-col {
   margin: 16px 0;
 }
 
+/* ── Suggestion accuracy (Tasks & Sessions) ──
+   Per-field tally of the draft column's auto-suggestions plus the newest raw
+   diffs. Tabular numbers so the columns line up as counts change. */
+.suggest-accuracy-table {
+  width: 100%;
+  max-width: 460px;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.suggest-accuracy-table th {
+  text-align: right;
+  font-weight: 600;
+  color: var(--fg-muted);
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.suggest-accuracy-table th:first-child,
+.suggest-accuracy-table td:first-child { text-align: left; }
+.suggest-accuracy-table td {
+  text-align: right;
+  padding: 3px 8px;
+  color: var(--fg-secondary);
+}
+.suggest-accuracy-pct { color: var(--fg); font-weight: 600; }
+.suggest-accuracy-total td {
+  border-top: 1px solid var(--border);
+  color: var(--fg);
+  font-weight: 600;
+}
+/* One row per commit; entries wrap inside it. Bounded height because the ledger
+   holds up to 20 records and this panel is one card among many. */
+.suggest-accuracy-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.suggest-accuracy-record {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+}
+.suggest-accuracy-when {
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.suggest-accuracy-entry {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.suggest-accuracy-field { color: var(--fg-muted); }
+.suggest-accuracy-values { color: var(--fg); }
+.suggest-accuracy-verdict { color: var(--fg-muted); font-size: 10px; }
+/* Kept reads calm, an override reads as the finding — the whole point of the
+   panel is spotting the second kind at a glance. */
+.suggest-accuracy-entry.verdict-changed { border-color: color-mix(in srgb, var(--warning, #ff9f0a) 55%, var(--border)); }
+.suggest-accuracy-entry.verdict-changed .suggest-accuracy-verdict { color: var(--warning, #ff9f0a); }
+.suggest-accuracy-entry.verdict-dropped { border-color: color-mix(in srgb, var(--fg-muted) 45%, var(--border)); }
+
 /* Secret Input */
 .secret-input-wrapper {
   position: relative;
@@ -20844,10 +20913,25 @@ td.usage-share-col {
 .draft-launch-bar .sps-meta-more {
   /* No `margin-left: auto` here (the shared rule's): in the picker's footer the
      model select anchors the left and pushing More to the far right balances the
-     row, but this row starts at the engine toggle and the model select is gone —
-     an auto margin stranded "⋯ More" against the panel edge, a whole column away
-     from the controls it belongs to. Hugging the tier group is the approved shape. */
+     row, but this row starts at the pin-tier group and both the model select and
+     the engine toggle are gone — an auto margin stranded "⋯ More" against the panel
+     edge, a whole column away from the controls it belongs to. Hugging the tier
+     group is the approved shape. */
   margin-left: 0;
+}
+/* The draft bar ALWAYS shows the "Pin" key, overriding the footer's narrow-width
+   container query. In the picker footer the caption is the row's least
+   informative bit, so a narrow column drops it; here it is the opposite — the row
+   is now a single segmented control sitting under a labelled chip row, and
+   unlabelled it read as more folder buttons. Same visual weight as the Quick key
+   so the two rows announce themselves the same way. */
+.draft-launch-bar .pin-tier-label {
+  display: inline;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  user-select: none;
 }
 
 /* ── Popout mode (draft column) ──
@@ -20896,14 +20980,35 @@ td.usage-share-col {
 }
 
 /* Quick-access row — one chip per recently-used folder, labelled with the folder
-   BASENAME only (a "Start in " prefix repeated four times was noise). One click
-   sets folder AND project. */
+   BASENAME only (a "Start in " prefix repeated eight times was noise). One click
+   sets folder AND project.
+
+   A KEY ("Quick") leads the row and a hairline closes it. Both are structural,
+   not decoration: the row grew to eight chips, and stacked flush against the tier
+   row and the folder/project pills it read as one undifferentiated wall of
+   buttons — nothing said which row answered which question. The divider is what
+   makes "these eight are folders" a separate zone from the launch controls below. */
 .draft-quick-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
   min-width: 0;
   row-gap: 4px;
+  align-items: center;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border);
+}
+/* Sits on the row's baseline as a caption. `line-height: 1.9` matches the chips'
+   box so the key doesn't ride high on the first wrapped line. */
+.draft-quick-key {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.9;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  user-select: none;
 }
 .draft-quick-chip {
   max-width: 100%;

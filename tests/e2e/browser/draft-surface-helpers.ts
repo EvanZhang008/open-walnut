@@ -17,8 +17,8 @@ import { expect, type Locator, type Page } from '@playwright/test'
  * Preset the per-tier view mode ('project' = clustered with folder labels,
  * 'custom' = raw pin order) before the first render. Call BEFORE `page.goto`.
  *
- * Load-bearing for the same reason as `presetStickyTier`: the key rides
- * ui-prefs-sync (`walnut-todo-` prefix) on a SHARED fixture server, so another
+ * Load-bearing, not tidiness: the key rides ui-prefs-sync (`walnut-todo-` prefix)
+ * on a SHARED fixture server, so another
  * spec's flip is merged back into a later page's localStorage at boot, and a locally
  * written value with no sync timestamp WINS that merge. Any spec asserting on the
  * by-project folder labels MUST pin this — in 'custom' mode those labels (and the

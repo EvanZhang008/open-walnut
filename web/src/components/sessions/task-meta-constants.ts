@@ -15,11 +15,11 @@ export const DEFAULT_META: QuickStartTaskMeta = {
   priority: 'none',
   // Satellite, not Focus: a launched session is "in flight", not necessarily
   // what the user is staring at right now — Focus filled up with every session
-  // ever started. The last tier the user picked wins over this baseline
-  // (readLastPinTier), so this only decides the very first launch.
+  // ever started. This is the tier EVERY fresh launcher opens on; see
+  // freshLauncherMeta for why nothing is remembered across launches.
   pinTier: 'satellite',
   model: undefined,      // Auto — Claude/config default picks the model unless user overrides
-  engine: undefined,     // Claude (native) unless the user flips the engine toggle
+  engine: undefined,     // Claude (native) unless the user picks Codex in the model picker
 };
 
 export const TIER_OPTIONS: { value: FocusTier; label: string }[] = [
@@ -29,30 +29,10 @@ export const TIER_OPTIONS: { value: FocusTier; label: string }[] = [
   { value: 'wait', label: 'Wait' },
 ];
 
-/** Last tier picked in the session launcher. `open-walnut-` prefix = mirrored to
- *  the server by ui-prefs-sync, so the choice follows the user across browsers. */
-export const LAUNCHER_PIN_TIER_KEY = 'open-walnut-launcher-pin-tier';
-/** Stored marker for "explicitly not pinned" — distinct from "never chose",
- *  which must still fall back to the DEFAULT_META tier. */
-const PIN_TIER_NONE = 'none';
-
-/** The tier a fresh launcher opens on: last explicit pick, else the default. */
-export function readLastPinTier(): FocusTier | undefined {
-  try {
-    const raw = localStorage.getItem(LAUNCHER_PIN_TIER_KEY);
-    if (raw === PIN_TIER_NONE) return undefined;
-    if (TIER_OPTIONS.some(t => t.value === raw)) return raw as FocusTier;
-    // Custom tier ids are legitimate remembered picks. A stale id (tier since
-    // deleted) self-heals server-side into Satellite, so passing it through is safe.
-    if (raw?.startsWith('ct_')) return raw;
-  } catch { /* storage disabled — fall through to the default */ }
-  return DEFAULT_META.pinTier;
-}
-
-/** Remember the tier the user just picked (undefined = deliberately unpinned). */
-export function rememberPinTier(tier: FocusTier | undefined): void {
-  try { localStorage.setItem(LAUNCHER_PIN_TIER_KEY, tier ?? PIN_TIER_NONE); } catch { /* quota */ }
-}
+/** The launcher's RETIRED sticky-tier pref (see freshLauncherMeta for why the
+ *  stickiness went away). Nothing reads it; MainPage's mount-time sweep deletes
+ *  it, so a value mirrored by ui-prefs-sync can't linger as a dead synced pref. */
+export const LEGACY_LAUNCHER_PIN_TIER_KEY = 'open-walnut-launcher-pin-tier';
 
 /** Last cwd/host a session was launched on. Same `open-walnut-` prefix as the
  *  pin tier, so ui-prefs-sync mirrors it to the server and the memory follows
@@ -93,12 +73,23 @@ export function rememberLaunchPath(path: LastLaunchPath): void {
   try { localStorage.setItem(LAUNCHER_LAST_PATH_KEY, JSON.stringify(path)); } catch { /* quota */ }
 }
 
-/** Meta a freshly-opened launcher starts from: the defaults with the user's
- *  remembered tier applied. Use this instead of DEFAULT_META wherever a NEW
- *  launch is being seeded (DEFAULT_META stays the static baseline the
- *  changed-from-default badge compares against). */
+/**
+ * Meta a freshly-opened launcher starts from — a plain copy of the defaults, so
+ * EVERY new draft opens on Satellite.
+ *
+ * It used to apply the last tier the user picked (a mirrored `open-walnut-`
+ * pref). That single pick then rode every later launch: one "Focus" on a genuinely
+ * urgent session made months of ordinary sessions open on Focus, which is exactly
+ * how the pinned working set filled up with things nobody was working on. Satellite
+ * is the honest baseline for "in flight", and moving off it is a per-task judgement
+ * — the background parse makes it (applyDraftParse writes pinTier while the human
+ * hasn't touched the meta), and the human overrides in one click. Nothing is
+ * remembered between launches on purpose.
+ *
+ * Still a function, not a const: callers mutate the object they get back.
+ */
 export function freshLauncherMeta(): QuickStartTaskMeta {
-  return { ...DEFAULT_META, pinTier: readLastPinTier() };
+  return { ...DEFAULT_META };
 }
 
 // Keep in sync with TaskKebabMenu's TIER_COLORS: wait is amber (paused/blocked) —

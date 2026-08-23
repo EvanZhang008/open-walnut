@@ -5,17 +5,22 @@
  * closest to the two verbs they configure.
  *
  * Rows, top → bottom (R6 order):
- *   1. quick access — folder chips (label = the folder BASENAME). TOPMOST because
- *      this is the row whose CONTENT changes most across launches (top-2-by-use +
- *      2-most-recent, see `quickDirsFor`): a row that moves between sessions must
- *      not sit where the user aims for a fixed control. Within one draft the row
- *      is STABLE — membership is a pure function of the cache, picks never
- *      reshuffle it (the current folder's chip just renders active).
- *   2. provider/task — engine toggle · pin tier · "⋯ More" (priority /
- *      unread). The SAME MetaFooter the folder picker uses, minus its model
- *      select (`hideModel`): the model belongs with the message, so the draft
- *      renders it inside the composer's controls row, exactly where a real
- *      session's model pill sits.
+ *   1. quick access — a "Quick" key, then folder chips (label = the folder
+ *      BASENAME), then a divider. TOPMOST because this is the row whose CONTENT
+ *      changes most across launches (top-4-by-use + 4-most-recent, see
+ *      `quickDirsFor`): a row that moves between sessions must not sit where the
+ *      user aims for a fixed control. Within one draft the row is STABLE —
+ *      membership is a pure function of the cache, picks never reshuffle it (the
+ *      current folder's chip just renders active). The key + divider are what let
+ *      the row hold eight chips: unlabelled and flush against the rows below, the
+ *      whole stack read as one wall of buttons with no way to tell which button
+ *      answered which question (user feedback).
+ *   2. task — pin tier · "⋯ More" (priority / dates / unread). The SAME MetaFooter
+ *      the folder picker uses, minus its model select AND engine toggle
+ *      (`hideModel`): the model belongs with the message, so the draft renders it
+ *      inside the composer's controls row, exactly where a real session's model
+ *      pill sits — and the provider rides along inside that same picker rather
+ *      than being asked a second time up here.
  *   3. path + project — the cwd/host pill and the project pill, LEFT-ALIGNED.
  *      FIXED as the last row: "where does this run" is the statement the composer
  *      answers, so it stays glued to it and never moves.
@@ -148,7 +153,13 @@ export function DraftLaunchBar({
           cursor 21ms after a pick — a double-click then re-picked the folder the
           user had just left. */}
       {chips.length > 0 && (
-        <div className="draft-quick-chips">
+        <div className="draft-quick-chips" role="group" aria-label="Quick folders">
+          {/* The row's KEY. Not decoration: these chips are folders, the row below
+              is tiers, and the one below that is folder + project — eight
+              unlabelled pills stacked on two more unlabelled rows is where the
+              panel stopped being readable (user feedback). A caption, not a
+              control: no tab stop, no click target. */}
+          <span className="draft-quick-key">Quick</span>
           {chips.map(d => {
             const active = chipKey({ cwd: d.cwd, host: d.host ?? null }) === currentKey;
             return (

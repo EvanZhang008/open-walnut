@@ -52,6 +52,13 @@ import {
 import { VALID_PRIORITIES, type Task, type ProcessStatus, type SessionMode } from '../../core/types.js'
 import { parseQuickTask } from '../../core/quick-task-parse.js'
 import { buildProjectDigest, type ProjectDigest } from '../../core/quick-task-digest.js'
+import {
+  SUGGEST_FIELDS,
+  recordSuggestDiff,
+  summarizeSuggestAccuracy,
+  type SuggestDiffEntry,
+  type SuggestField,
+} from '../../core/suggest-accuracy.js'
 
 /** Session info used during enrichment (includes mode for slot inference). */
 interface SessionInfo {
@@ -575,6 +582,71 @@ tasksRouter.post('/quick-parse', async (req: Request, res: Response, next: NextF
       textLen: text.length,
     })
     res.json(parse)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ─── Suggestion accuracy ledger ──────────────────────────────────────────────
+// The draft column's background parse fills the launch pills while the user types.
+// These two routes are the only way to tell whether it is any good: the client
+// posts what was suggested vs. what the launch carried, and the summary turns it
+// into per-field numbers. Registered BEFORE GET /:id, or Express reads the path as
+// a task id.
+
+/** Cap on entries per commit — seven fields exist; anything more is a client bug. */
+const MAX_SUGGEST_ENTRIES = 20
+/** Values are project names / tiers / dates / paths, never prose. */
+const MAX_SUGGEST_VALUE_CHARS = 300
+
+// POST /api/tasks/suggest-feedback — record one commit's suggested-vs-chosen pairs
+tasksRouter.post('/suggest-feedback', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { surface, entries, textLen } = req.body as {
+      surface?: unknown; entries?: unknown; textLen?: unknown
+    }
+    if (typeof surface !== 'string' || surface.trim() === '' || surface.length > 40) {
+      res.status(400).json({ error: 'surface must be a short non-empty string' })
+      return
+    }
+    if (!Array.isArray(entries) || entries.length > MAX_SUGGEST_ENTRIES) {
+      res.status(400).json({ error: `entries must be an array of at most ${MAX_SUGGEST_ENTRIES} items` })
+      return
+    }
+    // Unknown fields and over-long values are DROPPED, not 400: this is
+    // best-effort telemetry riding a launch the user already committed, so a
+    // client that learns a new field must never be able to fail the write.
+    const clean: SuggestDiffEntry[] = []
+    for (const raw of entries) {
+      if (!raw || typeof raw !== 'object') continue
+      const { field, suggested, chosen } = raw as Record<string, unknown>
+      if (typeof field !== 'string' || !SUGGEST_FIELDS.includes(field as SuggestField)) continue
+      if (typeof suggested !== 'string' || suggested === '' || suggested.length > MAX_SUGGEST_VALUE_CHARS) continue
+      clean.push({
+        field: field as SuggestField,
+        suggested,
+        ...(typeof chosen === 'string' && chosen.length <= MAX_SUGGEST_VALUE_CHARS ? { chosen } : {}),
+      })
+    }
+    await recordSuggestDiff({
+      surface: surface.trim(),
+      entries: clean,
+      ...(typeof textLen === 'number' && Number.isFinite(textLen) && textLen >= 0
+        ? { textLen: Math.min(Math.round(textLen), 1_000_000) }
+        : {}),
+    })
+    res.status(204).end()
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/tasks/suggest-accuracy?limit=N — per-field accuracy + the newest diffs
+tasksRouter.get('/suggest-accuracy', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const raw = req.query.limit
+    const limit = typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : 20
+    res.json(await summarizeSuggestAccuracy(limit))
   } catch (err) {
     next(err)
   }

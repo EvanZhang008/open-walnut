@@ -1,13 +1,13 @@
 /**
- * "fix walnut" pill → the launch must follow the SAME sticky launcher settings
- * as a regular quick session.
+ * "fix walnut" pill → the launch must follow the SAME launcher settings as a
+ * regular quick session.
  *
  * Reported bug (2026-07-30): the pill hardcoded pinTier:'focus' and always reset
- * the model to Auto, ignoring the launcher's remembered tier and the checkout
- * dir's remembered model — unlike every other quick-session launch. The pill
- * skips the path picker, so it must seed the launcher defaults itself
- * (freshLauncherMeta + per-dir launch memory). This REPLACES the earlier
- * contract that pinned repairs to Focus unconditionally — user direction.
+ * the model to Auto, ignoring the launcher default and the checkout dir's
+ * remembered model — unlike every other quick-session launch. The pill skips the
+ * path picker, so it must seed the launcher defaults itself (freshLauncherMeta +
+ * per-dir launch memory). This REPLACES the earlier contract that pinned repairs
+ * to Focus unconditionally — user direction.
  *
  * Drives the real UI (pill click → type → Enter) and asserts on the quick-start
  * payload + the focus API (the same source the tiers render from).
@@ -17,13 +17,10 @@ import { test, expect } from '@playwright/test'
 
 const API = 'http://localhost:3457'
 
-test('fix walnut pill inherits the sticky launcher tier instead of forcing Focus', async ({ page }) => {
-  // Seed a non-default sticky tier: the pill must INHERIT it (parity with the
-  // regular launcher), not override it back to Focus. 'wait' (≠ the Satellite
-  // default) proves inheritance rather than passing by luck.
-  await page.addInitScript(() => {
-    try { localStorage.setItem('open-walnut-launcher-pin-tier', 'wait') } catch { /* storage disabled */ }
-  })
+test('fix walnut pill inherits the launcher tier instead of forcing Focus', async ({ page }) => {
+  // Nothing to seed: the launcher tier is no longer sticky, so the value the pill
+  // must inherit is the plain default (Satellite). Focus is what the bug produced,
+  // so 'satellite' vs 'focus' is still the discriminating assertion.
   await page.goto('/')
 
   const pill = page.getByRole('button', { name: /fix walnut/i })
@@ -51,7 +48,7 @@ test('fix walnut pill inherits the sticky launcher tier instead of forcing Focus
     taskMeta?: { pinTier?: string | null }
   }
   expect(payload.intent).toBe('fix-walnut')
-  expect(payload.taskMeta?.pinTier).toBe('wait')
+  expect(payload.taskMeta?.pinTier).toBe('satellite')
 
   // Find the task the launch created. Title is server-built as "Fix Walnut: <report>".
   const titleNeedle = report.slice(0, 40)
@@ -65,16 +62,21 @@ test('fix walnut pill inherits the sticky launcher tier instead of forcing Focus
     .not.toBeNull()
   const taskId = (await findTask())!.id
 
-  // The focus API is exactly what the tier UI renders from: the task must land
-  // in the STICKY tier (wait), not in focus.
+  // The focus API is exactly what the tier UI renders from: the task must land in
+  // the launcher's default tier (satellite), not in focus.
   await expect.poll(async () => {
     const res = await fetch(`${API}/api/focus/tasks`)
     if (!res.ok) return 'api-error'
-    const body = (await res.json()) as { focus_tasks?: string[]; wait_tasks?: string[] }
-    if (body.wait_tasks?.includes(taskId)) return 'wait'
+    const body = (await res.json()) as { focus_tasks?: string[]; satellite_tasks?: string[]; wait_tasks?: string[] }
     if (body.focus_tasks?.includes(taskId)) return 'focus'
+    if (body.wait_tasks?.includes(taskId)) return 'wait'
+    // Satellite is the DEFAULT bucket: a pinned task in no named tier is in it.
+    // Read it positively when the API reports it, else infer from "pinned, not
+    // focus/wait" the same way the panel splits the tiers.
+    if (body.satellite_tasks?.includes(taskId)) return 'satellite'
     return 'unpinned'
-  }, { timeout: 15_000, message: 'fix-walnut task never reached the sticky (wait) tier' }).toBe('wait')
+  }, { timeout: 15_000, message: 'fix-walnut task never reached the default (satellite) tier' })
+    .toBe('satellite')
 
-  await page.screenshot({ path: '/tmp/fix-walnut-parity/sticky-tier.png', fullPage: true })
+  await page.screenshot({ path: '/tmp/fix-walnut-parity/default-tier.png', fullPage: true })
 })

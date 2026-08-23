@@ -1,6 +1,7 @@
 /**
- * The draft session column's pure logic: quick-access chip selection (R6) and the
- * AI-backfill ownership rules (R9).
+ * The draft session column's pure logic: quick-access chip selection (R6), the
+ * AI-backfill ownership rules (R9), and the suggested-vs-chosen ledger the launch
+ * records from them.
  *
  * Both are decisions a browser spec can only observe indirectly — the chip row is
  * ranked over a working-dirs store every launch reorders, and "the AI may not
@@ -19,7 +20,7 @@ const { peek } = vi.hoisted(() => ({ peek: vi.fn<() => WorkingDirsResult | null>
 
 vi.mock('@/api/sessions', () => ({ peekWorkingDirs: peek }));
 
-const { applyDraftParse, clearAiFields, quickDirsFor, projectForFolderPick } = await import(
+const { applyDraftParse, clearAiFields, quickDirsFor, projectForFolderPick, suggestDiff } = await import(
   '@/components/sessions/draft-column'
 );
 type DraftColumn = import('@/components/sessions/draft-column').DraftColumn;
@@ -51,7 +52,7 @@ beforeEach(() => {
 });
 
 describe('quickDirsFor — chip selection (R6)', () => {
-  it('takes the top 2 by ABSOLUTE count, then the 2 most recent of the rest', () => {
+  it('takes the top 4 by ABSOLUTE count, then the 4 most recent of the rest', () => {
     // /fresh* are the newest but barely used; /heavy* are the workhorses. The
     // server's own frecency order would surface /fresh1 first, which is exactly
     // the churn this split removes.
@@ -61,20 +62,24 @@ describe('quickDirsFor — chip selection (R6)', () => {
       dir('/fresh2', 2, '2026-08-10T10:00:00Z'),
       dir('/heavy2', 50, '2026-02-01T00:00:00Z'),
       dir('/heavy3', 30, '2026-03-01T00:00:00Z'),
+      dir('/heavy4', 25, '2026-03-05T00:00:00Z'),
+      dir('/heavy5', 20, '2026-03-06T00:00:00Z'),
+      dir('/fresh3', 3, '2026-08-09T10:00:00Z'),
+      dir('/fresh4', 4, '2026-08-08T10:00:00Z'),
       dir('/old', 3, '2020-01-01T00:00:00Z'),
     ]);
     expect(names(quickDirsFor())).toEqual([
-      '/heavy1', '/heavy2',              // by count
-      '/fresh1', '/fresh2',              // by recency, excluding the two above
+      '/heavy1', '/heavy2', '/heavy3', '/heavy4',   // by count
+      '/fresh1', '/fresh2', '/fresh3', '/fresh4',   // by recency, excluding the four above
     ]);
   });
 
-  it('never exceeds 4 chips', () => {
+  it('never exceeds 8 chips', () => {
     seedDirs(Array.from({ length: 20 }, (_, i) => dir(`/d${i}`, 20 - i, `2026-08-${(i % 28) + 1}T00:00:00Z`)));
-    expect(quickDirsFor()).toHaveLength(4);
+    expect(quickDirsFor()).toHaveLength(8);
   });
 
-  it('returns fewer than 4 when the cache holds fewer dirs', () => {
+  it('returns fewer than 8 when the cache holds fewer dirs', () => {
     seedDirs([dir('/a', 5, '2026-08-01T00:00:00Z'), dir('/b', 2, '2026-08-02T00:00:00Z')]);
     expect(names(quickDirsFor())).toEqual(['/a', '/b']);
   });
@@ -139,7 +144,13 @@ describe('applyDraftParse — AI may only fill what nobody claimed (R9)', () => 
   it('NEVER overwrites a user-picked project', () => {
     const d = draft({ project: 'Mine', projectSource: 'user' });
     const out = applyDraftParse(d, { project: 'Marina' }, noDefaults);
-    expect(out).toBe(d);   // same object = no re-render either
+    expect(out.project).toBe('Mine');
+    expect(out.projectSource).toBe('user');
+    expect(out.aiFields?.has('project')).toBeFalsy();
+    // The REFUSED proposal is still recorded: "the AI said Marina, the user
+    // launched under Mine" is the single most useful line in the accuracy ledger,
+    // so this is the one thing that legitimately changes the row here.
+    expect(out.aiSuggested).toEqual({ project: 'Marina' });
   });
 
   it('NEVER overwrites a SEEDED project (project/tier "+")', () => {
@@ -192,8 +203,11 @@ describe('applyDraftParse — AI may only fill what nobody claimed (R9)', () => 
   it('writes NO meta once the user has edited it', () => {
     const d = draft({ metaTouched: true });
     const out = applyDraftParse(d, { pinTier: 'focus', priority: 'important' }, noDefaults);
-    expect(out).toBe(d);
+    expect(out.meta).toBe(d.meta);   // the meta object itself is untouched
     expect(out.meta.pinTier).toBe('satellite');
+    expect(out.aiFields?.has('pinTier')).toBeFalsy();
+    // …but the overridden suggestion is recorded (see the project case above).
+    expect(out.aiSuggested).toEqual({ pinTier: 'focus', priority: 'important' });
   });
 
   it('fills the date trio ("by Friday 3-5pm") while metaTouched is false', () => {
@@ -213,17 +227,84 @@ describe('applyDraftParse — AI may only fill what nobody claimed (R9)', () => 
 
   it('writes NO dates once the user has edited the meta', () => {
     const d = draft({ metaTouched: true });
-    expect(applyDraftParse(d, { due_date: '2026-08-14T17:00:00Z' }, noDefaults)).toBe(d);
+    const out = applyDraftParse(d, { due_date: '2026-08-14T17:00:00Z' }, noDefaults);
+    expect(out.meta).toBe(d.meta);
+    expect(out.aiSuggested).toEqual({ dueDate: '2026-08-14T17:00:00Z' });
   });
 
   it('returns the SAME row when the parse says nothing new', () => {
-    const d = draft({ project: 'Marina', projectSource: 'ai' });
+    // Includes the proposal ledger: a repeat of the SAME suggestion (which is what
+    // every eager mid-typing parse produces) must not hand React a new row.
+    const d = draft({
+      project: 'Marina',
+      projectSource: 'ai',
+      aiSuggested: { project: 'Marina', pinTier: 'satellite' },
+    });
     expect(applyDraftParse(d, { project: 'Marina', pinTier: 'satellite' }, noDefaults)).toBe(d);
   });
 
   it('returns the SAME row for an empty parse', () => {
     const d = draft();
     expect(applyDraftParse(d, {}, noDefaults)).toBe(d);
+  });
+});
+
+describe('suggestDiff — what the AI proposed vs. what the launch carried', () => {
+  const noDefaults = () => undefined;
+
+  it('pairs each proposal with the value the launch actually carries', () => {
+    // The user overrode the project by hand and moved the tier; the ledger has to
+    // show BOTH sides, or "the suggestions feel wrong" stays unfalsifiable.
+    let d = applyDraftParse(draft(), { project: 'Marina', pinTier: 'focus' }, noDefaults);
+    d = { ...d, project: 'Acme', projectSource: 'user', meta: { ...d.meta, pinTier: 'satellite' } };
+
+    expect(suggestDiff(d)).toEqual([
+      { field: 'project', suggested: 'Marina', chosen: 'Acme' },
+      { field: 'pinTier', suggested: 'focus', chosen: 'satellite' },
+    ]);
+  });
+
+  it('reports a kept suggestion as suggested === chosen', () => {
+    const d = applyDraftParse(draft(), { project: 'Marina' }, noDefaults);
+    expect(suggestDiff(d)).toEqual([{ field: 'project', suggested: 'Marina', chosen: 'Marina' }]);
+  });
+
+  it('omits `chosen` when the user cleared the field', () => {
+    let d = applyDraftParse(draft(), { pinTier: 'focus' }, noDefaults);
+    d = { ...d, meta: { ...d.meta, pinTier: undefined } };   // clicked the active tier = unpin
+    expect(suggestDiff(d)).toEqual([{ field: 'pinTier', suggested: 'focus' }]);
+  });
+
+  it("normalizes priority 'none' to absent, so an unset priority reads as cleared", () => {
+    // 'none' is the UI's sentinel for "no priority", not a value the AI could have
+    // meant — recording it as `chosen: 'none'` would classify a cleared suggestion
+    // as "changed to none" and inflate the changed count.
+    let d = applyDraftParse(draft(), { priority: 'important' }, noDefaults);
+    d = { ...d, meta: { ...d.meta, priority: 'none' } };
+    expect(suggestDiff(d)).toEqual([{ field: 'priority', suggested: 'important' }]);
+  });
+
+  it('records the folder the AI derived from its project', () => {
+    const d = applyDraftParse(
+      draft(),
+      { project: 'Marina' },
+      (name) => (name === 'Marina' ? { cwd: '/work/marina', host: null } : undefined),
+    );
+    expect(suggestDiff(d)).toEqual([
+      { field: 'project', suggested: 'Marina', chosen: 'Marina' },
+      { field: 'cwd', suggested: '/work/marina', chosen: '/work/marina' },
+    ]);
+  });
+
+  it('records NOTHING for fields the AI never proposed', () => {
+    // A draft always carries a folder and (by default) Satellite, so counting
+    // silence as "the AI missed it" would bury every real signal under defaults.
+    const d = draft({ cwd: '/picked', project: 'Chosen', projectSource: 'user' });
+    expect(suggestDiff(d)).toEqual([]);
+  });
+
+  it('survives a draft that never saw a parse', () => {
+    expect(suggestDiff(draft())).toEqual([]);
   });
 });
 

@@ -1,17 +1,19 @@
 /**
- * Session-launcher pin-tier default + stickiness.
+ * Session-launcher pin-tier default — and the deliberate ABSENCE of stickiness.
  *
  * Contract under test (the user-visible behavior):
- *   - A brand-new browser opens the launcher on SATELLITE (was Focus — every
- *     session ever started piled into the Focus tier).
- *   - Whatever tier the user last picked becomes the next launch's default,
- *     including an explicit "unpinned" (clicking the active tier to toggle off).
- *   - The key is `open-walnut-`-prefixed so ui-prefs-sync mirrors it to the
- *     server — the choice follows the user to another browser. Guarded here
- *     because a rename to a non-syncable prefix would silently make the memory
- *     device-local again.
- *   - Corrupt / unknown stored values fall back to the default instead of
- *     seeding an invalid tier that the quick-start route would 400 on.
+ *   - EVERY launcher opens on SATELLITE. Not just a brand-new browser: the tier
+ *     used to be remembered from the last pick and mirrored across browsers, so
+ *     one "Focus" on a genuinely urgent session made every later ordinary session
+ *     open on Focus — which is how the pinned working set filled up with work
+ *     nobody was doing. A per-launch decision is not a preference.
+ *   - The retired pref is never READ again, whatever is left in storage: a value
+ *     mirrored from another browser (or from before the change) must not resurrect
+ *     the old behavior. MainPage's mount-time sweep deletes it; this file pins the
+ *     half that matters — that reading it is gone.
+ *   - Moving off Satellite is still a one-click override in the picker, and the
+ *     background parse may write the tier (covered by the draft-parse tests) —
+ *     neither is persisted between launches.
  *
  * Node env: localStorage is stubbed with the minimal surface the module touches
  * (same style as crash-report.test.ts).
@@ -32,8 +34,7 @@ const localStorage = new FakeStorage();
 Object.defineProperty(globalThis, 'localStorage', { value: localStorage, writable: true, configurable: true });
 
 // ui-prefs-sync pulls in the API client + device token at import time; stub them
-// so the test can import the real `syncable` predicate (the thing that actually
-// decides whether this pref reaches the server) without a browser fetch stack.
+// so the test can import the real `syncable` predicate without a fetch stack.
 vi.mock('../../web/src/api/client', () => ({
   apiGet: async () => ({ prefs: {} }),
   apiPut: async () => ({}),
@@ -42,9 +43,7 @@ vi.mock('../../web/src/api/device-token', () => ({ getDeviceToken: () => null })
 
 const {
   DEFAULT_META,
-  LAUNCHER_PIN_TIER_KEY,
-  readLastPinTier,
-  rememberPinTier,
+  LEGACY_LAUNCHER_PIN_TIER_KEY,
   freshLauncherMeta,
 } = await import('../../web/src/components/sessions/task-meta-constants');
 const { syncable } = await import('../../web/src/utils/ui-prefs-sync');
@@ -54,9 +53,8 @@ beforeEach(() => {
 });
 
 describe('session launcher pin tier', () => {
-  it('defaults a first-ever launch to satellite', () => {
+  it('defaults every launch to satellite', () => {
     expect(DEFAULT_META.pinTier).toBe('satellite');
-    expect(readLastPinTier()).toBe('satellite');
     expect(freshLauncherMeta().pinTier).toBe('satellite');
   });
 
@@ -68,31 +66,28 @@ describe('session launcher pin tier', () => {
     expect(meta.engine).toBeUndefined();
   });
 
-  it('remembers the last picked tier as the next default', () => {
-    rememberPinTier('focus');
-    expect(readLastPinTier()).toBe('focus');
-    expect(freshLauncherMeta().pinTier).toBe('focus');
-
-    rememberPinTier('wait');
-    expect(freshLauncherMeta().pinTier).toBe('wait');
-
-    rememberPinTier('backlog');
-    expect(freshLauncherMeta().pinTier).toBe('backlog');
+  it('hands back a FRESH object each time (callers mutate it)', () => {
+    const first = freshLauncherMeta();
+    first.pinTier = 'focus';
+    expect(freshLauncherMeta().pinTier).toBe('satellite');
+    expect(DEFAULT_META.pinTier).toBe('satellite');
   });
 
-  it('remembers an explicit unpin instead of snapping back to the default', () => {
-    rememberPinTier(undefined);
-    expect(readLastPinTier()).toBeUndefined();
-    expect(freshLauncherMeta().pinTier).toBeUndefined();
+  it('ignores a leftover sticky-tier value, whatever it says', () => {
+    // The exact regression the stickiness caused: a stored 'focus' (this browser's
+    // own old pick, or one synced in from another) must NOT steer a new launch.
+    for (const stale of ['focus', 'wait', 'backlog', 'none', 'ct_abcd1234', 'top', '']) {
+      localStorage.setItem(LEGACY_LAUNCHER_PIN_TIER_KEY, stale);
+      expect(freshLauncherMeta().pinTier).toBe('satellite');
+    }
   });
 
-  it('syncs across browsers: the key passes ui-prefs-sync\'s own allowlist', () => {
-    // Asserted against the REAL predicate, not a hardcoded prefix: if the
-    // allowlist were ever narrowed, this cross-device guarantee would quietly
-    // become device-local, and a prefix-string assertion would still pass.
-    expect(syncable(LAUNCHER_PIN_TIER_KEY)).toBe(true);
-    rememberPinTier('wait');
-    expect(localStorage.getItem(LAUNCHER_PIN_TIER_KEY)).toBe('wait');
+  it('still names the retired pref as a syncable key, so the sweep can retract it', () => {
+    // The sweep works by DELETING the key, and a deletion only propagates to the
+    // other browsers if ui-prefs-sync mirrors this key at all. Asserted against
+    // the real predicate: if the allowlist ever narrowed, the stale value would
+    // survive on every other device with a green suite.
+    expect(syncable(LEGACY_LAUNCHER_PIN_TIER_KEY)).toBe(true);
   });
 
   it('does NOT sync keys whose name embeds an absolute path', () => {
@@ -102,34 +97,16 @@ describe('session launcher pin tier', () => {
     expect(syncable('open-walnut-file-explorer-selected:local:/Users/me/repo')).toBe(false);
   });
 
-  it('falls back to the default when the stored value is garbage', () => {
-    localStorage.setItem(LAUNCHER_PIN_TIER_KEY, 'top');   // an older/invalid tier name
-    expect(readLastPinTier()).toBe('satellite');
-    localStorage.setItem(LAUNCHER_PIN_TIER_KEY, '');
-    expect(readLastPinTier()).toBe('satellite');
-  });
-
-  it('remembers a custom tier id (ct_*) as the next default', () => {
-    // A stale id (tier since deleted) self-heals server-side into Satellite,
-    // so the passthrough never seeds an invalid pin.
-    rememberPinTier('ct_abcd1234');
-    expect(readLastPinTier()).toBe('ct_abcd1234');
-    expect(freshLauncherMeta().pinTier).toBe('ct_abcd1234');
-  });
-
   it('survives a storage that throws (private mode / quota)', () => {
-    const throwing = {
-      getItem: () => { throw new Error('SecurityError'); },
-      setItem: () => { throw new Error('QuotaExceeded'); },
-    };
-    const spyGet = vi.spyOn(localStorage, 'getItem').mockImplementation(throwing.getItem);
-    const spySet = vi.spyOn(localStorage, 'setItem').mockImplementation(throwing.setItem);
+    // freshLauncherMeta no longer touches storage at all, which is the point —
+    // a launcher that can't read a pref can't be broken by one either.
+    const spyGet = vi.spyOn(localStorage, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
     try {
-      expect(readLastPinTier()).toBe('satellite');
-      expect(() => rememberPinTier('focus')).not.toThrow();
+      expect(freshLauncherMeta().pinTier).toBe('satellite');
     } finally {
       spyGet.mockRestore();
-      spySet.mockRestore();
     }
   });
 });

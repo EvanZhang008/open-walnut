@@ -58,6 +58,12 @@ export interface DraftColumn {
    *  ownership decisions read `projectSource` / `metaTouched` / `cwdPinned`, never
    *  this set. */
   aiFields?: ReadonlySet<DraftAiField>;
+  /** The last value the background parse PROPOSED per field, whether or not the
+   *  ownership rules let it land, and kept after the user takes over. This is the
+   *  left column of the suggested-vs-chosen ledger (`suggestDiff`): a suggestion
+   *  the user overrode is the single most useful record we can keep, so it must
+   *  survive exactly the edits that clear `aiFields`. */
+  aiSuggested?: Readonly<Partial<Record<DraftAiField, string>>>;
   meta: QuickStartTaskMeta;
   /** True once the user picked the path explicitly — a later async seed (e.g. a
    *  project's default dir) must not overwrite their choice. */
@@ -169,21 +175,28 @@ function dirKey(d: { cwd: string; host: string | null }): string {
   return `${d.host ?? '__local__'}::${d.cwd}`;
 }
 
-/** How many chips are picked by ABSOLUTE use count vs. by recency. 2+2: five
- *  read as clutter on a draft column (user feedback), four is the scan limit. */
-const QUICK_TOP_BY_COUNT = 2;
-const QUICK_TOP_BY_RECENT = 2;
+/** How many chips are picked by ABSOLUTE use count vs. by recency.
+ *
+ *  4+4. It was 2+2, on the theory that a short row is a scannable row. The row is
+ *  in fact the fastest way to configure a launch (one click sets folder AND
+ *  project), so four chips meant the folder you wanted was usually NOT there and
+ *  you paid the full folder picker instead. Eight covers the real working set. What
+ *  made four feel like the limit was the row being an unlabelled wall of buttons
+ *  wedged against the tier/pill rows — so the row now carries a "Quick" key and a
+ *  divider (DraftLaunchBar) and reads as its own zone at eight. */
+const QUICK_TOP_BY_COUNT = 4;
+const QUICK_TOP_BY_RECENT = 4;
 
 /**
- * The launch bar's quick-access folder chips: **top 2 by absolute `count`** (the
- * folders this user works in most, ever) followed by the **2 most recent by
- * `lastUsed`** that aren't already in those two.
+ * The launch bar's quick-access folder chips: **top 4 by absolute `count`** (the
+ * folders this user works in most, ever) followed by the **4 most recent by
+ * `lastUsed`** that aren't already in those four.
  *
  * Why not the server's own ranking: `/api/sessions/working-dirs` returns a single
  * frecency order, in which a folder used twice this morning outranks the one used
  * 300 times over a year — so the chip row churned. Splitting the row into "my
- * folders" + "what I just touched" keeps the first three stable (they only move
- * when the actual usage totals do) while still surfacing today's work.
+ * folders" + "what I just touched" keeps the leading chips stable (they only move
+ * when the actual usage totals do) while still showing today's work.
  *
  * The row's membership is a pure function of the CACHE — the draft's current cwd
  * is NOT excluded (the bar renders that chip highlighted-active instead). The
@@ -302,6 +315,10 @@ export function projectForFolderPick(
  *     is not pinned (no explicit folder pick) and the project actually declares a
  *     `default_cwd`. Never sets `cwdPinned` for the same reason.
  * Returns the SAME object when nothing applies, so a no-op parse can't re-render.
+ *
+ * Separately from all of that it records what the parse PROPOSED (`aiSuggested`),
+ * including proposals the ownership rules refused — an overridden suggestion is
+ * precisely the evidence the accuracy ledger needs.
  */
 export function applyDraftParse(
   draft: DraftColumn,
@@ -320,6 +337,26 @@ export function applyDraftParse(
   let changed = false;
 
   const project = parse.project?.trim();
+  // The proposal ledger is filled BEFORE the ownership gates, so "the AI said
+  // Walnut, the user launched under Fix Walnut" is recordable at all.
+  const proposed: Partial<Record<DraftAiField, string>> = {};
+  // ONE registry lookup, shared with the apply branch below, so the folder the
+  // ledger records can never be a different folder from the one applied.
+  const home = project ? projectDefault(project) : undefined;
+  if (project) {
+    proposed.project = project;
+    if (home?.cwd) proposed.cwd = home.cwd;
+  }
+  if (parse.pinTier) proposed.pinTier = parse.pinTier;
+  if (parse.priority) proposed.priority = parse.priority;
+  if (parse.due_date) proposed.dueDate = parse.due_date;
+  if (parse.start_date) proposed.startDate = parse.start_date;
+  if (parse.end_date) proposed.endDate = parse.end_date;
+  if (differs(proposed, draft.aiSuggested)) {
+    next.aiSuggested = proposed;
+    changed = true;
+  }
+
   const projectFree = draft.projectSource === undefined || draft.projectSource === 'ai';
   if (project && projectFree && project !== draft.project) {
     next.project = project;
@@ -329,7 +366,6 @@ export function applyDraftParse(
     // Follow the project to its folder — the same "one gesture configures both"
     // rule the quick chips use, minus the click. A pinned cwd (explicit pick) or
     // an undeclared project leaves the folder alone.
-    const home = projectDefault(project);
     if (home?.cwd && !next.cwdPinned && home.cwd !== next.cwd) {
       next.cwd = home.cwd;
       next.host = home.host;
@@ -385,4 +421,61 @@ export function clearAiFields(draft: DraftColumn, fields: readonly DraftAiField[
   let changed = false;
   for (const f of fields) changed = ai.delete(f) || changed;
   return changed ? { ...draft, aiFields: ai } : draft;
+}
+
+/** Shallow value compare of two proposal maps (both may be undefined). */
+function differs(
+  a: Partial<Record<DraftAiField, string>>,
+  b: Readonly<Partial<Record<DraftAiField, string>>> | undefined,
+): boolean {
+  const keysA = Object.keys(a);
+  const keysB = b ? Object.keys(b) : [];
+  if (keysA.length !== keysB.length) return true;
+  return keysA.some((k) => a[k as DraftAiField] !== b?.[k as DraftAiField]);
+}
+
+/** One field's suggested-vs-chosen pair. */
+export interface SuggestDiffEntry {
+  field: DraftAiField;
+  /** What the background parse proposed. Always present — see suggestDiff. */
+  suggested: string;
+  /** What the launch actually carried, or undefined (left unset / unpinned). */
+  chosen?: string;
+}
+
+/**
+ * The suggested-vs-chosen ledger for a draft that is about to commit (Start, or
+ * "Create task for later").
+ *
+ * Why record this at all: the auto-suggestion is the one part of the draft the user
+ * cannot audit — it fills pills silently while they type, so a wrong guess is only
+ * visible if they happen to look. Recording every proposal against what the launch
+ * actually carried turns "the AI feels inaccurate" into a per-field number.
+ *
+ * Only fields the AI actually PROPOSED are recorded. A field it stayed silent on
+ * carries no evidence about it: the pin tier always ends up at its Satellite
+ * default and the folder is always set (a launch needs one), so counting those as
+ * "the AI missed it" would bury the real signal under defaults. `priority`
+ * normalizes its 'none' sentinel to absent so an unset priority reads as "the
+ * suggestion was dropped", not "changed to none".
+ */
+export function suggestDiff(draft: DraftColumn): SuggestDiffEntry[] {
+  const chosen: Partial<Record<DraftAiField, string | undefined>> = {
+    project: draft.project || undefined,
+    cwd: draft.cwd || undefined,
+    pinTier: draft.meta.pinTier,
+    priority: draft.meta.priority && draft.meta.priority !== 'none' ? draft.meta.priority : undefined,
+    dueDate: draft.meta.dueDate,
+    startDate: draft.meta.startDate,
+    endDate: draft.meta.endDate,
+  };
+  const fields: DraftAiField[] = ['project', 'cwd', 'pinTier', 'priority', 'dueDate', 'startDate', 'endDate'];
+  const out: SuggestDiffEntry[] = [];
+  for (const field of fields) {
+    const suggested = draft.aiSuggested?.[field];
+    if (suggested === undefined) continue;
+    const picked = chosen[field];
+    out.push({ field, suggested, ...(picked !== undefined ? { chosen: picked } : {}) });
+  }
+  return out;
 }

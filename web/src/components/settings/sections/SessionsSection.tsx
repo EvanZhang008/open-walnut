@@ -5,6 +5,7 @@ import { SectionCard } from '../inputs/SectionCard';
 import { NumberInput } from '../inputs/NumberInput';
 import { KeyValueEditor } from '../inputs/KeyValueEditor';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { SuggestAccuracyPanel } from './SuggestAccuracyPanel';
 import { useAutoSave } from '@/hooks/useAutoSave';
 
 interface Props {
@@ -314,6 +315,13 @@ export function SessionsSection({ config, onSave }: Props) {
           </p>
         </div>
       </div>
+
+      <div className="settings-divider" />
+
+      {/* Read-only receipt for the draft column's auto-suggestions. Lives under
+          "Tasks & Sessions" because that is what it measures: the guesses a new
+          session's draft makes about the task it is about to create. */}
+      <SuggestAccuracyPanel />
     </SectionCard>
   );
 }
