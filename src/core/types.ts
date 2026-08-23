@@ -1364,6 +1364,28 @@ export type SessionProvider = 'cli' | 'sdk' | 'embedded';
 export type SessionEngine = 'claude' | 'codex';
 export type SessionType = 'interactive' | 'triage' | 'hook' | 'cron' | 'subagent';
 
+/**
+ * Structured cause class for a session 'error' status.
+ *   'infra'    — the execution substrate died under a healthy session (host
+ *                rebooted, daemon restarted, ssh tunnel dropped, transient
+ *                upstream error). The work is resumable and safe to auto-resume.
+ *   'terminal' — the work itself ended the session (model refusal, auth/account
+ *                failure, context overflow, a stop the user asked for). Resuming
+ *                re-asks the same failing question; never auto-resume.
+ * Absent means unknown, which is deliberately NOT the same as 'infra'.
+ */
+export type SessionErrorKind = 'infra' | 'terminal';
+
+/** Persisted auto-recover budget for one session. */
+export interface SessionAutoRecoverState {
+  /** Auto-resumes fired inside the rolling window. */
+  attempts: number;
+  /** ISO timestamp of the most recent fire — the window anchor. */
+  lastAt: string;
+  /** status_reason that triggered the most recent fire (post-mortem). */
+  cause?: StatusReason;
+}
+
 export type StatusReason =
   /** Record seeded by a start route before the CLI process exists (its id was
    *  pre-assigned so the UI can open the real panel immediately). Marks the row
@@ -1593,6 +1615,21 @@ export interface SessionRecord {
   recapAt?: string;
   /** Error message when process_status is 'error' — persisted for post-mortem display. */
   errorMessage?: string;
+  /** STRUCTURED verdict on an 'error' status: is the cause infrastructure (host
+   *  rebooted, daemon died, tunnel dropped) or the work itself (model refusal,
+   *  auth failure, context overflow, user stop)?
+   *
+   *  Exists because recoverability used to be decided by matching the PROSE
+   *  `errorMessage.includes('Connection lost')`. The C2 snapshot projection
+   *  writes 'error' with no message at all, so every snapshot-projected error
+   *  read as "a real user-visible error, don't auto-recover" and was skipped
+   *  forever by both recovery paths (51 stuck sessions, 2026-08-22 incident
+   *  inc-1787439819342). Classification belongs in a field, never in a string.
+   *  Absent = unknown: recoverable enough to relabel, NOT enough to auto-resume. */
+  errorKind?: SessionErrorKind;
+  /** Auto-recover budget, persisted so a host in a reboot loop can't respawn a
+   *  session forever (an in-memory counter resets with the server). */
+  autoRecover?: SessionAutoRecoverState;
   /** Why the last process_status change happened (K8s condition style). */
   status_reason?: StatusReason;
   /** Who triggered the last process_status change. */
