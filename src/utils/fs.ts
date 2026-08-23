@@ -4,6 +4,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { log } from '../logging/index.js';
 import { withFileLock } from './file-lock.js';
+import { selfHealDataDirJson } from './json-conflict-recovery.js';
 
 /**
  * Atomically write JSON to a file (write to tmp, then rename).
@@ -31,6 +32,16 @@ export async function writeJsonFile(filePath: string, data: unknown): Promise<vo
  * Read and parse a JSON file. Returns fallback if file doesn't exist.
  * Throws on parse errors (corrupt/truncated files) to avoid silently
  * losing data — callers should handle this rather than accepting empty data.
+ *
+ * One exception, added after the 2026-08-22 incident: a file inside the walnut
+ * data dir whose content no longer parses is SELF-HEALED from the data repo's
+ * git history before the throw (see src/utils/json-conflict-recovery.ts). Two
+ * data files were committed with git conflict markers in them, and every read
+ * of `config/share/ui-prefs.json` then dead-ended on `Failed to parse …` — hours
+ * of 500s and six crashes of a bus subscriber, while a perfectly good version of
+ * the file sat one commit back. Recovery is gated to the data dir (repo config
+ * files and test fixtures must keep failing loudly) and, when it cannot find a
+ * valid version, the ORIGINAL parse error is thrown unchanged.
  */
 export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T> {
   let content: string;
@@ -55,6 +66,23 @@ export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T>
     if (content.trim().length === 0) {
       return fallback;
     }
+
+    // Self-heal from git history (data dir only). Never swallows the failure:
+    // if nothing recoverable exists we fall through to the original error, whose
+    // exact `Failed to parse …` shape callers and tests depend on.
+    const healed = await selfHealDataDirJson(filePath);
+    if (healed) {
+      log.web.warn('corrupt JSON self-healed from git history', {
+        file: filePath,
+        restoredFrom: healed.restoredFrom,
+        movedTo: healed.movedTo,
+        parseError: parseErr instanceof Error ? parseErr.message : String(parseErr),
+      });
+      try {
+        return JSON.parse(healed.content) as T;
+      } catch { /* validated before the write — fall through to the original error */ }
+    }
+
     throw new Error(
       `Failed to parse ${filePath}: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
     );

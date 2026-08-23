@@ -8,6 +8,12 @@ import { bus, EventNames } from '../core/event-bus.js';
 import { markCriticalSection } from '../core/event-loop-monitor.js';
 import { safeKillProcessGroup } from '../core/process-group-kill.js';
 import { log } from '../logging/index.js';
+import {
+  healJsonFileFromHistory,
+  jsonCandidatesFromPorcelain,
+  readFileBounded,
+  scanForConflictMarkers,
+} from '../utils/json-conflict-recovery.js';
 
 export interface SyncStatus {
   initialized: boolean;
@@ -349,6 +355,14 @@ node_modules/
 # the index in the window before that runs.)
 .open-walnut-*.tmp
 
+# Forensic copies parked by the conflict-marker / corrupt-JSON self-heal
+# (json-conflict-recovery.ts): the damaged original of a file that was restored
+# from history. Kept on disk because one side of a conflict can be a local edit
+# that never reached a commit — but NEVER tracked: committing the marker text
+# under a second name is the same 2026-08-22 incident wearing a hat.
+*.conflicted-*
+*.corrupt-*
+
 # Dead pre-SQLite stores (0-byte sessions.db / tasks.db leftovers). ROOT-LEVEL
 # ONLY: memory/history.db is live chat data and must stay tracked — a blanket
 # *.db would silence it.
@@ -464,8 +478,14 @@ const CRITICAL_IGNORES = ['auth.json', 'auth.json.bak', 'cloud-setup-job.json', 
  * `memory/**\/*.bak.*` — bounded-memory pre-write snapshots. Purely local
  * rollback artifacts, rewritten on every memory mutation; they have never been
  * tracked, so there is no index state to repair, only churn to keep out.
+ *
+ * `*.conflicted-*` / `*.corrupt-*` — forensic copies parked by the
+ * conflict-marker self-heal. These MUST be ignored in pre-existing repos too:
+ * the heal writes one next to the file it repairs, and an untracked sidecar in
+ * the data repo would be committed by the very next auto-save, putting the
+ * marker text back into history under a new name.
  */
-const EXTRA_IGNORE_PATTERNS = ['memory/**/*.bak.*', 'tmp/'];
+const EXTRA_IGNORE_PATTERNS = ['memory/**/*.bak.*', 'tmp/', '*.conflicted-*', '*.corrupt-*'];
 
 /**
  * Append missing CRITICAL_IGNORES / EXTRA_IGNORE_PATTERNS to an existing
@@ -947,6 +967,17 @@ export async function recoverOrphanedGitSurgery(
       dir: stateDir, branch, rescueBranch,
     });
 
+    // 0. A dead rebase leaves CONFLICTED files on disk — full of markers. The
+    //    snapshot below is an unconditional `add -A`, so without this the marker
+    //    text becomes a commit and then rides the merge-back into the live file
+    //    (2026-08-22: ui-prefs.json + a conversation file, both unreadable).
+    const preSnapshot = (await gitSafeAsync('status --porcelain -uall', opts)) ?? '';
+    await healConflictMarkeredJsonFromStatus(
+      preSnapshot.split('\n').filter((l) => l.trim().length > 0),
+      'orphan-rebase-recovery:pre-snapshot',
+      repoDir,
+    );
+
     // 1. Snapshot the live worktree on the detached HEAD (newest data on disk).
     await gitSafeAsync('add -A', opts);
     await gitSafeAsync('commit -q -m "rescue: live worktree at orphaned-rebase recovery"', opts);
@@ -957,6 +988,8 @@ export async function recoverOrphanedGitSurgery(
     if (await gitSafeAsync(`checkout -f ${branch}`, { ...opts, timeout: PULL_TIMEOUT }) === null) {
       return { recovered: false, kind: 'rebase', rescueBranch, error: `checkout -f ${branch} failed` };
     }
+    // Tip BEFORE the merge-back, so step 5 can ask what the rescue changed.
+    const preMergeTip = await gitSafeAsync('rev-parse HEAD', opts);
     // 3. Drop the dead rebase state (quit keeps refs; fall back to rm).
     if (await gitSafeAsync('rebase --quit', opts) === null) {
       try { fs.rmSync(stateDir, { recursive: true, force: true }); } catch { /* best-effort */ }
@@ -989,6 +1022,26 @@ export async function recoverOrphanedGitSurgery(
         }
       }
     }
+    // 5. Post-resolution sweep. The merge above resolves content automatically
+    //    (-X theirs / checkout from the rescue branch), so it cannot introduce
+    //    NEW markers — but marker text already committed on the rescue branch
+    //    (e.g. a previous half-finished recovery, or a file whose repair failed
+    //    in step 0) lands in the live tree here. Ask git what the rescue changed
+    //    rather than reading `status`: after a successful merge commit the
+    //    worktree is CLEAN, which is exactly how the bad content stayed invisible.
+    if (mergedBack && preMergeTip) {
+      const changed = (await gitSafeAsync(`diff --name-only ${preMergeTip} HEAD`, opts)) ?? '';
+      const healed = await healConflictMarkeredJsonFiles(
+        changed.split('\n').map((f) => f.trim()).filter((f) => f.endsWith('.json')),
+        'orphan-rebase-recovery:post-merge',
+        repoDir,
+      );
+      if (healed.restored.length > 0 || healed.quarantined.length > 0) {
+        await gitSafeAsync('add -A', opts);
+        await gitSafeAsync('commit -q -m "rescue: restore JSON files that carried conflict markers"', opts);
+      }
+    }
+
     log.git.warn('git-sync orphaned-rebase recovery complete — sync unfrozen', {
       branch, rescueBranch, mergedBack,
     });
@@ -1161,6 +1214,97 @@ export async function verifyWorktreeAfterPull(context: string): Promise<boolean>
   return false;
 }
 
+// ── Conflict-marker guard (2026-08-22 incident) ─────────────────────────────
+// A rescue/merge path left git conflict markers INSIDE two data-repo JSON files
+// (`config/share/ui-prefs.json` carried nested `<<<<<<< HEAD` / `|||||||` diff3
+// markers), and the 30s auto-save then committed that marker text as the file's
+// real content. Every later read threw `Failed to parse …`: hours of 500s on
+// /api/ui-prefs plus six crashes of a bus subscriber. Marker text is never data,
+// so it must never be committed as the live file.
+//
+// The guard is a SCAN, not a parse of the whole repo: only paths git already
+// reports as changed, only .json, and a bounded prefix read per file. Git
+// subprocesses run ONLY for a file that actually looks conflicted, which is
+// approximately never.
+
+/**
+ * Upper bound on files scanned per pass. A dirty set larger than this is
+ * already the mass-revert breaker's problem, and the point of the cap is that a
+ * 30s tick can never turn into thousands of file reads.
+ */
+export const MAX_MARKER_SCAN_FILES = 300;
+
+export interface MarkerGuardResult {
+  scanned: number;
+  restored: string[];
+  quarantined: string[];
+}
+
+/**
+ * Restore (or quarantine) any of `relPaths` whose JSON carries conflict markers.
+ *
+ * Resolution = the last version of that path in git history that parses, tried
+ * newest-first (HEAD, then up to 8 commits back). If NOTHING in history parses,
+ * the file is quarantined as `<name>.conflicted-<ts>` rather than committed: a
+ * missing file reads as "first run" and falls back cleanly, while marker text
+ * takes routes down. Either way the live file never carries markers forward.
+ */
+export async function healConflictMarkeredJsonFiles(
+  relPaths: string[],
+  context: string,
+  repoDir = WALNUT_HOME,
+): Promise<MarkerGuardResult> {
+  const result: MarkerGuardResult = { scanned: 0, restored: [], quarantined: [] };
+  const candidates = relPaths.slice(0, MAX_MARKER_SCAN_FILES);
+  if (relPaths.length > MAX_MARKER_SCAN_FILES) {
+    log.git.warn('git-sync conflict-marker scan capped — dirty JSON set larger than the per-pass bound', {
+      context, candidates: relPaths.length, cap: MAX_MARKER_SCAN_FILES,
+    });
+  }
+
+  for (const rel of candidates) {
+    const filePath = path.join(repoDir, rel);
+    const read = await readFileBounded(filePath);
+    if (!read) continue; // deleted / unreadable / not a file
+    result.scanned++;
+    if (!scanForConflictMarkers(read.text, read.truncated).conflicted) continue;
+
+    const heal = await healJsonFileFromHistory({
+      repoDir,
+      filePath,
+      relPath: rel,
+      label: 'conflicted',
+      quarantineOnFailure: true,
+    });
+    if (heal.action === 'restored') {
+      result.restored.push(rel);
+      log.git.error('git-sync: conflict markers found in JSON — restored last valid version', {
+        file: rel, restoredFrom: heal.restoredFrom, parkedAt: heal.movedTo, context, repo: repoDir,
+      });
+    } else if (heal.action === 'quarantined') {
+      result.quarantined.push(rel);
+      log.git.error(
+        'git-sync: conflict markers found in JSON and NO version in history parses — quarantined the file instead of committing marker text',
+        { file: rel, parkedAt: heal.movedTo, context, repo: repoDir },
+      );
+    } else {
+      log.git.error('git-sync: conflict markers found in JSON but the file could not be repaired', {
+        file: rel, action: heal.action, error: heal.error, context, repo: repoDir,
+      });
+    }
+  }
+  return result;
+}
+
+/** Porcelain-driven twin: the auto-save paths already hold a status snapshot. */
+export async function healConflictMarkeredJsonFromStatus(
+  dirtyLines: string[],
+  context: string,
+  repoDir = WALNUT_HOME,
+): Promise<MarkerGuardResult> {
+  return healConflictMarkeredJsonFiles(jsonCandidatesFromPorcelain(dirtyLines), context, repoDir);
+}
+
 /**
  * Single-flight latch for sync(). The 30s tick used to rely on setTimeout
  * self-rescheduling for serialization ("the next tick is armed only AFTER the
@@ -1271,6 +1415,10 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
   if (dirtyLines.length > 0 && !diskPullOnly) {
     const safety = await assessCommitSafety(dirtyLines);
     if (safety.ok) {
+      // Never let marker text become the committed content of a JSON store
+      // (2026-08-22). Runs on the dirty snapshot we already have, before add.
+      await healConflictMarkeredJsonFromStatus(dirtyLines, 'syncInner:commit');
+
       await gitAsync('add -A');
 
       // …and re-check: `add -A` itself can re-track a machine-local file the
@@ -1516,6 +1664,19 @@ async function lwwMerge(branch: string): Promise<{ merged: boolean; conflicts: n
     await gitSafeAsync(`pull -X theirs origin ${branch}`, { timeout: PULL_TIMEOUT });
     return { merged: true, conflicts: files.length };
   }
+
+  // Marker guard on the resolved set. `checkout --ours/--theirs` writes a clean
+  // blob, so this should find nothing — but this is a MERGE RESOLUTION path, and
+  // committing marker text as a JSON store's content is the 2026-08-22 incident.
+  // The file list is already in hand, so the check costs one bounded read each.
+  // Staged file-by-file, never `add -A`: the app keeps writing during a pull,
+  // and sweeping those writes into the merge commit is not this function's job.
+  const markerFix = await healConflictMarkeredJsonFiles(
+    files.filter((f) => f.endsWith('.json')),
+    'lwwMerge:resolved',
+  );
+  for (const f of markerFix.restored) await gitSafeAsync(`add -- "${f}"`);
+  for (const f of markerFix.quarantined) await gitSafeAsync(`rm -q --cached --ignore-unmatch -- "${f}"`);
 
   // Commit the merge. Parent 1 = local HEAD, parent 2 = remote head — the
   // losing content of every conflicted file survives under one of them.
@@ -1787,6 +1948,11 @@ export async function commitIfDirty(): Promise<boolean> {
   // 2200-file revert of the user's reorg. Refuse suspicious mass snapshots.
   const safety = await assessCommitSafety(lines);
   if (!safety.ok) return false;
+
+  // Conflict-marker guard: this is THE path that committed marker text as the
+  // live content of ui-prefs.json + a conversation file on 2026-08-22. Runs on
+  // the status snapshot above (no extra git call), before anything is staged.
+  await healConflictMarkeredJsonFromStatus(lines, 'commitIfDirty');
 
   try {
     await gitAsync('add -A');

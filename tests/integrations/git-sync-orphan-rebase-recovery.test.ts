@@ -109,7 +109,16 @@ describe('recoverOrphanedGitSurgery — orphaned rebase (the incident shape)', (
     run(`git merge-base --is-ancestor ${preRebaseTip} HEAD`, repo); // throws if not
     expect(fs.readFileSync(path.join(repo, 'live-write.md'), 'utf-8')).toContain('during the freeze');
     // The conflicted file resolved toward the live disk (-X theirs), repo sane.
-    expect(run('git status --porcelain', repo)).toBe('');
+    // `logs/` is excluded on purpose: this suite's mocked constants put LOG_DIR
+    // INSIDE the repo under test, and the logger flushes on a 2s timer
+    // (src/logging/logger.ts), so its own directory appears in the worktree at
+    // whatever moment that tick lands — after the rescue's `add -A` whenever the
+    // rescue takes longer than the interval, which under machine load it always
+    // does. That is the harness writing into the repo, not rescue residue.
+    const dirt = run('git status --porcelain', repo)
+      .split('\n')
+      .filter((l) => l.trim().length > 0 && !l.endsWith('logs/'));
+    expect(dirt).toEqual([]);
     expect(run('git fsck --no-progress', repo)).not.toMatch(/error/i);
   });
 
