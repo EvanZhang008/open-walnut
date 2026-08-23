@@ -1810,13 +1810,27 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // embedding model download is unwanted and search isn't exercised.
   if (process.env.WALNUT_DISABLE_SEARCH === '1') {
     log.memory.info('QMD search disabled via WALNUT_DISABLE_SEARCH=1 — skipping embedding model init')
-  } else if (CLOUD_MODE) {
-    // Cloud companion: no semantic indexes (keyword/FTS search still works).
-    log.memory.info('cloud mode: skipping QMD semantic index init')
-  } else if (!(await (await import('../core/qmd-store.js')).isQmdAvailable())) {
-    // qmd is an optionalDependency; npm skips it where node-llama-cpp can't
-    // build/run (e.g. glibc < 2.28 hosts). Keyword/FTS search still works.
-    log.memory.warn('QMD semantic search unavailable on this host (optional dependency not installed) — keyword search only')
+  } else if (CLOUD_MODE || !(await (await import('../core/qmd-store.js')).isQmdAvailable())) {
+    // Cloud companion (no semantic indexes) or qmd optionalDependency missing
+    // (node-llama-cpp can't build, e.g. glibc < 2.28). Keyword/FTS search
+    // still works — and it MUST still see file events: git-synced notes never
+    // pass through a write route, so without the structural watcher a synced
+    // note stays unsearchable until the next restart's drift scan (a note
+    // saved from the phone via the primary was invisible to the phone's own
+    // search minutes later, dogfood R14). Start the watcher with the semantic
+    // leg off; the notes-indexer's own CLOUD_MODE guards keep embedding work
+    // out regardless.
+    log.memory.info(CLOUD_MODE
+      ? 'cloud mode: skipping QMD semantic index init (structural notes watcher still on)'
+      : 'QMD semantic search unavailable on this host (optional dependency not installed) — keyword search only, structural notes watcher still on')
+    try {
+      const { startQmdWatcher } = await import('../core/qmd-watcher.js')
+      qmdWatcherHandle = startQmdWatcher({ semantic: false })
+    } catch (err) {
+      log.memory.warn('structural notes watcher failed to start', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
   } else try {
     const { startQmdWatcher } = await import('../core/qmd-watcher.js')
     const {

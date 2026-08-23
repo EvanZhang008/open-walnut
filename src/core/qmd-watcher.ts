@@ -31,7 +31,14 @@ function notifyGitVersioning(filename: string): void {
     .catch(() => {});
 }
 
-export function startQmdWatcher(): { stop: () => void } {
+export function startQmdWatcher(opts?: { semantic?: boolean }): { stop: () => void } {
+  // semantic:false = structural-only mode (cloud replica / hosts without the
+  // optional qmd dep). The NOTES_DIR leg must still run there: git-synced
+  // notes never pass through a write route, so without fs events the FTS
+  // index only refreshes on the once-per-boot drift scan — every note synced
+  // after that stayed unsearchable until the next restart (dogfood R14).
+  // The memory leg is semantic-only work, so it stays off in this mode.
+  const semantic = opts?.semantic !== false;
   const watchers: fs.FSWatcher[] = [];
   resetNotesIndexer();
 
@@ -52,7 +59,7 @@ export function startQmdWatcher(): { stop: () => void } {
   // embed). Full rebuilds use the same path over every note.
 
   try {
-    if (fs.existsSync(MEMORY_DIR)) {
+    if (semantic && fs.existsSync(MEMORY_DIR)) {
       watchers.push(fs.watch(MEMORY_DIR, { recursive: true }, (_event, filename) => {
         if (filename && filename.endsWith('.md')) {
           scheduleMemoryUpdate.call();
