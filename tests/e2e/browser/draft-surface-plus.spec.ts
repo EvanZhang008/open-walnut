@@ -397,19 +397,31 @@ test('the toolbar says "New task" until the panel is genuinely narrow', async ({
   await expect(view).toBeVisible()
   expect(await toolbarContentWidth()).toBeGreaterThan(275)
   const normalBox = await btn.boundingBox()
-  expect(normalBox?.width ?? 0).toBeGreaterThan(collapsedButtonPx)
+  const normalSearchBox = await search.boundingBox()
+  expect(normalBox?.width ?? 0).toBeGreaterThan(collapsedButtonPx * 2)
+  expect(normalSearchBox?.width ?? 0).toBeGreaterThan(100)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-06-toolbar-new-task-wide.png`, fullPage: false })
 
-  // A 900px viewport stays outside the mobile layout while driving the actual
-  // toolbar content box below the 275px container breakpoint.
-  await page.setViewportSize({ width: 900, height: 900 })
+  // With the pinned 25% panel and collapsed sidebar, a 4px viewport step moves
+  // the toolbar content box from 276px to 275px. This pins both sides of the
+  // container breakpoint instead of merely sampling far-away wide/narrow states.
+  await page.setViewportSize({ width: 1260, height: 900 })
+  await expect(label).toBeVisible()
+  expect(await toolbarContentWidth()).toBe(276)
+  const boundaryWideSearchBox = await search.boundingBox()
+  expect(boundaryWideSearchBox?.width ?? 0).toBeGreaterThan(100)
+
+  await page.setViewportSize({ width: 1256, height: 900 })
   await expect(label).toBeHidden()
   await expect(btn).toBeVisible()
+  await expect(btn.locator('svg')).toBeVisible()
   await expect(search).toBeVisible()
   await expect(view).toBeVisible()
-  expect(await toolbarContentWidth()).toBeLessThanOrEqual(275)
+  expect(await toolbarContentWidth()).toBe(275)
   const narrowBox = await btn.boundingBox()
+  const narrowSearchBox = await search.boundingBox()
   expect(narrowBox?.width ?? 0).toBeCloseTo(collapsedButtonPx, 0)
+  expect(narrowSearchBox?.width ?? 0).toBeGreaterThan(60)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-06-toolbar-new-task-narrow.png`, fullPage: false })
 
   // Responsive presentation must not change the established one-click behavior.
