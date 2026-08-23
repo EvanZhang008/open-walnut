@@ -35,21 +35,30 @@ describe('segmentHunkForAuto — per-region split/unified slicing', () => {
     expect(segs.length).toBe(1);
   });
 
-  it('an in-place replacement becomes its own split segment; context stays unified', () => {
+  it('an in-place replacement absorbs its short surrounding context into ONE split table', () => {
     const before = numbered(50);
     const after = before.replace('L25\n', 'L25-edited\n');
     const hunk = firstHunk(before, after);
     const segs = segmentHunkForAuto(hunk);
 
-    const splits = segs.filter((s) => s.viewType === 'split');
-    expect(splits.length).toBe(1);
-    // The split segment holds ONLY the paired edit rows — no context rides
-    // along (duplicated identical left/right context was the complaint).
-    expect(splits[0]!.hunk.changes.every((c) => c.type !== 'normal')).toBe(true);
-    expect(splits[0]!.hunk.changes.some((c) => c.type === 'delete')).toBe(true);
-    expect(splits[0]!.hunk.changes.some((c) => c.type === 'insert')).toBe(true);
-    // unified → split → unified, in order.
-    expect(segs.map((s) => s.viewType)).toEqual(['unified', 'split', 'unified']);
+    // The context pieces around the replacement are ≤ ABSORB_MAX_ROWS, so the
+    // whole hunk renders as one continuous side-by-side table — a
+    // unified→split→unified flip for 20 lines of context each way made the
+    // eye re-find its column twice for no benefit.
+    expect(segs.length).toBe(1);
+    expect(segs[0]!.viewType).toBe('split');
+    expect(segs[0]!.hunk.changes.some((c) => c.type === 'delete')).toBe(true);
+    expect(segs[0]!.hunk.changes.some((c) => c.type === 'insert')).toBe(true);
+  });
+
+  it('dense replacements with small context between them coalesce into ONE split run', () => {
+    const before = numbered(120);
+    let after = before;
+    // Three in-place edits ~10 lines apart — the layout must NOT alternate.
+    for (const n of [40, 50, 60]) after = after.replace(`L${n}\n`, `L${n}-edited\n`);
+    const segs = segmentHunkForAuto(firstHunk(before, after));
+    expect(segs.filter((s) => s.viewType === 'split').length).toBe(1);
+    expect(segs.length).toBe(1);
   });
 
   it('asymmetric replacement (many old lines → one new) still earns split', () => {
@@ -62,18 +71,32 @@ describe('segmentHunkForAuto — per-region split/unified slicing', () => {
     expect(split!.hunk.changes.filter((c) => c.type === 'insert').length).toBe(1);
   });
 
-  it('replacement AND a separate pure-insert block: only the replacement splits', () => {
+  it('replacement AND a separate BIG pure-insert block: the insert stays unified', () => {
     const before = numbered(80);
+    const added = Array.from({ length: 20 }, (_, i) => `added${i + 1}`).join('\n');
     const after = before
-      .replace('L30\n', 'L30-edited\n')                      // in-place → split
-      .replace('L40\n', 'L40\nadded1\nadded2\nadded3\n');    // pure insert → unified
+      .replace('L30\n', 'L30-edited\n')          // in-place → split
+      .replace('L40\n', `L40\n${added}\n`);      // 20 inserted rows > ABSORB_MAX_EDIT_ROWS
     const segs = segmentHunkForAuto(firstHunk(before, after));
     const splits = segs.filter((s) => s.viewType === 'split');
     expect(splits.length).toBe(1);
-    // The insert block stayed inside a unified segment.
+    // The big insert block must NOT be dragged into split (blank left column) —
+    // it stays inside a unified segment.
     const insertHome = segs.find((s) => s.viewType === 'unified'
       && s.hunk.changes.some((c) => c.type === 'insert' && c.content === 'added1'));
     expect(insertHome).toBeDefined();
+  });
+
+  it('a SMALL insert burst right between replacements rides the split run', () => {
+    const before = numbered(80);
+    const after = before
+      .replace('L30\n', 'L30-edited\n')
+      .replace('L35\n', 'L35\ntiny1\ntiny2\n')   // 2 inserted rows ≤ ABSORB_MAX_EDIT_ROWS
+      .replace('L40\n', 'L40-edited\n');
+    const segs = segmentHunkForAuto(firstHunk(before, after));
+    // One continuous split table — no unified sliver between the two edits.
+    expect(segs.filter((s) => s.viewType === 'split').length).toBe(1);
+    expect(segs.length).toBe(1);
   });
 
   it('segments preserve every change in order and keep line numbers continuous', () => {
