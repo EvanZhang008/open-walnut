@@ -205,6 +205,35 @@ function handleFrame(conn: BridgeConn, raw: string): void {
     const state = msg.state as string | undefined
     if (sid && conn.attachSent.has(sid)) {
       emitSse(channelKey(sid), 'status', { processStatus: state === 'dead' ? 'stopped' : 'running' })
+      if (state === 'running') {
+        // 'running' means the daemon (re)spawned this CLI (cmdStart --resume /
+        // adopt). The daemon subscribes only the SPAWN CALLER's ws to the new
+        // session's watcher — and an attach made while the CLI was DEAD never
+        // created a subscriber at all (cmdAttach's `if (alive)` gate), though
+        // it still answered ok and we marked attachSent. Either way this
+        // bridge is not in the new subscribers set, so every jsonl line of
+        // the resumed turn fans out ONLY to the primary walnut server: the
+        // phone sits on a healthy-looking SSE stream and never renders the
+        // reply it asked for (2026-08-23 dogfood — cold-resume turn invisible
+        // until the app reloads history). Re-attach to join the new watcher.
+        // Direct bridgeRequest, NOT bridgeAttachSession: attachSent must stay
+        // set (its gate drops jsonl frames), and daemon-side addSubscriber is
+        // a Set add — a redundant re-attach costs nothing.
+        void bridgeRequest(conn.hostAlias, 'attach', {
+          sid, fromOffset: Number.MAX_SAFE_INTEGER,
+        }).then((res) => {
+          if (res.ok !== true) {
+            log.ws.warn('bridge: re-attach on respawn refused', {
+              hostAlias: conn.hostAlias, sessionId: sid, error: String(res.error ?? 'unknown'),
+            })
+          }
+        }).catch((err: unknown) => {
+          log.ws.warn('bridge: re-attach on respawn failed', {
+            hostAlias: conn.hostAlias, sessionId: sid,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        })
+      }
     }
     return
   }

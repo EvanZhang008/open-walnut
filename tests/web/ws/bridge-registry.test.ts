@@ -296,6 +296,52 @@ describe('bridge lifecycle + proxied send + streaming', () => {
     }
   })
 
+  // Regression (2026-08-23 dogfood): a cold `--resume` respawn creates a NEW
+  // daemon-side watcher whose subscribers set contains only the spawn caller
+  // (the primary walnut server). This bridge conn was subscribed to the OLD
+  // watcher (or, if it attached while the CLI was dead, to nothing at all —
+  // cmdAttach's `if (alive)` gate), so every jsonl line of the resumed turn
+  // bypassed the phone: the reply streamed to the Mac while the app showed
+  // Idle + no assistant bubble until a full history reload. The fix: a
+  // `session_state: running` push for an attachSent sid re-sends `attach` to
+  // join the new watcher.
+  it('session_state running (respawn) → bridge re-attaches so resumed-turn jsonl still reaches the phone', async () => {
+    const daemon = await connectFakeDaemon(machineToken, HOST)
+    try {
+      const sse = await connectSse(apiUrl(`/api/v1/sessions/${SID}/stream`), {
+        Authorization: `Bearer ${deviceToken}`,
+      })
+      try {
+        await sse.waitFor((e) => e.event === 'bridge-online')
+        await waitFor(() => daemon.received.some((m) => m.cmd === 'attach' && m.sid === SID))
+        const attachesBefore = daemon.received.filter((m) => m.cmd === 'attach' && m.sid === SID).length
+
+        // The daemon respawns the CLI (cold --resume triggered by a send).
+        daemon.send({ ev: 'session_state', sid: SID, state: 'running', pid: 9999 })
+
+        // The phone header learns the turn started…
+        await sse.waitFor((e) => e.event === 'status' && e.data.processStatus === 'running')
+        // …and the bridge re-attached to the NEW watcher.
+        await waitFor(() =>
+          daemon.received.filter((m) => m.cmd === 'attach' && m.sid === SID).length > attachesBefore)
+
+        // attachSent survived the re-attach: resumed-turn jsonl still forwards.
+        daemon.send({ ev: 'jsonl', sid: SID, v: 500, line: JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'resumed reply' } } }) })
+        await sse.waitFor((e) => e.event === 'text-delta' && e.data.delta === 'resumed reply')
+
+        // A death push must NOT re-attach (nothing to tail on a dead CLI).
+        const attachesAfter = daemon.received.filter((m) => m.cmd === 'attach' && m.sid === SID).length
+        daemon.send({ ev: 'session_state', sid: SID, state: 'dead' })
+        await sse.waitFor((e) => e.event === 'status' && e.data.processStatus === 'stopped')
+        expect(daemon.received.filter((m) => m.cmd === 'attach' && m.sid === SID).length).toBe(attachesAfter)
+      } finally {
+        sse.close()
+      }
+    } finally {
+      daemon.close()
+    }
+  })
+
   it('dead CLI → 409 session_dead', async () => {
     const daemon = await connectFakeDaemon(machineToken, HOST, { alive: false })
     try {
