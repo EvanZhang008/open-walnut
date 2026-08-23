@@ -252,12 +252,13 @@ export function useFocusBar(): UseFocusBarReturn {
     const task = tasksRef.current.find((t) => t.id === taskId);
     if (task && (task.status === 'done' || task.phase === 'COMPLETE')) return;
     lastWriteRef.current = Date.now();
-    // Mirror backend togglePin: new pins surface at the TOP of their tier
-    // (pin_order = min existing - 1). If either side flips, the optimistic
-    // order and the echo order diverge and the row visibly jumps.
+    // Mirror backend togglePin: new pins land at the BOTTOM (pin_order = max
+    // existing + 1), so an arriving pin never reshuffles a hand-arranged order.
+    // If either side flips, the optimistic order and the echo order diverge and
+    // the row visibly jumps.
     const orders = tasksRef.current.filter((t) => t.pinned).map((t) => t.pin_order ?? 0);
-    const minOrder = orders.length ? Math.min(...orders) : 0;
-    patchTasksLocal({ [taskId]: { pinned: true, pin_order: minOrder - 1, focus_tier: undefined } });
+    const maxOrder = orders.length ? Math.max(...orders) : -1;
+    patchTasksLocal({ [taskId]: { pinned: true, pin_order: maxOrder + 1, focus_tier: undefined } });
     try {
       await focusApi.pinTask(taskId);
     } catch {
@@ -343,10 +344,9 @@ export function useFocusBar(): UseFocusBarReturn {
 
   const commitPin = useCallback(async (taskId: string, tier: FocusTier) => {
     lastWriteRef.current = Date.now();
-    // The backend pins at the TOP (pin_order = min - 1) and emits task:updated
-    // echoes with that transient state; our optimistic patch says bottom. Guard
-    // the two echoes (togglePin + setFocusTier) so the row doesn't jump to the
-    // top and back while the reorder below settles.
+    // Backend and optimistic patch now agree on bottom placement, but the two
+    // writes (togglePin + setFocusTier) each echo task:updated mid-flight, before
+    // the reorder below settles. Guard both so the row can't flicker.
     guardEcho(`update:${taskId}`);
     guardEcho(`update:${taskId}`);
     await focusApi.pinTask(taskId);

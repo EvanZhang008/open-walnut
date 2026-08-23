@@ -4598,7 +4598,8 @@ export async function getDashboardData(): Promise<DashboardData> {
 
 /**
  * Toggle pin on a task (by exact ID). Returns ordered list of pinned task IDs.
- * When pinning: sets pinned=true, pin_order = min existing - 1 (surfaces at top of its tier).
+ * When pinning: sets pinned=true, pin_order = max existing + 1 (lands at the BOTTOM,
+ * so an arriving pin never disturbs an order the user arranged by hand).
  * When unpinning: clears pinned & pin_order, compacts remaining orders.
  */
 export async function togglePin(taskId: string): Promise<{ pinned: boolean; pinned_tasks: string[] }> {
@@ -4623,14 +4624,22 @@ export async function togglePin(taskId: string): Promise<{ pinned: boolean; pinn
       const pinned = store.tasks.filter((t) => t.pinned).sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
       pinned.forEach((t, i) => { t.pin_order = i; });
     } else {
-      // Pin — new pins surface at the TOP of their tier (lowest pin_order sorts first).
-      // pin_order is only a relative sort key, so going below 0 (and drifting more
-      // negative each pin) is intentional and harmless — the unpin branch above and
-      // reorderPins() re-compact to 0..n whenever the set changes.
+      // Pin — new pins land at the BOTTOM (highest pin_order sorts last).
+      //
+      // This used to be `min - 1` (top of the list). That looked helpful for a
+      // manual pin but wrecked every hand-arranged order, because pinning is also
+      // AUTOMATIC: a fork inherits its source's pin (session-controls.ts) and a
+      // launcher can pin with a preset tier (quick-start.ts). Worse, the pinned
+      // area clusters a group at its FIRST member's slot, so a fork that joined an
+      // existing group dragged that whole group to the very top the moment it was
+      // created — the reported "有新的 conversation / fork 就直接跑到最前面".
+      // Bottom placement keeps a new member the LAST of its group, which leaves the
+      // group's anchor (and every other row) exactly where the user put it.
+      // Matches the quick-add path, which has always appended (useFocusBar.addLocalPin).
       const orders = store.tasks.filter((t) => t.pinned).map((t) => t.pin_order ?? 0);
-      const minOrder = orders.length ? Math.min(...orders) : 0;
+      const maxOrder = orders.length ? Math.max(...orders) : -1;
       task.pinned = true;
-      task.pin_order = minOrder - 1;
+      task.pin_order = maxOrder + 1;
       task.updated_at = now;
     }
 
@@ -4644,8 +4653,17 @@ export async function togglePin(taskId: string): Promise<{ pinned: boolean; pinn
 }
 
 /**
- * Reorder pinned tasks. Sets pin_order = index for each ID in the array.
- * IDs not in the list keep their current pin state.
+ * Reorder pinned tasks. The listed IDs take slots 0..n-1 in the order given;
+ * every OTHER pinned task keeps its relative position and is renumbered after
+ * them, so the whole set always ends up with unique, gap-free pin_orders.
+ *
+ * That renumbering is the fix for "the order keeps changing on its own". The old
+ * version only touched the ids it was handed, and callers legitimately hand it a
+ * SUBSET: the panel builds its order from the rendered tiers, which exclude the
+ * members of a hidden group. Those excluded rows kept their old pin_order, which
+ * now collided with the freshly assigned 0..n-1 — and once two tasks share a
+ * pin_order the sort is decided by their physical order in the store file, so the
+ * list reshuffled on its own after unrelated writes.
  *
  * Returns the FULL tier snapshot (not just pinned_tasks). A reorder never
  * touches focus_tier, but the client's applyFocusData() treats any missing
@@ -4658,13 +4676,25 @@ export async function reorderPins(orderedIds: string[]): Promise<TierResult> {
   return withWriteLock(async () => {
     const store = await readStore();
     const now = new Date().toISOString();
-    for (let i = 0; i < orderedIds.length; i++) {
-      const task = store.tasks.find((t) => t.id === orderedIds[i]);
-      if (task && task.pinned) {
-        task.pin_order = i;
-        task.updated_at = now;
-      }
+    const listed = new Set(orderedIds);
+    // Listed pinned tasks first, in the caller's order; then the pinned tasks the
+    // caller didn't mention, in their current relative order.
+    const byId = new Map(store.tasks.filter((t) => t.pinned).map((t) => [t.id, t]));
+    const final: Task[] = [];
+    for (const id of orderedIds) {
+      const t = byId.get(id);
+      if (t) final.push(t);
     }
+    const rest = store.tasks
+      .filter((t) => t.pinned && !listed.has(t.id))
+      .sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
+    final.push(...rest);
+    final.forEach((t, i) => {
+      if (t.pin_order !== i) {
+        t.pin_order = i;
+        t.updated_at = now;
+      }
+    });
     await writeStore(store);
     return splitTiers(store);
   });

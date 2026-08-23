@@ -79,12 +79,17 @@ describe('Focus Bar API', () => {
     expect(r.data.pinned_tasks).toHaveLength(4);
   });
 
-  it('newly pinned task surfaces at the top of the list', async () => {
-    // Pins so far (in order): taskIds[0], [1], [2], [3]. Each new pin goes to the
-    // front, so the most recently pinned (taskIds[3]) must be first.
+  it('newly pinned task lands at the bottom of the list', async () => {
+    // Pins so far (in order): taskIds[0], [1], [2], [3]. Each new pin APPENDS, so
+    // the list reads in pin order and the most recent (taskIds[3]) is last.
+    //
+    // This used to prepend. Pinning is also automatic (a fork inherits its source's
+    // pin, a launcher can pin with a preset tier), so prepending silently rewrote
+    // any hand-arranged order — and because the pinned area anchors a group at its
+    // first member, an auto-pinned fork dragged its whole group to the top.
     const r = await api('GET', '/api/focus/tasks');
-    expect(r.data.pinned_tasks[0]).toBe(taskIds[3]);
-    expect(r.data.pinned_tasks[r.data.pinned_tasks.length - 1]).toBe(taskIds[0]);
+    expect(r.data.pinned_tasks[0]).toBe(taskIds[0]);
+    expect(r.data.pinned_tasks[r.data.pinned_tasks.length - 1]).toBe(taskIds[3]);
   });
 
   it('DELETE /api/focus/tasks/:id unpins a task', async () => {

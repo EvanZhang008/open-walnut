@@ -10,29 +10,34 @@ import type { FocusTier } from '@/api/focus';
 import { useSortable } from '@dnd-kit/sortable';
 import { useDroppable, useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
+import { groupSortableId } from './tier-group-sentinels';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStartButton } from './TaskStartButton';
 import * as ICONS from '../common/Icons';
 
 
-/** Sortable id for a group's chip in a tier — encodes the tier so a group split
- *  across tiers renders distinct chips without an id collision. Kept in sync with
- *  the parser in TodoPanel (`group:<gid>:<tier>`). */
-export function groupSortableId(groupId: string, tier: FocusTier): string {
-  return `group:${groupId}:${tier}`;
-}
+// The sentinel id scheme (`group:<gid>:<tier>`) and its helpers live in
+// tier-group-sentinels.ts, next to the items-building logic that depends on them.
+export { groupSortableId } from './tier-group-sentinels';
 
 /**
  * Group header chip (Focus area). The chip represents the WHOLE cluster: grabbing its
  * grip (⣿) drags the entire group as a unit.
  *
- * It's a `useSortable` unit (not a bare `useDraggable`) so that DURING its own drag —
- * when TodoPanel collapses the group's member ids in the tier's SortableContext.items
- * down to this chip's single id — `verticalListSortingStrategy` gives it a real
- * activeIndex and pushes the sibling cards away, opening an empty slot exactly like a
- * regular task drag. At rest the chip's id is NOT in items (index -1, inert), which is
- * harmless: it just renders as a static header above its lead member. Droppable is
- * disabled so the chip never becomes a collision target for single-card drags.
+ * It's a full `useSortable` unit (not a bare `useDraggable`), and its id is ALWAYS in
+ * the tier's SortableContext.items — inserted right before its member run. Both halves
+ * matter:
+ *
+ *  • In items → `verticalListSortingStrategy` displaces the chip along with its own
+ *    cards during any drag. While the chip sat outside items it stayed pinned to its
+ *    original y while the cards it heads slid away, so the header visibly detached
+ *    from its cluster.
+ *  • Droppable ENABLED → the chip has a measured rect. dnd-kit only keeps rects for
+ *    enabled droppables, and the strategy reads `rects[activeIndex]` to size the slot
+ *    it opens. With no rect it fell back to the raw drag node and mis-measured every
+ *    gap, which is why dragging a whole group used to open no visible slot at all.
+ *    Being a collision target is also correct: dropping on a chip means "land above
+ *    this group", and it's the natural target when swapping two groups.
  */
 export function GroupChip({ groupId, tier, label, onRename, onDissolve, onHide }: {
   groupId: string;
@@ -45,7 +50,6 @@ export function GroupChip({ groupId, tier, label, onRename, onDissolve, onHide }
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: groupSortableId(groupId, tier),
     data: { type: 'group', groupId, tier },
-    disabled: { droppable: true, draggable: false },
   });
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -59,6 +63,7 @@ export function GroupChip({ groupId, tier, label, onRename, onDissolve, onHide }
     <div
       ref={setNodeRef}
       style={style}
+      data-group-id={groupId}
       className={`task-group-chip${isDragging ? ' task-group-chip-dragging' : ''}`}
       title="Grouped tasks — drag the grip to move the whole group"
     >

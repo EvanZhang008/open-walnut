@@ -106,7 +106,11 @@ import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { ProjectDetailPane } from './ProjectDetailPane';
 import { GlobalNotesSection } from '../notes/GlobalNotesSection';
 import { useGlobalNotes } from '@/hooks/useGlobalNotes';
-import { SortableTierCard, TierDropZone, GroupChip, groupSortableId } from './FocusSatelliteCards';
+import { SortableTierCard, TierDropZone, GroupChip } from './FocusSatelliteCards';
+import {
+  groupSortableId, parseGroupSentinelGid, isGroupSentinel, taskIdsOnly, withGroupSentinels,
+  pruneOrphanSentinels,
+} from './tier-group-sentinels';
 import { TodoSectionTabs, TODO_SECTIONS, type TodoSection } from './TodoSectionTabs';
 import { isBuiltinTier, type FocusTier, type CustomTierDef } from '@/api/focus';
 import { useSessionStatusEpoch, useTaskCircle } from '@/hooks/useSessionStatus';
@@ -1220,15 +1224,6 @@ const snapToCursor: Modifier = ({ activatorEvent, draggingNodeRect, transform })
 // code is littered with depends on dragOver NOT churning state.
 const livePointer = { x: 0, y: 0 };
 function trackPointer(e: PointerEvent) { livePointer.x = e.clientX; livePointer.y = e.clientY; }
-
-/** Extract the gid from a `group:<gid>:<tier>` sortable sentinel id. Neither gid
- *  (`g_…`) nor tier keys (`focus`/`ct_…`) contain colons, so slicing between the
- *  first and last colon is exact — works for custom tier suffixes too. */
-function parseGroupSentinelGid(sentinel: string): string {
-  const body = sentinel.slice('group:'.length);
-  const lastColon = body.lastIndexOf(':');
-  return lastColon === -1 ? body : body.slice(0, lastColon);
-}
 
 // left 2/3 of a card = group zone, right 1/3 = subtask (indent) zone.
 export const GROUP_ZONE_RATIO = 2 / 3;
@@ -3138,9 +3133,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // order is the render order (group clustering stays: a group must never split).
   const clusterForTier = useCallback((tier: string, tierTasks: Task[]): string[] => {
     const grouped = clusterTierByGroup(tierTasks);
-    return tierViewMode(tier) === 'custom'
+    const projected = tierViewMode(tier) === 'custom'
       ? grouped
       : clusterTierByProject(grouped, tierTasks, ordering?.projectOrder);
+    // Chip sentinels go in LAST — see withGroupSentinels for why they must not be
+    // visible to the project clustering pass.
+    return withGroupSentinels(projected, tierTasks, tier);
   }, [tierViewMode, ordering?.projectOrder]);
   const focusIds_arr = useMemo(() => dragTierIds?.get('focus') ?? clusterForTier('focus', focusTasksLocal), [dragTierIds, focusTasksLocal, clusterForTier]);
   const satelliteIds_arr = useMemo(() => dragTierIds?.get('satellite') ?? clusterForTier('satellite', satelliteTasksLocal), [dragTierIds, satelliteTasksLocal, clusterForTier]);
@@ -3163,7 +3161,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const dragStartSnapshot = useRef<{ tiers: Map<FocusTier, string[]>; recent?: string[] } | null>(null);
   const activeDragPinnedTask = useMemo(
     () => {
-      if (!activeDragPinnedId || activeDragPinnedId.startsWith('group:')) return null;
+      if (!activeDragPinnedId || isGroupSentinel(activeDragPinnedId)) return null;
       return pinnedTasks.find((t) => t.id === activeDragPinnedId)
         ?? recentTasks.find((t) => t.id === activeDragPinnedId)
         ?? null;
@@ -3176,7 +3174,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // that follows the cursor — otherwise dragging a group showed nothing under the
   // pointer and the user couldn't tell where it was going.
   const activeDragGroup = useMemo(() => {
-    if (!activeDragPinnedId?.startsWith('group:')) return null;
+    if (!(activeDragPinnedId && isGroupSentinel(activeDragPinnedId))) return null;
     const gid = parseGroupSentinelGid(activeDragPinnedId);
     const members = pinnedTasks.filter((t) => t.group_id === gid);
     if (members.length === 0) return null;
@@ -3239,13 +3237,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const activeId = event.active.id as string;
 
     // ── Collapse-on-drag ── When a whole group is grabbed (`group:<gid>:<tier>`),
-    // replace that group's member run in the frozen refs with a SINGLE sentinel id
-    // (the chip's id). The group then behaves as one atomic sortable unit: the
-    // strategy gives the sentinel a real activeIndex, so sibling cards push away and
-    // an empty slot opens — exactly like dragging a task. Members are hidden for the
-    // duration (renderTierItems draws the chip for the sentinel) and restored on end.
+    // drop that group's member ids out of the frozen refs, leaving its sentinel
+    // (already sitting immediately before them — see withGroupSentinels) to stand
+    // in for the whole cluster. The group then behaves as one atomic sortable unit:
+    // the strategy gives the sentinel a real activeIndex, so sibling cards push
+    // away and an empty slot opens — exactly like dragging a task. Members are
+    // hidden for the duration (renderTierItems draws the chip alone) and restored
+    // on end.
     collapsedGroupRef.current = null;
-    if (activeId.startsWith('group:')) {
+    if (isGroupSentinel(activeId)) {
       const gid = parseGroupSentinelGid(activeId);
       // Members in on-screen order (tier render order) so the restored block
       // preserves how the user saw them.
@@ -3254,14 +3254,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         const memberSet = new Set(orderedMembers);
         const collapse = (arr: string[]): string[] => {
           const out: string[] = [];
-          let placed = false;
           for (const id of arr) {
-            if (memberSet.has(id)) {
-              // Drop the members; drop the sentinel in at the FIRST member's slot only.
-              if (!placed) { out.push(activeId); placed = true; }
-            } else {
-              out.push(id);
-            }
+            // Members go; every other id (including this group's own sentinel and
+            // OTHER groups' sentinels) stays exactly where it is.
+            if (!memberSet.has(id)) out.push(id);
           }
           return out;
         };
@@ -3283,7 +3279,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // in-panel — a multi-task cluster has no calendar semantics.
     const busTask = pinnedTaskMap.get(activeId)
       ?? tasksRef.current.find((t) => t.id === activeId);
-    if (busTask && !activeId.startsWith('group:')) {
+    if (busTask && !isGroupSentinel(activeId)) {
       const pe = event.activatorEvent as PointerEvent | undefined;
       dragBus.begin({ kind: 'task', task: busTask }, pe?.clientX !== undefined ? { x: pe.clientX, y: pe.clientY } : undefined);
     }
@@ -3331,7 +3327,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // shift, an empty slot opens — just like a task). Here we only move the sentinel
     // BETWEEN tiers so the slot opens in the hovered tier. Never light a per-card
     // "join group" target for a group drag. Clear any stale single-card highlight.
-    if (activeId.startsWith('group:')) {
+    if (isGroupSentinel(activeId)) {
       if (dropIntentRef.current !== null) { dropIntentRef.current = null; setGroupTargetId((prev) => (prev === null ? prev : null)); }
       if (!dragStartSnapshot.current) return;
       // Target tier from the hovered drop-zone or the tier the over-card lives in now.
@@ -3503,7 +3499,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // tier ref that now holds it (dragOver moved it cross-tier; same-tier position was
     // reflected by the strategy's slot). Expand the sentinel back to the ordered
     // members at its landing spot, retier any member whose tier changed, and persist.
-    if (activeId.startsWith('group:')) {
+    if (isGroupSentinel(activeId)) {
       if (!collapsed || collapsed.members.length === 0) return;
       const orderedMembers = collapsed.members;
       const memberSet = new Set(orderedMembers);
@@ -3529,8 +3525,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
 
       // Expand: swap the sentinel for the ordered member block; drop any stray member.
+      // Other groups' sentinels ride along in `ordered` — taskIdsOnly drops them.
       const newOrder = ordered.flatMap((id) => id === activeId ? orderedMembers : (memberSet.has(id) ? [] : [id]));
-      onReorderPinned?.(newOrder);
+      onReorderPinned?.(taskIdsOnly(newOrder));
       return;
     }
 
@@ -3575,15 +3572,22 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // where it was dropped. Mirrors the Main list's drag-out.
     if (onUngroupTask && !isFromRecent) {
       const activeTask = tasks.find((t) => t.id === activeId);
-      const overTask = tasks.find((t) => t.id === overId);
-      if (activeTask?.group_id && activeTask.group_id !== overTask?.group_id) {
+      // The target's group: a chip sentinel IS its group, so releasing a member on
+      // its OWN header must not read as "left the cluster" and pop it out.
+      const overGid = isGroupSentinel(overId)
+        ? parseGroupSentinelGid(overId)
+        : tasks.find((t) => t.id === overId)?.group_id;
+      if (activeTask?.group_id && activeTask.group_id !== overGid) {
         onUngroupTask(activeId);
         // fall through — the tier-move / reorder logic below repositions it
       }
     }
 
     // Build global pinned order from live tier refs, optionally adjusting the
-    // active item's position within a tier to match the final drop target.
+    // active item's position within a tier to match the final drop target. The tier
+    // arrays carry group chip sentinels (they're real SortableContext items) — they
+    // take part in the splice so a drop ONTO a chip lands above that group, then
+    // taskIdsOnly strips them from what gets persisted.
     const buildOrderFromRefs = (adjustInTier?: FocusTier) => {
       const arrs = new Map<FocusTier, string[]>();
       for (const tier of snap.tiers.keys()) arrs.set(tier, [...finalArr(tier)]);
@@ -3596,7 +3600,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           arr.splice(oi, 0, activeId);
         }
       }
-      return [...arrs.values()].flat();
+      return taskIdsOnly([...arrs.values()].flat());
     };
 
     // When over === active, collision detected the dragged card itself (its center
@@ -3667,7 +3671,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const newOrder = [...snap.tiers.keys()].flatMap((tier) =>
       tier === origTier ? reorderedTier : (snap.tiers.get(tier) ?? [])
     );
-    onReorderPinned?.(newOrder);
+    onReorderPinned?.(taskIdsOnly(newOrder));
   }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, pinnedCardIds, tasks, DROP_ZONE_TIERS]);
 
   // Project chips for ViewDropdown, in the flat config order. Inbox rides along as
@@ -4105,20 +4109,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     [recentStaticId, visibleRecentTasks],
   );
   const visibleFocusIds = useMemo(
-    () => focusIds_arr.filter((id) => id.startsWith('group:') || tierVisibleTaskIds.has(id)),
-    [focusIds_arr, tierVisibleTaskIds],
+    () => pruneOrphanSentinels(focusIds_arr.filter((id) => isGroupSentinel(id) || tierVisibleTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
+    [focusIds_arr, tierVisibleTaskIds, pinnedTaskMap, activeDragPinnedId],
   );
   const visibleSatelliteIds = useMemo(
-    () => satelliteIds_arr.filter((id) => id.startsWith('group:') || tierVisibleTaskIds.has(id)),
-    [satelliteIds_arr, tierVisibleTaskIds],
+    () => pruneOrphanSentinels(satelliteIds_arr.filter((id) => isGroupSentinel(id) || tierVisibleTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
+    [satelliteIds_arr, tierVisibleTaskIds, pinnedTaskMap, activeDragPinnedId],
   );
   const visibleBacklogIds = useMemo(
-    () => backlogIds_arr.filter((id) => id.startsWith('group:') || tierVisibleTaskIds.has(id)),
-    [backlogIds_arr, tierVisibleTaskIds],
+    () => pruneOrphanSentinels(backlogIds_arr.filter((id) => isGroupSentinel(id) || tierVisibleTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
+    [backlogIds_arr, tierVisibleTaskIds, pinnedTaskMap, activeDragPinnedId],
   );
   const visibleWaitIds = useMemo(
-    () => waitIds_arr.filter((id) => id.startsWith('group:') || tierVisibleTaskIds.has(id)),
-    [waitIds_arr, tierVisibleTaskIds],
+    () => pruneOrphanSentinels(waitIds_arr.filter((id) => isGroupSentinel(id) || tierVisibleTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
+    [waitIds_arr, tierVisibleTaskIds, pinnedTaskMap, activeDragPinnedId],
   );
   // Per-custom-tier render model: visible ids + display tasks + group meta in one
   // memo (the built-ins keep their three separate memos; a custom tier bundles them
@@ -4126,12 +4130,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const customTierRender = useMemo(() => {
     const map: Record<string, { visibleIds: string[]; display: Task[]; groupMeta: Map<string, GroupRenderInfo> }> = {};
     for (const def of customTiers ?? []) {
-      const visibleIds = (customIds_arr[def.id] ?? []).filter((id) => id.startsWith('group:') || tierVisibleTaskIds.has(id));
+      const visibleIds = pruneOrphanSentinels(
+        (customIds_arr[def.id] ?? []).filter((id) => isGroupSentinel(id) || tierVisibleTaskIds.has(id)),
+        pinnedTaskMap, activeDragPinnedId,
+      );
       const display = visibleIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task);
       map[def.id] = { visibleIds, display, groupMeta: buildTierGroupMeta(display, taskGroups) };
     }
     return map;
-  }, [customTiers, customIds_arr, tierVisibleTaskIds, pinnedTaskMap, taskGroups]);
+  }, [customTiers, customIds_arr, tierVisibleTaskIds, pinnedTaskMap, taskGroups, activeDragPinnedId]);
   // tier id → its visible render ids, for logic that must work for ANY tier
   // (separator placement) instead of naming the four built-ins.
   const tierIdsByTier = useMemo(() => {
@@ -5421,14 +5428,21 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     };
 
     let prevProject: string | null = null;
-    for (const id of ids) {
-      if (id.startsWith('group:')) {
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      if (isGroupSentinel(id)) {
+        // A sentinel sits immediately before its member run (withGroupSentinels).
+        // At rest the chip is emitted by the LEAD MEMBER branch below instead, so
         // it lands after that row's folder label / separator lines — the placement
         // those two features were written around. Only when the run is gone (this
         // group is collapsed mid-drag) does the sentinel draw the chip itself: it
         // IS the whole cluster then. Same key in both states, so React keeps one
         // chip instance and dnd-kit's active node never remounts mid-drag.
         const gid = parseGroupSentinelGid(id);
+        const next = ids[i + 1];
+        const runFollows = next !== undefined && !isGroupSentinel(next)
+          && pinnedTaskMap.get(next)?.group_id === gid;
+        if (runFollows) continue;
         out.push(
           <GroupChip key={groupSortableId(gid, tier)} groupId={gid} tier={tier}
             label={taskGroups?.[gid] ?? ''} onRename={handleRenameGroup}
