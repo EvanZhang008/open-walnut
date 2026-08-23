@@ -58,8 +58,18 @@ final class TimelineCollectionController: UIViewController {
         collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         collectionView.backgroundColor = .clear
         collectionView.alwaysBounceVertical = true
-        collectionView.keyboardDismissMode = .interactive
+        // .onDrag, not .interactive: with the composer + tab bar behind the
+        // keyboard, "drag all the way down past the keyboard edge" was the
+        // ONLY way out — a plain scroll or a tap on the transcript left the
+        // keyboard up covering the tab bar (dogfood R17). Scroll = dismiss,
+        // like Messages' transcript.
+        collectionView.keyboardDismissMode = .onDrag
         collectionView.contentInsetAdjustmentBehavior = .always
+        // Tap anywhere on the transcript also dismisses. Non-cancelling so
+        // cell taps (links, code copy, bubbles) still land.
+        let tapAway = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard))
+        tapAway.cancelsTouchesInView = false
+        collectionView.addGestureRecognizer(tapAway)
         collectionView.dataSource = self
         collectionView.delegate = self
         collectionView.register(TimelineTextCell.self,
@@ -77,6 +87,10 @@ final class TimelineCollectionController: UIViewController {
             collectionView.refreshControl = control
             refreshControl = control
         }
+    }
+
+    @objc private func dismissKeyboard() {
+        view.window?.endEditing(true)
     }
 
     @objc private func refreshPulled() {

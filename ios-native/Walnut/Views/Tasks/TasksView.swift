@@ -184,7 +184,12 @@ struct TasksView: View {
     }
 
     private var sections: [(project: String, tasks: [WalnutTask])] {
-        Self.sections(from: tasks.tasks(for: activeFilter), query: trimmedQuery)
+        // The field promises "Search tasks & sessions", but the default
+        // (Sessions) filter slices tasks to [] — a task the user KNOWS exists
+        // showed "No local matches" until they discovered the All segment
+        // (dogfood R17). While a query is typed, search open tasks too.
+        let filter = (activeFilter == .sessions && !trimmedQuery.isEmpty) ? TaskFilter.allOpen : activeFilter
+        return Self.sections(from: tasks.tasks(for: filter), query: trimmedQuery)
     }
 
     // MARK: - Calendar surface
@@ -257,6 +262,18 @@ struct TasksView: View {
 
                 if activeFilter == .sessions {
                     sessionSections
+                    // Searching on the Sessions filter: matching TASKS render
+                    // below the session results (the sections slice switches
+                    // to All Open while a query is live — see `sections`).
+                    if !trimmedQuery.isEmpty {
+                        ForEach(sections, id: \.project) { section in
+                            Section(section.project) {
+                                ForEach(section.tasks) { task in
+                                    taskRowButton(task)
+                                }
+                            }
+                        }
+                    }
                 } else if sections.isEmpty {
                     Section {
                         Text(emptyText)
@@ -778,7 +795,11 @@ struct TasksView: View {
             }
         } else if scoped.isEmpty {
             Section {
-                Text(emptyText)
+                // With a live query, matching TASKS may render right below
+                // this session list — "No local matches" would be a lie then.
+                Text(!trimmedQuery.isEmpty && !sections.isEmpty
+                    ? "No session matches — matching tasks below."
+                    : emptyText)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 24)
