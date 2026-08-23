@@ -131,7 +131,7 @@ package.json, src/web/server.ts, src/web/routes/sessions.ts, src/core/keep-awake
 
 - [x] K1. committed f3ac873e via `git commit --only -- <30 explicit paths>` (index held other agents' staged work — desktop/, cli.ts, server.ts, instance-lock — all left intact); husky sensitive scan + staged-blob gate passed; `scripts/check-committed-bundle.sh` green on the new HEAD (the J1 closure requirement)
 - [x] K2. status line added to human-inbox.md; memory updated
-- [ ] K3. DEPLOY BLOCKED 2026-08-22: prod :3456 had an outage (deploy duel + tree boot hang) and now runs a HEAD build under launchd; do NOT run dev-prod until the boot-hang owner (search-v2/instance-lock staged changes) confirms a fix — commit only, deploy later
+- [x] K3. DEPLOYED 2026-08-23 via the clean-HEAD method (dev-prod stays off-limits while the boot-hang WIP sits in the working tree): `git archive HEAD` → /tmp/walnut-prod-inbox, tsup + vite + daemon builds there, isolated-data smoke (bound in 6s, letter roundtrip green), then launchctl remove + submit `com.open-walnut.dev-prod` pointing at the new dist. Prod bound in 5s, stable, first real letter verified in the live reader (screenshots /tmp/human-inbox-prod/). Rollback path: resubmit the job at the repo dist. iOS TestFlight deliberately NOT shipped solo — ios-native still holds other agents' uncommitted work and the build-45 batch ledger owns the next TF cut
 
 ## L. P3: wn env-less fallback — any agent on a daemon host (agent L)
 
