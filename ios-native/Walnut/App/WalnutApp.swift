@@ -11,6 +11,7 @@ struct WalnutApp: App {
     @State private var chat: ChatStore
     @State private var notes: NotesStore
     @State private var tasks: TasksStore
+    @State private var inbox: InboxStore
 
     init() {
         // Arm the activation gate before anything else so every subsystem
@@ -50,13 +51,16 @@ struct WalnutApp: App {
         let chat = ChatStore()
         let notes = NotesStore()
         let tasks = TasksStore()
+        let inbox = InboxStore()
         chat.connection = connection
         notes.connection = connection
         tasks.connection = connection
+        inbox.connection = connection
         _connection = State(initialValue: connection)
         _chat = State(initialValue: chat)
         _notes = State(initialValue: notes)
         _tasks = State(initialValue: tasks)
+        _inbox = State(initialValue: inbox)
     }
 
     var body: some Scene {
@@ -66,6 +70,7 @@ struct WalnutApp: App {
                 .environment(chat)
                 .environment(notes)
                 .environment(tasks)
+                .environment(inbox)
                 .tint(Theme.tint)
         }
     }
@@ -151,15 +156,18 @@ struct MainTabView: View {
     @Environment(ChatStore.self) private var chat
     @Environment(NotesStore.self) private var notes
     @Environment(TasksStore.self) private var tasks
+    @Environment(InboxStore.self) private var inbox
 
-    /// Tab identity, needed only so the voice Quick Action can bring Chat
-    /// forward. A warm launch from the Home screen can land on any tab, and the
-    /// chat composer (the only consumer of the shortcut) has to be ON SCREEN
-    /// before it may open the microphone.
-    enum Tab: Hashable { case chat, notes, tasks, settings }
+    /// Tab identity, needed so out-of-band entry points can bring the right tab
+    /// forward: the voice Quick Action needs Chat (its composer owns the mic),
+    /// and a tapped letter push needs Inbox (its list owns the reader). A warm
+    /// launch can land on any tab, so neither consumer can assume it is on
+    /// screen when the request arrives.
+    enum Tab: Hashable { case chat, inbox, notes, tasks, settings }
 
     @State private var selection: Tab = .chat
     @State private var quickAction = VoiceQuickAction.shared
+    @State private var letterLink = LetterDeepLink.shared
 
     var body: some View {
         TabView(selection: $selection) {
@@ -174,6 +182,14 @@ struct MainTabView: View {
                 .freezeScreen("chat")
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }
                 .tag(Tab.chat)
+            // Human Inbox: letters agents wrote for the human. The badge is the
+            // unread LETTER count only — a letter is never cleared by opening a
+            // panel, so this number means "documents you haven't read".
+            InboxView()
+                .freezeScreen("inbox")
+                .tabItem { Label("Inbox", systemImage: "envelope") }
+                .badge(inbox.unreadCount)
+                .tag(Tab.inbox)
             NotesView()
                 .freezeScreen("notes")
                 .tabItem { Label("Notes", systemImage: "doc.text") }
@@ -192,11 +208,29 @@ struct MainTabView: View {
         // mailbox already armed before this view exists (`onAppear`), a warm one
         // arms it while the app sits on another tab (`onChange`). The composer
         // owns the mic; this only decides which tab is in front.
+        // One appear hook for both mailboxes, so which tab wins is decided here
+        // rather than by SwiftUI's modifier order. Voice goes first: it is a
+        // live microphone with a 2-minute TTL, a letter can wait a tap.
         .onAppear {
-            if quickAction.pending != nil { selection = .chat }
+            if quickAction.pending != nil {
+                selection = .chat
+            } else if letterLink.pending != nil {
+                selection = .inbox
+            }
         }
         .onChange(of: quickAction.pending) { _, request in
             if request != nil { selection = .chat }
+        }
+        // A TAPPED letter push brings the Inbox forward; InboxView consumes the
+        // mailbox and opens that letter. Only the tab switch happens here.
+        .onChange(of: letterLink.pending) { _, request in
+            if request != nil { selection = .inbox }
+        }
+        // Any letter push (a silent one included) refreshes the list, so the tab
+        // badge is right even when the user is reading something else. This does
+        // NOT navigate — a background delivery is not a user instruction.
+        .onChange(of: letterLink.arrivals) { _, _ in
+            inbox.refreshFromPush(letterId: letterLink.pending?.letterId)
         }
         // Hydration is gated on first activation (P0-2). A background/prewarm
         // launch that ran this immediately did the whole cold-start path —
@@ -211,6 +245,7 @@ struct MainTabView: View {
                 await chat.initialize()
                 await notes.initialize()
                 await tasks.initialize()
+                await inbox.initialize()
                 LaunchTrace.mark("store hydration done")
                 // Closes the launch timeline on the tape: process start →
                 // first frame (LaunchTrace) → stores ready. A field report of

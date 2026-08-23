@@ -1,7 +1,10 @@
 import UIKit
 
-/// UIKit delegate whose only job is catching Home-screen Quick Actions and
-/// dropping them into `VoiceQuickAction.shared`. Nothing else lives here.
+/// UIKit delegate for the two out-of-band entry points SwiftUI gives no hook
+/// for: Home-screen Quick Actions (dropped into `VoiceQuickAction.shared`) and
+/// notification routing (`LetterDeepLink`, installed at launch because the
+/// responder for a notification TAP must exist before launching finishes).
+/// Both are mailbox hand-offs; no product logic lives here.
 ///
 /// A shortcut arrives through THREE different callbacks depending on the app's
 /// state, and missing any one of them makes the entry point work "sometimes":
@@ -33,6 +36,10 @@ final class QuickActionDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // Route notification taps into the letter mailbox. Must happen here:
+        // UNUserNotificationCenter drops a cold-launch tap if its delegate isn't
+        // set by the time this method returns.
+        LetterDeepLink.installNotificationRouting()
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains(where: { $0.contains(Self.debugLaunchArgument) }) {
             VoiceQuickAction.shared.handle(shortcutType: VoiceQuickAction.shortcutType, source: "debug-arg")
