@@ -12,6 +12,7 @@ import { getAllRepoMemorySummaries } from '../core/repo-memory.js';
 import { listTasks, getStoreProjects } from '../core/task-manager.js';
 import { buildTaskLedger } from '../core/task-ledger.js';
 import { renderSelfKnowledgeContract } from '../core/self-knowledge-contract.js';
+import { renderSuggestActionContract } from '../core/suggest-action-contract.js';
 import { registry } from '../core/integration-registry.js';
 import { log } from '../logging/index.js';
 
@@ -215,7 +216,9 @@ function enforceContextBudget(text: string, budget: number): string {
 
 /** Stable product contract shared by every Main Agent provider. */
 export function buildWorkModesSection(): string {
-  return renderSelfKnowledgeContract();
+  // Both halves are static, so they belong in the cached prefix, never in the
+  // per-turn dynamic block.
+  return `${renderSelfKnowledgeContract()}\n\n${renderSuggestActionContract()}`;
 }
 
 /** Per-plugin cap for a registerAgentContext snippet. */

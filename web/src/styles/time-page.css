@@ -1,0 +1,215 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   /time page — two clocks per task per day (human lease vs agent turns).
+   ALL rules are scoped under .time-page (imported by TimePage.tsx).
+   Do NOT move these into globals.css.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.time-page {
+  --time-human: var(--accent);
+  --time-agent: #af52de; /* iOS purple — reads as "not me" next to the accent */
+  max-width: 1000px;
+}
+
+.time-degraded {
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  font-size: 13px;
+}
+
+/* ── Stat row ── */
+
+.time-stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.time-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.time-stat-value {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+}
+
+.time-stat-human .time-stat-value { color: var(--time-human); }
+.time-stat-agent .time-stat-value { color: var(--time-agent); }
+
+.time-stat-label {
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.time-stat-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* ── Sections ── */
+
+.time-section { margin-bottom: 28px; }
+
+.time-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.time-section-head h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.time-section-hint,
+.time-empty {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+/* ── Per-task horizontal bars ── */
+
+.time-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.time-bar-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 240px) 1fr auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.time-bar-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.time-bar-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--fg);
+}
+
+/* Two stacked segments in one track: human first, agent continuing it. */
+.time-bar-track {
+  display: flex;
+  height: 18px;
+  background: color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.time-bar-seg { height: 100%; }
+.time-bar-human { background: var(--time-human); }
+.time-bar-agent { background: var(--time-agent); }
+
+.time-bar-values {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.time-bar-human-value { color: var(--time-human); }
+.time-bar-agent-value { color: var(--time-agent); }
+
+/* ── 7-day trend (plain divs, no chart dep) ── */
+
+.time-trend {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  height: 160px;
+  padding: 8px 4px 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.time-trend-day {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  gap: 6px;
+}
+
+.time-trend-stack {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 48px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  border-radius: 4px 4px 0 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--border) 45%, transparent);
+}
+
+.time-trend-seg { width: 100%; }
+.time-trend-human { background: var(--time-human); }
+.time-trend-agent { background: var(--time-agent); }
+
+.time-trend-label {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.time-trend-day.is-today .time-trend-label {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* ── Legend ── */
+
+.time-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.time-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.time-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+.time-swatch-human { background: var(--time-human); }
+.time-swatch-agent { background: var(--time-agent); }
+.time-swatch-focus { background: var(--tier-focus); border-radius: 50%; }

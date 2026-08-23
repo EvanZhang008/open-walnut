@@ -12,6 +12,8 @@ import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields, rend
 import { useSelectionFrozen } from '@/utils/selection-guard';
 import { parseAskQuestionInput } from './QuestionPopover';
 import { SubagentBlock } from './SubagentBlock';
+import { SuggestCard } from './SuggestCard';
+import { splitSuggestSegments, type SuggestSegment } from '@/utils/suggest-parse';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 export interface RouteInfo {
@@ -817,14 +819,57 @@ function SystemMessageGroup({ blocks, sourceLabel, taskLookup, onTaskClick, onSe
   );
 }
 
+/** Whether the split produced anything other than one plain markdown run. */
+function hasCardSegment(segments: SuggestSegment[]): boolean {
+  return segments.some((s) => s.kind === 'card');
+}
+
+/** Ordered markdown runs + `<suggest>` action cards.
+ *  A card is a sibling of the markdown around it, never HTML inside it: only a
+ *  real component can hold per-button running/applied state, and DOMPurify would
+ *  otherwise reduce the card to loose prose (see @/utils/suggest-parse). */
+function SuggestSegments({ segments, onClick }: {
+  segments: SuggestSegment[];
+  onClick: (e: React.MouseEvent<HTMLDivElement>) => void;
+}) {
+  return (
+    <>
+      {segments.map((seg, i) => seg.kind === 'card' ? (
+        <SuggestCard key={`${seg.card.id}-${i}`} card={seg.card} onContentClick={onClick} />
+      ) : (
+        <div
+          key={i}
+          className="markdown-body"
+          onClick={onClick}
+          dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(seg.text) }}
+        />
+      ))}
+    </>
+  );
+}
+
 /** Memoized text block that caches renderMarkdownWithRefs output (incl. clickable file paths).
  *  Content freezes while a selection lives inside the block (streaming deltas
- *  otherwise swap innerHTML and destroy the selection); catches up on clear. */
+ *  otherwise swap innerHTML and destroy the selection); catches up on clear.
+ *  The split runs on the FROZEN value so the freeze covers the whole message. */
 function MemoizedTextBlock({ content, onClick }: { content: string; onClick: (e: React.MouseEvent<HTMLDivElement>) => void }) {
   const { value: displayContent, hostRef } = useSelectionFrozen(content);
-  const html = useMemo(() => renderMarkdownWithRefs(displayContent), [displayContent]);
+  const segments = useMemo(() => splitSuggestSegments(displayContent), [displayContent]);
+  const cards = hasCardSegment(segments);
+  const html = useMemo(() => (cards ? '' : renderMarkdownWithRefs(displayContent)), [cards, displayContent]);
+  // Distinct keys, so the mid-stream flip from "plain html" to "segments"
+  // REMOUNTS the host instead of asking React to turn a
+  // dangerouslySetInnerHTML node into a children node in place.
+  if (cards) {
+    return (
+      <div key="segments" ref={hostRef}>
+        <SuggestSegments segments={segments} onClick={onClick} />
+      </div>
+    );
+  }
   return (
     <div
+      key="html"
       ref={hostRef}
       className="markdown-body"
       onClick={onClick}
@@ -890,6 +935,14 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
     }
     return null;
   }, [content, blocks, source, notification, role]);
+
+  // Cards on the legacy path: only assistant text without blocks can carry one
+  // (user text renders verbatim, and the blocks path goes through
+  // MemoizedTextBlock). null = nothing to consider, keep the plain html render.
+  const legacySegments = useMemo(
+    () => (html !== null && role !== 'user' ? splitSuggestSegments(content) : null),
+    [html, role, content],
+  );
 
   // System-initiated: only cron and heartbeat — fully collapse (automated, noisy).
   // Everything else (triage, session results, normal chat) renders expanded.
@@ -1272,11 +1325,17 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
           (!isCollapsed || !shouldAutoCollapse) && (
             <div className="chat-message-content">
               {routeInfo && <RouteInfoSection info={routeInfo} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />}
-              <div
-                className="markdown-body"
-                onClick={handleContentClick}
-                dangerouslySetInnerHTML={{ __html: html ?? '' }}
-              />
+              {/* History replay arrives without blocks, so cards have to work on
+                  this path too — otherwise a reloaded card degrades to prose. */}
+              {legacySegments && hasCardSegment(legacySegments) ? (
+                <SuggestSegments segments={legacySegments} onClick={handleContentClick} />
+              ) : (
+                <div
+                  className="markdown-body"
+                  onClick={handleContentClick}
+                  dangerouslySetInnerHTML={{ __html: html ?? '' }}
+                />
+              )}
               {isErrorNotification && (() => {
                 const domain = source === 'session-error' ? 'session' as const : undefined;
                 const sug = getErrorSuggestion(content, { domain });

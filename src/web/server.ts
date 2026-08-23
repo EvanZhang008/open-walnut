@@ -38,6 +38,7 @@ import { registerSessionChatRpc } from './routes/session-chat.js'
 import { registerBrowserLogsRpc, browserLogsRouter } from './routes/browser-logs.js'
 import { bugReportRouter } from './routes/bug-report.js'
 import { usageRouter } from './routes/usage.js'
+import { timeRouter, startTimeTracking, stopTimeTracking } from './routes/time.js'
 import { imagesRouter } from './routes/images.js'
 import { localImageRouter } from './routes/local-image.js'
 import { fileContentRouter } from './routes/file-content.js'
@@ -1293,6 +1294,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/chat', chatHistoryRouter)
   app.use('/api/context', contextInspectorRouter)
   app.use('/api/usage', usageRouter)
+  app.use('/api/time', timeRouter)
   app.use('/api/images', imagesRouter)
   app.use('/api/local-image', localImageRouter)
   app.use('/api/file-content', fileContentRouter)
@@ -1607,6 +1609,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
   registerAuthRpc()
   registerBrowserLogsRpc()
+
+  // -- Time tracking: agent-time collector (session:result) + rollup warm-up. --
+  startTimeTracking()
 
   // -- Push notification service --
   initPushNotifications()
@@ -4752,6 +4757,7 @@ export async function stopServer(): Promise<void> {
   bus.unsubscribe('plugin-config-reload')
   bus.unsubscribe('embedding-sync')
   bus.unsubscribe('setup-health')
+  stopTimeTracking()
   import('../agent/overview-maintainer.js')
     .then(({ stopOverviewMaintainer }) => stopOverviewMaintainer())
     .catch(() => {})

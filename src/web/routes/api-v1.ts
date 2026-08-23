@@ -1886,6 +1886,14 @@ import { humanInboxV1Router } from './human-inbox-v1.js'
 
 apiV1Router.use(humanInboxV1Router)
 
+// ─── Action cards (one clicked registry op) ────────────────────────────────
+// Same reason as above: /api/v1/actions/* is one feature, mounted next to the
+// v1 surface it is additive to.
+
+import { actionsV1Router } from './actions-v1.js'
+
+apiV1Router.use(actionsV1Router)
+
 // ─── Router-level error handler: frozen error shape ────────────────────────
 
 apiV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

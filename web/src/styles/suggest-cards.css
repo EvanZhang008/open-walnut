@@ -1,0 +1,133 @@
+/**
+ * <suggest> action cards inside chat messages.
+ *
+ * Loaded by SuggestCard.tsx itself (not globals.css) so the styles ride with the
+ * feature. Colors come from the shared tokens, so light/dark follow the app
+ * theme without a second palette here.
+ */
+
+.sug-card {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+}
+
+.sug-card-settled {
+  border-left-color: var(--border-strong);
+}
+
+.sug-card-dismissed {
+  margin: 10px 0;
+  padding: 6px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.sug-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--fg);
+}
+
+.sug-card-body { font-size: 13px; }
+.sug-card-body > :first-child { margin-top: 0; }
+.sug-card-body > :last-child { margin-bottom: 0; }
+
+.sug-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.sug-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sug-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sug-btn:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-subtle); }
+.sug-btn:disabled { opacity: 0.55; cursor: default; }
+
+.sug-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.sug-btn-danger {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+/* The op name on the card face — the label is prose, this is what runs. */
+.sug-tool {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* Inline confirmation step — the whole block replaces the button it belongs to. */
+.sug-confirm {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--error);
+  border-radius: var(--radius-sm);
+}
+
+.sug-confirm-text {
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+/* The exact call being authorized. Never truncated: it scrolls instead. */
+.sug-confirm-call {
+  margin: 0;
+  max-width: 100%;
+  max-height: 9em;
+  overflow: auto;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sug-confirm-buttons {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.sug-receipt { font-size: 12px; color: var(--fg-muted); }
+.sug-receipt-done { color: var(--success); }
+.sug-receipt-failed,
+.sug-receipt-blocked { color: var(--error); }
+
+.sug-error { font-size: 12px; color: var(--error); }
+.sug-note-ok { font-size: 12px; color: var(--success); }

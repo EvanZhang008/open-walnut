@@ -181,6 +181,10 @@ export function Sidebar({
           <CalendarIcon />
           <span className="sidebar-label">Calendar</span>
         </NavLink>
+        <NavLink to="/time" className={navLinkClass} title={collapsed ? 'Time' : undefined}>
+          <HourglassIcon />
+          <span className="sidebar-label">Time</span>
+        </NavLink>
 
         <NavLink to="/routines" className={navLinkClass} title={collapsed ? 'Routines' : undefined}>
           <ScheduleIcon />
@@ -410,6 +414,17 @@ function RecordingIcon({ recording, loading }: { recording: boolean; loading?: b
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="6" fill={fill} stroke={stroke} />
       <circle cx="12" cy="12" r="10" />
+    </svg>
+  );
+}
+
+function HourglassIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M7 3h10" />
+      <path d="M7 21h10" />
+      <path d="M7 3c0 4 5 5 5 9s-5 5-5 9" />
+      <path d="M17 3c0 4-5 5-5 9s5 5 5 9" />
     </svg>
   );
 }

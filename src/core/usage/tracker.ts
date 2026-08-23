@@ -201,6 +201,26 @@ export class UsageTracker {
   }
 
   /**
+   * Turn wall-time per (date, task), for the time-tracking panel's agent lane.
+   * Read-only and indexed on `date`. NOTE `date` here is UTC (see record()), and
+   * only turns that cost money have a row, so this is a backfill for days the
+   * live collector never observed — not a substitute for it.
+   */
+  getTurnDurationsByDay(startDate: string): { date: string; taskId: string; durationMs: number; turns: number }[] {
+    const db = this.getDb();
+    const rows = db.prepare(`
+      SELECT date, COALESCE(task_id, '') AS taskId,
+             COALESCE(SUM(duration_ms), 0) AS durationMs,
+             COUNT(*) AS turns
+      FROM usage
+      WHERE date >= ? AND duration_ms IS NOT NULL AND source IN ('session', 'chat')
+      GROUP BY date, taskId
+      ORDER BY date ASC
+    `).all(startDate) as { date: string; taskId: string; durationMs: number; turns: number }[];
+    return rows;
+  }
+
+  /**
    * Get daily cost aggregations for the chart. Walnut spend only — Claude Code
    * CLI sessions (source='session') are excluded.
    */

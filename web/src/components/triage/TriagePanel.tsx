@@ -190,7 +190,9 @@ export function TriagePanel({ onClose, taskId, onTaskClick, onSessionClick }: Tr
   const headerTitle = taskId ? 'Triage Sessions' : 'All Triage Sessions';
 
   return (
-    <div className="triage-panel">
+    // data-task-id: the single time-tracking listener attributes interaction
+    // inside this panel to the task being triaged (web/src/utils/time-attribution.ts).
+    <div className="triage-panel" data-task-id={taskId || undefined}>
       <div className="triage-panel-header">
         <div className="triage-panel-title-area">
           <span className="triage-panel-title">{headerTitle}</span>

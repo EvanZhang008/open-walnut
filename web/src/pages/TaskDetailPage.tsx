@@ -301,7 +301,9 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   if (!task) return <div className="empty-state"><p>Task not found</p></div>;
 
   return (
-    <div className="task-detail-v2">
+    // data-task-id: lets the single time-tracking listener attribute interaction
+    // on this page without depending on the URL (web/src/utils/time-attribution.ts).
+    <div className="task-detail-v2" data-task-id={task.id}>
       {/* One-line header: back / title / status / actions — no scrolling to act. */}
       <div className="tdv2-head">
         {/* Back button is meaningless in a pop-out window (no in-app history). */}

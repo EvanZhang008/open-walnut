@@ -10,6 +10,7 @@ import { NotificationProvider } from '@/contexts/notifications';
 import { FocusBarProvider, useFocusBarContext } from '@/contexts/FocusBarContext';
 import { lockScroll, unlockScroll } from '@/hooks/useModalOverlay';
 import { perf } from '@/utils/perf-logger';
+import { installTimeTracker } from '@/utils/time-tracking';
 
 interface AppShellProps {
   children: ReactNode;
@@ -91,6 +92,13 @@ function AppShellInner({ children }: AppShellProps) {
     const timer = setTimeout(() => perf.summary(), 3000);
     return () => clearTimeout(timer);
   }, []);
+
+  // Human time tracking: ONE set of document listeners for the whole app
+  // lifetime (AppShell wraps every route). Installed once — the pathname is
+  // read through a ref so the tracker never captures a stale route.
+  const pathnameRef = useRef(location.pathname);
+  pathnameRef.current = location.pathname;
+  useEffect(() => installTimeTracker({ getPathname: () => pathnameRef.current }), []);
 
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((prev) => !prev);
