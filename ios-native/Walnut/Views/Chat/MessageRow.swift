@@ -624,14 +624,17 @@ extension Text {
     /// URLs become tappable links here too — short plain messages take this
     /// fast path and never reach the block parser's linkifier.
     init(inline: String) {
+        // Entity-ref pills (<task-ref …/>) must render as their label on this
+        // fast path too, or a short "已创建: <task-ref …/>" reply shows raw XML.
+        let source = MarkdownParser.replaceEntityRefs(inline)
         if var attributed = try? AttributedString(
-            markdown: inline,
+            markdown: source,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
             MarkdownParser.linkifyBareURLs(&attributed)
             self.init(attributed)
         } else {
-            self.init(verbatim: inline)
+            self.init(verbatim: source)
         }
     }
 }

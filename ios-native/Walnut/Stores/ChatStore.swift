@@ -908,7 +908,17 @@ final class ChatStore {
         FreezeContext.shared.note("turn-end")
         if !fullText.isEmpty {
             // Provisional bubble; replaced by canonical history right after.
-            let isDuplicate = messages.last.map { $0.role == "assistant" && $0.text == fullText } ?? false
+            // Duplicate check normalizes entity refs on BOTH sides: an SSE ring
+            // replay (reconnect) re-delivers the previous turn's message-end,
+            // and old servers sent its fullText RAW (<task-ref …/>) while the
+            // canonical row is stripped — a byte compare saw "different" and
+            // re-materialized the old reply as a permanent extra bubble
+            // (2026-08-23 dogfood round 13).
+            let normalized = MarkdownParser.replaceEntityRefs(fullText, bold: false)
+            let isDuplicate = messages.last.map {
+                $0.role == "assistant"
+                    && MarkdownParser.replaceEntityRefs($0.text, bold: false) == normalized
+            } ?? false
             if !isDuplicate {
                 messages.append(ChatMessage(
                     id: "turn-\(Date().timeIntervalSince1970)",

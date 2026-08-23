@@ -838,7 +838,11 @@ async function runApiV1LaneTurn(
       { agentId, conversationId },
     )
 
-    emitSse(conversationId, 'message-end', { turnId, fullText: resultText })
+    // Strip entity refs so the frame's text matches GET /messages byte-wise.
+    // A client that dedups its provisional bubble against canonical rows
+    // breaks when the two texts differ (2026-08-23: an SSE ring replay after
+    // reconnect re-materialized the previous reply as a permanent duplicate).
+    emitSse(conversationId, 'message-end', { turnId, fullText: stripEntityRefs(resultText) })
     // source:'session' marks a lane turn, exactly as chat.ts's branch does: the
     // context inspector must not refetch in-process stats the lane never fed.
     broadcastEvent(EventNames.AGENT_RESPONSE, { text: resultText, agentId, conversationId, source: 'session' })
@@ -1033,7 +1037,8 @@ async function runApiV1Turn(
         await chatHistory.addAIMessages(afterUser, { agentId, conversationId })
       }
 
-      emitSse(conversationId, 'message-end', { turnId, fullText: result.response, ...engineMark })
+      // Same stripping as the lane path above — the frame must match canonical.
+      emitSse(conversationId, 'message-end', { turnId, fullText: stripEntityRefs(result.response), ...engineMark })
       broadcastEvent(EventNames.AGENT_RESPONSE, { text: result.response, agentId, conversationId })
       log.web.info('api-v1 turn completed', { conversationId, turnId, agentId })
 

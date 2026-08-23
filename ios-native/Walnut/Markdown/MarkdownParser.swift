@@ -286,8 +286,42 @@ enum MarkdownParser {
     // MARK: - Inline styling
 
     /// Inline markdown → AttributedString; wikilinks display their alias.
+    /// `<task-ref id="…" label="…"/>` / `<session-ref …/>` are the server's
+    /// entity-pill markup (self-knowledge contract). The web console renders
+    /// them as clickable pills; without this rewrite they reach the phone as
+    /// raw XML in every canonical assistant row. Render the label (id as the
+    /// fallback) — linking can come later, honest text now.
+    private static let entityRefRegex = try? NSRegularExpression(
+        pattern: #"<(task|session)-ref\s+([^>]*?)/?>"#
+    )
+    private static let refAttrRegex = try? NSRegularExpression(
+        pattern: #"(id|label)="([^"]*)""#
+    )
+
+    static func replaceEntityRefs(_ text: String, bold: Bool = true) -> String {
+        guard text.contains("-ref"), let regex = entityRefRegex else { return text }
+        let ns = text as NSString
+        var out = text
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let attrs = ns.substring(with: match.range(at: 2))
+            var id = "", label = ""
+            if let attrRegex = refAttrRegex {
+                let attrsNS = attrs as NSString
+                for attrMatch in attrRegex.matches(in: attrs, range: NSRange(location: 0, length: attrsNS.length)) {
+                    let key = attrsNS.substring(with: attrMatch.range(at: 1))
+                    let value = attrsNS.substring(with: attrMatch.range(at: 2))
+                    if key == "id" { id = value } else { label = value }
+                }
+            }
+            let display = label.isEmpty ? id : label
+            guard !display.isEmpty, let range = Range(match.range, in: out) else { continue }
+            out.replaceSubrange(range, with: bold ? "**\(display)**" : display)
+        }
+        return out
+    }
+
     static func inline(_ text: String) -> AttributedString {
-        var source = text
+        var source = replaceEntityRefs(text)
         // [[Note|alias]] → alias, [[path/To/Note]] → Note (display text only)
         source = source.replacingOccurrences(
             of: #"\[\[([^\]|]+)\|([^\]]+)\]\]"#, with: "$2", options: .regularExpression
