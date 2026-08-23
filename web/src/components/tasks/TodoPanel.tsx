@@ -112,6 +112,7 @@ import {
   groupSortableId, parseGroupSentinelGid, isGroupSentinel, taskIdsOnly, withGroupSentinels,
   pruneOrphanSentinels,
 } from './tier-group-sentinels';
+import { inferTierDropProject, resolveMoveMigration, sourceDisplayName } from './task-move-project';
 import { TodoSectionTabs, TODO_SECTIONS, type TodoSection } from './TodoSectionTabs';
 import { isBuiltinTier, type FocusTier, type CustomTierDef } from '@/api/focus';
 import { useSessionStatusEpoch, useTaskCircle } from '@/hooks/useSessionStatus';
@@ -3218,6 +3219,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     [onSetPhase, onComplete],
   );
 
+  // Ref indirection ONLY to break a declaration-order cycle: requestMoveTask is
+  // defined ~1200 lines below (it needs ensureManualSort), and naming it in this
+  // handler's dep array would read a const in its temporal dead zone.
+  const requestMoveTaskRef = useRef<typeof requestMoveTask | null>(null);
+
   const handlePinnedDragStart = useCallback((event: DragStartEvent) => {
     // Freeze the CLUSTERED order (what's on screen) — not the raw pin order — so the
     // frozen refs match the rendered list and grouped members sit contiguously (a
@@ -3495,11 +3501,82 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const globalOrder = (arrOf: (t: FocusTier) => string[]): string[] =>
       [...snap.tiers.keys()].flatMap((t) => arrOf(t));
 
+    // In a project-clustered tier view, a drop that lands inside ANOTHER project's
+    // run means "move to that project" — without this the reorder persists but the
+    // project cluster pass snaps the card straight back (the reported no-op).
+    // When the drop displaced a real card (`over` is a task card / group chip),
+    // THAT row's project is the answer — the dragged card took its slot, so it is
+    // in that run even when the slot sits at a run boundary where the neighbour
+    // walk in inferTierDropProject would read the previous folder instead. The
+    // walk stays as the fallback for self-drops (over === active after a dragOver
+    // relocation), where the only evidence is the landing position itself.
+    // allowInference=false for Recent-origin drops: dragOver APPENDS a Recent
+    // card at the tier's end regardless of where the pointer hovers, so the
+    // landing slot is an artifact — only an explicit over-card carries intent.
+    const maybeMoveProject = (tier: FocusTier, tierIds: string[], allowInference = true) => {
+      if (tierViewMode(tier) !== 'project') return;
+      // A tier drop-zone names a TIER, not a slot inside it — dragOver merely
+      // appended the card to the tier's end, so the neighbour walk below would
+      // read "last run in the tier" out of an artifact and silently reproject a
+      // pure tier-assignment gesture. Tier moves never change projects.
+      if (DROP_ZONE_TIERS[overId]) return;
+      const activeTask = tasks.find((t) => t.id === activeId);
+      if (!activeTask) return;
+      const projectOf = (id: string) => {
+        const t = pinnedTaskMap.get(id) ?? tasks.find((x) => x.id === id);
+        return t ? (t.project || '') : undefined;
+      };
+      // Only when ≥2 distinct project runs are visible (mirrors renderTierItems'
+      // showFolders gate) — with a single invisible folder the gesture is plain
+      // reorder. Like showFolders, count PINNED cards only: a Recent-origin card
+      // mid-drop isn't pinned yet and must not make a folderless tier pass the
+      // gate by bringing its own project along.
+      const distinct = new Set<string>();
+      for (const id of tierIds) {
+        const t = pinnedTaskMap.get(id);
+        if (t) distinct.add(t.project || '');
+      }
+      if (distinct.size < 2) return;
+      let landed: string | null = null;
+      if (overId !== activeId) {
+        if (isGroupSentinel(overId)) {
+          // A chip stands in for its whole group. Resolve the run from the id
+          // right AFTER the sentinel in this tier (its first member here) — a
+          // global tasks.find could hit a member parked in another tier or a
+          // mixed-project group's far member.
+          const si = tierIds.indexOf(overId);
+          if (si !== -1) {
+            for (let i = si + 1; i < tierIds.length; i++) {
+              if (tierIds[i] === activeId || isGroupSentinel(tierIds[i])) continue;
+              landed = projectOf(tierIds[i]) ?? null;
+              break;
+            }
+          }
+        } else {
+          landed = projectOf(overId) ?? null;
+        }
+      }
+      if (landed === null && allowInference) landed = inferTierDropProject(tierIds, activeId, projectOf);
+      if (landed === null || landed === (activeTask.project || '')) return;
+      // Fire-and-forget by design: the confirm (if any) resolves after this
+      // handler returns, and a CANCEL leaves the already-persisted pin reorder
+      // in place — the project cluster pass snaps the card back visually, at
+      // the cost of a silently changed raw pin index (visible only if the tier
+      // later switches to custom view). Accepted residue.
+      requestMoveTaskRef.current?.(activeId, landed).catch((err) => {
+        onOperationError?.(err instanceof Error ? err.message : 'Move failed');
+      });
+    };
+
     // ── Whole-group drag (chip grip) ── The active id is the `group:<gid>:<tier>`
     // sentinel that stood in for the collapsed cluster. Its FINAL tier is simply the
     // tier ref that now holds it (dragOver moved it cross-tier; same-tier position was
     // reflected by the strategy's slot). Expand the sentinel back to the ordered
     // members at its landing spot, retier any member whose tier changed, and persist.
+    // DELIBERATE scope cut: dragging a whole group into another project's folder
+    // does NOT reproject its members (this returns before maybeMoveProject). A
+    // group can span projects, so "move them all" needs its own batch confirm —
+    // use multi-select → Move to project for that today.
     if (isGroupSentinel(activeId)) {
       if (!collapsed || collapsed.members.length === 0) return;
       const orderedMembers = collapsed.members;
@@ -3614,12 +3691,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           const order = buildOrderFromRefs();
           onPinTask?.(activeId);
           setTimeout(() => onSetTier?.(activeId, currentTier, order), 100);
+          maybeMoveProject(currentTier, finalArr(currentTier), /* allowInference */ false);
         }
       } else {
         const origTier: FocusTier = snapTierOf(activeId) ?? 'satellite';
         if (currentTier && origTier !== currentTier) {
           onSetTier?.(activeId, currentTier, buildOrderFromRefs());
         }
+        // Independent of a tier change: a self-drop inside the SAME tier still
+        // reports its landing slot, which is where a cross-folder move comes from.
+        if (currentTier) maybeMoveProject(currentTier, finalArr(currentTier));
       }
       return;
     }
@@ -3634,6 +3715,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const order = buildOrderFromRefs();
       onPinTask?.(activeId);
       setTimeout(() => onSetTier?.(activeId, targetTier, order), 100);
+      maybeMoveProject(targetTier, finalArr(targetTier), /* allowInference */ false);
       return;
     }
 
@@ -3649,6 +3731,18 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
     if (origTier !== targetTier) {
       onSetTier?.(activeId, targetTier, buildOrderFromRefs(targetTier));
+      // Replicate the tier array buildOrderFromRefs persists (same ai/oi splice) so
+      // the landing slot can be read. A tiny duplication on purpose: buildOrderFromRefs
+      // flattens every tier and strips sentinels, and inference needs one tier's ids
+      // WITH its sentinels.
+      const arr = [...finalArr(targetTier)];
+      const ai = arr.indexOf(activeId);
+      const oi = arr.indexOf(overId);
+      if (ai !== -1 && oi !== -1 && ai !== oi) {
+        arr.splice(ai, 1);
+        arr.splice(oi, 0, activeId);
+      }
+      maybeMoveProject(targetTier, arr);
       return;
     }
 
@@ -3672,8 +3766,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const newOrder = [...snap.tiers.keys()].flatMap((tier) =>
       tier === origTier ? reorderedTier : (snap.tiers.get(tier) ?? [])
     );
+    maybeMoveProject(origTier, reorderedTier);
     onReorderPinned?.(taskIdsOnly(newOrder));
-  }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, pinnedCardIds, tasks, DROP_ZONE_TIERS]);
+  }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError]);
 
   // Project chips for ViewDropdown, in the flat config order. Inbox rides along as
   // INBOX_TAB (a sentinel chip) whenever any task has no project — '' is the All chip.
@@ -4668,6 +4763,49 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
   }, [sortBy, sortOrder, onBakeOrder, showSortToast]);
 
+  // Cross-project move with a cross-provider gate: when the destination project is
+  // claimed by a DIFFERENT provider, the backend migrates the task (old remote twin
+  // archived as "[Moved]" + completed) — that is destructive enough to confirm first.
+  // Same-provider (and local→provider folder-only) moves go straight through.
+  const requestMoveTask = useCallback(async (
+    taskId: string,
+    project: string,
+    opts?: { insertNearTaskId?: string; ensureSort?: boolean },
+  ): Promise<boolean> => {
+    if (!onMoveTask) return false;
+    const task = tasks.find((t) => t.id === taskId);
+    const mig = resolveMoveMigration(task?.source, project, projectRegistry.sourceByName);
+    // Fail CLOSED while the registry hasn't loaded: with an empty sourceByName
+    // every target reads "unknown → no migration", which would silently skip the
+    // destructive confirm for provider tasks. Local tasks never migrate, so only
+    // provider-sourced ones need the conservative ask.
+    const claimUnknown = !projectRegistry.loaded && mig.from !== 'local';
+    if (mig.migrates || claimUnknown) {
+      const fromName = sourceDisplayName(mig.from);
+      const ok = await confirm({
+        title: 'Move across providers?',
+        message: mig.migrates
+          ? `“${task?.title ?? taskId}” moves from ${fromName} to ${sourceDisplayName(mig.to)}. The original ${fromName} task will be archived (renamed “[Moved]” and marked complete). Same-provider subtasks move along with it.`
+          : `“${task?.title ?? taskId}” is a ${fromName} task and “${project || 'Inbox'}” may belong to a different provider (the project list hasn't loaded). If it does, the original ${fromName} task will be archived (renamed “[Moved]” and marked complete).`,
+        confirmLabel: 'Move',
+      });
+      if (!ok) return false;
+    }
+    // Only a CONFIRMED move switches the list to manual sort — a cancelled one must
+    // leave the user's sort mode alone.
+    if (opts?.ensureSort) ensureManualSort();
+    onMoveTask(taskId, project, opts?.insertNearTaskId);
+    // A migration rewrites the destination project's claim server-side without a
+    // project:created event, so the registry snapshot goes stale — refresh it or
+    // the NEXT move's confirm decision can be wrong in either direction.
+    if (mig.migrates) projectRegistry.refresh();
+    return true;
+  }, [onMoveTask, tasks, projectRegistry.sourceByName, projectRegistry.loaded, projectRegistry.refresh, confirm, ensureManualSort]);
+  // Published for handlePinnedDragEnd, which is declared above this point. Layout
+  // effect, not a render-phase write: this component uses startTransition, and a
+  // discarded concurrent render must not leave its abandoned closure in the ref.
+  useLayoutEffect(() => { requestMoveTaskRef.current = requestMoveTask; }, [requestMoveTask]);
+
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     // Cross-panel drop first (calendar side panel via the drag bus). When a bus
     // target consumed the drop, every in-panel semantic (group/nest/reorder)
@@ -4899,12 +5037,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
       onReorder(project, result);
     } else {
-      // Cross-project move
-      if (!onMoveTask) return;
-      ensureManualSort();
-      onMoveTask(activeId, targetProject, insertNearTaskId);
+      // Cross-project move (may pop a cross-provider confirm before it lands).
+      requestMoveTask(activeId, targetProject, { insertNearTaskId, ensureSort: true }).catch((err) => {
+        onOperationError?.(err instanceof Error ? err.message : 'Move failed');
+      });
     }
-  }, [onReorder, onMoveTask, onReparentTask, ordering, taskGroupMap, grouped, fullGrouped, sorted, childParentMap, trueChildCountMap, ensureManualSort, nestTargetId, groupTargetId, clearDropIntent, tasks, onAddToGroup, onGroupTasks]);
+  }, [onReorder, onReparentTask, ordering, taskGroupMap, grouped, fullGrouped, sorted, childParentMap, trueChildCountMap, ensureManualSort, requestMoveTask, nestTargetId, groupTargetId, clearDropIntent, tasks, onAddToGroup, onGroupTasks, onOperationError]);
 
   // Kebab "Move left" — promote subtask to top-level via onReparentTask(id, null).
   // Also primes scroll restoration so the task stays visible after refetch.
@@ -4918,8 +5056,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Kebab "Project" select — same mutation as dragging the task onto another
   // project group, minus the drag (no insertNearTaskId: append to the target).
   const handleMoveToProject = useCallback((taskId: string, project: string) => {
-    onMoveTask?.(taskId, project);
-  }, [onMoveTask]);
+    requestMoveTask(taskId, project).catch((err) => {
+      onOperationError?.(err instanceof Error ? err.message : 'Move failed');
+    });
+  }, [requestMoveTask, onOperationError]);
 
   // Group chip click → rename the group via the app's own prompt dialog (never the
   // browser-native prompt). Cancel/empty/unchanged keeps the name.
@@ -5172,12 +5312,27 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     exitSelectMode();
   }, [selectionInfo, pinnedTaskIds, onPinTask, onSetTier, exitSelectMode]);
 
-  const batchMoveToProject = useCallback((project: string) => {
-    selectionInfo.tasks.forEach((t) => {
-      if ((t.project || '') !== project) onMoveTask?.(t.id, project);
-    });
+  const batchMoveToProject = useCallback(async (project: string) => {
+    if (!onMoveTask) return; // never confirm a destructive move we then can't perform
+    const moving = selectionInfo.tasks.filter((t) => (t.project || '') !== project);
+    // ONE confirm for the whole batch when any member crosses a provider boundary —
+    // per-task requestMoveTask would stack a dialog per task. Same fail-closed rule
+    // as requestMoveTask: an unloaded registry must not read as "nothing migrates".
+    const migrating = moving.filter(
+      (t) => resolveMoveMigration(t.source, project, projectRegistry.sourceByName).migrates
+        || (!projectRegistry.loaded && (t.source ?? 'local') !== 'local'),
+    ).length;
+    if (migrating > 0) {
+      const ok = await confirm({
+        title: 'Move across providers?',
+        message: `${migrating} of the ${moving.length} tasks being moved cross a provider boundary. Their original tasks will be archived (renamed “[Moved]” and marked complete).`,
+        confirmLabel: 'Move',
+      });
+      if (!ok) return; // keep the selection so the user can adjust it
+    }
+    moving.forEach((t) => onMoveTask(t.id, project));
     exitSelectMode();
-  }, [selectionInfo, onMoveTask, exitSelectMode]);
+  }, [selectionInfo, projectRegistry.sourceByName, projectRegistry.loaded, confirm, onMoveTask, exitSelectMode]);
 
   const handlePinnedCardClick = handleTaskClick;
 
