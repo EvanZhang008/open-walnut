@@ -41,7 +41,7 @@ import { modelSupportsEffort, SESSION_EFFORTS, SESSION_MODE_LABELS } from '@open
 import { TaskQuickActions } from './TaskQuickActions';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
-import { useSessionUsage, formatModelName, getContextWindowSize } from '@/hooks/useSessionUsage';
+import { useSessionUsage, formatModelName, getContextWindowSize, contextBadgeTitle } from '@/hooks/useSessionUsage';
 import { useHostModelCatalog } from '@/hooks/useModelCatalog';
 import { useHeightVar } from '@/hooks/useHeightVar';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
@@ -293,12 +293,19 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     : '';
   const displayModel = formatModelName(rawModel);
   let contextPercent = liveUsage.contextPercent;
+  // Fallback for a page loaded with no live usage event yet (server restart, or
+  // a session idle since before this mount): derive it from the last assistant
+  // message's tokens. Both halves come from the SERVER when available — the
+  // model string can't reveal a custom proxy model's window, and guessing 200K
+  // for one was 5x wrong (2026-08-23).
+  let badgeUsage = liveUsage;
   if (contextPercent == null && lastAssistant?.usage) {
     const u = lastAssistant.usage as Record<string, number>;
     const totalInput = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
-    if (totalInput > 0) {
-      const ctxSize = getContextWindowSize(rawModel, totalInput);
+    const ctxSize = session?.contextWindow ?? getContextWindowSize(rawModel, totalInput);
+    if (totalInput > 0 && ctxSize != null) {
       contextPercent = Math.round(totalInput / ctxSize * 100);
+      badgeUsage = { ...liveUsage, inputTokens: totalInput, contextWindow: ctxSize };
     }
   }
 
@@ -917,7 +924,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               : contextPercent > 50 ? 'var(--warning, #ff9500)'
               : 'var(--fg-muted)',
           }}
-          title={`Context: ${contextPercent}%${liveUsage.inputTokens ? ` (${Math.round(liveUsage.inputTokens / 1000)}K)` : ''}`}
+          title={contextBadgeTitle(badgeUsage, contextPercent)}
         >
           {' '}{contextPercent}%
         </span>

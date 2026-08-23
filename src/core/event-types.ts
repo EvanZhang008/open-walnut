@@ -491,10 +491,17 @@ export interface SessionSideQuestionErrorEvent {
 export interface SessionUsageUpdateEvent {
   sessionId: string;
   model?: string;
-  /** Context window usage percentage (0–100+, may exceed 100 near compaction). */
+  /** Context window usage percentage (0–100+, may exceed 100 near compaction).
+   *  ABSENT when no trustworthy denominator is known yet (custom proxy model
+   *  before the CLI's own window reads land) — the UI then shows tokens only,
+   *  never a guessed percentage. */
   contextPercent?: number;
   /** Total input tokens for the latest API call (incl. cache). */
   inputTokens?: number;
+  /** The denominator behind `contextPercent`: the CLI's EFFECTIVE window, i.e.
+   *  min(model window, CLAUDE_CODE_AUTO_COMPACT_WINDOW). Carried so the UI can
+   *  show "99K / 400K" instead of a bare percentage whose basis is invisible. */
+  contextWindow?: number;
 }
 
 /** Applied-settings read-back push: emitted whenever refreshAppliedSettings()

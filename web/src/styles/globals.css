@@ -16884,6 +16884,20 @@ a.task-kebab-info:hover {
   white-space: nowrap;
 }
 
+/* Origin note under the context total (e.g. "window capped by
+   CLAUDE_CODE_AUTO_COMPACT_WINDOW") — quieter than a data row, and its value
+   is prose, so it may wrap. */
+.model-picker-details-note {
+  color: var(--fg-muted, #888);
+  font-style: italic;
+  margin-bottom: 3px;
+}
+
+.model-picker-details-note > span:last-child {
+  white-space: normal;
+  text-align: right;
+}
+
 .model-picker-details-version {
   margin-top: 8px;
   border-top: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.15));

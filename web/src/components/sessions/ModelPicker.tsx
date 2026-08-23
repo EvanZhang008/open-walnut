@@ -694,6 +694,21 @@ export function ModelPicker({
                     Context — {fmtTokens(details.contextUsage.totalTokens)} / {fmtTokens(details.contextUsage.maxTokens)}
                     {details.contextUsage.percentage != null ? ` (${details.contextUsage.percentage}%)` : ''}
                   </div>
+                  {/* Name the denominator's origin. A window the user's own env
+                      capped (e.g. CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000 on a 1M
+                      model) otherwise reads as a Walnut miscount — that confusion
+                      is exactly what the 2026-08-23 report was about. */}
+                  {details.contextUsage.autocompactSource
+                    && details.contextUsage.autocompactSource !== 'model-default' && (
+                    <div className="model-picker-details-row model-picker-details-note">
+                      <span>window</span>
+                      <span>
+                        {details.contextUsage.autocompactSource === 'env'
+                          ? 'capped by CLAUDE_CODE_AUTO_COMPACT_WINDOW'
+                          : `capped by auto-compact setting (${details.contextUsage.autocompactSource})`}
+                      </span>
+                    </div>
+                  )}
                   {details.contextUsage.categories
                     .filter((c) => c.tokens > 0)
                     .map((c) => (

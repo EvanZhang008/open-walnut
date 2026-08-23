@@ -68,7 +68,11 @@ import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from '../core/
 import type { WorkflowPhaseInfo, WorkflowAgentInfo } from '../core/event-types.js'
 import { recordTurn } from '../core/observability/recorder.js'
 import type { SessionServerClient } from './session-server-client.js'
-import { sanitizeInitModel, CONTEXT_WINDOW_DEFAULT } from '../agent/providers/defaults.js'
+import { sanitizeInitModel } from '../agent/providers/defaults.js'
+import {
+  resolveContextWindow, shortModelId,
+  rememberAutoCompactWindow, recallAutoCompactWindow,
+} from './context-window.js'
 import {
   openTurn,
   settleTurn,
@@ -219,6 +223,10 @@ export interface CliAppliedSettings {
 
 export interface CliEffectiveSettings {
   effortLevel?: string | null
+  /** The CLI's resolved environment. Read for CLAUDE_CODE_AUTO_COMPACT_WINDOW —
+   *  the clamp that decides the real context window (and therefore when the
+   *  session compacts), which no other read exposes cheaply. */
+  env?: Record<string, string>
 }
 
 export interface CliSettingsSnapshot {
@@ -229,14 +237,21 @@ export interface CliSettingsSnapshot {
 /** Normalized get_context_usage payload — the CLI's own per-category context
  *  breakdown (same source as the interactive /context command). NB maxTokens
  *  semantics changed across CLI versions: newer CLIs (≥2.1.2xx) report the
- *  AUTO-COMPACT window (min(model window, CLAUDE_CODE_AUTO_COMPACT_WINDOW)),
- *  NOT the model's raw window — see contextWindowForPercent for how the
- *  context% denominator handles that. */
+ *  EFFECTIVE window (min(model window, CLAUDE_CODE_AUTO_COMPACT_WINDOW)) and
+ *  divide their own percentage by it — which is why Walnut's badge does too
+ *  (see contextWindowForPercent). */
 export interface CliContextUsage {
   categories: Array<{ name: string; tokens: number }>
   totalTokens: number | null
   maxTokens: number | null
   percentage: number | null
+  /** The model's own window before the auto-compact clamp (2.1.2xx+). Reported
+   *  so the UI can explain a surprising denominator instead of just showing it:
+   *  "400K, capped from the model's 1M". */
+  rawMaxTokens?: number | null
+  /** Where the window came from: 'env' | 'settings' | 'clientdata' |
+   *  'model-default' — i.e. whether the user's own clamp is what's in force. */
+  autocompactSource?: string | null
 }
 
 /** control_response: CLI's reply to a Walnut-initiated control_request (e.g.
@@ -686,19 +701,24 @@ export class ClaudeCodeSession {
    *  counting and the default session lists skip it. */
   private _lane: string | undefined
   /** CLI-reported window (get_context_usage.maxTokens), cached from the
-   *  session-start/model-change read. ⚠️ On newer CLIs (≥2.1.2xx) this is the
-   *  AUTO-COMPACT window — min(model window, CLAUDE_CODE_AUTO_COMPACT_WINDOW) —
-   *  NOT the raw model window, so it must never LOWER the context% denominator
-   *  (see contextWindowForPercent). It still raises the string guess for
-   *  >200K models the model string can't reveal (custom/proxy windows). */
+   *  session-start/model-change read. On CLIs ≥2.1.2xx this is the EFFECTIVE
+   *  window — min(model window, CLAUDE_CODE_AUTO_COMPACT_WINDOW) — which is
+   *  exactly what `/context` divides by and what decides when the session
+   *  compacts, so it is the PREFERRED context% denominator (see
+   *  contextWindowForPercent). Cleared on model change: the old model's window
+   *  must not survive as the new model's denominator. */
   private _cliContextWindow: number | undefined
   /** The CLI's RAW model window, read from result.modelUsage[model].contextWindow
-   *  (= the CLI's getContextWindowForModel — the exact denominator the official
-   *  statusline uses; env auto-compact clamps do NOT apply to it). Arrives free
-   *  on every turn-end result, no control_request round-trip. Preferred over
-   *  every guess in contextWindowForPercent; cleared on model change (the old
-   *  model's window must not leak into the new model's percent). */
+   *  (= the CLI's getContextWindowForModel; env auto-compact clamps do NOT apply
+   *  to it). Arrives free on every turn-end result, no control_request
+   *  round-trip. Used ∧ the clamp while _cliContextWindow is unknown; cleared on
+   *  model change. */
   private _cliRawContextWindow: number | undefined
+  /** CLAUDE_CODE_AUTO_COMPACT_WINDOW as the CLI resolved it (get_settings
+   *  effective.env). Process-wide env, so unlike the two windows above it
+   *  SURVIVES a model switch — which is what keeps the denominator stable
+   *  across the seconds before the new model's CLI reads land. */
+  private _autoCompactWindow: number | undefined
   /** One-shot guard for the attach-path window probe (see refreshAppliedSettings):
    *  an old CLI that can't answer get_context_usage must not be re-probed per turn. */
   private _cliContextWindowProbed = false
@@ -3549,12 +3569,15 @@ export class ClaudeCodeSession {
             ? sanitizeInitModel(sys.model)
             : undefined
           if (rawModel) {
-            // Model changed across a resume (e.g. /model) — the old model's raw
-            // window must not survive as the new model's context% denominator.
-            if (this._initModel && this._initModel !== rawModel) this._cliRawContextWindow = undefined
+            // Model changed across a resume (e.g. /model) — neither of the old
+            // model's windows may survive as the new model's context% denominator.
+            if (this._initModel && this._initModel !== rawModel) {
+              this._cliRawContextWindow = undefined
+              this._cliContextWindow = undefined
+            }
             this._initModel = rawModel
             // Extract short model ID for display (e.g. "claude-opus-4-6" or "claude-opus-4-6[1m]")
-            const shortModel = rawModel.replace(/^.*\./, '').replace(/[-_]v\d+(\[1m\])?$/, '$1') || rawModel
+            const shortModel = shortModelId(rawModel)
             this._model = shortModel
           } else if (typeof sys.model === 'string' && sys.model) {
             // sanitizeInitModel rejected the string — log so we can diagnose.
@@ -3565,8 +3588,7 @@ export class ClaudeCodeSession {
             // eslint-disable-next-line no-control-regex
             const fallback = sys.model.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
             this._initModel = fallback
-            const shortModel = fallback.replace(/^.*\./, '').replace(/[-_]v\d+(\[1m\])?$/, '$1') || fallback
-            this._model = shortModel
+            this._model = shortModelId(fallback)
           }
 
           // Session-start settings read-back (once per live process). Fire slightly
@@ -3750,7 +3772,9 @@ export class ClaudeCodeSession {
               bus.emit(EventNames.SESSION_USAGE_UPDATE, {
                 sessionId: this.claudeSessionId,
                 model: this._model,
-                contextPercent: Math.round(cu.totalTokens / windowSize * 100),
+                ...(windowSize != null
+                  ? { contextPercent: Math.round(cu.totalTokens / windowSize * 100), contextWindow: windowSize }
+                  : {}),
                 inputTokens: cu.totalTokens,
               }, ['main-ai'], { source: 'session-runner' })
               log.session.info('post-compact context usage re-seeded from CLI', {
@@ -4519,7 +4543,11 @@ export class ClaudeCodeSession {
               + (usage.cache_creation_input_tokens ?? 0)
               + (usage.cache_read_input_tokens ?? 0)
             const contextWindowSize = this.contextWindowForPercent(totalInput)
-            const contextPercent = Math.round(totalInput / contextWindowSize * 100)
+            // No trustworthy window yet ⇒ no percent. The UI shows the token
+            // count alone rather than a number that will move 5x in a second.
+            const contextPercent = contextWindowSize != null
+              ? Math.round(totalInput / contextWindowSize * 100)
+              : undefined
             // Use assistant message model only as fallback when init event didn't
             // provide one. Init model is the source of truth — it reflects the
             // configured --model flag. Claude Code routes Agent subagent calls to
@@ -4533,8 +4561,9 @@ export class ClaudeCodeSession {
             bus.emit(EventNames.SESSION_USAGE_UPDATE, {
               sessionId: this.claudeSessionId,
               model: this._model,
-              contextPercent,
+              ...(contextPercent != null ? { contextPercent } : {}),
               inputTokens: totalInput,
+              ...(contextWindowSize != null ? { contextWindow: contextWindowSize } : {}),
             }, ['main-ai'], { source: 'session-runner' })
           }
         }
@@ -6132,6 +6161,8 @@ export class ClaudeCodeSession {
       totalTokens: typeof payload.totalTokens === 'number' ? payload.totalTokens : null,
       maxTokens: typeof payload.maxTokens === 'number' ? payload.maxTokens : null,
       percentage: typeof payload.percentage === 'number' ? payload.percentage : null,
+      rawMaxTokens: typeof payload.rawMaxTokens === 'number' ? payload.rawMaxTokens : null,
+      autocompactSource: typeof payload.autocompactSource === 'string' ? payload.autocompactSource : null,
     }
   }
 
@@ -6157,37 +6188,34 @@ export class ClaudeCodeSession {
   }
 
   /**
-   * Context% denominator — matches the official CLI statusline's
-   * `context_window.used_percentage`, which divides by the model's RAW window
-   * (calculateContextPercentages ÷ getContextWindowForModel), NOT the
-   * auto-compact window. get_context_usage.maxTokens on newer CLIs (≥2.1.2xx)
-   * reports min(model window, CLAUDE_CODE_AUTO_COMPACT_WINDOW) — e.g. 400K on
-   * a 1M fable session with the user's global AUTO_COMPACT_WINDOW=400000 —
-   * so using it verbatim showed 200K/400K = 50% where the official UI says
-   * 20% (2026-08-11 report). Resolution order:
-   *   1) _cliRawContextWindow — the CLI's own getContextWindowForModel answer
-   *      harvested from result.modelUsage (see harvestRawContextWindow).
-   *      Verbatim: this is EXACTLY the official statusline denominator, no
-   *      string-parsing involved.
-   *   2) string guess from the model markers: [1m] → 1M, else 200K default —
-   *      only until the first turn-end result arrives. (No natively-1M
-   *      special case — the CLI's own registry gives plain opus-5 a 200K row
-   *      and a separate "[1m]" row; trust the markers.)
-   *      _cliContextWindow can only RAISE that guess — it's ≤ the raw window
-   *      by construction (min-clamp), so taking the max keeps its one real
-   *      contribution (a >200K window the string can't reveal, e.g. a custom
-   *      proxy model) while ignoring the auto-compact clamp.
-   *   3) observed tokens can't exceed the window — a totalInput above the
-   *      result forces 1M (resume paths that lose the [1m] suffix).
+   * Context% denominator = the CLI's EFFECTIVE window, i.e. min(raw model
+   * window, CLAUDE_CODE_AUTO_COMPACT_WINDOW). Rules + the incident that set
+   * them live in `context-window.ts`; the short version:
+   *
+   *  - the effective window is what `/context` divides by and what decides when
+   *    the session compacts, so the badge and the picker's context panel can
+   *    never contradict each other (they did: 9% vs 25% on 2026-08-23);
+   *  - null means "no honest denominator yet" — the caller emits the token
+   *    count with NO percent instead of a guess. A custom proxy model has no
+   *    `[1m]` marker, so the old Anthropic-shaped 200K guess was 5x off and
+   *    made the badge swing 70% → 25% → 10% as CLI reads landed.
+   *
+   * NB this reverses the 2026-08-11 "match the statusline's raw window" choice.
+   * Upstream itself is inconsistent (2.1.240 statusline divides by the raw
+   * window, /context by the clamped one); Walnut shows both numbers in one
+   * popover, so it follows the one that predicts compaction.
    */
-  private contextWindowForPercent(totalInput?: number): number {
-    let window = this._cliRawContextWindow
-    if (window == null) {
-      const is1M = this._initModel?.includes('[1m]') ?? false
-      window = Math.max(is1M ? 1_000_000 : CONTEXT_WINDOW_DEFAULT, this._cliContextWindow ?? 0)
-    }
-    if (totalInput != null && totalInput > window) window = 1_000_000
-    return window
+  private contextWindowForPercent(totalInput?: number): number | null {
+    return resolveContextWindow({
+      cliEffectiveWindow: this._cliContextWindow,
+      cliRawWindow: this._cliRawContextWindow,
+      // Own read first, then whatever any session on this host already learned —
+      // the clamp is a host property, and waiting for THIS session's read is what
+      // let neighbouring sessions disagree by 5x after a server restart.
+      autoCompactWindow: this._autoCompactWindow ?? recallAutoCompactWindow(this._host),
+      model: this._initModel ?? this._model,
+      observedTokens: totalInput,
+    })?.window ?? null
   }
 
   /**
@@ -6205,7 +6233,7 @@ export class ClaudeCodeSession {
   private harvestRawContextWindow(modelUsage: NonNullable<StreamResultEvent['modelUsage']>): void {
     const keys = Object.keys(modelUsage)
     if (keys.length === 0) return
-    const strip = (s: string) => s.toLowerCase().replace(/^.*\./, '').replace(/[-_]v\d+(:\d+)?(?=\[|$)/, '')
+    const strip = (s: string) => shortModelId(s).toLowerCase()
     const candidates = [this._initModel, this._model].filter((m): m is string => !!m)
     let key = candidates.find((m) => modelUsage[m] !== undefined)
     if (!key) {
@@ -6226,13 +6254,20 @@ export class ClaudeCodeSession {
     }
   }
 
-  /** Seed _cliContextWindow from get_context_usage.maxTokens. NB on newer CLIs
-   *  this is the AUTO-COMPACT window, not the raw model window — it only ever
-   *  RAISES the context% denominator (see contextWindowForPercent). Called once
-   *  at session-start and again after a model change (the only events that can
-   *  change the window; NOT per turn — the read tokenizes the full tool surface
-   *  on the CLI side, too heavy for turn-end).
-   *  Fire-and-forget safe; an unreadable CLI just keeps the string-guess fallback. */
+  /** Seed _cliContextWindow from get_context_usage.maxTokens — the CLI's
+   *  EFFECTIVE window (min(model window, auto-compact clamp)), i.e. the context%
+   *  denominator. Called once at session-start and again after a model change
+   *  (the only events that can change the window; NOT per turn — the read
+   *  tokenizes the full tool surface on the CLI side, too heavy for turn-end).
+   *
+   *  The same payload carries totalTokens, so it also PUBLISHES the percentage.
+   *  Without that push the badge stayed blank until the session's next assistant
+   *  message: after a server restart nothing re-emits usage, and an idle session
+   *  may not produce one for hours (a custom-model session has no string guess to
+   *  fall back on). This read is already paid for — the emit is free and is the
+   *  CLI's own /context number, so badge and picker agree from second zero.
+   *
+   *  Fire-and-forget safe; an unreadable CLI just leaves the badge as it was. */
   private seedCliContextWindow(reason: string): void {
     void this.getContextUsage().then((cu) => {
       if (cu?.maxTokens && cu.maxTokens > 0 && cu.maxTokens !== this._cliContextWindow) {
@@ -6242,6 +6277,23 @@ export class ClaudeCodeSession {
         })
         this._cliContextWindow = cu.maxTokens
       }
+      const sid = this.claudeSessionId
+      if (!sid) return
+      const windowSize = this.contextWindowForPercent(cu?.totalTokens ?? undefined)
+      if (windowSize == null) return
+      // Persist the denominator too: a page loaded LATER missed this event, and
+      // then only the record can turn history tokens into a percentage.
+      void import('../core/session-tracker.js')
+        .then(({ updateSessionRecord }) => updateSessionRecord(sid, { contextWindow: windowSize }))
+        .catch(() => {})
+      if (cu?.totalTokens == null) return
+      bus.emit(EventNames.SESSION_USAGE_UPDATE, {
+        sessionId: sid,
+        model: this._model,
+        contextPercent: Math.round(cu.totalTokens / windowSize * 100),
+        inputTokens: cu.totalTokens,
+        contextWindow: windowSize,
+      }, ['main-ai'], { source: 'session-runner' })
     }).catch(() => {})
   }
 
@@ -6336,8 +6388,33 @@ export class ClaudeCodeSession {
   async refreshAppliedSettings(reason: string, preFetched?: CliAppliedSettings): Promise<{ effort: import('../core/types.js').SessionEffort | null; model: string | null } | null> {
     const sid = this.claudeSessionId
     if (!sid) return null
-    const applied = preFetched ?? await this.getSettings().catch(() => null)
+    const snapshot = preFetched ? null : await this.getSettingsSnapshot().catch(() => null)
+    const applied = preFetched ?? snapshot?.applied
     if (!applied) return null // untrusted read — don't clobber
+
+    // ── Auto-compact clamp ──
+    // CLAUDE_CODE_AUTO_COMPACT_WINDOW decides the session's REAL context window
+    // (min with the model window) and therefore when it compacts. Harvest it
+    // here because get_settings is the only cheap read that exposes the CLI's
+    // resolved env, and cache it: env can't change under a live process, so this
+    // one value keeps the context% denominator stable across model switches.
+    const clampRaw = snapshot?.effective?.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    if (typeof clampRaw === 'string' && clampRaw) {
+      const clamp = Number.parseInt(clampRaw, 10)
+      if (Number.isFinite(clamp) && clamp > 0) {
+        if (clamp !== this._autoCompactWindow) {
+          log.session.info('auto-compact window harvested from CLI env', {
+            sessionId: sid, taskId: this.taskId, reason,
+            autoCompactWindow: clamp, prev: this._autoCompactWindow ?? null,
+          })
+          this._autoCompactWindow = clamp
+        }
+        // Share it host-wide: sessions that haven't read yet (e.g. every session
+        // attached after a server restart, mid-turn) would otherwise divide by
+        // the unclamped raw window until their own read lands.
+        rememberAutoCompactWindow(this._host, clamp)
+      }
+    }
 
     // ── Effort ──
     // applied.effort may be null (no effort set → API default 'high') or a level
@@ -6357,15 +6434,18 @@ export class ClaudeCodeSession {
     const appliedModel = typeof applied.model === 'string' && applied.model ? applied.model : undefined
     let modelChanged = false
     if (appliedModel) {
-      const shortModel = appliedModel.replace(/^.*\./, '').replace(/[-_]v\d+(\[1m\])?$/, '$1') || appliedModel
+      const shortModel = shortModelId(appliedModel)
       if (shortModel !== this._model) {
         modelChanged = true
         this._model = shortModel
         this._initModel = appliedModel // keep 1M-context detection in sync with the switch
-        // Window size can change with the model (200K↔1M, env clamps) — drop the
-        // old model's raw window (next result re-harvests it) and re-seed the
-        // control-read denominator from the CLI.
+        // Window size changes with the model (200K↔1M, custom proxy windows) —
+        // drop BOTH cached windows (the next result re-harvests the raw one) and
+        // re-seed the effective one from the CLI. Until those land the
+        // denominator falls back to model-string ∧ the auto-compact clamp, which
+        // is env-wide and therefore already correct for the new model.
         this._cliRawContextWindow = undefined
+        this._cliContextWindow = undefined
         this.seedCliContextWindow('model-change')
         // Read-back truth outside the cached catalog ⇒ the allowlist/overrides
         // evidently shifted under us (or the CLI fell back to something we don't

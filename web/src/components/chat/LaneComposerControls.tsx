@@ -19,7 +19,7 @@ import type { SessionRecord } from '@/types/session';
 import type { SessionEffort } from '@open-walnut/core';
 import { modelSupportsEffort, SESSION_EFFORTS, SESSION_MODE_LABELS } from '@open-walnut/core';
 import { fetchSession, updateSession, setSessionModel, setSessionEffort, setCodexSessionModel } from '@/api/sessions';
-import { useSessionUsage, formatModelName, getContextWindowSize } from '@/hooks/useSessionUsage';
+import { useSessionUsage, formatModelName, getContextWindowSize, contextBadgeTitle } from '@/hooks/useSessionUsage';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { ModelPicker, shortCodexModelName, type ProviderId } from '@/components/sessions/ModelPicker';
 
@@ -107,9 +107,16 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
     ? (session?.acpModel ? shortCodexModelName(session.acpModel) : 'Codex')
     : formatModelName(rawModel);
   let contextPercent = liveUsage.contextPercent;
+  let badgeUsage = liveUsage;
   if (contextPercent == null && liveUsage.inputTokens) {
-    const ctxSize = getContextWindowSize(rawModel, liveUsage.inputTokens);
-    contextPercent = Math.round(liveUsage.inputTokens / ctxSize * 100);
+    // The server's persisted window first: the model string tells us nothing
+    // about a custom proxy model's window, and guessing 200K for one rendered
+    // a 5x-wrong percent (2026-08-23). Still null ⇒ stay silent.
+    const ctxSize = session?.contextWindow ?? getContextWindowSize(rawModel, liveUsage.inputTokens);
+    if (ctxSize != null) {
+      contextPercent = Math.round(liveUsage.inputTokens / ctxSize * 100);
+      badgeUsage = { ...liveUsage, contextWindow: ctxSize };
+    }
   }
 
   const modeLabel = (SESSION_MODE_LABELS as Record<string, string>)[currentMode] ?? currentMode;
@@ -147,7 +154,7 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
                 : contextPercent > 50 ? 'var(--warning, #ff9500)'
                 : 'var(--fg-muted)',
             }}
-            title={`Context: ${contextPercent}%`}
+            title={contextBadgeTitle(badgeUsage, contextPercent)}
           >
             {' '}{contextPercent}%
           </span>

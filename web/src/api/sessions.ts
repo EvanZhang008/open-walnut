@@ -412,6 +412,12 @@ export interface SessionLiveSettings {
       totalTokens: number | null;
       maxTokens: number | null;
       percentage: number | null;
+      /** The model's window before the auto-compact clamp (CLI 2.1.2xx+). */
+      rawMaxTokens?: number | null;
+      /** 'env' | 'settings' | 'clientdata' | 'model-default' — what set the
+       *  window. Shown in the panel so a surprising denominator explains
+       *  itself instead of looking like a Walnut miscount. */
+      autocompactSource?: string | null;
     } | null;
     /** get_usage → session block: total_cost_usd, model_usage per model, … */
     usage: {
