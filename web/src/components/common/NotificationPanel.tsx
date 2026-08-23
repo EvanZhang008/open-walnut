@@ -46,6 +46,10 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   const { feed, loaded, unreadCount, markAllRead, dismissFeed } = useNotifications();
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [section, setSection] = useState<RailSection>('all');
+  // Second-level filter inside Errors: null = every category (the landing view),
+  // a string = just that family. Owned here (not in the section union) because it
+  // is a refinement of one section, not a sibling of the others.
+  const [errorCategory, setErrorCategory] = useState<string | null>(null);
   const navigate = useNavigate();
   const qmdStatus = useQmdStatus(open, section === 'system');
 
@@ -83,15 +87,33 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   // most-recent-activity (groupErrorsByCategory), and the same-origin collapse
   // still applies INSIDE each category — the two groupings answer different
   // questions ("what family" vs "is this the same origin repeating").
+  //
+  // Computed from the FEED, not from the active section's items: the rail lists
+  // the categories as sub-entries under Errors (so a specific family is one
+  // click away from anywhere), which means the grouping has to exist even while
+  // the user is reading another section.
+  const errorCats = useMemo(() => {
+    const errs = feed.filter(nn => sectionOf(nn) === 'errors');
+    return groupErrorsByCategory([...errs].sort((a, b) => effectiveTs(b) - effectiveTs(a)));
+  }, [feed]);
+
+  // The selected category, validated against what actually exists: when the last
+  // card of the chosen family recovers or is dismissed, the view falls back to
+  // all errors instead of pinning an empty pane to a stale filter.
+  const activeErrorCategory =
+    errorCategory && errorCats.some(g => g.category === errorCategory) ? errorCategory : null;
+
   const errorBlocks = useMemo(() => (
     section === 'errors'
-      ? groupErrorsByCategory(items).map(g => ({
-        category: g.category,
-        count: g.items.length,
-        groups: collapseSameOrigin(g.items),
-      }))
+      ? errorCats
+        .filter(g => !activeErrorCategory || g.category === activeErrorCategory)
+        .map(g => ({
+          category: g.category,
+          count: g.items.length,
+          groups: collapseSameOrigin(g.items),
+        }))
       : null
-  ), [items, section]);
+  ), [errorCats, section, activeErrorCategory]);
 
   // Opening the panel clears the unread badge (everything in the feed is now seen).
   // Re-fires while open if new persistent events arrive (unreadCount climbs again) —
@@ -106,6 +128,16 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   const pickSection = useCallback((next: RailSection) => {
     userPickedSection.current = true;
     setSection(next);
+    // Entering Errors through the SECTION button always lands on every category
+    // ("all" is the natural landing); a specific family is only reached through
+    // its own sub-entry (pickErrorCategory below).
+    setErrorCategory(null);
+  }, []);
+
+  const pickErrorCategory = useCallback((category: string) => {
+    userPickedSection.current = true;
+    setSection('errors');
+    setErrorCategory(category);
   }, []);
 
   // Landing section is chosen ONCE per open (not derived every render): a pending
@@ -115,6 +147,7 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
     if (!open) return;
     userPickedSection.current = false;
     setSection(sectionCounts(feed).action > 0 ? 'action' : 'all');
+    setErrorCategory(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- open-transition only
   }, [open]);
 
@@ -207,8 +240,22 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
                 get the warning colour. */}
             <RailButton
               label="Errors" count={counts.errorsTotal}
-              active={section === 'errors'} onClick={() => pickSection('errors')}
+              active={section === 'errors' && !activeErrorCategory}
+              onClick={() => pickSection('errors')}
             />
+            {/* Second-level entries: the error FAMILIES, one click from anywhere.
+                The section button is the "all" view (a category is a refinement,
+                so selecting one moves aria-current onto the sub-entry). Rendered
+                only when there are two or more families — a single category IS
+                the all view, and a sub-entry duplicating its parent is noise. */}
+            {errorCats.length >= 2 && errorCats.map(g => (
+              <RailSubButton
+                key={g.category}
+                label={g.category} count={g.items.length}
+                active={section === 'errors' && activeErrorCategory === g.category}
+                onClick={() => pickErrorCategory(g.category)}
+              />
+            ))}
             <RailButton
               label="Automation" count={counts.automationTotal}
               active={section === 'automation'} onClick={() => pickSection('automation')}
@@ -240,9 +287,34 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
               <div className="notification-feed">
                 {errorBlocks.map(block => (
                   <div key={block.category} className="nfc-cat-block">
+                    {/* The header doubles as the drill-down: clicking a family in
+                        the all-errors view filters to it (same move as its rail
+                        sub-entry). Filtered, the header stops being a button and
+                        gains "Show all" — the way back mirrors the way in. Same
+                        two-family gate as the rail sub-entries: with one family
+                        the all view IS the category view, so there is nothing to
+                        drill into. */}
                     <div className="nfc-cat-header">
-                      <span className="nfc-cat-name">{block.category}</span>
+                      {activeErrorCategory || errorCats.length < 2 ? (
+                        <span className="nfc-cat-name">{block.category}</span>
+                      ) : (
+                        <button
+                          className="nfc-cat-name nfc-cat-drill"
+                          title={`Show only ${block.category} errors`}
+                          onClick={() => pickErrorCategory(block.category)}
+                        >
+                          {block.category}
+                        </button>
+                      )}
                       <span className="nfc-cat-count">{block.count}</span>
+                      {activeErrorCategory && (
+                        <button
+                          className="nfc-cat-showall"
+                          onClick={() => { userPickedSection.current = true; setErrorCategory(null); }}
+                        >
+                          Show all
+                        </button>
+                      )}
                     </div>
                     <FeedGroups
                       groups={block.groups}
@@ -280,6 +352,32 @@ const EMPTY_TEXT: Record<NotificationSection, string> = {
   automation: 'No automation activity',
   all: 'No notifications yet',
 };
+
+/**
+ * A category sub-entry under the Errors section button. Same anatomy as
+ * RailButton (name + count, aria-current when active) with the indent and
+ * smaller type that read as "child of the entry above" — kept as its own
+ * component so RailButton's props don't grow a `variant` flag for one caller.
+ */
+function RailSubButton({ label, count, active, onClick }: {
+  label: string;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={`nfc-rail-btn nfc-rail-sub${active ? ' nfc-active' : ''}`}
+      aria-current={active}
+      onClick={onClick}
+    >
+      <span className="nfc-rail-name">{label}</span>
+      {count > 0 && (
+        <span className="nfc-rail-subcount">{count > 99 ? '99+' : count}</span>
+      )}
+    </button>
+  );
+}
 
 function RailButton({ label, count, active, warn, dot, onClick }: {
   label: string;

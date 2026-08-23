@@ -417,6 +417,81 @@ test('rail sorts the feed by what the user has to do, and cards carry the ask', 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/all-section-expanded-group.png`, fullPage: true })
 })
 
+// ── 1b. Errors drill-down: land on all, click into one family, come back ──
+
+/**
+ * Two error FAMILIES with unique fixture category names. Unique on purpose: the
+ * rail's sub-entries are derived from every error in the feed, and a live error
+ * from the shared server landing mid-test could legitimately add a real family
+ * ('Sessions', 'API') — so the assertions pin only the two seeded ones.
+ */
+function categorizedErrorFeed(t: number): FeedRecord[] {
+  return [
+    {
+      id: 'nfc-cat-a1', kind: 'operation-error', severity: 'error',
+      title: 'PW NFC alpha failure one', body: 'First alpha-family failure',
+      timestamp: t - 10_000, read: false, dedupKey: 'error:pw-nfc-cat-a1',
+      category: 'PW NFC Alpha',
+    },
+    {
+      id: 'nfc-cat-a2', kind: 'operation-error', severity: 'error',
+      title: 'PW NFC alpha failure two', body: 'Second alpha-family failure',
+      timestamp: t - 20_000, read: false, dedupKey: 'error:pw-nfc-cat-a2',
+      category: 'PW NFC Alpha',
+    },
+    {
+      id: 'nfc-cat-b1', kind: 'operation-error', severity: 'error',
+      title: 'PW NFC beta failure', body: 'The one beta-family failure',
+      timestamp: t - 60_000, read: false, dedupKey: 'error:pw-nfc-cat-b1',
+      category: 'PW NFC Beta',
+    },
+  ]
+}
+
+test('the Errors section lands on all categories and drills into one family', async ({ page }) => {
+  await stubNotifications(page, categorizedErrorFeed(Date.now()))
+  await loadHome(page)
+  const panel = await openCenter(page)
+  await showSection(panel, 'Errors')
+
+  // Landing = every family, each under its own header (Alpha is more recent).
+  const headers = panel.locator('.nfc-cat-header').filter({ hasText: SEED_TAG })
+  await expect(headers).toHaveCount(2)
+  await expect(headers.nth(0)).toContainText('PW NFC Alpha')
+  await expect(headers.nth(1)).toContainText('PW NFC Beta')
+  await expect(seededItems(panel)).toHaveCount(3)
+
+  // The rail grew one sub-entry per family, each carrying its family's count.
+  const alphaSub = panel.locator('.nfc-rail-sub', { hasText: 'PW NFC Alpha' })
+  const betaSub = panel.locator('.nfc-rail-sub', { hasText: 'PW NFC Beta' })
+  await expect(alphaSub.locator('.nfc-rail-subcount')).toHaveText('2')
+  await expect(betaSub.locator('.nfc-rail-subcount')).toHaveText('1')
+
+  // Click straight into one family from the rail.
+  await betaSub.click()
+  await expect(betaSub).toHaveAttribute('aria-current', 'true')
+  await expect(rail(panel, 'Errors')).toHaveAttribute('aria-current', 'false')
+  await expect(seededItems(panel)).toHaveCount(1)
+  await expect(seededItems(panel)).toContainText('PW NFC beta failure')
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/errors-category-drilldown.png`, fullPage: true })
+
+  // The way back mirrors the way in: Show all in the filtered header.
+  await panel.locator('.nfc-cat-showall').click()
+  await expect(rail(panel, 'Errors')).toHaveAttribute('aria-current', 'true')
+  await expect(seededItems(panel)).toHaveCount(3)
+
+  // The header itself is the other way in — same filter as the rail sub-entry.
+  await headers.nth(0).locator('button.nfc-cat-drill').click()
+  await expect(alphaSub).toHaveAttribute('aria-current', 'true')
+  await expect(seededItems(panel)).toHaveCount(2)
+
+  // Re-picking the Errors SECTION resets to the all-categories landing.
+  await rail(panel, 'Errors').click()
+  await expect(rail(panel, 'Errors')).toHaveAttribute('aria-current', 'true')
+  await expect(alphaSub).toHaveAttribute('aria-current', 'false')
+  await expect(seededItems(panel)).toHaveCount(3)
+})
+
 // ── 2. Landing section falls back to All with nothing pending ──
 
 test('with no pending ask the center lands on All, and Needs Action reads empty', async ({ page }) => {

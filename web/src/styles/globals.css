@@ -28803,6 +28803,24 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 .nfc-rail-dot.nfc-warn { background: var(--warning); }
 
+/* Second-level rail entries: the error categories under the Errors button.
+   Indented + smaller so they read as children; the count is quiet text, not a
+   badge — the parent's badge already carries the section total, and a column of
+   pills would out-shout the sections themselves. */
+.nfc-rail-btn.nfc-rail-sub {
+  padding: 4px 10px 4px 22px;
+  font-size: 11.5px;
+}
+
+.nfc-rail-subcount {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  opacity: 0.75;
+}
+
 .nfc-detail {
   overflow-y: auto;
   padding: 12px;
@@ -28849,6 +28867,11 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   .nfc-rail-btn.nfc-active {
     border-left-color: transparent;
     border-bottom-color: var(--accent);
+  }
+  /* The horizontal strip has no "under" to indent into — the sub-entries sit
+     inline after Errors (the strip scrolls), so only the smaller type remains. */
+  .nfc-rail-btn.nfc-rail-sub {
+    padding: 9px 8px;
   }
 }
 
@@ -28919,6 +28942,33 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   color: var(--fg-muted);
   opacity: 0.75;
 }
+
+/* The header-as-drill-down: same quiet type as the plain label, with hover the
+   only tell that it filters. Inherits .nfc-cat-name's ellipsis + casing. */
+button.nfc-cat-drill {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
+
+/* The way back from a filtered category ("Show all"), right-aligned in the
+   header row. */
+.nfc-cat-showall {
+  margin-left: auto;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  font-size: 10.5px;
+  color: var(--accent);
+}
+
+.nfc-cat-showall:hover { text-decoration: underline; }
 
 /* In the All list there are no category headers, so an error card names its own
    family inline. Muted, like the context chips — it is a label, not a status. */
