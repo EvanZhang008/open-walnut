@@ -75,6 +75,10 @@ const CHECK = flag('--check');
 // + the built dist embed worker; the first query pays the model load, so a
 // warmup query runs untimed).
 const SEMANTIC = flag('--semantic');
+// Which embedding model the semantic rescore uses. The index's vectors MUST
+// have been backfilled with the same model (the meta gate wipes doc_vec on a
+// model swap) — pair --model qwen3 with --index-db <qwen3-backfilled copy>.
+const MODEL = opt('--model', 'e5-small');
 
 /** Per-kind score multipliers (kept in sync with the walnut adapter). */
 const KIND_WEIGHTS = {
@@ -85,11 +89,23 @@ const KIND_WEIGHTS = {
   skill: { weight: 1.0 },
 };
 
+const EMBEDDER_MODELS = {
+  'e5-small': {
+    modelId: 'Xenova/multilingual-e5-small',
+    dims: 384,
+    queryPrefix: 'query: ',
+    passagePrefix: 'passage: ',
+  },
+  qwen3: {
+    modelId: 'onnx-community/Qwen3-Embedding-0.6B-ONNX',
+    dims: 1024,
+    queryPrefix: 'Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ',
+    passagePrefix: '',
+    pooling: 'last',
+  },
+};
 const EMBEDDER = {
-  modelId: 'Xenova/multilingual-e5-small',
-  dims: 384,
-  queryPrefix: 'query: ',
-  passagePrefix: 'passage: ',
+  ...(EMBEDDER_MODELS[MODEL] ?? EMBEDDER_MODELS['e5-small']),
   workerPath: path.join(ROOT, 'dist', 'lib', 'hybrid-search', 'embed-worker.js'),
 };
 

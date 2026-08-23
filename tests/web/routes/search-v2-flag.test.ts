@@ -14,6 +14,7 @@ import request from 'supertest';
 import { searchRouter } from '../../../src/web/routes/search.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { addTask, _resetForTesting } from '../../../src/core/task-manager.js';
+import { createSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import { getSearchV2Index, resetSearchV2IndexForTests } from '../../../src/core/search/wiring.js';
 
@@ -96,5 +97,43 @@ describe('GET /api/search with WALNUT_SEARCH_V2=1', () => {
     const res = await request(createApp()).get('/api/search?q=zxqv%20nonexistent');
     expect(res.status).toBe(200);
     expect(res.body.results).toEqual([]);
+  });
+
+  it('surfaces the owning task via a session hit when the task text misses the query', async () => {
+    // Production shape (2026-08-23): the user searches with words that appear
+    // ONLY in a session transcript — the owning task's title/note never say
+    // them. The session leg must return the session hit CARRYING taskId so
+    // the frontend can associate it back to the owning task; a task-lane
+    // miss alone must not make the work item unfindable.
+    _resetSessionTrackerForTesting();
+    const { task } = await addTask({ title: 'Marina helper improvements' });
+    const sid = 'a0a0a0a0-1111-2222-3333-444444444444';
+    await createSessionRecord(sid, task.id, 'marina', '/tmp', { title: task.title });
+
+    const index = getSearchV2Index();
+    index.upsert({
+      kind: 'task',
+      ref: task.id,
+      title: task.title,
+      note: 'Refactor the helper pipeline.', // no query words here
+      updatedAt: Date.now(),
+    });
+    index.upsert({
+      kind: 'session',
+      ref: sid,
+      title: task.title,
+      note: 'User report: the marina helper bot stops answering replies after the third turn.',
+      updatedAt: Date.now(),
+    });
+
+    const res = await request(createApp())
+      .get('/api/search?q=helper%20bot%20stops%20answering%20replies');
+    expect(res.status).toBe(200);
+    const sessionHit = res.body.results.find(
+      (r: { type?: string; sessionId?: string }) => r.type === 'session' && r.sessionId === sid,
+    );
+    expect(sessionHit).toBeDefined();
+    // The association the frontend contract depends on: session hit → owner.
+    expect(sessionHit.taskId).toBe(task.id);
   });
 });

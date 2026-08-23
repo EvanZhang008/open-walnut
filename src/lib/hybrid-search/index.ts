@@ -54,6 +54,8 @@ export interface EmbedderConfig {
   /** transformers.js dtype (default 'q8'). */
   dtype?: string;
   cacheDir?: string;
+  /** Pooling: 'mean' (default; e5 family) or 'last' (Qwen3-Embedding). */
+  pooling?: 'mean' | 'last';
   /** Compiled embed-worker.js location. Required when the caller bundles this
    *  library; defaults to the sibling file (correct un-bundled). */
   workerPath?: string | URL;
