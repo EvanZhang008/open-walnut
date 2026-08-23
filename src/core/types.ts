@@ -1415,6 +1415,10 @@ export type StatusReason =
   | 'daemon_reported_exit'
   | 'daemon_reconnected'
   | 'retry_reconnect'
+  /** A spawn's daemon `start` command timed out or hit a dead connection — the
+   *  command may STILL execute daemon-side once the connection recovers, so the
+   *  outcome is UNKNOWN, not a confirmed failure. Recovery loops must probe. */
+  | 'spawn_outcome_unknown'
   | 'reconciled_authoritative'
   | 'streaming_evidence_self_heal'
   | 'turn_interrupted'

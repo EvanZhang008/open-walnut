@@ -21,6 +21,7 @@ import { REMOTE_IMAGES_DIR } from '../constants.js'
 import { writeMirrorSidecar, backfillMirrorSidecar, resolveSessionMirrorPath } from '../core/remote-image-mirror.js'
 import { log } from '../logging/index.js'
 import { getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
+import { isDaemonCommandOutcomeUnknown } from './delivery-failure.js'
 import {
   findImagePaths,
   findLocalImagePaths,
@@ -1143,11 +1144,12 @@ export class RemoteSessionManager implements SessionManager {
 
 // ── Helpers ──
 
-/** Match daemon connection errors that are worth retrying after reconnect. */
+/** Match daemon connection errors that are worth retrying after reconnect.
+ *  Same predicate as isDaemonCommandOutcomeUnknown — a connection-class failure
+ *  means the command outcome is unknown, which is exactly what makes the
+ *  reconnect+probe retry worthwhile. */
 function isDaemonConnError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false
-  const msg = err.message
-  return msg.includes('daemon command timeout') || msg.includes('not connected')
+  return isDaemonCommandOutcomeUnknown(err)
 }
 
 // Re-export for convenience

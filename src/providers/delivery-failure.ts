@@ -59,3 +59,25 @@ export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
 export function isPermanentDeliveryFailure(err: unknown): boolean {
   return classifyDeliveryFailure(err).kind === 'permanent';
 }
+
+/**
+ * The daemon command timed out or hit a dead/reconnecting connection. The bytes
+ * may already be in the socket: the command can STILL execute daemon-side once
+ * the daemon unwedges, so this is NOT a confirmed failure — the outcome is
+ * UNKNOWN and must be probed, never recorded as a terminal verdict.
+ * (inc-1787511363340: a `start` that "failed" this way spawned 15s later and
+ * ran for 1.6h behind a 'stopped' record no recovery loop would look at.)
+ *
+ * Matches the connection-class shapes the daemon layer produces:
+ * "daemon command timeout: <cmd> (<ms>ms)" and
+ * "DaemonConnection not connected to <host>" (both from send()), plus
+ * "Connection to <host> failed <N>s ago: …" (getDaemonConnection's failure
+ * cache — the shape a RETRY surfaces after an earlier send already timed out,
+ * so the earlier command may still land).
+ */
+const CONN_OUTCOME_UNKNOWN = /daemon command timeout|not connected|connection to .+ failed \d+s ago/i;
+
+export function isDaemonCommandOutcomeUnknown(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return CONN_OUTCOME_UNKNOWN.test(err.message);
+}

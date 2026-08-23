@@ -54,6 +54,11 @@ export const INFRA_STATUS_REASONS: ReadonlySet<string> = new Set<StatusReason>([
   'server_restart',
   // A reconnect/retry path that was already mid-recovery.
   'retry_reconnect',
+  // A spawn's daemon `start` timed out / hit a dead connection: the command may
+  // still execute daemon-side after the connection recovers (inc-1787511363340:
+  // the "failed" start spawned 15s later and ran for hours behind a terminal
+  // record). Unknown outcome is an infra condition — probe, never a verdict.
+  'spawn_outcome_unknown',
 ])
 
 /**
@@ -140,4 +145,40 @@ export function isRecoverableSessionError(record: Pick<SessionRecord,
 export function isInfraSessionError(record: Pick<SessionRecord,
   'errorKind' | 'status_reason' | 'errorMessage'>): boolean {
   return classifySessionError(record) === 'infra'
+}
+
+/**
+ * How long a 'stopped' record stays eligible for a liveness re-probe. A live
+ * CLI hiding behind a wrongly-terminal record is by definition recent (the
+ * daemon's own idle reaper kills a silent CLI at 2h; a turn tops out well
+ * under a day), so anything older is settled truth and not worth an RPC.
+ */
+export const RESCUABLE_STOPPED_WINDOW_MS = 24 * 60 * 60 * 1000
+
+/**
+ * A 'stopped' record that is worth re-probing against the daemon registry.
+ *
+ * 'stopped' used to be an unconditional dead end: every recovery loop skipped
+ * it, so a record wedged at 'stopped' while the CLI lived on was invisible
+ * forever (inc-1787511363340: a spawn whose daemon `start` timed out was
+ * marked 'stopped', the command executed 15s later anyway, and the session ran
+ * for 1.6h behind a "Stopped" badge). The skip is only safe when the stop is
+ * POSITIVELY intentional — a user action or a terminal-class reason. Anything
+ * else (infra reasons, un-stamped writes, unknown causes) is a claim about
+ * process death that the daemon can cheaply confirm or refute.
+ *
+ * Mirrors isRecoverableSessionError's bar ("being wrong costs nothing" — a
+ * probe that finds the process dead changes nothing), plus a recency bound so
+ * reconnect passes don't re-probe months of history.
+ */
+export function isRescuableStoppedRecord(record: Pick<SessionRecord,
+  'process_status' | 'errorKind' | 'status_reason' | 'errorMessage'
+  | 'status_changed_by' | 'last_status_change'>, nowMs: number = Date.now()): boolean {
+  if (record.process_status !== 'stopped') return false
+  if (record.status_changed_by === 'user') return false
+  if (classifySessionError(record) === 'terminal') return false
+  const changedAt = record.last_status_change ? Date.parse(record.last_status_change) : NaN
+  // No/unparsable timestamp → treat as settled history, not a fresh wedge.
+  if (!Number.isFinite(changedAt)) return false
+  return nowMs - changedAt <= RESCUABLE_STOPPED_WINDOW_MS
 }

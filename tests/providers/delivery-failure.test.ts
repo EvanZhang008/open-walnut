@@ -10,7 +10,7 @@
  *   - too wide → a plain ssh outage strands a message the user must retry by hand
  */
 import { describe, it, expect } from 'vitest';
-import { classifyDeliveryFailure, isPermanentDeliveryFailure } from '../../src/providers/delivery-failure.js';
+import { classifyDeliveryFailure, isPermanentDeliveryFailure, isDaemonCommandOutcomeUnknown } from '../../src/providers/delivery-failure.js';
 import { CwdMissingError } from '../../src/providers/cwd-check.js';
 
 describe('classifyDeliveryFailure — permanent', () => {
@@ -66,5 +66,44 @@ describe('classifyDeliveryFailure — transient (keeps the current retry behavio
   it('caps the reason so it cannot bloat the queue row or the UI label', () => {
     const verdict = classifyDeliveryFailure(new Error('x'.repeat(5_000)));
     expect(verdict.reason.length).toBeLessThanOrEqual(300);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+//  isDaemonCommandOutcomeUnknown — a connection-class failure means the
+//  command may STILL execute daemon-side (inc-1787511363340: a `start`
+//  that "failed" this way spawned 15s later). Unknown ≠ failed.
+// ═══════════════════════════════════════════════════════════════════
+
+describe('isDaemonCommandOutcomeUnknown', () => {
+  it('matches the two shapes DaemonConnection.send() produces', () => {
+    expect(isDaemonCommandOutcomeUnknown(
+      new Error('daemon command timeout: start (30000ms) [traceId=2956aa25]'),
+    )).toBe(true);
+    expect(isDaemonCommandOutcomeUnknown(
+      new Error('DaemonConnection not connected to __local__'),
+    )).toBe(true);
+  });
+
+  it('matches the failure-cache shape a RETRY surfaces after an earlier timeout', () => {
+    expect(isDaemonCommandOutcomeUnknown(
+      new Error('Connection to __local__ failed 11s ago: Local daemon started (port 65164) but not responding to hello'),
+    )).toBe(true);
+  });
+
+  it('a definite daemon verdict is NOT unknown — the daemon answered', () => {
+    for (const message of [
+      'Daemon start failed on host "clouddev": cwd missing',
+      'Daemon spawn failed on host "clouddev": no PID returned (cwd: "/gone")',
+      'Session working directory no longer exists',
+      'spawn EMFILE',
+    ]) {
+      expect(isDaemonCommandOutcomeUnknown(new Error(message)), message).toBe(false);
+    }
+  });
+
+  it('non-Error inputs are never unknown-outcome', () => {
+    expect(isDaemonCommandOutcomeUnknown('daemon command timeout: start')).toBe(false);
+    expect(isDaemonCommandOutcomeUnknown(undefined)).toBe(false);
   });
 });
