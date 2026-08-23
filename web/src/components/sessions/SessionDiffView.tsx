@@ -161,25 +161,43 @@ function buildFile(change: SessionFileChange): FileData | null {
  *  markEdits (intra-line add/del coloring). Highlighting is best-effort: any
  *  failure (or unknown language) falls back to plain markEdits-only tokens so a
  *  bad grammar can never throw out of the useMemo and blank the panel. */
+function computeTokens(hunks: HunkData[], language: string | undefined): ReturnType<typeof tokenize> | undefined {
+  const enhancers = [markEdits(hunks, { type: 'block' })];
+  if (language) {
+    try {
+      return tokenize(hunks, { highlight: true, refractor: diffRefractor, language, enhancers });
+    } catch (err) {
+      log.warn('session-changes', 'syntax tokenize failed; falling back to plain', { language, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  try {
+    return tokenize(hunks, { highlight: false, enhancers });
+  } catch (err) {
+    log.warn('session-changes', 'tokenize failed', { error: err instanceof Error ? err.message : String(err) });
+    return undefined;
+  }
+}
+
 function useTokens(hunks: HunkData[] | undefined, relPath: string): ReturnType<typeof tokenize> | undefined {
   const language = useMemo(() => languageForPath(relPath), [relPath]);
-  return useMemo(() => {
-    if (!hunks) return undefined;
-    const enhancers = [markEdits(hunks, { type: 'block' })];
-    if (language) {
-      try {
-        return tokenize(hunks, { highlight: true, refractor: diffRefractor, language, enhancers });
-      } catch (err) {
-        log.warn('session-changes', 'syntax tokenize failed; falling back to plain', { language, error: err instanceof Error ? err.message : String(err) });
-      }
-    }
-    try {
-      return tokenize(hunks, { highlight: false, enhancers });
-    } catch (err) {
-      log.warn('session-changes', 'tokenize failed', { error: err instanceof Error ? err.message : String(err) });
-      return undefined;
-    }
+  // Deferred OFF the first paint on purpose: tokenizing a whale diff takes
+  // hundreds of ms, and doing it in a render-time useMemo blocked the first
+  // frame of every newly opened file — a reference jump in the Changed tab
+  // felt stuck while the Files tab (plain innerHTML) was instant. The table
+  // paints uncolored, syntax colors land one tick later.
+  const [tokState, setTokState] = useState<{ for: HunkData[]; tokens: ReturnType<typeof tokenize> | undefined } | null>(null);
+  useEffect(() => {
+    if (!hunks) return;
+    let cancelled = false;
+    const id = window.setTimeout(() => {
+      if (!cancelled) setTokState({ for: hunks, tokens: computeTokens(hunks, language) });
+    }, 0);
+    return () => { cancelled = true; window.clearTimeout(id); };
   }, [hunks, language]);
+  // Tokens are positional per row — pairing stale tokens with NEW hunks (file
+  // switch, expansion) would color the wrong lines. Render plain until the
+  // recompute for THESE hunks lands.
+  return hunks && tokState?.for === hunks ? tokState.tokens : undefined;
 }
 
 // ── File tree (left rail) ────────────────────────────────────────────────────
@@ -671,7 +689,11 @@ function AiFileSummary({ sessionId, change }: { sessionId: string; change: Sessi
 
 // ── Single-file diff (center) ─────────────────────────────────────────────────
 
-function FileDiffPane({
+// memo is load-bearing: SessionDiffView re-renders on every small state change
+// (jump history, search status, reference panel) and an unmemoized whale table
+// re-reconciled for ~1s each time — measured as a 1s reference-jump stall. All
+// props are stable identities (useMemo'd change/pending, useCallback'd handlers).
+const FileDiffPane = memo(function FileDiffPane({
   change, viewType, rendered, sessionCwd, sessionHost, pending, sessionId, aiSummaryOn,
   onAddComment, onSendNow, onCopyComment, onRemoveComment,
 }: {
@@ -706,10 +728,13 @@ function FileDiffPane({
 
   // Auto-reveal tiny BETWEEN-hunk gaps: two hunks separated by ≤ UNFOLD_CHUNK
   // unchanged lines read better as one continuous block than as two sections
-  // split by an expand bar. One gap per pass — expanding merges hunks, which
-  // re-runs this effect until no small between-gap remains (bounded by the
-  // number of hunks). The file's head/tail gaps keep their bars: auto-showing
-  // dozens of leading imports would be noise, not context.
+  // split by an expand bar. ALL small gaps go in ONE pass: ranges are absolute
+  // old-side coordinates and useSourceExpansion applies them via a reducer, so
+  // the batch costs one re-render (and one re-tokenize) — the old
+  // one-gap-per-pass loop re-tokenized the whole file once per gap, which is a
+  // big part of why opening a many-hunk file felt slow. The file's head/tail
+  // gaps keep their bars: auto-showing dozens of leading imports would be
+  // noise, not context.
   //
   // triedRef is the no-progress brake: if expandRange can't actually reveal a
   // range (truncated/partial `before` content) but still returns a fresh hunks
@@ -719,12 +744,12 @@ function FileDiffPane({
   useEffect(() => { autoExpandTriedRef.current.clear(); }, [change.filePath, change.before]);
   useEffect(() => {
     const gaps = computeExpandGaps(hunks, oldSourceLineCount(change.before));
-    const small = gaps.find((g) =>
-      g.hunkIndex > 0 && g.hunkIndex < hunks.length && g.lines <= UNFOLD_CHUNK
-      && !autoExpandTriedRef.current.has(`${g.all[0]}:${g.all[1]}`));
-    if (small) {
-      autoExpandTriedRef.current.add(`${small.all[0]}:${small.all[1]}`);
-      expandRange(small.all[0], small.all[1]);
+    for (const g of gaps) {
+      if (!(g.hunkIndex > 0 && g.hunkIndex < hunks.length && g.lines <= UNFOLD_CHUNK)) continue;
+      const key = `${g.all[0]}:${g.all[1]}`;
+      if (autoExpandTriedRef.current.has(key)) continue;
+      autoExpandTriedRef.current.add(key);
+      expandRange(g.all[0], g.all[1]);
     }
   }, [hunks, change.filePath, change.before, expandRange]);
 
@@ -1182,7 +1207,7 @@ function FileDiffPane({
       )}
     </div>
   );
-}
+});
 
 // ── Pending-review persistence ────────────────────────────────────────────────
 // A drafted review (recorded comments not yet submitted) must survive leaving the
@@ -1740,9 +1765,10 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         }
       }
       // Diff content is lazy-fetched — retry until the pane renders (max ~3s).
-      if (++tries < 20) window.setTimeout(attempt, 150);
+      if (++tries < 30) window.setTimeout(attempt, 100);
     };
-    window.setTimeout(attempt, 50);
+    // First probe next tick: a same-file jump has the cell already in the DOM.
+    window.setTimeout(attempt, 0);
   }, []);
 
   const jumpHistRef = useRef<{ stops: DiffJumpStop[]; index: number }>({ stops: [], index: -1 });
@@ -2027,6 +2053,22 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     refSeqRef.current++; // supersede any in-flight fetch
     setRefState(null);
   }, []);
+
+  // The moment reference results land, prefetch the in-change files they point
+  // at — by the time a row is clicked its diff content is already local, so
+  // the jump doesn't pay a fetch round-trip on top of the render.
+  useEffect(() => {
+    const matches = refState?.result?.matches;
+    if (!matches || !isSessionBase) return;
+    const inChange = new Set(files.map((f) => f.change.filePath));
+    const seen = new Set<string>();
+    for (const m of matches) {
+      if (seen.size >= 8) break; // cap the speculative fetches
+      if (!inChange.has(m.file) || seen.has(m.file)) continue;
+      seen.add(m.file);
+      ensureFileContent(m.file);
+    }
+  }, [refState, files, isSessionBase, ensureFileContent]);
 
   // Esc closes the panel (capture, mirroring the Files tab).
   useEffect(() => {
