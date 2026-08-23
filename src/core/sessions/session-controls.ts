@@ -655,6 +655,11 @@ export type SessionControlAction =
   // replica relays the query here instead of refusing outright — the Mac
   // being reachable is exactly the common case for a phone on the replica.
   | 'server.search'
+  // Delegate (start/resume a task session): only the primary has a
+  // session-runner, so a replica-run agent turn relays its delegate call here.
+  // Without this, a fallback turn on the replica "starts" a session that no
+  // box will ever run (2026-08-22 incident) while still reporting accepted.
+  | 'server.delegate'
   // Wave 2 box-level family: routines CRUD/control (single-writer: the
   // PRIMARY's cron engine owns cron-jobs.json — replicas never write it
   // locally, avoiding the dual-engine blind-write storms), the launcher's
@@ -963,6 +968,16 @@ export async function handleSessionControlRelay(
         const dedupKeys = Array.isArray(p.dedupKeys) && p.dedupKeys.every((v) => typeof v === 'string')
           ? p.dedupKeys as string[] : undefined;
         result = await dismissNotifications({ ids, dedupKeys }) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'server.delegate': {
+        // Runs ON THE PRIMARY: a replica-run agent turn relays its delegate
+        // call here because only this box has a session-runner. delegateWork
+        // itself validates the input (QuickStartError → thrown as Error).
+        const { delegateWork } = await import('../delegate-work.js');
+        result = await delegateWork(
+          p as never, typeof p.source === 'string' ? `${p.source}-relay` : 'replica-relay',
+        ) as unknown as Record<string, unknown>;
         break;
       }
       case 'server.search': {

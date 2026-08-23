@@ -1,3 +1,4 @@
+import { CLOUD_MODE } from '../constants.js';
 import { taskRefTag } from '../utils/entity-refs.js';
 import { performMobileLaunch, validateDelegateLaunchBody } from './sessions/mobile-launch.js';
 import { QuickStartError } from './sessions/quick-start.js';
@@ -31,6 +32,26 @@ export async function delegateWork(
   if (!input || typeof input !== 'object') throw new QuickStartError('delegate input is required', 400);
   if (typeof input.message !== 'string' || !input.message.trim()) {
     throw new QuickStartError('message must be a non-empty string', 400);
+  }
+
+  // CLOUD_MODE (replica): there is NO session-runner here — the SESSION_START
+  // emit below would be a silent no-op that still mutates the task and then
+  // reports `accepted: true` (2026-08-22 incident: the Personal AI's replica
+  // fallback turn "started" a session that never existed anywhere). Same
+  // C-class trap task-v1's /start route refuses. Relay to the primary, where
+  // the runner lives; if the bridge is down, fail HONESTLY so the agent tells
+  // the user instead of promising a ghost session.
+  if (CLOUD_MODE) {
+    const { callPrimaryControl } = await import('../web/routes/v1-control-relay.js');
+    const outcome = await callPrimaryControl(
+      'server.delegate', '__server__', input as unknown as Record<string, unknown>,
+    );
+    if (outcome.ok) return outcome.result as unknown as DelegateWorkResult;
+    throw new QuickStartError(
+      `Cannot start the session from the cloud replica: the primary box is unreachable (${outcome.failure.message}). ` +
+      'Nothing was started — retry when the primary is back online.',
+      503,
+    );
   }
 
   if (input.taskId) {
