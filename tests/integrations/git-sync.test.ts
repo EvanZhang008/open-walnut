@@ -634,4 +634,57 @@ describe('sync conflict policy (LWW with history)', () => {
     expect(parents).toHaveLength(2); // self + 1 parent
     expect(conflictEvents).toHaveLength(0);
   });
+
+  it('JSON store conflict: the content clock (lastUpdated) beats the commit clock', async () => {
+    // 2026-08-23 incident shape: a replica pre-creates an EMPTY chat store,
+    // its 30s auto-save tick commits AFTER the primary's tick committed the
+    // SAME store carrying the user's message. Commit-time LWW picked the empty
+    // side and the message was erased on every box. The stores' own
+    // lastUpdated stamps had the true order.
+    const file = 'conv.json';
+    const withMessage = JSON.stringify({
+      version: 2,
+      lastUpdated: '2026-08-23T13:50:34.564Z', // newer CONTENT
+      entries: [{ role: 'user', content: 'the message that must survive' }],
+    });
+    const emptyStore = JSON.stringify({
+      version: 2,
+      lastUpdated: '2026-08-23T13:50:34.526Z', // older CONTENT
+      entries: [],
+    });
+
+    // Local (this box) holds the message, committed 2 min ago.
+    const past = new Date(Date.now() - 120_000).toISOString();
+    await fsp.writeFile(path.join(tmpDir, file), withMessage, 'utf-8');
+    commitAll(tmpDir, 'primary: user message persisted', past);
+
+    // Remote holds the stale empty store, committed NOW (newer commit clock).
+    await fsp.writeFile(path.join(cloneDir, file), emptyStore, 'utf-8');
+    commitAll(cloneDir, 'replica: empty pre-created store');
+    run('git push origin main', cloneDir);
+
+    const result = await sync();
+
+    expect(result.conflicts).toBeGreaterThan(0);
+    const merged = JSON.parse(await fsp.readFile(path.join(tmpDir, file), 'utf-8'));
+    expect(merged.entries).toHaveLength(1); // the message survived
+    expect(conflictEvents).toHaveLength(1);
+    expect(conflictEvents[0].winner).toBe('local');
+  });
+
+  it('non-JSON conflict still falls back to the commit clock (remote newer wins)', async () => {
+    const past = new Date(Date.now() - 120_000).toISOString();
+    await fsp.writeFile(path.join(tmpDir, 'data.txt'), 'LOCAL-VERSION\n', 'utf-8');
+    commitAll(tmpDir, 'local edit', past);
+
+    await fsp.writeFile(path.join(cloneDir, 'data.txt'), 'REMOTE-VERSION\n', 'utf-8');
+    commitAll(cloneDir, 'remote edit');
+    run('git push origin main', cloneDir);
+
+    const result = await sync();
+
+    expect(result.conflicts).toBeGreaterThan(0);
+    expect(await fsp.readFile(path.join(tmpDir, 'data.txt'), 'utf-8')).toBe('REMOTE-VERSION\n');
+    expect(conflictEvents[0].winner).toBe('remote');
+  });
 });

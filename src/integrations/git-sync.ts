@@ -1572,6 +1572,30 @@ async function pullFromRemote(branch: string): Promise<{ pulled: number; conflic
 }
 
 /**
+ * A conflicted file's CONTENT clock: the top-level `lastUpdated` ISO stamp our
+ * JSON stores write on every save (chat conversations, task DB exports, …).
+ * Returns epoch ms, or null when the blob isn't JSON / has no parseable stamp.
+ * Bounded read: `git show` of a data-repo JSON blob, parsed once — this runs
+ * only for files that are ALREADY in same-hunk conflict (rare).
+ */
+async function contentClockMs(ref: string, file: string): Promise<number | null> {
+  if (!file.endsWith('.json')) return null;
+  // Whale guard: don't buffer a multi-MB store just to read one stamp.
+  const size = Number(await gitSafeAsync(`cat-file -s ${ref}:"${file}"`) || 'NaN');
+  if (!Number.isFinite(size) || size > 8 * 1024 * 1024) return null;
+  const blob = await gitSafeAsync(`show ${ref}:"${file}"`);
+  if (blob === null) return null;
+  try {
+    const parsed = JSON.parse(blob) as { lastUpdated?: unknown };
+    if (typeof parsed?.lastUpdated !== 'string') return null;
+    const ms = Date.parse(parsed.lastUpdated);
+    return Number.isFinite(ms) ? ms : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Merge origin/<branch> into the local branch with last-writer-wins conflict
  * resolution at FILE granularity:
  *
@@ -1701,13 +1725,33 @@ async function lwwMerge(branch: string): Promise<{ merged: boolean; conflicts: n
     return { merged: fallback !== null, conflicts: fallback !== null ? 1 : 0 };
   }
 
-  // Per-file LWW: compare the newest commit touching each file on each side.
+  // Per-file LWW. The CONTENT clock (a store's own top-level `lastUpdated`)
+  // decides first; the commit clock is only the fallback. Commit time is the
+  // PHASE of each box's 30s auto-save tick, not data freshness — 2026-08-23
+  // incident: a replica's empty pre-created chat store committed 14s after the
+  // primary's copy that held the user's message, "won" commit-time LWW, and the
+  // merge erased the message from every box. The stores' own lastUpdated
+  // stamps (written by the app at write time) had the order right.
   const localWins: string[] = [];
   const remoteWins: string[] = [];
+  const clockByFile = new Map<string, 'content' | 'commit'>();
   for (const file of files) {
-    const localTime = Number(await gitSafeAsync(`log -1 --format=%ct HEAD -- "${file}"`) || '0');
-    const remoteTime = Number(await gitSafeAsync(`log -1 --format=%ct ${remoteRef} -- "${file}"`) || '0');
-    const side = localTime > remoteTime ? '--ours' : '--theirs';
+    const localClock = await contentClockMs('HEAD', file);
+    const remoteClock = await contentClockMs(remoteRef, file);
+    let newerIsLocal: boolean;
+    if (localClock !== null && remoteClock !== null && localClock !== remoteClock) {
+      newerIsLocal = localClock > remoteClock;
+      clockByFile.set(file, 'content');
+    } else {
+      // No content clock on one side (non-JSON, unreadable, no stamp) or a
+      // dead tie — fall back to commit time; tie there → remote wins
+      // (deterministic; matches the companion-box-pulls-the-Mac common case).
+      const localTime = Number(await gitSafeAsync(`log -1 --format=%ct HEAD -- "${file}"`) || '0');
+      const remoteTime = Number(await gitSafeAsync(`log -1 --format=%ct ${remoteRef} -- "${file}"`) || '0');
+      newerIsLocal = localTime > remoteTime;
+      clockByFile.set(file, 'commit');
+    }
+    const side = newerIsLocal ? '--ours' : '--theirs';
     if (await gitSafeAsync(`checkout ${side} -- "${file}"`) !== null) {
       await gitSafeAsync(`add -- "${file}"`);
     } else {
@@ -1781,6 +1825,7 @@ async function lwwMerge(branch: string): Promise<{ merged: boolean; conflicts: n
   const losingCommit = winner === 'local' ? remoteHead : localHead;
   log.git.warn('git-sync auto-resolved same-hunk conflict (LWW)', {
     files, winner, losingCommit, localWins, remoteWins,
+    clocks: Object.fromEntries(clockByFile),
   });
   bus.emit(EventNames.SYNC_CONFLICT_RESOLVED, { files, winner, losingCommit }, ['web-ui'], {
     source: 'git-sync',
