@@ -329,9 +329,16 @@ stop_new_server() {
   fi
 }
 
-# 120 × 0.5s = 60s readiness window (a slow boot under load can exceed 10s).
+# Readiness window, default 180s (override: WALNUT_DEVPROD_READY_SECS). The old
+# 60s window was SMALLER than a real boot under machine load: 2026-08-22, two
+# consecutive deploys each started a healthy server, hit the 60s ceiling while
+# it was still initializing (~90s at load 30-50), and killed it — prod stayed
+# down not because anything failed but because the deploy gave up too early.
+# The check stays bounded; it just has to outlast the slowest observed boot
+# with real margin.
+READY_SECS="${WALNUT_DEVPROD_READY_SECS:-180}"
 ready=0
-for _ in {1..120}; do
+for _ in $(seq 1 $(( READY_SECS * 2 ))); do
   if (( ! use_launchd )) && ! kill -0 "$pid" 2>/dev/null; then
     wait "$pid" || true
     echo "Server process exited before becoming ready." >&2
