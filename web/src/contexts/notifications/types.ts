@@ -9,7 +9,10 @@
 
 /** Persistent kinds land in the feed + unread count; ephemeral kinds only toast. */
 export type NotificationKind =
-  | 'permission' | 'cron' | 'operation-error' | 'sort' | 'audio-error' | 'skill' | 'hook';
+  | 'permission' | 'cron' | 'operation-error' | 'sort' | 'audio-error' | 'skill' | 'hook'
+  /** A letter an agent wrote to the human — envelope only; the body lives in the
+   *  letter store and is read in the Inbox reader (docs/plan/human-inbox.md). */
+  | 'letter';
 export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
 
 /** One option an ACP provider offered for a permission request. */
@@ -80,6 +83,12 @@ export interface Notification {
   /** ACP providers only — the option list the adapter offered. */
   acpOptions?: NotificationAcpOption[];
 
+  // ── Letter envelope (kind 'letter') ──
+  /** Which letter this envelope points at. The record carries NO body: read
+   *  state, pin, type and the thread all live in the letter store, so the row
+   *  and the reader fetch by this id (fallback: the `letter:<id>` dedupKey). */
+  letterId?: string;
+
   // ── Shared enrichment: context to act without opening the session ──
   host?: string;
   sessionTitle?: string;
@@ -110,6 +119,8 @@ export const TOAST_DURATION_MS: Record<NotificationKind, number> = {
   'audio-error': 8000,
   skill: 10000,
   hook: 8000,
+  // Never toasted (see SHOULD_TOAST) — the value only satisfies the Record.
+  letter: 10000,
 };
 
 /**
@@ -128,6 +139,7 @@ export const IS_PERSISTENT: Record<NotificationKind, boolean> = {
   'audio-error': false,
   skill: true,
   hook: true,
+  letter: true,
 };
 
 /**
@@ -149,5 +161,10 @@ export function SHOULD_TOAST(n: { kind: NotificationKind; severity: Notification
     case 'audio-error': return true;
     case 'cron': return false;
     case 'skill': return false;
+    // A letter is deliberately asynchronous — it may be read on a phone days
+    // later. Interrupting with a toast (which auto-dismisses) would be the
+    // wrong weight AND would risk the human "seeing" it without reading it.
+    // The bell badge + Inbox rail count are its surfaces.
+    case 'letter': return false;
   }
 }

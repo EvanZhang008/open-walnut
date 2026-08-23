@@ -1877,6 +1877,15 @@ apiV1Router.delete('/notes/*path', async (req: Request, res: Response, next: Nex
   }
 })
 
+// ─── Human inbox (letters from agents to the human) ────────────────────────
+// Its own router file, mounted here rather than in server.ts: the whole
+// /api/v1/human-inbox family is one feature, and this keeps the mount next to
+// the rest of the v1 surface it is additive to.
+
+import { humanInboxV1Router } from './human-inbox-v1.js'
+
+apiV1Router.use(humanInboxV1Router)
+
 // ─── Router-level error handler: frozen error shape ────────────────────────
 
 apiV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

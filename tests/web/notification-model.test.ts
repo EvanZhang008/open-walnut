@@ -54,6 +54,10 @@ describe('sectionOf', () => {
     expect(sectionOf(n({ kind: 'permission', dedupKey: 'perm:r3', resolved: 'expired' }))).toBe('all');
   });
 
+  it('routes a letter envelope to the Inbox rail', () => {
+    expect(sectionOf(n({ kind: 'letter', dedupKey: 'letter:lt-1', letterId: 'lt-1' }))).toBe('inbox');
+  });
+
   it('keeps an UNRESOLVED operation-error in the Errors rail', () => {
     expect(sectionOf(n({ kind: 'operation-error', dedupKey: 'error:live' }))).toBe('errors');
   });
@@ -166,9 +170,36 @@ describe('sectionCounts', () => {
 
   it('is all-zero for an empty feed', () => {
     expect(sectionCounts([])).toEqual({
-      action: 0, errors: 0, automation: 0, all: 0,
-      errorsTotal: 0, automationTotal: 0, allTotal: 0,
+      action: 0, inbox: 0, errors: 0, automation: 0, all: 0,
+      inboxTotal: 0, errorsTotal: 0, automationTotal: 0, allTotal: 0,
     });
+  });
+
+  // ── Letters (Human Inbox) ──
+  // The letter STORE owns read/pin/archive, so when the caller passes its list
+  // that list wins over the feed's envelopes — the 200-entry feed can have
+  // dropped an envelope while the durable letter is still in the inbox.
+  it('counts unread letter envelopes for the Inbox rail without a letter list', () => {
+    const withLetters = [
+      ...feed,
+      n({ kind: 'letter', dedupKey: 'letter:lt-1', read: false, letterId: 'lt-1' }),
+      n({ kind: 'letter', dedupKey: 'letter:lt-2', read: true, letterId: 'lt-2' }),
+    ];
+    const counts = sectionCounts(withLetters);
+    expect(counts.inbox).toBe(1);
+    expect(counts.inboxTotal).toBe(2);
+  });
+
+  it('prefers the letter store list, skips archived, and adds unanswered decisions to Needs Action', () => {
+    const counts = sectionCounts(feed, [
+      { type: 'action_required', read: false },
+      { type: 'action_required', read: true, answered: { actionId: 'a' } },
+      { type: 'completion', read: false },
+      { type: 'info', read: false, archived: true },
+    ]);
+    expect(counts.inboxTotal).toBe(3);   // the archived one is not in the feed
+    expect(counts.inbox).toBe(2);        // two unread, non-archived
+    expect(counts.action).toBe(3);       // 2 pending permissions + the 1 open decision
   });
 
   it('an EXPIRED permission stops inflating the Needs Action badge', () => {

@@ -15,7 +15,7 @@
 import { parseAskUserQuestionInput, type AskQuestion } from '@/components/sessions/ask-user-question';
 import type { Notification, NotificationAcpOption, NotificationKind } from './types';
 
-export type NotificationSection = 'action' | 'errors' | 'automation' | 'all';
+export type NotificationSection = 'action' | 'inbox' | 'errors' | 'automation' | 'all';
 
 /**
  * Which rail section an entry belongs to. Only a PENDING permission is an action
@@ -24,12 +24,29 @@ export type NotificationSection = 'action' | 'errors' | 'automation' | 'all';
  * describes a CONDITION, and once the operation succeeds again the condition is
  * gone, so the entry becomes history and leaves the Errors rail (without it, the
  * wall of red survived the fix and the rail stopped being worth reading).
+ *
+ * A letter goes to the Inbox rail. It ALSO shows in All (it is a notification),
+ * but its read/pin state is owned by the letter store, not by this record — see
+ * sectionCounts, which prefers the letter list when it has one.
  */
 export function sectionOf(n: Notification): NotificationSection {
   if (n.kind === 'permission') return n.resolved ? 'all' : 'action';
+  if (n.kind === 'letter') return 'inbox';
   if (n.kind === 'operation-error') return n.resolved ? 'all' : 'errors';
   if (n.kind === 'cron' || n.kind === 'skill' || n.kind === 'hook') return 'automation';
   return 'all';
+}
+
+/**
+ * The letter an envelope notification points at.
+ *
+ * Prefers the first-class field; falls back to the `letter:<id>` dedupKey for a
+ * record written before the server carried it (same shape as requestIdOf).
+ */
+export function letterIdOf(n: Notification): string | null {
+  if (n.letterId) return n.letterId;
+  if (n.dedupKey.startsWith('letter:')) return n.dedupKey.slice('letter:'.length) || null;
+  return null;
 }
 
 /**
@@ -63,18 +80,36 @@ export function resolvedLabelOf(
 
 export interface SectionCounts {
   action: number;
+  /** UNREAD letters — the Inbox rail badge (a letter is read one at a time, so
+   *  unread is the meaningful number here, unlike the other rails). */
+  inbox: number;
   /** UNREAD errors — bell-badge parity, NOT what the rail badge shows. */
   errors: number;
   /** UNREAD automation receipts. */
   automation: number;
   /** UNREAD across the whole feed (the bell badge's number). */
   all: number;
+  /** Letters the Inbox rail lists (non-archived). */
+  inboxTotal: number;
   /** Errors the rail actually lists: unresolved, read or not. */
   errorsTotal: number;
   /** Automation receipts the rail lists. */
   automationTotal: number;
   /** The whole feed. */
   allTotal: number;
+}
+
+/**
+ * The letter fields the counts need — structurally satisfied by LetterEnvelope
+ * (web/src/api/human-inbox.ts). Declared locally so this module stays free of
+ * API-client imports and remains a pure, unit-testable derivation.
+ */
+export interface LetterCountable {
+  type: string;
+  read: boolean;
+  pinned?: boolean;
+  archived?: boolean;
+  answered?: unknown;
 }
 
 /**
@@ -88,19 +123,37 @@ export interface SectionCounts {
  * number, and the user couldn't see there were nine errors sitting under a tab
  * they had already opened once. The unread fields stay for the bell badge, which
  * legitimately means "new since you looked".
+ *
+ * `letters` (the letter store's own list) is optional and AUTHORITATIVE when
+ * given: read/pin/archive live there, and the 200-entry feed can have dropped a
+ * durable letter's envelope entirely. Without it the feed's letter envelopes are
+ * used as a stand-in so the Inbox badge is right before the list loads. An
+ * UNANSWERED action_required letter also counts into Needs Action — it blocks
+ * work exactly like a permission ask does.
  */
-export function sectionCounts(feed: Notification[]): SectionCounts {
+export function sectionCounts(feed: Notification[], letters?: LetterCountable[]): SectionCounts {
   const counts: SectionCounts = {
-    action: 0, errors: 0, automation: 0, all: 0,
-    errorsTotal: 0, automationTotal: 0, allTotal: 0,
+    action: 0, inbox: 0, errors: 0, automation: 0, all: 0,
+    inboxTotal: 0, errorsTotal: 0, automationTotal: 0, allTotal: 0,
   };
   for (const n of feed) {
     counts.allTotal++;
     if (!n.read) counts.all++;
     const section = sectionOf(n);
     if (section === 'action') counts.action++;
+    else if (section === 'inbox') { counts.inboxTotal++; if (!n.read) counts.inbox++; }
     else if (section === 'errors') { counts.errorsTotal++; if (!n.read) counts.errors++; }
     else if (section === 'automation') { counts.automationTotal++; if (!n.read) counts.automation++; }
+  }
+  if (letters && letters.length > 0) {
+    counts.inbox = 0;
+    counts.inboxTotal = 0;
+    for (const l of letters) {
+      if (l.archived) continue;
+      counts.inboxTotal++;
+      if (!l.read) counts.inbox++;
+      if (l.type === 'action_required' && !l.answered) counts.action++;
+    }
   }
   return counts;
 }

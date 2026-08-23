@@ -31,6 +31,24 @@ export type OpOutcome =
   | { ok: true; result: unknown }
   | { ok: false; message: string }
 
+/** Header every op request carries when the caller's session id is known. */
+export const CALLER_SID_HEADER = 'x-walnut-caller-sid'
+
+/**
+ * Who is calling, for ops whose server side stamps provenance (the human inbox
+ * stamps a letter's sender from it). An explicit `callerSid` always wins — the
+ * gateway resolved it from the daemon's own view of the calling CLI. The env
+ * fallback covers the OTHER processes: `walnut tools call` and `wn mcp`, which
+ * run inside a managed session and inherit WALNUT_SESSION_ID.
+ *
+ * The header is provenance, never authorization: nothing gates on it, so a
+ * forged value can only mislabel a letter's sender.
+ */
+function resolveCallerSid(explicit?: string): string | undefined {
+  const sid = (explicit ?? process.env.WALNUT_SESSION_ID ?? '').trim()
+  return sid || undefined
+}
+
 /** Pull the deepest cause code out of a fetch failure (Node wraps in TypeError). */
 function causeCode(err: unknown): string | undefined {
   let cur: unknown = err
@@ -53,6 +71,7 @@ async function rawRequest(
   path: string,
   body: unknown,
   timeoutMs: number,
+  callerSid?: string,
 ): Promise<OpOutcome> {
   const serverRoot = base.replace(/\/api\/v1$/, '')
   const url = path.startsWith('/api/') ? `${serverRoot}${path}` : `${base}${path}`
@@ -62,6 +81,7 @@ async function rawRequest(
       method,
       headers: {
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...(callerSid ? { [CALLER_SID_HEADER]: callerSid } : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
@@ -152,7 +172,7 @@ export function materializeBinding(
 export async function executeOp(
   name: string,
   rawArgs: Record<string, unknown>,
-  options: { apiBase?: string } = {},
+  options: { apiBase?: string; callerSid?: string } = {},
 ): Promise<OpOutcome> {
   const op = getOp(name)
   if (!op) return { ok: false, message: `Unknown op: ${name}. Run \`walnut tools list\` for the catalog.` }
@@ -165,19 +185,20 @@ export async function executeOp(
   const args = parsed.data as Record<string, unknown>
 
   const base = resolveApiBase(options.apiBase)
-  return runOp(op, args, base)
+  return runOp(op, args, base, resolveCallerSid(options.callerSid))
 }
 
 async function runOp(
   op: WalnutOp,
   args: Record<string, unknown>,
   base: string,
+  callerSid?: string,
 ): Promise<OpOutcome> {
   const timeoutMs = op.timeoutMs ?? REQUEST_TIMEOUT_MS
   if (op.handler) {
     try {
       const call = async (method: HttpBinding['method'], path: string, body?: unknown): Promise<unknown> => {
-        const r = await rawRequest(base, method, path, body, timeoutMs)
+        const r = await rawRequest(base, method, path, body, timeoutMs, callerSid)
         if (!r.ok) throw new Error(r.message)
         return r.result
       }
@@ -193,7 +214,7 @@ async function runOp(
   } catch (err) {
     return { ok: false, message: `Invalid arguments for ${op.name}: ${err instanceof Error ? err.message : String(err)}` }
   }
-  const r = await rawRequest(base, op.bind!.method, materialized.path, materialized.body, timeoutMs)
+  const r = await rawRequest(base, op.bind!.method, materialized.path, materialized.body, timeoutMs, callerSid)
   if (!r.ok) return r
   const result = op.mapResult ? op.mapResult({ body: r.result, args }) : r.result
   return { ok: true, result }

@@ -211,6 +211,24 @@ export function initPushNotifications(): void {
           break
         }
 
+        case EventNames.HUMAN_INBOX_LETTER: {
+          const data = eventData<typeof EventNames.HUMAN_INBOX_LETTER>(event)
+          // Envelope only: `textPreview` is the letter's short plain-text preview
+          // (<= 300 chars, capped at write time), never the document body — the
+          // body stays behind GET /api/v1/human-inbox/:id.
+          const prefix = data.kind === 'reply' ? 'Reply: ' : 'New letter: '
+          // Subjects are capped at 200 in the store; a lock-screen title has room
+          // for far less, so trim it here rather than letting the OS elide it.
+          const title = `${prefix}${data.subject}`.slice(0, 100)
+          await maybePush(title, data.textPreview || 'Open Walnut to read it', {
+            type: 'human_inbox_letter',
+            letterId: data.letterId,
+            letterType: data.type,
+            kind: data.kind,
+          })
+          break
+        }
+
         case EventNames.CHAT_HISTORY_UPDATED: {
           const data = eventData<typeof EventNames.CHAT_HISTORY_UPDATED>(event)
           // source lives on the entry, not the top-level payload — reading the

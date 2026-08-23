@@ -657,6 +657,26 @@ export interface ClientIncidentEvent {
   timestamp: number;
 }
 
+// ── Human Inbox (letters from agents to the human) ──
+
+/**
+ * A letter was sent, or the origin agent replied in its thread. Carries the
+ * ENVELOPE only — the body is a document on disk behind
+ * GET /api/v1/human-inbox/:id, so a push can never leak letter content.
+ * Consumers: the notification bridge (envelope record), push, the WS feed.
+ */
+export interface HumanInboxLetterEvent {
+  letterId: string;
+  subject: string;
+  type: 'completion' | 'action_required' | 'review' | 'info';
+  /** <= 300 chars of plain text (the letter's, or the reply's for kind 'reply'). */
+  textPreview: string;
+  senderSessionId: string;
+  senderTitle?: string;
+  host: string;
+  kind: 'new' | 'reply';
+}
+
 export interface SystemHealthEvent {
   embedding: {
     total: number;
@@ -846,6 +866,8 @@ export interface EventPayloadMap {
   'system:health': SystemHealthEvent;
 
   'client:incident': ClientIncidentEvent;
+
+  'human-inbox:letter': HumanInboxLetterEvent;
 
   'audio:started': AudioStartedEvent;
   'audio:stopped': AudioStoppedEvent;

@@ -10,6 +10,7 @@
 import './tasks.js'
 import './core.js'
 import './work.js'
+import './human-inbox.js'
 
 export { defineOp, listOps, getOp, opNames, opInputJsonSchema, type WalnutOp, type HttpBinding } from './registry.js'
-export { executeOp, resolveApiBase, materializeBinding, type OpOutcome } from './executor.js'
+export { executeOp, resolveApiBase, materializeBinding, CALLER_SID_HEADER, type OpOutcome } from './executor.js'

@@ -4,6 +4,7 @@
  *
  * The rail sorts the feed by WHAT THE USER HAS TO DO:
  *   Needs Action — pending permission asks, answerable right here
+ *   Inbox        — letters agents wrote to the human (read in the LetterReader)
  *   Errors       — operation errors (with the server's ×N occurrence folding)
  *   Automation   — cron / skill / hook receipts
  *   System       — ambient health (remote hosts, data backup, embedding search)
@@ -11,9 +12,10 @@
  * A flat single list buried the one entry that blocks a session under twenty
  * receipts, which is why permissions used to need a session round-trip.
  *
- * Opening the panel marks the feed read. Same-origin entries (one cron job's
- * runs, one session's permissions) still collapse into an expandable group, and a
- * collapsed group never hides a pending ask.
+ * Opening the panel marks the feed read — EXCEPT letters, whose read state is
+ * owned by the letter store and set by actually reading one. Same-origin entries
+ * (one cron job's runs, one session's permissions) still collapse into an
+ * expandable group, and a collapsed group never hides a pending ask.
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -23,7 +25,7 @@ import {
   useNotifications, sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
   linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory,
-  systemIssueCount,
+  systemIssueCount, letterIdOf,
   type Notification, type NotificationSection,
 } from '@/contexts/notifications';
 import { respondToPermission } from '@/api/sessions';
@@ -31,6 +33,14 @@ import { PermissionAnswerForm } from './PermissionAnswerForm';
 import { NotificationSystemPane, useQmdStatus, qmdUnhealthy } from './NotificationSystemPane';
 import { navigateToTarget } from '@/utils/open-session';
 import { log } from '@/utils/log';
+import { useHumanInbox } from '@/hooks/useHumanInbox';
+import { LetterEnvelopeRow } from '@/components/inbox/LetterEnvelopeRow';
+import { InboxPane } from '@/components/inbox/InboxPane';
+import { LetterReader } from '@/components/inbox/LetterReader';
+import {
+  isAwaitingDecision, setLetterArchived, setLetterPinned, setLetterRead,
+  type LetterEnvelope,
+} from '@/api/human-inbox';
 
 interface NotificationPanelProps {
   open: boolean;
@@ -43,7 +53,7 @@ type RailSection = NotificationSection | 'system';
 
 export function NotificationPanel({ open, onClose, sidebarCollapsed }: NotificationPanelProps) {
   const { hasIssues } = useSystemHealth();
-  const { feed, loaded, unreadCount, markAllRead, dismissFeed } = useNotifications();
+  const { feed, loaded, unreadCount, markAllRead, markLocalRead, dismissFeed } = useNotifications();
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [section, setSection] = useState<RailSection>('all');
   // Second-level filter inside Errors: null = every category (the landing view),
@@ -53,7 +63,60 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   const navigate = useNavigate();
   const qmdStatus = useQmdStatus(open, section === 'system');
 
-  const counts = useMemo(() => sectionCounts(feed), [feed]);
+  // Letters live in their OWN store (durable documents), so the rail reads them
+  // from there instead of from the 200-entry feed — which can have dropped a
+  // letter's envelope while the letter itself is still in the inbox. Fetching is
+  // gated on the panel being open; every letter WS event refreshes it (D8).
+  const [showArchived, setShowArchived] = useState(false);
+  const [openLetterId, setOpenLetterId] = useState<string | null>(null);
+  const inbox = useHumanInbox({ enabled: open, archived: showArchived });
+  const inboxRef = useRef(inbox);
+  inboxRef.current = inbox;
+  // Escape belongs to the top-most layer: with the reader open, the panel must
+  // not also close (both listeners sit on `document`, so stopPropagation in the
+  // reader cannot help — the panel has to opt out itself).
+  const readerOpenRef = useRef(false);
+  readerOpenRef.current = !!openLetterId;
+
+  // Counts read the LIVE letters, never the current view: with Archived open the
+  // view holds only archived rows, which badged the Inbox 0 and made Needs Action
+  // forget the decisions it is there to surface.
+  const counts = useMemo(() => sectionCounts(feed, inbox.liveLetters), [feed, inbox.liveLetters]);
+
+  // Letter mutations: patch locally (the panel must feel instant), call the
+  // route, resync on failure. Read state ALSO mirrors onto the feed envelope so
+  // the bell badge drops without waiting for the WS round-trip.
+  const markLetterRead = useCallback((id: string, read = true) => {
+    const current = inboxRef.current.byId.get(id);
+    if (current && current.read === read) return;
+    markLocalRead([`letter:${id}`], read);
+    void inboxRef.current.applyChange(id, { read }, () => setLetterRead(id, read), 'read');
+  }, [markLocalRead]);
+
+  const toggleLetterPin = useCallback((letter: LetterEnvelope) => {
+    const pinned = !letter.pinned;
+    void inboxRef.current.applyChange(letter.id, { pinned }, () => setLetterPinned(letter.id, pinned), 'pin');
+  }, []);
+
+  // Archiving moves the letter between the live feed and the Archived view, so
+  // the list is re-read once the route settles rather than left showing a row
+  // that no longer belongs to the current filter.
+  const toggleLetterArchive = useCallback((letter: LetterEnvelope) => {
+    const archived = !letter.archived;
+    void inboxRef.current
+      .applyChange(letter.id, { archived }, () => setLetterArchived(letter.id, archived), 'archive')
+      .then(() => inboxRef.current.refresh());
+  }, []);
+
+  const openLetter = useCallback((id: string) => {
+    setOpenLetterId(id);
+    log.info('inbox', 'letter reader opened', { letterId: id });
+  }, []);
+
+  // Closing the panel closes the reader with it (the reader renders inside the
+  // panel's portal): without this, the next panel open would silently pop the
+  // letter the user had already walked away from.
+  useEffect(() => { if (!open) setOpenLetterId(null); }, [open]);
 
   // The System zone's own health signal. `hasIssues` is useSystemHealth's own
   // derivation (git-sync unprotected or failing) — the same one the Sidebar's
@@ -71,11 +134,20 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   // timestamp) keeps a folded recurring error at the top of the list — its
   // `timestamp` is first-seen and can be hours old while it is still firing.
   const items = useMemo(() => {
-    const pool = section === 'system' ? []
+    // Inbox rows come from the letter store, not the feed (see `inbox` above).
+    const pool = section === 'system' || section === 'inbox' ? []
       : section === 'all' ? feed
       : feed.filter(n => sectionOf(n) === section);
     return [...pool].sort((a, b) => effectiveTs(b) - effectiveTs(a));
   }, [feed, section]);
+
+  // An unanswered action_required letter blocks work exactly like a permission
+  // ask, so it is counted into Needs Action — and therefore has to be LISTED
+  // there too: a badge whose section shows nothing is how a decision gets lost.
+  const decisionLetters = useMemo(
+    () => inbox.liveLetters.filter(isAwaitingDecision),
+    [inbox.liveLetters],
+  );
 
   // Same-origin entries collapse into one expandable group (iPhone-style):
   // a cron job's repeated runs stack under the job name, a session's permission
@@ -165,7 +237,10 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   // overlay, so there is no ancestor to catch the key — it has to be on document.
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      // The reader (or its file preview) owns Escape while it is open.
+      if (e.key === 'Escape' && !readerOpenRef.current) onClose();
+    };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [open, onClose]);
@@ -232,6 +307,13 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
               label="Needs Action" count={counts.action} warn
               active={section === 'action'} onClick={() => pickSection('action')}
             />
+            {/* Inbox shows UNREAD letters (not the list length): a letter is read
+                one at a time, so "how many are still unread" is the number that
+                means something here. */}
+            <RailButton
+              label="Inbox" count={counts.inbox}
+              active={section === 'inbox'} onClick={() => pickSection('inbox')}
+            />
             {/* Every rail section carries a badge, and the non-action ones show
                 what the tab LISTS (not just what is unread): a rail where only
                 Needs Action had a number left the user unable to see that nine
@@ -278,7 +360,19 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
               /* Ambient health (daemons / backup / embedding search) — its own
                  component so the QMD poll only runs while this tab is showing. */
               <NotificationSystemPane qmdStatus={qmdStatus} />
-            ) : groups.length === 0 ? (
+            ) : section === 'inbox' ? (
+              <InboxPane
+                letters={inbox.letters}
+                loaded={inbox.loaded}
+                error={inbox.error}
+                showArchived={showArchived}
+                onToggleArchived={() => setShowArchived(v => !v)}
+                onOpen={openLetter}
+                onTogglePin={toggleLetterPin}
+                onToggleArchive={toggleLetterArchive}
+                onToggleRead={(l) => markLetterRead(l.id, !l.read)}
+              />
+            ) : groups.length === 0 && !(section === 'action' && decisionLetters.length > 0) ? (
               <div className="notification-feed-empty">{EMPTY_TEXT[section]}</div>
             ) : errorBlocks ? (
               /* Errors: one block per CATEGORY. The header is the whole point of
@@ -328,12 +422,30 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
               </div>
             ) : (
               <div className="notification-feed">
+                {/* Letters awaiting a decision sit ABOVE the permission cards in
+                    Needs Action: they are the asks that survived the session
+                    going idle, so they are the oldest debt in the section. */}
+                {section === 'action' && decisionLetters.length > 0 && (
+                  <div className="hib-list">
+                    {decisionLetters.map(letter => (
+                      <LetterEnvelopeRow
+                        key={letter.id}
+                        letter={letter}
+                        onOpen={() => openLetter(letter.id)}
+                        onTogglePin={() => toggleLetterPin(letter)}
+                        onToggleArchive={() => toggleLetterArchive(letter)}
+                        onToggleRead={() => markLetterRead(letter.id, !letter.read)}
+                      />
+                    ))}
+                  </div>
+                )}
                 <FeedGroups
                   groups={groups}
                   expandedGroups={expandedGroups}
                   onToggleGroup={toggleGroup}
                   onNavigate={onNavigate}
                   onDismissKey={key => dismissFeed([key])}
+                  onOpenLetter={openLetter}
                   showCategoryChip={section === 'all'}
                 />
               </div>
@@ -341,6 +453,21 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
           </div>
         </div>
       </div>
+
+      {/* The reader is its own portalled overlay above the panel: a letter is a
+          document, not a card, and the narrow panel can't hold one. */}
+      {openLetterId && (
+        <LetterReader
+          letterId={openLetterId}
+          {...(inbox.byId.get(openLetterId) ? { envelope: inbox.byId.get(openLetterId) } : {})}
+          onClose={() => setOpenLetterId(null)}
+          onLetterUpdated={inbox.mergeLetter}
+          onMarkRead={markLetterRead}
+          onTogglePin={toggleLetterPin}
+          onToggleArchive={toggleLetterArchive}
+          onNavigate={onNavigate}
+        />
+      )}
     </>,
     document.body,
   );
@@ -348,6 +475,7 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
 
 const EMPTY_TEXT: Record<NotificationSection, string> = {
   action: 'Nothing waiting on you',
+  inbox: 'No letters yet',
   errors: 'No errors',
   automation: 'No automation activity',
   all: 'No notifications yet',
@@ -443,13 +571,15 @@ function collapseSameOrigin(items: Notification[]): FeedGroup[] {
  * ask" rule especially) would drift.
  */
 function FeedGroups({
-  groups, expandedGroups, onToggleGroup, onNavigate, onDismissKey, showCategoryChip,
+  groups, expandedGroups, onToggleGroup, onNavigate, onDismissKey, onOpenLetter, showCategoryChip,
 }: {
   groups: FeedGroup[];
   expandedGroups: Set<string>;
   onToggleGroup: (key: string) => void;
   onNavigate: (to: string) => void;
   onDismissKey: (dedupKey: string) => void;
+  /** A letter envelope in the All feed opens the reader, not a session link. */
+  onOpenLetter?: (letterId: string) => void;
   /** All-section only: name the family on an error card, since there is no header. */
   showCategoryChip?: boolean;
 }) {
@@ -482,6 +612,7 @@ function FeedGroups({
                   n={n}
                   onNavigate={onNavigate}
                   onDismiss={() => onDismissKey(n.dedupKey)}
+                  {...(onOpenLetter ? { onOpenLetter } : {})}
                   showCategoryChip={showCategoryChip}
                 />
               )
@@ -730,10 +861,11 @@ function ContextChips({ n }: { n: Notification }) {
 }
 
 /** Error / automation card: title, body, ×N fold badge, deep-link chips. */
-const FeedItem = memo(function FeedItem({ n, onNavigate, onDismiss, showCategoryChip }: {
+const FeedItem = memo(function FeedItem({ n, onNavigate, onDismiss, onOpenLetter, showCategoryChip }: {
   n: Notification;
   onNavigate: (to: string) => void;
   onDismiss: () => void;
+  onOpenLetter?: (letterId: string) => void;
   showCategoryChip?: boolean;
 }) {
   // Entries without a navigation target (e.g. plugin/system errors) expand on
@@ -761,18 +893,23 @@ const FeedItem = memo(function FeedItem({ n, onNavigate, onDismiss, showCategory
   // recover it (its session died, or it predates recoveryKey), which reads as
   // "Stale" — deliberately not the green Recovered chip, because nobody fixed it.
   const stale = n.resolved === 'expired';
+  // A letter envelope in the All feed opens the LETTER, never its origin session:
+  // the envelope is a pointer at a document, and the document is the point.
+  const letterId = n.kind === 'letter' && onOpenLetter ? letterIdOf(n) : null;
+  const activate = letterId
+    ? () => onOpenLetter?.(letterId)
+    : target ? () => onNavigate(target) : () => setExpanded(v => !v);
 
   return (
     <div
-      className={`notification-feed-item notification-feed-item--${n.severity}${n.read ? '' : ' unread'}${target ? ' clickable' : ''}${expanded ? ' expanded' : ''}${recovered || stale ? ' recovered' : ''}`}
-      onClick={target ? () => onNavigate(target) : () => setExpanded(v => !v)}
+      className={`notification-feed-item notification-feed-item--${n.severity}${n.read ? '' : ' unread'}${target || letterId ? ' clickable' : ''}${expanded ? ' expanded' : ''}${recovered || stale ? ' recovered' : ''}`}
+      onClick={activate}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          if (target) onNavigate(target);
-          else setExpanded(v => !v);
+          activate();
         }
       }}
     >

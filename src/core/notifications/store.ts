@@ -23,8 +23,13 @@ const NOTIFICATIONS_FILE = path.join(WALNUT_HOME, 'notifications.json');
 /** Keep the feed bounded — most-recent N. Older notifications drop off the tail. */
 const MAX_NOTIFICATIONS = 200;
 
-/** Persistent kinds that can land in the feed. Ephemeral kinds never persist. */
-export type NotificationKind = 'permission' | 'cron' | 'operation-error' | 'skill' | 'hook';
+/** Persistent kinds that can land in the feed. Ephemeral kinds never persist.
+ *  'letter' is the Human Inbox envelope: a notification whose BODY is a document
+ *  living in its own durable store (src/core/human-inbox/), so the record here
+ *  carries only the envelope + `letterId`. It behaves differently from every
+ *  other kind in two deliberate ways — it is exempt from mark-all-read, and the
+ *  200-cap evicts ordinary records before it (see withStore). */
+export type NotificationKind = 'permission' | 'cron' | 'operation-error' | 'skill' | 'hook' | 'letter';
 export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
 
 export interface NotificationRecord {
@@ -98,6 +103,12 @@ export interface NotificationRecord {
   /** Project the session/task belongs to. */
   project?: string;
 
+  /** kind 'letter' only — the Human Inbox letter this envelope points at. The
+   *  document, thread and the canonical read/pin/archive state live in the letter
+   *  store; this record exists so a letter shows up on the bell with everything
+   *  else. `dedupKey` is `letter:<letterId>`. */
+  letterId?: string;
+
   // ── Occurrence folding (upsertNotification) ──
   /** Occurrences folded into this record. Absent = 1.
    *  On a log-bridge record this counts the 60s WINDOWS in which the error
@@ -159,6 +170,28 @@ async function readStore(): Promise<NotificationsStore> {
 }
 
 /**
+ * Trim the feed to MAX_NOTIFICATIONS, evicting ordinary records before letters.
+ *
+ * Plain notifications are EVENTS: losing the 201st cron line off the tail is the
+ * point of a bounded feed. A letter envelope points at a document the human is
+ * expected to read, and an error storm can produce 200 records in minutes — with
+ * a flat tail-slice that storm would silently push the human's inbox rows out of
+ * the feed. So letters are kept while any ordinary record is still droppable;
+ * only letters overflowing the cap ON THEIR OWN fall back to the tail rule.
+ * (With no letters in the feed this is byte-for-byte the old `slice(-MAX)`.)
+ */
+function capNotifications(records: NotificationRecord[]): NotificationRecord[] {
+  const letters = records.filter(n => n.kind === 'letter');
+  if (letters.length === 0) return records.slice(-MAX_NOTIFICATIONS);
+  const keepOthers = Math.max(0, MAX_NOTIFICATIONS - letters.length);
+  const others = records.filter(n => n.kind !== 'letter');
+  // slice(-0) returns the WHOLE array, so the zero case has to be explicit.
+  const kept = new Set(keepOthers === 0 ? [] : others.slice(-keepOthers));
+  const trimmed = records.filter(n => n.kind === 'letter' || kept.has(n));
+  return trimmed.length > MAX_NOTIFICATIONS ? trimmed.slice(-MAX_NOTIFICATIONS) : trimmed;
+}
+
+/**
  * Locked read-modify-write: mutate a FRESH store under the cross-process lock,
  * apply the cap + backup safety nets, persist, and return the callback's value.
  */
@@ -170,7 +203,7 @@ async function withStore<R>(fn: (store: NotificationsStore) => R): Promise<R> {
     out = fn(store);
     // Cap to most-recent MAX (appended, so the tail is newest).
     if (store.notifications.length > MAX_NOTIFICATIONS) {
-      store.notifications = store.notifications.slice(-MAX_NOTIFICATIONS);
+      store.notifications = capNotifications(store.notifications);
     }
     // dismiss/clear can legitimately empty the feed, so guard the non-empty→empty
     // transition with a .backup snapshot (same safety net as the cron store) in
@@ -326,14 +359,62 @@ export async function listNotifications(): Promise<{ feed: NotificationRecord[];
 /**
  * Mark notifications read. With no ids, marks ALL read (the common "opened the
  * panel" case). Returns the resulting unread count.
+ *
+ * kind 'letter' is EXEMPT from the mark-ALL path: a letter is a document that is
+ * read by being OPENED, one at a time, so "the user glanced at the panel" must
+ * not silence an unread letter the way it retires a cron line. An explicit id
+ * still works — that is the path the reader (and the letter store's read-state
+ * mirror) uses.
  */
 export async function markRead(ids?: string[]): Promise<{ unreadCount: number }> {
   return withWriteLock(() => withStore((store) => {
     const idSet = ids && ids.length > 0 ? new Set(ids) : null;
     for (const n of store.notifications) {
-      if (!idSet || idSet.has(n.id)) n.read = true;
+      if (!idSet) {
+        if (n.kind !== 'letter') n.read = true;
+        continue;
+      }
+      if (idSet.has(n.id)) n.read = true;
     }
     return { unreadCount: store.notifications.filter(n => !n.read).length };
+  }));
+}
+
+/**
+ * Patch the envelope notification for a letter, found by `letter:<id>`.
+ *
+ * The letter store is canonical for read/pin/archive, so this is a MIRROR, not a
+ * second source of truth: the bridge calls it when the agent replies (fresh
+ * preview + unread again) and when the human reads a letter. Returns null when
+ * no envelope exists (the letter predates the bridge, or the record was
+ * dismissed) — the caller re-creates it or lets it be, never throws.
+ *
+ * `bump` moves the record to the tail and stamps `lastTimestamp`: a thread that
+ * just gained a turn is news, and the tail is what the cap keeps.
+ */
+export async function updateLetterNotification(
+  letterId: string,
+  patch: { title?: string; body?: string; read?: boolean; bump?: boolean; timestamp?: number },
+): Promise<NotificationRecord | null> {
+  if (!letterId) return null;
+  const dedupKey = `letter:${letterId}`;
+  return withWriteLock(() => withStore((store) => {
+    const idx = store.notifications.findIndex(
+      n => n.kind === 'letter' && (n.letterId === letterId || n.dedupKey === dedupKey),
+    );
+    if (idx === -1) return null;
+    const rec = store.notifications[idx];
+    if (patch.title !== undefined) rec.title = patch.title;
+    if (patch.body !== undefined) rec.body = patch.body;
+    if (patch.read !== undefined) rec.read = patch.read;
+    if (patch.bump) {
+      rec.lastTimestamp = patch.timestamp ?? Date.now();
+      store.notifications.splice(idx, 1);
+      store.notifications.push(rec);
+    }
+    // Shallow clone: callers broadcast this after awaits, and a concurrent write
+    // would otherwise mutate the payload under them.
+    return { ...rec };
   }));
 }
 

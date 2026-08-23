@@ -141,6 +141,10 @@ export const EventNames = {
 
   // Cloud-companion setup job progress (never carries the pairing code)
   CLOUD_SETUP_UPDATE: 'cloud-setup:update',
+
+  // Human Inbox: an agent sent the human a letter, or replied in its thread.
+  // Envelope only — the body stays on disk (see HumanInboxLetterEvent).
+  HUMAN_INBOX_LETTER: 'human-inbox:letter',
 } as const;
 
 export type EventName = (typeof EventNames)[keyof typeof EventNames];

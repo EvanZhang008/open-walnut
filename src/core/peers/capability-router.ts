@@ -152,7 +152,10 @@ async function handleToolsCall(
       return err('throttled', 'too many gateway writes — slow down', { retryAfterMs: decision.retryAfterMs });
     }
   }
-  const r = await executeOp(name, (args ?? {}) as Record<string, unknown>);
+  // callerSid rides along as provenance (never authorization): ops whose
+  // server side stamps "who did this" — the human inbox stamps a letter's
+  // sender — get the daemon-resolved sid instead of guessing.
+  const r = await executeOp(name, (args ?? {}) as Record<string, unknown>, { callerSid });
   if (!r.ok) return err('internal', r.message);
   // GatewayResponse.result must be an object — wrap non-object op results.
   const result = (typeof r.result === 'object' && r.result !== null && !Array.isArray(r.result))

@@ -59,8 +59,15 @@ interface NotificationContextValue {
    * Idempotent — a toast calls it on every interaction and only the first does work.
    */
   pinToast: (id: string) => void;
-  /** Mark all feed entries read (server + local). */
+  /** Mark all feed entries read (server + local). Letters are exempt. */
   markAllRead: () => void;
+  /**
+   * Flip the read flag of specific feed entries LOCALLY only, addressed by
+   * dedupKey. For letters: the letter store owns their read state on the server
+   * (POST /api/v1/human-inbox/:id/read), so the envelope in the feed just has to
+   * follow along for the bell badge without waiting for a WS round-trip.
+   */
+  markLocalRead: (dedupKeys: string[], read: boolean) => void;
   /**
    * Remove feed entries (server + local), addressed by dedupKey — NOT
    * Notification.id (live WS entries carry a frontend-local id the server has
@@ -108,6 +115,8 @@ export interface FeedRecord {
   project?: string;
   count?: number;
   lastTimestamp?: number;
+  /** kind 'letter' only — which letter the envelope points at. */
+  letterId?: string;
 }
 
 /** Copy the enrichment fields off a wire record, omitting absent ones so a
@@ -125,6 +134,7 @@ function enrichmentOf(r: FeedRecord): Partial<Notification> {
     ...(r.host ? { host: r.host } : {}),
     ...(r.sessionTitle ? { sessionTitle: r.sessionTitle } : {}),
     ...(r.project ? { project: r.project } : {}),
+    ...(r.letterId ? { letterId: r.letterId } : {}),
     ...(typeof r.count === 'number' ? { count: r.count } : {}),
     ...(typeof r.lastTimestamp === 'number' ? { lastTimestamp: r.lastTimestamp } : {}),
   };
@@ -255,14 +265,27 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // object each time — a full re-render of the feed for a no-op. Already-read
     // entries keep their identity, and an all-read feed returns `prev` itself so
     // React bails out of the update entirely.
-    setFeed(prev => (prev.some(f => !f.read)
-      ? prev.map(f => (f.read ? f : { ...f, read: true }))
+    //
+    // LETTERS ARE EXEMPT (the server exempts them too): a letter is a document
+    // read one at a time in the reader, so merely opening the panel must not
+    // mark it read — that is how a 3am investigation report would be silently
+    // "seen" and lost. Skipping them locally as well keeps the optimistic
+    // update honest instead of clearing a dot the server will send back unread.
+    setFeed(prev => (prev.some(f => !f.read && f.kind !== 'letter')
+      ? prev.map(f => (f.read || f.kind === 'letter' ? f : { ...f, read: true }))
       : prev));
     fetch('/api/notifications/mark-read', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     }).catch(err => log.warn('notifications', 'mark-read failed', { error: String(err) }));
+  }, []);
+
+  const markLocalRead = useCallback((dedupKeys: string[], read: boolean) => {
+    if (dedupKeys.length === 0) return;
+    setFeed(prev => (prev.some(f => dedupKeys.includes(f.dedupKey) && f.read !== read)
+      ? prev.map(f => (dedupKeys.includes(f.dedupKey) && f.read !== read ? { ...f, read } : f))
+      : prev));
   }, []);
 
   // Remove feed entries locally + server-side. Addressed by dedupKey (NOT id):
@@ -542,8 +565,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const unreadCount = useMemo(() => feed.filter(f => !f.read).length, [feed]);
 
   const value = useMemo<NotificationContextValue>(() => ({
-    toasts, feed, loaded, unreadCount, notify, dismissToast, pinToast, markAllRead, dismissFeed,
-  }), [toasts, feed, loaded, unreadCount, notify, dismissToast, pinToast, markAllRead, dismissFeed]);
+    toasts, feed, loaded, unreadCount, notify, dismissToast, pinToast, markAllRead,
+    markLocalRead, dismissFeed,
+  }), [toasts, feed, loaded, unreadCount, notify, dismissToast, pinToast, markAllRead,
+    markLocalRead, dismissFeed]);
 
   return (
     <NotificationContext.Provider value={value}>
