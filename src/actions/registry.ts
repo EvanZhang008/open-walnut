@@ -28,7 +28,7 @@ let cache: ActionDefinition[] | null = null;
  * This file (registry.ts) is bundled into dist/web/server.js, so we walk up
  * from import.meta.url to find dist/actions/.
  */
-function resolveBuiltinDir(): string {
+function resolveBuiltinDir(): string | null {
   const thisDir = fileURLToPath(new URL('.', import.meta.url)).replace(/\/$/, '');
   let dir = thisDir;
   // When running from dist/web/server.js or dist/cli.js, walk up to find dist/actions/
@@ -41,8 +41,13 @@ function resolveBuiltinDir(): string {
     } catch { /* continue searching */ }
     dir = join(dir, '..');
   }
-  // Fallback: current directory (dev mode via tsx — scanDir filters out non-action files)
-  return thisDir;
+  // No actions/ dir found → skip the builtin scan entirely. The old fallback
+  // returned thisDir, which for a bundled build is dist/ itself — scanDir then
+  // dynamic-imported every .js in dist (all bundles + stale code-split chunks)
+  // and one of them wedged startServer before listen() (2026-08-22 outage:
+  // server alive, lock held, port never bound). A missing dir must cost the
+  // builtin actions, never the boot.
+  return null;
 }
 
 /**
@@ -99,8 +104,11 @@ async function scanDir(
  */
 export async function discoverActions(): Promise<ActionDefinition[]> {
   const builtinDir = resolveBuiltinDir();
+  if (!builtinDir) {
+    log.cron.warn('builtin actions dir not found next to the bundle — builtin actions unavailable this run');
+  }
   const [builtins, userActions] = await Promise.all([
-    scanDir(builtinDir, '.js', 'builtin'),
+    builtinDir ? scanDir(builtinDir, '.js', 'builtin') : Promise.resolve([]),
     scanDir(USER_ACTIONS_DIR, '.mjs', 'user'),
   ]);
 

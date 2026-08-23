@@ -8,6 +8,18 @@ const pluginEntries = fs.readdirSync(integrationsDir, { withFileTypes: true })
   .filter(d => d.isDirectory() && fs.existsSync(path.join(integrationsDir, d.name, 'index.ts')))
   .map(d => path.join(integrationsDir, d.name, 'index.ts'));
 
+// Built-in action modules: src/actions/registry.ts dynamic-imports them from
+// dist/actions/*.js at runtime, so they must be emitted as real files. Nothing
+// emitted them after an older build config was retired — the server ran for
+// weeks off stale dist/actions/ debris that `clean: false` happened to preserve,
+// and the first clean rebuild deleted it (2026-08-22: registry's fallback then
+// scanned dist/ itself, dynamic-imported every stale code-split chunk, and boot
+// hung before listen()). Excludes the registry's own infrastructure files.
+const actionsDir = 'src/actions';
+const actionEntries = fs.readdirSync(actionsDir)
+  .filter(f => f.endsWith('.ts') && !['types.ts', 'registry.ts', 'index.ts'].includes(f))
+  .map(f => path.join(actionsDir, f));
+
 export default defineConfig({
   entry: [
     'src/cli.ts',
@@ -18,6 +30,7 @@ export default defineConfig({
     'src/session-server/index.ts',
     'src/workers/qmd-index-worker.ts',
     'src/workers/git-compaction-worker.ts',
+    ...actionEntries,
     ...pluginEntries,
   ],
   format: ['esm'],
