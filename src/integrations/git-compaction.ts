@@ -333,13 +333,29 @@ export async function compactGitHistory(repoDir = WALNUT_HOME): Promise<Compacti
             })
           : { ok: false as const, bytes: 0, chunks: 0, error: 'no origin url' };
         if (!bundled.ok) {
-          log.git.warn('compaction: bundle delivery also failed — restoring pre-compaction main so sync stays consistent with the hub', { error: bundled.error });
+          // leaseKept says whether the hub still holds the chunks we did land:
+          // if the NEXT run builds the identical bundle (nothing new committed
+          // meanwhile) it resumes from there instead of chunk 1. When new
+          // commits land the bundle differs and the lease is simply ignored,
+          // which is why within-run sweeps — not this — are what makes a
+          // 200-chunk delivery converge.
+          log.git.warn('compaction: bundle delivery also failed — restoring pre-compaction main so sync stays consistent with the hub', {
+            error: bundled.error,
+            chunks: bundled.chunks,
+            chunksSent: bundled.chunksSent,
+            sweeps: bundled.sweeps,
+            resumedFromSeq: bundled.resumedFromSeq,
+            leaseKept: bundled.leaseKept,
+          });
           git(`update-ref refs/heads/main ${backupName}`, opts);
           gitSafe('reset --mixed HEAD', opts);
           removeState(repoDir);
           return { before: commits.length, after: commits.length, error: `push of compacted history failed (${bundled.error ?? 'lease lost or network'}) — rolled back, will retry next run` };
         }
-        log.git.info('compaction: rewritten history delivered via bundle channel', { bytes: bundled.bytes, chunks: bundled.chunks });
+        log.git.info('compaction: rewritten history delivered via bundle channel', {
+          bytes: bundled.bytes, chunks: bundled.chunks,
+          chunksSent: bundled.chunksSent, sweeps: bundled.sweeps, resumedFromSeq: bundled.resumedFromSeq,
+        });
         // The hub ref moved but our remote-tracking ref doesn't know yet —
         // sync's next fetch would otherwise see a surprise. Update it now.
         gitSafe('fetch origin main', opts);
