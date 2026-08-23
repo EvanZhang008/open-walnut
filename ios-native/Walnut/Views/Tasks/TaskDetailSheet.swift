@@ -207,7 +207,9 @@ struct TaskDetailSheet: View {
     private var chips: some View {
         HStack(spacing: 8) {
             Chip(text: statusLabel, color: statusColor)
-            Chip(text: phaseLabel, color: .secondary)
+            if let phaseText = phaseChipText {
+                Chip(text: phaseText, color: .secondary)
+            }
             priorityMenu
             if current.pinned == true {
                 tierMenu
@@ -414,8 +416,16 @@ struct TaskDetailSheet: View {
     }
 
     /// Phase enum → readable Title Case (e.g. AGENT_COMPLETE → Agent Complete).
-    private var phaseLabel: String {
-        current.phase
+    /// nil when the phase is just the status restated (TODO+todo showed
+    /// "To Do"+"Todo" side by side — dogfood R15): only a phase that says
+    /// something the status chip doesn't (AGENT_COMPLETE, or a mismatch like
+    /// COMPLETE while status is still open) earns a second chip.
+    private var phaseChipText: String? {
+        let redundant: [String: TaskStatus] = [
+            "TODO": .todo, "IN_PROGRESS": .inProgress, "COMPLETE": .done,
+        ]
+        if redundant[current.phase] == current.statusKind { return nil }
+        return current.phase
             .split(separator: "_")
             .map { $0.prefix(1).uppercased() + $0.dropFirst().lowercased() }
             .joined(separator: " ")
