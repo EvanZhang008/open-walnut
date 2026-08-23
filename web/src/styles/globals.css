@@ -12451,6 +12451,55 @@ body.walnut-dragging {
   opacity: 1;
 }
 
+/* ── Tier separators — a hand-placed divider line inside a pinned tier ──
+   Deliberately almost nothing: one hairline, a wider invisible hit area so it can
+   be grabbed without pixel hunting, and a delete "x" that only appears on hover.
+   It must read as "a break in the list", never as another row. */
+.tier-separator {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* 9px of padding around a 1px line: enough to grab, small enough that a band
+     boundary doesn't cost a row of vertical space. */
+  padding: 9px 4px;
+  cursor: grab;
+  user-select: none;
+}
+.tier-separator-line {
+  flex: 1;
+  height: 1px;
+  border-radius: 1px;
+  background: var(--border);
+}
+.tier-separator:hover .tier-separator-line { background: var(--fg-muted); }
+.tier-separator:active { cursor: grabbing; }
+.tier-separator-dragging .tier-separator-line {
+  background: var(--accent);
+  height: 2px;
+}
+/* Inert while a CARD drag owns the pointer — see TierSeparatorRow. */
+.tier-separator-inert { cursor: default; pointer-events: none; }
+
+.tier-separator-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-muted);
+  opacity: 0;
+  cursor: pointer;
+}
+.tier-separator:hover .tier-separator-delete,
+.tier-separator-delete:focus-visible { opacity: 1; }
+.tier-separator-delete:hover { background: var(--bg-hover); color: var(--danger, #e5484d); }
+.tier-separator-inert .tier-separator-delete { visibility: hidden; }
+
 /* Starred tab golden accent */
 .todo-panel-tab-starred {
   color: var(--warning);

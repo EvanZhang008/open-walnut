@@ -45,8 +45,8 @@ import {
   draftTierBtn, loadHome, presetStickyTier, watchForbiddenRequests,
 } from './draft-helpers'
 import {
-  navigateToTasksPage, pinToTier, presetTierViewModes, restVisibility, tasksPageGroupHeader,
-  tierProjectLabel, tierViewBar,
+  navigateToTasksPage, openSessionFromPlus, pinToTier, plusControl, presetTierViewModes,
+  restVisibility, tasksPageGroupHeader, tierProjectLabel, tierViewBar,
 } from './draft-surface-helpers'
 import { presetPanelView } from './todo-panel-helpers'
 
@@ -121,11 +121,11 @@ test('the Satellite tab carries a tier "+" that opens a draft preset to Satellit
   // resolving the "+" through it is also the claim about WHERE the control lives.
   const bar = tierViewBar(page)
   await expect(bar).toBeVisible({ timeout: 25_000 })
-  const plus = bar.getByRole('button', { name: 'New session in Satellite' })
+  const plus = plusControl(bar)
   await expect(plus, 'the tier tab must offer a session route').toHaveCount(1)
-  // A direct button, not a menu trigger: no aria-expanded is the machine-readable
-  // form of "one click gets you the column".
-  expect(await plus.getAttribute('aria-expanded'), 'a direct button has no expanded state').toBeNull()
+  // A MENU trigger here (R9): this surface offers task / task with session /
+  // separator, and `aria-expanded` is the machine-readable form of that.
+  expect(await plus.getAttribute('aria-expanded'), 'a menu trigger carries an expanded state').toBe('false')
 
   // Which view mode is active BEFORE the click, so the after-check below is a real
   // "unchanged", not a value that was never set.
@@ -135,13 +135,13 @@ test('the Satellite tab carries a tier "+" that opens a draft preset to Satellit
   // Armed BEFORE the click: a tier is a local value, so this route must touch
   // nothing server-side at all (contrast the project routes, which fetch a detail).
   const seen = watchForbiddenRequests(page)
-  await plus.click()
+  await openSessionFromPlus(page, bar)
 
   const panel = draftPanel(page)
   await expect(panel).toBeVisible({ timeout: 10_000 })
   expect(seen, 'the tier "+" is a pure client-state route').toEqual([])
-  // No menu was ever rendered between the click and the column.
-  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+  // The menu closed behind the choice — it must not sit over the fresh column.
+  await expect(page.getByTestId('plus-menu')).toHaveCount(0)
 
   // THE assertion, read off the control the user sees: Satellite is the active tier
   // in the draft's meta row, and the sticky default it replaced is not.
@@ -175,8 +175,9 @@ test('every built-in tier tab exposes its own "+" with its own tier', async ({ p
     const tab = page.locator('.todo-section-tabs [role="tab"]', { hasText: label }).first()
     await tab.click()
     await expect(tab).toHaveAttribute('aria-selected', 'true')
-    const plus = tierViewBar(page).getByRole('button', { name: `New session in ${label}` })
-    await expect(plus, `the ${label} tab has no session "+"`).toHaveCount(1)
+    const plus = plusControl(tierViewBar(page))
+    await expect(plus, `the ${label} tab has no "+"`).toHaveCount(1)
+    await expect(plus, `the ${label} "+" must name its tier`).toHaveAttribute('title', `Add to ${label}`)
     // Rest-visible on every tab, not only the one scenario 6 measures.
     const { opacity, hovered } = await restVisibility(plus)
     expect(hovered, `the ${label} "+" was measured under the pointer`).toBe(false)
@@ -216,7 +217,7 @@ test('a tier "By project" label offers a project "+" that seeds project AND its 
 
   const label = tierProjectLabel(page, SURFACE_PROJECT)
   await expect(label).toBeVisible({ timeout: 25_000 })
-  const plus = label.getByRole('button', { name: `New session in ${SURFACE_PROJECT}` })
+  const plus = plusControl(label)
   await expect(plus, 'the by-project tier label must carry a project "+"').toHaveCount(1)
 
   // The label is an HTML5 drag handle for project REORDERING, and it is also
@@ -231,11 +232,11 @@ test('a tier "By project" label offers a project "+" that seeds project AND its 
       reorders.push(req.url())
     }
   })
-  await plus.click()
+  await openSessionFromPlus(page, label)
 
   const panel = draftPanel(page)
   await expect(panel).toBeVisible({ timeout: 10_000 })
-  await expect(page.locator('.task-kebab-menu'), 'one click, no menu').toHaveCount(0)
+  await expect(page.getByTestId('plus-menu'), 'the menu closes behind the choice').toHaveCount(0)
 
   // Half one of the seed — synchronous, from the click itself.
   await expect(draftProjectPill(panel)).toHaveText(SURFACE_PROJECT)
@@ -409,15 +410,14 @@ test('the session "+" is legible at rest on every surface, while the kebab stays
   await loadHome(page)
 
   // Surface A — the tier tab's view-mode bar (GAP-1's control).
-  const tierPlus = tierViewBar(page).getByRole('button', { name: 'New session in Satellite' })
+  const tierPlus = plusControl(tierViewBar(page))
   await expect(tierPlus).toHaveCount(1, { timeout: 25_000 })
   const tierRest = await restVisibility(tierPlus)
   expect(tierRest.hovered, 'the tier "+" was measured under the pointer').toBe(false)
   expect(tierRest.opacity, 'the tier tab "+" is invisible at rest').toBeGreaterThan(0.2)
 
   // Surface B — the by-project tier label (GAP-2's control).
-  const labelPlus = tierProjectLabel(page, SURFACE_PROJECT)
-    .getByRole('button', { name: `New session in ${SURFACE_PROJECT}` })
+  const labelPlus = plusControl(tierProjectLabel(page, SURFACE_PROJECT))
   await expect(labelPlus).toHaveCount(1, { timeout: 25_000 })
   const labelRest = await restVisibility(labelPlus)
   expect(labelRest.hovered, 'the label "+" was measured under the pointer').toBe(false)

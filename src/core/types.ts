@@ -909,6 +909,28 @@ export interface Config {
   ordering?: {
     /** Flat project display order (single grouping layer). */
     projects?: string[];
+    /** Hand-placed divider lines inside the pinned tier lists (see
+     *  `TierSeparator` in web/src/components/tasks/tier-separators.ts). Purely
+     *  visual: a separator carries no tasks and no behaviour, it just splits a
+     *  tier (or one project run inside it) into bands the user can name in
+     *  their head. Anchored to the task ids ABOVE and BELOW it — never to an
+     *  index — so a reorder or a completed task moves the line with its
+     *  neighbours instead of stranding it. */
+    separators?: Array<{
+      /** `sep_<random>` — stable across reorders, so a drag is an update. */
+      id: string;
+      /** Tier it belongs to: 'focus' | 'satellite' | 'backlog' | 'wait' | `ct_*`. */
+      tier: string;
+      /** Which tier view mode shows it. The two modes are independent orders,
+       *  so a line placed in one is meaningless in the other. */
+      mode: 'project' | 'custom';
+      /** mode 'project' only: the project run it sits in ('' = Inbox). */
+      project?: string;
+      /** Task id directly ABOVE the line ('' = top of its scope). */
+      after?: string;
+      /** Task id directly BELOW the line ('' = bottom of its scope). */
+      before?: string;
+    }>;
   };
   session_server?: {
     /** Whether to use the SDK session server instead of CLI sessions. Default: false. */

@@ -1,24 +1,30 @@
 /**
  * ProjectHeaderMenus — the two hover actions on a project group header:
  *
- *   ProjectPlusMenu  ("+")  → opens a DRAFT SESSION column in this project
+ *   ProjectPlusMenu  ("+")  → new task / new task with session / add separator
  *   ProjectKebabMenu ("⋮")  → Details / Favorite / Rename… / Delete…
  *
- * The "+" is a DIRECT button, not a menu (R7). It used to drop a two-item menu
- * (Add task / Add session), which cost a click on both branches for no decision
- * the header couldn't already make: "add a task" is already one click away as the
- * ghost row at the bottom of every group, so the header's "+" now means the OTHER
- * thing — start working in this project. The component name/export is unchanged
- * because the ~2 browser specs and the TodoPanel call site address it by name.
+ * The "+" adapts to how many things its host can actually offer (R9):
  *
- * The kebab still portals to <body> with useMenuPlacement — same pattern (and same
- * .task-kebab-menu styling) as TaskKebabMenu, so it inherits flip/clamp behavior
+ *   ONE action  → a DIRECT button, no menu. This is the R7 ruling: a menu that
+ *                 always resolves to the same item is a wasted click.
+ *   TWO or more → a menu, because now there IS a decision — "a task", "a task
+ *                 with a session (draft column)", "a separator line". Right-click
+ *                 on the button opens the same menu.
+ *
+ * So hosts that only know how to launch a session (the /tasks table) keep the
+ * one-click behaviour untouched, while the TODO panel's tier and project headers
+ * become the one control that carries all three verbs.
+ *
+ * The menus portal to <body> with useMenuPlacement — same pattern (and same
+ * .task-kebab-menu styling) as TaskKebabMenu, so they inherit flip/clamp behavior
  * and the theme. The call site gates by group: the kebab is named-projects-only
- * (Inbox has no registry row to rename/delete/detail), and so is the "+" (a
- * session launch seeds the project's default folder, which Inbox cannot have).
+ * (Inbox has no registry row to rename/delete/detail), and so is the SESSION item
+ * (a session launch seeds the project's default folder, which Inbox cannot have)
+ * — but a task or a separator works fine in Inbox, so its "+" still appears.
  */
 
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useConfirm, useAlert, usePrompt } from '@/hooks/useConfirm';
@@ -68,67 +74,148 @@ function useHeaderMenu() {
   return { open, setOpen, btnRef, menuRef, menuPos, closeMenu, openAtCursor, setCursorAnchor };
 }
 
-// ── "+" — start a session in this project (ONE click, no menu) ──────────────
+// ── "+" — new task / new task with session / add separator ──────────────────
 
-export function ProjectPlusMenu({ project, onAddSession }: {
-  project: string;
-  /** Open a new draft session column seeded with this project (and its default
-   *  cwd/host, patched in when the project detail resolves). Omit to render
-   *  nothing — a group with no session route has no "+" at all. */
-  onAddSession?: (project: string) => void;
+/** Icons for the "+" menu items. Local to this file: a 14px hairline reads as
+ *  "a divider line", which no shared icon in Icons.tsx expresses. */
+const ICON_MENU_TASK = (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6" /></svg>
+);
+const ICON_MENU_SESSION = (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 3.5h11v7h-5l-3 2.5v-2.5h-3z" /></svg>
+);
+const ICON_MENU_SEPARATOR = (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M2 8h12" /></svg>
+);
+
+export interface PlusAction {
+  key: string;
+  icon: ReactNode;
+  label: string;
+  /** Tooltip/aria text to use when this is the ONLY action, so a single-action
+   *  host keeps the exact wording it had before the menu existed. */
+  soloTitle?: string;
+  run: () => void;
+}
+
+/**
+ * The "+" control itself: direct button for a single action, menu for several.
+ * Shared by the project header and the tier header so both read and behave the
+ * same way.
+ */
+function PlusControl({ actions, restLabel, wrapClassName }: {
+  actions: PlusAction[];
+  /** Tooltip / aria text ("Immigration", "Focus"). */
+  restLabel: string;
+  wrapClassName?: string;
 }) {
-  if (!onAddSession) return null;
-  const label = project || 'Inbox';
+  const { open, setOpen, btnRef, menuRef, menuPos, closeMenu, openAtCursor, setCursorAnchor } = useHeaderMenu();
+  if (actions.length === 0) return null;
+  const single = actions.length === 1 ? actions[0] : null;
+  const title = single ? (single.soloTitle ?? `${single.label}: ${restLabel}`) : `Add to ${restLabel}`;
   return (
-    <span className="todo-group-action-wrap">
+    <span className={wrapClassName ?? 'todo-group-action-wrap'} data-menu-open={open || undefined}>
       <button
+        ref={btnRef}
         // `-plus` modifier: the "+" is legible AT REST (muted, full on hover) while
         // the kebab stays hover-only. A discoverability call — a control nobody can
-        // see until they happen to hover the right row may as well not exist, and
-        // "start working here" is the header's primary verb.
+        // see until they happen to hover the right row may as well not exist.
         className="todo-group-action-btn todo-group-action-btn-plus"
-        onClick={(e) => { e.stopPropagation(); onAddSession(project); }}
-        // dnd-kit: the header IS the group's drag handle, so a pointerdown here
-        // would otherwise arm a project reorder while the user is just clicking.
+        onClick={(e) => {
+          e.stopPropagation();
+          if (single) { single.run(); return; }
+          setCursorAnchor(null);
+          setOpen(!open);
+        }}
+        // Right-click lands on the same menu — the button is the one control in
+        // the panel with more than one verb, so it owns its context menu.
+        onContextMenu={(e) => {
+          if (single) return;
+          e.preventDefault();
+          e.stopPropagation();
+          openAtCursor(e.clientX, e.clientY);
+        }}
+        // Header rows are click-to-collapse AND dnd-kit drag handles, so both
+        // events must stop here: the click would fold the section, the pointerdown
+        // would arm a reorder while the user is just pressing "+".
         onPointerDown={(e) => e.stopPropagation()}
-        title={`New session in ${label}`}
-        aria-label={`New session in ${label}`}
+        // ONLY the keys the host row itself acts on (a tier sublabel toggles its
+        // collapse on Enter/Space). A blanket stopPropagation here also swallowed
+        // ESCAPE — the button keeps focus after opening the menu, so the document
+        // keydown listener that closes it never saw the key and the menu could only
+        // be dismissed by clicking away.
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); }}
+        title={title}
+        aria-label={title}
+        aria-expanded={single ? undefined : open}
+        data-testid="plus-menu-trigger"
       >
         +
       </button>
+      {open && !single && createPortal(
+        <div
+          ref={menuRef}
+          className="task-kebab-menu"
+          style={menuPlacementStyle(menuPos)}
+          onPointerDown={(e) => e.stopPropagation()}
+          data-testid="plus-menu"
+        >
+          {actions.map((a) => (
+            <button
+              key={a.key}
+              className="task-kebab-item"
+              onClick={(e) => { e.stopPropagation(); closeMenu(); a.run(); }}
+            >
+              <span className="task-kebab-icon">{a.icon}</span>
+              <span>{a.label}</span>
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
     </span>
   );
 }
 
-// ── "+" — start a session pinned to this tier (R8; same control as above) ────
+export function ProjectPlusMenu({ project, onAddSession, onAddTask, onAddSeparator }: {
+  project: string;
+  /** Open a new draft session column seeded with this project (and its default
+   *  cwd/host, patched in when the project detail resolves). Omit for Inbox —
+   *  it has no registry row to carry a default folder. */
+  onAddSession?: (project: string) => void;
+  /** Open this project's inline "add task" row. */
+  onAddTask?: (project: string) => void;
+  /** Drop a divider line at the top of this project's run. */
+  onAddSeparator?: (project: string) => void;
+}) {
+  const label = project || 'Inbox';
+  const actions: PlusAction[] = [];
+  if (onAddTask) actions.push({ key: 'task', icon: ICON_MENU_TASK, label: 'New task', run: () => onAddTask(project) });
+  if (onAddSession) actions.push({ key: 'session', icon: ICON_MENU_SESSION, label: 'New task with session', soloTitle: `New session in ${label}`, run: () => onAddSession(project) });
+  if (onAddSeparator) actions.push({ key: 'separator', icon: ICON_MENU_SEPARATOR, label: 'Add separator', run: () => onAddSeparator(project) });
+  return <PlusControl actions={actions} restLabel={label} />;
+}
 
-export function TierPlusButton({ tier, label, onAddSession }: {
+// ── "+" — same control on a tier header (R8) ─────────────────────────────────
+
+export function TierPlusButton({ tier, label, onAddSession, onAddTask, onAddSeparator }: {
   /** Built-in tier name ('focus' | 'satellite' | 'backlog' | 'wait') or a custom
    *  tier id (`ct_*`) — whatever `meta.pinTier` accepts. */
   tier: string;
   /** Human label for the tooltip ("Focus", "Satellite", a custom tier's name). */
   label: string;
   /** Open a draft session column with this tier preset. */
-  onAddSession: (tier: string) => void;
+  onAddSession?: (tier: string) => void;
+  /** Open this tier's inline "add task" row. */
+  onAddTask?: (tier: string) => void;
+  /** Drop a divider line at the top of this tier's list. */
+  onAddSeparator?: (tier: string) => void;
 }) {
-  return (
-    <span className="todo-group-action-wrap todo-tier-action-wrap">
-      <button
-        // Rest-visible like the project "+" — see the note there.
-        className="todo-group-action-btn todo-group-action-btn-plus"
-        // The tier sublabel is a click-to-collapse row, so BOTH events have to
-        // stop here: the click would fold the section, the pointerdown would arm
-        // the pinned area's drag sensors.
-        onClick={(e) => { e.stopPropagation(); onAddSession(tier); }}
-        onPointerDown={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-        title={`New session in ${label}`}
-        aria-label={`New session in ${label}`}
-      >
-        +
-      </button>
-    </span>
-  );
+  const actions: PlusAction[] = [];
+  if (onAddTask) actions.push({ key: 'task', icon: ICON_MENU_TASK, label: 'New task', run: () => onAddTask(tier) });
+  if (onAddSession) actions.push({ key: 'session', icon: ICON_MENU_SESSION, label: 'New task with session', soloTitle: `New session in ${label}`, run: () => onAddSession(tier) });
+  if (onAddSeparator) actions.push({ key: 'separator', icon: ICON_MENU_SEPARATOR, label: 'Add separator', run: () => onAddSeparator(tier) });
+  return <PlusControl actions={actions} restLabel={label} wrapClassName="todo-group-action-wrap todo-tier-action-wrap" />;
 }
 
 // ── "⋮" — project management ────────────────────────────────────────────────

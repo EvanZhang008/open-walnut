@@ -28,6 +28,7 @@ import {
   draftProjectPill, draftQuickChips, expectedChips, loadHome, openDraft, openDraftOnCwd,
   watchForbiddenRequests, type WorkingDir,
 } from './draft-helpers'
+import { openSessionFromPlus } from './draft-surface-helpers'
 import { presetPanelView } from './todo-panel-helpers'
 
 /** Artifacts of this run, per-run overridable (same convention as the siblings). */
@@ -296,7 +297,7 @@ test('a quick-access chip for an unclaimed folder sets the cwd and keeps the see
   }).first()
   await expect(header).toBeVisible({ timeout: 25_000 })
   await header.hover()
-  await header.getByRole('button', { name: 'New session in Walnut' }).click()
+  await openSessionFromPlus(page, header)
 
   const panel = draftPanel(page)
   await expect(panel).toBeVisible({ timeout: 10_000 })

@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, memo, Fragment, type CSSProperties, type ReactNode } from 'react';
+import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, memo, Fragment, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
 import type { Task as CoreTask, SessionRecord } from '@open-walnut/core';
@@ -22,6 +22,16 @@ import type { TaskPriority } from '@open-walnut/core';
 import { TodoSearchBar } from './TodoSearchBar';
 import { NewLauncherButton } from './NewLauncherButton';
 import { ProjectPlusMenu, ProjectKebabMenu, TierPlusButton } from './ProjectHeaderMenus';
+import { TierSeparatorRow } from './TierSeparatorRow';
+import {
+  anchorsForSlot,
+  newSeparatorId,
+  placeSeparators,
+  removeSeparator,
+  upsertSeparator,
+  type SeparatorMode,
+  type TierSeparator,
+} from './tier-separators';
 import { TaskStartButton } from './TaskStartButton';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
@@ -1682,11 +1692,15 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
 
 const RECENT_VISIBLE_MAX = 3;
 
+/** Shared empty separator list — a fresh `[]` per render would invalidate
+ *  renderTierItems' memo and re-render every tier card on every render. */
+const NO_SEPARATORS: TierSeparator[] = [];
+
 // ── CustomTierSubgroup — one user-defined tier section in the pinned area. ──
 // Mirrors the built-in Wait sub-group JSX exactly, but lives in its own component
 // because each tier needs its own useResizableHeight hook and the number of custom
 // tiers is dynamic (hooks can't run in a loop inside TodoPanel itself).
-function CustomTierSubgroup({ def, isAll, folded, collapsed, onToggle, visibleIds, children, isEmpty, count, onAdd, onAddSession }: {
+function CustomTierSubgroup({ def, isAll, folded, collapsed, onToggle, visibleIds, children, isEmpty, count, onAdd, onAddSession, onAddTask, onAddSeparator, dropProps, addOpenSignal, onAddSignalConsumed }: {
   def: CustomTierDef;
   isAll: boolean;
   /** Chevron-folded in the stacked view (content hidden). */
@@ -1702,6 +1716,14 @@ function CustomTierSubgroup({ def, isAll, folded, collapsed, onToggle, visibleId
   onAdd: (title: string) => Promise<unknown>;
   /** Header "+" → a draft session pinned to this custom tier (R8). */
   onAddSession?: (tier: string) => void;
+  /** Header "+" → open this tier's inline add row. */
+  onAddTask?: (tier: string) => void;
+  /** Header "+" → drop a divider line at the top of this tier. */
+  onAddSeparator?: (tier: string) => void;
+  /** Native-drag handlers so a dragged separator can land in this tier. */
+  dropProps?: { onDragOver: (e: ReactDragEvent<HTMLDivElement>) => void; onDrop: (e: ReactDragEvent<HTMLDivElement>) => void };
+  addOpenSignal?: number;
+  onAddSignalConsumed?: () => void;
 }) {
   const resize = useResizableHeight(`open-walnut-focus-tier-height-${def.id}`, { min: 60, max: 1200 });
   return (
@@ -1712,16 +1734,17 @@ function CustomTierSubgroup({ def, isAll, folded, collapsed, onToggle, visibleId
         <span className="todo-pinned-sublabel-icon todo-tier-icon-custom">{ICONS.ICON_TIER_CUSTOM}</span>
         <span className="todo-pinned-sublabel-text">{def.label}</span>
         <span className="todo-pinned-sublabel-count">{count}</span>
-        {onAddSession && <TierPlusButton tier={def.id} label={def.label} onAddSession={onAddSession} />}
+        <TierPlusButton tier={def.id} label={def.label} onAddSession={onAddSession}
+          onAddTask={onAddTask} onAddSeparator={onAddSeparator} />
       </div>
       )}
       {!folded && (
         <SortableContext items={visibleIds} strategy={verticalListSortingStrategy}>
-          <div className="todo-pinned-list-scroll" style={isAll && resize.height != null ? { maxHeight: resize.height } : undefined}>
+          <div className="todo-pinned-list-scroll" style={isAll && resize.height != null ? { maxHeight: resize.height } : undefined} {...dropProps}>
             <TierDropZone id={`${def.id}-drop-zone`} isEmpty={isEmpty}>
               {children}
             </TierDropZone>
-            <InlineAdd label={`Add to ${def.label}…`} onAdd={onAdd} />
+            <InlineAdd label={`Add to ${def.label}…`} onAdd={onAdd} openSignal={addOpenSignal} onOpenSignalConsumed={onAddSignalConsumed} />
           </div>
           {/* Per-tier drag handle only makes sense when tiers share the panel. */}
           {isAll && (
@@ -4109,6 +4132,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
     return map;
   }, [customTiers, customIds_arr, tierVisibleTaskIds, pinnedTaskMap, taskGroups]);
+  // tier id → its visible render ids, for logic that must work for ANY tier
+  // (separator placement) instead of naming the four built-ins.
+  const tierIdsByTier = useMemo(() => {
+    const map = new Map<string, string[]>();
+    map.set('focus', visibleFocusIds);
+    map.set('satellite', visibleSatelliteIds);
+    map.set('backlog', visibleBacklogIds);
+    map.set('wait', visibleWaitIds);
+    for (const def of customTiers ?? []) map.set(def.id, customTierRender[def.id]?.visibleIds ?? []);
+    return map;
+  }, [visibleFocusIds, visibleSatelliteIds, visibleBacklogIds, visibleWaitIds, customTiers, customTierRender]);
   const focusTasksDisplay = useMemo(
     () => visibleFocusIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task),
     [pinnedTaskMap, visibleFocusIds],
@@ -5193,6 +5227,141 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     void ordering.reorderProjects(next);
   }, [ordering, tasks]);
 
+  // ── Separators (divider lines inside a tier) ── Same architecture as the
+  // project labels above: PLAIN DOM + native HTML5 drag, never a dnd-kit
+  // sortable. A separator carries no task, so it must not occupy a slot in the
+  // pinned reorder payload — and staying out of SortableContext keeps card
+  // indices (and the frozen drag refs) exactly as they were.
+  //
+  // Position is stored as the ids of the rows ABOVE and BELOW the line, so a
+  // reorder or a completed neighbour moves the line with its band instead of
+  // stranding it at a dead index (see tier-separators.ts).
+  const separators = ordering?.separators ?? NO_SEPARATORS;
+  const [sepDrag, setSepDrag] = useState<string | null>(null);
+  // Live drop target while dragging — rendered as the line's real position, so
+  // the preview IS the frame that gets committed on drop.
+  const [sepPreview, setSepPreview] = useState<TierSeparator | null>(null);
+  const clearSepDrag = useCallback(() => { setSepDrag(null); setSepPreview(null); }, []);
+
+  const persistSeparators = useCallback((next: TierSeparator[]) => {
+    if (!ordering?.saveSeparators) return;
+    void ordering.saveSeparators(next).catch((err) => {
+      onOperationError?.(err instanceof Error ? err.message : String(err));
+    });
+  }, [ordering, onOperationError]);
+
+  const sepModeFor = useCallback((tier: string): SeparatorMode =>
+    (tierViewMode(tier) === 'custom' ? 'custom' : 'project'), [tierViewMode]);
+
+  /** Resolve a pointer position inside a tier list into a separator placement.
+   *  Rows are read from the DOM: what the user SEES is the only honest source for
+   *  "which two rows did I drop between". */
+  const sepDropAt = useCallback((container: HTMLElement, tier: string, clientY: number): Omit<TierSeparator, 'id'> | null => {
+    const rows = Array.from(container.querySelectorAll<HTMLElement>('[data-task-id]'));
+    const ids = rows.map((el) => el.dataset.taskId ?? '').filter(Boolean);
+    if (ids.length === 0) return null;
+    // First row whose vertical middle is below the pointer; past the last row the
+    // slot is the end of the list.
+    let idx = ids.length;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i].getBoundingClientRect();
+      if (clientY < r.top + r.height / 2) { idx = i; break; }
+    }
+    const mode = sepModeFor(tier);
+    // Project mode: the line belongs to the run it was dropped into (the row
+    // under the pointer, or the last row when dropped past the end).
+    const anchorId = ids[Math.min(idx, ids.length - 1)];
+    const project = mode === 'project' ? (pinnedTaskMap.get(anchorId)?.project ?? '') : '';
+    const scopeIds = mode === 'project'
+      ? ids.filter((id) => (pinnedTaskMap.get(id)?.project ?? '') === project)
+      : ids;
+    const target = ids[idx];
+    const slot = target && scopeIds.includes(target) ? scopeIds.indexOf(target) : scopeIds.length;
+    return { tier, mode, ...(mode === 'project' ? { project } : {}), ...anchorsForSlot(scopeIds, slot) };
+  }, [sepModeFor, pinnedTaskMap]);
+
+  /** DnD props for a tier's list container — accepts a dragged separator line. */
+  const sepDropProps = useCallback((tier: string) => ({
+    onDragOver: (e: ReactDragEvent<HTMLDivElement>) => {
+      if (!sepDrag) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const spot = sepDropAt(e.currentTarget, tier, e.clientY);
+      if (spot) setSepPreview({ id: sepDrag, ...spot });
+    },
+    onDrop: (e: ReactDragEvent<HTMLDivElement>) => {
+      const id = e.dataTransfer.getData('text/walnut-separator') || sepDrag;
+      if (!id) return;
+      e.preventDefault();
+      const spot = sepDropAt(e.currentTarget, tier, e.clientY);
+      clearSepDrag();
+      if (!spot) return;
+      persistSeparators(upsertSeparator(separators, { id, ...spot }));
+    },
+  }), [sepDrag, sepDropAt, clearSepDrag, persistSeparators, separators]);
+
+  /** "Add separator" from a header "+": land at the TOP of the clicked scope, so
+   *  it appears exactly where the click was and can be dragged down from there.
+   *  An empty scope gets no line — it would have nothing to divide and nowhere to
+   *  render, and a control that silently does nothing visible is worse than none. */
+  const addSeparator = useCallback((tier: string, project?: string) => {
+    const mode = sepModeFor(tier);
+    const tierIds = (tierIdsByTier.get(tier) ?? []).filter((id) => pinnedTaskMap.has(id));
+    const scopeIds = mode === 'project' && project !== undefined
+      ? tierIds.filter((id) => (pinnedTaskMap.get(id)?.project ?? '') === project)
+      : tierIds;
+    if (scopeIds.length === 0) {
+      onOperationError?.('Nothing to separate here yet: add a task first.');
+      return;
+    }
+    // Project mode with a tier-level "+": the top of the tier is the top of its
+    // FIRST run, so the line belongs to that run.
+    const scopeProject = mode === 'project'
+      ? (project ?? (pinnedTaskMap.get(scopeIds[0])?.project ?? ''))
+      : undefined;
+    persistSeparators([...separators, {
+      id: newSeparatorId(),
+      tier,
+      mode,
+      ...(mode === 'project' ? { project: scopeProject } : {}),
+      ...anchorsForSlot(scopeIds, 0),
+    }]);
+  }, [sepModeFor, tierIdsByTier, pinnedTaskMap, persistSeparators, separators, onOperationError]);
+
+  const deleteSeparator = useCallback((id: string) => {
+    persistSeparators(removeSeparator(separators, id));
+  }, [persistSeparators, separators]);
+
+  // ── "+ → New task" targets ── The header "+" doesn't create a titled task by
+  // itself; it opens the inline add row in the scope that was clicked (tier
+  // bottom, or the end of one project run). Nonce-keyed so clicking "+" again
+  // re-focuses an already-open row.
+  const [tierAddSignal, setTierAddSignal] = useState<{ tier: string; nonce: number } | null>(null);
+  const [runAddSignal, setRunAddSignal] = useState<{ tier: string; project: string; nonce: number } | null>(null);
+  const addTaskToTier = useCallback((tier: string) => {
+    setTierAddSignal({ tier, nonce: Date.now() });
+  }, []);
+  const addTaskToRun = useCallback((tier: string, project: string) => {
+    setRunAddSignal({ tier, project, nonce: Date.now() });
+  }, []);
+  const tierAddOpenSignal = useCallback((tier: string) =>
+    (tierAddSignal?.tier === tier ? tierAddSignal.nonce : undefined), [tierAddSignal]);
+  const consumeTierAddSignal = useCallback(() => setTierAddSignal(null), []);
+  /** The inline add row for ONE project run inside a tier. Mounted only while that
+   *  run is the "+"-picked target — the tier's own bottom row covers the default
+   *  case, and a permanent ghost row per project would triple the list's chrome.
+   *  Consuming the signal zeroes the nonce instead of unmounting: dropping the row
+   *  the moment it opens would eat the click that asked for it. */
+  const runAddRow = useCallback((tier: string, project: string) => (
+    <InlineAdd
+      key={`runadd:${tier}:${project}`}
+      label={`Add to ${project || 'Inbox'}…`}
+      openSignal={runAddSignal?.tier === tier && runAddSignal.project === project ? runAddSignal.nonce : undefined}
+      onOpenSignalConsumed={() => setRunAddSignal((s) => (s ? { ...s, nonce: 0 } : s))}
+      onAdd={(title) => onCreate({ title, priority: 'none', project: project || undefined, pinnedTier: tier as FocusTier })}
+    />
+  ), [runAddSignal, onCreate]);
+
   // Render one tier's items from its ID array (NOT its Task array): a `group:*`
   // sentinel id — present only while that group is being dragged (the drag start
   // collapses its member run to this single id) — has no Task in the map, so we must
@@ -5230,9 +5399,35 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const dropSide = (targetProj: string): 'above' | 'below' =>
       // null check, not truthiness — '' (Inbox) is a legal dragged project.
       labelDragProj !== null && projSeq.indexOf(labelDragProj) > projSeq.indexOf(targetProj) ? 'above' : 'below';
+
+    // Divider lines. The live drag preview is substituted for the stored entry, so
+    // what the user sees mid-drag is literally the placement that will be saved.
+    const sepMode: SeparatorMode = tierViewMode(tier) === 'custom' ? 'custom' : 'project';
+    const sepList = sepPreview ? upsertSeparator(separators, sepPreview) : separators;
+    const sepPlacement = placeSeparators({
+      ids,
+      projectOf: (id) => { const t = pinnedTaskMap.get(id); return t ? (t.project || '') : null; },
+      tier,
+      mode: sepMode,
+      separators: sepList,
+    });
+    const sepRow = (sep: TierSeparator) => (
+      <TierSeparatorRow key={sep.id} id={sep.id} inert={isPinnedDragActive}
+        isDragging={sepDrag === sep.id}
+        onDragStart={setSepDrag} onDragEnd={clearSepDrag} onDelete={deleteSeparator} />
+    );
+    const flushSepTail = (scope: string) => {
+      for (const sep of sepPlacement.tail.get(scope) ?? []) out.push(sepRow(sep));
+    };
+
     let prevProject: string | null = null;
     for (const id of ids) {
       if (id.startsWith('group:')) {
+        // it lands after that row's folder label / separator lines — the placement
+        // those two features were written around. Only when the run is gone (this
+        // group is collapsed mid-drag) does the sentinel draw the chip itself: it
+        // IS the whole cluster then. Same key in both states, so React keeps one
+        // chip instance and dnd-kit's active node never remounts mid-drag.
         const gid = parseGroupSentinelGid(id);
         out.push(
           <GroupChip key={groupSortableId(gid, tier)} groupId={gid} tier={tier}
@@ -5244,6 +5439,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const task = pinnedTaskMap.get(id);
       if (!task) continue;
       const proj = task.project || '';
+      // Leaving a project run: flush that run's trailing lines (and its inline
+      // "add task" row) BEFORE the next folder label, so they stay inside the run
+      // they belong to.
+      if (sepMode === 'project' && prevProject !== null && proj !== prevProject) {
+        flushSepTail(prevProject);
+        if (runAddSignal?.tier === tier && runAddSignal.project === prevProject) out.push(runAddRow(tier, prevProject));
+      }
       if (showFolders && proj !== prevProject) {
         out.push(
           <div
@@ -5279,15 +5481,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           >
             <span className="tier-project-label-icon">{ICONS.ICON_FOLDER}</span>
             <span className="tier-project-label-name">{proj || 'Inbox'}</span>
-            {/* Project "+" (GAP-2) — the same one-click control the All-view project
-                header carries, so a by-project tier reads and behaves the same way.
-                Named projects only, exactly like that header: a launch seeds the
-                project's default folder and Inbox has no registry row to carry one.
+            {/* Project "+" (GAP-2) — the same control the All-view project header
+                carries, so a by-project tier reads and behaves the same way: new
+                task / new task with session / add separator. The SESSION item is
+                named-projects-only (a launch seeds the project's default folder and
+                Inbox has no registry row to carry one); task + separator work for
+                Inbox too, which is why the wrapper no longer gates on `proj`.
                 The label is an HTML5 drag handle for project reordering, so a
                 dragstart originating on the button is swallowed here — otherwise
                 pressing "+" and twitching would arm a project reorder. */}
-            {proj && onOpenLauncherForProject && (
-              <span
+            <span
                 className="tier-project-label-actions"
                 draggable={false}
                 onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
@@ -5301,13 +5504,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                 onPointerEnter={(e) => { const label = e.currentTarget.parentElement; if (label) label.draggable = false; }}
                 onPointerLeave={(e) => { const label = e.currentTarget.parentElement; if (label) label.draggable = true; }}
               >
-                <ProjectPlusMenu project={proj} onAddSession={onOpenLauncherForProject} />
+                <ProjectPlusMenu
+                  project={proj}
+                  onAddSession={proj && onOpenLauncherForProject ? onOpenLauncherForProject : undefined}
+                  onAddTask={(p) => addTaskToRun(tier, p)}
+                  onAddSeparator={(p) => addSeparator(tier, p)}
+                />
               </span>
-            )}
           </div>
         );
       }
       prevProject = proj;
+      // Lines placed directly above this row — before its group chip, so a line
+      // above a grouped card reads as "band boundary", not "inside the group".
+      for (const sep of sepPlacement.above.get(id) ?? []) out.push(sepRow(sep));
       const gi = groupMeta.get(id);
       if (gi?.isLead) {
         out.push(
@@ -5332,8 +5542,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} />
       );
     }
+    // Trailing lines of the last scope (project mode: the last run; custom mode:
+    // the whole tier), plus that scope's inline "add task" row.
+    const lastScope = sepMode === 'project' ? (prevProject ?? '') : '';
+    flushSepTail(lastScope);
+    if (sepMode === 'project' && runAddSignal?.tier === tier && runAddSignal.project === lastScope) {
+      out.push(runAddRow(tier, lastScope));
+    }
     return out;
-  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject]);
+  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
@@ -5509,19 +5726,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           >
             ↕ Custom order
           </button>
-          {/* Session "+" for THIS tab's tier (GAP-1). In the stacked All view every
-              tier owns a sublabel row that carries this button; a single-tier tab has
-              no sublabel (the tab itself names the tier), so the tier view bar is
-              where the same control belongs — otherwise the tier tabs are the only
-              place in the panel with no route to a session. Same handler and same
+          {/* The tier's "+" (GAP-1). In the stacked All view every tier owns a
+              sublabel row that carries this button; a single-tier tab has no
+              sublabel (the tab itself names the tier), so the tier view bar is where
+              the same control belongs — otherwise the tier tabs are the only place in
+              the panel with no route to a session. Same handlers and same
               `meta.pinTier` seed as the All-view sublabel "+". */}
-          {onOpenLauncherForTier && (
-            <TierPlusButton
-              tier={effectiveSection}
-              label={tierDisplayLabel(effectiveSection, customTiers)}
-              onAddSession={onOpenLauncherForTier}
-            />
-          )}
+          <TierPlusButton
+            tier={effectiveSection}
+            label={tierDisplayLabel(effectiveSection, customTiers)}
+            onAddSession={onOpenLauncherForTier}
+            onAddTask={addTaskToTier}
+            onAddSeparator={addSeparator}
+          />
         </div>
       )}
 
@@ -5588,16 +5805,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       <span className="todo-pinned-sublabel-icon todo-tier-icon-focus">{ICONS.ICON_TIER_FOCUS}</span>
                       <span className="todo-pinned-sublabel-text">Focus</span>
                       <span className="todo-pinned-sublabel-count">{focusTasksDisplay.length}</span>
-                      {onOpenLauncherForTier && <TierPlusButton tier="focus" label="Focus" onAddSession={onOpenLauncherForTier} />}
+                      <TierPlusButton tier="focus" label="Focus" onAddSession={onOpenLauncherForTier}
+                        onAddTask={addTaskToTier} onAddSeparator={addSeparator} />
                     </div>
                     )}
                     {!isFolded('focus') && (
                       <SortableContext items={visibleFocusIds} strategy={verticalListSortingStrategy}>
-                        <div className="todo-pinned-list-scroll" style={tierHeight(focusResize.height)}>
+                        <div className="todo-pinned-list-scroll" style={tierHeight(focusResize.height)} {...sepDropProps('focus')}>
                           <TierDropZone id="focus-drop-zone" isEmpty={focusTasksDisplay.length === 0}>
                             {renderTierItems(visibleFocusIds, 'focus', focusGroupMeta)}
                           </TierDropZone>
-                          <InlineAdd label="Add to Focus…" onAdd={async (title) => {
+                          <InlineAdd label="Add to Focus…" openSignal={tierAddOpenSignal('focus')} onOpenSignalConsumed={consumeTierAddSignal} onAdd={async (title) => {
                             // capture:true → routes to the configured Default Platform/Project (fast local Inbox by default).
                             // No onFocusTask here: handleCreate already locates the new card with
                             // scope 'pinned' (Pinned-region scroll only). Calling onFocusTask would
@@ -5629,12 +5847,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         <span className="todo-pinned-sublabel-icon todo-tier-icon-satellite">{ICONS.ICON_TIER_SATELLITE}</span>
                         <span className="todo-pinned-sublabel-text">Satellite</span>
                         <span className="todo-pinned-sublabel-count">{satelliteTasksDisplay.length}</span>
-                        {onOpenLauncherForTier && <TierPlusButton tier="satellite" label="Satellite" onAddSession={onOpenLauncherForTier} />}
+                        <TierPlusButton tier="satellite" label="Satellite" onAddSession={onOpenLauncherForTier}
+                        onAddTask={addTaskToTier} onAddSeparator={addSeparator} />
                       </div>
                       )}
                       {!isFolded('satellite') && (
                         <SortableContext items={visibleSatelliteIds} strategy={verticalListSortingStrategy}>
-                          <div className="todo-pinned-list todo-pinned-list-scroll" style={tierHeight(satelliteResize.height)}>
+                          <div className="todo-pinned-list todo-pinned-list-scroll" style={tierHeight(satelliteResize.height)} {...sepDropProps('satellite')}>
                             {/* Solo view needs the drop zone so an empty Satellite tab is
                                 still a valid drag target — the stacked view can skip it
                                 because the tier only renders when non-empty. */}
@@ -5643,7 +5862,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 {renderTierItems(visibleSatelliteIds, 'satellite', satelliteGroupMeta)}
                               </TierDropZone>
                             )}
-                            <InlineAdd label="Add to Satellite…" onAdd={async (title) => {
+                            <InlineAdd label="Add to Satellite…" openSignal={tierAddOpenSignal('satellite')} onOpenSignalConsumed={consumeTierAddSignal} onAdd={async (title) => {
                               // handleCreate locates with scope 'pinned' — see the Focus InlineAdd note.
                               await onCreate({ title, priority: 'none', pinnedTier: 'satellite', capture: true });
                             }} />
@@ -5674,16 +5893,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       <span className="todo-pinned-sublabel-icon todo-tier-icon-backlog">{ICONS.ICON_TIER_BACKLOG}</span>
                       <span className="todo-pinned-sublabel-text">Backlog</span>
                       <span className="todo-pinned-sublabel-count">{backlogTasksDisplay.length}</span>
-                      {onOpenLauncherForTier && <TierPlusButton tier="backlog" label="Backlog" onAddSession={onOpenLauncherForTier} />}
+                      <TierPlusButton tier="backlog" label="Backlog" onAddSession={onOpenLauncherForTier}
+                        onAddTask={addTaskToTier} onAddSeparator={addSeparator} />
                     </div>
                     )}
                     {!isFolded('backlog') && (
                       <SortableContext items={visibleBacklogIds} strategy={verticalListSortingStrategy}>
-                        <div className="todo-pinned-list-scroll" style={tierHeight(backlogResize.height)}>
+                        <div className="todo-pinned-list-scroll" style={tierHeight(backlogResize.height)} {...sepDropProps('backlog')}>
                           <TierDropZone id="backlog-drop-zone" isEmpty={backlogTasksDisplay.length === 0}>
                             {renderTierItems(visibleBacklogIds, 'backlog', backlogGroupMeta)}
                           </TierDropZone>
-                          <InlineAdd label="Add to Backlog…" onAdd={async (title) => {
+                          <InlineAdd label="Add to Backlog…" openSignal={tierAddOpenSignal('backlog')} onOpenSignalConsumed={consumeTierAddSignal} onAdd={async (title) => {
                             // handleCreate locates with scope 'pinned' — see the Focus InlineAdd note.
                             await onCreate({ title, priority: 'none', pinnedTier: 'backlog', capture: true });
                           }} />
@@ -5709,16 +5929,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       <span className="todo-pinned-sublabel-icon todo-tier-icon-wait">{ICONS.ICON_TIER_WAIT}</span>
                       <span className="todo-pinned-sublabel-text">Wait</span>
                       <span className="todo-pinned-sublabel-count">{waitTasksDisplay.length}</span>
-                      {onOpenLauncherForTier && <TierPlusButton tier="wait" label="Wait" onAddSession={onOpenLauncherForTier} />}
+                      <TierPlusButton tier="wait" label="Wait" onAddSession={onOpenLauncherForTier}
+                        onAddTask={addTaskToTier} onAddSeparator={addSeparator} />
                     </div>
                     )}
                     {!isFolded('wait') && (
                       <SortableContext items={visibleWaitIds} strategy={verticalListSortingStrategy}>
-                        <div className="todo-pinned-list-scroll" style={tierHeight(waitResize.height)}>
+                        <div className="todo-pinned-list-scroll" style={tierHeight(waitResize.height)} {...sepDropProps('wait')}>
                           <TierDropZone id="wait-drop-zone" isEmpty={waitTasksDisplay.length === 0}>
                             {renderTierItems(visibleWaitIds, 'wait', waitGroupMeta)}
                           </TierDropZone>
-                          <InlineAdd label="Add to Wait…" onAdd={async (title) => {
+                          <InlineAdd label="Add to Wait…" openSignal={tierAddOpenSignal('wait')} onOpenSignalConsumed={consumeTierAddSignal} onAdd={async (title) => {
                             // handleCreate locates with scope 'pinned' — see the Focus InlineAdd note.
                             await onCreate({ title, priority: 'none', pinnedTier: 'wait', capture: true });
                           }} />
@@ -5759,6 +5980,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         count={render.display.length}
                         onAdd={(title) => onCreate({ title, priority: 'none', pinnedTier: def.id, capture: true })}
                         onAddSession={onOpenLauncherForTier}
+                        onAddTask={addTaskToTier}
+                        onAddSeparator={addSeparator}
+                        dropProps={sepDropProps(def.id)}
+                        addOpenSignal={tierAddOpenSignal(def.id)}
+                        onAddSignalConsumed={consumeTierAddSignal}
                       >
                         {renderTierItems(render.visibleIds, def.id, render.groupMeta)}
                       </CustomTierSubgroup>
@@ -6106,15 +6332,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                               </button>
                             )}
                             <span className="todo-group-header-actions">
-                              {/* "+" is now ONE click → a draft session in this project
-                                  (R7), so like the kebab it is named-projects-only: a
-                                  launch seeds the project's default cwd and Inbox has no
-                                  registry row to carry one. Adding a TASK to any group,
-                                  Inbox included, stays covered by the ghost row at the
-                                  bottom of the group. */}
+                              {/* "+" → new task (opens this group's ghost row, in place)
+                                  or new task with session. The SESSION branch stays
+                                  named-projects-only: a launch seeds the project's
+                                  default cwd and Inbox has no registry row to carry one.
+                                  No separator item here — divider lines live in the
+                                  pinned TIER lists, whose two view modes define what a
+                                  line's position means. */}
                               <ProjectPlusMenu
                                 project={project}
                                 onAddSession={project ? onOpenLauncherForProject : undefined}
+                                onAddTask={(p) => setHeaderAddSignal({ project: p, nonce: Date.now() })}
                               />
                               {project && (
                                 <ProjectKebabMenu

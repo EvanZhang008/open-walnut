@@ -53,6 +53,7 @@ import {
   draftProjectPill, expectV4Stack, homeColumns, loadHome, lockLeftmostPanel, openDraft,
   openDraftOnCwd, seedColumns, setPanelMode, tasksTitled, watchForbiddenRequests,
 } from './draft-helpers'
+import { openSessionFromPlus } from './draft-surface-helpers'
 import { presetPanelView } from './todo-panel-helpers'
 
 /** Artifacts of the v4-layout run (the re-arranged column). Per-run overridable
@@ -319,8 +320,9 @@ test('project header "+" pre-fills the project pill, and Create task for later f
   await expect(header).toBeVisible({ timeout: 25_000 })
   // The header actions are hover-revealed (opacity 0 in a resting list).
   await header.hover()
-  // ONE click (R7): the "+" is a direct button now, not a two-item menu.
-  await header.getByRole('button', { name: 'New session in Walnut' }).click()
+  // The "+" is a MENU on this surface (R9: task / task with session / separator),
+  // so the session route is the button plus its named item.
+  await openSessionFromPlus(page, header)
 
   // The draft opens with the project pill already reading 'Walnut'. Pill order in
   // the launch bar is cwd/host first, project second.

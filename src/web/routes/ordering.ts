@@ -1,19 +1,89 @@
 /**
  * Ordering routes — the project display order (single grouping layer), stored
- * flat in config as `ordering.projects: string[]`.
+ * flat in config as `ordering.projects: string[]`, plus the hand-placed tier
+ * divider lines (`ordering.separators`).
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
+import type { Config } from '../../core/types.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 
 export const orderingRouter = Router()
+
+type Separator = NonNullable<NonNullable<Config['ordering']>['separators']>[number]
+
+/** A separator is decoration, so the ceiling is only there to keep a runaway
+ *  client from growing config without bound. Well past any hand-placed count. */
+const MAX_SEPARATORS = 500
+
+/** Accept only fully-formed rows and normalize the optional fields, so the
+ *  renderer never has to defend against a half-written entry. Anything else is
+ *  rejected outright (400) rather than silently dropped — a line the user
+ *  placed that quietly vanishes is worse than an error. */
+function parseSeparator(raw: unknown): Separator | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  if (typeof r.id !== 'string' || !r.id) return null
+  if (typeof r.tier !== 'string' || !r.tier) return null
+  if (r.mode !== 'project' && r.mode !== 'custom') return null
+  if (r.project !== undefined && typeof r.project !== 'string') return null
+  if (r.after !== undefined && typeof r.after !== 'string') return null
+  if (r.before !== undefined && typeof r.before !== 'string') return null
+  return {
+    id: r.id,
+    tier: r.tier,
+    mode: r.mode,
+    // 'custom' mode has no project runs — drop the field so the two modes can't
+    // drift into "same line, two scopes".
+    ...(r.mode === 'project' ? { project: (r.project as string | undefined) ?? '' } : {}),
+    after: (r.after as string | undefined) ?? '',
+    before: (r.before as string | undefined) ?? '',
+  }
+}
 
 // GET /api/ordering
 orderingRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const config = await getConfig()
-    res.json({ projects: config.ordering?.projects ?? [] })
+    res.json({
+      projects: config.ordering?.projects ?? [],
+      separators: config.ordering?.separators ?? [],
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// PUT /api/ordering/separators — replace the whole separator list
+orderingRouter.put('/separators', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { separators } = req.body as { separators: unknown }
+    if (!Array.isArray(separators)) {
+      res.status(400).json({ error: 'separators must be an array' })
+      return
+    }
+    if (separators.length > MAX_SEPARATORS) {
+      res.status(400).json({ error: `too many separators (max ${MAX_SEPARATORS})` })
+      return
+    }
+    const parsed: Separator[] = []
+    for (const raw of separators) {
+      const sep = parseSeparator(raw)
+      if (!sep) {
+        res.status(400).json({ error: 'each separator needs { id, tier, mode: "project"|"custom" } with string project/after/before' })
+        return
+      }
+      parsed.push(sep)
+    }
+    // Last id wins — a client that replays a stale list can't fork one line into two.
+    const deduped = [...new Map(parsed.map((s) => [s.id, s])).values()]
+    const config = await getConfig()
+    if (!config.ordering) config.ordering = {}
+    config.ordering.separators = deduped
+    await updateConfig({ ordering: config.ordering })
+    bus.emit(EventNames.CONFIG_CHANGED, { key: 'ordering' }, ['web-ui'])
+    res.json({ separators: deduped })
   } catch (err) {
     next(err)
   }

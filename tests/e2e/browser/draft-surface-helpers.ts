@@ -35,6 +35,40 @@ export async function presetTierViewModes(
 }
 
 /**
+ * The "+" on a task surface, whatever shape its host renders (R9).
+ *
+ * A host that can only launch a session (the /tasks table) keeps the direct
+ * one-click button; a host that also offers "new task" and "add separator" (the
+ * TODO panel's tier + project headers) renders the same button as a MENU trigger.
+ * Specs address it by test id so a surface changing shape doesn't rewrite the
+ * locator, and take the session branch through `openSessionFromPlus`.
+ */
+export function plusControl(scope: Locator): Locator {
+  return scope.locator('[data-testid="plus-menu-trigger"]').first()
+}
+
+/** Is this "+" a menu trigger (multi-verb host) or the direct button? */
+export async function plusIsMenu(scope: Locator): Promise<boolean> {
+  return (await plusControl(scope).getAttribute('aria-expanded')) !== null
+}
+
+/** Click a "+" and land on its SESSION branch on either shape of host. */
+export async function openSessionFromPlus(page: Page, scope: Locator): Promise<void> {
+  await plusControl(scope).click()
+  const item = page.getByTestId('plus-menu').locator('.task-kebab-item', { hasText: 'New task with session' }).first()
+  const opened = await item.waitFor({ state: 'visible', timeout: 2_000 }).then(() => true).catch(() => false)
+  if (opened) await item.click()
+}
+
+/** Click a "+" and take a named branch of its menu (multi-verb hosts only). */
+export async function chooseFromPlus(page: Page, scope: Locator, label: string): Promise<void> {
+  await plusControl(scope).click()
+  const item = page.getByTestId('plus-menu').locator('.task-kebab-item', { hasText: label }).first()
+  await item.waitFor({ state: 'visible', timeout: 5_000 })
+  await item.click()
+}
+
+/**
  * Pin a task into a tier — TWO routes, deliberately.
  *
  * `POST /api/focus/tasks/:id` only pins (a fresh pin carries no `focus_tier`, which

@@ -33,6 +33,7 @@ import {
   draftProjectPill, draftTierBtn, loadHome, openDraft, openDraftOnCwd, presetStickyTier,
   seedColumns, tasksTitled, watchForbiddenRequests,
 } from './draft-helpers'
+import { openSessionFromPlus, plusControl } from './draft-surface-helpers'
 import { presetPanelView } from './todo-panel-helpers'
 
 /** Artifacts of this run. Per-run overridable so a later revision's artifacts
@@ -91,21 +92,21 @@ test('project header "+" opens a draft in one click with the project AND its def
   await expect(header).toBeVisible({ timeout: 25_000 })
   await header.hover()
 
-  const plus = header.getByRole('button', { name: `New session in ${PLUS_PROJECT}` })
-  await expect(plus, 'the "+" is a direct button, so it advertises the session verb')
-    .toHaveAttribute('title', `New session in ${PLUS_PROJECT}`)
-  // No aria-expanded either: that attribute is what a menu trigger carries, and its
-  // absence is the machine-readable form of "this is not a menu".
-  expect(await plus.getAttribute('aria-expanded'), 'a direct button has no expanded state').toBeNull()
+  const plus = plusControl(header)
+  // R9 put the choice back on this surface (task / task with session / separator),
+  // so the "+" IS a menu trigger here — `aria-expanded` is the machine-readable
+  // form of that, and its title names the scope rather than one verb.
+  await expect(plus, 'a multi-verb "+" advertises the scope it adds to')
+    .toHaveAttribute('title', `Add to ${PLUS_PROJECT}`)
+  expect(await plus.getAttribute('aria-expanded'), 'a menu trigger carries an expanded state').toBe('false')
 
-  await plus.click()
+  await openSessionFromPlus(page, header)
 
-  // ONE click → the column. Asserted as "no menu was ever rendered": the old shape
-  // put a `.task-kebab-menu` between the click and any outcome, so a count of 0
-  // right after the column mounts is the two-clicks-to-one regression guard.
+  // The session branch still lands on the column, and the menu closes behind it —
+  // a menu left open over the fresh draft was the old two-item shape's other sin.
   const panel = draftPanel(page)
   await expect(panel).toBeVisible({ timeout: 10_000 })
-  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+  await expect(page.getByTestId('plus-menu')).toHaveCount(0)
 
   // Half one of the seed — synchronous, from the click itself.
   await expect(draftProjectPill(panel)).toHaveText(PLUS_PROJECT)
@@ -171,14 +172,14 @@ test('pin-tier header "+" opens a draft with that tier preset in the meta row', 
   }).first()
   await expect(sublabel).toBeVisible({ timeout: 25_000 })
   await sublabel.hover()
-  const plus = sublabel.getByRole('button', { name: 'New session in Backlog' })
+  const plus = plusControl(sublabel)
   await expect(plus).toBeVisible()
 
   // Armed BEFORE the click: a tier is a local value, so unlike the project "+"
   // (which fetches the project detail for its default_cwd) this route must touch
-  // nothing server-side at all.
+  // nothing server-side at all — opening the menu included.
   const seen = watchForbiddenRequests(page)
-  await plus.click()
+  await openSessionFromPlus(page, sublabel)
 
   const panel = draftPanel(page)
   await expect(panel).toBeVisible({ timeout: 10_000 })
