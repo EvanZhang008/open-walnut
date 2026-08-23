@@ -6,6 +6,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const sendMessageToSession = vi.fn(async () => ({ id: 'qm-1' }));
 vi.mock('../../../src/core/session-message-queue.js', () => ({
+  parkMessages: async () => 0,
+  parkStalePending: async () => [],
+  unparkMessage: async () => false,
   sendMessageToSession: (...args: unknown[]) => sendMessageToSession(...args),
 }));
 

@@ -1061,10 +1061,17 @@ needed; an old primary answers `400 session_control_needs_upgrade`).
   injecting a compact boundary (pairs with Wave 1's execute-continue).
 - Queued messages (REST twins of the web console's WS RPCs):
   - `GET /api/v1/sessions/:id/queue` → `{ "messages" }`; unknown session →
-    `404`.
+    `404`. Each row's `status` is `pending`, `processing`, or `parked`.
+    **`parked`** is the dead-letter state: delivery failed for a reason retrying
+    cannot fix (the session's working directory was deleted, its record is gone)
+    or the row went undelivered for over 7 days, so no automatic trigger will
+    attempt it again. Parked rows carry `parkedAt` and a human-readable
+    `parkedReason`; they stay listed so a client can offer Retry (re-send with
+    the same id, which un-parks it) or Discard (`DELETE` below).
   - `PATCH /api/v1/sessions/:id/queue/:messageId` body `{ "text" }` →
     `{ "ok" }`; already processing/gone → `409 conflict`.
-  - `DELETE /api/v1/sessions/:id/queue/:messageId` → `{ "ok" }`.
+  - `DELETE /api/v1/sessions/:id/queue/:messageId` → `{ "ok" }`; works for a
+    pending or parked row, `409 conflict` for one already in flight.
 
 ### File browsing (additive, Wave 2 2026-08) — list / resolve-path / file-content
 

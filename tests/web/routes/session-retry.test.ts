@@ -25,9 +25,14 @@ vi.mock('../../../src/constants.js', () => createMockConstants());
 // getQueue must be here too: retry inspects the pending queue FIRST and only falls
 // back to "continue" when it is empty. Omitting it made every resume-path request
 // 500 with "No getQueue export is defined on the mock".
+// unparkMessage likewise: retry is an explicit human action, so it revives PARKED
+// (dead-lettered) rows before counting them.
 vi.mock('../../../src/core/session-message-queue.js', () => ({
+  parkMessages: async () => 0,
+  parkStalePending: async () => [],
   sendMessageToSession: vi.fn().mockResolvedValue({ id: 'qm-test-1', sessionId: 'test', message: 'test', status: 'pending', enqueuedAt: new Date().toISOString() }),
   getQueue: vi.fn().mockResolvedValue([]),
+  unparkMessage: vi.fn().mockResolvedValue(false),
 }));
 
 // Stub the bus so SESSION_START/SESSION_SEND emits have no real side-effects, but keep
@@ -78,7 +83,7 @@ import {
 } from '../../../src/core/session-tracker.js';
 import { addTask, _resetForTesting } from '../../../src/core/task-manager.js';
 import { WALNUT_HOME, SESSIONS_FILE } from '../../../src/constants.js';
-import { sendMessageToSession } from '../../../src/core/session-message-queue.js';
+import { sendMessageToSession, getQueue, unparkMessage } from '../../../src/core/session-message-queue.js';
 import { isSessionProcessAlive } from '../../../src/utils/session-liveness.js';
 
 // ── App factory ──
@@ -112,6 +117,33 @@ afterEach(async () => {
 });
 
 // ── Critical tests ──
+
+// A PARKED row is a dead-letter: no automatic trigger will ever pick it up again.
+// A session Retry is an explicit human action, so it must revive one — otherwise the
+// response reports it as a restored message that markProcessing then skips, and the
+// retry silently does nothing.
+describe('POST /api/sessions/:sessionId/retry — parked rows', () => {
+  it('un-parks a parked queue row before re-triggering delivery', async () => {
+    const taskId = await makeTask();
+    await createSessionRecord('parked-retry-sess', taskId, 'project-a');
+    await updateSessionRecord('parked-retry-sess', { process_status: 'error' });
+    vi.mocked(getQueue).mockResolvedValueOnce([
+      { id: 'qm-parked-1', sessionId: 'parked-retry-sess', message: 'revive me', status: 'parked', enqueuedAt: new Date().toISOString(), parkedReason: 'Working directory no longer exists: /gone' },
+      { id: 'qm-pending-1', sessionId: 'parked-retry-sess', message: 'ordinary', status: 'pending', enqueuedAt: new Date().toISOString() },
+    ]);
+
+    const res = await request(createApp()).post('/api/sessions/parked-retry-sess/retry');
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('resuming');
+    expect(res.body.restoredMessages).toBe(2);
+    // Only the parked one is revived; the pending one was never parked.
+    expect(vi.mocked(unparkMessage)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(unparkMessage)).toHaveBeenCalledWith('parked-retry-sess', 'qm-parked-1');
+    // Re-delivery is triggered by the queue re-drain, not a fresh 'continue'.
+    expect(vi.mocked(sendMessageToSession)).not.toHaveBeenCalled();
+  });
+});
 
 describe('POST /api/sessions/:sessionId/retry — resume path (has claudeSessionId)', () => {
   it('returns { status: "resuming", sessionId } for an error session with claudeSessionId', async () => {

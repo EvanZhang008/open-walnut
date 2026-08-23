@@ -22,6 +22,20 @@ export interface CwdCheckResult {
   error?: string;
 }
 
+/**
+ * Thrown when this pre-flight refuses a spawn. Typed so the delivery-failure
+ * classifier can call it PERMANENT by class instead of by message text — the
+ * text match stays as a fallback for the same failure arriving as a plain string
+ * (e.g. relayed through a daemon reply). See providers/delivery-failure.ts.
+ */
+export class CwdMissingError extends Error {
+  readonly permanentDelivery = true as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'CwdMissingError';
+  }
+}
+
 const REMOTE_TIMEOUT_MS = 5_000;
 
 /**

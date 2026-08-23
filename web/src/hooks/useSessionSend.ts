@@ -84,7 +84,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     setSendError(null);
 
     if (activeSessionId) {
-      wsClient.sendRpc<{ messages: Array<{ id: string; message: string; status: string; enqueuedAt?: string }> }>(
+      wsClient.sendRpc<{ messages: Array<{ id: string; message: string; status: string; enqueuedAt?: string; parkedReason?: string }> }>(
         'session:get-queue',
         { sessionId: activeSessionId }
       ).then((res) => {
@@ -99,12 +99,18 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
                 // the user-facing part, but dedup against the full enqueued form
                 // (that is what history echoes) — see OptimisticMessage.dedupText.
                 const display = stripImageRefPrefix(m.message);
+                // 'parked' = the server stopped auto-retrying this row (permanent
+                // failure, e.g. the session's working folder was deleted). Reuse the
+                // 'failed' presentation so it keeps Retry + Discard instead of looking
+                // like an ordinary "Queued" message that is still on its way.
+                const parked = m.status === 'parked';
                 return {
                   role: 'user' as const,
                   text: display,
                   timestamp: m.enqueuedAt ?? new Date().toISOString(),
                   queueId: m.id,
-                  status: (m.status === 'processing' ? 'delivered' : 'received') as 'received' | 'delivered',
+                  status: (m.status === 'processing' ? 'delivered' : parked ? 'failed' : 'received') as 'received' | 'delivered' | 'failed',
+                  ...(parked ? { parked: true, failedError: m.parkedReason } : {}),
                   ...(display !== m.message ? { dedupText: m.message } : {}),
                 };
               });
@@ -251,8 +257,10 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     setSendError(null);
     log.info('send', 'retrying', { sessionId, queueId });
 
+    // Clear `parked` too: the server un-parks the row on this explicit retry, so
+    // a second failure must render as an ordinary "Send failed", not a stale park.
     setOptimisticMsgs((prev) => prev.map((m) =>
-      m.queueId === queueId ? { ...m, status: 'pending' as const, failedError: undefined } : m
+      m.queueId === queueId ? { ...m, status: 'pending' as const, failedError: undefined, parked: undefined } : m
     ));
 
     buildImageRefsPayload(failedMsg.images)

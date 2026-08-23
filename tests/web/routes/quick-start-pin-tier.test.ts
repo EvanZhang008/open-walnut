@@ -40,6 +40,9 @@ vi.mock('../../../src/providers/claude-code-session.js', () => ({
 
 // Mock session-message-queue (used by retry/restart to inspect & resend the queue)
 vi.mock('../../../src/core/session-message-queue.js', () => ({
+  parkMessages: async () => 0,
+  parkStalePending: async () => [],
+  unparkMessage: async () => false,
   sendMessageToSession: async () => {},
   getQueue: async () => [],
   revertToPending: async () => {},

@@ -94,6 +94,10 @@ export interface OptimisticMessage extends SessionHistoryMessage {
   images?: ImageAttachment[];
   /** Error message when status is 'failed' */
   failedError?: string;
+  /** Server PARKED this row (dead-letter): the failure is permanent, so nothing
+   *  will retry it automatically again. Rendered as a 'failed' bubble with its
+   *  own label + a Discard that actually deletes the durable row. */
+  parked?: boolean;
   /** Server-side text ACTUALLY enqueued to the CLI, when it differs from `text`.
    *  `text` is what the user typed (and what we render); with attachments the
    *  server prepends image refs before enqueueing, so the persisted echo carries
@@ -2542,11 +2546,18 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                   {m.status === 'failed' && (
                     <>
                       <div className="session-msg-failed-badge">
-                        Send failed{m.failedError ? ` — ${m.failedError}` : ''}
+                        {m.parked
+                          ? `Not delivered — auto-retry stopped${m.failedError ? ` (${m.failedError})` : ''}`
+                          : `Send failed${m.failedError ? ` — ${m.failedError}` : ''}`}
                       </div>
                       <div className="session-msg-queued-actions">
                         <button className="session-msg-retry-btn" onClick={() => onRetryFailed?.(m.queueId)}>Retry</button>
-                        <button onClick={() => onDismissFailed?.(m.queueId)}>Dismiss</button>
+                        {/* A parked row still exists on disk, so Discard must delete it
+                            server-side; Dismiss is local-only (the pending row it hides
+                            still drains on its own). */}
+                        {m.parked
+                          ? <button onClick={() => onDeleteQueued?.(m.queueId)}>Discard</button>
+                          : <button onClick={() => onDismissFailed?.(m.queueId)}>Dismiss</button>}
                       </div>
                     </>
                   )}

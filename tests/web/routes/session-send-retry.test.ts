@@ -44,7 +44,7 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
 import { registerSessionChatRpc } from '../../../src/web/routes/session-chat.js'
 import {
-  enqueueMessage, getQueue, markProcessing, revertToPending, resetCache,
+  enqueueMessage, getQueue, markProcessing, revertToPending, parkMessages, resetCache,
 } from '../../../src/core/session-message-queue.js'
 
 const SID = 'ffffffff-1111-2222-3333-444444444444'
@@ -168,6 +168,36 @@ describe('session:send retryOf — retry after a failed delivery', () => {
     // Worst case: that in-flight batch fails and is reverted. The next batch still
     // carries the text exactly once.
     await revertToPending(batch)
+    const nextBatch = await markProcessing(SID)
+    expect(nextBatch).toHaveLength(1)
+    expect(nextBatch.map((m) => m.message).join('\n\n')).toBe(TEXT)
+  })
+})
+
+// A PARKED row is deliberately invisible to markProcessing, so the re-drain above
+// would do nothing at all for one. An explicit user Retry is the ONLY thing allowed
+// to revive it — and it still must not enqueue a duplicate.
+describe('session:send retryOf — retry of a PARKED row', () => {
+  it('un-parks the row to pending and re-drains it, without duplicating the text', async () => {
+    const original = await enqueueMessage(SID, TEXT)
+    await parkMessages(await markProcessing(SID), 'Working directory no longer exists: /gone')
+    expect((await getQueue(SID))[0].status).toBe('parked')
+
+    const res = await callSend({ sessionId: SID, message: TEXT, retryOf: original.id })
+    expect(res.messageId).toBe(original.id)
+
+    const queue = await getQueue(SID)
+    expect(queue).toHaveLength(1)
+    expect(queue[0].id).toBe(original.id)
+    expect(queue[0].status).toBe('pending')
+    expect(queue[0].parkedReason).toBeUndefined()
+
+    // Delivery re-triggered, no second bubble.
+    expect(sends).toHaveLength(1)
+    expect(queued).toHaveLength(0)
+
+    // And the revived row is drainable again (this is what silently did nothing
+    // before the un-park).
     const nextBatch = await markProcessing(SID)
     expect(nextBatch).toHaveLength(1)
     expect(nextBatch.map((m) => m.message).join('\n\n')).toBe(TEXT)

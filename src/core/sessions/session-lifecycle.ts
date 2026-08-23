@@ -539,8 +539,14 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
     if (await resumeConversationExists(record)) {
       // Resume via --resume. If the pending queue already holds the user's
       // original message, re-trigger processNext (sends the ORIGINAL text).
-      const { sendMessageToSession, getQueue } = await import('../session-message-queue.js');
+      const { sendMessageToSession, getQueue, unparkMessage } = await import('../session-message-queue.js');
       const pendingMsgs = await getQueue(sessionId);
+      // Retry is an explicit human action, so it also revives PARKED rows — they
+      // are counted below and would otherwise be reported as restored while
+      // markProcessing skipped them (a retry that silently did nothing).
+      for (const parked of pendingMsgs.filter((m) => m.status === 'parked')) {
+        await unparkMessage(sessionId, parked.id);
+      }
       if (pendingMsgs.length > 0) {
         bus.emit(EventNames.SESSION_SEND, { sessionId, taskId: record.taskId }, ['session-runner'], { source: 'retry' });
         log.session.info('session retry: re-processing pending queue messages', { sessionId, taskId: record.taskId, count: pendingMsgs.length });

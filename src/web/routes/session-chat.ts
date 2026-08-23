@@ -11,7 +11,7 @@ import { bus, EventNames } from '../../core/event-bus.js'
 import { VALID_SESSION_EFFORT_IDS, resolveModelSwitchValue } from '../../core/types.js'
 import type { SessionEffort, SessionMode } from '../../core/types.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
-import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQueued } from '../../core/session-message-queue.js'
+import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQueued, unparkMessage } from '../../core/session-message-queue.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
 import { saveImageToDisk, resolveImageRefs } from './images.js'
 import { log } from '../../logging/index.js'
@@ -189,8 +189,12 @@ export function registerSessionChatRpc(): void {
     if (typeof data.retryOf === 'string' && data.retryOf) {
       const stillQueued = await isMessageQueued(data.sessionId, data.retryOf)
       if (stillQueued) {
+        // A PARKED row is invisible to markProcessing, so the re-drain below would
+        // do nothing at all. An explicit user Retry is the only thing allowed to
+        // put a dead-lettered row back in line — un-park it first.
+        const unparked = await unparkMessage(data.sessionId, data.retryOf)
         log.web.info('session:send retry — re-draining the queued row (no duplicate enqueue)', {
-          sessionId: data.sessionId, messageId: data.retryOf,
+          sessionId: data.sessionId, messageId: data.retryOf, unparked,
         })
         // Re-trigger delivery only. SESSION_SEND → session-runner → handleSend →
         // processNext, which markProcessing()es whatever is pending and drains it.

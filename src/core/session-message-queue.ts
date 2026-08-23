@@ -8,6 +8,22 @@
  *   enqueue()        → status: 'pending'     (on disk, editable)
  *   markProcessing() → status: 'processing'  (on disk, locked)
  *   removeProcessed()→ removed from disk      (now in JSONL history)
+ *   parkMessages()   → status: 'parked'      (on disk, NEVER auto-redelivered)
+ *
+ * ## Why 'parked' exists (the dead-letter state)
+ *
+ * A pending row is retried forever: on every server boot (startup recovery) and
+ * on every daemon reconnect. That is right for a transient failure (host asleep,
+ * ssh down) and catastrophic for a permanent one. Observed: user messages sat
+ * pending for 12 DAYS targeting sessions whose cwd had been deleted, so each
+ * boot/reconnect ran the same doomed cycle — redeliver → cwd pre-flight aborts
+ * the spawn → revert to pending — and published two error notifications per
+ * session per cycle. Every deploy lit up the Errors rail with the same 12-day-old
+ * failure.
+ *
+ * Parking ends that loop AT THE SOURCE: the row stays on disk and visible, but no
+ * automatic trigger will ever pick it up again. Only an explicit human action
+ * (unparkMessage, from Retry) puts it back in line, or deleteMessage discards it.
  */
 
 import { readJsonFile, updateJsonFile } from '../utils/fs.js';
@@ -16,7 +32,7 @@ import { log } from '../logging/index.js';
 
 // ── Types ──
 
-export type MessageStatus = 'pending' | 'processing';
+export type MessageStatus = 'pending' | 'processing' | 'parked';
 
 export interface QueuedMessage {
   id: string;
@@ -24,6 +40,10 @@ export interface QueuedMessage {
   message: string;
   status: MessageStatus;
   enqueuedAt: string;
+  /** When the row was parked (dead-lettered). Set only for status 'parked'. */
+  parkedAt?: string;
+  /** Why it was parked — shown to the human, e.g. the cwd pre-flight error. */
+  parkedReason?: string;
   /**
    * Process-monotonic enqueue counter — the tiebreaker for messages that share
    * an `enqueuedAt` millisecond. Optional: rows persisted before this field
@@ -355,8 +375,9 @@ export async function editMessage(sessionId: string, messageId: string, newText:
 }
 
 /**
- * Delete a pending message. Returns true on success.
- * Returns false if message not found or already processing.
+ * Delete a pending or parked message ("Discard"). Returns true on success.
+ * Returns false if the message is missing or already processing (in flight —
+ * deleting it would race the delivery points' own scoped removal).
  */
 export async function deleteMessage(sessionId: string, messageId: string): Promise<boolean> {
   return mutateStore((s) => {
@@ -365,7 +386,7 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
 
     const idx = queue.findIndex((m) => m.id === messageId);
     if (idx === -1) return false;
-    if (queue[idx].status !== 'pending') return false;
+    if (queue[idx].status === 'processing') return false;
 
     queue.splice(idx, 1);
     if (queue.length === 0) {
@@ -415,6 +436,125 @@ export async function revertToPending(messages: QueuedMessage[]): Promise<void> 
 }
 
 /**
+ * Age backstop for the parking policy: a pending row this old is parked instead
+ * of redelivered, whatever the failure that stranded it looked like.
+ *
+ * The classifier (providers/delivery-failure.ts) only recognizes the permanent
+ * failures we've SEEN. This catches the ones we haven't: a week is far longer
+ * than any real outage (the worst measured was ~7 minutes) and far shorter than
+ * the 12 days a doomed row actually survived.
+ */
+export const MAX_PENDING_AGE_MS = 7 * 24 * 60 * 60_000;
+
+/** One greppable line per parked row, shared by both park paths. */
+function logParked(rows: QueuedMessage[], reason: string): void {
+  for (const m of rows) {
+    log.session.warn('message parked — permanent delivery failure', {
+      sessionId: m.sessionId, messageId: m.id, reason,
+    });
+  }
+}
+
+/**
+ * Dead-letter a batch: 'processing' | 'pending' → 'parked'.
+ *
+ * Called INSTEAD of revertToPending when delivery failed for a reason that
+ * retrying cannot fix (deleted working directory, deleted session record). One
+ * structured line per row so the park is greppable.
+ *
+ * Same NO-LOSS re-insert as revertToPending: a row a concurrent cleanup removed
+ * while the batch was in flight is re-inserted (parked), never silently dropped.
+ * Note revertToPending only un-sticks rows whose stored status is 'processing',
+ * so a later transient revert can never resurrect a parked row.
+ */
+export async function parkMessages(messages: QueuedMessage[], reason: string): Promise<number> {
+  if (messages.length === 0) return 0;
+  const parkedAt = new Date().toISOString();
+  const parked = await mutateStore((s) => {
+    const done: QueuedMessage[] = [];
+    for (const m of messages) {
+      const queue = s.queues[m.sessionId] ?? (s.queues[m.sessionId] = []);
+      const existing = queue.find((q) => q.id === m.id);
+      const row = existing ?? { ...m };
+      if (!existing) {
+        queue.push(row);
+        queue.sort(compareEnqueueOrder);
+      }
+      if (row.status === 'parked') continue;
+      row.status = 'parked';
+      row.parkedAt = parkedAt;
+      row.parkedReason = reason;
+      done.push(row);
+    }
+    return done;
+  });
+  logParked(parked, reason);
+  return parked.length;
+}
+
+/**
+ * Park every pending row older than maxAgeMs. Run before the two automatic
+ * redelivery triggers (startup recovery, daemon reconnect) so a stale row is
+ * retired rather than retried; returns the rows it parked.
+ *
+ * A row whose `enqueuedAt` won't parse is left alone: its age is unknowable, and
+ * guessing "ancient" could retire a message that was written seconds ago.
+ */
+export async function parkStalePending(maxAgeMs = MAX_PENDING_AGE_MS): Promise<QueuedMessage[]> {
+  const cutoff = Date.now() - maxAgeMs;
+  const isStale = (m: QueuedMessage): boolean => {
+    if (m.status !== 'pending') return false;
+    const at = Date.parse(m.enqueuedAt);
+    return !Number.isNaN(at) && at <= cutoff;
+  };
+  // Cheap fresh read first. This runs on every boot AND every daemon reconnect,
+  // and the answer is almost always "nothing stale" — no file lock, no rewrite.
+  const peek = normalizeShape(await readJsonFile<QueueStore>(SESSION_QUEUE_FILE, { version: 1, queues: {} }));
+  if (!Object.values(peek.queues).some((msgs) => msgs.some(isStale))) return [];
+
+  const reason = `undelivered for over ${Math.round(maxAgeMs / 86_400_000)} days`;
+  const parkedAt = new Date().toISOString();
+  // One atomic pass that flips IN PLACE — deliberately not parkMessages(), whose
+  // no-loss re-insert would resurrect a row that got delivered since the peek.
+  const parked = await mutateStore((s) => {
+    const done: QueuedMessage[] = [];
+    for (const msgs of Object.values(s.queues)) {
+      for (const m of msgs) {
+        if (!isStale(m)) continue;
+        m.status = 'parked';
+        m.parkedAt = parkedAt;
+        m.parkedReason = reason;
+        done.push(m);
+      }
+    }
+    return done;
+  });
+  logParked(parked, reason);
+  return parked;
+}
+
+/**
+ * Put a parked row back in line — EXPLICIT HUMAN ACTION ONLY (the Retry
+ * affordance). Returns true when a parked row was un-parked; false when the row
+ * is absent or in a status the caller shouldn't disturb.
+ *
+ * The caller still has to trigger a delivery attempt (processNext); this only
+ * makes the row eligible again.
+ */
+export async function unparkMessage(sessionId: string, messageId: string): Promise<boolean> {
+  const ok = await mutateStore((s) => {
+    const msg = s.queues[sessionId]?.find((m) => m.id === messageId);
+    if (!msg || msg.status !== 'parked') return false;
+    msg.status = 'pending';
+    delete msg.parkedAt;
+    delete msg.parkedReason;
+    return true;
+  });
+  if (ok) log.session.info('parked message un-parked by user action', { sessionId, messageId });
+  return ok;
+}
+
+/**
  * Get all queued messages for a session.
  */
 export async function getQueue(sessionId: string): Promise<QueuedMessage[]> {
@@ -447,7 +587,10 @@ export async function isMessageQueued(sessionId: string, messageId: string): Pro
 }
 
 /**
- * Get all session IDs that have pending messages (for startup recovery).
+ * Get all session IDs that have pending messages (for startup recovery and
+ * daemon-reconnect redelivery). 'parked' rows are deliberately invisible here —
+ * this is the single gate both automatic triggers pass through, so excluding
+ * them is what makes "never auto-redelivered" true.
  */
 export async function getAllSessionsWithPending(): Promise<string[]> {
   const s = await getStore();

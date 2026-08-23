@@ -40,6 +40,8 @@ import {
   migrateSessionQueue,
   removeProcessed,
   revertToPending,
+  parkMessages,
+  parkStalePending,
   loadQueue,
   getAllSessionsWithPending,
 } from '../core/session-message-queue.js'
@@ -52,7 +54,8 @@ import type { SshTarget } from './session-io.js'
 import { createSessionManager, registerSessionManager, unregisterSessionManager } from './session-manager.js'
 import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
-import { checkCwdExists } from './cwd-check.js'
+import { checkCwdExists, CwdMissingError } from './cwd-check.js'
+import { classifyDeliveryFailure } from './delivery-failure.js'
 import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp } from './acp-session.js'
 import { extractImageFilePathFromInput } from '../core/session-history.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort } from '../core/types.js'
@@ -1826,7 +1829,9 @@ export class ClaudeCodeSession {
         log.session.warn('cwd pre-flight failed — aborting spawn', {
           taskId: this.taskId, host: host ?? 'local', cwd: resolvedCwd, error: errMsg,
         })
-        throw new Error(errMsg)
+        // Typed: a queue-managed --resume parks its batch on this instead of
+        // reverting it to pending and retrying forever (delivery-failure.ts).
+        throw new CwdMissingError(errMsg)
       }
       return transport.start({
       args,
@@ -6875,6 +6880,10 @@ export class SessionRunner {
       // Fix: process ALL pending queues including alive sessions. processNext() detects
       // alive sessions and uses the FIFO write path (not --resume spawn), so this is safe.
       await loadQueue()
+      // Age backstop before the drain: a row nobody could deliver in a week is
+      // parked, not retried. Without it an unrecognized permanent failure keeps
+      // re-attempting (and re-notifying) on every single boot, forever.
+      await parkStalePending().catch(() => [])
       const pendingSessions = await getAllSessionsWithPending()
       for (const sessionId of pendingSessions) {
         log.session.info('recovering pending queue messages on startup', { sessionId })
@@ -9130,15 +9139,23 @@ export class SessionRunner {
    * 'processing' back to 'pending' (recoverable on restart / user Retry) and tell the
    * UI to mark the optimistic rows 'failed' (keep text + Retry) via batch-failed —
    * NOT batch-completed (which deletes them). Called from send()'s onSpawnSettled(false).
+   *
+   * A PERMANENT failure (deleted cwd, deleted session record) parks the batch
+   * instead: pending would be re-attempted on every boot and every daemon
+   * reconnect, and the outcome cannot change. See providers/delivery-failure.ts.
    */
   private settleResumeFailure(sessionId: string, msgs: QueuedMessage[], err: Error): void {
     this.clearActiveProcessing(sessionId, { kind: 'error', message: err.message })
-    log.session.warn('resume spawn failed — reverting batch to pending', { sessionId, error: err.message })
+    const verdict = classifyDeliveryFailure(err)
+    log.session.warn(`resume spawn failed — ${verdict.kind === 'permanent' ? 'parking batch' : 'reverting batch to pending'}`, {
+      sessionId, error: err.message, failureCode: verdict.code,
+    })
     // This batch produced no echo and never will. Drop its claim so a Retry of the
     // SAME text isn't shadowed by it (FIFO text-match binding would give the dead
     // claim the retry's echo line — see revokeEchoClaims).
     revokeEchoClaims(sessionId, msgs.map((m) => m.id))
-    revertToPending(msgs).catch(() => {})
+    if (verdict.kind === 'permanent') parkMessages(msgs, verdict.reason).catch(() => {})
+    else revertToPending(msgs).catch(() => {})
     bus.emit(EventNames.SESSION_BATCH_FAILED, {
       sessionId,
       messageIds: msgs.map((m) => m.id),
@@ -9357,8 +9374,13 @@ export class SessionRunner {
    * (re)connected. Called from the daemon pool's host-connected callback.
    * Local sessions (host=null → '__local__') are included when the local
    * daemon reconnects.
+   *
+   * Parked rows are excluded (getAllSessionsWithPending ignores them) and the age
+   * backstop runs first, so a permanently undeliverable message can't turn every
+   * reconnect into another failed attempt plus another pair of error cards.
    */
   private async redeliverPendingForHost(hostKey: string): Promise<void> {
+    await parkStalePending().catch(() => [])
     const pendingSessions = await getAllSessionsWithPending()
     if (pendingSessions.length === 0) return
 
@@ -9717,8 +9739,12 @@ export class SessionRunner {
       // via batch-failed — NOT batch-completed, which would delete the optimistic rows.
       // Revoke the batch's echo-claim first: it will never bind, and left in place it
       // would steal a same-text Retry's echo line (see revokeEchoClaims).
+      // PERMANENT failures (deleted cwd, no session record to --resume) park instead:
+      // pending here means "retry on every boot and reconnect", and this one can't win.
       revokeEchoClaims(sessionId, msgs.map((m) => m.id))
-      await revertToPending(msgs).catch(() => {})
+      const verdict = classifyDeliveryFailure(err)
+      if (verdict.kind === 'permanent') await parkMessages(msgs, verdict.reason).catch(() => {})
+      else await revertToPending(msgs).catch(() => {})
 
       bus.emit(EventNames.SESSION_BATCH_FAILED, {
         sessionId,

@@ -23,9 +23,13 @@ import {
   getAllSessionsWithPending,
   migrateSessionQueue,
   rollbackSessionQueueMigration,
+  parkMessages,
+  parkStalePending,
+  unparkMessage,
+  MAX_PENDING_AGE_MS,
   resetCache,
 } from '../../src/core/session-message-queue.js';
-import { WALNUT_HOME } from '../../src/constants.js';
+import { WALNUT_HOME, SESSION_QUEUE_FILE } from '../../src/constants.js';
 
 beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
@@ -525,5 +529,193 @@ describe('scoped removeProcessed + revertToPending re-insert (no-loss guarantees
     const after = await getQueue('sess-1');
     expect(after.map((m) => m.message)).toEqual(['first', 'second']);
     expect(after[0].id).toBe(m1.id);
+  });
+});
+
+// A pending row is retried on EVERY server boot and EVERY daemon reconnect. That
+// loops forever when the failure is permanent (deleted cwd): real rows sat pending
+// for 12 days, re-firing two error notifications per session per cycle. 'parked' is
+// the dead-letter state that ends the loop: kept on disk, never auto-redelivered.
+describe('parked rows (dead-letter)', () => {
+  it('parkMessages flips a locked batch to parked and records when + why', async () => {
+    await enqueueMessage('sess-park', 'undeliverable');
+    const batch = await markProcessing('sess-park');
+
+    expect(await parkMessages(batch, 'Working directory no longer exists: /gone')).toBe(1);
+
+    const after = await getQueue('sess-park');
+    expect(after).toHaveLength(1);
+    expect(after[0].status).toBe('parked');
+    expect(after[0].parkedReason).toBe('Working directory no longer exists: /gone');
+    expect(after[0].parkedAt).toBeTruthy();
+    expect(after[0].message).toBe('undeliverable');
+  });
+
+  it('parking is idempotent (a second park of the same batch changes nothing)', async () => {
+    await enqueueMessage('sess-park', 'once');
+    const batch = await markProcessing('sess-park');
+    await parkMessages(batch, 'first reason');
+
+    expect(await parkMessages(batch, 'second reason')).toBe(0);
+    const after = await getQueue('sess-park');
+    expect(after[0].parkedReason).toBe('first reason');
+  });
+
+  it('parked rows are invisible to BOTH automatic redelivery triggers', async () => {
+    await enqueueMessage('sess-park', 'parked one');
+    const batch = await markProcessing('sess-park');
+    await parkMessages(batch, 'permanent');
+
+    // getAllSessionsWithPending is the single gate startup recovery and
+    // redeliverPendingForHost both pass through.
+    expect(await getAllSessionsWithPending()).not.toContain('sess-park');
+    // And neither batching primitive can pick a parked row up.
+    expect(await markProcessing('sess-park')).toHaveLength(0);
+    expect(await markNextProcessing('sess-park')).toHaveLength(0);
+  });
+
+  it('parked survives a server restart as parked (loadQueue does not revive it)', async () => {
+    await enqueueMessage('sess-park', 'still parked after boot');
+    await parkMessages(await markProcessing('sess-park'), 'permanent');
+
+    resetCache();
+    await loadQueue();
+
+    const after = await getQueue('sess-park');
+    expect(after[0].status).toBe('parked');
+    expect(await getAllSessionsWithPending()).toHaveLength(0);
+  });
+
+  it('parkMessages re-inserts a row swept while in flight (same no-loss rule as revert)', async () => {
+    await enqueueMessage('sess-park', 'swept then parked');
+    const batch = await markProcessing('sess-park');
+    await removeProcessed('sess-park'); // un-scoped sweep races the settle
+
+    await parkMessages(batch, 'permanent');
+
+    const after = await getQueue('sess-park');
+    expect(after).toHaveLength(1);
+    expect(after[0].status).toBe('parked');
+    expect(after[0].message).toBe('swept then parked');
+  });
+
+  it('a later transient revert cannot resurrect a parked row', async () => {
+    await enqueueMessage('sess-park', 'stays parked');
+    const batch = await markProcessing('sess-park');
+    await parkMessages(batch, 'permanent');
+
+    // revertToPending only un-sticks rows stored as 'processing'.
+    await revertToPending(batch);
+
+    expect((await getQueue('sess-park'))[0].status).toBe('parked');
+  });
+
+  it('unparkMessage puts a parked row back in line (explicit user retry)', async () => {
+    const msg = await enqueueMessage('sess-park', 'retry me by hand');
+    await parkMessages(await markProcessing('sess-park'), 'permanent');
+
+    expect(await unparkMessage('sess-park', msg.id)).toBe(true);
+
+    const after = await getQueue('sess-park');
+    expect(after[0].status).toBe('pending');
+    expect(after[0].parkedAt).toBeUndefined();
+    expect(after[0].parkedReason).toBeUndefined();
+    // Now the ordinary drain sees it again.
+    expect(await getAllSessionsWithPending()).toContain('sess-park');
+    expect(await markProcessing('sess-park')).toHaveLength(1);
+  });
+
+  it('unparkMessage refuses rows that are not parked', async () => {
+    const msg = await enqueueMessage('sess-park', 'pending already');
+    expect(await unparkMessage('sess-park', msg.id)).toBe(false);
+    expect(await unparkMessage('sess-park', 'no-such-id')).toBe(false);
+    expect(await unparkMessage('no-such-session', msg.id)).toBe(false);
+  });
+
+  it('deleteMessage discards a parked row, still refuses one in flight', async () => {
+    const parkedMsg = await enqueueMessage('sess-park', 'discard me');
+    await parkMessages(await markProcessing('sess-park'), 'permanent');
+    expect(await deleteMessage('sess-park', parkedMsg.id)).toBe(true);
+    expect(await getQueue('sess-park')).toHaveLength(0);
+
+    const liveMsg = await enqueueMessage('sess-live', 'in flight');
+    await markProcessing('sess-live');
+    expect(await deleteMessage('sess-live', liveMsg.id)).toBe(false);
+  });
+
+  it('a parked row is still listed for the UI (that is how Retry/Discard reach it)', async () => {
+    const msg = await enqueueMessage('sess-park', 'visible');
+    await parkMessages(await markProcessing('sess-park'), 'permanent');
+
+    const listed = await getQueue('sess-park');
+    expect(listed.map((m) => m.id)).toEqual([msg.id]);
+    // isMessageQueued still true → the retry route re-drains this row instead of
+    // enqueueing a duplicate (it un-parks first).
+    expect(await isMessageQueued('sess-park', msg.id)).toBe(true);
+  });
+});
+
+// Age backstop: the failure classifier only knows the permanent shapes we have
+// SEEN. A week-old pending row is retired whatever stranded it.
+describe('parkStalePending (7-day age backstop)', () => {
+  const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
+
+  async function backdate(sessionId: string, messageId: string, enqueuedAt: string): Promise<void> {
+    const raw = JSON.parse(await fsp.readFile(SESSION_QUEUE_FILE, 'utf-8'));
+    const row = raw.queues[sessionId].find((m: { id: string }) => m.id === messageId);
+    row.enqueuedAt = enqueuedAt;
+    await fsp.writeFile(SESSION_QUEUE_FILE, JSON.stringify(raw));
+    resetCache();
+  }
+
+  it('parks a pending row older than the default window, leaves a fresh one alone', async () => {
+    const old = await enqueueMessage('sess-age', 'twelve days old');
+    const fresh = await enqueueMessage('sess-age', 'sent just now');
+    await backdate('sess-age', old.id, daysAgo(12));
+
+    const parked = await parkStalePending();
+    expect(parked.map((m) => m.id)).toEqual([old.id]);
+
+    const after = await getQueue('sess-age');
+    expect(after.find((m) => m.id === old.id)!.status).toBe('parked');
+    expect(after.find((m) => m.id === old.id)!.parkedReason).toContain('7 days');
+    expect(after.find((m) => m.id === fresh.id)!.status).toBe('pending');
+    // The stale row no longer drags its session into the boot-time drain, but the
+    // fresh one still does.
+    expect(await getAllSessionsWithPending()).toContain('sess-age');
+    expect(await markProcessing('sess-age')).toHaveLength(1);
+  });
+
+  it('leaves a row that is exactly inside the window, parks one just outside', async () => {
+    const inside = await enqueueMessage('sess-age', 'six days');
+    const outside = await enqueueMessage('sess-age', 'eight days');
+    await backdate('sess-age', inside.id, daysAgo(6));
+    await backdate('sess-age', outside.id, daysAgo(8));
+
+    await parkStalePending(MAX_PENDING_AGE_MS);
+
+    const after = await getQueue('sess-age');
+    expect(after.find((m) => m.id === inside.id)!.status).toBe('pending');
+    expect(after.find((m) => m.id === outside.id)!.status).toBe('parked');
+  });
+
+  it('never touches a row that is in flight (processing)', async () => {
+    const msg = await enqueueMessage('sess-age', 'old but in flight');
+    await backdate('sess-age', msg.id, daysAgo(30));
+    await markProcessing('sess-age');
+
+    expect(await parkStalePending()).toHaveLength(0);
+    expect((await getQueue('sess-age'))[0].status).toBe('processing');
+  });
+
+  it('is a no-op on an empty queue and on already-parked rows', async () => {
+    expect(await parkStalePending()).toHaveLength(0);
+
+    const msg = await enqueueMessage('sess-age', 'already parked');
+    await parkMessages(await markProcessing('sess-age'), 'permanent');
+    await backdate('sess-age', msg.id, daysAgo(30));
+
+    expect(await parkStalePending()).toHaveLength(0);
+    expect((await getQueue('sess-age'))[0].parkedReason).toBe('permanent');
   });
 });
