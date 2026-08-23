@@ -189,7 +189,15 @@ enum CalendarLogic {
         }
         for task in tasks where !task.isDone {
             add(.due, task.dueDate, task)
-            add(.start, task.startDate, task)
+            // Same-day start+due would render the SAME task as two chips in
+            // one day column (dogfood R16) — the due item already marks it.
+            let dueKey = parseTaskDate(task.dueDate, calendar: calendar)
+                .map { dayKey($0.date, calendar: calendar) }
+            let startKey = parseTaskDate(task.startDate, calendar: calendar)
+                .map { dayKey($0.date, calendar: calendar) }
+            if startKey == nil || startKey != dueKey {
+                add(.start, task.startDate, task)
+            }
             if let end = task.endDate, let parsedEnd = parseTaskDate(end, calendar: calendar) {
                 let endKey = dayKey(parsedEnd.date, calendar: calendar)
                 let startKey = parseTaskDate(task.startDate, calendar: calendar)

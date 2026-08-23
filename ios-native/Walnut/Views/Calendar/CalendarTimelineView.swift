@@ -38,6 +38,9 @@ struct CalendarTimelineView: View {
     @State private var now = Date()
     /// One-shot scroll to the current hour on first appearance.
     @State private var didAutoScroll = false
+    /// Day columns whose all-day band is expanded past the 3-chip cap
+    /// ("+N more" was dead text — dogfood R16).
+    @State private var expandedAllDayKeys: Set<String> = []
 
     private var dayHeight: CGFloat { CGFloat(CalendarLayout.minutesPerDay) * minuteHeight }
 
@@ -103,15 +106,23 @@ struct CalendarTimelineView: View {
                     .foregroundStyle(.secondary)
                     .frame(width: gutterWidth, alignment: .trailing)
                     .padding(.trailing, 4)
-                ForEach(Array(zip(days, layouts)), id: \.0.dayKey) { _, dayLayout in
+                ForEach(Array(zip(days, layouts)), id: \.0.dayKey) { day, dayLayout in
+                    let expanded = expandedAllDayKeys.contains(day.dayKey)
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(dayLayout.allDay.prefix(3)) { row in
+                        ForEach(expanded ? dayLayout.allDay : Array(dayLayout.allDay.prefix(3))) { row in
                             CalendarAllDayChip(row: row, onTapTask: onTapTask)
                         }
                         if dayLayout.allDay.count > 3 {
-                            Text("+\(dayLayout.allDay.count - 3) more")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                            Button {
+                                if expanded { expandedAllDayKeys.remove(day.dayKey) }
+                                else { expandedAllDayKeys.insert(day.dayKey) }
+                            } label: {
+                                Text(expanded ? "show less" : "+\(dayLayout.allDay.count - 3) more")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("calendar.allDayMore.\(day.dayKey)")
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)

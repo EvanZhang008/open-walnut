@@ -232,6 +232,15 @@ final class CalendarLogicTests: XCTestCase {
         XCTAssertEqual(buckets["2026-08-12"]?.map(\.kind), [.due])
     }
 
+    func testSameDayStartAndDueEmitOneItem() {
+        // Start and due on the same local day → ONE chip (the due), not two
+        // copies of the same task in one column (dogfood R16).
+        let buckets = CalendarLogic.bucketTasks(
+            [task(id: "a", due: "2026-08-26", start: "2026-08-26")], calendar: la
+        )
+        XCTAssertEqual(buckets["2026-08-26"]?.map(\.kind), [.due])
+    }
+
     func testSameDayEndIsSuppressedDifferentDayEndEmits() {
         // Same local day as start → duration detail, no separate chip.
         let sameDay = CalendarLogic.bucketTasks(
