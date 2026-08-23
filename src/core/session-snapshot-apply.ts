@@ -37,6 +37,8 @@ import {
   getAppliedV,
   putBoundedEntry,
   SNAPSHOT_REGISTRY_CAP,
+  takeSuppressedErrorReason,
+  clearSuppressedErrorReason,
   _clearSnapshotRegistryForTests,
 } from './session-snapshot-gate.js'
 
@@ -267,7 +269,7 @@ export async function applySnapshot(
   // So epoch stamping happens only on enforce-mode writes below; shadow relies
   // on the in-memory reset above within each process lifetime.
 
-  // ── Terminal USER intent outranks snapshot labeling (C4) ──────────────────
+  // ── Terminal INTENT outranks snapshot labeling (C4) ───────────────────────
   // The user clicked Stop: walnut records ('user','user_stopped','stopped') and
   // kills the CLI. The reap produces a death snapshot whose v is BEYOND the
   // record's watermark and whose exitCode is non-zero (no clean result line), so
@@ -279,7 +281,19 @@ export async function applySnapshot(
   // label — the user's label wins, regardless of v. Only a projection that
   // contradicts the terminal verdict (running/idle, i.e. "the stop did not
   // take") may supersede it, and only with evidence beyond the watermark.
-  if (record.status_changed_by === 'user' && TERMINAL.has(actual)) {
+  //
+  // Teardowns WALNUT requested are the same shape with a different author:
+  // completing a task SIGINTs its sessions after stamping
+  // ('system','expected_teardown','stopped'). The kill can land mid-turn (a
+  // session that completes its OWN task dies while its tool call is still
+  // running), so the death snapshot has no clean result tail and projects
+  // 'error' — and the record flipped stopped → red Error for a session that
+  // did exactly what it was told (2026-08-23, compare-task session). Same
+  // rule: an intentional terminal label is a decision; the corpse's label is
+  // not.
+  const intentionalTerminal = record.status_changed_by === 'user'
+    || (record.status_changed_by === 'system' && record.status_reason === 'expected_teardown')
+  if (intentionalTerminal && TERMINAL.has(actual)) {
     if (TERMINAL.has(projected)) {
       return { outcome: 'skipped', reason: 'user-terminal-intent' }
     }
@@ -365,9 +379,33 @@ export async function applySnapshot(
     updates.streamEpoch = snapshot.streamEpoch
     if (epochChanged && !adoptWatermark) updates.consumedOffset = 0
   }
-  // Clear stale error text on any non-error convergence; on 'error' keep the
-  // existing message (the snapshot has no richer text to offer).
-  if (projected !== 'error') updates.errorMessage = undefined
+  // Clear stale error text on any non-error convergence; on 'error' adopt the
+  // diagnosis from the legacy writer the gate just dropped (the snapshot itself
+  // has no text to offer, and it is not allowed to invent one).
+  //
+  // Without this hand-off the record lands `errorMessage: null`, which the UI
+  // renders as a bare red "Error" and which BOTH recovery paths read as
+  // "unexplained user-visible error → leave it alone" — the session then never
+  // comes back, even after the host does (inc-1787439819342, 51 sessions).
+  if (projected !== 'error') {
+    updates.errorMessage = undefined
+    updates.errorKind = undefined
+    clearSuppressedErrorReason(sessionId)
+  } else {
+    const stashed = takeSuppressedErrorReason(sessionId)
+    if (stashed) {
+      // Only fill a BLANK message — a real message already on the record came
+      // from a writer with first-hand knowledge and outranks a stash.
+      if (!record.errorMessage && stashed.message) updates.errorMessage = stashed.message
+      if (!record.errorKind && stashed.kind) updates.errorKind = stashed.kind
+      log.session.info('snapshot projection adopted suppressed error reason', {
+        sessionId,
+        suppressedReason: stashed.reason,
+        kind: stashed.kind ?? null,
+        filledMessage: updates.errorMessage !== undefined,
+      })
+    }
+  }
 
   const updated = await updateSessionRecordConditionally(
     sessionId,

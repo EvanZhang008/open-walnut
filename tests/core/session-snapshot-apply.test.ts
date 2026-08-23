@@ -456,6 +456,51 @@ describe('applySnapshot — user terminal intent outranks snapshot LABELING (C4)
     }), 'daemon-push')
     expect(res).toMatchObject({ outcome: 'applied', projected: 'error' })
   })
+
+  it("walnut's OWN teardown (task completed) is not relabeled 'error' by the reap", async () => {
+    // 2026-08-23 incident: a session completed its own task via the gateway;
+    // completeTaskSessions stamped ('system','expected_teardown','stopped') and
+    // SIGINTed the CLI mid-tool-call. The death snapshot had no clean result
+    // tail → projected 'error' → the task sheet showed a red Error row for a
+    // session that did exactly what it was asked to.
+    setSnapshotModeForTests('enforce')
+    const sid = 'c4-expected-teardown'
+    await seedSession(sid, {
+      process_status: 'stopped', status_reason: 'expected_teardown', status_changed_by: 'system',
+      consumedOffset: 1000,
+    })
+    const res = await applySnapshot(sid, snap({
+      v: 9999, cliState: 'dead', turnActive: false, exitCode: 130, pid: null,
+    }), 'daemon-push')
+    expect(res).toMatchObject({ outcome: 'skipped', reason: 'user-terminal-intent' })
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.process_status).toBe('stopped')
+    expect(after?.status_reason).toBe('expected_teardown')
+  })
+
+  it('expected_teardown still yields to live contradiction (the kill did not take)', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'c4-teardown-did-not-take'
+    await seedSession(sid, {
+      process_status: 'stopped', status_reason: 'expected_teardown', status_changed_by: 'system',
+      consumedOffset: 1000,
+    })
+    const res = await applySnapshot(sid, snap({ v: 4000, cliState: 'running', turnActive: true }), 'pull-30s')
+    expect(res).toMatchObject({ outcome: 'applied', projected: 'running' })
+  })
+
+  it("a system record with a NON-teardown reason is still converged (veto needs the intent stamp)", async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'c4-system-other-reason'
+    await seedSession(sid, {
+      process_status: 'stopped', status_reason: 'server_restart', status_changed_by: 'system',
+      consumedOffset: 100,
+    })
+    const res = await applySnapshot(sid, snap({
+      v: 900, cliState: 'dead', turnActive: false, exitCode: 137, pid: null,
+    }), 'daemon-push')
+    expect(res).toMatchObject({ outcome: 'applied', projected: 'error' })
+  })
 })
 
 // ── C5+C16: the v-gate is enforced AT THE WRITE, and equal-v never resurrects ──

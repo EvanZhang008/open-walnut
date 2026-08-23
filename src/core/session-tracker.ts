@@ -28,7 +28,11 @@ import {
   isLegacyGatedStatusWrite,
   isUnstampedStatusWrite,
   noteSuppressedStatusWrite,
+  noteSuppressedErrorReason,
 } from './session-snapshot-gate.js';
+// Also a zero-import leaf — see the file header for why classification cannot
+// live in a prose match.
+import { classifyStatusReasonKind } from './session-error-kind.js';
 
 let sessionInitialized = false;
 
@@ -1471,6 +1475,24 @@ function applyUpdateToSession(
       if (count === 1) log.session.info('legacy status write suppressed', payload);
       else log.session.debug('legacy status write suppressed', payload);
 
+      // The STATUS verdict is the projection's, but the dropped writer is often
+      // the only one that knows WHY (health-monitor/remote_unreachable carries
+      // the diagnosis; the snapshot carries none and declines to invent one).
+      // Hand the explanation over so the projection can label its own 'error'
+      // — without it the record lands `errorMessage: null`, which reads as
+      // "unexplained user-visible error" and disqualifies the session from BOTH
+      // recovery paths forever (2026-08-22, inc-1787439819342).
+      if (updates.process_status === 'error') {
+        noteSuppressedErrorReason(session.claudeSessionId, {
+          reason: typeof reason === 'string' ? reason : 'unknown',
+          message: typeof (updates as Record<string, unknown>).errorMessage === 'string'
+            ? (updates as Record<string, unknown>).errorMessage as string
+            : undefined,
+          kind: classifyStatusReasonKind(reason),
+          at: Date.now(),
+        });
+      }
+
       // (a) drop the entire patch — nothing in it was meant to apply alone.
       if (gatedPair) return false;
 
@@ -2087,6 +2109,15 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
         }
         toReap.push({ claudeSessionId: session.claudeSessionId, host: session.host });
         session.process_status = 'stopped';
+        // Stamp the INTENT before the SIGINT below lands: the death snapshot the
+        // daemon folds after our kill has no clean result tail (the CLI can die
+        // mid-turn — e.g. the session completing its OWN task via the gateway is
+        // killed while its Bash tool is still running) and projects 'error'. The
+        // snapshot applier honors a durable intentional-teardown reason and keeps
+        // the label 'stopped' (2026-08-23: compare-task session showed red Error
+        // after finishing its work and completing its task).
+        session.status_reason = 'expected_teardown';
+        session.status_changed_by = 'system';
         if (session.pid != null) {
           log.session.info('clearing stale PID on task completion', { sessionId: sid, pid: session.pid });
         }
