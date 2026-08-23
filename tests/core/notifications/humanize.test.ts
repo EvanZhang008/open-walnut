@@ -118,6 +118,79 @@ describe('session families', () => {
     expect(out.message).toBe('API Error: model overloaded.');
   });
 
+  it('a model REFUSAL is its own family, not "a session hit an error"', () => {
+    // The provider's content policy declined the turn. Nothing on this machine
+    // broke, so the card must not read like a Walnut failure — and the raw copy
+    // ("API Error: … Learn more: <legal page>") sent people to read a policy page
+    // to find that out.
+    const out = humanizeErrorNotification({
+      title: 'Session Error',
+      body: '[mt1u|Notes / Draft the release post]: API Error: Some Model 5 '
+        + "can't help with this. Start a new session to continue.\n\n"
+        + 'Learn more: https://www.anthropic.com/legal/aup',
+      subsystem: 'session',
+      recoveryKey: 'session:s-7',
+    });
+    expect(out.title).toBe('Model refused the request');
+    expect(out.message).toMatch(/content policy declined this turn/);
+    expect(out.message).toMatch(/new session/);
+    // The session/task context line survives — WHICH session refused matters.
+    expect(out.message).toContain('[mt1u|Notes / Draft the release post]');
+    // Session-keyed like every other session card, so it groups with them.
+    expect(out.category).toBe('Sessions');
+    // The provider's raw sentence and its legal link stay in the Details toggle.
+    expect(out.message).not.toContain('anthropic.com');
+    expect(out.message).not.toContain('API Error');
+  });
+
+  it('the refusal rule does not pin the MODEL NAME (it changes every release)', () => {
+    for (const model of ['Some Model 5', 'Another Model 4.7', 'Assistant']) {
+      const out = humanizeErrorNotification({
+        title: 'Session Error',
+        body: `API Error: ${model} can't help with this. Start a new session to continue.\n\n`
+          + 'Learn more: https://www.anthropic.com/legal/aup',
+        recoveryKey: 'session:s-8',
+      });
+      expect(out.title).toBe('Model refused the request');
+    }
+  });
+
+  it('a provider tag in the context line is punctuation, not context', () => {
+    const out = humanizeErrorNotification({
+      title: 'Session Error',
+      body: "[mt1u]: [cyber] API Error: Some Model 5 can't help with this. "
+        + 'Start a new session to continue.\n\nLearn more: https://www.anthropic.com/legal/aup',
+      recoveryKey: 'session:s-9',
+    });
+    expect(out.message.startsWith('[mt1u]: The model')).toBe(true);
+  });
+
+  it('the refusal rule needs BOTH signals — an ordinary session error is untouched', () => {
+    // The phrase alone is something an error string can quote; the pair is what
+    // identifies the refusal family.
+    const out = humanizeErrorNotification({
+      title: 'Session Error',
+      body: "API Error: can't help with this right now, the operation timed out.",
+      recoveryKey: 'session:s-10',
+    });
+    expect(out.title).toBe('A session hit an error');
+  });
+
+  it('a refusal that arrives through the log bridge (meta.error) is matched too', () => {
+    const out = humanizeErrorNotification({
+      title: 'session error received',
+      subsystem: 'session',
+      recoveryKey: 'session:s-11',
+      meta: {
+        sessionId: 's-11',
+        error: "API Error: Some Model 5 can't help with this. Start a new session to "
+          + 'continue.\n\nLearn more: https://www.anthropic.com/legal/aup',
+      },
+    });
+    expect(out.title).toBe('Model refused the request');
+    expect(out.category).toBe('Sessions');
+  });
+
   it('Subagent Error gets its own title', () => {
     const out = humanizeErrorNotification({
       title: 'Subagent Error', body: 'researcher: tool call timed out', recoveryKey: 'task:t-9',
@@ -445,6 +518,9 @@ describe('rule precedence list', () => {
     expect(ids.indexOf('transport-start-failed')).toBeLessThan(ids.indexOf('plugin-generic'));
     // Delivery-failed must precede the generic session-error prefix rule.
     expect(ids.indexOf('session-delivery-failed')).toBeLessThan(ids.indexOf('session-error'));
+    // So must the refusal family: a refusal is published under the 'Session Error'
+    // title, so the generic rule would swallow it first.
+    expect(ids.indexOf('model-refusal')).toBeLessThan(ids.indexOf('session-error'));
   });
 });
 

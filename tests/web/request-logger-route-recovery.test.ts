@@ -10,6 +10,9 @@
  *   2. A <500 response signals recovery for a route that HAD failed — and does
  *      nothing at all otherwise. This runs on every request in the app, so the
  *      healthy path must not allocate, not publish, and not grow a map.
+ *   3. 501 is the ONE exempt 5xx: it is this codebase's `not_supported_cloud`
+ *      degradation (a deliberate answer, not a failure), so it logs at warn and
+ *      is treated like a 4xx — never a card.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Request, Response } from 'express';
@@ -20,6 +23,7 @@ import {
 } from '../../src/web/middleware/request-logger.js';
 import { errorHandler } from '../../src/web/middleware/error-handler.js';
 import { setErrorNotificationSink } from '../../src/logging/subsystem.js';
+import { log } from '../../src/logging/index.js';
 import { dedupFingerprintForTest } from '../../src/core/notifications/log-error-bridge.js';
 
 interface Logged { subsystem: string; message: string; meta?: Record<string, unknown> }
@@ -107,18 +111,37 @@ describe('5xx → one stable, keyed error record', () => {
     expect(errorLogs[0].meta?.url).toBe('/api/ui-prefs?keys=layout');
   });
 
-  it('a 501 is keyed too — any 5xx means this endpoint is failing', () => {
-    // The live feed's two `search → 501` cards. A 501 from the cloud replica is a
-    // real condition (it clears when the request reaches the primary), and it is
-    // just as unrecoverable without a key as a 500.
-    fire('GET', '/api/search-memory-v1', 501);
-    expect(errorLogs[0].message).toBe('GET /api/search-memory-v1 → 501');
-    expect(errorLogs[0].meta?.recoveryKey).toBe('route:GET /api/search-memory-v1');
+  it('a DESIGNED 501 never becomes an error card, but is still in the log at warn', () => {
+    // 501 has exactly one meaning in this codebase: `not_supported_cloud`, the
+    // cloud replica answering honestly that a capability lives on the primary box
+    // (search-memory-v1, console-v1, console-extras-v1, …). The route WORKS. As an
+    // error it minted red cards for normal replica behavior — and those cards then
+    // rode git-sync into the primary's feed, describing a condition that cannot
+    // exist there.
+    const warn = vi.spyOn(log.web, 'warn').mockImplementation(() => {});
+    try {
+      fire('GET', '/api/search-memory-v1', 501);
+      expect(errorLogs).toEqual([]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain('→ 501');
+    } finally {
+      warn.mockRestore();
+    }
   });
 
-  it('a 503 is keyed too', () => {
-    fire('GET', '/api/config', 503);
-    expect(errorLogs[0].meta?.recoveryKey).toBe('route:GET /api/config');
+  it('a 501 counts as the endpoint answering: it recovers a route that HAD failed', () => {
+    fire('GET', '/api/search-memory-v1', 500);
+    fire('GET', '/api/search-memory-v1', 501);
+    expect(recoveries).toEqual([['route:GET /api/search-memory-v1']]);
+  });
+
+  it('every OTHER 5xx still becomes a keyed card', () => {
+    for (const status of [500, 502, 503, 504]) {
+      fire('GET', '/api/config', status);
+    }
+    expect(errorLogs).toHaveLength(4);
+    expect(new Set(errorLogs.map((l) => l.meta?.recoveryKey)))
+      .toEqual(new Set(['route:GET /api/config']));
   });
 
   it('4xx NEVER creates an error record at all', () => {

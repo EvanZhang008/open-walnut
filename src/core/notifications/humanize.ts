@@ -311,6 +311,47 @@ function looksLikeMissingDir(text: string | undefined): boolean {
 }
 
 /**
+ * A model REFUSAL — the provider's content policy declined the turn, which is not
+ * a Walnut failure at all. The text arrives as
+ *   `API Error: <model> can't help with this. Start a new session to continue.
+ *    Learn more: https://www.anthropic.com/legal/aup`
+ * (sometimes carrying a short provider tag such as `[cyber]`).
+ *
+ * TWO signals are required together, and the MODEL NAME is deliberately not one of
+ * them — it changes with every release, so pinning it would make this rule expire
+ * silently. The refusal phrase alone is a sentence a session could quote in its own
+ * error text; the policy link alone shows up in other provider copy. The pair is
+ * what identifies the family. Same reasoning as the daemon's terminal-error
+ * classifier, which treats this exact phrase as never-retry.
+ */
+const REFUSAL_PHRASE_RE = /can[’'`]?t help with this/i;
+const REFUSAL_POLICY_URL_RE = /anthropic\.com\/legal\/aup/i;
+
+/** Everything a refusal could be hiding in: the title, the body, the meta error. */
+function refusalHaystack(input: HumanizeErrorInput): string {
+  return [input.title, input.body, metaError(input.meta)].filter(Boolean).join('\n');
+}
+
+/**
+ * The `[<taskId>|<project> / <title>]: ` context the session-error publisher
+ * prefixes onto its body — kept, so a refusal card still says WHICH session
+ * refused. Everything from the provider's own error text onwards is dropped: the
+ * rule writes its own sentence for that part.
+ */
+function sessionContextPrefix(body: string | undefined, max = 120): string {
+  const text = (body ?? '').replace(/\s+/g, ' ').trim();
+  const cut = text.search(/API Error:|can[’'`]?t help with this/i);
+  if (cut <= 0) return '';
+  let head = text.slice(0, cut).trim();
+  // A trailing provider tag (`[cyber]`) is punctuation, not context — but only
+  // strip it when something is left, or a bare `[mt1u]` ref would vanish whole.
+  const untagged = head.replace(/\s*\[[^\][]{0,24}\]\s*$/, '').trim();
+  if (untagged) head = untagged;
+  head = head.replace(/[\s:]+$/, '').trim();
+  return head.length > max ? `${head.slice(0, max).trimEnd()}…` : head;
+}
+
+/**
  * Ordered families. First match wins, so a specific rule must precede a general
  * one (the plugin rules are last for exactly that reason: a plugin's HTTP error
  * may also look like a generic 'API error').
@@ -344,6 +385,30 @@ const RULES: Rule[] = [
       // verbatim rather than re-summarized into a second, weaker copy.
       message: (i.body ?? '').trim() || firstSentence(metaError(i.meta)),
     }),
+  },
+  {
+    id: 'model-refusal',
+    // Session-keyed like every other session card (`session:<sid>` → Sessions), so
+    // a refusal groups with the rest of that session's history instead of opening
+    // its own one-card family.
+    category: CATEGORY_SESSIONS,
+    // Ahead of the generic 'Session Error' prefix rule: a refusal arrives under
+    // that title, and "A session hit an error" + the raw API sentence is exactly
+    // the copy that made people go read the provider's legal page to find out
+    // nothing was broken.
+    match: (i) => {
+      const text = refusalHaystack(i);
+      return REFUSAL_PHRASE_RE.test(text) && REFUSAL_POLICY_URL_RE.test(text);
+    },
+    render: (i) => {
+      const context = sessionContextPrefix(i.body ?? metaError(i.meta));
+      return {
+        title: 'Model refused the request',
+        message: `${context ? `${context}: ` : ''}The model's content policy declined this turn, `
+          + 'so it produced no answer. Nothing is broken on this machine; starting a '
+          + 'new session usually clears it.',
+      };
+    },
   },
   {
     id: 'session-error',

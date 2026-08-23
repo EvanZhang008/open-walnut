@@ -65,6 +65,25 @@ describe('extractField', () => {
     expect(extractField(wrapped, 'NEXT_STEPS')).toBe('Update the sender.\nAPI: must bump the version too.');
     expect(extractField(wrapped, 'BLOCKERS')).toBe('none');
   });
+
+  it('accepts a BARE label line (no colon) with the content on the next line', () => {
+    // The shape real reports arrive in when a session treats the label as a
+    // heading. The colon-only grammar read this as a missing section, and since
+    // the summary is the first label, the whole report was logged UNPARSEABLE.
+    const bare = 'EXEC_SUMMARY\nOnboarded two deprecation campaigns into the tracker.\n'
+      + 'USER_REQUEST: unchanged';
+    expect(extractField(bare, 'EXEC_SUMMARY'))
+      .toBe('Onboarded two deprecation campaigns into the tracker.');
+    expect(extractField(bare, 'USER_REQUEST')).toBe('unchanged');
+  });
+
+  it('a prose line that merely STARTS with a label word is not a label', () => {
+    // Content on the same line still requires the colon — otherwise a sentence
+    // opening with a label word would both hijack and truncate a field.
+    const prose = 'NEXT_STEPS: Ask the reviewer.\nSTATUS quo is fine for now.\nBLOCKERS: none';
+    expect(extractField(prose, 'NEXT_STEPS')).toBe('Ask the reviewer.\nSTATUS quo is fine for now.');
+    expect(extractField(prose, 'STATUS')).toBe('');
+  });
 });
 
 describe('parseNoteSections', () => {
@@ -133,6 +152,39 @@ describe('parseSectionAnswer', () => {
     expect(parseSectionAnswer('GOAL: unchanged', 'User Request')).toEqual({ kind: 'unchanged' });
   });
 
+  it('accepts EXEC_SUMMARY as a bare heading and the prose spelling of the label', () => {
+    const bare = 'EXEC_SUMMARY\nOnboarded two deprecation campaigns into the tracker.\n'
+      + 'WORK_LOG: append: filed the follow-ups.';
+    expect(parseSectionAnswer(bare, 'Executive Summary'))
+      .toEqual({ kind: 'rewrite', text: 'Onboarded two deprecation campaigns into the tracker.' });
+
+    for (const label of [
+      'EXECUTIVE SUMMARY:', 'EXECUTIVE_SUMMARY:', 'Executive Summary:', 'exec summary:', 'EXEC SUMMARY:',
+    ]) {
+      expect(parseSectionAnswer(`${label} Two campaigns are tracked.`, 'Executive Summary'))
+        .toEqual({ kind: 'rewrite', text: 'Two campaigns are tracked.' });
+    }
+    expect(parseSectionAnswer('EXECUTIVE SUMMARY: unchanged', 'Executive Summary'))
+      .toEqual({ kind: 'unchanged' });
+  });
+
+  it('the canonical label wins when a report carries both spellings', () => {
+    const both = 'EXEC_SUMMARY: The canonical answer.\nEXECUTIVE SUMMARY: The stray heading.';
+    expect(parseSectionAnswer(both, 'Executive Summary'))
+      .toEqual({ kind: 'rewrite', text: 'The canonical answer.' });
+  });
+
+  it('the accepted variants are an EXPLICIT list, not a loose heading parser', () => {
+    expect(parseSectionAnswer('SUMMARY: Two campaigns are tracked.', 'Executive Summary'))
+      .toEqual({ kind: 'none' });
+    expect(parseSectionAnswer('OVERVIEW\nTwo campaigns are tracked.', 'Executive Summary'))
+      .toEqual({ kind: 'none' });
+    // …and they belong to the ONE section that names them: no other label gains
+    // spellings it never had.
+    expect(parseSectionAnswer('WORKLOG: did a thing', 'Work Log')).toEqual({ kind: 'none' });
+    expect(parseSectionAnswer('USER REQUEST: ship it', 'User Request')).toEqual({ kind: 'none' });
+  });
+
   it('marker-less Work Log content defaults to append, never rewrite (append-only log)', () => {
     // A session that forgets the `append:` prefix must not wipe the whole log
     // with one turn's entry; other sections keep marker-less = rewrite.
@@ -156,6 +208,31 @@ describe('assembleNote', () => {
     // Progress replaced.
     expect(out!.note).toContain('WIP e2e verify — in progress');
     expect(out!.note).not.toContain('WIP parity check');
+  });
+
+  it('an EXEC_SUMMARY-heading report assembles a real note instead of parsing as nothing', () => {
+    // Shape of a report that used to be rejected wholesale (bare summary heading,
+    // multi-line summary, ordinary labels after it): every section came back
+    // `none`, the run logged UNPARSEABLE, and the task note went unwritten.
+    const report = [
+      'EXEC_SUMMARY',
+      'The session was asked in chat to onboard two deprecation campaigns into the tracker.',
+      'Both are filed; the second still needs an owner.',
+      'USER_REQUEST: Track both deprecation campaigns as tasks with owners and due dates.',
+      'CONTEXT: unchanged',
+      'PROGRESS: - [DONE] campaign one — filed\n- [WIP] campaign two — needs an owner',
+      'WORK_LOG: append: filed both campaigns; found the second has no owner yet.',
+      'STATUS: succeeded — both campaigns are in the tracker.',
+    ].join('\n');
+    const out = assembleNote('', report);
+    expect(out).not.toBeNull();
+    expect(out!.changed).toContain('Executive Summary');
+    expect(out!.note).toContain('## Executive Summary');
+    expect(out!.note).toContain('onboard two deprecation campaigns into the tracker');
+    // The multi-line summary is captured whole, not cut at the first newline.
+    expect(out!.note).toContain('the second still needs an owner');
+    // …and the label line itself never leaks into the note body.
+    expect(out!.note).not.toContain('EXEC_SUMMARY');
   });
 
   it('returns null when every section is unchanged/absent (skip persist)', () => {

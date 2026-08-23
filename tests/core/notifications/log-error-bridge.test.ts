@@ -492,6 +492,18 @@ describe('humanized copy on the way into the feed', () => {
     expect(feed[0].title).toContain('[REDACTED]');
   });
 
+  it('DEDUP IS UNCHANGED for the refusal rule too (raw message, never the new copy)', () => {
+    // A humanize rule may only reword; the moment a rule's output reached the
+    // fingerprint, adding copy would silently re-partition every existing card.
+    const raw = "API Error: Some Model 5 can't help with this. Start a new session to "
+      + 'continue.\n\nLearn more: https://www.anthropic.com/legal/aup';
+    const fp = dedupFingerprintForTest({
+      subsystem: 'session', message: 'Session Error', meta: { sessionId: 's-1', error: raw },
+    });
+    expect(fp).toContain('Session Error');
+    expect(fp).not.toContain('Model refused the request');
+  });
+
   it('DEDUP IS UNCHANGED: the fingerprint hashes the RAW message, not the copy', async () => {
     // Two log calls whose humanized TITLE is identical ("Couldn't start a
     // session") but whose raw cause differs must stay two cards; and the

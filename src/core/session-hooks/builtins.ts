@@ -144,6 +144,30 @@ const LEGACY_NOTE_LABELS: Partial<Record<NoteSection, string>> = {
   'User Request': 'GOAL',
 };
 
+/** A case-insensitive regex FRAGMENT for a label pattern, done by expanding each
+ *  letter into a two-letter class instead of turning on the `i` flag: the field
+ *  terminator (NEXT_LABEL_LOOKAHEAD) is a list of ALL-CAPS labels and must stay
+ *  case-sensitive — with `i` on, an ordinary prose line inside a section's content
+ *  ("progress: good") would be read as the next label and cut the field short. */
+function caseInsensitiveFragment(pattern: string): string {
+  return pattern.replace(/[a-zA-Z]/g, (ch) => `[${ch.toUpperCase()}${ch.toLowerCase()}]`);
+}
+
+/** Alternate SPELLINGS accepted for a section's report label, as a regex fragment.
+ *
+ *  Real reports drift on the summary label specifically: sessions write the prose
+ *  name ("EXECUTIVE SUMMARY") instead of the prompt's `EXEC_SUMMARY`, or use the
+ *  label as a bare heading with the text on the next line and no colon at all
+ *  ("EXEC_SUMMARY\nThe session was asked to…"). Both parsed as NOTHING, and since
+ *  the summary is the FIRST label, a whole otherwise-perfect report was logged
+ *  UNPARSEABLE and the task note went unwritten.
+ *
+ *  Deliberately an explicit variant LIST, not a loosened parser: only these
+ *  spellings map onto the section, and only for the section that names them. */
+const SECTION_LABEL_VARIANTS: Partial<Record<NoteSection, string>> = {
+  'Executive Summary': 'EXEC(?:UTIVE)?[ _]?SUMMARY',
+};
+
 /** Build the self-report prompt. `existingNote` is injected so the session works
  *  DELTA-FIRST against the task's living NOTE — this is what survives multi-day
  *  sessions and compactions: the prior note is re-fed every time, so the session
@@ -203,20 +227,42 @@ const SELF_REPORT_LABELS = [
   'TASK_SUMMARY', 'WHAT_I_DID', 'STATUS', 'CHANGES_TRIED', 'PHASE_SIGNAL', 'NEXT_STEPS',
   'BLOCKERS', 'USER_INTENT', 'VERIFIED', 'ARTIFACTS',
 ] as const;
-const NEXT_LABEL_LOOKAHEAD = `(?:${SELF_REPORT_LABELS.join('|')})`;
+const NEXT_LABEL_LOOKAHEAD = `(?:${[
+  ...SELF_REPORT_LABELS,
+  // The accepted alternate spellings terminate a field too — otherwise the field
+  // BEFORE an "EXECUTIVE SUMMARY" line would swallow the summary as its own content.
+  ...Object.values(SECTION_LABEL_VARIANTS).map(caseInsensitiveFragment),
+].join('|')})`;
+
+/** A label line ends with the colon the prompt asks for — or with nothing at all.
+ *  A bare label on its own line ("EXEC_SUMMARY\n<text>") is the other shape real
+ *  reports arrive in, and it used to parse as a missing section. Content on the
+ *  SAME line still requires the colon, so a prose line that merely starts with a
+ *  label word ("STATUS quo unchanged") is never mistaken for a label. */
+const LABEL_END = '(?::|(?=\\r?\\n)|$)';
+const LABEL_END_IN_LOOKAHEAD = '(?::|\\r?\\n|$)';
 
 /** Pull a single labeled field out of a self-report. Tolerant of leading bold
  *  markers and missing fields. Returns '' if absent. Exported for unit tests. */
 export function extractField(report: string, label: string): string {
-  // Match "LABEL:" at line start (optionally **bold**), capture until the next
-  // KNOWN self-report label line or end of string. No 'm' flag — we want `$` to
-  // mean end-of-STRING so a multi-line field captures fully; the label start is
-  // anchored with (?:^|\n). Terminating only on the known label set (not any
-  // ALL-CAPS WORD:) preserves wrapped content like "...see API: notes" inside a
-  // field. `label` is escaped defensively though all call sites pass constants.
-  const safe = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // `label` is escaped defensively though all call sites pass constants.
+  return extractLabeledField(report, label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+}
+
+/** extractField's engine, over a label PATTERN (an already-escaped literal, or one
+ *  of the SECTION_LABEL_VARIANTS fragments).
+ *
+ *  Match "LABEL:" (or a bare "LABEL" line) at line start, optionally **bold**, and
+ *  capture until the next KNOWN self-report label line or end of string. No 'm'
+ *  flag — we want `$` to mean end-of-STRING so a multi-line field captures fully;
+ *  the label start is anchored with (?:^|\n). Terminating only on the known label
+ *  set (not any ALL-CAPS WORD:) preserves wrapped content like "...see API: notes"
+ *  inside a field. */
+function extractLabeledField(report: string, labelPattern: string): string {
   const re = new RegExp(
-    `(?:^|\\n)\\s*\\*{0,2}${safe}\\*{0,2}\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*\\*{0,2}${NEXT_LABEL_LOOKAHEAD}\\*{0,2}\\s*:|$)`,
+    `(?:^|\\n)[^\\S\\n]*\\*{0,2}(?:${labelPattern})\\*{0,2}[^\\S\\n]*${LABEL_END}`
+    + `\\s*([\\s\\S]*?)`
+    + `(?=\\n[^\\S\\n]*\\*{0,2}${NEXT_LABEL_LOOKAHEAD}\\*{0,2}[^\\S\\n]*${LABEL_END_IN_LOOKAHEAD}|$)`,
   );
   const m = report.match(re);
   return m ? m[1].trim() : '';
@@ -268,6 +314,10 @@ export function parseSectionAnswer(report: string, section: NoteSection): Sectio
   let raw = extractField(report, NOTE_LABELS[section]).trim();
   const legacy = LEGACY_NOTE_LABELS[section];
   if (!raw && legacy) raw = extractField(report, legacy).trim();
+  // Accepted alternate spellings, tried LAST so the canonical label always wins
+  // when a report carries both.
+  const variants = SECTION_LABEL_VARIANTS[section];
+  if (!raw && variants) raw = extractLabeledField(report, caseInsensitiveFragment(variants)).trim();
   if (!raw) return { kind: 'none' };
   raw = raw.replace(/^[`*"']+/, '').replace(/[`*"']+$/, '').trim();
   if (/^unchanged\b[.!]?$/i.test(raw)) return { kind: 'unchanged' };

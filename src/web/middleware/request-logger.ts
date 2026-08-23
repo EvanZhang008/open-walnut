@@ -15,6 +15,10 @@
  * card and the log-error bridge fingerprints the message. See the ERROR-LINE
  * IDENTITY block below — nine cards for one broken endpoint is what the old
  * shape produced.
+ *
+ * One 5xx is exempt: 501 is this codebase's `not_supported_cloud` degradation, a
+ * deliberate answer rather than a failure, so it logs at warn and never becomes a
+ * card (see the 501 block below).
  */
 
 import type { Request, Response, NextFunction } from 'express'
@@ -185,7 +189,18 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
       status: String(Math.floor(status / 100) * 100), // 200/300/400/500 buckets
     })
 
-    if (status >= 500) {
+    // ── 501 IS A DESIGNED ANSWER, NOT A FAILURE ───────────────────────────────
+    // In this codebase 501 is returned for exactly one thing: `not_supported_cloud`
+    // degradation on a cloud-replica instance (search-memory-v1, console-v1,
+    // console-extras-v1, projects-v1, task-extras-v1, library-v1, …). The route
+    // WORKS — it is answering honestly that this capability lives on the primary
+    // box. Logging it as an error minted red cards for normal replica behavior,
+    // and those cards then rode git-sync into the primary's feed, where the
+    // condition they describe cannot even exist. So a 501 logs at WARN (still in
+    // the request log, never a notification) and is treated like a 4xx: the
+    // endpoint responded, which also counts as recovery for a route that HAD been
+    // throwing. Every other 5xx keeps the error path below.
+    if (status >= 500 && status !== 501) {
       // ── ERROR-LINE IDENTITY (the nine-cards bug) ────────────────────────────
       // log.error routes into the notification center, and the bridge's dedup
       // fingerprint is the MESSAGE. `${url}` carries the query string and
@@ -208,12 +223,15 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
       })
       routeHealth.observe(key, true)
     } else {
+      // 4xx and the designed 501 both land on warn: visible when reading the log,
+      // invisible to the notification sink (which only receives error level).
       if (status >= 400) log.web.warn(line, meta)
       else if (isQuietPath(req.path)) log.web.debug(line, meta)
       else log.web.info(line, meta)
-      // Recovery edge: this endpoint answered. A 4xx counts as recovered — the
-      // condition the card described was "this endpoint is throwing", and a 404
-      // or 400 means the route is reachable and reasoning about its input again.
+      // Recovery edge: this endpoint answered. A 4xx (or a designed 501) counts as
+      // recovered — the condition the card described was "this endpoint is
+      // throwing", and a 404, a 400 or a not_supported_cloud means the route is
+      // reachable and reasoning about its input again.
       // isFailing() first so a healthy box never allocates: the tracker only
       // holds routes that have actually failed (see routeHealth above).
       const key = routeRecoveryKey(method, url)
