@@ -104,12 +104,16 @@ export function resolveDaemonSourceVersion(): string {
 export function readSidecarDaemonVersion(fromPath: string): string | null {
   let dir = path.dirname(fromPath)
   for (let i = 0; i < 5; i++) {
-    for (const name of ['daemon-darwin-arm64.version', 'daemon-linux-x64.version', 'daemon-linux-arm64.version']) {
-      try {
-        const v = fs.readFileSync(path.join(dir, 'daemon-binaries', name), 'utf-8').trim()
+    // Any *.version sidecar works — build-daemon.sh writes the same version
+    // string for every platform in one build, so no platform-specific name.
+    const binDir = path.join(dir, 'daemon-binaries')
+    try {
+      for (const name of fs.readdirSync(binDir)) {
+        if (!name.endsWith('.version')) continue
+        const v = fs.readFileSync(path.join(binDir, name), 'utf-8').trim()
         if (v) return v
-      } catch { /* keep walking */ }
-    }
+      }
+    } catch { /* keep walking */ }
     const parent = path.dirname(dir)
     if (parent === dir) break
     dir = parent
