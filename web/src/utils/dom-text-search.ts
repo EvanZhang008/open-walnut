@@ -54,12 +54,20 @@ interface TextIndex {
 
 const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA']);
 
-function buildTextIndex(root: HTMLElement): TextIndex {
+function buildTextIndex(root: HTMLElement, skipSelector?: string): TextIndex {
   const doc = root.ownerDocument;
   const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(n) {
-      const tag = (n.parentElement?.tagName ?? '');
-      return SKIP_TAGS.has(tag) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+      const parent = n.parentElement;
+      const tag = (parent?.tagName ?? '');
+      if (SKIP_TAGS.has(tag)) return NodeFilter.FILTER_REJECT;
+      // Chrome-content opt-out: a diff table's line-number gutters, unfold bars
+      // and comment widgets are text nodes too — without this, searching "42"
+      // matches every 42nd line number. (With SHOW_TEXT only text nodes reach
+      // this filter, so REJECT behaves exactly like SKIP — no subtree pruning;
+      // closest() runs per text node.)
+      if (skipSelector && parent?.closest(skipSelector)) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
     },
   });
   const nodes: Text[] = [];
@@ -125,9 +133,9 @@ function locate(index: TextIndex, offset: number): { node: Text; off: number } {
 
 /** Find every match of `query` under `root` as live DOM Ranges (cross-node). */
 export function collectTextMatches(
-  root: HTMLElement, query: string, caseSensitive: boolean, cap = 5000,
+  root: HTMLElement, query: string, caseSensitive: boolean, cap = 5000, skipSelector?: string,
 ): Range[] {
-  const index = buildTextIndex(root);
+  const index = buildTextIndex(root, skipSelector);
   if (!index.nodes.length) return [];
   const offsets = findMatchOffsets(index.text, query, caseSensitive, cap);
   const doc = root.ownerDocument;
@@ -237,16 +245,21 @@ export class DomSearchController {
     private root: HTMLElement,
     private win: Window,
     private scrollWindow = false,
+    /** Chrome-content opt-out (diff gutters, unfold bars…) — see buildTextIndex. */
+    private skipSelector?: string,
   ) {}
 
   update(query: string, caseSensitive: boolean): { count: number; index: number } {
     const sameQuery = query === this.lastQuery && caseSensitive === this.lastCase;
     const prevActive = this.active;
     this.clearPaint();
-    this.ranges = query ? collectTextMatches(this.root, query, caseSensitive) : [];
+    this.ranges = query ? collectTextMatches(this.root, query, caseSensitive, 5000, this.skipSelector) : [];
     this.lastQuery = query;
     this.lastCase = caseSensitive;
     if (!this.ranges.length) this.active = -1;
+    // Same-query refresh keeps the NUMERIC index: if a mutation revealed
+    // matches before the active one, "3/7" now names a different occurrence —
+    // inherent to index-based tracking, and preferable to yanking the view.
     else if (sameQuery && prevActive >= 0) this.active = Math.min(prevActive, this.ranges.length - 1);
     else this.active = 0;
     this.paint();

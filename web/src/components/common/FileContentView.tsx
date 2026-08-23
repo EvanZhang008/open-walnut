@@ -39,8 +39,10 @@ import { SelectionAskPill, selectionClientRect } from '@/components/common/Selec
 import { FileSearchBar } from '@/components/common/FileSearchBar';
 import {
   DomSearchController, applyHighlights, clearHighlights, collectTextMatches,
-  ensureHighlightStyles, wordAtPoint, claimSearchOwner, onSearchOwnerLost, HL_SELMATCH,
+  ensureHighlightStyles, wordAtPoint, claimSearchOwner, onSearchOwnerLost, HL_SELMATCH, SYMBOL_RE,
 } from '@/utils/dom-text-search';
+import { CodeContextMenu, buildCodeContextTarget, type CodeContextTarget } from '@/components/common/CodeContextMenu';
+import { copyTextRobust } from '@/utils/clipboard';
 import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
 
@@ -852,11 +854,11 @@ export function FileContentView({
   }, []);
 
   // Another viewer claimed the registry — close our bar rather than sit there
-  // showing a count for highlights that are no longer painted.
-  useEffect(() => {
-    if (!searchOpen) return;
-    return onSearchOwnerLost(searchTokenRef.current, closeSearch);
-  }, [searchOpen, closeSearch]);
+  // showing a count for highlights that are no longer painted. Subscribed
+  // UNCONDITIONALLY: when one ⌘F reaches two surfaces, both claim before
+  // either's searchOpen commits — an open-gated listener would miss the loss
+  // and leave two bars fighting over the one highlight registry.
+  useEffect(() => onSearchOwnerLost(searchTokenRef.current, closeSearch), [closeSearch]);
 
   // Re-run the search when the query/case/surface changes. Debounced: the DOM
   // pass re-walks every text node, which a fast typist shouldn't pay per key.
@@ -935,7 +937,10 @@ export function FileContentView({
   // CodeMirror detects its own (virtualized DOM — see FileSourceEditor); this
   // covers the read-only <pre>, markdown preview, and WYSIWYG surfaces.
   const handleContainerMouseDown = useCallback((e: React.MouseEvent) => {
-    if (!onSymbolLookup || !(e.metaKey || e.ctrlKey) || e.button !== 0) return;
+    // metaKey only on Apple platforms: there ctrl+click IS the context-menu
+    // gesture — accepting it would fire a lookup AND open the menu in one click.
+    const lookupKey = /Mac|iP/.test(navigator.platform) ? e.metaKey && !e.ctrlKey : e.ctrlKey;
+    if (!onSymbolLookup || !lookupKey || e.button !== 0) return;
     const t = e.target as HTMLElement;
     if (t.closest('.fv-source-editor')) return; // CM owns its clicks
     // Cheap containment check FIRST: caretPositionFromPoint hit-tests the whole
@@ -958,9 +963,51 @@ export function FileContentView({
     onSymbolLookup(hit.word, filePath, lineNum);
   }, [onSymbolLookup, filePath]);
 
-  const handleCmSymbolClick = useCallback((symbol: string, lineNum: number) => {
+  // Shared by CodeMirror's cmd+click AND the context menu's "Find references"
+  // (same action, optional line from the menu path).
+  const handleCmSymbolClick = useCallback((symbol: string, lineNum?: number) => {
     onSymbolLookup?.(symbol, filePath, lineNum);
   }, [onSymbolLookup, filePath]);
+
+  // ── Right-click → code context menu ─────────────────────────────────────────
+  // Replaces the browser menu ONLY when we have something to offer (a selection
+  // or an identifier under the pointer) — otherwise the native menu opens.
+  const [ctxTarget, setCtxTarget] = useState<CodeContextTarget | null>(null);
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    const rootEl = contentRef.current;
+    if (!rootEl) return;
+    const t = e.target as HTMLElement;
+    // Editors' own chrome + form fields keep their native menus.
+    if (t.closest('input, textarea, .fv-html-toolbar, .fv-search-bar')) return;
+    const target = buildCodeContextTarget(e, rootEl, wordAtPoint, SYMBOL_RE, (node) => {
+      let n: Node | null = node;
+      while (n && n !== rootEl) {
+        if (n instanceof HTMLElement) {
+          const ln = n.getAttribute('data-line');
+          if (ln) { const v = Number(ln); if (!Number.isNaN(v)) return v; }
+        }
+        n = n.parentNode;
+      }
+      return undefined;
+    });
+    if (!target) return;
+    e.preventDefault();
+    setCtxTarget(target);
+  }, []);
+  // File switch invalidates the menu's captured context.
+  useEffect(() => { setCtxTarget(null); }, [filePath]);
+  const copySelection = useCallback((text: string) => {
+    // copyTextRobust: plain-HTTP LAN access has no navigator.clipboard —
+    // the execCommand fallback is what makes Copy work there.
+    void copyTextRobust(text);
+  }, []);
+  const askFromMenu = useCallback((text: string, lineNum?: number) => {
+    onSelectCode?.(filePath, lineNum, text);
+  }, [onSelectCode, filePath]);
+  const findInFileFromMenu = useCallback((q: string) => {
+    openSearch();
+    setSearchQuery(q);
+  }, [openSearch]);
 
   // Reference-jump within the SAME open file: the editor doesn't remount when
   // only `line` changes (key is path+hash), so scroll it imperatively — and
@@ -1139,6 +1186,10 @@ export function FileContentView({
       }}
       // Cmd/Ctrl+click identifier → references (DOM surfaces; CM self-detects).
       onMouseDown={onSymbolLookup ? handleContainerMouseDown : undefined}
+      // Right-click → our code menu (Copy / Ask / Find references / Find in file).
+      // raw/binary keep the browser menu on purpose: images and PDFs need
+      // "Save image as…" / the PDF viewer's own items, which ours can't offer.
+      onContextMenu={!raw && !data?.binary ? handleContextMenu : undefined}
     >
       {loading && <div className="file-viewer-loading">Loading file...</div>}
       {reloading && <div className="fv-reloading-badge">Reloading…</div>}
@@ -1390,6 +1441,16 @@ export function FileContentView({
           onDismiss={() => setSelection(null)}
           resolveRect={resolveSelectionRect}
           listenTo={selection.inHtml ? htmlFrameRef.current?.contentDocument : undefined}
+        />
+      )}
+      {ctxTarget && (
+        <CodeContextMenu
+          target={ctxTarget}
+          onClose={() => setCtxTarget(null)}
+          onCopy={copySelection}
+          onAsk={onSelectCode ? askFromMenu : undefined}
+          onFindReferences={onSymbolLookup ? handleCmSymbolClick : undefined}
+          onFindInFile={findInFileFromMenu}
         />
       )}
     </div>

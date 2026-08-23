@@ -591,7 +591,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // File-path click target for the Files split view. When set, the explorer roots
   // at the clicked file (backend lists its parent + preselects it, VS Code style)
   // instead of the session cwd. Cleared when the split closes / view switches.
-  const [fileViewTarget, setFileViewTarget] = useState<{ path: string; line?: number } | null>(null);
+  const [fileViewTarget, setFileViewTarget] = useState<{ path: string; line?: number; term?: string } | null>(null);
   // Toggle a split view: same view → close (exit fullscreen); other/none → open it.
   //
   // Exception kept: Files opened via a file-path click (fileViewTarget set) — the
@@ -624,8 +624,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // EVERY file type goes here, vault notes included: a click must never navigate
   // the app away from the session (that jump was reverted 2026-08-09). Notes get
   // an explicit "Open in Notes" button in the preview toolbar / right-click menu.
-  const handleFileOpen = useCallback((path: string, line?: number) => {
-    setFileViewTarget({ path, line });
+  const handleFileOpen = useCallback((path: string, line?: number, term?: string) => {
+    setFileViewTarget({ path, line, term });
     setActiveView('files');
     enterFullscreen();
   }, [enterFullscreen]);
@@ -1426,7 +1426,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                 {splitOpen && sessionId && activeView !== 'code' && (
                   <div className="session-panel-diff-col">
                     {activeView === 'changed' && (
-                      <SessionDiffView sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} barRightSlot={chatBarSlot} />
+                      <SessionDiffView sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} barRightSlot={chatBarSlot} onOpenFile={handleFileOpen} />
                     )}
                     {activeView === 'files' && (
                       <SessionFileExplorer
@@ -1434,6 +1434,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                         host={session?.host}
                         sessionId={sessionId}
                         initialLine={fileViewTarget?.line}
+                        initialTerm={fileViewTarget?.term}
                         // ONE memory key for both ways in, and one PER SESSION. `cwd`
                         // above differs per entry (chat file click → the file's parent
                         // dir; Files chip → session cwd), so a root-keyed "last file

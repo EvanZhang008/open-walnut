@@ -20,7 +20,15 @@ import { hiddenFunctionContext, splitSourceLines, type StickyDef } from '@/compo
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { SelectionAskPill } from '@/components/common/SelectionAskPill';
+import { FileSearchBar } from '@/components/common/FileSearchBar';
 import { FileContentView } from '@/components/common/FileContentView';
+import { ReferencePanel } from '@/components/common/ReferencePanel';
+import { CodeContextMenu, buildCodeContextTarget, type CodeContextTarget } from '@/components/common/CodeContextMenu';
+import { fetchReferences, type ReferencesResponse } from '@/api/files';
+import {
+  DomSearchController, applyHighlights, clearHighlights, collectTextMatches,
+  wordAtPoint, claimSearchOwner, onSearchOwnerLost, HL_SELMATCH, SYMBOL_RE,
+} from '@/utils/dom-text-search';
 import { ICON_REFRESH, ICON_WARNING, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED } from '@/components/common/Icons';
 import { log } from '@/utils/log';
 
@@ -96,6 +104,9 @@ interface SessionDiffViewProps {
   /** Chat segment of the full-width bar (the panel's chat toggle) — see
    *  SessionFileExplorer.barRightSlot. */
   barRightSlot?: ReactNode;
+  /** Open a file in the Files tab at a line (reference-panel jumps). `term`
+   *  is the symbol the jump was for — flashed at the landing line. */
+  onOpenFile?: (path: string, line?: number, term?: string) => void;
 }
 
 /** An in-progress inline comment anchored to a line range within one file. */
@@ -1370,6 +1381,14 @@ function CompareHelp({ base }: { base: SessionDiffBase }) {
 
 // ── Main view ─────────────────────────────────────────────────────────────────
 
+/** Text under these selectors is diff CHROME, not file content — excluded from
+ *  in-file search and selection-match highlighting, and the SAME list gates the
+ *  cmd+click / right-click handlers (an action offered on chrome text is
+ *  guaranteed to fail, because search can never find it). Add new chrome
+ *  classes HERE, not at the call sites. The last two are the rendered-markdown
+ *  mode's gutter and the recorded-comment cards. */
+const DIFF_SEARCH_SKIP = '.diff-gutter, .diff-widget, .session-diff-expander, .session-diff-filepane-head, .session-diff-ai-summary, .session-diff-rendered-lineno, .session-diff-pending-card';
+
 // Last result per session|base, module-level so it SURVIVES the tab switch
 // (the panel unmounts this view). Re-entering paints the previous list
 // instantly and refreshes behind it — without this, every visit started at
@@ -1387,7 +1406,7 @@ function rememberChanges(key: string, res: SessionChangesResult): void {
   }
 }
 
-export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCode, onComment, barRightSlot }: SessionDiffViewProps) {
+export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCode, onComment, barRightSlot, onOpenFile }: SessionDiffViewProps) {
   const [data, setData] = useState<SessionChangesResult | null>(() => {
     const mem = loadDiffMemory(sessionId);
     return lastChangesCache.get(`${sessionId}|${mem.base ?? 'session'}|session`) ?? null;
@@ -1791,11 +1810,315 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     return () => window.removeEventListener('keydown', onKey);
   }, [navigateJump]);
 
+  // ── In-file search (⌘F) over the rendered diff ─────────────────────────────
+  // Same engine as the Files viewer (dom-text-search): the diff is refractor-
+  // colored DOM, so highlights ride the CSS Custom Highlight API and never
+  // touch the table. DIFF_SEARCH_SKIP keeps gutters/unfold bars/widgets out —
+  // searching "42" must not light every 42nd line number.
+  const searchTokenRef = useRef(`sdv-${Math.random().toString(36).slice(2)}`);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchCase, setSearchCase] = useState(false);
+  const [searchStatus, setSearchStatus] = useState({ count: 0, index: 0 });
+  // Remounts the bar so its input refocuses+selects when "Find in file" prefills
+  // an ALREADY-open bar (FileSearchBar only autofocuses on mount).
+  const [searchEpoch, setSearchEpoch] = useState(0);
+  const domSearchRef = useRef<{ root: HTMLElement; ctrl: DomSearchController } | null>(null);
+
+  // Identity bail-out: the controller returns a fresh {count,index} on every
+  // update; passing it straight to setState would re-render (and re-reconcile
+  // the whole diff table) on every mutation burst even when nothing changed.
+  const setSearchStatusIfChanged = useCallback((next: { count: number; index: number }) => {
+    setSearchStatus((prev) => (prev.count === next.count && prev.index === next.index ? prev : next));
+  }, []);
+
+  const diffSearchCtrl = useCallback((): DomSearchController | null => {
+    const root = containerRef.current?.querySelector<HTMLElement>('.session-diff-main') ?? null;
+    if (!root) return null;
+    if (domSearchRef.current?.root !== root) {
+      domSearchRef.current?.ctrl.close();
+      domSearchRef.current = { root, ctrl: new DomSearchController(root, window, false, DIFF_SEARCH_SKIP) };
+    }
+    return domSearchRef.current.ctrl;
+  }, []);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery('');
+    setSearchStatus({ count: 0, index: 0 });
+    domSearchRef.current?.ctrl.close();
+    domSearchRef.current = null;
+  }, []);
+  // Unmount teardown: without this, leaving the tab with the bar open keeps up
+  // to 5000 live Ranges registered in the document-global CSS.highlights,
+  // pinning the detached diff table in memory (and every DOM mutation anywhere
+  // pays O(ranges) while they live). Direct ctrl.close(), not closeSearch —
+  // no setState during unmount.
+  useEffect(() => () => { domSearchRef.current?.ctrl.close(); domSearchRef.current = null; }, []);
+
+  /** Open the bar and claim the document-global highlight registry. */
+  const openSearch = useCallback((prefill?: string) => {
+    claimSearchOwner(searchTokenRef.current);
+    if (prefill !== undefined) {
+      setSearchQuery(prefill);
+      setSearchEpoch((v) => v + 1);
+    }
+    setSearchOpen(true);
+  }, []);
+
+  // Another viewer claimed the registry — close rather than show stale counts.
+  // Subscribed UNCONDITIONALLY (not gated on searchOpen): when one keydown
+  // reaches two surfaces, both claim before either's searchOpen state commits,
+  // so an open-gated listener would miss the loss and leave two bars fighting
+  // over the one registry. Last claimer wins; the earlier one closes here.
+  useEffect(() => onSearchOwnerLost(searchTokenRef.current, closeSearch), [closeSearch]);
+
+  // Recompute on query/case + anything that redraws the diff DOM (file switch,
+  // lazy content arrival, layout toggles). Debounced — the pass re-walks every
+  // text node under the scroller.
+  useEffect(() => {
+    if (!searchOpen) return;
+    const timer = setTimeout(() => {
+      const ctrl = diffSearchCtrl();
+      setSearchStatusIfChanged(ctrl ? ctrl.update(searchQuery, searchCase) : { count: 0, index: 0 });
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [searchOpen, searchQuery, searchCase, selectedId, contentVersion, viewType, rendered, data, diffSearchCtrl, setSearchStatusIfChanged]);
+
+  // Hunk EXPANSION redraws the table with no state visible at this level —
+  // observe the scroller so newly revealed lines get painted too. Loop-safe on
+  // TWO conditions, both load-bearing: (1) the Highlight API paints without
+  // mutating the DOM; (2) the match-count text this rerun updates renders in
+  // FileSearchBar, which sits OUTSIDE the observed .session-diff-main root —
+  // moving the count inside the scroller would close a permanent 250ms
+  // observe→setState→characterData→observe loop. The recompute closure rides a
+  // ref so a keystroke doesn't tear the observer down mid-burst; the 250ms here
+  // (vs 120ms for typing) absorbs multi-node redraw bursts.
+  const searchRecomputeRef = useRef<() => void>(() => {});
+  searchRecomputeRef.current = () => {
+    const ctrl = diffSearchCtrl();
+    if (ctrl) setSearchStatusIfChanged(ctrl.update(searchQuery, searchCase));
+  };
+  useEffect(() => {
+    if (!searchOpen) return;
+    const root = containerRef.current?.querySelector('.session-diff-main');
+    if (!root) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const obs = new MutationObserver(() => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => searchRecomputeRef.current(), 250);
+    });
+    obs.observe(root, { childList: true, subtree: true, characterData: true });
+    return () => { obs.disconnect(); if (timer) clearTimeout(timer); };
+    // data/selectedId: the scroller's CONTENT node can appear after the bar
+    // opened (spinner/empty state first) — reattach when it does.
+  }, [searchOpen, data, selectedId, diffSearchCtrl]);
+
+  const handleSearchNav = useCallback((dir: 1 | -1) => {
+    const ctrl = diffSearchCtrl();
+    setSearchStatus(ctrl ? ctrl.nav(dir) : { count: 0, index: 0 });
+  }, [diffSearchCtrl]);
+
+  // ⌘F opens the bar. Capture phase beats the browser's native find. The
+  // offsetParent probe answers "is THIS view on screen" — several session
+  // columns can mount their own SessionDiffView at once, and only the visible
+  // ones may react (trap: offsetParent is also null inside position:fixed
+  // subtrees — if this panel ever goes fixed, ⌘F dies silently here). When the
+  // key lands outside the diff, defer to a Files viewer only when it could
+  // legitimately own the key: one inside THIS panel (the ghost context file)
+  // or a document-level overlay — NOT a Files tab open in some other column.
+  const hasSearchableDiff = !!data && data.fileCount > 0; // `empty` is declared below (render section)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      if (e.key !== 'f' && e.key !== 'F') return;
+      const el = containerRef.current;
+      if (!el || el.offsetParent === null || !hasSearchableDiff) return;
+      const t = e.target as HTMLElement | null;
+      const inside = t ? el.contains(t) : false;
+      if (!inside) {
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+        const panel = el.closest('.session-panel');
+        for (const v of Array.from(document.querySelectorAll('.file-content-view'))) {
+          if (v.closest('.file-viewer-overlay') || panel?.contains(v)) return;
+        }
+      } else if (t?.closest('.file-content-view')) {
+        // Key target is the ghost context file INSIDE the diff — its own
+        // FileContentView ⌘F handler owns that search.
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      openSearch();
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [openSearch, hasSearchableDiff]);
+
+  // ── Select → highlight every exact match (same paint as the Files viewer) ──
+  // paintedRef: only clear the (document-global) highlight WE painted — another
+  // viewer instance may own the name right now.
+  const selMatchPaintedRef = useRef(false);
+  const refreshDiffSelectionMatches = useCallback(() => {
+    const root = containerRef.current?.querySelector<HTMLElement>('.session-diff-main');
+    const sel = window.getSelection();
+    const text = sel && !sel.isCollapsed && sel.rangeCount ? sel.toString() : '';
+    const t = text.trim();
+    if (!root || !t || t.length < 3 || t.length > 200 || t.includes('\n')
+      || !sel || !sel.rangeCount || !root.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+      if (selMatchPaintedRef.current) {
+        clearHighlights(window, HL_SELMATCH);
+        selMatchPaintedRef.current = false;
+      }
+      return;
+    }
+    applyHighlights(window, HL_SELMATCH, collectTextMatches(root, t, true, 2000, DIFF_SEARCH_SKIP));
+    selMatchPaintedRef.current = true;
+  }, []);
+  // The paint must track the SELECTION, not our mouse-ups: clearing the
+  // selection by clicking in the chat pane (or selecting text in another
+  // component) never fires a mouse-up here, which left the old highlight
+  // stuck on screen. selectionchange fires for all of those; debounce it so
+  // drag-selection doesn't re-scan a whale diff every frame.
+  useEffect(() => {
+    let timer = 0;
+    const onSelChange = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(refreshDiffSelectionMatches, 120);
+    };
+    document.addEventListener('selectionchange', onSelChange);
+    return () => {
+      document.removeEventListener('selectionchange', onSelChange);
+      window.clearTimeout(timer);
+    };
+  }, [refreshDiffSelectionMatches]);
+  useEffect(() => () => { if (selMatchPaintedRef.current) clearHighlights(window, HL_SELMATCH); }, []);
+  // File switch replaces the pane DOM — drop paint that points into the old tree.
+  useEffect(() => {
+    if (selMatchPaintedRef.current) {
+      clearHighlights(window, HL_SELMATCH);
+      selMatchPaintedRef.current = false;
+    }
+  }, [selectedId]);
+
+  // ── Cmd/Ctrl+click identifier → reference search (right-docked panel) ──────
+  const [refState, setRefState] = useState<{
+    symbol: string; fromFile: string; loading: boolean;
+    result: ReferencesResponse | null; error: string | null;
+  } | null>(null);
+  const refSeqRef = useRef(0);
+
+  const lookupReferences = useCallback((symbol: string, fromFile: string) => {
+    const seq = ++refSeqRef.current;
+    log.info('session-diff', 'reference lookup', { sessionId, symbol, fromFile });
+    setRefState({ symbol, fromFile, loading: true, result: null, error: null });
+    fetchReferences(fromFile, symbol, sessionHost)
+      .then((res) => {
+        if (refSeqRef.current === seq) setRefState({ symbol, fromFile, loading: false, result: res, error: null });
+      })
+      .catch((err) => {
+        if (refSeqRef.current === seq) {
+          setRefState({ symbol, fromFile, loading: false, result: null, error: err instanceof Error ? err.message : String(err) });
+        }
+      });
+  }, [sessionHost, sessionId]);
+
+  const closeReferences = useCallback(() => {
+    refSeqRef.current++; // supersede any in-flight fetch
+    setRefState(null);
+  }, []);
+
+  // Esc closes the panel (capture, mirroring the Files tab).
+  useEffect(() => {
+    if (!refState) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); closeReferences(); }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [refState, closeReferences]);
+
+  /** Nearest enclosing data-file-path for a DOM node (filepane roots carry it). */
+  const filePathFromNode = useCallback((node: Node | null): string | undefined => {
+    let n: Node | null = node;
+    while (n && n !== containerRef.current) {
+      if (n instanceof HTMLElement) {
+        const fp = n.getAttribute('data-file-path');
+        if (fp) return fp;
+      }
+      n = n.parentNode;
+    }
+    return undefined;
+  }, []);
+  // Line for a node inside the diff table, via react-diff-view's data-change-key
+  // (`N<oldLine>` context / `I<newLine>` insert / `D<oldLine>` delete — the lib
+  // does NOT emit data-line-number; v3 removed it). N-keys carry the OLD-side
+  // number, so a context row's line can drift from the new-side file by the
+  // insertions above it — fine for a human-facing "file:L<n>" hint.
+  const lineFromNode = useCallback((node: Node | null): number | undefined => {
+    let n: Node | null = node;
+    while (n && n !== containerRef.current) {
+      if (n instanceof HTMLElement) {
+        const key = n.getAttribute('data-change-key');
+        const m = key ? /^[NID](\d+)$/.exec(key) : null;
+        if (m) return Number(m[1]);
+      }
+      n = n.parentNode;
+    }
+    return undefined;
+  }, []);
+
+  // metaKey on Apple platforms ONLY: there ctrl+click IS the context-menu
+  // gesture — accepting ctrlKey would fire a repo-wide grep AND open the menu
+  // on one physical click.
+  const isSymbolLookupGesture = useCallback((e: ReactMouseEvent): boolean => {
+    const apple = /Mac|iP/.test(navigator.platform);
+    return apple ? e.metaKey && !e.ctrlKey : e.ctrlKey;
+  }, []);
+
+  const handleDiffMouseDown = useCallback((e: ReactMouseEvent) => {
+    if (!isSymbolLookupGesture(e) || e.button !== 0) return;
+    const main = containerRef.current?.querySelector<HTMLElement>('.session-diff-main');
+    const t = e.target as HTMLElement;
+    if (!main || !main.contains(t)) return;
+    // Ghost context files embed a FileContentView with its OWN cmd+click.
+    if (t.closest(`${DIFF_SEARCH_SKIP}, .session-diff-ghost, button, a, input, textarea, select`)) return;
+    const hit = wordAtPoint(document, e.clientX, e.clientY);
+    if (!hit || !main.contains(hit.node)) return;
+    const fromFile = filePathFromNode(hit.node) ?? selectedChange?.filePath;
+    if (!fromFile) return;
+    e.preventDefault(); // keep the caret still — this is a lookup, not a click
+    lookupReferences(hit.word, fromFile);
+  }, [isSymbolLookupGesture, filePathFromNode, lookupReferences, selectedChange]);
+
+  // ── Right-click → code context menu (diff area only) ───────────────────────
+  const [ctxMenu, setCtxMenu] = useState<{ target: CodeContextTarget; filePath: string } | null>(null);
+  const handleDiffContextMenu = useCallback((e: ReactMouseEvent) => {
+    const main = containerRef.current?.querySelector<HTMLElement>('.session-diff-main');
+    const t = e.target as HTMLElement;
+    if (!main || !main.contains(t)) return; // tree/toolbar keep the native menu
+    // Chrome text (gutters, unfold bars, AI blurbs…) is excluded from the
+    // search index, so every menu action on it would fail — keep those native.
+    // Ghost context files run their own FileContentView menu.
+    if (t.closest(`${DIFF_SEARCH_SKIP}, input, textarea, .session-diff-ghost`)) return;
+    const target = buildCodeContextTarget(e, main, wordAtPoint, SYMBOL_RE, lineFromNode);
+    if (!target) return; // nothing to offer → native menu
+    const filePath = filePathFromNode(t) ?? selectedChange?.filePath;
+    if (!filePath) return;
+    e.preventDefault();
+    setSelection(null); // the Ask pill and the menu must not stack at the cursor
+    setCtxMenu({ target, filePath });
+  }, [lineFromNode, filePathFromNode, selectedChange]);
+  // A different file under the cursor than when the menu opened = stale menu.
+  useEffect(() => { setCtxMenu(null); }, [selectedId]);
+
   // Detect a text selection inside the diff → show the floating "Ask" pill.
   // The anchor is the POINTER at release (not the selection rect), so the pill
   // appears next to the cursor — below after a downward drag, above after an
   // upward one (SelectionAskPill decides the side from this point).
   const handleMouseUp = useCallback((e: ReactMouseEvent) => {
+    if (e.button !== 0) return; // right-click must not raise the Ask pill under the menu
+    refreshDiffSelectionMatches();
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) { setSelection(null); return; }
     const text = sel.toString().trim();
@@ -1810,19 +2133,10 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       node = node.parentNode;
     }
     const filePath = fileEl?.getAttribute('data-file-path') ?? (selectedChange?.filePath ?? '');
-
-    let line: number | undefined;
-    let lineNode: Node | null = range.startContainer;
-    while (lineNode && lineNode !== containerRef.current) {
-      if (lineNode instanceof HTMLElement) {
-        const ln = lineNode.getAttribute('data-line-number');
-        if (ln) { const n = Number(ln); if (!Number.isNaN(n)) { line = n; break; } }
-      }
-      lineNode = lineNode.parentNode;
-    }
+    const line = lineFromNode(range.startContainer);
 
     setSelection({ x: e.clientX, y: e.clientY, text, filePath, line });
-  }, [selectedChange]);
+  }, [selectedChange, refreshDiffSelectionMatches, lineFromNode]);
 
   const commitSelection = useCallback(() => {
     if (!selection) return;
@@ -1970,6 +2284,16 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               disabled={rendered || selectedWholeFile}
             >Unified</button>
           </div>
+          {/* Hidden when there's nothing to search — the toolbar also renders in
+              the loading/error/empty states, where an open bar can't render. */}
+          {!empty && (
+            <button
+              className={`fv-html-tab${searchOpen ? ' active' : ''}`}
+              onClick={() => (searchOpen ? closeSearch() : openSearch())}
+              title="Find in diff (⌘F)"
+              aria-pressed={searchOpen}
+            >Find</button>
+          )}
           <button
             className={`session-diff-ai-toggle${aiSummaryOn ? ' is-active' : ''}`}
             onClick={toggleAiSummary}
@@ -2015,7 +2339,13 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   }
 
   return (
-    <div className="session-diff-view" ref={containerRef} onMouseUp={handleMouseUp}>
+    <div
+      className="session-diff-view"
+      ref={containerRef}
+      onMouseUp={handleMouseUp}
+      onMouseDown={handleDiffMouseDown}
+      onContextMenu={handleDiffContextMenu}
+    >
       {toolbar}
 
       {/* Refresh failed but the cached list is still on screen — say so in a
@@ -2027,6 +2357,19 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         </div>
       )}
 
+      {searchOpen && !empty && (
+        <FileSearchBar
+          key={searchEpoch}
+          query={searchQuery}
+          caseSensitive={searchCase}
+          count={searchStatus.count}
+          index={searchStatus.index}
+          onQueryChange={setSearchQuery}
+          onToggleCase={() => setSearchCase((c) => !c)}
+          onNav={handleSearchNav}
+          onClose={closeSearch}
+        />
+      )}
 
       {empty ? (
         <div className="session-diff-empty">
@@ -2091,6 +2434,13 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
                   <span className="session-diff-ghost-tag">context</span>
                   <span className="session-diff-ghost-path" title={ghost.file}>{ghost.file}</span>
                   <span className="session-diff-ghost-note">not part of this change — read-only</span>
+                  {onOpenFile && (
+                    <button
+                      className="btn btn-sm"
+                      onClick={() => { onOpenFile(ghost.file, ghost.line, ghost.term); }}
+                      title="Open this file in the Files tab"
+                    >Open in Files</button>
+                  )}
                   <button className="btn btn-sm" onClick={closeGhost} title="Back to the diff (⌘[)">Back to diff</button>
                 </div>
                 <div className="session-diff-ghost-body">
@@ -2101,6 +2451,8 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
                     lineTerm={ghost.term}
                     host={sessionHost}
                     hidePopout
+                    // ⌘-click inside the context file keeps working, still in-tab.
+                    onSymbolLookup={(symbol, filePath) => { lookupReferences(symbol, filePath); }}
                   />
                 </div>
               </div>
@@ -2129,8 +2481,20 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               <div className="session-diff-file-empty">Select a file from the tree.</div>
             )}
           </div>
-
-
+          {refState && (
+            <ReferencePanel
+              result={refState.result}
+              symbol={refState.symbol}
+              currentFile={refState.fromFile}
+              loading={refState.loading}
+              error={refState.error}
+              // A row jump stays IN the Changed tab: a changed file opens as
+              // its diff at that line; anything else shows as a grayed
+              // read-only context file in the same pane (⌘[ comes back).
+              onOpen={(file, line) => { openDiffReference(file, line, refState.symbol); }}
+              onClose={closeReferences}
+            />
+          )}
         </div>
       )}
 
@@ -2148,6 +2512,20 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
           anchor={selection}
           onCommit={commitSelection}
           onDismiss={() => setSelection(null)}
+        />
+      )}
+
+      {ctxMenu && (
+        <CodeContextMenu
+          target={ctxMenu.target}
+          onClose={() => setCtxMenu(null)}
+          onCopy={(text) => { void copyText(text); }}
+          // Path asymmetry is load-bearing: Ask gets displayPath (short, display
+          // only) while Find references gets the RAW absolute path —
+          // /api/files/references needs it to resolve the repo root.
+          onAsk={(text, line) => { onSelectCode(displayPath(ctxMenu.filePath, data), line, text); }}
+          onFindReferences={(symbol) => { lookupReferences(symbol, ctxMenu.filePath); }}
+          onFindInFile={(q) => { openSearch(q); }}
         />
       )}
 

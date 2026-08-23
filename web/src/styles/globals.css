@@ -23365,6 +23365,10 @@ a.file-link:hover {
   border-bottom: 1px solid var(--border);
   background: var(--bg-secondary, var(--bg));
 }
+/* The Changed tab hosts the same bar between its toolbar and body. What this
+   pins is flex-SHRINK: when the diff body overflows the column, an unpinned
+   bar gets crushed and its input clipped. */
+.session-diff-view > .fv-search-bar { flex: 0 0 auto; }
 .fv-search-input {
   flex: 0 1 260px;
   min-width: 120px;
@@ -28232,6 +28236,39 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 .cal-ctx-menu .cal-ctx-danger {
   color: var(--error);
+}
+
+/* Code context menu (Files viewer + Changed diff) — rides the cal-ctx base.
+   overflow-y here is the useMenuPlacement CONTRACT, not cosmetics: the hook
+   caps maxHeight, and without a scrollbar the clipped items are unreachable.
+   The menu's z-index is INLINE (10010, set in CodeContextMenu) so it clears
+   .fv-fullscreen (10000) and .file-viewer-overlay (9999); the backdrop must
+   ride just under it — the shared .cal-popover-backdrop sits at 999, which is
+   BELOW fullscreen panels, so outside-click would never reach it there. */
+.code-ctx-menu { min-width: 220px; max-width: 340px; overflow-y: auto; }
+.code-ctx-backdrop { z-index: 10009; }
+.code-ctx-menu button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+}
+.code-ctx-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.code-ctx-label code {
+  font-size: 12px;
+  background: var(--bg-tertiary);
+  padding: 0 4px;
+  border-radius: 4px;
+}
+.code-ctx-hint {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--fg-muted);
 }
 
 .cal-ctx-label {

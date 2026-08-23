@@ -42,6 +42,9 @@ interface SessionFileExplorerProps {
   sessionId?: string;
   /** Line to highlight/scroll-to in the initially-selected file's preview. */
   initialLine?: number;
+  /** Keyword to flash at `initialLine` (a reference jump from the Changed tab
+   *  lands on the symbol, not just the row). */
+  initialTerm?: string;
   /**
    * Stable key for "which file was I reading" + the back/forward history.
    *
@@ -127,7 +130,7 @@ function lastSegment(p: string): string {
   return trimmed.slice(trimmed.lastIndexOf('/') + 1) || trimmed;
 }
 
-export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryScope, onSelectCode, barRightSlot }: SessionFileExplorerProps) {
+export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initialTerm, memoryScope, onSelectCode, barRightSlot }: SessionFileExplorerProps) {
   const [root, setRoot] = useState<string>(cwd || '~');
   const [showHidden, setShowHidden] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -940,7 +943,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
               host={host}
               // Reference jumps ride refLine; the mount-time deep link keeps initialLine.
               line={refLine?.file === selectedFile ? refLine.line : (selectedFile === cwd ? initialLine : undefined)}
-              lineTerm={refLine?.file === selectedFile ? refLine.term : undefined}
+              lineTerm={refLine?.file === selectedFile ? refLine.term : (selectedFile === cwd ? initialTerm : undefined)}
               reloadToken={reloadToken}
               onSelectCode={onSelectCode}
               onSymbolLookup={handleSymbolLookup}

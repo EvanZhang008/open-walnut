@@ -173,6 +173,25 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        id: 'pw-task-changed',
+        title: 'Changed fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-changed-session'],
+        active_session_ids: [],
+        session_id: 'pw-changed-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         id: 'pw-task-codex-customer',
         title: 'Playwright Codex customer task',
         status: 'in_progress',
@@ -870,6 +889,46 @@ await fs.writeFile(
       '',
     ].join('\n'),
   )
+  // Changed-tab code-intel fixture (changed-code-intel.spec.ts): a session whose
+  // JSONL records a Write of sync-controller.go — the Changed tab reconstructs
+  // the diff from exactly these tool_use blocks, and the on-disk twin (written
+  // above) is what reference lookup greps.
+  //
+  // fs.readFile is MANDATORY, not a convenience: the Write content and the
+  // on-disk file must stay byte-identical, or the text the diff searches
+  // diverges from what the reference grep reports and the specs' counts break
+  // for a non-obvious reason. The specs also pin exact properties of these
+  // bytes: 'HasSyncedForItems' twice in this file (+1 in sync-caller.go = 3 ref
+  // rows), 'syncedFn' once, and the substring "12" appearing NOWHERE in content
+  // while line 12 exists (the gutter-exclusion proof) — edit the .go fixtures
+  // with those assertions in mind. The tool_use deliberately has no matching
+  // tool_result: the changes pipeline reads tool_use inputs only.
+  const controllerPath = path.join(vscodeFixtureRoot, 'sync-controller.go')
+  const controllerContent = await fs.readFile(controllerPath, 'utf8')
+  await fs.writeFile(
+    path.join(jsonlDir, 'pw-changed-session.jsonl'),
+    [
+      JSON.stringify({
+        type: 'user',
+        sessionId: 'pw-changed-session',
+        timestamp: new Date(sessionFixtureNow - 20_000).toISOString(),
+        message: { role: 'user', content: 'Add the sync gate.' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: 'pw-changed-session',
+        timestamp: new Date(sessionFixtureNow - 15_000).toISOString(),
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'Writing the controller.' },
+            { type: 'tool_use', id: 'toolu_pw_changed_1', name: 'Write', input: { file_path: controllerPath, content: controllerContent } },
+          ],
+        },
+      }),
+      '',
+    ].join('\n'),
+  )
 }
 const oldExactTargetAt = new Date(sessionFixtureNow - 30 * 24 * 60 * 60 * 1_000).toISOString()
 const scaleSessions = Array.from({ length: 501 }, (_, index) => ({
@@ -902,6 +961,19 @@ await fs.writeFile(
         messageCount: 1,
         cwd: vscodeFixtureRoot,
         title: 'Editor fixture session',
+      },
+      {
+        claudeSessionId: 'pw-changed-session',
+        taskId: 'pw-task-changed',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 25_000).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 1,
+        cwd: vscodeFixtureRoot,
+        title: 'Changed fixture session',
       },
       {
         claudeSessionId: 'pw-plan-session-completed',
