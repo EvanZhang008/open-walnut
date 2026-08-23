@@ -1,71 +1,56 @@
-/* ═══════════════════════════════════════════════════════════════════════
-   Time Tracking → Timeline tab: the day as blocks on an hour axis.
-
-   Scoped entirely under .tt (imported by TimeTimeline.tsx). Do NOT move any
-   of this into globals.css. It leans on the same tokens the settings and
-   usage cards use (--bg-elevated, --border, --radius-*), so light and dark
-   both come out right without a second palette.
-
-   Visual language borrowed from a calendar day view: a quiet hour rule with
-   a fainter half-hour rule, labels in the gutter, blocks with 4px rounding
-   and a hairline of separation, a crisp red now-line with a dot, 4/8px
-   spacing rhythm, 11-13px type matching the app's scale.
-
-   HUMAN vs AGENT is a hard visual split: human blocks carry a per-task hue
-   (--tt-block-color, set inline from a stable hash) and agent blocks are
-   always the purple --time-agent, hatched and muted. No task hue is ever
-   purple, so the two lanes can't be confused — not even in grayscale.
-
-   DENSITY: visual weight tracks time spent. A sub-5-minute block is a muted
-   tick with no text (.is-tick), so a burst of them reads as a textured band
-   instead of twenty saturated rectangles competing with the hour-long block
-   next to them.
-   ═══════════════════════════════════════════════════════════════════════ */
+/**
+ * Timeline tab — shell (day nav, view switcher, totals) + view A, the attention
+ * tape. Views B and C live in time-views.css.
+ *
+ * Spacing rhythm is 4/8px throughout, matching the rest of the settings panel. The
+ * idle base is a token, never a hard-coded grey: this surface has to read as "not
+ * working" on both the white and the black theme.
+ */
 
 .tt {
-  --tt-gutter: 56px;
-  --tt-rule: color-mix(in srgb, var(--border) 62%, transparent);
-  --tt-rule-half: color-mix(in srgb, var(--border) 28%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   outline: none;
+  /**
+   * The idle / aggregated grey, shared by the ribbon base, a composition bar and
+   * the "others" row. A MIX, not --bg-secondary: in the dark theme that token is
+   * byte-identical to the card background, so idle time had no shape at all and
+   * the tape's whole "grey = away" idea silently stopped working.
+   */
+  --tt-idle: color-mix(in srgb, var(--fg-muted) 14%, transparent);
 }
 
 .tt:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 4px;
-  border-radius: var(--radius-md);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+  border-radius: 10px;
 }
 
-/* ── Day nav ── */
+/* ── Day nav + view switcher ── */
 
 .tt-nav {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 12px;
   flex-wrap: wrap;
 }
 
 .tt-nav-btn,
 .tt-nav-reset {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px 10px;
-  min-width: 28px;
-  font-size: 13px;
-  color: var(--fg);
-  background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--fg);
+  border-radius: 8px;
+  height: 26px;
+  min-width: 26px;
+  padding: 0 8px;
+  font-size: 13px;
   cursor: pointer;
 }
 
-.tt-nav-btn { font-size: 15px; line-height: 1; }
-
 .tt-nav-btn:hover:not(:disabled),
 .tt-nav-reset:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
+  background: var(--bg-hover);
 }
 
 .tt-nav-btn:disabled,
@@ -75,30 +60,60 @@
 }
 
 .tt-nav-date {
+  font-size: 15px;
+  font-weight: 650;
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
-  min-width: 132px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--fg);
 }
 
 .tt-nav-today {
-  font-style: normal;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  color: var(--accent);
+  font-style: normal;
+}
+
+/* A segmented control: one visible group, not three loose buttons. */
+.tt-switch {
+  display: inline-flex;
+  margin-left: auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.tt-switch-btn {
+  border: 0;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tt-switch-btn:hover {
+  color: var(--fg);
+}
+
+.tt-switch-btn.is-active {
+  background: var(--bg-elevated);
+  color: var(--fg);
+  box-shadow: var(--card-shadow);
 }
 
 .tt-agents-toggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-left: auto;
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--fg-secondary);
   cursor: pointer;
 }
@@ -108,11 +123,9 @@
 .tt-totals {
   display: flex;
   align-items: center;
+  gap: 14px;
   flex-wrap: wrap;
-  gap: 8px 16px;
-  margin-bottom: 8px;
-  font-size: 12px;
-  color: var(--fg-secondary);
+  font-size: 13px;
 }
 
 .tt-total {
@@ -120,323 +133,142 @@
   align-items: center;
   gap: 6px;
   font-weight: 600;
-  color: var(--fg);
 }
 
-.tt-unplaced { color: var(--fg-muted); }
+.tt-total-side {
+  color: var(--fg-muted);
+  font-size: 12.5px;
+}
 
 .tt-swatch {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
   border-radius: 3px;
-  flex: 0 0 auto;
+  flex: none;
 }
 
-.tt-swatch-human { background: var(--time-human); }
-
-.tt-swatch-quick {
-  background: color-mix(in srgb, var(--fg-muted) 45%, transparent);
-  border: 1px solid var(--border-strong, var(--border));
-}
+.tt-swatch-human { background: var(--accent); }
 
 .tt-swatch-agent {
-  background: var(--time-agent);
-  background-image: repeating-linear-gradient(
+  background: repeating-linear-gradient(
     45deg,
-    rgba(255, 255, 255, 0.55) 0 2px,
-    transparent 2px 4px
+    var(--time-agent) 0 3px,
+    color-mix(in srgb, var(--time-agent) 45%, transparent) 3px 6px
   );
 }
 
-/* ── Body: the plot is the hero, the legend a narrow side column ──
-      FLEX, not grid: with 20+ legend rows a grid column sized off intrinsic
-      content squeezed the plot into a ~280px box on the right of the card and
-      pushed the legend to a full-width row underneath. flex-basis + min-width:0
-      on both children makes the split independent of content width. */
-
-.tt-body {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-}
-
-.tt-plot {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-@media (max-width: 880px) {
-  .tt-body { flex-wrap: wrap; }
-  .tt-legend { flex: 1 1 100%; }
-}
-
-/* Lane titles sit OUTSIDE the scroller so they never scroll away. The gutter
-   column keeps them aligned with the lanes below. */
-.tt-lane-heads {
-  display: grid;
-  grid-template-columns: var(--tt-gutter) 1fr;
-  margin-bottom: 4px;
-}
-
-/* Your own day is the subject, so it keeps the larger share of the width even
-   with the agent lane open (a 50/50 split gave half the plot to a lane that is
-   empty on most days). */
-.tt-lane-heads[data-agents='on'] {
-  grid-template-columns: var(--tt-gutter) 1.7fr 1fr;
-}
-
-.tt-lane-head {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+.tt-unplaced {
   color: var(--fg-muted);
+  font-size: 12px;
+  margin-left: auto;
 }
 
-.tt-lane-head-agent {
-  color: var(--time-agent);
-  padding-left: 8px;
-}
-
-.tt-grid {
+.tt-scroll {
   overflow-y: auto;
   overflow-x: hidden;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: 10px;
 }
 
-.tt-canvas {
-  position: relative;
+/* ══ View A: attention tape ══ */
+
+.tp {
   display: grid;
-  grid-template-columns: var(--tt-gutter) 1fr;
+  /* minmax(0,1fr) so a long ranked title can never push the ribbon narrow, and a
+     240px list rather than 300: in this panel (≈740px) 300 left the ribbon with
+     40% of the card, where the mockup gives it well over half. */
+  grid-template-columns: 56px minmax(0, 1fr) 240px;
+  gap: 0 16px;
+  align-items: start;
 }
 
-/* ── Hour ruler ── */
-
-.tt-ruler {
+.tp-gutter {
   position: relative;
-  border-right: 1px solid var(--tt-rule);
 }
 
-.tt-hour {
-  position: relative;
-  box-sizing: border-box;
-  border-top: 1px solid var(--tt-rule);
-}
-
-.tt-hour:first-child { border-top-color: transparent; }
-
-/* The label sits ON the hour line, in the gutter, quiet — a calendar puts the
-   time beside the rule, not inside the plot. */
-.tt-hour-label {
+.tp-hour {
   position: absolute;
-  top: -6px;
   right: 8px;
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--fg-muted);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-/* ── Lanes ── */
-
-.tt-lanes {
-  position: relative;
-  display: grid;
-  grid-template-columns: 1fr;
-  /* Hour + half-hour rules continue under the blocks. Driven by --tt-hour-px
-     (set inline from HOUR_PX) so the CSS can never drift from the geometry. */
-  background-image:
-    repeating-linear-gradient(
-      to bottom,
-      var(--tt-rule) 0 1px,
-      transparent 1px var(--tt-hour-px, 96px)
-    ),
-    repeating-linear-gradient(
-      to bottom,
-      transparent 0 calc(var(--tt-hour-px, 96px) / 2),
-      var(--tt-rule-half) calc(var(--tt-hour-px, 96px) / 2) calc(var(--tt-hour-px, 96px) / 2 + 1px),
-      transparent calc(var(--tt-hour-px, 96px) / 2 + 1px) var(--tt-hour-px, 96px)
-    );
-}
-
-.tt-lanes[data-agents='on'] { grid-template-columns: 1.7fr 1fr; }
-
-.tt-lane {
-  position: relative;
-  min-width: 0;
-}
-
-.tt-lanes[data-agents='on'] .tt-lane + .tt-lane {
-  border-left: 1px solid var(--tt-rule);
-}
-
-/* An open lane with nothing in it says so, rather than reading as a broken
-   column: "empty" and "broken" look identical otherwise. */
-.tt-lane-empty {
-  margin: 8px 0 0 8px;
+  transform: translateY(-50%);
   font-size: 11px;
   color: var(--fg-muted);
-}
-
-/* ── Blocks ── */
-
-.tt-block {
-  position: absolute;
-  box-sizing: border-box;
-  display: block;
-  padding: 1px 5px;
-  border: none;
-  border-radius: 4px;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  overflow: hidden;
-  transition: filter 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
-}
-
-.tt-block-human {
-  background: color-mix(in srgb, var(--tt-block-color, var(--time-human)) 82%, transparent);
-  box-shadow: inset 3px 0 0 0 var(--tt-block-color, var(--time-human));
-}
-
-/* Agents: the purple lane, muted and hatched so it can never read as your own
-   time even at a glance or in a grayscale screenshot. */
-.tt-block-agent {
-  background:
-    repeating-linear-gradient(
-      45deg,
-      color-mix(in srgb, var(--time-agent) 52%, transparent) 0 3px,
-      color-mix(in srgb, var(--time-agent) 26%, transparent) 3px 6px
-    );
-  box-shadow: inset 3px 0 0 0 color-mix(in srgb, var(--time-agent) 70%, transparent);
-}
-
-/* The agent surface is deliberately pale, so its label takes the foreground ink
-   instead of the white the saturated human hues need. White-on-hatched-lilac was
-   unreadable in light theme (caught by zooming into the dense render). */
-.tt-block-agent .tt-block-label,
-.tt-block-agent .tt-block-time {
-  color: var(--fg);
-  text-shadow: none;
-}
-
-/* A single line gets the whole box: 11px type needs ~14px, and 2px of vertical
-   padding was the difference between labelling a 10-minute block and not. */
-.tt-block.is-short {
-  padding-top: 0;
-  padding-bottom: 0;
-  display: flex;
-  align-items: center;
-}
-
-/* Sub-5-minute work: a muted band, no inset bar, no text. Twenty of these in a
-   row must read as texture, not as twenty competing rectangles. */
-.tt-block.is-tick {
-  border-radius: 3px;
-  padding: 0;
-  box-shadow: none;
-}
-
-.tt-block-human.is-tick {
-  background: color-mix(in srgb, var(--tt-block-color, var(--time-human)) 42%, transparent);
-}
-
-.tt-block-agent.is-tick {
-  background: color-mix(in srgb, var(--time-agent) 26%, transparent);
-}
-
-/* Calm hover: a slight lift and brighten, not a hard ring. The ring is kept for
-   keyboard focus, where it has to be unmistakable. */
-.tt-block:hover,
-.tt-block.is-hover {
-  filter: brightness(1.08) saturate(1.05);
-  box-shadow:
-    inset 3px 0 0 0 var(--tt-block-color, var(--time-agent)),
-    0 2px 8px rgba(0, 0, 0, 0.18);
-  z-index: 2;
-}
-
-.tt-block.is-tick:hover,
-.tt-block.is-tick.is-hover {
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.22);
-}
-
-.tt-block:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-  z-index: 3;
-}
-
-.tt-block.is-dimmed { opacity: 0.18; }
-
-/* Always exactly one line, ellipsised. Wrapping inside a 16px box is what
-   produced the clipped "No ta…" spilling over a block's own edge. */
-.tt-block-label {
-  display: block;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.25;
-  color: #fff;
-  /* The block hues are mid-saturation, so white text needs a shadow to stay
-     legible on the lighter ones (amber, lime) in light theme. */
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-/* Second line, only on blocks tall enough for it. */
-.tt-block-time {
-  display: block;
-  font-size: 10px;
-  line-height: 1.2;
-  color: rgba(255, 255, 255, 0.92);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+/**
+ * The ribbon. Its BACKGROUND is the idle time — segments are drawn on top of it, so
+ * "away from the computer" needs no rectangle of its own and no legend entry.
+ */
+.tp-ribbon {
+  position: relative;
+  border-radius: 10px;
+  background: var(--tt-idle);
   overflow: hidden;
 }
 
-/* ── Now line ── */
-
-.tt-now {
+.tp-rule {
   position: absolute;
   left: 0;
   right: 0;
-  height: 0;
-  display: flex;
-  align-items: center;
-  z-index: 4;
+  border-top: 1px solid var(--border);
   pointer-events: none;
 }
 
-/* In the gutter, never over a block: red on a coloured block is unreadable. */
-.tt-now-time {
-  flex: 0 0 var(--tt-gutter);
-  padding-right: 8px;
-  text-align: right;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--error);
-  font-variant-numeric: tabular-nums;
-  transform: translateY(-1px);
-}
-
-.tt-now-rule {
-  position: relative;
-  flex: 1 1 auto;
-  height: 0;
-  border-top: 2px solid var(--error);
-}
-
-.tt-now-rule::before {
-  content: '';
+.tp-seg {
   position: absolute;
-  left: -1px;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.15;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: filter 120ms ease, opacity 120ms ease;
+}
+
+/**
+ * Consecutive segments get a hairline of the ribbon's own light, not a gap: a gap
+ * would read as idle time that did not happen. This is the one rule that lets a
+ * burst of switching read as texture instead of a single muddy band.
+ */
+.tp-seg.is-joined {
+  border-top: 1px solid rgba(255, 255, 255, 0.55);
+}
+
+.tp-seg-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+.tp-seg small {
+  font-weight: 500;
+  opacity: 0.88;
+  flex: none;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+/* Cross-highlighting with the ranked list: the hovered task keeps its colour and
+   everything else steps back, which is how you find one task in a dense day. */
+.tp-seg.is-dim { opacity: 0.28; }
+.tp-seg.is-lit { filter: brightness(1.1); }
+
+.tp-now {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 2px solid var(--error);
+  z-index: 5;
+  pointer-events: none;
+}
+
+.tp-now i {
+  position: absolute;
+  left: 0;
   top: -4px;
   width: 8px;
   height: 8px;
@@ -444,130 +276,91 @@
   background: var(--error);
 }
 
-/* ── Legend ── */
-
-.tt-legend {
-  flex: 0 0 216px;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.tt-legend-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-/* Expanded, it scrolls itself rather than stretching the card. */
-.tt-legend-list.is-expanded {
-  max-height: 360px;
-  overflow-y: auto;
-}
-
-.tt-legend-row,
-.tt-legend-quick {
-  display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 4px 8px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.tt-legend-row.tt-legend-static { cursor: default; }
-
-.tt-legend-row:hover:not(.tt-legend-static),
-.tt-legend-quick:hover { background: var(--bg-hover, var(--bg-elevated)); }
-
-.tt-legend-row.is-picked {
-  background: var(--bg-elevated);
-  border-color: var(--accent);
-}
-
-.tt-legend-row.is-quiet { padding-left: 20px; }
-
-/* ONE line, whatever the title. A real day carried titles long enough to wrap
-   three times, which turned the key into the tallest thing on screen. */
-.tt-legend-name {
-  font-size: 12px;
-  color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.tt-legend-row.is-quiet .tt-legend-name,
-.tt-legend-quick .tt-legend-name { color: var(--fg-secondary); }
-
-.tt-legend-ms {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fg-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
-.tt-legend-more {
-  align-self: flex-start;
-  margin-top: 2px;
-  padding: 3px 8px;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
-  font: inherit;
+.tp-now span {
+  position: absolute;
+  right: 6px;
+  top: -16px;
   font-size: 11px;
-  color: var(--accent);
-  cursor: pointer;
+  font-weight: 700;
+  color: var(--error);
 }
 
-.tt-legend-more:hover { background: var(--bg-hover, var(--bg-elevated)); }
+/* ── Ranked "where it went" ── */
 
-/* ── Detail readout (a fixed strip, deliberately not a floating tooltip: an
-      overlay here would need placement rules and could clip at the card edge) ── */
-
-.tt-detail {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 12px;
-  min-height: 26px;
-  padding: 6px 10px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  color: var(--fg-secondary);
-}
-
-.tt-detail-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fg);
-  max-width: 46%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tt-detail-meta { font-variant-numeric: tabular-nums; }
-
-.tt-detail-kind {
-  margin-left: auto;
-  padding: 1px 7px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
+.tp-rank h4 {
+  margin: 2px 0 8px;
   font-size: 11px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
   color: var(--fg-muted);
-  white-space: nowrap;
+  font-weight: 700;
 }
 
-.tt-detail-hint { color: var(--fg-muted); }
+.tp-rrow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px;
+  border-radius: 8px;
+  font-size: 13px;
+  /* Pinned, not inherited: the panel's 1.5 body line-height made a one-line row
+     31px tall, which is indistinguishable from a wrapped row when measured. */
+  line-height: 1.35;
+  cursor: default;
+}
+
+.tp-rrow:hover,
+.tp-rrow.is-lit {
+  background: var(--bg-hover);
+}
+
+.tp-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex: none;
+}
+
+.tp-dot-quick { background: var(--fg-muted); opacity: 0.5; }
+
+.tp-rname {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tp-rtime {
+  color: var(--fg-muted);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+.tp-rrow.is-quick .tp-rname { color: var(--fg-muted); }
+
+.tp-more {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12.5px;
+  padding: 5px 6px;
+  cursor: pointer;
+  text-align: left;
+  display: block;
+}
+
+.tp-more:hover { text-decoration: underline; }
+
+/* One column under a narrow panel: the ranked list keeps its own full width. */
+@media (max-width: 900px) {
+  .tp {
+    grid-template-columns: 44px 1fr;
+  }
+
+  .tp-rank {
+    grid-column: 1 / -1;
+    margin-top: 12px;
+  }
+}

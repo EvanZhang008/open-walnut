@@ -325,11 +325,10 @@ async function seedAgentInterval(date: string, startMs: number, taskId: string, 
   }
   return false
 }
-
 test.describe('time timeline', () => {
-  test('plots the day as blocks, keeps agents in their own lane, and remembers the toggle', async ({ page, request }) => {
-    // Long on purpose: this is one whole user journey (seed → plot → toggle →
-    // reload → empty day → today → dark theme) and every step is a real click.
+  test('plots the day as one serial ribbon, ranks where it went, and remembers the view', async ({ page, request }) => {
+    // Long on purpose: one whole user journey (seed → ribbon → ranking → reload →
+    // empty day → today → dark) and every step is a real click.
     test.setTimeout(420_000)
 
     const token = stamp()
@@ -338,7 +337,7 @@ test.describe('time timeline', () => {
     const anchor = seedAnchor()
 
     // Seed HUMAN time through the real route: four adjacent ten-minute windows,
-    // which the server folds into ONE forty-minute block.
+    // which the SERIAL fold joins into one 40-minute segment.
     const samples = Array.from({ length: SEED_SPAN_MS / SEED_SAMPLE_MS }, (_, i) => ({
       ts: new Date(anchor.startMs + i * SEED_SAMPLE_MS).toISOString(),
       durationMs: SEED_SAMPLE_MS,
@@ -348,11 +347,10 @@ test.describe('time timeline', () => {
     const posted = await request.post('/api/time/heartbeats', { data: { samples } })
     expect(posted.status()).toBe(204)
 
-    // The fold really produced one block before the UI is touched at all.
     await expect.poll(async () => (await blocksFor(request, anchor.date, taskId)).map((b) => b.ms), {
       timeout: 30_000,
       intervals: [500, 500, 1_000],
-      message: 'four adjacent windows should fold into one 40-minute block',
+      message: 'the seeded windows should fold into one 40-minute block',
     }).toEqual([SEED_SPAN_MS])
 
     const agentSeeded = await seedAgentInterval(anchor.date, anchor.startMs, taskId, 25 * 60_000)
@@ -371,114 +369,73 @@ test.describe('time timeline', () => {
       await tl.locator('[data-testid="time-timeline-prev"]').click()
     }
 
-    // The toggle is persisted (ui-prefs mirrors it server-side), so a rerun of
-    // this spec against the same fixture server would inherit the ON state.
-    // Put it back to its documented default before asserting the default.
-    const agentsToggle = tl.locator('[data-testid="time-timeline-agents-toggle"]')
-    if (await agentsToggle.isChecked()) await agentsToggle.uncheck()
-    await expect(agentsToggle).not.toBeChecked()
+    // ── The tape is the default view: ONE ribbon, our segment labelled in it.
+    const seg = tl.locator(`[data-testid="time-tape-seg"][data-time-task-id="${taskId}"]`)
+    await expect(seg).toHaveCount(1, { timeout: 20_000 })
+    await expect(seg).toContainText(title)
+    await expect(tl.locator('[data-testid="time-timeline-human-total"]')).toContainText('40m')
 
-    // ── A block, in the human lane, labelled with the task's own title.
-    const humanLane = tl.locator('[data-testid="time-timeline-lane-human"]')
-    const block = humanLane.locator(`.tt-block[data-time-task-id="${taskId}"]`)
-    await expect(block).toHaveCount(1, { timeout: 20_000 })
-    await expect(block).toHaveAttribute('data-time-kind', 'session')
-    await expect(block).toContainText(title)
-    // The legend decodes the colors without hovering anything.
-    await expect(tl.locator('[data-testid="time-timeline-legend"]')).toContainText(title)
-    // Agents OFF: no second lane, and no agent rectangle anywhere on the page.
-    await expect(tl.locator('[data-testid="time-timeline-lane-agent"]')).toHaveCount(0)
-    await expect(tl.locator('.tt-block[data-time-kind="agent"]')).toHaveCount(0)
-    await expect(tl.locator('[data-testid="time-timeline-agent-total"]')).toHaveCount(0)
+    // ── The ranked list is the tape's key, and hovering it lights the segment.
+    const rank = tl.locator('[data-testid="time-tape-rank"]')
+    const ourRow = rank.locator(`[data-testid="time-tape-rrow"][data-time-task-id="${taskId}"]`)
+    await expect(ourRow).toContainText(title)
+    await ourRow.hover()
+    await expect(seg).toHaveClass(/is-lit/)
 
-    // Hover reads out the task, the clock range, the duration and the kind.
-    await block.hover()
-    const detail = tl.locator('[data-testid="time-timeline-detail"]')
-    await expect(detail).toContainText(title)
-    await expect(detail).toContainText('40m')
-    await expect(detail).toContainText('Session')
-    await expect(detail).toContainText(/\d{1,2}:\d{2} [AP]M – \d{1,2}:\d{2} [AP]M/)
+    // ── AGENTS ARE NOT IN THE TAPE AT ALL. The toggle does not even exist here:
+    // this view is about a person's attention, and 25 agent minutes in it would
+    // be read as the user's own time (that misreading is why this rule exists).
+    await expect(tl.locator('[data-testid="time-timeline-agents-toggle"]')).toHaveCount(0)
+    await expect(tl.locator(`[data-testid="time-tape-seg"][data-time-task-id="${taskId}"]`)).toHaveCount(1)
+
     await panel.scrollIntoViewIfNeeded()
-    await shoot(page, 'timeline-01-day-with-data')
+    await shoot(page, 'timeline-01-tape')
 
-    // ── Agents ON: a SEPARATE lane. Never the same lane, never the same block.
-    // Assertions are scoped to THIS run's task id: other tests in the same fixture
-    // server earn their own time on the same day, and a bare count would then be a
-    // test that fails for reasons the feature has nothing to do with.
-    await agentsToggle.check()
-    const agentLane = tl.locator('[data-testid="time-timeline-lane-agent"]')
-    await expect(agentLane).toBeVisible()
-    const agentBlock = agentLane.locator(`.tt-block[data-time-kind="agent"][data-time-task-id="${taskId}"]`)
-    await expect(agentBlock).toHaveCount(1)
-    await expect(agentLane.locator(`.tt-block[data-time-kind="session"]`)).toHaveCount(0)
-    await expect(humanLane.locator('.tt-block[data-time-kind="agent"]')).toHaveCount(0)
-    // The human block did not move, change lane, or absorb the agent's 25 minutes.
-    await expect(block).toHaveCount(1)
-    await expect(tl.locator('[data-testid="time-timeline-human-total"]')).toBeVisible()
-    await expect(tl.locator('[data-testid="time-timeline-agent-total"]')).toBeVisible()
-    // The agent's own turn reads as 25 minutes of AGENT time, never as yours.
-    await agentBlock.hover()
-    await expect(detail).toContainText('25m')
-    await expect(detail).toContainText('Agent')
-    await panel.scrollIntoViewIfNeeded()
-    await shoot(page, 'timeline-02-agents-on')
-
-    // ── The choice survives a reload (a preference, not a session toggle).
+    // ── The chosen view survives a reload (ui-prefs mirrors the key).
+    await tl.locator('[data-testid="time-view-lanes"]').click()
+    await expect(tl.locator('[data-testid="time-lanes"]')).toBeVisible()
     await page.reload()
     await appReady(page)
     await openTimeSection(page)
     await panel.locator('[data-testid="time-tab-timeline"]').click()
-    await expect(tl).toBeVisible({ timeout: 20_000 })
-    await expect(tl.locator('[data-testid="time-timeline-agents-toggle"]')).toBeChecked()
+    await expect(tl.locator('[data-testid="time-lanes"]')).toBeVisible({ timeout: 20_000 })
+    await tl.locator('[data-testid="time-view-tape"]').click()
+    await expect(tl.locator('[data-testid="time-tape"]')).toBeVisible()
 
-    // ── A day with nothing on it explains itself instead of drawing an empty grid.
+    // ── Walk back to a day with nothing on it: an explanation, not an empty box.
     const empty = tl.locator('[data-testid="time-timeline-empty"]')
-    for (let i = 0; i < 4 && (await empty.count()) === 0; i++) {
-      await tl.locator('[data-testid="time-timeline-prev"]').click()
+    for (let i = 0; i < 6; i += 1) {
+      if (await empty.isVisible().catch(() => false)) break
+      const prev = tl.locator('[data-testid="time-timeline-prev"]')
+      if (await prev.isDisabled()) break
+      await prev.click()
       await page.waitForTimeout(400)
     }
     await expect(empty).toBeVisible({ timeout: 20_000 })
-    await expect(empty).toContainText('Nothing tracked')
-    await panel.scrollIntoViewIfNeeded()
-    await shoot(page, 'timeline-03-empty-day')
+    await shoot(page, 'timeline-02-empty-day')
 
-    // ── "Today" comes back to the day with the work on it.
+    // Today snaps back.
     await tl.locator('[data-testid="time-timeline-today"]').click()
-    if (anchor.date !== localDate(Date.now())) {
-      await tl.locator('[data-testid="time-timeline-prev"]').click()
-    }
-    await expect(block).toHaveCount(1, { timeout: 20_000 })
-
-    // ── Dark theme, through the real theme picker.
-    await page.locator('#general .theme-picker-btn', { hasText: 'Dark' }).click()
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
-    await panel.scrollIntoViewIfNeeded()
-    await expect(block).toBeVisible()
-    await shoot(page, 'timeline-04-dark')
-    await page.locator('#general .theme-picker-btn', { hasText: 'System' }).click()
-
-    // Leave the persisted preference at its default for the next run.
-    await panel.locator('[data-testid="time-tab-timeline"]').click()
-    const finalToggle = tl.locator('[data-testid="time-timeline-agents-toggle"]')
-    if (await finalToggle.isChecked()) await finalToggle.uncheck()
+    await expect(tl.locator('[data-testid="time-timeline-date"]')).toContainText('today')
   })
 })
 
 /**
- * A REALISTIC day, because the one-task fixture hid every density problem the
- * user hit on their own data (75 minutes spread over 21 tasks): the plot
- * collapsed to a narrow box, the legend became a 21-row wall of 1-second rows,
- * and the blocks were unreadable slivers with clipped text.
+ * ── The dense day: 19 tasks, mixed 22s-25m slices, long mixed-script titles,
+ * overlapping bursts, and one REAL idle gap so the day has more than one chapter.
  *
- * Titles are deliberately long and mixed-script — a short ASCII title never
- * exercises truncation.
+ * Two constraints on WHERE this day sits, both learned the hard way:
+ *
+ * 1. It must stay in the past — a sample in the future is silently rejected by the
+ *    sanitizer, and an earlier version of this test quietly lost five of its tasks.
+ * 2. It must not overlap the journey test above, which seeds the last 40 minutes of
+ *    the same day. Both tests share one fixture server and one day file, and in a
+ *    SERIAL fold an overlapping block legitimately swallows whatever is inside it —
+ *    which silently ate this test's whole second chapter.
+ *
+ * So: 160 minutes back, with every sample inside the first 95 of them.
  */
-/**
- * The seeded day's width. Every offset below must stay inside it: a sample in the
- * future is silently rejected by the sanitizer, and the first version of this test
- * quietly lost five of its tasks that way.
- */
-const DENSE_SPAN_MS = 80 * 60_000
+const DENSE_SPAN_MS = 160 * 60_000
 
 const DENSE_TASKS: Array<{ title: string; slices: Array<[offsetMin: number, seconds: number]> }> = [
   { title: '重构会话时间轴渲染管线 — timeline rendering pipeline refactor', slices: [[0, 1500], [30, 900]] },
@@ -499,11 +456,13 @@ const DENSE_TASKS: Array<{ title: string; slices: Array<[offsetMin: number, seco
   { title: 'File a follow-up task for the parser edge case', slices: [[40, 33]] },
   { title: 'Glance at the notification centre 通知中心', slices: [[42, 31]] },
   { title: 'Confirm the backup finished 确认备份完成', slices: [[46, 30]] },
+  // After a 17-minute break: the second chapter of the day.
+  { title: '深度调试守护进程重连 deep debugging session', slices: [[66, 360], [74, 540]] },
 ]
 
 test.describe('time timeline at real density', () => {
-  test('a day across 18 tasks keeps the plot wide, the legend ranked, and every short slice drawn', async ({ page, request }) => {
-    test.setTimeout(420_000)
+  test('all three views hold up on a 19-task day: serial tape, chaptered story, capped lanes', async ({ page, request }) => {
+    test.setTimeout(480_000)
 
     const token = stamp()
     const anchor = seedAnchor(DENSE_SPAN_MS)
@@ -513,8 +472,8 @@ test.describe('time timeline at real density', () => {
       const taskId = await createTask(request, `${spec.title} ${token}`)
       ids.push(taskId)
       for (const [offsetMin, seconds] of spec.slices) {
-        // Bursts overlap on purpose (offsets collide across tasks), which is what
-        // exercises the side-by-side lane packing.
+        // Bursts overlap on purpose (offsets collide across tasks). The serial fold
+        // has to RESOLVE that rather than draw two things at once.
         samples.push({
           ts: new Date(anchor.startMs + offsetMin * 60_000 + (i % 3) * 20_000).toISOString(),
           durationMs: seconds * 1000,
@@ -524,11 +483,11 @@ test.describe('time timeline at real density', () => {
       }
     }
     // A late burst of touches UNDER the 30s draw floor — one per task so none of
-    // them merges into anything — which is what the user's real day was mostly
-    // made of, and what the "not drawn" note has to account for.
+    // them merges into anything — which is what the user's real day was mostly made
+    // of, and what the "not drawn" note has to account for.
     for (let i = 0; i < 10; i++) {
       samples.push({
-        ts: new Date(anchor.startMs + (56 + i * 2) * 60_000).toISOString(),
+        ts: new Date(anchor.startMs + (84 + i) * 60_000).toISOString(),
         durationMs: 22_000,
         kind: 'chat',
         taskId: ids[i + 2],
@@ -538,12 +497,19 @@ test.describe('time timeline at real density', () => {
     const posted = await request.post('/api/time/heartbeats', { data: { samples } })
     expect(posted.status()).toBe(204)
 
-    await expect.poll(async () => (await request.get('/api/time/blocks', { params: { date: anchor.date } })
-      .then((r) => r.json() as Promise<{ blocks: unknown[] }>)).blocks.length, {
+    // One long agent run across the same day, so the swimlanes' agent row really has
+    // hatched bars to draw rather than just existing.
+    const agentSeeded = await seedAgentInterval(anchor.date, anchor.startMs + 5 * 60_000, ids[0]!, 55 * 60_000)
+    expect(agentSeeded, 'the dense fixture day file should have been found by task id').toBe(true)
+
+    // The ribbon endpoint is the one both vertical views read.
+    await expect.poll(async () => (await request.get('/api/time/blocks', {
+      params: { date: anchor.date, raw: '1', kinds: 'session,triage,chat' },
+    }).then((r) => r.json() as Promise<{ blocks: unknown[] }>)).blocks.length, {
       timeout: 30_000,
       intervals: [500, 500, 1_000],
-      message: 'the dense day should fold into many blocks',
-    }).toBeGreaterThan(15)
+      message: 'the dense day should fold into a ribbon of many segments',
+    }).toBeGreaterThan(5)
 
     await page.goto('/')
     await appReady(page)
@@ -555,77 +521,116 @@ test.describe('time timeline at real density', () => {
     if (anchor.date !== localDate(Date.now())) {
       await tl.locator('[data-testid="time-timeline-prev"]').click()
     }
+    await tl.locator('[data-testid="time-view-tape"]').click()
 
-    const blocks = tl.locator('[data-testid="time-timeline-lane-human"] .tt-block')
-    await expect.poll(() => blocks.count(), { timeout: 20_000 }).toBeGreaterThan(15)
+    // ══ VIEW A: the tape ══
+    const segs = tl.locator('[data-testid="time-tape-seg"]')
+    await expect.poll(() => segs.count(), { timeout: 20_000 }).toBeGreaterThan(4)
 
-    // ── LAYOUT: the plot is the hero. The bug the user hit was a ~280px plot
-    // pushed to the right of the card with the legend dumped full-width below.
-    const cardBox = await panel.boundingBox()
-    const plotBox = await tl.locator('[data-testid="time-timeline-plot"]').boundingBox()
-    expect(cardBox && plotBox).toBeTruthy()
-    expect(plotBox!.width / cardBox!.width).toBeGreaterThan(0.6)
-    // …and it starts at the left of the card, not floated to the right edge.
-    expect(plotBox!.x - cardBox!.x).toBeLessThan(cardBox!.width * 0.15)
-    // Real vertical room: an hour is at least ~90px, so the axis is tall.
-    expect(plotBox!.height).toBeGreaterThan(360)
-
-    // ── EVERY slice draws, and none is a sub-pixel sliver.
-    const heights = await blocks.evaluateAll((els) => els.map((e) => (e as HTMLElement).offsetHeight))
-    expect(Math.min(...heights)).toBeGreaterThanOrEqual(8)
-
-    // ── No block renders text it cannot hold (the "No ta…" overflow), measured
-    // on the block itself so both the title and the duration line are covered.
-    const overflowing = await blocks.evaluateAll(
-      (els) => els.filter((el) => el.scrollHeight > el.clientHeight + 1).length,
-    )
+    // THE rule this whole redesign exists for: attention is serial, so no two
+    // segments may occupy the same pixels. (A 2px tolerance is the drawn floor for
+    // a 30-second stripe, which is the only overdraw the layout allows.)
+    const boxes = await segs.evaluateAll((els) => els.map((el) => {
+      const s = el as HTMLElement
+      return { top: s.offsetTop, height: s.offsetHeight }
+    }))
+    for (let i = 1; i < boxes.length; i++) {
+      const prev = boxes[i - 1]!
+      expect(boxes[i]!.top, 'serial ribbon: segments must never overlap').toBeGreaterThanOrEqual(prev.top + prev.height - 2)
+    }
+    // Big stretches carry their name; nothing carries text it cannot hold.
+    const labelled = await segs.evaluateAll((els) => els.filter((el) => !!el.querySelector('.tp-seg-title')).length)
+    expect(labelled).toBeGreaterThan(0)
+    const overflowing = await segs.evaluateAll((els) => els.filter((el) => el.scrollHeight > el.clientHeight + 1).length)
     expect(overflowing).toBe(0)
-    // …and the labels that DO fit are really there: a wall of anonymous colour is
-    // the failure mode of being too conservative about this.
-    const labelled = await blocks.evaluateAll(
-      (els) => els.filter((el) => !!el.querySelector('.tt-block-label')).length,
-    )
-    expect(labelled).toBeGreaterThan(3)
 
-    // ── LEGEND: ranked, not dumped. One line per row, capped, with the
-    // quick-touch group standing in for the tail of tiny entries.
-    const legend = tl.locator('[data-testid="time-timeline-legend"]')
-    const rows = legend.locator('.tt-legend-row, .tt-legend-quick')
-    expect(await rows.count()).toBeLessThanOrEqual(10)
-    const tall = await rows.evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetHeight > 30).length)
-    expect(tall, 'every legend row must be exactly one line').toBe(0)
-    await expect(legend.locator('[data-testid="time-timeline-legend-quick"]')).toContainText('Quick touches')
-
-    // The "not drawn" note is in human words, and only about the sub-floor time.
+    // The ranked list is capped, one line per row, with the quick-touch group.
+    const rank = tl.locator('[data-testid="time-tape-rank"]')
+    const rows = rank.locator('[data-testid="time-tape-rrow"]')
+    expect(await rows.count()).toBeLessThanOrEqual(9)
+    // "One line" measured as a WRAP, not as a magic pixel count: a wrapped row is
+    // ~1.6x its neighbours, which is what a long mixed-script title would cause.
+    const rowHeights = await rows.evaluateAll((els) => els.map((e) => (e as HTMLElement).offsetHeight))
+    expect(Math.max(...rowHeights)).toBeLessThan(Math.min(...rowHeights) * 1.4)
+    expect(Math.max(...rowHeights), 'a ranked row is one line of 13px type').toBeLessThanOrEqual(34)
+    await expect(rank.locator('[data-testid="time-tape-quick"]')).toContainText('Quick touches')
+    await expect(rank.locator('[data-testid="time-tape-more"]')).toContainText('more')
     await expect(tl.locator('[data-testid="time-timeline-notdrawn"]')).toContainText('under 30s')
 
     await panel.scrollIntoViewIfNeeded()
-    await shoot(page, 'timeline-05-dense')
+    await shoot(page, 'views-01-tape-dense')
 
-    // The tail past the cap is reachable, not dropped.
-    await expect(legend.locator('[data-testid="time-timeline-legend-more"]')).toContainText('more')
-    const capped = await rows.count()
-    await legend.locator('[data-testid="time-timeline-legend-more"]').click()
-    expect(await rows.count()).toBeGreaterThan(capped)
-    await legend.locator('[data-testid="time-timeline-legend-quick"]').click()
+    // ══ VIEW B: chapters ══
+    await tl.locator('[data-testid="time-view-chapters"]').click()
+    const cards = tl.locator('[data-testid="time-chapters-card"]')
+    await expect.poll(() => cards.count(), { timeout: 20_000 }).toBeGreaterThan(1)
+    // The 17-minute break really is drawn as a break in the story.
+    await expect(tl.locator('[data-testid="time-chapters-idle"]').first()).toContainText('空闲')
+    await expect(cards.first().locator('[data-testid="time-chapters-comp"]')).toBeVisible()
+    // A composition bar accounts for the whole chapter, so it has real segments.
+    const compParts = await cards.first().locator('[data-testid="time-chapters-comp"] i').count()
+    expect(compParts).toBeGreaterThan(1)
     await panel.scrollIntoViewIfNeeded()
-    await shoot(page, 'timeline-06-dense-legend-expanded')
+    await shoot(page, 'views-02-chapters-dense')
 
-    // Hovering a tiny tick still identifies it (tooltip-only blocks are not dead).
-    const smallest = blocks.nth(heights.indexOf(Math.min(...heights)))
-    await smallest.hover()
-    await expect(tl.locator('[data-testid="time-timeline-detail"]')).not.toContainText('Hover a block')
+    // Expanding a chapter reveals the same ribbon, zoomed, for just that stretch.
+    await cards.first().locator('.tc-head').click()
+    const detail = tl.locator('[data-testid="time-chapters-detail"]')
+    await expect(detail).toBeVisible()
+    expect(await detail.locator('[data-testid="time-tape-seg"]').count()).toBeGreaterThan(0)
+    await panel.scrollIntoViewIfNeeded()
+    await shoot(page, 'views-03-chapters-expanded')
 
-    // ── Dense + agents + dark, the combination nobody had looked at.
+    // ══ VIEW C: swimlanes ══
+    await tl.locator('[data-testid="time-view-lanes"]').click()
+    const taskRows = tl.locator('[data-testid="time-lanes-row-task"]')
+    await expect.poll(() => taskRows.count(), { timeout: 20_000 }).toBeGreaterThan(3)
+    // Rows are ranked, so the top row is the day's biggest task — asked of the API
+    // rather than assumed, because the journey test above shares this day file.
+    const ribbon = await request.get('/api/time/blocks', {
+      params: { date: anchor.date, raw: '1', kinds: 'session,triage,chat' },
+    }).then((r) => r.json() as Promise<{ totals: Array<{ taskId: string; ms: number }>; titles: Record<string, string> }>)
+    const biggest = ribbon.titles[ribbon.totals[0]!.taskId]
+    expect(biggest, 'the top-ranked task should have a joined title').toBeTruthy()
+    await expect(taskRows.first().locator('.tl-nm')).toHaveText(biggest!)
+    // …and capped: the tail is ONE aggregated row, never twelve rows of one bar.
+    expect(await taskRows.count()).toBeLessThanOrEqual(6)
+    const others = tl.locator('[data-testid="time-lanes-row-others"]')
+    await expect(others.locator('.tl-nm')).toContainText('其他')
+    // Every bar is visible, and no bar carries text (titles live in the column).
+    const barWidths = await tl.locator('[data-testid="time-lanes-bar"]')
+      .evaluateAll((els) => els.map((e) => (e as HTMLElement).offsetWidth))
+    expect(Math.min(...barWidths)).toBeGreaterThanOrEqual(4)
+    const barText = await tl.locator('[data-testid="time-lanes-bar"]')
+      .evaluateAll((els) => els.filter((e) => (e.textContent ?? '').trim().length > 0).length)
+    expect(barText).toBe(0)
+
+    // The agent row exists ONLY with the toggle, and only in this view.
     const agentsToggle = tl.locator('[data-testid="time-timeline-agents-toggle"]')
-    if (!(await agentsToggle.isChecked())) await agentsToggle.check()
-    await expect(tl.locator('[data-testid="time-timeline-lane-agent"]')).toBeVisible()
+    await expect(tl.locator('[data-testid="time-lanes-row-agent"]')).toHaveCount(0)
+    await agentsToggle.check()
+    const agentRow = tl.locator('[data-testid="time-lanes-row-agent"]')
+    await expect(agentRow).toBeVisible()
+    // Hatched purple, in its own row: never a bar in a task's row.
+    expect(await agentRow.locator('[data-testid="time-lanes-bar"]').count()).toBeGreaterThan(0)
+    // Non-zero, not an exact figure: the journey test's own agent interval is on
+    // this same day, and asserting "55m" would be asserting test isolation we
+    // deliberately do not have here.
+    await expect(tl.locator('[data-testid="time-timeline-agent-total"]')).not.toContainText('0s')
+    await panel.scrollIntoViewIfNeeded()
+    await shoot(page, 'views-04-lanes-dense')
+    await agentsToggle.uncheck()
+    await expect(tl.locator('[data-testid="time-lanes-row-agent"]')).toHaveCount(0)
+    await shoot(page, 'views-05-lanes-no-agents')
+
+    // ══ Dense + dark, on the view the user will live in ══
+    await tl.locator('[data-testid="time-view-tape"]').click()
     await page.locator('#general .theme-picker-btn', { hasText: 'Dark' }).click()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
-    await panel.scrollIntoViewIfNeeded()
-    await shoot(page, 'timeline-07-dense-dark')
-    await page.locator('#general .theme-picker-btn', { hasText: 'System' }).click()
     await panel.locator('[data-testid="time-tab-timeline"]').click()
-    if (await agentsToggle.isChecked()) await agentsToggle.uncheck()
+    await expect(tl.locator('[data-testid="time-tape"]')).toBeVisible()
+    await panel.scrollIntoViewIfNeeded()
+    await shoot(page, 'views-06-tape-dark')
+    await page.locator('#general .theme-picker-btn', { hasText: 'System' }).click()
   })
 })

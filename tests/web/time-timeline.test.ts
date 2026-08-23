@@ -6,8 +6,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  AXIS_PAD_HOURS, HOUR_MIN, HOUR_PX, LABEL_MIN_PX, LEGEND_TOP_ROWS, MIN_AXIS_HOURS, MIN_BLOCK_PX,
-  QUICK_TOUCH_MS, TASK_COLORS,
+  AXIS_PAD_HOURS, HOUR_MIN, LEGEND_TOP_ROWS, MIN_AXIS_HOURS, QUICK_TOUCH_MS, TASK_COLORS,
   axisRange, clockLabel, dayLabel, dayLengthMin, dayStartMs, formatDuration, groupLegend, hourLabel,
   minuteOfDay, planDrawMerge, shiftDate, taskColor, type LegendRow,
 } from '@/components/settings/sections/time-timeline';
@@ -176,7 +175,7 @@ describe('legend grouping', () => {
     const g = groupLegend(rows);
     expect(g.main).toHaveLength(LEGEND_TOP_ROWS);
     expect(g.main[0]!.ms).toBe(140 * 60_000); // biggest first
-    expect(g.hidden).toHaveLength(6);
+    expect(g.hidden).toHaveLength(14 - LEGEND_TOP_ROWS);
     expect(g.hiddenMs).toBe(g.hidden.reduce((a, r) => a + r.ms, 0));
   });
 
@@ -209,54 +208,40 @@ describe('legend grouping', () => {
   });
 });
 
-describe('dense-render geometry', () => {
-  it('gives an hour real vertical room, so minutes are distinguishable', () => {
-    // At 48px/hour a 30s touch is 0.4px. The whole density problem starts here.
-    expect(HOUR_PX).toBeGreaterThanOrEqual(90);
-  });
-
-  it('keeps a floor under every block and a text threshold above it', () => {
-    expect(MIN_BLOCK_PX).toBeGreaterThanOrEqual(8);
-    // Text must need MORE room than the minimum block, otherwise an 8px sliver
-    // renders a clipped "No ta…" over its own edges. It must also stay low
-    // enough to label a 10-minute block (16px at this scale), or a real day of
-    // 10-minute heartbeat slices renders as a wall of anonymous colour.
-    expect(LABEL_MIN_PX).toBeGreaterThan(MIN_BLOCK_PX + 4);
-    expect(LABEL_MIN_PX).toBeLessThanOrEqual(16);
-  });
-});
-
 describe('planDrawMerge', () => {
   const item = (taskId: string, startMin: number, endMin: number, kind = 'session') =>
     ({ taskId, kind, startMin, endMin });
+  /** The swimlanes' scale: 1.6px per minute with a 5px minimum bar. */
+  const SCALE = { pxPerMin: 1.6, minPx: 8, gapPx: 1 };
+  const plan = (items: ReturnType<typeof item>[]) => planDrawMerge(items, SCALE);
 
   it('folds same-task slivers whose inflated boxes would collide', () => {
     // Two 30s touches 90s apart: no overlap in MINUTES, but both draw 8px tall,
     // so on screen the second lands inside the first.
-    const runs = planDrawMerge([item('t1', 600, 600.5), item('t1', 602, 602.5)]);
+    const runs = plan([item('t1', 600, 600.5), item('t1', 602, 602.5)]);
     expect(runs).toEqual([[0, 1]]);
   });
 
   it('leaves a real gap alone', () => {
-    const runs = planDrawMerge([item('t1', 600, 600.5), item('t1', 640, 640.5)]);
+    const runs = plan([item('t1', 600, 600.5), item('t1', 640, 640.5)]);
     expect(runs).toEqual([[0], [1]]);
   });
 
   it('never folds two different tasks, however close they draw', () => {
-    const runs = planDrawMerge([item('t1', 600, 600.5), item('t2', 600, 600.5)]);
+    const runs = plan([item('t1', 600, 600.5), item('t2', 600, 600.5)]);
     expect(runs).toHaveLength(2);
     expect(runs.flat().sort()).toEqual([0, 1]);
   });
 
   it('never folds across kinds', () => {
-    const runs = planDrawMerge([item('t1', 600, 600.5), item('t1', 601, 601.5, 'chat')]);
+    const runs = plan([item('t1', 600, 600.5), item('t1', 601, 601.5, 'chat')]);
     expect(runs).toHaveLength(2);
   });
 
   it('cannot bridge more than the inflation it exists to fix', () => {
     // The whole point: this pass may only hide a gap the 8px minimum invented,
     // never a real pause in the day. 6 minutes is beyond any inflated box.
-    const runs = planDrawMerge([item('t1', 600, 600.5), item('t1', 606, 606.5)]);
+    const runs = plan([item('t1', 600, 600.5), item('t1', 606, 606.5)]);
     expect(runs).toEqual([[0], [1]]);
   });
 
@@ -264,13 +249,13 @@ describe('planDrawMerge', () => {
     const items = [
       item('t1', 700, 700.5), item('t2', 600, 610), item('t1', 701, 701.5), item('t2', 620, 621),
     ];
-    const runs = planDrawMerge(items);
+    const runs = plan(items);
     expect(runs.flat().slice().sort((a, b) => a - b)).toEqual([0, 1, 2, 3]);
     expect(items[runs[0]![0]!]!.startMin).toBeLessThan(items[runs[1]![0]!]!.startMin);
   });
 
   it('grows a run transitively while the boxes keep touching', () => {
-    const runs = planDrawMerge([
+    const runs = plan([
       item('t1', 600, 600.5), item('t1', 602, 602.5), item('t1', 604, 604.5),
     ]);
     expect(runs).toEqual([[0, 1, 2]]);

@@ -3,7 +3,9 @@
  *
  *   POST /api/time/heartbeats  — the browser banks closed lease windows here.
  *   GET  /api/time/summary?days=N — per-day per-task human + agent time.
- *   GET  /api/time/blocks?date=&kinds= — ONE day as intervals, for the timeline.
+ *   GET  /api/time/blocks?date=&kinds=&raw=1 — ONE day as intervals, for the
+ *        timeline. `raw=1` switches from per-task merged blocks to ONE serial
+ *        ribbon (non-overlapping by construction); see core/time-tracking/blocks.ts.
  *
  * All three answer fast or answer DEGRADED, never hang: the reads race a
  * deadline and return whatever is already in hand (flagged `degraded: true`)
@@ -17,7 +19,7 @@ import { Router, type Request, type Response } from 'express';
 import { CLOUD_MODE } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import {
-  dayBoundsMs, foldDayBlocks, getIndex, hydrate, localDateKey, readDayRecords, recentDateKeys,
+  dayBoundsMs, foldDayBlocks, foldDaySlices, getIndex, hydrate, localDateKey, readDayRecords, recentDateKeys,
   recordTime, resetTimeStore, sanitizeSamples, startAgentTimeCollector, stopAgentTimeCollector,
   summarize, withLedgerBackfill,
   type DayBlocks, type RollupIndex, type TimeKind, type TimeRecord, type TimeSummary,
@@ -176,10 +178,12 @@ async function readFocusTaskIds(): Promise<string[]> {
 // there; this route only reads the day file and joins task titles.
 
 export interface DayBlocksResponse extends DayBlocks {
-  /** taskId → title, for the blocks in this answer. Missing = unknown/deleted. */
+  /** taskId → title, for every task in this answer. Missing = unknown/deleted. */
   titles: Record<string, string>;
   /** True when the answer had to be given up on before it was complete. */
   degraded?: boolean;
+  /** Echoes the mode, so a client can never mistake merged blocks for a ribbon. */
+  raw?: boolean;
 }
 
 timeRouter.get('/blocks', async (req: Request, res: Response) => {
@@ -198,12 +202,18 @@ timeRouter.get('/blocks', async (req: Request, res: Response) => {
   }
   const date = raw;
   const kinds = parseKinds(req.query.kinds);
+  // Serial ribbon vs per-task blocks. Anything truthy but the string 'false'/'0'
+  // counts, so `?raw` alone works from a URL bar.
+  const serial = isTruthy(req.query.raw);
 
-  const empty = (): DayBlocksResponse => ({ date, blocks: [], titles: {}, unplacedMs: 0, degraded: true });
+  const empty = (): DayBlocksResponse => ({
+    date, blocks: [], titles: {}, shortMs: 0, foldedMs: 0, totals: [], agentTotalMs: 0, degraded: true,
+    ...(serial ? { raw: true } : {}),
+  });
   const bail = deadline(BLOCKS_DEADLINE_MS);
   // The loser of the race keeps running, so absorb its failure here rather than
   // letting it become an unhandled rejection after the response is sent.
-  const build = buildBlocks(date, kinds).catch((err: unknown) => {
+  const build = buildBlocks(date, kinds, serial).catch((err: unknown) => {
     log.web.warn('time blocks failed', { date, error: err instanceof Error ? err.message : String(err) });
     return empty();
   });
@@ -223,11 +233,28 @@ function parseKinds(raw: unknown): TimeKind[] | undefined {
   return kinds.length > 0 ? [...kinds] : undefined;
 }
 
-async function buildBlocks(date: string, kinds: TimeKind[] | undefined): Promise<DayBlocksResponse> {
+/** `?raw=1` / `?raw` / `?raw=true` — but not `raw=0` or `raw=false`. */
+function isTruthy(value: unknown): boolean {
+  if (value === undefined) return false;
+  const s = String(value).trim().toLowerCase();
+  return s !== '0' && s !== 'false' && s !== 'no';
+}
+
+async function buildBlocks(
+  date: string,
+  kinds: TimeKind[] | undefined,
+  serial: boolean,
+): Promise<DayBlocksResponse> {
   const records = await readDayRecords(date);
-  const day = foldDayBlocks(records, { date, ...(kinds ? { kinds } : {}) });
-  const ids = [...new Set(day.blocks.map((b) => b.taskId).filter(Boolean))];
-  return { ...day, titles: await readTaskTitles(ids) };
+  const fold = serial ? foldDaySlices : foldDayBlocks;
+  const day = fold(records, { date, ...(kinds ? { kinds } : {}) });
+  // Titles cover the RANKING as well as the drawn slices: a task whose whole day
+  // was sub-floor touches never appears in `blocks` but is still a named row.
+  const ids = [...new Set([
+    ...day.blocks.map((b) => b.taskId),
+    ...day.totals.map((t) => t.taskId),
+  ].filter(Boolean))];
+  return { ...day, titles: await readTaskTitles(ids), ...(serial ? { raw: true } : {}) };
 }
 
 /** Join titles so the timeline can label a task the client's list never loaded. */

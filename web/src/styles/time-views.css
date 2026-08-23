@@ -1,0 +1,299 @@
+/**
+ * Timeline views B (chapters) and C (swimlanes). Shell + view A: time-timeline.css.
+ *
+ * Both views lean on one shared idea: nothing important is written inside a coloured
+ * rectangle. A chapter puts its title on a card, a swimlane puts it in a fixed left
+ * column, so no label ever has to be truncated to fit a block, and a 30-second touch
+ * is as readable as an hour-long stretch.
+ */
+
+/* Aggregated remainder grey (a bar or a dot). The flatter --tt-idle from the shell
+   is the SURFACE grey; this one has to hold its own next to a task colour. */
+.tc,
+.tl {
+  --tc-rest: color-mix(in srgb, var(--fg-muted) 45%, transparent);
+}
+
+/* ══ View B: chapters ══ */
+
+.tc {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 4px;
+}
+
+/* The same 56px rail as the tape, so switching views does not shift the content
+   sideways. It labels the hour a chapter STARTS in — a coarse rail, because the
+   cards are a flow and each one prints its own exact range. */
+.tc-row {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 0 16px;
+  align-items: start;
+}
+
+.tc-hour {
+  padding-top: 12px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.tc-idle {
+  margin: 4px 0 4px 96px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  opacity: 0.75;
+}
+
+.tc-card {
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.tc-card.is-open {
+  border-color: var(--border-strong);
+  box-shadow: var(--card-shadow-hover);
+}
+
+/* The whole card is the toggle, so the click target is the thing you're reading. */
+.tc-head {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  padding: 12px 16px;
+  cursor: pointer;
+  font: inherit;
+  align-content: start;
+}
+
+.tc-head:hover { background: var(--bg-hover); }
+
+.tc-when {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.tc-what {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 14.5px;
+  font-weight: 700;
+}
+
+.tc-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: none;
+}
+
+.tc-glyph {
+  font-style: normal;
+  font-size: 13px;
+  color: var(--fg-muted);
+  flex: none;
+}
+
+.tc-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tc-tag {
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--accent);
+  flex: none;
+}
+
+/* The composition bar. Segment widths are the chapter's real shares and always sum
+   to it — the remainder is a segment, never a rounding error. */
+.tc-comp {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--tt-idle);
+}
+
+.tc-comp i {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+}
+
+.tc-parts {
+  font-size: 12px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tc-detail {
+  padding: 0 16px 14px;
+}
+
+/* ══ View C: swimlanes ══ */
+
+.tl {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.tl-axis {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.tl-hours {
+  position: relative;
+  height: 28px;
+}
+
+.tl-hours span {
+  position: absolute;
+  top: 7px;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.tl-rows {
+  position: relative;
+}
+
+.tl-row {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  border-bottom: 1px solid var(--border);
+}
+
+.tl-row:last-child { border-bottom: 0; }
+
+.tl-name {
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+}
+
+.tl-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex: none;
+  background: var(--tc-rest);
+}
+
+/* Titles live here IN FULL (one line, real tooltip) so no bar carries text. */
+.tl-nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+}
+
+.tl-tt {
+  color: var(--fg-muted);
+  font-weight: 600;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+.tl-track {
+  position: relative;
+  height: 42px;
+}
+
+.tl-grid {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--border);
+  opacity: 0.55;
+}
+
+.tl-bar {
+  position: absolute;
+  top: 9px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--tc-rest);
+  /* The real guarantee that a 30-second touch is visible. A percentage floor can
+     only ever guess the track's width; this cannot be wrong. */
+  min-width: 5px;
+}
+
+/* Visual weight tracks time spent: a sub-5-minute touch is a smaller, quieter mark
+   rather than a full-height block shouting as loudly as an hour of work. */
+.tl-bar.is-tick {
+  top: 15px;
+  height: 12px;
+  border-radius: 4px;
+  opacity: 0.75;
+}
+
+.tl-row.is-others { background: var(--tt-idle); }
+
+.tl-row.is-agent {
+  background: color-mix(in srgb, var(--time-agent) 8%, transparent);
+}
+
+.tl-row.is-agent .tl-dot { background: var(--time-agent); }
+
+/* Hatched, in the one hue no task colour uses: an agent's runtime must never be
+   mistakable for your own working day, even in a grayscale screenshot. */
+.tl-row.is-agent .tl-bar {
+  background: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--time-agent) 55%, transparent) 0 4px,
+    color-mix(in srgb, var(--time-agent) 26%, transparent) 4px 8px
+  );
+}
+
+.tl-now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 2px solid var(--error);
+  z-index: 4;
+  pointer-events: none;
+}
+
+@media (max-width: 900px) {
+  .tl-axis,
+  .tl-row {
+    grid-template-columns: 180px 1fr;
+  }
+}

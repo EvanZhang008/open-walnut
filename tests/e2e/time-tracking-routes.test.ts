@@ -276,3 +276,91 @@ describe('GET /api/time/blocks', () => {
     }
   });
 });
+
+/**
+ * The serial-ribbon mode. The two modes are different ANSWERS, not two formats:
+ * merged blocks are per task and may overlap each other; the ribbon is what the
+ * user was doing, which has exactly one answer per instant.
+ */
+describe('GET /api/time/blocks?raw=1', () => {
+  const anchor = seedAnchor();
+  const A = 't_raw_a';
+  const B = 't_raw_b';
+  /**
+   * Offset from the day's own window, past everything the merged-mode suite seeds.
+   * In a SERIAL fold an earlier, longer window legitimately swallows anything
+   * seeded inside it, so two suites cannot share one instant.
+   */
+  const OWN = 50 * 60_000;
+  const iso = (offsetMs: number): string => new Date(anchor.baseMs + OWN + offsetMs).toISOString();
+
+  beforeAll(async () => {
+    const res = await postHeartbeats({
+      samples: [
+        // A, then B, then back to A — one minute each, back to back.
+        { ts: iso(0), durationMs: 60_000, kind: 'session', taskId: A },
+        { ts: iso(60_000), durationMs: 60_000, kind: 'session', taskId: B },
+        { ts: iso(120_000), durationMs: 60_000, kind: 'session', taskId: A },
+        // A sub-floor touch of a task that gets NO other time all day.
+        { ts: iso(4 * 60_000), durationMs: 15_000, kind: 'session', taskId: 't_raw_tiny' },
+      ],
+    });
+    expect(res.status).toBe(204);
+  });
+
+  const ours = (body: any): Block[] =>
+    (body.blocks as Block[]).filter((b) => b.taskId === A || b.taskId === B);
+
+  it('splits a switch away and back into two segments', async () => {
+    const body = await getBlocks({ date: anchor.date, raw: '1' });
+    expect(body.raw).toBe(true);
+    expect(ours(body).map((b) => b.taskId)).toEqual([A, B, A]);
+  });
+
+  it('merges the same switch into one block WITHOUT raw — the modes differ', async () => {
+    const merged = await getBlocks({ date: anchor.date });
+    expect(merged.raw).toBeUndefined();
+    expect(merged.blocks.filter((b: Block) => b.taskId === A)).toHaveLength(1);
+  });
+
+  it('never overlaps two segments', async () => {
+    const blocks = (await getBlocks({ date: anchor.date, raw: '1' })).blocks as Block[];
+    for (let i = 1; i < blocks.length; i++) {
+      expect(blocks[i]!.startTs >= blocks[i - 1]!.endTs).toBe(true);
+    }
+  });
+
+  it('carries complete per-task totals, including work too short to draw', async () => {
+    const body = await getBlocks({ date: anchor.date, raw: '1' });
+    const tiny = (body.totals as Array<{ taskId: string; ms: number }>)
+      .find((t) => t.taskId === 't_raw_tiny');
+    expect(tiny?.ms).toBe(15_000);
+    // It is a ranked row but never a drawn segment: that is what shortMs explains.
+    expect((body.blocks as Block[]).some((b) => b.taskId === 't_raw_tiny')).toBe(false);
+    expect(body.shortMs).toBeGreaterThanOrEqual(15_000);
+    // Descending, so the client can slice the top N without sorting again.
+    const totals = body.totals as Array<{ ms: number }>;
+    expect([...totals].sort((x, y) => y.ms - x.ms)).toEqual(totals);
+  });
+
+  it('joins titles for ranked rows that own no segment', async () => {
+    // The ranking would otherwise show a raw id for a task whose whole day was
+    // sub-floor touches. `titles` covers totals, not just blocks.
+    const body = await getBlocks({ date: anchor.date, raw: '1' });
+    expect(body.titles).toBeTruthy();
+    expect(typeof body.titles).toBe('object');
+  });
+
+  it('accepts raw as a bare flag and rejects an explicit off value', async () => {
+    // `?raw` with no value is how a person types it into a URL bar.
+    expect((await getBlocks({ date: anchor.date, raw: '' })).raw).toBe(true);
+    expect((await getBlocks({ date: anchor.date, raw: 'true' })).raw).toBe(true);
+    expect((await getBlocks({ date: anchor.date, raw: '0' })).raw).toBeUndefined();
+    expect((await getBlocks({ date: anchor.date, raw: 'false' })).raw).toBeUndefined();
+  });
+
+  it('still validates the date in raw mode', async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/api/time/blocks?raw=1&date=2026-02-31`);
+    expect(res.status).toBe(400);
+  });
+});

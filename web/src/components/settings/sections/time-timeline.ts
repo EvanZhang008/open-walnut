@@ -7,6 +7,7 @@
  * 1. The axis COLLAPSES to the hours that actually carry time (plus an hour of
  *    padding, and the current hour on today so the now-line is never off-screen).
  *    Twenty-four rows of emptiness answer "how did my day go?" with a scroll bar.
+ *    Every view shares this axis; only the pixels-per-minute differ (time-views.ts).
  * 2. A task's color is a stable hash into a fixed palette that deliberately
  *    contains NO purple or magenta, because purple is the agent lane's color
  *    everywhere in this feature. Your time and an agent's runtime must never be
@@ -15,29 +16,6 @@
 
 /** Minutes of a day are converted against its own midnight, never assumed 1440. */
 export const HOUR_MIN = 60;
-/**
- * Hour row height. Twice the calendar grid's 48px on purpose: at 48px a real day
- * of 30s-3min touches collapsed into a 1-2px confetti of slivers. At 96px the
- * same day reads as a band of activity with distinguishable pieces, and the
- * container scrolls rather than compressing the hours.
- */
-export const HOUR_PX = 96;
-export const PX_PER_MIN = HOUR_PX / HOUR_MIN;
-/** Every block draws at least this tall, so 30s of real work is never invisible. */
-export const MIN_BLOCK_PX = 8;
-/** A 1px breathing gap, so two adjacent slices read as two, not one. */
-export const BLOCK_GAP_PX = 1;
-/**
- * Text thresholds, in px of block height, measured against the rendered line box
- * (11px type at 1.25 line-height ≈ 13.8px) rather than guessed. Two earlier cuts
- * were far too shy — 26px, then 18px — and both silenced the label on every
- * 10-minute block, which left a real day as a wall of anonymous colour. A single
- * line therefore drops the vertical padding and centres itself (.is-short), the
- * way a calendar labels a 15-minute event.
- */
-export const LABEL_MIN_PX = 14;
-/** From here a second line fits, so the duration joins the title (calendar style). */
-export const LABEL_TWO_LINE_PX = 32;
 /** Whole hours of breathing room added around the tracked span. */
 export const AXIS_PAD_HOURS = 1;
 /**
@@ -47,15 +25,14 @@ export const AXIS_PAD_HOURS = 1;
  */
 export const MIN_AXIS_HOURS = 4;
 /**
- * Blocks under this render as ticks: a muted, label-less band. Visual weight
- * tracks time spent, which is what turns a burst of tiny slices into texture
- * instead of 20 competing full-saturation rectangles.
+ * A bar under this draws as a tick in the swimlanes: shorter and quieter, so
+ * visual weight tracks time spent rather than every touch shouting equally.
  */
 export const TICK_BELOW_MS = 5 * 60 * 1000;
 /** A legend row under this is a "quick touch", grouped into one row. */
 export const QUICK_TOUCH_MS = 2 * 60 * 1000;
 /** Legend rows shown before the "+N more" expander. */
-export const LEGEND_TOP_ROWS = 8;
+export const LEGEND_TOP_ROWS = 7;
 /** Undrawable time is only worth a sentence past this. */
 export const NOTE_FLOOR_MS = 2 * 60 * 1000;
 /** Fallback window for a day with nothing on it. */
@@ -274,18 +251,22 @@ export interface DrawnItem {
  * Groups blocks that would be DRAWN touching into runs (indices into the input),
  * so the view can fold each run into one rectangle.
  *
- * This is a second, purely visual merge on top of the server's five-minute fold,
- * and it exists because MIN_BLOCK_PX lies for legibility: 30s of work is 0.8px of
- * real time drawn 8px tall. Two such touches 90 seconds apart do not overlap in
- * MINUTES, so the lane packer keeps them in one column, and then their inflated
- * boxes overlap on screen — a seam, or one sliver drawn over another. Folding them
- * makes the burst one readable block that can carry a label.
+ * This is a purely visual merge on top of the server's five-minute fold, and it
+ * exists because a minimum bar size lies for legibility: 30s of work is 1.6px of
+ * real time drawn 5px long. Two such touches 90 seconds apart do not overlap in
+ * MINUTES, so nothing separates them, and then their inflated boxes overlap on
+ * screen — a seam, or one sliver drawn over another. Folding them makes the burst
+ * one readable bar.
  *
- * It can only ever bridge the inflation itself (MIN_BLOCK_PX + BLOCK_GAP_PX ≈ 5.6
- * minutes at this scale), which is inside the window the server already merges, so
- * no real gap in the day is hidden by it. Runs are same-task AND same-kind only.
+ * The SCALE is the caller's, because the swimlanes draw the day horizontally and
+ * the tape vertically. It can only ever bridge the inflation itself (minPx + gapPx
+ * worth of minutes), which is inside the window the server already merges, so no
+ * real gap in the day is hidden by it. Runs are same-task AND same-kind only.
  */
-export function planDrawMerge(items: readonly DrawnItem[]): number[][] {
+export function planDrawMerge(
+  items: readonly DrawnItem[],
+  scale: { pxPerMin: number; minPx: number; gapPx?: number },
+): number[][] {
   // Nested maps, never a concatenated key: a task id is user data and a separator
   // is a bug waiting for the one id that contains it.
   const byKind = new Map<string, Map<string, number[]>>();
@@ -301,17 +282,18 @@ export function planDrawMerge(items: readonly DrawnItem[]): number[][] {
   for (const byTask of byKind.values()) {
     for (const indices of byTask.values()) {
       indices.sort((a, b) => items[a]!.startMin - items[b]!.startMin);
+      const gapPx = scale.gapPx ?? 1;
       let run: number[] = [];
       let bottomPx = -Infinity;
       for (const i of indices) {
         const it = items[i]!;
-        const topPx = it.startMin * PX_PER_MIN;
-        if (run.length > 0 && topPx > bottomPx + BLOCK_GAP_PX) {
+        const topPx = it.startMin * scale.pxPerMin;
+        if (run.length > 0 && topPx > bottomPx + gapPx) {
           runs.push(run);
           run = [];
         }
         run.push(i);
-        const drawn = Math.max((it.endMin - it.startMin) * PX_PER_MIN - BLOCK_GAP_PX, MIN_BLOCK_PX);
+        const drawn = Math.max((it.endMin - it.startMin) * scale.pxPerMin - gapPx, scale.minPx);
         bottomPx = Math.max(bottomPx, topPx + drawn);
       }
       if (run.length > 0) runs.push(run);

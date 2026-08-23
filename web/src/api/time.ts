@@ -51,19 +51,49 @@ export interface TimeBlock {
   trackedMs: number;
 }
 
+export interface TaskTotal {
+  taskId: string;
+  /** Every recorded ms of this task in the day, including work too short to draw. */
+  ms: number;
+}
+
 export interface DayBlocks {
   date: string;
+  /**
+   * In merged mode: one entry per (task, run-of-work), so two tasks' entries can
+   * overlap in time. In `raw` mode: ONE serial ribbon, non-overlapping.
+   */
   blocks: TimeBlock[];
-  /** Tracked ms this day that no block could carry (compacted / out of range). */
-  unplacedMs: number;
+  /** Tracked ms dropped for being shorter than the server's 30s draw floor. */
+  shortMs: number;
+  /** Tracked ms with no drawable interval at all (a compacted day). */
+  foldedMs: number;
+  /** Raw mode only: tracked ms swallowed by an earlier slice (concurrent leases). */
+  overlapMs?: number;
+  /** Per-task human time, descending, COMPLETE — the ranked list's only honest source. */
+  totals: TaskTotal[];
+  /** Agent runtime for the day, deliberately outside `totals`. */
+  agentTotalMs: number;
   /** taskId → title, joined server-side. Missing = unknown or deleted task. */
   titles: Record<string, string>;
   degraded?: boolean;
+  /** Echoed by the server: true when these blocks are the serial ribbon. */
+  raw?: boolean;
 }
 
-/** One day as intervals. `kinds` empty/omitted = every kind. */
-export function fetchTimeBlocks(date: string, kinds?: readonly TimeKind[]): Promise<DayBlocks> {
+/**
+ * One day as intervals. `kinds` empty/omitted = every kind.
+ *
+ * `raw` asks for the SERIAL ribbon instead of per-task merged blocks. The two are
+ * different answers, not two formats of one answer — see the module comment in
+ * src/core/time-tracking/blocks.ts.
+ */
+export function fetchTimeBlocks(
+  date: string,
+  opts: { kinds?: readonly TimeKind[]; raw?: boolean } = {},
+): Promise<DayBlocks> {
   const params: Record<string, string> = { date };
-  if (kinds && kinds.length > 0) params.kinds = kinds.join(',');
+  if (opts.kinds && opts.kinds.length > 0) params.kinds = opts.kinds.join(',');
+  if (opts.raw) params.raw = '1';
   return apiGet<DayBlocks>('/api/time/blocks', params, { timeoutMs: 10_000 });
 }

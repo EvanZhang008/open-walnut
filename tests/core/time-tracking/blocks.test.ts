@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  dayBoundsMs, foldDayBlocks, MERGE_GAP_MS, MIN_BLOCK_MS,
+  dayBoundsMs, foldDayBlocks, foldDaySlices, MERGE_GAP_MS, MIN_BLOCK_MS, SLICE_JOIN_GAP_MS,
 } from '../../../src/core/time-tracking/blocks.js';
 import type { TimeRecord } from '../../../src/core/time-tracking/types.js';
 
@@ -57,7 +57,7 @@ describe('dayBoundsMs', () => {
 
   it('answers empty for an unreal date instead of throwing', () => {
     expect(foldDayBlocks([rec()], { date: '2026-02-31' })).toEqual({
-      date: '2026-02-31', blocks: [], shortMs: 0, foldedMs: 0,
+      date: '2026-02-31', blocks: [], shortMs: 0, foldedMs: 0, totals: [], agentTotalMs: 0,
     });
   });
 });
@@ -265,5 +265,166 @@ describe('ordering', () => {
     ], { date: DATE });
     expect(blocks.map((b) => b.taskId)).toEqual(['t_a', 't_b', 't_c']);
     expect(blocks.map((b) => localHm(b.startTs))).toEqual(['09:00', '12:00', '16:00']);
+  });
+});
+
+describe('per-task totals', () => {
+  it('counts every recorded ms, including work too short to draw', () => {
+    // The ranked list must be COMPLETE: a task whose whole day was 10-second
+    // touches is still a row, even though it never becomes a block.
+    const day = foldDayBlocks([
+      rec({ ts: at(9, 0), durationMs: 20 * 60_000 }),
+      rec({ ts: at(11, 0), durationMs: 10_000, taskId: 't_tiny' }),
+      rec({ ts: at(11, 30), durationMs: 8_000, taskId: 't_tiny' }),
+    ], { date: DATE });
+    expect(day.blocks.map((b) => b.taskId)).toEqual(['t_alpha']);
+    expect(day.totals).toEqual([
+      { taskId: 't_alpha', ms: 20 * 60_000 },
+      { taskId: 't_tiny', ms: 18_000 },
+    ]);
+  });
+
+  it('keeps agent runtime out of the human totals entirely', () => {
+    const day = foldDayBlocks([
+      rec({ ts: at(9, 0), durationMs: 60_000 }),
+      rec({ ts: at(9, 0), durationMs: 90 * 60_000, kind: 'agent', taskId: 't_alpha' }),
+    ], { date: DATE });
+    expect(day.totals).toEqual([{ taskId: 't_alpha', ms: 60_000 }]);
+    expect(day.agentTotalMs).toBe(90 * 60_000);
+  });
+
+  it('sums a task across kinds, because a ranked row is per TASK', () => {
+    const day = foldDayBlocks([
+      rec({ ts: at(9, 0), durationMs: 60_000, kind: 'session' }),
+      rec({ ts: at(9, 30), durationMs: 60_000, kind: 'chat' }),
+    ], { date: DATE });
+    expect(day.totals).toEqual([{ taskId: 't_alpha', ms: 120_000 }]);
+  });
+
+  it('ranks descending, breaking ties by id so rows never jitter', () => {
+    const day = foldDayBlocks([
+      rec({ ts: at(9, 0), durationMs: 60_000, taskId: 't_b' }),
+      rec({ ts: at(10, 0), durationMs: 60_000, taskId: 't_a' }),
+      rec({ ts: at(11, 0), durationMs: 120_000, taskId: 't_c' }),
+    ], { date: DATE });
+    expect(day.totals.map((t) => t.taskId)).toEqual(['t_c', 't_a', 't_b']);
+  });
+});
+
+describe('foldDaySlices — the serial ribbon', () => {
+  it('is non-overlapping by construction, even when two leases ran at once', () => {
+    // The reason this fold exists: "what was I doing at 09:05" has exactly one
+    // answer, so a second lease cannot be drawn over the first.
+    const day = foldDaySlices([
+      rec({ ts: at(9, 0), durationMs: 10 * 60_000, taskId: 't_a' }),
+      rec({ ts: at(9, 5), durationMs: 10 * 60_000, taskId: 't_b' }),
+    ], { date: DATE });
+    for (let i = 1; i < day.blocks.length; i++) {
+      expect(day.blocks[i]!.startTs >= day.blocks[i - 1]!.endTs).toBe(true);
+    }
+    expect(day.blocks.map((b) => b.taskId)).toEqual(['t_a', 't_b']);
+    expect(localHm(day.blocks[1]!.startTs)).toBe('09:10');
+  });
+
+  it('reports a fully swallowed record instead of dropping it silently', () => {
+    const day = foldDaySlices([
+      rec({ ts: at(9, 0), durationMs: 30 * 60_000, taskId: 't_a' }),
+      rec({ ts: at(9, 10), durationMs: 60_000, taskId: 't_b' }),
+    ], { date: DATE });
+    expect(day.blocks).toHaveLength(1);
+    expect(day.overlapMs).toBe(60_000);
+    // Still in the totals: the time was recorded, it just has nowhere to be drawn.
+    expect(day.totals.find((t) => t.taskId === 't_b')!.ms).toBe(60_000);
+  });
+
+  it('joins adjacent windows of the same task', () => {
+    const day = foldDaySlices([
+      rec({ ts: at(9, 0), durationMs: 60_000 }),
+      rec({ ts: at(9, 1), durationMs: 60_000 }),
+      rec({ ts: at(9, 2), durationMs: 60_000 }),
+    ], { date: DATE });
+    expect(day.blocks).toHaveLength(1);
+    expect(day.blocks[0]!.ms).toBe(3 * 60_000);
+  });
+
+  it('does NOT join across another task, however close in time', () => {
+    // The whole point of the serial view: a switch away and back is two segments,
+    // even though foldDayBlocks would merge them into one per-task block.
+    const records = [
+      rec({ ts: at(9, 0), durationMs: 60_000, taskId: 't_a' }),
+      rec({ ts: at(9, 1), durationMs: 60_000, taskId: 't_b' }),
+      rec({ ts: at(9, 2), durationMs: 60_000, taskId: 't_a' }),
+    ];
+    expect(foldDaySlices(records, { date: DATE }).blocks.map((b) => b.taskId))
+      .toEqual(['t_a', 't_b', 't_a']);
+    expect(foldDayBlocks(records, { date: DATE }).blocks).toHaveLength(2);
+  });
+
+  it('does not join across a real pause', () => {
+    const day = foldDaySlices([
+      rec({ ts: at(9, 0), durationMs: 60_000 }),
+      rec({ ts: at(9, 30), durationMs: 60_000 }),
+    ], { date: DATE });
+    expect(day.blocks).toHaveLength(2);
+  });
+
+  it('bridges heartbeat jitter up to the join gap, and no further', () => {
+    const jitter = foldDaySlices([
+      rec({ ts: at(9, 0), durationMs: 60_000 }),
+      rec({ ts: new Date(Date.parse(at(9, 1)) + SLICE_JOIN_GAP_MS).toISOString(), durationMs: 60_000 }),
+    ], { date: DATE });
+    expect(jitter.blocks).toHaveLength(1);
+    const beyond = foldDaySlices([
+      rec({ ts: at(9, 0), durationMs: 60_000 }),
+      rec({ ts: new Date(Date.parse(at(9, 1)) + SLICE_JOIN_GAP_MS + 1_000).toISOString(), durationMs: 60_000 }),
+    ], { date: DATE });
+    expect(beyond.blocks).toHaveLength(2);
+  });
+
+  it('drops sub-floor slices AFTER joining, never before', () => {
+    // Three 12-second touches of one task in a row are 36s of real work and must
+    // survive as one segment; dropping first would lose all three.
+    const day = foldDaySlices([
+      rec({ ts: at(9, 0), durationMs: 12_000 }),
+      rec({ ts: at(9, 0, 12), durationMs: 12_000 }),
+      rec({ ts: at(9, 0, 24), durationMs: 12_000 }),
+    ], { date: DATE });
+    expect(day.blocks).toHaveLength(1);
+    expect(day.blocks[0]!.ms).toBe(36_000);
+    expect(day.shortMs).toBe(0);
+  });
+
+  it('accounts for a lone sub-floor touch in shortMs', () => {
+    const day = foldDaySlices([rec({ durationMs: MIN_BLOCK_MS - 1_000 })], { date: DATE });
+    expect(day.blocks).toEqual([]);
+    expect(day.shortMs).toBe(MIN_BLOCK_MS - 1_000);
+  });
+
+  it('honours the kinds filter, so the ribbon can be human-only', () => {
+    const day = foldDaySlices([
+      rec({ ts: at(9, 0), durationMs: 60_000, kind: 'session' }),
+      rec({ ts: at(9, 30), durationMs: 60_000, kind: 'agent' }),
+    ], { kinds: ['session', 'triage', 'chat'], date: DATE });
+    expect(day.blocks).toHaveLength(1);
+    expect(day.blocks[0]!.kind).toBe('session');
+    expect(day.agentTotalMs).toBe(0);
+  });
+
+  it('reports a compacted day as folded rather than inventing an hour for it', () => {
+    const day = foldDaySlices([
+      rec({ ts: `${DATE}T00:00:00.000Z`, durationMs: 45 * 60_000 }),
+    ], { date: DATE });
+    expect(day.blocks).toEqual([]);
+    expect(day.foldedMs).toBe(45 * 60_000);
+  });
+
+  it('clips a window that runs past midnight', () => {
+    const day = foldDaySlices([rec({ ts: at(23, 40), durationMs: 40 * 60_000 })], { date: DATE });
+    expect(day.blocks).toHaveLength(1);
+    expect(localHm(day.blocks[0]!.endTs)).toBe('00:00');
+  });
+
+  it('answers empty for an unreal date instead of throwing', () => {
+    expect(foldDaySlices([rec()], { date: '2026-13-01' }).blocks).toEqual([]);
   });
 });
