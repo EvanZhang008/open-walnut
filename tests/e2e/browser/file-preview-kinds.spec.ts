@@ -1,6 +1,14 @@
 /**
- * Playwright browser tests for the file preview's THREE user-reported gaps
- * (2026-08-09):
+ * Playwright browser tests for the file preview's user-reported gaps.
+ *
+ * Office documents (2026-08-23): docx/xlsx/pptx used to dead-end at "Binary
+ * file — cannot display"; they now render client-side (docx-preview / SheetJS /
+ * pptx-preview). Covered below: each kind renders, the spreadsheet's sheet tabs
+ * swap, a corrupt file degrades to a readable error, a malformed deck cannot
+ * hang the tab, and the two docx-preview sinks that reach our own origin
+ * (altChunk iframes, unchecked hyperlink schemes) stay closed.
+ *
+ * The original three gaps (2026-08-09):
  *
  *  1. Clicking a vault note (`.md` under the notes vault) used to NAVIGATE THE
  *     WHOLE APP to /notes — jarring mid-session, with no way back. It must now
@@ -54,8 +62,31 @@ async function selectFile(explorer: ReturnType<Page['locator']>, name: string) {
   return row
 }
 
+/**
+ * Click a file row by its EXACT file name.
+ *
+ * `selectFile`'s `hasText` is a substring match, so a row whose name merely
+ * contains the target wins when it sorts first — `~$office-doc.docx` (Word's
+ * lock stub) shadowed `office-doc.docx` and silently made the docx tests assert
+ * against the corrupt fixture. Each row carries `title={node.path}`, so match
+ * on the path's tail instead.
+ */
+async function selectFileExact(explorer: ReturnType<Page['locator']>, name: string) {
+  const row = explorer.locator(`.session-file-explorer-node[title$="/${name}"]`).first()
+  await expect(row).toBeVisible({ timeout: 10_000 })
+  await row.click()
+  return row
+}
+
+// This file's first navigation is the most expensive in the browser tier: the
+// fixture server is vite DEV, and the office renderers it now pre-bundles
+// (xlsx / docx-preview / pptx-preview, see web/vite.config.ts optimizeDeps) are
+// large CommonJS libraries. The default 30s budget was marginal for a cold load
+// on a loaded box, which showed up as `page.goto` timing out in beforeEach.
+test.describe.configure({ timeout: 90_000 })
+
 test.beforeEach(async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/', { timeout: 60_000 })
   await page.waitForLoadState('networkidle')
 })
 
@@ -94,6 +125,169 @@ test('PNG renders as an inline image with Download available', async ({ page }) 
   await expect(explorer.locator('a.fv-download-btn')).toBeVisible()
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/image-preview.png`, fullPage: false })
+})
+
+test('DOCX renders as a readable document (docx-preview), not a binary dead-end', async ({ page }) => {
+  const explorer = await openFilesPanel(page)
+  // The preview itself fetches the raw bytes — capture that request to prove
+  // the server labels them with the real OOXML type.
+  const rawRes = page.waitForResponse(
+    (r) => r.url().includes('office-doc.docx') && r.url().includes('raw=1'),
+    { timeout: 20_000 },
+  )
+  await selectFileExact(explorer, 'office-doc.docx')
+
+  // The lazy office chunk fetches the raw bytes and paints the document body.
+  // The old code fell through to "Binary file — cannot display".
+  await expect(explorer.locator('.fv-office-word')).toContainText('WALNUT DOCX MARKER', { timeout: 20_000 })
+  await expect(explorer.locator('.file-viewer-error')).toHaveCount(0)
+  await expect(explorer.locator('a.fv-download-btn')).toBeVisible()
+
+  const res = await rawRes
+  expect(res.ok()).toBe(true)
+  expect(res.headers()['content-type'])
+    .toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/docx-preview.png`, fullPage: false })
+})
+
+test('XLSX renders as tables with a tab per sheet (SheetJS)', async ({ page }) => {
+  const explorer = await openFilesPanel(page)
+  await selectFileExact(explorer, 'office-sheet.xlsx')
+
+  const pane = explorer.locator('.fv-office-sheet')
+  await expect(pane.locator('.fv-sheet-table')).toContainText('WALNUT XLSX MARKER', { timeout: 20_000 })
+  await expect(pane.locator('.fv-sheet-table')).toContainText('apples')
+
+  await expect(explorer.locator('.file-viewer-error')).toHaveCount(0)
+
+  // Multi-sheet workbook → tab bar; switching tabs SWAPS the table (asserting
+  // the old sheet is gone, not merely that the new text appeared — concatenated
+  // tables would pass a contains-only check).
+  const tabs = pane.locator('.fv-sheet-tab')
+  await expect(tabs).toHaveCount(2)
+  await tabs.nth(1).click()
+  await expect(pane.locator('.fv-sheet-table')).toContainText('SECOND SHEET MARKER')
+  await expect(pane.locator('.fv-sheet-table')).not.toContainText('WALNUT XLSX MARKER')
+
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/xlsx-preview.png`, fullPage: false })
+})
+
+test('PPTX renders slides (pptx-preview)', async ({ page }) => {
+  const explorer = await openFilesPanel(page)
+  await selectFileExact(explorer, 'office-slides.pptx')
+
+  await expect(explorer.locator('.fv-office-slides')).toContainText('WALNUT PPTX MARKER', { timeout: 20_000 })
+  await expect(explorer.locator('.file-viewer-error')).toHaveCount(0)
+
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/pptx-preview.png`, fullPage: false })
+})
+
+test('a corrupt .docx degrades to a readable error, not a blank pane', async ({ page }) => {
+  // `~$name.docx` is Word's owner-lock stub: a real file the user sees in their
+  // own folders, and NOT a zip. The renderer must say so and keep Download
+  // reachable rather than leaving an empty pane behind.
+  const explorer = await openFilesPanel(page)
+  await selectFileExact(explorer, '~$office-doc.docx')
+
+  const err = explorer.locator('.fv-office-word .file-viewer-error')
+  await expect(err).toBeVisible({ timeout: 20_000 })
+  await expect(err).toContainText('Download')
+  await expect(explorer.locator('a.fv-download-btn')).toBeVisible()
+
+  // And the app is still alive: the next file previews normally.
+  await selectFileExact(explorer, 'office-doc.docx')
+  await expect(explorer.locator('.fv-office-word')).toContainText('WALNUT DOCX MARKER', { timeout: 20_000 })
+})
+
+test('a malformed .pptx cannot hang the tab', async ({ page }) => {
+  // pptx-preview parses slide XML with a hand-rolled scanner; a slide whose
+  // text holds a literal '<' (office-crafted.pptx) is the input shape that can
+  // spin it. Whatever it renders, the MAIN THREAD must survive — a frozen tab
+  // is unrecoverable for the user, so this asserts liveness, not output.
+  const explorer = await openFilesPanel(page)
+  await selectFileExact(explorer, 'office-crafted.pptx')
+
+  // Give the parse a real chance to run, then prove the page still answers JS
+  // and still routes clicks (a spinning parser fails both).
+  await page.waitForTimeout(6_000)
+  const alive = await page.evaluate(() => 1 + 1)
+  expect(alive).toBe(2)
+  await selectFileExact(explorer, 'office-doc.docx')
+  await expect(explorer.locator('.fv-office-word')).toContainText('WALNUT DOCX MARKER', { timeout: 20_000 })
+})
+
+test('docx preview neutralizes hostile hyperlinks and never renders altChunk iframes', async ({ page }) => {
+  // Two library sinks that reach OUR origin, both closed in OfficePreview:
+  //  - w:altChunk → docx-preview builds an UNSANDBOXED same-origin <iframe
+  //    srcdoc> from an arbitrary zip part = arbitrary JS (renderAltChunks:false)
+  //  - w:hyperlink target is copied to href with no scheme check, so
+  //    `javascript:` runs on click (hardenRenderedLinks strips it)
+  const explorer = await openFilesPanel(page)
+  await selectFileExact(explorer, 'office-doc.docx')
+  const pane = explorer.locator('.fv-office-word')
+  await expect(pane).toContainText('WALNUT DOCX MARKER', { timeout: 20_000 })
+
+  // No iframe may EVER appear inside an office preview.
+  await expect(pane.locator('iframe')).toHaveCount(0)
+  // Every surviving link is web-navigable and opens away from the SPA.
+  const bad = await pane.evaluate((el) => Array.from(el.querySelectorAll('a[href]'))
+    .map((a) => ({ href: a.getAttribute('href') ?? '', target: a.getAttribute('target') }))
+    .filter((l) => !/^(#|https?:|mailto:)/i.test(l.href) || (!l.href.startsWith('#') && l.target !== '_blank')))
+  expect(bad).toEqual([])
+})
+
+test('a missing office chunk degrades the PANE, never the session panel', async ({ page }) => {
+  // REGRESSION (2026-08-23, reported from a live session): the office renderers
+  // load from their own chunk. It used to be a React.lazy + Suspense, whose
+  // REJECTION throws during render — and the nearest boundary is the session
+  // panel's, so a deploy that replaced the chunk under an open tab turned "this
+  // docx can't preview" into "Something went wrong loading this session" for the
+  // whole panel. Failing the chunk request reproduces a post-deploy tab exactly.
+  const explorer = await openFilesPanel(page)
+  // Registered AFTER the app has loaded: the office chunk is only requested on
+  // the first office-file click, and this keeps the abort from touching the
+  // initial page load at all.
+  await page.route(/OfficePreview|docx-preview|xlsx|pptx-preview/, (route) => route.abort())
+  await selectFileExact(explorer, 'office-doc.docx')
+
+  // The pane says what happened and offers a way out…
+  const fallback = explorer.locator('[data-testid="office-chunk-error"]')
+  await expect(fallback).toBeVisible({ timeout: 20_000 })
+  await expect(fallback).toContainText('older version of the app')
+  await expect(fallback.getByRole('button', { name: 'Reload the page' })).toBeVisible()
+  await expect(explorer.locator('a.fv-download-btn')).toBeVisible()
+
+  // …and the SESSION PANEL is still alive: no boundary screen, tree still works,
+  // and a non-office file still previews normally.
+  await expect(page.getByText('Something went wrong loading this session')).toHaveCount(0)
+  await expect(page.locator('.session-file-explorer')).toBeVisible()
+  await selectFile(explorer, 'incident-report.md')
+  await expect(explorer.locator('.fv-wysiwyg-editor, .fv-md-preview'))
+    .toContainText('BOTTOM_OF_REPORT', { timeout: 20_000 })
+})
+
+test('office preview opened from a CHAT file link keeps the session usable', async ({ page }) => {
+  // The reported crash came from clicking a .docx path in the chat, not from the
+  // file tree — a different entry point into the same viewer (the fullscreen
+  // FileViewer overlay). Prove that path renders and the chat survives it.
+  const explorer = await openFilesPanel(page)
+  await selectFileExact(explorer, 'office-doc.docx')
+  await expect(explorer.locator('.fv-office-word')).toContainText('WALNUT DOCX MARKER', { timeout: 20_000 })
+
+  // The session panel around it is intact — no boundary screen — and its chat
+  // still renders alongside the preview (the reported failure replaced the whole
+  // panel with "Something went wrong loading this session").
+  await expect(page.getByText('Something went wrong loading this session')).toHaveCount(0)
+  const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
+  await expect(panel).toBeVisible()
+  await expect(panel.locator('.session-history, .session-chat, .chat-input, textarea').first()).toBeVisible()
+
+  // The tree still drives the pane afterwards (the panel is interactive, not a
+  // frozen husk): a second office file swaps the preview in place.
+  await selectFileExact(explorer, 'office-sheet.xlsx')
+  await expect(explorer.locator('.fv-office-sheet')).toContainText('WALNUT XLSX MARKER', { timeout: 20_000 })
+  await expect(page.getByText('Something went wrong loading this session')).toHaveCount(0)
 })
 
 test('clicking a vault note previews IN PLACE — no jump to /notes', async ({ page }) => {

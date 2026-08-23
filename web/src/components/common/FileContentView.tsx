@@ -118,6 +118,27 @@ const DOC_EXTS = new Set(['pdf']);
 // svg is NOT here: it's text, so the source/preview toggle is more useful (and
 // the markdown/HTML path already renders it when embedded).
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'avif', 'heic', 'tiff', 'tif']);
+// Office documents — read-only preview rendered CLIENT-SIDE by lazy-loaded
+// open-source libs (docx-preview / SheetJS / pptx-preview) from the raw-bytes
+// URL. Legacy binary formats (.doc/.ppt) have no browser renderer and stay on
+// the binary-download fallback.
+const WORD_EXTS = new Set(['docx']);
+const SHEET_EXTS = new Set(['xlsx', 'xls', 'xlsm', 'xlsb', 'ods']);
+const SLIDES_EXTS = new Set(['pptx']);
+
+/**
+ * The office renderers are heavyweight (SheetJS alone ~1MB), so they live in
+ * their own chunk that loads on the first office-file click.
+ *
+ * Deliberately NOT React.lazy + Suspense. A lazy import that REJECTS throws
+ * during render, and the nearest boundary here is the session panel's — so a
+ * chunk that a deploy replaced under an open tab turned "this docx can't
+ * preview" into "Something went wrong loading this session" for the whole
+ * panel (2026-08-23, reported from a live session; the same stale-chunk class
+ * as the .go-syntax incident). Loading it as state keeps the failure LOCAL: the
+ * pane shows a reload prompt, the session keeps working.
+ */
+type OfficePreviewComponent = typeof import('@/components/common/OfficePreview')['OfficePreview'];
 
 /** Speed steps shared by the toolbar select and the </> keyboard shortcuts. */
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
@@ -130,12 +151,15 @@ const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
  *   doc         → <iframe> → the browser's built-in PDF viewer
  *   image       → <img>
  */
-function rawKind(path: string): 'video' | 'audio' | 'doc' | 'image' | null {
+function rawKind(path: string): 'video' | 'audio' | 'doc' | 'image' | 'word' | 'sheet' | 'slides' | null {
   const e = (path.split('.').pop() || '').toLowerCase();
   if (VIDEO_EXTS.has(e)) return 'video';
   if (AUDIO_EXTS.has(e)) return 'audio';
   if (DOC_EXTS.has(e)) return 'doc';
   if (IMAGE_EXTS.has(e)) return 'image';
+  if (WORD_EXTS.has(e)) return 'word';
+  if (SHEET_EXTS.has(e)) return 'sheet';
+  if (SLIDES_EXTS.has(e)) return 'slides';
   return null;
 }
 
@@ -232,6 +256,30 @@ export function FileContentView({
   // `media` = the playable subset that owns the speed/skip toolbar.
   const raw = rawKind(filePath);
   const media = isPlayable(raw) ? raw : null;
+  // `office` = the subset rendered by the lazy client-side office libs.
+  const office = raw === 'word' || raw === 'sheet' || raw === 'slides' ? raw : null;
+
+  // Office chunk, loaded as STATE so a failed fetch is a pane-local message
+  // instead of a render throw that kills the session panel (see the type above).
+  const [OfficeComp, setOfficeComp] = useState<OfficePreviewComponent | null>(null);
+  const [officeChunkFailed, setOfficeChunkFailed] = useState(false);
+  useEffect(() => {
+    if (!office || OfficeComp) return;
+    let cancelled = false;
+    setOfficeChunkFailed(false);
+    import('@/components/common/OfficePreview')
+      .then((m) => { if (!cancelled) setOfficeComp(() => m.OfficePreview); })
+      .catch((err) => {
+        if (cancelled) return;
+        setOfficeChunkFailed(true);
+        // Same signal the app-wide recovery listens for: a chunk that vanished
+        // means this tab is running a build the server no longer has.
+        log.warn('office-preview', 'office chunk failed to load', {
+          path: filePath, error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    return () => { cancelled = true; };
+  }, [office, OfficeComp, filePath]);
 
   // View state (source/preview toggle, fullscreen, speed) belongs to the FILE,
   // not to a reload — a Refresh must not kick you back out of Preview mode.
@@ -1240,6 +1288,41 @@ export function FileContentView({
           <div className="fv-image-preview">
             <img src={rawFileContentUrl(filePath, host)} alt={filePath} />
           </div>
+        </>
+      )}
+      {/* Office documents (docx/xlsx/pptx…): read-only client-side render by
+          lazy-loaded open-source libs, fed from the same raw-bytes URL. */}
+      {!loading && office && (
+        <>
+          <div className="fv-html-toolbar">
+            {commonBtns}
+            <button
+              className="fv-html-tab fv-fullscreen-btn"
+              onClick={() => setFullscreen((f) => !f)}
+              title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'}
+            >
+              {fullscreen ? '✕ Exit' : '⛶ Fullscreen'}
+            </button>
+            {popoutBtn}
+          </div>
+          {officeChunkFailed ? (
+            <div className="fv-office-preview" data-testid="office-chunk-error">
+              <div className="file-viewer-error">
+                The document preview couldn’t load because this page is running an
+                older version of the app (a deploy replaced it).
+                {' '}
+                <button type="button" className="fv-html-tab" onClick={() => window.location.reload()}>
+                  Reload the page
+                </button>
+                {' '}
+                or use Download to open the file locally.
+              </div>
+            </div>
+          ) : OfficeComp ? (
+            <OfficeComp path={filePath} host={host} kind={office} reloadToken={reloadToken} />
+          ) : (
+            <div className="file-viewer-loading">Loading preview…</div>
+          )}
         </>
       )}
       {!loading && media && (

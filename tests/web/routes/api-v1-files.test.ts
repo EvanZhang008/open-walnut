@@ -181,4 +181,50 @@ describe('GET /api/v1/file-content?raw=1', () => {
     expect(res.status).toBe(200)
     expect(res.headers['content-disposition']).toContain('attachment')
   })
+
+  it('an EMPTY file on the raw path answers 200/0 bytes instead of erroring', async () => {
+    // Routing office types onto the byte lane made a latent hole reachable:
+    // for size 0 the range math yields end = -1, and createReadStream({end:-1})
+    // throws ERR_OUT_OF_RANGE *after* the 200 headers are staged, so the client
+    // got the generic error handler instead of an empty document.
+    await fs.writeFile(path.join(base, 'blank.docx'), '')
+    const res = await request(createApp())
+      .get(`/api/v1/file-content?path=${encodeURIComponent(path.join(base, 'blank.docx'))}&raw=1`)
+    expect(res.status).toBe(200)
+    expect(res.headers['content-length']).toBe('0')
+  })
+
+  it('serves office documents as raw BYTES with their real OOXML type (docx/xlsx/pptx)', async () => {
+    // The web console's OfficePreview fetches these bytes and renders them
+    // client-side (docx-preview / SheetJS / pptx-preview). A text-decoded read
+    // would corrupt the zip container — the old "Binary file, cannot display".
+    // Deliberately NOT valid UTF-8 (0xff 0xfe 0x80): the earlier fixture was
+    // pure ASCII, which survives a `readFile(…,'utf-8') → send(string)` path
+    // byte for byte, so the byte assertion below passed even when the file was
+    // being text-decoded. These bytes fail that path loudly.
+    const zipMagic = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff, 0xfe, 0x80, 0x00])
+    const cases: Array<[string, string]> = [
+      ['letter.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+      ['budget.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+      ['deck.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+    ]
+    const app = createApp()
+    for (const [name, mime] of cases) {
+      await fs.writeFile(path.join(base, name), zipMagic)
+      const res = await request(app)
+        .get(`/api/v1/file-content?path=${encodeURIComponent(path.join(base, name))}&raw=1`)
+        // superagent has no parser for OOXML types — buffer the bytes ourselves,
+        // else res.body is {} and the byte assertion below is meaningless.
+        .buffer(true)
+        .parse((r, cb) => {
+          const chunks: Buffer[] = []
+          r.on('data', (c: Buffer) => chunks.push(c))
+          r.on('end', () => cb(null, Buffer.concat(chunks)))
+        })
+      expect(res.status).toBe(200)
+      expect(res.headers['content-type']).toBe(mime)
+      // Byte-exact, whole file — a text-decode path mangles the 0xff/0x80.
+      expect(res.body as Buffer).toEqual(zipMagic)
+    }
+  })
 })

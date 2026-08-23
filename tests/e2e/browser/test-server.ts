@@ -822,6 +822,37 @@ await fs.writeFile(
 // Image fixture in the SAME dir as the other explorer fixtures, so one spec can
 // walk file → doc → image without changing roots.
 await fs.writeFile(path.join(vscodeFixtureRoot, 'diagram.png'), makePng(34, 139, 34))
+// Office fixtures (file-preview-kinds.spec.ts): REAL docx/xlsx/pptx binaries
+// (generated once with python-docx/openpyxl/python-pptx, committed under
+// fixtures/) — hand-built minimal OOXML zips are exactly the "unsupported
+// variant" the client-side renderers reject.
+{
+  const fixturesDir = new URL('./fixtures/', import.meta.url)
+  for (const name of ['office-doc.docx', 'office-sheet.xlsx', 'office-slides.pptx']) {
+    const from = new URL(name, fixturesDir)
+    try {
+      await fs.copyFile(from, path.join(vscodeFixtureRoot, name))
+    } catch (err) {
+      throw new Error(
+        `Office fixture ${name} is missing from tests/e2e/browser/fixtures/ (${String(err)}). `
+        + 'Regenerate it with tests/e2e/browser/fixtures/make-office-fixtures.py.',
+      )
+    }
+  }
+  // A file Word leaves behind while a doc is open: the owner-lock stub. It is
+  // NOT a zip, so the renderer must degrade to a readable error instead of a
+  // blank pane — the `~$…docx` in the user's own notes dir is what surfaced
+  // this whole feature request.
+  await fs.writeFile(path.join(vscodeFixtureRoot, '~$office-doc.docx'), 'not a zip at all\n')
+  // A deck whose slide XML is malformed (committed fixture: slide text holds a
+  // literal '<'). pptx-preview parses XML with a hand-rolled scanner, and this
+  // is the input shape suspected of spinning it — the spec's job is to prove
+  // the TAB STAYS ALIVE either way.
+  await fs.copyFile(
+    new URL('office-crafted.pptx', fixturesDir),
+    path.join(vscodeFixtureRoot, 'office-crafted.pptx'),
+  )
+}
 // Vault note fixture: a real note inside NOTES_DIR. Clicking it must open the
 // file preview IN PLACE (the old behavior navigated the whole app to /notes);
 // the jump is now the explicit "Open in Notes" button.
@@ -1499,15 +1530,15 @@ if (process.env.PW_NATIVE_PLUGIN_FIXTURE === '1') {
   const { execFile } = await import('node:child_process')
   const { promisify } = await import('node:util')
   const execFileAsync = promisify(execFile)
-  const referenceRoot = path.resolve(
+  const demoRoot = path.resolve(
     path.dirname(new URL(import.meta.url).pathname),
-    '../../../examples/plugins/reference-walnut',
+    '../../../examples/plugins/walnut-demo',
   )
   const pluginRepo = path.join(tmpBase, 'native-plugin-repo')
-  await fs.cp(referenceRoot, pluginRepo, {
+  await fs.cp(demoRoot, pluginRepo, {
     recursive: true,
     filter(source) {
-      const segments = path.relative(referenceRoot, source).split(path.sep)
+      const segments = path.relative(demoRoot, source).split(path.sep)
       return !segments.some((segment) => segment === '.git' || segment === 'dist' || segment === 'node_modules')
     },
   })

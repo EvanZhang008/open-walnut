@@ -23722,6 +23722,102 @@ a.file-link:hover {
   object-fit: contain;
 }
 
+/* Office documents (docx/xlsx/pptx): read-only client-side preview pane.
+   Same trap as the editors (see the :has() note above): .file-content-view is
+   a plain BLOCK, so a flex child can't fill it — without this the docx pane
+   stopped at its content height and left dead white space below. Scope the
+   flex column to the office state only. */
+.file-content-view:has(> .fv-office-preview) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.file-content-view:has(> .fv-office-preview) > .fv-html-toolbar,
+.file-content-view:has(> .fv-office-preview) > .fv-reloading-badge {
+  flex: 0 0 auto;
+}
+.fv-office-preview {
+  flex: 1;
+  /* 40vh floor mirrors the sibling raw panes: keeps the preview usable when an
+     ancestor has no resolvable height (pop-out window, unusually short pane). */
+  min-height: 40vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.fv-office-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+/* Per-run mount node (see OfficePreview mount()): transparent to layout so the
+   rendered document participates directly in .fv-office-body's flex/centering. */
+.fv-office-mount {
+  display: contents;
+}
+/* docx-preview paints white paginated "sheets" on its own desk backdrop; keep
+   the desk neutral in both themes so a Word doc reads like a document. */
+.fv-office-word .fv-office-body,
+.fv-office-slides .fv-office-body {
+  background: var(--bg-subtle, var(--bg));
+}
+.fv-office-word .docx-wrapper {
+  background: transparent;
+  padding: 16px;
+}
+/* pptx-preview emits fixed-size slide boxes; stack and center them. */
+.fv-office-slides .fv-office-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Spreadsheets: sheet tab bar (multi-sheet workbooks) + the rendered table. */
+.fv-sheet-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.fv-sheet-tab {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.fv-sheet-tab:hover {
+  background: var(--bg-tertiary);
+}
+.fv-sheet-tab.active {
+  background: var(--bg-tertiary);
+  color: var(--fg);
+  font-weight: 600;
+}
+.fv-sheet-table {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px;
+}
+.fv-sheet-table table {
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.fv-sheet-table td,
+.fv-sheet-table th {
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
 /* Desktop hand-off failure (open failed / not permitted) — dismiss by clicking. */
 .fv-reveal-error,
 .sfe-reveal-error {
@@ -23864,6 +23960,7 @@ a.file-link:hover {
 .file-content-view.fv-fullscreen .fv-md-preview,
 .file-content-view.fv-fullscreen .fv-media-preview,
 .file-content-view.fv-fullscreen .fv-doc-preview,
+.file-content-view.fv-fullscreen .fv-office-preview,
 .file-content-view.fv-fullscreen .fv-image-preview {
   flex: 1;
   height: auto;

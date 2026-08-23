@@ -31,6 +31,9 @@ import fsp from 'node:fs/promises'
 import { log } from '../../logging/index.js'
 import { computeContentHash } from '../../utils/file-ops.js'
 import { sendV1Error } from './v1-control-relay.js'
+// ONE source of truth for which extensions ride the raw byte lane (see the
+// note next to its use below — a copied table drifted and corrupted bytes).
+import { RAW_INLINE_MIME } from './file-content.js'
 
 /** Primary box's daemon always registers under this bridge alias. */
 const PRIMARY_BRIDGE_ALIAS = '__local__'
@@ -82,17 +85,14 @@ const FRIENDLY_TOO_LARGE =
 const FRIENDLY_NEEDS_UPGRADE =
   "File previews aren't available from this host yet — its daemon upgrades automatically on the next reconnect. Try again in a minute."
 
-// ── Raw-mode content types (mirrors file-content.ts serveRawFileContent) ────
-// The bounded relay serves whole small files, so media Range support is not
-// needed here — a 2MB-capped read is a document/image, not a seekable video.
-const RAW_INLINE_MIME: Record<string, string> = {
-  pdf: 'application/pdf',
-  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
-  webp: 'image/webp', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif',
-  heic: 'image/heic', tiff: 'image/tiff', tif: 'image/tiff',
-  mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm',
-  mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', ogg: 'audio/ogg',
-}
+// ── Raw-mode content types ──────────────────────────────────────────────────
+// RAW_INLINE_MIME is IMPORTED from file-content.ts (top of this file), not
+// copied: it used to be a hand-maintained twin and silently fell behind when
+// office types were added there. Drift is not cosmetic — an extension missing
+// from the table falls to the text lane below, which utf-8-decodes the bytes
+// and hands the client a mangled zip that looks like a corrupt document.
+// (The bounded relay serves whole small files, so media Range support is not
+// needed here — a 2MB-capped read is a document/image, not a seekable video.)
 
 /** Detect binary content by scanning for NUL bytes in the first 8KB. */
 function isBinaryBuffer(buffer: Buffer): boolean {

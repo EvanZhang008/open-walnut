@@ -72,12 +72,16 @@ export const fileContentRouter = Router()
 const MAX_FILE_SIZE = 512 * 1024 // 512 KB
 
 /**
- * Extensions served as byte-exact raw streams with a real Content-Type, so the
- * BROWSER renders them with its own built-in viewer (PDF.js, image decoder,
- * media player) instead of Walnut re-implementing one. Text decoding would
- * corrupt every one of these, which is why they bypass the JSON payload path.
+ * Extensions served as byte-exact raw streams with a real Content-Type. Media,
+ * PDF and images are rendered by the BROWSER's own viewer (PDF.js, image
+ * decoder, media player); office documents by client-side libraries
+ * (OfficePreview.tsx) fed from this same endpoint. Text decoding would corrupt
+ * every one of these, which is why they bypass the JSON payload path.
+ *
+ * Exported so the cloud bridge relay (file-content-bridge.ts) serves the SAME
+ * set — it previously kept a hand-copied table that silently drifted.
  */
-const RAW_INLINE_MIME: Record<string, string> = {
+export const RAW_INLINE_MIME: Record<string, string> = {
   // Video / audio — <video>/<audio> issue Range requests to seek.
   mp4: 'video/mp4',
   m4v: 'video/mp4',
@@ -89,6 +93,17 @@ const RAW_INLINE_MIME: Record<string, string> = {
   ogg: 'audio/ogg',
   // Documents the browser renders natively.
   pdf: 'application/pdf',
+  // Office documents — rendered client-side by lazy-loaded open-source libs
+  // (docx-preview / SheetJS / pptx-preview in OfficePreview.tsx), which fetch
+  // these bytes from this raw endpoint. Legacy binary formats (.doc/.ppt) have
+  // no browser renderer; they stay on the binary-download path.
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xlsm: 'application/vnd.ms-excel.sheet.macroEnabled.12',
+  xlsb: 'application/vnd.ms-excel.sheet.binary.macroEnabled.12',
+  xls: 'application/vnd.ms-excel',
+  ods: 'application/vnd.oasis.opendocument.spreadsheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   // Raster images (svg stays on the text path — it IS text).
   png: 'image/png',
   jpg: 'image/jpeg',
@@ -241,6 +256,7 @@ async function serveRawBytes(
     ...(range ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}),
     ...(download ? { 'Content-Disposition': `attachment; filename="${path.basename(filePath)}"` } : {}),
   })
+  if (end < start) { res.end(); return } // empty file — headers already say Content-Length: 0
   const stream = fs.createReadStream(filePath, { start, end })
   stream.on('error', () => res.destroy())
   stream.pipe(res)

@@ -27,6 +27,15 @@ export default defineConfig({
       },
     },
   },
+  optimizeDeps: {
+    // Pre-bundle the office renderers instead of discovering them on the first
+    // office-file click. They are large CommonJS libraries (SheetJS alone ~1MB),
+    // and vite's on-demand "new dependencies optimized" path FULL-PAGE-RELOADS
+    // when it finds them mid-session — which drops the preview that just
+    // mounted, and made the browser tests flake on whichever office spec ran
+    // first in a cold run.
+    include: ['xlsx', 'docx-preview', 'pptx-preview'],
+  },
   build: {
     outDir: '../dist/web/static',
     emptyOutDir: true,
