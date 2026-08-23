@@ -41,6 +41,57 @@ const NETWORK_TIMEOUT = 15_000;
 export const PULL_TIMEOUT = 60_000;
 /** Exported for tests pinning the fetch/pull timeout split. */
 export const FETCH_TIMEOUT = NETWORK_TIMEOUT;
+/**
+ * After this many consecutive fetch failures, the next fetch runs with
+ * FETCH_RECOVERY_TIMEOUT instead of NETWORK_TIMEOUT. A failure STREAK means
+ * the transfer is bigger than the fail-fast window — the canonical case is
+ * the first fetch after a history compaction, which must move the entire
+ * rewritten chain (measured 2m33s on the cloud box). Killing it at 15s just
+ * guarantees it never completes, and each kill leaves a tmp_pack_* corpse:
+ * 2026-08-23 the 30s tick looped this way 92 times and buried the disk under
+ * 79GB of dead packs in 73 minutes (disk 100%, SSM agent couldn't fork).
+ */
+export const FETCH_STREAK_FOR_RECOVERY = 3;
+export const FETCH_RECOVERY_TIMEOUT = 10 * 60_000;
+
+/** Pick the fetch timeout for the current failure streak (pure, for tests). */
+export function fetchTimeoutForStreak(streak: number): number {
+  return streak >= FETCH_STREAK_FOR_RECOVERY ? FETCH_RECOVERY_TIMEOUT : NETWORK_TIMEOUT;
+}
+
+/**
+ * Minimum corpse age before the failure-path sweep may delete a tmp_pack_*.
+ * A LIVE transfer touches its tmp_pack continuously, so anything untouched
+ * for minutes is a kill corpse from an earlier cycle. The weekly maintenance
+ * sweep (DEBRIS_MAX_AGE_MS = 24h) is far too slow for the kill-loop case —
+ * at one ~590MB-1.7GB corpse per 30s tick, 24h of grace is a full disk.
+ */
+export const FETCH_DEBRIS_MIN_AGE_MS = 5 * 60_000;
+
+/**
+ * Sweep dead tmp_pack_* corpses left by OUR OWN killed fetches. Runs on the
+ * fetch-failure path only, age-gated so a genuinely in-flight transfer
+ * (ours under the single-flight latch, or any other process's) is never
+ * touched. Exported for tests.
+ */
+export function sweepDeadFetchPacks(repoDir: string, now = Date.now()): number {
+  const packDir = path.join(repoDir, '.git', 'objects', 'pack');
+  let swept = 0;
+  let entries: string[] = [];
+  try { entries = fs.readdirSync(packDir); } catch { return 0; }
+  for (const e of entries) {
+    if (!e.startsWith('tmp_pack_')) continue;
+    const p = path.join(packDir, e);
+    try {
+      if (now - fs.statSync(p).mtimeMs > FETCH_DEBRIS_MIN_AGE_MS) {
+        fs.unlinkSync(p);
+        swept++;
+        log.git.warn('git-sync swept a dead fetch pack corpse', { path: p });
+      }
+    } catch { /* raced — fine */ }
+  }
+  return swept;
+}
 /** Grace period between SIGTERM and SIGKILL when reaping a git process group. */
 const KILL_GRACE_MS = 3_000;
 
@@ -1548,9 +1599,21 @@ async function lwwMerge(branch: string): Promise<{ merged: boolean; conflicts: n
   // permanently — it never self-healed and the warning below repeated forever.
   clearStaleLock();
 
+  // A failure streak upgrades the timeout: a fetch that repeatedly dies at
+  // NETWORK_TIMEOUT is usually a transfer BIGGER than the window (post-
+  // compaction full-chain fetch), and killing it forever = tmp_pack_* debris
+  // filling the disk (92 corpses / 79GB in 73min, 2026-08-23). Giving one
+  // fetch 10 minutes is cheap; the single-flight latch keeps ticks from
+  // stacking behind it.
+  const fetchTimeout = fetchTimeoutForStreak(guard.consecutiveNetworkFailures);
+  if (fetchTimeout !== NETWORK_TIMEOUT) {
+    log.git.warn('git-sync fetch failure streak — widening this fetch\'s timeout', {
+      branch, streak: guard.consecutiveNetworkFailures, timeoutMs: fetchTimeout,
+    });
+  }
   let fetchError: unknown = null;
   try {
-    await gitAsync(`fetch origin ${branch}`, { timeout: NETWORK_TIMEOUT });
+    await gitAsync(`fetch origin ${branch}`, { timeout: fetchTimeout });
   } catch (err) {
     fetchError = err;
   }
@@ -1562,7 +1625,7 @@ async function lwwMerge(branch: string): Promise<{ merged: boolean; conflicts: n
     if (isLockContention(fetchError)) {
       clearStaleLock(0);
       try {
-        await gitAsync(`fetch origin ${branch}`, { timeout: NETWORK_TIMEOUT });
+        await gitAsync(`fetch origin ${branch}`, { timeout: fetchTimeout });
         fetchError = null;
         log.git.warn('git-sync fetch recovered after clearing a stale lock', { branch });
       } catch (retryErr) {
@@ -1583,6 +1646,10 @@ async function lwwMerge(branch: string): Promise<{ merged: boolean; conflicts: n
         lockContention: isLockContention(fetchError),
         consecutiveNetworkFailures: streak,
       });
+      // Each killed fetch leaves its partial tmp_pack behind; sweep corpses
+      // now (age-gated) instead of waiting for weekly maintenance — the
+      // 30s retry loop otherwise buries the disk (79GB in 73min, 2026-08-23).
+      sweepDeadFetchPacks(WALNUT_HOME);
       return { merged: false, conflicts: 0 };
     }
   }
