@@ -315,11 +315,28 @@ process.umask(0o077);
 // (async: the socket handlers call process.exit). Keep exit codes + command
 // surface in sync with wn-cli.ts and daemon-standalone.ts.
 function runWnMinimal(argv) {
-  var out = function (s) { process.stdout.write(s + '\\n'); };
+  // Buffer stdout and FLUSH BEFORE EXITING. process.exit() discards whatever is
+  // still queued for a pipe (pipes are async on macOS), so the old
+  // out(...) then process.exit(0) shape cut "wn ... --json | jq" at exactly the
+  // 64KB pipe buffer — invalid JSON for the agent that piped it. Mirror of
+  // wn-cli.ts writeStdout(); exitWn is ASYNC, so every call site returns.
+  var outBuf = '';
+  var out = function (s) { outBuf += s + '\\n'; };
   var errOut = function (s) { process.stderr.write(s + '\\n'); };
+  var exitWn = function (code) {
+    if (!outBuf) return process.exit(code);
+    var text = outBuf;
+    outBuf = '';
+    var done = false;
+    var finishExit = function () { if (done) return; done = true; process.exit(code); };
+    // 5s cap so a runtime that never calls back cannot hang wn.
+    var flushTimer = setTimeout(finishExit, 5000);
+    if (flushTimer.unref) flushTimer.unref();
+    try { process.stdout.write(text, finishExit); } catch (e) { finishExit(); }
+  };
   var usage = 'usage: wn guide | wn peers list [--json] | wn peers send <target> <text...> | wn tools list|call <op> [json]';
-  if (argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') { out(usage); process.exit(0); }
-  if (argv[0] !== 'peers' && argv[0] !== 'tools' && argv[0] !== 'guide') { errOut('wn: unknown command; ' + usage); process.exit(2); }
+  if (argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') { out(usage); return exitWn(0); }
+  if (argv[0] !== 'peers' && argv[0] !== 'tools' && argv[0] !== 'guide') { errOut('wn: unknown command; ' + usage); return exitWn(2); }
   // Mirror wn-cli.ts: --json is recognized only BEFORE positional args, so
   // message text can legitimately contain the token '--json'.
   var json = false;
@@ -332,7 +349,7 @@ function runWnMinimal(argv) {
   var guide = false;
   if (head === 'guide') {
     // Sugar over tools.call skill_read {dirName:'walnut'} — mirrors wn-cli.ts.
-    if (sub !== undefined) { errOut('wn: guide takes no arguments'); process.exit(2); }
+    if (sub !== undefined) { errOut('wn: guide takes no arguments'); return exitWn(2); }
     guide = true;
     op = 'tools.call';
     args = { name: 'skill_read', args: { dirName: 'walnut' } };
@@ -346,24 +363,41 @@ function runWnMinimal(argv) {
       else {
         var callArgs = {};
         if (rest[1] !== undefined) {
-          try { callArgs = JSON.parse(rest[1]); } catch (e) { errOut('wn: invalid JSON arguments'); process.exit(2); }
-          if (callArgs === null || typeof callArgs !== 'object' || Array.isArray(callArgs)) { errOut('wn: arguments must be a JSON object'); process.exit(2); }
+          try { callArgs = JSON.parse(rest[1]); } catch (e) { errOut('wn: invalid JSON arguments'); return exitWn(2); }
+          if (callArgs === null || typeof callArgs !== 'object' || Array.isArray(callArgs)) { errOut('wn: arguments must be a JSON object'); return exitWn(2); }
         }
         op = 'tools.call';
         args = { name: rest[0], args: callArgs };
       }
-    } else { errOut('wn: ' + usage); process.exit(2); }
+    } else { errOut('wn: ' + usage); return exitWn(2); }
   }
   else if (sub === 'list' && rest.length === 0) { op = 'peers.list'; args = {}; }
   else if (sub === 'send' && rest.length >= 2) {
     op = 'peers.send';
     args = { target: rest[0], text: rest.slice(1).join(' ') };
-  } else { errOut('wn: ' + usage); process.exit(2); }
-  var sockPath = process.env.WALNUT_AGENT_SOCKET;
-  var sid = process.env.WALNUT_SESSION_ID;
-  if (!sockPath || !sid) {
-    errOut('wn: not running inside a Walnut-managed session (WALNUT_AGENT_SOCKET / WALNUT_SESSION_ID not set)');
-    process.exit(6);
+  } else { errOut('wn: ' + usage); return exitWn(2); }
+  // Env-less fallback — mirror of wn-cli.ts resolveWnEndpoint. Inside a session
+  // Walnut launched, both vars are injected. Started by hand (plain terminal,
+  // self-launched agent), fall back to this host's well-known daemon socket and
+  // identify as 'external'. Trusted ONLY when it is a socket owned by this user
+  // with no group/other bits: the 0600 mode IS the gateway credential and the
+  // daemon dir sits under a world-writable /tmp.
+  var sockPath = (process.env.WALNUT_AGENT_SOCKET || '').trim();
+  var sid = (process.env.WALNUT_SESSION_ID || '').trim() || 'external';
+  if (!sockPath) {
+    var wellKnown = path.join(DAEMON_DIR, 'agent-gateway.sock');
+    var sockStat = null;
+    try { sockStat = fs.statSync(wellKnown); } catch (e) { sockStat = null; }
+    if (!sockStat) {
+      errOut('wn: no Walnut daemon on this host (WALNUT_AGENT_SOCKET is unset and ' + wellKnown + ' does not exist)');
+      return exitWn(6);
+    }
+    var myUid = typeof process.getuid === 'function' ? process.getuid() : -1;
+    if (!sockStat.isSocket() || (myUid >= 0 && sockStat.uid !== myUid) || (sockStat.mode & 0o077) !== 0) {
+      errOut('wn: refusing ' + wellKnown + ': not an owner-only socket belonging to this user');
+      return exitWn(6);
+    }
+    sockPath = wellKnown;
   }
   // Exit-code table mirrors wn-cli.ts errorToExitCode (plan §4).
   var exitFor = function (code) {
@@ -378,14 +412,14 @@ function runWnMinimal(argv) {
   var finished = false;
   var finish = function (fn) { if (finished) return; finished = true; clearTimeout(timer); sock.destroy(); fn(); };
   var timer = setTimeout(function () {
-    finish(function () { errOut('wn: hub_timeout: no reply from the Walnut daemon within 30s'); process.exit(5); });
+    finish(function () { errOut('wn: hub_timeout: no reply from the Walnut daemon within 30s'); exitWn(5); });
   }, 30000);
   sock.on('connect', function () { sock.write(JSON.stringify({ v: 1, op: op, sid: sid, args: args }) + '\\n'); });
   sock.on('error', function (e) {
-    finish(function () { errOut('wn: not running inside a Walnut-managed session (agent socket unreachable: ' + e.message + ')'); process.exit(6); });
+    finish(function () { errOut('wn: Walnut daemon socket unreachable at ' + sockPath + ': ' + e.message); exitWn(6); });
   });
   sock.on('close', function () {
-    finish(function () { errOut('wn: agent socket closed without a response'); process.exit(6); });
+    finish(function () { errOut('wn: agent socket closed without a response'); exitWn(6); });
   });
   sock.on('data', function (chunk) {
     buf += chunk.toString('utf-8');
@@ -394,16 +428,16 @@ function runWnMinimal(argv) {
     var line = buf.slice(0, nl);
     finish(function () {
       var resp;
-      try { resp = JSON.parse(line); } catch (e) { errOut('wn: malformed response from agent socket'); process.exit(1); }
-      if (json) { out(JSON.stringify(resp)); process.exit(resp.ok ? 0 : exitFor(resp.error && resp.error.code)); }
+      try { resp = JSON.parse(line); } catch (e) { errOut('wn: malformed response from agent socket'); return exitWn(1); }
+      if (json) { out(JSON.stringify(resp)); return exitWn(resp.ok ? 0 : exitFor(resp.error && resp.error.code)); }
       if (!resp.ok) {
         var err = resp.error || {};
         errOut('wn: ' + (err.code || 'internal') + ': ' + (err.message || 'gateway request failed'));
-        process.exit(exitFor(err.code));
+        return exitWn(exitFor(err.code));
       }
       if (op === 'peers.list') {
         var peers = (resp.result && resp.result.peers) || [];
-        if (peers.length === 0) { out('(no peer sessions)'); process.exit(0); }
+        if (peers.length === 0) { out('(no peer sessions)'); return exitWn(0); }
         for (var i = 0; i < peers.length; i++) {
           var p = peers[i];
           out((p.self ? '*' : ' ') + ' ' + p.shortId + '  ' + (p.title || '(untitled)') + '  ' + (p.host || 'local') + '  ' + (p.status || '?'));
@@ -416,14 +450,14 @@ function runWnMinimal(argv) {
       } else if (op === 'tools.call') {
         if (guide) {
           var sk = resp.result && resp.result.skill;
-          if (!sk || !sk.content) { errOut('wn: internal: the hub returned no manual content'); process.exit(1); }
+          if (!sk || !sk.content) { errOut('wn: internal: the hub returned no manual content'); return exitWn(1); }
           out(String(sk.content).replace(/\\n$/, ''));
         } else out(JSON.stringify(resp.result, null, 2));
       } else {
         var r = resp.result || {};
         out('sent to ' + String(r.targetSid || '').slice(0, 8) + ' "' + (r.targetTitle || '') + '" (queue depth ' + (r.queueDepth || 0) + ')');
       }
-      process.exit(0);
+      return exitWn(0);
     });
   });
 }
@@ -2243,9 +2277,18 @@ function parseGatewayLine(line) {
   return { ok: true, request: { v: 1, op: parsed.op, sid: parsed.sid, args: args } };
 }
 
-// Mirror of gateway-core.ts resolveCallerSid — chase the alias chain (max 5
-// hops so a corrupt/cyclic table terminates); null = unknown_caller.
+// Mirror of gateway-core.ts EXTERNAL_CALLER_SID: an env-less wn (hand-started
+// agent or the user's own terminal on this host) identifies as 'external'. It
+// is a PROVENANCE label, never authorization — the owner-only socket already
+// vouched for the caller, and the hub grants 'external' nothing a tracked
+// session lacks.
+var EXTERNAL_CALLER_SID = 'external';
+
+// Mirror of gateway-core.ts resolveGatewayCallerSid — 'external' passes through
+// (never a tracked session), everything else chases the alias chain (max 5 hops
+// so a corrupt/cyclic table terminates); null = unknown_caller.
 function resolveCallerSid(sid) {
+  if (sid === EXTERNAL_CALLER_SID) return EXTERNAL_CALLER_SID;
   var cur = sid;
   for (var hop = 0; hop <= 5; hop++) {
     if (sessions.has(cur)) return cur;
@@ -2312,6 +2355,9 @@ function handleGatewayLine(line, respond) {
     // the request never leaves this host. A respawn self-heals.
     return respond(gatewayError('unknown_caller', 'session is not tracked by this daemon (a respawn self-heals)'));
   }
+  if (callerSid === EXTERNAL_CALLER_SID) {
+    logMsg('info', 'gateway: external caller (no session env)', { op: req.op });
+  }
   sendGatewayRequest(req.op, callerSid, req.args, respond);
 }
 
@@ -2355,6 +2401,57 @@ function startGatewayListener() {
   }
 }
 
+// A wn on the USER's own PATH, for agents nobody spawned. GATEWAY_SHIM_DIR is
+// only on the PATH of sessions the daemon starts, so a claude the user launched
+// by hand answered "wn: command not found" and the env-less fallback was
+// unreachable. This shim resolves the daemon-managed shim AT CALL TIME, so an
+// upgrade never strands it, and exits 6 when no daemon is on the host.
+// Keep in sync with daemon-standalone.ts.
+var USER_WN_SHIM_MARKER = 'walnut-wn-shim v1';
+
+function userWnShimText() {
+  return '#!/bin/sh\\n'
+    + '# ' + USER_WN_SHIM_MARKER + ' — installed by the Walnut session daemon. Safe to delete.\\n'
+    + '# Resolves the daemon-managed shim at call time so an upgrade never strands it.\\n'
+    + 'dir="\${WALNUT_DAEMON_DIR:-' + PROD_DAEMON_DIR + '}"\\n'
+    + '[ -x "$dir/bin/wn" ] && exec "$dir/bin/wn" "$@"\\n'
+    + 'echo "wn: no Walnut daemon on this host ($dir/bin/wn is missing)." >&2\\n'
+    + 'exit 6\\n';
+}
+
+// PRODUCTION dir only (a test/sandbox daemon must not write the user's bin dir)
+// and never clobber a foreign wn (only an absent path or one carrying our
+// marker). ~/bin is used only when it already exists.
+function installUserWnShim() {
+  if (path.resolve(DAEMON_DIR) !== path.resolve(PROD_DAEMON_DIR)) return;
+  var text = userWnShimText();
+  var installed = [];
+  var candidates = [
+    [path.join(HOME_DIR, '.local', 'bin'), true],
+    [path.join(HOME_DIR, 'bin'), false],
+  ];
+  for (var i = 0; i < candidates.length; i++) {
+    var dir = candidates[i][0];
+    var createDir = candidates[i][1];
+    try {
+      if (!fs.existsSync(dir)) {
+        if (!createDir) continue;
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      var target = path.join(dir, 'wn');
+      if (fs.existsSync(target)) {
+        var existing = fs.readFileSync(target, 'utf-8');
+        if (existing.indexOf(USER_WN_SHIM_MARKER) === -1) continue;
+        if (existing === text) { installed.push(target); continue; }
+      }
+      fs.writeFileSync(target, text, { mode: 0o755 });
+      fs.chmodSync(target, 0o755);
+      installed.push(target);
+    } catch (e) { /* additive convenience — never fail startup over it */ }
+  }
+  if (installed.length > 0) logMsg('info', 'wn on user PATH', { paths: installed });
+}
+
 // PATH shim so wn inside spawned sessions reaches this daemon's wn dispatch.
 // Source-deploy branch: exec node <this daemon.cjs> wn "$@".
 function writeWnShim() {
@@ -2367,6 +2464,7 @@ function writeWnShim() {
   } catch (err) {
     logMsg('warn', 'wn shim write failed', { error: err.message });
   }
+  installUserWnShim();
 }
 
 // ── Mobile events relay: walnut server → cloud bridge (reverse direction) ──

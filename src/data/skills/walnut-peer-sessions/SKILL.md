@@ -4,16 +4,22 @@ description: >-
   Discover and message the user's other Walnut-managed coding sessions with
   the `wn` CLI (peer sessions on this or other machines). Use when a session
   needs to hand off context, notify a sibling session that shared work is
-  ready, or check what other sessions are running. Only available inside
-  sessions launched by Walnut (WALNUT_AGENT_SOCKET is set).
+  ready, or check what other sessions are running. Works on any host that runs
+  a Walnut daemon, inside a Walnut-launched session or a plain terminal.
 ---
 
 # Peer Sessions (`wn` CLI)
 
-Every session Walnut launches can talk to the user's OTHER sessions through
-a small CLI called `wn`. It is preinstalled on the PATH of every
-Walnut-managed session and needs zero configuration (it reads
-`WALNUT_AGENT_SOCKET` and `WALNUT_SESSION_ID` from the environment).
+A small CLI called `wn` talks to the user's OTHER sessions. It needs zero
+configuration:
+
+- Inside a session Walnut launched, it is already on the PATH and uses the
+  injected `WALNUT_AGENT_SOCKET` + `WALNUT_SESSION_ID`.
+- Started by hand (a plain terminal, an agent you launched yourself), it falls
+  back to this host's own daemon socket and identifies as an external caller.
+  Same commands, same capabilities; only the sender label differs, because
+  there is no session to name. If `wn` is not on your PATH, the daemon also
+  installs it at `~/.local/bin/wn`.
 
 ## Commands
 
@@ -50,7 +56,9 @@ peer-to-peer note.
   refused (`target_awaiting_permission`) so your note cannot disturb the
   prompt. Try again later.
 - Exit 5 means the Walnut hub is unreachable from this host right now;
-  exit 6 means this process is not a Walnut-managed session.
+  exit 6 means there is no reachable Walnut daemon socket on this host.
+- A note from an external caller is unidentified: it says so, and it carries
+  no more authority than any other peer note.
 
 ## Examples
 

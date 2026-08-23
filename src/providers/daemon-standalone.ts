@@ -81,8 +81,9 @@ import {
   GATEWAY_SOCKET_FILENAME,
   GATEWAY_MAX_LINE_BYTES,
   gatewayHubTimeoutMs,
+  isExternalCallerSid,
   parseGatewayLine,
-  resolveCallerSid,
+  resolveGatewayCallerSid,
   type GatewayErrorCode,
   type GatewayResponse,
 } from './gateway-core.js'
@@ -1873,8 +1874,10 @@ function cmdMobileEvent(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
 }
 
 // ── Agent gateway: on-host unix socket → Mac hub relay ──
-// A `wn` CLI inside a Walnut-spawned claude session writes one NDJSON request
-// line to ${DAEMON_DIR}/agent-gateway.sock; the daemon resolves the caller's
+// A `wn` CLI writes one NDJSON request line to ${DAEMON_DIR}/agent-gateway.sock
+// (env-injected inside a Walnut-spawned session; the same path found by
+// wellKnownGatewaySocketPath() when `wn` runs with no env, which is how a
+// hand-started agent reaches Walnut); the daemon resolves the caller's
 // CURRENT sid (env sid is only a lookup key — fresh spawns use a tmp sid that
 // cmdRename re-keys) and relays the request to the Mac hub with the same
 // reverse-RPC shape as cmdLaunchRelay/cmdLaunchResult: relayId + pending map +
@@ -1966,12 +1969,20 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
   const req = parsed.request
   // ACP sessions (engine=codex) live in the acp worker map, not `sessions` —
   // their WALNUT_SESSION_ID is the runtimeId, stable for the worker's life.
-  const callerSid = resolveCallerSid(req.sid, sessions, gatewaySidAliases)
+  // sid 'external' (env-less `wn`: a hand-started agent or the user's own
+  // terminal) is not a tracked session and passes through as a provenance
+  // label — the owner-only socket already vouched for the caller, and the hub
+  // grants 'external' nothing a tracked session lacks. Every other unknown sid
+  // is still refused here.
+  const callerSid = resolveGatewayCallerSid(req.sid, sessions, gatewaySidAliases)
     ?? (acp.hasWorker(req.sid) ? req.sid : null)
   if (!callerSid) {
     // Unknown sid (CLI adopted from before a daemon restart) — refuse locally,
     // the request never leaves this host. A respawn self-heals (plan §5).
     return respond(gatewayError('unknown_caller', 'session is not tracked by this daemon (a respawn self-heals)'))
+  }
+  if (isExternalCallerSid(callerSid)) {
+    logMsg('info', 'gateway: external caller (no session env)', { op: req.op })
   }
   sendGatewayRequest(req.op, callerSid, req.args, respond)
 }
@@ -2038,6 +2049,63 @@ function startGatewayListener() {
   }
 }
 
+// A `wn` on the USER's own PATH, for agents nobody spawned.
+// GATEWAY_SHIM_DIR is only appended to the PATH of sessions the daemon starts,
+// so a `claude` the user launched in a plain terminal used to answer
+// `wn: command not found` — the env-less fallback could never even be reached.
+// This second shim lives in an ordinary user bin dir and RESOLVES THE DAEMON AT
+// CALL TIME (it execs $WALNUT_DAEMON_DIR/bin/wn), so it can never go stale when
+// the daemon binary is replaced or upgraded, and with no daemon on the host it
+// exits 6 with the same meaning `wn` itself gives that case. Keep in sync with
+// daemon-source.ts.
+const USER_WN_SHIM_MARKER = 'walnut-wn-shim v1'
+
+function userWnShimText(): string {
+  return '#!/bin/sh\n'
+    + '# ' + USER_WN_SHIM_MARKER + ' — installed by the Walnut session daemon. Safe to delete.\n'
+    + '# Resolves the daemon-managed shim at call time so an upgrade never strands it.\n'
+    + 'dir="${WALNUT_DAEMON_DIR:-' + PROD_DAEMON_DIR + '}"\n'
+    + '[ -x "$dir/bin/wn" ] && exec "$dir/bin/wn" "$@"\n'
+    + 'echo "wn: no Walnut daemon on this host ($dir/bin/wn is missing)." >&2\n'
+    + 'exit 6\n'
+}
+
+/**
+ * Install the user-PATH `wn` shim. Two guards, both load-bearing:
+ *  - PRODUCTION dir only — a test/sandbox/ephemeral daemon must never write
+ *    into the user's real bin dir.
+ *  - never clobber a foreign `wn`: we only write a path that is absent or
+ *    already carries our marker.
+ * ~/bin is written only when it already exists (creating it would put the shim
+ * somewhere that is not on anyone's PATH).
+ */
+function installUserWnShim() {
+  if (path.resolve(DAEMON_DIR) !== path.resolve(PROD_DAEMON_DIR)) return
+  const text = userWnShimText()
+  const installed: string[] = []
+  for (const [dir, createDir] of [
+    [path.join(HOME_DIR, '.local', 'bin'), true],
+    [path.join(HOME_DIR, 'bin'), false],
+  ] as Array<[string, boolean]>) {
+    try {
+      if (!fs.existsSync(dir)) {
+        if (!createDir) continue
+        fs.mkdirSync(dir, { recursive: true })
+      }
+      const target = path.join(dir, 'wn')
+      if (fs.existsSync(target)) {
+        const existing = fs.readFileSync(target, 'utf-8')
+        if (!existing.includes(USER_WN_SHIM_MARKER)) continue // someone else's wn — leave it
+        if (existing === text) { installed.push(target); continue }
+      }
+      fs.writeFileSync(target, text, { mode: 0o755 })
+      fs.chmodSync(target, 0o755)
+      installed.push(target)
+    } catch { /* additive convenience — never fail startup over it */ }
+  }
+  if (installed.length > 0) logMsg('info', 'wn on user PATH', { paths: installed })
+}
+
 /** PATH shim so `wn` inside spawned sessions reaches this daemon's wn dispatch. */
 function writeWnShim() {
   try {
@@ -2057,6 +2125,7 @@ function writeWnShim() {
   } catch (err) {
     logMsg('warn', 'wn shim write failed', { error: (err as Error).message })
   }
+  installUserWnShim()
 }
 
 // ── ACP session commands (engine=codex etc; see acp-daemon.ts) ──

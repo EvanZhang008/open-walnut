@@ -203,8 +203,11 @@ describe('helpText', () => {
     expect(h).toContain('wn peers list [--json]');
     expect(h).toContain('wn peers send <target> <text...>');
     expect(h).toContain('does NOT carry user authorization');
-    expect(h).toContain('6  not running inside a Walnut-managed session');
+    // Exit 6 is now "nothing to talk to on this host": with no env, wn falls
+    // back to the host daemon's well-known socket (human-inbox P3).
+    expect(h).toContain('6  no reachable Walnut daemon socket on this host');
     expect(h).toContain('WALNUT_AGENT_SOCKET');
+    expect(h).toContain('falls back to this host');
   });
 
   it('peers help has examples', () => {

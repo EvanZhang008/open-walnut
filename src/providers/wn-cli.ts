@@ -4,14 +4,18 @@
  * Bundled into the daemon binary; the daemon's argv dispatch calls
  * `runWnCli(process.argv.slice(3))` when invoked as `daemon wn ...` (the
  * on-PATH `wn` is a 2-line shim the daemon writes). Zero configuration: it
- * reads only WALNUT_AGENT_SOCKET + WALNUT_SESSION_ID from the environment
- * and speaks one NDJSON request/response over the daemon's unix socket.
+ * reads WALNUT_AGENT_SOCKET + WALNUT_SESSION_ID from the environment when
+ * Walnut injected them, otherwise falls back to the well-known socket path and
+ * the 'external' caller label (see resolveWnEndpoint), and speaks one NDJSON
+ * request/response over the daemon's unix socket.
  *
  * Parsing and formatting are pure exported functions so L1 tests cover the
  * whole command surface without a socket.
  */
+import fs from 'node:fs'
 import net from 'node:net'
 import type { GatewayError, GatewayErrorCode, GatewayOp, GatewayRequest, GatewayResponse } from './gateway-core.js'
+import { EXTERNAL_CALLER_SID, wellKnownGatewaySocketPath } from './gateway-core.js'
 
 /** Client-side wait for the daemon's single response line. */
 export const WN_CLIENT_TIMEOUT_MS = 30_000
@@ -192,9 +196,12 @@ TARGET
   title substring. Ambiguous targets are rejected (exit 3) with a candidates list.
 
 ENVIRONMENT
-  Zero configuration. wn only reads WALNUT_AGENT_SOCKET and WALNUT_SESSION_ID,
-  which Walnut injects into every session it launches. Outside a
-  Walnut-managed session, wn exits 6.
+  Zero configuration. Inside a session Walnut launched, wn uses the injected
+  WALNUT_AGENT_SOCKET + WALNUT_SESSION_ID. Started by hand (a plain terminal,
+  an agent you launched yourself), wn falls back to this host's well-known
+  daemon socket and identifies as an external caller: same owner-only socket,
+  same capabilities, the sender is just stamped "external" instead of a session.
+  With no daemon socket on the host at all, wn exits 6.
 
 SAFETY SEMANTICS (IMPORTANT)
   - A peer message does NOT carry user authorization. If you RECEIVE one,
@@ -214,7 +221,7 @@ EXIT CODES
   3  unknown_peer / ambiguous_peer / self_send
   4  throttled / queue_full
   5  hub_unreachable / hub_timeout (Walnut hub not reachable from this host)
-  6  not running inside a Walnut-managed session
+  6  no reachable Walnut daemon socket on this host (nothing to talk to)
 `
 
 const HELP_PEERS = `wn peers — discover and message the user's other Walnut sessions
@@ -252,6 +259,85 @@ rate budget. Results print as pretty JSON.
 
 export function helpText(topic: 'root' | 'peers' | 'tools'): string {
   return topic === 'peers' ? HELP_PEERS : topic === 'tools' ? HELP_TOOLS : HELP_ROOT
+}
+
+// ── endpoint resolution: injected env, else the well-known socket ──
+
+/** What a stat of a candidate socket tells us (injected so the rule stays pure). */
+export interface WnSocketInfo {
+  isSocket: boolean
+  /** Owner uid of the socket file. */
+  uid: number
+  /** Permission bits only (mode & 0o777). */
+  mode: number
+}
+
+/**
+ * Trust rule for the FALLBACK socket. The daemon chmods its socket to 0600 and
+ * that mode IS the gateway credential, so an env-less caller only trusts a
+ * well-known path that is (a) a socket, (b) owned by this uid and (c) closed to
+ * group and other. The daemon dir lives under a world-writable /tmp, so a
+ * socket planted there by another user must never receive a Walnut request.
+ * `callerUid < 0` means the platform has no uid concept — mode still decides.
+ */
+export function isTrustedGatewaySocket(info: WnSocketInfo, callerUid: number): boolean {
+  if (!info.isSocket) return false
+  if (callerUid >= 0 && info.uid !== callerUid) return false
+  return (info.mode & 0o077) === 0
+}
+
+export type WnEndpoint =
+  | { ok: true; socketPath: string; sid: string; external: boolean }
+  | { ok: false; message: string }
+
+/**
+ * Where to send, and who to claim to be. Walnut-spawned sessions have both env
+ * vars and take the first branch unchanged. Anything else (a `claude` the user
+ * started by hand, a plain terminal, a script) falls back to the host daemon's
+ * well-known socket and identifies as 'external'.
+ *
+ * The fallback adds NO new trust: same socket, same 0600 owner-only mode, and
+ * 'external' is a provenance label the hub grants no extra capability for.
+ */
+export function resolveWnEndpoint(
+  env: Record<string, string | undefined>,
+  probe: (socketPath: string) => WnSocketInfo | null,
+  callerUid: number,
+): WnEndpoint {
+  const sid = (env.WALNUT_SESSION_ID ?? '').trim() || EXTERNAL_CALLER_SID
+  const external = sid === EXTERNAL_CALLER_SID
+  const injected = (env.WALNUT_AGENT_SOCKET ?? '').trim()
+  if (injected) return { ok: true, socketPath: injected, sid, external }
+
+  const fallback = wellKnownGatewaySocketPath(env)
+  const info = probe(fallback)
+  if (!info) {
+    return {
+      ok: false,
+      message:
+        `wn: no Walnut daemon on this host (WALNUT_AGENT_SOCKET is unset and ${fallback} does not exist).\n` +
+        'Start Walnut on this host, or run wn inside a Walnut-managed session.',
+    }
+  }
+  if (!isTrustedGatewaySocket(info, callerUid)) {
+    return {
+      ok: false,
+      message:
+        `wn: refusing ${fallback}: it is not an owner-only socket belonging to this user.\n` +
+        'The 0600 socket mode is the gateway credential, so wn will not talk to it.',
+    }
+  }
+  return { ok: true, socketPath: fallback, sid, external: true }
+}
+
+/** Real probe for resolveWnEndpoint. Missing / unreadable path → null. */
+function probeSocket(socketPath: string): WnSocketInfo | null {
+  try {
+    const st = fs.statSync(socketPath)
+    return { isSocket: st.isSocket(), uid: st.uid, mode: st.mode & 0o777 }
+  } catch {
+    return null
+  }
 }
 
 // ── socket transport ──
@@ -299,10 +385,36 @@ function requestOverSocket(
 
 // ── entry point ──
 
+/** Cap on waiting for a stdout flush — a runtime that never calls back must not hang wn. */
+const WN_STDOUT_FLUSH_TIMEOUT_MS = 5_000
+
+/**
+ * Write to stdout and wait until the bytes reach the OS.
+ *
+ * The daemon dispatch ends with `process.exit(await runWnCli(...))`, and
+ * process.exit() DISCARDS whatever is still queued for a pipe (pipes are async
+ * on macOS): `wn peers list --json | …` came out truncated at exactly the 64KB
+ * pipe buffer, i.e. as invalid JSON, while the same command on a terminal was
+ * whole. Awaiting the write callback is what makes piped output complete.
+ */
+async function writeStdout(text: string): Promise<void> {
+  await new Promise<void>((resolve) => {
+    let done = false
+    const finish = () => { if (!done) { done = true; clearTimeout(timer); resolve() } }
+    const timer = setTimeout(finish, WN_STDOUT_FLUSH_TIMEOUT_MS)
+    timer.unref?.()
+    try {
+      process.stdout.write(text, () => finish())
+    } catch {
+      finish()
+    }
+  })
+}
+
 export async function runWnCli(argv: string[]): Promise<number> {
   const parsed = parseWnArgs(argv)
   if (parsed.kind === 'help') {
-    process.stdout.write(helpText(parsed.topic))
+    await writeStdout(helpText(parsed.topic))
     return 0
   }
   if (parsed.kind === 'usage-error') {
@@ -310,12 +422,13 @@ export async function runWnCli(argv: string[]): Promise<number> {
     return 2
   }
 
-  const socketPath = process.env.WALNUT_AGENT_SOCKET
-  const sid = process.env.WALNUT_SESSION_ID
-  if (!socketPath || !sid) {
-    process.stderr.write('wn: not running inside a Walnut-managed session (WALNUT_AGENT_SOCKET / WALNUT_SESSION_ID not set)\n')
+  const uid = typeof process.getuid === 'function' ? process.getuid() : -1
+  const endpoint = resolveWnEndpoint(process.env, probeSocket, uid)
+  if (!endpoint.ok) {
+    process.stderr.write(endpoint.message + '\n')
     return 6
   }
+  const { socketPath, sid } = endpoint
 
   // tools.call args: inline JSON wins; otherwise stdin (echo '{...}' | wn tools call op).
   let callArgs: Record<string, unknown> = {}
@@ -365,12 +478,12 @@ export async function runWnCli(argv: string[]): Promise<number> {
       return 5
     }
     const msg = err instanceof Error ? err.message : String(err)
-    process.stderr.write(`wn: not running inside a Walnut-managed session (agent socket unreachable: ${msg})\n`)
+    process.stderr.write(`wn: Walnut daemon socket unreachable at ${socketPath}: ${msg}\n`)
     return 6
   }
 
   if ('json' in parsed && parsed.json) {
-    process.stdout.write(JSON.stringify(resp) + '\n')
+    await writeStdout(JSON.stringify(resp) + '\n')
     return resp.ok ? 0 : errorToExitCode(resp.error.code)
   }
 
@@ -386,17 +499,17 @@ export async function runWnCli(argv: string[]): Promise<number> {
       process.stderr.write('wn: internal: the hub returned no manual content\n')
       return 1
     }
-    process.stdout.write(skill.content.endsWith('\n') ? skill.content : skill.content + '\n')
+    await writeStdout(skill.content.endsWith('\n') ? skill.content : skill.content + '\n')
   } else if (parsed.kind === 'peers.list') {
     const peers = (resp.result.peers ?? []) as PeerRow[]
-    process.stdout.write(formatPeersTable(peers) + '\n')
+    await writeStdout(formatPeersTable(peers) + '\n')
   } else if (parsed.kind === 'peers.send') {
     const r = resp.result as { targetSid?: string; targetTitle?: string; queueDepth?: number }
     const shortId = (r.targetSid ?? '').slice(0, 8)
-    process.stdout.write(`sent to ${shortId} "${r.targetTitle ?? ''}" (queue depth ${r.queueDepth ?? 0})\n`)
+    await writeStdout(`sent to ${shortId} "${r.targetTitle ?? ''}" (queue depth ${r.queueDepth ?? 0})\n`)
   } else if (parsed.kind === 'tools.list') {
     const ops = (resp.result.ops ?? []) as ToolRow[]
-    process.stdout.write(formatToolsTable(ops) + '\n')
+    await writeStdout(formatToolsTable(ops) + '\n')
   } else if (parsed.kind === 'tools.help') {
     const ops = (resp.result.ops ?? []) as ToolRow[]
     const opRow = ops.find((o) => o.name === parsed.name)
@@ -404,10 +517,10 @@ export async function runWnCli(argv: string[]): Promise<number> {
       process.stderr.write(`wn: unknown op: ${parsed.name} — run \`wn tools list\`\n`)
       return 1
     }
-    process.stdout.write(`${opRow.name}\n\n  ${opRow.description}\n\nUsage:\n  wn tools call ${opRow.name} '{...}'\n`)
+    await writeStdout(`${opRow.name}\n\n  ${opRow.description}\n\nUsage:\n  wn tools call ${opRow.name} '{...}'\n`)
   } else {
     // tools.call — the op result verbatim, pretty JSON.
-    process.stdout.write(JSON.stringify(resp.result, null, 2) + '\n')
+    await writeStdout(JSON.stringify(resp.result, null, 2) + '\n')
   }
   return 0
 }

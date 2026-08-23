@@ -13,6 +13,40 @@
 
 export const GATEWAY_SOCKET_FILENAME = 'agent-gateway.sock';
 
+/**
+ * Well-known daemon dir. Duplicated from local-daemon.ts on purpose: the daemon
+ * twins are standalone deploy artifacts and cannot import server code.
+ */
+export const PROD_DAEMON_DIR = '/tmp/open-walnut';
+
+/**
+ * Well-known gateway socket path — what `wn` falls back to when no
+ * WALNUT_AGENT_SOCKET was injected (a hand-started agent, or the user's own
+ * terminal, on a host that runs a daemon). WALNUT_DAEMON_DIR override honoured
+ * so tests and ephemeral daemons stay isolated.
+ */
+export function wellKnownGatewaySocketPath(env?: Record<string, string | undefined>): string {
+  const e: Record<string, string | undefined> = env ?? (typeof process !== 'undefined' ? process.env : {});
+  const dir = (e.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR).replace(/\/+$/, '');
+  return `${dir}/${GATEWAY_SOCKET_FILENAME}`;
+}
+
+/**
+ * Caller sid a `wn` invocation sends when it has no WALNUT_SESSION_ID.
+ *
+ * PROVENANCE LABEL, NEVER AUTHORIZATION. The gateway socket is owner-only 0600
+ * and that mode is the entire credential, so whoever sends this sid is already
+ * the user who owns the daemon; the label only tells the hub "this did not come
+ * from a tracked session" so a letter's sender is stamped honestly. The hub
+ * must never grant 'external' anything a tracked session cannot do.
+ */
+export const EXTERNAL_CALLER_SID = 'external';
+
+/** True for the env-less caller label. Session ids are UUIDs, so no collision. */
+export function isExternalCallerSid(sid: string): boolean {
+  return sid === EXTERNAL_CALLER_SID;
+}
+
 /** Hard cap on a single NDJSON request line (bytes). Oversized → reject + close. */
 export const GATEWAY_MAX_LINE_BYTES = 256 * 1024;
 
@@ -143,4 +177,20 @@ export function resolveCallerSid(
     cur = next;
   }
   return null;
+}
+
+/**
+ * Caller identity for one gateway request (what handleGatewayLine uses in both
+ * twins). 'external' passes through untouched — it is not a tracked session and
+ * never will be, and the owner-only socket already vouched for the caller.
+ * Every OTHER sid must still resolve to a session this daemon tracks; null →
+ * unknown_caller and the request never leaves the host.
+ */
+export function resolveGatewayCallerSid(
+  sid: string,
+  sessions: { has(sid: string): boolean },
+  aliases: Map<string, string>,
+): string | null {
+  if (isExternalCallerSid(sid)) return EXTERNAL_CALLER_SID;
+  return resolveCallerSid(sid, sessions, aliases);
 }
