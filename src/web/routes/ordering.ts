@@ -30,13 +30,31 @@ function parseSeparator(raw: unknown): Separator | null {
   if (r.project !== undefined && typeof r.project !== 'string') return null
   if (r.after !== undefined && typeof r.after !== 'string') return null
   if (r.before !== undefined && typeof r.before !== 'string') return null
+  if (r.afterProject !== undefined && typeof r.afterProject !== 'string') return null
+  if (r.beforeProject !== undefined && typeof r.beforeProject !== 'string') return null
+  // Each mode keeps only the anchors it can act on, so one line can never carry
+  // two conflicting positions. 'project' anchors on FOLDERS (a folder is one unit
+  // there), 'custom' anchors on cards.
+  if (r.mode === 'project') {
+    return {
+      id: r.id,
+      tier: r.tier,
+      mode: r.mode,
+      // Absent stays absent: '' is Inbox, a real folder, so it cannot double as
+      // "no folder on that side".
+      ...(r.afterProject !== undefined ? { afterProject: r.afterProject as string } : {}),
+      ...(r.beforeProject !== undefined ? { beforeProject: r.beforeProject as string } : {}),
+      // Legacy rows (a line that used to sit inside a run) keep their field so the
+      // renderer can still resolve them to that folder's top edge.
+      ...(r.project !== undefined && r.afterProject === undefined && r.beforeProject === undefined
+        ? { project: r.project as string }
+        : {}),
+    }
+  }
   return {
     id: r.id,
     tier: r.tier,
     mode: r.mode,
-    // 'custom' mode has no project runs — drop the field so the two modes can't
-    // drift into "same line, two scopes".
-    ...(r.mode === 'project' ? { project: (r.project as string | undefined) ?? '' } : {}),
     after: (r.after as string | undefined) ?? '',
     before: (r.before as string | undefined) ?? '',
   }
@@ -71,7 +89,7 @@ orderingRouter.put('/separators', async (req: Request, res: Response, next: Next
     for (const raw of separators) {
       const sep = parseSeparator(raw)
       if (!sep) {
-        res.status(400).json({ error: 'each separator needs { id, tier, mode: "project"|"custom" } with string project/after/before' })
+        res.status(400).json({ error: 'each separator needs { id, tier, mode: "project"|"custom" } with string after/before (custom) or afterProject/beforeProject (project)' })
         return
       }
       parsed.push(sep)

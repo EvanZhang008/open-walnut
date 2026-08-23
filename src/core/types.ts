@@ -924,12 +924,19 @@ export interface Config {
       /** Which tier view mode shows it. The two modes are independent orders,
        *  so a line placed in one is meaningless in the other. */
       mode: 'project' | 'custom';
-      /** mode 'project' only: the project run it sits in ('' = Inbox). */
-      project?: string;
-      /** Task id directly ABOVE the line ('' = top of its scope). */
+      /** mode 'custom': task id directly ABOVE the line ('' = top of the list). */
       after?: string;
-      /** Task id directly BELOW the line ('' = bottom of its scope). */
+      /** mode 'custom': task id directly BELOW the line ('' = bottom of the list). */
       before?: string;
+      /** mode 'project': the FOLDER directly above the line ('' = Inbox, a real
+       *  folder). In this mode a folder is one whole unit, so a line sits between
+       *  two folders and never inside one. Absent = top of the tier. */
+      afterProject?: string;
+      /** mode 'project': the folder directly below the line. Absent = tier bottom. */
+      beforeProject?: string;
+      /** LEGACY, read-only: the run a project-mode line used to sit INSIDE, from
+       *  before a folder was atomic. Read as `beforeProject`; never written. */
+      project?: string;
     }>;
   };
   session_server?: {

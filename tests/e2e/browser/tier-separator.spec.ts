@@ -13,11 +13,16 @@
  *   3. dragging the line re-anchors it to the row it was dropped above, persisted
  *   4. the hover "x" removes it for good
  *   5. "New task" opens that tier's inline add row and a typed title becomes a task
+ *   6. in "By project" a FOLDER IS ONE UNIT: the line lands between folders (and a
+ *      mid-folder drop snaps to the nearest boundary), never between a folder's
+ *      label and its own cards
  *
- * Anchors are asserted through `/api/ordering` (the stored `before`/`after` task
- * ids) rather than by pixel order: the position is the CONTRACT, the DOM order is
- * its rendering, and on the shared fixture another spec's card can sit between
- * mine at any time.
+ * Anchors are asserted through `/api/ordering` (the stored anchors: card ids in
+ * custom mode, folder names in project mode) rather than by pixel order: the
+ * position is the CONTRACT, the DOM order is its rendering, and on the shared
+ * fixture another spec's card can sit between mine at any time. The one thing
+ * asserted in the DOM is what the user actually judges in project mode: the row
+ * below the line is a folder LABEL, so the line is outside every folder.
  *
  * House rules: `page.goto('/')` is the initial load only, every later step is a
  * real click, and the tier used here is scoped to a stamped private project so a
@@ -44,9 +49,11 @@ interface StoredSeparator {
   id: string
   tier: string
   mode: string
-  project?: string
   after?: string
   before?: string
+  afterProject?: string
+  beforeProject?: string
+  project?: string
 }
 
 async function readSeparators(page: Page): Promise<StoredSeparator[]> {
@@ -217,18 +224,30 @@ test('"New task" opens the tier\'s inline add row and a typed title becomes a ta
   await page.screenshot({ path: `${SCREENSHOT_DIR}/04-new-task-inline.png` })
 })
 
-test('a project run gets its own line in "By project" mode', async ({ page }) => {
+/** Pin one task of its own project into the tier, so the tier has another folder. */
+async function seedProject(page: Page, project: string, title: string): Promise<string> {
+  const res = await page.request.post('/api/tasks', { data: { title, source: 'local', project } })
+  expect(res.ok(), await res.text()).toBe(true)
+  const id = ((await res.json()) as { task: { id: string } }).task.id
+  await pinToTier(page, id, TIER)
+  return id
+}
+
+/** The folders currently rendered in the tier, top to bottom, as STORED names —
+ *  Inbox is '' and shows as "Inbox", so the visible text is not the name. */
+async function folderOrder(page: Page): Promise<string[]> {
+  return page.locator('.tier-project-label').evaluateAll(
+    (els) => els.map((el) => (el as HTMLElement).dataset.project ?? ''),
+  )
+}
+
+test('in "By project" the line goes BETWEEN folders, never inside one', async ({ page }) => {
   const stamp = Date.now()
   await clearSeparators(page)
   const mine = await seed(page, 2, stamp)
   // A tier needs 2+ DISTINCT projects for the folder labels (and the project "+"
   // they carry) to render at all.
-  const otherRes = await page.request.post('/api/tasks', {
-    data: { title: `separator alt ${stamp}`, source: 'local', project: 'SeparatorAltProj' },
-  })
-  expect(otherRes.ok(), await otherRes.text()).toBe(true)
-  const other = ((await otherRes.json()) as { task: { id: string } }).task.id
-  await pinToTier(page, other, TIER)
+  await seedProject(page, 'SeparatorAltProj', `separator alt ${stamp}`)
 
   await openTier(page, 'project', mine[0])
   const label = page.locator('.tier-project-label').filter({
@@ -242,17 +261,72 @@ test('a project run gets its own line in "By project" mode', async ({ page }) =>
   await expect(separators(page)).toHaveCount(1, { timeout: 15_000 })
   const stored = await readSeparators(page)
   expect(stored[0].mode).toBe('project')
-  expect(stored[0].project, 'the line belongs to the run whose "+" was used').toBe(PROJECT)
-  // Its anchor is a card of THAT project, never the other run's. Asserted by
-  // looking the anchor up rather than against this test's own ids: earlier
-  // scenarios in this file pin cards into the same run, so the top of the run is
-  // legitimately one of theirs.
-  const anchorId = stored[0].before
-  expect(anchorId, 'a line at the top of a run anchors to that run\'s first card').toBeTruthy()
-  const anchorRes = await page.request.get(`/api/tasks/${anchorId}`)
-  expect(anchorRes.ok(), await anchorRes.text()).toBe(true)
-  const anchor = ((await anchorRes.json()) as { task: { project?: string } }).task
-  expect(anchor.project).toBe(PROJECT)
-  expect(mine.length, 'this scenario seeded its own cards into that run').toBeGreaterThan(0)
+  // A folder is one unit here, so the line is positioned by FOLDER, and card
+  // anchors must not exist at all — a card anchor is what used to let a line land
+  // between a folder's label and its own tasks.
+  expect(stored[0].after, 'no card anchors in project mode').toBeUndefined()
+  expect(stored[0].before).toBeUndefined()
+  const folders = await folderOrder(page)
+  const boundary = stored[0].beforeProject
+  // '' is Inbox, a real folder — so the check is "is it a rendered folder", never
+  // truthiness.
+  expect(boundary, 'the line names the folder it sits above').not.toBeUndefined()
+  expect(folders, 'and that folder is one actually rendered in this tier').toContain(boundary)
+  expect(stored[0].afterProject, 'clicking a folder\'s "+" ends the band after it')
+    .toBe(PROJECT)
+
+  // The rendering, which is what the user judges: the row right below the line is
+  // a FOLDER LABEL, so the line is outside every folder.
+  const nextClass = await separators(page).first().evaluate(
+    (el) => el.nextElementSibling?.className ?? '',
+  )
+  expect(nextClass, 'the line sits directly above a folder label').toContain('tier-project-label')
   await page.screenshot({ path: `${SCREENSHOT_DIR}/05-project-run-separator.png` })
+})
+
+test('dragging in "By project" snaps to a folder boundary, even mid-folder', async ({ page }) => {
+  const stamp = Date.now()
+  await clearSeparators(page)
+  // Three folders → two real boundaries, so a drag has somewhere to move TO.
+  const mine = await seed(page, 2, stamp)
+  await seedProject(page, 'SeparatorAltProj', `separator alt ${stamp}`)
+  await seedProject(page, 'SeparatorThirdProj', `separator third ${stamp}`)
+
+  await openTier(page, 'project', mine[0])
+  // 3+ because the shared fixture carries folders of its own (including Inbox) —
+  // the exact set is not this spec's business, only that there are two boundaries.
+  await expect(page.locator('.tier-project-label').nth(2)).toBeVisible({ timeout: 30_000 })
+  const folders = await folderOrder(page)
+  expect(folders.length).toBeGreaterThanOrEqual(3)
+
+  await chooseFromPlus(page, page.getByTestId('tier-view-bar'), 'Add separator')
+  const line = separators(page).first()
+  await expect(line).toBeVisible({ timeout: 15_000 })
+  const start = (await readSeparators(page))[0].beforeProject
+  expect(start, 'a tier-level "+" takes the first boundary').toBe(folders[1])
+
+  // Drop on the BOTTOM half of the LAST card of the second folder. Mid-folder is
+  // exactly the drop that used to split a folder; it must resolve to the boundary
+  // BELOW that folder instead.
+  const midFolderCard = page.locator('.tier-project-label').nth(2)
+    .locator('xpath=preceding-sibling::*[@data-task-id][1]')
+  await expect(midFolderCard).toBeVisible()
+  const box = await midFolderCard.boundingBox()
+  expect(box).not.toBeNull()
+  await line.dragTo(midFolderCard, {
+    targetPosition: { x: Math.min(40, box!.width / 2), y: box!.height - 3 },
+  })
+
+  await expect.poll(async () => (await readSeparators(page))[0]?.beforeProject, {
+    timeout: 15_000,
+    message: 'the mid-folder drop never moved the line to the next boundary',
+  }).toBe(folders[2])
+  const after = await readSeparators(page)
+  expect(after[0].afterProject).toBe(folders[1])
+  expect(after[0].before, 'still no card anchors').toBeUndefined()
+  const nextClass = await separators(page).first().evaluate(
+    (el) => el.nextElementSibling?.className ?? '',
+  )
+  expect(nextClass, 'and it is still drawn above a folder label').toContain('tier-project-label')
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/06-project-boundary-drag.png` })
 })

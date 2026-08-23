@@ -36,13 +36,13 @@ afterEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
+/** A project-mode line: anchored between two FOLDERS (a folder is one unit there). */
 const sep = (over: Record<string, unknown> = {}) => ({
   id: 'sep_a1',
   tier: 'focus',
   mode: 'project',
-  project: 'marina',
-  after: 't1',
-  before: 't2',
+  afterProject: 'marina',
+  beforeProject: 'acme',
   ...over,
 })
 
@@ -62,16 +62,62 @@ describe('PUT /api/ordering/separators', () => {
     expect(put.body.separators).toHaveLength(1)
 
     const get = await request(app).get('/api/ordering')
-    expect(get.body.separators[0]).toMatchObject({ id: 'sep_a1', tier: 'focus', mode: 'project', project: 'marina', after: 't1', before: 't2' })
+    expect(get.body.separators[0]).toEqual({ id: 'sep_a1', tier: 'focus', mode: 'project', afterProject: 'marina', beforeProject: 'acme' })
   })
 
-  it('normalizes missing anchors to "" and drops project in custom mode', async () => {
+  it('normalizes missing card anchors to "" and drops folder anchors in custom mode', async () => {
     const app = createApp()
     await request(app).put('/api/ordering/separators')
-      .send({ separators: [{ id: 'sep_b', tier: 'wait', mode: 'custom', project: 'ignored' }] })
+      .send({ separators: [{ id: 'sep_b', tier: 'wait', mode: 'custom', beforeProject: 'ignored' }] })
       .expect(200)
     const get = await request(app).get('/api/ordering')
     expect(get.body.separators[0]).toEqual({ id: 'sep_b', tier: 'wait', mode: 'custom', after: '', before: '' })
+  })
+
+  it('drops card anchors in project mode — a folder is the unit, so cards cannot position a line', async () => {
+    const app = createApp()
+    await request(app).put('/api/ordering/separators')
+      .send({ separators: [sep({ after: 't1', before: 't2' })] })
+      .expect(200)
+    const get = await request(app).get('/api/ordering')
+    expect(get.body.separators[0]).toEqual({ id: 'sep_a1', tier: 'focus', mode: 'project', afterProject: 'marina', beforeProject: 'acme' })
+  })
+
+  it('keeps a folder anchor that is "" — Inbox is a real folder, not "no folder"', async () => {
+    const app = createApp()
+    await request(app).put('/api/ordering/separators')
+      .send({ separators: [{ id: 'sep_c', tier: 'focus', mode: 'project', afterProject: 'acme', beforeProject: '' }] })
+      .expect(200)
+    const get = await request(app).get('/api/ordering')
+    expect(get.body.separators[0]).toEqual({ id: 'sep_c', tier: 'focus', mode: 'project', afterProject: 'acme', beforeProject: '' })
+  })
+
+  it('a top-of-tier line stores NO afterProject — absent is how "no folder above" is spelled', async () => {
+    const app = createApp()
+    await request(app).put('/api/ordering/separators')
+      .send({ separators: [{ id: 'sep_d', tier: 'focus', mode: 'project', beforeProject: 'marina' }] })
+      .expect(200)
+    const get = await request(app).get('/api/ordering')
+    expect(get.body.separators[0]).toEqual({ id: 'sep_d', tier: 'focus', mode: 'project', beforeProject: 'marina' })
+    expect('afterProject' in get.body.separators[0]).toBe(false)
+  })
+
+  it('keeps a LEGACY row (line inside a run) so the renderer can still resolve it', async () => {
+    const app = createApp()
+    await request(app).put('/api/ordering/separators')
+      .send({ separators: [{ id: 'sep_old', tier: 'focus', mode: 'project', project: 'marina', after: 't1', before: 't2' }] })
+      .expect(200)
+    const get = await request(app).get('/api/ordering')
+    expect(get.body.separators[0]).toEqual({ id: 'sep_old', tier: 'focus', mode: 'project', project: 'marina' })
+  })
+
+  it('a folder anchor beats the legacy field once the line has been dragged', async () => {
+    const app = createApp()
+    await request(app).put('/api/ordering/separators')
+      .send({ separators: [{ id: 'sep_old', tier: 'focus', mode: 'project', project: 'marina', beforeProject: 'acme' }] })
+      .expect(200)
+    const get = await request(app).get('/api/ordering')
+    expect(get.body.separators[0]).toEqual({ id: 'sep_old', tier: 'focus', mode: 'project', beforeProject: 'acme' })
   })
 
   it('keeps the project order untouched', async () => {
@@ -87,20 +133,20 @@ describe('PUT /api/ordering/separators', () => {
     const app = createApp()
     await request(app).put('/api/ordering/separators').send({ separators: [sep()] }).expect(200)
     await request(app).put('/api/ordering/separators')
-      .send({ separators: [sep({ after: 't5', before: 't6' })] })
+      .send({ separators: [sep({ afterProject: 'acme', beforeProject: 'orbit' })] })
       .expect(200)
     const get = await request(app).get('/api/ordering')
     expect(get.body.separators).toHaveLength(1)
-    expect(get.body.separators[0]).toMatchObject({ after: 't5', before: 't6' })
+    expect(get.body.separators[0]).toMatchObject({ afterProject: 'acme', beforeProject: 'orbit' })
   })
 
   it('collapses a duplicated id — last write wins', async () => {
     const app = createApp()
     const res = await request(app).put('/api/ordering/separators')
-      .send({ separators: [sep({ before: 'old' }), sep({ before: 'new' })] })
+      .send({ separators: [sep({ beforeProject: 'old' }), sep({ beforeProject: 'new' })] })
     expect(res.status).toBe(200)
     expect(res.body.separators).toHaveLength(1)
-    expect(res.body.separators[0].before).toBe('new')
+    expect(res.body.separators[0].beforeProject).toBe('new')
   })
 
   it('rejects a malformed entry instead of storing part of it', async () => {
@@ -110,7 +156,8 @@ describe('PUT /api/ordering/separators', () => {
       { id: 'x', mode: 'project' },                       // no tier
       { id: 'x', tier: 'focus' },                         // no mode
       { id: 'x', tier: 'focus', mode: 'sideways' },       // unknown mode
-      { id: 'x', tier: 'focus', mode: 'project', before: 7 }, // non-string anchor
+      { id: 'x', tier: 'focus', mode: 'custom', before: 7 },  // non-string card anchor
+      { id: 'x', tier: 'focus', mode: 'project', beforeProject: 7 }, // non-string folder anchor
       'not an object',
     ]
     for (const entry of bad) {

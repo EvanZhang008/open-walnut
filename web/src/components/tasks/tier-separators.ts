@@ -6,20 +6,32 @@
  * tier) without inventing a container that the task model would then have to
  * carry everywhere.
  *
- * Two design rules live in this file:
+ * Three design rules live in this file:
  *
  * 1. **Anchored to neighbours, never to an index.** A line stored as "position
  *    4" drifts the moment anything above it is completed, reordered or moved to
  *    another tier — the user's band silently swallows the wrong rows. So a
- *    separator records the task id directly ABOVE it and the one directly BELOW
- *    it, and placement resolves `before` first, then `after`, then the end of
- *    its scope. Whatever happens to the list, the line lands next to a row the
- *    user actually put it next to, and it can never disappear.
+ *    separator records what sits directly ABOVE it and directly BELOW it, and
+ *    placement resolves `before` first, then `after`, then the end of the list.
+ *    Whatever happens to the tier, the line lands next to something the user
+ *    actually put it next to, and it can never disappear.
  *
  * 2. **A separator belongs to ONE view mode.** 'By project' and 'Custom order'
  *    are separate orders (project mode clusters the raw pin order into runs), so
  *    a line placed between two rows in one mode sits between unrelated rows in
  *    the other. Each separator names its mode and is invisible in the other one.
+ *
+ * 3. **In 'By project', A FOLDER IS ONE UNIT.** The two modes therefore anchor to
+ *    different things, which is why the fields are separate rather than one pair
+ *    whose meaning flips with `mode`:
+ *
+ *      custom  → the TASK above / below the line. Cards are the unit, so a line
+ *                sits between two cards.
+ *      project → the FOLDER above / below the line. A folder is a whole thing, so
+ *                a line sits between two folders and NEVER inside one. Dropping a
+ *                line between a folder's label and its own cards would read as
+ *                "this folder is split from its tasks", which is not a band
+ *                boundary, just a broken-looking folder.
  *
  * Placement is pure so the renderer can call it with the live drag preview
  * substituted in and get the exact frame it will commit.
@@ -33,21 +45,31 @@ export interface TierSeparator {
   /** 'focus' | 'satellite' | 'backlog' | 'wait' | `ct_*`. */
   tier: string;
   mode: SeparatorMode;
-  /** mode 'project' only: which project run it sits in ('' = Inbox). */
-  project?: string;
-  /** Task id directly above the line ('' = top of scope). */
+  /** mode 'custom': task id directly above the line ('' = top of the list). */
   after?: string;
-  /** Task id directly below the line ('' = bottom of scope). */
+  /** mode 'custom': task id directly below the line ('' = bottom of the list). */
   before?: string;
+  /** mode 'project': the folder directly ABOVE the line ('' = Inbox, which is a
+   *  real folder here). Absent means "no folder above": top of the tier. */
+  afterProject?: string;
+  /** mode 'project': the folder directly BELOW the line. Absent means "no folder
+   *  below": bottom of the tier. */
+  beforeProject?: string;
+  /** LEGACY, read-only: the run a project-mode line used to sit INSIDE, back when
+   *  a line could split a folder. Resolved as `beforeProject` so an old line moves
+   *  to that folder's top edge instead of silently vanishing. Never written. */
+  project?: string;
 }
 
 /** Where a separator sits, resolved against the tier's current render order. */
 export interface SeparatorPlacement {
-  /** taskId → separators drawn immediately ABOVE that row. */
+  /** mode 'custom': taskId → separators drawn immediately ABOVE that card. */
   above: Map<string, TierSeparator[]>;
-  /** scope key → separators drawn at the END of that scope. In project mode the
-   *  key is the project name ('' = Inbox); in custom mode it is always ''. */
-  tail: Map<string, TierSeparator[]>;
+  /** mode 'project': project → separators drawn immediately above that FOLDER
+   *  (above its label, so the line reads as a boundary between folders). */
+  aboveProject: Map<string, TierSeparator[]>;
+  /** Separators drawn at the very END of the tier list, in either mode. */
+  tail: TierSeparator[];
 }
 
 const SEP_PREFIX = 'sep_';
@@ -78,65 +100,91 @@ export function placeSeparators(opts: {
 }): SeparatorPlacement {
   const { ids, projectOf, tier, mode, separators } = opts;
   const above = new Map<string, TierSeparator[]>();
-  const tail = new Map<string, TierSeparator[]>();
+  const aboveProject = new Map<string, TierSeparator[]>();
+  const tail: TierSeparator[] = [];
 
-  // Task ids per scope, in render order. In custom mode the whole tier is one
-  // scope ('') — that mode has no project runs at all.
-  const scopeIds = new Map<string, string[]>();
+  // The two modes divide different things, so they resolve against different
+  // sequences: cards for 'custom', folder runs (first-seen order, which is the
+  // order they render in) for 'project'.
+  const taskIds: string[] = [];
+  const runs: string[] = [];
   for (const id of ids) {
     const proj = projectOf(id);
     if (proj === null) continue; // group sentinel / unknown id
-    const key = mode === 'project' ? proj : '';
-    const arr = scopeIds.get(key);
-    if (arr) arr.push(id); else scopeIds.set(key, [id]);
+    taskIds.push(id);
+    if (!runs.includes(proj)) runs.push(proj);
   }
 
-  const pushAbove = (anchor: string, sep: TierSeparator) => {
-    const arr = above.get(anchor);
-    if (arr) arr.push(sep); else above.set(anchor, [sep]);
-  };
-  const pushTail = (key: string, sep: TierSeparator) => {
-    const arr = tail.get(key);
-    if (arr) arr.push(sep); else tail.set(key, [sep]);
+  const push = (map: Map<string, TierSeparator[]>, anchor: string, sep: TierSeparator) => {
+    const arr = map.get(anchor);
+    if (arr) arr.push(sep); else map.set(anchor, [sep]);
   };
 
   for (const sep of separators) {
     if (sep.tier !== tier || sep.mode !== mode) continue;
-    const key = mode === 'project' ? (sep.project ?? '') : '';
-    const scope = scopeIds.get(key);
-    // Scope gone (project has no rows in this tier right now) → the line is not
-    // rendered, but it is NOT deleted: pin a task back into that project and the
-    // line comes back where the user left it.
-    if (!scope || scope.length === 0) continue;
 
-    const beforeIdx = sep.before ? scope.indexOf(sep.before) : -1;
-    if (beforeIdx !== -1) { pushAbove(sep.before!, sep); continue; }
+    // Empty tier → nothing to divide and nowhere to draw. The record survives:
+    // pin a task back and the line comes back where the user left it.
+    if (taskIds.length === 0) continue;
 
-    // The row below vanished — hold the line under the row ABOVE it instead.
-    const afterIdx = sep.after ? scope.indexOf(sep.after) : -1;
-    if (afterIdx !== -1) {
-      const next = scope[afterIdx + 1];
-      if (next) pushAbove(next, sep); else pushTail(key, sep);
+    if (mode === 'project') {
+      // 'project' is legacy data (a line that used to live inside a run) and
+      // resolves to that folder's top edge.
+      const below = sep.beforeProject ?? sep.project;
+      if (below !== undefined && runs.includes(below)) { push(aboveProject, below, sep); continue; }
+      // The folder below is gone — hold the line under the folder ABOVE it.
+      if (sep.afterProject !== undefined) {
+        const idx = runs.indexOf(sep.afterProject);
+        if (idx !== -1) {
+          const next = runs[idx + 1];
+          if (next !== undefined) push(aboveProject, next, sep); else tail.push(sep);
+          continue;
+        }
+      }
+      // Both neighbours are gone: keep it at the end of the tier rather than
+      // dropping it. The user placed it; only its neighbourhood moved on.
+      tail.push(sep);
       continue;
     }
 
-    // Both neighbours are gone. Keep it at the end of its scope rather than
-    // dropping it — the user placed it, only its neighbourhood moved on.
-    pushTail(key, sep);
+    if (sep.before && taskIds.includes(sep.before)) { push(above, sep.before, sep); continue; }
+    const afterIdx = sep.after ? taskIds.indexOf(sep.after) : -1;
+    if (afterIdx !== -1) {
+      const next = taskIds[afterIdx + 1];
+      if (next) push(above, next, sep); else tail.push(sep);
+      continue;
+    }
+    tail.push(sep);
   }
 
-  return { above, tail };
+  return { above, aboveProject, tail };
 }
 
 /**
- * Neighbours for a drop between two rows: the ids that will become the
- * separator's `after` / `before`. `rows` is the scope's task ids in render
+ * Neighbours for a drop between two CARDS (mode 'custom'): the ids that become
+ * the separator's `after` / `before`. `rows` is the tier's task ids in render
  * order, `index` the slot the line lands in (0 = above the first row,
  * rows.length = below the last).
  */
 export function anchorsForSlot(rows: string[], index: number): { after: string; before: string } {
   const i = Math.max(0, Math.min(index, rows.length));
   return { after: i > 0 ? rows[i - 1] : '', before: i < rows.length ? rows[i] : '' };
+}
+
+/**
+ * Neighbours for a drop between two FOLDERS (mode 'project'). `runs` is the
+ * tier's folders in render order, `index` the boundary (0 = above the first
+ * folder, runs.length = below the last).
+ *
+ * An absent field means "that end of the tier", which is why these can't be
+ * normalized to '': '' is Inbox, a real folder.
+ */
+export function projectAnchorsForSlot(runs: string[], index: number): { afterProject?: string; beforeProject?: string } {
+  const i = Math.max(0, Math.min(index, runs.length));
+  return {
+    ...(i > 0 ? { afterProject: runs[i - 1] } : {}),
+    ...(i < runs.length ? { beforeProject: runs[i] } : {}),
+  };
 }
 
 /** Replace one separator in a list (by id), appending it when it's new. */

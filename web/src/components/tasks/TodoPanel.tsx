@@ -27,6 +27,7 @@ import {
   anchorsForSlot,
   newSeparatorId,
   placeSeparators,
+  projectAnchorsForSlot,
   removeSeparator,
   upsertSeparator,
   type SeparatorMode,
@@ -5264,27 +5265,53 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    *  Rows are read from the DOM: what the user SEES is the only honest source for
    *  "which two rows did I drop between". */
   const sepDropAt = useCallback((container: HTMLElement, tier: string, clientY: number): Omit<TierSeparator, 'id'> | null => {
-    const rows = Array.from(container.querySelectorAll<HTMLElement>('[data-task-id]'));
-    const ids = rows.map((el) => el.dataset.taskId ?? '').filter(Boolean);
-    if (ids.length === 0) return null;
-    // First row whose vertical middle is below the pointer; past the last row the
-    // slot is the end of the list.
+    const rows = Array.from(container.querySelectorAll<HTMLElement>('[data-task-id]'))
+      .map((el) => ({ el, id: el.dataset.taskId ?? '' }))
+      .filter((r) => r.id);
+    if (rows.length === 0) return null;
+    const mode = sepModeFor(tier);
+
+    if (mode === 'project') {
+      // A folder is ONE unit here, so the only legal spots are the boundaries
+      // BETWEEN folders — never between a folder's label and its own cards. Each
+      // run's vertical middle picks the side: drop in a folder's top half and the
+      // line lands above it, bottom half and it lands below (= above the next).
+      const runs: string[] = [];
+      const span = new Map<string, { top: number; bottom: number }>();
+      for (const r of rows) {
+        const proj = pinnedTaskMap.get(r.id)?.project ?? '';
+        const rect = r.el.getBoundingClientRect();
+        const seen = span.get(proj);
+        if (seen) {
+          seen.top = Math.min(seen.top, rect.top);
+          seen.bottom = Math.max(seen.bottom, rect.bottom);
+        } else {
+          span.set(proj, { top: rect.top, bottom: rect.bottom });
+          runs.push(proj);
+        }
+      }
+      if (runs.length < 2) return null; // one folder = no boundary to sit on
+      let slot = runs.length;
+      for (let i = 0; i < runs.length; i++) {
+        const s = span.get(runs[i])!;
+        if (clientY < s.top + (s.bottom - s.top) / 2) { slot = i; break; }
+      }
+      // Clamped inside the list: a line above the first folder or below the last
+      // divides nothing, so a drag to either extreme snaps to the nearest real
+      // boundary instead of parking somewhere with no meaning.
+      slot = Math.min(Math.max(slot, 1), runs.length - 1);
+      return { tier, mode, ...projectAnchorsForSlot(runs, slot) };
+    }
+
+    // Custom order: cards are the unit. First row whose vertical middle is below
+    // the pointer; past the last row the slot is the end of the list.
+    const ids = rows.map((r) => r.id);
     let idx = ids.length;
     for (let i = 0; i < rows.length; i++) {
-      const r = rows[i].getBoundingClientRect();
+      const r = rows[i].el.getBoundingClientRect();
       if (clientY < r.top + r.height / 2) { idx = i; break; }
     }
-    const mode = sepModeFor(tier);
-    // Project mode: the line belongs to the run it was dropped into (the row
-    // under the pointer, or the last row when dropped past the end).
-    const anchorId = ids[Math.min(idx, ids.length - 1)];
-    const project = mode === 'project' ? (pinnedTaskMap.get(anchorId)?.project ?? '') : '';
-    const scopeIds = mode === 'project'
-      ? ids.filter((id) => (pinnedTaskMap.get(id)?.project ?? '') === project)
-      : ids;
-    const target = ids[idx];
-    const slot = target && scopeIds.includes(target) ? scopeIds.indexOf(target) : scopeIds.length;
-    return { tier, mode, ...(mode === 'project' ? { project } : {}), ...anchorsForSlot(scopeIds, slot) };
+    return { tier, mode, ...anchorsForSlot(ids, idx) };
   }, [sepModeFor, pinnedTaskMap]);
 
   /** DnD props for a tier's list container — accepts a dragged separator line. */
@@ -5307,32 +5334,44 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     },
   }), [sepDrag, sepDropAt, clearSepDrag, persistSeparators, separators]);
 
-  /** "Add separator" from a header "+": land at the TOP of the clicked scope, so
-   *  it appears exactly where the click was and can be dragged down from there.
-   *  An empty scope gets no line — it would have nothing to divide and nowhere to
-   *  render, and a control that silently does nothing visible is worse than none. */
+  /** "Add separator" from a header "+". An empty list gets no line — it would have
+   *  nothing to divide and nowhere to render, and a control that silently does
+   *  nothing visible is worse than none. */
   const addSeparator = useCallback((tier: string, project?: string) => {
     const mode = sepModeFor(tier);
     const tierIds = (tierIdsByTier.get(tier) ?? []).filter((id) => pinnedTaskMap.has(id));
-    const scopeIds = mode === 'project' && project !== undefined
-      ? tierIds.filter((id) => (pinnedTaskMap.get(id)?.project ?? '') === project)
-      : tierIds;
-    if (scopeIds.length === 0) {
+    if (tierIds.length === 0) {
       onOperationError?.('Nothing to separate here yet: add a task first.');
       return;
     }
-    // Project mode with a tier-level "+": the top of the tier is the top of its
-    // FIRST run, so the line belongs to that run.
-    const scopeProject = mode === 'project'
-      ? (project ?? (pinnedTaskMap.get(scopeIds[0])?.project ?? ''))
-      : undefined;
-    persistSeparators([...separators, {
-      id: newSeparatorId(),
-      tier,
-      mode,
-      ...(mode === 'project' ? { project: scopeProject } : {}),
-      ...anchorsForSlot(scopeIds, 0),
-    }]);
+    const add = (sep: Omit<TierSeparator, 'id'>) =>
+      persistSeparators([...separators, { id: newSeparatorId(), ...sep }]);
+
+    if (mode === 'project') {
+      const runs: string[] = [];
+      for (const id of tierIds) {
+        const p = pinnedTaskMap.get(id)?.project ?? '';
+        if (!runs.includes(p)) runs.push(p);
+      }
+      // One folder means no boundary between folders. Say which mode does divide
+      // inside a folder instead of failing silently.
+      if (runs.length < 2) {
+        onOperationError?.('Only one folder in this tier: "By project" puts a line BETWEEN folders. Switch to Custom order to divide inside one.');
+        return;
+      }
+      // The line goes on the side of the clicked folder that HAS a neighbour:
+      // below by default ("end the band after this folder"), above when it is the
+      // last one. Either way it divides something, which a line at the very top or
+      // bottom of the tier would not. A tier-level "+" has no folder, so it takes
+      // the first boundary and the user drags from there.
+      const idx = project !== undefined ? runs.indexOf(project) : 0;
+      const slot = idx === -1 ? 1 : Math.min(idx + 1, runs.length - 1);
+      add({ tier, mode, ...projectAnchorsForSlot(runs, slot) });
+      return;
+    }
+    // Custom order: land at the TOP of the list, so it appears right where the
+    // click was and can be dragged down from there.
+    add({ tier, mode, ...anchorsForSlot(tierIds, 0) });
   }, [sepModeFor, tierIdsByTier, pinnedTaskMap, persistSeparators, separators, onOperationError]);
 
   const deleteSeparator = useCallback((id: string) => {
@@ -5423,9 +5462,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         isDragging={sepDrag === sep.id}
         onDragStart={setSepDrag} onDragEnd={clearSepDrag} onDelete={deleteSeparator} />
     );
-    const flushSepTail = (scope: string) => {
-      for (const sep of sepPlacement.tail.get(scope) ?? []) out.push(sepRow(sep));
-    };
 
     let prevProject: string | null = null;
     for (let i = 0; i < ids.length; i++) {
@@ -5453,17 +5489,25 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const task = pinnedTaskMap.get(id);
       if (!task) continue;
       const proj = task.project || '';
-      // Leaving a project run: flush that run's trailing lines (and its inline
-      // "add task" row) BEFORE the next folder label, so they stay inside the run
-      // they belong to.
+      // Leaving a project run: its inline "add task" row belongs to the run above,
+      // so it goes out BEFORE the next folder label.
       if (sepMode === 'project' && prevProject !== null && proj !== prevProject) {
-        flushSepTail(prevProject);
         if (runAddSignal?.tier === tier && runAddSignal.project === prevProject) out.push(runAddRow(tier, prevProject));
+      }
+      // A line placed between folders draws ABOVE this folder's label, outside the
+      // folder entirely — a folder is one unit in this mode, and a line between a
+      // label and its own cards would read as a split folder, not a band boundary.
+      if (sepMode === 'project' && proj !== prevProject) {
+        for (const sep of sepPlacement.aboveProject.get(proj) ?? []) out.push(sepRow(sep));
       }
       if (showFolders && proj !== prevProject) {
         out.push(
           <div
             key={`projlabel:${tier}:${proj}`}
+            // The REAL project name, which the visible text isn't: Inbox renders as
+            // "Inbox" but is stored as ''. Anything matching folders (a separator's
+            // boundary, a test) needs the stored value.
+            data-project={proj}
             // Inbox ('') drags too — its slot rides ordering.projects as the
             // empty string. '' is falsy, so every gate below checks against
             // null (the "no drag" sentinel), never truthiness.
@@ -5529,8 +5573,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         );
       }
       prevProject = proj;
-      // Lines placed directly above this row — before its group chip, so a line
-      // above a grouped card reads as "band boundary", not "inside the group".
+      // Custom order: lines sit directly above a CARD — emitted before its group
+      // chip, so a line above a grouped card reads as "band boundary", not "inside
+      // the group". (In project mode `above` is empty; folders are the unit there.)
       for (const sep of sepPlacement.above.get(id) ?? []) out.push(sepRow(sep));
       const gi = groupMeta.get(id);
       if (gi?.isLead) {
@@ -5556,10 +5601,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} />
       );
     }
-    // Trailing lines of the last scope (project mode: the last run; custom mode:
-    // the whole tier), plus that scope's inline "add task" row.
-    const lastScope = sepMode === 'project' ? (prevProject ?? '') : '';
-    flushSepTail(lastScope);
+    // Lines whose neighbours are all gone end up here, at the bottom of the tier:
+    // the user placed them, only their neighbourhood moved on. Then the last run's
+    // inline "add task" row.
+    for (const sep of sepPlacement.tail) out.push(sepRow(sep));
+    const lastScope = prevProject ?? '';
     if (sepMode === 'project' && runAddSignal?.tier === tier && runAddSignal.project === lastScope) {
       out.push(runAddRow(tier, lastScope));
     }
