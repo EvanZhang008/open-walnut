@@ -9,7 +9,7 @@
 
 import path from 'node:path';
 import { log } from '../../logging/index.js';
-import { addTask, getTask, updateTask, togglePin, setFocusTier, InvalidProjectNameError, ProjectSourceConflictError } from '../task-manager.js';
+import { addTask, getTask, updateTask, togglePin, setFocusTier, ensureProject, setProjectMetadata, InvalidProjectNameError, ProjectSourceConflictError } from '../task-manager.js';
 import { getSessionsForTask, updateSessionRecord } from '../session-tracker.js';
 import { bus, EventNames } from '../event-bus.js';
 import type { Task, SessionEngine } from '../types.js';
@@ -47,6 +47,12 @@ export interface QuickStartParams {
   /** Task project. Omitted/empty = Inbox; the auto-organize pass below then
    *  offers to file the task under an existing project. */
   project?: string;
+  /** `project` was DERIVED from the launch folder (the draft's "a folder is a
+   *  project" default) — when this launch CREATES the registry row, the folder is
+   *  stamped as its default_cwd so the next pick resolves straight to it. Only
+   *  the folder-derived path may claim this; a server-chosen or routine-supplied
+   *  project must not adopt whatever directory it happened to first run in. */
+  projectFromFolder?: boolean;
   /** Event-bus source tag, e.g. 'quick-start' | 'routine'. */
   source: string;
   requestTs?: number;
@@ -150,6 +156,25 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   } else {
     // Normal mode: create new task
     const title = params.taskTitle?.trim() || defaultSessionTaskTitle(cwd);
+    // Folder → default project: when THIS launch creates the registry row (the
+    // draft's folder-derived default, typically the folder's basename), the
+    // launch folder becomes the new project's default_cwd/default_host, so the
+    // next pick of that folder resolves straight to it (projectByCwd). Gated on
+    // projectFromFolder — only a folder-derived pick may bind a folder — and on
+    // `created`: an EXISTING row's mapping is the user's, never rewritten. The
+    // row does get created moments before addTask would have anyway; a rare
+    // addTask failure leaves an empty (idempotently reusable) project behind,
+    // which is harmless next to failing the launch on a registry race.
+    let projectIsNew = false;
+    if (project && params.projectFromFolder) {
+      try {
+        projectIsNew = (await ensureProject(project)).created;
+      } catch (err) {
+        // Same 400 mapping as addTask below — ensureProject runs the name gate.
+        if (err instanceof InvalidProjectNameError) throw new QuickStartError(err.message, 400);
+        throw err;
+      }
+    }
     let task: Task;
     try {
       ({ task } = await addTask({
@@ -164,6 +189,20 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       if (err instanceof InvalidProjectNameError) throw new QuickStartError(err.message, 400);
       if (err instanceof ProjectSourceConflictError) throw new QuickStartError(err.message, 409);
       throw err;
+    }
+    if (projectIsNew) {
+      try {
+        await setProjectMetadata(project, {
+          default_cwd: cwd.replace(/\/+$/, '') || cwd,
+          ...(host ? { default_host: host } : {}),
+        });
+      } catch (err) {
+        // Best-effort: the stamp only powers future folder→project resolution —
+        // never fail a launch over it.
+        log.web.warn(`${source}: failed to stamp new project default_cwd`, {
+          project, cwd, error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
     // Merge taskMeta into the initial update.
     const updates: Partial<Task> = { cwd };

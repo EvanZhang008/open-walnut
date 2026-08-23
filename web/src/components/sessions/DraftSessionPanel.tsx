@@ -149,9 +149,9 @@ interface Props {
    *  clicks fold onto the freshest row instead of a props snapshot; the owner
    *  also flips `metaTouched` here — every path into it is a user edit. */
   onMetaChange: (draftId: string, updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
-  /** Registry project whose `default_cwd` is this directory ('' = no match), so a
-   *  quick-access chip can set folder + project in one click. */
-  projectForDir: (cwd: string) => string;
+  /** Registry membership (case-insensitive) — the launch bar badges a project
+   *  that doesn't exist yet ("new"), e.g. the folder-derived default. */
+  isKnownProject: (name: string) => boolean;
   /** A landed background parse of the composer text. The owner decides what it is
    *  allowed to write (see draft-column's applyDraftParse) — the panel only
    *  delivers it. Omit to disable the backfill entirely. */
@@ -160,7 +160,7 @@ interface Props {
 
 export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose,
-  onPathChange, onProjectChange, onMetaChange, projectForDir, onAiParse,
+  onPathChange, onProjectChange, onMetaChange, isKnownProject, onAiParse,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -334,7 +334,7 @@ export function DraftSessionPanel({
           onPathChange={onPathChange}
           onProjectChange={onProjectChange}
           onMetaChange={onMetaChange}
-          projectForDir={projectForDir}
+          isKnownProject={isKnownProject}
           onAfterQuickPick={focusComposer}
         />
         <ChatInput

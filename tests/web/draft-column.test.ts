@@ -19,7 +19,7 @@ const { peek } = vi.hoisted(() => ({ peek: vi.fn<() => WorkingDirsResult | null>
 
 vi.mock('@/api/sessions', () => ({ peekWorkingDirs: peek }));
 
-const { applyDraftParse, clearAiFields, quickDirsFor } = await import(
+const { applyDraftParse, clearAiFields, quickDirsFor, projectForFolderPick } = await import(
   '@/components/sessions/draft-column'
 );
 type DraftColumn = import('@/components/sessions/draft-column').DraftColumn;
@@ -241,5 +241,69 @@ describe('clearAiFields — a user edit drops the badge, not the authority', () 
     expect(clearAiFields(d, ['project'])).toBe(d);
     const bare = draft();
     expect(clearAiFields(bare, ['project'])).toBe(bare);
+  });
+});
+
+describe('projectForFolderPick — a folder is a project unless somebody said otherwise', () => {
+  /** Registry lookup: only /home/walnut is declared (by "Walnut"). Exact-match on
+   *  a slash-stripped path, mirroring MainPage's projectForDir. */
+  const registry = (cwd: string) => (cwd === '/home/walnut' ? 'Walnut' : '');
+
+  it('a declared folder resolves to its registry owner, over any earlier value', () => {
+    expect(projectForFolderPick(draft(), '/home/walnut', registry)).toBe('Walnut');
+    // Trailing slashes are normalized before the registry lookup.
+    expect(projectForFolderPick(draft(), '/home/walnut//', registry)).toBe('Walnut');
+    // The mapping is user-configured fact — it outranks even an explicit pick.
+    const userPicked = draft({ project: 'Other', projectSource: 'user' });
+    expect(projectForFolderPick(userPicked, '/home/walnut', registry)).toBe('Walnut');
+  });
+
+  it('a folder INSIDE a declared checkout resolves to that project, not a junk basename', () => {
+    // Picking repo/web inside the checkout must not mint a "web" project.
+    expect(projectForFolderPick(draft(), '/home/walnut/web/src', registry)).toBe('Walnut');
+  });
+
+  it('re-picking the folder of the CURRENT project still returns it — the caller must latch ownership', () => {
+    // Same value, but the source may be 'ai': returning null would leave the AI
+    // free to move the project off a folder the user just explicitly picked.
+    const aiSame = draft({ project: 'Walnut', projectSource: 'ai' });
+    expect(projectForFolderPick(aiSame, '/home/walnut', registry)).toBe('Walnut');
+  });
+
+  it('an undeclared folder defaults to its basename (the project the launch creates)', () => {
+    expect(projectForFolderPick(draft(), '/repos/tidepool', registry)).toBe('tidepool');
+    // Trailing slashes don't leak into the name.
+    expect(projectForFolderPick(draft(), '/repos/tidepool///', registry)).toBe('tidepool');
+  });
+
+  it('the basename DEFAULT never overwrites an explicit user/seed project — including Inbox', () => {
+    expect(projectForFolderPick(draft({ project: 'Chosen', projectSource: 'user' }), '/repos/x', registry)).toBeNull();
+    expect(projectForFolderPick(draft({ project: 'Seeded', projectSource: 'seed' }), '/repos/x', registry)).toBeNull();
+    // Explicit "Inbox" pick ('' with source 'user') is a choice too.
+    expect(projectForFolderPick(draft({ project: '', projectSource: 'user' }), '/repos/x', registry)).toBeNull();
+  });
+
+  it('the basename default DOES replace an AI guess and an earlier folder derivation', () => {
+    expect(projectForFolderPick(draft({ project: 'AiGuess', projectSource: 'ai' }), '/repos/x', registry)).toBe('x');
+    // Second folder pick re-derives: the previous 'folder' value follows the new folder.
+    expect(projectForFolderPick(draft({ project: 'x', projectSource: 'folder' }), '/repos/y', registry)).toBe('y');
+  });
+
+  it('bound and fork drafts are never reseeded — their task already has a project', () => {
+    expect(projectForFolderPick(draft({ taskId: 't1' }), '/repos/x', registry)).toBeNull();
+    expect(projectForFolderPick(draft({ forkOf: { sessionId: 's1' } }), '/repos/x', registry)).toBeNull();
+  });
+
+  it("never derives a name the server's registry gate would reject", () => {
+    // Leading '.' (hidden dirs), '..' runs, backslashes: each would 400 the
+    // launch AFTER the draft is gone — better to leave the project alone.
+    expect(projectForFolderPick(draft(), '/home/.claude', registry)).toBeNull();
+    expect(projectForFolderPick(draft(), '/tags/v1..v2', registry)).toBeNull();
+    expect(projectForFolderPick(draft(), '/weird/back\\slash', registry)).toBeNull();
+  });
+
+  it('no-ops on an empty cwd and the filesystem root', () => {
+    expect(projectForFolderPick(draft(), '', registry)).toBeNull();
+    expect(projectForFolderPick(draft(), '/', registry)).toBeNull();
   });
 });

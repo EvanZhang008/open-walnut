@@ -3,13 +3,17 @@
  * folders one click away, and the one whose contents are a ranking DECISION rather
  * than a rendering detail.
  *
- * Three claims, none of which the sibling lifecycle spec can make:
+ * Four claims, none of which the sibling lifecycle spec can make:
  *   1. the row is the R6 MIX — top 2 by absolute use count, then the 2 most recent —
  *      in that order, and that this is a DIFFERENT answer from the server's single
  *      frecency order (scenario 1);
  *   2. one click sets BOTH halves of "where does this run" (folder + the project
  *      that declares it as its `default_cwd`), off the synchronous caches only;
- *   3. no `default_cwd` match leaves the project UNTOUCHED — never cleared.
+ *   3. no `default_cwd` match leaves a SEEDED/user-picked project UNTOUCHED —
+ *      never cleared;
+ *   4. no match on an UNCLAIMED draft derives the project from the folder — the
+ *      basename, badged "new" — and launching stamps the auto-created registry row
+ *      with the folder as its `default_cwd`, so the next pick resolves via rule 2.
  *
  * Why the mix is asserted against a CAPTURED payload rather than fixture folder
  * names: `frequent-directories.json` is live state on a SHARED fixture server that
@@ -22,6 +26,7 @@
  * tests/e2e/browser/draft-session-seeds.spec.ts for the seeding entry points.
  */
 
+import fs from 'node:fs'
 import { test, expect } from '@playwright/test'
 import {
   basenameOf, discoverFixtureRoot, draftChipPaths, draftComposer, draftCwdPill, draftPanel,
@@ -56,9 +61,10 @@ const CHIP_CWD = (root: string): string => `${root}/projects/wallets`
 let fixtureRoot = ''
 test.beforeAll(async () => { fixtureRoot = await discoverFixtureRoot() })
 
-// A real CLI spawn (scenario 1 launches to age the store) plus round-trips that
-// queue behind the fixture's session health monitor on its seeded 500-session
-// dataset — same budget as the siblings, for the same reasons.
+// Real CLI spawns (scenarios 1 and 4 both launch — one to age the store, one to
+// prove the auto-create + stamp) plus round-trips that queue behind the fixture's
+// session health monitor on its seeded 500-session dataset — same budget as the
+// siblings, for the same reasons.
 test.setTimeout(180_000)
 
 // Serial: all three drive ONE shared working-dirs store and project registry.
@@ -335,4 +341,68 @@ test('a quick-access chip for an unclaimed folder sets the cwd and keeps the see
   expect(seen, 'the chip must not fetch to decide there is no project').toEqual([])
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03-chip-keeps-project.png`, fullPage: false })
+})
+
+// ── 4. An unclaimed folder on an UNCLAIMED draft derives the project from it ─
+
+test('an unclaimed folder defaults the project to its basename, badged new, and launching stamps default_cwd', async ({ page }) => {
+  // "A folder is a project": with nobody having picked/seeded a project, choosing a
+  // folder no registry project declares must fill the project pill with the
+  // folder's BASENAME (the project the launch will auto-create) instead of leaving
+  // the task in the Inbox — the two-step "pick folder, then also create a project
+  // for it" chore this feature removes. The launch then stamps the auto-created
+  // row's default_cwd, which is what makes the mapping stick for the NEXT pick
+  // (scenario 2's one-click rule).
+  //
+  // A FRESH directory rather than a fixture chip: the fixture folders' basenames
+  // (walnut/wallets/mcps) are all registered project names on the seeded server,
+  // where the pill legitimately resolves to the EXISTING project and no "new"
+  // badge shows — the full claim (derive + badge + auto-create + stamp) needs a
+  // name the registry has never seen. mkdir on the test side is fine: the fixture
+  // root is a local temp tree, and the user story starts at "I made a folder".
+  const projectName = `driftwood-${Date.now().toString(36)}`
+  const cwd = `${fixtureRoot}/projects/${projectName}`
+  fs.mkdirSync(cwd, { recursive: true })
+
+  await page.setViewportSize({ width: 2400, height: 1000 })
+  await loadHome(page)
+  // The REAL picker (type path + Shift+Enter), not a chip — a brand-new folder is
+  // never in the frecency row, so this is exactly the route a user takes.
+  const panel = await openDraftOnCwd(page, cwd)
+
+  // The pick fills the project pill with the folder's basename, badged "new"
+  // (same badge + meaning as Quick Task's confirm panel): this project doesn't
+  // exist yet, starting will create it.
+  await expect(draftProjectPill(panel)).toContainText(projectName)
+  await expect(draftProjectPill(panel).locator('.qtc-confirm-new')).toHaveText('new')
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/04-folder-derived-project.png`, fullPage: false })
+
+  // Launch for real: the task files under the derived project, and the registry
+  // row the launch auto-created now DECLARES this folder (default_cwd stamped
+  // server-side), closing the loop — the next pick of this folder is scenario 2.
+  await draftComposer(page).fill(`folder-derived project launch ${Date.now()}`)
+  const launched = page.waitForResponse((res) =>
+    res.request().method() === 'POST' && new URL(res.url()).pathname === '/api/sessions/quick-start' && res.ok())
+  await panel.locator('.draft-start-btn').click()
+  const body = (await (await launched).json()) as { taskId?: string }
+  expect(body.taskId, 'quick-start returned a task id').toBeTruthy()
+
+  const { task } = (await (await page.request.get(`/api/tasks/${body.taskId}`)).json()) as { task?: { project?: string } }
+  expect(task?.project, 'the task filed under the folder-derived project').toBe(projectName)
+
+  await expect.poll(async () => {
+    const res = (await (await page.request.get('/api/projects')).json()) as {
+      projects?: Array<{ name: string; source: string; metadata?: { default_cwd?: string } }>
+    }
+    const row = res.projects?.find((p) => p.name.toLowerCase() === projectName.toLowerCase())
+    return row ? { source: row.source, default_cwd: row.metadata?.default_cwd } : null
+  }, { timeout: 15_000, message: 'the auto-created project row carries the launch folder' })
+    .toEqual({ source: 'local', default_cwd: cwd })
+
+  // Clean the claim up: on a REUSED local fixture server every run of this
+  // scenario would otherwise leave one more project claiming a folder, slowly
+  // shrinking the unclaimed pool scenario 3 draws from. (The task it filed moves
+  // to the Inbox — fine, the shared fixture accretes tasks from every spec.)
+  const del = await page.request.delete(`/api/projects/${encodeURIComponent(projectName)}`)
+  expect(del.ok(), await del.text()).toBe(true)
 })

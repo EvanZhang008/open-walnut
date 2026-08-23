@@ -50,9 +50,9 @@ interface Props {
   onPathChange: (draftId: string, path: QuickStartPath, meta: QuickStartTaskMeta) => void;
   onProjectChange: (draftId: string, project: string) => void;
   onMetaChange: (draftId: string, updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
-  /** Registry project whose `default_cwd` is this directory ('' = leave the
-   *  project as-is). Lets a quick chip set folder + project in one click. */
-  projectForDir: (cwd: string) => string;
+  /** Registry membership (case-insensitive) — drives the project pill's "new"
+   *  badge when the launch will auto-create the project (folder-derived name). */
+  isKnownProject: (name: string) => boolean;
   /** Called after a chip pick so the owner can put the caret back in the composer. */
   onAfterQuickPick?: () => void;
 }
@@ -78,7 +78,7 @@ function basename(cwd: string): string {
 
 export function DraftLaunchBar({
   draft, pickerOpen, onOpenPicker, onClosePicker,
-  onPathChange, onProjectChange, onMetaChange, projectForDir, onAfterQuickPick,
+  onPathChange, onProjectChange, onMetaChange, isKnownProject, onAfterQuickPick,
 }: Props) {
   const projectBtnRef = useRef<HTMLButtonElement>(null);
   // Anchor for the folder picker's POPOUT: the panel portals to <body> (so the
@@ -110,22 +110,25 @@ export function DraftLaunchBar({
   // A quick chip is a full path pick: it goes through the SAME onPathChange the
   // picker uses (so it pins the cwd and can't be overwritten by a late project
   // default), carrying that folder's remembered model/engine unless the user has
-  // already edited the meta. It ALSO sets the project — the registry project
-  // whose default_cwd is this folder — so one click configures both, which is the
-  // whole point of the row. No match ⇒ the project is left alone (never cleared:
-  // a seeded project must survive a folder pick).
+  // already edited the meta. The PROJECT rides the same write — the owner's
+  // handleDraftPathChange derives it from the folder (registry owner, else the
+  // basename the launch will auto-create; see projectForFolderPick), so one click
+  // configures both, which is the whole point of the row.
   const pickDir = useCallback((d: WorkingDirEntry) => {
     onPathChange(
       draft.id,
       { cwd: d.cwd, host: d.host, ...(d.hostLabel ? { hostLabel: d.hostLabel } : {}) },
       draft.metaTouched ? draft.meta : applyLaunchMemory(draft.meta, d.lastLaunch),
     );
-    const project = projectForDir(d.cwd);
-    if (project && project !== draft.project) onProjectChange(draft.id, project);
     onAfterQuickPick?.();
-  }, [draft.id, draft.meta, draft.metaTouched, draft.project, onPathChange, onProjectChange, projectForDir, onAfterQuickPick]);
+  }, [draft.id, draft.meta, draft.metaTouched, onPathChange, onAfterQuickPick]);
 
   const isFork = !!draft.forkOf;
+  // The pill's project doesn't exist yet — launching will create it (the
+  // folder-derived default, or a name the AI invented). Same badge + meaning as
+  // the Quick Task confirm panel's. Never on a fork: its project is the source
+  // task's, already real.
+  const projectIsNew = !isFork && !!draft.project && !isKnownProject(draft.project);
   // No quick chips on a fork draft: the folder is immutable, so a row of other
   // folders would be five inert buttons (or worse, five ways to break the fork).
   const chips = isFork ? [] : quickDirsFor();
@@ -228,9 +231,12 @@ export function DraftLaunchBar({
           disabled={isFork}
           title={isFork
             ? 'The forked task files as a sibling of the source task, in its project'
-            : 'Project the new task files under'}
+            : projectIsNew
+              ? `Project "${draft.project}" doesn't exist yet — starting will create it`
+              : 'Project the new task files under'}
         >
           {draft.project || 'Inbox'}
+          {projectIsNew && <span className="qtc-confirm-new">new</span>}
           <AiBadge on={isAi('project')} />
         </button>
         {projectOpen && (

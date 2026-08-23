@@ -34,10 +34,12 @@ export type DraftAiField =
   'project' | 'cwd' | 'pinTier' | 'priority' | 'dueDate' | 'startDate' | 'endDate';
 
 /** Who put the current `project` on the row — the ownership rule the AI backfill
- *  obeys. 'seed' = a project/tier "+" seeded it, 'user' = an explicit pick (pill
- *  or quick chip), 'ai' = the background parse (overwritable by a later parse).
+ *  obeys. 'seed' = a project/tier "+" seeded it, 'user' = an explicit pick on the
+ *  project pill, 'ai' = the background parse (overwritable by a later parse),
+ *  'folder' = derived from a folder pick (projectForFolderPick) — final against
+ *  the AI like 'user'/'seed', but a later folder pick re-derives it.
  *  undefined = nobody, i.e. Inbox. */
-export type DraftProjectSource = 'user' | 'seed' | 'ai';
+export type DraftProjectSource = 'user' | 'seed' | 'ai' | 'folder';
 
 export interface DraftColumn {
   /** `draft:<ts>-<seq>` — also the session-strip column id. */
@@ -231,6 +233,58 @@ function lastUsedMs(d: WorkingDirEntry): number {
 /** A project's declared folder, looked up by lowercased name
  *  (`useProjectRegistry().projectDefaults`). */
 export type ProjectDefaultLookup = (project: string) => { cwd: string; host: string | null } | undefined;
+
+/** Mirror of the server's project-name gate (task-manager's
+ *  assertValidProjectName) for the parts a folder BASENAME can violate: leading
+ *  '.', a '..' run, a backslash, NUL. Deriving a name the launch would 400 on
+ *  turns Start into a dead end (the draft is already gone by then), so an
+ *  underivable folder simply doesn't seed a project. */
+function isDerivableProjectName(name: string): boolean {
+  return !!name && !name.startsWith('.') && !name.includes('..')
+    && !name.includes('\\') && !name.includes('\0');
+}
+
+/**
+ * The project a FOLDER PICK should put on the draft — "a folder is a project"
+ * unless somebody explicitly said otherwise. Returns the project name to set
+ * (caller marks it `projectSource: 'folder'`), or null to leave the row alone.
+ *
+ *  1. A registry project DECLARES this folder — or an ANCESTOR of it — as its
+ *     `default_cwd` → that project, always: the mapping is user-configured fact,
+ *     so it outranks any earlier value on the row. Nearest ancestor wins, so
+ *     picking `repo/web` inside the checkout `repo` declares still files under
+ *     the repo's project instead of minting a junk `web` project.
+ *  2. No owner anywhere up the path → the folder's basename, as the project this
+ *     launch will auto-create (quick-start stamps the new row's `default_cwd`, so
+ *     the next pick of this folder resolves via rule 1). This is only a DEFAULT,
+ *     so it never overwrites an explicit 'user'/'seed' project — including an
+ *     explicit "Inbox" pick ('' with source 'user') — only unclaimed/'ai'/
+ *     'folder' rows, and never derives a name the server's registry gate rejects.
+ *  3. Bound and fork drafts are skipped entirely: their task already has a
+ *     project, and the launch reuses it — reseeding the pill would make it lie.
+ *
+ * The resolved name is returned even when it EQUALS the row's current project:
+ * the caller latching `projectSource: 'folder'` is the point — leaving an 'ai'
+ * source in place would let the next background parse move the project off a
+ * folder the user just explicitly picked.
+ */
+export function projectForFolderPick(
+  draft: Pick<DraftColumn, 'project' | 'projectSource' | 'taskId' | 'forkOf'>,
+  cwd: string,
+  projectForDir: (cwd: string) => string,
+): string | null {
+  if (!cwd || draft.taskId || draft.forkOf) return null;
+  const clean = cwd.replace(/\/+$/, '');
+  if (!clean) return null;
+  // Rule 1, nearest declared ancestor first: /a/b/c, /a/b, /a.
+  for (let p = clean; p && p !== '/'; p = p.slice(0, p.lastIndexOf('/')) || '/') {
+    const owned = projectForDir(p);
+    if (owned) return owned;
+  }
+  if (draft.projectSource === 'user' || draft.projectSource === 'seed') return null;
+  const name = clean.split('/').pop() ?? '';
+  return isDerivableProjectName(name) ? name : null;
+}
 
 /**
  * Fold a background parse of the composer text into a draft row.

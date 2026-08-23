@@ -250,7 +250,7 @@ function buildFixWalnutMessage(userReport: string): string {
 sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: NextFunction) => {
   const requestTs = Date.now()
   try {
-    const { cwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, project, intent, createCwd, engine } = req.body as {
+    const { cwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, project, projectFromFolder, intent, createCwd, engine } = req.body as {
       cwd: string
       host?: string
       message: string
@@ -260,6 +260,9 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       taskId?: string // retry mode: reuse existing task instead of creating a new one
       /** File the new task under this project (created if unknown). Omitted/empty = Inbox. */
       project?: string
+      /** `project` was derived from the picked folder — a NEWLY created registry
+       *  row gets the launch folder stamped as its default_cwd. */
+      projectFromFolder?: boolean
       // A retired `starred` key from an older client is silently ignored (this
       // is a body cast — unlisted JSON fields never reach quickStartSession).
       taskMeta?: {
@@ -441,8 +444,11 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         engine: engine === 'codex' ? 'codex' : undefined,
         preassignedSessionId,
         // Client project seed (project-header "+ → Add session"). fixWalnutExtras
-        // spreads AFTER so a repair launch always files under 'Walnut'.
-        ...(project?.trim() ? { project: project.trim() } : {}),
+        // spreads AFTER so a repair launch always files under 'Walnut' — and a
+        // repair also drops the folder-derived flag with it (its project wasn't
+        // derived from the folder anymore).
+        ...(project?.trim() ? { project: project.trim(), projectFromFolder: projectFromFolder === true } : {}),
+        ...(isFixWalnut ? { projectFromFolder: false } : {}),
         ...fixWalnutExtras,
       })
       // Remember this folder's launch config for next time (fire-and-forget).

@@ -36,7 +36,7 @@ import express from 'express';
 import request from 'supertest';
 import { sessionsRouter } from '../../../src/web/routes/sessions.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
-import { _resetForTesting as resetTaskManager, getTask, getStoreProjects } from '../../../src/core/task-manager.js';
+import { _resetForTesting as resetTaskManager, getTask, getStoreProjects, getProjectMetadata, setProjectMetadata } from '../../../src/core/task-manager.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 
 function createApp() {
@@ -126,6 +126,70 @@ describe('POST /api/sessions/quick-start — project param', () => {
     expect(task.project).toBe('Marina');
     const projects = await getStoreProjects();
     expect(Object.keys(projects).filter((k) => k.toLowerCase() === 'marina')).toEqual(['Marina']);
+  });
+
+  it('stamps a NEWLY created folder-derived project with the launch folder as default_cwd', async () => {
+    const app = createApp();
+    const res = await request(app).post('/api/sessions/quick-start')
+      .send({ cwd: '/repos/tidepool/', message: 'go', project: 'tidepool', projectFromFolder: true });
+
+    expect(res.status).toBe(200);
+    const meta = await getProjectMetadata('tidepool');
+    // Trailing slash normalized away — projectByCwd on the web side keys verbatim
+    // minus trailing slashes, so the stamp must match that shape.
+    expect(meta?.default_cwd).toBe('/repos/tidepool');
+    expect(meta?.default_host).toBeUndefined();
+  });
+
+  it('stamps default_host too when the launch targets a remote host', async () => {
+    const app = createApp();
+    const res = await request(app).post('/api/sessions/quick-start')
+      .send({ cwd: '/repos/acme', message: 'go', project: 'acme', host: 'devbox', projectFromFolder: true });
+
+    expect(res.status).toBe(200);
+    const meta = await getProjectMetadata('acme');
+    expect(meta?.default_cwd).toBe('/repos/acme');
+    expect(meta?.default_host).toBe('devbox');
+  });
+
+  it('WITHOUT projectFromFolder a new project is created but NOT stamped', async () => {
+    // A routine or server-chosen project must not adopt whatever directory it
+    // happened to first run in — only the draft's folder-derived pick may bind.
+    const app = createApp();
+    const res = await request(app).post('/api/sessions/quick-start')
+      .send({ cwd: '/scratch/tmp-run', message: 'go', project: 'Drifter' });
+
+    expect(res.status).toBe(200);
+    const projects = await getStoreProjects();
+    expect(projects['Drifter']?.source).toBe('local');
+    const meta = await getProjectMetadata('Drifter');
+    expect(meta?.default_cwd ?? undefined).toBeUndefined();
+  });
+
+  it("NEVER rewrites an EXISTING project's default_cwd", async () => {
+    const app = createApp();
+    await setProjectMetadata('Marina', { default_cwd: '/home/marina' });
+    const res = await request(app).post('/api/sessions/quick-start')
+      .send({ cwd: '/somewhere/else', message: 'go', project: 'Marina', projectFromFolder: true });
+
+    expect(res.status).toBe(200);
+    const meta = await getProjectMetadata('Marina');
+    expect(meta?.default_cwd).toBe('/home/marina');
+  });
+
+  it('an existing project WITHOUT default_cwd stays unstamped (only a first create earns one)', async () => {
+    const app = createApp();
+    // Row exists from a prior create…
+    await request(app).post('/api/sessions/quick-start')
+      .send({ cwd: '/first/place', message: 'go', project: 'Roamer', projectFromFolder: true });
+    // Wipe the stamp to simulate a user who cleared it / a pre-feature row.
+    await setProjectMetadata('Roamer', { default_cwd: null });
+    const res = await request(app).post('/api/sessions/quick-start')
+      .send({ cwd: '/second/place', message: 'go', project: 'Roamer', projectFromFolder: true });
+
+    expect(res.status).toBe(200);
+    const meta = await getProjectMetadata('Roamer');
+    expect(meta?.default_cwd ?? null).toBeNull();
   });
 
   it('fix-walnut intent overrides a client project seed', async () => {

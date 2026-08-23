@@ -32,7 +32,7 @@ import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import {
   applyDraftParse, clearAiFields, draftComposerKey, withDirLaunchMemory,
-  launchDivergesFromDirMemory, type DraftColumn,
+  launchDivergesFromDirMemory, projectForFolderPick, type DraftColumn,
 } from '@/components/sessions/draft-column';
 import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
 import { SessionSearchPanel } from '@/components/sessions/SessionSearchPanel';
@@ -1235,6 +1235,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     forgetDraft(draftId);
   }, [forgetDraft]);
 
+  /** Ref mirror of `projectForDir` (defined below, on the registry's projectByCwd)
+   *  so the []-dep handleDraftPathChange reads the LIVE registry, not a mount-time
+   *  snapshot — same pattern as projectDefaultsRef. */
+  const projectForDirRef = useRef<(cwd: string) => string>(() => '');
+
   /**
    * A cwd/host pick landed on this draft (folder picker, or a recent-dir chip in
    * the draft body).
@@ -1250,21 +1255,32 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    * "the user chose this" (see launchDivergesFromDirMemory), and without latching
    * it here a later cwd change would refresh model/engine right back over the
    * choice they just made inside the picker.
+   *
+   * The PROJECT follows the folder in the same write ("a folder is a project"):
+   * the registry owner of the folder when one declares it, else the folder's
+   * basename as the project the launch will auto-create. projectForFolderPick
+   * owns the rules (never over a 'user'/'seed' pick, never on bound/fork drafts);
+   * seeding here — the ONE state writer every folder pick routes through — is what
+   * makes the quick chips and the full picker behave identically.
    */
   const handleDraftPathChange = useCallback((draftId: string, path: QuickStartPath, meta: QuickStartTaskMeta) => {
-    setDraftColumns(prev => prev.map(d => (d.id === draftId
+    setDraftColumns(prev => prev.map(d => {
+      if (d.id !== draftId) return d;
+      const project = projectForFolderPick(d, path.cwd, projectForDirRef.current);
       // `createCwd` is always REWRITTEN (never merged) so re-picking an existing
       // folder clears a stale "create it" flag from an earlier pick.
-      ? {
-          // The folder is now the user's own pick (`cwdPinned`), so any ✦ the AI
-          // put on it is no longer true — drop the badge with the same write.
-          ...clearAiFields(d, ['cwd']),
-          cwd: path.cwd, host: path.host, hostLabel: path.hostLabel, meta, cwdPinned: true,
-          userTouched: true,
-          createCwd: path.createCwd === true,
-          metaTouched: d.metaTouched || launchDivergesFromDirMemory(meta, path.cwd, path.host),
-        }
-      : d)));
+      return {
+        // The folder is now the user's own pick (`cwdPinned`), so any ✦ the AI
+        // put on it is no longer true — drop the badge with the same write. A
+        // folder-derived project likewise replaces an AI guess, badge included.
+        ...clearAiFields(d, project !== null ? ['cwd', 'project'] : ['cwd']),
+        cwd: path.cwd, host: path.host, hostLabel: path.hostLabel, meta, cwdPinned: true,
+        userTouched: true,
+        createCwd: path.createCwd === true,
+        metaTouched: d.metaTouched || launchDivergesFromDirMemory(meta, path.cwd, path.host),
+        ...(project !== null ? { project, projectSource: 'folder' as const } : {}),
+      };
+    }));
   }, []);
 
   /** Project pill / quick-access chip → an EXPLICIT project choice. `projectSource:
@@ -1294,13 +1310,22 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, []);
 
   /** Which registry project OWNS this folder (its `default_cwd`), so a draft's
-   *  quick-access chip sets folder + project in one click. '' = no project
-   *  declares it, in which case the caller leaves the project alone rather than
-   *  clearing a seeded one. Reads the already-loaded registry — no fetch, which
-   *  the draft path requires. */
+   *  folder pick sets folder + project in one gesture. '' = no project declares
+   *  it — projectForFolderPick then walks the ancestors and finally derives the
+   *  folder's basename as the default (see its doc). Reads the already-loaded
+   *  registry — no fetch, which the draft path requires. */
   const projectForDir = useCallback(
     (cwd: string) => projectByCwd.get(cwd.replace(/\/+$/, '')) ?? '',
     [projectByCwd],
+  );
+  projectForDirRef.current = projectForDir;
+
+  /** Registry membership for the launch bar's "new" badge — reports everything as
+   *  known until the registry has actually LOADED, so a seeded draft rendered in
+   *  that window can't flash "new" on a project that exists. */
+  const isKnownProjectLoaded = useCallback(
+    (name: string) => !projectRegistry.loaded || projectRegistry.isKnownProject(name),
+    [projectRegistry.loaded, projectRegistry.isKnownProject],
   );
 
   /** A launch-meta edit from the draft's launch bar (model / engine / pin tier /
@@ -2073,6 +2098,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       columnId?: string;
       /** Reuse this task instead of letting the server create one (task ▶ Start). */
       taskId?: string;
+      /** `project` was DERIVED from the picked folder (projectSource 'folder') —
+       *  tells the server to stamp a newly created project row with this folder
+       *  as its default_cwd. Only the folder-derived path may claim that. */
+      projectFromFolder?: boolean;
     },
   ) => {
       // Set pending ref BEFORE the async call so WS events that arrive
@@ -2138,6 +2167,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         model,
         engine,
         project,
+        projectFromFolder: opts?.projectFromFolder,
         intent: qsp.intent,
         createCwd: qsp.createCwd,
         taskId: opts?.taskId,
@@ -2261,7 +2291,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       draft.project || undefined,
       // `taskId` on a bound draft REUSES that task (server's existingTaskId
       // branch) instead of minting a second one for the same work.
-      { columnId: draftId, ...(draft.taskId ? { taskId: draft.taskId } : {}) },
+      {
+        columnId: draftId,
+        ...(draft.taskId ? { taskId: draft.taskId } : {}),
+        // Folder-derived project → the server may stamp a NEW row's default_cwd.
+        ...(draft.project && draft.projectSource === 'folder' ? { projectFromFolder: true } : {}),
+      },
     );
     return true;
   }, [forgetDraft, launchQuickStart, handleForkPending, handleForkResolved, handleForkFailed]);
@@ -3076,8 +3111,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     onPathChange={handleDraftPathChange}
                     onProjectChange={handleDraftProjectChange}
                     onMetaChange={handleDraftMetaChange}
-                    // Lets a quick-access chip set folder + project together.
-                    projectForDir={projectForDir}
+                    // "new" badge on a project the launch will auto-create.
+                    isKnownProject={isKnownProjectLoaded}
                     // Back-fills the launch pills from what the user types (R9).
                     onAiParse={handleDraftAiParse}
                   />

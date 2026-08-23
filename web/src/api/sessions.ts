@@ -647,6 +647,9 @@ export async function quickStartSession(opts: {
   taskMeta?: QuickStartTaskMeta;
   /** File the new task under this project (created if unknown). Omitted = Inbox / server default. */
   project?: string;
+  /** `project` was derived from the picked folder — a NEWLY created project row
+   *  gets that folder stamped as its default_cwd (folder→project memory). */
+  projectFromFolder?: boolean;
   /** Launch intent — 'fix-walnut' makes the server wrap the message in a repair briefing. */
   intent?: 'fix-walnut';
   /** User opted into "create & start": server mkdirs the cwd before starting. */
