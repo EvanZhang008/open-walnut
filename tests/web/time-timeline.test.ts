@@ -6,9 +6,10 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  AXIS_PAD_HOURS, HOUR_MIN, MIN_AXIS_HOURS, TASK_COLORS,
-  axisRange, clockLabel, dayLabel, dayLengthMin, dayStartMs, formatDuration, hourLabel,
-  minuteOfDay, shiftDate, taskColor,
+  AXIS_PAD_HOURS, HOUR_MIN, HOUR_PX, LABEL_MIN_PX, LEGEND_TOP_ROWS, MIN_AXIS_HOURS, MIN_BLOCK_PX,
+  QUICK_TOUCH_MS, TASK_COLORS,
+  axisRange, clockLabel, dayLabel, dayLengthMin, dayStartMs, formatDuration, groupLegend, hourLabel,
+  minuteOfDay, planDrawMerge, shiftDate, taskColor, type LegendRow,
 } from '@/components/settings/sections/time-timeline';
 
 const DAY = 24 * HOUR_MIN;
@@ -59,11 +60,10 @@ describe('axisRange', () => {
   });
 
   it('labels every hour it spans, ascending and gapless', () => {
-    // 9-12 padded is 8-13, five hours — one short of the minimum, so the axis
-    // grows downward to 8-14 and labels the six hours it now covers.
+    // 9-12 padded is 8-13: already past the minimum, so it is drawn as it is.
     const range = axisRange([span(9, 12)], { lengthMin: DAY });
-    expect(range.hours).toEqual([8, 9, 10, 11, 12, 13]);
-    expect(range.hours.length).toBe(MIN_AXIS_HOURS);
+    expect(range.hours).toEqual([8, 9, 10, 11, 12]);
+    expect(range.hours.length).toBeGreaterThanOrEqual(MIN_AXIS_HOURS);
   });
 
   it('labels exactly the hours it spans once the span is wide enough', () => {
@@ -165,5 +165,114 @@ describe('labels', () => {
     expect(formatDuration(4_000)).toBe('4s');
     expect(formatDuration(90_000)).toBe('2m');
     expect(formatDuration(2 * 3_600_000 + 7 * 60_000)).toBe('2h 07m');
+  });
+});
+
+describe('legend grouping', () => {
+  const row = (title: string, ms: number): LegendRow => ({ taskId: `t_${title}`, title, ms });
+
+  it('ranks by time and caps the visible rows', () => {
+    const rows = Array.from({ length: 14 }, (_, i) => row(`task ${i}`, (i + 1) * 10 * 60_000));
+    const g = groupLegend(rows);
+    expect(g.main).toHaveLength(LEGEND_TOP_ROWS);
+    expect(g.main[0]!.ms).toBe(140 * 60_000); // biggest first
+    expect(g.hidden).toHaveLength(6);
+    expect(g.hiddenMs).toBe(g.hidden.reduce((a, r) => a + r.ms, 0));
+  });
+
+  it('collapses everything under two minutes into one group', () => {
+    // The real day that broke this: three destinations plus a tail of 11s / 2s /
+    // 1s touches, all printed as equals.
+    const rows = [row('big', 40 * 60_000), row('mid', 5 * 60_000), row('a', 11_000), row('b', 2_000), row('c', 1_000)];
+    const g = groupLegend(rows);
+    expect(g.main.map((r) => r.title)).toEqual(['big', 'mid']);
+    expect(g.quick.map((r) => r.title)).toEqual(['a', 'b', 'c']);
+    expect(g.quickMs).toBe(14_000);
+    expect(g.hidden).toHaveLength(0);
+  });
+
+  it('counts a row exactly at the quick-touch line as real work', () => {
+    const g = groupLegend([row('edge', QUICK_TOUCH_MS)]);
+    expect(g.main).toHaveLength(1);
+    expect(g.quick).toHaveLength(0);
+  });
+
+  it('never loses a row: main + hidden + quick is the whole input', () => {
+    const rows = Array.from({ length: 21 }, (_, i) => row(`t${i}`, i * 30_000));
+    const g = groupLegend(rows);
+    expect(g.main.length + g.hidden.length + g.quick.length).toBe(21);
+  });
+
+  it('is stable for equal durations (title order), so rows never jitter', () => {
+    const g = groupLegend([row('beta', 60_000 * 5), row('alpha', 60_000 * 5)]);
+    expect(g.main.map((r) => r.title)).toEqual(['alpha', 'beta']);
+  });
+});
+
+describe('dense-render geometry', () => {
+  it('gives an hour real vertical room, so minutes are distinguishable', () => {
+    // At 48px/hour a 30s touch is 0.4px. The whole density problem starts here.
+    expect(HOUR_PX).toBeGreaterThanOrEqual(90);
+  });
+
+  it('keeps a floor under every block and a text threshold above it', () => {
+    expect(MIN_BLOCK_PX).toBeGreaterThanOrEqual(8);
+    // Text must need MORE room than the minimum block, otherwise an 8px sliver
+    // renders a clipped "No ta…" over its own edges. It must also stay low
+    // enough to label a 10-minute block (16px at this scale), or a real day of
+    // 10-minute heartbeat slices renders as a wall of anonymous colour.
+    expect(LABEL_MIN_PX).toBeGreaterThan(MIN_BLOCK_PX + 4);
+    expect(LABEL_MIN_PX).toBeLessThanOrEqual(16);
+  });
+});
+
+describe('planDrawMerge', () => {
+  const item = (taskId: string, startMin: number, endMin: number, kind = 'session') =>
+    ({ taskId, kind, startMin, endMin });
+
+  it('folds same-task slivers whose inflated boxes would collide', () => {
+    // Two 30s touches 90s apart: no overlap in MINUTES, but both draw 8px tall,
+    // so on screen the second lands inside the first.
+    const runs = planDrawMerge([item('t1', 600, 600.5), item('t1', 602, 602.5)]);
+    expect(runs).toEqual([[0, 1]]);
+  });
+
+  it('leaves a real gap alone', () => {
+    const runs = planDrawMerge([item('t1', 600, 600.5), item('t1', 640, 640.5)]);
+    expect(runs).toEqual([[0], [1]]);
+  });
+
+  it('never folds two different tasks, however close they draw', () => {
+    const runs = planDrawMerge([item('t1', 600, 600.5), item('t2', 600, 600.5)]);
+    expect(runs).toHaveLength(2);
+    expect(runs.flat().sort()).toEqual([0, 1]);
+  });
+
+  it('never folds across kinds', () => {
+    const runs = planDrawMerge([item('t1', 600, 600.5), item('t1', 601, 601.5, 'chat')]);
+    expect(runs).toHaveLength(2);
+  });
+
+  it('cannot bridge more than the inflation it exists to fix', () => {
+    // The whole point: this pass may only hide a gap the 8px minimum invented,
+    // never a real pause in the day. 6 minutes is beyond any inflated box.
+    const runs = planDrawMerge([item('t1', 600, 600.5), item('t1', 606, 606.5)]);
+    expect(runs).toEqual([[0], [1]]);
+  });
+
+  it('keeps every input exactly once and orders runs by start', () => {
+    const items = [
+      item('t1', 700, 700.5), item('t2', 600, 610), item('t1', 701, 701.5), item('t2', 620, 621),
+    ];
+    const runs = planDrawMerge(items);
+    expect(runs.flat().slice().sort((a, b) => a - b)).toEqual([0, 1, 2, 3]);
+    expect(items[runs[0]![0]!]!.startMin).toBeLessThan(items[runs[1]![0]!]!.startMin);
+  });
+
+  it('grows a run transitively while the boxes keep touching', () => {
+    const runs = planDrawMerge([
+      item('t1', 600, 600.5), item('t1', 602, 602.5), item('t1', 604, 604.5),
+    ]);
+    expect(runs).toEqual([[0, 1, 2]]);
   });
 });

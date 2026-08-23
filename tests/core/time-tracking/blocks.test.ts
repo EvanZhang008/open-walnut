@@ -57,7 +57,7 @@ describe('dayBoundsMs', () => {
 
   it('answers empty for an unreal date instead of throwing', () => {
     expect(foldDayBlocks([rec()], { date: '2026-02-31' })).toEqual({
-      date: '2026-02-31', blocks: [], unplacedMs: 0,
+      date: '2026-02-31', blocks: [], shortMs: 0, foldedMs: 0,
     });
   });
 });
@@ -115,29 +115,38 @@ describe('gap merge', () => {
   });
 });
 
-describe('sub-minute threshold', () => {
-  it('drops a block shorter than the floor and reports its time as unplaced', () => {
-    const { blocks, unplacedMs } = foldDayBlocks([
+describe('draw floor', () => {
+  it('is low enough that short work still draws', () => {
+    // A real 75-minute day arrived as mostly sub-minute touches; a 60s floor made
+    // a third of it invisible.
+    expect(MIN_BLOCK_MS).toBeLessThanOrEqual(30_000);
+    const { blocks } = foldDayBlocks([rec({ ts: at(9, 0), durationMs: 45_000 })], { date: DATE });
+    expect(blocks).toHaveLength(1);
+  });
+
+  it('drops a block under the floor and reports it as SHORT, not folded', () => {
+    const { blocks, shortMs, foldedMs } = foldDayBlocks([
       rec({ ts: at(9, 0), durationMs: MIN_BLOCK_MS - 1 }),
     ], { date: DATE });
     expect(blocks).toHaveLength(0);
-    expect(unplacedMs).toBe(MIN_BLOCK_MS - 1);
+    expect(shortMs).toBe(MIN_BLOCK_MS - 1);
+    expect(foldedMs).toBe(0);
   });
 
   it('keeps a block exactly at the floor', () => {
-    const { blocks, unplacedMs } = foldDayBlocks([
+    const { blocks, shortMs } = foldDayBlocks([
       rec({ ts: at(9, 0), durationMs: MIN_BLOCK_MS }),
     ], { date: DATE });
     expect(blocks).toHaveLength(1);
-    expect(unplacedMs).toBe(0);
+    expect(shortMs).toBe(0);
   });
 
   it('keeps fragments that merge past the floor together', () => {
     const records = Array.from({ length: 4 }, (_, i) => rec({ ts: at(9, 0, i * 20), durationMs: 20_000 }));
-    const { blocks, unplacedMs } = foldDayBlocks(records, { date: DATE });
+    const { blocks, shortMs } = foldDayBlocks(records, { date: DATE });
     expect(blocks).toHaveLength(1);
     expect(blocks[0]!.ms).toBe(80_000);
-    expect(unplacedMs).toBe(0);
+    expect(shortMs).toBe(0);
   });
 });
 
@@ -205,43 +214,45 @@ describe('midnight', () => {
     expect(localHm(blocks[0]!.endTs)).toBe('01:00');
   });
 
-  it('reports a window entirely outside the day as unplaced, not as a block', () => {
-    const { blocks, unplacedMs } = foldDayBlocks([
+  it('reports a window entirely outside the day as folded, not as a block', () => {
+    const { blocks, foldedMs, shortMs } = foldDayBlocks([
       rec({ ts: at(9, 0, 0, -3), durationMs: 60_000 }),
     ], { date: DATE });
     expect(blocks).toHaveLength(0);
-    expect(unplacedMs).toBe(60_000);
+    expect(foldedMs).toBe(60_000);
+    expect(shortMs).toBe(0);
   });
 });
 
 describe('records that cannot be drawn', () => {
-  it('reports a compacted day as unplaced time instead of an invented hour', () => {
+  it('reports a compacted day as FOLDED time instead of an invented hour', () => {
     // What store.ts compactDay leaves behind: the day's total at UTC midnight.
-    const { blocks, unplacedMs } = foldDayBlocks([
+    const { blocks, foldedMs, shortMs } = foldDayBlocks([
       { date: DATE, ts: `${DATE}T00:00:00.000Z`, durationMs: 3 * 3_600_000, kind: 'session', taskId: 't_alpha' },
       { date: DATE, ts: `${DATE}T00:00:00.000Z`, durationMs: 3_600_000, kind: 'agent' },
     ], { date: DATE });
     expect(blocks).toHaveLength(0);
-    expect(unplacedMs).toBe(4 * 3_600_000);
+    expect(foldedMs).toBe(4 * 3_600_000);
+    expect(shortMs).toBe(0);
   });
 
-  it('drops a malformed kind silently — it is in no total, so it is not "unplaced"', () => {
-    const { blocks, unplacedMs } = foldDayBlocks([
+  it('drops a malformed kind silently — it is in no total, so it is not "not drawn"', () => {
+    const { blocks, shortMs, foldedMs } = foldDayBlocks([
       { date: DATE, ts: at(9, 0), durationMs: 600_000, kind: 'nonsense' as TimeRecord['kind'] },
     ], { date: DATE });
     expect(blocks).toHaveLength(0);
-    expect(unplacedMs).toBe(0);
+    expect(shortMs + foldedMs).toBe(0);
   });
 
   it('skips a torn or empty timestamp and a non-positive duration', () => {
-    const { blocks, unplacedMs } = foldDayBlocks([
+    const { blocks, foldedMs } = foldDayBlocks([
       rec({ ts: '', durationMs: 60_000 }),
       rec({ ts: 'not-a-date', durationMs: 60_000 }),
       rec({ ts: at(9, 0), durationMs: 0 }),
       rec({ ts: at(9, 0), durationMs: -5 }),
     ], { date: DATE });
     expect(blocks).toHaveLength(0);
-    expect(unplacedMs).toBe(120_000); // the two bad timestamps; a zero duration adds nothing
+    expect(foldedMs).toBe(120_000); // the two bad timestamps; a zero duration adds nothing
   });
 });
 

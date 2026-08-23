@@ -4,51 +4,40 @@ import { layoutDayEvents } from '@/utils/calendar-date';
 import { visibleInterval } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
 import {
-  HOUR_MIN, HOUR_PX, PX_PER_MIN, TICK_BELOW_MS,
+  HOUR_MIN, HOUR_PX, NOTE_FLOOR_MS, PX_PER_MIN,
   axisRange, clockLabel, dayLabel, dayLengthMin, dayStartMs, formatDuration, hourLabel,
-  minuteOfDay, shiftDate, taskColor,
+  minuteOfDay, shiftDate, taskColor, type LegendRow,
 } from './time-timeline';
+import {
+  KIND_LABEL, Lane, blockRangeLabel, durationLabel, place, type Placed,
+} from './TimeTimelineLane';
+import { TimeTimelineLegend } from './TimeTimelineLegend';
 import '@/styles/time-timeline.css';
 
 /**
- * Timeline — "how did my day actually go?" as blocks on an hour axis.
+ * Timeline — "how did my day actually go?" as blocks on an hour axis, built to
+ * read like a calendar day view: quiet hour rules, blocks separated by a hairline,
+ * in-block text only when it fits, a crisp now-line, one detail strip.
  *
  * THE HUMAN LANE AND THE AGENT LANE ARE PHYSICALLY SEPARATE COLUMNS, never one
  * merged track: the same rule the two tabs above encode, because a user read an
  * agent's 8h57m as their own working day and reported the data as broken. Agents
- * are also OFF by default, purple (a hue no task color uses), and hatched, so the
+ * are also OFF by default, purple (a hue no task colour uses), and hatched, so the
  * two can't be confused even in a grayscale screenshot.
  *
- * The axis shows only the hours that carry time, padded by an hour — a full 24
- * rows answers the question with a scroll bar. Geometry and colors are pure
- * (time-timeline.ts) so the axis rules are unit tested.
+ * DENSITY IS THE DESIGN PROBLEM (a real day: 75 minutes across 21 tasks). Three
+ * rules come from that render: visual weight tracks time spent (sub-5-minute work
+ * draws as a muted tick, never a full-saturation rectangle competing with an
+ * hour-long block); no text is drawn that cannot fit its box; and the legend ranks
+ * rather than dumps. Geometry and grouping are pure (time-timeline.ts).
  */
 
 /** Remembers the agents toggle. `open-walnut-` prefix ⇒ synced by ui-prefs. */
 const LS_AGENTS_KEY = 'open-walnut-time-timeline-agents';
-/** Tallest the scroller gets before it scrolls instead of growing the page. */
-const MAX_GRID_PX = 560;
-/** A block shorter than this many px still gets a visible tick. */
-const TICK_PX = 3;
-/** Below this height a block cannot hold a legible label. */
-const LABEL_MIN_PX = 22;
+/** Tallest the scroller gets before it scrolls instead of compressing hours. */
+const MAX_GRID_PX = 620;
 
-const KIND_LABEL: Record<TimeBlock['kind'], string> = {
-  session: 'Session',
-  triage: 'Triage',
-  chat: 'Chat',
-  agent: 'Agent',
-};
 
-interface Placed {
-  key: string;
-  block: TimeBlock;
-  topPx: number;
-  heightPx: number;
-  lane: number;
-  laneCount: number;
-  tick: boolean;
-}
 
 function readAgentsPref(): boolean {
   try {
@@ -149,14 +138,14 @@ export function TimeTimeline({ dates, today, titleFor }: {
     };
   }, [dayData, showAgents, startMs, lengthMin, isToday, nowMin]);
 
-  const legend = useMemo(() => {
-    const rows = new Map<string, { taskId: string; title: string; ms: number }>();
+  const legendRows = useMemo(() => {
+    const rows = new Map<string, LegendRow>();
     for (const p of human) {
       const row = rows.get(p.block.taskId);
       if (row) row.ms += p.block.trackedMs;
       else rows.set(p.block.taskId, { taskId: p.block.taskId, title: labelFor(p.block.taskId), ms: p.block.trackedMs });
     }
-    return [...rows.values()].sort((a, b) => b.ms - a.ms || a.title.localeCompare(b.title));
+    return [...rows.values()];
   }, [human, labelFor]);
 
   const humanMs = human.reduce((sum, p) => sum + p.block.trackedMs, 0);
@@ -186,6 +175,7 @@ export function TimeTimeline({ dates, today, titleFor }: {
   const detail = shown.find((p) => p.key === hoverKey)
     ?? (pickedTaskId !== null ? shown.find((p) => p.block.taskId === pickedTaskId) : undefined);
   const nothingDrawn = !pending && shown.length === 0;
+  const drawn = !pending && !nothingDrawn;
 
   return (
     <div
@@ -238,7 +228,7 @@ export function TimeTimeline({ dates, today, titleFor }: {
         </label>
       </div>
 
-      {!pending && !nothingDrawn && (
+      {drawn && (
         <div className="tt-totals">
           <span className="tt-total tt-total-human" data-testid="time-timeline-human-total">
             <i className="tt-swatch tt-swatch-human" /> You {formatDuration(humanMs)}
@@ -248,11 +238,7 @@ export function TimeTimeline({ dates, today, titleFor }: {
               <i className="tt-swatch tt-swatch-agent" /> Agents {formatDuration(agentMs)}
             </span>
           )}
-          {dayData.unplacedMs > 0 && (
-            <span className="tt-unplaced" data-testid="time-timeline-unplaced">
-              {formatDuration(dayData.unplacedMs)} counted in the totals but too short or too folded to place here
-            </span>
-          )}
+          <NotDrawnNote day={dayData} />
         </div>
       )}
 
@@ -261,214 +247,127 @@ export function TimeTimeline({ dates, today, titleFor }: {
 
       {pending && !error && <p className="time-empty">Loading…</p>}
 
-      {nothingDrawn
-        ? (
-          <p className="time-empty" data-testid="time-timeline-empty">
-            {(dayData?.unplacedMs ?? 0) > 0
-              ? 'This day has tracked time, but it was folded into daily totals — the per-block detail is no longer on disk. The other two tabs still have its numbers.'
-              : `Nothing tracked on ${dayLabel(date)}. Time starts counting the moment you work in a session, triage a task, or chat here.`}
-          </p>
-        )
-        : !pending && (
-          <div className="tt-body">
-            {/* The heads and the scroller are ONE grid child: three children in a
-                two-column grid wrapped the legend under a 230px-wide plot. */}
-            <div className="tt-plot">
-              <div className="tt-lane-heads" data-agents={showAgents ? 'on' : 'off'}>
-                <span className="tt-gutter" />
-                <span className="tt-lane-head">You</span>
-                {showAgents && <span className="tt-lane-head tt-lane-head-agent">Agents</span>}
-              </div>
+      {nothingDrawn && (
+        <p className="time-empty" data-testid="time-timeline-empty">
+          {(dayData?.foldedMs ?? 0) > 0
+            ? `${formatDuration(dayData!.foldedMs)} was tracked on ${dayLabel(date)}, but this day has been folded into daily totals — the hour-by-hour detail is no longer on disk. The other two tabs still have its numbers.`
+            : `Nothing tracked on ${dayLabel(date)}. Time starts counting the moment you work in a session, triage a task, or chat here.`}
+        </p>
+      )}
 
-              <div className="tt-grid" ref={scrollRef} style={{ maxHeight: MAX_GRID_PX }}>
-                <div className="tt-canvas" style={{ height: axisHeight }}>
-                  <div className="tt-ruler">
-                    {axis.hours.map((h) => (
-                      <div className="tt-hour" key={h} style={{ height: HOUR_PX }}>
-                        <span className="tt-hour-label">{hourLabel(h)}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="tt-lanes" data-agents={showAgents ? 'on' : 'off'}>
+      {drawn && (
+        <div className="tt-body">
+          {/* The plot and its lane titles are ONE flex child: three children in a
+              two-column grid wrapped the legend under a 230px-wide plot. */}
+          <div className="tt-plot" data-testid="time-timeline-plot">
+            <div className="tt-lane-heads" data-agents={showAgents ? 'on' : 'off'}>
+              <span className="tt-gutter" />
+              <span className="tt-lane-head">You</span>
+              {showAgents && <span className="tt-lane-head tt-lane-head-agent">Agents</span>}
+            </div>
+
+            <div className="tt-grid" ref={scrollRef} style={{ maxHeight: MAX_GRID_PX }}>
+              <div
+                className="tt-canvas"
+                style={{ height: axisHeight, '--tt-hour-px': `${HOUR_PX}px` } as React.CSSProperties}
+              >
+                <div className="tt-ruler">
+                  {axis.hours.map((h) => (
+                    <div className="tt-hour" key={h} style={{ height: HOUR_PX }}>
+                      <span className="tt-hour-label">{hourLabel(h)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="tt-lanes" data-agents={showAgents ? 'on' : 'off'}>
+                  <Lane
+                    testId="time-timeline-lane-human"
+                    placed={human}
+                    pickedTaskId={pickedTaskId}
+                    hoverKey={hoverKey}
+                    titleFor={labelFor}
+                    onHover={setHoverKey}
+                    onPick={setPickedTaskId}
+                  />
+                  {showAgents && (
                     <Lane
-                      testId="time-timeline-lane-human"
-                      placed={human}
+                      testId="time-timeline-lane-agent"
+                      placed={agent}
+                      emptyHint="no agent runtime today"
                       pickedTaskId={pickedTaskId}
                       hoverKey={hoverKey}
                       titleFor={labelFor}
                       onHover={setHoverKey}
                       onPick={setPickedTaskId}
                     />
-                    {showAgents && (
-                      <Lane
-                        testId="time-timeline-lane-agent"
-                        placed={agent}
-                        pickedTaskId={pickedTaskId}
-                        hoverKey={hoverKey}
-                        titleFor={labelFor}
-                        onHover={setHoverKey}
-                        onPick={setPickedTaskId}
-                      />
-                    )}
-                    {isToday && nowMin >= axis.startMin && nowMin <= axis.endMin && (
-                      <div
-                        className="tt-now"
-                        data-testid="time-timeline-now"
-                        style={{ top: (nowMin - axis.startMin) * PX_PER_MIN }}
-                      >
-                        <span className="tt-now-dot" />
-                        <span className="tt-now-label">{clockLabel(nowMin)}</span>
-                      </div>
-                    )}
-                  </div>
+                  )}
                 </div>
+                {isToday && nowMin >= axis.startMin && nowMin <= axis.endMin && (
+                  // A child of the CANVAS, not of the lanes: the time then sits in
+                  // the empty gutter instead of on top of whatever block is at
+                  // this hour (red on a coloured block is unreadable).
+                  <div
+                    className="tt-now"
+                    data-testid="time-timeline-now"
+                    style={{ top: (nowMin - axis.startMin) * PX_PER_MIN }}
+                  >
+                    <span className="tt-now-time">{clockLabel(nowMin)}</span>
+                    <span className="tt-now-rule" />
+                  </div>
+                )}
               </div>
             </div>
-
-            <aside className="tt-legend" data-testid="time-timeline-legend">
-              {legend.map((row) => (
-                <button
-                  key={row.taskId || '__none__'}
-                  className={`tt-legend-row${pickedTaskId === row.taskId ? ' is-picked' : ''}`}
-                  data-time-task-id={row.taskId}
-                  title={row.title}
-                  onClick={() => setPickedTaskId((prev) => (prev === row.taskId ? null : row.taskId))}
-                >
-                  <i className="tt-swatch" style={{ background: taskColor(row.taskId) }} />
-                  <span className="tt-legend-name">{row.title}</span>
-                  <span className="tt-legend-ms">{formatDuration(row.ms)}</span>
-                </button>
-              ))}
-              {showAgents && agentMs > 0 && (
-                <div className="tt-legend-row tt-legend-static">
-                  <i className="tt-swatch tt-swatch-agent" />
-                  <span className="tt-legend-name">Agent turns</span>
-                  <span className="tt-legend-ms">{formatDuration(agentMs)}</span>
-                </div>
-              )}
-            </aside>
           </div>
-        )}
 
-      {!pending && !nothingDrawn && (
-      <div className="tt-detail" data-testid="time-timeline-detail">
-        {detail
-          ? (
-            <>
-              <i className="tt-swatch" style={{ background: detail.block.kind === 'agent' ? 'var(--time-agent)' : taskColor(detail.block.taskId) }} />
-              <strong className="tt-detail-title">{labelFor(detail.block.taskId)}</strong>
-              <span className="tt-detail-meta">{blockRangeLabel(detail, startMs, lengthMin)}</span>
-              <span className="tt-detail-meta">{durationLabel(detail.block)}</span>
-              <span className="tt-detail-kind">{KIND_LABEL[detail.block.kind]}</span>
-            </>
-          )
-          : <span className="tt-detail-hint">Hover a block for its task, hours and duration. Click one to highlight that task.</span>}
-      </div>
+          <TimeTimelineLegend
+            rows={legendRows}
+            agentMs={showAgents ? agentMs : 0}
+            pickedTaskId={pickedTaskId}
+            onPick={setPickedTaskId}
+          />
+        </div>
+      )}
+
+      {drawn && (
+        <div className="tt-detail" data-testid="time-timeline-detail">
+          {detail
+            ? (
+              <>
+                <i
+                  className="tt-swatch"
+                  style={{ background: detail.block.kind === 'agent' ? 'var(--time-agent)' : taskColor(detail.block.taskId) }}
+                />
+                <strong className="tt-detail-title">{labelFor(detail.block.taskId)}</strong>
+                <span className="tt-detail-meta">{blockRangeLabel(detail, startMs, lengthMin)}</span>
+                <span className="tt-detail-meta">{durationLabel(detail.block)}</span>
+                <span className="tt-detail-kind">{KIND_LABEL[detail.block.kind]}</span>
+              </>
+            )
+            : <span className="tt-detail-hint">Hover a block for its task, hours and duration. Click one to highlight that task.</span>}
+        </div>
       )}
     </div>
   );
 }
 
-function Lane({ testId, placed, pickedTaskId, hoverKey, titleFor, onHover, onPick }: {
-  testId: string;
-  placed: Placed[];
-  pickedTaskId: string | null;
-  hoverKey: string | null;
-  titleFor: (taskId: string) => string;
-  onHover: (key: string | null) => void;
-  onPick: (taskId: string | null) => void;
-}) {
+/**
+ * The one line about time that isn't on the chart. Two distinct reasons, two
+ * sentences: "too short or too folded to place here" was one caption covering
+ * both and read as nonsense. Silent under two minutes — a caption about 8
+ * seconds is noise, not honesty.
+ */
+function NotDrawnNote({ day }: { day: DayBlocks }) {
+  const notes: string[] = [];
+  if (day.shortMs >= NOTE_FLOOR_MS) notes.push(`quick touches under 30s: ${formatDuration(day.shortMs)} not drawn`);
+  if (day.foldedMs >= NOTE_FLOOR_MS) notes.push(`${formatDuration(day.foldedMs)} folded into daily totals`);
+  if (notes.length === 0) return null;
   return (
-    <div className="tt-lane" data-testid={testId}>
-      {placed.map((p) => {
-        const agent = p.block.kind === 'agent';
-        const dimmed = pickedTaskId !== null && pickedTaskId !== p.block.taskId;
-        const width = 100 / p.laneCount;
-        return (
-          <button
-            key={p.key}
-            // NOT `data-task-id`: the time tracker bills any signal inside a
-            // div[data-task-id] to that task, so a report block carrying it would
-            // charge the task you merely LOOKED at here.
-            data-time-task-id={p.block.taskId}
-            data-time-kind={p.block.kind}
-            className={[
-              'tt-block',
-              agent ? 'tt-block-agent' : 'tt-block-human',
-              p.tick ? 'is-tick' : '',
-              dimmed ? 'is-dimmed' : '',
-              hoverKey === p.key ? 'is-hover' : '',
-            ].filter(Boolean).join(' ')}
-            style={{
-              top: p.topPx,
-              height: p.heightPx,
-              left: `calc(${p.lane * width}% + 1px)`,
-              width: `calc(${width}% - 2px)`,
-              ...(agent ? {} : { '--tt-block-color': taskColor(p.block.taskId) } as React.CSSProperties),
-            }}
-            title={`${titleFor(p.block.taskId)} — ${KIND_LABEL[p.block.kind]} · ${durationLabel(p.block)}`}
-            onMouseEnter={() => onHover(p.key)}
-            onMouseLeave={() => onHover(null)}
-            onFocus={() => onHover(p.key)}
-            onBlur={() => onHover(null)}
-            onClick={() => onPick(pickedTaskId === p.block.taskId ? null : p.block.taskId)}
-          >
-            {p.heightPx >= LABEL_MIN_PX && (
-              <span className="tt-block-label">{titleFor(p.block.taskId)}</span>
-            )}
-          </button>
-        );
-      })}
-    </div>
+    <span className="tt-unplaced" data-testid="time-timeline-notdrawn">
+      {notes.join(' · ')}
+    </span>
   );
-}
-
-/** Blocks → pixel geometry, with overlaps packed side by side (never stacked). */
-function place(blocks: TimeBlock[], prefix: string, axisStartMin: number, startMs: number, lengthMin: number): Placed[] {
-  const spans = blocks.map((b, i) => ({
-    id: `${prefix}${i}`,
-    startMin: minuteOfDay(b.startTs, startMs, lengthMin),
-    endMin: minuteOfDay(b.endTs, startMs, lengthMin),
-  }));
-  // Reuses the calendar's lane packer, so an overlap opens a second column
-  // instead of hiding one block behind another.
-  const lanes = layoutDayEvents(spans);
-  return blocks.map((block, i) => {
-    const span = spans[i]!;
-    const lane = lanes.get(span.id) ?? { lane: 0, laneCount: 1 };
-    const tick = block.ms < TICK_BELOW_MS;
-    return {
-      key: span.id,
-      block,
-      topPx: (span.startMin - axisStartMin) * PX_PER_MIN,
-      // Never zero-height: a few minutes of real work must stay visible, and a
-      // tick is styled differently so short work reads as short, not as noise.
-      heightPx: Math.max((span.endMin - span.startMin) * PX_PER_MIN, TICK_PX),
-      lane: lane.lane,
-      laneCount: Math.max(1, lane.laneCount),
-      tick,
-    };
-  });
 }
 
 function currentMinuteOfDay(): number {
   const now = new Date();
   return now.getHours() * HOUR_MIN + now.getMinutes();
-}
-
-function blockRangeLabel(p: Placed, startMs: number, lengthMin: number): string {
-  const from = minuteOfDay(p.block.startTs, startMs, lengthMin);
-  const to = minuteOfDay(p.block.endTs, startMs, lengthMin);
-  return `${clockLabel(from)} – ${clockLabel(to)}`;
-}
-
-/**
- * The block's span, plus the recorded time when the two differ: a merged block
- * bridges gaps of up to five minutes, and a bare span would silently disagree
- * with the totals on the other tabs.
- */
-function durationLabel(block: TimeBlock): string {
-  const span = formatDuration(block.ms);
-  if (block.ms - block.trackedMs < 60_000) return span;
-  return `${span} (${formatDuration(block.trackedMs)} tracked)`;
 }

@@ -198,7 +198,7 @@ describe('GET /api/time/blocks', () => {
         { ts: iso(20 * 60_000), durationMs: 120_000, kind: 'session', taskId: TASK },
         // A different kind at the same instant → its own block, never merged in.
         { ts: iso(0), durationMs: 180_000, kind: 'chat', taskId: TASK },
-        // Under the one-minute floor → drawn nowhere, reported as unplaced.
+        // Under the 30s draw floor → drawn nowhere, reported as short.
         { ts: iso(40 * 60_000), durationMs: 20_000, kind: 'triage', taskId: TASK },
       ],
     });
@@ -223,9 +223,10 @@ describe('GET /api/time/blocks', () => {
     const body = await getBlocks({ date: anchor.date });
     expect(mine(body, 'chat')).toHaveLength(1);
     expect(mine(body, 'chat')[0]!.ms).toBe(180_000);
-    // The sub-minute triage window is not drawn at all.
+    // The 20-second triage window is under the draw floor: not a block, and
+    // reported as SHORT (real work, too small to draw) rather than as folded.
     expect(mine(body, 'triage')).toHaveLength(0);
-    expect(body.unplacedMs).toBeGreaterThanOrEqual(20_000);
+    expect(body.shortMs).toBeGreaterThanOrEqual(20_000);
   });
 
   it('returns blocks ascending by start', async () => {
@@ -264,7 +265,7 @@ describe('GET /api/time/blocks', () => {
   it('defaults to today and answers an empty day with an empty list', async () => {
     expect((await getBlocks()).date).toBe(localToday());
     const quiet = await getBlocks({ date: '2020-01-02' });
-    expect(quiet).toMatchObject({ date: '2020-01-02', blocks: [], unplacedMs: 0, titles: {} });
+    expect(quiet).toMatchObject({ date: '2020-01-02', blocks: [], shortMs: 0, foldedMs: 0, titles: {} });
   });
 
   it('rejects a date it cannot answer for instead of quietly answering another day', async () => {

@@ -17,10 +17,11 @@
  * other tabs, and "these numbers contradict each other" is exactly the reaction
  * this feature area has already been burned by.
  *
- * NOTHING IS SILENTLY LOST: time that cannot be drawn (a compaction summary
- * line, a record whose window falls outside the day, a sub-minute fragment) is
- * summed into `unplacedMs` so the view can say so instead of showing a quiet,
- * wrong, empty morning.
+ * NOTHING IS SILENTLY LOST, and the two reasons are reported SEPARATELY because
+ * they mean different things to a reader: `shortMs` is real work too short to
+ * draw, `foldedMs` is time whose interval no longer exists at all (a compacted
+ * day, a record outside the day). One number covering both produced a caption
+ * ("too short or too folded to place here") that meant nothing to anyone.
  *
  * Day keys are LOCAL dates, matching the rest of time-tracking.
  */
@@ -37,8 +38,12 @@ const KINDS = new Set<string>(['session', 'triage', 'chat', 'agent']);
 
 /** Records of one (task, kind) closer than this become a single block. */
 export const MERGE_GAP_MS = 5 * 60 * 1000;
-/** A merged block shorter than this is noise on a day timeline. */
-export const MIN_BLOCK_MS = 60 * 1000;
+/**
+ * Floor for a drawn block. Deliberately LOW: on a real 75-minute day, 23 minutes
+ * of it arrived as sub-minute touches, and a 60s floor made a third of the day
+ * invisible. Short work is real work — it draws, as a tick.
+ */
+export const MIN_BLOCK_MS = 30 * 1000;
 
 export interface TimeBlock {
   /** '' = no task (Inbox / taskless session / main-agent chat). */
@@ -56,8 +61,10 @@ export interface DayBlocks {
   date: string;
   /** Ascending by start. Never overlapping within one (taskId, kind). */
   blocks: TimeBlock[];
-  /** Tracked ms in this day's records that no block could carry. */
-  unplacedMs: number;
+  /** Tracked ms dropped for being shorter than MIN_BLOCK_MS. */
+  shortMs: number;
+  /** Tracked ms with no drawable interval: a compacted day, or outside the day. */
+  foldedMs: number;
 }
 
 /**
@@ -98,7 +105,7 @@ export function foldDayBlocks(
   opts: { date: string; kinds?: readonly TimeKind[] },
 ): DayBlocks {
   const bounds = dayBoundsMs(opts.date);
-  if (!bounds) return { date: opts.date, blocks: [], unplacedMs: 0 };
+  if (!bounds) return { date: opts.date, blocks: [], shortMs: 0, foldedMs: 0 };
   const wanted = opts.kinds && opts.kinds.length > 0 ? new Set<string>(opts.kinds) : null;
   /**
    * The line shape a compacted day collapses to (store.ts compactDay): one
@@ -112,19 +119,20 @@ export function foldDayBlocks(
   // by an older build can contain anything, and a joined key would need a
   // separator that such an id could smuggle (the bug parseBucketKey now guards).
   const groups = new Map<TimeKind, Map<string, Span[]>>();
-  let unplacedMs = 0;
+  let shortMs = 0;
+  let foldedMs = 0;
 
   for (const rec of records) {
     if (!(rec.durationMs > 0)) continue;
     if (!KINDS.has(rec.kind)) continue;
     if (wanted && !wanted.has(rec.kind)) continue;
     if (rec.ts === compactedTs) {
-      unplacedMs += rec.durationMs;
+      foldedMs += rec.durationMs;
       continue;
     }
     const startedMs = Date.parse(rec.ts);
     if (!Number.isFinite(startedMs)) {
-      unplacedMs += rec.durationMs;
+      foldedMs += rec.durationMs;
       continue;
     }
     // Clip to the day. A window that straddles midnight keeps only its share:
@@ -132,7 +140,7 @@ export function foldDayBlocks(
     const startMs = Math.max(startedMs, bounds.startMs);
     const endMs = Math.min(startedMs + rec.durationMs, bounds.endMs);
     if (endMs <= startMs) {
-      unplacedMs += rec.durationMs;
+      foldedMs += rec.durationMs;
       continue;
     }
     let byTask = groups.get(rec.kind);
@@ -166,7 +174,7 @@ export function foldDayBlocks(
       for (const span of merged) {
         const ms = span.endMs - span.startMs;
         if (ms < MIN_BLOCK_MS) {
-          unplacedMs += span.trackedMs;
+          shortMs += span.trackedMs;
           continue;
         }
         blocks.push({
@@ -185,5 +193,5 @@ export function foldDayBlocks(
 
   blocks.sort((a, b) =>
     a.startTs.localeCompare(b.startTs) || a.kind.localeCompare(b.kind) || a.taskId.localeCompare(b.taskId));
-  return { date: opts.date, blocks, unplacedMs };
+  return { date: opts.date, blocks, shortMs, foldedMs };
 }

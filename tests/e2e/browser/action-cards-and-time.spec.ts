@@ -263,10 +263,11 @@ function localDate(ms: number): string {
  * Within the first 40 minutes after local midnight neither holds for a 40-minute
  * span on today, so seed yesterday afternoon and let the test walk one day back.
  */
-function seedAnchor(): { startMs: number; date: string } {
+function seedAnchor(spanMs: number = SEED_SPAN_MS): { startMs: number; date: string } {
   const now = Date.now()
-  const start = now - SEED_SPAN_MS
+  const start = now - spanMs
   if (localDate(start) === localDate(now)) return { startMs: start, date: localDate(now) }
+  // 16:00 yesterday: comfortably inside the day for any span this suite uses.
   const midnight = new Date()
   midnight.setHours(0, 0, 0, 0)
   const yesterdayAfternoon = midnight.getTime() - 8 * 60 * 60_000
@@ -460,5 +461,171 @@ test.describe('time timeline', () => {
     await panel.locator('[data-testid="time-tab-timeline"]').click()
     const finalToggle = tl.locator('[data-testid="time-timeline-agents-toggle"]')
     if (await finalToggle.isChecked()) await finalToggle.uncheck()
+  })
+})
+
+/**
+ * A REALISTIC day, because the one-task fixture hid every density problem the
+ * user hit on their own data (75 minutes spread over 21 tasks): the plot
+ * collapsed to a narrow box, the legend became a 21-row wall of 1-second rows,
+ * and the blocks were unreadable slivers with clipped text.
+ *
+ * Titles are deliberately long and mixed-script — a short ASCII title never
+ * exercises truncation.
+ */
+/**
+ * The seeded day's width. Every offset below must stay inside it: a sample in the
+ * future is silently rejected by the sanitizer, and the first version of this test
+ * quietly lost five of its tasks that way.
+ */
+const DENSE_SPAN_MS = 80 * 60_000
+
+const DENSE_TASKS: Array<{ title: string; slices: Array<[offsetMin: number, seconds: number]> }> = [
+  { title: '重构会话时间轴渲染管线 — timeline rendering pipeline refactor', slices: [[0, 1500], [30, 900]] },
+  { title: 'Investigate flaky provider reconnect under load 排查重连抖动', slices: [[6, 1200]] },
+  { title: '写周报与季度目标对齐文档 quarterly planning writeup', slices: [[26, 780]] },
+  { title: 'Review pull request for the search indexing worker', slices: [[14, 420]] },
+  { title: '修复移动端消息回执丢失的问题 mobile receipt loss', slices: [[20, 300]] },
+  { title: 'Pair on the daemon capability gate 与队友结对', slices: [[44, 260]] },
+  { title: 'Triage inbox and reschedule blocked items 收件箱清理', slices: [[10, 150]] },
+  { title: 'Answer questions in the release thread 回复发布讨论', slices: [[13, 200]] },
+  { title: 'Check overnight cron output 检查夜间任务输出', slices: [[16, 190]] },
+  { title: 'Update the onboarding checklist for new hosts', slices: [[18, 175]] },
+  { title: 'Skim the incident report from yesterday 事故回顾', slices: [[22, 165]] },
+  { title: 'Reply to the design review comment 设计评审回复', slices: [[24, 48]] },
+  { title: 'Rename a project and fix its stale references', slices: [[34, 44]] },
+  { title: 'Look at the cache hit-rate panel 缓存命中率', slices: [[36, 40]] },
+  { title: 'Bump a dependency and read its changelog', slices: [[38, 36]] },
+  { title: 'File a follow-up task for the parser edge case', slices: [[40, 33]] },
+  { title: 'Glance at the notification centre 通知中心', slices: [[42, 31]] },
+  { title: 'Confirm the backup finished 确认备份完成', slices: [[46, 30]] },
+]
+
+test.describe('time timeline at real density', () => {
+  test('a day across 18 tasks keeps the plot wide, the legend ranked, and every short slice drawn', async ({ page, request }) => {
+    test.setTimeout(420_000)
+
+    const token = stamp()
+    const anchor = seedAnchor(DENSE_SPAN_MS)
+    const ids: string[] = []
+    const samples: Array<Record<string, unknown>> = []
+    for (const [i, spec] of DENSE_TASKS.entries()) {
+      const taskId = await createTask(request, `${spec.title} ${token}`)
+      ids.push(taskId)
+      for (const [offsetMin, seconds] of spec.slices) {
+        // Bursts overlap on purpose (offsets collide across tasks), which is what
+        // exercises the side-by-side lane packing.
+        samples.push({
+          ts: new Date(anchor.startMs + offsetMin * 60_000 + (i % 3) * 20_000).toISOString(),
+          durationMs: seconds * 1000,
+          kind: i % 4 === 0 ? 'session' : i % 4 === 1 ? 'triage' : 'chat',
+          taskId,
+        })
+      }
+    }
+    // A late burst of touches UNDER the 30s draw floor — one per task so none of
+    // them merges into anything — which is what the user's real day was mostly
+    // made of, and what the "not drawn" note has to account for.
+    for (let i = 0; i < 10; i++) {
+      samples.push({
+        ts: new Date(anchor.startMs + (56 + i * 2) * 60_000).toISOString(),
+        durationMs: 22_000,
+        kind: 'chat',
+        taskId: ids[i + 2],
+      })
+    }
+
+    const posted = await request.post('/api/time/heartbeats', { data: { samples } })
+    expect(posted.status()).toBe(204)
+
+    await expect.poll(async () => (await request.get('/api/time/blocks', { params: { date: anchor.date } })
+      .then((r) => r.json() as Promise<{ blocks: unknown[] }>)).blocks.length, {
+      timeout: 30_000,
+      intervals: [500, 500, 1_000],
+      message: 'the dense day should fold into many blocks',
+    }).toBeGreaterThan(15)
+
+    await page.goto('/')
+    await appReady(page)
+    await openTimeSection(page)
+    const panel = page.locator('#time.time-page')
+    await panel.locator('[data-testid="time-tab-timeline"]').click()
+    const tl = panel.locator('[data-testid="time-view-timeline"]')
+    await expect(tl).toBeVisible({ timeout: 20_000 })
+    if (anchor.date !== localDate(Date.now())) {
+      await tl.locator('[data-testid="time-timeline-prev"]').click()
+    }
+
+    const blocks = tl.locator('[data-testid="time-timeline-lane-human"] .tt-block')
+    await expect.poll(() => blocks.count(), { timeout: 20_000 }).toBeGreaterThan(15)
+
+    // ── LAYOUT: the plot is the hero. The bug the user hit was a ~280px plot
+    // pushed to the right of the card with the legend dumped full-width below.
+    const cardBox = await panel.boundingBox()
+    const plotBox = await tl.locator('[data-testid="time-timeline-plot"]').boundingBox()
+    expect(cardBox && plotBox).toBeTruthy()
+    expect(plotBox!.width / cardBox!.width).toBeGreaterThan(0.6)
+    // …and it starts at the left of the card, not floated to the right edge.
+    expect(plotBox!.x - cardBox!.x).toBeLessThan(cardBox!.width * 0.15)
+    // Real vertical room: an hour is at least ~90px, so the axis is tall.
+    expect(plotBox!.height).toBeGreaterThan(360)
+
+    // ── EVERY slice draws, and none is a sub-pixel sliver.
+    const heights = await blocks.evaluateAll((els) => els.map((e) => (e as HTMLElement).offsetHeight))
+    expect(Math.min(...heights)).toBeGreaterThanOrEqual(8)
+
+    // ── No block renders text it cannot hold (the "No ta…" overflow), measured
+    // on the block itself so both the title and the duration line are covered.
+    const overflowing = await blocks.evaluateAll(
+      (els) => els.filter((el) => el.scrollHeight > el.clientHeight + 1).length,
+    )
+    expect(overflowing).toBe(0)
+    // …and the labels that DO fit are really there: a wall of anonymous colour is
+    // the failure mode of being too conservative about this.
+    const labelled = await blocks.evaluateAll(
+      (els) => els.filter((el) => !!el.querySelector('.tt-block-label')).length,
+    )
+    expect(labelled).toBeGreaterThan(3)
+
+    // ── LEGEND: ranked, not dumped. One line per row, capped, with the
+    // quick-touch group standing in for the tail of tiny entries.
+    const legend = tl.locator('[data-testid="time-timeline-legend"]')
+    const rows = legend.locator('.tt-legend-row, .tt-legend-quick')
+    expect(await rows.count()).toBeLessThanOrEqual(10)
+    const tall = await rows.evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetHeight > 30).length)
+    expect(tall, 'every legend row must be exactly one line').toBe(0)
+    await expect(legend.locator('[data-testid="time-timeline-legend-quick"]')).toContainText('Quick touches')
+
+    // The "not drawn" note is in human words, and only about the sub-floor time.
+    await expect(tl.locator('[data-testid="time-timeline-notdrawn"]')).toContainText('under 30s')
+
+    await panel.scrollIntoViewIfNeeded()
+    await shoot(page, 'timeline-05-dense')
+
+    // The tail past the cap is reachable, not dropped.
+    await expect(legend.locator('[data-testid="time-timeline-legend-more"]')).toContainText('more')
+    const capped = await rows.count()
+    await legend.locator('[data-testid="time-timeline-legend-more"]').click()
+    expect(await rows.count()).toBeGreaterThan(capped)
+    await legend.locator('[data-testid="time-timeline-legend-quick"]').click()
+    await panel.scrollIntoViewIfNeeded()
+    await shoot(page, 'timeline-06-dense-legend-expanded')
+
+    // Hovering a tiny tick still identifies it (tooltip-only blocks are not dead).
+    const smallest = blocks.nth(heights.indexOf(Math.min(...heights)))
+    await smallest.hover()
+    await expect(tl.locator('[data-testid="time-timeline-detail"]')).not.toContainText('Hover a block')
+
+    // ── Dense + agents + dark, the combination nobody had looked at.
+    const agentsToggle = tl.locator('[data-testid="time-timeline-agents-toggle"]')
+    if (!(await agentsToggle.isChecked())) await agentsToggle.check()
+    await expect(tl.locator('[data-testid="time-timeline-lane-agent"]')).toBeVisible()
+    await page.locator('#general .theme-picker-btn', { hasText: 'Dark' }).click()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+    await panel.scrollIntoViewIfNeeded()
+    await shoot(page, 'timeline-07-dense-dark')
+    await page.locator('#general .theme-picker-btn', { hasText: 'System' }).click()
+    await panel.locator('[data-testid="time-tab-timeline"]').click()
+    if (await agentsToggle.isChecked()) await agentsToggle.uncheck()
   })
 })
