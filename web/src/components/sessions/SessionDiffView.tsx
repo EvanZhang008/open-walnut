@@ -14,15 +14,53 @@ import { buildDiffTree, flattenFiles, allContainerIds, isMarkdownPath, type Diff
 import { languageForPath, diffRefractor } from '@/components/sessions/diffHighlight';
 import { buildCommentMessage, buildReviewMessage } from '@/components/sessions/diffPrefill';
 import { markdownBlocksWithLines, markdownCommentRange, type MarkdownBlock } from '@/components/sessions/diffMarkdownBlocks';
-import { computeExpandGaps, oldSourceLineCount, UNFOLD_CHUNK } from '@/components/sessions/diffExpand';
+import { computeExpandGaps, oldSourceLineCount, UNFOLD_CHUNK, type ExpandGap } from '@/components/sessions/diffExpand';
+import { segmentHunkForAuto, type DiffSegment } from '@/components/sessions/diffAutoSegment';
 import { hiddenFunctionContext, splitSourceLines, type StickyDef } from '@/components/sessions/diffFuncContext';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { SelectionAskPill } from '@/components/common/SelectionAskPill';
+import { FileContentView } from '@/components/common/FileContentView';
 import { ICON_REFRESH, ICON_WARNING, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED } from '@/components/common/Icons';
 import { log } from '@/utils/log';
 
 export type DiffViewType = 'split' | 'unified';
+/** The toolbar layout mode: 'auto' picks per file — split only when some line
+ *  changed IN PLACE (there's a left/right to compare), unified otherwise. */
+export type DiffViewMode = DiffViewType | 'auto';
+
+/** A file shown TEMPORARILY inside the Changed tab because a reference jump
+ *  landed outside the change set. Read-only, visually grayed — it's context,
+ *  not part of the review. */
+interface GhostFile { file: string; line?: number; term?: string }
+
+/** One stop in the in-tab jump history (⌘[ / ⌘] walk these). */
+type DiffJumpStop =
+  | { kind: 'change'; id: string; line?: number }
+  | { kind: 'ghost'; ghost: GhostFile };
+
+/** Line cells are found via react-diff-view's data-change-key — the ONLY line
+ *  marker it emits (`N<oldLine>` context / `I<newLine>` insert / `D<oldLine>`
+ *  delete; v3 removed data-line-number). N-keys carry the old-side number, so
+ *  on files with insertions a context-line jump can land a few lines off —
+ *  nearest-visible is the contract anyway (the exact line may be folded). */
+function lineCellFor(main: HTMLElement, line: number): HTMLElement | null {
+  return main.querySelector<HTMLElement>(`[data-change-key="I${line}"], [data-change-key="N${line}"]`);
+}
+
+/** Fallback when the exact target line sits inside a collapsed fold: land on
+ *  the closest VISIBLE line so the jump still puts the target area on screen. */
+function nearestLineCell(main: HTMLElement, line: number): HTMLElement | null {
+  let best: HTMLElement | null = null;
+  let bestDist = Infinity;
+  for (const el of main.querySelectorAll<HTMLElement>('[data-change-key]')) {
+    const m = /^[NID](\d+)$/.exec(el.getAttribute('data-change-key') ?? '');
+    if (!m) continue;
+    const d = Math.abs(Number(m[1]) - line);
+    if (d < bestDist) { bestDist = d; best = el; }
+  }
+  return best;
+}
 
 /** Comparison-BASE options. Every mode is scoped to the repos THIS session
  *  edited — the base only changes the baseline `before`/`after` is read from,
@@ -381,6 +419,38 @@ function ExpandRow({ lines, split, funcOld, funcNew, onAll, onUp, onDown, onJump
   );
 }
 
+/** One auto-mode region: its own <Diff> table in the layout the region earned
+ *  (split for an in-place replacement, unified for everything else — see
+ *  diffAutoSegment.ts). Tokens are computed per segment; change objects are
+ *  shared with the source hunks, so widgets/gutter events/selection keys all
+ *  keep working, just spread across tables. */
+function SegmentDiff({ seg, diffType, relPath, widgets, gutterEvents, selectedChanges, dragging }: {
+  seg: DiffSegment;
+  diffType: FileData['type'];
+  relPath: string;
+  widgets: Record<string, ReactNode> | undefined;
+  gutterEvents: EventMap;
+  selectedChanges: string[];
+  dragging: boolean;
+}) {
+  const segHunks = useMemo(() => [seg.hunk], [seg.hunk]);
+  const tokens = useTokens(segHunks, relPath);
+  return (
+    <Diff
+      viewType={seg.viewType}
+      diffType={diffType}
+      hunks={segHunks}
+      tokens={tokens}
+      widgets={widgets}
+      gutterEvents={gutterEvents}
+      selectedChanges={selectedChanges}
+      className={`session-diff-table session-diff-segment is-${seg.viewType} session-diff-commentable${dragging ? ' is-dragging' : ''}`}
+    >
+      {(hs) => hs.map((h) => <Hunk key={h.content} hunk={h} />)}
+    </Diff>
+  );
+}
+
 // ── Rendered markdown pane ────────────────────────────────────────────────────
 
 /** The rendered HTML body of one markdown block, isolated behind React.memo
@@ -593,7 +663,7 @@ function FileDiffPane({
   onAddComment, onSendNow, onCopyComment, onRemoveComment,
 }: {
   change: SessionFileChange;
-  viewType: DiffViewType;
+  viewType: DiffViewMode;
   rendered: boolean;
   sessionCwd?: string;
   sessionHost?: string;
@@ -649,7 +719,14 @@ function FileDiffPane({
   // Force unified so the whole new file reads as one continuous green column
   // (GitHub does the same for brand-new files). Deleted files are the mirror.
   const isWholeFile = change.status === 'added' || change.status === 'deleted';
-  const effectiveViewType: DiffViewType = isWholeFile ? 'unified' : viewType;
+  // Auto layout is PER REGION, not per file: replacements (a run with both
+  // deletes and inserts) get side-by-side, everything else — context, pure
+  // insertions/deletions — stays full-width unified. One in-place edit must
+  // not flip a 700-line-insertion file into a blank left column.
+  const autoHybrid = viewType === 'auto' && !isWholeFile;
+  // The single-<Diff> layout used when a fixed mode is forced (or the file is
+  // whole-file). In auto the hybrid path below renders instead.
+  const effectiveViewType: DiffViewType = isWholeFile || viewType === 'auto' ? 'unified' : viewType;
 
   // The line the user clicked the gutter on → an open comment draft anchored there.
   const [draft, setDraft] = useState<CommentDraft | null>(null);
@@ -966,52 +1043,84 @@ function FileDiffPane({
   // Decoration rows + expandRange() calls. Keyed by hunkIndex so the leading/tail
   // unfold rows stay stable as expansions merge hunks. The gaps are computed against the
   // CURRENTLY-rendered (possibly already-expanded) hunks the render-prop hands us. */
+  // One unfold bar's content — shared by the single-<Diff> Decoration path and
+  // the hybrid standalone path (where bars live OUTSIDE any diff table).
+  const gapRow = useCallback((g: ExpandGap, rendered: HunkData[], split: boolean): ReactElement => {
+    // The definition to pin, per side: scan up from the next hunk's old/new
+    // start (trailing gap: the first hidden line after the last hunk). Pinned
+    // ONLY when the definition itself is hidden inside THIS gap — visible on
+    // screen or pinned by an earlier bar → null (no repeats).
+    const next = g.hunkIndex < rendered.length ? rendered[g.hunkIndex]! : null;
+    const prev = g.hunkIndex > 0 ? rendered[g.hunkIndex - 1]! : null;
+    const last = rendered[rendered.length - 1];
+    const oldAt = next ? next.oldStart : g.all[0];
+    const newLo = prev ? prev.newStart + prev.newLines : 1;
+    const newAt = next ? next.newStart : (last ? last.newStart + last.newLines : 1);
+    const funcOld = hiddenFunctionContext(oldLines, oldAt, g.all[0], g.all[1]);
+    const funcNew = hiddenFunctionContext(newLines, newAt, newLo, next ? next.newStart : Number.MAX_SAFE_INTEGER);
+    // Click-to-reveal: expandRange speaks OLD line numbers. The gap is an
+    // unchanged region, so a new-side line maps exactly via the gap offset.
+    const jumpOld = funcOld ? () => expandRange(funcOld.line, g.all[1]) : undefined;
+    const jumpNew = funcNew ? () => expandRange(g.all[0] + (funcNew.line - newLo), g.all[1]) : undefined;
+    return (
+      <ExpandRow
+        lines={g.lines}
+        split={split}
+        funcOld={funcOld}
+        funcNew={funcNew}
+        onAll={() => expandRange(g.all[0], g.all[1])}
+        onDown={g.down ? () => expandRange(g.down![0], g.down![1]) : undefined}
+        onUp={g.up ? () => expandRange(g.up![0], g.up![1]) : undefined}
+        onJumpOld={jumpOld}
+        onJumpNew={jumpNew}
+      />
+    );
+  }, [expandRange, oldLines, newLines]);
+
   const renderHunks = useCallback((rendered: HunkData[]): ReactElement[] => {
     const gaps = computeExpandGaps(rendered, oldLineCount);
     const gapByIndex = new Map(gaps.map((g) => [g.hunkIndex, g]));
     const out: ReactElement[] = [];
-    const emit = (g: typeof gaps[number]) => {
-      // The definition to pin, per side: scan up from the next hunk's old/new
-      // start (trailing gap: the first hidden line after the last hunk). Pinned
-      // ONLY when the definition itself is hidden inside THIS gap — visible on
-      // screen or pinned by an earlier bar → null (no repeats).
-      const next = g.hunkIndex < rendered.length ? rendered[g.hunkIndex]! : null;
-      const prev = g.hunkIndex > 0 ? rendered[g.hunkIndex - 1]! : null;
-      const last = rendered[rendered.length - 1];
-      const oldAt = next ? next.oldStart : g.all[0];
-      const newLo = prev ? prev.newStart + prev.newLines : 1;
-      const newAt = next ? next.newStart : (last ? last.newStart + last.newLines : 1);
-      const funcOld = hiddenFunctionContext(oldLines, oldAt, g.all[0], g.all[1]);
-      const funcNew = hiddenFunctionContext(newLines, newAt, newLo, next ? next.newStart : Number.MAX_SAFE_INTEGER);
-      // Click-to-reveal: expandRange speaks OLD line numbers. The gap is an
-      // unchanged region, so a new-side line maps exactly via the gap offset.
-      const jumpOld = funcOld ? () => expandRange(funcOld.line, g.all[1]) : undefined;
-      const jumpNew = funcNew ? () => expandRange(g.all[0] + (funcNew.line - newLo), g.all[1]) : undefined;
-      out.push(
-        <Decoration key={`exp-${g.hunkIndex}`}>
-          <ExpandRow
-            lines={g.lines}
-            split={effectiveViewType === 'split'}
-            funcOld={funcOld}
-            funcNew={funcNew}
-            onAll={() => expandRange(g.all[0], g.all[1])}
-            onDown={g.down ? () => expandRange(g.down![0], g.down![1]) : undefined}
-            onUp={g.up ? () => expandRange(g.up![0], g.up![1]) : undefined}
-            onJumpOld={jumpOld}
-            onJumpNew={jumpNew}
-          />
-        </Decoration>,
-      );
-    };
     rendered.forEach((hunk, i) => {
       const g = gapByIndex.get(i);
-      if (g) emit(g);
+      if (g) out.push(<Decoration key={`exp-${g.hunkIndex}`}>{gapRow(g, rendered, effectiveViewType === 'split')}</Decoration>);
       out.push(<Hunk key={hunk.content} hunk={hunk} />);
     });
     const tail = gapByIndex.get(rendered.length);
-    if (tail) emit(tail);
+    if (tail) out.push(<Decoration key={`exp-${tail.hunkIndex}`}>{gapRow(tail, rendered, effectiveViewType === 'split')}</Decoration>);
     return out;
-  }, [expandRange, oldLineCount, oldLines, newLines, effectiveViewType]);
+  }, [gapRow, oldLineCount, effectiveViewType]);
+
+  // Auto-mode hybrid body: unfold bars render standalone between hunks, and
+  // each hunk is sliced into per-region <Diff> segments (split only for
+  // in-place replacements — see diffAutoSegment.ts).
+  const hybridBody = useMemo(() => {
+    if (!autoHybrid || !file) return null;
+    const gaps = computeExpandGaps(hunks, oldLineCount);
+    const gapByIndex = new Map(gaps.map((g) => [g.hunkIndex, g]));
+    const out: ReactElement[] = [];
+    hunks.forEach((hunk, i) => {
+      const g = gapByIndex.get(i);
+      if (g) out.push(<div key={`exp-${i}`} className="session-diff-expand-standalone">{gapRow(g, hunks, false)}</div>);
+      for (const seg of segmentHunkForAuto(hunk)) {
+        out.push(
+          <SegmentDiff
+            key={seg.hunk.content}
+            seg={seg}
+            diffType={file.type}
+            relPath={change.relPath}
+            widgets={widgets}
+            gutterEvents={gutterEvents}
+            selectedChanges={selectedChanges}
+            dragging={!!dragSel}
+          />,
+        );
+      }
+    });
+    const tail = gapByIndex.get(hunks.length);
+    if (tail) out.push(<div key="exp-tail" className="session-diff-expand-standalone">{gapRow(tail, hunks, false)}</div>);
+    return out;
+  }, [autoHybrid, file, hunks, oldLineCount, gapRow, change.relPath, widgets, gutterEvents, selectedChanges, dragSel]);
 
   return (
     <div className="session-diff-filepane" data-file-path={change.filePath}>
@@ -1033,6 +1142,8 @@ function FileDiffPane({
       {aiSummaryOn && <AiFileSummary sessionId={sessionId} change={change} />}
       {rendered && renderedBlocks != null ? (
         <RenderedMarkdown blocks={renderedBlocks} dragging={mdDragRange != null} renderRow={renderMarkdownRow} />
+      ) : file && hybridBody ? (
+        <div className="session-diff-hybrid">{hybridBody}</div>
       ) : file ? (
         <Diff
           viewType={effectiveViewType}
@@ -1276,8 +1387,15 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [viewType, setViewType] = useState<DiffViewType>(() => {
-    try { return (localStorage.getItem('open-walnut-diff-view') as DiffViewType) || 'split'; } catch { return 'split'; }
+  // Layout mode. 'auto' (the default) shows each file the way it reads best:
+  // unified when one side would be empty anyway, split only when lines changed
+  // in place. New storage key on purpose — the old 'open-walnut-diff-view' key
+  // has 'split' saved everywhere, which would silently defeat the auto default.
+  const [viewType, setViewType] = useState<DiffViewMode>(() => {
+    try {
+      const v = localStorage.getItem('open-walnut-diff-view-mode');
+      return v === 'split' || v === 'unified' || v === 'auto' ? v : 'auto';
+    } catch { return 'auto'; }
   });
   // ✦ AI summaries: on by default. Off = zero fetches. NOT merely per-browser:
   // the 'open-walnut-' prefix rides ui-prefs-sync, so the choice follows the
@@ -1407,7 +1525,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   }, [load]);
 
   useEffect(() => {
-    try { localStorage.setItem('open-walnut-diff-view', viewType); } catch { /* ignore */ }
+    try { localStorage.setItem('open-walnut-diff-view-mode', viewType); } catch { /* ignore */ }
   }, [viewType]);
 
   // If this component instance is reused for ANOTHER session (no remount),
@@ -1548,7 +1666,14 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     });
   }, []);
 
+  // Temporary "context file" shown in place of the diff (reference jump landed
+  // outside the change set). Declared before selectFile so a tree click can
+  // dismiss it.
+  const [ghost, setGhost] = useState<GhostFile | null>(null);
+  const closeGhost = useCallback(() => setGhost(null), []);
+
   const selectFile = useCallback((change: SessionFileChange) => {
+    setGhost(null); // a tree click leaves any temporary context file
     setSelectedId(change.filePath);
   }, []);
 
@@ -1557,8 +1682,105 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     if (!files.length) return;
     const idx = files.findIndex((f) => f.id === selectedId);
     const nextIdx = idx < 0 ? 0 : Math.min(files.length - 1, Math.max(0, idx + dir));
+    setGhost(null);
     setSelectedId(files[nextIdx]!.id);
   }, [files, selectedId]);
+
+  // ── In-tab reference jumps + browser-style back/forward (⌘[ / ⌘]) ─────────
+  // A reference row NEVER leaves the Changed tab: a file that's part of this
+  // change opens as its own diff (scrolled to the line); anything else opens
+  // as a grayed read-only context view in the same pane. Keeps the reviewer's
+  // train of thought in one place — no tab switching mid-review.
+  const diffScrollSeqRef = useRef(0);
+  const scrollDiffToLine = useCallback((line: number | undefined) => {
+    if (!line) return;
+    const seq = ++diffScrollSeqRef.current;
+    let tries = 0;
+    const attempt = () => {
+      if (diffScrollSeqRef.current !== seq) return; // superseded by a newer jump
+      const main = containerRef.current?.querySelector<HTMLElement>('.session-diff-main');
+      if (main) {
+        const cell = lineCellFor(main, line) ?? nearestLineCell(main, line);
+        if (cell) {
+          cell.scrollIntoView({ block: 'center' });
+          const row = cell.closest('tr');
+          if (row) {
+            row.classList.add('session-diff-jump-flash');
+            window.setTimeout(() => row.classList.remove('session-diff-jump-flash'), 1600);
+          }
+          return;
+        }
+      }
+      // Diff content is lazy-fetched — retry until the pane renders (max ~3s).
+      if (++tries < 20) window.setTimeout(attempt, 150);
+    };
+    window.setTimeout(attempt, 50);
+  }, []);
+
+  const jumpHistRef = useRef<{ stops: DiffJumpStop[]; index: number }>({ stops: [], index: -1 });
+  const [, setJumpHistVer] = useState(0); // refreshes the Back/Forward disabled state
+
+  const applyJumpStop = useCallback((stop: DiffJumpStop) => {
+    if (stop.kind === 'change') {
+      setGhost(null);
+      setSelectedId(stop.id);
+      scrollDiffToLine(stop.line);
+    } else {
+      setGhost(stop.ghost);
+    }
+  }, [scrollDiffToLine]);
+
+  const pushJumpStop = useCallback((stop: DiffJumpStop) => {
+    const h = jumpHistRef.current;
+    const stops = h.stops.slice(0, h.index + 1); // a new jump truncates the forward tail
+    if (!stops.length) {
+      // Seed with where we ARE so the very first ⌘[ returns to the departure file.
+      if (ghost) stops.push({ kind: 'ghost', ghost });
+      else if (selectedId) stops.push({ kind: 'change', id: selectedId });
+    }
+    stops.push(stop);
+    jumpHistRef.current = { stops, index: stops.length - 1 };
+    setJumpHistVer((v) => v + 1);
+    applyJumpStop(stop);
+  }, [applyJumpStop, ghost, selectedId]);
+
+  const navigateJump = useCallback((delta: -1 | 1) => {
+    const h = jumpHistRef.current;
+    const idx = h.index + delta;
+    const stop = h.stops[idx];
+    if (!stop) return;
+    jumpHistRef.current = { stops: h.stops, index: idx };
+    setJumpHistVer((v) => v + 1);
+    applyJumpStop(stop);
+  }, [applyJumpStop]);
+
+  const canJumpBack = jumpHistRef.current.index > 0;
+  const canJumpForward = jumpHistRef.current.index >= 0
+    && jumpHistRef.current.index < jumpHistRef.current.stops.length - 1;
+
+  const openDiffReference = useCallback((file: string, line: number, term?: string) => {
+    const inChange = files.some((f) => f.change.filePath === file);
+    pushJumpStop(inChange
+      ? { kind: 'change', id: file, line }
+      : { kind: 'ghost', ghost: { file, line, term } });
+  }, [files, pushJumpStop]);
+
+  // ⌘[ / ⌘] — same keys as the Files tab. Tabs mount exclusively, but keep the
+  // visibility guard anyway (pop-outs, future layouts).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      if (e.key !== '[' && e.key !== ']') return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      const el = containerRef.current;
+      if (!el || el.offsetParent === null) return;
+      e.preventDefault();
+      navigateJump(e.key === '[' ? -1 : 1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [navigateJump]);
 
   // Detect a text selection inside the diff → show the floating "Ask" pill.
   // The anchor is the POINTER at release (not the selection rect), so the pill
@@ -1669,6 +1891,24 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         >
           {treeCollapsed ? ICON_PANEL_LEFT : ICON_PANEL_LEFT_FILLED}
         </button>
+        <div className="sfe-nav-group">
+          <button
+            type="button"
+            className="sfe-btn sfe-nav-btn"
+            onClick={() => navigateJump(-1)}
+            disabled={!canJumpBack}
+            title={canJumpBack ? 'Back (⌘[)' : 'Back (no earlier jump)'}
+            aria-label="Back to the previous jump target"
+          >‹</button>
+          <button
+            type="button"
+            className="sfe-btn sfe-nav-btn"
+            onClick={() => navigateJump(1)}
+            disabled={!canJumpForward}
+            title={canJumpForward ? 'Forward (⌘])' : 'Forward (no later jump)'}
+            aria-label="Forward to the next jump target"
+          >›</button>
+        </div>
         <span className="session-diff-toolbar-title">
           {data ? (empty ? 'No file changes' : `${data.fileCount} file${data.fileCount === 1 ? '' : 's'} changed`) : (loading ? 'Loading…' : 'Changes')}
           {(refreshingBg || (loading && !!data)) && <span className="session-diff-refreshing" title="List served from cache — re-scanning in the background">↻</span>}
@@ -1704,6 +1944,12 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
             aria-label="Diff layout"
             title={selectedWholeFile ? 'New/deleted files always show the whole file' : undefined}
           >
+            <button
+              className={`session-diff-viewtoggle-btn${viewType === 'auto' && !selectedWholeFile ? ' is-active' : ''}`}
+              onClick={() => setViewType('auto')}
+              disabled={rendered || selectedWholeFile}
+              title="Unified normally; split only where lines changed in place"
+            >Auto</button>
             <button
               className={`session-diff-viewtoggle-btn${viewType === 'split' && !selectedWholeFile ? ' is-active' : ''}`}
               onClick={() => setViewType('split')}
@@ -1772,6 +2018,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         </div>
       )}
 
+
       {empty ? (
         <div className="session-diff-empty">
           {base === 'session' ? (
@@ -1808,6 +2055,18 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
                     critical={aiSummaryOn && isSessionBase ? criticalMap : undefined}
                   />
                 ))}
+                {ghost && (
+                  <div className="session-diff-tree-ghost" title={ghost.file}>
+                    <span className="session-diff-tree-ghost-name">{basename(ghost.file)}</span>
+                    <span className="session-diff-tree-ghost-tag">context</span>
+                    <button
+                      className="session-diff-tree-ghost-close"
+                      onClick={closeGhost}
+                      title="Close context file"
+                      aria-label="Close context file"
+                    >×</button>
+                  </div>
+                )}
               </div>
               <div
                 className="session-diff-tree-resize"
@@ -1817,7 +2076,26 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
             </>
           )}
           <div className="session-diff-main">
-            {selectedContentLoading ? (
+            {ghost ? (
+              <div className="session-diff-ghost">
+                <div className="session-diff-ghost-banner">
+                  <span className="session-diff-ghost-tag">context</span>
+                  <span className="session-diff-ghost-path" title={ghost.file}>{ghost.file}</span>
+                  <span className="session-diff-ghost-note">not part of this change — read-only</span>
+                  <button className="btn btn-sm" onClick={closeGhost} title="Back to the diff (⌘[)">Back to diff</button>
+                </div>
+                <div className="session-diff-ghost-body">
+                  <FileContentView
+                    key={ghost.file}
+                    path={ghost.file}
+                    line={ghost.line}
+                    lineTerm={ghost.term}
+                    host={sessionHost}
+                    hidePopout
+                  />
+                </div>
+              </div>
+            ) : selectedContentLoading ? (
               <div className="session-diff-file-empty"><LoadingSpinner /></div>
             ) : selectedChange ? (
               <FileDiffPane
@@ -1842,6 +2120,8 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               <div className="session-diff-file-empty">Select a file from the tree.</div>
             )}
           </div>
+
+
         </div>
       )}
 

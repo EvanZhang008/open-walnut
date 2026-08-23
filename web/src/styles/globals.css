@@ -25759,6 +25759,29 @@ a.file-link:hover {
   pointer-events: none;
 }
 
+/* ── Auto hybrid layout: per-region split/unified segments ─────────────────
+   In auto mode each hunk is sliced into its own <Diff> tables: in-place
+   replacements render split, everything else unified full-width. Gutter
+   columns are a fixed 7ch (react-diff-view colgroup), so stacked tables keep
+   their line numbers aligned. */
+.session-diff-hybrid {
+  display: flex;
+  flex-direction: column;
+}
+.session-diff-hybrid .session-diff-segment {
+  margin: 0; /* segments must read as ONE continuous diff */
+}
+/* A split region announces itself: a thin accent edge marks "this block is a
+   side-by-side replacement", so the layout change never reads as a glitch. */
+.session-diff-hybrid .session-diff-segment.is-split {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
+}
+/* Unfold bars live OUTSIDE any table here — same visuals as the in-table
+   Decoration (the .session-diff-expander inside carries them). */
+.session-diff-expand-standalone {
+  width: 100%;
+}
+
 /* ── In-tab reference jumps: ghost (context) file + jump flash ────────────── */
 /* A reference that lands OUTSIDE the change set shows the real file here,
    visibly grayed — it's read-only context, not part of the review. */
