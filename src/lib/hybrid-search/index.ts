@@ -70,6 +70,16 @@ export interface SearchOptions {
   semanticDeadlineMs?: number;
 }
 
+export interface StoredDoc {
+  kind: string;
+  ref: string;
+  title: string;
+  summary: string;
+  note: string;
+  meta: string;
+  updatedAt: number;
+}
+
 /** One scored hit with every component exposed — scores must stay explainable. */
 export interface ScoredHit {
   kind: string;
@@ -93,6 +103,8 @@ export interface SearchIndex {
   upsert(doc: Doc): UpsertResult;
   remove(kind: string, ref: string): boolean;
   search(query: string, options?: SearchOptions): ScoredHit[];
+  /** Stored raw text of a doc (snippet extraction, rescoring). */
+  getDoc(kind: string, ref: string): StoredDoc | null;
   rebuildAll(docs: Iterable<Doc> | AsyncIterable<Doc>): Promise<{ inserted: number }>;
   stats(): IndexStats;
   optimize(): void;
@@ -154,6 +166,24 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         updatedAt: hit.updatedAt,
         semantic: options.embedder ? 'timeout' : 'disabled',
       }));
+    },
+    getDoc: (kind, ref) => {
+      const row = db.prepare(
+        `SELECT kind, ref, title, summary, note, meta, updated_at FROM doc
+         WHERE kind = ? AND ref = ?`,
+      ).get(kind, ref) as
+        | { kind: string; ref: string; title: string; summary: string; note: string; meta: string; updated_at: number }
+        | undefined;
+      if (!row) return null;
+      return {
+        kind: row.kind,
+        ref: row.ref,
+        title: row.title,
+        summary: row.summary,
+        note: row.note,
+        meta: row.meta,
+        updatedAt: row.updated_at,
+      };
     },
     rebuildAll: async (docs) => {
       const result = await writer.rebuildAll(docs);

@@ -478,6 +478,7 @@ let externalSessionImporter:
 let terminalReaperHandle: { stop: () => void } | null = null
 let qmdWatcherHandle: { stop: () => void } | null = null
 let qmdSyncStop: (() => Promise<void>) | null = null
+let searchV2WiringHandle: { stop(): Promise<void> } | null = null
 let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
 let diskWatermarkHandle: { stop: () => void; poll: () => Promise<unknown> } | null = null
 let backupSchedulerHandle: import('../core/backup/backup-scheduler.js').BackupSchedulerHandle | null = null
@@ -1985,6 +1986,22 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.memory.warn('QMD startup failed', {
       error: err instanceof Error ? err.message : String(err),
     })
+  }
+
+  // ── Search v2 (hybrid-search) — flag-gated double-run beside QMD ──
+  // Phase 2 gate: primary only (the cloud replica story lands with Phase 3/4).
+  if (process.env.WALNUT_SEARCH_V2 === '1' && !CLOUD_MODE) {
+    try {
+      const wiring = await import('../core/search/wiring.js')
+      if (wiring.isSearchV2Enabled()) {
+        searchV2WiringHandle = wiring.startSearchV2Wiring(bus)
+        log.memory.info('search-v2 wiring started (WALNUT_SEARCH_V2=1)')
+      }
+    } catch (err) {
+      log.memory.warn('search-v2 startup failed', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
   }
 
   // -- Git auto-commit polling (30s interval) --
@@ -4638,6 +4655,10 @@ export async function stopServer(): Promise<void> {
   if (qmdSyncStop) {
     await qmdSyncStop()
     qmdSyncStop = null
+  }
+  if (searchV2WiringHandle) {
+    await searchV2WiringHandle.stop().catch(() => {})
+    searchV2WiringHandle = null
   }
   // Also covers a worker started through the admin route in cloud mode or
   // before startup finished assigning qmdSyncStop.

@@ -23,6 +23,30 @@ export async function buildSkillPrefetchHint(userMessage: string): Promise<strin
   const query = (userMessage ?? '').trim();
   if (query.length < MIN_MESSAGE_CHARS) return null;
 
+  // Search v2 keyword lane: ~10ms warm, so the prefetch actually fits inside
+  // the caller's 300ms deadline instead of losing the race almost every turn.
+  if (process.env.WALNUT_SEARCH_V2 === '1') {
+    try {
+      const { searchV2Lane, isSearchV2Enabled } = await import('../core/search/wiring.js');
+      if (isSearchV2Enabled()) {
+        const hits = searchV2Lane(query.slice(0, 500), { kinds: ['skill'], limit: 12 });
+        const names = [...new Set(
+          hits
+            .filter((h) => path.basename(h.ref) === 'SKILL.md')
+            .map((h) => path.basename(path.dirname(h.ref)))
+            .filter(Boolean),
+        )].slice(0, MAX_HINTS);
+        if (names.length === 0) return null;
+        return `Possibly relevant skills: ${names.join(', ')} — load with skill_view if applicable.`;
+      }
+    } catch (err) {
+      log.agent.debug('search-v2 skill prefetch failed (non-fatal)', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
   try {
     // Single natural-language query — the user message IS the query (Hermes:
     // no reformulation step; the backend decides lex/vec). Over-fetch (12, not

@@ -17,7 +17,7 @@
 import path from 'node:path';
 import type { Doc } from '../../lib/hybrid-search/index.js';
 import type { SessionRecord, Task } from '../types.js';
-import { isJunkTask } from '../task-junk.js';
+import { isLedgerJunk } from '../task-junk.js';
 import { isLaneSession } from '../session-tracker.js';
 import { parseFrontmatter } from '../parse-frontmatter.js';
 
@@ -35,9 +35,16 @@ function joinParts(parts: Array<string | undefined | null>): string {
   return parts.filter((p): p is string => Boolean(p && p.trim())).join('\n\n');
 }
 
-/** Task → Doc. Returns null for junk/test tasks (they must not enter). */
+/** Task → Doc. Returns null for junk/test tasks (they must not enter).
+ *
+ *  Uses the STRICTER isLedgerJunk (probe-title heuristic included), unlike
+ *  the old QMD sync which stopped at project-level rules: echo-test probes
+ *  live in Inbox with no project and kept leaking into ranked results (golden
+ *  junk family failed on both engines). "An exact hit must stay findable"
+ *  still holds — the reference lane resolves task IDs from tasks.json, not
+ *  from this index. */
 export function taskToDoc(task: Task): Doc | null {
-  if (isJunkTask(task)) return null;
+  if (isLedgerJunk(task)) return null;
   const identifiers = [
     task.id,
     task.session_id,
@@ -74,10 +81,13 @@ export interface SessionDocInput {
   commitShas?: string[];
 }
 
-/** Session → Doc. Returns null for chat-lane sessions (never indexed). */
+/** Session → Doc. Returns null for chat-lane sessions (never indexed) and
+ *  for sessions spawned by junk/probe tasks (same title heuristic as tasks —
+ *  the probe SESSION leaked into results right beside the probe task). */
 export function sessionToDoc(input: SessionDocInput): Doc | null {
   const { session, task } = input;
   if (isLaneSession(session)) return null;
+  if (isLedgerJunk({ project: session.project, title: session.title ?? '' })) return null;
   const identifiers = [
     session.claudeSessionId,
     ...(input.commitShas ?? session.commitShas ?? []),

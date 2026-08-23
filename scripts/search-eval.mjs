@@ -135,8 +135,17 @@ let v2FixtureIndex = null;
 async function getV2FixtureIndex() {
   if (v2FixtureIndex) return v2FixtureIndex;
   const { createSearchIndex } = await loadV2();
+  // Production feeds the index through the adapter serializers, which drop
+  // junk/probe docs (isLedgerJunk) before they ever enter. The fixture feed
+  // applies the same gate so the junk family tests the real contract instead
+  // of the engine's ranking of docs production would never index.
+  const { isLedgerJunk } = await import('../src/core/task-junk.js');
   v2FixtureIndex = createSearchIndex({ dbPath: ':memory:', kinds: KIND_WEIGHTS });
   for (const doc of pub.corpus) {
+    if ((doc.kind === 'task' || doc.kind === 'session')
+      && isLedgerJunk({ project: doc.project ?? '', title: doc.title ?? '' })) {
+      continue;
+    }
     v2FixtureIndex.upsert({
       kind: doc.kind,
       ref: doc.ref,

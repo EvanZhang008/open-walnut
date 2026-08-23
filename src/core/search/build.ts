@@ -85,9 +85,9 @@ function isIndexableNote(absPath: string): boolean {
   return path.basename(absPath) !== 'global-notes.md';
 }
 
-async function readSessionBody(
+export async function readSessionBody(
   session: SessionRecord,
-  tailBytes: number | undefined,
+  tailBytes?: number,
 ): Promise<{ body: string | null; commitShas?: string[] }> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {

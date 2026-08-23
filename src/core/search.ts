@@ -548,6 +548,18 @@ async function searchInner(
   const qmdEnabled =
     process.env.WALNUT_DISABLE_SEARCH !== '1'
     && !CLOUD_MODE;
+  // Search v2 (hybrid-search lib) replaces the three QMD legs below when the
+  // flag is on. Env check duplicated from wiring.isSearchV2Enabled() so the
+  // flag-off path never loads the wiring module (and its better-sqlite3 chain).
+  const v2Enabled = qmdEnabled && process.env.WALNUT_SEARCH_V2 === '1';
+  // v2's coverage component is a fraction over ITS tokenization of the query;
+  // the merge below wants a hit count over contentQueryTerms. Same terms in
+  // practice — reconstruct the count from the fraction.
+  const mergeTermCount = contentQueryTerms(normalizedQuery).length;
+  const v2CoveredHits = (coverageFrac: number): number | undefined =>
+    mergeTermCount > 1
+      ? Math.min(mergeTermCount, Math.round(coverageFrac * mergeTermCount))
+      : undefined;
 
   // Tasks loaded lazily — only when needed for BM25 fallback or child expansion
   let tasks: Task[] | null = null;
@@ -631,24 +643,39 @@ async function searchInner(
         appendTaskResult(result);
       }
     } else try {
-      const { memoryNotesSearch } = await import('./memory-search.js');
-      const qmdResults = await memoryNotesSearch(
-        normalizedQuery,
-        ['task'],
-        limit,
-        undefined,
-        { rerank: false, overfetchMultiplier: 1 },
-      );
-      for (const r of qmdResults) {
-        appendTaskResult({
-          type: 'task',
-          title: r.title,
-          snippet: capSnippet(r.snippet),
-          taskId: r.taskId,
-          score: r.finalScore,
-          matchField: 'task',
-          coveredTermHits: r.coveredTermHits,
-        });
+      if (v2Enabled) {
+        const { searchV2Lane } = await import('./search/wiring.js');
+        for (const hit of searchV2Lane(normalizedQuery, { kinds: ['task'], limit })) {
+          appendTaskResult({
+            type: 'task',
+            title: hit.title,
+            snippet: extractSnippet(hit.text, normalizedQuery),
+            taskId: hit.ref,
+            score: hit.score,
+            matchField: 'task',
+            coveredTermHits: v2CoveredHits(hit.components.coverage),
+          });
+        }
+      } else {
+        const { memoryNotesSearch } = await import('./memory-search.js');
+        const qmdResults = await memoryNotesSearch(
+          normalizedQuery,
+          ['task'],
+          limit,
+          undefined,
+          { rerank: false, overfetchMultiplier: 1 },
+        );
+        for (const r of qmdResults) {
+          appendTaskResult({
+            type: 'task',
+            title: r.title,
+            snippet: capSnippet(r.snippet),
+            taskId: r.taskId,
+            score: r.finalScore,
+            matchField: 'task',
+            coveredTermHits: r.coveredTermHits,
+          });
+        }
       }
     } catch (err) {
       // QMD task search failed — fall back to BM25 keyword search.
@@ -693,33 +720,51 @@ async function searchInner(
       results.push(...bm25ScoreSessions(await getSessions(), normalizedQuery)
         .filter((result) => !seenSessionIds.has(result.sessionId)));
     } else try {
-      const { memoryNotesSearch } = await import('./memory-search.js');
-      const qmdResults = await memoryNotesSearch(
-        normalizedQuery,
-        ['session'],
-        limit,
-        undefined,
-        { rerank: false, overfetchMultiplier: 1 },
-      );
-      // QMD returns only the session id; join the owning task from the record
-      // so every session hit answers "which task?" too (see the taskId note in
-      // bm25ScoreSessions). One already-cached listSessions() read, no per-hit I/O.
+      // Join the owning task from the record so every session hit answers
+      // "which task?" too (see the taskId note in bm25ScoreSessions). One
+      // already-cached listSessions() read, no per-hit I/O.
       const taskBySession = new Map(
         (await getSessions()).map((s) => [s.claudeSessionId, s.taskId]),
       );
-      for (const r of qmdResults) {
-        if (seenSessionIds.has(r.sessionId)) continue;
-        const ownerTaskId = r.sessionId ? taskBySession.get(r.sessionId) : undefined;
-        results.push({
-          type: 'session',
-          title: r.title,
-          snippet: capSnippet(r.snippet),
-          sessionId: r.sessionId,
-          ...(ownerTaskId ? { taskId: ownerTaskId } : {}),
-          score: r.finalScore,
-          matchField: r.source,
-          coveredTermHits: r.coveredTermHits,
-        });
+      if (v2Enabled) {
+        const { searchV2Lane } = await import('./search/wiring.js');
+        for (const hit of searchV2Lane(normalizedQuery, { kinds: ['session'], limit })) {
+          if (seenSessionIds.has(hit.ref)) continue;
+          const ownerTaskId = taskBySession.get(hit.ref);
+          results.push({
+            type: 'session',
+            title: hit.title || hit.ref,
+            snippet: extractSnippet(hit.text, normalizedQuery),
+            sessionId: hit.ref,
+            ...(ownerTaskId ? { taskId: ownerTaskId } : {}),
+            score: hit.score,
+            matchField: 'session',
+            coveredTermHits: v2CoveredHits(hit.components.coverage),
+          });
+        }
+      } else {
+        const { memoryNotesSearch } = await import('./memory-search.js');
+        const qmdResults = await memoryNotesSearch(
+          normalizedQuery,
+          ['session'],
+          limit,
+          undefined,
+          { rerank: false, overfetchMultiplier: 1 },
+        );
+        for (const r of qmdResults) {
+          if (seenSessionIds.has(r.sessionId)) continue;
+          const ownerTaskId = r.sessionId ? taskBySession.get(r.sessionId) : undefined;
+          results.push({
+            type: 'session',
+            title: r.title,
+            snippet: capSnippet(r.snippet),
+            sessionId: r.sessionId,
+            ...(ownerTaskId ? { taskId: ownerTaskId } : {}),
+            score: r.finalScore,
+            matchField: r.source,
+            coveredTermHits: r.coveredTermHits,
+          });
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -747,24 +792,42 @@ async function searchInner(
   // worth 11s of app-wide freeze on a keystroke path.
   if (types.includes('memory') && qmdEnabled) {
     try {
-      const { memoryNotesSearch } = await import('./memory-search.js');
-      const qmdResults = await memoryNotesSearch(
-        normalizedQuery,
-        undefined,
-        limit,
-        undefined,
-        { rerank: false, overfetchMultiplier: 1 },
-      );
-      for (const r of qmdResults) {
-        results.push({
-          type: 'memory',
-          title: r.title,
-          snippet: capSnippet(r.snippet),
-          path: r.filepath,
-          score: r.finalScore,
-          matchField: r.source,
-          coveredTermHits: r.coveredTermHits,
-        });
+      if (v2Enabled) {
+        const { searchV2Lane } = await import('./search/wiring.js');
+        // The memory leg has always been the whole file-backed universe (the
+        // QMD default sources spanned memory + notes + skills); matchField
+        // carries the v2 kind so callers can still tell them apart.
+        for (const hit of searchV2Lane(normalizedQuery, { kinds: ['memory', 'note', 'skill'], limit })) {
+          results.push({
+            type: 'memory',
+            title: hit.title,
+            snippet: extractSnippet(hit.text, normalizedQuery),
+            path: hit.ref,
+            score: hit.score,
+            matchField: hit.kind,
+            coveredTermHits: v2CoveredHits(hit.components.coverage),
+          });
+        }
+      } else {
+        const { memoryNotesSearch } = await import('./memory-search.js');
+        const qmdResults = await memoryNotesSearch(
+          normalizedQuery,
+          undefined,
+          limit,
+          undefined,
+          { rerank: false, overfetchMultiplier: 1 },
+        );
+        for (const r of qmdResults) {
+          results.push({
+            type: 'memory',
+            title: r.title,
+            snippet: capSnippet(r.snippet),
+            path: r.filepath,
+            score: r.finalScore,
+            matchField: r.source,
+            coveredTermHits: r.coveredTermHits,
+          });
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -837,6 +900,8 @@ async function searchInner(
   // one session's work) and keep full credit.
   const GRAB_BAG_SOURCES = new Set([
     'memory_global', 'memory_skill', 'memory_daily', 'memory_compaction',
+    // v2 kind for the skills tree (the v2 equivalent of memory_skill).
+    'skill',
   ]);
   const effectiveCoverage = (r: SearchResult): number => {
     const c = coverage.get(r) ?? 0;

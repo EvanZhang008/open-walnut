@@ -17,6 +17,8 @@
  * and queries and still phrase-matches.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import Database from 'better-sqlite3';
 
 export type SearchDb = Database.Database;
@@ -122,6 +124,11 @@ function wipeIndex(db: SearchDb): void {
 }
 
 export function openSearchDb(options: OpenOptions): OpenResult {
+  // SQLite won't create parent directories, and its CANTOPEN error names no
+  // path — ensure the directory instead of surfacing that riddle.
+  if (options.dbPath !== ':memory:') {
+    fs.mkdirSync(path.dirname(options.dbPath), { recursive: true });
+  }
   const db = new Database(options.dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = NORMAL');
