@@ -593,7 +593,19 @@ struct TasksView: View {
     }
 
     private var emptyText: String {
-        switch activeFilter {
+        Self.emptyPlaceholder(filter: activeFilter, query: trimmedQuery)
+    }
+
+    /// Empty-state copy for a filter, search-aware. With a query active the
+    /// filter wording ("No agent sessions.", "No open tasks.") reads as "your
+    /// search found nothing" while the real hits sit BELOW in Server Search —
+    /// a user could bail before scrolling (2026-08-23 dogfood R11). Say what
+    /// actually happened and point at where the results are.
+    static func emptyPlaceholder(filter: TaskFilter, query: String) -> String {
+        if !query.isEmpty {
+            return "No local matches — see Server Search below."
+        }
+        switch filter {
         case .today: return "Nothing due today."
         case .inProgress: return "No tasks in progress."
         case .sessions: return "No agent sessions."

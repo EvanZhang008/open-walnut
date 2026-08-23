@@ -173,3 +173,23 @@ final class ChatEchoPreservationTests: XCTestCase {
         XCTAssertFalse(ChatStore.turnSettled(history: [], watched: nil))
     }
 }
+
+/// Empty-state copy under an active search (2026-08-23 dogfood R11 FRICTION):
+/// the filter's own wording read as "search failed" while the actual matches
+/// were below in the Server Search section.
+final class TasksEmptyPlaceholderTests: XCTestCase {
+    func testFilterWordingWithoutQuery() {
+        XCTAssertEqual(TasksView.emptyPlaceholder(filter: .sessions, query: ""), "No agent sessions.")
+        XCTAssertEqual(TasksView.emptyPlaceholder(filter: .allOpen, query: ""), "No open tasks.")
+    }
+
+    func testActiveQueryPointsAtServerSearch() {
+        for filter in [TaskFilter.sessions, .allOpen, .today, .inProgress, .done] {
+            XCTAssertEqual(
+                TasksView.emptyPlaceholder(filter: filter, query: "AMD"),
+                "No local matches — see Server Search below.",
+                "filter \(filter) must not show its own empty copy while searching"
+            )
+        }
+    }
+}
