@@ -229,21 +229,23 @@ describe('daemon twin parity for the external caller', () => {
     expect(wnSection).not.toMatch(/process\.stdout\.write\(s \+ '\\\\n'\)/);
   });
 
-  it('both twins install a wn on the user PATH, prod-dir only and marker-guarded', () => {
+  it('both twins install a walnut on the user PATH, prod-dir only and marker-guarded', () => {
     // GATEWAY_SHIM_DIR only reaches sessions the daemon spawns, so without this
-    // a hand-started terminal answers `wn: command not found` and the whole
+    // a hand-started terminal answers `walnut: command not found` and the whole
     // env-less fallback is unreachable.
     for (const src of [nodeTwin, bunTwin]) {
-      expect(src).toMatch(/USER_WN_SHIM_MARKER = 'walnut-wn-shim v1'/);
-      expect(src).toMatch(/function installUserWnShim/);
-      expect(src).toMatch(/installUserWnShim\(\)/);
+      expect(src).toMatch(/function installUserWalnutShim/);
+      expect(src).toMatch(/installUserWalnutShim\(\)/);
       // Never for an isolated (test/sandbox/ephemeral) daemon.
       expect(src).toMatch(/if \(path\.resolve\(DAEMON_DIR\) !== path\.resolve\(PROD_DAEMON_DIR\)\) return/);
       // Never clobber a foreign binary: the guard reads the shim's marker.
-      expect(src).toMatch(/existing\.(includes|indexOf)\(marker\)/);
-      // The one-name-everywhere `walnut` shim ships alongside `wn`.
+      expect(src).toMatch(/existing\.(includes|indexOf)\((USER_WALNUT_SHIM_MARKER|marker)\)/);
       expect(src).toMatch(/USER_WALNUT_SHIM_MARKER = 'walnut-user-shim v1'/);
       expect(src).toMatch(/'\.local', 'bin'\)/);
+      // The retired `wn` name is actively cleaned up, marker-guarded: our old
+      // shims are deleted, a foreign wn binary is left alone.
+      expect(src).toMatch(/LEGACY_WN_SHIM_MARKERS = \['walnut-wn-shim v1'\]/);
+      expect(src).not.toMatch(/function userWnShimText/);
     }
   });
 });

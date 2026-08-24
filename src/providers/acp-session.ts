@@ -310,7 +310,7 @@ export function parseCodexBaseConfig(raw: string | undefined): Record<string, un
  * Environment for the ACP worker + adapter (and therefore for every shell the
  * provider spawns inside the session).
  *
- * `WALNUT_SESSION_ID` is the managed-session identity the in-session `wn` CLI
+ * `WALNUT_SESSION_ID` is the managed-session identity the in-session `walnut` CLI
  * reads to resolve its own sid against the daemon gateway. The native `claude`
  * spawn sets it in daemon-standalone.ts / daemon-source.ts; without it here, a
  * Codex session has no managed identity at all. We deliberately do NOT set

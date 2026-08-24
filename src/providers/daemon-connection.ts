@@ -962,7 +962,7 @@ export class DaemonConnection {
   }
 
   /**
-   * Answer a daemon-relayed agent-gateway request (a `wn` CLI inside one of
+   * Answer a daemon-relayed agent-gateway request (a `walnut` CLI inside one of
    * this host's sessions calling peers.list / peers.send over the daemon's
    * unix socket). Runs the hub-side capability router and replies with a
    * `gateway-result` carrying the relayId. Errors are reported back with an

@@ -75,7 +75,7 @@ function peerCandidates(sessions: SessionRecord[], deps: CapabilityRouterDeps): 
  * Rate-limit bucket for one caller. A tracked session IS its sid; an anonymous
  * ('external') caller has NO identity, so the finest honest bucket is the host
  * it called from. Keying anonymous callers on the bare label collapsed every
- * env-less `wn` on every machine into ONE budget, so a runaway agent on a dev
+ * env-less `walnut` on every machine into ONE budget, so a runaway agent on a dev
  * box could throttle the user's own terminal on the Mac.
  */
 function throttleKey(callerSid: string, host: string): string {
@@ -89,7 +89,7 @@ function throttleKey(callerSid: string, host: string): string {
  * `host` is the daemon connection's hostKey — authoritative for where the
  * calling CLI runs. Never throws; every failure maps to a GatewayError.
  *
- * `callerSid` may be 'external' (an env-less `wn`: a hand-started agent or the
+ * `callerSid` may be 'external' (an env-less `walnut`: a hand-started agent or the
  * user's own terminal on a daemon host). That is a PROVENANCE label, not an
  * authorization, and it is ANONYMOUS rather than trusted: any program the user's
  * account can run on a daemon host can send it, including a managed session that
@@ -128,7 +128,7 @@ export async function handleGatewayCapability(
 
 // ── tools.list / tools.call — the op registry over the gateway ──────────────
 //
-// A `wn tools ...` call inside ANY Walnut-managed session (local or remote)
+// A `walnut tools ...` call inside ANY Walnut-managed session (local or remote)
 // lands here and dispatches into the SAME registry executor the MCP server and
 // the `walnut tools` CLI use, against this hub's own local API. Remote policy
 // is per-op (`tags.remote`): destructive ops refuse the gateway transport.
@@ -167,7 +167,7 @@ async function handleToolsCall(
   const { getOp, executeOp } = await import('../../ops/index.js');
   const op = getOp(name);
   if (!op) {
-    return err('bad_request', `unknown op: ${name} — run \`wn tools list\``);
+    return err('bad_request', `unknown op: ${name} — run \`walnut tools list\``);
   }
   if (op.tags.remote === 'deny') {
     return err('bad_request', `${name} is local-only (destructive) — run it on the Walnut host via \`walnut tools call\``);

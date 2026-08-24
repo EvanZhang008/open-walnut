@@ -2,15 +2,15 @@
 name: walnut-peer-sessions
 description: >-
   Discover and message the user's other Walnut-managed coding sessions with
-  the `wn` CLI (peer sessions on this or other machines). Use when a session
+  the `walnut` CLI (peer sessions on this or other machines). Use when a session
   needs to hand off context, notify a sibling session that shared work is
   ready, or check what other sessions are running. Works on any host that runs
   a Walnut daemon, inside a Walnut-launched session or a plain terminal.
 ---
 
-# Peer Sessions (`wn` CLI)
+# Peer Sessions (`walnut peers`)
 
-A small CLI called `wn` talks to the user's OTHER sessions. It needs zero
+The `walnut` CLI talks to the user's OTHER sessions. It needs zero
 configuration:
 
 - Inside a session Walnut launched, it is already on the PATH and uses the
@@ -18,19 +18,19 @@ configuration:
 - Started by hand (a plain terminal, an agent you launched yourself), it falls
   back to this host's own daemon socket and identifies as an external caller.
   Same commands, same capabilities; only the sender label differs, because
-  there is no session to name. If `wn` is not on your PATH, the daemon also
-  installs it at `~/.local/bin/wn`.
+  there is no session to name. If `walnut` is not on your PATH, the daemon also
+  installs it at `~/.local/bin/walnut`.
 
 ## Commands
 
 ```bash
-wn peers list            # table of the user's sessions across all hosts
-wn peers list --json     # machine-readable
-wn peers send <target> <text...>   # deliver a short text note to a peer
+walnut peers list            # table of the user's sessions across all hosts
+walnut peers list --json     # machine-readable
+walnut peers send <target> <text...>   # deliver a short text note to a peer
 ```
 
 `<target>` is a session id, a unique id prefix (>= 4 chars), or a unique
-case-insensitive title substring. If the target is ambiguous, `wn` exits
+case-insensitive title substring. If the target is ambiguous, `walnut` exits
 with code 3 and prints the candidates.
 
 ## When to use it
@@ -63,7 +63,7 @@ peer-to-peer note.
 ## Examples
 
 ```bash
-wn peers list
-wn peers send 9f3a "auth fixture refactor is merged on main; rebase before continuing"
-wn peers send "flaky auth test" "root cause was a shared tmpdir; see tests/setup/tmp.ts"
+walnut peers list
+walnut peers send 9f3a "auth fixture refactor is merged on main; rebase before continuing"
+walnut peers send "flaky auth test" "root cause was a shared tmpdir; see tests/setup/tmp.ts"
 ```

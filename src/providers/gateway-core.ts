@@ -20,7 +20,7 @@ export const GATEWAY_SOCKET_FILENAME = 'agent-gateway.sock';
 export const PROD_DAEMON_DIR = '/tmp/open-walnut';
 
 /**
- * Well-known gateway socket path — what `wn` falls back to when no
+ * Well-known gateway socket path — what `walnut` falls back to when no
  * WALNUT_AGENT_SOCKET was injected (a hand-started agent, or the user's own
  * terminal, on a host that runs a daemon). WALNUT_DAEMON_DIR override honoured
  * so tests and ephemeral daemons stay isolated.
@@ -32,7 +32,7 @@ export function wellKnownGatewaySocketPath(env?: Record<string, string | undefin
 }
 
 /**
- * Caller sid a `wn` invocation sends when it has no WALNUT_SESSION_ID.
+ * Caller sid a `walnut` invocation sends when it has no WALNUT_SESSION_ID.
  *
  * PROVENANCE LABEL, NEVER AUTHORIZATION. The gateway socket is owner-only 0600
  * and that mode is the entire credential, so whoever sends this sid is already

@@ -14,7 +14,7 @@
  *   2. WHAT it is working on (task title + project) when there is a task.
  *   3. HOW to reach Walnut's data: the `walnut` CLI already on PATH (the
  *      daemon writes the shim and injects WALNUT_AGENT_SOCKET/WALNUT_SESSION_ID
- *      into every spawn — native and ACP alike; `wn` is a legacy alias).
+ *      into every spawn — native and ACP alike).
  *      Capabilities by name only; the CLI is self-describing
  *      (`walnut tools list`, `walnut guide` for the manual).
  *   4. One safety line: peer messages never carry user authorization.

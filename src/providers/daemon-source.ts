@@ -2228,7 +2228,7 @@ function cmdMessageResult(ws, id, cmd) {
 
 var GATEWAY_SOCK_PATH = path.join(DAEMON_DIR, 'agent-gateway.sock');
 var GATEWAY_SHIM_DIR = path.join(DAEMON_DIR, 'bin');
-var GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'wn');
+var GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'walnut');
 var GATEWAY_MAX_LINE_BYTES = 256 * 1024;
 var GATEWAY_OPS = ['peers.list', 'peers.send', 'tools.list', 'tools.call'];
 // 20s default (shorter than the 45s launch relay — peers ops have no long
@@ -2404,23 +2404,10 @@ function startGatewayListener() {
   }
 }
 
-// A wn on the USER's own PATH, for agents nobody spawned. GATEWAY_SHIM_DIR is
-// only on the PATH of sessions the daemon starts, so a claude the user launched
-// by hand answered "wn: command not found" and the env-less fallback was
-// unreachable. This shim resolves the daemon-managed shim AT CALL TIME, so an
-// upgrade never strands it, and exits 6 when no daemon is on the host.
-// Keep in sync with daemon-standalone.ts.
-var USER_WN_SHIM_MARKER = 'walnut-wn-shim v1';
-
-function userWnShimText() {
-  return '#!/bin/sh\\n'
-    + '# ' + USER_WN_SHIM_MARKER + ' — installed by the Walnut session daemon. Safe to delete.\\n'
-    + '# Resolves the daemon-managed shim at call time so an upgrade never strands it.\\n'
-    + 'dir="\${WALNUT_DAEMON_DIR:-' + PROD_DAEMON_DIR + '}"\\n'
-    + '[ -x "$dir/bin/wn" ] && exec "$dir/bin/wn" "$@"\\n'
-    + 'echo "walnut: no Walnut daemon on this host ($dir/bin/wn is missing)." >&2\\n'
-    + 'exit 6\\n';
-}
+// The retired 'wn' name (fully removed 2026-08-24): shims we previously wrote
+// under it are deleted at startup, recognized by their markers. Keep in sync
+// with daemon-standalone.ts.
+var LEGACY_WN_SHIM_MARKERS = ['walnut-wn-shim v1'];
 
 // A 'walnut' on the user's PATH (one name everywhere). A real walnut CLI
 // anywhere else on PATH always wins; otherwise the daemon gateway shim
@@ -2449,63 +2436,67 @@ function userWalnutShimText() {
 }
 
 // PRODUCTION dir only (a test/sandbox daemon must not write the user's bin dir)
-// and never clobber a foreign wn (only an absent path or one carrying our
-// marker). ~/bin is used only when it already exists.
-function installUserWnShim() {
+// and never clobber a foreign walnut (only an absent path or one carrying our
+// marker). ~/bin is used only when it already exists. Retired 'wn' shims we
+// wrote in the alias era are deleted here (marker-guarded — a foreign wn is
+// left alone).
+function installUserWalnutShim() {
   if (path.resolve(DAEMON_DIR) !== path.resolve(PROD_DAEMON_DIR)) return;
-  var text = userWnShimText();
+  var text = userWalnutShimText();
   var installed = [];
   var candidates = [
     [path.join(HOME_DIR, '.local', 'bin'), true],
     [path.join(HOME_DIR, 'bin'), false],
   ];
-  var shims = [
-    ['wn', text, USER_WN_SHIM_MARKER],
-    ['walnut', userWalnutShimText(), USER_WALNUT_SHIM_MARKER],
-  ];
   for (var i = 0; i < candidates.length; i++) {
     var dir = candidates[i][0];
     var createDir = candidates[i][1];
-    for (var j = 0; j < shims.length; j++) {
-      try {
-        if (!fs.existsSync(dir)) {
-          if (!createDir) continue;
-          fs.mkdirSync(dir, { recursive: true });
+    try {
+      var legacy = path.join(dir, 'wn');
+      if (fs.existsSync(legacy)) {
+        var legacyBody = fs.readFileSync(legacy, 'utf-8');
+        for (var m = 0; m < LEGACY_WN_SHIM_MARKERS.length; m++) {
+          if (legacyBody.indexOf(LEGACY_WN_SHIM_MARKERS[m]) !== -1) { fs.unlinkSync(legacy); break; }
         }
-        var name = shims[j][0]; var body = shims[j][1]; var marker = shims[j][2];
-        var target = path.join(dir, name);
-        if (fs.existsSync(target)) {
-          var existing = fs.readFileSync(target, 'utf-8');
-          if (existing.indexOf(marker) === -1) continue;
-          if (existing === body) { installed.push(target); continue; }
-        }
-        fs.writeFileSync(target, body, { mode: 0o755 });
-        fs.chmodSync(target, 0o755);
-        installed.push(target);
-      } catch (e) { /* additive convenience — never fail startup over it */ }
-    }
+      }
+    } catch (e) { /* removal is hygiene — never fail startup over it */ }
+    try {
+      if (!fs.existsSync(dir)) {
+        if (!createDir) continue;
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      var marker = USER_WALNUT_SHIM_MARKER;
+      var target = path.join(dir, 'walnut');
+      if (fs.existsSync(target)) {
+        var existing = fs.readFileSync(target, 'utf-8');
+        if (existing.indexOf(marker) === -1) continue;
+        if (existing === text) { installed.push(target); continue; }
+      }
+      fs.writeFileSync(target, text, { mode: 0o755 });
+      fs.chmodSync(target, 0o755);
+      installed.push(target);
+    } catch (e) { /* additive convenience — never fail startup over it */ }
   }
-  if (installed.length > 0) logMsg('info', 'walnut/wn on user PATH', { paths: installed });
+  if (installed.length > 0) logMsg('info', 'walnut on user PATH', { paths: installed });
 }
 
-// PATH shim so wn inside spawned sessions reaches this daemon's wn dispatch.
-// Source-deploy branch: exec node <this daemon.cjs> wn "$@".
+// PATH shim so walnut inside spawned sessions reaches this daemon's dispatch.
+// Source-deploy branch: exec node <this daemon.cjs> wn "$@" ('wn' is the
+// internal dispatch keyword, not a user-facing name).
 function writeWnShim() {
   try {
     fs.mkdirSync(GATEWAY_SHIM_DIR, { recursive: true, mode: 0o700 });
     var q = function (s) { return "'" + String(s).replace(/'/g, "'\\\\''") + "'"; };
     var shim = '#!/bin/sh\\nexec ' + q(process.execPath) + ' ' + q(process.argv[1]) + ' wn "$@"\\n';
-    // Same dispatch under both names — walnut is canonical, wn a legacy alias.
-    var shimNames = ['wn', 'walnut'];
-    for (var si = 0; si < shimNames.length; si++) {
-      var sp = path.join(GATEWAY_SHIM_DIR, shimNames[si]);
-      fs.writeFileSync(sp, shim, { mode: 0o755 });
-      fs.chmodSync(sp, 0o755);
-    }
+    // One name: walnut. The retired wn file is removed, not rewritten.
+    var sp = path.join(GATEWAY_SHIM_DIR, 'walnut');
+    fs.writeFileSync(sp, shim, { mode: 0o755 });
+    fs.chmodSync(sp, 0o755);
+    try { fs.unlinkSync(path.join(GATEWAY_SHIM_DIR, 'wn')); } catch (e) {}
   } catch (err) {
-    logMsg('warn', 'wn shim write failed', { error: err.message });
+    logMsg('warn', 'walnut shim write failed', { error: err.message });
   }
-  installUserWnShim();
+  installUserWalnutShim();
 }
 
 // ── Mobile events relay: walnut server → cloud bridge (reverse direction) ──
@@ -6106,7 +6097,7 @@ function cleanup() {
     // daemon-standalone.ts cleanup().
     try { fs.unlinkSync(GATEWAY_SOCK_PATH); } catch {}
     try { fs.unlinkSync(GATEWAY_SHIM_PATH); } catch {}
-    try { fs.unlinkSync(path.join(GATEWAY_SHIM_DIR, 'walnut')); } catch {}
+    try { fs.unlinkSync(path.join(GATEWAY_SHIM_DIR, 'wn')); } catch {} // retired alias, older daemons wrote it
   }
   logMsg('info', 'daemon cleanup complete', { uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000) });
 }

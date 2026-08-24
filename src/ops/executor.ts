@@ -38,7 +38,7 @@ export const CALLER_SID_HEADER = 'x-walnut-caller-sid'
  * Who is calling, for ops whose server side stamps provenance (the human inbox
  * stamps a letter's sender from it). An explicit `callerSid` always wins — the
  * gateway resolved it from the daemon's own view of the calling CLI. The env
- * fallback covers the OTHER processes: `walnut tools call` and `wn mcp`, which
+ * fallback covers the OTHER processes: `walnut tools call` and `walnut mcp`, which
  * run inside a managed session and inherit WALNUT_SESSION_ID.
  *
  * The header is provenance, never authorization: nothing gates on it, so a

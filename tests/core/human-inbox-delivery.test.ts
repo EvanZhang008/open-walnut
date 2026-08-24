@@ -176,7 +176,7 @@ describe('delivery wrapper: agent-authored text is fenced, bounded and one-lined
 
     expect(text.startsWith('[Letter reply]')).toBe(true);
     expect(text).toContain('lt-abc-000001');
-    expect(text).toContain("wn tools call human_inbox_reply '{\"letter\":\"lt-abc-000001\"");
+    expect(text).toContain("walnut tools call human_inbox_reply '{\"letter\":\"lt-abc-000001\"");
 
     const payload = fencedPayload(text);
     expect(payload).toContain('subject: Ship the migration?');

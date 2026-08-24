@@ -95,9 +95,9 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * feed checks hasCapability before pushing, so an old daemon just means the
  * cloud feed degrades to snapshot + heartbeats until the next auto-deploy.
  *
- * 'agent-gateway' — on-host unix-socket gateway for the `wn` peer-session
+ * 'agent-gateway' — on-host unix-socket gateway for the `walnut` peer-session
  * CLI (daemon relays `gateway-request` events UP; the server answers with
- * the `gateway-result` command). Optional: on an old daemon `wn` simply
+ * the `gateway-result` command). Optional: on an old daemon `walnut` simply
  * exits 6 (socket absent) until the next auto-deploy upgrades it.
  *
  * 'hooks-v1' — declarative daemon-hook rules (hooks.configure command). The

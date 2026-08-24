@@ -2,7 +2,7 @@
  * /api/v1/human-inbox — letters from agents to the ONE human who reads them.
  *
  * Mounted from api-v1.ts (additive to the frozen v1 contract), so the console,
- * the phone, and every `wn tools call human_inbox_*` share one implementation.
+ * the phone, and every `walnut tools call human_inbox_*` share one implementation.
  *
  *   POST   /human-inbox                  send a letter  → { id }            (201)
  *   GET    /human-inbox[?archived=1]     envelopes      → { letters, unreadCount }

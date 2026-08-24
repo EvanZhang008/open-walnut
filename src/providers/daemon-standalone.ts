@@ -785,7 +785,7 @@ function buildSpawnPreamble(): string {
     // sets the user's intended PATH order; these dirs only fill gaps when claude
     // /node aren't on the RC PATH at all.
     // GATEWAY_SHIM_DIR is appended at runtime (string concat, not a $HOME
-    // template) so `wn` — the peer-session CLI shim — is on every session's
+    // template) so `walnut` — the peer-session CLI shim — is on every session's
     // PATH. Keep in sync with daemon-source.ts.
     'export PATH="$PATH:$HOME/.toolbox/bin:$HOME/.local/bin:$HOME/.npm-global/bin:'
       + GATEWAY_SHIM_DIR + '"',
@@ -1874,9 +1874,9 @@ function cmdMobileEvent(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
 }
 
 // ── Agent gateway: on-host unix socket → Mac hub relay ──
-// A `wn` CLI writes one NDJSON request line to ${DAEMON_DIR}/agent-gateway.sock
+// A `walnut` CLI writes one NDJSON request line to ${DAEMON_DIR}/agent-gateway.sock
 // (env-injected inside a Walnut-spawned session; the same path found by
-// wellKnownGatewaySocketPath() when `wn` runs with no env, which is how a
+// wellKnownGatewaySocketPath() when `walnut` runs with no env, which is how a
 // hand-started agent reaches Walnut); the daemon resolves the caller's
 // CURRENT sid (env sid is only a lookup key — fresh spawns use a tmp sid that
 // cmdRename re-keys) and relays the request to the Mac hub with the same
@@ -1887,7 +1887,7 @@ function cmdMobileEvent(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
 
 const GATEWAY_SOCK_PATH = path.join(DAEMON_DIR, GATEWAY_SOCKET_FILENAME)
 const GATEWAY_SHIM_DIR = path.join(DAEMON_DIR, 'bin')
-const GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'wn')
+const GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'walnut')
 
 // oldSid → newSid, maintained by cmdRename. resolveCallerSid follows the
 // chain (max 5 hops) to map a CLI's spawn-time WALNUT_SESSION_ID to the sid
@@ -1969,7 +1969,7 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
   const req = parsed.request
   // ACP sessions (engine=codex) live in the acp worker map, not `sessions` —
   // their WALNUT_SESSION_ID is the runtimeId, stable for the worker's life.
-  // sid 'external' (env-less `wn`: a hand-started agent or the user's own
+  // sid 'external' (env-less `walnut`: a hand-started agent or the user's own
   // terminal) is not a tracked session and passes through as a provenance
   // label — the owner-only socket already vouched for the caller, and the hub
   // grants 'external' nothing a tracked session lacks. Every other unknown sid
@@ -1997,7 +1997,7 @@ function startGatewayListener() {
     type GwSocket = { data: GwSockData; write(s: string | Buffer): number; end(): void }
     // Bun.listen raw sockets do PARTIAL writes: write() returns the bytes the
     // kernel buffer took (~8KB) and end() closes immediately, silently
-    // truncating anything larger (a skill_read reply is ~11KB — the wn client
+    // truncating anything larger (a skill_read reply is ~11KB — the walnut client
     // then saw "socket closed without a response"). Buffer the remainder and
     // finish in drain(); node:net in daemon-source.ts queues internally, so
     // only this twin needs the dance.
@@ -2049,26 +2049,10 @@ function startGatewayListener() {
   }
 }
 
-// A `wn` on the USER's own PATH, for agents nobody spawned.
-// GATEWAY_SHIM_DIR is only appended to the PATH of sessions the daemon starts,
-// so a `claude` the user launched in a plain terminal used to answer
-// `wn: command not found` — the env-less fallback could never even be reached.
-// This second shim lives in an ordinary user bin dir and RESOLVES THE DAEMON AT
-// CALL TIME (it execs $WALNUT_DAEMON_DIR/bin/wn), so it can never go stale when
-// the daemon binary is replaced or upgraded, and with no daemon on the host it
-// exits 6 with the same meaning `wn` itself gives that case. Keep in sync with
-// daemon-source.ts.
-const USER_WN_SHIM_MARKER = 'walnut-wn-shim v1'
-
-function userWnShimText(): string {
-  return '#!/bin/sh\n'
-    + '# ' + USER_WN_SHIM_MARKER + ' — installed by the Walnut session daemon. Safe to delete.\n'
-    + '# Resolves the daemon-managed shim at call time so an upgrade never strands it.\n'
-    + 'dir="${WALNUT_DAEMON_DIR:-' + PROD_DAEMON_DIR + '}"\n'
-    + '[ -x "$dir/bin/wn" ] && exec "$dir/bin/wn" "$@"\n'
-    + 'echo "walnut: no Walnut daemon on this host ($dir/bin/wn is missing)." >&2\n'
-    + 'exit 6\n'
-}
+// The retired `wn` name (fully removed 2026-08-24): shims we previously wrote
+// under it are deleted at startup, recognized by their markers. Keep in sync
+// with daemon-source.ts.
+const LEGACY_WN_SHIM_MARKERS = ['walnut-wn-shim v1']
 
 // `walnut` on the user's PATH (one name everywhere, decision 2026-08-23). On
 // the hub the REAL npm-installed walnut CLI must always win, whatever the
@@ -2098,51 +2082,56 @@ function userWalnutShimText(): string {
 }
 
 /**
- * Install the user-PATH `wn` shim. Two guards, both load-bearing:
+ * Install the user-PATH `walnut` shim. Two guards, both load-bearing:
  *  - PRODUCTION dir only — a test/sandbox/ephemeral daemon must never write
  *    into the user's real bin dir.
- *  - never clobber a foreign `wn`: we only write a path that is absent or
+ *  - never clobber a foreign `walnut`: we only write a path that is absent or
  *    already carries our marker.
  * ~/bin is written only when it already exists (creating it would put the shim
- * somewhere that is not on anyone's PATH).
+ * somewhere that is not on anyone's PATH). Retired `wn` shims we wrote in the
+ * alias era are deleted here (marker-guarded — a foreign `wn` is left alone).
  */
-function installUserWnShim() {
+function installUserWalnutShim() {
   if (path.resolve(DAEMON_DIR) !== path.resolve(PROD_DAEMON_DIR)) return
+  const text = userWalnutShimText()
   const installed: string[] = []
   for (const [dir, createDir] of [
     [path.join(HOME_DIR, '.local', 'bin'), true],
     [path.join(HOME_DIR, 'bin'), false],
   ] as Array<[string, boolean]>) {
-    for (const [name, text, marker] of [
-      ['wn', userWnShimText(), USER_WN_SHIM_MARKER],
-      ['walnut', userWalnutShimText(), USER_WALNUT_SHIM_MARKER],
-    ] as Array<[string, string, string]>) {
-      try {
-        if (!fs.existsSync(dir)) {
-          if (!createDir) continue
-          fs.mkdirSync(dir, { recursive: true })
-        }
-        const target = path.join(dir, name)
-        if (fs.existsSync(target)) {
-          const existing = fs.readFileSync(target, 'utf-8')
-          if (!existing.includes(marker)) continue // someone else's binary — leave it
-          if (existing === text) { installed.push(target); continue }
-        }
-        fs.writeFileSync(target, text, { mode: 0o755 })
-        fs.chmodSync(target, 0o755)
-        installed.push(target)
-      } catch { /* additive convenience — never fail startup over it */ }
-    }
+    try {
+      const legacy = path.join(dir, 'wn')
+      if (fs.existsSync(legacy)) {
+        const body = fs.readFileSync(legacy, 'utf-8')
+        if (LEGACY_WN_SHIM_MARKERS.some((m) => body.includes(m))) fs.unlinkSync(legacy)
+      }
+    } catch { /* removal is hygiene — never fail startup over it */ }
+    try {
+      if (!fs.existsSync(dir)) {
+        if (!createDir) continue
+        fs.mkdirSync(dir, { recursive: true })
+      }
+      const target = path.join(dir, 'walnut')
+      if (fs.existsSync(target)) {
+        const existing = fs.readFileSync(target, 'utf-8')
+        if (!existing.includes(USER_WALNUT_SHIM_MARKER)) continue // someone else's binary — leave it
+        if (existing === text) { installed.push(target); continue }
+      }
+      fs.writeFileSync(target, text, { mode: 0o755 })
+      fs.chmodSync(target, 0o755)
+      installed.push(target)
+    } catch { /* additive convenience — never fail startup over it */ }
   }
-  if (installed.length > 0) logMsg('info', 'walnut/wn on user PATH', { paths: installed })
+  if (installed.length > 0) logMsg('info', 'walnut on user PATH', { paths: installed })
 }
 
-/** PATH shim so `wn` inside spawned sessions reaches this daemon's wn dispatch. */
+/** PATH shim so `walnut` inside spawned sessions reaches this daemon's dispatch. */
 function writeWnShim() {
   try {
     fs.mkdirSync(GATEWAY_SHIM_DIR, { recursive: true, mode: 0o700 })
     // Compiled binary: argv[1] is a bunfs VIRTUAL path (embedded, must never
-    // leak into the shim) → exec the binary itself, argv[2]='wn'. Dev run
+    // leak into the shim) → exec the binary itself, argv[2]='wn' (the internal
+    // dispatch keyword — not a user-facing name). Dev run
     // (`bun daemon-standalone.ts`): argv[1] is the real script on disk → keep
     // it so the shim reaches the same code.
     const entry = process.argv[1] || ''
@@ -2151,19 +2140,17 @@ function writeWnShim() {
       ? ' ' + shellQuote(entry)
       : ''
     const shim = '#!/bin/sh\nexec ' + shellQuote(process.execPath) + script + ' wn "$@"\n'
-    // Same dispatch under both names — `walnut` is the canonical name, `wn`
-    // the legacy alias. GATEWAY_SHIM_DIR is APPENDED to session PATH, so on
+    // One name: `walnut`. GATEWAY_SHIM_DIR is APPENDED to session PATH, so on
     // the hub the real npm walnut still wins; on remote hosts this shim IS
-    // the walnut command.
-    for (const name of ['wn', 'walnut']) {
-      const p = path.join(GATEWAY_SHIM_DIR, name)
-      fs.writeFileSync(p, shim, { mode: 0o755 })
-      fs.chmodSync(p, 0o755)
-    }
+    // the walnut command. The retired `wn` file is removed, not rewritten.
+    const p = path.join(GATEWAY_SHIM_DIR, 'walnut')
+    fs.writeFileSync(p, shim, { mode: 0o755 })
+    fs.chmodSync(p, 0o755)
+    try { fs.unlinkSync(path.join(GATEWAY_SHIM_DIR, 'wn')) } catch {}
   } catch (err) {
-    logMsg('warn', 'wn shim write failed', { error: (err as Error).message })
+    logMsg('warn', 'walnut shim write failed', { error: (err as Error).message })
   }
-  installUserWnShim()
+  installUserWalnutShim()
 }
 
 // ── ACP session commands (engine=codex etc; see acp-daemon.ts) ──
@@ -2174,7 +2161,7 @@ function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
   if (!params.sid || !params.cwd) return sendError(ws, id, 'acpStart: missing sid/cwd')
   // Agent gateway for ACP sessions: same wiring the native `claude` spawn gets.
   // WALNUT_SESSION_ID arrives hub-side (the runtimeId; acp.hasWorker() vouches
-  // for it in handleGatewayLine); the daemon owns the socket path and the `wn`
+  // for it in handleGatewayLine); the daemon owns the socket path and the `walnut`
   // shim dir, so those are injected here, not hub-side. PATH is overridden (not
   // appended in-shell like the native spawn) because ACP workers don't run
   // through the RC-sourcing shell wrapper.
@@ -2422,7 +2409,7 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
       MCP_CONNECTION_NONBLOCKING: '1',
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
       CLAUDE_CODE_MAX_RETRIES: cliMaxRetries,
-      // Agent gateway (peer sessions): the `wn` CLI inside this session reads
+      // Agent gateway (peer sessions): the `walnut` CLI inside this session reads
       // these two to reach the on-host gateway socket. The sid may be a fresh
       // spawn's tmp id — gatewaySidAliases (cmdRename) resolves it to the
       // current sid on every request. Keep in sync with daemon-source.ts.
@@ -5115,7 +5102,7 @@ function cleanup() {
     // daemon-source.ts cleanup().
     try { fs.unlinkSync(GATEWAY_SOCK_PATH) } catch {}
     try { fs.unlinkSync(GATEWAY_SHIM_PATH) } catch {}
-    try { fs.unlinkSync(path.join(GATEWAY_SHIM_DIR, 'walnut')) } catch {}
+    try { fs.unlinkSync(path.join(GATEWAY_SHIM_DIR, 'wn')) } catch {} // retired alias, older daemons wrote it
   }
   logMsg('info', 'daemon cleanup complete', { uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000) })
 }

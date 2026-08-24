@@ -32,7 +32,7 @@ if (process.env.WALNUT_CLI_DIRECT === '1') {
 }
 
 program
-  .name('open-walnut')
+  .name('walnut')
   .version(packageVersion)
   .description('Open Walnut — Personal AI & task manager')
   .option('--json', 'Output as JSON', false);

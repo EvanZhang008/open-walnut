@@ -1,13 +1,14 @@
 /**
- * `wn` — the on-host peer-session CLI (plan: P1 agent gateway, §4).
+ * `walnut` — the on-host peer-session CLI (plan: P1 agent gateway, §4).
  *
  * Bundled into the daemon binary; the daemon's argv dispatch calls
- * `runWnCli(process.argv.slice(3))` when invoked as `daemon wn ...` (the
- * on-PATH `wn` is a 2-line shim the daemon writes). Zero configuration: it
- * reads WALNUT_AGENT_SOCKET + WALNUT_SESSION_ID from the environment when
- * Walnut injected them, otherwise falls back to the well-known socket path and
- * the 'external' caller label (see resolveWnEndpoint), and speaks one NDJSON
- * request/response over the daemon's unix socket.
+ * `runWnCli(process.argv.slice(3))` when invoked as `daemon wn ...` ('wn' is
+ * the internal dispatch keyword only; the on-PATH `walnut` is a 2-line shim
+ * the daemon writes). Zero configuration: it reads WALNUT_AGENT_SOCKET +
+ * WALNUT_SESSION_ID from the environment when Walnut injected them, otherwise
+ * falls back to the well-known socket path and the 'external' caller label
+ * (see resolveWnEndpoint), and speaks one NDJSON request/response over the
+ * daemon's unix socket.
  *
  * Parsing and formatting are pure exported functions so L1 tests cover the
  * whole command surface without a socket.
@@ -38,7 +39,7 @@ export function parseWnArgs(argv: string[]): WnParsed {
   if (head === '--help' || head === '-h' || head === 'help') return { kind: 'help', topic: 'root' }
   if (head === 'guide') {
     // Sugar over `tools.call skill_read {dirName:"walnut"}` — the manual is
-    // one live document on the hub, and `wn guide` is how sessions read it.
+    // one live document on the hub, and `walnut guide` is how sessions read it.
     if (rest.length > 0) return { kind: 'usage-error', message: 'guide takes no arguments' }
     return { kind: 'guide' }
   }
@@ -81,7 +82,7 @@ export function parseWnArgs(argv: string[]): WnParsed {
   return { kind: 'usage-error', message: `unknown peers subcommand: ${sub}` }
 }
 
-/** `wn tools list | help <op> | call <op> ['{json}']` — same contract as `walnut tools`. */
+/** `walnut tools list | help <op> | call <op> ['{json}']` — same contract as the hub `walnut tools`. */
 function parseToolsArgs(args: string[]): WnParsed {
   const [sub, ...rest] = args
   if (sub === '--help' || sub === '-h' || sub === undefined) return { kind: 'help', topic: 'tools' }
@@ -182,7 +183,7 @@ export function formatErrorLines(error: GatewayError): string[] {
   return lines
 }
 
-const HELP_ROOT = `walnut — the Walnut CLI (wn is a legacy alias)
+const HELP_ROOT = `walnut — the Walnut CLI
 
 USAGE
   walnut guide                              print the full Walnut manual (recipes + safety rules)
@@ -316,7 +317,7 @@ export function resolveWnEndpoint(
       ok: false,
       message:
         `walnut: no Walnut daemon on this host (WALNUT_AGENT_SOCKET is unset and ${fallback} does not exist).\n` +
-        'Start Walnut on this host, or run wn inside a Walnut-managed session.',
+        'Start Walnut on this host, or run walnut inside a Walnut-managed session.',
     }
   }
   if (!isTrustedGatewaySocket(info, callerUid)) {
@@ -324,7 +325,7 @@ export function resolveWnEndpoint(
       ok: false,
       message:
         `walnut: refusing ${fallback}: it is not an owner-only socket belonging to this user.\n` +
-        'The 0600 socket mode is the gateway credential, so wn will not talk to it.',
+        'The 0600 socket mode is the gateway credential, so walnut will not talk to it.',
     }
   }
   return { ok: true, socketPath: fallback, sid, external: true }
@@ -385,7 +386,7 @@ function requestOverSocket(
 
 // ── entry point ──
 
-/** Cap on waiting for a stdout flush — a runtime that never calls back must not hang wn. */
+/** Cap on waiting for a stdout flush — a runtime that never calls back must not hang walnut. */
 const WN_STDOUT_FLUSH_TIMEOUT_MS = 5_000
 
 /**
@@ -393,7 +394,7 @@ const WN_STDOUT_FLUSH_TIMEOUT_MS = 5_000
  *
  * The daemon dispatch ends with `process.exit(await runWnCli(...))`, and
  * process.exit() DISCARDS whatever is still queued for a pipe (pipes are async
- * on macOS): `wn peers list --json | …` came out truncated at exactly the 64KB
+ * on macOS): `walnut peers list --json | …` came out truncated at exactly the 64KB
  * pipe buffer, i.e. as invalid JSON, while the same command on a terminal was
  * whole. Awaiting the write callback is what makes piped output complete.
  */
@@ -433,7 +434,7 @@ export async function runWnCli(argv: string[]): Promise<number> {
   }
   const { socketPath, sid } = endpoint
 
-  // tools.call args: inline JSON wins; otherwise stdin (echo '{...}' | wn tools call op).
+  // tools.call args: inline JSON wins; otherwise stdin (echo '{...}' | walnut tools call op).
   let callArgs: Record<string, unknown> = {}
   if (parsed.kind === 'tools.call') {
     let rawJson = parsed.rawJson
@@ -546,5 +547,5 @@ export function formatToolsTable(ops: ToolRow[]): string {
       .filter(Boolean).join(', ')
     return `  ${o.name.padEnd(width)}  ${o.title ?? ''} (${flags})`
   })
-  return ['Available operations:', '', ...lines, '', 'Run `wn tools help <op>`, then `wn tools call <op> \'{json}\'`.'].join('\n')
+  return ['Available operations:', '', ...lines, '', 'Run `walnut tools help <op>`, then `walnut tools call <op> \'{json}\'`.'].join('\n')
 }

@@ -21,7 +21,7 @@ Markdown body (optional): context, a numbered draft, task refs.
 
 ## Attributes
 
-- `tool`: any Walnut op name (`wn tools list`). The click runs it exactly as written — the server validates args against the op's schema and refuses unknown ops.
+- `tool`: any Walnut op name (`walnut tools list`). The click runs it exactly as written — the server validates args against the op's schema and refuses unknown ops.
 - `args`: complete, static, valid JSON. REAL ids only — never a placeholder, never a guess.
 - `label`: short button text. `style`: `primary`, `danger`, or omitted.
 - `confirm="..."`: adds an inline confirmation step. Required for anything irreversible (delete, merge, anything that runs code or replaces a document — the server refuses destructive ops without it).

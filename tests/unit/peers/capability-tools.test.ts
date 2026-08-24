@@ -71,14 +71,14 @@ describe('gateway tools.call — policy gates', () => {
     if (!badArgs.ok) expect(badArgs.error.code).toBe('bad_request');
   });
 
-  it('unknown op → bad_request pointing at `wn tools list`', async () => {
+  it('unknown op → bad_request pointing at `walnut tools list`', async () => {
     const r = await handleGatewayCapability(
       'tools.call', CALLER, { name: 'nope_not_real' }, 'devbox', deps(),
     );
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error.code).toBe('bad_request');
-    expect(r.error.message).toContain('wn tools list');
+    expect(r.error.message).toContain('walnut tools list');
   });
 
   it('writes consume the shared rate budget; the cap trips with retryAfterMs', async () => {

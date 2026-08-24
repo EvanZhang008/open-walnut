@@ -187,7 +187,7 @@ export function buildLetterDeliveryText(
     '',
     'Continue the work accordingly, then reply in the letter thread (not just in this '
     + 'session) so the answer reaches them wherever they are:',
-    `wn tools call human_inbox_reply '{"letter":"${letter.id}","text":"..."}'`,
+    `walnut tools call human_inbox_reply '{"letter":"${letter.id}","text":"..."}'`,
   ].join('\n');
 }
 
