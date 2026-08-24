@@ -26,9 +26,15 @@ interface NotesBookmarksGroupProps {
   onSelect: (path: string, opts?: { newTab?: boolean }) => void;
   /** Un-bookmark a note (the inline × affordance). */
   onToggleFavorite: (path: string) => void;
+  /**
+   * Right-click a row → the tree's own context menu (Open in new tab, Rename,
+   * Reveal in Finder, Copy path, Delete…). Without it the browser's native menu
+   * takes the row, which in the Mac app means Look Up / Translate / Services.
+   */
+  onContextMenu?: (e: React.MouseEvent, path: string) => void;
 }
 
-export function NotesBookmarksGroup({ favoriteNotes, selectedPath, onSelect, onToggleFavorite }: NotesBookmarksGroupProps) {
+export function NotesBookmarksGroup({ favoriteNotes, selectedPath, onSelect, onToggleFavorite, onContextMenu }: NotesBookmarksGroupProps) {
   const [expanded, setExpanded] = useState<boolean>(() => {
     try { return localStorage.getItem(LS_BOOKMARKS_KEY) !== 'collapsed'; } catch { return true; }
   });
@@ -57,6 +63,7 @@ export function NotesBookmarksGroup({ favoriteNotes, selectedPath, onSelect, onT
               className={`notes-tree-item notes-tree-file notes-bookmark-row ${selectedPath === path ? 'selected' : ''}`}
               title={path}
               onClick={(e) => onSelect(path, { newTab: e.metaKey || e.ctrlKey })}
+              onContextMenu={onContextMenu ? (e) => onContextMenu(e, path) : undefined}
             >
               <BookmarkGlyph />
               <span className="notes-tree-name">{basenameNoExt(path)}</span>

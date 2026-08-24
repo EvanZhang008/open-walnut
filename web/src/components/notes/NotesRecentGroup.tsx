@@ -37,9 +37,14 @@ interface NotesRecentGroupProps {
   expanded: boolean;
   /** Toggle the group's collapse state (flips RECENT_GROUP_KEY in the parent's set). */
   onToggle: () => void;
+  /**
+   * Right-click a row → the tree's own context menu. Without it the row falls
+   * through to the browser's native menu (Look Up / Translate in the Mac app).
+   */
+  onContextMenu?: (e: React.MouseEvent, path: string) => void;
 }
 
-export function NotesRecentGroup({ existingPaths, selectedPath, onSelect, expanded, onToggle }: NotesRecentGroupProps) {
+export function NotesRecentGroup({ existingPaths, selectedPath, onSelect, expanded, onToggle, onContextMenu }: NotesRecentGroupProps) {
   // Only render recents that still resolve to a file in the current tree.
   const recents = readRecents().filter((p) => existingPaths.has(p)).slice(0, MAX_SHOWN);
   if (recents.length === 0) return null;
@@ -62,6 +67,7 @@ export function NotesRecentGroup({ existingPaths, selectedPath, onSelect, expand
               className={`notes-tree-item notes-tree-file notes-bookmark-row ${selectedPath === path ? 'selected' : ''}`}
               title={path}
               onClick={(e) => onSelect(path, { newTab: e.metaKey || e.ctrlKey })}
+              onContextMenu={onContextMenu ? (e) => onContextMenu(e, path) : undefined}
             >
               <ClockGlyph />
               <span className="notes-tree-name">{basenameNoExt(path)}</span>

@@ -13,10 +13,14 @@ export type CopyResult = 'clipboard' | 'execCommand' | 'failed';
  *  WKWebView rejects navigator.clipboard writes whose user-gesture has expired
  *  (any async work between click and copy), so the app exposes a message
  *  handler that writes NSPasteboard directly. */
-function desktopBridgeCopy(text: string): boolean {
-  const handler = (window as unknown as {
+function desktopBridge(): { postMessage: (t: string) => void } | undefined {
+  return (window as unknown as {
     webkit?: { messageHandlers?: { walnutClipboard?: { postMessage: (t: string) => void } } };
   }).webkit?.messageHandlers?.walnutClipboard;
+}
+
+function desktopBridgeCopy(text: string): boolean {
+  const handler = desktopBridge();
   if (!handler) return false;
   try { handler.postMessage(text); return true; } catch { return false; }
 }
@@ -31,11 +35,18 @@ function desktopBridgeCopy(text: string): boolean {
  * promise minted inside the gesture and Safari honors it when it settles.
  */
 export function copyTextDeferred(textPromise: Promise<string>): Promise<CopyResult> {
+  // In the Mac app the native bridge is strictly better than ClipboardItem: it
+  // writes NSPasteboard directly, so it needs no live gesture and can't be
+  // rejected. Take it before touching the web clipboard at all.
+  if (desktopBridge()) return textPromise.then(copyTextRobust);
+
   try {
     if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
-      const item = new ClipboardItem({
-        'text/plain': textPromise.then((t) => new Blob([t], { type: 'text/plain' })),
-      });
+      const blob = textPromise.then((t) => new Blob([t], { type: 'text/plain' }));
+      // Mark the derived promise handled so a failing textPromise doesn't also
+      // fire an unhandledrejection (the caller still sees it via our return).
+      blob.catch(() => {});
+      const item = new ClipboardItem({ 'text/plain': blob });
       return navigator.clipboard.write([item]).then(
         () => 'clipboard' as const,
         // Rejected (e.g. Chromium quirk, or the bridge is a better fit) —

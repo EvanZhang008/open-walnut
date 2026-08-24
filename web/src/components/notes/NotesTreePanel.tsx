@@ -5,6 +5,7 @@ import { NotesBookmarksGroup } from './NotesBookmarksGroup';
 import { NotesRecentGroup, RECENT_GROUP_KEY } from './NotesRecentGroup';
 import { HighlightedText, HighlightedTitle } from './HighlightedText';
 import { useConfirm, useAlert } from '@/hooks/useConfirm';
+import { copyTextDeferred } from '@/utils/clipboard';
 
 /**
  * Folder expand/collapse persistence (Feature 3). The expanded-folders set is
@@ -44,6 +45,22 @@ function collectNotePaths(nodes: NoteTreeNode[], acc: Set<string> = new Set()): 
       if (n.children) collectNotePaths(n.children, acc);
     } else if (n.kind !== 'attachment') {
       acc.add(n.path);
+    }
+  }
+  return acc;
+}
+
+/**
+ * path → file node for every file in the tree. The Bookmarks / Recent / search
+ * rows only carry a PATH, so this is how a right-click on one of them recovers
+ * the real node (name + note-vs-attachment kind) the context menu needs.
+ */
+function collectFileNodes(nodes: NoteTreeNode[], acc: Map<string, NoteTreeNode> = new Map()): Map<string, NoteTreeNode> {
+  for (const n of nodes) {
+    if (n.type === 'folder') {
+      if (n.children) collectFileNodes(n.children, acc);
+    } else {
+      acc.set(n.path, n);
     }
   }
   return acc;
@@ -207,6 +224,9 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   const existingNotePaths = useMemo(() => collectNotePaths(tree), [tree]);
   // All files (incl. attachments) — the drag-move collision guard must see both.
   const existingFilePaths = useMemo(() => collectFilePaths(tree), [tree]);
+  // path → node, so a path-only row (Bookmarks / Recent / search hit) can open
+  // the SAME context menu the tree rows do.
+  const fileNodeByPath = useMemo(() => collectFileNodes(tree), [tree]);
   // Recent group is COLLAPSED iff the sentinel is in the expanded-folders set.
   const recentExpanded = !expandedFolders.has(RECENT_GROUP_KEY);
   const toggleRecent = useCallback(() => {
@@ -373,6 +393,24 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     setContextMenu({ x: e.clientX, y: e.clientY, node });
   }, []);
 
+  /**
+   * Right-click on a row that only knows a PATH: the Bookmarks group, the Recent
+   * group, and search hits. Without this they fell through to the BROWSER's own
+   * menu (Look Up / Translate / Services in the Mac app) — the whole tree offers
+   * Walnut's menu, so these must too. The real node is preferred so the menu
+   * shows note-vs-attachment actions; a synthesized one keeps a row whose file
+   * left the tree from regressing to the native menu.
+   */
+  const handlePathContextMenu = useCallback((e: React.MouseEvent, p: string) => {
+    const node: NoteTreeNode = fileNodeByPath.get(p) ?? {
+      name: p.split('/').pop() ?? p,
+      path: p,
+      type: 'file',
+      kind: p.toLowerCase().endsWith('.md') ? 'note' : 'attachment',
+    };
+    handleContextMenu(e, node);
+  }, [fileNodeByPath, handleContextMenu]);
+
   const handleStartRename = useCallback((node: NoteTreeNode) => {
     setRenaming(node.path);
     setRenameValue(node.name.replace(/\.md$/, ''));
@@ -443,16 +481,25 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     });
   }, [alert]);
 
-  const handleCopyPath = useCallback(async (p: string) => {
+  // Copy path: the text is only known AFTER a network round-trip, which is
+  // exactly the case a plain navigator.clipboard.writeText cannot survive —
+  // Safari/WKWebView (the Mac app) voids the click's user-activation while the
+  // resolve is in flight and rejects the write ("Copy failed" on every use).
+  // copyTextDeferred hands the clipboard a promise minted INSIDE the gesture and
+  // falls back to the app's NSPasteboard bridge / execCommand, so it must be
+  // called synchronously here — never awaited first.
+  const handleCopyPath = useCallback((p: string) => {
     setContextMenu(null);
-    try {
-      const fullPath = await revealNote(p, 'path');
-      await navigator.clipboard.writeText(fullPath);
-    } catch {
-      // Safari drops the user-activation across the network await, and cloud
-      // mode 400s the resolve — either way, tell the user instead of no-op'ing.
-      void alert({ title: 'Copy failed', message: 'Could not copy the path to the clipboard.' });
-    }
+    copyTextDeferred(revealNote(p, 'path')).then(
+      (result) => {
+        if (result !== 'failed') return;
+        void alert({ title: 'Copy failed', message: 'Could not copy the path to the clipboard.' });
+      },
+      () => {
+        // The resolve itself failed (cloud mode 400s, file gone).
+        void alert({ title: 'Copy failed', message: 'Could not resolve the file path on this machine.' });
+      },
+    );
   }, [alert]);
 
   // ── Drag-to-move (#5) ──
@@ -698,6 +745,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           selectedPath={selectedPath}
           onSelect={onSelect}
           onToggleFavorite={onToggleFavorite}
+          onContextMenu={handlePathContextMenu}
         />
       )}
 
@@ -710,6 +758,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           onSelect={onSelect}
           expanded={recentExpanded}
           onToggle={toggleRecent}
+          onContextMenu={handlePathContextMenu}
         />
       )}
 
@@ -732,6 +781,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
               <div
                 key={`folder:${f.path}`}
                 className="notes-tree-item notes-tree-folder notes-search-folder"
+                onContextMenu={(e) => handleContextMenu(e, { name: f.name, path: f.path, type: 'folder' })}
                 onClick={() => {
                   setSearchQuery('');
                   setSearchResults(null);
@@ -770,6 +820,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                 <div
                   key={r.path}
                   className={`notes-tree-item notes-tree-file notes-search-result ${selectedPath === r.path ? 'selected' : ''}`}
+                  onContextMenu={(e) => handlePathContextMenu(e, r.path)}
                   onClick={() => {
                     // Attachment hits (OCR/PDF text) open in the preview pane —
                     // the note loader .md-suffixes the path and 404s on binaries.
