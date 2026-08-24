@@ -1,0 +1,14 @@
+{
+  "id": "walnut-time",
+  "name": "Time",
+  "description": "Your day as a timeline: an attention tape, work chapters and task swimlanes, plus the My time and Agents reports.",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "engines": {
+    "walnut": ">=0.3.2"
+  },
+  "web": "dist/web.mjs",
+  "build": {
+    "web": "src/web.tsx"
+  }
+}

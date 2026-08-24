@@ -80,7 +80,7 @@
     "test:full": "npm run test && npm run test:e2e && npm run test:live:daemon && npm run test:live:cloud",
     "test:all": "npm run lint && npm run lint:paths && npm run test && npx playwright test",
     "lint:paths": "bash scripts/lint-production-paths.sh",
-    "lint:plugins": "npm run build:plugins && tsc --noEmit -p packages/plugin-api/tsconfig.json && tsc --noEmit -p packages/plugin-cli/tsconfig.json && tsc -p tests/typechecks/tsconfig.plugin-api.json && tsc --noEmit -p examples/plugins/walnut-demo/tsconfig.json",
+    "lint:plugins": "npm run build:plugins && tsc --noEmit -p packages/plugin-api/tsconfig.json && tsc --noEmit -p packages/plugin-cli/tsconfig.json && tsc -p tests/typechecks/tsconfig.plugin-api.json && tsc --noEmit -p examples/plugins/walnut-demo/tsconfig.json && tsc --noEmit -p examples/plugins/walnut-time/tsconfig.json",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "build:daemon": "bash scripts/build-daemon.sh",
