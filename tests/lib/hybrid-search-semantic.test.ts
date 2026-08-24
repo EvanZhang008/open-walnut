@@ -204,6 +204,60 @@ import type { SearchIndex } from '../../src/lib/hybrid-search/index.js';
 import { createWriter } from '../../src/lib/hybrid-search/writer.js';
 
 /** The writer surface for a live index (same db handle). */
+describe('rescore guards (fake worker: query always embeds to [127,0,0,0])', () => {
+  const FAKE_EMBEDDER = {
+    modelId: 'fake/unit-x',
+    dims: 4,
+    workerPath: new URL('./fixtures/fake-embed-worker.cjs', import.meta.url).pathname,
+  };
+
+  it('span confidence: near-duplicate pool keeps keyword (recency) order', async () => {
+    // Three docs identical except age. Cosines OPPOSE recency but live in a
+    // tiny span (~0.02) — min-max would stretch that noise to the full blend
+    // weight and flip the order; the span confidence must keep it scaled to
+    // ~0.2·(span/SPAN_REF), below the recency gap.
+    const index = createSearchIndex({ dbPath: ':memory:', kinds: KINDS, embedder: FAKE_EMBEDDER });
+    const now = Date.now();
+    const w = indexWriterView(index);
+    const mk = (ref: string, updatedAt: number) =>
+      index.upsert({ kind: 'task', ref, title: 'orbit telemetry alert', note: 'same body', updatedAt }).docId;
+    // newest → lowest cosine, oldest → highest, span ~0.004 (pure noise);
+    // ages 0/30/60 days so recency still carries a real keyword gap.
+    w.writeVectors(mk('newest', now), [new Int8Array([127, 12, 0, 0])]);
+    w.writeVectors(mk('middle', now - 30 * 24 * 3600 * 1000), [new Int8Array([127, 8, 0, 0])]);
+    w.writeVectors(mk('oldest', now - 60 * 24 * 3600 * 1000), [new Int8Array([127, 0, 0, 0])]);
+    const hits = await index.searchSemantic('orbit telemetry', { semanticDeadlineMs: 5000 });
+    expect(hits.map((h) => h.ref)).toEqual(['newest', 'middle', 'oldest']);
+    expect(hits[0].semantic).toBe('ok');
+    index.close();
+  });
+
+  it('demotion cap: a keyword-rank-1 doc never sinks below limit/2 + 1', async () => {
+    // 13 keyword-tied docs; the newest (keyword rank 1 via recency) gets an
+    // ORTHOGONAL vector (cos 0) while every filler gets cos 1 — a full-width
+    // span, so without the cap the target lands dead last. The rescore may
+    // promote fillers freely, but the cap floors the target at index cap (5).
+    const index = createSearchIndex({ dbPath: ':memory:', kinds: KINDS, embedder: FAKE_EMBEDDER });
+    const now = Date.now();
+    const w = indexWriterView(index);
+    const target = index.upsert({
+      kind: 'task', ref: 'target', title: 'orbit telemetry alert', note: 'same body', updatedAt: now,
+    }).docId;
+    w.writeVectors(target, [new Int8Array([0, 127, 0, 0])]);
+    for (let i = 0; i < 12; i++) {
+      const id = index.upsert({
+        kind: 'task', ref: `filler-${i}`, title: 'orbit telemetry alert', note: 'same body',
+        updatedAt: now - (i + 1) * 24 * 3600 * 1000,
+      }).docId;
+      w.writeVectors(id, [new Int8Array([127, 0, 0, 0])]);
+    }
+    const hits = await index.searchSemantic('orbit telemetry', { limit: 10, semanticDeadlineMs: 5000 });
+    expect(hits).toHaveLength(10);
+    expect(hits.findIndex((h) => h.ref === 'target')).toBe(5); // kwRank 0 + cap 5
+    index.close();
+  });
+});
+
 function indexWriterView(index: SearchIndex) {
   return createWriter(index.db);
 }

@@ -54,6 +54,8 @@ export interface EmbedderConfig {
   /** transformers.js dtype (default 'q8'). */
   dtype?: string;
   cacheDir?: string;
+  /** Pooling: 'mean' (default; e5 family) or 'last' (Qwen3-Embedding). */
+  pooling?: 'mean' | 'last';
   /** Compiled embed-worker.js location. Required when the caller bundles this
    *  library; defaults to the sibling file (correct un-bundled). */
   workerPath?: string | URL;
@@ -212,6 +214,11 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
 
   /** Cosine blend weight — same additive stack as the keyword components. */
   const W_COSINE = 0.20;
+  /** Pool cosine span at which the rescore earns its full weight. Below this
+   *  the candidates are semantically indistinguishable and the min-max
+   *  stretch would amplify noise (measured: Qwen3 spans run 0.15-0.4 on
+   *  mixed pools, well under 0.1 on same-topic near-duplicate pools). */
+  const SPAN_REF = 0.15;
 
   const selectVecs = (ids: number[]) => db.prepare(
     `SELECT doc_id, vec FROM doc_vec WHERE doc_id IN (${ids.map(() => '?').join(',')})`,
@@ -274,7 +281,14 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         if (cos > max) max = cos;
       }
       const span = max - min;
-      const scored = pool.map((h) => {
+      // Min-max normalization amplifies WHATEVER span the pool has to the
+      // full blend weight — on a pool of near-duplicates (an exact-identifier
+      // query where every candidate is about the same component) that
+      // stretches semantic noise into ±W_COSINE and overrides recency, the
+      // only signal that actually ranks such a pool. Scale the blend by how
+      // much cosine information the pool really contains.
+      const confidence = Math.min(1, span / SPAN_REF);
+      const scored = pool.map((h, kwRank) => {
         const cos = bestCos.get(h.docId);
         // A missing vector means UNKNOWN similarity, not zero: a doc whose
         // vectors were just dropped by an upsert (i.e. the freshest doc in
@@ -283,11 +297,31 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         const cosNorm = cos === undefined || span <= 0 ? 0.5 : (cos - min) / span;
         const out = toScored(h, 'ok');
         out.components = { ...h.components, cosine: cos };
-        out.score = h.score + (kindWeights[h.kind] ?? 1) * W_COSINE * cosNorm;
-        return out;
+        out.score = h.score + (kindWeights[h.kind] ?? 1) * W_COSINE * confidence * cosNorm;
+        return { out, kwRank };
       });
-      scored.sort((a, b) => b.score - a.score);
-      return scored.slice(0, limit);
+      scored.sort((a, b) => b.out.score - a.out.score);
+      // Demotion cap: the rescore is a tiebreaker, not a veto. It may promote
+      // a doc any distance, but may not sink one more than limit/2 places
+      // below its keyword rank (2026-08-24: a keyword-rank-5 doc fell out of
+      // top-10 to a cosine opinion; the golden set says the keyword evidence
+      // should have kept it visible). Earliest overdue keyword rank wins a slot.
+      const cap = Math.max(3, Math.floor(limit / 2));
+      const final: ScoredHit[] = [];
+      const pending = [...scored];
+      while (final.length < Math.min(limit, pending.length + final.length)) {
+        let pick = 0;
+        let bestDeadline = Infinity;
+        for (let j = 0; j < pending.length; j++) {
+          const deadline = pending[j].kwRank + cap;
+          if (deadline <= final.length && deadline < bestDeadline) {
+            pick = j;
+            bestDeadline = deadline;
+          }
+        }
+        final.push(pending.splice(pick, 1)[0].out);
+      }
+      return final;
     },
     backfillVectors: async (backfillOptions = {}) => {
       if (!embedder || closed) return { embedded: 0, drained: true, cursor: null };

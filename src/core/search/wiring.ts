@@ -51,8 +51,12 @@ export function isSearchV2Enabled(): boolean {
     && process.env.WALNUT_DISABLE_SEARCH !== '1';
 }
 
-/** Known embedding models (Q2 in the plan: golden-set Chinese recall decides
- *  between them; the env override exists so the eval can flip without code). */
+/** Known embedding models. Plan Q2 settled 2026-08-24 by the full golden-set
+ *  A/B: qwen3-0.6b wins on human-realistic queries (recall@10 70%→80%, MRR
+ *  0.56→0.62, 7 failures fixed) at an acceptable cost (24ms/query — well
+ *  inside the rescore deadline; ~30x slower passage embedding, which only the
+ *  paced background backfill pays). The env override flips models without
+ *  code; the meta gate wipes doc_vec on a switch, so the backfill re-embeds. */
 const EMBED_MODELS: Record<string, Omit<EmbedderConfig, 'workerPath'>> = {
   'e5-small': {
     modelId: 'Xenova/multilingual-e5-small',
@@ -60,7 +64,15 @@ const EMBED_MODELS: Record<string, Omit<EmbedderConfig, 'workerPath'>> = {
     queryPrefix: 'query: ',
     passagePrefix: 'passage: ',
   },
+  'qwen3-0.6b': {
+    modelId: 'onnx-community/Qwen3-Embedding-0.6B-ONNX',
+    dims: 1024,
+    queryPrefix: 'Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ',
+    passagePrefix: '',
+    pooling: 'last',
+  },
 };
+const DEFAULT_EMBED_MODEL = 'qwen3-0.6b';
 
 function resolveEmbedWorkerPath(): string | undefined {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -80,7 +92,7 @@ function resolveEmbedWorkerPath(): string | undefined {
 
 function buildEmbedderConfig(): EmbedderConfig | undefined {
   if (process.env.WALNUT_SEARCH_V2_SEMANTIC === '0') return undefined;
-  const model = EMBED_MODELS[process.env.WALNUT_SEARCH_V2_EMBED_MODEL ?? 'e5-small'];
+  const model = EMBED_MODELS[process.env.WALNUT_SEARCH_V2_EMBED_MODEL ?? DEFAULT_EMBED_MODEL];
   if (!model) return undefined;
   const workerPath = resolveEmbedWorkerPath();
   if (!workerPath) {
