@@ -68,20 +68,20 @@ test('search finds a future-start task that the Now date filter hides', async ({
   await expect(page.locator('.todo-panel-item[data-task-id="pw-task-done-marmalade"]')).toHaveCount(0);
 });
 
-test('search ignores the tag filter too', async ({ page }) => {
+test('search ignores the phase filter too', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('.todo-panel')).toBeVisible();
 
-  // 'Local only task' has no tags; filter to the seeded 'pw-e2e-tag' so it is
-  // excluded from the list. Same class of bug as the date filter. (This leg
-  // used the Priority select until 2026-08-23, when Priority was retired from
-  // Quick filters — Tag is the remaining legacy select of that class.)
+  // 'Local only task' is TODO; filter Phase to Complete so it is excluded from
+  // the list. Same class of bug as the date filter. (This leg used the Priority
+  // then Tag selects until 2026-08-23, when both were retired from Quick
+  // filters — Phase is the remaining legacy control of that class.)
   await page.locator('.vd-trigger').click();
   const panel = page.locator('.vd-panel');
   await expect(panel).toBeVisible();
-  // Legacy selects render in the "Quick filters" rail section of the panel.
+  // Legacy controls render as buttons in the "Quick filters" rail section.
   await panel.locator('.vd-rail-btn[data-rail-section="quick"]').click();
-  await panel.locator('.vd-field', { hasText: 'Tag' }).locator('select').selectOption('pw-e2e-tag');
+  await panel.locator('.vd-seg-btn[data-phase-value="COMPLETE"]').click();
   await page.keyboard.press('Escape');
   await expect(panel).toBeHidden();
 

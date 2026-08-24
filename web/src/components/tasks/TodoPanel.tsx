@@ -2125,7 +2125,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const confirm = useConfirm();
   const [showCompleted, setShowCompleted] = useState(false);
   const [phaseFilter, setPhaseFilter] = useState('');
-  const [tagFilter, setTagFilter] = useState('');
   // Canonical composable query (src/core/task-query.ts) — the same model REST
   // and the agent tool use. Starts neutral: the legacy showCompleted toggle
   // still owns "hide done" on this surface, so seeding a completion condition
@@ -3836,15 +3835,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return counts;
   }, [tasks, showCompleted]);
 
-  // Available tags for ViewDropdown
-  const availableTags = useMemo(() => {
-    const tagSet = new Set<string>();
-    for (const t of tasks) {
-      if (t.tags) for (const tag of t.tags) tagSet.add(tag);
-    }
-    return Array.from(tagSet).sort();
-  }, [tasks]);
-
   // Value lists for the query panel — derived from the loaded tasks (plus the
   // registry for projects, so a zero-task project is still selectable).
   const queryProjectOptions = useMemo(() => {
@@ -3889,9 +3879,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     } else if (phaseFilter) {
       next.phases = [...(next.phases ?? []), phaseFilter as TaskPhase];
     }
-    if (tagFilter) next.tagsAny = [...(next.tagsAny ?? []), tagFilter];
     return next;
-  }, [phaseFilter, tagFilter]);
+  }, [phaseFilter]);
 
   // ONE `now` for BOTH normalizations: relative windows must not slide mid-pass,
   // and search-mode results must agree with the plain list.
@@ -4064,7 +4053,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (isDone && !completedBypass(task) && !showCompleted && phaseFilter !== 'COMPLETE') reasons.push('hidden by completed filter');
     if (phaseFilter && !matchesPhaseFilter(phaseFilter, task.phase)) reasons.push(`phase ≠ ${phaseFilter}`);
     if (dateFilter && !isDone && !matchesDateFilter(task, dateFilter, tasks)) reasons.push(`outside "${DATE_LABELS[dateFilter] || dateFilter}" date filter`);
-    if (tagFilter && (!task.tags || !task.tags.includes(tagFilter))) reasons.push(`missing tag "${tagFilter}"`);
     // Canonical query conditions get ONE combined reason: they're composable, so
     // enumerating each mismatch would be a paragraph. The chips above the list
     // already name every active condition.
@@ -4073,7 +4061,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       reasons.push(window ? `outside the active filters (${window})` : 'outside the active filters');
     }
     return reasons.length > 0 ? reasons.join(' · ') : undefined;
-  }, [overrideReasonTaskId, tasks, showCompleted, phaseFilter, dateFilter, tagFilter, completedBypass, matchesCanonicalQuery, taskQueryState]);
+  }, [overrideReasonTaskId, tasks, showCompleted, phaseFilter, dateFilter, completedBypass, matchesCanonicalQuery, taskQueryState]);
 
   // Every REFINEMENT the user set, and nothing that is mere navigation:
   //   • the full canonical query (including its own `projects` condition, which
@@ -5843,9 +5831,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           projectCounts={projectCounts}
           phaseFilter={phaseFilter}
           onPhaseFilterChange={(v) => { setPhaseFilter(v); clearFocusOverride(); }}
-          tagFilter={tagFilter}
-          onTagFilterChange={(v) => { setTagFilter(v); clearFocusOverride(); }}
-          availableTags={availableTags}
           dateFilter={dateFilter}
           onDateFilterChange={(v) => { setDateFilter(v); persistDateFilter(v); clearFocusOverride(); }}
           sortBy={sortBy}
@@ -5857,7 +5842,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           onClearAll={() => {
             setActiveProject(''); persistTab(''); onProjectChange?.('');
             setPhaseFilter('');
-            setTagFilter('');
             setDateFilter(''); persistDateFilter('');
             setTaskQueryState((prev) => ({ ...DEFAULT_TASK_QUERY_FILTER_STATE, sort: prev.sort }));
             clearFocusOverride();

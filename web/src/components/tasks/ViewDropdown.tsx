@@ -79,9 +79,6 @@ export interface ViewDropdownProps {
 
   phaseFilter?: string;
   onPhaseFilterChange?: (v: string) => void;
-  tagFilter?: string;
-  onTagFilterChange?: (v: string) => void;
-  availableTags?: string[];
 
   dateFilter?: DateFilter;
   onDateFilterChange?: (v: DateFilter) => void;
@@ -146,7 +143,6 @@ interface RailSection {
 export function ViewDropdown({
   projects, activeProject, onProjectChange, projectCounts,
   phaseFilter, onPhaseFilterChange,
-  tagFilter, onTagFilterChange, availableTags,
   dateFilter, onDateFilterChange,
   sortBy, onSortByChange, groupBy, onGroupByChange,
   showCompleted, onShowCompletedChange, onClearAll,
@@ -169,7 +165,7 @@ export function ViewDropdown({
   const hasQuery = !!query && !!onQueryChange;
 
   const queryActive = !!query && hasActiveTaskQuery(query);
-  const hasActiveFilter = !!(phaseFilter || tagFilter || dateFilter || activeProject || showCompleted) || queryActive;
+  const hasActiveFilter = !!(phaseFilter || dateFilter || activeProject || showCompleted) || queryActive;
 
   // Memoized: the fallback branches allocate, and these arrays feed the
   // sections/search memos below — fresh identities would defeat both.
@@ -187,7 +183,7 @@ export function ViewDropdown({
   const sections = useMemo<RailSection[]>(() => {
     const list: RailSection[] = [];
     if (hasLegacySelects) {
-      const set = [phaseFilter, dateFilter, tagFilter].filter(Boolean).length;
+      const set = [phaseFilter, dateFilter].filter(Boolean).length;
       list.push({ id: 'quick', name: 'Quick filters', badge: set });
     }
     if (hasProjectChips) list.push({ id: 'projects', name: 'Projects', badge: activeProject ? 1 : 0 });
@@ -215,7 +211,7 @@ export function ViewDropdown({
     // project) and the memo would go stale. `query` changes on every filter
     // click anyway, so this memo mostly documents the inputs.
   }, [hasProjectChips, hasLegacySelects, hasLegacySortGroup, hasQuery, query,
-      activeProject, phaseFilter, dateFilter, tagFilter,
+      activeProject, phaseFilter, dateFilter,
       projectOptions, sourceOptions, sprintOptions]);
 
   const activeSection = sections.find((s) => s.id === section) ?? sections[0];
@@ -348,7 +344,6 @@ export function ViewDropdown({
   if (hasLegacySelects) {
     if (dateFilter) quickNotes.push(`date ${DATE_FILTER_OPTIONS.find((o) => o.value === dateFilter)?.label ?? dateFilter}`);
     if (phaseFilter) quickNotes.push(`phase ${PHASE_OPTIONS.find((o) => o.value === phaseFilter)?.label ?? phaseFilter}`);
-    if (tagFilter) quickNotes.push(`tag ${tagFilter}`);
   }
 
   // Build project chips: [All, ...projects]. Inbox rides in the project list
@@ -462,7 +457,6 @@ export function ViewDropdown({
                   id={activeSection?.id ?? ''}
                   catChips={catChips} activeProject={activeProject} onProjectChange={onProjectChange}
                   phaseFilter={phaseFilter} onPhaseFilterChange={onPhaseFilterChange}
-                  tagFilter={tagFilter} onTagFilterChange={onTagFilterChange} availableTags={availableTags}
                   dateFilter={dateFilter} onDateFilterChange={onDateFilterChange}
                   sortBy={sortBy} onSortByChange={onSortByChange}
                   groupBy={groupBy} onGroupByChange={onGroupByChange}
@@ -503,7 +497,6 @@ function SectionDetail(props: {
   activeProject?: string;
   onProjectChange?: (p: string) => void;
   phaseFilter?: string; onPhaseFilterChange?: (v: string) => void;
-  tagFilter?: string; onTagFilterChange?: (v: string) => void; availableTags?: string[];
   dateFilter?: DateFilter; onDateFilterChange?: (v: DateFilter) => void;
   sortBy?: SortBy; onSortByChange?: (v: SortBy) => void;
   groupBy?: GroupBy; onGroupByChange?: (v: GroupBy) => void;
@@ -564,15 +557,19 @@ function SectionDetail(props: {
             </select>
           </div>
         </div>
-        <InlineSelect label="Phase" value={props.phaseFilter ?? ''} options={PHASE_OPTIONS} onChange={props.onPhaseFilterChange!} />
-        {props.availableTags && props.availableTags.length > 0 && props.onTagFilterChange && (
-          <InlineSelect
-            label="Tag"
-            value={props.tagFilter ?? ''}
-            options={[{ value: '', label: 'All' }, ...props.availableTags.slice(0, 20).map(t => ({ value: t, label: t.length > 16 ? t.slice(0, 16) + '…' : t }))]}
-            onChange={props.onTagFilterChange}
-          />
-        )}
+        <div className="vd-field vd-span2">
+          <span className="vd-label">Phase</span>
+          <div className="vd-seg">
+            {PHASE_OPTIONS.map((o) => (
+              <button
+                key={o.value || 'all'}
+                className={`vd-seg-btn${(props.phaseFilter ?? '') === o.value ? ' vd-active' : ''}`}
+                data-phase-value={o.value}
+                onClick={() => props.onPhaseFilterChange!(o.value)}
+              >{o.label}</button>
+            ))}
+          </div>
+        </div>
       </div>
     );
   }
@@ -580,23 +577,30 @@ function SectionDetail(props: {
   if (id === 'arrange') {
     return (
       <div className="vd-grid">
-        <div className="vd-field">
+        {/* Full words, not P↓/C↓ codes — the pane has the room, and the codes
+            read as noise (user review 2026-08-23). */}
+        <div className="vd-field vd-span2">
           <span className="vd-label">Sort</span>
           <div className="vd-seg">
-            {([['manual', 'M'], ['priority', 'P↓'], ['date', 'C↓'], ['updated', 'U↓']] as const).map(([val, lbl]) => (
+            {([
+              ['manual', 'Manual', 'Manual order (drag / move buttons)'],
+              ['priority', 'Priority', 'Highest priority first'],
+              ['date', 'Created', 'Newest first'],
+              ['updated', 'Updated', 'Recently updated first'],
+            ] as const).map(([val, lbl, tip]) => (
               <button
                 key={val}
                 className={`vd-seg-btn${props.sortBy === val ? ' vd-active' : ''}`}
                 onClick={() => props.onSortByChange!(val)}
-                title={val === 'manual' ? 'Manual order (drag / move buttons)' : undefined}
+                title={tip}
               >{lbl}</button>
             ))}
           </div>
         </div>
-        <div className="vd-field">
+        <div className="vd-field vd-span2">
           <span className="vd-label">Group</span>
           <div className="vd-seg">
-            {([['project', 'Proj'], ['none', 'Flat']] as const).map(([val, lbl]) => (
+            {([['project', 'By project'], ['none', 'Flat']] as const).map(([val, lbl]) => (
               <button key={val} className={`vd-seg-btn${props.groupBy === val ? ' vd-active' : ''}`} onClick={() => props.onGroupByChange!(val)}>{lbl}</button>
             ))}
           </div>
@@ -825,29 +829,6 @@ function TriStateField({ label, value, onChange }: {
           >{c.label}</button>
         ))}
       </div>
-    </div>
-  );
-}
-
-// ── InlineSelect: grid field — small label above a full-width select ──
-//
-// Native <select> (against the general menu rule) ONLY because these legacy
-// controls predate it and existing specs drive them via selectOption; the new
-// query controls are custom option rows. Retire together with the legacy
-// props once both surfaces are on the query model.
-
-function InlineSelect({ label, value, options, onChange }: {
-  label: string;
-  value: string;
-  options: { value: string; label: string }[];
-  onChange: (v: string) => void;
-}) {
-  return (
-    <div className="vd-field">
-      <span className="vd-label">{label}</span>
-      <select className={`vd-sel${value ? ' vd-filtered' : ''}`} value={value} onChange={(e) => onChange(e.target.value)}>
-        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
     </div>
   );
 }

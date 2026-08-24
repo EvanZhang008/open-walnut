@@ -126,23 +126,22 @@ test('Date=Now hides future tasks from the pinned area', async ({ page }) => {
 
 test('search and filters apply across pinned, recent, and task sections', async ({ page }) => {
   const query = `shared-query-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  // The toolbar-filter leg below uses the legacy Tag select (the Priority
-  // select was retired from Quick filters 2026-08-23 — priority lives in the
+  // The toolbar-filter leg below uses the legacy DATE filter (Priority and Tag
+  // were retired from Quick filters 2026-08-23 — priority lives in the
   // canonical query rail, which search deliberately does NOT bypass).
+  // filterMismatch is deferred (future start_date), so Date=Now hides it.
   const matchingPinned = await createTaskViaApi(`Pinned ${query} match`, {
     project: 'Work',
-    tags: ['pw-shared-tag'],
   })
-  const filterMismatch = await createTaskViaApi(`Pinned ${query} tag mismatch`, {
+  const filterMismatch = await createTaskViaApi(`Pinned ${query} deferred mismatch`, {
     project: 'Work',
+    start_date: new Date(Date.now() + 30 * 86_400_000).toISOString(),
   })
   const searchMismatch = await createTaskViaApi('Pinned unrelated search target', {
     project: 'Work',
-    tags: ['pw-shared-tag'],
   })
   const unpinnedMatch = await createTaskViaApi(`Unpinned ${query} match`, {
     project: 'Work',
-    tags: ['pw-shared-tag'],
   })
   await pinTaskViaApi(matchingPinned.id)
   await pinTaskViaApi(filterMismatch.id)
@@ -152,6 +151,14 @@ test('search and filters apply across pinned, recent, and task sections', async 
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   await showAllTasks(page)
+
+  // Date defaults to Now, which would hide the deferred fixture from the very
+  // first assertion — start from the neutral All view; the filter leg below
+  // flips it to Now mid-search.
+  await page.getByRole('button', { name: 'View options' }).click()
+  await page.locator('.vd-rail-btn[data-rail-section="quick"]').click()
+  await page.locator('.vd-panel .vd-seg-btn[data-date-value=""]').click()
+  await page.keyboard.press('Escape')
 
   const pinnedHeader = page.locator('.todo-pinned-label').filter({ hasText: /^Pinned$/ }).locator('..')
   const pinnedSection = pinnedHeader.locator('..')
@@ -201,15 +208,15 @@ test('search and filters apply across pinned, recent, and task sections', async 
   await expect(recentCard(unpinnedMatch.id)).toBeVisible()
 
   await page.getByRole('button', { name: 'View options' }).click()
-  // Legacy selects render in the "Quick filters" rail section of the panel.
+  // The Date buttons render in the "Quick filters" rail section of the panel.
   await page.locator('.vd-rail-btn[data-rail-section="quick"]').click()
-  await page.locator('.vd-field').filter({ hasText: /^Tag/ }).locator('select').selectOption('pw-shared-tag')
+  await page.locator('.vd-panel .vd-seg-btn[data-date-value="now"]').click()
   await page.keyboard.press('Escape')
 
   // Search ignores EVERY toolbar filter (user ruling 2026-08-09 — see
   // todo-search-ignores-filters.spec.ts): while the query is active, the
-  // tag filter must NOT hide a matching card anywhere. It only takes
-  // effect once the query is cleared (asserted below).
+  // Date=Now filter must NOT hide a matching (deferred) card anywhere. It only
+  // takes effect once the query is cleared (asserted below).
   await expect(pinnedCard(matchingPinned.id)).toBeVisible()
   await expect(pinnedCard(filterMismatch.id)).toBeVisible()
   await expect(pinnedCard(searchMismatch.id)).toBeHidden()
