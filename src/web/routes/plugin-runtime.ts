@@ -24,6 +24,7 @@ import {
 export interface PluginRuntimeRouterDeps {
   registry: IntegrationRegistry
   list(): PluginLifecycleRecord[]
+  discover?(pluginId: string): Promise<PluginLifecycleRecord>
   reload(pluginId: string): Promise<PluginLifecycleRecord>
   disable(pluginId: string): Promise<PluginLifecycleRecord>
   clearQuarantine(pluginId: string): Promise<void>
@@ -86,6 +87,27 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
         return
       }
       next(error)
+    }
+  })
+
+  router.post('/discover', async (req, res) => {
+    try {
+      const rawPluginId = req.body?.pluginId
+      if (typeof rawPluginId !== 'string') throw new Error('Plugin discovery requires pluginId')
+      const pluginId = routePluginId(rawPluginId)
+      if (!cloudMode && !deps.discover) {
+        res.status(501).json({ error: 'Plugin discovery is unavailable' })
+        return
+      }
+      const plugin = cloudMode
+        ? (await managePrimary(pluginId, 'discover')).plugin
+        : await deps.discover!(pluginId)
+      if (!plugin) throw new PluginRuntimeRelayError('Primary did not return the discovered Plugin', 502)
+      publishCloudChange(pluginId, 'discovered')
+      res.json({ plugin })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      res.status(message.includes('not discovered') ? 404 : errorStatus(error)).json({ error: message })
     }
   })
 

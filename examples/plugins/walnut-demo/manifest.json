@@ -1,7 +1,7 @@
 {
-  "id": "reference-walnut",
-  "name": "Reference Walnut Plugin",
-  "description": "Executable reference for the public Open Walnut Plugin API.",
+  "id": "walnut-demo",
+  "name": "Walnut Plugin Demo",
+  "description": "Interactive demo of every public Open Walnut Plugin capability, shipped as one native app.",
   "version": "0.1.0",
   "apiVersion": 1,
   "engines": {

@@ -131,7 +131,8 @@ export async function publishCheck(root = process.cwd()): Promise<PublishCheckRe
     ...webviewFiles,
     ...await localFilesUnder(root, 'skills'),
   ])
-  const missing = [...required].filter((file) => !packed.has(file))
+  // Sorted, because `readdir` order is filesystem-dependent and would report the same break differently per machine.
+  const missing = [...required].filter((file) => !packed.has(file)).sort()
   if (missing.length > 0) {
     throw new Error(`npm package is missing required Plugin files: ${missing.join(', ')}`)
   }

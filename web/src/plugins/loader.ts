@@ -2,6 +2,8 @@ import { apiGet, apiGetText } from '@/api/client'
 import { wsClient } from '@/api/ws'
 import { PLUGINS_CHANGED_EVENT } from '@/utils/plugin-events'
 import { log } from '@/utils/log'
+import { appRegistry } from '@/apps/registry'
+import { refreshAppsCatalogue } from '@/hooks/useApps'
 import { createWebPluginApi } from './host-api'
 import { WebPluginContext, disposable } from './disposable'
 import { pluginUiRegistry } from './registry'
@@ -106,6 +108,7 @@ async function unload(pluginId: string): Promise<void> {
   const current = loaded.get(pluginId)
   if (!current) {
     pluginUiRegistry.removeOwner(pluginId)
+    appRegistry.removeOwner(pluginId)
     return
   }
   loaded.delete(pluginId)
@@ -113,6 +116,7 @@ async function unload(pluginId: string): Promise<void> {
     await current.context.dispose()
   } finally {
     pluginUiRegistry.removeOwner(pluginId)
+    appRegistry.removeOwner(pluginId)
   }
 }
 
@@ -154,6 +158,7 @@ async function load(descriptor: PluginWebModuleDescriptor): Promise<void> {
   } catch (error) {
     await context.dispose().catch(() => undefined)
     pluginUiRegistry.removeOwner(descriptor.id)
+    appRegistry.removeOwner(descriptor.id)
     throw error
   }
 }
@@ -246,8 +251,9 @@ async function refreshPluginCommandCatalogue(): Promise<void> {
 }
 
 /** Catalogue refresh + the slash commands/skills that came with those plugins. */
-export function refreshWebPluginsWithCommands(): Promise<void> {
-  return refreshWebPlugins().then(refreshPluginCommandCatalogue)
+export async function refreshWebPluginsWithCommands(): Promise<void> {
+  await Promise.all([refreshWebPlugins(), refreshAppsCatalogue()])
+  await refreshPluginCommandCatalogue()
 }
 
 export function initWebPlugins(): Promise<void> {

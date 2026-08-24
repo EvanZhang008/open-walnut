@@ -505,6 +505,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       resetInput();
       return;
     }
+    if (cmd.source === 'app' && onCommand && 'execute' in cmd) {
+      onCommand(cmd as SlashCommand);
+      resetInput();
+      return;
+    }
     // Both modes: splice the command over the active "/query" span (user presses
     // Enter to execute). Falls back to whole-input replace if the span is stale.
     const at = slashIndexRef.current;
@@ -528,7 +533,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         el.setSelectionRange(newCaret, newCaret);
       }
     });
-  }, [onControlCommand, closePalette, value, saveDraft]);
+  }, [onCommand, onControlCommand, closePalette, value, saveDraft]);
 
   // Replace the active "@query" span with the selected path, then close the popup.
   // The popup hands back an absolute path (avoids ambiguity about what a relative

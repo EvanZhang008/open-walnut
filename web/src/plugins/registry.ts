@@ -1,43 +1,27 @@
 import type {
   Disposable,
-  PluginNavContribution,
   PluginPageContribution,
-  PluginPanelContribution,
   PluginSettingsContribution,
   PluginUiSnapshot,
   RegisteredUiContribution,
 } from './types'
 import { disposable } from './disposable'
 
-type Contribution =
-  | PluginNavContribution
-  | PluginPageContribution
-  | PluginPanelContribution
-  | PluginSettingsContribution
-
-type Kind = 'nav' | 'pages' | 'panels' | 'settings'
-
+type Contribution = PluginPageContribution | PluginSettingsContribution
+type Kind = 'pages' | 'settings'
 type Entry<T extends Contribution> = RegisteredUiContribution<T> & { token: symbol }
 
 class PluginUiRegistry {
   private readonly maps = {
-    nav: new Map<string, Entry<PluginNavContribution>>(),
     pages: new Map<string, Entry<PluginPageContribution>>(),
-    panels: new Map<string, Entry<PluginPanelContribution>>(),
     settings: new Map<string, Entry<PluginSettingsContribution>>(),
   }
   private readonly listeners = new Set<() => void>()
   private generation = 0
   private snapshot: PluginUiSnapshot = {
     version: 0,
-    nav: [],
     pages: [],
-    panels: [],
     settings: [],
-  }
-
-  registerNav(pluginId: string, pluginName: string, value: PluginNavContribution): Disposable {
-    return this.register('nav', pluginId, pluginName, value)
   }
 
   registerPage(pluginId: string, pluginName: string, value: PluginPageContribution): Disposable {
@@ -46,10 +30,6 @@ class PluginUiRegistry {
       throw new Error(`Plugin page path "${value.path}" is already registered by "${collision.pluginId}"`)
     }
     return this.register('pages', pluginId, pluginName, value)
-  }
-
-  registerPanel(pluginId: string, pluginName: string, value: PluginPanelContribution): Disposable {
-    return this.register('panels', pluginId, pluginName, value)
   }
 
   registerSettings(pluginId: string, pluginName: string, value: PluginSettingsContribution): Disposable {
@@ -115,16 +95,9 @@ class PluginUiRegistry {
       generation: entry.generation,
       value: entry.value,
     })
-    const nav = [...this.maps.nav.values()]
-      .sort((a, b) => (a.value.order ?? 100) - (b.value.order ?? 100) || a.generation - b.generation)
-      .map(clean)
     this.snapshot = {
       version: this.snapshot.version + 1,
-      nav,
       pages: [...this.maps.pages.values()].map(clean),
-      panels: [...this.maps.panels.values()]
-        .sort((a, b) => (a.value.order ?? 100) - (b.value.order ?? 100) || a.generation - b.generation)
-        .map(clean),
       settings: [...this.maps.settings.values()].map(clean),
     }
     for (const listener of this.listeners) listener()

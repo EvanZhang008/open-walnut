@@ -519,7 +519,17 @@ The server handles commits, pulls, and pushes automatically.
 
 ### External Plugins
 
-Install a trusted Plugin by linking it under `~/.open-walnut/plugins/<plugin-id>/`, or use Settings → Plugin Store with a Git URL or npm spec. A Plugin can add full Node server logic, native React pages, sidebar navigation, Settings, Dashboard panels, Tools, Skills, Commands, Hooks, Cron actions, Agents, Providers, routes, and task sync. See [Plugin development](docs/reference/plugin-development.md) and the executable [reference Plugin](examples/plugins/reference-walnut).
+Install a trusted Plugin by linking it under `~/.open-walnut/plugins/<plugin-id>/`, or use Settings → Plugin Store with a Git URL or npm spec. A Plugin can add full Node server logic, a native React App, Settings sections, Tools, Skills, Commands, Hooks, Cron actions, Agents, Providers, routes, and task sync. Installing a Plugin means trusting its code: a server entry is full Node, and a native web entry runs in the console's own React tree.
+
+A Plugin App joins the same App Registry as Walnut's own screens, so one `walnut.ui.app` registration gives it a Sidebar entry, the route `/apps/<plugin-id>~<app-id>`, deep links into every subpath, a badge, and a Command Palette entry.
+
+After the author packages reach npm, the whole first loop is a single command. They are not published yet; the Plugin guide gives the equivalent local-checkout command available today.
+
+```bash
+npx @open-walnut/plugin-cli new my-plugin --dev
+```
+
+That scaffolds the project, installs, builds, links it into `~/.open-walnut/plugins/`, asks the running Walnut to load it, prints the App URL, and then rebuilds and reloads on every save. Later loops are `npm run dev` in the project. See [Plugin development](docs/reference/plugin-development.md) for the full guide, and [examples/plugins/walnut-demo](examples/plugins/walnut-demo) (the Walnut Plugin Demo) for a runnable example of every public capability.
 
 ---
 

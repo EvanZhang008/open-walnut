@@ -5,8 +5,10 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "noEmit": true,
+    "skipLibCheck": true,
     "jsx": "react-jsx",
-    "lib": ["ES2022", "DOM"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
     "baseUrl": ".",
     "paths": {
       "@open-walnut/plugin-api/server": ["../../../packages/plugin-api/src/server.ts"],

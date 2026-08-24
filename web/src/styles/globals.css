@@ -343,6 +343,7 @@ select {
 }
 
 .sidebar-link {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -15479,6 +15480,11 @@ a.task-kebab-info:hover {
   background: rgba(251, 191, 36, 0.15);
 }
 
+.command-palette-source-app {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 .command-palette-source-built-in {
   color: #0e7490;
   background: #cffafe;
@@ -29586,162 +29592,82 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   margin-right: 8px;
 }
 
-.plugin-dashboard-page {
-  min-height: 100%;
-  padding: 28px;
-  color: var(--fg);
-  background: var(--bg);
+.plugin-native-app {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
 }
 
-.plugin-dashboard-heading {
+@media (max-width: 768px) {
+  .plugin-native-app {
+    padding-top: 48px;
+  }
+}
+
+.settings-section-header-row {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 20px;
+  gap: 16px;
 }
 
-.plugin-dashboard-heading h1 {
-  margin: 0;
-  font-size: 24px;
+.settings-section-header-row p {
+  margin: 4px 0 0;
 }
 
-.plugin-dashboard-heading p {
-  margin: 5px 0 0;
-  color: var(--fg-muted);
-  font-size: 13px;
-}
-
-.plugin-dashboard-grid {
+.app-manager-list {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  align-items: stretch;
+  gap: 10px;
+  margin-top: 16px;
 }
 
-.plugin-dashboard-cell {
-  min-width: 0;
-  min-height: 260px;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-secondary);
-}
-
-.plugin-dashboard-cell-header {
-  flex: 0 0 auto;
-  min-height: 46px;
+.app-manager-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 8px 10px 8px 14px;
-  border-bottom: 1px solid var(--border);
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
 }
 
-.plugin-dashboard-cell-title {
+.app-manager-copy {
   min-width: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  gap: 3px;
 }
 
-.plugin-dashboard-cell-title strong,
-.plugin-dashboard-cell-title span {
+.app-manager-copy span,
+.app-manager-copy code {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.app-manager-copy code {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.plugin-dashboard-cell-title strong {
-  font-size: 13px;
-}
-
-.plugin-dashboard-cell-title span {
-  color: var(--fg-muted);
-  font-size: 11px;
-}
-
-.plugin-dashboard-cell-actions {
+.app-manager-actions {
   display: flex;
-  gap: 4px;
-}
-
-.plugin-dashboard-cell-actions button {
-  min-width: 28px;
-  height: 28px;
-  padding: 0 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-muted);
-  background: transparent;
-  cursor: pointer;
-}
-
-.plugin-dashboard-cell-actions button:hover:not(:disabled) {
-  color: var(--fg);
-  background: var(--bg-hover);
-}
-
-.plugin-dashboard-cell-actions button:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.plugin-dashboard-panel-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  padding: 14px;
-}
-
-.plugin-dashboard-cell-missing {
-  border-style: dashed;
-}
-
-.plugin-dashboard-missing-body,
-.plugin-dashboard-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
-  color: var(--fg-muted);
-  text-align: center;
-}
-
-.plugin-dashboard-missing-body {
-  flex: 1;
-  padding: 24px;
-}
-
-.plugin-dashboard-empty {
-  min-height: 240px;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-lg);
-}
-
-.plugin-dashboard-missing-body strong,
-.plugin-dashboard-empty strong {
-  color: var(--fg);
-}
-
-@media (max-width: 1000px) {
-  .plugin-dashboard-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .plugin-dashboard-cell {
-    grid-column: span 1 !important;
-  }
 }
 
 @media (max-width: 700px) {
-  .plugin-dashboard-page {
-    padding: 16px;
+  .settings-section-header-row,
+  .app-manager-row {
+    align-items: stretch;
+    flex-direction: column;
   }
 
-  .plugin-dashboard-grid {
-    grid-template-columns: minmax(0, 1fr);
+  .app-manager-actions {
+    justify-content: flex-start;
   }
 }

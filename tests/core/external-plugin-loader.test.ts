@@ -513,7 +513,7 @@ export function activate() {}
     await fsp.writeFile(path.join(pluginDir, 'dist', 'server.mjs'), `
 export function activate() { return new Promise(() => {}); }
 `);
-    setPluginCodeTimeoutForTesting(10);
+    setPluginCodeTimeoutForTesting(1_000);
     const registry = new IntegrationRegistry();
 
     await loadPlugins(registry);
@@ -521,7 +521,7 @@ export function activate() { return new Promise(() => {}); }
     expect(getPluginLifecycleRecords(registry)).toContainEqual(expect.objectContaining({
       id: 'activation-timeout',
       state: 'failed',
-      error: 'Plugin "activation-timeout" activation timed out after 10ms',
+      error: 'Plugin "activation-timeout" activation timed out after 1000ms',
     }));
   });
 

@@ -287,7 +287,7 @@ Only eligible skills appear in the system prompt as `<available_skills>` XML. Th
 
 ## Plugin System
 
-Walnut has one Plugin model. Installing a Plugin means trusting its code. A Plugin can have a full Node server entry, a native React web entry, an optional sandboxed Webview, or any combination. `server`, `web`, and `webview` are entry points, not permission levels. Full authoring details live in [Plugin development](./docs/reference/plugin-development.md).
+Walnut has one Plugin model. Installing a Plugin means trusting its code. A Plugin can have a full Node server entry, a native React web entry, an optional iframe Webview, or any combination. `server`, `web`, and `webview` are entry points, not permission levels. Full authoring details live in [Plugin development](./docs/reference/plugin-development.md).
 
 ### Public contract
 
@@ -295,7 +295,13 @@ An `apiVersion: 1` manifest names `server`, `web`, and optional `webview` artifa
 
 The Server API has three layers: typed services for common data, stable primitives such as events, ops, HTTP, WebSocket RPC, tools, hooks, cron actions, agents, providers, commands, skills, and sync registration, then an explicitly unstable `unsafe` escape hatch. Full Node access is already available to server code, so Walnut does not pretend these methods are a security boundary.
 
-The Web API runs native Plugin modules in Walnut's browser realm. The host provides the exact React, ReactDOM, and JSX runtime instances used by the console, so Plugin components share one React tree. Live owner-scoped registries feed routes, sidebar items, pages, panels, Dashboard layouts, Settings sections, and stable Views such as `TaskView`, `ChatView`, `SessionView`, `CalendarView`, `FileView`, `NoteView`, and `TerminalView`.
+The Web API runs native Plugin modules in Walnut's browser realm. The host provides the exact React, ReactDOM, and JSX runtime instances used by the console, so Plugin components share one React tree. Live owner-scoped registries feed Apps, standalone pages, Settings sections, injected CSS, and stable Views such as `TaskView`, `ChatView`, `SessionView`, `CalendarView`, `FileView`, `NoteView`, and `TerminalView`.
+
+### App Registry
+
+The console has one App Registry (`web/src/apps/registry.ts`) holding three kinds of row: Core Apps (Home, Tasks, Notes, Calendar, Routines, Settings), native Plugin Apps, and legacy Webviews. The Sidebar, the `/apps/:appId/*` host route, the App Command Palette entries, and the Apps section of Settings all read that one registry, so order, visibility, pinning, badges, and navigation behave the same for a Plugin App as for a built-in screen. There is no fixed dashboard route and no panel grid: an App owns its own screen. Home's Chat, Todo, and Agenda are Dock controls inside Home rather than registry rows.
+
+`walnut.ui.app({ id, title, icon, component, badge, order, fullBleed })` is the atom. The host derives the route `/apps/<pluginId>~<appId>` and every subpath under it, the Sidebar entry, deep links, the palette entry, and the badge channel, then returns a handle carrying `path`, `setBadge(value)`, and `dispose()`. The component receives `basePath`, `subpath`, `search`, and `navigate`. Registration is owner-scoped and path collisions are refused, so a Plugin can neither shadow a Walnut route nor outlive its own disable.
 
 ### Lifecycle and ownership
 
@@ -315,7 +321,9 @@ The older iframe APP path remains available as `webview`. It is useful for exter
 
 The long-term Kernel is small: Plugin discovery and lifecycle, owner registries, Event Bus, storage, auth, transport, and the React shell. First-party integrations already use the same `apiVersion: 1` registration path, and other first-party features move one contribution at a time without breaking legacy routes or stored data.
 
-The executable reference is [examples/plugins/reference-walnut](./examples/plugins/reference-walnut). It exercises server and native web entries, lifecycle cleanup, Tool, Hook, Cron, HTTP, WebSocket RPC, Agent, Provider, Dashboard, Settings, and stable View composition.
+The executable reference is [examples/plugins/walnut-demo](./examples/plugins/walnut-demo), the Walnut Plugin Demo. Its browser surface is one Demo App registered through `ui.app`, one auxiliary `ui.page`, a Settings section, and one injected stylesheet. Its server entry exercises every registry category along with lifecycle cleanup, Tool, Hook, Cron, HTTP, WebSocket RPC, Agent, Provider, storage, secrets, and stable View composition.
+
+Authoring details, including the one-command dev loop, live in [Plugin development](./docs/reference/plugin-development.md).
 
 ---
 

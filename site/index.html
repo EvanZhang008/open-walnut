@@ -84,6 +84,8 @@
   .feature{display:grid;grid-template-columns:1fr 1fr;gap:34px;align-items:center;margin-top:54px}
   .feature:nth-child(even) .ftext{order:2}
   .feature img{width:100%;border-radius:14px;border:1px solid var(--line);box-shadow:0 18px 50px rgba(0,0,0,.45)}
+  .plugin-demo-media{display:block;max-width:960px;margin:38px auto 0;border-radius:16px;overflow:hidden;border:1px solid var(--line);box-shadow:0 24px 64px rgba(0,0,0,.45)}
+  .plugin-demo-media img{display:block;width:100%;height:auto}
   .feature h3{font-size:23px;font-weight:800;color:#fff;margin-bottom:10px}
   .feature p{color:var(--muted);font-size:16px}
   @media(max-width:760px){.feature{grid-template-columns:1fr;gap:18px}.feature:nth-child(even) .ftext{order:0}}
@@ -111,6 +113,7 @@
     <div class="brand"><img src="assets/walnut-icon.png" alt="Walnut logo"/> Walnut</div>
     <div class="nav-links">
       <a href="#features">Features</a>
+      <a href="#plugins">Plugins</a>
       <a href="#install">Install</a>
       <a href="https://youtu.be/uN4WCZ-n2mw">Demo</a>
       <a class="btn btn-ghost" href="https://github.com/EvanZhang008/open-walnut">★ GitHub</a>
@@ -221,6 +224,37 @@
       <div class="gcard"><h4>🔊 Free text-to-speech</h4><p>A built-in TTS tool the agent can speak through — no API key, no extra cost.</p></div>
       <div class="gcard"><h4>🔒 Local-first &amp; private</h4><p>Plain JSON / Markdown / SQLite in a local folder. No telemetry, no cloud database — your data stays on your machine.</p></div>
     </div>
+  </section>
+
+  <section id="plugins">
+    <h2>Write your own app inside Walnut</h2>
+    <p class="lead">Walnut is a plugin host. One command scaffolds a plugin, links it into the running console, and reloads it on every save.</p>
+
+    <div class="code">
+<span class="c"># scaffold, link, load, and watch</span><br/>
+npx @open-walnut/plugin-cli new my-plugin --dev<br/><br/>
+<span class="c"># every loop after that</span><br/>
+npm run dev
+    </div>
+
+    <p class="lead" style="max-width:720px">That single run installs dependencies, validates the manifest, builds both entries, links the project into <code>~/.open-walnut/plugins/</code>, tells the running Walnut to load it with no restart, prints your App's URL, then rebuilds and reloads while you edit.</p>
+    <p class="lead" style="max-width:720px;font-size:15px">The author packages ship from the repository today, so until the first registry release you run the same flow from a checkout. The plugin guide has the exact commands.</p>
+
+    <a class="plugin-demo-media" href="assets/plugin-demo.png">
+      <img src="assets/plugin-demo.png" alt="Walnut Plugin Demo running as a first-class native App" loading="lazy" />
+    </a>
+
+    <div class="grid">
+      <div class="gcard"><h4>A real app, not an iframe</h4><p>One <code>walnut.ui.app()</code> call and the host gives you a route, a sidebar entry, deep links, a badge, and a command-palette entry. Your React components run inside Walnut's own React tree and theme, so a plugin app looks and feels like a built-in screen. An optional webview stays available for external pages that need a separate document context, but it is not a security boundary for trusted Plugin code.</p></div>
+      <div class="gcard"><h4>Full Node on the server side</h4><p>The server entry runs in the Walnut process: tools the AI can call, hooks on sessions and tasks, cron actions, HTTP routes, WebSocket methods, custom agents and model providers, plus private storage, SQLite, and secrets. Task sync to any tracker is the same contract the built-in integrations use.</p></div>
+      <div class="gcard"><h4>Full trust, stated plainly</h4><p>Installing a plugin means trusting its code, confirmed once at install. There is no fake permission prompt around code that already has full access. What Walnut does guarantee: pinned sources, no install scripts, no silent updates, owner-scoped cleanup, and one release check that refuses to ship secrets or missing build output.</p></div>
+    </div>
+
+    <div class="cta" style="margin-top:34px">
+      <a class="btn btn-primary" href="https://github.com/EvanZhang008/open-walnut/blob/main/docs/reference/plugin-development.md">Plugin guide</a>
+      <a class="btn btn-ghost" href="https://github.com/EvanZhang008/open-walnut/tree/main/examples/plugins/walnut-demo">Walnut Plugin Demo</a>
+    </div>
+    <p class="lead" style="margin-top:16px">The Demo App is runnable: one native app that exercises every public plugin capability, so you can read a working shape before writing your own.</p>
   </section>
 
   <section id="install">

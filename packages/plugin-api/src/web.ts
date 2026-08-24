@@ -5,13 +5,28 @@ import type { Disposable, PluginLogger, TaskPhase, TaskPriority } from './shared
 import type { EventApi, OpsService, PluginFetchInit, PluginFetchResponse } from './server.js'
 
 export type PluginComponent<Props = Record<string, never>> = ComponentType<Props>
+export type AppBadge = number | 'dot' | null
 
-export interface NavContribution {
+export interface AppProps {
+  basePath: string
+  subpath: string
+  search: string
+  navigate(path: string, options?: { replace?: boolean }): void
+}
+
+export interface AppContribution {
   id: string
-  label: string
+  title: string
   icon?: PluginComponent<{ size?: number }>
-  path: string
+  component: PluginComponent<AppProps>
+  badge?: AppBadge
   order?: number
+  fullBleed?: boolean
+}
+
+export interface AppHandle extends Disposable {
+  readonly path: string
+  setBadge(value: AppBadge): void
 }
 
 export interface PageContribution {
@@ -19,18 +34,6 @@ export interface PageContribution {
   path: string
   component: PluginComponent
   title?: string
-}
-
-export interface PanelProps {
-  panelKey: string
-}
-
-export interface PanelContribution {
-  id: string
-  title: string
-  component: PluginComponent<PanelProps>
-  defaultSpan?: 1 | 2 | 3
-  order?: number
 }
 
 export interface SettingsContribution {
@@ -111,9 +114,8 @@ export interface ChatViewProps {
 }
 
 export interface WebUiService {
-  nav(contribution: NavContribution): Disposable
+  app(contribution: AppContribution): AppHandle
   page(contribution: PageContribution): Disposable
-  panel(contribution: PanelContribution): Disposable
   settings(contribution: SettingsContribution): Disposable
   injectCss(css: string): Disposable
   readonly views: {

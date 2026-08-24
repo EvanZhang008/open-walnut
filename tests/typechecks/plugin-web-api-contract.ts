@@ -16,3 +16,14 @@ void (null as unknown as HostApiMustNotBeAny)
 void (null as unknown as HostOnlyKeys)
 void (null as unknown as PublicOnlyKeys)
 void hostImplementsPublicContract
+
+const app = hostApi.ui.app({
+  id: 'main',
+  title: 'Example',
+  component: () => null,
+  badge: 'dot',
+})
+const appPath: string = app.path
+app.setBadge(3)
+app.setBadge(null)
+void appPath

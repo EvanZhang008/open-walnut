@@ -55,6 +55,7 @@ function setup(overrides: Partial<Parameters<typeof createPluginRuntimeRouter>[0
   const deps = {
     registry,
     list: () => records,
+    discover: vi.fn(async (pluginId: string) => record({ id: pluginId })),
     reload: vi.fn(async (pluginId: string) => record({ id: pluginId })),
     disable: vi.fn(async (pluginId: string) => record({ id: pluginId, state: 'disabled' })),
     clearQuarantine: vi.fn(async () => undefined),
@@ -169,6 +170,27 @@ describe('plugin runtime routes', () => {
     await request(app).get('/api/plugin-runtime/sample/ops').expect(404)
   })
 
+  it('discovers a newly linked Plugin without restarting the host', async () => {
+    const { app, deps } = setup()
+
+    const response = await request(app)
+      .post('/api/plugin-runtime/discover')
+      .send({ pluginId: 'new-plugin' })
+      .expect(200)
+
+    expect(deps.discover).toHaveBeenCalledWith('new-plugin')
+    expect(response.body.plugin).toMatchObject({ id: 'new-plugin', state: 'active' })
+  })
+
+  it('validates discovery ids before scanning Plugin roots', async () => {
+    const { app, deps } = setup()
+
+    await request(app).post('/api/plugin-runtime/discover').send({ pluginId: '../bad' }).expect(400)
+    await request(app).post('/api/plugin-runtime/discover').send({}).expect(400)
+
+    expect(deps.discover).not.toHaveBeenCalled()
+  })
+
   it('reloads before returning the current record', async () => {
     const { app, deps } = setup()
 
@@ -250,11 +272,11 @@ describe('plugin runtime routes', () => {
       { name: 'task_get', title: 'Get task', readonly: true },
     ])
     const callPrimaryOp = vi.fn(async () => ({ ok: true, result: { title: 'Remote task' } }))
-    const managePrimary = vi.fn(async (_pluginId: string, operation: 'reload' | 'disable' | 'clear-quarantine') => {
+    const managePrimary = vi.fn(async (_pluginId: string, operation: 'discover' | 'reload' | 'disable' | 'clear-quarantine') => {
       if (operation === 'clear-quarantine') return { ok: true as const }
       return { plugin: record({ id: 'sample', state: operation === 'disable' ? 'disabled' : 'active' }) }
     })
-    const { app, registry } = setup({
+    const { app, deps, registry } = setup({
       cloudMode: true,
       listPrimaryOps,
       callPrimaryOp,
@@ -269,13 +291,16 @@ describe('plugin runtime routes', () => {
       .post('/api/plugin-runtime/sample/ops/task_get')
       .send({ id: 'abc' })
       .expect(200, { ok: true, result: { title: 'Remote task' } })
+    await request(app).post('/api/plugin-runtime/discover').send({ pluginId: 'sample' }).expect(200)
     await request(app).post('/api/plugin-runtime/sample/reload').expect(200)
     await request(app).post('/api/plugin-runtime/sample/disable').expect(200)
     await request(app).post('/api/plugin-runtime/sample/clear-quarantine').expect(200, { ok: true })
 
     expect(listPrimaryOps).toHaveBeenCalledWith('sample')
     expect(callPrimaryOp).toHaveBeenCalledWith('sample', 'task_get', { id: 'abc' })
+    expect(deps.discover).not.toHaveBeenCalled()
     expect(managePrimary.mock.calls.map((call) => call[1])).toEqual([
+      'discover',
       'reload',
       'disable',
       'clear-quarantine',

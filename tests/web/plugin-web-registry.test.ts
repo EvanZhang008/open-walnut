@@ -5,29 +5,22 @@ const Component = () => null
 
 afterEach(() => pluginUiRegistry.clear())
 
-describe('native Web Plugin UI registry', () => {
-  it('namespaces, orders, and disposes contributions by owner', () => {
-    const later = pluginUiRegistry.registerNav('plugin-a', 'Plugin A', {
-      id: 'later', label: 'Later', path: '/later', order: 20,
+describe('Native Web Plugin auxiliary UI registry', () => {
+  it('namespaces and disposes pages and settings by owner', () => {
+    const page = pluginUiRegistry.registerPage('plugin-a', 'Plugin A', {
+      id: 'details', path: '/plugins/plugin-a/details', component: Component,
     })
-    pluginUiRegistry.registerNav('plugin-b', 'Plugin B', {
-      id: 'first', label: 'First', path: '/first', order: 10,
-    })
-    pluginUiRegistry.registerPage('plugin-a', 'Plugin A', {
-      id: 'page', path: '/page', component: Component,
+    pluginUiRegistry.registerSettings('plugin-b', 'Plugin B', {
+      id: 'settings', label: 'Plugin B', component: Component,
     })
 
-    expect(pluginUiRegistry.getSnapshot().nav.map((entry) => entry.key)).toEqual([
-      'plugin-b:first',
-      'plugin-a:later',
-    ])
-    expect(pluginUiRegistry.getSnapshot().pages[0].key).toBe('plugin-a:page')
+    expect(pluginUiRegistry.getSnapshot().pages[0].key).toBe('plugin-a:details')
+    expect(pluginUiRegistry.getSnapshot().settings[0].key).toBe('plugin-b:settings')
 
-    later.dispose()
-    expect(pluginUiRegistry.getSnapshot().nav.map((entry) => entry.key)).toEqual(['plugin-b:first'])
-    expect(pluginUiRegistry.removeOwner('plugin-a')).toBe(1)
+    page.dispose()
     expect(pluginUiRegistry.getSnapshot().pages).toEqual([])
-    expect(pluginUiRegistry.getSnapshot().nav).toHaveLength(1)
+    expect(pluginUiRegistry.removeOwner('plugin-b')).toBe(1)
+    expect(pluginUiRegistry.getSnapshot().settings).toEqual([])
   })
 
   it('does not let a stale disposable remove a later contribution', () => {
@@ -58,8 +51,8 @@ describe('native Web Plugin UI registry', () => {
     let notifications = 0
     const unsubscribe = pluginUiRegistry.subscribe(() => { notifications++ })
 
-    pluginUiRegistry.registerPanel('plugin-a', 'Plugin A', {
-      id: 'panel', title: 'Panel', component: Component,
+    pluginUiRegistry.registerPage('plugin-a', 'Plugin A', {
+      id: 'page', path: '/plugins/plugin-a/page', component: Component,
     })
 
     const after = pluginUiRegistry.getSnapshot()

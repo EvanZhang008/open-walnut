@@ -1330,6 +1330,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/plugin-runtime', createPluginRuntimeRouter({
     registry,
     list: () => getPluginLifecycleRecords(registry),
+    discover: async (pluginId) => {
+      await pluginSoftReload()
+      const plugin = getPluginLifecycleRecords(registry).find((record) => record.id === pluginId)
+      if (!plugin) throw new Error(`Plugin "${pluginId}" was not discovered`)
+      return plugin
+    },
     reload: (pluginId) => runPluginMutation(async () => {
       await stopPluginSyncPolling(pluginId)
       try {

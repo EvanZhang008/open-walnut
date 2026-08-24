@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import type { Config } from '@open-walnut/core'
 import { AdvancedSection } from './sections/AdvancedSection'
+import { AppsSection } from './sections/AppsSection'
 import { AudioCaptureSection } from './sections/AudioCaptureSection'
 import { BackupSection } from './sections/BackupSection'
 import { BugReportSection } from './sections/BugReportSection'
@@ -41,6 +42,7 @@ export interface CoreSettingsContribution {
 }
 
 export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = [
+  { owner: 'walnut', id: 'apps', label: 'Apps', title: 'Apps', group: 'manage', render: () => <AppsSection /> },
   { owner: 'walnut', id: 'repositories', label: 'Repositories', title: 'Repositories', group: 'manage', render: () => <ReposSection /> },
   { owner: 'walnut', id: 'hooks', label: 'Hooks', title: 'Hooks', group: 'manage', render: () => <HooksSection /> },
   { owner: 'walnut', id: 'providers', label: 'AI Provider', title: 'AI Provider', group: 'configure', render: ({ config, saveSection }) => <ProvidersSection config={config} onSave={saveSection} /> },

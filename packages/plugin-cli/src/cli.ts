@@ -1,15 +1,23 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { spawn } from 'node:child_process'
 import { Command } from 'commander'
+import { appUrl } from './app-route.js'
 import { buildPlugin } from './build.js'
+import {
+  defaultDevDependencies,
+  reportLine,
+  runDev,
+  runNew,
+  syncPlugin,
+  type DevSession,
+} from './dev.js'
 import { apiRequest } from './http.js'
 import { assertValid, readManifest, validatePlugin } from './manifest.js'
+import { npmBin, spawnCommand } from './process.js'
 import {
   assertScaffoldTemplate,
   DEFAULT_TEMPLATE,
   SCAFFOLD_TEMPLATES,
-  scaffoldPlugin,
 } from './scaffold.js'
 import { linkPlugin } from './link.js'
 import { publishCheck } from './publish-check.js'
@@ -21,16 +29,15 @@ function printValidation(result: Awaited<ReturnType<typeof validatePlugin>>): vo
   if (result.errors.length === 0) process.stdout.write(`valid: ${result.manifest?.id}\n`)
 }
 
-async function reloadPlugin(id: string): Promise<void> {
-  await apiRequest(`/api/plugin-runtime/${encodeURIComponent(id)}/reload`, { method: 'POST' })
-}
-
-async function spawnCommand(command: string, args: string[], cwd: string): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, stdio: 'inherit', env: process.env })
-    child.once('error', reject)
-    child.once('exit', (code) => resolve(code ?? 1))
-  })
+/** Only the bin waits on the watcher; `runDev` returns as soon as the plugin is live. */
+async function holdOpen(session: DevSession): Promise<void> {
+  const stop = async () => {
+    await session.stop()
+    process.exit(0)
+  }
+  process.once('SIGINT', () => { void stop() })
+  process.once('SIGTERM', () => { void stop() })
+  await new Promise(() => undefined)
 }
 
 export function createProgram(): Command {
@@ -40,7 +47,7 @@ export function createProgram(): Command {
     .version(CLI_VERSION)
 
   program.command('new')
-    .description('Create a plugin project')
+    .description('Create a plugin project, and with --dev take it live in one command')
     .argument('<id>', 'Plugin id, e.g. my-plugin')
     .option('-d, --directory <path>', 'Where to create the project (default: the plugin id)')
     .option(
@@ -48,10 +55,20 @@ export function createProgram(): Command {
       `Surfaces to scaffold: ${SCAFFOLD_TEMPLATES.join(' | ')}`,
       DEFAULT_TEMPLATE,
     )
+    .option('--dev', 'Install dependencies, then link, watch, and reload against the running Walnut')
+    .option('--no-install', 'With --dev, skip npm install (you already have node_modules)')
+    .option('--open', 'With --dev, open the App in a browser (interactive terminals only)')
     .action(async (id, options) => {
       const template = assertScaffoldTemplate(String(options.template))
-      const root = await scaffoldPlugin(id, options.directory ?? id, { template })
-      process.stdout.write(`${root}\n`)
+      const result = await runNew({
+        id,
+        directory: options.directory,
+        template,
+        dev: !!options.dev,
+        install: options.install !== false,
+        open: !!options.open,
+      })
+      if (result.session) await holdOpen(result.session)
     })
 
   program.command('validate')
@@ -74,16 +91,20 @@ export function createProgram(): Command {
     })
 
   program.command('link')
-    .description('Symlink this project into ~/.open-walnut/plugins, then reload it')
+    .description('Symlink this project into ~/.open-walnut/plugins, then load it')
     .option('-r, --root <path>', 'Plugin root', process.cwd())
     .action(async (options) => {
       const root = path.resolve(options.root)
-      const manifest = await readManifest(root)
+      const manifest = assertValid(await validatePlugin(root))
       await buildPlugin({ root })
       const target = await linkPlugin(root)
       process.stdout.write(`linked: ${target}\n`)
-      try { await reloadPlugin(manifest.id); process.stdout.write('reloaded\n') }
-      catch { process.stdout.write('Walnut is offline; link will load on next start\n') }
+      const deps = defaultDevDependencies()
+      // Discover, not just reload: a first link is unknown to the running Walnut, and this is what saves the restart.
+      const report = await syncPlugin(manifest.id, deps)
+      const baseUrl = deps.baseUrl()
+      process.stdout.write(reportLine(manifest.id, report, baseUrl))
+      if (manifest.web) process.stdout.write(`App: ${appUrl(manifest.id, baseUrl)}\n`)
     })
 
   program.command('status')
@@ -91,9 +112,11 @@ export function createProgram(): Command {
     .option('-r, --root <path>', 'Plugin root', process.cwd())
     .action(async (options) => {
       const manifest = await readManifest(path.resolve(options.root))
-      const data = await apiRequest<{ plugins: Array<Record<string, unknown>>; tombstones: Array<Record<string, unknown>> }>('/api/plugin-runtime')
-      const plugin = data.plugins.find((item) => item.id === manifest.id)
-      const tombstone = data.tombstones.find((item) => item.id === manifest.id)
+      const data = await apiRequest<{ plugins?: Array<Record<string, unknown>>; tombstones?: Array<Record<string, unknown>> }>('/api/plugin-runtime')
+      const plugins = Array.isArray(data.plugins) ? data.plugins : []
+      const tombstones = Array.isArray(data.tombstones) ? data.tombstones : []
+      const plugin = plugins.find((item) => item.id === manifest.id)
+      const tombstone = tombstones.find((item) => item.id === manifest.id)
       if (!plugin && !tombstone) {
         process.stderr.write(`not found: ${manifest.id}\n`)
         process.exitCode = 3
@@ -103,25 +126,12 @@ export function createProgram(): Command {
     })
 
   program.command('dev')
-    .description('Build, link, then rebuild and reload on every change')
+    .description('Build, link, load, then rebuild and reload on every change')
     .option('-r, --root <path>', 'Plugin root', process.cwd())
+    .option('--open', 'Open the App in a browser (interactive terminals only)')
     .action(async (options) => {
-      const root = path.resolve(options.root)
-      const manifest = await readManifest(root)
-      await buildPlugin({ root })
-      await linkPlugin(root)
-      const result = await buildPlugin({
-        root,
-        watch: true,
-        onRebuild: async () => {
-          try { await reloadPlugin(manifest.id); process.stdout.write('rebuilt and reloaded\n') }
-          catch { process.stdout.write('rebuilt; Walnut is offline\n') }
-        },
-      })
-      const stop = async () => { await result.stop?.(); process.exit(0) }
-      process.once('SIGINT', () => { void stop() })
-      process.once('SIGTERM', () => { void stop() })
-      await new Promise(() => undefined)
+      const session = await runDev({ root: path.resolve(options.root), open: !!options.open })
+      await holdOpen(session)
     })
 
   program.command('test')
@@ -136,7 +146,7 @@ export function createProgram(): Command {
       const packageJson = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')) as { scripts?: Record<string, string> }
       const script = packageJson.scripts?.['plugin:test']
       if (script) {
-        const code = await spawnCommand(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'plugin:test'], root)
+        const code = await spawnCommand(npmBin(), ['run', 'plugin:test'], root)
         if (code !== 0) process.exitCode = code
       } else {
         process.stdout.write('no plugin:test script; validate + build passed\n')

@@ -1,8 +1,9 @@
 /**
  * Slash-command registry — owner-scoped, with a fixed priority order.
  *
- * Three owners, highest priority first:
+ * Four owners, highest priority first:
  *   core      — hardcoded frontend commands (/compact, /session, /task, /help …)
+ *   app       : App Registry navigation commands
  *   markdown  — server-stored commands: user .md, plugin-registered, shipped builtin
  *   skill     — SKILL.md entries surfaced in the palette
  *
@@ -17,7 +18,7 @@
 import type { SlashCommand } from './types.js';
 
 /** Owners in priority order — the first owner holding a name wins it. */
-export const COMMAND_OWNERS = ['core', 'markdown', 'skill'] as const;
+export const COMMAND_OWNERS = ['core', 'app', 'markdown', 'skill'] as const;
 
 export type CommandOwner = (typeof COMMAND_OWNERS)[number];
 
@@ -37,6 +38,7 @@ function bucket(owner: CommandOwner): Map<string, SlashCommand> {
 
 /** Map a command's declared source onto the owner that should hold it. */
 function ownerForSource(source?: SlashCommand['source']): CommandOwner {
+  if (source === 'app') return 'app';
   if (source === 'skill') return 'skill';
   if (source === 'hardcoded' || source === 'control') return 'core';
   return 'markdown';

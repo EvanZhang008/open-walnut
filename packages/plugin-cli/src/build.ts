@@ -7,6 +7,7 @@ export interface BuildPluginOptions {
   root?: string
   watch?: boolean
   minify?: boolean
+  /** Fires only for a rebuild AFTER the initial build, which the returned result reports instead. */
   onRebuild?: () => void | Promise<void>
 }
 
@@ -52,6 +53,13 @@ interface WatchEvents {
 
 async function runBuild(options: BuildOptions, watch: boolean, events?: WatchEvents) {
   if (!watch) return { result: await build(options) }
+  let settleInitial: ((result: BuildResult) => void) | undefined
+  let failInitial: ((error: unknown) => void) | undefined
+  const initial = new Promise<BuildResult>((resolve, reject) => {
+    settleInitial = resolve
+    failInitial = reject
+  })
+  let sawInitial = false
   const ctx = await context({
     ...options,
     plugins: [
@@ -60,14 +68,29 @@ async function runBuild(options: BuildOptions, watch: boolean, events?: WatchEve
         name: 'walnut-plugin-rebuild',
         setup(pluginBuild) {
           pluginBuild.onStart(() => { events?.onStart() })
-          pluginBuild.onEnd((result) => { events?.onEnd(result.errors.length === 0) })
+          pluginBuild.onEnd((result) => {
+            const success = result.errors.length === 0
+            if (!sawInitial) {
+              sawInitial = true
+              if (success) settleInitial?.(result)
+              else failInitial?.(new Error(result.errors.map((error) => error.text).join('\n') || 'build failed'))
+            }
+            events?.onEnd(success)
+          })
         },
       },
     ],
   })
-  const result = await ctx.rebuild()
-  await ctx.watch()
-  return { result, stop: () => ctx.dispose() }
+  // No `ctx.rebuild()` here: `watch()` runs the first build itself, and doing both built twice, the second looking exactly like a save.
+  try {
+    await ctx.watch()
+    const result = await initial
+    return { result, stop: () => ctx.dispose() }
+  } catch (error) {
+    // A broken first build must not leave a watcher holding the event loop open.
+    await ctx.dispose()
+    throw error
+  }
 }
 
 export async function buildPlugin(options: BuildPluginOptions = {}): Promise<PluginBuildResult> {
@@ -78,6 +101,8 @@ export async function buildPlugin(options: BuildPluginOptions = {}): Promise<Plu
     .filter((key): key is 'server' | 'web' => key !== null)
   const buildHealth = new Map(buildKeys.map((key) => [key, false]))
   let reloadTimer: ReturnType<typeof setTimeout> | undefined
+  // The initial onEnd is what resolves each `runBuild`, so this is still false there and true for every later build.
+  let initialBuildSettled = false
   const watchEvents = (key: 'server' | 'web'): WatchEvents => ({
     onStart() {
       buildHealth.set(key, false)
@@ -85,6 +110,7 @@ export async function buildPlugin(options: BuildPluginOptions = {}): Promise<Plu
     },
     onEnd(success) {
       buildHealth.set(key, success)
+      if (!initialBuildSettled) return
       if (!success || !options.onRebuild || [...buildHealth.values()].some((ready) => !ready)) return
       if (reloadTimer) clearTimeout(reloadTimer)
       reloadTimer = setTimeout(() => {
@@ -132,7 +158,16 @@ export async function buildPlugin(options: BuildPluginOptions = {}): Promise<Plu
     }, !!options.watch, watchEvents('web')))
   }
 
-  const results = await Promise.all(builds)
+  // One entry failing must take the other's watcher down, or a failed `dev` hangs on a live esbuild context.
+  const settled = await Promise.allSettled(builds)
+  const started = settled.flatMap((entry) => (entry.status === 'fulfilled' ? [entry.value] : []))
+  const failed = settled.find((entry): entry is PromiseRejectedResult => entry.status === 'rejected')
+  if (failed) {
+    await Promise.all(started.map((item) => item.stop?.()))
+    throw failed.reason
+  }
+  const results = started
+  initialBuildSettled = true
   const metafiles = results.map(({ result }) => result.metafile).filter((value): value is Metafile => !!value)
   return {
     outputs: outputStats(root, metafiles),

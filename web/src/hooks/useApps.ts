@@ -17,6 +17,8 @@ import { log } from '@/utils/log';
 
 let cache: PluginApp[] | null = null;
 let inFlight: Promise<void> | null = null;
+let requestedLoad = 0;
+let completedLoad = 0;
 let lastError: string | null = null;
 const subscribers = new Set<() => void>();
 
@@ -24,26 +26,40 @@ function notify(): void {
   for (const cb of subscribers) cb();
 }
 
-/** Fetch once; concurrent callers share the in-flight promise. */
+/** Fetch once; a forced change during a fetch queues one fresh response behind it. */
 function load(force: boolean): Promise<void> {
   if (!force && cache !== null) return Promise.resolve();
-  if (inFlight) return inFlight;
-  inFlight = fetchApps()
-    .then((apps) => {
-      cache = apps;
-      lastError = null;
-    })
-    .catch((err: unknown) => {
-      // Empty catalogue, not a broken sidebar.
-      cache = [];
-      lastError = err instanceof Error ? err.message : String(err);
-      log.warn('apps', 'failed to load plugin apps', { error: lastError });
-    })
-    .finally(() => {
+  if (inFlight) {
+    if (force) requestedLoad++;
+    return inFlight;
+  }
+
+  requestedLoad++;
+  inFlight = (async () => {
+    try {
+      while (completedLoad < requestedLoad) {
+        const targetLoad = requestedLoad;
+        try {
+          cache = await fetchApps();
+          lastError = null;
+        } catch (err: unknown) {
+          // Empty catalogue, not a broken sidebar.
+          cache = [];
+          lastError = err instanceof Error ? err.message : String(err);
+          log.warn('apps', 'failed to load plugin apps', { error: lastError });
+        }
+        completedLoad = targetLoad;
+        notify();
+      }
+    } finally {
       inFlight = null;
-      notify();
-    });
+    }
+  })();
   return inFlight;
+}
+
+export function refreshAppsCatalogue(): Promise<void> {
+  return load(true);
 }
 
 export interface UseAppsReturn {
@@ -89,5 +105,7 @@ export function useApps(): UseAppsReturn {
 export function __resetAppsCache(): void {
   cache = null;
   inFlight = null;
+  requestedLoad = 0;
+  completedLoad = 0;
   lastError = null;
 }

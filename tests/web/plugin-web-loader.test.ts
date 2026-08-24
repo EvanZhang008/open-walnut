@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+const appsCatalogue = vi.hoisted(() => ({
+  refresh: vi.fn(async () => undefined),
+}))
+
 vi.mock('@/api/client', () => ({
   apiGet: vi.fn(),
   apiGetText: vi.fn(async () => 'module source'),
@@ -14,6 +18,9 @@ vi.mock('@/api/ws', () => ({
   },
 }))
 vi.mock('@/api/device-token', () => ({ getDeviceToken: vi.fn(() => null) }))
+vi.mock('@/hooks/useApps', () => ({ refreshAppsCatalogue: appsCatalogue.refresh }))
+vi.mock('@/commands/markdown-bridge', () => ({ refreshMarkdownCommands: vi.fn(async () => undefined) }))
+vi.mock('@/commands/skill-bridge', () => ({ refreshSkillCommands: vi.fn(async () => undefined) }))
 vi.mock('@/utils/log', () => ({
   log: {
     debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(),
@@ -33,10 +40,12 @@ vi.mock('../../web/src/plugins/views.tsx', () => ({
 
 import { apiGet } from '../../web/src/api/client.js'
 import { wsClient } from '../../web/src/api/ws.js'
+import { appRegistry } from '../../web/src/apps/registry.js'
 import {
   disposeWebPluginsForTesting,
   getWebPluginRuntimeSnapshot,
   refreshWebPlugins,
+  refreshWebPluginsWithCommands,
   setWebPluginActivationTimeoutForTesting,
   setWebPluginImporterForTesting,
 } from '../../web/src/plugins/loader.js'
@@ -63,16 +72,25 @@ function response(hash: string | null): PluginRuntimeResponse {
 afterEach(async () => {
   await disposeWebPluginsForTesting()
   pluginUiRegistry.clear()
+  appRegistry.clear()
   vi.clearAllMocks()
 })
 
 describe('native Web Plugin loader', () => {
+  it('refreshes the legacy Webview catalogue with runtime changes', async () => {
+    vi.mocked(apiGet).mockResolvedValue(response(null))
+
+    await refreshWebPluginsWithCommands()
+
+    expect(appsCatalogue.refresh).toHaveBeenCalledOnce()
+  })
+
   it('activates contributions and removes them when the module disappears', async () => {
     const cleanup = vi.fn()
     vi.mocked(apiGet).mockResolvedValue(response('hash-one'))
     setWebPluginImporterForTesting(async () => ({
       activate(api: WalnutWebApiHost) {
-        api.ui.nav({ id: 'nav', label: 'Sample', path: '/sample' })
+        api.ui.app({ id: 'main', title: 'Sample', component: Component })
         api.ui.page({ id: 'page', path: '/sample', component: Component })
         api.ui.settings({ id: 'settings', label: 'Sample', component: Component })
         return { dispose: cleanup }
@@ -81,7 +99,7 @@ describe('native Web Plugin loader', () => {
 
     await refreshWebPlugins()
 
-    expect(pluginUiRegistry.getSnapshot().nav.map((entry) => entry.key)).toEqual(['sample:nav'])
+    expect(appRegistry.getSnapshot().apps.map((entry) => entry.key)).toEqual(['sample:main'])
     expect(pluginUiRegistry.getSnapshot().pages.map((entry) => entry.key)).toEqual(['sample:page'])
     expect(pluginUiRegistry.getSnapshot().settings.map((entry) => entry.key)).toEqual(['sample:settings'])
     expect(getWebPluginRuntimeSnapshot()).toMatchObject({ ready: true, loading: false, errors: [] })
@@ -90,7 +108,7 @@ describe('native Web Plugin loader', () => {
     await refreshWebPlugins()
 
     expect(cleanup).toHaveBeenCalledOnce()
-    expect(pluginUiRegistry.getSnapshot().nav).toEqual([])
+    expect(appRegistry.getSnapshot().apps).toEqual([])
     expect(pluginUiRegistry.getSnapshot().pages).toEqual([])
     expect(pluginUiRegistry.getSnapshot().settings).toEqual([])
   })
@@ -166,6 +184,29 @@ describe('native Web Plugin loader', () => {
     expect(getWebPluginRuntimeSnapshot().errors).toEqual([{
       id: 'sample',
       error: `Plugin page path conflicts with Walnut: ${JSON.stringify(route)}`,
+    }])
+    expect(pluginUiRegistry.getSnapshot().pages).toEqual([])
+  })
+
+  it('rejects a page that conflicts with a Core App added to the registry', async () => {
+    appRegistry.registerCore({
+      id: 'future-core',
+      title: 'Future Core',
+      path: '/future-core',
+      component: Component,
+    })
+    vi.mocked(apiGet).mockResolvedValue(response('future-core-route'))
+    setWebPluginImporterForTesting(async () => ({
+      activate(api: WalnutWebApiHost) {
+        api.ui.page({ id: 'page', path: '/future-core/details', component: Component })
+      },
+    }))
+
+    await refreshWebPlugins()
+
+    expect(getWebPluginRuntimeSnapshot().errors).toEqual([{
+      id: 'sample',
+      error: 'Plugin page path conflicts with Walnut: "/future-core/details"',
     }])
     expect(pluginUiRegistry.getSnapshot().pages).toEqual([])
   })

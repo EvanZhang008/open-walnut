@@ -1546,7 +1546,7 @@ if (process.env.PW_NATIVE_PLUGIN_FIXTURE === '1') {
   await buildPlugin({ root: pluginRepo })
   const git = (...args: string[]) => execFileAsync('git', args, { cwd: pluginRepo })
   await git('init', '--initial-branch=main')
-  await git('add', 'manifest.json', 'package.json', 'tsconfig.json', 'src', 'dist')
+  await git('add', 'manifest.json', 'package.json', 'tsconfig.json', 'src', 'skills', 'dist')
   await git(
     '-c', 'user.name=Walnut Test',
     '-c', 'user.email=walnut-test@example.invalid',

@@ -80,6 +80,11 @@ export async function activate(walnut) {
   app.use('/api/plugin-runtime', createPluginRuntimeRouter({
     registry,
     list: () => getPluginLifecycleRecords(registry),
+    discover: async (pluginId) => {
+      const plugin = getPluginLifecycleRecords(registry).find((record) => record.id === pluginId)
+      if (!plugin) throw new Error(`Plugin "${pluginId}" was not discovered`)
+      return plugin
+    },
     reload: (pluginId) => reloadLoadedPlugin(registry, pluginId),
     disable: (pluginId) => disableLoadedPlugin(registry, pluginId),
     clearQuarantine: async (pluginId) => { await clearPluginQuarantine(registry, pluginId) },
@@ -240,6 +245,12 @@ describe('primary Plugin runtime control relay', () => {
   })
 
   it('runs lifecycle management on the primary and returns current records', async () => {
+    await expect(handleSessionControlRelay(
+      'server.plugin-manage',
+      '__server__',
+      { pluginId: 'sample', operation: 'discover' },
+    )).resolves.toMatchObject({ ok: true, result: { plugin: { id: 'sample', state: 'active' } } })
+
     await expect(handleSessionControlRelay(
       'server.plugin-manage',
       '__server__',

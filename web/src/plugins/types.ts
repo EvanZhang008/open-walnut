@@ -4,6 +4,30 @@ export interface Disposable {
   dispose(): void | Promise<void>
 }
 
+export type PluginAppBadge = number | 'dot' | null
+
+export interface PluginAppProps {
+  basePath: string
+  subpath: string
+  search: string
+  navigate(path: string, options?: { replace?: boolean }): void
+}
+
+export interface PluginAppContribution {
+  id: string
+  title: string
+  icon?: ComponentType<{ size?: number }>
+  component: ComponentType<PluginAppProps>
+  badge?: PluginAppBadge
+  order?: number
+  fullBleed?: boolean
+}
+
+export interface PluginAppHandle extends Disposable {
+  readonly path: string
+  setBadge(value: PluginAppBadge): void
+}
+
 export interface PluginWebModuleDescriptor {
   id: string
   name: string
@@ -57,31 +81,11 @@ export type PluginOpResult<T = unknown> =
   | { ok: true; result: T }
   | { ok: false; message: string }
 
-export interface PluginNavContribution {
-  id: string
-  label: string
-  icon?: ComponentType<{ size?: number }>
-  path: string
-  order?: number
-}
-
 export interface PluginPageContribution {
   id: string
   path: string
   component: ComponentType<Record<string, never>>
   title?: string
-}
-
-export interface PluginPanelProps {
-  panelKey: string
-}
-
-export interface PluginPanelContribution {
-  id: string
-  title: string
-  component: ComponentType<PluginPanelProps>
-  defaultSpan?: 1 | 2 | 3
-  order?: number
 }
 
 export interface PluginSettingsContribution {
@@ -100,9 +104,7 @@ export interface RegisteredUiContribution<T> {
 
 export interface PluginUiSnapshot {
   version: number
-  nav: Array<RegisteredUiContribution<PluginNavContribution>>
   pages: Array<RegisteredUiContribution<PluginPageContribution>>
-  panels: Array<RegisteredUiContribution<PluginPanelContribution>>
   settings: Array<RegisteredUiContribution<PluginSettingsContribution>>
 }
 
@@ -211,9 +213,8 @@ export interface WalnutWebApiHost {
     fetch(url: string, init?: PluginFetchInit): Promise<PluginFetchResponse>
   }
   readonly ui: {
-    nav(contribution: PluginNavContribution): Disposable
+    app(contribution: PluginAppContribution): PluginAppHandle
     page(contribution: PluginPageContribution): Disposable
-    panel(contribution: PluginPanelContribution): Disposable
     settings(contribution: PluginSettingsContribution): Disposable
     injectCss(css: string): Disposable
     readonly views: PluginViews

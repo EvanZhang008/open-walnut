@@ -20,9 +20,26 @@ export interface TaskListFilter {
 }
 
 export interface TaskQueryInput {
-  text?: string
-  where?: Record<string, unknown>
-  sort?: Array<{ field: string; direction?: 'asc' | 'desc' }>
+  completion?: Array<'todo' | 'in_progress' | 'complete'>
+  phases?: TaskPhase[]
+  projects?: string[]
+  priorities?: TaskPriority[]
+  sources?: string[]
+  sprints?: string[]
+  tagsAny?: string[]
+  tagsAll?: string[]
+  pinned?: boolean
+  unread?: boolean
+  blocked?: boolean
+  parentTaskId?: string
+  groupId?: string
+  time?: {
+    basis: 'created' | 'updated' | 'created_or_updated'
+    last?: { value: number; unit: 'hours' | 'days' }
+    from?: string
+    until?: string
+  }
+  sort?: 'updated_desc' | 'created_desc' | 'completed_desc' | 'priority' | 'title_asc'
   limit?: number
 }
 

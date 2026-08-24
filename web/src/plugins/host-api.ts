@@ -4,6 +4,7 @@ import { wsClient } from '@/api/ws'
 import { getAppInfo } from '@/utils/app-info'
 import { log } from '@/utils/log'
 import { disposable, type WebPluginContext } from './disposable'
+import { appRegistry, type AppBadge, type AppContribution } from '@/apps/registry'
 import { pluginUiRegistry } from './registry'
 import { createPluginViews } from './views'
 import type {
@@ -11,9 +12,7 @@ import type {
   PluginFetchInit,
   PluginFetchResponse,
   PluginLogger,
-  PluginNavContribution,
   PluginPageContribution,
-  PluginPanelContribution,
   PluginSettingsContribution,
   WalnutWebApiHost,
 } from './types'
@@ -28,7 +27,6 @@ const RESERVED_PAGE_ROOTS = new Set([
   '/chat',
   '/commands',
   '/cron',
-  '/dashboard',
   '/hooks',
   '/memory',
   '/notes',
@@ -82,11 +80,21 @@ function validatePagePath(value: string): void {
       throw new Error(`Plugin page path conflicts with Walnut: ${JSON.stringify(value)}`)
     }
   }
+  if (appRegistry.findByPath(value)) {
+    throw new Error(`Plugin page path conflicts with Walnut: ${JSON.stringify(value)}`)
+  }
 }
 
 function validateComponent(component: unknown): void {
   if (typeof component !== 'function' && typeof component !== 'object') {
     throw new Error('Plugin UI contribution requires a React component')
+  }
+}
+
+function validateAppBadge(badge: AppBadge | undefined): void {
+  if (badge === undefined || badge === null || badge === 'dot') return
+  if (!Number.isInteger(badge) || badge < 0) {
+    throw new Error('Plugin App badge must be a non-negative integer, dot, or null')
   }
 }
 
@@ -204,28 +212,22 @@ export function createWebPluginApi(
       },
     },
     ui: {
-      nav(contribution: PluginNavContribution) {
+      app(contribution: AppContribution) {
         validateLocalId(contribution.id)
-        validatePath(contribution.path)
+        if (!contribution.title?.trim()) throw new Error('Plugin App title is required')
         if (contribution.icon) validateComponent(contribution.icon)
-        return own(pluginUiRegistry.registerNav(pluginId, pluginName, contribution))
+        validateComponent(contribution.component)
+        validateAppBadge(contribution.badge)
+        if (contribution.order !== undefined && !Number.isFinite(contribution.order)) {
+          throw new Error('Plugin App order must be finite')
+        }
+        return own(appRegistry.registerPlugin(pluginId, pluginName, contribution))
       },
       page(contribution: PluginPageContribution) {
         validateLocalId(contribution.id)
         validatePagePath(contribution.path)
         validateComponent(contribution.component)
         return own(pluginUiRegistry.registerPage(pluginId, pluginName, contribution))
-      },
-      panel(contribution: PluginPanelContribution) {
-        validateLocalId(contribution.id)
-        validateComponent(contribution.component)
-        if (contribution.defaultSpan !== undefined && ![1, 2, 3].includes(contribution.defaultSpan)) {
-          throw new Error('Plugin panel defaultSpan must be 1, 2, or 3')
-        }
-        if (contribution.order !== undefined && !Number.isFinite(contribution.order)) {
-          throw new Error('Plugin panel order must be finite')
-        }
-        return own(pluginUiRegistry.registerPanel(pluginId, pluginName, contribution))
       },
       settings(contribution: PluginSettingsContribution) {
         validateLocalId(contribution.id)
@@ -249,7 +251,7 @@ export function createWebPluginApi(
       }
       return {
         react: globalThis.__WALNUT_PLUGIN_HOST__?.React,
-        host: { registry: pluginUiRegistry },
+        host: { appRegistry, uiRegistry: pluginUiRegistry },
         dom: document,
       }
     },

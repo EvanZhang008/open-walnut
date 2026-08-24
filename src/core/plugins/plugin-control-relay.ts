@@ -201,11 +201,20 @@ async function fetchLoopback(
 async function managePlugin(params: Record<string, unknown>): Promise<Record<string, unknown>> {
   const pluginId = pluginIdFrom(params.pluginId)
   const operation = params.operation
-  if (operation !== 'reload' && operation !== 'disable' && operation !== 'clear-quarantine') {
+  if (operation !== 'discover' && operation !== 'reload' && operation !== 'disable' && operation !== 'clear-quarantine') {
     throw new PluginControlFailure('Invalid Plugin management operation', 400)
   }
-  const target = loopbackUrl(`/api/plugin-runtime/${encodeURIComponent(pluginId)}/${operation}`)
-  const { response, body } = await fetchLoopback(target, { method: 'POST' }, MANAGEMENT_TIMEOUT_MS, 512 * 1024)
+  const target = operation === 'discover'
+    ? loopbackUrl('/api/plugin-runtime/discover')
+    : loopbackUrl(`/api/plugin-runtime/${encodeURIComponent(pluginId)}/${operation}`)
+  const init: RequestInit = operation === 'discover'
+    ? {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pluginId }),
+      }
+    : { method: 'POST' }
+  const { response, body } = await fetchLoopback(target, init, MANAGEMENT_TIMEOUT_MS, 512 * 1024)
   let parsed: unknown
   try {
     parsed = body.byteLength === 0 ? {} : JSON.parse(body.toString('utf8'))

@@ -69,7 +69,7 @@ export interface PluginOpInfo {
   readonly: boolean
 }
 
-export type PluginManagementAction = 'reload' | 'disable' | 'clear-quarantine'
+export type PluginManagementAction = 'discover' | 'reload' | 'disable' | 'clear-quarantine'
 
 export interface PluginHttpRelayRequest {
   pluginId: string

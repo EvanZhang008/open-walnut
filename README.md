@@ -208,8 +208,20 @@ one source does not overwhelm the others.
 - **Commands and skills**: Browse and run local or remote Claude Code commands and
   skills from the web app.
 - **Task integrations**: Sync Microsoft To-Do and Jira through built-in plugins.
-- **Custom plugins**: Install trusted Git or npm Plugins that add server logic, native React UI, Tools, Hooks, Agents, Providers, routes, and task sync without changing Walnut.
+- **Custom plugins**: Install trusted Git or npm Plugins that add server logic, a native React App, Tools, Skills, Commands, Hooks, Agents, Providers, routes, and task sync without changing Walnut.
 - **Notifications**: Send optional Slack notifications for important events.
+
+### Writing a plugin
+
+A plugin App joins the same App Registry as Walnut's own screens, so one `walnut.ui.app` registration gives it a Sidebar entry, the route `/apps/<plugin-id>~<app-id>`, deep links, a badge, and a Command Palette entry. Installing a plugin means trusting its code: a server entry is full Node, and a native web entry shares the console's React tree.
+
+After the author packages reach npm, the whole first authoring loop is one command, which scaffolds, links into the running console, and reloads on every save. They are not published yet; the guide gives the equivalent local-checkout command available today.
+
+```bash
+npx @open-walnut/plugin-cli new my-plugin --dev
+```
+
+Read [Plugin development](docs/reference/plugin-development.md) for the full guide, and [examples/plugins/walnut-demo](examples/plugins/walnut-demo) (the Walnut Plugin Demo) for a runnable example of every public capability.
 
 ## iOS Companion
 
@@ -243,9 +255,12 @@ See [Cloud sync](docs/reference/cloud-sync.md) for the architecture and setup.
 | `/commands` | Claude Code commands |
 | `/skills` | Claude Code and Walnut skills |
 | `/settings` | Providers, integrations, repositories, usage, and app settings |
+| `/apps/<plugin-id>~<app-id>` | A plugin App, mounted by the App Registry |
 
 Sessions open as columns on the home page. Legacy `/sessions?id=...` links redirect
 there automatically.
+
+Walnut's own screens and every plugin App live in one App Registry, so they share the same Sidebar order, visibility, badges, and navigation. Home's Chat, Todo, and Agenda are Dock controls inside Home rather than separate apps.
 
 ## CLI
 

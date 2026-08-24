@@ -53,7 +53,7 @@ import { apiGet } from '../../web/src/api/client.js'
 import { getCommand, listCommands } from '../../web/src/commands/index.js'
 import { refreshMarkdownCommands } from '../../web/src/commands/markdown-bridge.js'
 import { refreshSkillCommands } from '../../web/src/commands/skill-bridge.js'
-import { removeOwner } from '../../web/src/commands/registry.js'
+import { registerOwned, removeOwner } from '../../web/src/commands/registry.js'
 import {
   disposeWebPluginsForTesting,
   refreshWebPluginsWithCommands,
@@ -87,6 +87,7 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  removeOwner('app')
   removeOwner('markdown')
   removeOwner('skill')
   await disposeWebPluginsForTesting()
@@ -94,6 +95,21 @@ afterEach(async () => {
 })
 
 describe('slash-command owner tiers', () => {
+  it('keeps App navigation commands across markdown and skill refreshes', async () => {
+    registerOwned('app', {
+      name: 'app:demo:main',
+      description: 'Open Demo',
+      type: 'frontend',
+      source: 'app',
+      execute: () => undefined,
+    })
+
+    await refreshMarkdownCommands()
+    await refreshSkillCommands()
+
+    expect(getCommand('app:demo:main')?.description).toBe('Open Demo')
+  })
+
   it('keeps the hardcoded commands across a markdown refresh', async () => {
     vi.mocked(fetchCommands).mockResolvedValue([
       serverCommand('user-cmd', 'user'),

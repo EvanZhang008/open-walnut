@@ -11,6 +11,7 @@ import { FocusBarProvider, useFocusBarContext } from '@/contexts/FocusBarContext
 import { lockScroll, unlockScroll } from '@/hooks/useModalOverlay';
 import { perf } from '@/utils/perf-logger';
 import { installTimeTracker } from '@/utils/time-tracking';
+import { useAppCatalog } from '@/apps/hooks';
 
 interface AppShellProps {
   children: ReactNode;
@@ -54,14 +55,10 @@ function AppShellInner({ children }: AppShellProps) {
     () => window.matchMedia(MOBILE_SIDEBAR_QUERY).matches,
   );
   const location = useLocation();
+  const apps = useAppCatalog();
   const isMainPage = location.pathname === '/';
-  // Full-bleed pages own their whole canvas (multi-pane layouts with internal
-  // scrolling) — no content-area padding, no outer scrollbar. Everything else
-  // keeps the default 24px page gutter.
-  const isFullBleed = isMainPage
-    || location.pathname.startsWith('/notes')
-    // A plugin app owns its whole canvas — the iframe fills the content area.
-    || location.pathname.startsWith('/apps');
+  const activeApp = apps.findByPath(location.pathname);
+  const isFullBleed = activeApp?.fullBleed ?? location.pathname.startsWith('/apps/');
   const focusBar = useFocusBarContext();
   const contentRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
