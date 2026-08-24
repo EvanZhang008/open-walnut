@@ -688,28 +688,37 @@ export function ModelPicker({
             <div className="model-picker-details-loading">Not available — session not live (or CLI too old).</div>
           ) : (
             <>
-              {details.contextUsage && (
+              {details.contextUsage && (() => {
+                // Headline divides by the MODEL'S MAX — the same denominator the
+                // badge uses, so the two can't contradict each other (they did:
+                // 9% on the pill vs 25% in this panel, 2026-08-23). The CLI's own
+                // percentage is against the auto-compact window, which gets its
+                // own row below instead of silently redefining the headline.
+                const cu = details.contextUsage;
+                const modelMax = details.windows?.modelMax ?? cu.maxTokens;
+                const compactAt = details.windows?.autoCompactAt ?? null;
+                const pct = cu.totalTokens != null && modelMax
+                  ? Math.round(cu.totalTokens / modelMax * 100)
+                  : cu.percentage;
+                const compactPct = cu.totalTokens != null && compactAt
+                  ? Math.round(cu.totalTokens / compactAt * 100)
+                  : null;
+                return (
                 <div className="model-picker-details-block">
                   <div className="model-picker-details-title">
-                    Context — {fmtTokens(details.contextUsage.totalTokens)} / {fmtTokens(details.contextUsage.maxTokens)}
-                    {details.contextUsage.percentage != null ? ` (${details.contextUsage.percentage}%)` : ''}
+                    Context — {fmtTokens(cu.totalTokens)} / {fmtTokens(modelMax)}
+                    {pct != null ? ` (${pct}%)` : ''}
                   </div>
-                  {/* Name the denominator's origin. A window the user's own env
-                      capped (e.g. CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000 on a 1M
-                      model) otherwise reads as a Walnut miscount — that confusion
-                      is exactly what the 2026-08-23 report was about. */}
-                  {details.contextUsage.autocompactSource
-                    && details.contextUsage.autocompactSource !== 'model-default' && (
+                  {compactAt != null && (
                     <div className="model-picker-details-row model-picker-details-note">
-                      <span>window</span>
+                      <span>auto-compacts at</span>
                       <span>
-                        {details.contextUsage.autocompactSource === 'env'
-                          ? 'capped by CLAUDE_CODE_AUTO_COMPACT_WINDOW'
-                          : `capped by auto-compact setting (${details.contextUsage.autocompactSource})`}
+                        {fmtTokens(compactAt)}{compactPct != null ? ` — ${compactPct}% used` : ''}
+                        {cu.autocompactSource === 'env' ? ' (CLAUDE_CODE_AUTO_COMPACT_WINDOW)' : ''}
                       </span>
                     </div>
                   )}
-                  {details.contextUsage.categories
+                  {cu.categories
                     .filter((c) => c.tokens > 0)
                     .map((c) => (
                       <div key={c.name} className="model-picker-details-row">
@@ -718,7 +727,8 @@ export function ModelPicker({
                       </div>
                     ))}
                 </div>
-              )}
+                );
+              })()}
               {details.usage && (
                 <div className="model-picker-details-block">
                   <div className="model-picker-details-title">

@@ -112,10 +112,13 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
     // The server's persisted window first: the model string tells us nothing
     // about a custom proxy model's window, and guessing 200K for one rendered
     // a 5x-wrong percent (2026-08-23). Still null ⇒ stay silent.
-    const ctxSize = session?.contextWindow ?? getContextWindowSize(rawModel, liveUsage.inputTokens);
+    const ctxSize = session?.modelMaxWindow ?? getContextWindowSize(rawModel, liveUsage.inputTokens);
     if (ctxSize != null) {
       contextPercent = Math.round(liveUsage.inputTokens / ctxSize * 100);
-      badgeUsage = { ...liveUsage, contextWindow: ctxSize };
+      badgeUsage = {
+        ...liveUsage, contextWindow: ctxSize,
+        autoCompactAt: liveUsage.autoCompactAt ?? session?.autoCompactAt,
+      };
     }
   }
 

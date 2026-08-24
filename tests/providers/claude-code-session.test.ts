@@ -31,6 +31,7 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 
 import { ClaudeCodeSession, SessionRunner, shellQuote, outputFileCheckResult, stripCliStartupNoise, isBenignSshStderr, reconcileMcpMountStatus } from '../../src/providers/claude-code-session.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
+import { resetContextWindowCaches, rememberModelWindow, recallModelWindow } from '../../src/providers/context-window.js';
 import { log } from '../../src/logging/index.js';
 import type { BusEvent } from '../../src/core/event-bus.js';
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js';
@@ -2630,7 +2631,7 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
     expect(result?.autocompactSource).toBeNull();
   });
 
-  it('getContextUsage seeds _cliContextWindow via seedCliContextWindow', async () => {
+  it('getContextUsage seeds the effective (auto-compact) window via seedCliContextWindow', async () => {
     const { session, writes } = makeSessionWithStubTransport();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(session as any).seedCliContextWindow('test');
@@ -2656,12 +2657,15 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
   // and for a custom proxy model there is no model-string fallback at all, so
   // without this push the badge sat blank (found in real-UI verification,
   // 2026-08-23). The payload already carries totalTokens; the emit is free.
-  it('seedCliContextWindow publishes the CLI percentage so the badge fills without a turn', async () => {
+  it('seedCliContextWindow publishes the percentage so the badge fills without a turn', async () => {
     const { session, writes } = makeSessionWithStubTransport();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(session as any).claudeSessionId = 'sid-seed-emit';
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(session as any)._initModel = 'gpt-5.6-sol'; // no [1m] ⇒ no string guess
+    // The model's real window, as the CLI reports it for this unrecognized model.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(session as any)._envMaxContextTokens = 1_000_000;
     // Usage updates are addressed to 'main-ai' (the server relays them to the
     // browser), so the probe must subscribe under that name to see them.
     const seen: BusEvent[] = [];
@@ -2681,32 +2685,52 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
       },
     });
     await new Promise((r) => setTimeout(r, 10));
-    const data = seen.at(-1)?.data as { contextPercent?: number; contextWindow?: number; inputTokens?: number };
-    expect(data?.contextWindow).toBe(400_000);
+    const data = seen.at(-1)?.data as {
+      contextPercent?: number; contextWindow?: number; inputTokens?: number; autoCompactAt?: number;
+    };
+    expect(data?.contextWindow).toBe(1_000_000); // the MODEL's max, not the 400K clamp
     expect(data?.inputTokens).toBe(99_366);
-    expect(data?.contextPercent).toBe(25); // exactly what /context shows
+    expect(data?.contextPercent).toBe(10);
+    // …and the clamp still reaches the UI, as its own fact.
+    expect(data?.autoCompactAt).toBe(400_000);
   });
 
   // ── contextWindowForPercent: the context% denominator ──
-  // The denominator is the CLI's EFFECTIVE window — min(model window,
-  // CLAUDE_CODE_AUTO_COMPACT_WINDOW) — i.e. the same number `/context` (and so
-  // the model picker's context panel) divides by, and the window the session
-  // actually compacts at. Rules + the incident live in ../../src/providers/context-window.ts.
-  // This REVERSES the 2026-08-11 "divide by the raw window to match the
-  // statusline" choice: upstream 2.1.240 is itself inconsistent (statusline ÷ raw,
-  // /context ÷ clamped) and Walnut renders both numbers in ONE popover, where
-  // 9% next to 25% is indefensible (2026-08-23 report).
+  // The denominator is the MODEL'S ABSOLUTE MAX window. An auto-compact setting
+  // never moves it: the badge answers "how much of this model am I using", and
+  // folding a compaction setting into that is what made the same 99K read as 25%
+  // on the pill and 10% in the picker (2026-08-23 report). The compaction point
+  // is reported separately, see contextLimits. Rules + sources live in
+  // ../../src/providers/context-window.ts.
   describe('contextWindowForPercent', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const win = (session: ClaudeCodeSession, totalInput?: number) => (session as any).contextWindowForPercent(totalInput);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const limits = (session: ClaudeCodeSession, totalInput?: number) => (session as any).contextLimits(totalInput);
 
-    it('divides by the CLI effective window, not the raw 1M (agrees with /context)', () => {
+    beforeEach(() => { resetContextWindowCaches(); });
+
+    it('divides by the model max the CLI reported, NOT the auto-compact window', () => {
       const { session } = makeSessionWithStubTransport();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(session as any)._initModel = 'global.anthropic.claude-fable-5[1m]';
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(session as any)._cliContextWindow = 400_000; // get_context_usage.maxTokens
-      expect(win(session, 200_000)).toBe(400_000); // 50% — same as the panel
+      ;(session as any)._cliRawContextWindow = 1_000_000; // modelUsage
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._cliContextWindow = 400_000; // get_context_usage (clamped)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._autoCompactWindow = 400_000;
+      expect(win(session, 200_000)).toBe(1_000_000); // 20% of the model
+      expect(limits(session, 200_000)).toEqual({ window: 1_000_000, autoCompactAt: 400_000 });
+    });
+
+    it('reports no compaction point when the session compacts at the model limit', () => {
+      const { session } = makeSessionWithStubTransport();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._initModel = 'claude-sonnet-4-6';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._cliContextWindow = 200_000;
+      expect(limits(session, 50_000)).toEqual({ window: 200_000, autoCompactAt: null });
     });
 
     it('CLI answer outranks the string guess (custom >200K window)', () => {
@@ -2714,7 +2738,7 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(session as any)._initModel = 'some-proxy-model'; // no [1m] marker
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(session as any)._cliContextWindow = 262_000;
+      ;(session as any)._cliRawContextWindow = 262_000;
       expect(win(session, 100_000)).toBe(262_000);
     });
 
@@ -2744,16 +2768,28 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
       expect(win(session, 99_366)).toBeNull();
     });
 
-    it('the harvested auto-compact clamp carries an unknown model on its own', () => {
+    it('an auto-compact clamp alone is NOT a denominator for an unknown model', () => {
       const { session } = makeSessionWithStubTransport();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(session as any)._initModel = 'gpt-5.6-sol';
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(session as any)._autoCompactWindow = 400_000;
-      expect(win(session, 99_366)).toBe(400_000); // 25% — what /context showed
+      expect(win(session, 99_366)).toBeNull(); // the clamp says nothing about the model
     });
 
-    it('result.modelUsage raw window is clamped by the auto-compact env', () => {
+    it('CLAUDE_CODE_MAX_CONTEXT_TOKENS answers for an unrecognized model', () => {
+      const { session } = makeSessionWithStubTransport();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._initModel = 'gpt-5.6-sol';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._envMaxContextTokens = 1_000_000;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._autoCompactWindow = 400_000;
+      expect(win(session, 99_366)).toBe(1_000_000); // 10%, and it stays 10%
+      expect(limits(session, 99_366).autoCompactAt).toBe(400_000);
+    });
+
+    it('result.modelUsage sets the model window verbatim — no clamping', () => {
       const { session } = makeSessionWithStubTransport();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(session as any)._initModel = 'global.anthropic.claude-fable-5[1m]';
@@ -2770,11 +2806,26 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
       });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect((session as any)._cliRawContextWindow).toBe(1_000_000);
-      expect(win(session, 200_000)).toBe(400_000);
-      // No clamp configured ⇒ the raw window stands.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(session as any)._autoCompactWindow = undefined;
       expect(win(session, 200_000)).toBe(1_000_000);
+    });
+
+    it('caches the harvested window for the next session on this host+model', () => {
+      // The exact window only arrives at a turn END, so a fresh session on the
+      // same model would otherwise spend its first turn with no percentage.
+      const { session } = makeSessionWithStubTransport();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._initModel = 'gpt-5.6-sol';
+      feed(session, {
+        type: 'result', subtype: 'success', is_error: false, result: 'done', session_id: 'sid-mu-cache',
+        modelUsage: { 'gpt-5.6-sol': { contextWindow: 1_000_000 } },
+      });
+      expect(recallModelWindow(null, 'gpt-5.6-sol')).toBe(1_000_000);
+
+      const { session: fresh } = makeSessionWithStubTransport();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(fresh as any)._initModel = 'gpt-5.6-sol';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((fresh as any).contextWindowForPercent(99_366)).toBe(1_000_000);
     });
 
     it('modelUsage matches the main model by normalized key, not the largest window', () => {
@@ -2816,11 +2867,11 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
       expect(win(session, 50_000)).toBe(200_000);
     });
 
-    it('a model switch never shows a 5x-wrong percent while the CLI reads land', () => {
-      // The whole 2026-08-23 complaint in one assertion: the clamp survives the
-      // switch (it is process env), so the denominator moves 400K → 400K
-      // instead of 200K → 400K → 1M.
+    it('a model switch lands on the new MODEL\'s window, not a 5x-wrong guess', () => {
+      // The 2026-08-23 complaint: switching models replayed a whole discovery
+      // ladder. Now the host+model cache answers for the new model immediately.
       const { session } = makeSessionWithStubTransport();
+      rememberModelWindow(null, 'gpt-5.6-sol', 1_000_000);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(session as any)._transport.renameForSession = () => {};
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2828,14 +2879,10 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(session as any)._initModel = 'global.anthropic.claude-fable-5[1m]';
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(session as any)._autoCompactWindow = 400_000;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(session as any)._cliContextWindow = 400_000;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(session as any)._cliRawContextWindow = 1_000_000;
-      expect(win(session, 99_366)).toBe(400_000);
+      expect(win(session, 99_366)).toBe(1_000_000);
       feed(session, { type: 'system', subtype: 'init', session_id: 'sid-mu4', model: 'openai.gpt-5.6-sol' });
-      expect(win(session, 99_366)).toBe(400_000); // same denominator, no jump
+      expect(win(session, 99_366)).toBe(1_000_000); // same denominator, no jump
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect((session as any)._model).toBe('gpt-5.6-sol'); // not "6-sol"
     });

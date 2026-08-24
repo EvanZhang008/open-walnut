@@ -9,9 +9,13 @@ export interface SessionUsage {
   contextPercent?: number;
   /** Total input tokens for the latest API call (incl. cache). */
   inputTokens?: number;
-  /** Denominator behind contextPercent — the CLI's effective window
-   *  (min(model window, auto-compact clamp)), for the "99K / 400K" tooltip. */
+  /** Denominator behind contextPercent — the MODEL'S ABSOLUTE max window, for
+   *  the "99K / 1M" tooltip. */
   contextWindow?: number;
+  /** Where this session auto-compacts, when below contextWindow. Shown as a
+   *  separate line: it explains why a session compacts "early" without
+   *  redefining what the percentage measures. */
+  autoCompactAt?: number;
 }
 
 /**
@@ -28,7 +32,7 @@ export function useSessionUsage(sessionId: string | null): SessionUsage {
   const handler = useCallback((data: unknown) => {
     const d = data as {
       sessionId?: string; model?: string; contextPercent?: number;
-      inputTokens?: number; contextWindow?: number;
+      inputTokens?: number; contextWindow?: number; autoCompactAt?: number;
     };
     if (!sessionId || d.sessionId !== sessionId) return;
     setUsage({
@@ -36,6 +40,7 @@ export function useSessionUsage(sessionId: string | null): SessionUsage {
       contextPercent: d.contextPercent,
       inputTokens: d.inputTokens,
       contextWindow: d.contextWindow,
+      autoCompactAt: d.autoCompactAt,
     });
   }, [sessionId]);
 
@@ -111,17 +116,21 @@ function fmtTokens(n: number): string {
 }
 
 /**
- * Tooltip for the context badge. Always names the denominator: the badge divides
- * by the CLI's EFFECTIVE window (min(model window, CLAUDE_CODE_AUTO_COMPACT_WINDOW)),
- * which is the same number the model picker's context panel shows and the one
- * that decides when the session compacts.
+ * Tooltip for the context badge. Names the denominator (the MODEL'S max window)
+ * and, separately, where this session will auto-compact when a setting puts that
+ * below the model's limit. Two facts, two lines: folding the compaction window
+ * into the percentage is what made the same 99K read as 25% here and 10% in the
+ * picker (2026-08-23).
  */
 export function contextBadgeTitle(usage: SessionUsage, percent: number): string {
   const parts = [`Context: ${percent}%`];
   if (usage.inputTokens != null && usage.contextWindow != null) {
-    parts.push(`${fmtTokens(usage.inputTokens)} / ${fmtTokens(usage.contextWindow)} (window the session compacts at)`);
+    parts.push(`${fmtTokens(usage.inputTokens)} / ${fmtTokens(usage.contextWindow)} (model max)`);
   } else if (usage.inputTokens != null) {
     parts.push(`${fmtTokens(usage.inputTokens)} in context`);
+  }
+  if (usage.autoCompactAt != null) {
+    parts.push(`auto-compacts at ${fmtTokens(usage.autoCompactAt)}`);
   }
   return parts.join(' — ');
 }

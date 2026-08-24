@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
-  resolveContextWindow, shortModelId,
-  rememberAutoCompactWindow, recallAutoCompactWindow, resetAutoCompactWindowCache,
+  resolveContextWindow, shortModelId, isRecognizedClaudeModel,
+  rememberAutoCompactWindow, recallAutoCompactWindow,
+  rememberEnvMaxContextTokens, recallEnvMaxContextTokens,
+  rememberModelWindow, recallModelWindow, resetContextWindowCaches,
   ANTHROPIC_DEFAULT_WINDOW, EXTENDED_WINDOW,
 } from '../../src/providers/context-window.js';
 
@@ -9,27 +11,48 @@ import {
 // incident it exists for (inc-1787517631989-wpy5i3, 2026-08-23): one session on
 // a custom proxy model showed 70% → 25% → 10% as three different denominators
 // arrived, and 9% on the badge next to "99.4K / 400K (25%)" in the picker.
+//
+// The denominator is the MODEL'S ABSOLUTE MAX. The auto-compact window is a
+// setting, not a property of the model, so it never moves this number.
 
 describe('resolveContextWindow', () => {
-  it('prefers the CLI effective window — the number /context divides by', () => {
+  it('prefers the window the CLI itself reported for this model', () => {
+    // result.modelUsage[model].contextWindow. Live-verified on 2.1.240: 1M for
+    // gpt-5.6-sol, opus-5[1m] and fable[1m] alike.
     expect(resolveContextWindow({
-      cliEffectiveWindow: 400_000,
-      cliRawWindow: 1_000_000, // raw 1M must NOT win: the session compacts at 400K
-      autoCompactWindow: 400_000,
-      model: 'global.anthropic.claude-fable-5[1m]',
+      cliModelWindow: 1_000_000,
+      hostModelWindow: 400_000,
+      envMaxContextTokens: 272_000,
+      model: 'gpt-5.6-sol',
       observedTokens: 99_366,
-    })).toEqual({ window: 400_000, source: 'cli-effective' });
+    })).toEqual({ window: 1_000_000, source: 'cli-model-usage' });
   });
 
-  it('clamps the raw model window with the auto-compact env', () => {
-    expect(resolveContextWindow({
-      cliRawWindow: 1_000_000, autoCompactWindow: 400_000, model: 'gpt-5.6-sol',
-    })).toEqual({ window: 400_000, source: 'raw-clamped' });
+  it('an auto-compact clamp does NOT shrink the denominator', () => {
+    // The reversal: 99K of a 1M model is 10%, whatever the compact setting says.
+    // Folding the clamp in is what made the badge and the picker disagree.
+    const resolved = resolveContextWindow({ cliModelWindow: 1_000_000, model: 'claude-fable-5[1m]' });
+    expect(resolved?.window).toBe(1_000_000);
   });
 
-  it('uses the raw window verbatim when no clamp is configured', () => {
-    expect(resolveContextWindow({ cliRawWindow: 1_000_000, model: 'gpt-5.6-sol' }))
-      .toEqual({ window: 1_000_000, source: 'cli-raw' });
+  it('falls back to what an earlier session on this host+model learned', () => {
+    expect(resolveContextWindow({ hostModelWindow: 1_000_000, model: 'gpt-5.6-sol' }))
+      .toEqual({ window: 1_000_000, source: 'host-model-cache' });
+  });
+
+  it('uses CLAUDE_CODE_MAX_CONTEXT_TOKENS for a model the CLI does not recognize', () => {
+    // The CLI's own words for an unrecognized model: "set
+    // CLAUDE_CODE_MAX_CONTEXT_TOKENS to its real window".
+    expect(resolveContextWindow({ envMaxContextTokens: 1_000_000, model: 'gpt-5.6-sol' }))
+      .toEqual({ window: 1_000_000, source: 'env-max-tokens' });
+  });
+
+  it('IGNORES that env var for a recognized Claude model — the CLI does too', () => {
+    // Trusting it here would invent a 1M window for a 200K model.
+    expect(resolveContextWindow({ envMaxContextTokens: 1_000_000, model: 'claude-sonnet-4-6' }))
+      .toEqual({ window: ANTHROPIC_DEFAULT_WINDOW, source: 'model-string' });
+    expect(resolveContextWindow({ envMaxContextTokens: 1_000_000, model: 'global.anthropic.claude-fable-5[1m]' }))
+      .toEqual({ window: EXTENDED_WINDOW, source: 'model-string' });
   });
 
   it('returns NOTHING for a custom model with no CLI-sourced window', () => {
@@ -38,11 +61,6 @@ describe('resolveContextWindow', () => {
     expect(resolveContextWindow({ model: 'gpt-5.6-sol', observedTokens: 99_366 })).toBeNull();
     expect(resolveContextWindow({ model: 'bedrock_mantle/openai.gpt-5.6-sol' })).toBeNull();
     expect(resolveContextWindow({})).toBeNull();
-  });
-
-  it('falls back to the clamp alone for an unknown model (bounds the window)', () => {
-    expect(resolveContextWindow({ model: 'gpt-5.6-sol', autoCompactWindow: 400_000, observedTokens: 99_366 }))
-      .toEqual({ window: 400_000, source: 'clamp-only' });
   });
 
   it('reads the [1m] marker, and the 200K default for plain Anthropic ids', () => {
@@ -55,25 +73,58 @@ describe('resolveContextWindow', () => {
       .toEqual({ window: EXTENDED_WINDOW, source: 'model-string' });
   });
 
-  it('clamps the string guess too', () => {
-    expect(resolveContextWindow({ model: 'claude-fable-5[1m]', autoCompactWindow: 400_000 }))
-      .toEqual({ window: 400_000, source: 'model-clamped' });
-    // A clamp ABOVE the model window never inflates it.
-    expect(resolveContextWindow({ model: 'claude-sonnet-4-6', autoCompactWindow: 400_000 }))
-      .toEqual({ window: ANTHROPIC_DEFAULT_WINDOW, source: 'model-clamped' });
-  });
-
   it('trusts observed tokens over a lost [1m] suffix', () => {
     expect(resolveContextWindow({ model: 'claude-sonnet-4-6', observedTokens: 250_000 })?.window)
       .toBe(EXTENDED_WINDOW);
   });
 
   it('ignores zero / negative / non-finite windows', () => {
-    expect(resolveContextWindow({ cliEffectiveWindow: 0, cliRawWindow: 1_000_000 })?.source).toBe('cli-raw');
-    expect(resolveContextWindow({ cliEffectiveWindow: Number.NaN, model: 'claude-sonnet-4-6' })?.source)
+    expect(resolveContextWindow({ cliModelWindow: 0, hostModelWindow: 1_000_000 })?.source)
+      .toBe('host-model-cache');
+    expect(resolveContextWindow({ cliModelWindow: Number.NaN, model: 'claude-sonnet-4-6' })?.source)
       .toBe('model-string');
-    expect(resolveContextWindow({ cliRawWindow: 1_000_000, autoCompactWindow: -1 })?.window)
-      .toBe(1_000_000);
+    expect(resolveContextWindow({ envMaxContextTokens: -1, model: 'gpt-5.6-sol' })).toBeNull();
+  });
+});
+
+describe('isRecognizedClaudeModel', () => {
+  it('sees through transport / region / provider decoration', () => {
+    expect(isRecognizedClaudeModel('global.anthropic.claude-opus-5[1m]')).toBe(true);
+    expect(isRecognizedClaudeModel('bedrock_mantle/openai.gpt-5.6-sol')).toBe(false);
+    expect(isRecognizedClaudeModel('fable')).toBe(true);
+    expect(isRecognizedClaudeModel(undefined)).toBe(false);
+  });
+});
+
+describe('host+model window cache', () => {
+  // The exact window only arrives at a turn END, so without this cache every
+  // session spends its first turn on a guess (or, for a proxy model, on no
+  // percentage) and then jumps.
+  it('answers for later sessions on the same host+model only', () => {
+    resetContextWindowCaches();
+    expect(recallModelWindow(null, 'gpt-5.6-sol')).toBeUndefined();
+    rememberModelWindow(null, 'gpt-5.6-sol', 1_000_000);
+    expect(recallModelWindow(null, 'gpt-5.6-sol')).toBe(1_000_000);
+    expect(recallModelWindow(null, 'GPT-5.6-SOL')).toBe(1_000_000); // case-insensitive
+    expect(recallModelWindow('clouddev', 'gpt-5.6-sol')).toBeUndefined();
+    expect(recallModelWindow(null, 'claude-sonnet-4-6')).toBeUndefined();
+  });
+
+  it('ignores nonsense and a missing model', () => {
+    resetContextWindowCaches();
+    rememberModelWindow(null, 'x', 0);
+    rememberModelWindow(null, undefined, 1_000_000);
+    expect(recallModelWindow(null, 'x')).toBeUndefined();
+    expect(recallModelWindow(null, undefined)).toBeUndefined();
+  });
+});
+
+describe('CLAUDE_CODE_MAX_CONTEXT_TOKENS cache (host-scoped)', () => {
+  it('shares per host', () => {
+    resetContextWindowCaches();
+    rememberEnvMaxContextTokens(null, 1_000_000);
+    expect(recallEnvMaxContextTokens(null)).toBe(1_000_000);
+    expect(recallEnvMaxContextTokens('clouddev')).toBeUndefined();
   });
 });
 
@@ -83,7 +134,7 @@ describe('auto-compact clamp cache (host-scoped)', () => {
   // completed its get_settings read, the first had not. The clamp is a HOST
   // property, so the first read answers for every session on that host.
   it('shares a clamp across sessions on the same host, and only that host', () => {
-    resetAutoCompactWindowCache();
+    resetContextWindowCaches();
     expect(recallAutoCompactWindow(null)).toBeUndefined();
     rememberAutoCompactWindow(null, 400_000);
     expect(recallAutoCompactWindow(null)).toBe(400_000);
@@ -95,7 +146,7 @@ describe('auto-compact clamp cache (host-scoped)', () => {
   });
 
   it('ignores a nonsense clamp', () => {
-    resetAutoCompactWindowCache();
+    resetContextWindowCaches();
     rememberAutoCompactWindow(null, 0);
     rememberAutoCompactWindow(null, Number.NaN);
     rememberAutoCompactWindow(null, -5);

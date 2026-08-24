@@ -406,7 +406,9 @@ export interface SessionLiveSettings {
    *  "Live details" section). Each field degrades to null independently. */
   details?: {
     /** get_context_usage — the CLI's own per-category breakdown (same source as
-     *  /context). maxTokens = EFFECTIVE window incl. env clamps. */
+     *  /context). NB maxTokens is the AUTO-COMPACT window (env clamps applied),
+     *  NOT the model's max, and in 2.1.240 rawMaxTokens is literally the same
+     *  variable. Use `windows.modelMax` for the denominator the badge shows. */
     contextUsage: {
       categories: Array<{ name: string; tokens: number }>;
       totalTokens: number | null;
@@ -432,6 +434,10 @@ export interface SessionLiveSettings {
       }>;
     } | null;
     binaryVersion: { version?: string; buildTime?: string } | null;
+    /** The windows Walnut resolved: `modelMax` is the context% denominator (the
+     *  model's absolute max), `autoCompactAt` is where this session compacts
+     *  when a setting puts that below the model's limit. */
+    windows?: { modelMax: number | null; autoCompactAt: number | null } | null;
   };
 }
 

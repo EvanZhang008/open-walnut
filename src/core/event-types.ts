@@ -498,10 +498,16 @@ export interface SessionUsageUpdateEvent {
   contextPercent?: number;
   /** Total input tokens for the latest API call (incl. cache). */
   inputTokens?: number;
-  /** The denominator behind `contextPercent`: the CLI's EFFECTIVE window, i.e.
-   *  min(model window, CLAUDE_CODE_AUTO_COMPACT_WINDOW). Carried so the UI can
-   *  show "99K / 400K" instead of a bare percentage whose basis is invisible. */
+  /** The denominator behind `contextPercent`: the MODEL'S ABSOLUTE max window.
+   *  Carried so the UI can show "99K / 1M" instead of a bare percentage whose
+   *  basis is invisible. */
   contextWindow?: number;
+  /** Where this session will auto-compact, when that is BELOW `contextWindow`
+   *  (a session-level or env-level CLAUDE_CODE_AUTO_COMPACT_WINDOW). Reported
+   *  alongside the percentage, never folded into it: the badge measures the
+   *  model, and a compaction setting is not a property of the model. Absent when
+   *  the session compacts only at the model's own limit. */
+  autoCompactAt?: number;
 }
 
 /** Applied-settings read-back push: emitted whenever refreshAppliedSettings()

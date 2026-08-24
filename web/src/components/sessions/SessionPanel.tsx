@@ -302,10 +302,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   if (contextPercent == null && lastAssistant?.usage) {
     const u = lastAssistant.usage as Record<string, number>;
     const totalInput = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
-    const ctxSize = session?.contextWindow ?? getContextWindowSize(rawModel, totalInput);
+    const ctxSize = session?.modelMaxWindow ?? getContextWindowSize(rawModel, totalInput);
     if (totalInput > 0 && ctxSize != null) {
       contextPercent = Math.round(totalInput / ctxSize * 100);
-      badgeUsage = { ...liveUsage, inputTokens: totalInput, contextWindow: ctxSize };
+      badgeUsage = {
+        ...liveUsage, inputTokens: totalInput, contextWindow: ctxSize,
+        autoCompactAt: liveUsage.autoCompactAt ?? session?.autoCompactAt,
+      };
     }
   }
 

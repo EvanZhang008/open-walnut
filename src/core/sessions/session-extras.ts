@@ -127,6 +127,11 @@ export interface SessionSettingsPayload {
     contextUsage: unknown | null;
     usage: Record<string, unknown> | null;
     binaryVersion: { version?: string; buildTime?: string } | null;
+    /** The two windows Walnut resolved, so the panel can show the SAME
+     *  denominator the badge uses. The CLI's own contextUsage.maxTokens is the
+     *  auto-compact window, which is why the panel and the badge used to
+     *  disagree (25% vs 10% on 2026-08-23). */
+    windows: { modelMax: number | null; autoCompactAt: number | null } | null;
   };
 }
 
@@ -171,9 +176,11 @@ export async function getSessionSettings(sessionId: string, wantDetails: boolean
       // one round-trip serves both the picker and the persisted truth.
       void session.refreshAppliedSettings('picker-pull', settingsSnapshot.applied).catch(() => null);
     }
-    if (wantDetails) details = { contextUsage, usage, binaryVersion };
+    if (wantDetails) {
+      details = { contextUsage, usage, binaryVersion, windows: session.contextWindowsForUi() };
+    }
   } else if (wantDetails) {
-    details = { contextUsage: null, usage: null, binaryVersion: null };
+    details = { contextUsage: null, usage: null, binaryVersion: null, windows: null };
   }
   return { live: applied !== null, requested, applied, effective, ...(details !== undefined ? { details } : {}) };
 }

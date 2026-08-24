@@ -17,22 +17,39 @@
  * Anthropic models hid the bug: the user runs `[1m]` variants, so stage 1
  * already guessed 1M and stages 2-3 barely moved the number.
  *
- * Two rules encoded here:
+ * THE DENOMINATOR IS THE MODEL'S ABSOLUTE MAX WINDOW. Not the auto-compact
+ * window. The badge answers "how much of this model am I using", which is a
+ * property of the model, so it must not move when a session-level or env-level
+ * compaction setting moves. The compaction threshold is a SEPARATE fact and is
+ * rendered separately ("auto-compacts at 400K") instead of being folded into the
+ * percentage where it silently redefines what the number means.
  *
- * A. ONE denominator, and it is the CLI's EFFECTIVE window — min(raw model
- *    window, CLAUDE_CODE_AUTO_COMPACT_WINDOW). That is what `/context` divides
- *    by (verified in 2.1.240: it reports maxTokens === rawMaxTokens === the
- *    clamped value, with autocompactSource:'env'), and it is the window that
- *    governs behavior: a session with the user's global 400K clamp compacts at
- *    400K no matter how big the model's raw window is. The CLI's own statusline
- *    divides by the RAW window instead (2.1.240: `context_window: Fy0(v, T)`
- *    with `T = rawWindowForModel(model)`), which is why the two numbers
- *    disagree upstream too. Walnut shows both surfaces in ONE popover, so it
- *    picks the one that predicts compaction and labels the denominator.
+ * Where the absolute max can be learned, in order of authority. Only the first
+ * two are exact; the CLI does not expose a raw window anywhere else:
  *
- * B. Never render a percent from a guess we have no basis for. An unrecognized
- *    model string yields NO window (and the caller emits tokens without a
- *    percent) rather than a 200K Anthropic-shaped guess that will be off by 5x.
+ *   1. `result.modelUsage[<model>].contextWindow` (turn end). The CLI's own
+ *      resolved model window: verified 2.1.240 reporting 1000000 for
+ *      gpt-5.6-sol, claude-opus-5[1m] and claude-fable-5[1m].
+ *   2. The same value cached per host+model, so the SECOND session on a model
+ *      starts already knowing it (see rememberModelWindow).
+ *   3. `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, but ONLY for a model the CLI does not
+ *      recognize. That is the CLI's own rule, and its own words: for an
+ *      unrecognized model it prints "…is not a model this version of Claude Code
+ *      recognizes… To make it recognized, append [1m] to the model name for 1M,
+ *      or set CLAUDE_CODE_MAX_CONTEXT_TOKENS to its real window". Recognized
+ *      claude-* models ignore the variable, so trusting it there would invent a
+ *      1M window for a 200K model.
+ *   4. The model string: `[1m]` → 1M, a recognized Anthropic family → 200K.
+ *
+ * `get_context_usage.maxTokens` is deliberately NOT in that list. In 2.1.240 the
+ * payload is built as `{maxTokens: g, rawMaxTokens: g, autocompactSource: y}` —
+ * the same variable twice, already clamped — so it reveals the effective window
+ * and nothing about the model's real one.
+ *
+ * Second rule: never render a percent from a guess with no basis. An
+ * unrecognized model with no CLI reading yet yields NO window, and the caller
+ * shows the token count alone rather than a 200K Anthropic-shaped guess that is
+ * 5x wrong for a 1M proxy model.
  */
 
 /** Window assumed for an Anthropic model with no `[1m]` marker. */
@@ -42,23 +59,20 @@ export const EXTENDED_WINDOW = 1_000_000
 /** Where the resolved denominator came from — carried to the UI for the tooltip
  *  and logged, so a wrong percentage is diagnosable without a repro. */
 export type ContextWindowSource =
-  | 'cli-effective' // get_context_usage.maxTokens — exact, matches /context
-  | 'raw-clamped' // CLI raw model window ∧ the auto-compact clamp
-  | 'cli-raw' // CLI raw model window, no clamp configured
-  | 'model-clamped' // model-string guess ∧ the auto-compact clamp
-  | 'model-string' // model-string guess, no clamp configured
-  | 'clamp-only' // window unknowable, but the clamp bounds it
+  | 'cli-model-usage' // result.modelUsage[model].contextWindow — exact
+  | 'host-model-cache' // the same value, learned from an earlier session
+  | 'env-max-tokens' // CLAUDE_CODE_MAX_CONTEXT_TOKENS (unrecognized models only)
+  | 'model-string' // `[1m]` marker / known Anthropic family
 
 export interface ContextWindowInputs {
-  /** get_context_usage.maxTokens — the CLI's own effective window, already
-   *  min(model window, clamp). Exact; prefer it over everything. */
-  cliEffectiveWindow?: number | undefined
-  /** result.modelUsage[model].contextWindow — the CLI's RAW model window
-   *  (immune to the auto-compact clamp). */
-  cliRawWindow?: number | undefined
-  /** CLAUDE_CODE_AUTO_COMPACT_WINDOW as the CLI reports it (get_settings
-   *  effective.env). Process-wide, so it survives model switches. */
-  autoCompactWindow?: number | undefined
+  /** result.modelUsage[model].contextWindow — the CLI's resolved model window
+   *  for THIS session. Exact; prefer it over everything. */
+  cliModelWindow?: number | undefined
+  /** Same value learned earlier for this host+model (rememberModelWindow). */
+  hostModelWindow?: number | undefined
+  /** CLAUDE_CODE_MAX_CONTEXT_TOKENS as the CLI reports it (get_settings
+   *  effective.env). Applies to unrecognized models only — see the header. */
+  envMaxContextTokens?: number | undefined
   /** Full model string from init / get_settings.applied. */
   model?: string | undefined
   /** input + cache_creation + cache_read of the latest call. Only used to
@@ -74,6 +88,14 @@ export interface ResolvedContextWindow {
 const positive = (n: number | undefined): number | undefined =>
   typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : undefined
 
+/** Does the CLI recognize this as one of its own models? Only those ignore
+ *  CLAUDE_CODE_MAX_CONTEXT_TOKENS and carry an inferable window. */
+export function isRecognizedClaudeModel(model: string | undefined): boolean {
+  if (!model) return false
+  const lower = shortModelId(model).toLowerCase()
+  return /claude/.test(lower) || /\b(opus|sonnet|haiku|fable)\b/.test(lower)
+}
+
 /** Anthropic model ids are the only ones whose window we can infer from the
  *  string (the `[1m]` marker is a client-side opt-in the CLI honours; plain
  *  ids get the 200K default). Everything else — custom proxy models, OpenAI
@@ -81,10 +103,8 @@ const positive = (n: number | undefined): number | undefined =>
  *  and must come from the CLI. */
 function windowFromModelString(model: string | undefined, observedTokens?: number): number | undefined {
   if (!model) return undefined
-  const lower = model.toLowerCase()
-  if (lower.includes('[1m]')) return EXTENDED_WINDOW
-  const looksAnthropic = /claude/.test(lower) || /\b(opus|sonnet|haiku|fable)\b/.test(lower)
-  if (!looksAnthropic) return undefined
+  if (model.toLowerCase().includes('[1m]')) return EXTENDED_WINDOW
+  if (!isRecognizedClaudeModel(model)) return undefined
   // A resume can drop the `[1m]` suffix; tokens above the default prove the
   // session really is on the extended window (you cannot exceed the window).
   if (observedTokens != null && observedTokens > ANTHROPIC_DEFAULT_WINDOW) return EXTENDED_WINDOW
@@ -92,54 +112,41 @@ function windowFromModelString(model: string | undefined, observedTokens?: numbe
 }
 
 /**
- * Resolve the context% denominator, or null when nothing available justifies a
- * percentage (caller then shows the token count alone).
+ * Resolve the context% denominator (the model's absolute max window), or null
+ * when nothing available justifies a percentage — the caller then shows the
+ * token count alone.
  */
 export function resolveContextWindow(inputs: ContextWindowInputs): ResolvedContextWindow | null {
-  const clamp = positive(inputs.autoCompactWindow)
+  const own = positive(inputs.cliModelWindow)
+  if (own !== undefined) return { window: own, source: 'cli-model-usage' }
 
-  const effective = positive(inputs.cliEffectiveWindow)
-  if (effective !== undefined) return { window: effective, source: 'cli-effective' }
+  const cached = positive(inputs.hostModelWindow)
+  if (cached !== undefined) return { window: cached, source: 'host-model-cache' }
 
-  const raw = positive(inputs.cliRawWindow)
-  if (raw !== undefined) {
-    return clamp !== undefined
-      ? { window: Math.min(raw, clamp), source: 'raw-clamped' }
-      : { window: raw, source: 'cli-raw' }
+  // The CLI applies this variable to models it does not recognize, and ignores
+  // it for its own — mirror that exactly rather than trusting it everywhere.
+  const envMax = positive(inputs.envMaxContextTokens)
+  if (envMax !== undefined && !isRecognizedClaudeModel(inputs.model)) {
+    return { window: envMax, source: 'env-max-tokens' }
   }
 
   const guess = windowFromModelString(inputs.model, inputs.observedTokens)
-  if (guess !== undefined) {
-    return clamp !== undefined
-      ? { window: Math.min(guess, clamp), source: 'model-clamped' }
-      : { window: guess, source: 'model-string' }
-  }
+  if (guess !== undefined) return { window: guess, source: 'model-string' }
 
-  // Unknown model. The clamp is still an upper bound on the effective window,
-  // so it yields a real (if optimistic) percentage instead of nothing — and it
-  // is what get_context_usage will confirm seconds later whenever the model's
-  // raw window is the larger of the two, which is the common case for the
-  // proxy models this path exists for.
-  return clamp !== undefined ? { window: clamp, source: 'clamp-only' } : null
+  return null
 }
+
+const hostKey = (host: string | null | undefined): string => host ?? '__local__'
 
 /**
  * Last-seen auto-compact clamp per exec host.
  *
- * CLAUDE_CODE_AUTO_COMPACT_WINDOW is a property of the HOST's settings/env, not
- * of one CLI process, so the first session to read it can answer for every other
- * session on that host. Without this share, sessions that had not yet completed
- * a get_settings read divided by the raw window while their neighbours divided
- * by the clamp — live WS capture right after a server restart showed one
- * fable[1m] session reporting `window: 1000000` (20%) while another reported
- * `400000` (89%), which is the same jump this whole module exists to remove.
- *
- * A session's OWN read always wins; this is only the fallback for the window
- * before it lands. Keyed by host (null = local) so a remote daemon's clamp never
- * answers for the Mac's.
+ * No longer a denominator (see the header) but still shown to the user, and
+ * still worth sharing: CLAUDE_CODE_AUTO_COMPACT_WINDOW is a property of the
+ * HOST's settings/env, not of one CLI process, so the first session to read it
+ * can answer for every other session on that host.
  */
 const autoCompactByHost = new Map<string, number>()
-const hostKey = (host: string | null | undefined): string => host ?? '__local__'
 
 export function rememberAutoCompactWindow(host: string | null | undefined, window: number): void {
   if (Number.isFinite(window) && window > 0) autoCompactByHost.set(hostKey(host), window)
@@ -149,9 +156,52 @@ export function recallAutoCompactWindow(host: string | null | undefined): number
   return autoCompactByHost.get(hostKey(host))
 }
 
+/**
+ * Last-seen CLAUDE_CODE_MAX_CONTEXT_TOKENS per exec host. Same reasoning as the
+ * clamp cache: it is a host env value, so one session's read answers for all.
+ */
+const envMaxTokensByHost = new Map<string, number>()
+
+export function rememberEnvMaxContextTokens(host: string | null | undefined, tokens: number): void {
+  if (Number.isFinite(tokens) && tokens > 0) envMaxTokensByHost.set(hostKey(host), tokens)
+}
+
+export function recallEnvMaxContextTokens(host: string | null | undefined): number | undefined {
+  return envMaxTokensByHost.get(hostKey(host))
+}
+
+/**
+ * Absolute max window per host+model, learned from `result.modelUsage`.
+ *
+ * This is what removes the remaining ladder. The exact window only arrives at a
+ * turn END, so without a cache every session would spend its first turn on a
+ * string guess (or, for a proxy model, on no percentage at all) and then jump.
+ * Keyed by host too: the same alias can resolve differently on a remote daemon.
+ * A session's OWN reading always wins over the cache.
+ */
+const modelWindowByHostModel = new Map<string, number>()
+/** Normalized so one model can't occupy two slots. The writer sees the key
+ *  `result.modelUsage` used and the reader sees the init/applied string, and the
+ *  two differ by decoration: `openai.gpt-5.6-sol` vs `gpt-5.6-sol` missed the
+ *  cache on every model switch until both sides ran through shortModelId. */
+const modelKey = (host: string | null | undefined, model: string): string =>
+  `${hostKey(host)}::${shortModelId(model).toLowerCase()}`
+
+export function rememberModelWindow(host: string | null | undefined, model: string | undefined, window: number): void {
+  if (!model) return
+  if (Number.isFinite(window) && window > 0) modelWindowByHostModel.set(modelKey(host, model), window)
+}
+
+export function recallModelWindow(host: string | null | undefined, model: string | undefined): number | undefined {
+  if (!model) return undefined
+  return modelWindowByHostModel.get(modelKey(host, model))
+}
+
 /** Test seam only. */
-export function resetAutoCompactWindowCache(): void {
+export function resetContextWindowCaches(): void {
   autoCompactByHost.clear()
+  envMaxTokensByHost.clear()
+  modelWindowByHostModel.clear()
 }
 
 /** Region/partition prefixes Bedrock-style model ids carry. */

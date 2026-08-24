@@ -42,10 +42,12 @@ export interface SessionRecord {
   /** TRUE runtime effort the CLI actually uses (read back via get_settings). Reflects
    *  env override + model downgrade. Undefined until first read-back. Badge prefers this. */
   effectiveEffort?: import('@open-walnut/core').SessionEffort;
-  /** The CLI's effective context window (min(model window, auto-compact clamp)),
-   *  persisted by the server. Lets a freshly-loaded page compute the context
-   *  badge from history tokens without guessing from the model string. */
-  contextWindow?: number;
+  /** The model's absolute max context window, persisted by the server. Lets a
+   *  freshly-loaded page compute the context badge from history tokens without
+   *  guessing from the model string. */
+  modelMaxWindow?: number;
+  /** Where this session auto-compacts, when below modelMaxWindow. */
+  autoCompactAt?: number;
   /** Archived — hidden from UI but data preserved. */
   archived?: boolean;
   /** Why this session was archived (e.g. "plan_executed", user-provided reason). */

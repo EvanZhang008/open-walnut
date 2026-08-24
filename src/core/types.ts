@@ -1608,14 +1608,18 @@ export interface SessionRecord {
    *  default). Undefined until the first successful read-back (or on an old CLI that
    *  doesn't answer get_settings). May legitimately differ from `effort` (= override). */
   effectiveEffort?: SessionEffort;
-  /** The CLI's EFFECTIVE context window — min(model window,
-   *  CLAUDE_CODE_AUTO_COMPACT_WINDOW), read from get_context_usage.maxTokens.
+  /** The model's ABSOLUTE max context window (the context% denominator).
    *  Persisted so a freshly-loaded page can turn the last assistant message's
    *  token count into a percentage WITHOUT guessing from the model string: a
    *  custom proxy model (e.g. one served through a local Bedrock proxy) carries
    *  no `[1m]` marker, so the string tells the UI nothing and the badge would
    *  otherwise sit blank until the session's next turn. */
-  contextWindow?: number;
+  modelMaxWindow?: number;
+  /** Where this session will auto-compact (min(model window,
+   *  CLAUDE_CODE_AUTO_COMPACT_WINDOW)), when that is BELOW modelMaxWindow.
+   *  Reported next to the percentage rather than folded into it — a compaction
+   *  setting is not a property of the model. */
+  autoCompactAt?: number;
   /** Archived — hidden from UI but data preserved. */
   archived?: boolean;
   /** Why this session was archived (e.g. "plan_executed", user-provided reason). */
