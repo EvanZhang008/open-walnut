@@ -33,6 +33,15 @@
  *                "this folder is split from its tasks", which is not a band
  *                boundary, just a broken-looking folder.
  *
+ * 4. **A GROUP IS ONE UNIT TOO, in BOTH modes.** Same reasoning as a folder, but
+ *    it needs its own rule because a group's members are ordinary cards, so in
+ *    custom mode a line CAN anchor to one. Reported 2026-08-24: a card that joined
+ *    a group carried the line in with it (the line was anchored to that card), and
+ *    the cluster ended up straddling the line — members the user had put above it
+ *    were suddenly below it. So a resolved position that falls between two members
+ *    of one group is pushed down to the boundary BELOW that group: everything the
+ *    user had already put above the line stays above it.
+ *
  * Placement is pure so the renderer can call it with the live drag preview
  * substituted in and get the exact frame it will commit.
  */
@@ -85,20 +94,47 @@ export function isSeparatorId(id: string): boolean {
 }
 
 /**
+ * The nearest slot that is not INSIDE a group's member run.
+ *
+ * `rows` is the card order (no sentinels), `index` a slot (0 = above the first
+ * card, rows.length = below the last). A slot is inside a run when the cards on
+ * both sides of it belong to the same group; such a slot is pushed DOWN to the
+ * boundary below that run, so members already above the line stay above it.
+ *
+ * Members are contiguous by construction (the tier order clusters them), but the
+ * walk doesn't rely on that: it follows the run from the slot outward.
+ */
+export function snapSlotOutOfGroup(
+  rows: string[],
+  index: number,
+  groupOf: (id: string) => string | null,
+): number {
+  const i = Math.max(0, Math.min(index, rows.length));
+  if (i === 0 || i === rows.length) return i; // the ends are never inside anything
+  const gid = groupOf(rows[i - 1]);
+  if (!gid || groupOf(rows[i]) !== gid) return i;
+  let end = i;
+  while (end < rows.length && groupOf(rows[end]) === gid) end++;
+  return end;
+}
+
+/**
  * Resolve every separator of one tier+mode into render positions.
  *
  * `ids` is the tier's RENDER order (task ids, possibly with `group:*` sentinels
  * mixed in — those are skipped). `projectOf` returns a task's project ('' for
- * Inbox) or null when the id isn't a task.
+ * Inbox) or null when the id isn't a task. `groupOf` returns a task's group id or
+ * null; without it a line can land between two members of one group and split it.
  */
 export function placeSeparators(opts: {
   ids: string[];
   projectOf: (id: string) => string | null;
+  groupOf?: (id: string) => string | null;
   tier: string;
   mode: SeparatorMode;
   separators: TierSeparator[];
 }): SeparatorPlacement {
-  const { ids, projectOf, tier, mode, separators } = opts;
+  const { ids, projectOf, groupOf = () => null, tier, mode, separators } = opts;
   const above = new Map<string, TierSeparator[]>();
   const aboveProject = new Map<string, TierSeparator[]>();
   const tail: TierSeparator[] = [];
@@ -147,14 +183,21 @@ export function placeSeparators(opts: {
       continue;
     }
 
-    if (sep.before && taskIds.includes(sep.before)) { push(above, sep.before, sep); continue; }
-    const afterIdx = sep.after ? taskIds.indexOf(sep.after) : -1;
-    if (afterIdx !== -1) {
-      const next = taskIds[afterIdx + 1];
-      if (next) push(above, next, sep); else tail.push(sep);
-      continue;
+    // Resolve to a SLOT (the gap the line occupies), so the group snap below has
+    // one thing to correct — the ladder is: the card below it, then the card above
+    // it, then the end of the list.
+    let slot: number | null = null;
+    if (sep.before) {
+      const bi = taskIds.indexOf(sep.before);
+      if (bi !== -1) slot = bi;
     }
-    tail.push(sep);
+    if (slot === null && sep.after) {
+      const ai = taskIds.indexOf(sep.after);
+      if (ai !== -1) slot = ai + 1;
+    }
+    if (slot === null) { tail.push(sep); continue; }
+    slot = snapSlotOutOfGroup(taskIds, slot, groupOf);
+    if (slot >= taskIds.length) tail.push(sep); else push(above, taskIds[slot], sep);
   }
 
   return { above, aboveProject, tail };

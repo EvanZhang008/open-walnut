@@ -18,6 +18,7 @@ import {
   placeSeparators,
   projectAnchorsForSlot,
   removeSeparator,
+  snapSlotOutOfGroup,
   upsertSeparator,
   type TierSeparator,
 } from '../../web/src/components/tasks/tier-separators';
@@ -196,6 +197,111 @@ describe('placeSeparators — project mode (a folder is one unit)', () => {
       separators: [{ id: 'old', tier: 'focus', mode: 'project', project: 'ghost', after: 't9', before: '' }],
     });
     expect(p.tail.map((s) => s.id)).toEqual(['old']);
+  });
+});
+
+describe('a group is one unit (reported 2026-08-24: a joining card split the cluster)', () => {
+  // Focus order: g1 g2 g3 are one group, x and y are loose cards.
+  const ids = ['x', 'g1', 'g2', 'g3', 'y'];
+  const projectOf = lookup({ x: 'p', g1: 'p', g2: 'p', g3: 'p', y: 'p' });
+  const groupOf = (id: string) => (id.startsWith('g') ? 'grp' : null);
+
+  it('a line anchored to a MIDDLE member drops below the whole group', () => {
+    const p = placeSeparators({
+      ids, projectOf, groupOf, tier: 'focus', mode: 'custom',
+      separators: [sep({ after: 'g1', before: 'g2' })],
+    });
+    expect(p.above.get('y')?.map((s) => s.id)).toEqual(['sep_1']);
+    expect(p.above.get('g2'), 'never between two members').toBeUndefined();
+  });
+
+  it('a line anchored to the LAST member also drops below the group', () => {
+    const p = placeSeparators({
+      ids, projectOf, groupOf, tier: 'focus', mode: 'custom',
+      separators: [sep({ after: 'g2', before: 'g3' })],
+    });
+    expect(p.above.get('y')?.map((s) => s.id)).toEqual(['sep_1']);
+  });
+
+  it('a line above the group\'s FIRST member stays there — that IS the top boundary', () => {
+    const p = placeSeparators({
+      ids, projectOf, groupOf, tier: 'focus', mode: 'custom',
+      separators: [sep({ after: 'x', before: 'g1' })],
+    });
+    expect(p.above.get('g1')?.map((s) => s.id)).toEqual(['sep_1']);
+  });
+
+  it('a line below the whole group is left alone', () => {
+    const p = placeSeparators({
+      ids, projectOf, groupOf, tier: 'focus', mode: 'custom',
+      separators: [sep({ after: 'g3', before: 'y' })],
+    });
+    expect(p.above.get('y')?.map((s) => s.id)).toEqual(['sep_1']);
+  });
+
+  it('a group at the very END pushes the line to the tier tail, not inside it', () => {
+    const tailIds = ['x', 'g1', 'g2'];
+    const p = placeSeparators({
+      ids: tailIds, projectOf, groupOf, tier: 'focus', mode: 'custom',
+      separators: [sep({ after: 'g1', before: 'g2' })],
+    });
+    expect(p.tail.map((s) => s.id)).toEqual(['sep_1']);
+    expect(p.above.size).toBe(0);
+  });
+
+  it('the `after`-only fallback also snaps out', () => {
+    const p = placeSeparators({
+      ids, projectOf, groupOf, tier: 'focus', mode: 'custom',
+      separators: [sep({ after: 'g1', before: 'deleted' })],
+    });
+    expect(p.above.get('y')?.map((s) => s.id)).toEqual(['sep_1']);
+  });
+
+  it('two ADJACENT groups keep their own boundary between them', () => {
+    const twoIds = ['a1', 'a2', 'b1', 'b2'];
+    const twoProj = lookup({ a1: 'p', a2: 'p', b1: 'p', b2: 'p' });
+    const twoGroups = (id: string) => (id.startsWith('a') ? 'ga' : 'gb');
+    const p = placeSeparators({
+      ids: twoIds, projectOf: twoProj, groupOf: twoGroups, tier: 'focus', mode: 'custom',
+      separators: [sep({ after: 'a2', before: 'b1' })],
+    });
+    expect(p.above.get('b1')?.map((s) => s.id)).toEqual(['sep_1']);
+  });
+
+  it('without groupOf nothing snaps — the default keeps old callers exact', () => {
+    const p = placeSeparators({
+      ids, projectOf, tier: 'focus', mode: 'custom',
+      separators: [sep({ after: 'g1', before: 'g2' })],
+    });
+    expect(p.above.get('g2')?.map((s) => s.id)).toEqual(['sep_1']);
+  });
+});
+
+describe('snapSlotOutOfGroup', () => {
+  const rows = ['x', 'g1', 'g2', 'g3', 'y'];
+  const groupOf = (id: string) => (id.startsWith('g') ? 'grp' : null);
+
+  it('a slot inside a run moves to the slot after the run', () => {
+    expect(snapSlotOutOfGroup(rows, 2, groupOf)).toBe(4);
+    expect(snapSlotOutOfGroup(rows, 3, groupOf)).toBe(4);
+  });
+  it('the run\'s own boundaries are already legal', () => {
+    expect(snapSlotOutOfGroup(rows, 1, groupOf)).toBe(1);
+    expect(snapSlotOutOfGroup(rows, 4, groupOf)).toBe(4);
+  });
+  it('the ends of the list are never inside anything', () => {
+    expect(snapSlotOutOfGroup(rows, 0, groupOf)).toBe(0);
+    expect(snapSlotOutOfGroup(rows, rows.length, groupOf)).toBe(rows.length);
+  });
+  it('clamps out-of-range slots', () => {
+    expect(snapSlotOutOfGroup(rows, 99, groupOf)).toBe(5);
+    expect(snapSlotOutOfGroup(rows, -3, groupOf)).toBe(0);
+  });
+  it('ungrouped neighbours are untouched', () => {
+    expect(snapSlotOutOfGroup(['a', 'b', 'c'], 2, () => null)).toBe(2);
+  });
+  it('two members of DIFFERENT groups are a legal boundary', () => {
+    expect(snapSlotOutOfGroup(['a1', 'b1'], 1, (id) => (id[0] === 'a' ? 'ga' : 'gb'))).toBe(1);
   });
 });
 

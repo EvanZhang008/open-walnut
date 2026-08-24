@@ -1,4 +1,5 @@
-import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, memo, Fragment, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
+import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, memo, Fragment, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
 import type { Task as CoreTask, SessionRecord } from '@open-walnut/core';
@@ -29,6 +30,7 @@ import {
   placeSeparators,
   projectAnchorsForSlot,
   removeSeparator,
+  snapSlotOutOfGroup,
   upsertSeparator,
   type SeparatorMode,
   type TierSeparator,
@@ -1224,6 +1226,11 @@ const snapToCursor: Modifier = ({ activatorEvent, draggingNodeRect, transform })
 // latest coords in a module ref the drag handlers read. Module-level (not React
 // state) so it never triggers a re-render — the React #185 loop guard the DnD
 // code is littered with depends on dragOver NOT churning state.
+/** Height of the unpin strip that overlays the bottom of the pinned area during a
+ *  card drag. Deep enough to be an easy target, shallow enough that the tier rows
+ *  it covers are still readable while aiming. */
+const UNPIN_ZONE_H = 46;
+
 const livePointer = { x: 0, y: 0 };
 function trackPointer(e: PointerEvent) { livePointer.x = e.clientX; livePointer.y = e.clientY; }
 
@@ -3222,6 +3229,43 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // handler's dep array would read a const in its temporal dead zone.
   const requestMoveTaskRef = useRef<typeof requestMoveTask | null>(null);
 
+  // ── Unpin-by-drag ── `unpinZone` drives the portalled strip (null = no strip),
+  // `unpinRectRef` is the same rect for the drop test in a handler that runs after
+  // state has been torn down, `unpinHot` is the armed look.
+  const pinnedWrapperRef = useRef<HTMLDivElement>(null);
+  const unpinRectRef = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [unpinZone, setUnpinZone] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [unpinHot, setUnpinHot] = useState(false);
+  /** True when (x, y) is inside the strip. One place, so the armed look and the
+   *  drop decision can never disagree. */
+  const overUnpinZone = useCallback((x: number, y: number) => {
+    const r = unpinRectRef.current;
+    return !!r && x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height;
+  }, []);
+  // Arm/disarm from the pointer itself rather than from dnd-kit's collisions: the
+  // strip is deliberately NOT a droppable, so closestCenter can never award it a
+  // drop the user aimed at a card near the bottom of a tier.
+  useEffect(() => {
+    if (!unpinZone) return;
+    let raf = 0;
+    let x = 0;
+    let y = 0;
+    const apply = () => {
+      raf = 0;
+      const hot = overUnpinZone(x, y);
+      setUnpinHot((prev) => (prev === hot ? prev : hot));
+    };
+    const onMove = (e: PointerEvent) => {
+      x = e.clientX; y = e.clientY;
+      if (!raf) raf = requestAnimationFrame(apply);
+    };
+    window.addEventListener('pointermove', onMove, { passive: true });
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [unpinZone, overUnpinZone]);
+
   const handlePinnedDragStart = useCallback((event: DragStartEvent) => {
     // Freeze the CLUSTERED order (what's on screen) — not the raw pin order — so the
     // frozen refs match the rendered list and grouped members sit contiguously (a
@@ -3274,6 +3318,22 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
 
     setActiveDragPinnedId(activeId);
+    // ── The way OUT of the pinned area ── Dragging a card IN (from Recent, from
+    // another tier) had no reverse: unpinning lived only in a card menu. A strip
+    // appears over the bottom of the pinned area for the duration of the drag.
+    // Its rect is captured ONCE here and the strip is portalled at fixed coords:
+    // adding a real element to the wrapper mid-drag would reflow the lists and
+    // dnd-kit's measured rects with them, which reads as every card jumping.
+    // Only for a single PINNED card — a Recent-origin card isn't pinned yet, and a
+    // whole-group sentinel would turn one gesture into N unpins.
+    if (!isGroupSentinel(activeId) && pinnedTaskIds?.has(activeId) && onUnpinTask) {
+      const r = pinnedWrapperRef.current?.getBoundingClientRect();
+      if (r && r.height > UNPIN_ZONE_H * 2) {
+        const rect = { left: r.left, top: r.bottom - UNPIN_ZONE_H, width: r.width, height: UNPIN_ZONE_H };
+        unpinRectRef.current = rect;
+        setUnpinZone(rect);
+      }
+    }
     // Track the live cursor so dragOver/End can highlight "join group" when hovering
     // a card (Pin tiers have no subtasks → the whole card is the group zone).
     window.addEventListener('pointermove', trackPointer, { passive: true });
@@ -3288,7 +3348,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const pe = event.activatorEvent as PointerEvent | undefined;
       dragBus.begin({ kind: 'task', task: busTask }, pe?.clientX !== undefined ? { x: pe.clientX, y: pe.clientY } : undefined);
     }
-  }, [focusTasksLocal, satelliteTasksLocal, backlogTasksLocal, waitTasksLocal, customTiers, customTasksLocal, recentDraggableIds, pinnedTaskMap, clusterForTier]);
+  }, [focusTasksLocal, satelliteTasksLocal, backlogTasksLocal, waitTasksLocal, customTiers, customTasksLocal, recentDraggableIds, pinnedTaskMap, clusterForTier, pinnedTaskIds, onUnpinTask]);
 
   // Shared live-drag tier accessors: dragTierIdsRef is the live state during a
   // drag with the frozen snapshot as fallback. `findTierOf` answers "which tier
@@ -3448,6 +3508,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     window.removeEventListener('pointermove', trackPointer);
     dropIntentRef.current = null;
     setGroupTargetId((prev) => (prev === null ? prev : null));
+    unpinRectRef.current = null;
+    setUnpinZone(null);
+    setUnpinHot(false);
   }, []);
 
   const handlePinnedDragCancel = useCallback(() => {
@@ -3466,6 +3529,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
     const { active, over } = event;
     const snap = dragStartSnapshot.current;
+
+    // Released on the unpin strip → the card leaves the pinned area, and NOTHING
+    // else applies (no retier, no reorder, no group join). Decided from the pointer,
+    // for the reason in the effect above; `livePointer` holds the last move, which
+    // is where the release happened.
+    if (overUnpinZone(livePointer.x, livePointer.y)) {
+      const dropped = active.id as string;
+      clearDragState();
+      if (!isGroupSentinel(dropped)) onUnpinTask?.(dropped);
+      return;
+    }
 
     // Capture live tier positions BEFORE clearing — handlePinnedDragOver may have
     // moved the active item cross-tier during drag. We need these to persist the
@@ -3766,7 +3840,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     );
     maybeMoveProject(origTier, reorderedTier);
     onReorderPinned?.(taskIdsOnly(newOrder));
-  }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError]);
+  }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, onUnpinTask, overUnpinZone, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError]);
 
   // Project chips for ViewDropdown, in the flat config order. Inbox rides along as
   // INBOX_TAB (a sentinel chip) whenever any task has no project — '' is the All chip.
@@ -5451,6 +5525,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const r = rows[i].el.getBoundingClientRect();
       if (clientY < r.top + r.height / 2) { idx = i; break; }
     }
+    // A group is one unit here too, so a drop inside a cluster snaps below it. Done
+    // on the SLOT (not just at render time) so the stored anchors are already
+    // outside the group — otherwise the line's position would depend on the snap
+    // forever and would jump the day that group dissolves.
+    idx = snapSlotOutOfGroup(ids, idx, (id) => pinnedTaskMap.get(id)?.group_id ?? null);
     return { tier, mode, ...anchorsForSlot(ids, idx) };
   }, [sepModeFor, pinnedTaskMap]);
 
@@ -5593,6 +5672,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const sepPlacement = placeSeparators({
       ids,
       projectOf: (id) => { const t = pinnedTaskMap.get(id); return t ? (t.project || '') : null; },
+      // A group is one unit: without this a line anchored to a card that later
+      // joined a cluster ends up between two members and splits it.
+      groupOf: (id) => pinnedTaskMap.get(id)?.group_id ?? null,
       tier,
       mode: sepMode,
       separators: sepList,
@@ -5984,6 +6066,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       {(anyTierVisible || recentVisible) && (visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0 || hiddenPinnedGroups.length > 0) && (
         <DndContext sensors={pinnedSensors} collisionDetection={closestCenter} onDragStart={handlePinnedDragStart} onDragOver={handlePinnedDragOver} onDragEnd={handlePinnedDragEnd} onDragCancel={handlePinnedDragCancel}>
           <div
+            ref={pinnedWrapperRef}
             className={`todo-pinned-wrapper${isAll ? '' : ' todo-pinned-wrapper-solo'}`}
             style={
               // Single-section view: this region IS the panel — take all the height.
@@ -6301,6 +6384,21 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           )}
 
           </div>
+          {/* The way out of the pinned area — see handlePinnedDragStart. Portalled at
+              fixed coords over the wrapper's bottom edge so it costs the lists no
+              reflow, and deliberately not a droppable: the pointer decides, so a card
+              aimed at the last row of a tier can't be unpinned by a stray collision. */}
+          {unpinZone && createPortal(
+            <div
+              className={`todo-unpin-zone${unpinHot ? ' todo-unpin-zone-hot' : ''}`}
+              data-testid="unpin-drop-zone"
+              style={{ left: unpinZone.left, top: unpinZone.top, width: unpinZone.width, height: unpinZone.height }}
+            >
+              <span className="todo-unpin-zone-icon" aria-hidden="true">↧</span>
+              <span>{unpinHot ? 'Release to unpin' : 'Drop here to unpin'}</span>
+            </div>,
+            document.body,
+          )}
           {/* Floating preview card during cross-container drag */}
           <DragOverlay dropAnimation={null}>
             {activeDragPinnedTask && (

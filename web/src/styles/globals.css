@@ -12459,6 +12459,39 @@ body.walnut-dragging {
   opacity: 1;
 }
 
+/* ── Unpin strip — the way OUT of the pinned area, shown only mid-drag ──
+   Portalled to <body> at fixed coords over the bottom of the pinned area, so it
+   adds no layout to the tier lists while a drag is measuring them. pointer-events
+   off: the drop is decided from the pointer position, and swallowing the pointer
+   would break the drag it is trying to serve. */
+.todo-unpin-zone {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  pointer-events: none;
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  backdrop-filter: blur(3px);
+  color: var(--fg-muted);
+  font-size: 12px;
+  transition: color 90ms ease, border-color 90ms ease, background 90ms ease;
+}
+
+.todo-unpin-zone-icon { font-size: 14px; line-height: 1; }
+
+/* Armed: the pointer is inside, so releasing WILL unpin. Warm border + text
+   because this drop is the one that removes the card from the tiers. */
+.todo-unpin-zone-hot {
+  border-style: solid;
+  border-color: var(--danger, #e5484d);
+  color: var(--danger, #e5484d);
+  background: color-mix(in srgb, var(--danger, #e5484d) 12%, var(--bg-elevated));
+}
+
 /* ── Tier separators — a hand-placed divider line inside a pinned tier ──
    Deliberately almost nothing: one hairline, a wider invisible hit area so it can
    be grabbed without pixel hunting, and a delete "x" that only appears on hover.
