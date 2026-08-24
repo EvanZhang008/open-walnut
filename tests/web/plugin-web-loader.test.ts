@@ -113,6 +113,49 @@ describe('native Web Plugin loader', () => {
     expect(pluginUiRegistry.getSnapshot().settings).toEqual([])
   })
 
+  it('carries a declared App placement into the registry and takes the row away with the owner', async () => {
+    vi.mocked(apiGet).mockResolvedValue(response('placement-hash'))
+    setWebPluginImporterForTesting(async () => ({
+      activate(api: WalnutWebApiHost) {
+        api.ui.app({ id: 'main', title: 'Sample', component: Component, placement: 'settings' })
+      },
+    }))
+
+    await refreshWebPlugins()
+
+    expect(appRegistry.getSnapshot().apps).toEqual([
+      expect.objectContaining({ key: 'sample:main', placement: 'settings' }),
+    ])
+
+    // The Settings row is owner-scoped like every other contribution, so a disable
+    // or uninstall removes it with no extra bookkeeping.
+    vi.mocked(apiGet).mockResolvedValue(response(null))
+    await refreshWebPlugins()
+    expect(appRegistry.getSnapshot().apps).toEqual([])
+  })
+
+  it('isolates an App that asks for a placement no surface renders', async () => {
+    vi.mocked(apiGet).mockResolvedValue(response('bad-placement-hash'))
+    setWebPluginImporterForTesting(async () => ({
+      activate(api: WalnutWebApiHost) {
+        api.ui.app({
+          id: 'main',
+          title: 'Sample',
+          component: Component,
+          placement: 'toolbar' as 'settings',
+        })
+      },
+    }))
+
+    await refreshWebPlugins()
+
+    expect(getWebPluginRuntimeSnapshot().errors).toEqual([{
+      id: 'sample',
+      error: 'Plugin App placement must be one of sidebar, settings',
+    }])
+    expect(appRegistry.getSnapshot().apps).toEqual([])
+  })
+
   it('reloads exactly one owner when its build hash changes', async () => {
     const cleanups: Array<ReturnType<typeof vi.fn>> = []
     let activations = 0

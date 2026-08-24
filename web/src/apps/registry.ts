@@ -5,6 +5,17 @@ import { disposable } from '@/plugins/disposable'
 export type AppBadge = number | 'dot' | null
 export type AppKind = 'core' | 'native' | 'webview'
 
+/**
+ * WHERE an app's entry row lives. One registry, two consumers: the Sidebar renders
+ * `'sidebar'` apps, the Settings "Manage" group renders `'settings'` apps. Everything
+ * else about an app is placement-blind — same route, same deep links, same Command
+ * Palette entry, same owner lifecycle — so moving an app between surfaces can never
+ * change what it can do.
+ */
+export type AppPlacement = 'sidebar' | 'settings'
+
+export const APP_PLACEMENTS: readonly AppPlacement[] = ['sidebar', 'settings']
+
 export interface AppComponentProps {
   basePath: string
   subpath: string
@@ -20,6 +31,8 @@ export interface AppContribution {
   badge?: AppBadge
   order?: number
   fullBleed?: boolean
+  /** Default 'sidebar', so every plugin written before this field keeps its row. */
+  placement?: AppPlacement
 }
 
 export interface CoreAppContribution {
@@ -48,6 +61,7 @@ export interface RegisteredApp {
   badge: AppBadge
   order: number
   fullBleed: boolean
+  placement: AppPlacement
   persistent: boolean
   lockVisibility: boolean
   generation: number
@@ -87,6 +101,19 @@ function assertBadge(value: AppBadge): void {
   }
 }
 
+/**
+ * A typo here would be silent — an unknown placement matches no consumer's filter, so
+ * the app would register successfully and then appear NOWHERE. Refusing the value is
+ * the only way the author finds out.
+ */
+function resolvePlacement(value: AppPlacement | undefined): AppPlacement {
+  if (value === undefined) return 'sidebar'
+  if (!APP_PLACEMENTS.includes(value)) {
+    throw new Error(`App placement must be one of ${APP_PLACEMENTS.join(', ')}`)
+  }
+  return value
+}
+
 export class AppRegistry {
   private readonly entries = new Map<string, AppEntry>()
   private readonly listeners = new Set<() => void>()
@@ -108,6 +135,9 @@ export class AppRegistry {
       badge: null,
       order: contribution.order ?? 100,
       fullBleed: contribution.fullBleed ?? false,
+      // Core screens are the Sidebar; there is no reason for one to opt out, and
+      // giving them the choice would only add a way to lose Chat or Home.
+      placement: 'sidebar',
       persistent: contribution.persistent ?? false,
       lockVisibility: contribution.lockVisibility ?? false,
     })
@@ -115,6 +145,7 @@ export class AppRegistry {
 
   registerPlugin(pluginId: string, pluginName: string, contribution: AppContribution): AppHandle {
     assertBadge(contribution.badge ?? null)
+    const placement = resolvePlacement(contribution.placement)
     const routeId = pluginRouteId(pluginId, contribution.id)
     return this.register({
       key: `${pluginId}:${contribution.id}`,
@@ -129,6 +160,7 @@ export class AppRegistry {
       badge: contribution.badge ?? null,
       order: contribution.order ?? 500,
       fullBleed: contribution.fullBleed ?? true,
+      placement,
       persistent: false,
       lockVisibility: false,
       pluginId,
@@ -239,6 +271,8 @@ export function adaptWebviewApps(apps: PluginApp[]): RegisteredApp[] {
       badge: null,
       order: 500 + index,
       fullBleed: true,
+      // A legacy webview has no way to ask for anything else.
+      placement: 'sidebar',
       persistent: false,
       lockVisibility: false,
       generation: 0,

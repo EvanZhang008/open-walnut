@@ -10,9 +10,10 @@ import { test, expect, type Page } from '@playwright/test'
  * The fixture server installs no plugins, so this pins the two behaviors that
  * must hold on a stock install:
  *
- *   1. Zero plugins = zero sidebar noise. No divider, no `/apps/…` link, and the
- *      column is still exactly the core nine. (The declutter spec owns the label
- *      list; here we assert the app group specifically stays empty.)
+ *   1. Zero plugins = zero noise on EITHER entry surface. No divider, no `/apps/…`
+ *      link, the column is still exactly the core nine, and Settings → Manage carries
+ *      no App row. (The declutter spec owns the label list; here we assert the app
+ *      group specifically stays empty.)
  *   2. An unknown app id answers with a friendly card, never a raw error and
  *      never a bounce to home through the router's catch-all. A dead-end errno
  *      in the UI is a bug, not a diagnosis.
@@ -59,6 +60,12 @@ test('with no plugins installed the sidebar carries no app entries', async ({ pa
   expect(labels).toEqual([
     'Chat', 'Todo', 'Agenda', 'Home', 'Tasks', 'Notes', 'Calendar', 'Routines', 'Settings',
   ])
+
+  // The other entry surface stays empty too: an App only reaches Settings → Manage by
+  // asking for `placement: 'settings'`, so zero plugins must mean zero extra rows.
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await expect(page.getByTestId('settings-nav-agents')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.settings-nav [data-testid^="settings-nav-app-"]')).toHaveCount(0)
 })
 
 test('an unknown app id shows the not-found card, not a crash or a redirect home', async ({ page }) => {

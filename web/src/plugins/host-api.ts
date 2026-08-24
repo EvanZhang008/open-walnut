@@ -4,7 +4,7 @@ import { wsClient } from '@/api/ws'
 import { getAppInfo } from '@/utils/app-info'
 import { log } from '@/utils/log'
 import { disposable, type WebPluginContext } from './disposable'
-import { appRegistry, type AppBadge, type AppContribution } from '@/apps/registry'
+import { APP_PLACEMENTS, appRegistry, type AppBadge, type AppContribution } from '@/apps/registry'
 import { pluginUiRegistry } from './registry'
 import { createPluginViews } from './views'
 import type {
@@ -220,6 +220,11 @@ export function createWebPluginApi(
         validateAppBadge(contribution.badge)
         if (contribution.order !== undefined && !Number.isFinite(contribution.order)) {
           throw new Error('Plugin App order must be finite')
+        }
+        // The registry validates it too; failing here names the CONTRIBUTION rather
+        // than a registry internal, which is what the author is looking at.
+        if (contribution.placement !== undefined && !APP_PLACEMENTS.includes(contribution.placement)) {
+          throw new Error(`Plugin App placement must be one of ${APP_PLACEMENTS.join(', ')}`)
         }
         return own(appRegistry.registerPlugin(pluginId, pluginName, contribution))
       },

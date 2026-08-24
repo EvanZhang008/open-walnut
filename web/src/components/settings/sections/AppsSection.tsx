@@ -47,14 +47,21 @@ export function AppsSection() {
             >
               <div className="app-manager-copy">
                 <strong>{app.title}</strong>
-                <span>{app.kind === 'core' ? 'Core App' : app.kind === 'native' ? 'Native Plugin App' : 'Webview App'}</span>
+                {/* Where its row lives is part of what this app IS, and without it a
+                    settings-placed app reads as missing from the sidebar. */}
+                <span>
+                  {app.kind === 'core' ? 'Core App' : app.kind === 'native' ? 'Native Plugin App' : 'Webview App'}
+                  {app.placement === 'settings' ? ' · row in Settings → Manage' : ''}
+                </span>
                 <code>{app.path}</code>
               </div>
               <div className="app-manager-actions">
                 <button type="button" className="btn btn-secondary" onClick={() => navigate(app.path)}>
                   Open
                 </button>
-                {!app.lockVisibility && state === 'pinned' && (
+                {/* Pinning is about the SIDEBAR, so a settings-placed app gets no
+                    pin control: the button would report a state nothing reads. */}
+                {app.placement !== 'settings' && !app.lockVisibility && state === 'pinned' && (
                   <button
                     type="button"
                     className="btn btn-secondary"
@@ -64,7 +71,7 @@ export function AppsSection() {
                     Unpin
                   </button>
                 )}
-                {!app.lockVisibility && state === 'unpinned' && (
+                {app.placement !== 'settings' && !app.lockVisibility && state === 'unpinned' && (
                   <button
                     type="button"
                     className="btn btn-secondary"

@@ -22,6 +22,7 @@ const app = hostApi.ui.app({
   title: 'Example',
   component: () => null,
   badge: 'dot',
+  placement: 'settings',
 })
 const appPath: string = app.path
 app.setBadge(3)

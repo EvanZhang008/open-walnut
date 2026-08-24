@@ -15,7 +15,11 @@ export function AppHostPage() {
 
   if (!app) {
     if (!runtime.ready || runtime.loading || catalog.loadingWebviews) return <LoadingSpinner />
-    return <Navigate to="/" replace />
+    // A bookmark to a disabled or uninstalled App must SAY so. Bouncing to Home
+    // silently is the dead-end answer this repo keeps banning: the user is left
+    // wondering whether they mistyped, whether the App broke, or whether Walnut
+    // did. PluginAppPage owns that card already, for the legacy Webview case.
+    return <PluginAppPage />
   }
   if (app.kind === 'webview') return <PluginAppPage />
   if (app.kind !== 'native' || !app.component || !app.pluginId) return <Navigate to="/" replace />

@@ -105,6 +105,34 @@ describe('App Registry', () => {
     ])
   })
 
+  it('defaults a Plugin App to the Sidebar and refuses an unknown placement', () => {
+    registry.registerPlugin('plugin-a', 'Plugin A', {
+      id: 'main', title: 'Sidebar by default', component: Component,
+    })
+    registry.registerPlugin('plugin-b', 'Plugin B', {
+      id: 'main', title: 'Settings row', component: Component, placement: 'settings',
+    })
+    registry.registerCore({
+      id: 'tasks', title: 'Tasks', path: '/tasks', component: Component,
+    })
+
+    expect(registry.getSnapshot().apps.map((app) => [app.key, app.placement])).toEqual([
+      ['core:tasks', 'sidebar'],
+      ['plugin-a:main', 'sidebar'],
+      ['plugin-b:main', 'settings'],
+    ])
+
+    // An unknown placement matches no consumer's filter, so a typo would register
+    // an app that appears nowhere. It has to fail loudly instead.
+    expect(() => registry.registerPlugin('plugin-c', 'Plugin C', {
+      id: 'main',
+      title: 'Nowhere',
+      component: Component,
+      placement: 'sidebbar' as 'sidebar',
+    })).toThrow('App placement must be one of sidebar, settings')
+    expect(registry.getSnapshot().apps.map((app) => app.key)).not.toContain('plugin-c:main')
+  })
+
   it('adapts legacy Webviews into the same descriptor contract without claiming Native routes', () => {
     const adapted = adaptWebviewApps([
       {
@@ -123,6 +151,7 @@ describe('App Registry', () => {
         routeId: 'legacy-app',
         path: '/apps/legacy-app',
         title: 'Legacy App',
+        placement: 'sidebar',
       }),
     ])
   })

@@ -13,6 +13,9 @@ export interface PluginAppProps {
   navigate(path: string, options?: { replace?: boolean }): void
 }
 
+/** Which surface carries the App's entry row. See packages/plugin-api web.ts. */
+export type PluginAppPlacement = 'sidebar' | 'settings'
+
 export interface PluginAppContribution {
   id: string
   title: string
@@ -21,6 +24,7 @@ export interface PluginAppContribution {
   badge?: PluginAppBadge
   order?: number
   fullBleed?: boolean
+  placement?: PluginAppPlacement
 }
 
 export interface PluginAppHandle extends Disposable {

@@ -295,15 +295,16 @@ Contribution fields:
 - **`badge`**: initial badge, either a non-negative integer, `'dot'`, or `null`.
 - **`order`**: sort weight in the Sidebar. Core Apps occupy 10 to 1000, and plugin Apps default to 500.
 - **`fullBleed`**: whether the App paints its own full surface. Plugin Apps default to `true`.
+- **`placement`**: which surface carries the App's entry row, `'sidebar'` (the default) or `'settings'`. See [Where the App's row lives](#where-the-apps-row-lives).
 
 What the host derives for you, with no second registration:
 
 - **The route**: `/apps/<pluginId>~<appId>`, plus every subpath under it. You never declare a path, and you cannot collide with a Walnut route or another plugin.
-- **The Sidebar entry**: icon, title, badge, and pin state, in the same list as Core Apps.
+- **The entry row**: icon, title, badge, and pin state, in the Sidebar beside the Core Apps, or in Settings under Manage when the App asks for `placement: 'settings'`.
 - **Deep links**: `/apps/my-plugin~main/history?tab=recent` opens your App with the rest of the URL handed to your component.
 - **A Command Palette entry**: `Open <title>`, refreshed whenever the App list changes.
-- **The badge channel**: `handle.setBadge(...)` updates the Sidebar live.
-- **Owner lifecycle**: disable, reload, or uninstall the plugin and the App, its route, its Sidebar entry, and its palette entry all disappear together.
+- **The badge channel**: `handle.setBadge(...)` updates the row live, on whichever surface it sits.
+- **Owner lifecycle**: disable, reload, or uninstall the plugin and the App, its route, its entry row, and its palette entry all disappear together.
 
 The returned handle is small and complete: `handle.path` is where the host mounted the App, `handle.setBadge(value)` updates the badge, and `handle.dispose()` removes the App early if you want to own that yourself.
 
@@ -357,6 +358,33 @@ Treat `subpath` as your own router input. Keep it a plain string comparison for 
 
 A badge is a number, `'dot'`, or `null`. A non-integer or negative number is refused at the call. Set an initial value on the contribution, then move it with the handle as state changes, and clear it with `null` when the user has seen whatever it was counting.
 
+### Where the App's row lives
+
+An App declares which surface carries its entry row. The default, `'sidebar'`, puts it in the app sidebar next to Home and Tasks. `'settings'` puts it in Settings under the Manage group instead, in the same list as Agents, Skills, Commands, and Memory, and gives it no sidebar row at all.
+
+```tsx compile=web-placement
+import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
+
+export function activate(walnut: WalnutWebApi) {
+  function ReportApp({ subpath }: AppProps) {
+    return <main>Report {subpath || 'overview'}</main>
+  }
+
+  walnut.ui.app({
+    id: 'main',
+    title: 'Weekly Report',
+    component: ReportApp,
+    placement: 'settings',
+  })
+}
+```
+
+Nothing else changes: same route at `/apps/<pluginId>~<appId>`, same deep links, same Command Palette entry, same badge, same owner lifecycle. The Settings row is a real link that navigates to the App's own full-page route, so the App is never squeezed into a settings panel.
+
+Pick by how often the App is opened. The sidebar is for surfaces someone lives in all day and its length is the whole point: every row added there costs every other row a little attention. A report, an audit, an occasional tool belongs under Manage, where people already go looking for the things they configure and inspect. The shipped `walnut-time` example uses `'settings'` for exactly that reason.
+
+A user's own preferences still apply on top of the App's choice. Hiding an App removes its row from either surface, while pinning and unpinning are Sidebar-only ideas, so the Apps section of Settings offers no pin control for a settings-placed App. An unknown placement value is refused at the call rather than accepted, because an App that matches no surface would register successfully and then appear nowhere.
+
 ### Settings, CSS, and pages
 
 `walnut.ui.settings` adds a section to the Settings page. `walnut.ui.injectCss` adds an owner-tagged stylesheet that Walnut removes when the plugin unloads. Scope your selectors to a class you own, because the stylesheet is global while it is mounted.
@@ -379,7 +407,7 @@ export function activate(walnut: WalnutWebApi) {
 
 Core Walnut screens, native plugin Apps, and legacy Webviews are all rows in the same App Registry, so they share one order, one visibility model, one badge shape, and one navigation path. The registry is what the Sidebar, the App host route, the Command Palette, and the Apps section of Settings all read.
 
-The consequences worth knowing as an author: a user can pin, unpin, or hide your App like the hideable Core Apps; your App is reachable by URL, palette, and Sidebar without you wiring any of the three; and your App renders inside its own error boundary, so a render failure names your plugin instead of blanking the console. Home and Settings are recovery surfaces, so Walnut locks their visibility.
+The consequences worth knowing as an author: a user can pin, unpin, or hide your App like the hideable Core Apps; your App is reachable by URL, palette, and its entry row without you wiring any of the three, and `placement` decides which surface renders that row from the same registration; and your App renders inside its own error boundary, so a render failure names your plugin instead of blanking the console. Home and Settings are recovery surfaces, so Walnut locks their visibility.
 
 Home, Tasks, Notes, Calendar, Routines, and Settings are the Core Apps. Home's Chat, Todo, and Agenda are Dock controls inside Home rather than separate Apps, which is why you will not find them in the App list.
 

@@ -123,7 +123,10 @@ export function TimeApp({ api, log, basePath, subpath, navigate }: TimeAppProps)
     <div className="wt-root" data-testid="time-app" data-tab={tab}>
       <header className="wt-header">
         <div>
-          <span className="wt-kicker">Time tracking</span>
+          {/* "Time", matching the App's title and its Settings row. The console's own
+              "Time Tracking" section is where collection is CONFIGURED, and reusing that
+              name here made two different things read as one. */}
+          <span className="wt-kicker">Time</span>
           <h1>Your day</h1>
           <p>
             Where your attention went, and what your agents ran. Two questions, never mixed

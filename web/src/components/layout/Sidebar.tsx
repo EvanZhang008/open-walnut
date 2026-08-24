@@ -158,7 +158,9 @@ export function Sidebar({
           <span className="sidebar-label">Agenda</span>
         </button>
         <div className="sidebar-nav-divider" />
-        {apps.pinned.map((app) => {
+        {/* `sidebar`, not `pinned`: an App can declare `placement: 'settings'`, in
+            which case its row lives in Settings → Manage and never here. */}
+        {apps.sidebar.map((app) => {
           const Icon = app.icon;
           const icon = Icon ? (
             app.kind === 'native' && app.pluginId ? (

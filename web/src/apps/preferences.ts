@@ -11,11 +11,25 @@ export interface AppPreferences {
   hidden: string[]
 }
 
+/**
+ * The buckets every consumer reads. Two axes, deliberately kept apart:
+ *
+ * - The USER's preference (pinned / unpinned / hidden), which is what the App manager
+ *   in Settings edits.
+ * - The APP's declared placement (sidebar / settings), which the app itself owns.
+ *
+ * `sidebar` and `settings` are the two entry-row surfaces, each already filtered by
+ * both axes, so neither the Sidebar nor the Settings nav has to know the rules. Hiding
+ * an app removes it from both surfaces; unpinning only concerns the Sidebar, since a
+ * settings row is not a pin.
+ */
 export interface ResolvedApps {
   all: RegisteredApp[]
   pinned: RegisteredApp[]
   discoverable: RegisteredApp[]
   hidden: RegisteredApp[]
+  sidebar: RegisteredApp[]
+  settings: RegisteredApp[]
 }
 
 function uniqueStrings(value: unknown): string[] {
@@ -143,10 +157,15 @@ export function resolveApps(apps: RegisteredApp[], preferences: AppPreferences):
   const isHidden = (app: RegisteredApp) => !app.lockVisibility && hiddenKeys.has(app.key)
   const isUnpinned = (app: RegisteredApp) => !app.lockVisibility && unpinnedKeys.has(app.key)
 
+  const pinned = all.filter((app) => !isHidden(app) && !isUnpinned(app))
+  const discoverable = all.filter((app) => !isHidden(app))
+
   return {
     all,
-    pinned: all.filter((app) => !isHidden(app) && !isUnpinned(app)),
-    discoverable: all.filter((app) => !isHidden(app)),
+    pinned,
+    discoverable,
     hidden: all.filter(isHidden),
+    sidebar: pinned.filter((app) => app.placement !== 'settings'),
+    settings: discoverable.filter((app) => app.placement === 'settings'),
   }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { RegisteredApp } from '../../web/src/apps/registry.js'
+import type { AppPlacement, RegisteredApp } from '../../web/src/apps/registry.js'
 import {
   APP_PREFERENCES_KEY,
   createAppPreferences,
@@ -10,7 +10,12 @@ import {
 } from '../../web/src/apps/preferences.js'
 import { syncable } from '../../web/src/utils/ui-prefs-sync.js'
 
-function app(key: string, order: number, lockVisibility = false): RegisteredApp {
+function app(
+  key: string,
+  order: number,
+  lockVisibility = false,
+  placement: AppPlacement = 'sidebar',
+): RegisteredApp {
   const [owner, id] = key.split(':')
   return {
     key,
@@ -24,6 +29,7 @@ function app(key: string, order: number, lockVisibility = false): RegisteredApp 
     badge: null,
     order,
     fullBleed: true,
+    placement,
     persistent: false,
     lockVisibility,
     generation: 1,
@@ -68,6 +74,44 @@ describe('App preferences', () => {
       'core:settings',
     ])
     expect(resolved.hidden.map((item) => item.key)).toEqual(['core:tasks'])
+  })
+
+  it('routes a settings-placed App to the Settings surface and never to the Sidebar', () => {
+    const withSettingsApp = [...apps, app('plugin-time:main', 500, false, 'settings')]
+    const resolved = resolveApps(withSettingsApp, createAppPreferences())
+
+    expect(resolved.sidebar.map((item) => item.key)).toEqual([
+      'core:home',
+      'core:tasks',
+      'plugin-a:main',
+      'core:settings',
+    ])
+    expect(resolved.settings.map((item) => item.key)).toEqual(['plugin-time:main'])
+    // The Command Palette reads `discoverable`, so placement must not cost the app
+    // its keyboard entry, and the App manager reads `all`.
+    expect(resolved.discoverable.map((item) => item.key)).toContain('plugin-time:main')
+    expect(resolved.all.map((item) => item.key)).toContain('plugin-time:main')
+  })
+
+  it('lets hidden remove a settings-placed App while unpinned leaves it alone', () => {
+    const withSettingsApp = [...apps, app('plugin-time:main', 500, false, 'settings')]
+
+    // Unpinning is a Sidebar-only idea: a settings row is not a pin, so it stays.
+    const unpinned = resolveApps(
+      withSettingsApp,
+      setAppDisposition(createAppPreferences(), 'plugin-time:main', 'unpinned'),
+    )
+    expect(unpinned.settings.map((item) => item.key)).toEqual(['plugin-time:main'])
+    expect(unpinned.sidebar.map((item) => item.key)).not.toContain('plugin-time:main')
+
+    // Hidden means gone from every launcher, whichever surface the row was on.
+    const hidden = resolveApps(
+      withSettingsApp,
+      setAppDisposition(createAppPreferences(), 'plugin-time:main', 'hidden'),
+    )
+    expect(hidden.settings).toEqual([])
+    expect(hidden.sidebar.map((item) => item.key)).not.toContain('plugin-time:main')
+    expect(hidden.hidden.map((item) => item.key)).toEqual(['plugin-time:main'])
   })
 
   it('never hides or unpins recovery Apps', () => {

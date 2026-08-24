@@ -12,12 +12,16 @@ import { TIME_CSS } from './web/styles'
  * minute is affected.
  *
  * Everything is registered through `walnut.ui`, so disable / reload / uninstall
- * takes the route, the Sidebar row, the Command Palette entry and the injected CSS
+ * takes the route, the entry row, the Command Palette entry and the injected CSS
  * away together.
+ *
+ * The App declares `placement: 'settings'`, so its row is in Settings under Manage
+ * rather than in the Sidebar. A day report is something you open now and then; the
+ * Sidebar is for the surfaces you live in.
  */
 
 /** The documented default weight for a plugin App (core screens use 10 to 1000). */
-const SIDEBAR_ORDER = 500
+const APP_ORDER = 500
 
 export async function activate(walnut: WalnutWebApi) {
   const api = createTimeApi(walnut)
@@ -57,10 +61,14 @@ export async function activate(walnut: WalnutWebApi) {
     icon: TimeIcon,
     component: TimeAppRoot,
     badge: null,
-    order: SIDEBAR_ORDER,
+    order: APP_ORDER,
     // A day plot wants the whole canvas: the tape is 144px per hour and the
     // swimlanes want every pixel of width they can get.
     fullBleed: true,
+    // A report you read now and then, not a daily surface: its row belongs in
+    // Settings under Manage, beside Agents and Skills, and the Sidebar stays short.
+    // The route, the deep links and the Command Palette entry are unaffected.
+    placement: 'settings',
   })
 
   walnut.ui.injectCss(TIME_CSS)

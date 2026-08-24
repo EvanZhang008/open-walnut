@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import { useAppCatalog } from '@/apps/hooks';
 import { usePluginUi } from '@/plugins/hooks';
 import { CORE_SETTINGS_CONTRIBUTIONS } from './core-settings-registry';
 
@@ -24,6 +25,11 @@ interface NavItem {
  *
  * There is no "Memory" entry under Configure: the old MemorySection's entire body was
  * a button to /memory, which the Manage link above now is.
+ *
+ * A plugin App that declares `placement: 'settings'` joins the Manage group as one more
+ * page link, from the SAME App Registry the app sidebar reads (`useAppCatalog`), which
+ * is why it appears and disappears with the plugin's own lifecycle and needs no
+ * separate registration channel. Its badge, if it set one, rides the row.
  */
 const MANAGE_PAGES: Array<{ to: string; label: string; testId: string }> = [
   { to: '/agents', label: 'Agents', testId: 'settings-nav-agents' },
@@ -47,6 +53,7 @@ interface SettingsNavProps {
 
 export function SettingsNav({ activeSection, onNavigate }: SettingsNavProps) {
   const pluginUi = usePluginUi();
+  const apps = useAppCatalog();
   const sectionButton = (item: NavItem) => (
     <span key={item.id}>
       {item.divider && <div className="settings-nav-divider" />}
@@ -72,6 +79,22 @@ export function SettingsNav({ activeSection, onNavigate }: SettingsNavProps) {
           data-testid={link.testId}
         >
           {link.label}
+        </NavLink>
+      ))}
+      {apps.settings.map((app) => (
+        <NavLink
+          key={`${app.key}:${app.generation}`}
+          to={app.path}
+          className="settings-nav-item settings-nav-page-link"
+          data-testid={`settings-nav-app-${app.key}`}
+          data-app-kind={app.kind}
+        >
+          {app.title}
+          {app.badge === 'dot' ? (
+            <span className="notification-badge-dot" />
+          ) : typeof app.badge === 'number' && app.badge > 0 ? (
+            <span className="notification-badge-count">{app.badge > 99 ? '99+' : app.badge}</span>
+          ) : null}
         </NavLink>
       ))}
       {MANAGE_SECTIONS.map(sectionButton)}
