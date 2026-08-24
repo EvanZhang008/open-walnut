@@ -383,7 +383,11 @@ Nothing else changes: same route at `/apps/<pluginId>~<appId>`, same deep links,
 
 Pick by how often the App is opened. The sidebar is for surfaces someone lives in all day and its length is the whole point: every row added there costs every other row a little attention. A report, an audit, an occasional tool belongs under Manage, where people already go looking for the things they configure and inspect. The shipped `walnut-time` example uses `'settings'` for exactly that reason.
 
-A user's own preferences still apply on top of the App's choice. Hiding an App removes its row from either surface, while pinning and unpinning are Sidebar-only ideas, so the Apps section of Settings offers no pin control for a settings-placed App. An unknown placement value is refused at the call rather than accepted, because an App that matches no surface would register successfully and then appear nowhere.
+**Your `placement` is the default, not the verdict.** Only the person using the sidebar knows whether your App belongs in it, so Settings → Apps carries a **Move to Settings** / **Move to Sidebar** action on every native plugin App row. Their choice wins over yours, applies immediately, and survives a reload; **Restore defaults** in that section drops every override and puts each App back where it asked to be. Write the declaration as the answer that is right for most people and let the rest move it.
+
+Two consequences worth knowing. Because moving the row cannot change what the App can do, code that branches on where its own row currently sits is code that will be wrong: read the route, not the surface. And because Core Apps and legacy webview Apps have no placement of their own to override, they get no Move action at all.
+
+A user's other preferences apply on top too. Hiding an App removes its row from either surface, while pinning and unpinning are Sidebar-only ideas, so a row currently placed in Settings has no pin control (moving it back to the Sidebar brings the control back). An unknown placement value is refused at the call rather than accepted, because an App that matches no surface would register successfully and then appear nowhere.
 
 ### Settings, CSS, and pages
 

@@ -4,6 +4,8 @@ A first-party plugin App that answers two questions about a day, and keeps them 
 
 It contributes ONE App with three tabs and no server entry. Time collection, storage, and the `/api/time/*` endpoints all stay in Walnut; this plugin is only a reader of them, so uninstalling it cannot affect a single recorded minute.
 
+**This is the whole Time UI.** Walnut used to carry a second copy as a Settings section; that section is gone, so this App is where a recorded minute becomes something you can look at. Because time is captured for every install whether or not anything renders it, the plugin **ships as a builtin**: it is present and enabled on a stock install with no install step. Turn it off with `plugins.walnut-time.enabled: false` in `config.yaml`, or from the Plugin Store section of Settings.
+
 ## The three tabs
 
 Each tab is a real URL, so any of them can be bookmarked or linked:
@@ -20,7 +22,7 @@ The Timeline tab carries three switchable readings of the same day, sharing one 
 - **章节 Chapters**: the day cut at idle gaps over ten minutes, one card per stretch, each with its clock range, its dominant task (or "fragmented work" when nothing held 40% of it), a composition bar that always adds up, and a click to expand the same ribbon zoomed over that stretch alone.
 - **泳道 Lanes**: one row per task, time left to right, titles in full in a fixed left column so no bar has to carry text. The top six tasks get their own row and everything else is aggregated into one row. Agents get their own hatched row, and only when the toggle asks for it.
 
-The view choice and the agents toggle persist in `localStorage` under `open-walnut-time-app-view` and `open-walnut-time-app-agents`. They are the plugin's own keys: the console's Time Tracking section keeps a separate pair, so the two surfaces never fight over one value.
+The view choice and the agents toggle persist in `localStorage` under `open-walnut-time-app-view` and `open-walnut-time-app-agents`. They are the plugin's own keys rather than the host's, so a change to how Walnut stores its own preferences can never reshape a value this plugin wrote. The retired Settings section's pair (`open-walnut-time-timeline-view` / `-agents`) is still read once as a fallback, so anyone who had settled on Lanes with agents shown keeps that view instead of silently landing back on a bare Tape.
 
 ## What it reads
 
@@ -32,7 +34,9 @@ Everything comes from three host endpoints through `walnut.http.fetch`, which is
 
 ## Install
 
-The author loop, from a checkout of this repository:
+Nothing to install: `scripts/ship-builtin-plugins.mjs` runs during `npm run build` and `npm run web:build`, building this directory's web bundle and copying it (with the manifest) into `dist/integrations/walnut-time/`, where builtin discovery finds it.
+
+The author loop, from a checkout of this repository, is still how you iterate on the code:
 
 ```bash
 npm run build:plugins                                                    # build the plugin API + CLI once
@@ -42,12 +46,16 @@ node packages/plugin-cli/dist/cli.js link  --root examples/plugins/walnut-time
 
 `link` symlinks the directory into `~/.open-walnut/plugins/walnut-time`, then asks the running Walnut to discover and load it, so a first install needs no restart. It talks to `http://127.0.0.1:3456` unless `OPEN_WALNUT_API_URL` says otherwise, which is what you want when testing against an isolated server.
 
+⚠️ **A builtin wins a duplicate id.** On a server started from a build that includes the shipped copy, the builtin in `dist/integrations/walnut-time/` shadows a `link`ed checkout, so `dev` rebuilds will appear to do nothing. Either iterate against a server run from source (a `tsx` run resolves builtins to `src/integrations/`, where this plugin is not), or set `plugins.walnut-time.enabled: false` while you work from the link.
+
 ```bash
 node packages/plugin-cli/dist/cli.js status --root examples/plugins/walnut-time   # state + App URL
 node packages/plugin-cli/dist/cli.js dev    --root examples/plugins/walnut-time   # rebuild + reload on save
 ```
 
 Once it is active, **Settings → Manage** grows a **Time** row pointing at `/apps/walnut-time~main`, beside Agents and Skills. The App declares `placement: 'settings'` for that reason: a day report is something you open now and then, and the Sidebar is for the surfaces you live in. Nothing else about the App changes: it is still a full page at its own route, still deep-linkable per tab, and still in the Command Palette as "Open Time".
+
+That declaration is only the default. Anyone who does open their day every morning can move the row into the sidebar from **Settings → Apps** → **Move to Sidebar**, and **Restore defaults** there puts it back.
 
 ## Develop
 
@@ -62,4 +70,6 @@ npm run test         # validate + build (this example ships no plugin:test scrip
 
 ## A note on duplication
 
-The view components and the pure geometry modules (`time-timeline.ts`, `time-views.ts`, `time-chapters.ts`) are COPIES of the console's Time Tracking section, marked as such at the top of each file. A plugin bundles standalone and must not import host internals, so the duplication is deliberate for now: the console section stays in place until this app has been used for a while, and then it goes away and this becomes the only copy. Until then, a fix in one place has to be repeated in the other.
+There is none left. The view components and the pure geometry modules (`time-timeline.ts`, `time-views.ts`, `time-chapters.ts`) began as copies of the console's Time Tracking section; that section has been deleted, so these are the only copies and nothing has to be kept in step by hand.
+
+The geometry modules are pure on purpose, and their unit tests (`tests/web/time-timeline.test.ts`, `time-views.test.ts`, `time-chapters.test.ts`) import them from here directly. A plugin bundles standalone and must not import host internals, which is why these rules live in the plugin rather than in a shared host module.

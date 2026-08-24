@@ -4,10 +4,11 @@ import {
   moveApp,
   parseAppPreferences,
   setAppDisposition,
+  setAppPlacement,
   type AppDisposition,
   type AppPreferences,
 } from './preferences'
-import type { RegisteredApp } from './registry'
+import type { AppPlacement, RegisteredApp } from './registry'
 
 const listeners = new Set<() => void>()
 let snapshot: AppPreferences | null = null
@@ -55,6 +56,10 @@ export function subscribeAppPreferences(listener: () => void): () => void {
 
 export function updateAppDisposition(key: string, disposition: AppDisposition): void {
   publish(setAppDisposition(getCurrent(), key, disposition))
+}
+
+export function updateAppPlacement(key: string, placement: AppPlacement): void {
+  publish(setAppPlacement(getCurrent(), key, placement))
 }
 
 export function moveAppPreference(apps: RegisteredApp[], key: string, direction: 'up' | 'down'): void {

@@ -10,7 +10,9 @@ import {
   CHAPTER_MAX_PX, CHAPTER_MIN_PX, CHAPTER_ZOOM_PX_PER_MIN, LANE_BAR_MIN_PX, LANE_ROWS,
   LANE_TRACK_PX, SEG_LABEL_PX, SEG_MIN_PX, SEG_RANGE_PX, TAPE_PX_PER_MIN,
   chapterHeightPx, laneBar, layoutTape, segLabel,
-} from '@/components/settings/sections/time-views';
+// The geometry now lives ONLY in the walnut-time Plugin App: the console section that
+// used to hold a second copy is gone, so these assertions follow the surviving one.
+} from '../../examples/plugins/walnut-time/src/web/time-views';
 
 const MIN = 60_000;
 const BASE = new Date(2026, 7, 23, 11, 0, 0, 0).getTime();

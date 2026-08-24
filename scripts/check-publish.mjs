@@ -21,6 +21,11 @@ const required = [
   'dist/web/server.js',             // web server bundle
   'dist/web/static/index.html',     // built SPA
   'dist/data',                      // shipped skills/templates
+  // Builtin first-party plugin Apps. A missing bundle is INVISIBLE at runtime — the
+  // plugin loads with no App and the Settings row is simply absent — so the tarball
+  // is where it has to be caught (scripts/ship-builtin-plugins.mjs writes these).
+  'dist/integrations/walnut-time/manifest.json',
+  'dist/integrations/walnut-time/dist/web.mjs',
   'dist/workers/qmd-index-worker.js',
   'dist/daemon-binaries/acp-worker.js', // plain JS bundle (kept; daemon-* binaries excluded)
   'patches',

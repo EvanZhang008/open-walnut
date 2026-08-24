@@ -1,9 +1,8 @@
 /**
- * PORTED COPY (walnut-time plugin). The original lives in the Walnut console at
- * web/src/components/settings/sections/time-chapters.ts. A plugin builds standalone, so
- * it cannot import host internals; this file is duplicated on purpose and the two
- * copies are expected to be kept in step by hand until the console section is
- * retired in favour of this app.
+ * The ONLY copy of these rules. It began as a port of the Walnut console's
+ * web/src/components/settings/sections/time-chapters.ts, and that section has since been
+ * deleted — this app is the Time UI now, so there is nothing left to keep in step by
+ * hand. Unit tests: tests/web/time-chapters.test.ts imports this file directly.
  */
 /**
  * Chapters — PURE. Turns the day's serial ribbon into a handful of readable

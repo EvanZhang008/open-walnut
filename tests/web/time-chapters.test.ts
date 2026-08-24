@@ -8,7 +8,9 @@ import { describe, it, expect } from 'vitest';
 import {
   CHAPTER_GAP_MS, COMP_TOP_PARTS, FRAGMENTED_SHARE, QUICK_PART_MS,
   buildChapters, composition, type Sliceish,
-} from '@/components/settings/sections/time-chapters';
+// Chaptering now lives ONLY in the walnut-time Plugin App: the console section that used
+// to hold a second copy is gone, so these assertions follow the surviving one.
+} from '../../examples/plugins/walnut-time/src/web/time-chapters';
 
 const MIN = 60_000;
 /** A fixed local wall-clock base, so no assertion depends on the machine's zone. */

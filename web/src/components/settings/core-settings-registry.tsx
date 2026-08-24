@@ -21,7 +21,6 @@ import { ReposSection } from './sections/ReposSection'
 import { SearchSection } from './sections/SearchSection'
 import { SessionsSection } from './sections/SessionsSection'
 import { SttSection } from './sections/SttSection'
-import { TimeSection } from './sections/TimeSection'
 import { TimelineSection } from './sections/TimelineSection'
 import { UsageSection } from './sections/UsageSection'
 
@@ -63,7 +62,14 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   { owner: 'walnut', id: 'cloud', label: 'Cloud Companion', title: 'Cloud Companion', group: 'configure', render: () => <CloudSection /> },
   { owner: 'walnut', id: 'advanced', label: 'Advanced', title: 'Advanced', group: 'configure', render: ({ config, saveSection }) => <AdvancedSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'usage', label: 'Usage & Costs', title: 'Usage & Costs', group: 'configure', divider: true, render: () => <UsageSection /> },
-  { owner: 'walnut', id: 'time', label: 'Time Tracking', title: 'Time Tracking', group: 'configure', render: () => <TimeSection /> },
+  // Time tracking's OWN UI is the walnut-time Plugin App, not a section here. The old
+  // `time` section was a second copy of it and was deleted; the server side
+  // (/api/time/*, the heartbeat capture) is untouched and is what the app reads.
+  //
+  // This `timeline` row is NOT that feature and did not go with it: it is the
+  // screen-activity Life Tracker (/api/timeline/*, screenshot-derived categories, and
+  // the only control that enables or disables its cron). Nothing else exposes it, so
+  // deleting it as "the duplicated Timeline" would delete a live feature.
   { owner: 'walnut', id: 'timeline', label: 'Timeline', title: 'Timeline', group: 'configure', render: () => <TimelineSection /> },
   { owner: 'walnut', id: 'bug-report', label: 'Bug Report', title: 'Bug Report', group: 'configure', divider: true, render: () => <BugReportSection /> },
 ]

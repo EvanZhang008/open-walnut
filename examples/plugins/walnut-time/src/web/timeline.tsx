@@ -44,6 +44,14 @@ import { TimeLanes } from './lanes'
  */
 const LS_VIEW_KEY = 'open-walnut-time-app-view'
 const LS_AGENTS_KEY = 'open-walnut-time-app-agents'
+/**
+ * The retired console section's pair. Read once, as a fallback, so someone who had
+ * settled on Lanes with agents shown does not silently land back on a bare Tape the
+ * day this app replaced that section. Never written: the first change here writes the
+ * plugin's own key, and from then on the legacy value is simply unread.
+ */
+const LEGACY_VIEW_KEY = 'open-walnut-time-timeline-view'
+const LEGACY_AGENTS_KEY = 'open-walnut-time-timeline-agents'
 /** The tape and the chapters are about a person's attention: never agent runtime. */
 const HUMAN_KINDS: readonly TimeKind[] = ['session', 'triage', 'chat']
 
@@ -57,7 +65,7 @@ const VIEWS: Array<{ key: ViewKey; label: string; hint: string }> = [
 
 function readView(): ViewKey {
   try {
-    const raw = localStorage.getItem(LS_VIEW_KEY)
+    const raw = localStorage.getItem(LS_VIEW_KEY) ?? localStorage.getItem(LEGACY_VIEW_KEY)
     if (raw === 'tape' || raw === 'chapters' || raw === 'lanes') return raw
   } catch { /* private mode */ }
   return 'tape'
@@ -65,7 +73,7 @@ function readView(): ViewKey {
 
 function readAgentsPref(): boolean {
   try {
-    return localStorage.getItem(LS_AGENTS_KEY) === '1'
+    return (localStorage.getItem(LS_AGENTS_KEY) ?? localStorage.getItem(LEGACY_AGENTS_KEY)) === '1'
   } catch {
     return false
   }

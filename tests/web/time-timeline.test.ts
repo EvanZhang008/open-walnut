@@ -9,7 +9,9 @@ import {
   AXIS_PAD_HOURS, HOUR_MIN, LEGEND_TOP_ROWS, MIN_AXIS_HOURS, QUICK_TOUCH_MS, TASK_COLORS,
   axisRange, clockLabel, dayLabel, dayLengthMin, dayStartMs, formatDuration, groupLegend, hourLabel,
   minuteOfDay, planDrawMerge, shiftDate, taskColor, type LegendRow,
-} from '@/components/settings/sections/time-timeline';
+// The axis/color rules now live ONLY in the walnut-time Plugin App: the console section
+// that used to hold a second copy is gone, so these assertions follow the surviving one.
+} from '../../examples/plugins/walnut-time/src/web/time-timeline';
 
 const DAY = 24 * HOUR_MIN;
 

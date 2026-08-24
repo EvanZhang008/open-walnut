@@ -4,8 +4,9 @@ import net from 'node:net'
 import { expect, test, type Page } from '@playwright/test'
 
 /**
- * The Time plugin App — the same three day views as the console's Time Tracking
- * section, but shipped as a first-party plugin and given a whole page.
+ * The Time plugin App — the ONLY Time UI. It began as a port of the console's Time
+ * Tracking section; that section has been deleted, so this App is the surface and the
+ * server side (/api/time/*, the heartbeat capture) is the data plane it reads.
  *
  * Everything here runs against the fixture's OWN server
  * (tests/e2e/browser/time-app-server.ts), because the shared :3457 fixture installs
@@ -19,6 +20,8 @@ import { expect, test, type Page } from '@playwright/test'
  *   1. Placement: the App declares `placement: 'settings'`, so there is NO Sidebar row
  *      and there IS a Settings → Manage row, which is what the test clicks. The Command
  *      Palette entry survives the move, and disabling the plugin takes the row away.
+ *      The declaration is only a DEFAULT: the user can move the row either way from
+ *      Settings → Apps, live and durably, and Restore defaults gives it back.
  *   2. Its tabs are real URLs (a reload on /timeline comes back on the timeline, not on
  *      tab one).
  *   3. Attention is SERIAL: no two segments of the tape may overlap vertically. That
@@ -112,12 +115,27 @@ async function openTimeApp(page: Page): Promise<void> {
   await expect(page.getByTestId('time-app')).toBeVisible({ timeout: 60_000 })
 }
 
-/** Walk the day nav back if the fixture had to seed yesterday. */
-async function landOnSeededDay(page: Page): Promise<void> {
+function localToday(): string {
   const today = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
-  const local = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
-  if (fixture!.date !== local) await page.getByTestId('time-app-prev').click()
+  return `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
+}
+
+/** Walk the day nav back if the fixture had to seed yesterday. */
+async function landOnSeededDay(page: Page): Promise<void> {
+  if (fixture!.date !== localToday()) await page.getByTestId('time-app-prev').click()
+}
+
+/**
+ * Same problem one tab over. The reports default to the Today range, but the fixture
+ * seeds YESTERDAY whenever the run starts within its span of local midnight
+ * (`seedAnchor`, time-app-server.ts) — so between midnight and ~02:40 the report is
+ * honestly empty and every assertion below it reads as a rendering bug. Pick the range
+ * that actually contains the seeded day instead of trusting the wall clock.
+ */
+async function landOnSeededRange(page: Page): Promise<void> {
+  if (fixture!.date === localToday()) return
+  await page.getByTestId('time-app-range-yesterday').click()
 }
 
 test.beforeAll(async () => {
@@ -188,9 +206,13 @@ test('the App declares its own surface: a Settings → Manage row, no Sidebar ro
   expect(rowBox!.y).toBeGreaterThan(memoryBox!.y)
   await shoot(page, 'views-app-settings-nav')
 
-  // The core Time Tracking section still exists under Configure this round, so the two
-  // names live in one nav and have to stay tellable apart.
-  await expect(page.getByTestId('settings-nav-time')).toHaveText('Time Tracking')
+  // This App is the ONLY Time UI now: the console's duplicate `time` section is gone,
+  // so Configure must not offer a second door to the same numbers. `timeline` is NOT
+  // that door — it is the screen-activity Life Tracker, which nothing else exposes.
+  await expect(page.getByTestId('settings-nav-time')).toHaveCount(0)
+  await expect(page.locator('.settings-nav-item', { hasText: 'Time Tracking' })).toHaveCount(0)
+  await expect(page.getByTestId('settings-nav-timeline')).toHaveText('Timeline')
+  await shoot(page, 'configure-group-no-time')
 
   await row.click()
   await expect(page).toHaveURL(/\/apps\/walnut-time~main$/)
@@ -213,6 +235,7 @@ test('the plugin App page holds the reports and its tabs are real URLs', async (
   // Tab one is the report, and the page is a page: the reports have a filter bar.
   await expect(page.getByTestId('time-app-view-mine')).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId('time-app-project-filter')).toBeVisible()
+  await landOnSeededRange(page)
   await expect(page.getByTestId('time-app-group-focus')).toBeVisible()
   await expect(page.getByTestId('time-app-trend').locator('.wt-trend-day')).toHaveCount(7)
   await shoot(page, 'views-app-my-time')
@@ -312,11 +335,96 @@ test('all three timeline views hold up on the dense day', async ({ page }) => {
   await expect(page.getByTestId('time-app-agent-total')).not.toContainText('0s')
   await shoot(page, 'views-app-lanes')
 
-  // The view choice is remembered across a reload, like the console's copy.
+  // The view choice is remembered across a reload (localStorage, the plugin's own
+  // keys). The DAY is not remembered and resets to today, so walk back to the seeded
+  // one first: on an empty day every view draws its empty state and this assertion
+  // would fail for want of data rather than for want of the remembered view.
   await page.reload()
+  await expect(page.getByTestId('time-app-timeline')).toBeVisible({ timeout: 60_000 })
+  await landOnSeededDay(page)
   await expect(page.getByTestId('time-app-lanes')).toBeVisible({ timeout: 60_000 })
 
   expect(pageErrors, 'the plugin App must not throw in the browser').toEqual([])
+})
+
+test('the user can move the row to the Sidebar and back, live and across a reload', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+
+  await page.goto(`http://127.0.0.1:${fixture!.port}/`)
+  await page.waitForLoadState('domcontentloaded')
+  await openSettings(page)
+  await page.getByTestId('settings-nav-apps').click()
+
+  const managerRow = page.getByTestId('app-manager-row-walnut-time:main')
+  await expect(managerRow).toBeVisible({ timeout: 60_000 })
+  // Where it starts: what the App declared, plus the two rules that follow from it —
+  // the row is labelled as living in Settings, and a settings row is not a pin.
+  await expect(managerRow).toHaveAttribute('data-app-placement', 'settings')
+  await expect(managerRow).toContainText('row in Settings → Manage')
+  await expect(managerRow.getByRole('button', { name: 'Unpin Time' })).toHaveCount(0)
+  const move = page.getByTestId('app-manager-placement-walnut-time:main')
+  await expect(move).toHaveText('Move to Sidebar')
+  await shoot(page, 'apps-manager-placement-control')
+
+  // A Core App is not the user's to move: the registry pins it to the Sidebar, so the
+  // control that cannot be honoured is not offered.
+  await expect(page.getByTestId('app-manager-placement-core:home')).toHaveCount(0)
+
+  await move.click()
+
+  // Live, with no reload: the declared placement was only a default.
+  await expect(managerRow).toHaveAttribute('data-app-placement', 'sidebar')
+  await expect(managerRow).not.toContainText('row in Settings → Manage')
+  await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toHaveCount(0)
+  await expect(page.getByTestId('sidebar-app-walnut-time:main')).toBeVisible({ timeout: 30_000 })
+  // Back on the Sidebar, pinning means something again, so the control returns.
+  await expect(managerRow.getByRole('button', { name: 'Unpin Time' })).toBeVisible()
+  await expect(move).toHaveText('Move to Settings')
+  await shoot(page, 'placement-moved-to-sidebar')
+
+  // It survives a reload, and the App itself is unchanged by the move: same route,
+  // same page, reached from its new row.
+  await page.reload()
+  await expandSidebar(page)
+  const sidebarRow = page.getByTestId('sidebar-app-walnut-time:main')
+  await expect(sidebarRow).toBeVisible({ timeout: 60_000 })
+  await sidebarRow.click()
+  await expect(page).toHaveURL(/\/apps\/walnut-time~main/)
+  await expect(page.getByTestId('time-app')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('time-app-trend').locator('.wt-trend-day')).toHaveCount(7, { timeout: 30_000 })
+
+  // Restore defaults is the way back to following the App's own choice.
+  await openSettings(page)
+  await page.getByTestId('settings-nav-apps').click()
+  await page.getByRole('button', { name: 'Restore defaults' }).click()
+  await expect(page.getByTestId('app-manager-row-walnut-time:main'))
+    .toHaveAttribute('data-app-placement', 'settings')
+  await expect(page.getByTestId('sidebar-app-walnut-time:main')).toHaveCount(0)
+  await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toBeVisible({ timeout: 30_000 })
+
+  // An override is NOT browser-local. App preferences ride the ui-prefs mirror
+  // (config/share/ui-prefs.json) so a move follows you to your phone — which also
+  // means a fresh browser context inherits it, and leaving one set here walked
+  // straight into the next test. So assert the mirror, not just the DOM: the reload
+  // flushes the pending write on pagehide, and Restore defaults has to have reached
+  // the server for real.
+  await page.reload()
+  await expect.poll(async () => {
+    const res = await page.request.get(`http://127.0.0.1:${fixture!.port}/api/ui-prefs`)
+    if (!res.ok()) return 'unreachable'
+    const body = await res.json() as { prefs?: Record<string, { v: string | null }> }
+    const stored = body.prefs?.['open-walnut-app-preferences-v1']?.v
+    if (!stored) return 'clear'
+    try {
+      const parsed = JSON.parse(stored) as { placement?: Record<string, string> }
+      return Object.keys(parsed.placement ?? {}).length > 0 ? 'still-overridden' : 'clear'
+    } catch {
+      return 'unparsable'
+    }
+  }, { timeout: 30_000, intervals: [500, 1_000] }).toBe('clear')
+
+  expect(pageErrors, 'moving a row must not throw in the browser').toEqual([])
 })
 
 /*

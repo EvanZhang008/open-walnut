@@ -61,6 +61,11 @@ export interface RegisteredApp {
   badge: AppBadge
   order: number
   fullBleed: boolean
+  /**
+   * The app's DECLARED placement, i.e. the default. The user can override it per app,
+   * so read `effectiveAppPlacement(app, preferences)` instead of this field anywhere
+   * the answer decides what a surface renders.
+   */
   placement: AppPlacement
   persistent: boolean
   lockVisibility: boolean
