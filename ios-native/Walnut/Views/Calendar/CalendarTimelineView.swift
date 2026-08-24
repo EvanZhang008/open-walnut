@@ -19,6 +19,8 @@ struct CalendarTimelineView: View {
     let spanBuckets: [String: [CalendarTimeline.TaskSpan]]
     let eventsFor: (String) -> [DeviceCalendarEvent]
     let onTapTask: (WalnutTask) -> Void
+    /// A tap on empty space, carrying the slot it landed in.
+    let onCreate: (CalendarCreate.Draft) -> Void
     /// Notifies the parent which days are now on screen, so it can fetch their
     /// months' events.
     let onVisibleRangeChange: (Date, Date) -> Void
@@ -94,46 +96,61 @@ struct CalendarTimelineView: View {
     // MARK: - All-day band
 
     /// The band spans the visible page's columns so a banner sits above its own
-    /// day. Hidden entirely when nothing is all-day (Apple does the same).
+    /// day. ALWAYS present now (it used to hide when empty): it is the create
+    /// affordance for an all-day task, and an empty band that shows "+ all-day"
+    /// is the only hint a user gets that day-granular items live up here.
     @ViewBuilder
     private var allDayBand: some View {
         let days = visibleDays
         let layouts = days.map { layout(for: $0) }
-        if layouts.contains(where: { !$0.allDay.isEmpty }) {
-            HStack(alignment: .top, spacing: 0) {
-                Text("all-day")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .frame(width: gutterWidth, alignment: .trailing)
-                    .padding(.trailing, 4)
-                ForEach(Array(zip(days, layouts)), id: \.0.dayKey) { day, dayLayout in
-                    let expanded = expandedAllDayKeys.contains(day.dayKey)
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(expanded ? dayLayout.allDay : Array(dayLayout.allDay.prefix(3))) { row in
-                            CalendarAllDayChip(row: row, onTapTask: onTapTask)
-                        }
-                        if dayLayout.allDay.count > 3 {
-                            Button {
-                                if expanded { expandedAllDayKeys.remove(day.dayKey) }
-                                else { expandedAllDayKeys.insert(day.dayKey) }
-                            } label: {
-                                Text(expanded ? "show less" : "+\(dayLayout.allDay.count - 3) more")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("calendar.allDayMore.\(day.dayKey)")
-                        }
+        HStack(alignment: .top, spacing: 0) {
+            Text("all-day")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(width: gutterWidth, alignment: .trailing)
+                .padding(.trailing, 4)
+            ForEach(Array(zip(days, layouts)), id: \.0.dayKey) { day, dayLayout in
+                let expanded = expandedAllDayKeys.contains(day.dayKey)
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(expanded ? dayLayout.allDay : Array(dayLayout.allDay.prefix(3))) { row in
+                        CalendarAllDayChip(row: row, onTapTask: onTapTask)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 2)
+                    if dayLayout.allDay.count > 3 {
+                        Button {
+                            if expanded { expandedAllDayKeys.remove(day.dayKey) }
+                            else { expandedAllDayKeys.insert(day.dayKey) }
+                        } label: {
+                            Text(expanded ? "show less" : "+\(dayLayout.allDay.count - 3) more")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("calendar.allDayMore.\(day.dayKey)")
+                    }
+                    // Per-DAY add: in multi-day the columns are side by side, so
+                    // one shared button couldn't say which day it meant.
+                    Button {
+                        onCreate(CalendarCreate.allDayDraft(day: day.date, calendar: calendar))
+                    } label: {
+                        Label("all-day", systemImage: "plus")
+                            .font(.caption2)
+                            .foregroundStyle(Theme.tint)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("calendar.allDayAdd.\(day.dayKey)")
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 2)
             }
-            .padding(.vertical, 4)
-            .background(Color(.secondarySystemGroupedBackground))
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("calendar.allDayBand")
         }
+        .padding(.vertical, 4)
+        .background(Color(.secondarySystemGroupedBackground))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("calendar.allDayBand")
     }
 
     // MARK: - Pager
@@ -216,6 +233,23 @@ struct CalendarTimelineView: View {
         let dayLayout = layout(for: day)
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
+                // Empty-slot tap → create at that hour. FIRST in the ZStack so
+                // it sits BEHIND the blocks: a tap on a block still opens that
+                // task, and only genuinely empty space creates (dogfood R18:
+                // tapping the grid did nothing at all). A tap gesture doesn't
+                // fight the vertical scroll the way a drag would.
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(
+                        SpatialTapGesture()
+                            .onEnded { value in
+                                guard let draft = CalendarCreate.timedDraft(
+                                    atY: value.location.y, minuteHeight: minuteHeight,
+                                    day: day.date, calendar: calendar
+                                ) else { return }
+                                onCreate(draft)
+                            }
+                    )
                 // Column separator (multi-day only — a single day needs none).
                 if dayCount > 1 {
                     Rectangle()

@@ -15,6 +15,8 @@ struct CalendarListView: View {
     let taskBuckets: [String: [CalendarLogic.TaskItem]]
     let eventsByDay: [String: [DeviceCalendarEvent]]
     let onTapTask: (WalnutTask) -> Void
+    /// Per-day add (the section header's "+"): an all-day task on that day.
+    let onCreate: (CalendarCreate.Draft) -> Void
     let onVisibleRangeChange: (Date, Date) -> Void
 
     /// Days rendered before / after the anchor, grown as the user scrolls out.
@@ -62,10 +64,25 @@ struct CalendarListView: View {
                 ForEach(sections) { section in
                     Section {
                         if section.isEmpty {
-                            Text("Nothing on this day.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .accessibilityIdentifier("calendar.list.empty")
+                            // An empty day is exactly where you want to add
+                            // something — the row itself creates (dogfood R18:
+                            // the List view had no create entry at all).
+                            Button {
+                                onCreate(CalendarCreate.allDayDraft(day: section.day, calendar: calendar))
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "plus.circle")
+                                        .font(.caption)
+                                        .foregroundStyle(Theme.tint)
+                                    Text("Nothing on this day — add something")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                    Spacer(minLength: 0)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("calendar.list.empty")
                         } else {
                             ForEach(section.rows) { row in
                                 switch row {
@@ -115,6 +132,7 @@ struct CalendarListView: View {
 
     private func sectionHeader(_ day: Date) -> some View {
         let isToday = calendar.isDateInToday(day)
+        let key = CalendarLogic.dayKey(day, calendar: calendar)
         return HStack(spacing: 6) {
             Text(day.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
                 .font(.subheadline.weight(.semibold))
@@ -128,8 +146,20 @@ struct CalendarListView: View {
             Text(day.formatted(.dateTime.year()))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
+            // Add straight onto the day you are reading.
+            Button {
+                onCreate(CalendarCreate.allDayDraft(day: day, calendar: calendar))
+            } label: {
+                Image(systemName: "plus")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Theme.tint)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("calendar.list.add.\(key)")
         }
-        .accessibilityIdentifier("calendar.list.header.\(CalendarLogic.dayKey(day, calendar: calendar))")
+        .accessibilityIdentifier("calendar.list.header.\(key)")
     }
 
     // MARK: - Window growth

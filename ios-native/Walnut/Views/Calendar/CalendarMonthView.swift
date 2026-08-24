@@ -14,6 +14,9 @@ struct CalendarMonthView: View {
     let eventsFor: (String) -> [DeviceCalendarEvent]
     let showsDeniedHint: Bool
     let onTapTask: (WalnutTask) -> Void
+    /// Full create sheet for a day (the agenda's "+"), alongside the one-line
+    /// quick add below the grid.
+    let onCreate: (CalendarCreate.Draft) -> Void
     /// Committed day tap: the container switches to the Day view.
     let onDrillIntoDay: (Date) -> Void
     let onVisibleRangeChange: (Date, Date) -> Void
@@ -206,23 +209,38 @@ struct CalendarMonthView: View {
     @ViewBuilder
     private func agendaSection(rows: [CalendarLogic.AgendaRow]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Button {
-                onDrillIntoDay(previewDay)
-            } label: {
-                HStack(spacing: 6) {
-                    Text(previewDay.formatted(.dateTime.weekday(.wide).month(.wide).day()))
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                    Spacer(minLength: 0)
+            HStack(spacing: 6) {
+                Button {
+                    onDrillIntoDay(previewDay)
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(previewDay.formatted(.dateTime.weekday(.wide).month(.wide).day()))
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("calendar.agendaTitle")
+                // The full sheet (time, project) next to the one-line quick add
+                // below — a timed task needs more than a title.
+                Button {
+                    onCreate(CalendarCreate.allDayDraft(day: previewDay, calendar: calendar))
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Theme.tint)
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("calendar.agendaAdd")
             }
-            .buttonStyle(.plain)
             .padding(.top, 12)
-            .accessibilityIdentifier("calendar.agendaTitle")
 
             if showsDeniedHint {
                 CalendarAccessDeniedHint()

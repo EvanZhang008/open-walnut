@@ -18,6 +18,14 @@ import SwiftUI
 ///     the all-day band and the list.
 ///   - Device events (EventKit) are read-only. Permission is asked lazily on
 ///     first open; denial degrades to a Settings hint and never blocks tasks.
+///   - The FILTER (CalendarFilter) is applied to the task list ONCE, before
+///     bucketing, so every view narrows identically and the expensive walk runs
+///     over the narrowed set.
+///
+/// Creating: every view can create. A tap on empty space carries the slot it
+/// landed in (CalendarCreate), and the header "+" creates on the selected day.
+/// Both open CalendarCreateSheet. A create into a project the filter hides
+/// RELAXES the filter rather than swallowing the new task (dogfood R18).
 struct CalendarTabView: View {
     /// DEBUG harness override (`-calendar-view <mode>`): pins the starting view
     /// so each one is screenshot-able without tapping through the menu. nil in
@@ -40,14 +48,22 @@ struct CalendarTabView: View {
     /// Set once the persisted view mode has been restored, so the first
     /// onChange (restore) never writes the default back over it.
     @State private var restored = false
+    /// What the calendar is allowed to show (persisted).
+    @State private var filter = CalendarFilter.unrestricted
+    @State private var showFilter = false
+    /// The tapped slot awaiting a title — non-nil presents the create sheet.
+    @State private var createDraft: CalendarCreate.Draft?
 
     private let preference = CalendarViewPreference()
+    private let filterPreference = CalendarFilterPreference()
 
     var body: some View {
         // Bind derived collections ONCE per body pass (TasksView discipline):
-        // one bucketing walk feeds every view.
-        let taskBuckets = CalendarLogic.bucketTasks(tasks.tasks, calendar: calendar)
-        let spanBuckets = CalendarTimeline.bucketTaskSpans(tasks.tasks, calendar: calendar)
+        // one bucketing walk feeds every view. The filter narrows the LIST
+        // first, so the two bucketing walks run over the smaller set.
+        let visibleTasks = filter.apply(toTasks: tasks.tasks)
+        let taskBuckets = CalendarLogic.bucketTasks(visibleTasks, calendar: calendar)
+        let spanBuckets = CalendarTimeline.bucketTaskSpans(visibleTasks, calendar: calendar)
         VStack(spacing: 0) {
             header
             if deviceCalendar.access == .denied, mode != .month {
@@ -60,7 +76,7 @@ struct CalendarTabView: View {
                     selectedDay: $selectedDay,
                     calendar: calendar,
                     hasContent: { key in
-                        !(taskBuckets[key] ?? []).isEmpty || !deviceCalendar.events(on: key).isEmpty
+                        !(taskBuckets[key] ?? []).isEmpty || !visibleEvents(key).isEmpty
                     }
                 )
                 Divider()
@@ -82,10 +98,27 @@ struct CalendarTabView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
-        // Restore the remembered view + lazy permission ask on open.
+        .sheet(item: $createDraft) { draft in
+            CalendarCreateSheet(
+                draft: draft,
+                calendar: calendar,
+                // One selected project = the obvious intent for a new task.
+                suggestedProject: filter.projects.count == 1 ? (filter.projects.first ?? "") : "",
+                onCreated: adoptCreated
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showFilter) {
+            CalendarFilterSheet(filter: $filter, tasks: tasks.tasks)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        // Restore the remembered view + filter, lazy permission ask on open.
         .task {
             if !restored {
                 mode = forcedMode ?? preference.load()
+                filter = filterPreference.load()
                 if let forcedDay { selectedDay = calendar.startOfDay(for: forcedDay) }
                 restored = true
             }
@@ -99,6 +132,39 @@ struct CalendarTabView: View {
             guard restored else { return }
             preference.save(newMode)
         }
+        .onChange(of: filter) { _, newFilter in
+            guard restored else { return }
+            filterPreference.save(newFilter)
+        }
+    }
+
+    // MARK: - Create
+
+    /// Open the create sheet for a tapped slot.
+    private func startCreate(_ draft: CalendarCreate.Draft) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        createDraft = draft
+    }
+
+    /// A just-created task must be VISIBLE. Creating into a project the filter
+    /// excludes would otherwise swallow it silently ("I added it and nothing
+    /// happened" — the exact class of bug this whole change is fixing), so the
+    /// filter widens to admit it and the day jumps to where it landed.
+    private func adoptCreated(_ task: WalnutTask) {
+        if !filter.projects.isEmpty, !filter.projects.contains(task.project) {
+            filter.projects.insert(task.project)
+        }
+        if !filter.showsTasks { filter.showsTasks = true }
+        if filter.hidesOverdue, task.isOverdue { filter.hidesOverdue = false }
+        // Land on the day it was created for (a create from the header on a
+        // different day, or an edited slot in the sheet).
+        let landing = CalendarLogic.parseTaskDate(task.startDate, calendar: calendar)
+            ?? CalendarLogic.parseTaskDate(task.dueDate, calendar: calendar)
+        if let landing, !calendar.isDate(landing.date, inSameDayAs: selectedDay) {
+            withAnimation(.snappy(duration: 0.25)) {
+                selectedDay = calendar.startOfDay(for: landing.date)
+            }
+        }
     }
 
     // MARK: - Header
@@ -109,10 +175,29 @@ struct CalendarTabView: View {
                 .font(.title3.weight(.semibold))
                 .accessibilityIdentifier("calendar.title")
             Spacer()
+            CalendarFilterButton(activeCount: filter.activeCount) { showFilter = true }
+            addButton
             viewMenu
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
+    }
+
+    /// Header create: an all-day task on the selected day. The unmissable entry
+    /// that does NOT require knowing you can tap the grid — every view has it,
+    /// including List and Month (dogfood R18: Day/Multi-Day/List had none).
+    private var addButton: some View {
+        Button {
+            startCreate(CalendarCreate.allDayDraft(day: selectedDay, calendar: calendar))
+        } label: {
+            Image(systemName: "plus")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(Theme.tint)
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("calendar.add")
     }
 
     /// Apple's switcher: a menu of the four views with the current one checked.
@@ -172,8 +257,9 @@ struct CalendarTabView: View {
                 selectedDay: $selectedDay,
                 calendar: calendar,
                 taskBuckets: taskBuckets,
-                eventsByDay: deviceCalendar.eventsByDay,
+                eventsByDay: filter.showsEvents ? deviceCalendar.eventsByDay : [:],
                 onTapTask: { selectedTask = $0 },
+                onCreate: startCreate,
                 onVisibleRangeChange: warmRange
             )
         case .day, .multiDay:
@@ -183,8 +269,9 @@ struct CalendarTabView: View {
                 calendar: calendar,
                 taskBuckets: taskBuckets,
                 spanBuckets: spanBuckets,
-                eventsFor: deviceCalendar.events(on:),
+                eventsFor: visibleEvents,
                 onTapTask: { selectedTask = $0 },
+                onCreate: startCreate,
                 onVisibleRangeChange: warmRange
             )
         case .month:
@@ -192,9 +279,10 @@ struct CalendarTabView: View {
                 selectedDay: $selectedDay,
                 calendar: calendar,
                 taskBuckets: taskBuckets,
-                eventsFor: deviceCalendar.events(on:),
+                eventsFor: visibleEvents,
                 showsDeniedHint: deviceCalendar.access == .denied,
                 onTapTask: { selectedTask = $0 },
+                onCreate: startCreate,
                 onDrillIntoDay: { day in
                     let outcome = CalendarViewTransition.tappingMonthDay(day, calendar: calendar)
                     withAnimation(.snappy(duration: 0.25)) {
@@ -230,6 +318,15 @@ struct CalendarTabView: View {
         .padding(.leading, 16)
         .padding(.bottom, 16)
         .accessibilityIdentifier("calendar.today")
+    }
+
+    // MARK: - Events
+
+    /// One day's device events, after the filter. Every view reads events
+    /// through here so "hide device events" can't be honoured in one view and
+    /// ignored in another.
+    private func visibleEvents(_ dayKey: String) -> [DeviceCalendarEvent] {
+        filter.apply(toEvents: deviceCalendar.events(on: dayKey))
     }
 
     // MARK: - Event warming

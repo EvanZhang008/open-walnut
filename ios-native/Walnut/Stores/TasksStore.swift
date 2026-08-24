@@ -846,12 +846,25 @@ final class TasksStore {
         tasks.filter { $0.statusKind == .done }
     }
 
+    /// Open tasks that CARRY A DATE — exactly what the calendar surfaces can
+    /// place. The Calendar card counted the (always empty) flat slice and so
+    /// read "0" while the grid below it was full of dots (dogfood R18).
+    var datedTasks: [WalnutTask] {
+        openTasks.filter { task in
+            task.dueDate?.isEmpty == false
+                || task.startDate?.isEmpty == false
+                || task.endDate?.isEmpty == false
+        }
+    }
+
     /// Tasks for a smart-list filter, already sorted for section rendering.
     /// (.sessions renders its own list — returns [] here.) Memoized per
     /// tasks-generation; the `.today` slice additionally keys on the local
     /// day so "due today / overdue" rolls over at midnight like it used to.
     func tasks(for filter: TaskFilter) -> [WalnutTask] {
         guard filter != .sessions else { return [] }
+        // NOTE: .calendar deliberately falls through to the memoized path — the
+        // card's count needs the real dated slice (see the switch below).
         _ = tasks.count // observed read FIRST (dependency tracking on hits)
         let day = Calendar.current.startOfDay(for: Date())
         if taskSliceCache.gen != tasksGen || taskSliceCache.day != day {
@@ -862,9 +875,12 @@ final class TasksStore {
         switch filter {
         case .today: rows = WalnutTask.openSorted(todayTasks)
         case .inProgress: rows = WalnutTask.openSorted(inProgressTasks)
-        // Calendar renders its own month grid straight from the store; the
-        // flat-list slice is unused (mirrors .sessions).
-        case .sessions, .calendar: rows = []
+        // Calendar renders its own grid straight from the store, so this slice
+        // is not what gets drawn — but it IS what the card counts, so it must
+        // be the tasks the calendar can place, not [] (dogfood R18: the card
+        // said 0 above a grid full of dots).
+        case .calendar: rows = WalnutTask.openSorted(datedTasks)
+        case .sessions: rows = []
         case .allOpen: rows = WalnutTask.openSorted(openTasks)
         case .done: rows = WalnutTask.doneSorted(doneTasks)
         }
@@ -875,7 +891,13 @@ final class TasksStore {
     func count(for filter: TaskFilter) -> Int {
         // Rides the memoized slices — the smart-list cards call this 5x per
         // body pass, which used to be 5 more full-projection filter walks.
-        filter == .sessions ? sessions.count : tasks(for: filter).count
+        switch filter {
+        case .sessions: return sessions.count
+        // The calendar renders its own grid, so its flat slice is empty by
+        // design — count what it actually PLACES instead of that empty slice.
+        case .calendar: return tasks(for: .calendar).count
+        default: return tasks(for: filter).count
+        }
     }
 
     private func reportIfNetwork(_ error: Error) {
