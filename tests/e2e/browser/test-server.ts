@@ -292,6 +292,9 @@ await fs.writeFile(
         phase: 'IN_PROGRESS',
         priority: 'important',
         project: 'Backend',
+        // Gives the Quick filters Tag select an option — see
+        // todo-search-ignores-filters.spec.ts ("search ignores the tag filter").
+        tags: ['pw-e2e-tag'],
         source: 'plugin-b',
         ext: { 'plugin-b': { issue_id: '10042', issue_key: 'BE-42', project_key: 'BE' } },
         external_url: 'https://plugin-b.example.com/browse/BE-42',

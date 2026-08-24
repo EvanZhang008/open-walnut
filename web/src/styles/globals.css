@@ -9105,6 +9105,13 @@ body.walnut-dragging {
 .vd-sel:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .vd-sel.vd-filtered { color: var(--accent); border-color: var(--accent); font-weight: 500; }
 
+/* Quick filters Date row: All/Now segmented pair + a compact "More…" select.
+   The seg takes the room; the select only fits its label. */
+.vd-span2 { grid-column: 1 / -1; }
+.vd-daterow { display: flex; align-items: stretch; gap: 8px; }
+.vd-daterow .vd-seg { flex: 1; min-width: 0; }
+.vd-sel-more { width: auto; flex: 0 0 auto; }
+
 /* Sort + Group: segmented controls fill their grid cell */
 .vd-seg {
   display: flex; width: 100%;

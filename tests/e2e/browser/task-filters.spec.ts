@@ -97,18 +97,32 @@ async function closeViewPanel(page: Page): Promise<void> {
   }
 }
 
-/** Rail section id owning each query dimension in the rail+detail panel. */
+/** Rail section id owning each query dimension in the rail+detail panel.
+ *  NOTE: Project has NO rail section on the HOME surface (hidden 2026-08-23 —
+ *  it duplicated the Projects chip section); use searchToggleOption there. */
 const RAIL_SECTION: Record<string, string> = {
   Status: 'q-status',
   Phase: 'q-phase',
   Priority: 'q-priority',
-  Project: 'q-project',
+  Project: 'q-project', // /tasks surface only
   Source: 'q-source',
   Sprint: 'q-sprint',
   Pinned: 'q-flags',
   Blocked: 'q-flags',
   Time: 'q-time',
   'Order by': 'q-sort',
+}
+
+/** Toggle a query option through the panel's cross-dimension SEARCH — the only
+ *  route to dimensions without a rail section on a surface (home's Project).
+ *  Search-result rows carry the display LABEL in data-filter-value. */
+async function searchToggleOption(panel: Locator, dimension: string, label: string): Promise<void> {
+  await panel.locator('.vd-search input').fill(label)
+  await panel.locator('.vd-field', { hasText: dimension })
+    .locator(`.vd-cat[data-filter-value="${label}"]`).first().click()
+  // Clear the search so the panel is back on the rail/detail view for the
+  // next helper (rail clicks also clear it, but don't rely on that).
+  await panel.locator('.vd-search-clear').click()
 }
 
 /** Focus a dimension's rail section so its options render in the detail pane.
@@ -238,7 +252,7 @@ test('project plus the recently-updated preset narrows to that project alone', a
 
   const panel = await openViewPanel(page)
   // "Recently updated" = the Updated basis plus the last-24h preset.
-  await toggleQueryChip(panel, 'Project', 'Meadow')
+  await searchToggleOption(panel, 'Project', 'Meadow')
   await setTimeWindow(panel, 'updated', '24h')
   await closeViewPanel(page)
 
@@ -269,7 +283,7 @@ test('chips remove one condition each and Clear all restores the list', async ({
   // a Status=Done chip alone shows nothing and would make each removal below
   // unobservable. Scenario 1 covers the completed-row path (via pinned).
   const panel = await openViewPanel(page)
-  await toggleQueryChip(panel, 'Project', 'Meadow')
+  await searchToggleOption(panel, 'Project', 'Meadow')
   await toggleQueryChip(panel, 'Priority', 'important')
   await setTimeWindow(panel, 'updated', '30d')
   await closeViewPanel(page)
@@ -302,7 +316,7 @@ test('chips remove one condition each and Clear all restores the list', async ({
   // Re-add a condition so Clear all has MORE than one to drop, then assert it
   // drops every one of them in a single click.
   const panel2 = await openViewPanel(page)
-  await toggleQueryChip(panel2, 'Project', 'Meadow')
+  await searchToggleOption(panel2, 'Project', 'Meadow')
   await closeViewPanel(page)
   await expect(chipStrip(page).locator('.usage-chip')).toHaveCount(2)
   await expect(homeRow(page, OPEN_RECENT)).toHaveCount(0)
@@ -373,7 +387,7 @@ test('filter sentence spells out the query and its chips remove one condition ea
   await openHomePanel(page)
 
   const panel = await openViewPanel(page)
-  await toggleQueryChip(panel, 'Project', 'Meadow')
+  await searchToggleOption(panel, 'Project', 'Meadow')
   await setTimeWindow(panel, 'updated', '24h')
 
   // The sentence writes the active query in plain words with one chip per value.

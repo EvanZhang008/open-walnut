@@ -29,7 +29,7 @@ async function showAllTasks(page: Page): Promise<void> {
 // Helper: create task via REST API with unique suffix for parallel safety
 async function createTaskViaApi(
   title: string,
-  opts: Record<string, string> = {},
+  opts: Record<string, unknown> = {},
 ): Promise<{ id: string; title: string }> {
   const uniqueTitle = `${title} ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const res = await fetch(`${API}/api/tasks`, {
@@ -108,17 +108,17 @@ test('Date=Now hides future tasks from the pinned area', async ({ page }) => {
   const pinnedCard = (taskId: string) => page.locator(`.todo-focus-card[data-task-id="${taskId}"]`)
 
   await page.getByRole('button', { name: 'View options' }).click()
-  // Legacy selects render in the "Quick filters" rail section of the panel.
+  // The Date filter renders as direct All/Now buttons in the "Quick filters"
+  // rail section (the panel's landing section).
   await page.locator('.vd-rail-btn[data-rail-section="quick"]').click()
-  await page.locator('.vd-field').filter({ hasText: /^Date/ }).locator('select').selectOption('')
+  await page.locator('.vd-panel .vd-seg-btn[data-date-value=""]').click()
   await page.keyboard.press('Escape')
   await expect(pinnedCard(futurePinned.id)).toBeVisible({ timeout: 5000 })
   await expect(pinnedCard(currentPinned.id)).toBeVisible()
 
   await page.getByRole('button', { name: 'View options' }).click()
-  // Legacy selects render in the "Quick filters" rail section of the panel.
   await page.locator('.vd-rail-btn[data-rail-section="quick"]').click()
-  await page.locator('.vd-field').filter({ hasText: /^Date/ }).locator('select').selectOption('now')
+  await page.locator('.vd-panel .vd-seg-btn[data-date-value="now"]').click()
   await page.keyboard.press('Escape')
   await expect(pinnedCard(futurePinned.id)).toBeHidden()
   await expect(pinnedCard(currentPinned.id)).toBeVisible()
@@ -126,26 +126,28 @@ test('Date=Now hides future tasks from the pinned area', async ({ page }) => {
 
 test('search and filters apply across pinned, recent, and task sections', async ({ page }) => {
   const query = `shared-query-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  // The toolbar-filter leg below uses the legacy Tag select (the Priority
+  // select was retired from Quick filters 2026-08-23 — priority lives in the
+  // canonical query rail, which search deliberately does NOT bypass).
   const matchingPinned = await createTaskViaApi(`Pinned ${query} match`, {
     project: 'Work',
-    priority: 'immediate',
+    tags: ['pw-shared-tag'],
   })
-  const priorityMismatch = await createTaskViaApi(`Pinned ${query} priority mismatch`, {
+  const filterMismatch = await createTaskViaApi(`Pinned ${query} tag mismatch`, {
     project: 'Work',
-    priority: 'important',
   })
   const searchMismatch = await createTaskViaApi('Pinned unrelated search target', {
     project: 'Work',
-    priority: 'immediate',
+    tags: ['pw-shared-tag'],
   })
   const unpinnedMatch = await createTaskViaApi(`Unpinned ${query} match`, {
     project: 'Work',
-    priority: 'immediate',
+    tags: ['pw-shared-tag'],
   })
   await pinTaskViaApi(matchingPinned.id)
-  await pinTaskViaApi(priorityMismatch.id)
+  await pinTaskViaApi(filterMismatch.id)
   await pinTaskViaApi(searchMismatch.id)
-  await groupTasksViaApi([matchingPinned.id, priorityMismatch.id, searchMismatch.id])
+  await groupTasksViaApi([matchingPinned.id, filterMismatch.id, searchMismatch.id])
 
   await page.goto('/')
   await page.waitForLoadState('networkidle')
@@ -163,7 +165,7 @@ test('search and filters apply across pinned, recent, and task sections', async 
   const searchInput = page.locator('.todo-search-input')
 
   await expect(pinnedCard(matchingPinned.id)).toBeVisible({ timeout: 5000 })
-  await expect(pinnedCard(priorityMismatch.id)).toBeVisible()
+  await expect(pinnedCard(filterMismatch.id)).toBeVisible()
   await expect(pinnedCard(searchMismatch.id)).toBeVisible()
   await expect(recentCard(searchMismatch.id)).toBeVisible()
 
@@ -181,11 +183,11 @@ test('search and filters apply across pinned, recent, and task sections', async 
   await searchInput.pressSequentially(query)
   await expect(searchInput).toHaveValue(query)
   await expect(pinnedCard(matchingPinned.id)).toBeVisible()
-  await expect(pinnedCard(priorityMismatch.id)).toBeVisible()
+  await expect(pinnedCard(filterMismatch.id)).toBeVisible()
   await expect(pinnedCard(searchMismatch.id)).toBeHidden()
   await expect(pinnedCount).toHaveText('2')
   await expect(recentCard(matchingPinned.id)).toBeVisible()
-  await expect(recentCard(priorityMismatch.id)).toBeVisible()
+  await expect(recentCard(filterMismatch.id)).toBeVisible()
   await expect(recentCard(unpinnedMatch.id)).toBeVisible()
   await expect(recentCard(searchMismatch.id)).toBeHidden()
   await expect(recentCount).toHaveText('3')
@@ -195,25 +197,25 @@ test('search and filters apply across pinned, recent, and task sections', async 
   releaseServerSearch()
   await expect(page.locator('.todo-search-spinner')).toBeHidden()
   await expect(pinnedCard(matchingPinned.id)).toBeVisible()
-  await expect(pinnedCard(priorityMismatch.id)).toBeVisible()
+  await expect(pinnedCard(filterMismatch.id)).toBeVisible()
   await expect(recentCard(unpinnedMatch.id)).toBeVisible()
 
   await page.getByRole('button', { name: 'View options' }).click()
   // Legacy selects render in the "Quick filters" rail section of the panel.
   await page.locator('.vd-rail-btn[data-rail-section="quick"]').click()
-  await page.locator('.vd-field').filter({ hasText: /^Priority/ }).locator('select').selectOption('immediate')
+  await page.locator('.vd-field').filter({ hasText: /^Tag/ }).locator('select').selectOption('pw-shared-tag')
   await page.keyboard.press('Escape')
 
   // Search ignores EVERY toolbar filter (user ruling 2026-08-09 — see
   // todo-search-ignores-filters.spec.ts): while the query is active, the
-  // priority filter must NOT hide a matching card anywhere. It only takes
+  // tag filter must NOT hide a matching card anywhere. It only takes
   // effect once the query is cleared (asserted below).
   await expect(pinnedCard(matchingPinned.id)).toBeVisible()
-  await expect(pinnedCard(priorityMismatch.id)).toBeVisible()
+  await expect(pinnedCard(filterMismatch.id)).toBeVisible()
   await expect(pinnedCard(searchMismatch.id)).toBeHidden()
   await expect(pinnedCount).toHaveText('2')
   await expect(recentCard(matchingPinned.id)).toBeVisible()
-  await expect(recentCard(priorityMismatch.id)).toBeVisible()
+  await expect(recentCard(filterMismatch.id)).toBeVisible()
   await expect(recentCard(searchMismatch.id)).toBeHidden()
   await expect(recentCard(unpinnedMatch.id)).toBeVisible()
   await expect(recentCount).toHaveText('3')
@@ -221,10 +223,10 @@ test('search and filters apply across pinned, recent, and task sections', async 
 
   await page.getByTitle('Clear search (Esc)').click()
   await expect(pinnedCard(matchingPinned.id)).toBeVisible()
-  await expect(pinnedCard(priorityMismatch.id)).toBeHidden()
+  await expect(pinnedCard(filterMismatch.id)).toBeHidden()
   await expect(pinnedCard(searchMismatch.id)).toBeVisible()
   await expect(recentCard(matchingPinned.id)).toBeVisible()
-  await expect(recentCard(priorityMismatch.id)).toBeHidden()
+  await expect(recentCard(filterMismatch.id)).toBeHidden()
   await expect(recentCard(searchMismatch.id)).toBeVisible()
 
   const sourceHandle = pinnedCard(matchingPinned.id).locator('.todo-pinned-drag-handle')
@@ -243,9 +245,9 @@ test('search and filters apply across pinned, recent, and task sections', async 
     const res = await fetch(`${API}/api/focus/tasks`)
     const body = (await res.json()) as { pinned_tasks: string[] }
     return body.pinned_tasks.filter((id) =>
-      id === matchingPinned.id || id === priorityMismatch.id || id === searchMismatch.id
+      id === matchingPinned.id || id === filterMismatch.id || id === searchMismatch.id
     )
-  }).toEqual([searchMismatch.id, priorityMismatch.id, matchingPinned.id])
+  }).toEqual([searchMismatch.id, filterMismatch.id, matchingPinned.id])
 })
 
 // ── Create task ──

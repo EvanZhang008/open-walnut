@@ -79,8 +79,6 @@ export interface ViewDropdownProps {
 
   phaseFilter?: string;
   onPhaseFilterChange?: (v: string) => void;
-  priorityFilter?: string;
-  onPriorityFilterChange?: (v: string) => void;
   tagFilter?: string;
   onTagFilterChange?: (v: string) => void;
   availableTags?: string[];
@@ -122,19 +120,19 @@ const PHASE_OPTIONS = [
   { value: 'COMPLETE', label: 'Complete' },
 ];
 
-const PRIORITY_OPTIONS = [
-  { value: '', label: 'All' },
-  { value: 'immediate', label: '!!' },
-  { value: 'important', label: '!' },
-  { value: 'backlog', label: '~' },
-  { value: 'none', label: '--' },
-];
-
 const DATE_FILTER_OPTIONS = [
   { value: '', label: 'All' },
   { value: 'now', label: 'Now' },
   { value: 'overdue', label: 'Overdue' },
   { value: 'this-week', label: 'Week' },
+  { value: 'no-date', label: 'No date' },
+];
+
+// Date values beyond the two-button pair (All / Now) live in the "More…"
+// dropdown of the Quick filters section.
+const DATE_MORE_OPTIONS = [
+  { value: 'overdue', label: 'Overdue' },
+  { value: 'this-week', label: 'This week' },
   { value: 'no-date', label: 'No date' },
 ];
 
@@ -147,7 +145,7 @@ interface RailSection {
 
 export function ViewDropdown({
   projects, activeProject, onProjectChange, projectCounts,
-  phaseFilter, onPhaseFilterChange, priorityFilter, onPriorityFilterChange,
+  phaseFilter, onPhaseFilterChange,
   tagFilter, onTagFilterChange, availableTags,
   dateFilter, onDateFilterChange,
   sortBy, onSortByChange, groupBy, onGroupByChange,
@@ -164,15 +162,14 @@ export function ViewDropdown({
 
   // Which legacy blocks this surface still owns. Each is all-or-nothing (value +
   // setter), so a half-wired caller can't render a dead control.
-  const hasLegacySelects = onPhaseFilterChange !== undefined
-    && onPriorityFilterChange !== undefined && onDateFilterChange !== undefined;
+  const hasLegacySelects = onPhaseFilterChange !== undefined && onDateFilterChange !== undefined;
   const hasLegacySortGroup = onSortByChange !== undefined && onGroupByChange !== undefined;
   const hasProjectChips = projects !== undefined && onProjectChange !== undefined;
   const hasShowCompleted = onShowCompletedChange !== undefined;
   const hasQuery = !!query && !!onQueryChange;
 
   const queryActive = !!query && hasActiveTaskQuery(query);
-  const hasActiveFilter = !!(phaseFilter || priorityFilter || tagFilter || dateFilter || activeProject || showCompleted) || queryActive;
+  const hasActiveFilter = !!(phaseFilter || tagFilter || dateFilter || activeProject || showCompleted) || queryActive;
 
   // Memoized: the fallback branches allocate, and these arrays feed the
   // sections/search memos below — fresh identities would defeat both.
@@ -183,21 +180,27 @@ export function ViewDropdown({
   const sourceOptions = useMemo(() => querySourceOptions ?? [], [querySourceOptions]);
   const sprintOptions = useMemo(() => querySprintOptions ?? [], [querySprintOptions]);
 
-  // Rail sections, in reading order: presentation first (home panel only),
-  // then the canonical query dimensions.
+  // Rail sections, in reading order: Quick filters FIRST (it is the landing
+  // page — the most-used controls, one glance away), then the other
+  // presentation sections (home panel only), then the canonical query
+  // dimensions.
   const sections = useMemo<RailSection[]>(() => {
     const list: RailSection[] = [];
-    if (hasProjectChips) list.push({ id: 'projects', name: 'Projects', badge: activeProject ? 1 : 0 });
     if (hasLegacySelects) {
-      const set = [phaseFilter, priorityFilter, dateFilter, tagFilter].filter(Boolean).length;
+      const set = [phaseFilter, dateFilter, tagFilter].filter(Boolean).length;
       list.push({ id: 'quick', name: 'Quick filters', badge: set });
     }
+    if (hasProjectChips) list.push({ id: 'projects', name: 'Projects', badge: activeProject ? 1 : 0 });
     if (hasLegacySortGroup) list.push({ id: 'arrange', name: 'Arrange' });
     if (hasQuery && query) {
       list.push({ id: 'q-status', name: 'Status', badge: query.completion.length });
       list.push({ id: 'q-phase', name: 'Phase', badge: query.phases.length });
       list.push({ id: 'q-priority', name: 'Priority', badge: query.priorities.length });
-      if (projectOptions.length) list.push({ id: 'q-project', name: 'Project', badge: query.projects.length });
+      // Home already has the Projects chip section — a second "Project" row
+      // right under it read as a duplicate (user report 2026-08-23). The
+      // multi-project query stays reachable there via the panel search;
+      // /tasks (no chips) keeps its dedicated section.
+      if (projectOptions.length && !hasProjectChips) list.push({ id: 'q-project', name: 'Project', badge: query.projects.length });
       if (sourceOptions.length) list.push({ id: 'q-source', name: 'Source', badge: query.sources.length });
       if (sprintOptions.length) list.push({ id: 'q-sprint', name: 'Sprint', badge: query.sprints.length });
       list.push({
@@ -212,7 +215,7 @@ export function ViewDropdown({
     // project) and the memo would go stale. `query` changes on every filter
     // click anyway, so this memo mostly documents the inputs.
   }, [hasProjectChips, hasLegacySelects, hasLegacySortGroup, hasQuery, query,
-      activeProject, phaseFilter, priorityFilter, dateFilter, tagFilter,
+      activeProject, phaseFilter, dateFilter, tagFilter,
       projectOptions, sourceOptions, sprintOptions]);
 
   const activeSection = sections.find((s) => s.id === section) ?? sections[0];
@@ -284,7 +287,7 @@ export function ViewDropdown({
 
   // Reset transient state per open so the panel always comes up predictable:
   // no stale search, rail on the first section (which differs per surface:
-  // home = Projects, /tasks = Status). Focus is handled by autoFocus on the
+  // home = Quick filters, /tasks = Status). Focus is handled by autoFocus on the
   // search input — this effect can run before the portal mounts (pos is set
   // in a layout effect), so a ref .focus() here would race the mount.
   useEffect(() => {
@@ -345,7 +348,6 @@ export function ViewDropdown({
   if (hasLegacySelects) {
     if (dateFilter) quickNotes.push(`date ${DATE_FILTER_OPTIONS.find((o) => o.value === dateFilter)?.label ?? dateFilter}`);
     if (phaseFilter) quickNotes.push(`phase ${PHASE_OPTIONS.find((o) => o.value === phaseFilter)?.label ?? phaseFilter}`);
-    if (priorityFilter) quickNotes.push(`priority ${priorityFilter}`);
     if (tagFilter) quickNotes.push(`tag ${tagFilter}`);
   }
 
@@ -460,7 +462,6 @@ export function ViewDropdown({
                   id={activeSection?.id ?? ''}
                   catChips={catChips} activeProject={activeProject} onProjectChange={onProjectChange}
                   phaseFilter={phaseFilter} onPhaseFilterChange={onPhaseFilterChange}
-                  priorityFilter={priorityFilter} onPriorityFilterChange={onPriorityFilterChange}
                   tagFilter={tagFilter} onTagFilterChange={onTagFilterChange} availableTags={availableTags}
                   dateFilter={dateFilter} onDateFilterChange={onDateFilterChange}
                   sortBy={sortBy} onSortByChange={onSortByChange}
@@ -502,7 +503,6 @@ function SectionDetail(props: {
   activeProject?: string;
   onProjectChange?: (p: string) => void;
   phaseFilter?: string; onPhaseFilterChange?: (v: string) => void;
-  priorityFilter?: string; onPriorityFilterChange?: (v: string) => void;
   tagFilter?: string; onTagFilterChange?: (v: string) => void; availableTags?: string[];
   dateFilter?: DateFilter; onDateFilterChange?: (v: DateFilter) => void;
   sortBy?: SortBy; onSortByChange?: (v: SortBy) => void;
@@ -531,11 +531,40 @@ function SectionDetail(props: {
   }
 
   if (id === 'quick') {
+    // The landing page stays LEAN (user ruling 2026-08-23): Date is the one
+    // filter used every day, so its two everyday values (All / Now) are direct
+    // buttons and the long tail hides in a "More…" dropdown. Priority was
+    // dropped from here entirely — it still has its own query rail section.
+    const df = props.dateFilter ?? '';
+    const dfMore = DATE_MORE_OPTIONS.some((o) => o.value === df) ? df : '';
     return (
       <div className="vd-grid">
+        <div className="vd-field vd-span2">
+          <span className="vd-label">Date</span>
+          <div className="vd-daterow">
+            <div className="vd-seg">
+              {([['', 'All'], ['now', 'Now']] as const).map(([val, lbl]) => (
+                <button
+                  key={val || 'all'}
+                  className={`vd-seg-btn${df === val ? ' vd-active' : ''}`}
+                  data-date-value={val}
+                  title={val === 'now' ? 'Hide tasks whose start date is still in the future' : 'Show every task, deferred ones included'}
+                  onClick={() => props.onDateFilterChange!(val as DateFilter)}
+                >{lbl}</button>
+              ))}
+            </div>
+            <select
+              className={`vd-sel vd-sel-more${dfMore ? ' vd-filtered' : ''}`}
+              aria-label="More date filters"
+              value={dfMore}
+              onChange={(e) => props.onDateFilterChange!(e.target.value as DateFilter)}
+            >
+              <option value="">More…</option>
+              {DATE_MORE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+        </div>
         <InlineSelect label="Phase" value={props.phaseFilter ?? ''} options={PHASE_OPTIONS} onChange={props.onPhaseFilterChange!} />
-        <InlineSelect label="Priority" value={props.priorityFilter ?? ''} options={PRIORITY_OPTIONS} onChange={props.onPriorityFilterChange!} />
-        <InlineSelect label="Date" value={props.dateFilter ?? ''} options={DATE_FILTER_OPTIONS} onChange={(v) => props.onDateFilterChange!(v as DateFilter)} />
         {props.availableTags && props.availableTags.length > 0 && props.onTagFilterChange && (
           <InlineSelect
             label="Tag"

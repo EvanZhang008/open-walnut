@@ -32,9 +32,10 @@ test('search finds a future-start task that the Now date filter hides', async ({
   await page.locator('.vd-trigger').click();
   const datePanel = page.locator('.vd-panel');
   await expect(datePanel).toBeVisible();
-  // Legacy selects render in the "Quick filters" rail section of the panel.
+  // The Date filter renders as direct All/Now buttons in the "Quick filters"
+  // rail section (the panel's landing section).
   await datePanel.locator('.vd-rail-btn[data-rail-section="quick"]').click();
-  await datePanel.locator('.vd-field', { hasText: 'Date' }).locator('select').selectOption('now');
+  await datePanel.locator('.vd-seg-btn[data-date-value="now"]').click();
   const showCompleted = datePanel.locator('.vd-check input[type="checkbox"]');
   if (await showCompleted.isChecked()) await showCompleted.uncheck();
   await page.keyboard.press('Escape');
@@ -67,18 +68,20 @@ test('search finds a future-start task that the Now date filter hides', async ({
   await expect(page.locator('.todo-panel-item[data-task-id="pw-task-done-marmalade"]')).toHaveCount(0);
 });
 
-test('search ignores the priority filter too', async ({ page }) => {
+test('search ignores the tag filter too', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('.todo-panel')).toBeVisible();
 
-  // 'Local only task' has priority 'none'; filter to '!!' (immediate) so it is
-  // excluded from the list. Same class of bug as the date filter.
+  // 'Local only task' has no tags; filter to the seeded 'pw-e2e-tag' so it is
+  // excluded from the list. Same class of bug as the date filter. (This leg
+  // used the Priority select until 2026-08-23, when Priority was retired from
+  // Quick filters — Tag is the remaining legacy select of that class.)
   await page.locator('.vd-trigger').click();
   const panel = page.locator('.vd-panel');
   await expect(panel).toBeVisible();
   // Legacy selects render in the "Quick filters" rail section of the panel.
   await panel.locator('.vd-rail-btn[data-rail-section="quick"]').click();
-  await panel.locator('.vd-field', { hasText: 'Priority' }).locator('select').selectOption('immediate');
+  await panel.locator('.vd-field', { hasText: 'Tag' }).locator('select').selectOption('pw-e2e-tag');
   await page.keyboard.press('Escape');
   await expect(panel).toBeHidden();
 

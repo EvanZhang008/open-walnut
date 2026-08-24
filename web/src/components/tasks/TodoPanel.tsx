@@ -2124,7 +2124,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const prompt = usePrompt();
   const confirm = useConfirm();
   const [showCompleted, setShowCompleted] = useState(false);
-  const [priorityFilter, setPriorityFilter] = useState('');
   const [phaseFilter, setPhaseFilter] = useState('');
   const [tagFilter, setTagFilter] = useState('');
   // Canonical composable query (src/core/task-query.ts) — the same model REST
@@ -3890,10 +3889,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     } else if (phaseFilter) {
       next.phases = [...(next.phases ?? []), phaseFilter as TaskPhase];
     }
-    if (priorityFilter) next.priorities = [...(next.priorities ?? []), priorityFilter as TaskPriority];
     if (tagFilter) next.tagsAny = [...(next.tagsAny ?? []), tagFilter];
     return next;
-  }, [phaseFilter, priorityFilter, tagFilter]);
+  }, [phaseFilter, tagFilter]);
 
   // ONE `now` for BOTH normalizations: relative windows must not slide mid-pass,
   // and search-mode results must agree with the plain list.
@@ -4064,7 +4062,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const reasons: string[] = [];
     const isDone = task.status === 'done';
     if (isDone && !completedBypass(task) && !showCompleted && phaseFilter !== 'COMPLETE') reasons.push('hidden by completed filter');
-    if (priorityFilter && effectivePriority(task.priority) !== priorityFilter) reasons.push(`priority ≠ ${priorityFilter}`);
     if (phaseFilter && !matchesPhaseFilter(phaseFilter, task.phase)) reasons.push(`phase ≠ ${phaseFilter}`);
     if (dateFilter && !isDone && !matchesDateFilter(task, dateFilter, tasks)) reasons.push(`outside "${DATE_LABELS[dateFilter] || dateFilter}" date filter`);
     if (tagFilter && (!task.tags || !task.tags.includes(tagFilter))) reasons.push(`missing tag "${tagFilter}"`);
@@ -4076,7 +4073,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       reasons.push(window ? `outside the active filters (${window})` : 'outside the active filters');
     }
     return reasons.length > 0 ? reasons.join(' · ') : undefined;
-  }, [overrideReasonTaskId, tasks, showCompleted, phaseFilter, priorityFilter, dateFilter, tagFilter, completedBypass, matchesCanonicalQuery, taskQueryState]);
+  }, [overrideReasonTaskId, tasks, showCompleted, phaseFilter, dateFilter, tagFilter, completedBypass, matchesCanonicalQuery, taskQueryState]);
 
   // Every REFINEMENT the user set, and nothing that is mere navigation:
   //   • the full canonical query (including its own `projects` condition, which
@@ -5803,6 +5800,30 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // height (a cap sized for the old cramped stack) would leave dead space below.
   const tierHeight = (h: number | null) => (isAll && h != null ? { maxHeight: h } : undefined);
 
+  // Date quick chip (tier bar + tasks mini-bar): one click flips between the
+  // two everyday values — Now (hide deferred) and All. From a long-tail value
+  // (Overdue/Week/No date, set in the View panel) a click lands on Now, so the
+  // chip always converges on the everyday pair.
+  const dateQuickLabel = dateFilter ? (DATE_LABELS[dateFilter] ?? dateFilter) : 'All';
+  const toggleDateQuick = () => {
+    const next: DateFilter = dateFilter === 'now' ? '' : 'now';
+    setDateFilter(next); persistDateFilter(next); clearFocusOverride();
+  };
+  const dateQuickChip = (
+    <button
+      type="button"
+      className={`todo-minibar-btn todo-minibar-date${dateFilter ? ' on' : ''}`}
+      title={dateFilter === 'now'
+        ? 'Date: Now — tasks with a future start date are hidden. Click to show All.'
+        : dateFilter === ''
+          ? 'Date: All — every task shown, deferred ones included. Click to switch to Now.'
+          : `Date: ${dateQuickLabel} (set in the View panel). Click to switch to Now.`}
+      onClick={toggleDateQuick}
+    >
+      ◷ {dateQuickLabel}
+    </button>
+  );
+
   return (
     <div className={`todo-panel${splitterResizing ? ' splitter-resizing' : ''}`} ref={splitterContainerRef}>
       {/* Search bar + View dropdown — single row replaces old tabs + filters + sort */}
@@ -5822,8 +5843,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           projectCounts={projectCounts}
           phaseFilter={phaseFilter}
           onPhaseFilterChange={(v) => { setPhaseFilter(v); clearFocusOverride(); }}
-          priorityFilter={priorityFilter}
-          onPriorityFilterChange={(v) => { setPriorityFilter(v); clearFocusOverride(); }}
           tagFilter={tagFilter}
           onTagFilterChange={(v) => { setTagFilter(v); clearFocusOverride(); }}
           availableTags={availableTags}
@@ -5838,7 +5857,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           onClearAll={() => {
             setActiveProject(''); persistTab(''); onProjectChange?.('');
             setPhaseFilter('');
-            setPriorityFilter('');
             setTagFilter('');
             setDateFilter(''); persistDateFilter('');
             setTaskQueryState((prev) => ({ ...DEFAULT_TASK_QUERY_FILTER_STATE, sort: prev.sort }));
@@ -5900,6 +5918,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           >
             ↕ {sortBy === 'manual' ? 'Manual' : sortBy === 'priority' ? 'Priority' : sortBy === 'date' ? 'Date' : 'Updated'}
           </button>
+          {dateQuickChip}
           {runningTaskIds.length > 0 && (
             <>
               <span className="todo-minibar-sep" />
@@ -5925,22 +5944,23 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         && (['focus', 'satellite', 'backlog', 'wait'].includes(effectiveSection) || effectiveSection.startsWith('ct_'))
         && (
         <div className="todo-minibar" data-testid="tier-view-bar">
+          {/* ONE toggle, not two buttons (user ruling 2026-08-23, same pattern
+              as the Date chip): the label shows the ACTIVE mode, a click
+              switches to the other. */}
           <button
             type="button"
-            className={`todo-minibar-btn${tierViewMode(effectiveSection) === 'project' ? ' on' : ''}`}
-            title="Cluster this tier by project, with folder labels"
-            onClick={() => setTierViewMode(effectiveSection, 'project')}
+            className="todo-minibar-btn on"
+            data-testid="tier-mode-toggle"
+            title={tierViewMode(effectiveSection) === 'project'
+              ? 'Grouped by project, with folder labels. Click for your custom pin order.'
+              : 'Your custom pin order (drag to arrange). Click to group by project.'}
+            onClick={() => setTierViewMode(effectiveSection, tierViewMode(effectiveSection) === 'project' ? 'custom' : 'project')}
           >
-            {ICONS.ICON_FOLDER} By project
+            {tierViewMode(effectiveSection) === 'project'
+              ? <>{ICONS.ICON_FOLDER} By project</>
+              : <>↕ Custom order</>}
           </button>
-          <button
-            type="button"
-            className={`todo-minibar-btn${tierViewMode(effectiveSection) === 'custom' ? ' on' : ''}`}
-            title="Show your custom pin order (drag to arrange, order is kept)"
-            onClick={() => setTierViewMode(effectiveSection, 'custom')}
-          >
-            ↕ Custom order
-          </button>
+          {dateQuickChip}
           {/* The tier's "+" (GAP-1). In the stacked All view every tier owns a
               sublabel row that carries this button; a single-tier tab has no
               sublabel (the tab itself names the tier), so the tier view bar is where
@@ -5962,21 +5982,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           Pure sort toggle; the underlying feed isn't rewritten. */}
       {!isSearchMode && effectiveSection === 'recent' && (
         <div className="todo-minibar" data-testid="recent-sort-bar">
+          {/* Same one-button toggle grammar as the tier mode / Date chips. */}
           <button
             type="button"
-            className={`todo-minibar-btn${recentSortMode === 'updated' ? ' on' : ''}`}
-            title="Sort by latest activity (updates, sessions, completion)"
-            onClick={() => handleRecentSortChange('updated')}
+            className="todo-minibar-btn on"
+            title={recentSortMode === 'updated'
+              ? 'Sorted by latest activity (updates, sessions, completion). Click to sort by creation time.'
+              : 'Sorted by creation time. Click to sort by latest activity.'}
+            onClick={() => handleRecentSortChange(recentSortMode === 'updated' ? 'created' : 'updated')}
           >
-            ↕ Sort by update
-          </button>
-          <button
-            type="button"
-            className={`todo-minibar-btn${recentSortMode === 'created' ? ' on' : ''}`}
-            title="Sort by creation time"
-            onClick={() => handleRecentSortChange('created')}
-          >
-            ↕ Sort by creation time
+            ↕ {recentSortMode === 'updated' ? 'Sort by update' : 'Sort by creation time'}
           </button>
         </div>
       )}
