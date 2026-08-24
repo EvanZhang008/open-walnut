@@ -67,6 +67,18 @@ A codex session on the laptop finishes a migration and sends a letter summarizin
 - Row actions: pin/unpin (pinned letters sort first and never age out), archive (leaves the feed, retrievable from an Archived filter), mark unread.
 - The sidebar bell badge includes unread letters; the Inbox rail tab shows its own count.
 
+### Web console, inside a session: the Inbox tab
+
+The notification center is the cross-session view. Inside one session there is a second lens on the same letters: an **Inbox tab** in the session panel, peer to Changed / Files / Terminal / Code.
+
+- The tab lists the letters THIS session wrote (envelope rows, unread dot, type badge, answered chip), and the tab chip carries the session's unread count, coloured as a warning while a decision is still unanswered. The count is live whether the tab is open or not, because that badge is the thing that tells you a letter is waiting.
+- Clicking a row opens the letter IN the tab: the same document body, decision buttons, answered record, thread and reply composer the overlay reader shows. It is literally the same component, so the two surfaces cannot drift.
+- The tab joins the existing split, so the letter sits beside the live chat in one session column: read the ask on the left, keep talking to the agent on the right. A window too narrow for both opens the letter alone, with the chat one click away.
+- A file path inside a letter opens in the panel's own Files view, like every other path click in a session, rather than popping a modal over it.
+- "Open session" inside a letter deep-links to that session's Inbox tab with the letter open (`/sessions?id=<sid>&tab=inbox&letter=<id>`), which also works pasted or bookmarked.
+
+The rail and the tab are two lenses on ONE store: read, pinned, archived and answered live with the letter, so answering in the tab updates the rail, the bell badge and the phone with no refresh anywhere.
+
 ### Phone (iOS)
 
 - An Inbox list (same envelope rows) and a reader built on the existing WKWebView HTML preview, with the thread and a reply box.

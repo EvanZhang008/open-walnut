@@ -176,11 +176,24 @@
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16), 0 32px 80px rgba(0, 0, 0, 0.18);
 }
 
+/* The letter's inside (LetterView) — one box, two hosts: this overlay and the
+   session panel's Inbox tab. It always fills whatever its host gives it, so the
+   overlay stays bounded by 88vh while the tab fills its split column. */
+.hib-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .hib-reader-head,
 .hib-reader-meta,
 .hib-composer {
   flex: 0 0 auto;
 }
+
+.hib-back-btn { flex: 0 0 auto; }
 
 .hib-reader-head {
   display: flex;
@@ -415,6 +428,91 @@
 }
 
 .hib-send-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* The Inbox TAB's badge. The badge itself is the existing
+   `.session-action-chip-count` (globals.css); only the "a decision is still
+   waiting" colour is new, and it lives here so the feature owns its own styles.
+
+   BOTH classes in the selector on purpose: this file lands BEFORE globals.css in
+   the bundle (it is imported from a component, globals.css from main.tsx), so a
+   single-class rule loses the `background: var(--accent)` tie-break to the base
+   badge and the warning colour never renders. Two classes on the same element
+   beats it on specificity regardless of order. */
+.session-action-chip-count.session-action-chip-count-warn { background: var(--warning); }
+
+/* ── Session panel Inbox tab ──────────────────────────────────────────────────
+   Peer of Changed / Files / Terminal / Code: the pane fills
+   `.session-panel-diff-col` and its bar matches the shared split bar height, so
+   the left view's bar and the chat column's bar read as ONE bar. */
+
+.session-inbox-pane {
+  width: 100%;
+  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.session-inbox-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  /* Shared bar height (see .session-code-header / the file explorer toolbar). */
+  min-height: var(--split-bar-h, 43px);
+}
+
+.session-inbox-bar-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  flex-shrink: 0;
+}
+
+.session-inbox-bar-sub {
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-inbox-bar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.session-inbox-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+}
+
+.session-inbox-empty {
+  padding: 24px 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--fg-muted);
+  max-width: 46em;
+}
+
+/* Embedded in the tab there is no 88vh box above the body, so the document gets
+   the column's real height instead of a modal-sized slice. */
+.hib-view-embedded .hib-html-frame { height: 58vh; min-height: 260px; }
+.hib-view-embedded .hib-reader-head { padding: 10px 14px 8px; }
+.hib-view-embedded .hib-reader-meta { padding: 8px 14px; }
+.hib-view-embedded .hib-reader-body { padding: 12px 14px; }
+.hib-view-embedded .hib-composer { padding: 10px 14px 12px; }
 
 @media (max-width: 720px) {
   .hib-reader { width: 96vw; max-height: 92vh; }

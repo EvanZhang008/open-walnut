@@ -6,7 +6,29 @@
  * reveals the opened column. Same window-event bridge pattern as
  * `dock:activate-task` / `sidebar:toggle-todo`.
  */
-export function openSessionOnHome(sessionId: string, navigate: (to: string) => void): void {
+import { armSessionInboxLink, parseSessionInboxTarget } from '@/components/inbox/session-inbox-link';
+
+/** Extra state a session deep link can carry (currently: the Inbox tab). */
+export interface OpenSessionOptions {
+  /** Open the panel's Inbox tab; with a letter id, on that letter. */
+  inboxLetterId?: string;
+  inboxTab?: boolean;
+}
+
+export function openSessionOnHome(
+  sessionId: string,
+  navigate: (to: string) => void,
+  opts?: OpenSessionOptions,
+): void {
+  // Park the tab request BEFORE the column opens: the panel is what consumes it,
+  // and it does not exist yet (session-inbox-link.ts explains the mailbox).
+  //
+  // Note for anyone tempted to defer this until after `navigate('/')`: it does not
+  // help. React Router's `useLocation()` still reports the OLD pathname for a beat
+  // after the URL changes, so a panel opened from another route mounts thinking it
+  // is on that route and then sees a pathname change. SessionPanel absorbs that
+  // (see DEEP_LINK_SETTLE_MS there) rather than this function guessing at timing.
+  if (opts?.inboxTab || opts?.inboxLetterId) armSessionInboxLink(sessionId, opts.inboxLetterId);
   window.dispatchEvent(new CustomEvent('main:open-session', { detail: { sessionId } }));
   navigate('/');
 }
@@ -32,9 +54,18 @@ export function openDraftSessionOnHome(project: string | undefined, navigate: (t
 /**
  * Navigate to a deep-link target, rerouting session links (`/sessions?id=…`)
  * to the home-page session columns. Non-session targets navigate as-is.
+ *
+ * A session link may carry `&tab=inbox[&letter=…]` (a letter's "Open session"),
+ * which opens the column AND its Inbox tab on that letter. Anything else in the
+ * query is ignored, so a plain `/sessions?id=…` behaves exactly as before.
  */
 export function navigateToTarget(to: string, navigate: (to: string) => void): void {
-  const m = /^\/sessions\?id=([^&]+)$/.exec(to);
-  if (m) openSessionOnHome(decodeURIComponent(m[1]), navigate);
-  else navigate(to);
+  const m = /^\/sessions\?(.+)$/.exec(to);
+  const params = m ? new URLSearchParams(m[1]) : null;
+  const id = params?.get('id');
+  if (!id) { navigate(to); return; }
+  const inbox = parseSessionInboxTarget(params!);
+  openSessionOnHome(id, navigate, inbox
+    ? { inboxTab: true, ...(inbox.letterId ? { inboxLetterId: inbox.letterId } : {}) }
+    : undefined);
 }

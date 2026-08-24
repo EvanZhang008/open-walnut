@@ -6,6 +6,7 @@ import { syncAppCommands } from './apps/commands';
 import { ensureCoreAppsRegistered } from './apps/core-apps';
 import { useAppCatalog } from './apps/hooks';
 import { openSessionOnHome } from './utils/open-session';
+import { parseSessionInboxTarget } from './components/inbox/session-inbox-link';
 import { AppShell } from './components/layout/AppShell';
 import { DebugCrashProbe } from './components/common/AppErrorBoundary';
 import { PluginBoundary } from './components/common/PluginBoundary';
@@ -29,8 +30,13 @@ function SessionsRedirect() {
   const navigate = useNavigate();
   const id = searchParams.get('id');
   useEffect(() => {
-    if (id) openSessionOnHome(id, (to) => navigate(to, { replace: true }));
-    else navigate('/', { replace: true });
+    if (!id) { navigate('/', { replace: true }); return; }
+    // `&tab=inbox[&letter=…]` on a pasted/bookmarked link lands on the session's
+    // Inbox tab, same as clicking "Open session" inside a letter.
+    const inbox = parseSessionInboxTarget(searchParams);
+    openSessionOnHome(id, (to) => navigate(to, { replace: true }), inbox
+      ? { inboxTab: true, ...(inbox.letterId ? { inboxLetterId: inbox.letterId } : {}) }
+      : undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return null;

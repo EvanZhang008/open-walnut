@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode, type ErrorInfo, memo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { copyTextDeferred } from '@/utils/clipboard';
 import { SessionChatHistory } from './SessionChatHistory';
 import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNotes';
@@ -9,10 +9,17 @@ import { SessionTerminal } from './SessionTerminal';
 import { SessionCodeView } from './SessionCodeView';
 import { prefetchVscodeEmbed } from './vscodeEmbedPrefetch';
 import { SessionDiffView } from './SessionDiffView';
+import { SessionInboxPane } from '@/components/inbox/SessionInboxPane';
+import { useSessionLetters } from '@/hooks/useSessionLetters';
+import { inboxChipTitle } from '@/components/inbox/session-letters';
+import {
+  consumeSessionInboxLink, deepLinkFullscreenReassert, SESSION_INBOX_LINK_EVENT,
+} from '@/components/inbox/session-inbox-link';
 import { buildSelectionPrefill, displayPathForPrefill } from './diffPrefill';
 import type { SessionSplitView } from './sessionSplitView';
 import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
+import { navigateToTarget } from '@/utils/open-session';
 import { UserMessagesSummary } from './UserMessagesSummary';
 // PlanPreviewSection replaced by inline plan popover in meta bar
 import { ChatInput } from '@/components/chat/ChatInput';
@@ -57,6 +64,13 @@ import { useSessionControls } from '@/hooks/useSessionControls';
 import { nextSessionControlValue, SessionControlPills } from './SessionControlPills';
 import { useNotifications } from '@/contexts/notifications';
 import { useConfirm } from '@/hooks/useConfirm';
+
+/**
+ * Below this viewport width a split view opens with the chat column collapsed:
+ * the content pane and the 280px-floor chat column don't both fit, and half a
+ * letter is worse than one click on "show chat".
+ */
+const SPLIT_MIN_WIDTH = 900;
 
 interface SessionPanelErrorBoundaryProps {
   sessionId: string;
@@ -184,6 +198,21 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   const modelPillRef = useRef<HTMLElement | null>(null);
   // CSS-promotion fullscreen (same instance, no remount)
   const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen();
+
+  // The route, and when it last CHANGED (0 = not since mount). Both live in refs
+  // read by the fullscreen guard below, so that effect's deps stay on the
+  // fullscreen state (useFullscreen already subscribes this component to the
+  // router, so useLocation costs no extra render here). The change is detected
+  // against the ref rather than trusting the effect's own mount run: a fresh mount
+  // is not a navigation, and StrictMode's double-invoke must stay a no-op.
+  const { pathname } = useLocation();
+  const routePath = useRef(pathname);
+  const routeChangedAt = useRef(0);
+  useEffect(() => {
+    if (routePath.current === pathname) return;
+    routePath.current = pathname;
+    routeChangedAt.current = Date.now();
+  }, [pathname]);
 
   // G4 liquid glass: header + composer overlay the chat column (position:
   // absolute) so content scrolls UNDER them; the scroll area pads itself by
@@ -572,6 +601,16 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // null = none open. Opening any view promotes the panel to fullscreen.
   const [activeView, setActiveView] = useState<SessionSplitView | null>(null);
   const splitOpen = activeView !== null;
+  // Inbox tab: the letters THIS session wrote to the human. The COUNT is read
+  // whether or not the tab is open — a badge that only appears once you open the
+  // tab can't tell you a letter is waiting. One shared fetch feeds every panel
+  // (useSessionLetters), so N columns are still one GET.
+  const {
+    unreadCount: letterUnread, decisionCount: letterDecisions, attentionCount: letterAttention,
+  } = useSessionLetters(sessionId);
+  // The letter open IN the tab. Owned here, not in the pane, so hopping to the
+  // Files tab and back returns to the letter instead of the list.
+  const [inboxLetterId, setInboxLetterId] = useState<string | null>(null);
   // ChatInput prefill driver — selecting code in the diff drops a prompt into the
   // existing input (no new chat, no fork; goes to the main agent via normal send).
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined);
@@ -586,6 +625,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     // `display:none`, so ChatInput's focus() lands on <body> and every keystroke
     // the user then types is LOST (2026-08-13 report: "the cursor doesn't go to
     // the input box"). Asking about a selection means "take me to the chat".
+    // Reveal is the USER's choice, so it outlives a tab hop (applyOpenCollapse).
+    autoCollapsed.current = false;
     setChatCollapsed(false);
   }, [session?.cwd]);
   // A line comment from the diff → send straight to this session's main agent.
@@ -598,6 +639,27 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // content pane (file preview / diff) is the priority — chat is a side column.
   const chatPanel = useResizablePanel('open-walnut-split-chat-w3', 30, 'right');
   const [chatCollapsed, setChatCollapsed] = useState(false);
+  // Was the collapse the WINDOW's decision (too narrow for both columns) or the
+  // user's? An automatic collapse belongs to the view that asked for it, so
+  // switching tabs drops it; a hand-hidden chat sticks until the user says
+  // otherwise. Every user-driven toggle goes through collapseChat.
+  const autoCollapsed = useRef(false);
+  const collapseChat = useCallback((collapsed: boolean) => {
+    autoCollapsed.current = false;
+    setChatCollapsed(collapsed);
+  }, []);
+  // Opening a view decides the chat column's fate: below the split floor the Inbox
+  // tab opens on the letter alone (the chat column has a 280px floor, and half a
+  // letter is worse than one click on "show chat"); any other view clears a
+  // collapse that was automatic so a tab hop can't silently lose the chat.
+  const applyOpenCollapse = useCallback((view: SessionSplitView) => {
+    if (view === 'inbox' && window.innerWidth < SPLIT_MIN_WIDTH) {
+      autoCollapsed.current = true;
+      setChatCollapsed(true);
+      return;
+    }
+    if (autoCollapsed.current) { autoCollapsed.current = false; setChatCollapsed(false); }
+  }, []);
   // File-path click target for the Files split view. When set, the explorer roots
   // at the clicked file (backend lists its parent + preselects it, VS Code style)
   // instead of the session cwd. Cleared when the split closes / view switches.
@@ -613,12 +675,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     const rerooting = view === 'files' && fileViewTarget !== null && activeView === 'files';
     setFileViewTarget(null);
     if (rerooting) return; // stay open, explorer re-roots to the session cwd
-    setActiveView((cur) => {
-      const next = cur === view ? null : view;
-      if (next) enterFullscreen(); else { exitFullscreen(); setChatCollapsed(false); }
-      return next;
-    });
-  }, [enterFullscreen, exitFullscreen, fileViewTarget, activeView]);
+    // `next` is computed from this render's activeView (already a dependency)
+    // rather than inside the updater: the side effects below are not pure, and
+    // StrictMode double-invokes an updater.
+    const next = activeView === view ? null : view;
+    setActiveView(next);
+    if (next) { enterFullscreen(); applyOpenCollapse(next); } else { exitFullscreen(); collapseChat(false); }
+  }, [enterFullscreen, exitFullscreen, fileViewTarget, activeView, applyOpenCollapse, collapseChat]);
   // Keep-alive for the Code view: once opened, it stays MOUNTED (css-hidden)
   // for the panel's lifetime. Unmounting destroys the iframe, and remounting
   // reboots the whole VS Code workbench (seconds, worse over a tunnel) — the
@@ -639,6 +702,28 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     setActiveView('files');
     enterFullscreen();
   }, [enterFullscreen]);
+
+  // Open the Inbox tab (optionally on one letter) — the arrival half of the
+  // `/sessions?id=…&tab=inbox&letter=…` deep link.
+  //
+  // The split engages only when there is room for both columns: a letter needs
+  // real width to read, and the chat column has a 280px floor, so a narrow
+  // window lands on the letter alone (its show-chat toggle sits in the bar).
+  const openInboxTab = useCallback((letterId?: string) => {
+    setFileViewTarget(null);
+    setInboxLetterId(letterId ?? null);
+    setActiveView('inbox');
+    applyOpenCollapse('inbox');
+    enterFullscreen();
+    log.info('inbox', 'session inbox tab opened', { sessionId, letterId: letterId ?? '' });
+  }, [enterFullscreen, sessionId, applyOpenCollapse]);
+
+  // A path inside a letter opens where every other path in a session opens: the
+  // panel's Files split. A letter must not be the one surface that pops a modal.
+  const handleLetterFileOpen = useCallback(
+    (target: { path: string; line?: number }) => handleFileOpen(target.path, target.line),
+    [handleFileOpen],
+  );
   // planPopoverRef removed — modal uses backdrop click
 
   // Auto-refresh plan content when modal opens
@@ -675,14 +760,83 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     setMessagesOpen(false);
     setActiveView(null);
     setFileViewTarget(null);
+    setInboxLetterId(null);
     exitFullscreen();
   }, [sessionId, exitFullscreen]);
 
+  // ── Inbox deep link (`/sessions?id=…&tab=inbox&letter=…`) ──
+  // Two arrival paths, because the panel that must react usually does not exist
+  // yet when the link is followed: a MOUNTED panel hears the event, a freshly
+  // mounted one claims the parked request (session-inbox-link.ts). Declared AFTER
+  // the reset effect above deliberately — effects run in declaration order, so a
+  // link claimed before the reset would be wiped by it on the same commit.
+  //
+  // The claim is REMEMBERED per session id, not applied once. Claiming empties the
+  // mailbox, but the reset effect above runs AGAIN on any effect replay — React
+  // StrictMode double-invokes a newly mounted subtree's effects in dev, and a
+  // remount does the same in any build — and its second pass set activeView back
+  // to null with the park already gone, so the deep link landed on a plain session
+  // column with no tab and no fullscreen. Re-applying from the ref makes the
+  // arrival idempotent instead of order-critical.
+  const claimedInboxLink = useRef<{ sid: string; letterId?: string; at: number } | null>(null);
+  useEffect(() => {
+    const remembered = claimedInboxLink.current?.sid === sessionId
+      ? claimedInboxLink.current : null;
+    const claimed = consumeSessionInboxLink(sessionId) ?? remembered;
+    if (claimed) {
+      claimedInboxLink.current = {
+        sid: sessionId, at: Date.now(), ...(claimed.letterId ? { letterId: claimed.letterId } : {}),
+      };
+      openInboxTab(claimed.letterId);
+    }
+    const onLink = (e: Event) => {
+      const detail = (e as CustomEvent<{ sessionId?: string; letterId?: string }>).detail;
+      if (!detail || detail.sessionId !== sessionId) return;
+      consumeSessionInboxLink(sessionId); // claim it so a later mount can't re-pop
+      claimedInboxLink.current = {
+        sid: sessionId, at: Date.now(), ...(detail.letterId ? { letterId: detail.letterId } : {}),
+      };
+      openInboxTab(detail.letterId);
+    };
+    window.addEventListener(SESSION_INBOX_LINK_EVENT, onLink);
+    return () => window.removeEventListener(SESSION_INBOX_LINK_EVENT, onLink);
+  }, [sessionId, openInboxTab]);
+
   // If the user exits fullscreen (ESC / backdrop) while a split view is open, close
   // it too so the body returns to the normal single-column chat.
+  //
+  // …UNLESS a deep link is still SETTLING. A link followed from another route
+  // (`/sessions?id=…&tab=inbox`, or a notification clicked on /tasks) opens the
+  // column before React Router's `useLocation()` catches up with the URL, so the
+  // panel mounts believing it is on the old route and then sees a pathname change —
+  // and a pathname change is useFullscreen's "you navigated away" exit. That
+  // dropped fullscreen a few ms after the tab opened, and this guard read it as
+  // "the user pressed Escape" and closed the very view the link asked for.
+  //
+  // Re-asserting fullscreen is a LOADED move (useFullscreen's backdrop is
+  // portalled to document.body, so putting it back after a REAL navigation strands
+  // a blurred click-blocking sheet over the new page — the 2026-08-09 incident), so
+  // the decision is a pure rule with four conditions and lives in
+  // `deepLinkFullscreenReassert`, where it is unit-pinned.
+  const settledClaim = useRef('');
   useEffect(() => {
-    if (!isFullscreen && splitOpen) { setActiveView(null); setFileViewTarget(null); }
-  }, [isFullscreen, splitOpen]);
+    if (isFullscreen || !splitOpen) return;
+    const key = deepLinkFullscreenReassert({
+      claim: claimedInboxLink.current,
+      sessionId,
+      settledKey: settledClaim.current,
+      routeChangedAt: routeChangedAt.current,
+      path: routePath.current,
+      now: Date.now(),
+    });
+    if (key) {
+      settledClaim.current = key;
+      enterFullscreen();
+      return;
+    }
+    setActiveView(null);
+    setFileViewTarget(null);
+  }, [isFullscreen, splitOpen, sessionId, enterFullscreen]);
 
   // planCompleted=true means the plan is definitively done — show Execute even if session is still running
   // (SSH FIFO sessions stay alive after plan completion; execution creates a new session anyway).
@@ -1196,6 +1350,26 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             >
               Terminal
             </button>
+            {/* Inbox — peer of the other tabs. The badge counts THIS session's
+                letters that still want the human: unread OR waiting on a decision,
+                each letter once (a decision read-but-not-answered is the whole
+                point of an async ask, and gating on unread alone left the chip
+                bare while the agent was still blocked). Any unanswered decision in
+                the count turns the badge warning-coloured. */}
+            <button
+              className={`session-action-chip${activeView === 'inbox' ? ' session-action-chip-active' : ''}`}
+              onClick={() => toggleView('inbox')}
+              title={inboxChipTitle(letterAttention, letterUnread, letterDecisions)}
+            >
+              Inbox
+              {letterAttention > 0 && (
+                <span
+                  className={`session-action-chip-count${letterDecisions > 0 ? ' session-action-chip-count-warn' : ''}`}
+                >
+                  {letterAttention > 99 ? '99+' : letterAttention}
+                </span>
+              )}
+            </button>
             <button
               className={`session-action-chip${activeView === 'code' ? ' session-action-chip-active' : ''}`}
               onClick={() => toggleView('code')}
@@ -1355,20 +1529,28 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             />
           </div>
         )}
-        {ps === 'error' && session?.errorMessage && (() => {
+        {ps === 'error' && (() => {
+          // Render even with NO errorMessage. An error the backend couldn't label
+          // used to render nothing at all \u2014 the user got a red "Error" pill and
+          // zero explanation, with the Retry button (which lives in this banner)
+          // also hidden, so the session looked permanently bricked
+          // (inc-1787439819342). A blank diagnosis is still worth a sentence and
+          // a Retry.
+          const errorText = session?.errorMessage
+            || 'Session ended unexpectedly and no cause was recorded \u2014 Retry resumes it.';
           // Coupling: 'Connection lost' is set by session-health-monitor when daemon unreachable.
-          // 'Reconnecting' activity is set by the same monitor's recoverConnectionLostSessions().
-          const isReconnecting = session.errorMessage.includes('Connection lost')
-            && session.activity?.includes('Reconnecting');
+          // 'Reconnecting' activity is set by the same monitor's recovery loop.
+          const isReconnecting = !!session?.errorMessage?.includes('Connection lost')
+            && !!session.activity?.includes('Reconnecting');
           return (
             <div className={`session-error-banner${isReconnecting ? ' session-error-banner--reconnecting' : ''}`}>
               <span className="session-error-banner-icon">{isReconnecting ? '\u21BB' : '\u26A0\uFE0F'}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <span className="session-error-banner-text">
-                  {isReconnecting ? 'Reconnecting to remote host...' : session.errorMessage}
+                  {isReconnecting ? 'Reconnecting to remote host...' : errorText}
                 </span>
-                {!isReconnecting && (() => {
-                  const sug = getErrorSuggestion(session.errorMessage!, { host: session.host, provider: session.provider });
+                {!isReconnecting && session?.errorMessage && (() => {
+                  const sug = getErrorSuggestion(session.errorMessage, { host: session.host, provider: session.provider });
                   return sug ? <ErrorSuggestionLink {...sug} /> : null;
                 })()}
               </div>
@@ -1425,7 +1607,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               <button
                 type="button"
                 className="sfe-btn sfe-tree-toggle session-chat-collapse-btn"
-                onClick={() => setChatCollapsed(false)}
+                onClick={() => collapseChat(false)}
                 title="Show chat"
                 aria-label="Show chat"
                 aria-expanded={false}
@@ -1469,6 +1651,18 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                         barRightSlot={chatBarSlot}
                       />
                     )}
+                    {/* Inbox: this session's letters, reader in place. Same split
+                        as its peers, so chat-left + letter-right is free. */}
+                    {activeView === 'inbox' && (
+                      <SessionInboxPane
+                        sessionId={sessionId}
+                        openLetterId={inboxLetterId}
+                        onOpenLetter={setInboxLetterId}
+                        onNavigate={(to) => navigateToTarget(to, navigate)}
+                        onOpenFile={handleLetterFileOpen}
+                        barRightSlot={chatBarSlot}
+                      />
+                    )}
                   </div>
                 )}
                 {/* Code view keep-alive: once opened it stays MOUNTED for the
@@ -1507,7 +1701,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                 <button
                   type="button"
                   className="sfe-btn sfe-tree-toggle session-chat-collapse-btn"
-                  onClick={() => setChatCollapsed(true)}
+                  onClick={() => collapseChat(true)}
                   title="Hide chat"
                   aria-label="Hide chat"
                   aria-expanded
