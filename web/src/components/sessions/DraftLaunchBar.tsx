@@ -5,15 +5,15 @@
  * closest to the two verbs they configure.
  *
  * Rows, top → bottom (R6 order):
- *   1. quick access — a "Quick" key, then folder chips (label = the folder
- *      BASENAME), then a divider. TOPMOST because this is the row whose CONTENT
- *      changes most across launches (top-4-by-use + 4-most-recent, see
+ *   1. quick access — a "Quick folders" caption, then the folder chips (label =
+ *      the folder BASENAME), then a divider. TOPMOST because this is the row whose
+ *      CONTENT changes most across launches (top-4-by-use + 4-most-recent, see
  *      `quickDirsFor`): a row that moves between sessions must not sit where the
  *      user aims for a fixed control. Within one draft the row is STABLE —
  *      membership is a pure function of the cache, picks never reshuffle it (the
- *      current folder's chip just renders active). The key + divider are what let
- *      the row hold eight chips: unlabelled and flush against the rows below, the
- *      whole stack read as one wall of buttons with no way to tell which button
+ *      current folder's chip just renders active). The caption + divider are what
+ *      let the row hold eight chips: unlabelled and flush against the rows below,
+ *      the whole stack read as one wall of buttons with no way to tell which button
  *      answered which question (user feedback).
  *   2. task — pin tier · "⋯ More" (priority / dates / unread). The SAME MetaFooter
  *      the folder picker uses, minus its model select AND engine toggle
@@ -153,31 +153,39 @@ export function DraftLaunchBar({
           cursor 21ms after a pick — a double-click then re-picked the folder the
           user had just left. */}
       {chips.length > 0 && (
-        <div className="draft-quick-chips" role="group" aria-label="Quick folders">
-          {/* The row's KEY. Not decoration: these chips are folders, the row below
-              is tiers, and the one below that is folder + project — eight
-              unlabelled pills stacked on two more unlabelled rows is where the
-              panel stopped being readable (user feedback). A caption, not a
+        <div className="draft-quick-block">
+          {/* The group's CAPTION, on its own line ABOVE the chips.
+              Not decoration: these chips are folders, the row below is tiers, and
+              the one below that is folder + project — eight unlabelled pills
+              stacked on two more unlabelled rows is where the panel stopped being
+              readable (user feedback). It sits above rather than inline because an
+              inline key indents only the FIRST wrapped line: at eight chips the
+              row wraps, and rows two and three then started a key-width to the
+              left of row one while the tier row and the pills each started
+              somewhere else again. Above the group, every row in the stack shares
+              ONE left edge and the chips get the full width. A caption, not a
               control: no tab stop, no click target. */}
-          <span className="draft-quick-key">Quick</span>
-          {chips.map(d => {
-            const active = chipKey({ cwd: d.cwd, host: d.host ?? null }) === currentKey;
-            return (
-              <button
-                key={`${d.host ?? '__local__'}::${d.cwd}`}
-                className={`draft-quick-chip${active ? ' draft-quick-chip-active' : ''}`}
-                aria-pressed={active}
-                // Truly disabled (not a click-less button): a focusable control
-                // that ignores Enter is a keyboard dead end. The active style
-                // sets its own colors, so no default disabled dimming shows.
-                disabled={active}
-                onClick={() => pickDir(d)}
-                title={d.host ? `${d.cwd} (on ${d.hostLabel ?? d.host})` : d.cwd}
-              >
-                {basename(d.cwd)}
-              </button>
-            );
-          })}
+          <span className="draft-quick-key">Quick folders</span>
+          <div className="draft-quick-chips" role="group" aria-label="Quick folders">
+            {chips.map(d => {
+              const active = chipKey({ cwd: d.cwd, host: d.host ?? null }) === currentKey;
+              return (
+                <button
+                  key={`${d.host ?? '__local__'}::${d.cwd}`}
+                  className={`draft-quick-chip${active ? ' draft-quick-chip-active' : ''}`}
+                  aria-pressed={active}
+                  // Truly disabled (not a click-less button): a focusable control
+                  // that ignores Enter is a keyboard dead end. The active style
+                  // sets its own colors, so no default disabled dimming shows.
+                  disabled={active}
+                  onClick={() => pickDir(d)}
+                  title={d.host ? `${d.cwd} (on ${d.hostLabel ?? d.host})` : d.cwd}
+                >
+                  {basename(d.cwd)}
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 

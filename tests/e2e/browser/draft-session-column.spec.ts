@@ -11,10 +11,10 @@
  *   header             title + Draft badge + (bound task) + ✕
  *   `.draft-session-body`   ONE centered muted line, nothing actionable
  *   `.session-panel-input`  the whole bottom stack:
- *     `.draft-launch-bar`   "Quick" key + up to 8 basename chips + divider →
- *                           labelled pin-tier row → cwd pill · project pill
- *                           (left-aligned), with the folder picker opening
- *                           UPWARD from it
+ *     `.draft-launch-bar`   "Quick folders" caption over up to 8 basename chips +
+ *                           divider → bare pin-tier row → cwd pill · project pill,
+ *                           every row on ONE left edge, with the folder picker
+ *                           opening UPWARD from it
  *     the composer          whose controls row holds the model select + two verbs
  *
  * What moved in v4, and therefore what this file asserts POSITIONALLY rather than
@@ -109,12 +109,14 @@ test('"+" opens a focused draft column with no network in the open path', async 
   await expectV4Stack(panel)
 
   // The launch meta the user can see WITHOUT opening the folder picker: the pin
-  // tier, labelled (the model AND the provider moved to the composer's model
-  // picker — see expectV4Stack). Before the earlier revision this was reachable
-  // only by opening the picker, so a draft's actual launch config was invisible.
+  // tier (the model AND the provider moved to the composer's model picker — see
+  // expectV4Stack). Before the earlier revision this was reachable only by opening
+  // the picker, so a draft's actual launch config was invisible. The group carries
+  // NO caption: the four tier names are self-describing, and the caption pushed the
+  // row off the stack's shared left edge (expectV4Stack pins both facts).
   const meta = draftLaunchBar(panel).locator('.sps-meta-footer')
   await expect(meta.locator('.pin-tier-options')).toBeVisible()
-  await expect(meta.locator('.pin-tier-label')).toBeVisible()
+  await expect(meta.locator('.pin-tier-label')).toBeHidden()
   // …and NEITHER the model select nor the engine toggle is in that row any more.
   // Asserted here (not only as "they are in the composer") because leaving a
   // second copy behind would give the column two competing controls for one

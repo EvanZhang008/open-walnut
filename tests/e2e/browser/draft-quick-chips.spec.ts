@@ -30,7 +30,7 @@ import fs from 'node:fs'
 import { test, expect } from '@playwright/test'
 import {
   basenameOf, discoverFixtureRoot, draftChipPaths, draftComposer, draftCwdPill, draftPanel,
-  draftProjectPill, draftQuickChips, expectedChips, loadHome, openDraft, openDraftOnCwd,
+  draftProjectPill, draftQuickChips, draftQuickKey, expectedChips, loadHome, openDraft, openDraftOnCwd,
   watchForbiddenRequests, type WorkingDir,
 } from './draft-helpers'
 import { openSessionFromPlus } from './draft-surface-helpers'
@@ -123,6 +123,12 @@ test('the chip row is top-2-by-use then 2-most-recent — a different answer fro
 
   const panel = await openDraft(page)
   const paths = await draftChipPaths(panel)
+
+  // The group's caption, on its own line above the chips. Asserted here because
+  // this is the spec that owns the row: without it eight bare pills stacked on two
+  // more unlabelled rows say nothing about what they change, and inline (its first
+  // shape) it put wrapped chip rows on a different left edge from the first row.
+  await expect(draftQuickKey(panel)).toHaveText('Quick folders')
 
   // THE assertion: the R6 mix, in order, over the bytes the page was handed.
   expect(paths, 'chips are the 4 most-used folders then the 4 most recent, in that order')

@@ -83,15 +83,17 @@ export function draftLaunchBar(panel: Locator): Locator {
 /** Quick-access folder chips (label = folder BASENAME, title = full path). Up to
  *  EIGHT: top 4 by absolute use count + the 4 most recent (see `quickDirsFor` in
  *  web/src/components/sessions/draft-column.ts). Scoped to `.draft-quick-chip` so
- *  the row's leading "Quick" caption is never counted as a chip. */
+ *  the group's caption is never counted as a chip. */
 export function draftQuickChips(panel: Locator): Locator {
   return draftLaunchBar(panel).locator('.draft-quick-chips .draft-quick-chip')
 }
 
-/** The quick row's KEY caption ("Quick"). A caption, not a control — it exists so
- *  eight folder chips read as their own zone rather than as more launch buttons. */
+/** The quick group's CAPTION ("Quick folders"), which sits on its own line ABOVE
+ *  the chips (not inline at their left — an inline key indents only the first
+ *  wrapped line). A caption, not a control: it exists so eight folder chips read as
+ *  their own zone rather than as more launch buttons. */
 export function draftQuickKey(panel: Locator): Locator {
-  return draftLaunchBar(panel).locator('.draft-quick-chips .draft-quick-key')
+  return draftLaunchBar(panel).locator('.draft-quick-block > .draft-quick-key')
 }
 
 /** Full paths of the rendered chips, in row order — the chip row's `title` IS the
@@ -238,7 +240,8 @@ export async function expectV4Stack(panel: Locator): Promise<void> {
   //    fixed controls; the pills stay glued to the composer.
   const [hintY, chipsY, metaY, pillsY, composerY] = await Promise.all([
     topOf(body.locator('.draft-quick-hint'), 'the body hint'),
-    topOf(bar.locator('.draft-quick-chips'), 'the quick-access chips row'),
+    // The whole quick GROUP (its caption + the chips), which is what row 1 is now.
+    topOf(bar.locator('.draft-quick-block'), 'the quick-access group'),
     topOf(bar.locator('.sps-meta-footer .sps-meta-row').first(), 'the pin-tier row'),
     topOf(bar.locator('.draft-composer-bar'), 'the cwd/project pills row'),
     topOf(composer, 'the composer'),
@@ -259,20 +262,34 @@ export async function expectV4Stack(panel: Locator): Promise<void> {
   expect(project.x, 'the project pill follows the cwd pill').toBeGreaterThan(cwd.x)
   expect(Math.abs(project.y - cwd.y), 'both pills share one line').toBeLessThan(4)
 
-  // 4b. The three rows share ONE left edge — the quick row's KEY, the pin-tier
-  //     row's key, and the cwd pill. This is the regression the in-flow ✦ slot
-  //     shipped (the meta row sat 11px right of its neighbours); the slot is an
-  //     absolute overlay now, and this pins that. Compared as first-CHILD edges,
-  //     not container edges, because a container can be full-width regardless of
-  //     where its content starts. The chips themselves are indented one caption
-  //     width now, which is the whole point of the caption.
-  const quickKey = await bar.locator('.draft-quick-chips .draft-quick-key').boundingBox()
-  const pinKey = await bar.locator('.pin-tier-options .pin-tier-label').boundingBox()
+  // 4b. ONE LEFT EDGE for the whole stack — the caption, the first chip, the tier
+  //     group's first button and the cwd pill all start at the same x (user
+  //     feedback: "I want them beautifully aligned"). Two shapes are ruled out by
+  //     this: the in-flow ✦ slot that once pushed the meta row 11px right of its
+  //     neighbours (it is an absolute overlay now), and the inline "Quick" key that
+  //     indented only the FIRST chip line, leaving wrapped rows on a different edge
+  //     from the row above them. Compared as first-CHILD edges, not container
+  //     edges, because a container can be full-width regardless of where its
+  //     content starts.
+  const quickKey = await bar.locator('.draft-quick-block > .draft-quick-key').boundingBox()
   const firstChip = await bar.locator('.draft-quick-chips .draft-quick-chip').first().boundingBox()
-  if (!quickKey || !pinKey || !firstChip) throw new Error('the chips/meta rows did not render')
-  expect(Math.abs(quickKey.x - cwd.x), 'the "Quick" key shares the pills\' left edge').toBeLessThan(3)
-  expect(Math.abs(pinKey.x - cwd.x), 'the "Pin" key shares the pills\' left edge').toBeLessThan(3)
-  expect(firstChip.x, 'the chips start after their key').toBeGreaterThan(quickKey.x)
+  // The tier button is compared BOX-to-box like the rest: it is borderless with the
+  // same 10px padding the bordered chips/pills carry, so box-aligned rows land every
+  // glyph within 1px of one line. (Nudging the group left by its padding to align
+  // the TEXT instead is what this number rejects — it threw all three boxes 10px
+  // out.)
+  const firstTier = await bar.locator('.pin-tier-options .pin-tier-btn').first().boundingBox()
+  if (!quickKey || !firstChip || !firstTier) throw new Error('the chips/meta rows did not render')
+  expect(Math.abs(quickKey.x - cwd.x), 'the caption shares the pills\' left edge').toBeLessThan(3)
+  expect(Math.abs(firstChip.x - cwd.x), 'the chips share the pills\' left edge').toBeLessThan(3)
+  expect(Math.abs(firstTier.x - cwd.x), 'the tier group shares the pills\' left edge').toBeLessThan(3)
+  expect(quickKey.y, 'the caption sits ABOVE the chips, not inline with them')
+    .toBeLessThan(firstChip.y)
+
+  // 4b-2. No "Pin" caption: the four tier names say what they are, and a second
+  //       inline key both duplicated the Quick caption's job and pushed this row's
+  //       content off the shared left edge asserted above (user feedback).
+  await expect(bar.locator('.pin-tier-label')).toBeHidden()
 
   // 4c. The provider question is asked ONCE, in the composer's model picker. The
   //     meta row's Claude|Codex toggle is gone: the model pill below already opens

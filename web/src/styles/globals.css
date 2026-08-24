@@ -20968,19 +20968,21 @@ td.usage-share-col {
      group is the approved shape. */
   margin-left: 0;
 }
-/* The draft bar ALWAYS shows the "Pin" key, overriding the footer's narrow-width
-   container query. In the picker footer the caption is the row's least
-   informative bit, so a narrow column drops it; here it is the opposite — the row
-   is now a single segmented control sitting under a labelled chip row, and
-   unlabelled it read as more folder buttons. Same visual weight as the Quick key
-   so the two rows announce themselves the same way. */
+/* No "Pin" key in the draft bar: the four tier names say what they are, and a
+   second inline caption bought nothing while pushing this row's content a
+   key-width right of every other row (user feedback: "I want them beautifully
+   aligned"). With the label gone the tier group starts at the bar's left edge on
+   its own — no nudge needed, and none wanted: the tier buttons are borderless with
+   10px padding while the chips and pills are bordered with 10px padding, so
+   box-aligned rows put every glyph within 1px of the same line. Pulling the group
+   left by its padding (an earlier attempt) aligned the TEXT and misaligned all
+   three boxes by 10px instead.
+
+   Hiding it explicitly, NOT via the footer's `@container sps-footer (max-width:
+   520px)` rule: a single-panel draft column is wider than 520px, so leaning on
+   that query would make "Pin" reappear in the widest layout and only there. */
 .draft-launch-bar .pin-tier-label {
-  display: inline;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  user-select: none;
+  display: none;
 }
 
 /* ── Popout mode (draft column) ──
@@ -21032,11 +21034,25 @@ td.usage-share-col {
    BASENAME only (a "Start in " prefix repeated eight times was noise). One click
    sets folder AND project.
 
-   A KEY ("Quick") leads the row and a hairline closes it. Both are structural,
-   not decoration: the row grew to eight chips, and stacked flush against the tier
-   row and the folder/project pills it read as one undifferentiated wall of
-   buttons — nothing said which row answered which question. The divider is what
-   makes "these eight are folders" a separate zone from the launch controls below. */
+   A CAPTION ("Quick folders") sits above the chips and a hairline closes them.
+   Both are structural, not decoration: the row grew to eight chips, and stacked
+   flush against the tier row and the folder/project pills it read as one
+   undifferentiated wall of buttons — nothing said which row answered which
+   question. The divider is what makes "these eight are folders" a separate zone
+   from the launch controls below.
+
+   The caption is ABOVE the chips, not inline at their left. Inline it indented
+   only the FIRST line, so at eight chips (which wrap) rows two and three began a
+   key-width left of row one, and with the tier row and the pills each starting
+   somewhere else again the whole stack was stepped. Above the group there is ONE
+   left edge for every row in the bar, and the chips get the panel's full width
+   (which usually pays back the caption's own line by saving a wrap). */
+.draft-quick-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
 .draft-quick-chips {
   display: flex;
   flex-wrap: wrap;
@@ -21047,13 +21063,11 @@ td.usage-share-col {
   padding-bottom: 5px;
   border-bottom: 1px solid var(--border);
 }
-/* Sits on the row's baseline as a caption. `line-height: 1.9` matches the chips'
-   box so the key doesn't ride high on the first wrapped line. */
 .draft-quick-key {
-  flex-shrink: 0;
+  display: block;
   font-size: 10px;
   font-weight: 600;
-  line-height: 1.9;
+  line-height: 1.4;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--fg-muted);
