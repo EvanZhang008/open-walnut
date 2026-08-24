@@ -18917,6 +18917,28 @@ td.usage-share-col {
   text-overflow: ellipsis;
 }
 
+/* Repo-context root header: "repo/…/folder". The muted prefix shrinks (and
+   ellipsizes) far before the folder name does — the name is the identity and
+   must survive a narrow tree. */
+.sfe-name-ctx {
+  display: flex;
+  min-width: 0;
+}
+.sfe-name-prefix {
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 999 auto;
+  min-width: 2ch;
+}
+.sfe-name-ctx .sfe-name-base {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
+
 .sfe-size {
   flex-shrink: 0;
   font-size: 11px;

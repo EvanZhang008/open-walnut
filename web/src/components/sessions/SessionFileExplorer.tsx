@@ -80,6 +80,9 @@ interface TreeNode {
 interface RootSection {
   path: string;
   label: string;
+  /** Muted repo context rendered before `label` ("repo" or "repo/…") — a bare
+   *  folder name like "templates" says nothing on a deep monorepo path. */
+  prefix?: string;
   /** 'cwd' = session working dir; 'changed' = a git repo (or submodule) the
    *  session edited — GIT ROOTS ONLY, per-folder sections were noise. */
   kind: 'cwd' | 'changed';
@@ -488,8 +491,21 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   const rootSections = useMemo<RootSection[]>(() => {
     const rootNorm = root.replace(/\/+$/, '');
     const cwdChanged = changedRoots.find((r) => r.path === rootNorm);
+    // A cwd deep inside a monorepo labels as just its folder name ("templates"),
+    // which identifies nothing. When a known repo root CONTAINS the cwd (deepest
+    // wins — a submodule is more specific than its superproject), prefix the
+    // header with the repo: "repo/…/templates". Full path stays on hover.
+    const container = changedRoots
+      .filter((r) => rootNorm.startsWith(`${r.path}/`))
+      .sort((a, b) => b.path.length - a.path.length)[0];
+    let prefix: string | undefined;
+    if (container) {
+      const repoName = lastSegment(container.path);
+      const isDirectChild = !rootNorm.slice(container.path.length + 1).includes('/');
+      prefix = isDirectChild ? repoName : `${repoName}/…`;
+    }
     const cwdSection: RootSection = {
-      path: root, label: lastSegment(root), kind: 'cwd', fileCount: cwdChanged?.fileCount,
+      path: root, label: lastSegment(root), prefix, kind: 'cwd', fileCount: cwdChanged?.fileCount,
     };
     const rest = changedRoots.filter((r) => r.path !== rootNorm);
     return [cwdSection, ...rest];
@@ -874,7 +890,10 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                 >
                   <span className="sfe-arrow">{isRootLoading ? '…' : isOpen ? '▼' : '▶'}</span>
                   <span className="sfe-icon">{section.kind === 'cwd' ? '🏠' : '📦'}</span>
-                  <span className="sfe-name">{section.label}</span>
+                  <span className={`sfe-name${section.prefix ? ' sfe-name-ctx' : ''}`}>
+                    {section.prefix && <span className="sfe-name-prefix">{section.prefix}/</span>}
+                    <span className="sfe-name-base">{section.label}</span>
+                  </span>
                   {section.fileCount != null && section.fileCount > 0 && (
                     <span className="sfe-size sfe-changed-badge">{section.fileCount} changed</span>
                   )}
