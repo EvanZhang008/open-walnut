@@ -4,6 +4,9 @@
  * and searchSemantic's degrade ladder (disabled → timeout → keyword order).
  */
 import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   createSearchIndex,
   cosineInt8,
@@ -204,6 +207,41 @@ import type { SearchIndex } from '../../src/lib/hybrid-search/index.js';
 import { createWriter } from '../../src/lib/hybrid-search/writer.js';
 
 /** The writer surface for a live index (same db handle). */
+describe('identifier ownership (keyword layer)', () => {
+  it('a doc found by its OWN ref outranks prose quoting the id', () => {
+    const index = createSearchIndex({ dbPath: ':memory:', kinds: KINDS });
+    const now = Date.now();
+    // The referent: its id appears in NO text field of its own.
+    index.upsert({ kind: 'task', ref: 'mt9zz9zz-aaaa', title: 'Fix the reconciler', updatedAt: now });
+    // The quoter: mentions the id in prose AND carries it as an identifier.
+    index.upsert({
+      kind: 'task', ref: 'mt0other-bbbb', title: 'Investigate mt9zz9zz-aaaa regression',
+      note: 'Root cause traced to mt9zz9zz-aaaa, see details.',
+      identifiers: ['mt9zz9zz-aaaa'], updatedAt: now,
+    });
+    const hits = index.search('mt9zz9zz-aaaa');
+    expect(hits[0].ref).toBe('mt9zz9zz-aaaa');
+    expect(hits[0].components.selfIdent).toBe(1);
+    expect(hits[1].components.selfIdent).toBe(0);
+    index.close();
+  });
+
+  it('an identifier PREFIX still finds and ranks the owning doc', () => {
+    const index = createSearchIndex({ dbPath: ':memory:', kinds: KINDS });
+    const now = Date.now();
+    index.upsert({ kind: 'task', ref: 'mt9zz9zz-aaaa', title: 'Fix the reconciler', updatedAt: now });
+    index.upsert({
+      kind: 'task', ref: 'mt0other-bbbb', title: 'Unrelated work',
+      identifiers: ['b3f9a1c2d4e5f60718293a4b5c6d7e8f90a1b2c3'], updatedAt: now,
+    });
+    // Prefix of the doc's own ref (humans paste id prefixes).
+    expect(index.search('mt9zz9zz')[0]?.ref).toBe('mt9zz9zz-aaaa');
+    // Prefix of a mentioned identifier (SHA prefix → the task that made it).
+    expect(index.search('b3f9a1c2d4e5')[0]?.ref).toBe('mt0other-bbbb');
+    index.close();
+  });
+});
+
 describe('rescore guards (fake worker: query always embeds to [127,0,0,0])', () => {
   const FAKE_EMBEDDER = {
     modelId: 'fake/unit-x',
@@ -255,6 +293,70 @@ describe('rescore guards (fake worker: query always embeds to [127,0,0,0])', () 
     expect(hits).toHaveLength(10);
     expect(hits.findIndex((h) => h.ref === 'target')).toBe(5); // kwRank 0 + cap 5
     index.close();
+  });
+
+  it('recall slot cap: keyword-less neighbours never crowd out keyword evidence', async () => {
+    // 12 CJK-only docs embed identically to the query (cos 1) while 10
+    // keyword docs carry real-but-partial term coverage (one of two query
+    // terms — the typo/vague query shape) and weaker vectors, so every KNN
+    // neighbour outscores them. Unbounded, the recall lane would take every
+    // page slot (2026-08-24: live typo/vague queries returned 10/10 KNN
+    // neighbours); the cap holds it to ⌈limit/4⌉.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hs-slotcap-'));
+    const index = createSearchIndex({
+      dbPath: path.join(dir, 'search.sqlite'), kinds: KINDS, embedder: FAKE_EMBEDDER,
+    });
+    const now = Date.now();
+    const w = indexWriterView(index);
+    // Corpus padding: keeps 'orbit' (10 docs) under the 15% df gate so the
+    // keyword docs actually enter the relaxed lane.
+    for (let i = 0; i < 60; i++) {
+      index.upsert({
+        kind: 'task', ref: `pad-${i}`, title: `unrelated filler item ${i}`,
+        updatedAt: now - (i + 100) * 24 * 3600 * 1000,
+      });
+    }
+    for (let i = 0; i < 10; i++) {
+      const { docId } = index.upsert({
+        kind: 'task', ref: `kw-${i}`, title: 'orbit alert stream', note: 'same body',
+        updatedAt: now - i * 3600 * 1000,
+      });
+      w.writeVectors(docId, [new Int8Array([90, 90, 0, 0])]); // decent, not top
+    }
+    for (let i = 0; i < 12; i++) {
+      const { docId } = index.upsert({
+        kind: 'task', ref: `knn-${i}`, title: `完全无关标题${i}`, note: '没有英文词',
+        updatedAt: now - i * 3600 * 1000,
+      });
+      w.writeVectors(docId, [new Int8Array([127, 0, 0, 0])]); // cos 1 vs query
+    }
+    const hits = await index.searchSemantic('orbit telemetry', { limit: 10, semanticDeadlineMs: 5000 });
+    expect(hits).toHaveLength(10);
+    const recallCount = hits.filter((h) => h.ref.startsWith('knn-')).length;
+    expect(recallCount).toBeGreaterThan(0); // still admitted…
+    expect(recallCount).toBeLessThanOrEqual(3); // …but bounded to ⌈10/4⌉
+    expect(hits.filter((h) => h.ref.startsWith('kw-')).length).toBe(10 - recallCount);
+    index.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('semantic recall admits a doc with ZERO keyword overlap (file-backed db)', async () => {
+    // Cross-lingual shape: the query shares no token with the doc, so the
+    // keyword pool is empty — only the worker's level-0 KNN can reach it.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hs-recall-'));
+    const dbPath = path.join(dir, 'search.sqlite');
+    const index = createSearchIndex({ dbPath, kinds: KINDS, embedder: FAKE_EMBEDDER });
+    const w = indexWriterView(index);
+    const { docId } = index.upsert({
+      kind: 'task', ref: 'unreachable', title: '完全无关的标题', note: '没有任何英文词',
+      updatedAt: Date.now(),
+    });
+    w.writeVectors(docId, [new Int8Array([127, 0, 0, 0])]); // seq 0 = doc-level
+    const hits = await index.searchSemantic('orbit telemetry', { semanticDeadlineMs: 5000 });
+    expect(hits.map((h) => h.ref)).toContain('unreachable');
+    expect(hits[0].components.cosine).toBeCloseTo(1, 3);
+    index.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });
 

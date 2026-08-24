@@ -22,7 +22,13 @@ import {
 } from './db.js';
 import { createWriter, type Doc, type MissingVecCursor, type UpsertResult, type Writer } from './writer.js';
 import { TOKENIZER_VERSION, tokenize, type TokenStreams } from './tokenizer.js';
-import { searchKeyword, DEFAULT_DF_THRESHOLD, type KeywordHit } from './query.js';
+import {
+  searchKeyword,
+  DEFAULT_DF_THRESHOLD,
+  RECENCY_HALF_LIFE_DAYS,
+  W_RECENCY,
+  type KeywordHit,
+} from './query.js';
 import { cosineInt8, createEmbedder, type Embedder } from './embedder.js';
 import { passagesForDoc } from './chunk.js';
 
@@ -113,6 +119,8 @@ export interface ScoredHit {
     bm25Relaxed: number;
     coverage: number;
     exactIdent: number;
+    /** Matched by the doc's OWN ref (exact 1.0 / prefix-discounted). */
+    selfIdent: number;
     recency: number;
     cosine?: number;
   };
@@ -184,7 +192,12 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
   }
 
   const embedder: Embedder | null = options.embedder
-    ? createEmbedder(options.embedder, log)
+    ? createEmbedder({
+      ...options.embedder,
+      // The recall lane's worker opens its own readonly connection — only
+      // possible for a real file (a :memory: db is invisible across threads).
+      dbPath: options.dbPath !== ':memory:' ? options.dbPath : undefined,
+    }, log)
     : null;
   let closed = false;
   /** Per-process embed-failure counts; at 2 the doc is quarantined with a
@@ -214,6 +227,23 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
 
   /** Cosine blend weight — same additive stack as the keyword components. */
   const W_COSINE = 0.20;
+  /** Doc-level KNN neighbours requested from the worker per query. */
+  const RECALL_K = 30;
+  /** Score weight for a recall doc's KNN RANK. A keyword-less doc's only
+   *  evidence is that it out-cosined ~12k others — rank is model-agnostic
+   *  where raw cosine units are not. Linear decay to 0 at rank K keeps the
+   *  tail harmless; the top neighbour (0.6 + cosine blend) beats weak keyword
+   *  stacks but never a strong one (≥1.0), and the demotion cap already
+   *  shields the keyword top-5. */
+  const W_RECALL_RANK = 0.35;
+  /** Share of the returned page that keyword-less recall docs may occupy
+   *  while keyword-evidenced docs still compete (⌈limit/N⌉ slots). KNN rank
+   *  is uncorroborated model opinion; bound its breadth the way the demotion
+   *  cap bounds cosine demotion (2026-08-24: on typo/vague queries recall
+   *  neighbours took every slot of the page and buried docs with real term
+   *  coverage). When the keyword pool runs out the cap lifts — a
+   *  cross-lingual query with zero term overlap still fills its page. */
+  const RECALL_SLOT_SHARE = 4;
   /** Pool cosine span at which the rescore earns its full weight. Below this
    *  the candidates are semantically indistinguishable and the min-max
    *  stretch would amplify noise (measured: Qwen3 spans run 0.15-0.4 on
@@ -249,11 +279,56 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         searchOptions,
         Math.max(limit, Math.min(100, Math.max(60, limit * 3))),
       );
-      if (pool.length === 0) return [];
-      const queryVec = await embedder.embedQuery(query, deadline);
-      if (!queryVec || closed) {
+      const reply = await embedder.embedQuery(query, deadline, RECALL_K);
+      if (!reply || closed) {
         return pool.slice(0, limit).map((h) => toScored(h, 'timeout'));
       }
+      const queryVec = reply.vec;
+      // Semantic recall union: docs the keyword lanes could not reach (zero
+      // term overlap — cross-lingual queries, full paraphrases). They join the
+      // pool as keyword-less candidates (recency only) and earn their place
+      // through the cosine blend below; appended AFTER the keyword pool, the
+      // demotion cap never forces them anywhere. This is deliberately NOT the
+      // banned full-KNN: only level-0 doc vectors, scanned in the worker.
+      const recallDocIds = new Set<number>();
+      if (reply.recall.length > 0) {
+        const inPool = new Set(pool.map((h) => h.docId));
+        const recallRank = new Map<number, number>();
+        reply.recall.forEach((r, i) => {
+          if (!inPool.has(r.docId)) recallRank.set(r.docId, i);
+        });
+        if (recallRank.size > 0) {
+          const addIds = [...recallRank.keys()];
+          const rows = db.prepare(
+            `SELECT id, kind, ref, title, updated_at FROM doc
+             WHERE id IN (${addIds.map(() => '?').join(',')})`,
+          ).all(...addIds) as Array<{ id: number; kind: string; ref: string; title: string; updated_at: number }>;
+          const allowedKinds = searchOptions.kinds?.length ? new Set(searchOptions.kinds) : null;
+          const now = Date.now();
+          for (const row of rows) {
+            if (allowedKinds && !allowedKinds.has(row.kind)) continue;
+            const recency = Math.exp(
+              -Math.max(0, now - row.updated_at) / (RECENCY_HALF_LIFE_DAYS * 86_400_000),
+            );
+            const rankStrength = 1 - (recallRank.get(row.id) ?? RECALL_K) / RECALL_K;
+            recallDocIds.add(row.id);
+            pool.push({
+              docId: row.id,
+              kind: row.kind,
+              ref: row.ref,
+              title: row.title,
+              updatedAt: row.updated_at,
+              score: (kindWeights[row.kind] ?? 1)
+                * (W_RECALL_RANK * rankStrength + W_RECENCY * recency),
+              components: {
+                bm25Strict: 0, bm25Relaxed: 0, coverage: 0,
+                exactIdent: 0, selfIdent: 0, recency,
+              },
+            });
+          }
+        }
+      }
+      if (pool.length === 0) return [];
       // Max cosine over a doc's chunk vectors: the best-matching passage
       // speaks for the doc.
       const bestCos = new Map<number, number>();
@@ -298,7 +373,14 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         const out = toScored(h, 'ok');
         out.components = { ...h.components, cosine: cos };
         out.score = h.score + (kindWeights[h.kind] ?? 1) * W_COSINE * confidence * cosNorm;
-        return { out, kwRank };
+        // A recall entry has NO keyword rank — its pool position is just the
+        // append/SELECT order. Infinity keeps the demotion cap from ever
+        // "protecting" one into the page ahead of scored keyword evidence.
+        return {
+          out,
+          kwRank: recallDocIds.has(h.docId) ? Number.POSITIVE_INFINITY : kwRank,
+          docId: h.docId,
+        };
       });
       scored.sort((a, b) => b.out.score - a.out.score);
       // Demotion cap: the rescore is a tiebreaker, not a veto. It may promote
@@ -307,10 +389,12 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       // top-10 to a cosine opinion; the golden set says the keyword evidence
       // should have kept it visible). Earliest overdue keyword rank wins a slot.
       const cap = Math.max(3, Math.floor(limit / 2));
+      const recallCap = Math.max(2, Math.ceil(limit / RECALL_SLOT_SHARE));
+      let recallUsed = 0;
       const final: ScoredHit[] = [];
       const pending = [...scored];
       while (final.length < Math.min(limit, pending.length + final.length)) {
-        let pick = 0;
+        let pick = -1;
         let bestDeadline = Infinity;
         for (let j = 0; j < pending.length; j++) {
           const deadline = pending[j].kwRank + cap;
@@ -319,6 +403,16 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
             bestDeadline = deadline;
           }
         }
+        if (pick === -1) {
+          // No overdue keyword doc: highest score wins the slot — unless it
+          // is a recall doc past the slot cap and a keyword doc still waits.
+          pick = 0;
+          if (recallUsed >= recallCap && recallDocIds.has(pending[0].docId)) {
+            const kw = pending.findIndex((p) => !recallDocIds.has(p.docId));
+            if (kw !== -1) pick = kw;
+          }
+        }
+        if (recallDocIds.has(pending[pick].docId)) recallUsed++;
         final.push(pending.splice(pick, 1)[0].out);
       }
       return final;

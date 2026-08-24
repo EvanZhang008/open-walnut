@@ -40,7 +40,7 @@ const SUB_COLUMNS = '{tsub ssub nsub msub}';
 export const DEFAULT_DF_THRESHOLD = 0.15;
 const DEFAULT_CANDIDATES = 250;
 const DEFAULT_LIMIT = 20;
-const RECENCY_HALF_LIFE_DAYS = 180;
+export const RECENCY_HALF_LIFE_DAYS = 180;
 /** Lane over-fetch factor when a kind filter applies: filtering happens in JS
  *  AFTER the lane query (see the JOIN note below), so fetch extra headroom. */
 const KIND_FILTER_OVERFETCH = 4;
@@ -49,7 +49,29 @@ const W_STRICT = 0.45;
 const W_RELAXED = 0.25;
 const W_COVERAGE = 0.2;
 const W_IDENT = 0.07;
-const W_RECENCY = 0.03;
+export const W_RECENCY = 0.03;
+/** A doc matched by its OWN ref is the strongest possible signal: searching an
+ *  exact id means the user wants THE doc, and its id usually appears nowhere
+ *  in its own text — only prose QUOTING the id gets bm25 + coverage + ident
+ *  (a stack topping out ≈1.33), so self-ownership must exceed that BY
+ *  CONSTRUCTION, same semantics as the production reference lane. */
+const W_SELF_IDENT = 1.5;
+/** When the query IS an identifier (≤2 tokens), identifier ownership must
+ *  dominate prose that quotes it; on longer queries idents stay a tiebreaker. */
+const W_IDENT_ID_QUERY = 0.4;
+/** Identifier-prefix matching (humans paste id/SHA prefixes): applied to
+ *  tokens that look like identifiers, at a discount vs an exact match. */
+const IDENT_PREFIX_MIN = 6;
+const IDENT_PREFIX_STRENGTH = 0.7;
+const IDENT_PREFIX_ROW_CAP = 64;
+
+/** Identifier-shaped: long-enough and digit-bearing (ids, SHAs, CR numbers),
+ *  or very long (pure-hex prefixes). Ordinary words never qualify, so prefix
+ *  scans can't flood on prose tokens. */
+function looksLikeIdentifier(token: string): boolean {
+  if (token.length < IDENT_PREFIX_MIN) return false;
+  return /[0-9]/.test(token) || token.length >= 10;
+}
 
 export interface KeywordSearchOptions {
   kinds?: string[];
@@ -73,6 +95,8 @@ export interface KeywordHit {
     bm25Relaxed: number;
     coverage: number;
     exactIdent: number;
+    /** Matched by the doc's OWN ref (exact 1.0 / prefix-discounted). */
+    selfIdent: number;
     recency: number;
   };
 }
@@ -237,7 +261,7 @@ export function searchKeyword(
     [...relaxedTerms.flatMap((t) => t.relaxedExprs), ...pairPhrases].join(' OR '),
   );
 
-  // ── exact identifier hits: each token, plus the whole trimmed query.
+  // ── identifier hits: each token, plus the whole trimmed query.
   // These SEED the candidate set — an id pasted into the search box matches
   // nothing in the FTS lanes (ids live in the ident table, not the token
   // streams), so boost-only ident scoring could never surface such a doc. ──
@@ -245,11 +269,40 @@ export function searchKeyword(
     ...uniqueOrig,
     query.trim().toLowerCase(),
   ])].filter(Boolean);
-  const identDocIds = new Set<number>(
-    (db.prepare(
-      `SELECT doc_id FROM ident WHERE token IN (${identTokens.map(() => '?').join(',')})`,
-    ).all(...identTokens) as Array<{ doc_id: number }>).map((r) => r.doc_id),
-  );
+  /** docId → match strength: 1.0 exact, IDENT_PREFIX_STRENGTH prefix. */
+  const identMatch = new Map<number, number>();
+  for (const r of db.prepare(
+    `SELECT doc_id FROM ident WHERE token IN (${identTokens.map(() => '?').join(',')})`,
+  ).all(...identTokens) as Array<{ doc_id: number }>) {
+    identMatch.set(r.doc_id, 1);
+  }
+  const prefixTokens = identTokens.filter(looksLikeIdentifier);
+  for (const tok of prefixTokens) {
+    // Range scan rides the ident PK index; the row cap keeps a short common
+    // prefix from flooding the candidate set.
+    for (const r of db.prepare(
+      `SELECT doc_id FROM ident WHERE token > ? AND token < ? LIMIT ${IDENT_PREFIX_ROW_CAP}`,
+    ).all(tok, `${tok}￿`) as Array<{ doc_id: number }>) {
+      if (!identMatch.has(r.doc_id)) identMatch.set(r.doc_id, IDENT_PREFIX_STRENGTH);
+    }
+  }
+  // Self-ownership seeding: a doc found by its OWN ref (exact or prefix) must
+  // enter the candidate set even when its id appears in no ident row and no
+  // text field. 12k-row ref scans measure <1ms; only identifier-shaped tokens
+  // run one.
+  const selfMatch = new Map<number, number>();
+  for (const tok of prefixTokens) {
+    for (const r of db.prepare(
+      `SELECT id, ref FROM doc WHERE ref >= ? AND ref < ? LIMIT 16`,
+    ).all(tok, `${tok}￿`) as Array<{ id: number; ref: string }>) {
+      const refLc = r.ref.toLowerCase();
+      if (refLc === tok) selfMatch.set(r.id, 1);
+      else if (refLc.startsWith(tok)) {
+        selfMatch.set(r.id, Math.max(selfMatch.get(r.id) ?? 0, IDENT_PREFIX_STRENGTH));
+      }
+    }
+  }
+  const identDocIds = new Set<number>([...identMatch.keys(), ...selfMatch.keys()]);
 
   // ── merge candidates + normalize bm25 (fts5 bm25 is negative-better) ──
   const candidates = new Map<number, { strict?: number; relaxed?: number }>();
@@ -294,6 +347,9 @@ export function searchKeyword(
   }
 
   // ── score ──
+  // Identifier-query detection: on a 1-2 token query the identifier IS the
+  // intent, so ownership outweighs prose quoting it.
+  const wIdent = terms.length <= 2 && prefixTokens.length > 0 ? W_IDENT_ID_QUERY : W_IDENT;
   const hits: KeywordHit[] = [];
   for (const row of docRows) {
     const lanes = candidates.get(row.id)!;
@@ -305,7 +361,8 @@ export function searchKeyword(
       bm25Strict: norm(lanes.strict, bestStrict),
       bm25Relaxed: norm(lanes.relaxed, bestRelaxed),
       coverage: covered / terms.length,
-      exactIdent: identDocIds.has(row.id) ? 1 : 0,
+      exactIdent: identMatch.get(row.id) ?? 0,
+      selfIdent: selfMatch.get(row.id) ?? 0,
       recency: Math.exp(-Math.max(0, now - row.updated_at) / (RECENCY_HALF_LIFE_DAYS * 86_400_000)),
     };
     const kindWeight = options.kindWeights?.[row.kind] ?? 1;
@@ -313,7 +370,8 @@ export function searchKeyword(
       W_STRICT * components.bm25Strict
       + W_RELAXED * components.bm25Relaxed
       + W_COVERAGE * components.coverage
-      + W_IDENT * components.exactIdent
+      + wIdent * components.exactIdent
+      + W_SELF_IDENT * components.selfIdent
       + W_RECENCY * components.recency
     );
     hits.push({

@@ -19,16 +19,34 @@ export interface EmbedderRuntimeConfig {
   /** transformers.js dtype (default 'q8'). */
   dtype?: string;
   cacheDir?: string;
+  /** Pooling: 'mean' (default; e5 family) or 'last' (Qwen3-Embedding). */
+  pooling?: 'mean' | 'last';
   /** Absolute path/URL of the compiled worker script. Defaults to the sibling
    *  embed-worker.js — correct when this library runs un-bundled; a bundling
    *  caller must pass where its build put the worker entry. */
   workerPath?: string | URL;
+  /** Index db file for the worker's own READONLY connection (semantic recall
+   *  lane). Omitted for :memory: indexes — a worker thread can't see them. */
+  dbPath?: string;
+}
+
+/** One semantic-recall candidate from the worker's doc-level KNN. */
+export interface RecallHit {
+  docId: number;
+  cos: number;
+}
+
+export interface QueryEmbedding {
+  vec: Int8Array;
+  /** Doc-level KNN neighbours (empty when recall is disabled/unavailable). */
+  recall: RecallHit[];
 }
 
 export interface Embedder {
-  /** Embed one query. Resolves null when the deadline expires or the worker
-   *  is unavailable — callers degrade to keyword-only. */
-  embedQuery(text: string, deadlineMs?: number): Promise<Int8Array | null>;
+  /** Embed one query (optionally with doc-level KNN recall). Resolves null
+   *  when the deadline expires or the worker is unavailable — callers degrade
+   *  to keyword-only. */
+  embedQuery(text: string, deadlineMs?: number, recallK?: number): Promise<QueryEmbedding | null>;
   /** Embed passages (backfill path, no deadline). Throws on worker failure so
    *  the backfill loop can stop instead of writing garbage. */
   embedPassages(texts: string[]): Promise<Int8Array[]>;
@@ -41,8 +59,13 @@ export const MAX_EMBED_CHARS = 2000;
 
 const MAX_CONSECUTIVE_CRASHES = 3;
 
+interface WorkerReply {
+  rows: Int8Array[];
+  recall: RecallHit[];
+}
+
 interface Pending {
-  resolve: (rows: Int8Array[]) => void;
+  resolve: (reply: WorkerReply) => void;
   reject: (err: Error) => void;
   count: number;
 }
@@ -83,6 +106,8 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
           dims: config.dims,
           dtype: config.dtype,
           cacheDir: config.cacheDir,
+          pooling: config.pooling,
+          dbPath: config.dbPath,
         },
       });
     } catch (err) {
@@ -94,7 +119,13 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
       return null;
     }
     worker.unref();
-    worker.on('message', (msg: { id: number; buf?: ArrayBuffer; dims?: number; error?: string }) => {
+    worker.on('message', (msg: {
+      id: number;
+      buf?: ArrayBuffer;
+      dims?: number;
+      error?: string;
+      recall?: RecallHit[];
+    }) => {
       // Only a SUCCESSFUL reply proves health. Resetting on error replies (or
       // counting any reply) lets a worker that answers a few batches and then
       // dies on a poison input reload the model forever without ever tripping
@@ -112,7 +143,7 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
       for (let i = 0; i < p.count; i++) {
         rows.push(flat.slice(i * msg.dims, (i + 1) * msg.dims));
       }
-      p.resolve(rows);
+      p.resolve({ rows, recall: msg.recall ?? [] });
     });
     worker.on('error', (err) => {
       log('warn', 'hybrid-search: embed worker error', { error: err.message });
@@ -131,26 +162,25 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
     return worker;
   }
 
-  function submitJob(texts: string[]): { id: number; promise: Promise<Int8Array[]> } | null {
+  function submitJob(
+    texts: string[],
+    recallK?: number,
+  ): { id: number; promise: Promise<WorkerReply> } | null {
     const w = getWorker();
     if (!w) return null;
     const id = nextId++;
-    const promise = new Promise<Int8Array[]>((resolve, reject) => {
+    const promise = new Promise<WorkerReply>((resolve, reject) => {
       pending.set(id, { resolve, reject, count: texts.length });
-      w.postMessage({ id, texts });
+      w.postMessage({ id, texts, ...(recallK ? { recallK } : {}) });
     });
     return { id, promise };
   }
 
-  function submit(texts: string[]): Promise<Int8Array[]> {
-    const job = submitJob(texts);
-    return job ? job.promise : Promise.reject(new Error('embed worker unavailable'));
-  }
-
   return {
-    async embedQuery(text, deadlineMs = 150) {
+    async embedQuery(text, deadlineMs = 150, recallK) {
       const prefixed = (config.queryPrefix ?? '') + text.slice(0, MAX_EMBED_CHARS);
-      const job = submitJob([prefixed]);
+      // Recall requires a real db file the worker can open on its own.
+      const job = submitJob([prefixed], config.dbPath ? recallK : undefined);
       if (!job) return null;
       job.promise.catch(() => {}); // settled after we gave up ≠ unhandled
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -159,14 +189,14 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
         // finally, and it is the only thing guaranteeing this race settles —
         // an unref'd timer plus the (deliberately) unref'd worker let a
         // one-shot CLI process exit before the race resolved.
-        const rows = await Promise.race([
+        const reply = await Promise.race([
           job.promise,
           new Promise<null>((resolve) => {
             timer = setTimeout(() => resolve(null), deadlineMs);
           }),
         ]);
-        if (!rows) pending.delete(job.id); // deadline: drop the live closure
-        return rows ? rows[0] : null;
+        if (!reply) pending.delete(job.id); // deadline: drop the live closure
+        return reply ? { vec: reply.rows[0], recall: reply.recall } : null;
       } catch {
         return null;
       } finally {
@@ -176,7 +206,9 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
 
     async embedPassages(texts) {
       const prefixed = texts.map((t) => (config.passagePrefix ?? '') + t.slice(0, MAX_EMBED_CHARS));
-      return submit(prefixed);
+      const job = submitJob(prefixed);
+      if (!job) return Promise.reject(new Error('embed worker unavailable'));
+      return (await job.promise).rows;
     },
 
     async dispose() {
