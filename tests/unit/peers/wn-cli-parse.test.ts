@@ -165,7 +165,7 @@ describe('formatPeersTable', () => {
 describe('formatErrorLines', () => {
   it('renders wn: <code>: <message>', () => {
     const lines = formatErrorLines({ code: 'unknown_peer', message: 'no such peer' });
-    expect(lines).toEqual(['wn: unknown_peer: no such peer']);
+    expect(lines).toEqual(['walnut: unknown_peer: no such peer']);
   });
 
   it('appends a candidates table for ambiguous_peer', () => {
@@ -179,7 +179,7 @@ describe('formatErrorLines', () => {
         ],
       },
     });
-    expect(lines[0]).toBe('wn: ambiguous_peer: multiple peers match');
+    expect(lines[0]).toBe('walnut: ambiguous_peer: multiple peers match');
     expect(lines[1]).toBe('candidates:');
     expect(lines[2]).toContain('aaaa1111');
     expect(lines[3]).toContain('devbox');
@@ -199,9 +199,9 @@ describe('formatErrorLines', () => {
 describe('helpText', () => {
   it('root help embeds usage, exit codes, and safety semantics', () => {
     const h = helpText('root');
-    expect(h).toContain('wn guide');
-    expect(h).toContain('wn peers list [--json]');
-    expect(h).toContain('wn peers send <target> <text...>');
+    expect(h).toContain('walnut guide');
+    expect(h).toContain('walnut peers list [--json]');
+    expect(h).toContain('walnut peers send <target> <text...>');
     expect(h).toContain('does NOT carry user authorization');
     // Exit 6 is now "nothing to talk to on this host": with no env, wn falls
     // back to the host daemon's well-known socket (human-inbox P3).
@@ -212,6 +212,6 @@ describe('helpText', () => {
 
   it('peers help has examples', () => {
     const h = helpText('peers');
-    expect(h).toContain('wn peers send 9f3a');
+    expect(h).toContain('walnut peers send 9f3a');
   });
 });

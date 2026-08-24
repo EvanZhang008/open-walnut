@@ -11,7 +11,7 @@ description: >-
   my plate", "did I write anything about X", "which task/session did X". Read
   this BEFORE guessing subcommands, running --help, inspecting files, or
   reaching for git: those guess, this gives the exact call. Works through the
-  `walnut` CLI over Bash (`wn tools ...` inside managed sessions), or the
+  `walnut` CLI over Bash (the same `walnut` command works inside managed sessions on any host), or the
   Walnut MCP tools when mounted.
 ---
 
@@ -122,7 +122,7 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `human_inbox_send` | Send the human a letter (write) | subject (string): One line the human reads first, like an email subject; type (completion\|action_required\|review\|info): completion \| action_required \| review \| info; markdown? (string): Letter body as markdown (exactly one of markdown \| html); html? (string): Letter body as self-contained HTML, no scripts (inline styles only); text? (string): Short plain-text preview for the envelope row and the phone push; actions? (array<object>): action_required only: the options rendered as buttons; task_refs? (array<string>): Task ids this letter is about; rendered as clickable pills; pin? (boolean): Pin it to the top of the inbox (digests, standing reports) |
 | `human_inbox_reply` | Reply in a letter thread (write) | letter (string): Letter id from human_inbox_send (lt-...); text (string): Your reply as plain text (always required: it is the thread line); markdown? (string): Optional richer body rendered under the reply; html? (string): Optional self-contained HTML body, no scripts |
 
-Use `walnut tools help <op>` or `wn tools help <op>` for the full live description. Use the generic `api` operation only when no named operation exists.
+Use `walnut tools help <op>` for the full live description. Use the generic `api` operation only when no named operation exists.
 
 <!-- ops-catalog:end -->
 
@@ -175,14 +175,14 @@ sender line (session, task, project, host) is stamped by the server, so never
 write it yourself.
 
 ```bash
-wn tools call human_inbox_send '{"subject":"Sync freeze: root cause found","type":"action_required","markdown":"The freeze is a stale lock left by an interrupted rebase, not the network.\n\n- **A** self-heal on startup (safe, ~1 day)\n- **B** fail loudly and let the human clear it (1 hour)\n\nRecommend A.","text":"Root cause found; pick A (self-heal) or B (fail loud).","actions":[{"id":"a","label":"Self-heal on startup","description":"Recommended"},{"id":"b","label":"Fail loudly"}]}'
+walnut tools call human_inbox_send '{"subject":"Sync freeze: root cause found","type":"action_required","markdown":"The freeze is a stale lock left by an interrupted rebase, not the network.\n\n- **A** self-heal on startup (safe, ~1 day)\n- **B** fail loudly and let the human clear it (1 hour)\n\nRecommend A.","text":"Root cause found; pick A (self-heal) or B (fail loud).","actions":[{"id":"a","label":"Self-heal on startup","description":"Recommended"},{"id":"b","label":"Fail loudly"}]}'
 ```
 
 Body is `markdown` OR `html`, exactly one, 200KB max. When the human answers or
 replies, it arrives in this session as a message; answer into the same thread:
 
 ```bash
-wn tools call human_inbox_reply '{"letter":"<letter-id>","text":"..."}'
+walnut tools call human_inbox_reply '{"letter":"<letter-id>","text":"..."}'
 ```
 
 ## Safety

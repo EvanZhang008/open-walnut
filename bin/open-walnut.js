@@ -8,7 +8,10 @@
 // LITE list mirrors LITE_COMMANDS in src/cli-fast.ts — keep in sync.
 // WALNUT_CLI_DIRECT=1 always takes the full CLI: the in-process legacy
 // runners live only in that bundle (see src/commands/direct-registry.ts).
-const LITE = new Set(['tools', 'add', 'tasks', 'done', 'recall', 'projects', 'sessions', 'start']);
+// `walnut guide | head` closes the pipe early: EPIPE on stdout is the reader
+// saying "enough", not an error — exit clean instead of an uncaught stack.
+process.stdout.on('error', (e) => { if (e && e.code === 'EPIPE') process.exit(0); });
+const LITE = new Set(['tools', 'add', 'tasks', 'done', 'recall', 'projects', 'sessions', 'start', 'guide', 'peers']);
 const args = process.argv.slice(2);
 const sub = args.find((a) => !a.startsWith('-'));
 const fast = process.env.WALNUT_CLI_DIRECT !== '1'

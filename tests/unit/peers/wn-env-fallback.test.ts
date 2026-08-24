@@ -239,8 +239,10 @@ describe('daemon twin parity for the external caller', () => {
       expect(src).toMatch(/installUserWnShim\(\)/);
       // Never for an isolated (test/sandbox/ephemeral) daemon.
       expect(src).toMatch(/if \(path\.resolve\(DAEMON_DIR\) !== path\.resolve\(PROD_DAEMON_DIR\)\) return/);
-      // Never clobber a foreign `wn`.
-      expect(src).toMatch(/USER_WN_SHIM_MARKER\)/);
+      // Never clobber a foreign binary: the guard reads the shim's marker.
+      expect(src).toMatch(/existing\.(includes|indexOf)\(marker\)/);
+      // The one-name-everywhere `walnut` shim ships alongside `wn`.
+      expect(src).toMatch(/USER_WALNUT_SHIM_MARKER = 'walnut-user-shim v1'/);
       expect(src).toMatch(/'\.local', 'bin'\)/);
     }
   });

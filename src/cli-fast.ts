@@ -31,6 +31,7 @@ import { fileURLToPath } from 'node:url';
 /** Data subcommands served by this entry. Mirrored in bin/open-walnut.js. */
 export const LITE_COMMANDS = new Set([
   'tools', 'add', 'tasks', 'done', 'recall', 'projects', 'sessions', 'start',
+  'guide', 'peers',
 ]);
 
 const argv = process.argv.slice(2);
@@ -88,6 +89,23 @@ switch (sub) {
   case 'tools': {
     const { runTools } = await import('./commands/tools.js');
     await runTools(args, globals);
+    break;
+  }
+  case 'guide': {
+    const { runGuide } = await import('./commands/guide.js');
+    await runGuide(globals);
+    break;
+  }
+  case 'peers': {
+    // Peer messaging always rides the agent gateway (attribution, throttling,
+    // refusal semantics live daemon-side) — same code the remote shim runs.
+    // --json must sit between the subcommand and the target (send treats
+    // anything after the target as message text).
+    const { runWnCli } = await import('./providers/wn-cli.js');
+    const argv = args.length > 0 && json
+      ? ['peers', args[0], '--json', ...args.slice(1)]
+      : ['peers', ...args];
+    process.exit(await runWnCli(argv));
     break;
   }
   case 'add': {

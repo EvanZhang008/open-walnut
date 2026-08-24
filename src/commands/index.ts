@@ -270,6 +270,25 @@ export function registerCommands(program: Command): void {
       await runTools(args ?? [], cmd.optsWithGlobals());
     });
 
+  // One name everywhere: `walnut guide` / `walnut peers` work identically on
+  // the hub (this entry) and on remote hosts (the daemon's walnut shim).
+  program
+    .command('guide')
+    .description('Print the full Walnut manual (recipes + safety rules)')
+    .action(async (_options: Record<string, unknown>, cmd) => {
+      const { runGuide } = await import('./guide.js');
+      await runGuide(cmd.optsWithGlobals());
+    });
+
+  program
+    .command('peers [args...]')
+    .description('Discover and message the user\'s other Walnut sessions (list | send <target> <text...>)')
+    .allowUnknownOption(true)
+    .action(async (args: string[] | undefined, _options: Record<string, unknown>) => {
+      const { runWnCli } = await import('../providers/wn-cli.js');
+      process.exit(await runWnCli(['peers', ...(args ?? [])]));
+    });
+
   program
     .command('session-server')
     .description('Start the session server (WebSocket wrapping Claude Agent SDK)')

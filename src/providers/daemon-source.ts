@@ -315,6 +315,9 @@ process.umask(0o077);
 // (async: the socket handlers call process.exit). Keep exit codes + command
 // surface in sync with wn-cli.ts and daemon-standalone.ts.
 function runWnMinimal(argv) {
+  // 'walnut guide | head' closes the pipe early: EPIPE on stdout is the reader
+  // saying "enough", not an error — exit clean instead of an uncaught stack.
+  process.stdout.on('error', function (e) { if (e && e.code === 'EPIPE') process.exit(0); });
   // Buffer stdout and FLUSH BEFORE EXITING. process.exit() discards whatever is
   // still queued for a pipe (pipes are async on macOS), so the old
   // out(...) then process.exit(0) shape cut "wn ... --json | jq" at exactly the
@@ -334,9 +337,9 @@ function runWnMinimal(argv) {
     if (flushTimer.unref) flushTimer.unref();
     try { process.stdout.write(text, finishExit); } catch (e) { finishExit(); }
   };
-  var usage = 'usage: wn guide | wn peers list [--json] | wn peers send <target> <text...> | wn tools list|call <op> [json]';
+  var usage = 'usage: walnut guide | walnut peers list [--json] | walnut peers send <target> <text...> | walnut tools list|call <op> [json]';
   if (argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') { out(usage); return exitWn(0); }
-  if (argv[0] !== 'peers' && argv[0] !== 'tools' && argv[0] !== 'guide') { errOut('wn: unknown command; ' + usage); return exitWn(2); }
+  if (argv[0] !== 'peers' && argv[0] !== 'tools' && argv[0] !== 'guide') { errOut('walnut: unknown command; ' + usage); return exitWn(2); }
   // Mirror wn-cli.ts: --json is recognized only BEFORE positional args, so
   // message text can legitimately contain the token '--json'.
   var json = false;
@@ -349,7 +352,7 @@ function runWnMinimal(argv) {
   var guide = false;
   if (head === 'guide') {
     // Sugar over tools.call skill_read {dirName:'walnut'} — mirrors wn-cli.ts.
-    if (sub !== undefined) { errOut('wn: guide takes no arguments'); return exitWn(2); }
+    if (sub !== undefined) { errOut('walnut: guide takes no arguments'); return exitWn(2); }
     guide = true;
     op = 'tools.call';
     args = { name: 'skill_read', args: { dirName: 'walnut' } };
@@ -363,19 +366,19 @@ function runWnMinimal(argv) {
       else {
         var callArgs = {};
         if (rest[1] !== undefined) {
-          try { callArgs = JSON.parse(rest[1]); } catch (e) { errOut('wn: invalid JSON arguments'); return exitWn(2); }
-          if (callArgs === null || typeof callArgs !== 'object' || Array.isArray(callArgs)) { errOut('wn: arguments must be a JSON object'); return exitWn(2); }
+          try { callArgs = JSON.parse(rest[1]); } catch (e) { errOut('walnut: invalid JSON arguments'); return exitWn(2); }
+          if (callArgs === null || typeof callArgs !== 'object' || Array.isArray(callArgs)) { errOut('walnut: arguments must be a JSON object'); return exitWn(2); }
         }
         op = 'tools.call';
         args = { name: rest[0], args: callArgs };
       }
-    } else { errOut('wn: ' + usage); return exitWn(2); }
+    } else { errOut('walnut: ' + usage); return exitWn(2); }
   }
   else if (sub === 'list' && rest.length === 0) { op = 'peers.list'; args = {}; }
   else if (sub === 'send' && rest.length >= 2) {
     op = 'peers.send';
     args = { target: rest[0], text: rest.slice(1).join(' ') };
-  } else { errOut('wn: ' + usage); return exitWn(2); }
+  } else { errOut('walnut: ' + usage); return exitWn(2); }
   // Env-less fallback — mirror of wn-cli.ts resolveWnEndpoint. Inside a session
   // Walnut launched, both vars are injected. Started by hand (plain terminal,
   // self-launched agent), fall back to this host's well-known daemon socket and
@@ -389,12 +392,12 @@ function runWnMinimal(argv) {
     var sockStat = null;
     try { sockStat = fs.statSync(wellKnown); } catch (e) { sockStat = null; }
     if (!sockStat) {
-      errOut('wn: no Walnut daemon on this host (WALNUT_AGENT_SOCKET is unset and ' + wellKnown + ' does not exist)');
+      errOut('walnut: no Walnut daemon on this host (WALNUT_AGENT_SOCKET is unset and ' + wellKnown + ' does not exist)');
       return exitWn(6);
     }
     var myUid = typeof process.getuid === 'function' ? process.getuid() : -1;
     if (!sockStat.isSocket() || (myUid >= 0 && sockStat.uid !== myUid) || (sockStat.mode & 0o077) !== 0) {
-      errOut('wn: refusing ' + wellKnown + ': not an owner-only socket belonging to this user');
+      errOut('walnut: refusing ' + wellKnown + ': not an owner-only socket belonging to this user');
       return exitWn(6);
     }
     sockPath = wellKnown;
@@ -412,14 +415,14 @@ function runWnMinimal(argv) {
   var finished = false;
   var finish = function (fn) { if (finished) return; finished = true; clearTimeout(timer); sock.destroy(); fn(); };
   var timer = setTimeout(function () {
-    finish(function () { errOut('wn: hub_timeout: no reply from the Walnut daemon within 30s'); exitWn(5); });
+    finish(function () { errOut('walnut: hub_timeout: no reply from the Walnut daemon within 30s'); exitWn(5); });
   }, 30000);
   sock.on('connect', function () { sock.write(JSON.stringify({ v: 1, op: op, sid: sid, args: args }) + '\\n'); });
   sock.on('error', function (e) {
-    finish(function () { errOut('wn: Walnut daemon socket unreachable at ' + sockPath + ': ' + e.message); exitWn(6); });
+    finish(function () { errOut('walnut: Walnut daemon socket unreachable at ' + sockPath + ': ' + e.message); exitWn(6); });
   });
   sock.on('close', function () {
-    finish(function () { errOut('wn: agent socket closed without a response'); exitWn(6); });
+    finish(function () { errOut('walnut: agent socket closed without a response'); exitWn(6); });
   });
   sock.on('data', function (chunk) {
     buf += chunk.toString('utf-8');
@@ -428,11 +431,11 @@ function runWnMinimal(argv) {
     var line = buf.slice(0, nl);
     finish(function () {
       var resp;
-      try { resp = JSON.parse(line); } catch (e) { errOut('wn: malformed response from agent socket'); return exitWn(1); }
+      try { resp = JSON.parse(line); } catch (e) { errOut('walnut: malformed response from agent socket'); return exitWn(1); }
       if (json) { out(JSON.stringify(resp)); return exitWn(resp.ok ? 0 : exitFor(resp.error && resp.error.code)); }
       if (!resp.ok) {
         var err = resp.error || {};
-        errOut('wn: ' + (err.code || 'internal') + ': ' + (err.message || 'gateway request failed'));
+        errOut('walnut: ' + (err.code || 'internal') + ': ' + (err.message || 'gateway request failed'));
         return exitWn(exitFor(err.code));
       }
       if (op === 'peers.list') {
@@ -450,7 +453,7 @@ function runWnMinimal(argv) {
       } else if (op === 'tools.call') {
         if (guide) {
           var sk = resp.result && resp.result.skill;
-          if (!sk || !sk.content) { errOut('wn: internal: the hub returned no manual content'); return exitWn(1); }
+          if (!sk || !sk.content) { errOut('walnut: internal: the hub returned no manual content'); return exitWn(1); }
           out(String(sk.content).replace(/\\n$/, ''));
         } else out(JSON.stringify(resp.result, null, 2));
       } else {
@@ -2415,7 +2418,33 @@ function userWnShimText() {
     + '# Resolves the daemon-managed shim at call time so an upgrade never strands it.\\n'
     + 'dir="\${WALNUT_DAEMON_DIR:-' + PROD_DAEMON_DIR + '}"\\n'
     + '[ -x "$dir/bin/wn" ] && exec "$dir/bin/wn" "$@"\\n'
-    + 'echo "wn: no Walnut daemon on this host ($dir/bin/wn is missing)." >&2\\n'
+    + 'echo "walnut: no Walnut daemon on this host ($dir/bin/wn is missing)." >&2\\n'
+    + 'exit 6\\n';
+}
+
+// A 'walnut' on the user's PATH (one name everywhere). A real walnut CLI
+// anywhere else on PATH always wins; otherwise the daemon gateway shim
+// answers. Keep in sync with daemon-standalone.ts userWalnutShimText.
+var USER_WALNUT_SHIM_MARKER = 'walnut-user-shim v1';
+
+function userWalnutShimText() {
+  return '#!/bin/sh\\n'
+    + '# ' + USER_WALNUT_SHIM_MARKER + ' — installed by the Walnut session daemon. Safe to delete.\\n'
+    + '# A real walnut CLI anywhere else on PATH always wins; otherwise the\\n'
+    + '# daemon gateway shim answers (guide / peers / tools work on any host).\\n'
+    + 'self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\\n'
+    + 'old_ifs=$IFS; IFS=:\\n'
+    + 'for d in $PATH; do\\n'
+    + '  [ "$d" = "$self_dir" ] && continue\\n'
+    + '  [ -x "$d/walnut" ] || continue\\n'
+    + '  # skip sibling copies of this shim (two installs must not exec each other)\\n'
+    + '  grep -q "walnut-user-shim" "$d/walnut" 2>/dev/null && continue\\n'
+    + '  IFS=$old_ifs && exec "$d/walnut" "$@"\\n'
+    + 'done\\n'
+    + 'IFS=$old_ifs\\n'
+    + 'dir="\${WALNUT_DAEMON_DIR:-' + PROD_DAEMON_DIR + '}"\\n'
+    + '[ -x "$dir/bin/walnut" ] && exec "$dir/bin/walnut" "$@"\\n'
+    + 'echo "walnut: no Walnut daemon on this host ($dir/bin/walnut is missing)." >&2\\n'
     + 'exit 6\\n';
 }
 
@@ -2430,26 +2459,33 @@ function installUserWnShim() {
     [path.join(HOME_DIR, '.local', 'bin'), true],
     [path.join(HOME_DIR, 'bin'), false],
   ];
+  var shims = [
+    ['wn', text, USER_WN_SHIM_MARKER],
+    ['walnut', userWalnutShimText(), USER_WALNUT_SHIM_MARKER],
+  ];
   for (var i = 0; i < candidates.length; i++) {
     var dir = candidates[i][0];
     var createDir = candidates[i][1];
-    try {
-      if (!fs.existsSync(dir)) {
-        if (!createDir) continue;
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      var target = path.join(dir, 'wn');
-      if (fs.existsSync(target)) {
-        var existing = fs.readFileSync(target, 'utf-8');
-        if (existing.indexOf(USER_WN_SHIM_MARKER) === -1) continue;
-        if (existing === text) { installed.push(target); continue; }
-      }
-      fs.writeFileSync(target, text, { mode: 0o755 });
-      fs.chmodSync(target, 0o755);
-      installed.push(target);
-    } catch (e) { /* additive convenience — never fail startup over it */ }
+    for (var j = 0; j < shims.length; j++) {
+      try {
+        if (!fs.existsSync(dir)) {
+          if (!createDir) continue;
+          fs.mkdirSync(dir, { recursive: true });
+        }
+        var name = shims[j][0]; var body = shims[j][1]; var marker = shims[j][2];
+        var target = path.join(dir, name);
+        if (fs.existsSync(target)) {
+          var existing = fs.readFileSync(target, 'utf-8');
+          if (existing.indexOf(marker) === -1) continue;
+          if (existing === body) { installed.push(target); continue; }
+        }
+        fs.writeFileSync(target, body, { mode: 0o755 });
+        fs.chmodSync(target, 0o755);
+        installed.push(target);
+      } catch (e) { /* additive convenience — never fail startup over it */ }
+    }
   }
-  if (installed.length > 0) logMsg('info', 'wn on user PATH', { paths: installed });
+  if (installed.length > 0) logMsg('info', 'walnut/wn on user PATH', { paths: installed });
 }
 
 // PATH shim so wn inside spawned sessions reaches this daemon's wn dispatch.
@@ -2459,8 +2495,13 @@ function writeWnShim() {
     fs.mkdirSync(GATEWAY_SHIM_DIR, { recursive: true, mode: 0o700 });
     var q = function (s) { return "'" + String(s).replace(/'/g, "'\\\\''") + "'"; };
     var shim = '#!/bin/sh\\nexec ' + q(process.execPath) + ' ' + q(process.argv[1]) + ' wn "$@"\\n';
-    fs.writeFileSync(GATEWAY_SHIM_PATH, shim, { mode: 0o755 });
-    fs.chmodSync(GATEWAY_SHIM_PATH, 0o755);
+    // Same dispatch under both names — walnut is canonical, wn a legacy alias.
+    var shimNames = ['wn', 'walnut'];
+    for (var si = 0; si < shimNames.length; si++) {
+      var sp = path.join(GATEWAY_SHIM_DIR, shimNames[si]);
+      fs.writeFileSync(sp, shim, { mode: 0o755 });
+      fs.chmodSync(sp, 0o755);
+    }
   } catch (err) {
     logMsg('warn', 'wn shim write failed', { error: err.message });
   }
@@ -6065,6 +6106,7 @@ function cleanup() {
     // daemon-standalone.ts cleanup().
     try { fs.unlinkSync(GATEWAY_SOCK_PATH); } catch {}
     try { fs.unlinkSync(GATEWAY_SHIM_PATH); } catch {}
+    try { fs.unlinkSync(path.join(GATEWAY_SHIM_DIR, 'walnut')); } catch {}
   }
   logMsg('info', 'daemon cleanup complete', { uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000) });
 }

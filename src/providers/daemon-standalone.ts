@@ -2066,7 +2066,34 @@ function userWnShimText(): string {
     + '# Resolves the daemon-managed shim at call time so an upgrade never strands it.\n'
     + 'dir="${WALNUT_DAEMON_DIR:-' + PROD_DAEMON_DIR + '}"\n'
     + '[ -x "$dir/bin/wn" ] && exec "$dir/bin/wn" "$@"\n'
-    + 'echo "wn: no Walnut daemon on this host ($dir/bin/wn is missing)." >&2\n'
+    + 'echo "walnut: no Walnut daemon on this host ($dir/bin/wn is missing)." >&2\n'
+    + 'exit 6\n'
+}
+
+// `walnut` on the user's PATH (one name everywhere, decision 2026-08-23). On
+// the hub the REAL npm-installed walnut CLI must always win, whatever the
+// PATH order — so this shim first scans PATH (minus its own dir) for another
+// walnut and execs it, and only then falls back to the daemon's gateway shim.
+const USER_WALNUT_SHIM_MARKER = 'walnut-user-shim v1'
+
+function userWalnutShimText(): string {
+  return '#!/bin/sh\n'
+    + '# ' + USER_WALNUT_SHIM_MARKER + ' — installed by the Walnut session daemon. Safe to delete.\n'
+    + '# A real walnut CLI anywhere else on PATH always wins; otherwise the\n'
+    + '# daemon gateway shim answers (guide / peers / tools work on any host).\n'
+    + 'self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
+    + 'old_ifs=$IFS; IFS=:\n'
+    + 'for d in $PATH; do\n'
+    + '  [ "$d" = "$self_dir" ] && continue\n'
+    + '  [ -x "$d/walnut" ] || continue\n'
+    + '  # skip sibling copies of this shim (two installs must not exec each other)\n'
+    + '  grep -q "walnut-user-shim" "$d/walnut" 2>/dev/null && continue\n'
+    + '  IFS=$old_ifs && exec "$d/walnut" "$@"\n'
+    + 'done\n'
+    + 'IFS=$old_ifs\n'
+    + 'dir="${WALNUT_DAEMON_DIR:-' + PROD_DAEMON_DIR + '}"\n'
+    + '[ -x "$dir/bin/walnut" ] && exec "$dir/bin/walnut" "$@"\n'
+    + 'echo "walnut: no Walnut daemon on this host ($dir/bin/walnut is missing)." >&2\n'
     + 'exit 6\n'
 }
 
@@ -2081,29 +2108,33 @@ function userWnShimText(): string {
  */
 function installUserWnShim() {
   if (path.resolve(DAEMON_DIR) !== path.resolve(PROD_DAEMON_DIR)) return
-  const text = userWnShimText()
   const installed: string[] = []
   for (const [dir, createDir] of [
     [path.join(HOME_DIR, '.local', 'bin'), true],
     [path.join(HOME_DIR, 'bin'), false],
   ] as Array<[string, boolean]>) {
-    try {
-      if (!fs.existsSync(dir)) {
-        if (!createDir) continue
-        fs.mkdirSync(dir, { recursive: true })
-      }
-      const target = path.join(dir, 'wn')
-      if (fs.existsSync(target)) {
-        const existing = fs.readFileSync(target, 'utf-8')
-        if (!existing.includes(USER_WN_SHIM_MARKER)) continue // someone else's wn — leave it
-        if (existing === text) { installed.push(target); continue }
-      }
-      fs.writeFileSync(target, text, { mode: 0o755 })
-      fs.chmodSync(target, 0o755)
-      installed.push(target)
-    } catch { /* additive convenience — never fail startup over it */ }
+    for (const [name, text, marker] of [
+      ['wn', userWnShimText(), USER_WN_SHIM_MARKER],
+      ['walnut', userWalnutShimText(), USER_WALNUT_SHIM_MARKER],
+    ] as Array<[string, string, string]>) {
+      try {
+        if (!fs.existsSync(dir)) {
+          if (!createDir) continue
+          fs.mkdirSync(dir, { recursive: true })
+        }
+        const target = path.join(dir, name)
+        if (fs.existsSync(target)) {
+          const existing = fs.readFileSync(target, 'utf-8')
+          if (!existing.includes(marker)) continue // someone else's binary — leave it
+          if (existing === text) { installed.push(target); continue }
+        }
+        fs.writeFileSync(target, text, { mode: 0o755 })
+        fs.chmodSync(target, 0o755)
+        installed.push(target)
+      } catch { /* additive convenience — never fail startup over it */ }
+    }
   }
-  if (installed.length > 0) logMsg('info', 'wn on user PATH', { paths: installed })
+  if (installed.length > 0) logMsg('info', 'walnut/wn on user PATH', { paths: installed })
 }
 
 /** PATH shim so `wn` inside spawned sessions reaches this daemon's wn dispatch. */
@@ -2120,8 +2151,15 @@ function writeWnShim() {
       ? ' ' + shellQuote(entry)
       : ''
     const shim = '#!/bin/sh\nexec ' + shellQuote(process.execPath) + script + ' wn "$@"\n'
-    fs.writeFileSync(GATEWAY_SHIM_PATH, shim, { mode: 0o755 })
-    fs.chmodSync(GATEWAY_SHIM_PATH, 0o755)
+    // Same dispatch under both names — `walnut` is the canonical name, `wn`
+    // the legacy alias. GATEWAY_SHIM_DIR is APPENDED to session PATH, so on
+    // the hub the real npm walnut still wins; on remote hosts this shim IS
+    // the walnut command.
+    for (const name of ['wn', 'walnut']) {
+      const p = path.join(GATEWAY_SHIM_DIR, name)
+      fs.writeFileSync(p, shim, { mode: 0o755 })
+      fs.chmodSync(p, 0o755)
+    }
   } catch (err) {
     logMsg('warn', 'wn shim write failed', { error: (err as Error).message })
   }
@@ -5077,6 +5115,7 @@ function cleanup() {
     // daemon-source.ts cleanup().
     try { fs.unlinkSync(GATEWAY_SOCK_PATH) } catch {}
     try { fs.unlinkSync(GATEWAY_SHIM_PATH) } catch {}
+    try { fs.unlinkSync(path.join(GATEWAY_SHIM_DIR, 'walnut')) } catch {}
   }
   logMsg('info', 'daemon cleanup complete', { uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000) })
 }

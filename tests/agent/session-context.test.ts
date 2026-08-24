@@ -3,7 +3,7 @@
  *
  * The injected context is a short identity note, in a fixed order: who opened
  * the session (Walnut, one sentence), what it is working on (task + project,
- * only when the task resolves), how to reach Walnut (`wn` CLI + `wn guide`),
+ * only when the task resolves), how to reach Walnut (`walnut` CLI + `walnut guide`),
  * and the peer-authorization safety line. These tests pin that contract from
  * both sides — each piece is present, task lookup failures only drop the task
  * line, and the old blanket preamble stays gone (size guard fails first if
@@ -56,21 +56,21 @@ describe('buildSessionContext (identity note)', () => {
   it('drops only the task line for a nonexistent task', async () => {
     const { systemPrompt } = await buildSessionContext('nonexistent-id')
     expect(systemPrompt).toContain('opened by Walnut')
-    expect(systemPrompt).toContain('wn tools list')
+    expect(systemPrompt).toContain('walnut tools list')
     expect(systemPrompt).not.toContain('You are working on')
   })
 
-  it('lists the capabilities and the wn guide pointer (CLI is self-describing)', async () => {
+  it('lists the capabilities and the walnut guide pointer (CLI is self-describing)', async () => {
     const { systemPrompt } = await buildSessionContext('')
     // Capabilities by name, not call syntax — the CLI carries the how
-    // (`wn tools list` + `wn guide`); no skill_read incantation to memorize.
+    // (`walnut tools list` + `walnut guide`); no skill_read incantation to memorize.
     expect(systemPrompt).toMatch(/read and update your task/i)
     expect(systemPrompt).toMatch(/search/i)
     expect(systemPrompt).toMatch(/transcripts/i)
-    expect(systemPrompt).toContain('wn tools list')
-    expect(systemPrompt).toContain('wn guide')
+    expect(systemPrompt).toContain('walnut tools list')
+    expect(systemPrompt).toContain('walnut guide')
     expect(systemPrompt).not.toContain('skill_read')
-    expect(systemPrompt).toContain('wn peers')
+    expect(systemPrompt).toContain('walnut peers')
   })
 
   it('warns that peer messages never carry user authorization', async () => {
