@@ -29710,127 +29710,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   margin: 4px 0 0;
 }
 
-.app-manager-list {
-  margin-top: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-secondary);
-  overflow: hidden;
-}
-
-.app-manager-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 42px;
-  padding: 6px 10px;
-}
-
-.app-manager-row + .app-manager-row {
-  border-top: 1px solid var(--border);
-}
-
-.app-manager-row[data-app-disposition='hidden'] .app-manager-icon,
-.app-manager-row[data-app-disposition='hidden'] .app-manager-title {
-  opacity: 0.5;
-}
-
-.app-manager-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  background: var(--bg-tertiary);
-  color: var(--fg-muted);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.app-manager-icon img {
-  width: 15px;
-  height: 15px;
-  object-fit: contain;
-}
-
-.app-manager-copy {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-}
-
-.app-manager-title {
-  /* overflow:hidden zeroes the flex automatic minimum, so a long plugin title
-     ellipsizes instead of running under the icon buttons. */
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.app-manager-chip {
-  flex-shrink: 0;
-  padding: 1px 7px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--fg-muted);
-  font-size: 10px;
-  white-space: nowrap;
-}
-
-.app-manager-path {
-  overflow: hidden;
-  color: var(--fg-muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.app-manager-actions {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  gap: 2px;
-}
-
-.app-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-
-.app-icon-btn:hover:not(:disabled) {
-  background: var(--bg-tertiary);
-  color: var(--fg);
-}
-
-.app-icon-btn:disabled {
-  opacity: 0.3;
-  cursor: default;
-}
-
-.app-icon-btn svg {
-  width: 15px;
-  height: 15px;
-}
-
-.app-manager-footer {
-  margin: 10px 2px 0;
-}
-
 .link-button {
   padding: 0;
   color: var(--accent);
@@ -29841,11 +29720,115 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   text-decoration: underline;
 }
 
+/* A plugin's app entries, listed on the plugin's own row in the Plugins section */
+
+.plugin-app-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.plugin-app-controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.plugin-app-controls-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  min-width: 0;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.plugin-app-controls-label strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plugin-app-chip {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.plugin-app-controls-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+/* "Build a plugin" — the one simple way in (Plugins section + /plugins/new) */
+
+.build-plugin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.build-plugin-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.build-plugin-head span {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.build-plugin-form {
+  display: flex;
+  gap: 8px;
+}
+
+.build-plugin-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.build-plugin-manual {
+  margin: 0;
+}
+
+.build-plugin-manual code {
+  font-size: 11px;
+}
+
 @media (max-width: 700px) {
-  /* Only the path goes: the chips carry state (In Settings / Hidden) a phone
-     user still needs to see. */
-  .app-manager-path {
-    display: none;
+  .plugin-app-controls-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .build-plugin-form {
+    flex-direction: column;
   }
 }
 
@@ -29878,6 +29861,13 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   color: var(--fg-muted);
   font-size: 14px;
   line-height: 1.55;
+}
+
+/* A section break, not a fifth step: larger than the step h2s (15px) and
+   spaced away from the card above. */
+.create-plugin-diy {
+  margin: 34px 0 0;
+  font-size: 18px;
 }
 
 .create-plugin-steps {

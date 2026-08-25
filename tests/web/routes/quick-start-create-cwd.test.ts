@@ -138,6 +138,29 @@ describe('POST /api/sessions/quick-start — createCwd', () => {
     expect(res.body.error).toContain('invalid characters');
   });
 
+  it('local ~/ cwd expands against the home directory once, at the route edge', async () => {
+    const home = vi.spyOn(os, 'homedir').mockReturnValue(tmpRoot);
+    try {
+      const app = createApp();
+      const res = await request(app).post('/api/sessions/quick-start')
+        .send({ cwd: '~/nested/plug', message: 'go', createCwd: true });
+      expect(res.status).toBe(200);
+      const st = await fs.stat(path.join(tmpRoot, 'nested/plug'));
+      expect(st.isDirectory()).toBe(true);
+    } finally {
+      home.mockRestore();
+    }
+  });
+
+  it('remote host: a ~/ cwd rides to the daemon untouched (its machine, its homedir)', async () => {
+    const app = createApp();
+    const res = await request(app).post('/api/sessions/quick-start')
+      .send({ cwd: '~/proj', host: 'testhost', message: 'go', createCwd: true });
+    expect(res.status).toBe(200);
+    const mkdirCall = daemonSendCalls.find(c => c.cmd === 'fs.mkdir');
+    expect(mkdirCall!.params.path).toBe('~/proj');
+  });
+
   it('remote host: sends fs.mkdir through the daemon connection', async () => {
     const app = createApp();
     const res = await request(app).post('/api/sessions/quick-start')

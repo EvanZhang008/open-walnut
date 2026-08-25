@@ -239,9 +239,8 @@ test('the switch turns a plugin off and on, and off survives a restart', async (
   await expect(page.getByTestId('plugin-row-walnut-time')).toContainText('off')
   await shoot(page, 'store-1680-toggled-off')
 
-  // One registry, so the App manager forgets it in the same beat as the nav row.
-  await page.getByTestId('settings-nav-apps').click()
-  await expect(page.getByTestId('app-manager-row-walnut-time:main')).toHaveCount(0)
+  // One registry, so the plugin's app row forgets it in the same beat as the nav row.
+  await expect(page.getByTestId('plugin-app-row-walnut-time:main')).toHaveCount(0)
 
   // The promise the switch makes is durability, and that lives in config.yaml.
   await expect.poll(() => configEnabled('walnut-time'), { timeout: 15_000 }).toBe(false)

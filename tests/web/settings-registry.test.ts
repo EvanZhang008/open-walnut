@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { CORE_SETTINGS_CONTRIBUTIONS } from '../../web/src/components/settings/core-settings-registry.js'
 
 const EXPECTED_IDS = [
-  'apps', 'repositories', 'hooks',
+  // No `apps` row either: a plugin's app entries are managed on the plugin's own
+  // row in the Plugins section (PluginAppControls) — one panel is the start point
+  // for everything plugin-shaped.
+  'repositories', 'hooks',
   'providers', 'general', 'sessions', 'focus-tiers', 'integrations', 'calendar',
   'permissions', 'plugin-store', 'search', 'stt', 'audio-capture', 'heartbeat',
   // No `time` row: time tracking's only UI is the walnut-time Plugin App, and the
@@ -30,9 +33,9 @@ describe('core settings registry', () => {
   it('keeps the existing Manage and Configure split', () => {
     expect(CORE_SETTINGS_CONTRIBUTIONS
       .filter((entry) => entry.group === 'manage')
-      .map((entry) => entry.id)).toEqual(['apps', 'repositories', 'hooks'])
+      .map((entry) => entry.id)).toEqual(['repositories', 'hooks'])
     expect(CORE_SETTINGS_CONTRIBUTIONS
       .filter((entry) => entry.group === 'configure')
-      .map((entry) => entry.id)).toEqual(EXPECTED_IDS.slice(3))
+      .map((entry) => entry.id)).toEqual(EXPECTED_IDS.slice(2))
   })
 })

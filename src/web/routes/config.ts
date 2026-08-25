@@ -63,7 +63,7 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // its "Reveal in Finder / Open in default app" items when false instead of
     // offering menu entries that always 400.
     const canRevealLocalFiles = !CLOUD_MODE && process.platform === 'darwin'
-    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles })
+    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, cloud: CLOUD_MODE })
   } catch (err) {
     next(err)
   }

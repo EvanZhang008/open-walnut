@@ -47,6 +47,22 @@ export function fetchCanRevealLocalFiles(): Promise<boolean> {
   return _canRevealPromise;
 }
 
+/**
+ * Whether this server is a cloud replica (WALNUT_CLOUD_MODE=1). A replica has
+ * no CLI and no local daemon, so surfaces that would start local work (e.g.
+ * "Build a plugin") hide their action and point at the Mac instead. Same
+ * page-lifetime cache rationale as installDir (the mode can't change without
+ * a server restart); errors resolve false so the primary console never loses
+ * the affordance to a flaky fetch.
+ */
+let _cloudPromise: Promise<boolean> | null = null;
+export function fetchIsCloudReplica(): Promise<boolean> {
+  _cloudPromise ??= apiGet<{ cloud?: boolean }>('/api/config')
+    .then(res => res.cloud === true)
+    .catch(() => { _cloudPromise = null; return false; });
+  return _cloudPromise;
+}
+
 export async function updateConfig(config: Partial<Config>): Promise<{ ok: boolean }> {
   return apiPut<{ ok: boolean }>('/api/config', config);
 }

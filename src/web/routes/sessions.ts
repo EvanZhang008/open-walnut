@@ -30,6 +30,7 @@ import { getConfig } from '../../core/config-manager.js'
 import { bus, EventNames, eventData } from '../../core/event-bus.js'
 import fsp from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
+import os from 'os'
 import path from 'path'
 import { isSessionProcessAlive } from '../../utils/session-liveness.js'
 import { readPlanFromSession, buildPlanExecutionMessage } from '../../utils/plan-message.js'
@@ -250,7 +251,7 @@ function buildFixWalnutMessage(userReport: string): string {
 sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: NextFunction) => {
   const requestTs = Date.now()
   try {
-    const { cwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, project, projectFromFolder, intent, createCwd, engine } = req.body as {
+    const { cwd: rawCwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, project, projectFromFolder, intent, createCwd, engine } = req.body as {
       cwd: string
       host?: string
       message: string
@@ -283,10 +284,18 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       engine?: string
     }
 
-    if (!cwd || typeof cwd !== 'string') {
+    if (!rawCwd || typeof rawCwd !== 'string') {
       res.status(400).json({ error: 'cwd is required' })
       return
     }
+    // A local `~/…` cwd is expanded ONCE here so ensureCwd's mkdir and the CLI
+    // spawn agree on one absolute path (a literal ~ ENOENTs at spawn). Remote
+    // hosts keep the literal ~ untouched — the server must not paste ITS
+    // homedir into a path on another machine. (The daemon's mkdir expands ~,
+    // but its spawn does not; remote callers should send absolute paths.)
+    const cwd = !host && (rawCwd === '~' || rawCwd.startsWith('~/'))
+      ? path.join(os.homedir(), rawCwd.slice(1))
+      : rawCwd
     // An EMPTY message is allowed: spawn + init the CLI (SessionStart hook,
     // MCP/skills load) with no first turn — it idles on stdin until the user
     // sends. Same daemon contract as restart's empty-queue respawn.
@@ -415,7 +424,10 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     try {
       if (createCwd === true) {
         // Same sanitize rule as list-dirs — this path flows into a daemon RPC.
-        if (/[;&|`$(){}!<>]/.test(cwd)) {
+        // Checked against the CLIENT's value, not the expanded one: the guard
+        // sanitizes input, and a homedir containing e.g. `(` must not turn a
+        // clean `~/x` into a 400.
+        if (/[;&|`$(){}!<>]/.test(rawCwd)) {
           res.status(400).json({ error: 'invalid characters in cwd' })
           return
         }

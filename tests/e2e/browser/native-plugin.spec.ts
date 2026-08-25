@@ -252,24 +252,19 @@ test('installs a first-class Plugin App and exercises its real capabilities', as
   await app.getByTestId('plugin-demo-section-server').scrollIntoViewIfNeeded()
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'capabilities.png'), fullPage: true })
 
+  // The app's entry is managed on the PLUGIN's row in the Plugins section —
+  // there is no separate Apps panel.
   await openSettings(page)
-  await page.getByTestId('settings-nav-apps').click()
-  const appRow = page.getByTestId('app-manager-row-walnut-demo:main')
+  await page.getByTestId('settings-nav-plugin-store').click()
+  const appRow = page.getByTestId('plugin-app-row-walnut-demo:main')
   await expect(appRow).toBeVisible()
-  await appRow.getByRole('button', { name: 'Move Plugin Demo up' }).click()
-  const sidebarOrder = await page.locator('.sidebar-nav a[data-testid]').evaluateAll((nodes) => (
-    nodes.map((node) => node.getAttribute('data-testid'))
-  ))
-  expect(sidebarOrder.indexOf('sidebar-app-walnut-demo:main')).toBeLessThan(
-    sidebarOrder.indexOf('sidebar-core-app-routines'),
-  )
-  await appRow.getByRole('button', { name: 'Unpin Plugin Demo' }).click()
+  const visibility = page.getByTestId('plugin-app-visibility-walnut-demo:main')
+  await expect(visibility).toHaveText('Hide')
+  await visibility.click()
   await expect(demoNav).toHaveCount(0)
-  await appRow.getByRole('button', { name: 'Pin Plugin Demo' }).click()
-  await expect(demoNav).toBeVisible()
-  await appRow.getByRole('button', { name: 'Hide Plugin Demo' }).click()
-  await expect(demoNav).toHaveCount(0)
-  await appRow.getByRole('button', { name: 'Open', exact: true }).click()
+  await expect(appRow).toContainText('Hidden')
+  // Hidden keeps its deep link: Open still lands on the app.
+  await page.getByTestId('plugin-app-open-walnut-demo:main').click()
   await expect(page).toHaveURL(/\/apps\/walnut-demo~main$/)
   await expect(page.getByTestId('plugin-demo-app')).toBeVisible()
   await expect(demoNav).toHaveCount(0)
@@ -286,20 +281,15 @@ test('installs a first-class Plugin App and exercises its real capabilities', as
   await page.keyboard.press('Escape')
   await hiddenComposer.fill('')
   await openSettings(page)
-  await page.getByTestId('settings-nav-apps').click()
-  await appRow.getByRole('button', { name: 'Show Plugin Demo' }).click()
-  await appRow.getByRole('button', { name: 'Pin Plugin Demo' }).click()
+  await page.getByTestId('settings-nav-plugin-store').click()
+  await expect(visibility).toHaveText('Show')
+  await visibility.click()
   await expect(demoNav).toBeVisible()
 
+  // Reload keeps the #plugin-store hash, so the section re-anchors on its own.
   await page.reload()
-  await expect(page.getByTestId('app-manager-row-walnut-demo:main')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('plugin-app-row-walnut-demo:main')).toBeVisible({ timeout: 30_000 })
   await expect(demoNav).toBeVisible()
-  const persistedSidebarOrder = await page.locator('.sidebar-nav a[data-testid]').evaluateAll((nodes) => (
-    nodes.map((node) => node.getAttribute('data-testid'))
-  ))
-  expect(persistedSidebarOrder.indexOf('sidebar-app-walnut-demo:main')).toBeLessThan(
-    persistedSidebarOrder.indexOf('sidebar-core-app-routines'),
-  )
   expect(pageErrors).toEqual([])
 })
 

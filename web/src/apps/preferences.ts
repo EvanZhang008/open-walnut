@@ -15,8 +15,7 @@ export interface AppPreferences {
    *
    * An override is stored even when it matches the declared value: it records a
    * decision, so a plugin author later flipping their own default can NOT silently
-   * move a row the user already placed. "Restore defaults" is how you get back to
-   * following the app.
+   * move a row the user already placed.
    */
   placement: Record<string, AppPlacement>
 }

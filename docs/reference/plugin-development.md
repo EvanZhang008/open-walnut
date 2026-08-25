@@ -8,7 +8,7 @@ npx @open-walnut/plugin-cli new my-plugin --dev
 
 That single command is the whole first loop: it scaffolds the project, installs dependencies, validates the manifest, builds the entries, links the directory into `~/.open-walnut/plugins/my-plugin`, asks the running Walnut to discover and load the new plugin, reads the runtime state back, prints the App URL, and then keeps watching so every save rebuilds and reloads. A first link needs no server restart. Walnut may be offline while you work, in which case the link loads on Walnut's next start.
 
-The console has a guided version of this page at `/plugins/new` (Settings → Apps → "Build a plugin app"): the same command with a copy button, plus a live panel that shows your plugin's App the moment the first build links in.
+Or skip the terminal entirely: Settings → Plugins has a **Build a plugin** card. Describe what you want and click **Build it**, and an AI session starts in `~/walnut-plugins`, runs the command above itself, and keeps the watcher alive so the plugin appears in your sidebar as it takes shape. The same card links to the guided version of this page at `/plugins/new`: the command with a copy button, plus a live panel that shows your plugin's App the moment the first build links in.
 
 After that first run, the project's own script continues the same loop:
 
@@ -302,7 +302,7 @@ Contribution fields:
 What the host derives for you, with no second registration:
 
 - **The route**: `/apps/<pluginId>~<appId>`, plus every subpath under it. You never declare a path, and you cannot collide with a Walnut route or another plugin.
-- **The entry row**: icon, title, badge, and pin state, in the Sidebar beside the Core Apps, or in Settings under Manage when the App asks for `placement: 'settings'`.
+- **The entry row**: icon, title, and badge, in the Sidebar beside the Core Apps, or in Settings under Manage when the App asks for `placement: 'settings'`.
 - **Deep links**: `/apps/my-plugin~main/history?tab=recent` opens your App with the rest of the URL handed to your component.
 - **A Command Palette entry**: `Open <title>`, refreshed whenever the App list changes.
 - **The badge channel**: `handle.setBadge(...)` updates the row live, on whichever surface it sits.
@@ -385,11 +385,11 @@ Nothing else changes: same route at `/apps/<pluginId>~<appId>`, same deep links,
 
 Pick by how often the App is opened. The sidebar is for surfaces someone lives in all day and its length is the whole point: every row added there costs every other row a little attention. A report, an audit, an occasional tool belongs under Manage, where people already go looking for the things they configure and inspect. The shipped `walnut-time` example uses `'settings'` for exactly that reason.
 
-**Your `placement` is the default, not the verdict.** Only the person using the sidebar knows whether your App belongs in it, so Settings → Apps carries a **Move to Settings** / **Move to Sidebar** action on every native plugin App row. Their choice wins over yours, applies immediately, and survives a reload; **Restore defaults** in that section drops every override and puts each App back where it asked to be. Write the declaration as the answer that is right for most people and let the rest move it.
+**Your `placement` is the default, not the verdict.** Only the person using the sidebar knows whether your App belongs in it, so your plugin's row in Settings → Plugins lists each of its Apps with a **Move to Settings** / **Move to Sidebar** action. Their choice wins over yours, applies immediately, and survives a reload. Write the declaration as the answer that is right for most people and let the rest move it.
 
 Two consequences worth knowing. Because moving the row cannot change what the App can do, code that branches on where its own row currently sits is code that will be wrong: read the route, not the surface. And because Core Apps and legacy webview Apps have no placement of their own to override, they get no Move action at all.
 
-A user's other preferences apply on top too. Hiding an App removes its row from either surface, while pinning and unpinning are Sidebar-only ideas, so a row currently placed in Settings has no pin control (moving it back to the Sidebar brings the control back). An unknown placement value is refused at the call rather than accepted, because an App that matches no surface would register successfully and then appear nowhere.
+A user can also **Hide** your App there, which removes its entry from either surface while keeping the deep link working. An unknown placement value is refused at the call rather than accepted, because an App that matches no surface would register successfully and then appear nowhere.
 
 ### Settings, CSS, and pages
 
@@ -411,9 +411,9 @@ export function activate(walnut: WalnutWebApi) {
 
 ### One App Registry for everything
 
-Core Walnut screens, native plugin Apps, and legacy Webviews are all rows in the same App Registry, so they share one order, one visibility model, one badge shape, and one navigation path. The registry is what the Sidebar, the App host route, the Command Palette, and the Apps section of Settings all read.
+Core Walnut screens, native plugin Apps, and legacy Webviews are all rows in the same App Registry, so they share one order, one visibility model, one badge shape, and one navigation path. The registry is what the Sidebar, the App host route, the Command Palette, and your plugin's app rows in Settings → Plugins all read.
 
-The consequences worth knowing as an author: a user can pin, unpin, or hide your App like the hideable Core Apps; your App is reachable by URL, palette, and its entry row without you wiring any of the three, and `placement` decides which surface renders that row from the same registration; and your App renders inside its own error boundary, so a render failure names your plugin instead of blanking the console. Home and Settings are recovery surfaces, so Walnut locks their visibility.
+The consequences worth knowing as an author: a user can hide your App or move it between surfaces from your plugin's row; your App is reachable by URL, palette, and its entry row without you wiring any of the three, and `placement` decides which surface renders that row from the same registration; and your App renders inside its own error boundary, so a render failure names your plugin instead of blanking the console. Home and Settings are recovery surfaces, so Walnut locks their visibility.
 
 Home, Tasks, Notes, Calendar, Routines, and Settings are the Core Apps. Home's Chat, Todo, and Agenda are Dock controls inside Home rather than separate Apps, which is why you will not find them in the App list.
 

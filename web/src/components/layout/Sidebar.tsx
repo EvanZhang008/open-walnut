@@ -159,8 +159,8 @@ export function Sidebar({
         </button>
         <div className="sidebar-nav-divider" />
         {/* `sidebar`, not `pinned`: an App whose effective placement is 'settings'
-            (declared by the App, or chosen by the user in Settings → Apps) has its row
-            in Settings → Manage and never here. */}
+            (declared by the App, or moved by the user from its plugin's row in
+            Settings → Plugins) has its row in Settings → Manage and never here. */}
         {apps.sidebar.map((app) => {
           const Icon = app.icon;
           const icon = Icon ? (

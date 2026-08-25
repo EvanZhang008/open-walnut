@@ -21,7 +21,7 @@ import { expect, test, type Page } from '@playwright/test'
  *      and there IS a Settings → Manage row, which is what the test clicks. The Command
  *      Palette entry survives the move, and disabling the plugin takes the row away.
  *      The declaration is only a DEFAULT: the user can move the row either way from
- *      Settings → Apps, live and durably, and Restore defaults gives it back.
+ *      the plugin's own row in Settings → Plugins, live and durably.
  *   2. Its tabs are real URLs (a reload on /timeline comes back on the timeline, not on
  *      tab one).
  *   3. Attention is SERIAL: no two segments of the tape may overlap vertically. That
@@ -363,33 +363,30 @@ test('the user can move the row to the Sidebar and back, live and across a reloa
   await page.goto(`http://127.0.0.1:${fixture!.port}/`)
   await page.waitForLoadState('domcontentloaded')
   await openSettings(page)
-  await page.getByTestId('settings-nav-apps').click()
+  await page.getByTestId('settings-nav-plugin-store').click()
 
-  const managerRow = page.getByTestId('app-manager-row-walnut-time:main')
-  await expect(managerRow).toBeVisible({ timeout: 60_000 })
-  // Where it starts: what the App declared, plus the two rules that follow from it —
-  // the row is labelled as living in Settings, and a settings row is not a pin.
-  await expect(managerRow).toHaveAttribute('data-app-placement', 'settings')
-  await expect(managerRow).toContainText('In Settings')
-  await expect(managerRow.getByRole('button', { name: 'Unpin Time' })).toHaveCount(0)
-  const move = page.getByTestId('app-manager-placement-walnut-time:main')
-  await expect(move).toHaveAttribute('aria-label', 'Move Time to the sidebar')
+  // The app's controls live on the PLUGIN's row in the Plugins section — an app
+  // is not a separate thing to manage on another panel.
+  const appRow = page.getByTestId('plugin-app-row-walnut-time:main')
+  await expect(appRow).toBeVisible({ timeout: 60_000 })
+  // Where it starts: what the App declared.
+  await expect(appRow).toContainText('In Settings')
+  const move = page.getByTestId('plugin-app-placement-walnut-time:main')
+  await expect(move).toHaveText('Move to Sidebar')
   await shoot(page, 'apps-manager-placement-control')
 
-  // A Core App is not the user's to move: the registry pins it to the Sidebar, so the
-  // control that cannot be honoured is not offered.
-  await expect(page.getByTestId('app-manager-placement-core:home')).toHaveCount(0)
+  // A Core App is not the user's to move: it is not a plugin, so it has no row
+  // (and no placement control) here at all.
+  await expect(page.getByTestId('plugin-app-placement-core:home')).toHaveCount(0)
+  await expect(page.getByTestId('plugin-app-row-core:home')).toHaveCount(0)
 
   await move.click()
 
   // Live, with no reload: the declared placement was only a default.
-  await expect(managerRow).toHaveAttribute('data-app-placement', 'sidebar')
-  await expect(managerRow).not.toContainText('In Settings')
+  await expect(appRow).toContainText('In Sidebar')
   await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toHaveCount(0)
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toBeVisible({ timeout: 30_000 })
-  // Back on the Sidebar, pinning means something again, so the control returns.
-  await expect(managerRow.getByRole('button', { name: 'Unpin Time' })).toBeVisible()
-  await expect(move).toHaveAttribute('aria-label', 'Move Time to Settings')
+  await expect(move).toHaveText('Move to Settings')
   await shoot(page, 'placement-moved-to-sidebar')
 
   // It survives a reload, and the App itself is unchanged by the move: same route,
@@ -403,35 +400,32 @@ test('the user can move the row to the Sidebar and back, live and across a reloa
   await expect(page.getByTestId('time-app')).toBeVisible({ timeout: 60_000 })
   await expect(page.getByTestId('time-app-trend').locator('.wt-trend-day')).toHaveCount(7, { timeout: 30_000 })
 
-  // Restore defaults is the way back to following the App's own choice.
+  // The same button is the way back to the App's own choice.
   await openSettings(page)
-  await page.getByTestId('settings-nav-apps').click()
-  await page.getByRole('button', { name: 'Restore defaults' }).click()
-  await expect(page.getByTestId('app-manager-row-walnut-time:main'))
-    .toHaveAttribute('data-app-placement', 'settings')
+  await page.getByTestId('settings-nav-plugin-store').click()
+  await page.getByTestId('plugin-app-placement-walnut-time:main').click()
+  await expect(page.getByTestId('plugin-app-row-walnut-time:main')).toContainText('In Settings')
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toHaveCount(0)
   await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toBeVisible({ timeout: 30_000 })
 
   // An override is NOT browser-local. App preferences ride the ui-prefs mirror
-  // (config/share/ui-prefs.json) so a move follows you to your phone — which also
-  // means a fresh browser context inherits it, and leaving one set here walked
-  // straight into the next test. So assert the mirror, not just the DOM: the reload
-  // flushes the pending write on pagehide, and Restore defaults has to have reached
-  // the server for real.
+  // (config/share/ui-prefs.json) so a move follows you to your phone. Assert the
+  // mirror, not just the DOM: the reload flushes the pending write on pagehide,
+  // and the move back has to have reached the server for real.
   await page.reload()
   await expect.poll(async () => {
     const res = await page.request.get(`http://127.0.0.1:${fixture!.port}/api/ui-prefs`)
     if (!res.ok()) return 'unreachable'
     const body = await res.json() as { prefs?: Record<string, { v: string | null }> }
     const stored = body.prefs?.['open-walnut-app-preferences-v1']?.v
-    if (!stored) return 'clear'
+    if (!stored) return 'missing'
     try {
       const parsed = JSON.parse(stored) as { placement?: Record<string, string> }
-      return Object.keys(parsed.placement ?? {}).length > 0 ? 'still-overridden' : 'clear'
+      return parsed.placement?.['walnut-time:main'] ?? 'missing'
     } catch {
       return 'unparsable'
     }
-  }, { timeout: 30_000, intervals: [500, 1_000] }).toBe('clear')
+  }, { timeout: 30_000, intervals: [500, 1_000] }).toBe('settings')
 
   expect(pageErrors, 'moving a row must not throw in the browser').toEqual([])
 })
@@ -459,7 +453,7 @@ test('disabling the plugin takes the Settings row away without a reload', async 
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toHaveCount(0)
   await shoot(page, 'views-app-settings-nav-disabled')
 
-  // One registry, so the App manager forgets it in the same beat as the nav row.
-  await page.getByTestId('settings-nav-apps').click()
-  await expect(page.getByTestId('app-manager-row-walnut-time:main')).toHaveCount(0)
+  // One registry, so the plugin's app row forgets it in the same beat as the nav row.
+  await page.getByTestId('settings-nav-plugin-store').click()
+  await expect(page.getByTestId('plugin-app-row-walnut-time:main')).toHaveCount(0)
 })

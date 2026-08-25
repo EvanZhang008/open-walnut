@@ -1,18 +1,21 @@
 /**
  * /plugins/new — guided onboarding for plugin authors.
  *
- * The page is built around ONE command (`plugin-cli new … --dev`): everything
- * else here is proof that it worked. The "your plugins" panel reads the same
- * live app catalog the sidebar uses, so when the CLI links a new plugin into
- * this Walnut, the row appears without a refresh — that moment is the payoff,
- * and it's why this is a page instead of a docs link.
+ * AI-first: the primary path is the same BuildPluginCard as the Plugins
+ * section (describe it → a session builds it). The steps below are the
+ * do-it-yourself route, built around ONE command (`plugin-cli new … --dev`);
+ * everything else here is proof that it worked. The "your plugins" panel reads
+ * the same live app catalog the sidebar uses, so when the CLI links a new
+ * plugin into this Walnut, the row appears without a refresh — that moment is
+ * the payoff, and it's why this is a page instead of a docs link.
  */
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppCatalog } from '@/apps/hooks'
 import { copyTextRobust } from '@/utils/clipboard'
+import { BuildPluginCard, PLUGIN_CREATE_COMMAND } from '@/components/settings/BuildPluginCard'
 
-const CREATE_COMMAND = 'npx @open-walnut/plugin-cli new my-plugin --dev'
+const CREATE_COMMAND = PLUGIN_CREATE_COMMAND
 const DOCS_URL = 'https://github.com/EvanZhang008/open-walnut/blob/main/docs/reference/plugin-development.md'
 const DEMO_URL = 'https://github.com/EvanZhang008/open-walnut/tree/main/examples/plugins/walnut-demo'
 
@@ -64,10 +67,15 @@ export function CreatePluginPage() {
         <p className="create-plugin-lede">
           A plugin is plain TypeScript and React that runs inside Walnut with full access:
           it can put an app in the sidebar, give the AI new tools, add skills, routes,
-          hooks, and more. One command sets up everything.
+          hooks, and more. Describe what you want and an AI session builds it, or run
+          one command yourself.
         </p>
       </header>
 
+      {/* The steps below ARE the manual path, so the card drops its own manual line. */}
+      <BuildPluginCard showManual={false} />
+
+      <h2 className="create-plugin-diy">Do it yourself</h2>
       <ol className="create-plugin-steps">
         <li className="create-plugin-step">
           <div className="create-plugin-step-head">

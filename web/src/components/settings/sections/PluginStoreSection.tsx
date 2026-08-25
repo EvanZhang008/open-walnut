@@ -28,11 +28,12 @@
  * restart, and turning it on writes `enabled: true` before reloading it.
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
 import type { Config } from '@open-walnut/core';
 import { SettingsSection, SettingsRow, SettingsSubCard, SettingsEmpty, SettingsNotice } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { PluginConfigCards } from './PluginConfigCards';
+import { PluginAppControls } from '../PluginAppControls';
+import { BuildPluginCard } from '../BuildPluginCard';
 // Deliberately NOT '@/plugins/hooks': that module reaches the plugin loader, which
 // reaches every view a plugin may mount (NotesPage, CalendarPage, SessionPanel …).
 // Importing it here would pull that whole graph into anything that touches the
@@ -147,7 +148,6 @@ function originLabel(row: RegistryRow): string {
 }
 
 export function PluginStoreSection({ config, onSave }: Props) {
-  const navigate = useNavigate();
   const [registry, setRegistry] = useState<RegistryResponse | null>(null);
   const [sources, setSources] = useState<PluginSource[]>([]);
   const [url, setUrl] = useState('');
@@ -336,6 +336,10 @@ export function PluginStoreSection({ config, onSave }: Props) {
       {error && <SettingsNotice kind="error">{error}</SettingsNotice>}
       {notice && <SettingsNotice kind="success">{notice}</SettingsNotice>}
 
+      {/* This section is the start point for everything plugin-shaped, and the
+          simplest way in leads: describe a plugin, click, and a session builds it. */}
+      <BuildPluginCard />
+
       {/* ── Installed ── */}
       <div className="plugin-store-group" data-testid="plugin-store-installed">
         <div className="plugin-store-group-head">
@@ -432,6 +436,9 @@ export function PluginStoreSection({ config, onSave }: Props) {
                       <span className="plugin-store-why">{row.error ?? row.reason}</span>
                     )}
                   </SettingsRow>
+                  {/* The plugin's app entries live HERE, on the plugin itself —
+                      an app is not a separate thing to manage on another panel. */}
+                  <PluginAppControls pluginId={row.id} />
                   {open && row.configurable && (
                     <div className="plugin-store-config" data-testid={`plugin-config-${row.id}`}>
                       <PluginConfigCards config={config} onSave={onSave} onlyIds={[row.id]} bare />
@@ -646,17 +653,6 @@ export function PluginStoreSection({ config, onSave }: Props) {
         </p>
       )}
 
-      <p className="text-sm text-muted" style={{ marginTop: 4 }}>
-        Want to build one?{' '}
-        <button
-          type="button"
-          className="link-button"
-          data-testid="plugin-store-create-link"
-          onClick={() => navigate('/plugins/new')}
-        >
-          Create your own plugin →
-        </button>
-      </p>
     </SettingsSection>
   );
 }

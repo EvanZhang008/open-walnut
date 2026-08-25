@@ -55,7 +55,7 @@ node packages/plugin-cli/dist/cli.js dev    --root examples/plugins/walnut-time 
 
 Once it is active, **Settings → Manage** grows a **Time** row pointing at `/apps/walnut-time~main`, beside Agents and Skills. The App declares `placement: 'settings'` for that reason: a day report is something you open now and then, and the Sidebar is for the surfaces you live in. Nothing else about the App changes: it is still a full page at its own route, still deep-linkable per tab, and still in the Command Palette as "Open Time".
 
-That declaration is only the default. Anyone who does open their day every morning can move the row into the sidebar from **Settings → Apps** → **Move to Sidebar**, and **Restore defaults** there puts it back.
+That declaration is only the default. Anyone who does open their day every morning can move the row into the sidebar from the plugin's row in **Settings → Plugins** (**Move to Sidebar**), and the same button moves it back.
 
 ## Develop
 
