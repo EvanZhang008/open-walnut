@@ -6,13 +6,17 @@
  * tier) without inventing a container that the task model would then have to
  * carry everywhere.
  *
- * Three design rules live in this file:
+ * Five design rules live in this file:
  *
  * 1. **Anchored to neighbours, never to an index.** A line stored as "position
  *    4" drifts the moment anything above it is completed, reordered or moved to
  *    another tier — the user's band silently swallows the wrong rows. So a
  *    separator records what sits directly ABOVE it and directly BELOW it, and
- *    placement resolves `before` first, then `after`, then the end of the list.
+ *    placement resolves `after` first (the line clings to the row it ends a band
+ *    after), then `before`, then the end of the list. `after` leads because a
+ *    card INSERTED into the line's gap arrives from below it (a drop in the gap
+ *    above targets the row above → a different gesture entirely), so the honest
+ *    read of "new card between my anchors" is "it landed under the line".
  *    Whatever happens to the tier, the line lands next to something the user
  *    actually put it next to, and it can never disappear.
  *
@@ -41,6 +45,16 @@
  *    were suddenly below it. So a resolved position that falls between two members
  *    of one group is pushed down to the boundary BELOW that group: everything the
  *    user had already put above the line stays above it.
+ *
+ * 5. **A line never follows a card that MOVES.** Anchors follow their card when it
+ *    is COMPLETED or unpinned (the ladder degrades to the other side) — that is
+ *    the point of anchoring. But when the user picks an anchor card up and drops
+ *    it somewhere ELSE, the line marks a band position, not that card: reported
+ *    2026-08-25, a card below the line was dragged into a group above it, the
+ *    line rode along past the whole group, and every task the user had banded
+ *    ended up on the wrong side. So every drag that relocates a card re-anchors
+ *    the affected lines to the neighbours that STAYED
+ *    (reanchorSeparatorsAfterMove), before the move is persisted.
  *
  * Placement is pure so the renderer can call it with the live drag preview
  * substituted in and get the exact frame it will commit.
@@ -119,6 +133,68 @@ export function snapSlotOutOfGroup(
 }
 
 /**
+ * A custom-mode separator's SLOT in a card order (0 = above the first card,
+ * rows.length = below the last), or null when neither anchor is present. The
+ * ladder is rule 1's: below the `after` card, else above the `before` card.
+ * Shared by render placement and the move-time re-anchor so the two can never
+ * disagree about where a line currently sits.
+ */
+export function customSlotFor(rows: string[], sep: TierSeparator): number | null {
+  if (sep.after) {
+    const ai = rows.indexOf(sep.after);
+    if (ai !== -1) return ai + 1;
+  }
+  if (sep.before) {
+    const bi = rows.indexOf(sep.before);
+    if (bi !== -1) return bi;
+  }
+  return null;
+}
+
+/**
+ * Rule 5: re-anchor the lines whose anchor card is about to MOVE, so the line
+ * stays with its band instead of riding along with the card.
+ *
+ * `beforeIds` is the tier's render order BEFORE the move (task ids only, in the
+ * order placement resolved against), `movedIds` the card being relocated — or a
+ * whole group's members when the block moves as one. Each affected line keeps
+ * its current slot: the new anchors are the nearest rows on either side that
+ * are NOT moving. Lines in other tiers/modes and lines not anchored to a moved
+ * card pass through untouched; when nothing changes the SAME array comes back,
+ * so callers can `!==` to skip a pointless save.
+ */
+export function reanchorSeparatorsAfterMove(opts: {
+  separators: TierSeparator[];
+  tier: string;
+  beforeIds: string[];
+  movedIds: string[];
+  groupOf?: (id: string) => string | null;
+}): TierSeparator[] {
+  const { separators, tier, beforeIds, movedIds, groupOf = () => null } = opts;
+  const moved = new Set(movedIds);
+  let changed = false;
+  const out = separators.map((sep) => {
+    if (sep.tier !== tier || sep.mode !== 'custom') return sep;
+    if (!(sep.after && moved.has(sep.after)) && !(sep.before && moved.has(sep.before))) return sep;
+    let slot = customSlotFor(beforeIds, sep);
+    if (slot === null) return sep; // already unresolvable — the ladder owns it
+    slot = snapSlotOutOfGroup(beforeIds, slot, groupOf);
+    // The band's real neighbours are the rows that STAY: walk outward past the
+    // moving cards on both sides.
+    let ai = slot - 1;
+    while (ai >= 0 && moved.has(beforeIds[ai])) ai--;
+    let bi = slot;
+    while (bi < beforeIds.length && moved.has(beforeIds[bi])) bi++;
+    const after = ai >= 0 ? beforeIds[ai] : '';
+    const before = bi < beforeIds.length ? beforeIds[bi] : '';
+    if (after === (sep.after ?? '') && before === (sep.before ?? '')) return sep;
+    changed = true;
+    return { ...sep, after, before };
+  });
+  return changed ? out : separators;
+}
+
+/**
  * Resolve every separator of one tier+mode into render positions.
  *
  * `ids` is the tier's RENDER order (task ids, possibly with `group:*` sentinels
@@ -184,17 +260,9 @@ export function placeSeparators(opts: {
     }
 
     // Resolve to a SLOT (the gap the line occupies), so the group snap below has
-    // one thing to correct — the ladder is: the card below it, then the card above
-    // it, then the end of the list.
-    let slot: number | null = null;
-    if (sep.before) {
-      const bi = taskIds.indexOf(sep.before);
-      if (bi !== -1) slot = bi;
-    }
-    if (slot === null && sep.after) {
-      const ai = taskIds.indexOf(sep.after);
-      if (ai !== -1) slot = ai + 1;
-    }
+    // one thing to correct — rule 1's ladder: below the card above it, then above
+    // the card below it, then the end of the list.
+    let slot = customSlotFor(taskIds, sep);
     if (slot === null) { tail.push(sep); continue; }
     slot = snapSlotOutOfGroup(taskIds, slot, groupOf);
     if (slot >= taskIds.length) tail.push(sep); else push(above, taskIds[slot], sep);

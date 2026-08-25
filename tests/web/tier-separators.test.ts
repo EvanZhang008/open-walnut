@@ -14,9 +14,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   anchorsForSlot,
+  customSlotFor,
   newSeparatorId,
   placeSeparators,
   projectAnchorsForSlot,
+  reanchorSeparatorsAfterMove,
   removeSeparator,
   snapSlotOutOfGroup,
   upsertSeparator,
@@ -274,6 +276,144 @@ describe('a group is one unit (reported 2026-08-24: a joining card split the clu
       separators: [sep({ after: 'g1', before: 'g2' })],
     });
     expect(p.above.get('g2')?.map((s) => s.id)).toEqual(['sep_1']);
+  });
+});
+
+describe('the line clings to the row ABOVE it (`after` resolves first)', () => {
+  const projectOf = lookup({ t1: 'p', t2: 'p', t3: 'p' });
+
+  it('a card inserted into the line\'s gap lands BELOW the line, not above it', () => {
+    // Stored while t1 and t3 were adjacent; t2 was then dropped between them.
+    // The only reorder gesture that inserts here arrives from under the line, so
+    // the honest resolution keeps the newcomer under it.
+    const p = placeSeparators({
+      ids: ['t1', 't2', 't3'], projectOf, tier: 'focus', mode: 'custom',
+      separators: [sep({ after: 't1', before: 't3' })],
+    });
+    expect(p.above.get('t2')?.map((s) => s.id)).toEqual(['sep_1']);
+    expect(p.above.get('t3')).toBeUndefined();
+  });
+
+  it('adjacent anchors agree, so the primary flip changes nothing', () => {
+    const p = placeSeparators({
+      ids: ['t1', 't2', 't3'], projectOf, tier: 'focus', mode: 'custom',
+      separators: [sep({ after: 't1', before: 't2' })],
+    });
+    expect(p.above.get('t2')?.map((s) => s.id)).toEqual(['sep_1']);
+  });
+});
+
+describe('customSlotFor', () => {
+  const rows = ['a', 'b', 'c'];
+  it('below the `after` card', () => {
+    expect(customSlotFor(rows, sep({ after: 'a', before: '' }))).toBe(1);
+  });
+  it('`after` wins even when `before` disagrees', () => {
+    expect(customSlotFor(rows, sep({ after: 'a', before: 'c' }))).toBe(1);
+  });
+  it('falls back to above the `before` card', () => {
+    expect(customSlotFor(rows, sep({ after: 'gone', before: 'c' }))).toBe(2);
+  });
+  it('null when neither anchor resolves', () => {
+    expect(customSlotFor(rows, sep({ after: 'gone', before: 'also' }))).toBeNull();
+    expect(customSlotFor(rows, sep({ after: '', before: '' }))).toBeNull();
+  });
+});
+
+describe('reanchorSeparatorsAfterMove (rule 5: a line never follows a moved card)', () => {
+  const base = ['a', 'b', 'c', 'd'];
+
+  it('the card BELOW the line moves away → the line keeps its band', () => {
+    const out = reanchorSeparatorsAfterMove({
+      separators: [sep({ after: 'b', before: 'c' })], tier: 'focus', beforeIds: base, movedIds: ['c'],
+    });
+    expect(out[0]).toMatchObject({ after: 'b', before: 'd' });
+  });
+
+  it('the card ABOVE the line moves away → the line keeps its band', () => {
+    const out = reanchorSeparatorsAfterMove({
+      separators: [sep({ after: 'b', before: 'c' })], tier: 'focus', beforeIds: base, movedIds: ['b'],
+    });
+    expect(out[0]).toMatchObject({ after: 'a', before: 'c' });
+  });
+
+  it('reported 2026-08-25: the before-card joins a group ABOVE the line — the whole band stays put', () => {
+    // g1 g2 are one group with the line right under them; x (the line's `before`)
+    // joins the group. Without the re-anchor the line rode up with x past the
+    // cluster and every banded task changed sides.
+    const rows = ['g1', 'g2', 'x', 'y'];
+    const out = reanchorSeparatorsAfterMove({
+      separators: [sep({ after: 'g2', before: 'x' })], tier: 'focus', beforeIds: rows, movedIds: ['x'],
+      groupOf: (id) => (id.startsWith('g') ? 'grp' : null),
+    });
+    expect(out[0]).toMatchObject({ after: 'g2', before: 'y' });
+    // And placement with x now INSIDE the cluster keeps the line below all of it.
+    const p = placeSeparators({
+      ids: rows, projectOf: lookup({ g1: 'p', g2: 'p', x: 'p', y: 'p' }),
+      groupOf: (id) => (id === 'y' ? null : 'grp'),
+      tier: 'focus', mode: 'custom', separators: out,
+    });
+    expect(p.above.get('y')?.map((s) => s.id)).toEqual(['sep_1']);
+  });
+
+  it('a whole group moves as one block — its line re-anchors to the stayers', () => {
+    const rows = ['a', 'g1', 'g2', 'b'];
+    const out = reanchorSeparatorsAfterMove({
+      separators: [sep({ after: 'g2', before: 'b' })], tier: 'focus', beforeIds: rows, movedIds: ['g1', 'g2'],
+    });
+    expect(out[0]).toMatchObject({ after: 'a', before: 'b' });
+  });
+
+  it('a stored slot INSIDE a group snaps out before the walk', () => {
+    // Legacy anchors between two members: the resolved slot snaps below the
+    // group first, so the re-anchor never writes an in-cluster neighbour.
+    const rows = ['g1', 'g2', 'g3', 'x'];
+    const out = reanchorSeparatorsAfterMove({
+      separators: [sep({ after: 'g1', before: 'g2' })], tier: 'focus', beforeIds: rows, movedIds: ['g1'],
+      groupOf: (id) => (id.startsWith('g') ? 'grp' : null),
+    });
+    expect(out[0]).toMatchObject({ after: 'g3', before: 'x' });
+  });
+
+  it('a line not anchored to the moved card returns the SAME array (callers skip the save)', () => {
+    const list = [sep({ after: 'a', before: 'b' })];
+    expect(reanchorSeparatorsAfterMove({ separators: list, tier: 'focus', beforeIds: base, movedIds: ['d'] })).toBe(list);
+  });
+
+  it('other tiers and project-mode lines pass through untouched', () => {
+    const list = [
+      sep({ id: 'other', tier: 'backlog', after: 'c', before: 'd' }),
+      psep({ id: 'proj', beforeProject: 'c' }),
+    ];
+    expect(reanchorSeparatorsAfterMove({ separators: list, tier: 'focus', beforeIds: base, movedIds: ['c'] })).toBe(list);
+  });
+
+  it('every row on one side moved → that anchor degrades to the end marker', () => {
+    const out = reanchorSeparatorsAfterMove({
+      separators: [sep({ after: 'a', before: 'b' })], tier: 'focus', beforeIds: ['a', 'b'], movedIds: ['a'],
+    });
+    expect(out[0]).toMatchObject({ after: '', before: 'b' });
+  });
+
+  it('both neighbours moving at once walks past all of them', () => {
+    const out = reanchorSeparatorsAfterMove({
+      separators: [sep({ after: 'b', before: 'c' })], tier: 'focus', beforeIds: base, movedIds: ['b', 'c'],
+    });
+    expect(out[0]).toMatchObject({ after: 'a', before: 'd' });
+  });
+
+  it('an anchor that no longer resolves is left for the placement ladder', () => {
+    const list = [sep({ after: 'ghost', before: '' })];
+    expect(reanchorSeparatorsAfterMove({ separators: list, tier: 'focus', beforeIds: base, movedIds: ['ghost'] })).toBe(list);
+  });
+
+  it('two lines hugging one moved card both re-anchor', () => {
+    const out = reanchorSeparatorsAfterMove({
+      separators: [sep({ id: 's1', after: 'a', before: 'b' }), sep({ id: 's2', after: 'b', before: 'c' })],
+      tier: 'focus', beforeIds: base, movedIds: ['b'],
+    });
+    expect(out.find((s) => s.id === 's1')).toMatchObject({ after: 'a', before: 'c' });
+    expect(out.find((s) => s.id === 's2')).toMatchObject({ after: 'a', before: 'c' });
   });
 });
 

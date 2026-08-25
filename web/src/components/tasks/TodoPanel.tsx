@@ -29,6 +29,7 @@ import {
   newSeparatorId,
   placeSeparators,
   projectAnchorsForSlot,
+  reanchorSeparatorsAfterMove,
   removeSeparator,
   snapSlotOutOfGroup,
   upsertSeparator,
@@ -3228,6 +3229,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // defined ~1200 lines below (it needs ensureManualSort), and naming it in this
   // handler's dep array would read a const in its temporal dead zone.
   const requestMoveTaskRef = useRef<typeof requestMoveTask | null>(null);
+  // Same declaration-order cycle for the separator re-anchor (rule 5 in
+  // tier-separators.ts): the separator state lives ~2000 lines below, but the
+  // drag-end handler must re-anchor BEFORE it persists a move.
+  const sepReanchorRef = useRef<((tier: string, beforeIds: string[], movedIds: string[]) => void) | null>(null);
 
   // ── Unpin-by-drag ── `unpinZone` drives the portalled strip (null = no strip),
   // `unpinRectRef` is the same rect for the drop test in a handler that runs after
@@ -3236,11 +3241,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const unpinRectRef = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
   const [unpinZone, setUnpinZone] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [unpinHot, setUnpinHot] = useState(false);
-  /** True when (x, y) is inside the strip. One place, so the armed look and the
-   *  drop decision can never disagree. */
+  /** True when a release at (x, y) means "unpin". One place, so the armed look
+   *  and the drop decision can never disagree. Two conditions:
+   *  1. inside the strip's rect, AND
+   *  2. the pointer is NOT over a real row. The strip covers the wrapper's
+   *     bottom edge, and in a tier scrolled to its end the last CARDS live
+   *     there too — a reorder aimed at one of them must stay a reorder (caught
+   *     by e2e 2026-08-25: dropping onto the second-to-last card silently
+   *     unpinned it). elementFromPoint sees the row because the strip and the
+   *     DragOverlay are both pointer-events: none. */
   const overUnpinZone = useCallback((x: number, y: number) => {
     const r = unpinRectRef.current;
-    return !!r && x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height;
+    if (!r || x < r.left || x > r.left + r.width || y < r.top || y > r.top + r.height) return false;
+    const el = document.elementFromPoint(x, y);
+    return !(el instanceof Element && el.closest('[data-task-id],[data-group-id],[data-separator-id]'));
   }, []);
   // Arm/disarm from the pointer itself rather than from dnd-kit's collisions: the
   // strip is deliberately NOT a droppable, so closestCenter can never award it a
@@ -3573,6 +3587,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const globalOrder = (arrOf: (t: FocusTier) => string[]): string[] =>
       [...snap.tiers.keys()].flatMap((t) => arrOf(t));
 
+    // Rule 5 (tier-separators.ts): a drag that RELOCATES a card must not tow the
+    // divider lines anchored to it — re-anchor them to the neighbours that stay,
+    // resolved against the PRE-drag render order. Every path below that persists
+    // a move (reorder, retier, group join/leave) calls this first.
+    const reanchorSeps = (tier: FocusTier | undefined, movedIds: string[]) => {
+      if (!tier) return;
+      sepReanchorRef.current?.(tier, taskIdsOnly(snap.tiers.get(tier) ?? []), movedIds);
+    };
+
     // In a project-clustered tier view, a drop that lands inside ANOTHER project's
     // run means "move to that project" — without this the reorder persists but the
     // project cluster pass snaps the card straight back (the reported no-op).
@@ -3677,6 +3700,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // Expand: swap the sentinel for the ordered member block; drop any stray member.
       // Other groups' sentinels ride along in `ordered` — taskIdsOnly drops them.
       const newOrder = ordered.flatMap((id) => id === activeId ? orderedMembers : (memberSet.has(id) ? [] : [id]));
+      // Lines anchored to a member move with the BAND, not the block.
+      reanchorSeps(snapTierOf(orderedMembers[0]), orderedMembers);
       onReorderPinned?.(taskIdsOnly(newOrder));
       return;
     }
@@ -3704,13 +3729,39 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           setTimeout(() => onSetTier?.(activeId, overTier), 100);
         }
         if (overTask.group_id && onAddToGroup) {
+          // The card teleports into the cluster — free any line anchored to it
+          // BEFORE it goes, or the line rides into the group with it.
+          reanchorSeps(snapTierOf(activeId), [activeId]);
           onAddToGroup(overTask.group_id, [activeId]);
           return;
         }
         if (!overTask.group_id && onGroupTasks) {
+          reanchorSeps(snapTierOf(activeId), [activeId]);
           onGroupTasks([overTask.id, activeId]);
           return;
         }
+      }
+    }
+
+    // ── Drop ON a group chip ── The chip header carries the group's NAME, which
+    // makes it the clearest "into THIS group" target on screen — yet it used to
+    // fall through to the plain reorder, which parked the card immediately ABOVE
+    // the cluster (the sentinel's slot) with no join at all (reported 2026-08-25
+    // as "the whole thing moved outside"). Ungrouped actives only, mirroring the
+    // card-over-card guard: a grouped member released on a FOREIGN chip still
+    // means "pull out + reorder", never a silent group merge.
+    if (activeId !== overId && isGroupSentinel(overId)) {
+      const gid = parseGroupSentinelGid(overId);
+      const activeTask = tasks.find((t) => t.id === activeId);
+      if (gid && activeTask && !activeTask.group_id && onAddToGroup) {
+        if (isFromRecent) {
+          const overTier: FocusTier = finalTierOf(overId) ?? 'satellite';
+          onPinTask?.(activeId);
+          setTimeout(() => onSetTier?.(activeId, overTier), 100);
+        }
+        reanchorSeps(snapTierOf(activeId), [activeId]);
+        onAddToGroup(gid, [activeId]);
+        return;
       }
     }
 
@@ -3768,6 +3819,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       } else {
         const origTier: FocusTier = snapTierOf(activeId) ?? 'satellite';
         if (currentTier && origTier !== currentTier) {
+          reanchorSeps(origTier, [activeId]);
           onSetTier?.(activeId, currentTier, buildOrderFromRefs());
         }
         // Independent of a tier change: a self-drop inside the SAME tier still
@@ -3802,6 +3854,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const targetTier = DROP_ZONE_TIERS[overId] ?? snapTierOf(overId) ?? finalTierOf(activeId) ?? 'satellite';
 
     if (origTier !== targetTier) {
+      reanchorSeps(origTier, [activeId]);
       onSetTier?.(activeId, targetTier, buildOrderFromRefs(targetTier));
       // Replicate the tier array buildOrderFromRefs persists (same ai/oi splice) so
       // the landing slot can be read. A tiny duplication on purpose: buildOrderFromRefs
@@ -3839,6 +3892,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       tier === origTier ? reorderedTier : (snap.tiers.get(tier) ?? [])
     );
     maybeMoveProject(origTier, reorderedTier);
+    reanchorSeps(origTier, [activeId]);
     onReorderPinned?.(taskIdsOnly(newOrder));
   }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, onUnpinTask, overUnpinZone, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError]);
 
@@ -5475,6 +5529,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const sepModeFor = useCallback((tier: string): SeparatorMode =>
     (tierViewMode(tier) === 'custom' ? 'custom' : 'project'), [tierViewMode]);
 
+  // Body of the drag-end re-anchor (rule 5) — reached through sepReanchorRef,
+  // declared next to the drag handlers far above. Custom mode only: project-mode
+  // lines anchor FOLDERS, which stay put when one card moves.
+  useLayoutEffect(() => {
+    sepReanchorRef.current = (tier, beforeIds, movedIds) => {
+      if (tierViewMode(tier) !== 'custom') return;
+      const next = reanchorSeparatorsAfterMove({
+        separators, tier, beforeIds, movedIds,
+        groupOf: (id) => pinnedTaskMap.get(id)?.group_id ?? null,
+      });
+      if (next !== separators) persistSeparators(next);
+    };
+  }, [tierViewMode, separators, persistSeparators, pinnedTaskMap]);
+
   /** Resolve a pointer position inside a tier list into a separator placement.
    *  Rows are read from the DOM: what the user SEES is the only honest source for
    *  "which two rows did I drop between". */
@@ -6067,7 +6135,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         <DndContext sensors={pinnedSensors} collisionDetection={closestCenter} onDragStart={handlePinnedDragStart} onDragOver={handlePinnedDragOver} onDragEnd={handlePinnedDragEnd} onDragCancel={handlePinnedDragCancel}>
           <div
             ref={pinnedWrapperRef}
-            className={`todo-pinned-wrapper${isAll ? '' : ' todo-pinned-wrapper-solo'}`}
+            // -unpin-armed opens a row-free band at the SCROLL END (padding on the
+            // scroll container moves no existing row and no measured rect), so the
+            // strip has somewhere it can actually accept a drop when a full tier
+            // is scrolled to its bottom — over a real row it always refuses.
+            className={`todo-pinned-wrapper${isAll ? '' : ' todo-pinned-wrapper-solo'}${unpinZone ? ' todo-pinned-wrapper-unpin-armed' : ''}`}
             style={
               // Single-section view: this region IS the panel — take all the height.
               // Stacked view: Pinned+Recent both collapsed → shrink-wrap to the header
@@ -6399,8 +6471,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             </div>,
             document.body,
           )}
-          {/* Floating preview card during cross-container drag */}
-          <DragOverlay dropAnimation={null}>
+          {/* Floating preview card during cross-container drag. pointer-events
+              none so hit tests (the unpin strip's elementFromPoint row guard)
+              see the row UNDER the pointer, not this chrome — dnd-kit does not
+              set it by default. */}
+          <DragOverlay dropAnimation={null} style={{ pointerEvents: 'none' }}>
             {activeDragPinnedTask && (
               <div className="todo-pinned-card todo-pinned-card-dragging">
                 <span className="todo-pinned-title" title={activeDragPinnedTask.title}>{activeDragPinnedTask.title}</span>

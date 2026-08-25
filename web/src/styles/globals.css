@@ -12483,6 +12483,14 @@ body.walnut-dragging {
 
 .todo-unpin-zone-icon { font-size: 14px; line-height: 1; }
 
+/* While the strip is up, the scroll container grows a row-free band at its END
+   (padding moves no existing row and no measured rect — content is top-anchored)
+   so a tier scrolled to its bottom still has somewhere the strip can accept a
+   drop: over a real row the strip always refuses (see overUnpinZone). All view
+   scrolls on the wrapper; a solo tab scrolls on the tier's own list. */
+.todo-pinned-wrapper-unpin-armed { padding-bottom: 46px; }
+.todo-pinned-wrapper-unpin-armed .todo-pinned-list-scroll { padding-bottom: 46px; }
+
 /* Armed: the pointer is inside, so releasing WILL unpin. Warm border + text
    because this drop is the one that removes the card from the tiers. */
 .todo-unpin-zone-hot {
@@ -12519,8 +12527,16 @@ body.walnut-dragging {
   background: var(--accent);
   height: 2px;
 }
-/* Inert while a CARD drag owns the pointer — see TierSeparatorRow. */
-.tier-separator-inert { cursor: default; pointer-events: none; }
+/* Inert while a CARD drag owns the pointer — see TierSeparatorRow. Faded too:
+   mid-drag the cards move as CSS transforms around this STATIC row, so its
+   position is not live truth (a member sliding "below the line" read as a split
+   band, 2026-08-25). The real placement re-resolves the moment the drop lands. */
+.tier-separator-inert {
+  cursor: default;
+  pointer-events: none;
+  opacity: 0.35;
+  transition: opacity 120ms ease;
+}
 
 .tier-separator-delete {
   display: inline-flex;

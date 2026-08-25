@@ -1,10 +1,17 @@
 /**
- * Two reported pinned-area bugs, one spec.
+ * Reported pinned-area drag bugs, one spec.
  *
- * Reported 2026-08-24, with a screenshot of a fork group sitting above a divider
+ * Round 1 (2026-08-24), with a screenshot of a fork group sitting above a divider
  * line: "如果说它是在一个group … 它都在这个separation line上面, 新的task drag上去会把
  * 之前那个task给挤到这个separation line下面这个是不能接受的" and "我一旦拖一个任务进
  * 去我没有办法再拖出来了就是在这个pinned area".
+ *
+ * Round 2 (2026-08-25), three screenshots: "still like this … even worse after
+ * drop, the whole thing move outside". Two more root causes fell out: a drop on
+ * the group CHIP fell through to the plain reorder (card parked above the whole
+ * cluster, no join), and a line anchored `before` a card RODE ALONG when that
+ * card was dragged elsewhere — rule 5 in tier-separators.ts re-anchors it to the
+ * band's neighbours that stayed.
  *
  *  1. A GROUP IS ONE UNIT, like a project folder. A divider line anchors to a card
  *     id, so when a card joined a group the line followed that card INTO the
@@ -85,7 +92,17 @@ async function putSeparators(separators: unknown[]): Promise<void> {
   if (!res.ok) throw new Error(`separators failed: ${res.status} ${await res.text()}`)
 }
 
+async function readSeparators(): Promise<Array<{ id: string; after?: string; before?: string }>> {
+  const res = await fetch(`${API}/api/ordering`)
+  return ((await res.json()) as { separators?: Array<{ id: string; after?: string; before?: string }> }).separators ?? []
+}
+
 async function openFocus(page: Page): Promise<void> {
+  // Tall viewport so the accumulated fixture cards don't push this test's rows
+  // into the tier's scroll tail: a drop held 45px from a scrollable container's
+  // bottom edge sits in dnd-kit's autoscroll band, the rows slide up under the
+  // pointer mid-hold, and `over` drifts to the dragged card itself.
+  await page.setViewportSize({ width: 1400, height: 1000 })
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   await selectSection(page, 'Focus')
@@ -184,6 +201,179 @@ test('a divider line never splits a group: a card joining the cluster keeps ever
     `the line split the group: ${above} of ${after.members.length} members above it`,
   ).toBe(true)
   expect(errors).toEqual([])
+})
+
+test('dropping a card on the group CHIP joins the group — it never parks above the cluster', async ({ page }) => {
+  // Second report, 2026-08-25 (screenshots): the drop fell through to the plain
+  // reorder, so the card landed immediately ABOVE the whole group with no join,
+  // and the divider line rode along with it — "the whole thing move outside".
+  test.setTimeout(150_000)
+  const proj = `SepChip${Date.now().toString(36)}`
+  const m1 = await createTask('chip member one', proj)
+  const m2 = await createTask('chip member two', proj)
+  const m3 = await createTask('chip member three', proj)
+  const joiner = await createTask('drops on the chip', proj)
+  const outsider = await createTask('chip outsider', proj)
+  const gid = await groupTasks([m1.id, m2.id, m3.id], 'Chip Group')
+  for (const t of [m1, m2, m3, joiner, outsider]) await pinToFocus(t.id)
+  await reorderOwn([m1.id, m2.id, m3.id, joiner.id, outsider.id])
+  await presetTierViewModes(page, { focus: 'custom' })
+  // The user's exact layout: the line directly under the group, the joiner under it.
+  await putSeparators([{ id: 'sep_chip', tier: 'focus', mode: 'custom', after: m3.id, before: joiner.id }])
+
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e).slice(0, 300)))
+  await openFocus(page)
+  await expect(page.locator(`${TIER_SCOPE} [data-task-id="${joiner.id}"]`).first()).toBeVisible({ timeout: 20_000 })
+
+  const chip = page.locator(`${TIER_SCOPE} [data-group-id="${gid}"]`).first()
+  await expect(chip, 'the group chip header must be on screen').toBeVisible({ timeout: 20_000 })
+  const chipBox = await chip.boundingBox()
+  expect(chipBox).not.toBeNull()
+  await dragCardTo(page, joiner.id, chipBox!.x + chipBox!.width / 2, chipBox!.y + chipBox!.height / 2)
+
+  await expect
+    .poll(async () => (await fetch(`${API}/api/tasks/${joiner.id}`).then((r) => r.json())).task.group_id, {
+      timeout: 20_000,
+      message: 'dropping on the chip must JOIN the group',
+    })
+    .toBe(gid)
+  await page.waitForTimeout(900)
+  await page.screenshot({ path: `${SHOT_DIR}/09-chip-drop-joins.png` })
+
+  const rows = await tierRows(page)
+  const sepIdx = rows.findIndex((r) => r.sep === 'sep_chip')
+  const memberIdx = [m1.id, m2.id, m3.id, joiner.id].map((id) => rows.findIndex((r) => r.task === id))
+  const outsiderIdx = rows.findIndex((r) => r.task === outsider.id)
+  expect(sepIdx, 'the line is still rendered').toBeGreaterThan(-1)
+  expect(memberIdx.every((i) => i !== -1 && i < sepIdx), `all four members stay above the line (rows: sep=${sepIdx}, members=${memberIdx})`).toBe(true)
+  expect(outsiderIdx, 'the outsider stays below the line').toBeGreaterThan(sepIdx)
+  expect(errors).toEqual([])
+})
+
+test('the line stays with its BAND when the card below it is dragged above the group', async ({ page }) => {
+  // The distilled screenshot-3 state: the line was anchored `before` the card,
+  // so moving the card above the cluster towed the line past the whole group and
+  // every banded task changed sides. Rule 5: the drag re-anchors the line to the
+  // neighbours that stayed.
+  test.setTimeout(150_000)
+  const proj = `SepBand${Date.now().toString(36)}`
+  const top = await createTask('band top loose', proj)
+  const m1 = await createTask('band member one', proj)
+  const m2 = await createTask('band member two', proj)
+  const mover = await createTask('band mover', proj)
+  const outsider = await createTask('band outsider', proj)
+  await groupTasks([m1.id, m2.id], 'Band Group')
+  for (const t of [top, m1, m2, mover, outsider]) await pinToFocus(t.id)
+  await reorderOwn([top.id, m1.id, m2.id, mover.id, outsider.id])
+  await presetTierViewModes(page, { focus: 'custom' })
+  await putSeparators([{ id: 'sep_band', tier: 'focus', mode: 'custom', after: m2.id, before: mover.id }])
+
+  await openFocus(page)
+  const topCard = page.locator(`${TIER_SCOPE} [data-task-id="${top.id}"]`).first()
+  await expect(topCard).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator(`${TIER_SCOPE} [data-separator-id="sep_band"]`)).toBeVisible({ timeout: 20_000 })
+
+  // Plain reorder: release on the top card's UPPER edge (away from the chip and
+  // the members, so nothing reads as a group gesture).
+  const topBox = await topCard.boundingBox()
+  expect(topBox).not.toBeNull()
+  await dragCardTo(page, mover.id, topBox!.x + topBox!.width / 2, topBox!.y + 4)
+
+  // The mover must NOT have joined or formed a group.
+  await expect
+    .poll(async () => {
+      const rows = await tierRows(page)
+      const mi = rows.findIndex((r) => r.task === mover.id)
+      const g1 = rows.findIndex((r) => r.task === m1.id)
+      return mi !== -1 && g1 !== -1 && mi < g1
+    }, { timeout: 20_000, message: 'the drag never moved the card above the group' })
+    .toBe(true)
+  const moved = await fetch(`${API}/api/tasks/${mover.id}`).then((r) => r.json())
+  expect(moved.task.group_id ?? null, 'a plain reorder must not group').toBeNull()
+
+  // Rule 5, persisted: the stored anchors now name the rows that stayed.
+  await expect
+    .poll(async () => {
+      const s = (await readSeparators()).find((x) => x.id === 'sep_band')
+      return s ? `${s.after}→${s.before}` : 'missing'
+    }, { timeout: 20_000, message: 'the line must re-anchor to the band, not follow the card' })
+    .toBe(`${m2.id}→${outsider.id}`)
+
+  await page.waitForTimeout(600)
+  await page.screenshot({ path: `${SHOT_DIR}/10-line-stays-with-band.png` })
+  const rows = await tierRows(page)
+  const sepIdx = rows.findIndex((r) => r.sep === 'sep_band')
+  for (const id of [m1.id, m2.id, mover.id]) {
+    const i = rows.findIndex((r) => r.task === id)
+    expect(i !== -1 && i < sepIdx, `${id} stays above the line (idx ${i}, sep ${sepIdx})`).toBe(true)
+  }
+  expect(rows.findIndex((r) => r.task === outsider.id)).toBeGreaterThan(sepIdx)
+})
+
+test('a card dropped into the gap under the line lands BELOW the line', async ({ page }) => {
+  test.setTimeout(120_000)
+  const proj = `SepGap${Date.now().toString(36)}`
+  const a = await createTask('gap above', proj)
+  const b = await createTask('gap below', proj)
+  const c = await createTask('gap newcomer', proj)
+  for (const t of [a, b, c]) await pinToFocus(t.id)
+  await reorderOwn([a.id, b.id, c.id])
+  await presetTierViewModes(page, { focus: 'custom' })
+  await putSeparators([{ id: 'sep_gap', tier: 'focus', mode: 'custom', after: a.id, before: b.id }])
+
+  await openFocus(page)
+  const bCard = page.locator(`${TIER_SCOPE} [data-task-id="${b.id}"]`).first()
+  await expect(bCard).toBeVisible({ timeout: 20_000 })
+  const bBox = await bCard.boundingBox()
+  expect(bBox).not.toBeNull()
+  // Take b's slot from below — the only reorder that inserts into the line's gap.
+  await dragCardTo(page, c.id, bBox!.x + bBox!.width / 2, bBox!.y + bBox!.height / 2)
+
+  await expect
+    .poll(async () => {
+      const rows = await tierRows(page)
+      const sep = rows.findIndex((r) => r.sep === 'sep_gap')
+      const ci = rows.findIndex((r) => r.task === c.id)
+      const ai = rows.findIndex((r) => r.task === a.id)
+      return sep !== -1 && ci !== -1 && ai !== -1 ? (ai < sep && sep < ci) : false
+    }, { timeout: 20_000, message: 'the newcomer must land under the line, not above it' })
+    .toBe(true)
+  // The line's anchors were not touched — the newcomer was never an anchor.
+  const s = (await readSeparators()).find((x) => x.id === 'sep_gap')
+  expect(s).toMatchObject({ after: a.id, before: b.id })
+})
+
+test('divider lines fade while a card drag is live — their position is not live truth', async ({ page }) => {
+  test.setTimeout(120_000)
+  const proj = `SepFade${Date.now().toString(36)}`
+  const a = await createTask('fade one', proj)
+  const b = await createTask('fade two', proj)
+  for (const t of [a, b]) await pinToFocus(t.id)
+  await reorderOwn([a.id, b.id])
+  await presetTierViewModes(page, { focus: 'custom' })
+  await putSeparators([{ id: 'sep_fade', tier: 'focus', mode: 'custom', after: a.id, before: b.id }])
+
+  await openFocus(page)
+  const line = page.locator(`${TIER_SCOPE} [data-separator-id="sep_fade"]`)
+  await expect(line).toBeVisible({ timeout: 20_000 })
+  await expect(line).not.toHaveClass(/tier-separator-inert/)
+
+  const card = page.locator(`${TIER_SCOPE} [data-task-id="${a.id}"]`).first()
+  await card.hover()
+  const grip = card.locator('.todo-pinned-drag-handle')
+  const box = await grip.boundingBox()
+  expect(box).not.toBeNull()
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2 + 14)
+  await expect(line).toHaveClass(/tier-separator-inert/)
+  await expect
+    .poll(() => line.evaluate((el) => getComputedStyle(el).opacity), { timeout: 5_000 })
+    .toBe('0.35')
+  // Release in place: a no-op drop must bring the line back to full strength.
+  await page.mouse.up()
+  await expect(line).not.toHaveClass(/tier-separator-inert/, { timeout: 10_000 })
 })
 
 test('a pinned card can be dragged back out of the pinned area', async ({ page }) => {
