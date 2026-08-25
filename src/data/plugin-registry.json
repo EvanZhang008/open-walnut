@@ -1,0 +1,53 @@
+{
+  "$comment": "Curated plugin catalog. LOCAL FILE ONLY: GET /api/plugin-runtime/registry merges it with live install state and never makes a network call. Listing something here installs nothing: a git/npm entry only PREFILLS the existing install form, which still requires the per-install trust acknowledgement. Users can add their own entries in ~/.open-walnut/plugin-registry.json (same shape, matched by id, theirs wins). Copied to dist/ by the `cp -r src/data dist/` build step.",
+  "version": 1,
+  "plugins": [
+    {
+      "id": "walnut-time",
+      "name": "Time",
+      "description": "Your day as a timeline: an attention tape, work chapters and task swimlanes, plus the My time and Agents reports.",
+      "adds": ["App", "Reports"],
+      "source": { "kind": "builtin" },
+      "homepage": "https://github.com/EvanZhang008/open-walnut/tree/main/examples/plugins/walnut-time"
+    },
+    {
+      "id": "calendar",
+      "name": "Calendar",
+      "description": "Calendar tools for the AI, backed by the Walnut calendar service on this machine.",
+      "adds": ["Agent tools"],
+      "source": { "kind": "builtin" }
+    },
+    {
+      "id": "jira",
+      "name": "Jira",
+      "description": "Two-way task sync with Jira Cloud or Server. Needs a base URL and credentials before it activates.",
+      "adds": ["Task sync"],
+      "source": { "kind": "builtin" }
+    },
+    {
+      "id": "ms-todo",
+      "name": "Microsoft To-Do",
+      "description": "Two-way task sync with Microsoft To-Do. Needs an application client ID before it activates.",
+      "adds": ["Task sync"],
+      "source": { "kind": "builtin" }
+    },
+    {
+      "id": "walnut-demo",
+      "name": "Walnut Plugin Demo",
+      "description": "Every public plugin capability in one native App: React UI, server ops, agent tools, skills, badges, routes and storage. The worked example to read before writing your own.",
+      "adds": ["App", "Agent tools", "Skill"],
+      "source": { "kind": "example", "path": "examples/plugins/walnut-demo" },
+      "homepage": "https://github.com/EvanZhang008/open-walnut/tree/main/examples/plugins/walnut-demo",
+      "docs": "docs/reference/plugin-development.md"
+    },
+    {
+      "id": "hello-walnut",
+      "name": "Hello Walnut",
+      "description": "The smallest useful plugin: one app page, one AI tool, one skill. Start here when writing your own.",
+      "adds": ["App", "Agent tools", "Skill"],
+      "source": { "kind": "example", "path": "examples/plugins/hello-walnut" },
+      "homepage": "https://github.com/EvanZhang008/open-walnut/tree/main/examples/plugins/hello-walnut",
+      "docs": "docs/reference/plugin-development.md"
+    }
+  ]
+}

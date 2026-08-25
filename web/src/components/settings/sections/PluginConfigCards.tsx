@@ -32,6 +32,18 @@ interface Props {
   onSave: (partial: Partial<Config>) => Promise<void>;
   /** Plugin IDs already rendered by hand elsewhere in the section. */
   excludeIds?: string[];
+  /**
+   * Render ONLY these plugin ids. The Plugins section uses it to put one plugin's
+   * form under its own row, so a plugin is configured where it is turned on. Absent
+   * means every configurable plugin, which is the whole-list behaviour.
+   */
+  onlyIds?: string[];
+  /**
+   * Render the fields WITHOUT the collapsible `<details>` shell. The Plugins section
+   * already shows the plugin's name, its status badge and an expand control on the row
+   * above, so the shell would repeat all three.
+   */
+  bare?: boolean;
 }
 
 const MASKED = '••••••';
@@ -50,24 +62,34 @@ function HelpText({ text }: { text: string }) {
   );
 }
 
-export function PluginConfigCards({ config, onSave, excludeIds = [] }: Props) {
+export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, bare = false }: Props) {
   const [plugins, setPlugins] = useState<PluginSettingsMeta[]>([]);
   const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
   const [saving, setSaving] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
 
+  // `onlyIds` is joined into the dep key so switching which row is expanded refetches
+  // instead of showing the previous plugin's fields.
+  const scope = onlyIds ? onlyIds.join(',') : '';
+
   const refresh = useCallback(() => {
     fetch('/api/integrations/settings')
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: PluginSettingsMeta[]) => {
-        const visible = data.filter(p => !excludeIds.includes(p.id) && p.configSchema?.properties);
+        const wanted = scope ? new Set(scope.split(',')) : null;
+        const visible = data.filter(p =>
+          !excludeIds.includes(p.id)
+          && (!wanted || wanted.has(p.id))
+          // An empty `properties` object is a schema with nothing to fill in; showing
+          // it renders a card that is just a Save button.
+          && Object.keys(p.configSchema?.properties ?? {}).length > 0);
         setPlugins(visible);
         // Merge: keep in-flight edits, seed fields for newly-appeared plugins
         setDrafts(d => Object.fromEntries(visible.map(p => [p.id, { ...p.values, ...d[p.id] }])));
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
     refresh();
@@ -116,18 +138,9 @@ export function PluginConfigCards({ config, onSave, excludeIds = [] }: Props) {
         const needsConfig = plugin.status === 'needs-config';
         const missingLabels = plugin.missing.map(f => plugin.uiHints?.[f]?.label ?? f);
 
-        return (
-          <details key={plugin.id} className="settings-collapsible" open={needsConfig}>
-            <summary className="settings-collapsible-title">
-              {plugin.name}
-              {needsConfig && (
-                <span className="badge badge-immediate" style={{ marginLeft: 8 }}>
-                  needs setup
-                </span>
-              )}
-            </summary>
+        const body = (
             <div className="settings-collapsible-body">
-              {plugin.description && (
+              {!bare && plugin.description && (
                 <p className="text-xs text-muted" style={{ marginTop: 0 }}>{plugin.description}</p>
               )}
               {needsConfig && (
@@ -196,6 +209,20 @@ export function PluginConfigCards({ config, onSave, excludeIds = [] }: Props) {
                 )}
               </div>
             </div>
+        );
+
+        if (bare) return <div key={plugin.id}>{body}</div>;
+        return (
+          <details key={plugin.id} className="settings-collapsible" open={needsConfig}>
+            <summary className="settings-collapsible-title">
+              {plugin.name}
+              {needsConfig && (
+                <span className="badge badge-immediate" style={{ marginLeft: 8 }}>
+                  needs setup
+                </span>
+              )}
+            </summary>
+            {body}
           </details>
         );
       })}

@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { SettingsSection, SettingsNotice } from '../SettingsSection';
 import { apiGetText } from '@/api/client';
 import { wsClient } from '@/api/ws';
 import { getRecentEntries } from '@/utils/browser-logger';
@@ -107,13 +108,14 @@ export function BugReportSection() {
   };
 
   return (
-    <div id="bug-report" className="card settings-section settings-section-wide">
-      <h3 className="settings-section-title">Bug Report</h3>
-      <p className="settings-section-subtitle">
+    <SettingsSection
+      id="bug-report"
+      title="Bug Report"
+      description={<>
         Generates a scrubbed diagnostic bundle: recent server logs, system health, config with
         secrets masked, and this browser&apos;s state. Paste it into an issue or chat when reporting a problem.
-      </p>
-
+      </>}
+    >
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <select
           className="input"
@@ -142,9 +144,9 @@ export function BugReportSection() {
       </div>
 
       {copyFailed && (
-        <p className="text-sm" style={{ color: 'var(--warning, #b58900)', marginTop: 8 }}>
+        <SettingsNotice kind="warn">
           Clipboard unavailable in this browser context — select the text below and copy manually.
-        </p>
+        </SettingsNotice>
       )}
 
       {report && (
@@ -158,6 +160,6 @@ export function BugReportSection() {
           }}
         />
       )}
-    </div>
+    </SettingsSection>
   );
 }

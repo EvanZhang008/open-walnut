@@ -6,6 +6,7 @@ import {
   type TimelineResponse,
   type TimelineEntry,
 } from '@/api/timeline';
+import { SettingsSection, SettingsEmpty, SettingsNotice } from '../SettingsSection';
 
 // ── Category colors ──
 
@@ -286,51 +287,39 @@ export function TimelineSection() {
   }, [data]);
 
   return (
-    <div id="timeline" className="card settings-section settings-section-wide">
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h3 className="settings-section-title" style={{ margin: 0 }}>Timeline</h3>
+    <SettingsSection
+      id="timeline"
+      title="Timeline"
+      description="Screen-activity tracking: periodic screenshots, categorised into what you were doing."
+      actions={(
         <button
+          type="button"
+          className={data?.tracking ? 'btn-danger-outline' : 'btn btn-primary'}
           onClick={handleToggle}
           disabled={toggling}
-          style={{
-            padding: '8px 20px',
-            borderRadius: 8,
-            border: 'none',
-            cursor: toggling ? 'wait' : 'pointer',
-            fontWeight: 600,
-            fontSize: 13,
-            backgroundColor: data?.tracking ? '#FF3B30' : '#34C759',
-            color: '#fff',
-          }}
         >
-          {toggling ? '...' : data?.tracking ? 'Stop Tracking' : 'Start Tracking'}
+          {toggling ? '…' : data?.tracking ? 'Stop Tracking' : 'Start Tracking'}
         </button>
-      </div>
-
+      )}
+    >
       {/* Date picker */}
       <div style={{ marginBottom: 20 }}>
         <DatePicker value={date} availableDates={dates} onChange={setDate} />
       </div>
 
-      {error && (
-        <div style={{ padding: 12, background: '#FF3B3020', borderRadius: 8, color: '#FF3B30', marginBottom: 16 }}>
-          {error}
-        </div>
-      )}
+      {error && <SettingsNotice kind="error">{error}</SettingsNotice>}
 
       {loading ? (
-        <div className="empty-state"><p>Loading...</p></div>
+        <SettingsEmpty>Loading…</SettingsEmpty>
       ) : !data?.entries.length ? (
-        <div className="empty-state">
-          <p style={{ fontSize: 32, marginBottom: 8 }}>&#128247;</p>
-          <p>No activity recorded for {date}</p>
-          <p style={{ fontSize: 13, marginTop: 8 }}>
+        <SettingsEmpty>
+          <p style={{ margin: '0 0 4px' }}>No activity recorded for {date}</p>
+          <p style={{ margin: 0, fontSize: 12 }}>
             {data?.tracking
               ? 'Tracking is active — activity will appear here as screenshots are analyzed.'
               : 'Enable tracking to start recording your daily activity.'}
           </p>
-        </div>
+        </SettingsEmpty>
       ) : (
         <>
           {/* Category bar */}
@@ -356,6 +345,6 @@ export function TimelineSection() {
           </div>
         </>
       )}
-    </div>
+    </SettingsSection>
   );
 }

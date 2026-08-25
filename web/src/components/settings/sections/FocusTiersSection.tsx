@@ -7,6 +7,7 @@
  */
 
 import { useState, useEffect, useRef, type KeyboardEvent } from 'react';
+import { SettingsSection, SettingsNotice } from '../SettingsSection';
 import { useEvent } from '@/hooks/useWebSocket';
 import {
   fetchCustomTiers,
@@ -149,12 +150,11 @@ export function FocusTiersSection() {
   };
 
   return (
-    <div id="focus-tiers" className="card settings-section">
-      <h3 className="settings-section-title">Focus Tiers</h3>
-      <p className="text-sm text-muted" style={{ margin: '0 0 16px' }}>
-        Custom pinned-task tiers shown alongside Focus / Satellite / Backlog / Wait.
-      </p>
-
+    <SettingsSection
+      id="focus-tiers"
+      title="Focus Tiers"
+      description="Custom pinned-task tiers shown alongside Focus / Satellite / Backlog / Wait."
+    >
       {loading ? <LoadingSpinner /> : (
         <>
           <ul className="focus-tiers-list">
@@ -224,18 +224,10 @@ export function FocusTiersSection() {
             </button>
           </div>
 
-          {error && (
-            <div className="text-sm" style={{ color: 'var(--error)', marginTop: 8 }}>
-              Error: {error}
-            </div>
-          )}
-          {notice && (
-            <div className="text-sm" style={{ color: 'var(--success)', marginTop: 8 }}>
-              {notice}
-            </div>
-          )}
+          {error && <SettingsNotice kind="error">Error: {error}</SettingsNotice>}
+          {notice && <SettingsNotice kind="success">{notice}</SettingsNotice>}
         </>
       )}
-    </div>
+    </SettingsSection>
   );
 }

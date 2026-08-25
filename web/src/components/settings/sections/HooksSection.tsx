@@ -1,9 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { fetchHooks, patchHook, type HookInfo, type HookSetting } from '@/api/hooks';
+import { SettingsSection, SettingsEmpty } from '../SettingsSection';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch';
 import { NumberInput } from '@/components/settings/inputs/NumberInput';
 import { log } from '@/utils/log';
+
+const HOOKS_DESCRIPTION = 'Everything Walnut does automatically, in one place: session lifecycle, task phase transitions, cron fires, and daemon policies.';
 
 const ACTION_ICON: Record<string, string> = {
   send_message_to_session: '\u{1F4AC}',
@@ -214,23 +217,36 @@ export function HooksSection() {
       });
   }, [reload]);
 
-  if (loading) return <div id="hooks"><LoadingSpinner /></div>;
-  if (error) return <div id="hooks"><div className="empty-state"><p>Error: {error}</p></div></div>;
+  // Loading and error used to render a BARE <div id="hooks">, so the content sat
+  // outside the card frame and the page visibly reflowed once it arrived. Same
+  // shell in all three states.
+  if (loading) {
+    return (
+      <SettingsSection id="hooks" title="Hooks" description={HOOKS_DESCRIPTION}>
+        <LoadingSpinner />
+      </SettingsSection>
+    );
+  }
+  if (error) {
+    return (
+      <SettingsSection id="hooks" title="Hooks" description={HOOKS_DESCRIPTION}>
+        <SettingsEmpty>Error: {error}</SettingsEmpty>
+      </SettingsSection>
+    );
+  }
 
   return (
-    <div id="hooks" className="card settings-section settings-section-wide">
-      <h3 className="settings-section-title">Hooks</h3>
-      <p className="settings-section-subtitle">
-        Everything Walnut does automatically — session lifecycle, task phase transitions, cron fires, and daemon policies — in one place
-      </p>
-
-      {banner && (
+    <SettingsSection
+      id="hooks"
+      title="Hooks"
+      description={HOOKS_DESCRIPTION}
+      banner={banner ? (
         <div className="hook-banner" role="status">
           {banner}
           <button type="button" className="hook-banner-dismiss" onClick={() => setBanner(null)}>{'×'}</button>
         </div>
-      )}
-
+      ) : undefined}
+    >
       {RUNTIME_GROUPS.map((group) => {
         const groupHooks = hooks.filter(group.match);
         if (groupHooks.length === 0) return null;
@@ -256,6 +272,6 @@ export function HooksSection() {
         Declare your own hooks in <code>config.yaml</code> under <code>hooks.defs</code> (declarative actions),
         or drop <code>.mjs</code> files in <code>~/.open-walnut/hooks/</code> (code hooks).
       </p>
-    </div>
+    </SettingsSection>
   );
 }

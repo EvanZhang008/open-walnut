@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { SettingsSection, SettingsNotice } from '../SettingsSection';
 import { useUsageOverview } from '@/hooks/useUsageOverview';
 import { UsageSummaryCards } from '@/components/usage/UsageSummaryCards';
 import { UsageDailyChart } from '@/components/usage/UsageDailyChart';
@@ -32,14 +33,16 @@ export function UsageSection() {
   const bounds = overview?.dateBounds ?? { min: null, max: null };
 
   return (
-    <div id="usage" className="card settings-section settings-section-wide">
-      <div className="usage-header">
-        <h3 className="settings-section-title">Usage &amp; Costs</h3>
+    <SettingsSection
+      id="usage"
+      title="Usage & Costs"
+      description="What every model call cost, by day, source, agent and model."
+      actions={(
         <button className="usage-refresh-btn" onClick={refresh} disabled={loading}>
           {loading ? 'Refreshing…' : 'Refresh'}
         </button>
-      </div>
-
+      )}
+    >
       <div className="usage-period-tabs">
         {PRESETS.map((p) => (
           <button
@@ -61,7 +64,7 @@ export function UsageSection() {
 
       <UsageFilterChips chips={chips} onClearAll={clearDrill} />
 
-      {error && <div className="usage-error">Error: {error}</div>}
+      {error && <SettingsNotice kind="error">Error: {error}</SettingsNotice>}
 
       <UsageSummaryCards summary={overview?.summary ?? null} loading={loading} filtered={chips.length > 0 || time.preset === 'custom'} />
 
@@ -130,7 +133,7 @@ export function UsageSection() {
         </div>
         <UsageRecentTable data={overview?.recent ?? []} loading={loading} />
       </div>
-    </div>
+    </SettingsSection>
   );
 }
 

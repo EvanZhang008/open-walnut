@@ -1,4 +1,10 @@
+/**
+ * The save-on-submit section wrapper. It owns the saving/error/success lifecycle;
+ * the BOX, header and spacing come from SettingsSection so this card is
+ * geometrically identical to the hand-built sections (Apps, Repositories, Usage …).
+ */
 import { useState, useRef, useEffect, type ReactNode, type FormEvent } from 'react';
+import { SettingsSection, SettingsNotice } from '../SettingsSection';
 
 interface SectionCardProps {
   id: string;
@@ -53,38 +59,31 @@ export function SectionCard({
   const hasSaveButton = showSave ?? !!onSave;
 
   return (
-    <form
+    <SettingsSection
+      as="form"
       id={id}
-      className="settings-section"
+      title={title}
+      description={description}
       onSubmit={handleSubmit}
+      {...(attention ? { className: 'settings-card-attention' } : {})}
+      {...(banner
+        ? { banner: <div className="settings-banner settings-banner-success">{banner}</div> }
+        : {})}
+      footer={
+        <>
+          {error && <SettingsNotice kind="error">Error: {error}</SettingsNotice>}
+          {success && <SettingsNotice kind="success">Saved successfully.</SettingsNotice>}
+          {hasSaveButton && (
+            <div className="form-actions">
+              <button type="submit" className="btn btn-primary" disabled={saving || !onSave}>
+                {saving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          )}
+        </>
+      }
     >
-      {banner && (
-        <div className="settings-banner settings-banner-success">{banner}</div>
-      )}
-      <h3 className="settings-section-title">{title}</h3>
-      {description && (
-        <p className="text-sm text-muted" style={{ margin: '0 0 16px' }}>
-          {description}
-        </p>
-      )}
       {children}
-      {error && (
-        <div className="text-sm" style={{ color: 'var(--error)', marginTop: 8 }}>
-          Error: {error}
-        </div>
-      )}
-      {success && (
-        <div className="text-sm" style={{ color: 'var(--success)', marginTop: 8 }}>
-          Saved successfully.
-        </div>
-      )}
-      {hasSaveButton && (
-        <div className="form-actions">
-          <button type="submit" className="btn btn-primary" disabled={saving || !onSave}>
-            {saving ? 'Saving...' : 'Save'}
-          </button>
-        </div>
-      )}
-    </form>
+    </SettingsSection>
   );
 }

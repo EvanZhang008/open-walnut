@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
+import { SettingsSection, SettingsEmpty } from '../SettingsSection';
 import { useRepositories } from '@/hooks/useRepositories';
 import { RepoCard } from '@/components/repositories/RepoCard';
 import { RepoForm } from '@/components/repositories/RepoForm';
@@ -6,6 +7,8 @@ import { RepoDetail } from '@/components/repositories/RepoDetail';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { useConfirm } from '@/hooks/useConfirm';
 import type { RepoSummary } from '@/api/repositories';
+
+const REPOS_DESCRIPTION = 'Repositories Walnut knows about: what each one is, its tech stack, and where it lives on this machine.';
 
 export function ReposSection() {
   const { repos, loading, error, save, remove, refresh } = useRepositories();
@@ -65,43 +68,60 @@ export function ReposSection() {
     setSelected(null);
   }, []);
 
-  if (loading) return <div id="repositories" className="card settings-section settings-section-wide"><LoadingSpinner /></div>;
-  if (error) return <div id="repositories" className="card settings-section settings-section-wide"><div className="empty-state"><p>Error: {error}</p></div></div>;
+  // Every state — loading, error, the add form, one repo's detail, the list —
+  // renders in the SAME shell, so switching between them no longer changes the
+  // card's width or its header.
+  if (loading) {
+    return (
+      <SettingsSection id="repositories" title="Repositories" description={REPOS_DESCRIPTION}>
+        <LoadingSpinner />
+      </SettingsSection>
+    );
+  }
+  if (error) {
+    return (
+      <SettingsSection id="repositories" title="Repositories" description={REPOS_DESCRIPTION}>
+        <SettingsEmpty>Error: {error}</SettingsEmpty>
+      </SettingsSection>
+    );
+  }
 
   if (showForm) {
     return (
-      <div id="repositories" className="card settings-section settings-section-wide">
+      <SettingsSection id="repositories" title="Repositories" description={REPOS_DESCRIPTION}>
         <RepoForm
           editSlug={editingSlug}
           onSave={handleSave}
           onCancel={handleBack}
         />
-      </div>
+      </SettingsSection>
     );
   }
 
   if (selected) {
     return (
-      <div id="repositories" className="card settings-section settings-section-wide">
+      <SettingsSection id="repositories" title="Repositories" description={REPOS_DESCRIPTION}>
         <RepoDetail
           repo={selected}
           onBack={handleBack}
           onEdit={() => handleEdit(selected.slug)}
           onDelete={() => handleDelete(selected.slug)}
         />
-      </div>
+      </SettingsSection>
     );
   }
 
   return (
-    <div id="repositories" className="card settings-section settings-section-wide">
-      <div className="repos-header">
-        <h3 className="settings-section-title">Repositories</h3>
+    <SettingsSection
+      id="repositories"
+      title="Repositories"
+      description={REPOS_DESCRIPTION}
+      actions={(
         <button className="btn btn-primary" onClick={handleCreate}>
           + Add Repository
         </button>
-      </div>
-
+      )}
+    >
       <div className="repos-search-row">
         <input
           className="repos-search-input"
@@ -114,12 +134,11 @@ export function ReposSection() {
       </div>
 
       {filtered.length === 0 ? (
-        <div className="empty-state">
-          <p>{repos.length === 0
-            ? 'No repositories registered yet. Click "+ Add Repository" to get started.'
-            : 'No repositories match your search.'
-          }</p>
-        </div>
+        <SettingsEmpty>
+          {repos.length === 0
+            ? 'No repositories registered yet. Use "+ Add Repository" to get started.'
+            : 'No repositories match your search.'}
+        </SettingsEmpty>
       ) : (
         <div className="repos-grid">
           {filtered.map((repo) => (
@@ -133,6 +152,6 @@ export function ReposSection() {
           ))}
         </div>
       )}
-    </div>
+    </SettingsSection>
   );
 }

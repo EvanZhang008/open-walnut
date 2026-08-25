@@ -1,0 +1,90 @@
+/*
+ * Settings → Plugins. Only the bits the shared shell does not already cover:
+ * the group heading with its count, the version chip, the "why not active" line,
+ * and the config form that unfolds under a row.
+ *
+ * Everything structural (card width, header, row, sub-card, empty state, notices)
+ * comes from settings-shell.css, so this section looks like every other section.
+ */
+
+.plugin-store-group {
+  margin-bottom: 20px;
+}
+
+.plugin-store-group:last-of-type {
+  margin-bottom: 0;
+}
+
+.plugin-store-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.plugin-store-group-head .settings-subcard-title {
+  margin: 0;
+}
+
+.plugin-store-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--fg-muted, var(--text-muted));
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A row plus the config form it can unfold, kept as one unit so the form reads as
+   belonging to the row above it rather than to the next plugin. */
+.plugin-store-entry {
+  display: grid;
+  gap: 0;
+}
+
+.plugin-store-version {
+  color: var(--fg-muted, var(--text-muted));
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Why a plugin is not running, in the server's own words. Wraps: a stack trace tail
+   truncated to one line is a diagnosis nobody can act on. */
+.plugin-store-why {
+  color: var(--priority-important, var(--fg-muted));
+  white-space: normal;
+}
+
+.plugin-store-config {
+  margin: -1px 0 0;
+  padding: 12px 12px 4px;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+/* The trust acknowledgement is a sentence, not a field caption. `.form-group label`
+   uppercases and letter-spaces every label, which turned the one thing on this page a
+   person must actually read into a wall of shouting. Note the selector: that rule is
+   (0,1,1), so a bare class would lose to it. */
+.form-group label.plugin-trust-label,
+.plugin-trust-label {
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  color: var(--fg-secondary, var(--fg));
+  line-height: 1.45;
+}
+
+/* Inside a row's own frame the config form does not need a second card border. */
+.plugin-store-config .settings-collapsible {
+  border: none;
+  background: none;
+  padding: 0;
+}

@@ -51,7 +51,10 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   { owner: 'walnut', id: 'integrations', label: 'Integrations', title: 'Integrations', group: 'configure', render: ({ config, saveSection }) => <IntegrationsSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'calendar', label: 'Calendar', title: 'Calendar', group: 'configure', render: () => <CalendarSection /> },
   { owner: 'walnut', id: 'permissions', label: 'Permissions', title: 'Permissions', group: 'configure', render: () => <PermissionsSection /> },
-  { owner: 'walnut', id: 'plugin-store', label: 'Plugin Store', title: 'Plugin Store', group: 'configure', render: () => <PluginStoreSection /> },
+  // The id stays `plugin-store` — the nav testid, the `#plugin-store` deep link and
+  // several specs address it — while the LABEL is now what the section actually is:
+  // every plugin on this machine, not just a shop.
+  { owner: 'walnut', id: 'plugin-store', label: 'Plugins', title: 'Plugins', group: 'configure', render: ({ config, saveSection }) => <PluginStoreSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'search', label: 'Search & Embeddings', title: 'Search', group: 'configure', render: ({ config, saveSection }) => <SearchSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'stt', label: 'Speech-to-Text', title: 'Speech-to-Text', group: 'configure', render: ({ config, saveSection, reload }) => <SttSection config={config} onSave={saveSection} onReload={reload} /> },
   { owner: 'walnut', id: 'audio-capture', label: 'Audio Capture', title: 'Audio Capture', group: 'configure', render: ({ config, saveSection }) => <AudioCaptureSection config={config} onSave={saveSection} /> },

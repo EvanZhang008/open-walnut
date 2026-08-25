@@ -3,7 +3,6 @@ import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { SecretInput } from '../inputs/SecretInput';
-import { PluginConfigCards } from './PluginConfigCards';
 import { useAutoSave } from '@/hooks/useAutoSave';
 
 interface Props {
@@ -118,8 +117,11 @@ export function IntegrationsSection({ config, onSave }: Props) {
         </div>
       </details>
 
-      {/* Data-driven plugin configs (external plugins discovered from manifests) */}
-      <PluginConfigCards config={config} onSave={onSave} excludeIds={['ms-todo']} />
+      {/* A plugin's manifest-driven config form now lives under its OWN row in
+          Settings → Plugins, next to its on/off switch, so install → configure →
+          turn on is one surface. Rendering it here as well would put two forms for
+          the same plugin on one page (duplicate input ids included). This section
+          keeps the hand-built TOOL settings below, which are not plugin manifests. */}
 
       {/* Slack */}
       <details className="settings-collapsible">

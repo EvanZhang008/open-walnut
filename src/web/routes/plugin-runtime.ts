@@ -1,8 +1,14 @@
 import { Router, type RequestHandler } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { bus } from '../../core/event-bus.js'
 import type { IntegrationRegistry } from '../../core/integration-registry.js'
 import { validatePluginId } from '../../core/plugins/ids.js'
+import {
+  loadPluginCatalog,
+  mergePluginRegistry,
+  type InstalledPluginFacts,
+  type PluginRegistryResult,
+} from '../../core/plugins/plugin-catalog.js'
 import type { PluginLifecycleRecord } from '../../core/plugins/plugin-manager.js'
 import {
   listPluginWebModules,
@@ -34,6 +40,12 @@ export interface PluginRuntimeRouterDeps {
   listPrimaryOps?(pluginId: string): ReturnType<typeof listPrimaryPluginOps>
   callPrimaryOp?(pluginId: string, opName: string, args: Record<string, unknown>): ReturnType<typeof callPrimaryPluginOp>
   managePrimary?(pluginId: string, operation: PluginManagementAction): ReturnType<typeof managePrimaryPlugin>
+  /** Which external source installed each plugin id — for the store's Update/Remove. */
+  pluginSourceOwners?(): Promise<Map<string, { slug: string; kind: 'git' | 'npm' }>>
+  /** Config schemas for plugins that did NOT load because config is missing. */
+  unconfiguredSchemas?(): Promise<Map<string, Record<string, unknown> | undefined>>
+  /** Overridable so a test can point the catalog overlay at a temp home. */
+  walnutHome?: string
 }
 
 function routePluginId(value: string | string[]): string {
@@ -52,6 +64,29 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
   const getPrimaryOps = deps.listPrimaryOps ?? listPrimaryPluginOps
   const invokePrimaryOp = deps.callPrimaryOp ?? callPrimaryPluginOp
   const managePrimary = deps.managePrimary ?? managePrimaryPlugin
+  /**
+   * id → the external source that installed it. Imported lazily so the plugin-sources
+   * module (and the config read behind it) stays off this router's import path.
+   */
+  const resolveSourceOwners = deps.pluginSourceOwners ?? (async () => {
+    const { listSources } = await import('../../core/plugin-sources.js')
+    const owners = new Map<string, { slug: string; kind: 'git' | 'npm' }>()
+    for (const source of await listSources()) {
+      for (const plugin of source.plugins) {
+        if (plugin.id) owners.set(plugin.id, { slug: source.slug, kind: source.kind ?? 'git' })
+      }
+    }
+    return owners
+  })
+  /**
+   * A needs-config plugin is NOT in the registry (that is what "did not load" means),
+   * so its schema cannot be read from there — and those are exactly the plugins whose
+   * Configure button matters most. The loader keeps their manifests aside; read them.
+   */
+  const resolveUnconfiguredSchemas = deps.unconfiguredSchemas ?? (async () => {
+    const { getUnconfiguredPlugins } = await import('../../core/integration-loader.js')
+    return new Map(getUnconfiguredPlugins().map((plugin) => [plugin.id, plugin.configSchema]))
+  })
   const activePlugin = (pluginId: string) => {
     const active = deps.list().some((plugin) => plugin.id === pluginId && plugin.state === 'active')
     return active ? deps.registry.get(pluginId) : undefined
@@ -81,6 +116,78 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
         modules,
         moduleErrors: catalogue.errors,
       })
+    } catch (error) {
+      if (error instanceof PluginRuntimeRelayError) {
+        res.status(error.status).json({ error: error.message })
+        return
+      }
+      next(error)
+    }
+  })
+
+  /**
+   * GET /registry — the store's whole list in one call: the curated catalog merged
+   * with what is actually installed and what state it is in.
+   *
+   * Mounted under /api/plugin-runtime because that is the plugin management surface
+   * and it needs no new server mount point.
+   *
+   * Local file + in-memory state only, never the network. In cloud mode the install
+   * state comes from the primary over the same relay `GET /` already uses; the
+   * plugin-SOURCE list is Mac-local and is not relayed, so external rows come back
+   * without their Update/Remove slug and the response says so rather than pretending
+   * (`sourcesUnavailable`).
+   */
+  router.get('/registry', async (_req, res, next) => {
+    try {
+      const catalog = await loadPluginCatalog(deps.walnutHome ?? WALNUT_HOME)
+      const lifecycle = cloudMode ? (await listPrimaryModules()).plugins : deps.list()
+      let owners = new Map<string, { slug: string; kind: 'git' | 'npm' }>()
+      let pendingSchemas = new Map<string, Record<string, unknown> | undefined>()
+      let sourcesUnavailable = cloudMode
+      if (!cloudMode) {
+        try {
+          pendingSchemas = await resolveUnconfiguredSchemas()
+        } catch { /* no Configure button for a needs-config row; the reason still shows */ }
+        try {
+          owners = await resolveSourceOwners()
+        } catch {
+          // A store list that renders is worth more than one that 500s because the
+          // sources file could not be read; the rows just lose their slug.
+          sourcesUnavailable = true
+        }
+      }
+      const installed: InstalledPluginFacts[] = lifecycle.map((record) => {
+        const live = deps.registry.get(record.id)
+        const tombstone = deps.registry.getTombstone(record.id)
+        const owner = owners.get(record.id)
+        return {
+          id: record.id,
+          name: record.name,
+          state: record.state,
+          builtin: record.builtin,
+          ...(live?.version ?? tombstone?.version ? { version: live?.version ?? tombstone?.version } : {}),
+          ...(live?.description ? { description: live.description } : {}),
+          ...(live?.capabilities ?? tombstone?.capabilities
+            ? { capabilities: live?.capabilities ?? tombstone?.capabilities }
+            : {}),
+          ...(record.missingConfig?.length ? { missingConfig: record.missingConfig } : {}),
+          ...(record.reason ? { reason: record.reason } : {}),
+          ...(record.error ? { error: record.error } : {}),
+          // "Configure" must open something. A manifest can declare a configSchema
+          // whose `properties` is empty (calendar does), and offering Configure for it
+          // opens a form that is nothing but a Save button.
+          configurable: Object.keys(
+            ((
+              (live?.configSchema ?? pendingSchemas.get(record.id)) as
+                { properties?: Record<string, unknown> } | undefined
+            )?.properties) ?? {},
+          ).length > 0,
+          ...(owner ? { sourceSlug: owner.slug, sourceKind: owner.kind } : {}),
+        }
+      })
+      const merged: PluginRegistryResult = mergePluginRegistry(catalog, installed)
+      res.json({ ...merged, sourcesUnavailable, cloud: cloudMode })
     } catch (error) {
       if (error instanceof PluginRuntimeRelayError) {
         res.status(error.status).json({ error: error.message })
