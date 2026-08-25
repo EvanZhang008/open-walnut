@@ -398,11 +398,6 @@ export function splitSuggestSegments(text: string, scope?: string): SuggestSegme
   return segments;
 }
 
-/** True when the text carries at least one complete card (cheap UI precheck). */
-export function hasSuggestCard(text: string): boolean {
-  return text.includes(OPEN_TAG) && splitSuggestSegments(text).some((s) => s.kind === 'card');
-}
-
 /** Whether a split produced anything other than one plain markdown run. */
 export function hasCardSegment(segments: SuggestSegment[]): boolean {
   return segments.some((s) => s.kind === 'card');

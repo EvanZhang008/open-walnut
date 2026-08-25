@@ -95,7 +95,11 @@ export function App() {
         <Route path="/memory" element={<MemoryPage />} />
         <Route path="/hooks" element={<Navigate to="/settings#hooks" replace />} />
         <Route path="/repos" element={<Navigate to="/settings#repositories" replace />} />
-        <Route path="/time" element={<Navigate to="/settings#time" replace />} />
+        {/* The Time UI is the walnut-time Plugin App; the old Settings section it
+            used to point at was deleted with the duplicate views. An uninstalled
+            App answers with its own "disabled or uninstalled" card, which is a
+            better answer than a Settings page with no Time row on it. */}
+        <Route path="/time" element={<Navigate to="/apps/walnut-time~main" replace />} />
         <Route path="/timeline" element={<Navigate to="/settings#timeline" replace />} />
         <Route path="/chat" element={<Navigate to="/" replace />} />
         <Route path="/apps/:appId/*" element={<AppHostPage />} />

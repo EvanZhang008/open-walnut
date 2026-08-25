@@ -255,6 +255,15 @@ test('the plugin App page holds the reports and its tabs are real URLs', async (
   await expect(page.getByTestId('time-app-timeline')).toBeVisible({ timeout: 60_000 })
   await expect(page.getByTestId('time-app')).toHaveAttribute('data-tab', 'timeline')
 
+  // An old `/time` bookmark still has to land somewhere real. The route it used to
+  // redirect to (`/settings#time`) was deleted with the duplicate section, which left
+  // the bookmark opening a Settings page that has no Time row on it at all — a
+  // dead-end answer to a question with a real destination. `goto` on purpose: a
+  // bookmark IS a cold URL load, and no click in the UI can produce this one.
+  await page.goto(`http://127.0.0.1:${fixture!.port}/time`)
+  await expect(page).toHaveURL(/\/apps\/walnut-time~main$/)
+  await expect(page.getByTestId('time-app')).toBeVisible({ timeout: 60_000 })
+
   expect(pageErrors, 'the plugin App must not throw in the browser').toEqual([])
 })
 
@@ -361,10 +370,10 @@ test('the user can move the row to the Sidebar and back, live and across a reloa
   // Where it starts: what the App declared, plus the two rules that follow from it —
   // the row is labelled as living in Settings, and a settings row is not a pin.
   await expect(managerRow).toHaveAttribute('data-app-placement', 'settings')
-  await expect(managerRow).toContainText('row in Settings → Manage')
+  await expect(managerRow).toContainText('In Settings')
   await expect(managerRow.getByRole('button', { name: 'Unpin Time' })).toHaveCount(0)
   const move = page.getByTestId('app-manager-placement-walnut-time:main')
-  await expect(move).toHaveText('Move to Sidebar')
+  await expect(move).toHaveAttribute('aria-label', 'Move Time to the sidebar')
   await shoot(page, 'apps-manager-placement-control')
 
   // A Core App is not the user's to move: the registry pins it to the Sidebar, so the
@@ -375,12 +384,12 @@ test('the user can move the row to the Sidebar and back, live and across a reloa
 
   // Live, with no reload: the declared placement was only a default.
   await expect(managerRow).toHaveAttribute('data-app-placement', 'sidebar')
-  await expect(managerRow).not.toContainText('row in Settings → Manage')
+  await expect(managerRow).not.toContainText('In Settings')
   await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toHaveCount(0)
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toBeVisible({ timeout: 30_000 })
   // Back on the Sidebar, pinning means something again, so the control returns.
   await expect(managerRow.getByRole('button', { name: 'Unpin Time' })).toBeVisible()
-  await expect(move).toHaveText('Move to Settings')
+  await expect(move).toHaveAttribute('aria-label', 'Move Time to Settings')
   await shoot(page, 'placement-moved-to-sidebar')
 
   // It survives a reload, and the App itself is unchanged by the move: same route,

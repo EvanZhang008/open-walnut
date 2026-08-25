@@ -90,7 +90,8 @@ export function TimeLanes({ blocks, totals, agentMs, showAgents, axis, minuteOf,
   const showNow = nowMin !== null && nowMin >= axis.startMin && nowMin <= axis.endMin
   // Only the FRACTION crosses into CSS. The offset past the name column is done in
   // the stylesheet with that column's own width token, so the two can never disagree
-  // (the console's copy hard-codes 280px here and drifts in the narrow layout).
+  // — a px offset computed here against a hard-coded column width lands the now-line
+  // an hour off the moment the narrow layout changes that width.
   const nowFrac = nowMin !== null && showNow
     ? (nowMin - axis.startMin) / Math.max(1, axis.endMin - axis.startMin)
     : 0

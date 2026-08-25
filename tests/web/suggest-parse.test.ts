@@ -10,7 +10,7 @@
  *    only DOCUMENTS the syntax, and renders half a card mid-stream.
  */
 import { describe, it, expect } from 'vitest';
-import { splitSuggestSegments, hasSuggestCard, type SuggestCardSpec } from '@/utils/suggest-parse';
+import { splitSuggestSegments, type SuggestCardSpec } from '@/utils/suggest-parse';
 
 function onlyCard(text: string, scope?: string): SuggestCardSpec {
   const cards = splitSuggestSegments(text, scope).filter((s) => s.kind === 'card');
@@ -27,7 +27,6 @@ describe('splitSuggestSegments — plain text', () => {
   it('treats similar words as prose, not a card', () => {
     const text = 'One <suggestion> for you.';
     expect(splitSuggestSegments(text)).toEqual([{ kind: 'md', text }]);
-    expect(hasSuggestCard(text)).toBe(false);
   });
 
   it('returns nothing for empty text', () => {
@@ -213,7 +212,6 @@ describe('splitSuggestSegments — code regions outside the card', () => {
     ].join('\n');
 
     expect(splitSuggestSegments(text)).toEqual([{ kind: 'md', text }]);
-    expect(hasSuggestCard(text)).toBe(false);
   });
 
   it('survives a four-backtick fence wrapping inner fences', () => {
@@ -224,7 +222,7 @@ describe('splitSuggestSegments — code regions outside the card', () => {
       '```',
       '````',
     ].join('\n');
-    expect(hasSuggestCard(text)).toBe(false);
+    expect(splitSuggestSegments(text)).toEqual([{ kind: 'md', text }]);
   });
 
   it('renders an inline-code mention literally', () => {
@@ -282,7 +280,6 @@ describe('splitSuggestSegments — an unclosed tag in prose keeps the answer', (
     const rendered = (segments[0] as { text: string }).text;
     expect(rendered).toContain('Here is the full analysis:');
     expect(rendered).toContain('2. Second point');
-    expect(hasSuggestCard(text)).toBe(false);
   });
 
   it('keeps the answer when the mention is the last thing in the message', () => {

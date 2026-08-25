@@ -275,8 +275,15 @@ test('installs a first-class Plugin App and exercises its real capabilities', as
   await expect(demoNav).toHaveCount(0)
   await page.getByTestId('sidebar-core-app-home').click()
   const hiddenComposer = page.locator('.main-page-chat .chat-input-textarea')
-  await hiddenComposer.fill('/app:walnut-demo')
+  await hiddenComposer.click()
+  // Typed, not filled: the palette opens off the CARET, and it renders nothing at
+  // all when no command matches — so "the hidden App has no entry" only means
+  // something once the palette is demonstrably open and listing other Apps.
+  await hiddenComposer.pressSequentially('/app:', { delay: 15 })
+  await expect(page.locator('.command-palette-item', { hasText: 'app:core:tasks' }))
+    .toBeVisible({ timeout: 15_000 })
   await expect(page.locator('.command-palette-item', { hasText: 'app:walnut-demo:main' })).toHaveCount(0)
+  await page.keyboard.press('Escape')
   await hiddenComposer.fill('')
   await openSettings(page)
   await page.getByTestId('settings-nav-apps').click()
@@ -362,14 +369,29 @@ export async function activate(walnut) {
   expect(disable.ok(), await disable.text()).toBe(true)
   await expect(page.getByTestId('sidebar-app-walnut-demo:main')).toHaveCount(0, { timeout: 30_000 })
   await expect(page.locator('style[data-walnut-plugin="walnut-demo"]')).toHaveCount(0)
-  await expect(page).toHaveURL(new RegExp(`^http://127\\.0\\.0\\.1:${fixturePort}/$`))
+  // Disabling the plugin while its App page is open does NOT teleport the reader
+  // home. The page says the App is gone and offers the way back, which is what the
+  // placement work deliberately replaced the silent bounce to `/` with — a reader
+  // dropped on Home cannot tell a typo from a broken plugin.
+  await expect(page.getByTestId('plugin-app-not-found')).toBeVisible({ timeout: 30_000 })
+  await expect(page).toHaveURL(new RegExp(`^http://127\\.0\\.0\\.1:${fixturePort}/apps/walnut-demo~main$`))
   const statsAfterDisable = await page.request.get(`http://127.0.0.1:${fixturePort}/api/plugins/walnut-demo/stats`)
   expect(statsAfterDisable.status()).toBe(404)
 
   await page.setViewportSize({ width: 1280, height: 800 })
+  // And the way back works: the card's own link, clicked, is how the reader leaves.
+  await page.getByRole('link', { name: 'Back to Walnut' }).click()
+  await expect(page).toHaveURL(new RegExp(`^http://127\\.0\\.0\\.1:${fixturePort}/$`))
   const composer = page.locator('.main-page-chat .chat-input-textarea')
-  await composer.fill('/app:walnut-demo')
+  await composer.click()
+  // Typed, and anchored on an App that IS there: the palette renders nothing when
+  // no command matches, so a bare absence assertion would pass even if the
+  // palette never opened.
+  await composer.pressSequentially('/app:', { delay: 15 })
+  await expect(page.locator('.command-palette-item', { hasText: 'app:core:tasks' }))
+    .toBeVisible({ timeout: 15_000 })
   await expect(page.locator('.command-palette-item', { hasText: 'app:walnut-demo:main' })).toHaveCount(0)
+  await page.keyboard.press('Escape')
   await composer.fill('')
   await openSettings(page)
   await expect(page.getByTestId('settings-nav-walnut-demo:demo')).toHaveCount(0)

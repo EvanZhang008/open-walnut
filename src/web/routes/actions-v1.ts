@@ -174,17 +174,18 @@ actionsV1Router.post('/actions/invoke', async (req: Request, res: Response, next
       return
     }
 
+    const sid = callerSid(req)
     const startedAt = Date.now()
     const outcome = await executeOp(tool, parsed.data as Record<string, unknown>, {
       apiBase: apiBaseFor(req),
-      ...(callerSid(req) ? { callerSid: callerSid(req)! } : {}),
+      ...(sid ? { callerSid: sid } : {}),
     })
     const ms = Date.now() - startedAt
 
     // Every invoke is logged with its outcome: a card click is a real mutation
     // the user authorized, so it needs the same audit trail an agent call has.
     if (outcome.ok) {
-      log.web.info('actions: invoke ok', { tool, ms, callerSid: callerSid(req) })
+      log.web.info('actions: invoke ok', { tool, ms, callerSid: sid })
       res.json({ ok: true, tool, result: outcome.result })
       return
     }

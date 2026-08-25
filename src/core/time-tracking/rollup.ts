@@ -8,6 +8,7 @@
 
 import {
   HUMAN_KINDS,
+  TIME_KINDS,
   type HeartbeatSample,
   type HumanKind,
   type RollupIndex,
@@ -21,9 +22,9 @@ import {
 /** A single lease window can never legitimately exceed this (client caps at 60s + a flush). */
 export const MAX_SAMPLE_MS = 10 * 60 * 1000;
 /** Samples older than this are stale client state, not history to be trusted. */
-export const MAX_SAMPLE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_SAMPLE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 /** Small clock skew allowance for a client whose clock runs fast. */
-export const MAX_SAMPLE_FUTURE_MS = 5 * 60 * 1000;
+const MAX_SAMPLE_FUTURE_MS = 5 * 60 * 1000;
 /** Hard cap on samples accepted from one request. */
 export const MAX_SAMPLES_PER_REQUEST = 200;
 const MAX_ID_LEN = 128;
@@ -98,9 +99,9 @@ function isHumanKind(raw: unknown): raw is HumanKind {
   return typeof raw === 'string' && (HUMAN_KINDS as readonly string[]).includes(raw);
 }
 
-/** A key whose kind is neither a human lane nor `agent` is malformed data. */
+/** A key whose kind is not one of the four lanes is malformed data. */
 function isTimeKind(raw: unknown): raw is TimeKind {
-  return raw === 'agent' || isHumanKind(raw);
+  return typeof raw === 'string' && (TIME_KINDS as readonly string[]).includes(raw);
 }
 
 /**

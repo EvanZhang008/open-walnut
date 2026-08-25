@@ -11,11 +11,17 @@
  * therefore approximate at day edges; see agent-time.ts.
  */
 
-/** The three human contexts plus the derived agent lane. */
-export type TimeKind = 'session' | 'triage' | 'chat' | 'agent';
-
 export const HUMAN_KINDS = ['session', 'triage', 'chat'] as const;
 export type HumanKind = (typeof HUMAN_KINDS)[number];
+
+/**
+ * The three human contexts plus the derived agent lane — the ONE list of lanes.
+ * Everything that has to enumerate them (the sample validator, the block fold's
+ * "is this a real kind", the route's `kinds=` parser) reads it from here, so a
+ * fifth lane cannot be half-added.
+ */
+export const TIME_KINDS = [...HUMAN_KINDS, 'agent'] as const;
+export type TimeKind = (typeof TIME_KINDS)[number];
 
 /** What the browser posts. `ts` is the START of the counted window. */
 export interface HeartbeatSample {

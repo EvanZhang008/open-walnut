@@ -1,12 +1,8 @@
 /**
- * The ONLY copy of these rules. It began as a port of the Walnut console's
- * web/src/components/settings/sections/time-views.ts, and that section has since been
- * deleted — this app is the Time UI now, so there is nothing left to keep in step by
- * hand. Unit tests: tests/web/time-views.test.ts imports this file directly.
- */
-/**
  * Per-view geometry for the three timeline sub-views — PURE, so the rules that
- * decide "is this segment tall enough for text" are unit tested without a browser.
+ * decide "is this segment tall enough for text" are unit tested without a
+ * browser. This app is the Time UI, so this is the ONLY copy of these rules;
+ * unit tests (tests/web/time-views.test.ts) import this file directly.
  *
  * The three views answer three different questions and therefore draw at three
  * different scales, but they share ONE axis (time-timeline.ts axisRange), so
@@ -116,8 +112,6 @@ export function chapterHeightPx(spanMs: number): number {
 
 /** Task rows before the aggregated "others" row. */
 export const LANE_ROWS = 6;
-/** Left column width. Titles live here in full, so blocks never carry text. */
-export const LANE_NAME_PX = 280;
 /**
  * A bar shorter than this would be invisible. Enforced twice on purpose: as a
  * percentage floor here (so the visual merge knows how wide a bar will really be)

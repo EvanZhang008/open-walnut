@@ -8,9 +8,9 @@ import type { WalnutWebApi } from '@open-walnut/plugin-api/web'
  * through `walnut.http.fetch`, which is same-origin and carries the device
  * credential, so the plugin never handles a token itself.
  *
- * The types mirror the console's `web/src/api/time.ts` field for field. They are
- * duplicated because a plugin bundles standalone; if the endpoint ever grows a
- * field, both copies have to learn about it.
+ * The types are this app's own reading of the `/api/time/*` responses (served by
+ * src/web/routes/time.ts). A plugin bundles standalone, so it cannot import the
+ * host's types; if an endpoint grows a field, add it here too.
  */
 
 export type TimeHumanKind = 'session' | 'triage' | 'chat'

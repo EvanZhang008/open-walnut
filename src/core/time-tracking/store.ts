@@ -37,11 +37,11 @@ import { addRecord, localDateKey, parseBucketKey, recentDateKeys } from './rollu
 import type { RollupIndex, TimeRecord } from './types.js';
 
 /** How many days back the lazy rehydrate reads. Bounds boot cost forever. */
-export const HYDRATE_DAYS = 90;
+const HYDRATE_DAYS = 90;
 /** A day file this large is never parsed whole — only its tail is read. */
 export const MAX_DAY_FILE_BYTES = 8 * 1024 * 1024;
 /** How much of an over-cap day file to read, from the END (newest records). */
-export const TAIL_READ_BYTES = 2 * 1024 * 1024;
+const TAIL_READ_BYTES = 2 * 1024 * 1024;
 /**
  * Once an append pushes a day past this, the file is folded into one line per
  * (task, kind) bucket. This is what makes the day file bounded: the old code
@@ -57,7 +57,7 @@ const MAX_COMPACT_READ_BYTES = 64 * 1024 * 1024;
  * past this, the OLDEST parked records are dropped (losing a minute of old
  * telemetry beats an OOM on the server every route shares).
  */
-export const MAX_PENDING_RECORDS = 10_000;
+const MAX_PENDING_RECORDS = 10_000;
 
 function storeDir(): string {
   return path.join(WALNUT_HOME, 'time-tracking');

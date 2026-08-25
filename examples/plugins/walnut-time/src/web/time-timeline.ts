@@ -1,12 +1,7 @@
 /**
- * The ONLY copy of these rules. It began as a port of the Walnut console's
- * web/src/components/settings/sections/time-timeline.ts, and that section has since been
- * deleted — this app is the Time UI now, so there is nothing left to keep in step by
- * hand. Unit tests: tests/web/time-timeline.test.ts imports this file directly.
- */
-/**
  * Day-timeline geometry and colors — PURE, so the axis rules are unit tested
- * without a browser.
+ * without a browser. This app is the Time UI, so this is the ONLY copy of these
+ * rules; unit tests (tests/web/time-timeline.test.ts) import this file directly.
  *
  * Two decisions live here that the view only renders:
  *

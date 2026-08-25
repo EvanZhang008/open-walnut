@@ -21,7 +21,7 @@ import { log } from '../../logging/index.js';
 import {
   dayBoundsMs, foldDayBlocks, foldDaySlices, getIndex, hydrate, localDateKey, readDayRecords, recentDateKeys,
   recordTime, resetTimeStore, sanitizeSamples, startAgentTimeCollector, stopAgentTimeCollector,
-  summarize, withLedgerBackfill,
+  summarize, withLedgerBackfill, TIME_KINDS,
   type DayBlocks, type RollupIndex, type TimeKind, type TimeRecord, type TimeSummary,
 } from '../../core/time-tracking/index.js';
 
@@ -35,7 +35,6 @@ const SUMMARY_DEADLINE_MS = 2_000;
 const BLOCKS_DEADLINE_MS = 2_000;
 /** Distinct tasks whose titles one day's answer will join. */
 const MAX_TITLE_LOOKUPS = 200;
-const ALL_KINDS: readonly TimeKind[] = ['session', 'triage', 'chat', 'agent'];
 
 /** Start the collectors. Idempotent; safe to call on every server boot. */
 export function startTimeTracking(): void {
@@ -229,7 +228,7 @@ timeRouter.get('/blocks', async (req: Request, res: Response) => {
 function parseKinds(raw: unknown): TimeKind[] | undefined {
   if (typeof raw !== 'string' || !raw.trim()) return undefined;
   const wanted = raw.split(',').map((s) => s.trim());
-  const kinds = ALL_KINDS.filter((k) => wanted.includes(k));
+  const kinds = TIME_KINDS.filter((k) => wanted.includes(k));
   return kinds.length > 0 ? [...kinds] : undefined;
 }
 

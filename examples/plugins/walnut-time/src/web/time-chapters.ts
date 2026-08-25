@@ -1,12 +1,8 @@
 /**
- * The ONLY copy of these rules. It began as a port of the Walnut console's
- * web/src/components/settings/sections/time-chapters.ts, and that section has since been
- * deleted — this app is the Time UI now, so there is nothing left to keep in step by
- * hand. Unit tests: tests/web/time-chapters.test.ts imports this file directly.
- */
-/**
  * Chapters — PURE. Turns the day's serial ribbon into a handful of readable
- * "chapters", the narrative view of a day.
+ * "chapters", the narrative view of a day. This app is the Time UI, so this is
+ * the ONLY copy of these rules; unit tests (tests/web/time-chapters.test.ts)
+ * import this file directly.
  *
  * The premise: sixty slices is data, not a story. A person remembers a day as a
  * few stretches ("inbox, then the RFE, then alerts"), and the natural boundary
@@ -41,7 +37,7 @@ export const QUICK_PART_MS = 2 * 60 * 1000;
 /** A part thinner than this cannot be seen, so it joins the remainder. */
 export const COMP_MIN_SHARE = 0.02;
 
-/** The minimum a slice needs to be for the ribbon to draw it (server floor). */
+/** The least a ribbon slice has to carry for the chapter fold to read it. */
 export interface Sliceish {
   taskId: string;
   startTs: string;

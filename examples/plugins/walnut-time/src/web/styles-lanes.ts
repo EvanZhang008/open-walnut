@@ -3,16 +3,15 @@
  *
  * The one geometry constant shared with TypeScript is the name column, and it lives
  * HERE as `--wt-lane-name`: the component hands over only the now-line's fraction, so
- * the column's width and the line's offset can never disagree (the console's copy
- * hard-codes 280px in both places and drifts in its narrow layout).
+ * the column's width and the line's offset can never disagree.
  */
 
 export const LANES_CSS = `
 /* ══ View C: swimlanes ══ */
 
 /* The name column's width is a TOKEN because the now-line has to be positioned past
-   it. The console's copy hard-codes 280 in both the CSS and the TS, so its now-line
-   lands an hour off in the narrow layout; here the two can never disagree. */
+   it. Spelling that width in both the CSS and the TS is what lands a now-line an hour
+   off in the narrow layout; here only this value exists. */
 .wt-tl { --wt-lane-name: 320px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
 
 .wt-tl-axis {

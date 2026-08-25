@@ -337,7 +337,8 @@ export const BASE_CSS = `
   flex: 0 0 auto;
 }
 
+/* No agent swatch: the reports keep the lanes in separate TABS, and the timeline's
+   agent legend has its own hatched .wt-tt-swatch-agent (styles-views.ts). */
 .wt-swatch-human { background: var(--wt-other); }
-.wt-swatch-agent { background: var(--wt-agent); }
 .wt-swatch-focus { background: var(--wt-focus); border-radius: 50%; }
 `

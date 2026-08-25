@@ -42,15 +42,16 @@
  * Day keys are LOCAL dates, matching the rest of time-tracking.
  */
 
-import type { TimeKind, TimeRecord } from './types.js';
+import { TIME_KINDS, type TimeKind, type TimeRecord } from './types.js';
 
 /**
- * The four real lanes. A record with any other kind is a malformed line (a
- * hand-edited JSONL, an id that smuggled a separator past an older build), and
- * summarize() already drops it from the totals — so it is skipped SILENTLY here
- * rather than counted as unplaced, which would claim it is in a total it is not.
+ * The four real lanes (types.ts owns the list). A record with any other kind is a
+ * malformed line (a hand-edited JSONL, an id that smuggled a separator past an
+ * older build), and summarize() already drops it from the totals — so it is
+ * skipped SILENTLY here rather than counted as unplaced, which would claim it is
+ * in a total it is not.
  */
-const KINDS = new Set<string>(['session', 'triage', 'chat', 'agent']);
+const KINDS = new Set<string>(TIME_KINDS);
 
 /** Records of one (task, kind) closer than this become a single block. */
 export const MERGE_GAP_MS = 5 * 60 * 1000;

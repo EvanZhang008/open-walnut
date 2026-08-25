@@ -59,8 +59,6 @@ interface StoreShape {
   cards: Record<string, CardRecord>;
 }
 
-const EMPTY: StoreShape = { v: 1, cards: {} };
-
 function load(): StoreShape {
   try {
     const raw = localStorage.getItem(STORE_KEY);

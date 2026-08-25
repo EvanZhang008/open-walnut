@@ -13,7 +13,6 @@ import { useSelectionFrozen } from '@/utils/selection-guard';
 import { parseAskQuestionInput } from './QuestionPopover';
 import { SubagentBlock } from './SubagentBlock';
 import { SuggestSegments, useSuggestSegments } from './SuggestSegments';
-import { splitSuggestSegments, needsSegments } from '@/utils/suggest-parse';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 export interface RouteInfo {
@@ -920,10 +919,11 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
 
   // Cards on the legacy path: only assistant text without blocks can carry one
   // (user text renders verbatim, and the blocks path goes through
-  // MemoizedTextBlock). null = nothing to consider, keep the plain html render.
-  const legacySegments = useMemo(
-    () => (html !== null && role !== 'user' ? splitSuggestSegments(content, cardScope) : null),
-    [html, role, content, cardScope],
+  // MemoizedTextBlock). Anything else feeds the hook '' — no segments, so the
+  // plain html render below stays the path.
+  const { segments: legacySegments, useSegments: legacyCards } = useSuggestSegments(
+    html !== null && role !== 'user' ? content : '',
+    cardScope,
   );
 
   // System-initiated: only cron and heartbeat — fully collapse (automated, noisy).
@@ -1310,7 +1310,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
               {routeInfo && <RouteInfoSection info={routeInfo} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />}
               {/* History replay arrives without blocks, so cards have to work on
                   this path too — otherwise a reloaded card degrades to prose. */}
-              {legacySegments && needsSegments(legacySegments, content) ? (
+              {legacyCards ? (
                 <SuggestSegments segments={legacySegments} onClick={handleContentClick} />
               ) : (
                 <div
