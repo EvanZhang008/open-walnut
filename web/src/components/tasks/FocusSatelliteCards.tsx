@@ -194,8 +194,13 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
 
   // Sync title text when task.title changes externally while not editing
   useEffect(() => {
-    if (!isEditing && titleRef.current && titleRef.current.textContent !== task.title) {
-      titleRef.current.textContent = task.title;
+    if (!isEditing && titleRef.current) {
+      if (titleRef.current.textContent !== task.title) {
+        titleRef.current.textContent = task.title;
+      }
+      // Editing auto-scrolls the overflow:hidden span to keep the caret visible;
+      // a leftover scrollLeft on a nowrap+ellipsis span paints as a BLANK title.
+      titleRef.current.scrollLeft = 0;
     }
   }, [task.title, isEditing]);
 

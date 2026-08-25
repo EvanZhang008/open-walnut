@@ -678,8 +678,13 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
 
   // Sync DOM text when task.title changes externally (e.g. WS push) while not editing
   useEffect(() => {
-    if (!isEditing && titleRef.current && titleRef.current.textContent !== task.title) {
-      titleRef.current.textContent = task.title;
+    if (!isEditing && titleRef.current) {
+      if (titleRef.current.textContent !== task.title) {
+        titleRef.current.textContent = task.title;
+      }
+      // Editing auto-scrolls the overflow:hidden span to keep the caret visible;
+      // a leftover scrollLeft on a nowrap+ellipsis span paints as a BLANK title.
+      titleRef.current.scrollLeft = 0;
     }
   }, [task.title, isEditing]);
 
@@ -1965,8 +1970,13 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
   const titleClickedRef = useRef(false);
 
   useEffect(() => {
-    if (!isEditing && titleRef.current && titleRef.current.textContent !== task.title) {
-      titleRef.current.textContent = task.title;
+    if (!isEditing && titleRef.current) {
+      if (titleRef.current.textContent !== task.title) {
+        titleRef.current.textContent = task.title;
+      }
+      // Editing auto-scrolls the overflow:hidden span to keep the caret visible;
+      // a leftover scrollLeft on a nowrap+ellipsis span paints as a BLANK title.
+      titleRef.current.scrollLeft = 0;
     }
   }, [task.title, isEditing]);
 
