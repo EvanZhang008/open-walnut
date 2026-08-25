@@ -146,7 +146,9 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
       p.resolve({ rows, recall: msg.recall ?? [] });
     });
     worker.on('error', (err) => {
-      log('warn', 'hybrid-search: embed worker error', { error: err.message });
+      log('warn', 'hybrid-search: embed worker error', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     });
     worker.on('exit', (code) => {
       worker = null;
