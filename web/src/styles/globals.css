@@ -29711,55 +29711,331 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 
 .app-manager-list {
-  display: grid;
-  gap: 10px;
-  margin-top: 16px;
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  overflow: hidden;
 }
 
 .app-manager-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-secondary);
+  gap: 10px;
+  min-height: 42px;
+  padding: 6px 10px;
+}
+
+.app-manager-row + .app-manager-row {
+  border-top: 1px solid var(--border);
+}
+
+.app-manager-row[data-app-disposition='hidden'] .app-manager-icon,
+.app-manager-row[data-app-disposition='hidden'] .app-manager-title {
+  opacity: 0.5;
+}
+
+.app-manager-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--bg-tertiary);
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.app-manager-icon img {
+  width: 15px;
+  height: 15px;
+  object-fit: contain;
 }
 
 .app-manager-copy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
-  display: grid;
-  gap: 3px;
+  flex: 1;
 }
 
-.app-manager-copy span,
-.app-manager-copy code {
+.app-manager-title {
+  /* overflow:hidden zeroes the flex automatic minimum, so a long plugin title
+     ellipsizes instead of running under the icon buttons. */
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-manager-chip {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.app-manager-path {
+  overflow: hidden;
   color: var(--fg-muted);
   font-size: 11px;
-}
-
-.app-manager-copy code {
-  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .app-manager-actions {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+.app-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.app-icon-btn:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  color: var(--fg);
+}
+
+.app-icon-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.app-icon-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.app-manager-footer {
+  margin: 10px 2px 0;
+}
+
+.link-button {
+  padding: 0;
+  color: var(--accent);
+  font-size: inherit;
+}
+
+.link-button:hover {
+  text-decoration: underline;
 }
 
 @media (max-width: 700px) {
-  .settings-section-header-row,
-  .app-manager-row {
-    align-items: stretch;
-    flex-direction: column;
+  /* Only the path goes: the chips carry state (In Settings / Hidden) a phone
+     user still needs to see. */
+  .app-manager-path {
+    display: none;
   }
+}
 
-  .app-manager-actions {
-    justify-content: flex-start;
-  }
+/* /plugins/new — the plugin-author onboarding page */
+
+.create-plugin-page {
+  max-width: 780px;
+  margin: 0 auto;
+  /* .app-content-area already pads the sides; only depth is ours. */
+  padding: 4px 0 48px;
+}
+
+.create-plugin-kicker {
+  margin: 0 0 4px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.create-plugin-hero h1 {
+  margin: 0 0 8px;
+  font-size: 26px;
+}
+
+.create-plugin-lede {
+  max-width: 620px;
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.create-plugin-steps {
+  display: grid;
+  gap: 14px;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.create-plugin-step {
+  /* Grid items refuse to shrink below content (min-width:auto), so the nowrap
+     command line would set the whole page's width on phones without this. */
+  min-width: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.create-plugin-step > p {
+  margin: 8px 0 0;
+  color: var(--fg-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.create-plugin-step-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.create-plugin-step-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.create-plugin-step-num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.create-plugin-command {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+}
+
+.create-plugin-command code {
+  flex: 1;
+  /* The command must never wrap (a wrapped npx line copies broken), so it
+     scrolls — and a flex child only shrinks below content width with min-width:0,
+     otherwise the whole page inherits the command's width on phones. */
+  min-width: 0;
+  overflow-x: auto;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.create-plugin-live {
+  margin-top: 12px;
+}
+
+.create-plugin-waiting {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+.create-plugin-pulse {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: create-plugin-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes create-plugin-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.create-plugin-app-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.create-plugin-app-row + .create-plugin-app-row {
+  margin-top: 6px;
+}
+
+.create-plugin-app-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.create-plugin-app-path {
+  flex: 1;
+  overflow: hidden;
+  color: var(--fg-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.create-plugin-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.create-plugin-cap {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.create-plugin-step > p.create-plugin-links {
+  display: flex;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.create-plugin-links a {
+  color: var(--accent);
+  font-size: 13px;
+}
+
+/* Direct child only: the Copy button inside the command bar must not inherit
+   this offset (align-items:center would float it below the text). */
+.create-plugin-step > .btn {
+  margin-top: 12px;
 }

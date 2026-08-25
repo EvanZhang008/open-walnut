@@ -18,6 +18,7 @@ import { AgentsPage } from './pages/AgentsPage';
 import { CommandsPage } from './pages/CommandsPage';
 import { SkillsPage } from './pages/SkillsPage';
 import { MemoryPage } from './pages/MemoryPage';
+import { CreatePluginPage } from './pages/CreatePluginPage';
 import { PopoutRoot } from './popout/PopoutRoot';
 import { isPopoutPath } from './popout/openPopout';
 
@@ -93,6 +94,7 @@ export function App() {
         <Route path="/commands" element={<CommandsPage />} />
         <Route path="/skills" element={<SkillsPage />} />
         <Route path="/memory" element={<MemoryPage />} />
+        <Route path="/plugins/new" element={<CreatePluginPage />} />
         <Route path="/hooks" element={<Navigate to="/settings#hooks" replace />} />
         <Route path="/repos" element={<Navigate to="/settings#repositories" replace />} />
         {/* The Time UI is the walnut-time Plugin App; the old Settings section it

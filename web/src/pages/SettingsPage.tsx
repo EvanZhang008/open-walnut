@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode, type ErrorInfo } from 'react';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { SettingsNav } from '@/components/settings/SettingsNav';
+import { SettingsSection } from '@/components/settings/SettingsSection';
 import { useSettingsConfig } from '@/hooks/useSettingsConfig';
 import { PluginBoundary } from '@/components/common/PluginBoundary';
 import { CORE_SETTINGS_CONTRIBUTIONS } from '@/components/settings/core-settings-registry';
@@ -16,9 +17,13 @@ class SectionErrorBoundary extends Component<{ name: string; children: ReactNode
   render() {
     if (this.state.error) {
       return (
-        <div className="card settings-section" style={{ borderColor: 'var(--error)' }}>
-          <h3 className="settings-section-title">{this.props.name}</h3>
-          <p className="text-sm" style={{ color: 'var(--error)' }}>
+        <div className="settings-section settings-card" style={{ borderColor: 'var(--error)' }}>
+          <header className="settings-card-head">
+            <div className="settings-card-heading">
+              <h3 className="settings-section-title">{this.props.name}</h3>
+            </div>
+          </header>
+          <p className="settings-notice settings-notice-error">
             This section encountered an error: {this.state.error.message}
           </p>
         </div>
@@ -29,6 +34,9 @@ class SectionErrorBoundary extends Component<{ name: string; children: ReactNode
 }
 
 const CORE_SECTION_IDS = CORE_SETTINGS_CONTRIBUTIONS.map((entry) => entry.id);
+
+/** Any of these means the person took the wheel — hash anchoring must let go. */
+const USER_TAKEOVER_EVENTS = ['wheel', 'touchmove', 'keydown', 'pointerdown'] as const;
 
 export function SettingsPage() {
   const { config, loading, error, saveSection, reload } = useSettingsConfig();
@@ -71,13 +79,42 @@ export function SettingsPage() {
     }
   }, []);
 
-  // On mount, scroll to hash
+  // On mount, scroll to the URL hash — and KEEP it there until layout settles.
+  // Two races killed the old one-shot setTimeout(100): the config fetch gates
+  // the page behind a spinner (element not there yet), and after the first
+  // scroll the async sections above the target keep growing and push it back
+  // out of view. So: retry until the element exists, re-anchor each tick while
+  // its position still moves, stop once it's been stable for a few ticks — and
+  // hand over immediately if the user scrolls or types.
   useEffect(() => {
     const hash = window.location.hash.slice(1);
-    if (hash && sectionIds.includes(hash)) {
-      setTimeout(() => handleNavigate(hash), 100);
+    if (!hash || !sectionIds.includes(hash)) return;
+    let tries = 0;
+    let lastTop: number | null = null;
+    let stableTicks = 0;
+    const stop = () => {
+      clearInterval(timer);
+      for (const event of USER_TAKEOVER_EVENTS) window.removeEventListener(event, stop);
+    };
+    const timer = setInterval(() => {
+      tries += 1;
+      const el = document.getElementById(hash);
+      if (el) {
+        const top = el.getBoundingClientRect().top;
+        stableTicks = lastTop !== null && Math.abs(top - lastTop) < 1 ? stableTicks + 1 : 0;
+        lastTop = top;
+        if (stableTicks >= 3) { stop(); return; }
+        el.scrollIntoView({ block: 'start' });
+        setActiveSection(hash);
+        window.history.replaceState(null, '', `#${hash}`);
+      }
+      if (tries >= 100) stop();
+    }, 100);
+    for (const event of USER_TAKEOVER_EVENTS) {
+      window.addEventListener(event, stop, { passive: true });
     }
-  }, [handleNavigate, sectionIds]);
+    return stop;
+  }, [sectionIds]);
 
   // Cmd+S to save the focused section
   useEffect(() => {
@@ -103,7 +140,8 @@ export function SettingsPage() {
       <SettingsNav activeSection={activeSection} onNavigate={handleNavigate} />
       <div className="settings-content" ref={contentRef}>
         <div className="settings-content-inner">
-          <div className="page-header">
+          {/* Same width as every card below it, so the page reads as one column. */}
+          <div className="page-header settings-page-header">
             <h1 className="page-title">Settings</h1>
             <p className="page-subtitle">Configure everything from one place</p>
           </div>
@@ -112,16 +150,19 @@ export function SettingsPage() {
               {entry.render({ config, saveSection, reload })}
             </SectionErrorBoundary>
           ))}
+          {/* A plugin's own settings panel gets the SAME shell as a core section —
+              its interior is the plugin's, its frame is Walnut's. */}
           {pluginUi.settings.map((entry) => {
             const PluginSettings = entry.value.component;
             return (
-              <section
-                id={entry.key}
+              <SettingsSection
                 key={`${entry.key}:${entry.generation}`}
-                className="card settings-section plugin-settings-section"
+                id={entry.key}
+                title={entry.value.label}
+                description={`Provided by the ${entry.pluginName} plugin.`}
+                className="plugin-settings-section"
                 data-plugin-id={entry.pluginId}
               >
-                <h3 className="settings-section-title">{entry.value.label}</h3>
                 <PluginBoundary
                   pluginId={entry.pluginId}
                   pluginName={entry.pluginName}
@@ -129,7 +170,7 @@ export function SettingsPage() {
                 >
                   <PluginSettings />
                 </PluginBoundary>
-              </section>
+              </SettingsSection>
             );
           })}
         </div>

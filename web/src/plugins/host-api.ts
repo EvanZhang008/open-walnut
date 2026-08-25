@@ -30,6 +30,7 @@ const RESERVED_PAGE_ROOTS = new Set([
   '/hooks',
   '/memory',
   '/notes',
+  '/plugins',
   '/popout',
   '/repos',
   '/routines',
@@ -38,6 +39,7 @@ const RESERVED_PAGE_ROOTS = new Set([
   '/settings',
   '/skills',
   '/tasks',
+  '/time',
   '/timeline',
   '/usage',
 ])

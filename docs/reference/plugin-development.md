@@ -8,6 +8,8 @@ npx @open-walnut/plugin-cli new my-plugin --dev
 
 That single command is the whole first loop: it scaffolds the project, installs dependencies, validates the manifest, builds the entries, links the directory into `~/.open-walnut/plugins/my-plugin`, asks the running Walnut to discover and load the new plugin, reads the runtime state back, prints the App URL, and then keeps watching so every save rebuilds and reloads. A first link needs no server restart. Walnut may be offline while you work, in which case the link loads on Walnut's next start.
 
+The console has a guided version of this page at `/plugins/new` (Settings → Apps → "Build a plugin app"): the same command with a copy button, plus a live panel that shows your plugin's App the moment the first build links in.
+
 After that first run, the project's own script continues the same loop:
 
 ```bash

@@ -221,7 +221,7 @@ After the author packages reach npm, the whole first authoring loop is one comma
 npx @open-walnut/plugin-cli new my-plugin --dev
 ```
 
-Read [Plugin development](docs/reference/plugin-development.md) for the full guide, and [examples/plugins/walnut-demo](examples/plugins/walnut-demo) (the Walnut Plugin Demo) for a runnable example of every public capability.
+Read [Plugin development](docs/reference/plugin-development.md) for the full guide, and [examples/plugins/walnut-demo](examples/plugins/walnut-demo) (the Walnut Plugin Demo) for a runnable example of every public capability. The console also ships a guided onboarding page at `/plugins/new`.
 
 ## iOS Companion
 

@@ -1,0 +1,269 @@
+/*
+ * Settings shell — ONE geometry for every section on /settings.
+ *
+ * Why this file exists: sections grew in two families. Sixteen went through
+ * SectionCard (a 680px form, no shadow, a 13px muted description) and seven were
+ * hand-rolled with `card settings-section` — which adds `.card`'s drop shadow, and
+ * five of those also carried `settings-section-wide` (1200px). So the page showed
+ * cards at two different widths, some with a shadow and some without, plus four
+ * different ad-hoc header rows and a `.settings-section-subtitle` class that had no
+ * CSS at all (browser default 16px type and 1em margins where its neighbours used
+ * 13px muted). Reading down the page, nothing lined up.
+ *
+ * The fix is structural, not per-section: SettingsSection.tsx renders this markup
+ * and SectionCard now delegates to it, so every section — including the ones with a
+ * unique interior like Usage and Timeline — shares the outer box, the header, and
+ * the spacing scale. Interiors are untouched.
+ *
+ * Selectors are compound (`.settings-section.settings-card`) on purpose: globals.css
+ * still defines `.settings-section`, `.settings-section-wide` and `.card` at one
+ * class of specificity, so two classes win here regardless of sheet order.
+ */
+
+:root {
+  /* ONE content width for the whole page. 880px is the compromise the old split
+     was avoiding: wide enough for Usage's two-column breakdown grid and the
+     Repositories/Hooks lists, narrow enough that a single text input in General
+     does not stretch across the screen. */
+  --settings-w: 880px;
+  --settings-pad-x: 24px;
+  --settings-pad-y: 20px;
+  --settings-stack: 16px;
+}
+
+/* ── The box ── */
+.settings-section.settings-card {
+  max-width: var(--settings-w);
+  margin: 0 auto var(--settings-stack);
+  padding: var(--settings-pad-y) var(--settings-pad-x);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 12px);
+  background: var(--bg-card, var(--bg));
+  /* `.card` used to add a shadow to 7 of 23 sections. One system: no shadow. */
+  box-shadow: none;
+  scroll-margin-top: 16px;
+}
+
+/* A section that cannot work until it is filled in. SectionCard has accepted an
+   `attention` prop since it was written but never rendered anything for it; now it
+   marks the card instead of silently dropping the signal. */
+.settings-section.settings-card.settings-card-attention {
+  border-color: var(--priority-important, var(--border));
+}
+
+/* The page title has to agree with the cards it sits above; globals pinned it to
+   the old 680px. Three classes so this holds whichever sheet loads last. */
+.settings-content-inner > .page-header.settings-page-header {
+  max-width: var(--settings-w);
+}
+
+/* ── The header ── */
+.settings-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: var(--settings-stack);
+}
+
+/* A header with nothing under it (a section whose body is empty) should not leave
+   a hanging gap. */
+.settings-card-head:last-child {
+  margin-bottom: 0;
+}
+
+.settings-card-heading {
+  min-width: 0;
+}
+
+.settings-card-head .settings-section-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.settings-card-desc {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg-muted, var(--text-muted));
+  /* Measure, not width: a description that runs the full 880px is unreadable. */
+  max-width: 68ch;
+}
+
+.settings-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* ── The body ── */
+.settings-card-body > :first-child {
+  margin-top: 0;
+}
+
+.settings-card-body > :last-child {
+  margin-bottom: 0;
+}
+
+/* ── Shared interior idioms ──
+   Each of these replaces a hand-rolled equivalent that differed per section. */
+
+/* A row of things you act on: one list item, copy on the left, buttons on the
+   right. Same metrics as `.app-manager-row`, which it generalises. */
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.settings-row-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.settings-row-copy strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.settings-row-copy span,
+.settings-row-copy code {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.settings-row-copy code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.settings-row-list {
+  display: grid;
+  gap: 10px;
+}
+
+/* A grouping inside a section: same border language as a row, more padding. */
+.settings-subcard {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.settings-subcard-title {
+  margin: 0 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-subcard-desc {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--fg-muted, var(--text-muted));
+}
+
+/* One empty state, instead of `.empty-state`'s 48px well in some sections and a
+   bare muted paragraph in others. */
+.settings-empty {
+  padding: 18px 16px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  text-align: center;
+  font-size: 13px;
+  color: var(--fg-muted, var(--text-muted));
+}
+
+/* One notice, instead of per-section inline colours (Timeline hardcoded #FF3B30,
+   which ignores the theme entirely). */
+.settings-notice {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.settings-notice-info {
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+}
+
+.settings-notice-success {
+  background: rgba(52, 199, 89, 0.12);
+  color: var(--success);
+}
+
+.settings-notice-warn {
+  background: rgba(255, 149, 0, 0.12);
+  color: var(--priority-important, var(--fg));
+}
+
+.settings-notice-error {
+  background: rgba(255, 59, 48, 0.12);
+  color: var(--error, var(--priority-immediate));
+}
+
+/* Section-level "stack" helper for interiors that want the shell's rhythm. */
+.settings-stack {
+  display: grid;
+  gap: var(--settings-stack);
+}
+
+/* ── Interiors that were laid out for a width they never actually had ──
+   Usage's breakdown grid is a hard `1fr 1fr`, and globals only relaxes it under a
+   `max-width: 768px` VIEWPORT query. But the constraint here is the CARD, and the
+   settings nav eats 200px+ of the window, so the grid overflowed at every window size
+   measured — even at 1680px, where it painted 143px past its container. Sizing by a
+   real minimum instead of a fixed count fixes that at the widths this page is used at,
+   and gives two columns back automatically if the card is ever widened. */
+.settings-card .usage-breakdown-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr));
+}
+
+/* Below ~640px of card there is no honest way to fit six numeric columns: the table's
+   min-content simply exceeds the box. Scroll it inside its own panel instead of letting
+   it paint over the card border — a clipped number is worse than one you scroll to.
+   (`.usage-recent-scroll` already behaves this way; this brings the panels in line.) */
+.settings-card .usage-breakdown-panel {
+  overflow-x: auto;
+}
+
+@media (max-width: 700px) {
+  .settings-section.settings-card {
+    padding: 16px;
+  }
+
+  .settings-card-head,
+  .settings-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-card-actions,
+  .settings-row-actions {
+    justify-content: flex-start;
+  }
+}

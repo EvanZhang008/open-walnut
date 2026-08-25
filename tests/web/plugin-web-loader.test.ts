@@ -214,7 +214,7 @@ describe('native Web Plugin loader', () => {
     expect(pluginUiRegistry.getSnapshot().pages).toEqual([])
   })
 
-  it.each(['/tasks', '/popout', '/popout/session'])('rejects a page that conflicts with Walnut route %s', async (route) => {
+  it.each(['/tasks', '/popout', '/popout/session', '/plugins/new', '/time'])('rejects a page that conflicts with Walnut route %s', async (route) => {
     vi.mocked(apiGet).mockResolvedValue(response(`reserved-route-${route}`))
     setWebPluginImporterForTesting(async () => ({
       activate(api: WalnutWebApiHost) {
