@@ -27,7 +27,7 @@
  * Both assertions are about THIS test's own ids: the fixture dataset is shared
  * across the specs in a run.
  */
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Locator, type Page } from '@playwright/test'
 import { presetTierViewModes } from './draft-surface-helpers'
 import { selectSection } from './todo-panel-helpers'
 
@@ -122,6 +122,31 @@ function tierRows(page: Page): Promise<Array<{ task: string | null; sep: string 
   )
 }
 
+/** Unpin everything so each test starts with an EMPTY focus tier. Earlier
+ *  tests' cards otherwise pile up (22 by test 6) and push this test's rows
+ *  into dnd-kit's bottom autoscroll band, where a held pointer scrolls the
+ *  container and the collision answer drifts (the documented over→self trap). */
+async function clearFocus(): Promise<void> {
+  const split = await fetch(`${API}/api/focus/tasks`).then((r) => r.json())
+  const ids = new Set<string>()
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) { for (const x of v) walk(x); return }
+    if (v && typeof v === 'object') {
+      const id = (v as { id?: unknown }).id
+      if (typeof id === 'string') { ids.add(id); return }
+      for (const val of Object.values(v)) walk(val)
+      return
+    }
+    if (typeof v === 'string') ids.add(v) // unpinning a non-pinned id is a no-op
+  }
+  walk(split)
+  await Promise.all([...ids].map((id) => fetch(`${API}/api/focus/tasks/${id}`, { method: 'DELETE' })))
+}
+
+test.beforeEach(async () => {
+  await clearFocus()
+})
+
 /** Press the card's grip and drag to (x, y), in steps, then release. */
 async function dragCardTo(page: Page, taskId: string, x: number, y: number): Promise<void> {
   const card = page.locator(`${TIER_SCOPE} [data-task-id="${taskId}"]`).first()
@@ -134,6 +159,31 @@ async function dragCardTo(page: Page, taskId: string, x: number, y: number): Pro
   // Past dnd-kit's activation constraint first, then to the target.
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 10)
   await page.mouse.move(x, y, { steps: 16 })
+  await page.waitForTimeout(400)
+  await page.mouse.up()
+  await page.waitForTimeout(1200)
+}
+
+/** Drag a card ONTO a target row and release on its middle band ('middle' =
+ *  join intent) or its top edge ('top' = insert-between intent). The join
+ *  decision lives in dnd-kit's STATIC collision space (rects measured at drag
+ *  start — the sortable rows sliding aside mid-drag are a transform-only
+ *  preview), so aim at the target's rect BEFORE the drag displaces anything
+ *  and never chase the live position: chasing a row that yields to the drag
+ *  oscillates forever (probed 2026-08-25). */
+async function dragCardOnto(page: Page, dragId: string, target: Locator, at: 'middle' | 'top'): Promise<void> {
+  const card = page.locator(`${TIER_SCOPE} [data-task-id="${dragId}"]`).first()
+  await card.hover()
+  const grip = card.locator('.todo-pinned-drag-handle')
+  const gb = await grip.boundingBox()
+  if (!gb) throw new Error(`no drag handle for ${dragId}`)
+  const tb = await target.boundingBox() // static layout — measured pre-drag
+  if (!tb) throw new Error('drop target not visible')
+  await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2 + 10)
+  const y = at === 'middle' ? tb.y + tb.height / 2 : tb.y + 3
+  await page.mouse.move(tb.x + tb.width / 2, y, { steps: 12 })
   await page.waitForTimeout(400)
   await page.mouse.up()
   await page.waitForTimeout(1200)
@@ -179,9 +229,7 @@ test('a divider line never splits a group: a card joining the cluster keeps ever
   // The reported gesture: drag the card just below the line onto a group member,
   // which makes it join the group.
   const target = page.locator(`${TIER_SCOPE} [data-task-id="${m2.id}"]`).first()
-  const targetBox = await target.boundingBox()
-  expect(targetBox).not.toBeNull()
-  await dragCardTo(page, joiner.id, targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2)
+  await dragCardOnto(page, joiner.id, target, 'middle')
 
   await expect
     .poll(async () => (await fetch(`${API}/api/tasks/${joiner.id}`).then((r) => r.json())).task.group_id, {
@@ -228,9 +276,7 @@ test('dropping a card on the group CHIP joins the group — it never parks above
 
   const chip = page.locator(`${TIER_SCOPE} [data-group-id="${gid}"]`).first()
   await expect(chip, 'the group chip header must be on screen').toBeVisible({ timeout: 20_000 })
-  const chipBox = await chip.boundingBox()
-  expect(chipBox).not.toBeNull()
-  await dragCardTo(page, joiner.id, chipBox!.x + chipBox!.width / 2, chipBox!.y + chipBox!.height / 2)
+  await dragCardOnto(page, joiner.id, chip, 'middle')
 
   await expect
     .poll(async () => (await fetch(`${API}/api/tasks/${joiner.id}`).then((r) => r.json())).task.group_id, {
@@ -276,9 +322,7 @@ test('the line stays with its BAND when the card below it is dragged above the g
 
   // Plain reorder: release on the top card's UPPER edge (away from the chip and
   // the members, so nothing reads as a group gesture).
-  const topBox = await topCard.boundingBox()
-  expect(topBox).not.toBeNull()
-  await dragCardTo(page, mover.id, topBox!.x + topBox!.width / 2, topBox!.y + 4)
+  await dragCardOnto(page, mover.id, topCard, 'top')
 
   // The mover must NOT have joined or formed a group.
   await expect
@@ -325,10 +369,9 @@ test('a card dropped into the gap under the line lands BELOW the line', async ({
   await openFocus(page)
   const bCard = page.locator(`${TIER_SCOPE} [data-task-id="${b.id}"]`).first()
   await expect(bCard).toBeVisible({ timeout: 20_000 })
-  const bBox = await bCard.boundingBox()
-  expect(bBox).not.toBeNull()
-  // Take b's slot from below — the only reorder that inserts into the line's gap.
-  await dragCardTo(page, c.id, bBox!.x + bBox!.width / 2, bBox!.y + bBox!.height / 2)
+  // Take b's slot from below via its top edge — the insert-between gesture (a
+  // release on b's MIDDLE now means "group c with b", a different verb).
+  await dragCardOnto(page, c.id, bCard, 'top')
 
   await expect
     .poll(async () => {
@@ -374,6 +417,92 @@ test('divider lines fade while a card drag is live — their position is not liv
   // Release in place: a no-op drop must bring the line back to full strength.
   await page.mouse.up()
   await expect(line).not.toHaveClass(/tier-separator-inert/, { timeout: 10_000 })
+})
+
+test('a drop BESIDE a group never falls into it — joining needs the pointer on a card\'s middle', async ({ page }) => {
+  // Round 3 (2026-08-25): "我明明是拉到外面的,然后他还是并到了这个Group里" — the
+  // join decision came from closestCenter (the NEAREST card), so releasing next
+  // to a cluster joined it. Joining now requires the pointer to sit in the
+  // target card's MIDDLE band; the edge band is an insert-between gesture.
+  test.setTimeout(150_000)
+  const proj = `SepEdge${Date.now().toString(36)}`
+  const m1 = await createTask('edge member one', proj)
+  const m2 = await createTask('edge member two', proj)
+  const loose = await createTask('edge stays loose', proj)
+  const gid = await groupTasks([m1.id, m2.id], 'Edge Group')
+  for (const t of [m1, m2, loose]) await pinToFocus(t.id)
+  await reorderOwn([m1.id, m2.id, loose.id])
+  await presetTierViewModes(page, { focus: 'custom' })
+  await putSeparators([])
+
+  await openFocus(page)
+  const m1Card = page.locator(`${TIER_SCOPE} [data-task-id="${m1.id}"]`).first()
+  await expect(m1Card).toBeVisible({ timeout: 20_000 })
+  // Release on the group's TOP EDGE (first member's top 3px): between-rows
+  // intent, one pixel row away from what used to be a silent join.
+  await dragCardOnto(page, loose.id, m1Card, 'top')
+
+  // The reorder lands (the card moves above the group)…
+  await expect
+    .poll(async () => {
+      const rows = await tierRows(page)
+      const li = rows.findIndex((r) => r.task === loose.id)
+      const g1 = rows.findIndex((r) => r.task === m1.id)
+      return li !== -1 && g1 !== -1 && li < g1
+    }, { timeout: 20_000, message: 'the edge drop must reorder the card above the group' })
+    .toBe(true)
+  // …and NOTHING joined: the loose card has no group, the group kept exactly two.
+  const looseNow = await fetch(`${API}/api/tasks/${loose.id}`).then((r) => r.json())
+  expect(looseNow.task.group_id ?? null, 'a drop beside the group must not join it').toBeNull()
+  for (const id of [m1.id, m2.id]) {
+    const t = await fetch(`${API}/api/tasks/${id}`).then((r) => r.json())
+    expect(t.task.group_id).toBe(gid)
+  }
+  await page.screenshot({ path: `${SHOT_DIR}/11-edge-drop-stays-out.png` })
+})
+
+test('the blue join frame follows the pointer\'s middle-band test — no frame, no join', async ({ page }) => {
+  test.setTimeout(120_000)
+  const proj = `SepFrame${Date.now().toString(36)}`
+  const m1 = await createTask('frame member one', proj)
+  const m2 = await createTask('frame member two', proj)
+  const loose = await createTask('frame prober', proj)
+  await groupTasks([m1.id, m2.id], 'Frame Group')
+  for (const t of [m1, m2, loose]) await pinToFocus(t.id)
+  await reorderOwn([m1.id, m2.id, loose.id])
+  await presetTierViewModes(page, { focus: 'custom' })
+  await putSeparators([])
+
+  await openFocus(page)
+  const looseCard = page.locator(`${TIER_SCOPE} [data-task-id="${loose.id}"]`).first()
+  const target = page.locator(`${TIER_SCOPE} [data-task-id="${m1.id}"]`).first()
+  await expect(looseCard).toBeVisible({ timeout: 20_000 })
+  const tBox = await target.boundingBox()
+  expect(tBox).not.toBeNull()
+
+  await looseCard.hover()
+  const grip = looseCard.locator('.todo-pinned-drag-handle')
+  const gBox = await grip.boundingBox()
+  expect(gBox).not.toBeNull()
+  await page.mouse.move(gBox!.x + gBox!.width / 2, gBox!.y + gBox!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(gBox!.x + gBox!.width / 2, gBox!.y + gBox!.height / 2 + 12)
+
+  const lit = page.locator(`${TIER_SCOPE} [data-task-id="${m1.id}"].todo-panel-item-group-target`)
+  // Middle of the member's AT-DRAG-START rect → the join frame lights. The
+  // test lives in dnd-kit's static collision space (the rows sliding aside are
+  // a transform-only preview), so aim at the pre-drag rect and stay there.
+  await page.mouse.move(tBox!.x + tBox!.width / 2, tBox!.y + tBox!.height / 2, { steps: 10 })
+  await expect(lit, 'pointer on the card middle must announce the join').toHaveCount(1, { timeout: 5_000 })
+  await page.screenshot({ path: `${SHOT_DIR}/12-join-frame-middle.png` })
+  // Slide to its top edge → the frame goes out: this release would reorder.
+  await page.mouse.move(tBox!.x + tBox!.width / 2, tBox!.y + 2, { steps: 6 })
+  await expect(lit, 'pointer on the edge band must NOT announce a join').toHaveCount(0, { timeout: 5_000 })
+  // Release here and verify the promise held.
+  await page.mouse.up()
+  await page.waitForTimeout(1200)
+  const after = await fetch(`${API}/api/tasks/${loose.id}`).then((r) => r.json())
+  expect(after.task.group_id ?? null, 'the unlit frame promised no join').toBeNull()
 })
 
 test('a pinned card can be dragged back out of the pinned area', async ({ page }) => {
@@ -434,12 +563,12 @@ test('the unpin zone stays out of the way of an ordinary reorder', async ({ page
 
   const bCard = page.locator(`${TIER_SCOPE} [data-task-id="${b.id}"]`).first()
   await expect(bCard).toBeVisible({ timeout: 20_000 })
-  const aBox = await page.locator(`${TIER_SCOPE} [data-task-id="${a.id}"]`).first().boundingBox()
-  expect(aBox).not.toBeNull()
+  const aCard = page.locator(`${TIER_SCOPE} [data-task-id="${a.id}"]`).first()
 
-  // Drop b onto a: a plain reorder. The zone is on screen during this drag, so if
-  // it could win a drop it did not deserve, this card would silently unpin.
-  await dragCardTo(page, b.id, aBox!.x + aBox!.width / 2, aBox!.y + 4)
+  // Drop b at a's top edge: a plain reorder. The zone is on screen during this
+  // drag, so if it could win a drop it did not deserve, this card would
+  // silently unpin — and a release on a's MIDDLE would now group the two.
+  await dragCardOnto(page, b.id, aCard, 'top')
 
   const order = (await pinnedOrder()).filter((id) => id === a.id || id === b.id)
   expect(order, 'a reorder near the bottom of the tier must not unpin').toHaveLength(2)

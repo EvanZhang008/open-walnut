@@ -60,6 +60,7 @@ import {
   closestCenter,
   type DragStartEvent,
   type DragOverEvent,
+  type DragMoveEvent,
   type DragEndEvent,
   type CollisionDetection,
   type Modifier,
@@ -3266,6 +3267,61 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const el = document.elementFromPoint(x, y);
     return !(el instanceof Element && el.closest('[data-task-id],[data-group-id],[data-separator-id]'));
   }, []);
+
+  // ── Join is a POINTER decision, never a proximity one ── dnd-kit's
+  // closestCenter reports the card whose center is NEAREST, which is routinely a
+  // group member when the user is merely dragging PAST the cluster — and a drop
+  // that lands "next to" a group must not fall into it ("他抓到哪就是哪",
+  // reported 2026-08-25). Joining requires the pointer to be inside the over
+  // card's rect, and only its MIDDLE band: the edge band always reads as "insert
+  // between rows" (reorder), exactly like every list UI the user knows.
+  //
+  // WHY over.rect and not what's visually under the pointer (both probed
+  // 2026-08-25): the sortable strategy previews reorders by CSS-transforming
+  // rows away from the insert slot, but collision detection keeps working in
+  // the STATIC layout measured at drag start. elementFromPoint always answers
+  // "the card you're holding" (the active placeholder is transformed into the
+  // slot, i.e. exactly under the pointer), and matching live rects oscillates:
+  // pointer touches the target's visual middle → over flips → the target is
+  // transformed away from the pointer → over flips back — an unlandable,
+  // flickering join. over.rect is the SAME static space the collision answer
+  // lives in, so the test is stable: pointer inside the target's at-drag-start
+  // rect = join, and the target sliding aside is just the preview animation.
+  const pinnedJoinIntent = useCallback((over: DragMoveEvent['over'], activeId: string): { joinId: string | null; chipGid: string | null } => {
+    const none = { joinId: null, chipGid: null };
+    if (!over) return none;
+    const overId = String(over.id);
+    const r = over.rect;
+    const { x, y } = livePointer;
+    if (x < r.left || x > r.left + r.width || y < r.top || y > r.top + r.height) return none;
+    // The chip header is the one non-card surface that means "into this group".
+    if (isGroupSentinel(overId)) return { joinId: null, chipGid: parseGroupSentinelGid(overId) };
+    if (overId === activeId || !pinnedCardIds.has(overId)) return none;
+    const band = Math.max(6, r.height * 0.25); // top/bottom quarter = reorder intent
+    return y >= r.top + band && y <= r.top + r.height - band
+      ? { joinId: overId, chipGid: null }
+      : none;
+  }, [pinnedCardIds]);
+
+  // The join-target highlight follows the SAME test, driven by onDragMove
+  // (onDragOver only fires when `over` CHANGES, but the middle-band edge crosses
+  // inside one card). Contract: the blue frame and the drop decision can never
+  // disagree — no lit frame, no join.
+  const handlePinnedDragMove = useCallback((event: DragMoveEvent) => {
+    const activeId = String(event.active.id);
+    if (isGroupSentinel(activeId)) return; // dragOver owns clearing for group drags
+    // GROUPED-MEMBER EXEMPTION: a member dragged out has two outcomes only —
+    // reorder, or pull OUT. Lighting "join" for it caused the group-absorb bug.
+    const activeGid = tasksRef.current.find((t) => t.id === activeId)?.group_id;
+    const { joinId, chipGid } = activeGid ? { joinId: null, chipGid: null } : pinnedJoinIntent(event.over, activeId);
+    // The chip lights nothing per-card; the frame is only for card-middle joins.
+    const valid = chipGid ? null : joinId;
+    const key = valid ? `${valid}:group` : null;
+    if (dropIntentRef.current !== key) {
+      dropIntentRef.current = key;
+      setGroupTargetId(valid);
+    }
+  }, [pinnedJoinIntent]);
   // Arm/disarm from the pointer itself rather than from dnd-kit's collisions: the
   // strip is deliberately NOT a droppable, so closestCenter can never award it a
   // drop the user aimed at a card near the bottom of a tier.
@@ -3450,27 +3506,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Check if this item came from Recent
     const isFromRecent = snap.recent?.includes(activeId) ?? false;
 
-    // Drop-into-group highlight: hovering another task card (drop zones have ids like
-    // "tier-*", real cards are task ids in pinnedCardIds) lights it as a group target.
-    // Pin tiers have no subtasks, so the WHOLE card is the group zone (no left/right
-    // split). Dedupe via dropIntentRef so we don't churn state every dragOver tick.
-    // GROUPED-MEMBER EXEMPTION: if the dragged card is ALREADY in a group, NEVER light
-    // the group target. A grouped member has two valid outcomes only: drop on a
-    // neighbor → reorder; drop elsewhere → pull OUT (handled at drag end). Lighting
-    // "join group" here caused the reported bug — groupTasks() ABSORBS, so grouping a
-    // member with an outside card merged its whole group + the target into a new group
-    // instead of just popping the member out.
-    const activeGroupId = tasks.find((t) => t.id === activeId)?.group_id;
-    if (overId !== activeId && pinnedCardIds.has(overId) && !activeGroupId) {
-      const key = `${overId}:group`;
-      if (dropIntentRef.current !== key) {
-        dropIntentRef.current = key;
-        setGroupTargetId(overId);
-      }
-    } else if (dropIntentRef.current !== null) {
-      dropIntentRef.current = null;
-      setGroupTargetId((prev) => (prev === null ? prev : null));
-    }
+    // (The join-target highlight is NOT set here: onDragOver only fires when the
+    // collision target changes, but the middle-band edge crosses INSIDE one card.
+    // handlePinnedDragMove owns the highlight — same test the drop itself uses.)
 
     // Determine target tier from drop zone or the CURRENT position of the over-card.
     // Use drag refs (live state during drag) with snapshot as fallback.
@@ -3719,59 +3757,47 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Check if item came from Recent section
     const isFromRecent = snap.recent?.includes(activeId) ?? false;
 
-    // ── Drag-into-group ── A drop onto ANOTHER task card (not a tier drop-zone)
-    // means "group these together" — the whole card is the group zone in the pinned
-    // area (no subtasks here). If the target is already in a group, join it; else
-    // create a new group from the two. Takes precedence over tier-move/reorder
-    // (those still apply for drops onto a tier drop-zone). A task from Recent is
-    // pinned to the target's tier first so it shows up inside the cluster.
+    // ── Drag-into-group ── Joining a group is decided by the POINTER, never by
+    // closestCenter alone: dnd-kit's `over` is the NEAREST card, which is
+    // routinely a group member when the user releases beside or between rows —
+    // that pulled "明明是拉到外面的" drops into the cluster (2026-08-25).
+    // pinnedJoinIntent additionally requires the release point to be inside the
+    // over card's rect and its MIDDLE band (the same test that lights the blue
+    // frame, so no lit frame = no join); the edge band and the gaps stay plain
+    // reorders. If that row is in a group, join it; if it's a loose card, group
+    // the two. A chip hit means "into this group" — it used to fall through to
+    // the reorder, which parked the card immediately above the cluster with no
+    // join ("the whole thing moved outside", 2026-08-25). A task from Recent is
+    // pinned to the target's tier first so it shows up in the cluster.
     // GUARD: only an UNGROUPED active card can join here. If the dragged card is
     // already in a group, dropping it on an outside card must NOT group-merge (that
     // ABSORBED the member's whole group + the target — the reported bug); instead it
     // falls through to the drag-OUT logic below, which pops just this member out.
-    if (activeId !== overId && pinnedCardIds.has(overId)) {
-      const overTask = tasks.find((t) => t.id === overId);
+    {
+      const { joinId, chipGid } = pinnedJoinIntent(event.over, activeId);
+      const joinTask = joinId && joinId !== activeId && pinnedCardIds.has(joinId)
+        ? tasks.find((t) => t.id === joinId) : undefined;
       const activeTask = tasks.find((t) => t.id === activeId);
-      if (overTask && activeTask && !activeTask.group_id && activeTask.group_id !== overTask.group_id) {
+      const targetGid = joinTask?.group_id ?? chipGid ?? null;
+      if (activeTask && !activeTask.group_id && (joinTask || chipGid) && activeTask.group_id !== targetGid) {
         if (isFromRecent) {
-          const overTier: FocusTier = finalTierOf(overId) ?? 'satellite';
+          const overTier: FocusTier = (joinId ? finalTierOf(joinId) : undefined)
+            ?? finalTierOf(overId) ?? 'satellite';
           onPinTask?.(activeId);
           setTimeout(() => onSetTier?.(activeId, overTier), 100);
         }
-        if (overTask.group_id && onAddToGroup) {
+        if (targetGid && onAddToGroup) {
           // The card teleports into the cluster — free any line anchored to it
           // BEFORE it goes, or the line rides into the group with it.
           reanchorSeps(snapTierOf(activeId), [activeId]);
-          onAddToGroup(overTask.group_id, [activeId]);
+          onAddToGroup(targetGid, [activeId]);
           return;
         }
-        if (!overTask.group_id && onGroupTasks) {
+        if (joinTask && !targetGid && onGroupTasks) {
           reanchorSeps(snapTierOf(activeId), [activeId]);
-          onGroupTasks([overTask.id, activeId]);
+          onGroupTasks([joinTask.id, activeId]);
           return;
         }
-      }
-    }
-
-    // ── Drop ON a group chip ── The chip header carries the group's NAME, which
-    // makes it the clearest "into THIS group" target on screen — yet it used to
-    // fall through to the plain reorder, which parked the card immediately ABOVE
-    // the cluster (the sentinel's slot) with no join at all (reported 2026-08-25
-    // as "the whole thing moved outside"). Ungrouped actives only, mirroring the
-    // card-over-card guard: a grouped member released on a FOREIGN chip still
-    // means "pull out + reorder", never a silent group merge.
-    if (activeId !== overId && isGroupSentinel(overId)) {
-      const gid = parseGroupSentinelGid(overId);
-      const activeTask = tasks.find((t) => t.id === activeId);
-      if (gid && activeTask && !activeTask.group_id && onAddToGroup) {
-        if (isFromRecent) {
-          const overTier: FocusTier = finalTierOf(overId) ?? 'satellite';
-          onPinTask?.(activeId);
-          setTimeout(() => onSetTier?.(activeId, overTier), 100);
-        }
-        reanchorSeps(snapTierOf(activeId), [activeId]);
-        onAddToGroup(gid, [activeId]);
-        return;
       }
     }
 
@@ -3904,7 +3930,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     maybeMoveProject(origTier, reorderedTier);
     reanchorSeps(origTier, [activeId]);
     onReorderPinned?.(taskIdsOnly(newOrder));
-  }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, onUnpinTask, overUnpinZone, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError]);
+  }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, onUnpinTask, overUnpinZone, pinnedJoinIntent, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError]);
 
   // Project chips for ViewDropdown, in the flat config order. Inbox rides along as
   // INBOX_TAB (a sentinel chip) whenever any task has no project — '' is the All chip.
@@ -6142,7 +6168,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
       {/* Unified DndContext wrapping both Pinned + Recent — enables drag from Recent to Pin */}
       {(anyTierVisible || recentVisible) && (visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0 || hiddenPinnedGroups.length > 0) && (
-        <DndContext sensors={pinnedSensors} collisionDetection={closestCenter} onDragStart={handlePinnedDragStart} onDragOver={handlePinnedDragOver} onDragEnd={handlePinnedDragEnd} onDragCancel={handlePinnedDragCancel}>
+        <DndContext sensors={pinnedSensors} collisionDetection={closestCenter} onDragStart={handlePinnedDragStart} onDragMove={handlePinnedDragMove} onDragOver={handlePinnedDragOver} onDragEnd={handlePinnedDragEnd} onDragCancel={handlePinnedDragCancel}>
           <div
             ref={pinnedWrapperRef}
             // -unpin-armed opens a row-free band at the SCROLL END (padding on the
