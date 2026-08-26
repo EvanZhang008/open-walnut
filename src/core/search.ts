@@ -548,10 +548,11 @@ async function searchInner(
   const qmdEnabled =
     process.env.WALNUT_DISABLE_SEARCH !== '1'
     && !CLOUD_MODE;
-  // Search v2 (hybrid-search lib) replaces the three QMD legs below when the
-  // flag is on. Env check duplicated from wiring.isSearchV2Enabled() so the
-  // flag-off path never loads the wiring module (and its better-sqlite3 chain).
-  const v2Enabled = qmdEnabled && process.env.WALNUT_SEARCH_V2 === '1';
+  // Search v2 (hybrid-search lib) replaces the three QMD legs below unless the
+  // flag opts out (=0 → QMD rollback path). Env check duplicated from
+  // wiring.isSearchV2Enabled() so the opted-out path never loads the wiring
+  // module (and its better-sqlite3 chain).
+  const v2Enabled = qmdEnabled && process.env.WALNUT_SEARCH_V2 !== '0';
   // v2's coverage component is a fraction over ITS tokenization of the query;
   // the merge below wants a hit count over contentQueryTerms. Same terms in
   // practice — reconstruct the count from the fraction.

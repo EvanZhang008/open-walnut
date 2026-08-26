@@ -1033,7 +1033,7 @@ async function performNotesSearchInner(opts: {
     // search is the cloud answer (same gate as initQmdStores in server.ts).
     const wantString = mode === 'hybrid' || mode === 'string'
     const wantSemantic = !CLOUD_MODE && (mode === 'hybrid' || mode === 'semantic')
-    const v2Active = process.env.WALNUT_SEARCH_V2 === '1'
+    const v2Active = process.env.WALNUT_SEARCH_V2 !== '0'
       && process.env.WALNUT_DISABLE_SEARCH !== '1'
       && !CLOUD_MODE
 

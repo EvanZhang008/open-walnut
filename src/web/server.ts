@@ -2065,14 +2065,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })
   }
 
-  // ── Search v2 (hybrid-search) — flag-gated double-run beside QMD ──
-  // Phase 2 gate: primary only (the cloud replica story lands with Phase 3/4).
-  if (process.env.WALNUT_SEARCH_V2 === '1' && !CLOUD_MODE) {
+  // ── Search v2 (hybrid-search) — default ON; =0 falls back to QMD ──
+  // Primary only (the cloud replica story lands with Phase 3/4). The outer env
+  // check keeps the opted-out path from loading the wiring module at all.
+  if (process.env.WALNUT_SEARCH_V2 !== '0' && !CLOUD_MODE) {
     try {
       const wiring = await import('../core/search/wiring.js')
       if (wiring.isSearchV2Enabled()) {
         searchV2WiringHandle = wiring.startSearchV2Wiring(bus)
-        log.memory.info('search-v2 wiring started (WALNUT_SEARCH_V2=1)')
+        log.memory.info('search-v2 wiring started')
       }
     } catch (err) {
       log.memory.warn('search-v2 startup failed', {

@@ -13,10 +13,11 @@
  * server-down path in production):
  *   1. a future-start task is findable while Date = Now (the reported bug),
  *   2. a completed task is findable too (search ignores "Show completed"),
- *   3. the OPEN hit ranks before the completed one (rankOpenTasksFirst), so a
- *      history-heavy store can't push live work past the 40-row render cap,
- *   4. clearing the query restores the filtered view — search must not leak
+ *   3. clearing the query restores the filtered view — search must not leak
  *      its filter bypass into the normal list.
+ *
+ * (An open-before-done ordering assertion lived here until 2026-08-26; the
+ * partition was removed by user request — search order is pure relevance.)
  */
 import { expect, test } from '@playwright/test';
 
@@ -51,12 +52,6 @@ test('search finds a future-start task that the Now date filter hides', async ({
   await expect(page.locator(DEFERRED)).toBeVisible({ timeout: 5_000 });
   // Search also ignores "Show completed".
   await expect(page.locator(DONE)).toBeVisible();
-
-  // Open before done — otherwise history buries live work past the render cap.
-  const orderedIds = await page.locator('.todo-search-results .todo-panel-item')
-    .evaluateAll((rows) => rows.map((r) => r.getAttribute('data-task-id')));
-  expect(orderedIds.indexOf('pw-task-deferred'))
-    .toBeLessThan(orderedIds.indexOf('pw-task-done-marmalade'));
 
   // The row explains itself: the deferred-start pill says WHY it isn't in the list.
   await expect(page.locator(`${DEFERRED} .todo-item-start-pill`)).toBeVisible();

@@ -1230,7 +1230,7 @@ Actions:
     name: 'task_search',
     // Env is fixed at process start, so a load-time ternary picks the
     // description matching the engine the execute() below will actually use.
-    description: process.env.WALNUT_SEARCH_V2 === '1'
+    description: process.env.WALNUT_SEARCH_V2 !== '0'
       ? `Search tasks via hybrid keyword search (identifier-aware subword index). Indexed fields: title, description, summary, note, conversation_log, tags, project. Task IDs, session IDs, commit SHAs, and external URLs resolve directly from structured records first. Auto-expands child tasks of matched parents.
 
 ## How matching works
@@ -1326,7 +1326,7 @@ queries: ["pipeline API allowlisting", "PAPINS SigV4", "pipeline allowlist"]  â†
 
       try {
         if (semanticQueries.length > 0) {
-          const wiring = process.env.WALNUT_SEARCH_V2 === '1'
+          const wiring = process.env.WALNUT_SEARCH_V2 !== '0'
             ? await import('../core/search/wiring.js')
             : null;
           if (wiring?.isSearchV2Enabled()) {

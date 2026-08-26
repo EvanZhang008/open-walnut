@@ -119,8 +119,8 @@ defineOp({
     id: z.string().min(1).describe('Task id or a unique id prefix'),
   },
   // POST /complete, NOT PATCH {status:'done'}: only completeTask() semantics
-  // auto-unpin from the Focus bar and surface a sync-push failure (the v1
-  // PATCH swallows it via asyncPush). Same reasoning as the CLI's `done`.
+  // surface a sync-push failure (the v1 PATCH swallows it via asyncPush).
+  // Same reasoning as the CLI's `done`.
   bind: { method: 'POST', path: '/tasks/:id/complete' },
   mapResult: ({ body }) => withRef((body as { task?: unknown } | undefined)?.task, { completed: true }),
   // remote 'allow': completing a task is ordinary, reversible work. This was

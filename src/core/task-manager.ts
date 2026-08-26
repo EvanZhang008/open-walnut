@@ -2557,15 +2557,9 @@ export async function completeTask(idPrefix: string): Promise<{ task: Task }> {
     const oldPhase = t.phase;
     guardActiveChildren(store, t);
     applyPhase(t, 'COMPLETE');
-    // Auto-unpin completed tasks so they don't linger in Focus Bar
-    if (t.pinned) {
-      t.pinned = false;
-      delete t.pin_order;
-      delete t.focus_tier;
-      // Compact remaining pin orders
-      const pinned = store.tasks.filter((x) => x.pinned).sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
-      pinned.forEach((x, i) => { x.pin_order = i; });
-    }
+    // No auto-unpin on completion (removed 2026-08-26, user request): a pin is
+    // a manual placement, so the done card stays in its tier until the user
+    // unpins it. Same rule in toggleComplete and setPhaseBulk.
     t.updated_at = new Date().toISOString();
 
     await writeStore(store);
@@ -2611,14 +2605,7 @@ export async function toggleComplete(idPrefix: string): Promise<{ task: Task }> 
     } else {
       guardActiveChildren(store, t);
       applyPhase(t, 'COMPLETE');
-      // Auto-unpin completed tasks
-      if (t.pinned) {
-        t.pinned = false;
-        delete t.pin_order;
-        delete t.focus_tier;
-        const pinned = store.tasks.filter((x) => x.pinned).sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
-        pinned.forEach((x, i) => { x.pin_order = i; });
-      }
+      // No auto-unpin on completion — see completeTask.
     }
     t.updated_at = new Date().toISOString();
 
@@ -2675,8 +2662,8 @@ export interface BatchPhaseResult {
  * `failed`; the rest still apply. Partial success is the right semantics here: the
  * user picked 10 rows and one being un-completable must not void the other 9.
  *
- * Completing also auto-unpins (same rule as completeTask) so done tasks don't
- * linger in the Focus bar, and pin_order is compacted once for the whole batch.
+ * Completing does NOT unpin (2026-08-26, user request): pinned done cards stay
+ * in their tier until the user unpins them.
  * External-sync push + session auto-complete run OUTSIDE the lock, per task, the
  * same way completeTask does (autoPushIfConfigured re-enters the lock).
  */
@@ -2727,22 +2714,13 @@ export async function setPhaseBulk(
       }
       priorPhases.set(t.id, t.phase);
       applyPhase(t, phase);
-      if (phase === 'COMPLETE' && t.pinned) {
-        t.pinned = false;
-        delete t.pin_order;
-        delete t.focus_tier;
-      }
+      // No auto-unpin on completion — see completeTask.
       t.updated_at = now;
       applied.push(t);
     }
 
     if (applied.length === 0) return { changed: applied, failed: skipped, oldPhases: priorPhases };
 
-    // Compact pin orders ONCE for the whole batch (completeTask does this per call).
-    if (phase === 'COMPLETE') {
-      const pinned = store.tasks.filter((x) => x.pinned).sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
-      pinned.forEach((x, i) => { x.pin_order = i; });
-    }
     await writeStore(store);
     return { changed: applied, failed: skipped, oldPhases: priorPhases };
   });
@@ -4608,7 +4586,9 @@ export async function togglePin(taskId: string): Promise<{ pinned: boolean; pinn
     const task = store.tasks.find((t) => t.id === taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
 
-    // Reject pinning completed tasks — only unpin is allowed
+    // Reject NEW pins on completed tasks (the tier view hides done pins outside
+    // search, so a fresh pin would be invisible); an EXISTING pin now survives
+    // completion (auto-unpin removed 2026-08-26) — unpin stays allowed.
     if (!task.pinned && (task.phase === 'COMPLETE' || task.status === 'done')) {
       throw new Error(`Cannot pin a completed task: ${task.title}`);
     }
@@ -4705,9 +4685,10 @@ export async function reorderPins(orderedIds: string[]): Promise<TierResult> {
  */
 export async function getPinnedTasks(): Promise<Task[]> {
   const store = await readStore();
-  // Defense-in-depth: exclude completed tasks even if they have pinned=true
+  // Completed pins are INCLUDED (2026-08-26, user request): completion no
+  // longer unpins, and the done card stays in its tier until the user unpins.
   return store.tasks
-    .filter((t) => t.pinned && t.phase !== 'COMPLETE' && t.status !== 'done')
+    .filter((t) => t.pinned)
     .sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
 }
 
@@ -4729,10 +4710,11 @@ export interface TierResult {
 // Non-default built-in focus_tier values (satellite = the undefined default).
 const BUILTIN_TIER_VALUES = ['focus', 'backlog', 'wait'];
 
-/** Helper: split pinned tasks into tier arrays (includes pinned_tasks for full state sync). */
+/** Helper: split pinned tasks into tier arrays (includes pinned_tasks for full state sync).
+ *  Completed pins are included — completion no longer unpins (2026-08-26). */
 function splitTiers(store: TaskStore): TierResult {
   const pinned = store.tasks
-    .filter((t) => t.pinned && t.phase !== 'COMPLETE' && t.status !== 'done')
+    .filter((t) => t.pinned)
     .sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
   const customIds = new Set((store.custom_tiers ?? []).map((t) => t.id));
   const customTierTasks: Record<string, string[]> = {};

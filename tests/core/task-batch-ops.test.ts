@@ -80,7 +80,7 @@ describe('setPhaseBulk', () => {
     }
   });
 
-  it('auto-unpins completed tasks and compacts the remaining pin order', async () => {
+  it('keeps completed tasks pinned in place (auto-unpin removed 2026-08-26)', async () => {
     const [a, b, c] = await makeTasks(['A', 'B', 'C']);
     for (const [i, id] of [a, b, c].entries()) {
       await updateTaskRaw(id, { pinned: true, pin_order: i, focus_tier: 'focus' });
@@ -88,12 +88,14 @@ describe('setPhaseBulk', () => {
 
     await setPhaseBulk([a, b], 'COMPLETE');
 
-    expect((await getTask(a)).pinned).toBeFalsy();
-    expect((await getTask(b)).pinned).toBeFalsy();
-    const survivor = await getTask(c);
-    expect(survivor.pinned).toBe(true);
-    // Sole remaining pin compacts to index 0 (was 2).
-    expect(survivor.pin_order).toBe(0);
+    // A pin is a manual placement: completing must not evict the card. The
+    // done tasks keep their pin, tier, and order; the user unpins explicitly.
+    for (const [i, id] of [a, b, c].entries()) {
+      const t = await getTask(id);
+      expect(t.pinned).toBe(true);
+      expect(t.pin_order).toBe(i);
+      expect(t.focus_tier).toBe('focus');
+    }
   });
 
   it('skips a parent with active children but still completes the rest', async () => {

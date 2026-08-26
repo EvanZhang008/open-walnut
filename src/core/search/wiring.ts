@@ -1,7 +1,7 @@
 /**
  * Search v2 wiring: the walnut-side lifecycle of the hybrid-search index.
  *
- * Gated on WALNUT_SEARCH_V2=1 (default off while QMD double-runs). When on:
+ * Default ON; WALNUT_SEARCH_V2=0 falls back to QMD (kept until Phase 4). When on:
  *   - one index handle per process (~/.open-walnut/search.sqlite)
  *   - event-bus driven incremental upserts (tasks + sessions), reusing the
  *     debounce/generation/cooldown queue the QMD path proved out
@@ -27,7 +27,7 @@ import {
   type ScoredHit,
   type SearchIndex,
 } from '../../lib/hybrid-search/index.js';
-import { GLOBAL_SKILLS_DIR, MEMORY_DIR, NOTES_DIR, WALNUT_HOME } from '../../constants.js';
+import { CLOUD_MODE, GLOBAL_SKILLS_DIR, MEMORY_DIR, NOTES_DIR, WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import { createQmdIncrementalQueue, type QmdIncrementalQueue } from '../qmd-incremental-queue.js';
 import { EventNames, type EventBus } from '../event-bus.js';
@@ -47,8 +47,13 @@ export const SEARCH_V2_KIND_WEIGHTS = {
 } as const;
 
 export function isSearchV2Enabled(): boolean {
-  return process.env.WALNUT_SEARCH_V2 === '1'
-    && process.env.WALNUT_DISABLE_SEARCH !== '1';
+  // Default ON since 2026-08-26 (QMD stays as the WALNUT_SEARCH_V2=0 rollback
+  // path until Phase 4 deletes it). Cloud replicas stay off: no QMD store
+  // there either, and the embed model would pin the small instance — the
+  // replica search story lands with Phase 3/4.
+  return process.env.WALNUT_SEARCH_V2 !== '0'
+    && process.env.WALNUT_DISABLE_SEARCH !== '1'
+    && !CLOUD_MODE;
 }
 
 /** Known embedding models. Plan Q2 settled 2026-08-24 by the full golden-set

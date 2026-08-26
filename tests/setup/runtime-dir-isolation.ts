@@ -72,3 +72,13 @@ if (pointsAtProduction || inheritedFromRunner) {
   fs.mkdirSync(testRuntime, { recursive: true })
   process.env.WALNUT_DAEMON_DIR = testRuntime
 }
+
+// Search v2 is default-ON (2026-08-26 cutover), and its semantic lane spawns an
+// embed worker whose first query tries to LOAD (and, on a fresh temp
+// WALNUT_HOME, download — ~600MB) the embedding model. No test needs that:
+// keyword-only covers every route/tool contract, and the dedicated semantic
+// tests use the fake worker fixture. Tests that really want the worker opt
+// back in by setting this to '1' themselves.
+if (process.env.WALNUT_SEARCH_V2_SEMANTIC === undefined) {
+  process.env.WALNUT_SEARCH_V2_SEMANTIC = '0'
+}

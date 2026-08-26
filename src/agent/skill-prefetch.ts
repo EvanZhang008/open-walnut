@@ -25,7 +25,7 @@ export async function buildSkillPrefetchHint(userMessage: string): Promise<strin
 
   // Search v2 keyword lane: ~10ms warm, so the prefetch actually fits inside
   // the caller's 300ms deadline instead of losing the race almost every turn.
-  if (process.env.WALNUT_SEARCH_V2 === '1') {
+  if (process.env.WALNUT_SEARCH_V2 !== '0') {
     try {
       const { searchV2Lane, isSearchV2Enabled } = await import('../core/search/wiring.js');
       if (isSearchV2Enabled()) {

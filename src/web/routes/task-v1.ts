@@ -195,12 +195,11 @@ taskV1Router.delete('/tasks/:id', async (req: Request, res: Response, next: Next
 
 // POST /api/v1/tasks/:id/complete — completeTask() semantics.
 //
-// WHY this is not just PATCH { status: 'done' }: updateTask's status→phase
-// branch applies the phase but does NOT auto-unpin, and it AWAITS nothing on
-// the pin_order compaction that completeTask performs — a completed task would
-// linger in the Focus bar. completeTask also propagates a sync-push failure to
-// the caller (a plugin-backed task that didn't reach its remote store is a real
-// error), whereas the v1 PATCH uses asyncPush and swallows it into a log line.
+// WHY this is not just PATCH { status: 'done' }: completeTask propagates a
+// sync-push failure to the caller (a plugin-backed task that didn't reach its
+// remote store is a real error), whereas the v1 PATCH uses asyncPush and
+// swallows it into a log line. (It also used to auto-unpin; that behavior was
+// removed 2026-08-26 — completed pins stay in their tier.)
 // The CLI's `done` command has always had completeTask semantics, so it needs
 // this endpoint rather than the PATCH.
 taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, next: NextFunction) => {
@@ -210,11 +209,11 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
     try {
       const result = await tm.completeTask(id)
       log.web.info('task completed via api-v1', { taskId: result.task.id })
-      // fields (additive): on a REPLICA this scopes the outbox op so the
-      // auto-unpin's DELETED pin_order/focus_tier land as explicit clears.
+      // fields (additive): scopes the replica outbox op to what completion
+      // actually changes (auto-unpin was removed 2026-08-26 — pins persist).
       bus.emit(EventNames.TASK_COMPLETED, {
         task: result.task,
-        fields: ['status', 'phase', 'completed_at', 'pinned', 'pin_order', 'focus_tier'],
+        fields: ['status', 'phase', 'completed_at'],
       }, ['web-ui', 'main-agent'], { source: 'api-v1' })
       res.json(result)
     } catch (err) {
@@ -464,7 +463,7 @@ taskV1Router.post('/tasks/batch/phase', async (req: Request, res: Response, next
     // same way it does for a single-task change.
     const eventName = phase === 'COMPLETE' ? EventNames.TASK_COMPLETED : EventNames.TASK_UPDATED
     const fields = phase === 'COMPLETE'
-      ? ['status', 'phase', 'completed_at', 'pinned', 'pin_order', 'focus_tier'] // COMPLETE auto-unpins
+      ? ['status', 'phase', 'completed_at'] // completion no longer touches pin fields (2026-08-26)
       : ['status', 'phase']
     for (const task of changed) {
       bus.emit(eventName, { task, fields }, ['web-ui', 'main-agent'], { source: 'api-v1' })

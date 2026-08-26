@@ -108,9 +108,12 @@ export function useFocusBar(): UseFocusBarReturn {
   const customIdSet = useMemo(() => new Set(customTiers.map((t) => t.id)), [customTiers]);
 
   // ── Derivation ──
+  // Completed pins are INCLUDED (2026-08-26, user request): completion no
+  // longer unpins anywhere (server or client), so the done card keeps its tier
+  // slot until the user unpins it. Mirrors server splitTiers().
   const orderedPinned = useMemo(() =>
     tasks
-      .filter((t) => t.pinned && t.phase !== 'COMPLETE' && t.status !== 'done')
+      .filter((t) => t.pinned)
       .sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0)),
   [tasks]);
 
@@ -226,23 +229,10 @@ export function useFocusBar(): UseFocusBarReturn {
     focusApi.fetchPinnedTasks().then(applyFocusData).catch(() => {});
   });
 
-  // Auto-unpin completed tasks. Display already excludes them (orderedPinned
-  // filter), but the phase-update server path (updateTask phase=COMPLETE) does
-  // not clear pinned server-side — completeTask/toggleComplete do. Keep the DB
-  // tidy so the pin doesn't resurrect on reopen.
-  const autoUnpinIfCompleted = useCallback((data: unknown) => {
-    const { task } = data as { task: { id: string; phase?: string; status?: string; pinned?: boolean } | null };
-    if (!task?.id) return;
-    const done = task.phase === 'COMPLETE' || task.status === 'done';
-    if (!done) return;
-    const local = tasksRef.current.find((t) => t.id === task.id);
-    if (!(task.pinned ?? local?.pinned)) return;
-    lastWriteRef.current = Date.now();
-    patchTasksLocal({ [task.id]: { pinned: false, focus_tier: undefined, pin_order: undefined } });
-    focusApi.unpinTask(task.id).catch(() => {});
-  }, [patchTasksLocal]);
-  useEvent('task:completed', autoUnpinIfCompleted);
-  useEvent('task:updated', autoUnpinIfCompleted);
+  // Auto-unpin-on-completion REMOVED (2026-08-26, user request): a pin is a
+  // manual placement, so completing a task keeps its card in the tier (with
+  // done styling) until the user unpins it. The server-side auto-unpin in
+  // completeTask/toggleComplete/setPhaseBulk was removed in the same change.
 
   // ── Mutations: optimistic patch (mirrors server semantics) + API call.
   // The WS echo of our own call merges as a no-op (same values); on API error
@@ -250,6 +240,8 @@ export function useFocusBar(): UseFocusBarReturn {
 
   const pin = useCallback(async (taskId: string) => {
     const task = tasksRef.current.find((t) => t.id === taskId);
+    // No NEW pins on done tasks (mirrors server togglePin) — existing pins
+    // survive completion, but a fresh pin would be invisible outside search.
     if (task && (task.status === 'done' || task.phase === 'COMPLETE')) return;
     lastWriteRef.current = Date.now();
     // Mirror backend togglePin: new pins land at the BOTTOM (pin_order = max

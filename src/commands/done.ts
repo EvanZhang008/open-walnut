@@ -15,7 +15,7 @@ export interface CompletedTask {
  * `open-walnut done <id>` — id may be a unique prefix (resolved server-side).
  *
  * Uses POST /api/v1/tasks/:id/complete, NOT PATCH { status: 'done' }: only
- * completeTask() auto-unpins the task from the Focus bar and surfaces an
+ * completeTask() surfaces an
  * external-sync push failure to the caller. See the endpoint's comment in
  * src/web/routes/task-v1.ts.
  */

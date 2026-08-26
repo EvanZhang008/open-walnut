@@ -47,7 +47,9 @@ async function waitFor(check: () => boolean, timeoutMs = 8_000): Promise<void> {
 }
 
 describe('isSearchV2Enabled', () => {
-  it('requires WALNUT_SEARCH_V2=1 and respects WALNUT_DISABLE_SEARCH', () => {
+  it('defaults ON; WALNUT_SEARCH_V2=0 and WALNUT_DISABLE_SEARCH opt out', () => {
+    expect(isSearchV2Enabled()).toBe(true);
+    delete process.env.WALNUT_SEARCH_V2; // unset = on (2026-08-26 cutover)
     expect(isSearchV2Enabled()).toBe(true);
     process.env.WALNUT_DISABLE_SEARCH = '1';
     expect(isSearchV2Enabled()).toBe(false);

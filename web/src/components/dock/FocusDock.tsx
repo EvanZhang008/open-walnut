@@ -299,9 +299,11 @@ export function FocusDock({ focusBar, onQuickAddToFocus }: FocusDockProps) {
   const pinnedTasks = useMemo(() => {
     const ids = focusIds.length > 0 ? focusIds : pinnedIds;
     return ids
-      .slice(0, FOCUS_DOCK_MAX_VISIBLE)
       .map((id) => taskMap.get(id))
-      .filter((t): t is Task => !!t);
+      // Pin membership now survives completion (2026-08-26) — the dock is
+      // "current focus", so completed pins are display-filtered here.
+      .filter((t): t is Task => !!t && t.status !== 'done' && t.phase !== 'COMPLETE')
+      .slice(0, FOCUS_DOCK_MAX_VISIBLE);
   }, [focusIds, pinnedIds, taskMap]);
 
   // Self-manage active state by listening to custom events

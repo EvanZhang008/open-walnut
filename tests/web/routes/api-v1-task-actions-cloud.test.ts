@@ -179,7 +179,7 @@ describe('Wave-1 task mutations dispatch to the primary on a REPLICA', () => {
     expect(op!.task?.depends_on).toEqual([dep.id])
   })
 
-  it('POST /v1/tasks/:id/complete → 200 + phase-scoped op incl. the auto-unpin clears', async () => {
+  it('POST /v1/tasks/:id/complete → 200 + phase-scoped op; the pin persists', async () => {
     const { task } = await addTask({ title: 'Cloud complete target' })
     const { togglePin } = await import('../../../src/core/task-manager.js')
     await togglePin(task.id)
@@ -190,8 +190,10 @@ describe('Wave-1 task mutations dispatch to the primary on a REPLICA', () => {
     // The earlier togglePin also queued an op for this id — match the COMPLETE one.
     const op = await waitForOp((o) => o.type === 'update' && o.task?.id === task.id && o.task?.phase === 'COMPLETE')
     expect(op).not.toBeNull()
-    expect(op!.touched).toEqual(expect.arrayContaining(['status', 'phase', 'pinned', 'pin_order', 'focus_tier']))
-    expect(op!.task?.pinned).toBe(false)
+    expect(op!.touched).toEqual(expect.arrayContaining(['status', 'phase', 'completed_at']))
+    // Auto-unpin removed 2026-08-26: completion must NOT touch or clear the pin.
+    expect(op!.touched).not.toEqual(expect.arrayContaining(['pinned']))
+    expect(op!.task?.pinned).toBe(true)
   })
 
   it('POST /v1/tasks/batch/phase → 200 + one scoped op per changed task', async () => {
