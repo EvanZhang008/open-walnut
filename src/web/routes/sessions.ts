@@ -849,6 +849,19 @@ sessionsRouter.patch('/:sessionId', async (req: Request, res: Response, next: Ne
   }
 })
 
+/** First user message of the FULL parse — a ?tail= payload may not contain it,
+ *  and the client used to fake one from its window head (the pinned "Initial
+ *  Prompt" bubble showed a recent message instead of the session's real first
+ *  prompt). Callers must NOT attach this for windowed reads: there the array
+ *  head isn't the session head, and a confident wrong answer is worse than none. */
+function initialUserTextOf(messages: Array<{ role?: string; text?: string }>): string | undefined {
+  const first = messages.find(m => m.role === 'user' && typeof m.text === 'string' && m.text.trim().length > 0)
+  if (!first?.text) return undefined
+  // Cap: this rides EVERY full history response; a pasted-novel first prompt
+  // shouldn't tax them all.
+  return first.text.length > 10_000 ? `${first.text.slice(0, 10_000)}…` : first.text
+}
+
 // GET /api/sessions/:sessionId/history
 // ?source=streams — fast path: local-only reads (skip SSH).
 // Local sessions: reads canonical JSONL (~1ms, same result as full path).
@@ -866,11 +879,12 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       if (record?.engine === 'codex') {
         // Tail-bounded P1: bound a COLD fold to the journal's last few MB so a
         // whale journal paints instantly; the fold cache serves the follow-ups.
-        const { messages } = await readProviderSessionHistory(sessionId, record, record.host, true,
+        const { messages, windowed } = await readProviderSessionHistory(sessionId, record, record.host, true,
           tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined)
         logMessageOrdering('P1:streams', sessionId, messages, record.host)
         const sliced = tail && tail > 0 ? messages.slice(-tail) : messages
-        res.json({ messages: sliced, total: messages.length })
+        const initialUserText = windowed ? undefined : initialUserTextOf(messages)
+        res.json({ messages: sliced, total: messages.length, ...(initialUserText ? { initialUserText } : {}) })
         return
       }
       // Fast path: host=undefined forces local-only reads (canonical JSONL + streams fallback).
@@ -896,11 +910,13 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         return
       }
       // skipSubagents: frontend lazy-loads each subagent via /subagent/:agentId/history on demand
-      const { messages, finishedAgentIds: p1FinishedIds } = await readProviderSessionHistory(sessionId, record, undefined)
+      const { messages, finishedAgentIds: p1FinishedIds, windowed: p1Windowed } = await readProviderSessionHistory(sessionId, record, undefined)
       logMessageOrdering('P1:streams', sessionId, messages, record?.host)
       const sliced = tail && tail > 0 ? messages.slice(-tail) : messages
+      const p1InitialUserText = p1Windowed ? undefined : initialUserTextOf(messages)
       res.json({
         messages: sliced, total: messages.length,
+        ...(p1InitialUserText ? { initialUserText: p1InitialUserText } : {}),
         ...(p1FinishedIds && p1FinishedIds.length > 0 ? { finishedAgentIds: p1FinishedIds } : {}),
       })
       return
@@ -1236,6 +1252,10 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     const adjustedForkBoundary = forkBoundaryIndex != null && tail && tail > 0
       ? (forkBoundaryIndex >= total - tail ? forkBoundaryIndex - (total - tail) : undefined)
       : forkBoundaryIndex
+    // True initial prompt of the conversation (fork prefix included) — computed
+    // BEFORE the tail slice, because the slice is exactly what drops it. Windowed
+    // read / failed fork prefix: the head we hold isn't the real head — omit.
+    const initialUserText = historyWindowed || forkLoadFailed ? undefined : initialUserTextOf(messages)
     res.json({
       // Full payloads carry the flag too — a client that first loads mid-flight must
       // know which rows to re-ask for on its next delta.
@@ -1243,6 +1263,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       total,
       cursor: total,
       delta: false,
+      ...(initialUserText ? { initialUserText } : {}),
       // Windowed parse: `total` is the WINDOW length, not the file's message
       // count — the client can't compute a real olderHidden from it. The flag
       // lets it show an uncounted "Load earlier messages" affordance instead of

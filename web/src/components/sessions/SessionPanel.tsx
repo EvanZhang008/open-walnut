@@ -292,7 +292,20 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   }, [sessionId, session?.effort, session?.effectiveEffort]);
 
   // Fetch messages for the UserMessagesSummary
-  const { messages: historyMessages, loading: historyLoading } = useSessionHistory(sessionId);
+  const {
+    messages: historyMessages, loading: historyLoading,
+    phase2Pending: historyPhase2Pending, olderHidden: historyOlderHidden,
+    olderWindowed: historyOlderWindowed, initialUserText: historyInitialUserText,
+  } = useSessionHistory(sessionId);
+  // The pinned "Initial Prompt" bubble: prefer the server-computed TRUE first
+  // user message. historyMessages is a lazy TAIL — its first user row can be
+  // mid-conversation (the collapse-mode bubble used to show a recent message as
+  // the "Initial Prompt"). Fall back to the window head ONLY when we provably
+  // hold the full history (nothing hidden before messages[0], fetch settled).
+  const initialPromptText = historyInitialUserText
+    ?? (!historyPhase2Pending && historyOlderHidden === 0 && !historyOlderWindowed
+      ? historyMessages.find(m => m.role === 'user')?.text
+      : undefined);
 
   // Plan content for plan chip and execute buttons
   const hasPlan = !!session?.planCompleted;
@@ -1714,7 +1727,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             sessionId={sessionId}
             engine={session?.engine}
             phase={taskPhase}
-            initialPrompt={historyMessages.find(m => m.role === 'user')?.text}
+            initialPrompt={initialPromptText}
             sessionCwd={session?.cwd}
             sessionHost={session?.host}
             optimisticMessages={optimisticMsgs}

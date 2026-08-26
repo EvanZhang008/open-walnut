@@ -51,6 +51,10 @@ export interface CachedHistory {
    *  Undefined/0 = full history. Must ride every cache write or the delta
    *  length-guard sees a mismatched count space and rebuilds forever. */
   baseOffset?: number;
+  /** The session's TRUE first user message (server-computed from the full
+   *  parse). messages[0] here may be mid-conversation (tail slice) — the pinned
+   *  "Initial Prompt" bubble must come from this field, never from the head. */
+  initialUserText?: string;
 }
 
 const historyCache = new Map<string, CachedHistory>();
@@ -454,6 +458,7 @@ function registerGlobalListeners(): void {
                   forkBoundaryIndex: full.forkBoundaryIndex,
                   msgCount: fullCursor,
                   baseOffset: Math.max(0, fullCursor - full.messages.length),
+                  initialUserText: full.initialUserText ?? cached?.initialUserText,
                 });
               })
               .catch(() => { /* keep current cache; next turn retries */ });
@@ -463,6 +468,7 @@ function registerGlobalListeners(): void {
               forkBoundaryIndex: r.forkBoundaryIndex ?? cached.forkBoundaryIndex,
               msgCount: plan.cursor,
               baseOffset: cached.baseOffset ?? 0,
+              initialUserText: cached.initialUserText,
             });
             log.info('session-cache', `bg delta for ${sid.substring(0, 8)}: +${r.messages.length} → ${plan.messages.length}`);
           } else {
@@ -478,6 +484,7 @@ function registerGlobalListeners(): void {
             forkBoundaryIndex: r.forkBoundaryIndex,
             msgCount: fullCursor,
             baseOffset: Math.max(0, fullCursor - r.messages.length),
+            initialUserText: r.initialUserText ?? cached?.initialUserText,
           });
           log.info('session-cache', `bg-updated history for ${sid.substring(0, 8)}`, { msgCount: r.messages.length });
         }

@@ -34,6 +34,10 @@ interface UseSessionHistoryReturn {
   /** Fetch the full history (no tail limit) — call when the user wants to read
    *  past the lazy-loaded tail. Idempotent while in flight. */
   loadFullHistory: () => void;
+  /** The session's TRUE first user message (server-computed from the full parse).
+   *  With lazy tail loading, messages[0] can be mid-conversation — the pinned
+   *  "Initial Prompt" bubble must use this, never the loaded window's head. */
+  initialUserText?: string;
 }
 
 /** Diagnostic: count user text messages and check if they're interleaved or bunched */
@@ -97,6 +101,17 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   const baseOffsetRef = useRef(0);
   const [olderHidden, setOlderHidden] = useState(0);
   const [olderWindowed, setOlderWindowed] = useState(false);
+  // True first user message (server-computed). Sticky for the session's life —
+  // deltas and degraded payloads don't carry it, so only adopt, never clear
+  // (except on session switch). Ref mirror for cache writes inside callbacks.
+  const [initialUserText, setInitialUserText] = useState<string | undefined>(undefined);
+  const initialUserTextRef = useRef<string | undefined>(undefined);
+  const adoptInitialUserText = (v: string | undefined) => {
+    if (v && v !== initialUserTextRef.current) {
+      initialUserTextRef.current = v;
+      setInitialUserText(v);
+    }
+  };
   // Adopt a full (possibly tail-sliced) payload's offset bookkeeping.
   // `windowed` = bounded window read: cursor === messages.length even though
   // older messages exist, so olderHidden computes to 0 — track the flag
@@ -120,6 +135,8 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       baseOffsetRef.current = 0;
       setOlderHidden(0);
       setOlderWindowed(false);
+      initialUserTextRef.current = undefined;
+      setInitialUserText(undefined);
       return;
     }
 
@@ -190,6 +207,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                   setStale(null);
                   setMessages(full.messages);
                   setForkBoundaryIndex(full.forkBoundaryIndex);
+                  adoptInitialUserText(full.initialUserText);
                   const fullCursor = full.cursor ?? full.messages.length;
                   cursorRef.current = fullCursor;
                   adoptOffset(full.messages.length, fullCursor, full.windowed);
@@ -198,6 +216,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                     forkBoundaryIndex: full.forkBoundaryIndex,
                     msgCount: fullCursor,
                     baseOffset: Math.max(0, fullCursor - full.messages.length),
+                    initialUserText: full.initialUserText ?? initialUserTextRef.current,
                   });
                 })
                 .catch(() => { /* keep current view; next turn retries */ });
@@ -210,6 +229,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 forkBoundaryIndex: result.forkBoundaryIndex ?? forkBoundaryIndex,
                 msgCount: plan.cursor,
                 baseOffset: baseOffsetRef.current,
+                initialUserText: initialUserTextRef.current,
               });
             }
             // Advance cursor even on an empty delta (nothing new yet — archive lagging).
@@ -219,6 +239,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
             diagnoseOrdering('refetch-full', sid, result.messages);
             setMessages(result.messages);
             setForkBoundaryIndex(result.forkBoundaryIndex);
+            adoptInitialUserText(result.initialUserText);
             const fullCursor = result.cursor ?? result.messages.length;
             cursorRef.current = fullCursor;
             adoptOffset(result.messages.length, fullCursor, result.windowed);
@@ -227,6 +248,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
               forkBoundaryIndex: result.forkBoundaryIndex,
               msgCount: fullCursor,
               baseOffset: Math.max(0, fullCursor - result.messages.length),
+              initialUserText: result.initialUserText ?? initialUserTextRef.current,
             });
           }
         })
@@ -248,6 +270,10 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       cursorRef.current = cached.msgCount;
       baseOffsetRef.current = cached.baseOffset ?? 0;
       setOlderHidden(cached.baseOffset ?? 0);
+      // Hard adopt (not sticky): this branch also runs on session SWITCH, where
+      // the previous session's initial prompt must not leak through.
+      initialUserTextRef.current = cached.initialUserText;
+      setInitialUserText(cached.initialUserText);
       setLoading(false);
       // Offscreen column: show cache, skip the background SSH re-verify until visible.
       if (!enabled) return () => { cancelled = true; controller.abort(); };
@@ -269,12 +295,14 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           }
           setStale(null);
           diagnoseOrdering('cache-verify', sid, result.messages);
+          adoptInitialUserText(result.initialUserText);
           const fullCursor = result.cursor ?? result.messages.length;
           setHistoryCache(sessionId, {
             messages: result.messages,
             forkBoundaryIndex: result.forkBoundaryIndex,
             msgCount: fullCursor,
             baseOffset: Math.max(0, fullCursor - result.messages.length),
+            initialUserText: result.initialUserText ?? initialUserTextRef.current,
           });
           cursorRef.current = fullCursor;
           adoptOffset(result.messages.length, fullCursor, result.windowed);
@@ -298,6 +326,9 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     // Cache miss → normal Phase 1 (streams) → Phase 2 (full)
     setLoading(true);
     setPhase2Pending(true);
+    // Session switch without a cache entry: drop the previous session's prompt.
+    initialUserTextRef.current = undefined;
+    setInitialUserText(undefined);
 
     // Phase 1: Fast local read (streams file, ~1ms). Tail-sliced too — the
     // response has no cursor, so no offset bookkeeping; Phase 2 replaces it.
@@ -311,6 +342,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           setMessages(result.messages);
         }
         if (result.forkBoundaryIndex != null) setForkBoundaryIndex(result.forkBoundaryIndex);
+        adoptInitialUserText(result.initialUserText);
         setLoading(false); // Always clear loading — even if empty, don't block on Phase 2
       })
       .catch(() => {
@@ -341,6 +373,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 return;
               }
               setStale(null);
+              adoptInitialUserText(result.initialUserText);
               const fullCursor = result.cursor ?? result.messages.length;
               cursorRef.current = fullCursor;
               adoptOffset(result.messages.length, fullCursor, result.windowed);
@@ -350,6 +383,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 forkBoundaryIndex: result.forkBoundaryIndex,
                 msgCount: fullCursor,
                 baseOffset: Math.max(0, fullCursor - result.messages.length),
+                initialUserText: result.initialUserText ?? initialUserTextRef.current,
               });
             }
           })
@@ -396,6 +430,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           setStale(null);
           setMessages(result.messages);
           setForkBoundaryIndex(result.forkBoundaryIndex);
+          adoptInitialUserText(result.initialUserText);
           const fullCursor = result.cursor ?? result.messages.length;
           cursorRef.current = fullCursor;
           adoptOffset(result.messages.length, fullCursor, result.windowed);
@@ -404,6 +439,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
             forkBoundaryIndex: result.forkBoundaryIndex,
             msgCount: fullCursor,
             baseOffset: Math.max(0, fullCursor - result.messages.length),
+            initialUserText: result.initialUserText ?? initialUserTextRef.current,
           });
         })
         .catch(() => { /* transient — keep the banner, retry next tick */ });
@@ -429,6 +465,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
         if (result.stale) return; // keep the tail view; banner path handles it
         setMessages(result.messages);
         setForkBoundaryIndex(result.forkBoundaryIndex);
+        adoptInitialUserText(result.initialUserText);
         const fullCursor = result.cursor ?? result.messages.length;
         cursorRef.current = fullCursor;
         adoptOffset(result.messages.length, fullCursor, result.windowed);
@@ -437,11 +474,12 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           forkBoundaryIndex: result.forkBoundaryIndex,
           msgCount: fullCursor,
           baseOffset: Math.max(0, fullCursor - result.messages.length),
+          initialUserText: result.initialUserText ?? initialUserTextRef.current,
         });
       })
       .catch(() => { /* keep the tail view; user can retry */ })
       .finally(() => { loadingFullRef.current = false; setPhase2Pending(false); });
   }, [sessionId]);
 
-  return { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, loadFullHistory };
+  return { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, loadFullHistory, initialUserText };
 }

@@ -55,6 +55,7 @@ interface HistoryResponse {
   total?: number
   cursor?: number
   delta?: boolean
+  initialUserText?: string
 }
 
 async function history(sessionId: string, qs = ''): Promise<HistoryResponse> {
@@ -129,7 +130,7 @@ function padding(count: number): unknown[] {
   return out
 }
 
-const SIDS = ['e2e-whale', 'e2e-whale-anchored', 'e2e-small', 'e2e-agent-late', 'e2e-agent-settled', 'e2e-agent-empty-delta']
+const SIDS = ['e2e-whale', 'e2e-whale-anchored', 'e2e-small', 'e2e-agent-late', 'e2e-agent-settled', 'e2e-agent-empty-delta', 'e2e-initial-tail', 'e2e-initial-whale']
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -317,5 +318,37 @@ describe('history delta contract — mutable prefix (inc-1785965937858)', () => 
     expect(delta.delta).toBe(true)
     expect(delta.revisedMessages ?? []).toHaveLength(0)
     expect(delta.messages.length).toBeGreaterThan(0)
+  })
+})
+
+describe('history initialUserText — the pinned "Initial Prompt" bubble source', () => {
+  it('a ?tail= payload that drops the head still carries the TRUE first user message', async () => {
+    // The client renders a pinned "Initial Prompt" bubble above collapsed
+    // history. It used to fake it from the head of the tail-sliced window, so
+    // a whale session showed a RECENT message under that label. The server
+    // must ship the real head out-of-band.
+    const sid = 'e2e-initial-tail'
+    delete process.env.WALNUT_MAX_FILE_READ_BYTES
+    await writeJsonl(sid, [...padding(5), user('the newest question', 90), asst('the newest answer', 91)])
+
+    const res = await history(sid, '?tail=2')
+    expect(res.messages.length).toBe(2)
+    // The window head is NOT the session head…
+    expect(res.messages[0]!.text).not.toContain('old question 0')
+    // …but initialUserText is.
+    expect(res.initialUserText).toContain('old question 0')
+  })
+
+  it('a windowed (byte-ceiling) read omits initialUserText rather than lying', async () => {
+    // The sliding window evicted the real head — the array's first user row is
+    // mid-conversation. A confident wrong answer is worse than none: omit.
+    const sid = 'e2e-initial-whale'
+    await writeJsonl(sid, [...padding(60), user('the newest question', 90), asst('the newest answer', 91)])
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '4096'
+
+    const res = await history(sid)
+    expect(res.messages.length).toBeLessThan(122) // strict subset — head evicted
+    expect(res.initialUserText).toBeUndefined()
+    delete process.env.WALNUT_MAX_FILE_READ_BYTES
   })
 })

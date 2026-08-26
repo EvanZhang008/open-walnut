@@ -543,12 +543,15 @@ describe('GET /api/sessions/:sessionId/history', () => {
     const full = await request(app).get('/api/sessions/codex-history/history');
 
     expect(streams.status).toBe(200);
-    expect(streams.body).toEqual({ messages: projected, total: 2 });
+    expect(streams.body).toEqual({ messages: projected, total: 2, initialUserText: 'first exact prompt' });
     expect(full.status).toBe(200);
     expect(full.body.messages).toEqual(projected);
     expect(full.body.total).toBe(2);
     expect(full.body.cursor).toBe(2);
     expect(full.body.delta).toBe(false);
+    // True first user message rides out-of-band — the pinned "Initial Prompt"
+    // bubble source (a ?tail= slice may not contain it).
+    expect(full.body.initialUserText).toBe('first exact prompt');
   });
 
   it('full-rebuilds a Codex cursor when later chunks grow the same assistant message', async () => {

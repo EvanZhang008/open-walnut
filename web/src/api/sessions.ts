@@ -104,6 +104,11 @@ export interface SessionHistoryResult {
    *  message count, so olderHidden can't be computed from it — but older
    *  messages DO exist; show an uncounted "Load earlier" affordance. */
   windowed?: boolean;
+  /** The session's TRUE first user message (server computes it from the full
+   *  parse before tail-slicing). The pinned "Initial Prompt" bubble must use
+   *  this, never the head of the tail-sliced window. Absent on deltas and on
+   *  windowed/degraded payloads where the server doesn't hold the real head. */
+  initialUserText?: string;
 }
 
 /** Lazy history: first load fetches only the last N messages (server `?tail=`).
@@ -159,6 +164,7 @@ export async function fetchSessionHistory(
     staleReason?: string;
     historyUnavailable?: string;
     windowed?: boolean;
+    initialUserText?: string;
   }>(
     `/api/sessions/${sessionId}/history`, params, { signal: opts?.signal, timeoutMs },
   );
@@ -190,6 +196,7 @@ export async function fetchSessionHistory(
     stale: res.stale,
     staleReason: res.staleReason,
     windowed: res.windowed,
+    initialUserText: res.initialUserText,
   };
 }
 
