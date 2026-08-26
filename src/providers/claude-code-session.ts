@@ -8435,11 +8435,20 @@ export class SessionRunner {
             seen.add(current.id)
             current = await getTask(current.parent_task_id).catch(() => undefined)
           }
-          // Project metadata default_cwd
-          if (!cwd) {
-            const metadata = await getProjectMetadata(task.project || '')
-            if (metadata?.default_cwd) cwd = metadata.default_cwd as string
+          // Project metadata defaults. Host and cwd travel TOGETHER: a project
+          // whose default_cwd is a remote path pairs it with default_host, and
+          // adopting the path while dropping the host spawned "local Mac +
+          // remote-only cwd", which the local pre-flight then rightly refused
+          // (task_start via CLI, 2026-08-26). Mirrors resolveSessionContext():
+          // explicit caller host always wins; only undefined inherits.
+          const metadata = await getProjectMetadata(task.project || '')
+          // undefined = caller had no opinion; ''/'local'/'__local__' are
+          // explicit "run locally" choices and must not be overridden.
+          if (data.host === undefined && metadata?.default_host) {
+            data.host = metadata.default_host as string
+            log.session.info('handleStart: adopted project default_host', { taskId, host: data.host })
           }
+          if (!cwd && metadata?.default_cwd) cwd = metadata.default_cwd as string
           // Last resort: project memory directory (LOCAL sessions only).
           // For remote sessions, a local path won't exist on the remote host —
           // fail with a clear error instead of sending a bogus cwd.
@@ -8728,10 +8737,14 @@ export class SessionRunner {
             seen.add(current.id)
             current = await getTaskFn(current.parent_task_id).catch(() => undefined)
           }
-          if (!cwd) {
-            const metadata = await getProjectMetadata(task.project || '')
-            if (metadata?.default_cwd) cwd = metadata.default_cwd as string
+          // Same host+cwd pairing rule as handleStart: never adopt a project's
+          // default_cwd while dropping its default_host.
+          const metadata = await getProjectMetadata(task.project || '')
+          if (data.host === undefined && metadata?.default_host) {
+            data.host = metadata.default_host as string
+            log.session.info('handleStartSdk: adopted project default_host', { taskId, host: data.host })
           }
+          if (!cwd && metadata?.default_cwd) cwd = metadata.default_cwd as string
           if (!cwd) {
             if (data.host) {
               const projectLabel = task.project || 'Inbox'
