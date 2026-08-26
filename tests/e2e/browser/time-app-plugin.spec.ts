@@ -18,7 +18,7 @@ import { expect, test, type Page } from '@playwright/test'
  * What it pins, beyond "it renders":
  *
  *   1. Placement: the App declares `placement: 'settings'`, so there is NO Sidebar row
- *      and there IS a Settings → Manage row, which is what the test clicks. The Command
+ *      and there IS a Settings → Plugins row, which is what the test clicks. The Command
  *      Palette entry survives the move, and disabling the plugin takes the row away.
  *      The declaration is only a DEFAULT: the user can move the row either way from
  *      the plugin's own row in Settings → Plugins, live and durably.
@@ -103,7 +103,7 @@ async function openSettings(page: Page): Promise<void> {
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible({ timeout: 30_000 })
 }
 
-/** The app, opened the way a user opens it: Settings → Manage → Time. */
+/** The app, opened the way a user opens it: Settings → Plugins → Time. */
 async function openTimeApp(page: Page): Promise<void> {
   await page.goto(`http://127.0.0.1:${fixture!.port}/`)
   await page.waitForLoadState('domcontentloaded')
@@ -165,7 +165,7 @@ test.afterAll(async () => {
   if (!graceful) child.kill('SIGKILL')
 })
 
-test('the App declares its own surface: a Settings → Manage row, no Sidebar row', async ({ page }) => {
+test('the App declares its own surface: a Settings → Plugins row, no Sidebar row', async ({ page }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
 
@@ -190,7 +190,7 @@ test('the App declares its own surface: a Settings → Manage row, no Sidebar ro
   await page.keyboard.press('Escape')
   await composer.fill('')
 
-  // And it IS in the Manage group, beside Agents and Skills, as a real link.
+  // And it IS in the Plugins group, below Agents and Memory, as a real link.
   await openSettings(page)
   const row = page.getByTestId('settings-nav-app-walnut-time:main')
   await expect(row).toBeVisible({ timeout: 60_000 })

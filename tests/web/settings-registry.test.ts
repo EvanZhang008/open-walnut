@@ -30,12 +30,17 @@ describe('core settings registry', () => {
     expect(plugins!.title).toBe('Plugins')
   })
 
-  it('keeps the existing Manage and Configure split', () => {
+  it('keeps the Manage / Plugins / Configure split', () => {
     expect(CORE_SETTINGS_CONTRIBUTIONS
       .filter((entry) => entry.group === 'manage')
       .map((entry) => entry.id)).toEqual(['repositories', 'hooks'])
+    // The Plugins group holds everything plugin-shaped: this section anchors it,
+    // and the nav adds settings-placed plugin Apps + plugin settings panels to it.
+    expect(CORE_SETTINGS_CONTRIBUTIONS
+      .filter((entry) => entry.group === 'plugins')
+      .map((entry) => entry.id)).toEqual(['plugin-store'])
     expect(CORE_SETTINGS_CONTRIBUTIONS
       .filter((entry) => entry.group === 'configure')
-      .map((entry) => entry.id)).toEqual(EXPECTED_IDS.slice(2))
+      .map((entry) => entry.id)).toEqual(EXPECTED_IDS.slice(2).filter((id) => id !== 'plugin-store'))
   })
 })

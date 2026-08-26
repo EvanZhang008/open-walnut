@@ -11,7 +11,7 @@ import { expect, test, type Page } from '@playwright/test'
  *   1. The store lists what is actually on this machine (walnut-time, linked) AND
  *      catalog entries that are not (the fixture's git overlay entry) — one surface,
  *      two lists.
- *   2. The ON/OFF switch is real: turning walnut-time off takes its Settings → Manage
+ *   2. The ON/OFF switch is real: turning walnut-time off takes its Settings → Plugins
  *      row and its App away LIVE, and turning it back on brings them back. Before this
  *      section there was no UI that could do it at all (the old spec next door had to
  *      POST the disable route by hand, and said so).
@@ -232,7 +232,7 @@ test('the switch turns a plugin off and on, and off survives a restart', async (
   await expect(toggle).toHaveAttribute('aria-checked', 'true')
   await toggle.click()
 
-  // The row is owner-scoped, so the App's Settings → Manage entry goes away live.
+  // The row is owner-scoped, so the App's Settings → Plugins entry goes away live.
   await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toHaveCount(0, { timeout: 60_000 })
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toHaveCount(0)
   await expect(page.getByTestId('plugin-row-walnut-time')).toHaveAttribute('data-plugin-status', 'disabled')

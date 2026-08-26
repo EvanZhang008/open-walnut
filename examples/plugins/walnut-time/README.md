@@ -53,7 +53,7 @@ node packages/plugin-cli/dist/cli.js status --root examples/plugins/walnut-time 
 node packages/plugin-cli/dist/cli.js dev    --root examples/plugins/walnut-time   # rebuild + reload on save
 ```
 
-Once it is active, **Settings → Manage** grows a **Time** row pointing at `/apps/walnut-time~main`, beside Agents and Skills. The App declares `placement: 'settings'` for that reason: a day report is something you open now and then, and the Sidebar is for the surfaces you live in. Nothing else about the App changes: it is still a full page at its own route, still deep-linkable per tab, and still in the Command Palette as "Open Time".
+Once it is active, the **Settings → Plugins** group grows a **Time** row pointing at `/apps/walnut-time~main`, right below the Plugins section. The App declares `placement: 'settings'` for that reason: a day report is something you open now and then, and the Sidebar is for the surfaces you live in. Nothing else about the App changes: it is still a full page at its own route, still deep-linkable per tab, and still in the Command Palette as "Open Time".
 
 That declaration is only the default. Anyone who does open their day every morning can move the row into the sidebar from the plugin's row in **Settings → Plugins** (**Move to Sidebar**), and the same button moves it back.
 

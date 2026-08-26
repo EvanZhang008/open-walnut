@@ -302,7 +302,7 @@ Contribution fields:
 What the host derives for you, with no second registration:
 
 - **The route**: `/apps/<pluginId>~<appId>`, plus every subpath under it. You never declare a path, and you cannot collide with a Walnut route or another plugin.
-- **The entry row**: icon, title, and badge, in the Sidebar beside the Core Apps, or in Settings under Manage when the App asks for `placement: 'settings'`.
+- **The entry row**: icon, title, and badge, in the Sidebar beside the Core Apps, or in the Settings Plugins group when the App asks for `placement: 'settings'`.
 - **Deep links**: `/apps/my-plugin~main/history?tab=recent` opens your App with the rest of the URL handed to your component.
 - **A Command Palette entry**: `Open <title>`, refreshed whenever the App list changes.
 - **The badge channel**: `handle.setBadge(...)` updates the row live, on whichever surface it sits.
@@ -362,7 +362,7 @@ A badge is a number, `'dot'`, or `null`. A non-integer or negative number is ref
 
 ### Where the App's row lives
 
-An App declares which surface carries its entry row. The default, `'sidebar'`, puts it in the app sidebar next to Home and Tasks. `'settings'` puts it in Settings under the Manage group instead, in the same list as Agents, Skills, Commands, and Memory, and gives it no sidebar row at all.
+An App declares which surface carries its entry row. The default, `'sidebar'`, puts it in the app sidebar next to Home and Tasks. `'settings'` puts it in Settings under the Plugins group instead, right below the Plugins section that manages every installed plugin, and gives it no sidebar row at all.
 
 ```tsx compile=web-placement
 import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
@@ -383,7 +383,7 @@ export function activate(walnut: WalnutWebApi) {
 
 Nothing else changes: same route at `/apps/<pluginId>~<appId>`, same deep links, same Command Palette entry, same badge, same owner lifecycle. The Settings row is a real link that navigates to the App's own full-page route, so the App is never squeezed into a settings panel.
 
-Pick by how often the App is opened. The sidebar is for surfaces someone lives in all day and its length is the whole point: every row added there costs every other row a little attention. A report, an audit, an occasional tool belongs under Manage, where people already go looking for the things they configure and inspect. The shipped `walnut-time` example uses `'settings'` for exactly that reason.
+Pick by how often the App is opened. The sidebar is for surfaces someone lives in all day and its length is the whole point: every row added there costs every other row a little attention. A report, an audit, an occasional tool belongs in the Settings Plugins group, where people already go looking for the things they configure and inspect. The shipped `walnut-time` example uses `'settings'` for exactly that reason.
 
 **Your `placement` is the default, not the verdict.** Only the person using the sidebar knows whether your App belongs in it, so your plugin's row in Settings → Plugins lists each of its Apps with a **Move to Settings** / **Move to Sidebar** action. Their choice wins over yours, applies immediately, and survives a reload. Write the declaration as the answer that is right for most people and let the rest move it.
 

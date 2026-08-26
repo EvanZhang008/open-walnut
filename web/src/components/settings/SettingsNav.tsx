@@ -10,13 +10,18 @@ interface NavItem {
 }
 
 /**
- * The settings sidebar has TWO groups, split by what the entry IS rather than by
+ * The settings sidebar has THREE groups, split by what the entry IS rather than by
  * how it navigates:
  *
  * - Manage: browse-and-edit lists of things the AI uses (agents, skills, commands,
  *   memories, repos, hooks). Some are their own full pages (NavLink, marked with a
  *   chevron) and some are sections on this page (scroll button) — the group is about
  *   the content, not the mechanism.
+ * - Plugins: everything plugin-shaped in ONE place — the Plugins section (install,
+ *   on/off, configure), every plugin App that declared `placement: 'settings'` (a
+ *   page link from the SAME App Registry the app sidebar reads, so it appears and
+ *   disappears with the plugin's own lifecycle and needs no separate registration
+ *   channel; its badge rides the row), and any settings panel a plugin registered.
  * - Configure: the knobs. Every entry scrolls to a section here.
  *
  * Agents/Skills/Commands/Memory used to live in the app's main sidebar and turned it
@@ -25,11 +30,6 @@ interface NavItem {
  *
  * There is no "Memory" entry under Configure: the old MemorySection's entire body was
  * a button to /memory, which the Manage link above now is.
- *
- * A plugin App that declares `placement: 'settings'` joins the Manage group as one more
- * page link, from the SAME App Registry the app sidebar reads (`useAppCatalog`), which
- * is why it appears and disappears with the plugin's own lifecycle and needs no
- * separate registration channel. Its badge, if it set one, rides the row.
  */
 const MANAGE_PAGES: Array<{ to: string; label: string; testId: string }> = [
   { to: '/agents', label: 'Agents', testId: 'settings-nav-agents' },
@@ -40,6 +40,10 @@ const MANAGE_PAGES: Array<{ to: string; label: string; testId: string }> = [
 
 const MANAGE_SECTIONS: NavItem[] = CORE_SETTINGS_CONTRIBUTIONS
   .filter((entry) => entry.group === 'manage')
+  .map(({ id, label, divider }) => ({ id, label, divider }));
+
+const PLUGIN_SECTIONS: NavItem[] = CORE_SETTINGS_CONTRIBUTIONS
+  .filter((entry) => entry.group === 'plugins')
   .map(({ id, label, divider }) => ({ id, label, divider }));
 
 const NAV_ITEMS: NavItem[] = CORE_SETTINGS_CONTRIBUTIONS
@@ -81,6 +85,10 @@ export function SettingsNav({ activeSection, onNavigate }: SettingsNavProps) {
           {link.label}
         </NavLink>
       ))}
+      {MANAGE_SECTIONS.map(sectionButton)}
+      <div className="settings-nav-divider" />
+      <span className="settings-nav-group-label">Plugins</span>
+      {PLUGIN_SECTIONS.map(sectionButton)}
       {apps.settings.map((app) => (
         <NavLink
           key={`${app.key}:${app.generation}`}
@@ -97,20 +105,13 @@ export function SettingsNav({ activeSection, onNavigate }: SettingsNavProps) {
           ) : null}
         </NavLink>
       ))}
-      {MANAGE_SECTIONS.map(sectionButton)}
+      {pluginUi.settings.map((entry) => sectionButton({
+        id: entry.key,
+        label: entry.value.label,
+      }))}
       <div className="settings-nav-divider" />
       <span className="settings-nav-group-label">Configure</span>
       {NAV_ITEMS.map(sectionButton)}
-      {pluginUi.settings.length > 0 && (
-        <>
-          <div className="settings-nav-divider" />
-          <span className="settings-nav-group-label">Plugins</span>
-          {pluginUi.settings.map((entry) => sectionButton({
-            id: entry.key,
-            label: entry.value.label,
-          }))}
-        </>
-      )}
     </nav>
   );
 }
