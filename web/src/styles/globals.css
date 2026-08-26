@@ -6696,6 +6696,66 @@ select {
 .chat-plus-menu-item svg { color: var(--fg-muted); flex-shrink: 0; }
 .chat-send-menu-item.danger { color: var(--error); }
 
+/* "+" menu Shortcuts section: the composer's special-command index. */
+.chat-plus-menu-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+.chat-plus-menu-label {
+  padding: 4px 10px 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.chat-plus-menu-key {
+  flex-shrink: 0;
+  min-width: 22px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  text-align: center;
+}
+
+/* "Sent to @xxxx …" confirmation above the composer after a routed
+   (@<session> message) send — the reply lands in the OTHER session, so this
+   strip is the only local evidence the send happened. */
+.session-routed-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 4px 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  min-width: 0;
+}
+.session-routed-notice > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.session-routed-notice strong { color: var(--fg); }
+.session-routed-notice-dismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
 /* ── Send button (accent circle) + optional ghost "▾" menu ──
    Claude-app style: send is the ONLY filled control in the composer — a
    solid accent circle. The menu caret is a naked chevron beside it, not a
@@ -10103,6 +10163,30 @@ body.walnut-dragging {
   cursor: pointer;
   transition: background 0.15s;
   touch-action: none;
+  /* Offscreen rows skip layout+paint entirely — with thousands of mounted rows
+     this is the difference between "blank page while scrolling" and smooth
+     scroll. `auto 32px` = estimated row height before first render; once a row
+     has rendered the browser remembers its real size, keeping the scrollbar
+     stable.
+
+     Known hazard class (inc-1786603990062, notes tree): content-visibility on
+     rows once caused scroll teleports when the estimate diverged wildly from
+     real heights. This scroller differs — scroll anchoring stays live and the
+     `auto` keyword keeps each row's REMEMBERED size after first render — but
+     the min-height below still pins the floor so an unrendered row can never
+     collapse under its estimate. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 32px;
+  min-height: 26px;
+}
+
+/* The dnd-kit drag overlay clone renders OUTSIDE the scroller (fixed overlay);
+   content-visibility there can blank the dragged row mid-flight because the
+   browser considers it offscreen relative to its containing block. */
+.drag-overlay-item.todo-panel-item,
+.todo-panel-item.drag-overlay-item {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
 }
 
 /* Replace browser focus ring with subtle bg on sortable items (DnD adds tabIndex/role) */

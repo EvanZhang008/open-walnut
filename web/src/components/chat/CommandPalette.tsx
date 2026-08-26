@@ -32,6 +32,7 @@ const SOURCE_LABELS: Record<string, string> = {
   plugin: 'Plugin',        // Registered by an active plugin (`<pluginId>:<id>`)
   app: 'App',
   control: 'Control',
+  session: 'Session',
 };
 
 export function CommandPalette<T extends PaletteItem = SlashCommand>({ commands, selectedIndex, onSelect, showSource, onRefresh, refreshing }: CommandPaletteProps<T>) {

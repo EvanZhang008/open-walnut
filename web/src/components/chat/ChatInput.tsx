@@ -7,6 +7,14 @@ import { MAX_QUEUE_SIZE } from '@/hooks/useChat';
 import { CommandPalette, type PaletteItem } from './CommandPalette';
 import { detectSlashCommand } from './slash-trigger';
 import { FileMentionPopup, type FileMentionHandle } from './FileMentionPopup';
+import {
+  BROWSE_FILES_ITEM,
+  formatSessionRef,
+  sessionToPaletteItem,
+  shouldTriggerSessionMention,
+  type SessionMentionCandidate,
+  type SessionPaletteItem,
+} from './session-mention';
 import type { Task } from '@open-walnut/core';
 import { StatusBadge } from '../common/StatusBadge';
 import { MicButton } from '../common/MicButton';
@@ -88,6 +96,10 @@ interface ChatInputProps {
   mentionCwd?: string;
   /** SSH host for "@" mentions (undefined = local). */
   mentionHost?: string;
+  /** When set, "@" at the very START of the input opens a session picker
+   *  instead of the file browser (Claude Code's `@name message` direct-message
+   *  convention). The callback fuzzy-searches the user's sessions. */
+  searchMentionSessions?: (q: string) => Promise<SessionMentionCandidate[]>;
   /** External prefill: text to drop into the input (e.g. an agent-builder template). */
   prefillText?: string;
   /** Bump this (monotonic, >0) to apply prefillText — replaces the input + focuses,
@@ -104,7 +116,7 @@ interface ChatInputProps {
   onValueChange?: (text: string) => void;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, prefillText, prefillNonce, controlsSlot, onValueChange }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, searchMentionSessions, prefillText, prefillNonce, controlsSlot, onValueChange }: ChatInputProps) {
   const [value, setValue] = useState(() => {
     if (!draftKey) return '';
     try { return localStorage.getItem(draftKey) ?? ''; } catch { return ''; }
@@ -351,6 +363,57 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     mentionOpenRef.current = false;
   }, []);
 
+  // "@" SESSION mention state (line-start "@" only; see session-mention.ts).
+  // Shares the mentionAtIndexRef/mentionEndRef span with the file popup — the
+  // two popups are mutually exclusive, and both bracket the same "@query".
+  const [sessionMentionOpen, setSessionMentionOpen] = useState(false);
+  const [sessionMentionItems, setSessionMentionItems] = useState<PaletteItem[]>([BROWSE_FILES_ITEM]);
+  const [sessionMentionIndex, setSessionMentionIndex] = useState(0);
+  const sessionMentionOpenRef = useRef(false);
+  sessionMentionOpenRef.current = sessionMentionOpen;
+  // Ref mirror for keyboard nav (same stale-closure reasoning as paletteRef).
+  const sessionMentionStateRef = useRef({ items: [BROWSE_FILES_ITEM] as PaletteItem[], index: 0 });
+  useLayoutEffect(() => {
+    sessionMentionStateRef.current = { items: sessionMentionItems, index: sessionMentionIndex };
+  }, [sessionMentionItems, sessionMentionIndex]);
+  // "@" the user routed to the FILE browser via "Browse files…" — that same "@"
+  // won't reopen the session picker (cleared when the "@" goes away).
+  const sessionMentionOptOutAtRef = useRef<number>(-1);
+  // Debounced search: seq guards against out-of-order responses.
+  const sessionSearchTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const sessionSearchSeqRef = useRef(0);
+
+  const closeSessionMention = useCallback(() => {
+    clearTimeout(sessionSearchTimerRef.current);
+    sessionSearchSeqRef.current++;
+    setSessionMentionOpen(false);
+    setSessionMentionItems([BROWSE_FILES_ITEM]);
+    setSessionMentionIndex(0);
+    sessionMentionOpenRef.current = false;
+  }, []);
+
+  const openSessionMention = useCallback((query: string) => {
+    if (!searchMentionSessions) return;
+    setSessionMentionOpen(true);
+    sessionMentionOpenRef.current = true;
+    setSessionMentionIndex(0);
+    clearTimeout(sessionSearchTimerRef.current);
+    const seq = ++sessionSearchSeqRef.current;
+    sessionSearchTimerRef.current = setTimeout(() => {
+      searchMentionSessions(query).then((sessions) => {
+        if (seq !== sessionSearchSeqRef.current) return; // stale response
+        const rows: PaletteItem[] = [
+          ...sessions.map(sessionToPaletteItem),
+          ...(mentionCwd ? [BROWSE_FILES_ITEM] : []),
+        ];
+        if (rows.length === 0) { closeSessionMention(); return; }
+        setSessionMentionItems(rows);
+        setSessionMentionIndex((i) => Math.min(i, rows.length - 1));
+        sessionMentionStateRef.current = { items: rows, index: Math.min(sessionMentionStateRef.current.index, rows.length - 1) };
+      }).catch(() => { /* search is best-effort — the Browse files row remains */ });
+    }, 150);
+  }, [searchMentionSessions, mentionCwd, closeSessionMention]);
+
   const processFiles = useCallback((files: FileList | File[]) => {
     // Start the FileReader OUTSIDE any setState updater. The reader is a side effect;
     // React invokes state updaters more than once (always in StrictMode, and possibly
@@ -409,6 +472,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     setImages([]);
     closePalette();
     closeMention();
+    closeSessionMention();
+    sessionMentionOptOutAtRef.current = -1;
     // Clear the "/" span + Esc-dismissal memory — a new message starts fresh
     // (otherwise a dismissed "/" at index 0 would suppress the next palette).
     slashIndexRef.current = -1;
@@ -579,12 +644,67 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     });
   }, [value, saveDraft]);
 
+  // Session mention pick: a session row splices "@<short8> " over the "@query"
+  // span; the "Browse files…" row re-routes this same "@" to the file popup.
+  const handleSelectSessionMention = useCallback((item: PaletteItem) => {
+    const at = mentionAtIndexRef.current;
+    const end = mentionEndRef.current;
+    if (item === BROWSE_FILES_ITEM || item.source === 'control') {
+      sessionMentionOptOutAtRef.current = at;
+      closeSessionMention();
+      if (mentionEnabled && at >= 0) {
+        setMentionQuery(value.slice(at + 1, end >= at ? end : value.length));
+        setMentionOpen(true);
+        mentionOpenRef.current = true;
+      }
+      return;
+    }
+    const sessionId = (item as SessionPaletteItem).sessionId;
+    if (!sessionId || at < 0 || end < at) { closeSessionMention(); return; }
+    const ref = formatSessionRef(sessionId);
+    const newValue = value.slice(0, at) + ref + value.slice(end);
+    setValue(newValue);
+    saveDraft(newValue);
+    closeSessionMention();
+    const newCaret = at + ref.length;
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (ta) {
+        ta.focus();
+        ta.setSelectionRange(newCaret, newCaret);
+      }
+    });
+  }, [value, saveDraft, closeSessionMention, mentionEnabled]);
+
   const handleKeyDown = (e: KeyboardEvent) => {
     // Shift+Tab: caller-defined mode cycle (sessions: permission mode)
     if (e.key === 'Tab' && e.shiftKey) {
       e.preventDefault();
       onToggleMode?.();
       return;
+    }
+
+    // Session mention palette keyboard nav (mutually exclusive with the file
+    // popup and the "/" palette): ↑/↓ move · Enter/Tab pick · → browse files ·
+    // Esc dismiss (remembers the "@" so it doesn't instantly reopen).
+    if (sessionMentionOpenRef.current) {
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+      const st = sessionMentionStateRef.current;
+      if (e.key === 'ArrowDown') { e.preventDefault(); setSessionMentionIndex((st.index + 1) % st.items.length); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setSessionMentionIndex((st.index - 1 + st.items.length) % st.items.length); return; }
+      if (e.key === 'ArrowRight') { e.preventDefault(); handleSelectSessionMention(BROWSE_FILES_ITEM); return; }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        mentionDismissedAtRef.current = mentionAtIndexRef.current;
+        closeSessionMention();
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const item = st.items[st.index];
+        if (item) handleSelectSessionMention(item);
+        return;
+      }
     }
 
     // "@" file mention popup keyboard nav (takes priority over command palette;
@@ -672,10 +792,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     handleInput();
     saveDraft(newValue);
 
-    // "@" file mention detection: caret follows an "@" (at start or after whitespace)
-    // with no whitespace in between. The text after "@" is interpreted as a path
-    // (navigate + filter) by the popup.
-    if (mentionEnabled) {
+    // "@" mention detection: caret follows an "@" (at start or after whitespace)
+    // with no whitespace in between. A line-START "@" opens the SESSION picker
+    // (Claude Code's `@name message` direct-message convention) when the caller
+    // provided a session search; any other "@" is a file reference.
+    if (mentionEnabled || searchMentionSessions) {
       const caret = textareaRef.current?.selectionStart ?? newValue.length;
       const m = detectMention(newValue, caret);
       if (m) {
@@ -688,13 +809,27 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         mentionDismissedAtRef.current = -1; // a live "@" — clear any stale dismissal
         mentionAtIndexRef.current = m.atIndex;
         mentionEndRef.current = caret; // end of the "@query" span = current caret
-        setMentionQuery(m.query);
-        setMentionOpen(true);
-        mentionOpenRef.current = true;
+        const wantSessions = !!searchMentionSessions
+          && shouldTriggerSessionMention(m.atIndex, m.query)
+          && m.atIndex !== sessionMentionOptOutAtRef.current;
+        if (wantSessions) {
+          if (mentionOpenRef.current) closeMention();
+          openSessionMention(m.query);
+          return; // "@" and "/" are mutually exclusive triggers
+        }
+        if (sessionMentionOpenRef.current) closeSessionMention();
+        if (m.atIndex !== sessionMentionOptOutAtRef.current) sessionMentionOptOutAtRef.current = -1;
+        if (mentionEnabled) {
+          setMentionQuery(m.query);
+          setMentionOpen(true);
+          mentionOpenRef.current = true;
+        }
         return; // "@" and "/" are mutually exclusive triggers
       }
       mentionDismissedAtRef.current = -1; // no active "@" — reset dismissal memory
+      sessionMentionOptOutAtRef.current = -1;
       if (mentionOpenRef.current) closeMention();
+      if (sessionMentionOpenRef.current) closeSessionMention();
     }
 
     // Slash command detection: the caret follows a "/" at the input start or after
@@ -775,6 +910,27 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     fileInputRef.current?.click();
   };
 
+  // "+" menu Shortcuts: insert a special-command trigger and run the same
+  // detection typing it would. setRangeText mutates the DOM value + caret
+  // first, so handleChange (which reads selectionStart) sees the real caret.
+  const insertShortcut = (trigger: string, opts?: { lineStart?: boolean; fileMention?: boolean }) => {
+    setPlusOpen(false);
+    const el = textareaRef.current;
+    if (!el) return;
+    el.focus();
+    const caret = opts?.lineStart ? 0 : (el.selectionStart ?? el.value.length);
+    const before = el.value.slice(0, caret);
+    const needSpace = !opts?.lineStart && before.length > 0 && !/\s$/.test(before);
+    const inserted = (needSpace ? ' ' : '') + trigger;
+    el.setSelectionRange(caret, caret);
+    el.setRangeText(inserted, caret, caret, 'end');
+    // "Reference a file" must open the FILE popup even at line start where the
+    // session picker would otherwise claim the "@".
+    const atIndex = caret + (needSpace ? 1 : 0);
+    sessionMentionOptOutAtRef.current = opts?.fileMention ? atIndex : -1;
+    handleChange(el.value);
+  };
+
   const handleFileChange = () => {
     const files = fileInputRef.current?.files;
     if (files && files.length > 0) {
@@ -832,6 +988,14 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           showSource={isSessionMode}
           onRefresh={isSessionMode && onRefreshSessionCommands ? handleRefreshCommands : undefined}
           refreshing={refreshing}
+        />
+      )}
+      {sessionMentionOpen && (
+        <CommandPalette
+          commands={sessionMentionItems}
+          selectedIndex={sessionMentionIndex}
+          onSelect={handleSelectSessionMention}
+          showSource
         />
       )}
       {mentionOpen && mentionCwd && (
@@ -949,6 +1113,62 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                 </svg>
                 <span>{images.length >= MAX_IMAGES ? 'Image limit reached' : 'Attach image'}</span>
               </button>
+              {/* Shortcuts — the discoverable index of the composer's special
+                  commands (each row inserts its trigger and opens its picker). */}
+              {(searchMentionSessions || mentionCwd || showCommands || isSessionMode) && (
+                <>
+                  <div className="chat-plus-menu-divider" role="separator" />
+                  <div className="chat-plus-menu-label">Shortcuts</div>
+                  {searchMentionSessions && (
+                    <button
+                      className="chat-plus-menu-item"
+                      onClick={() => insertShortcut('@', { lineStart: true })}
+                      type="button"
+                      role="menuitem"
+                      title="Type @ at the start of the message to pick a session; the message goes to it instead of this one"
+                    >
+                      <span className="chat-plus-menu-key">@</span>
+                      <span>Message another session</span>
+                    </button>
+                  )}
+                  {mentionCwd && (
+                    <button
+                      className="chat-plus-menu-item"
+                      onClick={() => insertShortcut('@', { fileMention: true })}
+                      type="button"
+                      role="menuitem"
+                      title="Type @ to browse and reference a file"
+                    >
+                      <span className="chat-plus-menu-key">@</span>
+                      <span>Reference a file</span>
+                    </button>
+                  )}
+                  {mentionCwd && (
+                    <button
+                      className="chat-plus-menu-item"
+                      onClick={() => insertShortcut('@?', { fileMention: true })}
+                      type="button"
+                      role="menuitem"
+                      title="Type @? to fuzzy-search recently opened folders"
+                    >
+                      <span className="chat-plus-menu-key">@?</span>
+                      <span>Recent folders</span>
+                    </button>
+                  )}
+                  {(showCommands || isSessionMode) && (
+                    <button
+                      className="chat-plus-menu-item"
+                      onClick={() => insertShortcut('/')}
+                      type="button"
+                      role="menuitem"
+                      title="Type / to browse commands and skills"
+                    >
+                      <span className="chat-plus-menu-key">/</span>
+                      <span>Commands</span>
+                    </button>
+                  )}
+                </>
+              )}
             </div>
           )}
         </div>

@@ -30,7 +30,9 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
-import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, terminateSession, investigateSession, setSessionEffort, setSessionModel, setCodexSessionModel } from '@/api/sessions';
+import { fetchSession, searchSessions, executePlanContinue, executePlanSession, updateSession, restartSession, terminateSession, investigateSession, setSessionEffort, setSessionModel, setCodexSessionModel } from '@/api/sessions';
+import { parseSessionDirective, type SessionMentionCandidate } from '@/components/chat/session-mention';
+import { buildImageRefsPayload } from '@/api/image-upload';
 import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
 import { runWhenVisible } from '@/utils/page-visibility';
@@ -1023,7 +1025,53 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     }
   });
 
-  const handleSend = useCallback((message: string, images?: ImageAttachment[]) => {
+  // "@<session> message" routing (Claude Code's direct-message convention): a
+  // leading @ + id prefix resolved to another session sends THERE, not here.
+  // Resolution is server-side (unique-prefix or nothing — 409 on ambiguity), so
+  // an unresolvable ref falls through to a normal send and no text is lost.
+  const [routedNotice, setRoutedNotice] = useState<{ shortId: string; title: string } | null>(null);
+  const routedNoticeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(routedNoticeTimerRef.current), []);
+
+  const searchMentionSessions = useCallback(async (q: string): Promise<SessionMentionCandidate[]> => {
+    const rows = await searchSessions(q, 12);
+    return rows
+      .filter((r) => r.claudeSessionId !== sessionId && !r.archived)
+      .slice(0, 6)
+      .map((r) => ({
+        id: r.claudeSessionId,
+        title: r.title || '',
+        host: r.host || '',
+        status: r.process_status || '',
+      }));
+  }, [sessionId]);
+
+  const handleSend = useCallback(async (message: string, images?: ImageAttachment[]) => {
+    const directive = parseSessionDirective(message);
+    if (directive) {
+      let target = null;
+      try {
+        target = await fetchSession(directive.ref);
+      } catch { /* ambiguous prefix / transient — treat as unresolved */ }
+      if (target && target.claudeSessionId !== sessionId) {
+        try {
+          const res = await wsClient.sendRpc<{ messageId: string }>('session:send', {
+            sessionId: target.claudeSessionId,
+            message: directive.body,
+            ...(await buildImageRefsPayload(images)),
+          });
+          if (res?.messageId) {
+            setRoutedNotice({ shortId: target.claudeSessionId.slice(0, 8), title: target.title || '(untitled)' });
+            clearTimeout(routedNoticeTimerRef.current);
+            routedNoticeTimerRef.current = setTimeout(() => setRoutedNotice(null), 6000);
+            return true;
+          }
+          return false;
+        } catch {
+          return false; // ChatInput restores the draft on false
+        }
+      }
+    }
     return send(sessionId, message, images);
   }, [sessionId, send]);
 
@@ -1777,6 +1825,20 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               <span className="session-recap-tip-text">{session.recap}</span>
             </div>
           )}
+          {routedNotice && (
+            <div className="session-routed-notice" role="status">
+              <span aria-hidden="true">↗</span>
+              <span>Sent to <strong>@{routedNotice.shortId}</strong> {routedNotice.title}</span>
+              <button
+                type="button"
+                className="session-routed-notice-dismiss"
+                aria-label="Dismiss"
+                onClick={() => setRoutedNotice(null)}
+              >
+                &times;
+              </button>
+            </div>
+          )}
           <ChatInput
             controlsSlot={session ? (() => {
               // Mode toggle uses session.mode only (not planCompleted) — planCompleted
@@ -1840,6 +1902,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             onControlCommand={handleControlCommand}
             mentionCwd={session?.cwd}
             mentionHost={session?.host}
+            searchMentionSessions={searchMentionSessions}
             draftKey={`draft:session:${sessionId}`}
             prefillText={prefillText}
             prefillNonce={prefillNonce}
