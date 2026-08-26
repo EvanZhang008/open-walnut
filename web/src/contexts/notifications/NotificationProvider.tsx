@@ -83,6 +83,9 @@ const NotificationContext = createContext<NotificationContextValue | null>(null)
  *  interval (30min) so a persistent failure toasts about twice an hour, not 36x. */
 const AGENT_ERROR_TOAST_THROTTLE_MS = 10 * 60 * 1000;
 
+/** Min gap between toasts sharing one causeKey (see notify()). */
+const CAUSE_TOAST_THROTTLE_MS = 5 * 60 * 1000;
+
 /** Server feed record shape from GET /api/notifications (and the WS twins).
  *  Everything below `resolved` is server enrichment — absent on records written
  *  before that half deployed, so every reader treats it as optional.
@@ -101,6 +104,8 @@ export interface FeedRecord {
   taskId?: string;
   resolved?: 'allowed' | 'denied' | 'expired' | 'recovered';
   recoveryKey?: string;
+  /** the root cause this error shares with other conditions (`host:<alias>`). */
+  causeKey?: string;
   /** humanizer output: the family the Errors rail groups by. */
   category?: string;
   /** humanizer output: the raw technical line, behind the card's Details toggle. */
@@ -129,6 +134,7 @@ function enrichmentOf(r: FeedRecord): Partial<Notification> {
     ...(r.reason ? { reason: r.reason } : {}),
     ...(r.acpOptions ? { acpOptions: r.acpOptions } : {}),
     ...(r.recoveryKey ? { recoveryKey: r.recoveryKey } : {}),
+    ...(r.causeKey ? { causeKey: r.causeKey } : {}),
     ...(r.category ? { category: r.category } : {}),
     ...(r.detail ? { detail: r.detail } : {}),
     ...(r.host ? { host: r.host } : {}),
@@ -158,6 +164,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const toastDedup = useRef(new Set<string>());
   /** agent:error → last toast time per dedupKey (see AGENT_ERROR_TOAST_THROTTLE_MS). */
   const errorToastAt = useRef(new Map<string, number>());
+  /** causeKey → last toast time (see the same-cause suppression in notify()). */
+  const causeToastAt = useRef(new Map<string, number>());
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   // dedupKeys the user dismissed this session — a slow initial GET resolving
   // after a dismiss must not resurrect the entry via the merge below.
@@ -207,7 +215,18 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // Toast policy: only what needs a human NOW interrupts (permissions, hard
     // errors, hooks, the two ephemeral kinds). Routine automation — a cron run,
     // a new skill — lands in the feed + bell badge with no toast.
-    const shouldToast = SHOULD_TOAST(input);
+    let shouldToast = SHOULD_TOAST(input);
+
+    // Same-cause suppression: one outage fans out into several DISTINCT cards
+    // (a task's session start, a route 5xx, a delivery failure), each with its
+    // own dedupKey — so toast-level dedup never catches them and the user got a
+    // stack of toasts for one interruption. The causeKey is what says "same
+    // interruption", so only the first card of a cause toasts per window. The
+    // feed still gets every card.
+    const causeKey = input.kind === 'operation-error' ? input.causeKey : undefined;
+    if (causeKey && Date.now() - (causeToastAt.current.get(causeKey) ?? 0) < CAUSE_TOAST_THROTTLE_MS) {
+      shouldToast = false;
+    }
 
     // Toast-level dedup: don't re-show the same dedupKey while it's live. Only
     // toastable inputs consult/claim the key — a feed-only entry has no toast
@@ -215,6 +234,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (shouldToast) {
       if (toastDedup.current.has(input.dedupKey)) return;
       toastDedup.current.add(input.dedupKey);
+      // Stamped where the toast is actually committed, so a suppressed-by-dedup
+      // input never starts the cause window on behalf of a toast nobody saw.
+      if (causeKey) causeToastAt.current.set(causeKey, Date.now());
     }
 
     const id = input.id ?? `notif-${crypto.randomUUID()}`;

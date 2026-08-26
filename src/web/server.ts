@@ -128,6 +128,7 @@ import { hooksRouter } from './routes/hooks.js'
 import { addNotification as addFeedNotification, upsertNotification as upsertFeedNotification, resolvePermissionNotification, recoverNotifications } from '../core/notifications/store.js'
 import { createRecoveryTransitionTracker } from '../core/notifications/recovery-transition.js'
 import { humanizeErrorNotification } from '../core/notifications/humanize.js'
+import { causeKeyForError, hostCauseKey } from '../core/notifications/error-cause.js'
 import { releaseAbsorbedKeys } from '../core/notifications/log-error-bridge.js'
 import { compactPermissionInput, summarizePermissionRequest } from '../core/notifications/permission-detail.js'
 import { redactSensitiveText } from '../logging/redact.js'
@@ -195,11 +196,12 @@ export function setErrorNotificationRepeatTtlMs(ms: number): void {
   errorNotificationScopeRecoveryKeys.clear()
 }
 const errorNotificationRecentScopes = new Map<string, number>()
-/** dedupScope → recoveryKey, for the scopes that carry one. publishRecovery needs
- *  the reverse direction (a recovering key must release its scopes' absorbers)
- *  and the absorber map itself is keyed by scope, so the mapping is recorded here
- *  as each notification is published rather than re-derived by string surgery. */
-const errorNotificationScopeRecoveryKeys = new Map<string, string>()
+/** dedupScope → the keys a recovery can arrive by (recoveryKey and/or causeKey).
+ *  publishRecovery needs the reverse direction (a recovering key must release
+ *  its scopes' absorbers) and the absorber map itself is keyed by scope, so the
+ *  mapping is recorded here as each notification is published rather than
+ *  re-derived by string surgery. */
+const errorNotificationScopeRecoveryKeys = new Map<string, string[]>()
 
 /**
  * Permission requestIds already persisted to the durable feed.
@@ -274,6 +276,11 @@ async function publishErrorNotification(input: {
   // both fields would render the same sentence twice (once inline, once behind
   // the toggle).
   const detail = body === rawBody ? undefined : rawBody
+  // The ROOT CAUSE this failure shares with other conditions (a host's SSH/
+  // daemon link down), derived from the producer's own words — this path has no
+  // structured host, but the connectivity error shapes always name theirs.
+  // A daemon reconnect then retires the whole fan-out via publishRecovery.
+  const causeKey = causeKeyForError({ text: `${input.title}\n${plainBody}` })
   // Scope-only key (no body hash): one failing thing = ONE feed entry that folds
   // its repeats. Hashing the body used to split "same outage, slightly different
   // message" into a pile of near-identical cards.
@@ -292,11 +299,13 @@ async function publishErrorNotification(input: {
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       ...(input.taskId ? { taskId: input.taskId } : {}),
       ...(input.recoveryKey ? { recoveryKey: input.recoveryKey } : {}),
+      ...(causeKey ? { causeKey } : {}),
     })
     // Armed only after the write landed — a failed persist must not silence this
     // failure for a full TTL window with nothing durable to show for it.
     errorNotificationRecentScopes.set(input.dedupScope, timestamp)
-    if (input.recoveryKey) errorNotificationScopeRecoveryKeys.set(input.dedupScope, input.recoveryKey)
+    const releaseKeys = [input.recoveryKey, causeKey].filter((k): k is string => !!k)
+    if (releaseKeys.length > 0) errorNotificationScopeRecoveryKeys.set(input.dedupScope, releaseKeys)
     // 'inserted' → a new card; 'refreshed' → the same card with a live count and
     // the latest body, so connected UIs patch in place instead of re-toasting.
     broadcastEvent(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record)
@@ -339,8 +348,8 @@ export async function publishRecovery(keys: string[]): Promise<number> {
     // absorber would swallow the RE-failure and leave the card sitting green
     // ('recovered', severity info) while the thing is broken again. Recovery is
     // exactly the moment that suppression stops being correct.
-    for (const [scope, key] of errorNotificationScopeRecoveryKeys) {
-      if (!keys.includes(key)) continue
+    for (const [scope, scopeKeys] of errorNotificationScopeRecoveryKeys) {
+      if (!scopeKeys.some(k => keys.includes(k))) continue
       errorNotificationRecentScopes.delete(scope)
       errorNotificationScopeRecoveryKeys.delete(scope)
     }
@@ -517,6 +526,11 @@ let controlQueueFlushHandle: { stop: () => void } | null = null
 let sendQueueFlushHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
 let claudeSettingsWatcherStop: (() => void) | null = null
+/** Unhooks the host-connected → publishRecovery listener (daemon-connection's
+ *  listener set is module-global, so an in-process restart must not stack them). */
+let unsubscribeHostRecovery: (() => void) | null = null
+/** Daily error-notification reconcile (expiry + settled-receipt prune). */
+let notificationReconcileTimer: ReturnType<typeof setInterval> | null = null
 // Pending deferred-markDone timers from the session:status-changed handler.
 // Hoisted to module scope so stopServer() can cancel them before teardown,
 // otherwise a late-firing timer could mutate sessionStreamBuffer after the
@@ -2510,9 +2524,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // keyless record written before recoveryKey existed (nothing to signal
         // against). Both are stamped 'expired' here — see expireStaleErrorNotifications.
         const errors = await expireStaleErrorNotifications()
-        if (errors.deadSession > 0 || errors.keylessDebris > 0) {
+        if (errors.deadSession > 0 || errors.keylessDebris > 0 || errors.prunedResolved > 0) {
           log.web.info('startup: expired unresolvable error notifications', errors)
         }
+        // The same reconcile, daily: a long-lived server (the cloud replica
+        // runs for weeks) would otherwise never age out settled receipts or
+        // newly-dead sessions between boots. Cheap — every sweep has a
+        // lock-free pre-check, so a quiet day costs three file reads.
+        notificationReconcileTimer = setInterval(() => {
+          expireStaleErrorNotifications().catch(() => {})
+        }, 24 * 60 * 60 * 1000)
+        notificationReconcileTimer.unref?.()
       })
       .catch(err => log.web.warn('startup: pendingPermission heal failed', {
         error: err instanceof Error ? err.message : String(err),
@@ -2566,8 +2588,22 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // every DaemonConnection state-change into a system:health broadcast so the UI reflects
   // live connected/disconnected transitions without a page reload.
   {
-    const { setOnDaemonStatusChange, getDaemonPoolStatus } = await import('../providers/daemon-connection.js')
+    const { setOnDaemonStatusChange, getDaemonPoolStatus, addOnDaemonHostConnected } = await import('../providers/daemon-connection.js')
     const { getConfig } = await import('../core/config-manager.js')
+    // Host link restored → retire every error card that outage produced, across
+    // conditions (`task:…` session-start failures, `route:…` 5xx cards,
+    // `session:…` delivery failures all share the `host:<alias>` causeKey).
+    // setConnected(true) fires on TRANSITIONS only, so this is already
+    // edge-gated; recoverNotifications' lock-free pre-check makes the common
+    // "healthy reconnect, nothing to retire" case a single file read.
+    // Release a previous registration first: a second in-process startServer()
+    // would otherwise orphan the old listener AND let its stopServer() remove
+    // the new one.
+    unsubscribeHostRecovery?.()
+    unsubscribeHostRecovery = addOnDaemonHostConnected((hostKey) => {
+      if (hostKey === '__local__') return
+      void publishRecovery([hostCauseKey(hostKey)])
+    })
     setOnDaemonStatusChange(async () => {
       try {
         const config = await getConfig()
@@ -4670,6 +4706,14 @@ export async function stopServer(): Promise<void> {
   if (heartbeatHandle) {
     heartbeatHandle.stop()
     heartbeatHandle = null
+  }
+  if (unsubscribeHostRecovery) {
+    unsubscribeHostRecovery()
+    unsubscribeHostRecovery = null
+  }
+  if (notificationReconcileTimer) {
+    clearInterval(notificationReconcileTimer)
+    notificationReconcileTimer = null
   }
   // Close /api/v1 SSE streams so open connections + ping timers don't keep
   // the HTTP server alive (tests / graceful shutdown).

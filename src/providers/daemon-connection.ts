@@ -3232,6 +3232,20 @@ export function setOnDaemonHostConnected(cb: (hostKey: string) => void): void {
   onHostConnected = cb
 }
 
+/**
+ * ADDITIVE host-connected listeners, for observers beyond SessionRunner's
+ * single-subscriber slot above (which stays reserved for message redelivery —
+ * see its doc). server.ts uses this to retire `host:<alias>` error
+ * notifications the moment the outage that produced them ends. Returns an
+ * unsubscribe so an in-process server restart (tests) doesn't accumulate
+ * listeners across boots.
+ */
+const hostConnectedListeners = new Set<(hostKey: string) => void>()
+export function addOnDaemonHostConnected(cb: (hostKey: string) => void): () => void {
+  hostConnectedListeners.add(cb)
+  return () => { hostConnectedListeners.delete(cb) }
+}
+
 /** Internal: invoked by DaemonConnection.setConnected(true) transitions. */
 function notifyHostConnected(hostKey: string): void {
   // The host is provably reachable — drop any stale failure-cache entry NOW.
@@ -3239,6 +3253,14 @@ function notifyHostConnected(hostKey: string): void {
   // .then() clears the cache; without this, an immediate redelivery would
   // fast-fail against the stale entry.
   failureCache.delete(hostKey)
+  for (const listener of hostConnectedListeners) {
+    // Observers must never break connect — including via a rejected promise:
+    // this fires during boot, where an unhandled rejection is fatal.
+    try {
+      const result = listener(hostKey) as unknown
+      if (result instanceof Promise) result.catch(() => {})
+    } catch { /* observers must never break connect */ }
+  }
   if (!onHostConnected) return
   try { onHostConnected(hostKey) } catch { /* redelivery must never break connect */ }
 }

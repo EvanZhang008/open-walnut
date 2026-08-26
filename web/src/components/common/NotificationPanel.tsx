@@ -25,7 +25,7 @@ import {
   useNotifications, sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
   linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory,
-  systemIssueCount, letterIdOf,
+  partitionErrorsByCause, systemIssueCount, letterIdOf,
   type Notification, type NotificationSection,
 } from '@/contexts/notifications';
 import { respondToPermission } from '@/api/sessions';
@@ -164,10 +164,12 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   // the categories as sub-entries under Errors (so a specific family is one
   // click away from anywhere), which means the grouping has to exist even while
   // the user is reading another section.
-  const errorCats = useMemo(() => {
-    const errs = feed.filter(nn => sectionOf(nn) === 'errors');
-    return groupErrorsByCategory([...errs].sort((a, b) => effectiveTs(b) - effectiveTs(a)));
-  }, [feed]);
+  const sortedErrors = useMemo(
+    () => feed.filter(nn => sectionOf(nn) === 'errors').sort((a, b) => effectiveTs(b) - effectiveTs(a)),
+    [feed],
+  );
+
+  const errorCats = useMemo(() => groupErrorsByCategory(sortedErrors), [sortedErrors]);
 
   // The selected category, validated against what actually exists: when the last
   // card of the chosen family recovers or is dismissed, the view falls back to
@@ -175,17 +177,30 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   const activeErrorCategory =
     errorCategory && errorCats.some(g => g.category === errorCategory) ? errorCategory : null;
 
-  const errorBlocks = useMemo(() => (
-    section === 'errors'
-      ? errorCats
-        .filter(g => !activeErrorCategory || g.category === activeErrorCategory)
-        .map(g => ({
-          category: g.category,
-          count: g.items.length,
-          groups: collapseSameOrigin(g.items),
-        }))
-      : null
-  ), [errorCats, section, activeErrorCategory]);
+  // …and a THIRD level, above the families: the ROOT CAUSE. One outage fans out
+  // into unrelated conditions (a task's session start, a route 5xx, a delivery
+  // failure), so it lands as four red cards in four families and reads as four
+  // problems. Cards sharing an open `causeKey` fold into one block instead —
+  // only in the all-errors view, because drilling into a family means the user
+  // asked for that family's whole list.
+  const errorCauses = useMemo(() => (
+    section === 'errors' && !activeErrorCategory ? partitionErrorsByCause(sortedErrors) : null
+  ), [sortedErrors, section, activeErrorCategory]);
+
+  const errorBlocks = useMemo(() => {
+    if (section !== 'errors') return null;
+    // Whatever a cause block already shows is left OUT of the family blocks, so
+    // a card appears exactly once. Drilled into a family there are no cause
+    // blocks, so the family keeps its full list (errorCats, as before).
+    const cats = errorCauses ? groupErrorsByCategory(errorCauses.rest) : errorCats;
+    return cats
+      .filter(g => !activeErrorCategory || g.category === activeErrorCategory)
+      .map(g => ({
+        category: g.category,
+        count: g.items.length,
+        groups: collapseSameOrigin(g.items),
+      }));
+  }, [errorCats, errorCauses, section, activeErrorCategory]);
 
   // Opening the panel clears the unread badge (everything in the feed is now seen).
   // Re-fires while open if new persistent events arrive (unreadCount climbs again) —
@@ -375,10 +390,35 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
             ) : groups.length === 0 && !(section === 'action' && decisionLetters.length > 0) ? (
               <div className="notification-feed-empty">{EMPTY_TEXT[section]}</div>
             ) : errorBlocks ? (
-              /* Errors: one block per CATEGORY. The header is the whole point of
-                 the grouping — it names the family and how many cards are in it,
-                 so a rail of twenty reds becomes four readable problems. */
+              /* Errors: one block per ROOT CAUSE, then one per CATEGORY. The
+                 header is the whole point of the grouping — it names the cause or
+                 the family and how many cards are in it, so a rail of twenty reds
+                 becomes four readable problems. */
               <div className="notification-feed">
+                {/* Root-cause blocks first: they name the ONE thing that broke
+                    ("Can't reach devbox"), and the cards under them are the
+                    conditions it produced. A single group so the existing
+                    collapse shows the newest card + "Show N more" — the whole
+                    point is that an outage takes up one block, not four. */}
+                {errorCauses?.causes.map(cause => (
+                  <div key={cause.causeKey} className="nfc-cat-block">
+                    <div className="nfc-cat-header nfc-cause-header">
+                      <span className="nfc-cat-name">{cause.label}</span>
+                      <span className="nfc-cat-count">{cause.items.length}</span>
+                    </div>
+                    <FeedGroups
+                      groups={[{ key: `cause:${cause.causeKey}`, items: cause.items }]}
+                      expandedGroups={expandedGroups}
+                      onToggleGroup={toggleGroup}
+                      onNavigate={onNavigate}
+                      onDismissKey={key => dismissFeed([key])}
+                      // A cause block mixes families by construction (Sessions +
+                      // API under one outage), so unlike a family block its
+                      // header can't name the family — each card wears the chip.
+                      showCategoryChip
+                    />
+                  </div>
+                ))}
                 {errorBlocks.map(block => (
                   <div key={block.category} className="nfc-cat-block">
                     {/* The header doubles as the drill-down: clicking a family in

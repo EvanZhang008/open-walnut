@@ -29347,6 +29347,13 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   margin-bottom: 6px;
 }
 
+/* A ROOT-CAUSE block header ("Can't reach devbox") sits above the family blocks:
+   the cards under it are all one interruption, so its label reads a shade louder
+   than a family divider. */
+.nfc-cause-header { border-bottom-color: color-mix(in srgb, var(--warning) 45%, transparent); }
+
+.nfc-cause-header .nfc-cat-name { color: var(--fg); }
+
 .nfc-cat-name {
   font-size: 10.5px;
   font-weight: 700;

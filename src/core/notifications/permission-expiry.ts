@@ -31,6 +31,7 @@
 import {
   listNotifications, resolvePermissionNotification,
   expireErrorNotifications, expireKeylessErrorNotifications,
+  pruneResolvedErrorNotifications,
   type NotificationRecord,
 } from './store.js';
 import { getSessionByClaudeId } from '../session-tracker.js';
@@ -114,6 +115,17 @@ export async function expireOrphanedPermissionNotifications(): Promise<number> {
  */
 export const KEYLESS_ERROR_DEBRIS_MS = 48 * 60 * 60 * 1000;
 
+/**
+ * RESOLVED error records older than this leave the feed entirely.
+ *
+ * A recovered/expired error is a settled receipt — worth a day or two of "that
+ * outage retired itself", then sediment: the live feed had 61 settled error
+ * cards out of 76 records, which is what made the All section read as "so many
+ * notifications" long after everything recovered. Same 48h window as the
+ * keyless sweep, measured off the latest occurrence.
+ */
+export const RESOLVED_ERROR_RETENTION_MS = 48 * 60 * 60 * 1000;
+
 /** The session id an error record belongs to, from its `session:<sid>` key. */
 function sessionIdOfErrorKey(record: NotificationRecord): string | null {
   if (!record.recoveryKey?.startsWith('session:')) return null;
@@ -145,9 +157,10 @@ function sessionIdOfErrorKey(record: NotificationRecord): string | null {
  */
 export async function expireStaleErrorNotifications(
   now = Date.now(),
-): Promise<{ deadSession: number; keylessDebris: number }> {
+): Promise<{ deadSession: number; keylessDebris: number; prunedResolved: number }> {
   let deadSession = 0;
   let keylessDebris = 0;
+  let prunedResolved = 0;
   try {
     const { feed } = await listNotifications();
 
@@ -191,13 +204,26 @@ export async function expireStaleErrorNotifications(
         titles: debris.slice(0, 10).map(r => r.title),
       });
     }
+
+    // ── 3. Settled receipts past their retention ──
+    // Safe to run right after the sweeps above: the prune ages off `resolvedAt`,
+    // so a card they just stamped starts its retention clock now rather than
+    // being erased in the same breath.
+    const { pruned } = await pruneResolvedErrorNotifications(RESOLVED_ERROR_RETENTION_MS, now);
+    prunedResolved = pruned.length;
+    if (prunedResolved > 0) {
+      log.notif.info('pruned settled error notifications past retention', {
+        count: prunedResolved,
+        titles: pruned.slice(0, 10).map(r => r.title),
+      });
+    }
   } catch (err) {
     log.notif.warn('error notification expiry reconcile failed', {
       error: err instanceof Error ? err.message : String(err),
     });
   }
-  if (deadSession > 0 || keylessDebris > 0) {
-    log.notif.info('startup: reconciled unresolved error notifications', { deadSession, keylessDebris });
+  if (deadSession > 0 || keylessDebris > 0 || prunedResolved > 0) {
+    log.notif.info('startup: reconciled unresolved error notifications', { deadSession, keylessDebris, prunedResolved });
   }
-  return { deadSession, keylessDebris };
+  return { deadSession, keylessDebris, prunedResolved };
 }

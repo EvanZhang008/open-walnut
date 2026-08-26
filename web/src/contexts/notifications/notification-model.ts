@@ -359,6 +359,75 @@ export function categoryOf(n: Notification): string {
   return 'Other';
 }
 
+/**
+ * The human sentence for a root cause, or null when we cannot name one.
+ *
+ * `causeKey` is the server's second identity for an error: `recoveryKey` says
+ * WHICH CONDITION a card is about, `causeKey` says WHAT BROKE — and one break
+ * fans out into many conditions (src/core/notifications/error-cause.ts). The
+ * label is the group heading, so it has to read like the thing the user can act
+ * on ("Can't reach devbox") rather than the key itself. An unrecognised shape
+ * returns null on purpose: a raw `foo:bar` as a heading is worse than no
+ * grouping at all, so the caller leaves those cards alone.
+ */
+export function causeLabelOf(causeKey: string): string | null {
+  if (causeKey.startsWith('host:')) {
+    const host = causeKey.slice('host:'.length).trim();
+    if (host) return `Can't reach ${host}`;
+  }
+  return null;
+}
+
+export interface ErrorCauseGroup {
+  causeKey: string;
+  /** The group heading (causeLabelOf) — never the raw key. */
+  label: string;
+  items: Notification[];
+}
+
+/**
+ * Errors split into root-cause groups + everything else.
+ *
+ * One outage fans out into several unrelated CONDITIONS: a host whose link is
+ * down produces a session-start failure keyed `task:…`, route 5xx cards keyed
+ * `route:…`, and delivery failures keyed `session:…`. Each lands as its own red
+ * card in its own family, so four cards described ONE interruption and the pane
+ * read as four problems. The group is what makes them read as one.
+ *
+ * A group only exists when it EARNS its heading: two or more cards sharing the
+ * key (a single card is already one line — wrapping it in a header would just
+ * add a row), and a nameable shape (causeLabelOf). Everything else falls through
+ * to `rest` untouched, which keeps today's behavior for every keyless record.
+ * Groups are ordered by most-recent activity and items keep the caller's order,
+ * same idiom as groupErrorsByCategory. Resolved cards are the CALLER's business:
+ * this is a partition, not a filter.
+ */
+export function partitionErrorsByCause(items: Notification[]): {
+  causes: ErrorCauseGroup[];
+  rest: Notification[];
+} {
+  const byCause = new Map<string, Notification[]>();
+  for (const n of items) {
+    if (!n.causeKey) continue;
+    const list = byCause.get(n.causeKey);
+    if (list) list.push(n);
+    else byCause.set(n.causeKey, [n]);
+  }
+  const causes: ErrorCauseGroup[] = [];
+  for (const [causeKey, list] of byCause) {
+    if (list.length < 2) continue;
+    const label = causeLabelOf(causeKey);
+    if (!label) continue;
+    causes.push({ causeKey, label, items: list });
+  }
+  causes.sort((a, b) => {
+    const recency = (g: ErrorCauseGroup) => Math.max(...g.items.map(effectiveTs));
+    return recency(b) - recency(a);
+  });
+  const grouped = new Set(causes.map(g => g.causeKey));
+  return { causes, rest: items.filter(n => !n.causeKey || !grouped.has(n.causeKey)) };
+}
+
 /** A raw log-meta body: `[web] {"reqId":…}` — the shape the old cards showed. */
 const RAW_META_BODY_RE = /^\[[\w/@.-]+\]\s*[{[]/;
 

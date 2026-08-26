@@ -35,6 +35,7 @@ import { setErrorNotificationSink, type ErrorNotifyPayload } from '../../logging
 import { redactSensitiveText } from '../../logging/redact.js';
 import { upsertNotification } from './store.js';
 import { humanizeErrorNotification } from './humanize.js';
+import { causeKeyForError } from './error-cause.js';
 import { log } from '../../logging/index.js';
 
 /** Storm absorber: skip repeat sink calls for the same key within this window. */
@@ -43,11 +44,12 @@ const REPEAT_TTL_MS = 60_000;
 const MAX_BODY = 600;
 
 const recentKeys = new Map<string, number>();
-/** dedupKey → recoveryKey, for the absorber release below. The absorber is keyed
- *  by dedupKey (a hash) and a recovery arrives by CONDITION, so the mapping is
- *  recorded as each record is published rather than reverse-engineered. Pruned in
- *  lockstep with recentKeys — it exists only to release entries in that map. */
-const recentKeyConditions = new Map<string, string>();
+/** dedupKey → the keys a recovery can arrive by (recoveryKey and/or causeKey),
+ *  for the absorber release below. The absorber is keyed by dedupKey (a hash)
+ *  and a recovery arrives by CONDITION or CAUSE, so the mapping is recorded as
+ *  each record is published rather than reverse-engineered. Pruned in lockstep
+ *  with recentKeys — it exists only to release entries in that map. */
+const recentKeyConditions = new Map<string, string[]>();
 
 function pruneRecent(now: number): void {
   if (recentKeys.size < 500) return;
@@ -75,8 +77,8 @@ function pruneRecent(now: number): void {
 export function releaseAbsorbedKeys(recoveryKeys: string[]): void {
   if (recoveryKeys.length === 0) return;
   const keys = new Set(recoveryKeys);
-  for (const [dedupKey, condition] of recentKeyConditions) {
-    if (!keys.has(condition)) continue;
+  for (const [dedupKey, conditions] of recentKeyConditions) {
+    if (!conditions.some(c => keys.has(c))) continue;
     recentKeys.delete(dedupKey);
     recentKeyConditions.delete(dedupKey);
   }
@@ -282,7 +284,26 @@ export function installLogErrorNotifications(
     const taskId = typeof payload.meta?.taskId === 'string' ? payload.meta.taskId : undefined;
     // The condition this error belongs to, so a later success can retire it.
     const recoveryKey = recoveryKeyOf(payload);
-    if (recoveryKey) recentKeyConditions.set(dedupKey, recoveryKey);
+    // The ROOT CAUSE it shares with other conditions (host link down), so one
+    // daemon reconnect can retire the whole fan-out. Derived from the message
+    // plus the error-ish meta strings — the route-5xx card's host is only ever
+    // named inside meta.message, never structured.
+    const causeText = [
+      payload.message,
+      ...['error', 'err', 'reason', 'cause', 'detail', 'message']
+        .map((k) => payload.meta?.[k])
+        .filter((v): v is string => typeof v === 'string'),
+    ].join('\n');
+    const metaHost = typeof payload.meta?.host === 'string' ? payload.meta.host : undefined;
+    // Redacted first, like every other consumer of raw log text on this path:
+    // a secret sitting where a pattern expects a host would otherwise be
+    // persisted into the key and rendered as a group heading.
+    const causeKey = causeKeyForError({
+      text: redactSensitiveText(causeText),
+      ...(metaHost ? { host: metaHost } : {}),
+    });
+    const releaseKeys = [recoveryKey, causeKey].filter((k): k is string => !!k);
+    if (releaseKeys.length > 0) recentKeyConditions.set(dedupKey, releaseKeys);
 
     // Human copy. Note the ORDER relative to the dedupKey above: the fingerprint
     // hashes the RAW log message + stable meta and is computed BEFORE this, so
@@ -310,6 +331,7 @@ export function installLogErrorNotifications(
       ...(sessionId ? { sessionId } : {}),
       ...(taskId ? { taskId } : {}),
       ...(recoveryKey ? { recoveryKey } : {}),
+      ...(causeKey ? { causeKey } : {}),
     }).then(({ record, outcome }) => {
       // A first occurrence toasts; a later one (after the TTL window) patches the
       // existing card's count/body in place rather than re-toasting the UI.

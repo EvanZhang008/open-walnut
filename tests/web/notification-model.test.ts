@@ -18,7 +18,7 @@ import {
   sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
   linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory,
-  systemIssueCount,
+  systemIssueCount, causeLabelOf, partitionErrorsByCause,
 } from '../../web/src/contexts/notifications/notification-model';
 import { SHOULD_TOAST } from '../../web/src/contexts/notifications/types';
 import type { Notification, NotificationKind, NotificationSeverity } from '../../web/src/contexts/notifications/types';
@@ -689,5 +689,121 @@ describe('groupErrorsByCategory', () => {
 
   it('is empty for an empty list', () => {
     expect(groupErrorsByCategory([])).toEqual([]);
+  });
+});
+
+/**
+ * Root causes — the level ABOVE the families. `recoveryKey` says which condition
+ * a card is about, `causeKey` says what broke, and one break fans out into many
+ * conditions: a dead host link produces a `task:…` session-start failure, a
+ * `route:…` 5xx and a `session:…` delivery failure, i.e. four red cards for ONE
+ * interruption. These pin the two rules that keep the fold honest: a group has to
+ * earn its heading (two or more cards, and a shape we can name), and everything
+ * else falls through untouched.
+ */
+describe('causeLabelOf', () => {
+  it('names a host cause the way the user thinks about it', () => {
+    expect(causeLabelOf('host:devbox')).toBe("Can't reach devbox");
+  });
+
+  it('returns null for a shape it cannot name', () => {
+    // A raw `foo:bar` as a group heading is worse than no grouping — the caller
+    // leaves those cards in `rest` and today's behavior is unchanged.
+    expect(causeLabelOf('plugin:acme')).toBeNull();
+    expect(causeLabelOf('host:')).toBeNull();
+    expect(causeLabelOf('')).toBeNull();
+  });
+});
+
+describe('partitionErrorsByCause', () => {
+  const err = (dedupKey: string, over: Partial<Notification> = {}) =>
+    n({ kind: 'operation-error', dedupKey, ...over });
+
+  it('folds cards sharing a cause into ONE group (the four-reds-are-one-outage fix)', () => {
+    const items = [
+      err('a', { causeKey: 'host:devbox', recoveryKey: 'task:t-1', timestamp: 3_000 }),
+      err('b', { causeKey: 'host:devbox', recoveryKey: 'route:GET /api/x', timestamp: 2_000 }),
+      err('c', { causeKey: 'host:devbox', recoveryKey: 'session:s-1', timestamp: 1_000 }),
+    ];
+    const { causes, rest } = partitionErrorsByCause(items);
+    expect(causes).toHaveLength(1);
+    expect(causes[0].causeKey).toBe('host:devbox');
+    expect(causes[0].label).toBe("Can't reach devbox");
+    // Caller's order preserved inside the group (stable partition, not a re-sort).
+    expect(causes[0].items.map(i => i.dedupKey)).toEqual(['a', 'b', 'c']);
+    expect(rest).toEqual([]);
+  });
+
+  it('leaves a SINGLETON cause in rest — one card is already one line', () => {
+    const items = [
+      err('lonely', { causeKey: 'host:devbox' }),
+      err('other', { causeKey: 'host:builder' }),
+    ];
+    const { causes, rest } = partitionErrorsByCause(items);
+    expect(causes).toEqual([]);
+    expect(rest.map(i => i.dedupKey)).toEqual(['lonely', 'other']);
+  });
+
+  it("leaves keyless cards in rest (every pre-feature record keeps today's behavior)", () => {
+    const items = [err('k1'), err('k2', { recoveryKey: 'git' })];
+    const { causes, rest } = partitionErrorsByCause(items);
+    expect(causes).toEqual([]);
+    expect(rest.map(i => i.dedupKey)).toEqual(['k1', 'k2']);
+  });
+
+  it('never groups by an UNLABELABLE cause, however many cards share it', () => {
+    const items = [
+      err('u1', { causeKey: 'mystery:thing' }),
+      err('u2', { causeKey: 'mystery:thing' }),
+    ];
+    const { causes, rest } = partitionErrorsByCause(items);
+    expect(causes).toEqual([]);
+    expect(rest).toHaveLength(2);
+  });
+
+  it('orders groups by most-recent activity, folded records included', () => {
+    // Same reason the families are recency-ordered: the pane is read top-down
+    // when something just broke, and a still-firing record keeps an hours-old
+    // `timestamp`, so the LATEST occurrence is what has to decide.
+    const items = [
+      err('q1', { causeKey: 'host:quiet', timestamp: 50_000 }),
+      err('q2', { causeKey: 'host:quiet', timestamp: 40_000 }),
+      err('l1', { causeKey: 'host:live', timestamp: 1_000, lastTimestamp: 90_000 }),
+      err('l2', { causeKey: 'host:live', timestamp: 900 }),
+    ];
+    expect(partitionErrorsByCause(items).causes.map(g => g.causeKey))
+      .toEqual(['host:live', 'host:quiet']);
+  });
+
+  it('splits a mixed list, keeping rest in the caller order', () => {
+    const items = [
+      err('r1', { recoveryKey: 'git' }),
+      err('h1', { causeKey: 'host:devbox' }),
+      err('r2', { causeKey: 'host:solo' }),
+      err('h2', { causeKey: 'host:devbox' }),
+      err('r3'),
+    ];
+    const { causes, rest } = partitionErrorsByCause(items);
+    expect(causes).toHaveLength(1);
+    expect(causes[0].items.map(i => i.dedupKey)).toEqual(['h1', 'h2']);
+    expect(rest.map(i => i.dedupKey)).toEqual(['r1', 'r2', 'r3']);
+  });
+
+  it("does NOT filter resolved cards — that is the caller's job", () => {
+    // The panel hands in the unresolved errors it already computed for the rail;
+    // teaching this function about `resolved` too would put the same rule in two
+    // places and let them disagree.
+    const items = [
+      err('rec', { causeKey: 'host:devbox', resolved: 'recovered' }),
+      err('live', { causeKey: 'host:devbox' }),
+    ];
+    const { causes, rest } = partitionErrorsByCause(items);
+    expect(causes).toHaveLength(1);
+    expect(causes[0].items.map(i => i.dedupKey)).toEqual(['rec', 'live']);
+    expect(rest).toEqual([]);
+  });
+
+  it('is empty for an empty list', () => {
+    expect(partitionErrorsByCause([])).toEqual({ causes: [], rest: [] });
   });
 });

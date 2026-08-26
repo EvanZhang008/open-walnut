@@ -528,3 +528,108 @@ describe('humanized copy on the way into the feed', () => {
     expect(new Set(feed.map(n => n.dedupKey)).size).toBe(2);
   });
 });
+
+/**
+ * causeKey on the way into the feed — the ROOT CAUSE a card shares with
+ * otherwise unrelated conditions.
+ *
+ * A host whose SSH/daemon link is down produces a session-start failure keyed
+ * `task:<id>`, route 5xx cards keyed `route:…` and delivery failures keyed
+ * `session:<sid>`. Each of those waits for its own success signal that may never
+ * arrive, so the wall of red outlived the outage. The bridge derives the cause
+ * from the message plus the error-ish meta strings (the route card's host is only
+ * ever named inside meta, never structured), and `meta.host` is the hint that
+ * wins when present.
+ */
+describe('causeKey derivation through the sink', () => {
+  beforeEach(async () => {
+    uninstallLogErrorNotifications();
+    await dismissNotifications();
+    installLogErrorNotifications();
+  });
+
+  afterEach(() => {
+    uninstallLogErrorNotifications();
+  });
+
+  it('carries BOTH the condition key and the cause key on a session-start failure', async () => {
+    // The real shape: the session never existed, so the only condition id is the
+    // task — but the CAUSE is the host, and that is what a reconnect signals.
+    const logger = createSubsystemLogger('session');
+    logger.error('transport start failed', {
+      host: 'devbox', taskId: 't1',
+      error: 'Failed to deploy daemon source to devbox: Command failed: ssh -o BatchMode=yes devbox true',
+    });
+
+    const feed = await feedAfterFlush();
+    expect(feed).toHaveLength(1);
+    expect(feed[0].recoveryKey).toBe('task:t1');
+    expect(feed[0].causeKey).toBe('host:devbox');
+  });
+
+  it('finds the host inside meta.message on a route-style card', async () => {
+    // The route middleware's card is keyed by ROUTE and knows no host field; the
+    // connectivity text arrives only as prose in the meta.
+    const logger = createSubsystemLogger('web');
+    logger.error('GET /api/x → 500', {
+      recoveryKey: 'route:GET /api/x',
+      message: 'Failed to deploy daemon source to devbox: Command failed: ssh',
+    });
+
+    const feed = await feedAfterFlush();
+    expect(feed[0].recoveryKey).toBe('route:GET /api/x');
+    expect(feed[0].causeKey).toBe('host:devbox');
+  });
+
+  it('leaves causeKey ABSENT when nothing names a connectivity failure', async () => {
+    // A confident wrong grouping is worse than none: this card must not be
+    // retired by some unrelated host reconnecting.
+    const logger = createSubsystemLogger('session');
+    logger.error('transport start failed', {
+      host: 'devbox', taskId: 't2', cwd: '/data/gone',
+      error: 'ENOENT: no such file or directory',
+    });
+
+    const feed = await feedAfterFlush();
+    expect(feed[0].recoveryKey).toBe('task:t2');
+    expect(feed[0].causeKey).toBeUndefined();
+    expect('causeKey' in feed[0]).toBe(false);
+  });
+
+  it('releaseAbsorbedKeys accepts a CAUSE key, so a re-failure notifies inside the TTL', async () => {
+    // Same flap argument as the recoveryKey release: the host recovers, the card
+    // is stamped 'recovered', then the link drops again seconds later — well
+    // inside the 60s absorber. If the absorber stays armed the re-failure never
+    // reaches the store and the card sits green while the host is down again.
+    const { releaseAbsorbedKeys } = await import('../../../src/core/notifications/log-error-bridge.js');
+    const events: string[] = [];
+    uninstallLogErrorNotifications();
+    await dismissNotifications();
+    installLogErrorNotifications((name) => { events.push(name); });
+
+    const logger = createSubsystemLogger('session');
+    const meta = {
+      host: 'devbox', taskId: 't3',
+      error: 'DaemonConnection not connected to devbox',
+    };
+    logger.error('transport start failed', meta);
+    await feedAfterFlush();
+    expect(events).toEqual(['notification:new']);
+
+    // An unrelated host's recovery must not un-throttle this one.
+    releaseAbsorbedKeys(['host:unrelated']);
+    logger.error('transport start failed', meta);
+    await new Promise(r => setTimeout(r, 150));
+    expect(events).toEqual(['notification:new']);
+
+    // The right cause key releases it, so the next failure folds and re-broadcasts.
+    releaseAbsorbedKeys(['host:devbox']);
+    logger.error('transport start failed', meta);
+    await new Promise(r => setTimeout(r, 200));
+    expect(events).toEqual(['notification:new', 'notification:updated']);
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(1);
+    expect(feed[0].count).toBe(2);
+    expect(feed[0].causeKey).toBe('host:devbox');
+  });
+});

@@ -28,6 +28,7 @@ import {
   recoverNotifications,
   expireErrorNotifications,
   expireKeylessErrorNotifications,
+  pruneResolvedErrorNotifications,
 } from '../../../src/core/notifications/store.js';
 
 const NOTIFICATIONS_FILE = path.join(WALNUT_HOME, 'notifications.json');
@@ -691,5 +692,233 @@ describe('expireKeylessErrorNotifications', () => {
     expect(byKey.get('perm:old')?.resolved).toBeUndefined();
     expect(byKey.get('cron:old')?.resolved).toBeUndefined();
     expect(byKey.get('error:already')?.resolved).toBe('expired');
+  });
+});
+
+/**
+ * Recovery by ROOT CAUSE (`causeKey`), not only by condition.
+ *
+ * One host outage files cards under many conditions — a session start failure
+ * under `task:<id>`, route 5xx cards under `route:…`, delivery failures under
+ * `session:<sid>` — and each of those waits for its OWN success signal that may
+ * never arrive (nobody re-opens that view, that task never retries). The daemon
+ * reconnecting is the one signal that is true for all of them, and it arrives as
+ * `host:<alias>`, which matches no recoveryKey at all.
+ */
+describe('recoverNotifications by causeKey', () => {
+  it('retires a card whose CONDITION key does not match but whose CAUSE key does', async () => {
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: "Couldn't start a session",
+      dedupKey: 'logerr:session:abc', recoveryKey: 'task:t1', causeKey: 'host:devbox',
+    });
+
+    const { recovered } = await recoverNotifications(['host:devbox']);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0].dedupKey).toBe('logerr:session:abc');
+    expect(recovered[0].resolved).toBe('recovered');
+    // Settled fact, not something still needing a fix — same mapping as the
+    // condition-keyed path, so sectionOf() routes it out of the Errors rail.
+    expect(recovered[0].severity).toBe('info');
+    expect(typeof recovered[0].resolvedAt).toBe('number');
+
+    const { feed } = await listNotifications();
+    expect(feed[0].resolved).toBe('recovered');
+    expect(typeof feed[0].resolvedAt).toBe('number');
+  });
+
+  it('retires the whole fan-out of one cause across unrelated conditions', async () => {
+    for (const [dedupKey, recoveryKey] of [
+      ['logerr:session:one', 'task:t1'],
+      ['logerr:web:two', 'route:GET /api/x'],
+      ['logerr:session:three', 'session:s-9'],
+    ] as const) {
+      await upsertNotification({
+        kind: 'operation-error', severity: 'error', title: `failed ${dedupKey}`,
+        dedupKey, recoveryKey, causeKey: 'host:devbox',
+      });
+    }
+    // A different host's outage must not ride along.
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'failed elsewhere',
+      dedupKey: 'logerr:session:other', recoveryKey: 'task:t2', causeKey: 'host:buildhost',
+    });
+
+    const { recovered } = await recoverNotifications(['host:devbox']);
+    expect(recovered.map(r => r.dedupKey).sort())
+      .toEqual(['logerr:session:one', 'logerr:session:three', 'logerr:web:two']);
+    const byKey = new Map((await listNotifications()).feed.map(n => [n.dedupKey, n]));
+    expect(byKey.get('logerr:session:other')?.resolved).toBeUndefined();
+  });
+
+  it('no-ops (and stamps NOTHING) when no key matches — the lock-free pre-check path', async () => {
+    // Every daemon (re)connect fires this, including boots on a healthy box with
+    // nothing to retire, so the miss must cost a plain read and change no bytes.
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'failed',
+      dedupKey: 'logerr:session:keep', recoveryKey: 'task:t1', causeKey: 'host:devbox',
+    });
+
+    const { recovered } = await recoverNotifications(['host:marina', 'plugin:nobody']);
+    expect(recovered).toEqual([]);
+
+    const { feed } = await listNotifications();
+    expect(feed[0].resolved).toBeUndefined();
+    expect(feed[0].resolvedAt).toBeUndefined();
+    expect(feed[0].severity).toBe('error');
+  });
+
+  it('still matches a plain recoveryKey (regression — causeKey is additive)', async () => {
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'sync failed',
+      dedupKey: 'logerr:plugin-a:1', recoveryKey: 'plugin:plugin-a',
+    });
+    const { recovered } = await recoverNotifications(['plugin:plugin-a']);
+    expect(recovered.map(r => r.dedupKey)).toEqual(['logerr:plugin-a:1']);
+    expect(typeof recovered[0].resolvedAt).toBe('number');
+  });
+
+  it('a re-fire clears BOTH resolved and resolvedAt (the retention clock too)', async () => {
+    // The card came back red, so it is no longer a settled receipt — leaving
+    // resolvedAt behind would let the retention prune delete a LIVE error.
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'failed',
+      dedupKey: 'logerr:session:flap', recoveryKey: 'task:t1', causeKey: 'host:devbox',
+    });
+    await recoverNotifications(['host:devbox']);
+    expect((await listNotifications()).feed[0].resolvedAt).toBeGreaterThan(0);
+
+    const { record } = await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'failed again',
+      dedupKey: 'logerr:session:flap', recoveryKey: 'task:t1', causeKey: 'host:devbox',
+    });
+    expect(record.resolved).toBeUndefined();
+    expect(record.resolvedAt).toBeUndefined();
+    const { feed } = await listNotifications();
+    expect(feed[0].resolved).toBeUndefined();
+    expect(feed[0].resolvedAt).toBeUndefined();
+    expect(feed[0].severity).toBe('error');
+  });
+
+  it('causeKey follows the LATEST occurrence — set on a fold that has one, cleared on one that does not', async () => {
+    // A scope-keyed card folds occurrences with different bodies. If the first
+    // failure was an ssh error (host:devbox) and the current one is something
+    // else entirely, keeping the old key would let the next reconnect stamp
+    // 'recovered' on a condition that is still broken.
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'delivery failed',
+      dedupKey: 'error:session:s-9:delivery', recoveryKey: 'session:s-9',
+      causeKey: 'host:devbox',
+    });
+    const { record: cleared } = await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'delivery failed',
+      dedupKey: 'error:session:s-9:delivery', recoveryKey: 'session:s-9',
+      // No causeKey: this occurrence is not a connectivity failure.
+    });
+    expect(cleared.causeKey).toBeUndefined();
+    // …and a later connectivity occurrence re-establishes it.
+    const { record: restored } = await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'delivery failed',
+      dedupKey: 'error:session:s-9:delivery', recoveryKey: 'session:s-9',
+      causeKey: 'host:devbox',
+    });
+    expect(restored.causeKey).toBe('host:devbox');
+  });
+});
+
+/**
+ * pruneResolvedErrorNotifications — settled receipts leave the feed.
+ *
+ * A recovered/expired error is worth a day or two of "that outage retired
+ * itself", then it is sediment: the live feed had 61 settled error cards out of
+ * 76 records, which is what made the All section read as "so many notifications"
+ * long after every cause was gone. Age is measured off `resolvedAt` (how long it
+ * has been SETTLED), so a card stamped at boot still gets its window of
+ * visibility instead of being erased in the same breath.
+ */
+describe('pruneResolvedErrorNotifications', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const NOW = 1_800_000_000_000;
+  const RETENTION = 2 * DAY;
+
+  it('removes a settled error whose resolvedAt is past the window', async () => {
+    await upsertNotification({
+      kind: 'operation-error', severity: 'info', title: 'old receipt',
+      dedupKey: 'logerr:web:old', recoveryKey: 'route:GET /api/x',
+      timestamp: NOW - 5 * DAY, resolved: 'recovered', resolvedAt: NOW - 3 * DAY,
+    });
+
+    const { pruned } = await pruneResolvedErrorNotifications(RETENTION, NOW);
+    expect(pruned.map(r => r.dedupKey)).toEqual(['logerr:web:old']);
+    expect((await listNotifications()).feed).toHaveLength(0);
+  });
+
+  it('KEEPS a card with an OLD occurrence but a FRESH resolvedAt', async () => {
+    // The boot-sweep shape: a week-old error the reconcile just stamped 'expired'.
+    // Ageing off the occurrence would delete it in the same breath as stamping it,
+    // so the user never sees that it settled.
+    await upsertNotification({
+      kind: 'operation-error', severity: 'info', title: 'just settled',
+      dedupKey: 'logerr:web:fresh-stamp', recoveryKey: 'session:s-dead',
+      timestamp: NOW - 7 * DAY, lastTimestamp: NOW - 7 * DAY,
+      resolved: 'expired', resolvedAt: NOW - 60_000,
+    });
+
+    const { pruned } = await pruneResolvedErrorNotifications(RETENTION, NOW);
+    expect(pruned).toHaveLength(0);
+    expect((await listNotifications()).feed).toHaveLength(1);
+  });
+
+  it('falls back to the latest occurrence for a legacy record with NO resolvedAt', async () => {
+    // Records settled before resolvedAt existed still have to be able to leave.
+    await upsertNotification({
+      kind: 'operation-error', severity: 'info', title: 'legacy receipt',
+      dedupKey: 'logerr:web:legacy', recoveryKey: 'route:GET /api/y',
+      timestamp: NOW - 9 * DAY, lastTimestamp: NOW - 8 * DAY, resolved: 'recovered',
+    });
+
+    const { pruned } = await pruneResolvedErrorNotifications(RETENTION, NOW);
+    expect(pruned.map(r => r.dedupKey)).toEqual(['logerr:web:legacy']);
+    expect((await listNotifications()).feed).toHaveLength(0);
+  });
+
+  it('KEEPS an UNRESOLVED old error — nothing settled it, so it is still news', async () => {
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'still failing',
+      dedupKey: 'logerr:web:unresolved', recoveryKey: 'plugin:plugin-a',
+      timestamp: NOW - 30 * DAY, lastTimestamp: NOW - 30 * DAY,
+    });
+
+    const { pruned } = await pruneResolvedErrorNotifications(RETENTION, NOW);
+    expect(pruned).toHaveLength(0);
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(1);
+    expect(feed[0].resolved).toBeUndefined();
+  });
+
+  it('KEEPS a settled PERMISSION however old — that is somebody else\'s lifecycle', async () => {
+    await addNotification({
+      kind: 'permission', severity: 'info', title: 'Bash',
+      dedupKey: 'perm:r-old', requestId: 'r-old',
+      timestamp: NOW - 30 * DAY, resolved: 'expired', resolvedAt: NOW - 30 * DAY,
+    });
+    // …and a letter is not ours either.
+    await addNotification({
+      kind: 'letter', severity: 'info', title: 'Please review',
+      dedupKey: 'letter:l1', letterId: 'l1', timestamp: NOW - 30 * DAY,
+    });
+
+    const { pruned } = await pruneResolvedErrorNotifications(RETENTION, NOW);
+    expect(pruned).toHaveLength(0);
+    expect((await listNotifications()).feed).toHaveLength(2);
+  });
+
+  it('is idempotent and no-ops on an empty / all-fresh feed', async () => {
+    await upsertNotification({
+      kind: 'operation-error', severity: 'info', title: 'old receipt',
+      dedupKey: 'logerr:web:idem', recoveryKey: 'route:GET /api/z',
+      timestamp: NOW - 5 * DAY, resolved: 'recovered', resolvedAt: NOW - 3 * DAY,
+    });
+    expect((await pruneResolvedErrorNotifications(RETENTION, NOW)).pruned).toHaveLength(1);
+    expect((await pruneResolvedErrorNotifications(RETENTION, NOW)).pruned).toHaveLength(0);
   });
 });

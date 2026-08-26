@@ -56,6 +56,10 @@ export interface NotificationRecord {
    *  or the record predates recoveryKey entirely). The UI labels an expired ERROR
    *  "Stale" — an expired PERMISSION "Session ended". */
   resolved?: 'allowed' | 'denied' | 'expired' | 'recovered';
+  /** When `resolved` was stamped (epoch ms) — the retention clock for the
+   *  settled-receipt prune. Absent on records settled before this landed;
+   *  the prune falls back to the occurrence timestamp for those. */
+  resolvedAt?: number;
 
   /** operation-error only — WHICH condition this error is about, so a later
    *  success can retire it. An error notification describes a CONDITION (plugin
@@ -66,6 +70,14 @@ export interface NotificationRecord {
    *  `route:<METHOD> <path>`, `session:<sid>`, `task:<id>`, 'server-lifecycle',
    *  `bus:<subscriber>:<event>`, 'task-db-writers'. */
   recoveryKey?: string;
+
+  /** operation-error only — the ROOT CAUSE this error shares with otherwise
+   *  unrelated conditions (see src/core/notifications/error-cause.ts). Shapes:
+   *  `host:<alias>` — the host's SSH/daemon link is down. One cause fans out
+   *  into many recoveryKeys (`task:…`, `route:…`, `session:…`); this key is what
+   *  lets ONE recovery signal (the daemon reconnecting) retire all of them, and
+   *  what the UI groups by while they're firing. */
+  causeKey?: string;
 
   /** operation-error only — the FAMILY this error belongs to ('Sessions', 'API',
    *  'Data & Sync', a plugin's display name, …), derived at write time by
@@ -166,6 +178,22 @@ async function readStore(): Promise<NotificationsStore> {
   } catch (err) {
     log.notif.warn('notifications: failed to read store', { error: errMsg(err) });
     return emptyStore();
+  }
+}
+
+/**
+ * Snapshot for the lock-free pre-checks below, or null when the file couldn't
+ * be READ (as opposed to being legitimately empty). The distinction matters:
+ * a pre-check that treats "corrupt file" as "nothing to do" would skip the
+ * locked path — which is exactly the code that moves the corrupt file aside
+ * and retries — and an edge signal like a host reconnect never re-fires, so
+ * the whole fan-out would be stranded unresolved forever.
+ */
+async function readStoreOrNull(): Promise<NotificationsStore | null> {
+  try {
+    return normalizeStore(await readJsonFile<unknown>(NOTIFICATIONS_FILE, null));
+  } catch {
+    return null;
   }
 }
 
@@ -328,6 +356,15 @@ export async function upsertNotification(
       const value = input[key];
       if (value !== undefined) (existing as unknown as Record<string, unknown>)[key] = value;
     }
+    // causeKey is NOT additive-refreshed like the keys above: it is the RETIRE
+    // axis, and a scope-keyed card folds occurrences with different bodies. A
+    // card that once failed on an ssh error and now fails on something else
+    // must lose the `host:` key, or the next reconnect would stamp 'recovered'
+    // on a condition that is still broken. Both publish paths always attempt
+    // derivation, so an absent input causeKey reliably means "no cause this
+    // occurrence" — the field follows the LATEST occurrence, either direction.
+    if (input.causeKey !== undefined) existing.causeKey = input.causeKey;
+    else delete existing.causeKey;
     existing.count = (existing.count ?? 1) + 1;
     existing.lastTimestamp = input.timestamp ?? Date.now();
     // Deliberate: a re-FIRE re-badges the bell — the thing is happening again,
@@ -337,7 +374,10 @@ export async function upsertNotification(
     existing.read = false;
     // A stamped outcome only means anything for a permission request; on any
     // other kind a fresh occurrence means the thing is happening again.
-    if (existing.resolved && existing.kind !== 'permission') delete existing.resolved;
+    if (existing.resolved && existing.kind !== 'permission') {
+      delete existing.resolved;
+      delete existing.resolvedAt;
+    }
     // Tail = most recent, which is also what the cap keeps.
     store.notifications.splice(idx, 1);
     store.notifications.push(existing);
@@ -485,12 +525,30 @@ export async function recoverNotifications(
 ): Promise<{ recovered: NotificationRecord[] }> {
   if (recoveryKeys.length === 0) return { recovered: [] };
   const keys = new Set(recoveryKeys);
+  // A key matches a record's CONDITION (recoveryKey) or its ROOT CAUSE
+  // (causeKey): `host:<alias>` recovering must retire every card that outage
+  // produced, whatever condition each one was filed under.
+  const matches = (rec: NotificationRecord): boolean =>
+    (!!rec.recoveryKey && keys.has(rec.recoveryKey)) || (!!rec.causeKey && keys.has(rec.causeKey));
+  // Lock-free pre-check, same reasoning as expireErrorNotifications: the
+  // host-connected recovery path fires on EVERY daemon (re)connect — including
+  // boots on a healthy box with nothing to retire. A plain read costs no
+  // cross-process lock and no write; racing a concurrent publish is harmless
+  // (the card just recovers on the next signal or the boot reconcile). An
+  // UNREADABLE store falls through to the locked path, which repairs it.
+  const snapshot = await readStoreOrNull();
+  if (snapshot && !snapshot.notifications.some(
+    n => n.kind === 'operation-error' && !n.resolved && matches(n),
+  )) {
+    return { recovered: [] };
+  }
   return withWriteLock(() => withStore((store) => {
     const recovered: NotificationRecord[] = [];
     for (const rec of store.notifications) {
       if (rec.kind !== 'operation-error' || rec.resolved) continue;
-      if (!rec.recoveryKey || !keys.has(rec.recoveryKey)) continue;
+      if (!matches(rec)) continue;
       rec.resolved = 'recovered';
+      rec.resolvedAt = Date.now();
       // 'info', matching the denied/expired mapping: a recovered error is a
       // settled fact, not something that still needs fixing. sectionOf() reads
       // the stamp and routes it out of the Errors rail.
@@ -527,18 +585,19 @@ export async function expireErrorNotifications(
   // dozens of sessions die at once. A plain read costs no cross-process lock and
   // no write; only a session that actually has cards pays for the real cycle.
   // Racing with a concurrent publish is harmless: the notification would just be
-  // expired by the boot reconcile instead of now.
-  const { notifications } = await readStore();
-  const anyMatch = notifications.some(
-    n => n.kind === 'operation-error' && !n.resolved && n.recoveryKey && keys.has(n.recoveryKey),
-  );
-  if (!anyMatch) return { expired: [] };
+  // expired by the boot reconcile instead of now. Unreadable store → locked
+  // path, which moves the corrupt file aside and retries.
+  const snapshot = await readStoreOrNull();
+  if (snapshot && !snapshot.notifications.some(
+    n => n.kind === 'operation-error' && !n.resolved && !!n.recoveryKey && keys.has(n.recoveryKey),
+  )) return { expired: [] };
   return withWriteLock(() => withStore((store) => {
     const expired: NotificationRecord[] = [];
     for (const rec of store.notifications) {
       if (rec.kind !== 'operation-error' || rec.resolved) continue;
       if (!rec.recoveryKey || !keys.has(rec.recoveryKey)) continue;
       rec.resolved = 'expired';
+      rec.resolvedAt = Date.now();
       rec.severity = 'info';
       expired.push({ ...rec });
     }
@@ -578,10 +637,45 @@ export async function expireKeylessErrorNotifications(
       // ago describes something still happening, whatever its first-seen stamp.
       if ((rec.lastTimestamp ?? rec.timestamp) > cutoff) continue;
       rec.resolved = 'expired';
+      rec.resolvedAt = now;
       rec.severity = 'info';
       expired.push({ ...rec });
     }
     return { expired };
+  }));
+}
+
+/**
+ * Drop RESOLVED error records older than `olderThanMs` from the feed entirely.
+ *
+ * A recovered/expired error is a settled receipt: worth seeing for a day or two
+ * ("ah, that outage retired itself"), then pure sediment. Without this the All
+ * section accumulated them until the 200-cap (61 of 76 records in the live feed
+ * were settled errors), which read as "so many notifications" long after every
+ * cause was gone. Only `operation-error` and only `resolved` records qualify —
+ * permission history and letters are somebody else's lifecycle — and age is
+ * measured off `resolvedAt` (how long it has been SETTLED), so a card stamped
+ * Stale at boot still gets its retention window of visibility. Records settled
+ * before `resolvedAt` existed fall back to their latest occurrence.
+ *
+ * Returns shallow clones of what it removed so the caller can log titles.
+ */
+export async function pruneResolvedErrorNotifications(
+  olderThanMs: number,
+  now = Date.now(),
+): Promise<{ pruned: NotificationRecord[] }> {
+  const cutoff = now - olderThanMs;
+  const stale = (n: NotificationRecord): boolean =>
+    n.kind === 'operation-error' && !!n.resolved
+    && (n.resolvedAt ?? n.lastTimestamp ?? n.timestamp) <= cutoff;
+  // Lock-free pre-check (see recoverNotifications): this runs on every boot,
+  // usually with nothing to prune. Unreadable store → locked path repairs it.
+  const snapshot = await readStoreOrNull();
+  if (snapshot && !snapshot.notifications.some(stale)) return { pruned: [] };
+  return withWriteLock(() => withStore((store) => {
+    const pruned = store.notifications.filter(stale).map(n => ({ ...n }));
+    store.notifications = store.notifications.filter(n => !stale(n));
+    return { pruned };
   }));
 }
 

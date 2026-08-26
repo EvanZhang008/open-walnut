@@ -58,6 +58,10 @@ export interface Notification {
    *  the client-side fallback for `category` on records written before the
    *  humanizer shipped (see categoryOf in notification-model.ts). */
   recoveryKey?: string;
+  /** operation-error only — the ROOT CAUSE shared across conditions, shape
+   *  `host:<alias>`; the Errors pane folds cards sharing an open causeKey into
+   *  one group (server-owned, src/core/notifications/error-cause.ts). */
+  causeKey?: string;
   /** operation-error only — the FAMILY the Errors rail groups by ('Sessions',
    *  'API', a plugin's display name, …). Server-derived
    *  (src/core/notifications/humanize.ts); absent on pre-humanizer records. */

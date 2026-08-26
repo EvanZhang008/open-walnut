@@ -35,7 +35,7 @@ import {
 } from '../../../src/core/notifications/store.js';
 import {
   expireOrphanedPermissionNotifications, expireStaleErrorNotifications,
-  KEYLESS_ERROR_DEBRIS_MS,
+  KEYLESS_ERROR_DEBRIS_MS, RESOLVED_ERROR_RETENTION_MS,
 } from '../../../src/core/notifications/permission-expiry.js';
 import {
   createSessionRecord, updateSessionRecord, _resetSessionTrackerForTesting,
@@ -320,13 +320,39 @@ describe('expireStaleErrorNotifications', () => {
     const first = await expireStaleErrorNotifications();
     expect(first.deadSession + first.keylessDebris).toBe(2);
     const second = await expireStaleErrorNotifications();
-    expect(second).toEqual({ deadSession: 0, keylessDebris: 0 });
+    // Sweep 3 (the settled-receipt prune) reports 0 here BECAUSE it ages off
+    // `resolvedAt`: the cards sweeps 1+2 just stamped start their retention clock
+    // now, so a re-run must not erase them in the same breath.
+    expect(second).toEqual({ deadSession: 0, keylessDebris: 0, prunedResolved: 0 });
   });
 
   it('does not touch permissions at all (that is the other sweep)', async () => {
     await seedPerm('req-untouched', 'sess-missing');
     const out = await expireStaleErrorNotifications();
-    expect(out).toEqual({ deadSession: 0, keylessDebris: 0 });
+    expect(out).toEqual({ deadSession: 0, keylessDebris: 0, prunedResolved: 0 });
     expect(await resolvedOf('req-untouched')).toBeUndefined();
+  });
+
+  it('PRUNES settled receipts past retention, keeping a freshly settled one', async () => {
+    // Sweep 3. A recovered/expired error is a receipt: worth a day or two, then
+    // sediment (61 of 76 live-feed records were settled errors, which read as
+    // "so many notifications" long after every cause was gone).
+    const NOW = Date.now();
+    const OLD = RESOLVED_ERROR_RETENTION_MS + 60_000;
+    await upsertNotification({
+      kind: 'operation-error', severity: 'info', title: 'old receipt',
+      dedupKey: 'logerr:web:settled-old', recoveryKey: 'route:GET /api/x',
+      timestamp: NOW - OLD, resolved: 'recovered', resolvedAt: NOW - OLD,
+    });
+    await upsertNotification({
+      kind: 'operation-error', severity: 'info', title: 'fresh receipt',
+      dedupKey: 'logerr:web:settled-fresh', recoveryKey: 'route:GET /api/y',
+      timestamp: NOW - OLD, resolved: 'expired', resolvedAt: NOW - 60_000,
+    });
+
+    const out = await expireStaleErrorNotifications(NOW);
+    expect(out.prunedResolved).toBe(1);
+    const keys = (await listNotifications()).feed.map(n => n.dedupKey);
+    expect(keys).toEqual(['logerr:web:settled-fresh']);
   });
 });
