@@ -4,6 +4,12 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMockConstants } from '../../helpers/mock-constants.js';
 
+// This file tests the QMD (legacy) search lane BY NAME — its mocks target
+// memory-search.js, which the search-v2 path never calls. v2 became the
+// default on 2026-08-26, so pin the flag to the legacy lane here; the lane
+// and this file both retire together in Phase 4.
+process.env.WALNUT_SEARCH_V2 = '0';
+
 const { memoryNotesSearchMock, listSessionsMock } = vi.hoisted(() => ({
   memoryNotesSearchMock: vi.fn(),
   listSessionsMock: vi.fn(),

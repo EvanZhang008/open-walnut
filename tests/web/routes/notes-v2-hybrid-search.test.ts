@@ -25,6 +25,12 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants('notes-v2-hybrid-test'));
 
+// The semantic leg under test here is the QMD one (memory-search.js mock
+// below). Search v2 became the default on 2026-08-26 and routes the semantic
+// leg elsewhere, so pin the flag to the legacy lane; this leg and its tests
+// retire together in Phase 4.
+process.env.WALNUT_SEARCH_V2 = '0';
+
 // A per-test controllable semantic leg. Each test sets `semanticHits` to the
 // MemorySearchResult[] the QMD engine should "return" (or makes the mock throw
 // to simulate an unavailable engine). filepath MUST be ABSOLUTE (that is what
