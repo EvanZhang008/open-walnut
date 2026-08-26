@@ -390,6 +390,11 @@ export class DaemonConnection {
     // the rules, so "same hash as last push" must not skip it.
     if (changed) this.lastHooksPushHash = null
     if (changed && value) this.pushDaemonHooks()
+    // Distribute the walnut skill to this host's engine-native discovery
+    // surfaces (claude skill store / codex AGENTS.md) on every (re)connect —
+    // same freshness mechanism as the shims, hash-skipped daemon-side.
+    if (changed) this.lastSkillSyncHash = null
+    if (changed && value) this.pushSkillSync()
     // Keep bridge health fresh while connected: without a periodic re-push,
     // _lastBridgeConnected only updates on (re)connect and rots for days.
     if (changed) {
@@ -507,6 +512,55 @@ export class DaemonConnection {
         })
       } finally {
         this.hooksPushInFlight = false
+      }
+    })()
+  }
+
+  /**
+   * Distribute the walnut skill to this host's engine-native discovery
+   * surfaces: `~/.claude/skills/walnut/SKILL.md` and a fenced section in
+   * `~/.codex/AGENTS.md` (see core/skill-sync.ts for what and why). The
+   * daemon owns the writes (marker-guarded, production-dir only); this just
+   * ships the current content. Capability-gated: an old daemon simply keeps
+   * the previous copies until auto-deploy upgrades it. Fire-and-forget —
+   * distribution must never block or fail a connect.
+   */
+  private lastSkillSyncHash: string | null = null
+  private skillSyncInFlight = false
+
+  pushSkillSync(): void {
+    if (this.isReadOnlyRemote) return
+    if (this._capabilities && !this.hasCapability('skill-sync-v1')) return
+    if (this.skillSyncInFlight) return
+    this.skillSyncInFlight = true
+    void (async () => {
+      try {
+        const { buildSkillSyncPayload } = await import('../core/skill-sync.js')
+        const payload = await buildSkillSyncPayload()
+        if (!payload || payload.hash === this.lastSkillSyncHash) return
+        const reply = await this.send('skills.sync', {
+          hash: payload.hash,
+          claudeSkill: payload.claudeSkill,
+          codexSection: payload.codexSection,
+        })
+        if (reply.ok !== true) {
+          log.session.warn('DaemonConnection: skill sync rejected', {
+            host: this.hostKey, error: typeof reply.error === 'string' ? reply.error : undefined,
+          })
+          return
+        }
+        this.lastSkillSyncHash = payload.hash
+        log.session.info('DaemonConnection: walnut skill synced', {
+          host: this.hostKey, hash: payload.hash,
+          changed: (reply as Record<string, unknown>).changed === true,
+          wrote: (reply as Record<string, unknown>).wrote,
+        })
+      } catch (err) {
+        log.session.warn('DaemonConnection: skill sync failed', {
+          host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+        })
+      } finally {
+        this.skillSyncInFlight = false
       }
     })()
   }

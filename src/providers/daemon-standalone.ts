@@ -1456,6 +1456,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // NOT in BRIDGE_ALLOWED_COMMANDS: rule content may only arrive over the
     // trusted SSH-tunneled walnut socket, never from the public cloud bridge.
     case 'hooks.configure': return cmdHooksConfigure(ws, id as number, cmd)
+    case 'skills.sync': return cmdSkillsSync(ws, id as number, cmd)
     case 'bridgeResume': return cmdBridgeResume(ws, id as number, cmd)
     case 'stt': return cmdSttRelay(ws, id as number, cmd)
     case 'stt-result': return cmdSttResult(ws, id as number, cmd)
@@ -2612,6 +2613,70 @@ function cmdHooksConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
     logMsg('info', 'daemon hooks configured', { hash: next.hash, hooks: next.hooks.length })
   }
   return sendOk(ws, id, { applied: true, changed, hash: next.hash })
+}
+
+// ── skills.sync: distribute the walnut skill to this host's engine stores ──
+// The hub pushes the current content on every (re)connect (hash-skipped
+// hub-side); the daemon owns the writes so hand-started sessions on this host
+// discover the `walnut` CLI. Two guards, same spirit as the user-PATH shims:
+// production daemon only, and never clobber a file we did not write (the
+// marker string is the ownership proof). ~/.codex is only touched when the
+// directory already exists — no codex user, no codex file. Keep in sync with
+// daemon-source.ts cmdSkillsSync.
+const SKILL_SYNC_MARKER = 'walnut-managed v1'
+
+function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const claudeSkill = typeof cmd.claudeSkill === 'string' ? cmd.claudeSkill : ''
+  const codexSection = typeof cmd.codexSection === 'string' ? cmd.codexSection : ''
+  if (!claudeSkill.includes(SKILL_SYNC_MARKER) || !codexSection.includes(SKILL_SYNC_MARKER)) {
+    return sendError(ws, id, 'skills.sync: payload missing the managed marker')
+  }
+  if (path.resolve(DAEMON_DIR) !== path.resolve(PROD_DAEMON_DIR)) {
+    return sendOk(ws, id, { applied: true, changed: false, skipped: 'non-prod' })
+  }
+  const wrote: string[] = []
+  // claude: ~/.claude/skills/walnut/SKILL.md
+  try {
+    const dir = path.join(HOME_DIR, '.claude', 'skills', 'walnut')
+    const target = path.join(dir, 'SKILL.md')
+    let existing: string | null = null
+    try { existing = fs.readFileSync(target, 'utf-8') } catch {}
+    if (existing === null || existing.includes(SKILL_SYNC_MARKER)) {
+      if (existing !== claudeSkill) {
+        fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(target, claudeSkill, { mode: 0o644 })
+        wrote.push(target)
+      }
+    }
+  } catch (err) {
+    logMsg('warn', 'skills.sync: claude skill write failed', { error: (err as Error).message })
+  }
+  // codex: fenced section in ~/.codex/AGENTS.md, only when ~/.codex exists
+  try {
+    const codexDir = path.join(HOME_DIR, '.codex')
+    if (fs.existsSync(codexDir)) {
+      const target = path.join(codexDir, 'AGENTS.md')
+      let existing = ''
+      try { existing = fs.readFileSync(target, 'utf-8') } catch {}
+      const begin = existing.indexOf('<!-- BEGIN ' + SKILL_SYNC_MARKER)
+      const endMark = '<!-- END ' + SKILL_SYNC_MARKER + ' -->'
+      const end = existing.indexOf(endMark)
+      let next: string
+      if (begin !== -1 && end !== -1 && end > begin) {
+        next = existing.slice(0, begin) + codexSection + existing.slice(end + endMark.length)
+      } else {
+        next = existing ? existing.replace(/\n*$/, '\n\n') + codexSection + '\n' : codexSection + '\n'
+      }
+      if (next !== existing) {
+        fs.writeFileSync(target, next, { mode: 0o644 })
+        wrote.push(target)
+      }
+    }
+  } catch (err) {
+    logMsg('warn', 'skills.sync: codex section write failed', { error: (err as Error).message })
+  }
+  if (wrote.length > 0) logMsg('info', 'walnut skill distributed', { wrote })
+  return sendOk(ws, id, { applied: true, changed: wrote.length > 0, wrote })
 }
 
 // Hook point cron.created: a bypassPermissions session never emits a

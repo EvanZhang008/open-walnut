@@ -1857,6 +1857,7 @@ function dispatchCommand(ws, id, cmd) {
     // NOT in BRIDGE_ALLOWED_COMMANDS: rule content may only arrive over the
     // trusted SSH-tunneled walnut socket, never from the cloud bridge.
     case 'hooks.configure': return cmdHooksConfigure(ws, id, cmd);
+    case 'skills.sync': return cmdSkillsSync(ws, id, cmd);
     case 'bridgeResume': return cmdBridgeResume(ws, id, cmd);
     case 'stt': return cmdSttRelay(ws, id, cmd);
     case 'stt-result': return cmdSttResult(ws, id, cmd);
@@ -3218,6 +3219,69 @@ function cmdHooksConfigure(ws, id, cmd) {
   }
   return sendOk(ws, id, { applied: true, changed: changed, hash: next.hash });
 }
+
+// skills.sync: distribute the walnut skill into this host's engine stores
+// (claude skill dir + fenced codex AGENTS.md section). Marker-guarded and
+// production-dir only. Keep in sync with daemon-standalone.ts cmdSkillsSync.
+var SKILL_SYNC_MARKER = 'walnut-managed v1';
+
+function cmdSkillsSync(ws, id, cmd) {
+  var NL = String.fromCharCode(10);
+  var claudeSkill = typeof cmd.claudeSkill === 'string' ? cmd.claudeSkill : '';
+  var codexSection = typeof cmd.codexSection === 'string' ? cmd.codexSection : '';
+  if (claudeSkill.indexOf(SKILL_SYNC_MARKER) === -1 || codexSection.indexOf(SKILL_SYNC_MARKER) === -1) {
+    return sendError(ws, id, 'skills.sync: payload missing the managed marker');
+  }
+  if (path.resolve(DAEMON_DIR) !== path.resolve(PROD_DAEMON_DIR)) {
+    return sendOk(ws, id, { applied: true, changed: false, skipped: 'non-prod' });
+  }
+  var wrote = [];
+  try {
+    var dir = path.join(HOME_DIR, '.claude', 'skills', 'walnut');
+    var target = path.join(dir, 'SKILL.md');
+    var existing = null;
+    try { existing = fs.readFileSync(target, 'utf-8'); } catch (e) {}
+    if (existing === null || existing.indexOf(SKILL_SYNC_MARKER) !== -1) {
+      if (existing !== claudeSkill) {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(target, claudeSkill, { mode: 0o644 });
+        wrote.push(target);
+      }
+    }
+  } catch (err) {
+    logMsg('warn', 'skills.sync: claude skill write failed', { error: err.message });
+  }
+  try {
+    var codexDir = path.join(HOME_DIR, '.codex');
+    if (fs.existsSync(codexDir)) {
+      var ctarget = path.join(codexDir, 'AGENTS.md');
+      var cur = '';
+      try { cur = fs.readFileSync(ctarget, 'utf-8'); } catch (e) {}
+      var begin = cur.indexOf('<!-- BEGIN ' + SKILL_SYNC_MARKER);
+      var endMark = '<!-- END ' + SKILL_SYNC_MARKER + ' -->';
+      var end = cur.indexOf(endMark);
+      var nextText;
+      if (begin !== -1 && end !== -1 && end > begin) {
+        nextText = cur.slice(0, begin) + codexSection + cur.slice(end + endMark.length);
+      } else if (cur) {
+        var base = cur;
+        while (base.length > 0 && (base.charAt(base.length - 1) === NL || base.charAt(base.length - 1) === ' ')) base = base.slice(0, -1);
+        nextText = base + NL + NL + codexSection + NL;
+      } else {
+        nextText = codexSection + NL;
+      }
+      if (nextText !== cur) {
+        fs.writeFileSync(ctarget, nextText, { mode: 0o644 });
+        wrote.push(ctarget);
+      }
+    }
+  } catch (err2) {
+    logMsg('warn', 'skills.sync: codex section write failed', { error: err2.message });
+  }
+  if (wrote.length > 0) logMsg('info', 'walnut skill distributed', { wrote: wrote });
+  return sendOk(ws, id, { applied: true, changed: wrote.length > 0, wrote: wrote });
+}
+
 function durableCronDenyMessage() {
   return 'Denied by Walnut: durable scheduled tasks are not allowed in a Walnut-managed session. '
     + 'A durable cron is written to .claude/scheduled_tasks.json and the scheduler lock is scoped to the '

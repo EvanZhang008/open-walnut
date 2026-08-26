@@ -187,6 +187,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'vscode-v1',
   'grep-v1',
   'fs.readBounded',
+  // 'skill-sync-v1' — walnut-skill distribution (skills.sync command). The
+  // server pushes the current walnut SKILL.md + a short codex section at
+  // connect; the daemon writes them into the host's engine-native discovery
+  // surfaces (~/.claude/skills/walnut/, ~/.codex/AGENTS.md), marker-guarded
+  // and production-dir only, so hand-started sessions on any host know the
+  // `walnut` CLI exists. Optional: an old daemon keeps its previous copies
+  // (or none) until the next auto-deploy.
+  'skill-sync-v1',
   // 'acpSteer' — mid-turn message injection into a live ACP turn (worker
   // 'steer' op → adapter `_session/steering` → codex `turn/steer`). Optional:
   // an old daemon answers unknown-command, and AcpSession.steer() degrades to
