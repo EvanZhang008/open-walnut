@@ -6,8 +6,12 @@ const EXPECTED_IDS = [
   // row in the Plugins section (PluginAppControls) — one panel is the start point
   // for everything plugin-shaped.
   'repositories', 'hooks',
+  // ARRAY ORDER IS PAGE ORDER: plugin-store sits directly after the Manage
+  // sections because the nav's Plugins group renders between Manage and
+  // Configure — nav order and scroll order must agree or a click lands wrong.
+  'plugin-store',
   'providers', 'general', 'sessions', 'focus-tiers', 'integrations', 'calendar',
-  'permissions', 'plugin-store', 'search', 'stt', 'audio-capture', 'heartbeat',
+  'permissions', 'search', 'stt', 'audio-capture', 'heartbeat',
   // No `time` row: time tracking's only UI is the walnut-time Plugin App, and the
   // duplicate Settings section was deleted in 95473094. `timeline` below is a
   // different feature (the screen-activity Life Tracker) and stayed.
@@ -41,6 +45,6 @@ describe('core settings registry', () => {
       .map((entry) => entry.id)).toEqual(['plugin-store'])
     expect(CORE_SETTINGS_CONTRIBUTIONS
       .filter((entry) => entry.group === 'configure')
-      .map((entry) => entry.id)).toEqual(EXPECTED_IDS.slice(2).filter((id) => id !== 'plugin-store'))
+      .map((entry) => entry.id)).toEqual(EXPECTED_IDS.slice(3))
   })
 })

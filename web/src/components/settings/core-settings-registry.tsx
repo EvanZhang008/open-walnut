@@ -45,6 +45,15 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   // the start point for everything plugin-shaped.
   { owner: 'walnut', id: 'repositories', label: 'Repositories', title: 'Repositories', group: 'manage', render: () => <ReposSection /> },
   { owner: 'walnut', id: 'hooks', label: 'Hooks', title: 'Hooks', group: 'manage', render: () => <HooksSection /> },
+  // The id stays `plugin-store` — the nav testid, the `#plugin-store` deep link and
+  // several specs address it — while the LABEL is now what the section actually is:
+  // every plugin on this machine, not just a shop. It anchors the nav's own Plugins
+  // group, where every plugin-provided page (a settings-placed App, a plugin
+  // settings panel) also lives — one group for everything plugin-shaped.
+  // Array position matters: the page renders sections in THIS order, and the nav
+  // groups must read in the same top-to-bottom order or a nav click lands somewhere
+  // the eye did not expect. Keep this entry directly after the Manage sections.
+  { owner: 'walnut', id: 'plugin-store', label: 'Plugins', title: 'Plugins', group: 'plugins', render: ({ config, saveSection }) => <PluginStoreSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'providers', label: 'AI Provider', title: 'AI Provider', group: 'configure', render: ({ config, saveSection }) => <ProvidersSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'general', label: 'General', title: 'General', group: 'configure', render: ({ config, saveSection }) => <GeneralSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'sessions', label: 'Tasks & Sessions', title: 'Tasks & Sessions', group: 'configure', render: ({ config, saveSection }) => <SessionsSection config={config} onSave={saveSection} /> },
@@ -52,12 +61,6 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   { owner: 'walnut', id: 'integrations', label: 'Integrations', title: 'Integrations', group: 'configure', render: ({ config, saveSection }) => <IntegrationsSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'calendar', label: 'Calendar', title: 'Calendar', group: 'configure', render: () => <CalendarSection /> },
   { owner: 'walnut', id: 'permissions', label: 'Permissions', title: 'Permissions', group: 'configure', render: () => <PermissionsSection /> },
-  // The id stays `plugin-store` — the nav testid, the `#plugin-store` deep link and
-  // several specs address it — while the LABEL is now what the section actually is:
-  // every plugin on this machine, not just a shop. It anchors the nav's own Plugins
-  // group, where every plugin-provided page (a settings-placed App, a plugin
-  // settings panel) also lives — one group for everything plugin-shaped.
-  { owner: 'walnut', id: 'plugin-store', label: 'Plugins', title: 'Plugins', group: 'plugins', render: ({ config, saveSection }) => <PluginStoreSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'search', label: 'Search & Embeddings', title: 'Search', group: 'configure', render: ({ config, saveSection }) => <SearchSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'stt', label: 'Speech-to-Text', title: 'Speech-to-Text', group: 'configure', render: ({ config, saveSection, reload }) => <SttSection config={config} onSave={saveSection} onReload={reload} /> },
   { owner: 'walnut', id: 'audio-capture', label: 'Audio Capture', title: 'Audio Capture', group: 'configure', render: ({ config, saveSection }) => <AudioCaptureSection config={config} onSave={saveSection} /> },
