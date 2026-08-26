@@ -1319,13 +1319,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         startServer()
     }
 
+    @objc func openSettings() {
+        guard let webView = webView, let port = serverPort else { return }
+        webView.load(URLRequest(url: URL(string: "http://localhost:\(port)/settings")!))
+    }
+
     @objc func resetConfig() {
-        stopServer()
-        serverPort = nil
-        try? FileManager.default.removeItem(at: configFilePath())
-        walnutHome = nil
-        walnutSourceDir = nil
-        showSetupScreen()
+        // Destructive (forgets which installation this app points to) — always
+        // confirm. This used to run bare off ⌘, and wiped the config silently.
+        let alert = NSAlert()
+        alert.messageText = "Reset Setup?"
+        alert.informativeText = "Walnut will forget which installation it points to and show the setup screen again. Your data in ~/.open-walnut is not touched."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Reset Setup")
+        alert.alertStyle = .warning
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertSecondButtonReturn, let self = self else { return }
+            self.stopServer()
+            self.serverPort = nil
+            try? FileManager.default.removeItem(at: configFilePath())
+            self.walnutHome = nil
+            self.walnutSourceDir = nil
+            self.showSetupScreen()
+        }
     }
 
     // MARK: - Menu
@@ -1337,7 +1353,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appMenu.addItem(NSMenuItem(title: "About Walnut", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: ""))
         appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(NSMenuItem(title: "Reset Setup...", action: #selector(resetConfig), keyEquivalent: ","))
+        // ⌘, follows the macOS convention: open Settings (the web UI's settings
+        // page). It must NEVER be a destructive action — it used to trigger
+        // Reset Setup, so a muscle-memory ⌘, silently wiped the app config.
+        appMenu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ","))
+        appMenu.addItem(NSMenuItem(title: "Reset Setup...", action: #selector(resetConfig), keyEquivalent: ""))
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(NSMenuItem(title: "Quit Walnut", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appMenuItem.submenu = appMenu
