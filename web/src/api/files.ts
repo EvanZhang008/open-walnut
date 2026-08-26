@@ -72,10 +72,15 @@ export async function saveFileContent(
  * URL that serves a file's raw bytes with a real Content-Type. Used as an
  * iframe `src` so HTML previews get their own document URL — in-page anchors,
  * relative links and scripts then resolve against the file, not the Walnut SPA.
+ *
+ * `reload` (the pane's reloadToken) is folded into the query string: an iframe/
+ * img/video src that stays byte-identical is never re-navigated by the browser,
+ * so without it the Refresh button was a no-op for every raw-rendered kind.
  */
-export function rawFileContentUrl(filePath: string, host?: string): string {
+export function rawFileContentUrl(filePath: string, host?: string, reload?: number): string {
   const params = new URLSearchParams({ path: filePath, raw: '1' });
   if (host) params.set('host', host);
+  if (reload) params.set('r', String(reload));
   return `/api/file-content?${params}`;
 }
 

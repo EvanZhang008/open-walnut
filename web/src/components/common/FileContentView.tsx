@@ -1267,7 +1267,7 @@ export function FileContentView({
           </div>
           <iframe
             className="fv-doc-preview"
-            src={rawFileContentUrl(filePath, host)}
+            src={rawFileContentUrl(filePath, host, reloadToken)}
             title={filePath}
           />
         </>
@@ -1286,7 +1286,7 @@ export function FileContentView({
             {popoutBtn}
           </div>
           <div className="fv-image-preview">
-            <img src={rawFileContentUrl(filePath, host)} alt={filePath} />
+            <img src={rawFileContentUrl(filePath, host, reloadToken)} alt={filePath} />
           </div>
         </>
       )}
@@ -1376,7 +1376,7 @@ export function FileContentView({
               <video
                 controls
                 preload="metadata"
-                src={rawFileContentUrl(filePath, host)}
+                src={rawFileContentUrl(filePath, host, reloadToken)}
                 ref={(el) => { mediaRef.current = el; if (el) el.playbackRate = playbackRate; }}
                 // Some browsers reset playbackRate to 1 once metadata loads — re-apply.
                 onLoadedMetadata={(e) => { e.currentTarget.playbackRate = playbackRate; }}
@@ -1385,7 +1385,7 @@ export function FileContentView({
               <audio
                 controls
                 preload="metadata"
-                src={rawFileContentUrl(filePath, host)}
+                src={rawFileContentUrl(filePath, host, reloadToken)}
                 ref={(el) => { mediaRef.current = el; if (el) el.playbackRate = playbackRate; }}
                 onLoadedMetadata={(e) => { e.currentTarget.playbackRate = playbackRate; }}
               />
@@ -1456,7 +1456,9 @@ export function FileContentView({
           // instead of navigating the Walnut SPA. Files the user explicitly opened
           // are trusted; allow scripts/forms/popups so the page is interactive.
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals"
-          src={rawFileContentUrl(filePath, host)}
+          // reloadToken rides the URL: same-src iframes are never re-navigated,
+          // which made Refresh a silent no-op on the rendered HTML preview.
+          src={rawFileContentUrl(filePath, host, reloadToken)}
           title={filePath}
         />
       )}
