@@ -119,8 +119,11 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   // 425, refetch 400 → 25 rows vanish above the reader, scrollHeight collapses
   // by thousands of px) and it undoes a "Load earlier" full load outright. Ask
   // for at least what we hold; the initial load, which holds nothing, keeps the
-  // plain lazy tail.
-  const refreshTail = () => Math.max(HISTORY_TAIL_LIMIT, messagesRef.current.length);
+  // plain lazy tail. `held` is passed per call site and never read from
+  // messagesRef inside here: the cache-adopt and Phase-2 paths build their
+  // request in the SAME tick as their setMessages(), so the ref still mirrors
+  // the previous (usually empty) array and would quietly ask for 400 again.
+  const refreshTail = (held: number) => Math.max(HISTORY_TAIL_LIMIT, held);
 
   // Adopt a full (possibly tail-sliced) payload's offset bookkeeping.
   // `windowed` = bounded window read: cursor === messages.length even though
@@ -187,7 +190,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
         // Bounds the fall-through only: an honored delta ignores tail; a DECLINED
         // delta (anchor lost) returns a full payload, which must not be multi-MB
         // — but must not be SHORTER than what we hold either (refreshTail).
-        tail: refreshTail(),
+        tail: refreshTail(messagesRef.current.length),
         signal: controller.signal,
       })
         .then((result) => {
@@ -208,7 +211,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
               { baseOffset: baseOffsetRef.current });
             if (plan.kind === 'rebuild') {
               log.warn('session-history', `delta merge inconsistent — rebuilding (${plan.reason}, had=${messagesRef.current.length} +delta=${result.messages.length})`, { sessionId });
-              fetchSessionHistory(sessionId, { tail: refreshTail(), signal: controller.signal })
+              fetchSessionHistory(sessionId, { tail: refreshTail(messagesRef.current.length), signal: controller.signal })
                 .then((full) => {
                   if (cancelled) return;
                   // Stale rebuild would replace a fresher local view with the
@@ -291,7 +294,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       setPhase2Pending(true);
 
       const endP2 = perf.start(`session:full:${sid}`);
-      fetchSessionHistory(sessionId, { tail: refreshTail(), signal: controller.signal })
+      fetchSessionHistory(sessionId, { tail: refreshTail(cached.messages.length), signal: controller.signal })
         .then((result) => {
           if (cancelled) return;
           endP2(`${result.messages.length} msgs`);
@@ -341,12 +344,17 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       // Phase 1: Fast local read (streams file, ~1ms). Tail-sliced too — the
       // response has no cursor, so no offset bookkeeping; Phase 2 replaces it.
       const endP1 = perf.start(`session:streams:${sid}`);
+      // What Phase 1 put on screen — Phase 2 must not ask for a shorter window
+      // than that (it would re-window the array under the reader). Tracked in a
+      // local because messagesRef has not committed yet when Phase 2 is built.
+      let p1Count = 0;
       fetchSessionHistory(sessionId, { source: 'streams', tail: HISTORY_TAIL_LIMIT, signal: controller.signal })
         .then((result) => {
           if (cancelled) return;
           endP1(`${result.messages.length} msgs`);
           diagnoseOrdering('P1:streams', sid, result.messages);
           if (result.messages.length > 0) {
+            p1Count = result.messages.length;
             setMessages(result.messages);
           }
           if (result.forkBoundaryIndex != null) setForkBoundaryIndex(result.forkBoundaryIndex);
@@ -377,7 +385,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           // Lazy: only the last HISTORY_TAIL_LIMIT messages — a whale session used
           // to pin one of the browser's 6 connections for 35-150s here.
           const endP2 = perf.start(`session:full:${sid}`);
-          fetchSessionHistory(sessionId, { tail: refreshTail(), signal: controller.signal })
+          fetchSessionHistory(sessionId, { tail: refreshTail(p1Count), signal: controller.signal })
             .then((result) => {
               if (!cancelled) {
                 endP2(`${result.messages.length} msgs`);
@@ -473,7 +481,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     // visibleInterval: a hidden tab must not retry full history fetches every
     // 10s for hours (stale remote sessions are exactly the expensive fetch).
     const cancel = visibleInterval(() => {
-      fetchSessionHistory(sessionId, { tail: refreshTail(), signal: controller.signal })
+      fetchSessionHistory(sessionId, { tail: refreshTail(messagesRef.current.length), signal: controller.signal })
         .then((result) => {
           if (cancelled || result.stale) return; // still down — keep the banner, retry next tick
           // Live read recovered → adopt the fresh parse and drop the banner.

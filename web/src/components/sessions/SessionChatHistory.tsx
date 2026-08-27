@@ -9,6 +9,7 @@ import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { SessionMessage, SessionThinking, PlanCard, CollapsedPlanWrite, GenericToolCall, TaskGroupPrompt, agentModelLabel, ToolRunShell, toolRunPhrase, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, MergedHistoryToolRun, SystemGroupRun, SystemLineCollapsible, systemGroupMemberFromHistory, type SystemGroupMember } from './SessionMessage';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
+import { computeRenderWindow, type RenderWindowAnchor } from './render-window';
 import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-unavailable';
 import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence } from '@/stream/render-filter';
 import { getFinishedAgentIds, subscribeFinishedAgentIds } from '@/cache/finished-agents-store';
@@ -901,8 +902,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const pendingBottomDistance = useRef<number | null>(null);
   // Monotonic render-window start: once computed, only ratchets DOWN (older)
   // so already-rendered rows never unmount from the top (see visibleStart).
-  // null = fresh session view. Index into messages[].
+  // null = fresh session view. Index into messages[], re-derived from its
+  // CONTENT anchor on every pass — see render-window.ts for why an index alone
+  // cannot survive this array.
   const renderWindowStart = useRef<number | null>(null);
+  const renderWindowAnchor = useRef<RenderWindowAnchor | null>(null);
   const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
 
   // ── blockIndexMap: assigns each optimistic message a fixed position in the streaming timeline ──
@@ -957,12 +961,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const k = messages.findIndex((m) => m.msgId === prev);
       if (k > 0) {
         turnWatermark.current = Math.min(messages.length, turnWatermark.current + k);
-        // The reading pin is an index too — shift it by the same insertion
-        // count or it would point k rows too old after a backfill.
-        if (renderWindowStart.current !== null) {
-          renderWindowStart.current = Math.min(messages.length, renderWindowStart.current + k);
-        }
       }
+      // The render window is an index too, but it is NOT shifted here: an
+      // effect runs after the frame it should have corrected is already on
+      // screen (that one stale frame is the whole first-open flicker), and it
+      // only knows about insertions — not head drops or window swaps. It
+      // re-derives from its content anchor during render instead
+      // (computeRenderWindow), which covers all four cases.
     }
     prevFirstMsgId.current = first;
   }, [messages]);
@@ -1345,6 +1350,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     setTruncationOffset(0);
     pendingBottomDistance.current = null;
     renderWindowStart.current = null;
+    renderWindowAnchor.current = null;
     blockIndexMap.current.clear();
     consumedQueueIds.current.clear();
     notifiedConsumedIds.current.clear();
@@ -1932,11 +1938,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // change (messages / truncationOffset), so the memo can never serve a
   // visibleStart computed from a stale ratchet.
   const { historyParts, hiddenCount } = useMemo(() => {
-    let visibleStart = Math.max(0, messages.length - (INITIAL_RENDER_LIMIT + truncationOffset));
-    if (renderWindowStart.current !== null) {
-      visibleStart = Math.min(visibleStart, renderWindowStart.current);
-    }
+    const window = computeRenderWindow(
+      messages,
+      INITIAL_RENDER_LIMIT + truncationOffset,
+      { start: renderWindowStart.current, anchor: renderWindowAnchor.current },
+    );
+    const visibleStart = window.start;
     renderWindowStart.current = visibleStart;
+    renderWindowAnchor.current = window.anchor;
     const visibleMessages = messages.slice(visibleStart);
     const parts: HistoryPart[] = [];
     let historyRun: { m: SessionHistoryMessage; globalIndex: number }[] = [];
