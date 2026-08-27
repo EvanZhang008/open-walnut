@@ -28,7 +28,7 @@ import { FileContentView } from '@/components/common/FileContentView';
 import { formatSize } from '@/utils/format';
 import { log } from '@/utils/log';
 import { recordRecentFolder, getRecentFolders, fuzzyMatchRecents, type RecentFolder } from '@/utils/recentFolders';
-import { joinPath, parentPath, relativeTo, parseQuery } from './mention-path';
+import { joinPath, parentPath, relativeTo, normalizePath, parseQuery } from './mention-path';
 
 export interface FileMentionHandle {
   /** Move selection by delta (wraps). */
