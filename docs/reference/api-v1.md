@@ -176,6 +176,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | DELETE | `/api/v1/notes/folder/*path` | Recursive folder delete (client must confirm) |
 | PUT | `/api/v1/conversations/active` | Switch the Personal AI's active conversation pointer |
 | GET | `/api/v1/chat/stats` | Conversation size stats (messages + token estimate) |
+| GET | `/api/v1/chat/engine` | Which engine answers a conversation + its lane session id (read-only; never mints) |
 | POST | `/api/v1/chat/clear` | Clear a Personal AI conversation |
 | POST | `/api/v1/chat/compact` | Fire-and-forget background compaction |
 | GET | `/api/v1/agents/meta/tools\|skills\|models` | Agent-editor dropdown catalogs |
@@ -1239,6 +1240,26 @@ Class A (the REPLICA runs its own Personal AI). `agentId` as usual (absent →
   conversation.
 - `POST /api/v1/chat/clear?agentId=&conversationId=` → `{ "ok": true }` —
   clears the conversation history.
+- `GET /api/v1/chat/engine?agentId=&conversationId=` →
+  `{ "engine": "lane"|"in-process", "sessionId": string|null, "cwd"?, "host"?, "model"? }`
+  — which engine answers this conversation, and on the lane engine the id of the
+  `claude` session behind it.
+  - `engine: "lane"` (config `agent.provider = 'claude-code'`): the turn runs in a
+    real CLI session, so `sessionId` is a normal session id and the existing
+    `/sessions/:id/model-options`, `/model`, `/effort`, and `/controls` endpoints
+    all work on it (they resolve by session RECORD, so a lane session is not
+    excluded the way it is from `GET /sessions`). This is how a client puts a
+    model pill on the main-agent chat.
+  - `sessionId: null` means the lane has no session YET (a conversation with no
+    turn, or one whose lane was archived by `chat/clear`). **This endpoint never
+    mints a lane** — minting is a side effect of sending, and opening a picker
+    must not spawn a CLI. Clients render the model read-only (or hide the pill)
+    until the first turn.
+  - `engine: "in-process"`: no per-conversation session exists; the model is
+    `config.agent.main_model` (echoed as `model` when set) and is a config-level
+    setting, not a per-conversation switch.
+  - `host` is `""` for the primary box, matching `ProjectedSession.host`
+    semantics. No `conversationId` = the active conversation.
 
 ### Library (additive, Wave 3 2026-08) — agents / commands / skills write / repositories
 
