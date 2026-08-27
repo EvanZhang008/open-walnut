@@ -15,13 +15,30 @@ import UIKit
 ///    later `performActionFor` call — so we handle it here and return `false`
 ///    to avoid a duplicate delivery. (`VoiceQuickAction.handle` is idempotent
 ///    anyway; the return value just keeps the log honest.)
-///  - **Warm launch** (process alive, backgrounded): UIKit calls
-///    `application(_:performActionFor:completionHandler:)` — but only because
-///    SwiftUI's own internal scene delegate does NOT implement
-///    `windowScene(_:performActionFor:)`. If a future SwiftUI release starts
-///    implementing it, this callback goes silent; `VoiceQuickActionTests`
-///    can't catch that (it's a UIKit behavior), so the `source` field on the
-///    armed request is the field signal — it tells us which path actually fired.
+///  - **Warm launch** (process alive, backgrounded): UIKit prefers the SCENE
+///    delegate here and only falls back to
+///    `application(_:performActionFor:completionHandler:)` when no scene
+///    delegate implements `windowScene(_:performActionFor:)`.
+///
+///    **That fallback is gone.** SwiftUI's own internal scene delegate now
+///    implements the scene variant (verified in the iOS 26 runtime's SwiftUI
+///    binary: `windowScene:performActionForShortcutItem:completionHandler:` is
+///    in its method list), so it swallows every warm delivery and the
+///    app-level callback below never runs. Measured 2026-08-27: a real
+///    long-press → "Voice to Walnut" on an already-running app produced NO
+///    `quick action armed` line at all, while the same tap cold worked.
+///
+///    The fix is `QuickActionSceneDelegate` at the bottom of this file, wired
+///    in via `application(_:configurationForConnecting:options:)`: naming our
+///    own scene delegate class puts US ahead of SwiftUI's, so the warm
+///    delivery reaches the mailbox again. The app-level callback is KEPT as a
+///    belt-and-braces path (it still fires on OS versions whose SwiftUI lacks
+///    the scene method, and it costs nothing — `handle` is idempotent).
+///
+///    The `source` field on the armed request is how the field log tells these
+///    apart: `scene-perform` = our scene delegate won, `app-perform` = the
+///    old application-level path, `scene-connect` = a shortcut that arrived
+///    with a brand-new scene.
 ///  - **DEBUG launch argument** (`-voice-quick-action`): the same code path,
 ///    reachable from `xcrun simctl launch`. `simctl` cannot synthesize a real
 ///    Home-screen long-press, so this is how the E2E drives the feature. It is
@@ -58,6 +75,69 @@ final class QuickActionDelegate: NSObject, UIApplicationDelegate {
         completionHandler: @escaping (Bool) -> Void
     ) {
         let handled = VoiceQuickAction.shared.handle(shortcutType: shortcutItem.type, source: "app-perform")
+        completionHandler(handled)
+    }
+
+    /// Claim the scene delegate slot for our own class.
+    ///
+    /// This is the ONLY hook that gets ahead of SwiftUI's internal scene
+    /// delegate, and without it warm quick actions are silently dropped (see the
+    /// type header). SwiftUI still builds and drives the scene itself — we are
+    /// not replacing its hosting, only naming the delegate class UIKit should
+    /// message, and our delegate implements nothing but the two shortcut hooks.
+    func application(
+        _ application: UIApplication,
+        configurationForConnecting connectingSceneSession: UISceneSession,
+        options: UIScene.ConnectionOptions
+    ) -> UISceneConfiguration {
+        Self.sceneConfiguration(role: connectingSceneSession.role)
+    }
+
+    /// The configuration decision, split out so a unit test can assert it.
+    ///
+    /// `UISceneSession` has no public initializer and cannot be faked, so a test
+    /// calling the UIKit method above would need a live scene. Taking only the
+    /// `role` keeps the one thing worth pinning — that we install OUR delegate
+    /// class rather than leaving the slot to SwiftUI — reachable from a test.
+    static func sceneConfiguration(role: UISceneSession.Role) -> UISceneConfiguration {
+        let config = UISceneConfiguration(name: nil, sessionRole: role)
+        config.delegateClass = QuickActionSceneDelegate.self
+        return config
+    }
+}
+
+/// Scene-level shortcut delivery — the warm path on any OS whose SwiftUI
+/// implements the scene variant (iOS 26 does).
+///
+/// Deliberately minimal: it implements the two shortcut hooks and NOTHING else,
+/// so SwiftUI keeps full ownership of the window, the root view, and every other
+/// scene callback. Both hooks funnel into the same `VoiceQuickAction.handle()`
+/// the cold path uses — one mailbox, one set of rules (TTL, supersede, ignore
+/// foreign types), no parallel implementation to drift.
+final class QuickActionSceneDelegate: NSObject, UIWindowSceneDelegate {
+    /// A shortcut that arrives WITH the scene connection. Distinct from the cold
+    /// `launchOptions` case: the process may already be alive (a prewarm, a
+    /// background launch) while this particular scene is new, and then
+    /// `didFinishLaunchingWithOptions` has already run without the item.
+    func scene(
+        _ scene: UIScene,
+        willConnectTo session: UISceneSession,
+        options connectionOptions: UIScene.ConnectionOptions
+    ) {
+        VoiceQuickAction.shared.handle(
+            shortcutType: connectionOptions.shortcutItem?.type, source: "scene-connect"
+        )
+    }
+
+    /// The warm tap: app already running, scene already connected.
+    func windowScene(
+        _ windowScene: UIWindowScene,
+        performActionFor shortcutItem: UIApplicationShortcutItem,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        let handled = VoiceQuickAction.shared.handle(
+            shortcutType: shortcutItem.type, source: "scene-perform"
+        )
         completionHandler(handled)
     }
 }

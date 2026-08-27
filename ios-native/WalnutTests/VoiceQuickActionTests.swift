@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 @testable import Walnut
 
@@ -160,6 +161,37 @@ final class VoiceQuickActionTests: XCTestCase {
         XCTAssertNil(action.pending)
         XCTAssertFalse(action.autoSendArmed)
         XCTAssertFalse(action.takeAutoSend())
+    }
+
+    // MARK: - Warm delivery must have a SCENE-level owner
+
+    /// Regression pin for the 2026-08-27 warm-path break.
+    ///
+    /// UIKit prefers the SCENE delegate for a warm shortcut and only falls back
+    /// to `application(_:performActionFor:)` when no scene delegate implements
+    /// `windowScene(_:performActionFor:)`. SwiftUI's own internal scene delegate
+    /// DOES implement it on iOS 26, so it silently swallowed every warm
+    /// delivery: a real long-press on an already-running app armed nothing at
+    /// all, while the same tap on a cold app worked.
+    ///
+    /// The fix is that `QuickActionDelegate` names our own `delegateClass`, so
+    /// this asserts the two things that make the fix real: our scene delegate
+    /// exists and implements the scene hook (the UIKit contract), and it is the
+    /// class the app actually installs (the wiring). A future refactor that
+    /// drops either one puts the warm path back in SwiftUI's hands, and the
+    /// symptom is invisible to every other test in this file.
+    func testSceneDelegateOwnsWarmShortcutDelivery() {
+        XCTAssertTrue(
+            QuickActionSceneDelegate.instancesRespond(
+                to: #selector(UIWindowSceneDelegate.windowScene(_:performActionFor:completionHandler:))
+            ),
+            "our scene delegate doesn't implement windowScene(_:performActionFor:) — SwiftUI's internal one wins and warm quick actions are dropped"
+        )
+        let config = QuickActionDelegate.sceneConfiguration(role: .windowApplication)
+        XCTAssertTrue(
+            config.delegateClass === QuickActionSceneDelegate.self,
+            "the app isn't installing QuickActionSceneDelegate, so nothing gets ahead of SwiftUI's scene delegate"
+        )
     }
 
     // MARK: - Main-agent contract
