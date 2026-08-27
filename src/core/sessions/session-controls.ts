@@ -391,7 +391,7 @@ export async function forkSessionToTask(
 
   const { getSessionByClaudeId, getSessionsForTask, createSessionRecord } = await import('../session-tracker.js');
   const {
-    getTask, addTask, setFocusTier, updateTask, groupTasks, addToGroup, renameGroup,
+    getTask, addTask, updateTask, groupTasks, addToGroup, renameGroup,
   } = await import('../task-manager.js');
 
   const sourceRecord = await getSessionByClaudeId(sourceSessionId);
@@ -444,6 +444,24 @@ export async function forkSessionToTask(
       .trim() || sourceTask.title;
     const autoTitle = !child_title;
     const newTitle = child_title || `Fork of ${sourceBaseTitle}`;
+    // Inherit the source's TIER in the SAME write as the pin, so a fork of a
+    // Focus task is born in Focus (the old create → setFocusTier pair could
+    // half-land and leave the fork in Satellite). A stored tier the registry no
+    // longer knows is filtered out here rather than failing the fork: replaying
+    // a stale value is exactly the lenient case addTask refuses, and a fork must
+    // never die over the source's leftover tier id.
+    let inheritedTier: string | undefined;
+    if (sourceTask.pinned && sourceTask.focus_tier) {
+      const { getCustomTiers } = await import('../task-manager.js');
+      const known = ['focus', 'backlog', 'wait'].includes(sourceTask.focus_tier)
+        || (await getCustomTiers()).some((t) => t.id === sourceTask.focus_tier);
+      if (known) inheritedTier = sourceTask.focus_tier;
+      else {
+        log.session.warn('fork: source tier is not registered, filing the fork in Satellite', {
+          sourceTaskId: sourceTask.id, tier: sourceTask.focus_tier,
+        });
+      }
+    }
     // No _skipPluginOps: a fork inherits the source's source (e.g. an external
     // sync plugin) and must pass the same content validation + push as any
     // other task. addTask throws on invalid content → surfaced to the caller.
@@ -454,20 +472,8 @@ export async function forkSessionToTask(
       // A fork is a person splitting off live work, so it joins the board like
       // any other hand-made task (Satellite = pinned, no stored tier).
       pinned: true,
+      ...(inheritedTier ? { focus_tier: inheritedTier } : {}),
     });
-    // Inherit the source's TIER on top of that pin, so a fork of a Focus task
-    // lands in Focus too — addTask() never sets focus_tier. Best-effort,
-    // non-fatal on failure.
-    if (sourceTask.pinned && sourceTask.focus_tier) {
-      try {
-        await setFocusTier(newFork.id, sourceTask.focus_tier);
-      } catch (err) {
-        log.session.warn('fork: failed to inherit pin/tier from source', {
-          taskId: newFork.id, sourceTaskId: sourceTask.id, tier: sourceTask.focus_tier,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
     // Visually group the source task + fork. Reuse the source task's existing
     // group if it already belongs to one. Best-effort: a grouping failure must
     // not abort the fork — the fork task still exists standalone.
@@ -489,8 +495,9 @@ export async function forkSessionToTask(
     }
 
     // Emit task:created with the FINAL persisted state, not the stale addTask()
-    // reference: togglePin/setFocusTier/grouping above all mutated store clones,
-    // so `newFork` still says pinned=false / no focus_tier / no group_id.
+    // reference: the grouping above mutated a store clone, so `newFork` still
+    // says no group_id. (Pin + tier DO ride the create now, so the re-read is
+    // only about grouping.)
     try {
       task = await getTask(newFork.id);
     } catch {

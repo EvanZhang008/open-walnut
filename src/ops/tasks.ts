@@ -110,13 +110,19 @@ defineOp({
   description:
     'Record a task without starting any work or session. Use this only when the user wants tracking ' +
     'without execution; use `delegate` when work should start now. An omitted/empty project means ' +
-    'Inbox, and an unknown project name auto-creates its registry row. The result carries a `ref` tag.',
+    'Inbox, and an unknown project name auto-creates its registry row. A new task lands on the pinned ' +
+    'board in the Satellite tier; pass focus_tier to put it straight into another tier, or pinned=false ' +
+    'to keep it off the board. The result carries a `ref` tag.',
   input: {
     title: z.string().min(1).describe('Task title (required)'),
     project: z.string().optional().describe('Project name; omit or "" for the Inbox'),
     priority: PRIORITY.optional().describe('immediate | important | backlog | none'),
     due_date: z.string().optional().describe('YYYY-MM-DD or a full ISO-8601 datetime'),
     description: z.string().optional().describe('Longer body text (write-only)'),
+    pinned: z.boolean().optional().describe('Join the pinned board (default true). false keeps the task off the board'),
+    // Exact ids only — this rides straight to the server, which validates
+    // against the registry. Label tolerance lives in the agent tool.
+    focus_tier: z.string().optional().describe('Pin tier the task is born into (implies pinned): focus | satellite | backlog | wait | a registered ct_* id. Omit for Satellite; unknown tiers are rejected, not silently downgraded'),
   },
   bind: { method: 'POST', path: '/tasks' },
   mapResult: ({ body }) => withRef((body as { task?: unknown } | undefined)?.task),

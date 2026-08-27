@@ -21,6 +21,7 @@ import {
   ActiveSessionError,
   ActiveChildrenError,
   InvalidProjectNameError,
+  InvalidFocusTierError,
   ProjectSourceConflictError,
   addNote,
   updateNote,
@@ -716,7 +717,7 @@ tasksRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) 
 // POST /api/tasks — create
 tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { title, priority, status, pinned } = req.body
+    const { title, priority, status, pinned, focus_tier: focusTier } = req.body
 
     if (typeof title !== 'string' || title.trim() === '') {
       res.status(400).json({ error: 'title must be a non-empty string' })
@@ -724,6 +725,12 @@ tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) =>
     }
     if (pinned !== undefined && typeof pinned !== 'boolean') {
       res.status(400).json({ error: 'pinned must be a boolean' })
+      return
+    }
+    // null joins '' as "not specified" so a client can send its whole create
+    // shape unconditionally (same tolerance the date fields have).
+    if (focusTier !== undefined && focusTier !== null && typeof focusTier !== 'string') {
+      res.status(400).json({ error: 'focus_tier must be a string ("" / null = not specified)' })
       return
     }
     if (priority !== undefined && !VALID_PRIORITIES.includes(priority)) {
@@ -752,7 +759,21 @@ tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) =>
     // pinned: this is the human create surface (Quick Add, the calendar popover,
     // "create task for later"), so the task lands on the board in Satellite
     // unless the client said otherwise — see newTaskPinDefault.
-    const result = await addTask({ ...req.body, pinned: newTaskPinDefault(pinned), asyncPush: true })
+    // focus_tier: passed EXPLICITLY (not left to the req.body spread) so the
+    // create-time tier is part of this route's contract, and so the tier lands
+    // in the SAME store write as the pin — a create-then-setFocusTier pair
+    // silently drops the task out of the picked tier when the second write
+    // fails. addTask (resolveNewTaskTier) owns the value rules; an unknown tier
+    // or a pinned:false + tier contradiction throws InvalidFocusTierError → 400
+    // below, never a silent fall-through to Satellite.
+    const result = await addTask({
+      ...req.body,
+      pinned: newTaskPinDefault(pinned),
+      // Overwrite whatever the spread carried (`null` is a legal "not
+      // specified" on the wire but not a legal AddTaskInput value).
+      focus_tier: typeof focusTier === 'string' ? focusTier : undefined,
+      asyncPush: true,
+    })
     log.web.info('task created via REST', { taskId: result.task.id, project: result.task.project || '' })
     bus.emit(EventNames.TASK_CREATED, { task: result.task }, ['web-ui', 'main-agent'], { source: 'api' })
     res.status(201).json(result)
@@ -768,6 +789,10 @@ tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) =>
     }
     if (err instanceof InvalidProjectNameError) {
       res.status(400).json({ error: err.message, project: err.project })
+      return
+    }
+    if (err instanceof InvalidFocusTierError) {
+      res.status(400).json({ error: err.message, focus_tier: err.tier })
       return
     }
     next(err)

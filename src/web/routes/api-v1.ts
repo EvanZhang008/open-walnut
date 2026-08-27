@@ -1241,7 +1241,7 @@ apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction
 apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { title, project, priority, due_date: dueDate, start_date: startDate,
-      end_date: endDate, description, pinned } = (req.body ?? {}) as {
+      end_date: endDate, description, pinned, focus_tier: focusTier } = (req.body ?? {}) as {
       title?: unknown
       project?: unknown
       priority?: unknown
@@ -1250,6 +1250,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       end_date?: unknown
       description?: unknown
       pinned?: unknown
+      focus_tier?: unknown
     }
     if (typeof title !== 'string' || !title.trim()) {
       sendError(res, 400, 'bad_request', 'title must be a non-empty string')
@@ -1299,8 +1300,21 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       sendError(res, 400, 'bad_request', 'pinned must be a boolean')
       return
     }
+    // focus_tier (additive, 2026-08): which pin tier the task is BORN into, in
+    // the same store write as the pin. Built-ins 'focus' | 'satellite' |
+    // 'backlog' | 'wait', or a registered custom tier id ('ct_*'); '' means
+    // "not specified". addTask (resolveNewTaskTier) owns the value rules — an
+    // unknown tier is a 400, never a silent Satellite fall-through, and
+    // 'satellite' normalizes to pinned-with-no-stored-tier.
+    // null joins '' as "not specified" so a client can send its whole create
+    // shape unconditionally (same tolerance the date fields have).
+    if (focusTier !== undefined && focusTier !== null && typeof focusTier !== 'string') {
+      sendError(res, 400, 'bad_request', 'focus_tier must be a string ("" / null = not specified)')
+      return
+    }
 
-    const { addTask, newTaskPinDefault, ProjectSourceConflictError } = await import('../../core/task-manager.js')
+    const { addTask, newTaskPinDefault, ProjectSourceConflictError, InvalidFocusTierError } =
+      await import('../../core/task-manager.js')
     const { projectTask } = await import('../../core/task-projection.js')
     try {
       // asyncPush like the web create path: the client renders the task
@@ -1319,6 +1333,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         // task_create op) — lands on the board in Satellite unless the caller
         // passed an explicit `pinned`. See newTaskPinDefault.
         pinned: newTaskPinDefault(pinned),
+        ...(typeof focusTier === 'string' ? { focus_tier: focusTier } : {}),
         asyncPush: true,
       })
       log.web.info('task created via api-v1', { taskId: task.id, project: task.project })
@@ -1328,6 +1343,10 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     } catch (err) {
       if (err instanceof ProjectSourceConflictError) {
         sendError(res, 409, 'conflict', err.message)
+        return
+      }
+      if (err instanceof InvalidFocusTierError) {
+        sendError(res, 400, 'bad_request', err.message)
         return
       }
       throw err

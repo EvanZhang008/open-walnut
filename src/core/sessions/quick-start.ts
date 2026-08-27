@@ -9,7 +9,7 @@
 
 import path from 'node:path';
 import { log } from '../../logging/index.js';
-import { addTask, getTask, updateTask, setFocusTier, ensureProject, setProjectMetadata, InvalidProjectNameError, ProjectSourceConflictError } from '../task-manager.js';
+import { addTask, getTask, updateTask, getCustomTiers, ensureProject, setProjectMetadata, InvalidProjectNameError, ProjectSourceConflictError } from '../task-manager.js';
 import { getSessionsForTask, updateSessionRecord } from '../session-tracker.js';
 import { bus, EventNames } from '../event-bus.js';
 import type { Task, SessionEngine } from '../types.js';
@@ -186,6 +186,27 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     // write: `null` = the caller explicitly opted out (the launcher's unpin
     // gesture, a routine run); anything else joins the board.
     const pinNewTask = taskMeta?.pinTier !== null;
+    // Tier resolved to a value addTask will accept, BEFORE the create, so the
+    // pin AND its tier land in ONE store write (the old create → setFocusTier
+    // pair could half-land and silently drop the task into Satellite).
+    //
+    // Deliberately LENIENT here, unlike the task-create REST edges: the
+    // launcher persists the last tier in localStorage, so after the user
+    // deletes that tier in Settings a stale ct_* arrives on every launch. That
+    // is a stale remembered pick, not a caller error — downgrade it to
+    // Satellite (what setFocusTier used to self-heal it to) rather than failing
+    // the launch. See the matching note in web/routes/sessions.ts.
+    let bornTier: string | undefined;
+    if (pinNewTask && taskMeta?.pinTier && taskMeta.pinTier !== 'satellite') {
+      const known = ['focus', 'backlog', 'wait'].includes(taskMeta.pinTier)
+        || (await getCustomTiers()).some((t) => t.id === taskMeta.pinTier);
+      if (known) bornTier = taskMeta.pinTier;
+      else {
+        log.web.warn(`${source}: unknown pinTier on launch, filing in Satellite`, {
+          tier: taskMeta.pinTier,
+        });
+      }
+    }
     let task: Task;
     try {
       // ONE store write: cwd/priority/dates ride the create instead of a
@@ -206,6 +227,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
         ...(taskMeta?.start_date ? { start_date: taskMeta.start_date } : {}),
         ...(taskMeta?.end_date ? { end_date: taskMeta.end_date } : {}),
         ...(pinNewTask ? { pinned: true } : {}),
+        ...(bornTier ? { focus_tier: bornTier } : {}),
       }));
     } catch (err) {
       // Client-supplied project seed the registry rejects — a caller error, not
@@ -229,29 +251,15 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
         });
       }
     }
-    // Rare follow-up writes. `unread` doesn't ride AddTaskInput, and the tier
-    // only needs writing when the caller named one (a pinned task with no
-    // stored tier IS Satellite). Tier is best-effort: if it fails the task
-    // keeps its Satellite slot and the session still starts.
+    // One rare follow-up write left: `unread` doesn't ride AddTaskInput. The
+    // tier no longer needs one — it rode the create above.
     const wantsUnread = taskMeta?.unread === true;
-    const wantsTier = pinNewTask && taskMeta?.pinTier ? taskMeta.pinTier : undefined;
     if (wantsUnread) {
       await updateTask(task.id, { unread: true }, { source });
     }
-    if (wantsTier) {
-      try {
-        await setFocusTier(task.id, wantsTier);
-      } catch (err) {
-        log.web.warn(`${source}: failed to apply pin/tier`, {
-          taskId: task.id,
-          tier: wantsTier,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-    // Common path (Satellite tier, no unread): the addTask return IS the final
-    // task — skip the whole-store re-read that used to run on every launch.
-    updatedTask = wantsUnread || wantsTier ? await getTask(task.id) : task;
+    // Common path (no unread): the addTask return IS the final task — skip the
+    // whole-store re-read that used to run on every launch.
+    updatedTask = wantsUnread ? await getTask(task.id) : task;
   }
 
   if (!existingTaskId) {

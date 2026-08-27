@@ -426,8 +426,8 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
 - `503 { "error": { "code": "unavailable" } }` — projection not synced yet
   (fresh companion before its first git pull).
 - `POST /api/v1/tasks` (additive, 2026-08) body `{ "title", "project"?,
-  "priority"?, "due_date"?, "start_date"?, "end_date"?, "description"? }` →
-  `201 { "task": ProjectedTask }`.
+  "priority"?, "due_date"?, "start_date"?, "end_date"?, "description"?,
+  "pinned"?, "focus_tier"? }` → `201 { "task": ProjectedTask }`.
   Same creation semantics as the web quick-add: omitted/empty `project` =
   config default → Inbox; a new project name auto-creates its registry row;
   `priority` one of `immediate|important|backlog|none` (default from config).
@@ -438,9 +438,26 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   `description` is write-only: it is stored on the task but NOT returned in the
   slim ProjectedTask shape (which carries `summary`, a different field) — don't
   expect to read it back from `POST`'s response or `GET /tasks`.
+  `pinned` (boolean) decides whether the task joins the pinned board; omitted
+  means `true` (a task a person creates should not be invisible), and `false`
+  keeps it off the board.
+  `focus_tier` (additive, 2026-08-27) is which pin tier the task is BORN into,
+  written in the same store write as the pin — so a client never needs a second
+  request to place a new task, and a failed follow-up can never drop it out of
+  the tier the user picked. Accepted values: the built-ins `focus` |
+  `satellite` | `backlog` | `wait`, or a registered custom tier id (`ct_*`,
+  from `GET /api/v1/focus/tiers`). `""` or `null` means "not specified" so a
+  client can send the shape unconditionally. Three rules to code against:
+  a tier IMPLIES `pinned`, so sending only `focus_tier` still lands the task on
+  the board; `satellite` normalizes to pinned with NO stored tier (the response
+  omits `focus_tier` entirely, exactly like an omitted-tier create), because
+  that absence is how Satellite is stored; and an unknown tier is a `400`, never
+  a silent downgrade to Satellite.
   Errors: `400 bad_request` (missing title / bad priority / bad due_date /
   bad `start_date`/`end_date` / `end_date` before `start_date` / `end_date`
-  with no `start_date`), `409 conflict` (project source conflict).
+  with no `start_date` / non-string or unknown `focus_tier` / `focus_tier`
+  together with `pinned: false`, which is a contradiction rather than a
+  half-honored pair), `409 conflict` (project source conflict).
   Works on BOTH boxes (2026-08: the REPLICA's former `503 not_supported_cloud`
   gate was removed — the cloud companion writes to its local store and the
   task outbox syncs it back to the primary). On a REPLICA the new task shows

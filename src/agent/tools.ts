@@ -328,6 +328,33 @@ function looseBool(value: unknown, field: string): boolean {
   throw new Error(`${field} must be true or false`);
 }
 
+/**
+ * Model-facing `focus_tier` → the exact value the core layer stores. ONE
+ * definition shared by task_create and task_update: built-ins match
+ * case-insensitively and pass through verbatim; a custom tier matches by id OR
+ * label (case-insensitive) and resolves to its id, because the tool schema
+ * cannot enumerate a dynamic tier set. Returns an `error` string (never throws)
+ * so both call sites hand the model the same message with the valid list.
+ *
+ * Note the split of duties: this is the LENIENT, model-friendly layer.
+ * resolveNewTaskTier in task-manager.ts is the strict one (exact ids only) and
+ * is what the HTTP edges validate against — so a label only ever works through
+ * the tool, and a wrong value still fails loudly on both.
+ */
+async function resolveTierInput(raw: unknown): Promise<{ tier?: string; error?: string }> {
+  const value = String(raw).trim().toLowerCase();
+  if (value === 'focus' || value === 'satellite' || value === 'backlog' || value === 'wait') {
+    return { tier: value };
+  }
+  const customTiers = await getCustomTiers();
+  const match = customTiers.find(
+    (t) => t.id.toLowerCase() === value || t.label.trim().toLowerCase() === value,
+  );
+  if (match) return { tier: match.id };
+  const valid = ['focus', 'satellite', 'backlog', 'wait', ...customTiers.map((t) => t.label)];
+  return { error: `Error: unknown focus_tier "${String(raw)}". Valid tiers: ${valid.join(', ')}` };
+}
+
 function buildToolTaskQuery(params: Record<string, unknown>, where: Record<string, unknown>): TaskQuery {
   const query: TaskQuery = {};
 
@@ -767,6 +794,7 @@ export const tools: ToolDefinition[] = [
         depends_on: { type: 'array', items: { type: 'string' }, description: 'Full IDs of prerequisite tasks that must complete before this one can start.' },
         cwd: { type: 'string', description: 'Task-level working directory override (type=task only). Takes precedence over project default_cwd when starting sessions.' },
         pinned: { type: 'boolean', description: 'Whether the new task joins the pinned working set. Omit for the default (pinned, Satellite tier). Pass false only for work that is not expected within about a month.' },
+        focus_tier: { type: 'string', description: 'Which pinned tier the task is born into (implies pinned). Built-ins: focus=work on it now, satellite=needs doing soon (the default), backlog=someday/low-priority, wait=parked/blocked. Custom tiers (user-defined in Settings) are accepted by id or label. Omit for Satellite; do not combine with pinned=false.' },
       },
       required: [],
     },
@@ -844,6 +872,17 @@ export const tools: ToolDefinition[] = [
         // peek beforehand so the reply can flag a brand-new project to the model.
         const projectWasNew = !!project && !parentTaskId && !(await getProjectRecord(project));
 
+        // Tier resolved BEFORE the create so an unknown one costs nothing: the
+        // model gets the valid list back with no task written. addTask then
+        // writes pin + tier in ONE store write (no create-then-setFocusTier
+        // pair that can half-land).
+        let createTier: string | undefined;
+        if (params.focus_tier !== undefined) {
+          const resolved = await resolveTierInput(params.focus_tier);
+          if (resolved.error) return resolved.error;
+          createTier = resolved.tier;
+        }
+
         const { task, syncResult } = await addTask({
           title,
           priority: params.priority as TaskPriority | undefined,
@@ -860,6 +899,7 @@ export const tools: ToolDefinition[] = [
           // the AI records for the user should not be invisible. See
           // newTaskPinDefault.
           pinned: newTaskPinDefault(params.pinned),
+          ...(createTier ? { focus_tier: createTier } : {}),
         });
         bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: 'agent' });
         const syncStatus = syncResult?.success === false
@@ -988,20 +1028,9 @@ For projects (type='project'): set default_host and default_cwd for session defa
         // double-apply the parts that did land.
         let resolvedTier: string | undefined;
         if (params.focus_tier !== undefined) {
-          const raw = String(params.focus_tier).trim().toLowerCase();
-          if (raw === 'focus' || raw === 'satellite' || raw === 'backlog' || raw === 'wait') {
-            resolvedTier = raw;
-          } else {
-            const customTiers = await getCustomTiers();
-            const match = customTiers.find(
-              (t) => t.id.toLowerCase() === raw || t.label.trim().toLowerCase() === raw,
-            );
-            if (!match) {
-              const valid = ['focus', 'satellite', 'backlog', 'wait', ...customTiers.map((t) => t.label)];
-              return `Error: unknown focus_tier "${String(params.focus_tier)}". Valid tiers: ${valid.join(', ')}`;
-            }
-            resolvedTier = match.id;
-          }
+          const resolved = await resolveTierInput(params.focus_tier);
+          if (resolved.error) return resolved.error;
+          resolvedTier = resolved.tier;
         }
 
         // Structural fields

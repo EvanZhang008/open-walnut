@@ -6,7 +6,7 @@ import { generateId, isLegacyInboxGroup, isRetiredQuickStartGroup } from '../uti
 import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
-import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
+import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES } from './phase.js';
 import {
   COMPLETION_TO_PHASES,
@@ -762,12 +762,42 @@ export interface AddTaskInput {
   source?: TaskSource;
   /**
    * Create the task already in the pinned working set, at the BOTTOM of it
-   * (same placement rule as togglePin). NO focus_tier is written, which is how
-   * Satellite is stored — see newTaskPinDefault() for who passes this.
+   * (same placement rule as togglePin). NO focus_tier is written unless
+   * `focus_tier` below names one, and that absence IS how Satellite is stored —
+   * see newTaskPinDefault() for who passes this.
    * Omitted = unpinned, which stays the core default so bulk importers and
    * provider sync can't flood the board.
    */
   pinned?: boolean;
+  /**
+   * Which pin tier the new task is born into, written in the SAME store write
+   * as the pin. The alternative (create, then setFocusTier) is two writes, and
+   * a failed second write drops the task out of the tier the user picked
+   * without telling anyone.
+   *
+   * Accepted: the built-ins 'focus' | 'satellite' | 'backlog' | 'wait', or a
+   * REGISTERED custom tier id ('ct_*'). Anything else — including a ct_* id
+   * that no longer exists — throws InvalidFocusTierError; filing the task in
+   * Satellite instead would be a confident wrong answer. Matching is exact
+   * (lower-case ids), the same strictness setFocusTier and
+   * PUT /focus/tasks/:id/tier use; label / case tolerance belongs to the
+   * model-facing layer (see resolveTierInput in agent/tools.ts).
+   *
+   * Two rules this encodes:
+   *  - A tier IMPLIES pinned — a tier on an unpinned task is invisible and no
+   *    reader looks for it. Omitting `pinned` alongside a tier lands the task
+   *    pinned; passing `pinned: false` WITH a tier is a contradiction and
+   *    throws rather than silently honoring one half of it.
+   *  - 'satellite' is normalized AWAY: it is stored as pinned with NO
+   *    focus_tier, because that is what every reader treats as Satellite
+   *    (splitTiers here, focusTierMatches in task-query.ts). The literal
+   *    string must never reach the row.
+   *
+   * '' / whitespace means "not specified" (the shape a client sends when its
+   * tier picker was never touched) and leaves the create exactly as it was
+   * before this field existed.
+   */
+  focus_tier?: string;
   /** Don't block the return on the external sync push. The task is written locally and
    *  returned immediately; the push to the external target runs in the background and
    *  backfills ext/external_url/sync_error via a TASK_UPDATED event. Set by the web
@@ -802,6 +832,73 @@ function nextPinOrder(tasks: Task[]): number {
  */
 export function newTaskPinDefault(explicit?: unknown): boolean {
   return typeof explicit === 'boolean' ? explicit : true;
+}
+
+/**
+ * A create named a pin tier that isn't a thing (or contradicts `pinned`).
+ * Typed so routes answer 400 instead of 500 — and so the create FAILS rather
+ * than quietly filing the task in Satellite. setFocusTier is deliberately
+ * LENIENT (internal copy paths like session fork replay stale ids through it
+ * and must not throw); a create is the opposite case: the value came straight
+ * from a human's picker, so a wrong tier is worth an error, not a guess.
+ */
+export class InvalidFocusTierError extends Error {
+  public readonly tier: string;
+  constructor(message: string, tier: string) {
+    super(message);
+    this.name = 'InvalidFocusTierError';
+    this.tier = tier;
+  }
+}
+
+// Every built-in pin tier NAME accepted as create input, derived from the
+// policy in types.ts so a new built-in reaches the create path without a second
+// edit. 'satellite' is an accepted input even though it is never STORED (see
+// resolveNewTaskTier).
+const BUILTIN_TIER_NAMES: readonly string[] = PIN_TIER_POLICY.map((entry) => entry.tier);
+
+/**
+ * Fold an AddTaskInput's `{ pinned, focus_tier }` pair into the two values a
+ * task ROW actually carries. The ONE definition of create-time tier semantics,
+ * exported so the HTTP edges can validate with the same rules that write.
+ *
+ * Storage convention (matches splitTiers below and focusTierMatches in
+ * task-query.ts): Satellite is pinned with NO stored focus_tier, so an explicit
+ * 'satellite' normalizes AWAY rather than landing as a literal string that no
+ * reader looks for.
+ *
+ * Tier matching is EXACT, the same strictness setFocusTier and
+ * PUT /api/v1/focus/tasks/:id/tier use — label/case tolerance is a
+ * model-facing concern and lives in the agent tool.
+ */
+export function resolveNewTaskTier(
+  input: { pinned?: boolean; focus_tier?: string },
+  customTierIds: readonly string[],
+): { pinned: boolean; focus_tier?: string } {
+  const raw = typeof input.focus_tier === 'string' ? input.focus_tier.trim() : '';
+  // No tier named: byte-for-byte the pre-focus_tier behavior, which is what
+  // keeps bulk importers and provider sync off the board.
+  if (!raw) return { pinned: input.pinned === true };
+
+  // A tier is a property of the pinned board only, so the pair pinned:false +
+  // a tier can't be honored in either direction. Reject it instead of picking
+  // a half for the caller.
+  if (input.pinned === false) {
+    throw new InvalidFocusTierError(
+      `focus_tier "${raw}" contradicts pinned: false — a tier exists only on the pinned board. Send one or the other.`,
+      raw,
+    );
+  }
+  // A tier IMPLIES pinned: an omitted `pinned` alongside a tier still lands the
+  // task on the board, since an unpinned tier is invisible everywhere.
+  if (raw === 'satellite') return { pinned: true };
+  if (BUILTIN_TIER_NAMES.includes(raw) || customTierIds.includes(raw)) {
+    return { pinned: true, focus_tier: raw };
+  }
+  throw new InvalidFocusTierError(
+    `unknown focus_tier "${raw}". Valid tiers: ${[...BUILTIN_TIER_NAMES, ...customTierIds].join(', ')}`,
+    raw,
+  );
 }
 
 // ── Project registry (task_projects) — the single grouping layer ────────────
@@ -1927,6 +2024,13 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       }
     }
 
+    // Pin + tier, resolved BEFORE the row is built so an unknown tier fails the
+    // whole create (nothing written) instead of leaving a task in the wrong
+    // tier. The registry we validate against is the one already in `store` —
+    // the same snapshot the write commits, so a tier can't be deleted between
+    // check and write.
+    const bornPin = resolveNewTaskTier(input, (store.custom_tiers ?? []).map((t) => t.id));
+
     const newTask: Task = {
       id: generateId(),
       title: input.title,
@@ -1948,11 +2052,19 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       ...(input.tags?.length ? { tags: [...new Set(input.tags)] } : {}),
       ...(input.cwd ? { cwd: input.cwd } : {}),
       ...(input.sprint ? { sprint: input.sprint } : {}),
-      // Born pinned (interactive/AI creates — newTaskPinDefault). No focus_tier
-      // is written, and that absence IS Satellite. pin_order lands at the BOTTOM
-      // of the pinned set, the same placement togglePin uses, so a fresh task
-      // never jumps ahead of an order the user arranged by hand.
-      ...(input.pinned ? { pinned: true, pin_order: nextPinOrder(store.tasks) } : {}),
+      // Born pinned (interactive/AI creates — newTaskPinDefault), in the tier
+      // the caller named, in ONE store write. An absent focus_tier IS Satellite
+      // (see resolveNewTaskTier, which normalizes an explicit 'satellite' away
+      // and rejects an unknown tier). pin_order lands at the BOTTOM of the
+      // pinned set, the same placement togglePin uses, so a fresh task never
+      // jumps ahead of an order the user arranged by hand.
+      ...(bornPin.pinned
+        ? {
+          pinned: true,
+          pin_order: nextPinOrder(store.tasks),
+          ...(bornPin.focus_tier ? { focus_tier: bornPin.focus_tier } : {}),
+        }
+        : {}),
     };
 
     // Validate and attach depends_on before pushing to store
