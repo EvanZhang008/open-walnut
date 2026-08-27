@@ -340,8 +340,8 @@ function parseTaskQueryParams(rawQuery: Record<string, unknown>): TaskQuery {
   const raw: Record<string, string | undefined> = {}
   for (const name of [
     'completion', 'status', 'phases', 'projects', 'project', 'priorities',
-    'sources', 'source', 'sprints', 'sprint', 'tags_any', 'tags', 'tags_all',
-    'pinned', 'unread', 'blocked', 'parent_task_id',
+    'sources', 'source', 'sprints', 'sprint', 'tags_any', 'tags', 'tags_all', 'tag',
+    'pinned', 'unread', 'blocked', 'working_set', 'focus_tier', 'q', 'ids', 'parent_task_id',
     'group_id', 'time_basis', 'last_hours', 'last_days', 'time_from',
     'time_until', 'sort', 'limit',
   ]) {
@@ -384,10 +384,26 @@ function parseTaskQueryParams(rawQuery: Record<string, unknown>): TaskQuery {
     const values = csv(raw.tags_all).filter(Boolean)
     if (values.length > 0) query.tagsAll = values
   }
+  // `tag` — single exact tag, the task_list op's legacy arg name. Lowest
+  // precedence of the three tag spellings.
+  if (query.tagsAny === undefined && raw.tag !== undefined && raw.tag !== '') {
+    query.tagsAny = [raw.tag]
+  }
+  // Empty csv value = no condition, matching the tag params above.
+  if (raw.focus_tier !== undefined) {
+    const values = csv(raw.focus_tier).filter(Boolean)
+    if (values.length > 0) query.focusTiers = values
+  }
+  if (raw.ids !== undefined) {
+    const values = csv(raw.ids).filter(Boolean)
+    if (values.length > 0) query.ids = values
+  }
+  if (raw.q !== undefined) query.q = raw.q
 
   for (const name of ['pinned', 'unread', 'blocked'] as const) {
     if (raw[name] !== undefined) query[name] = parseBoolParam(raw[name]!, name)
   }
+  if (raw.working_set !== undefined) query.workingSet = parseBoolParam(raw.working_set, 'working_set')
   if (raw.parent_task_id !== undefined) query.parentTaskId = raw.parent_task_id
   if (raw.group_id !== undefined) query.groupId = raw.group_id
 

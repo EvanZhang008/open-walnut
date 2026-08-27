@@ -24,6 +24,7 @@ import path from 'node:path'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { MessageParam } from '../../agent/model.js'
 import { VALID_PRIORITIES, type ChatEntry, type TaskPhase, type TaskPriority } from '../../core/types.js'
+import { focusTierMatches } from '../../core/task-query.js'
 import { VALID_PHASES } from '../../core/phase.js'
 import { CLOUD_MODE, LOG_DIR, NOTES_DIR } from '../../constants.js'
 import * as chatHistory from '../../core/chat-history.js'
@@ -1175,6 +1176,45 @@ apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction
     if (typeof req.query.q === 'string' && req.query.q.trim()) {
       const q = req.query.q.trim().toLowerCase()
       tasks = tasks.filter((t) => t.title.toLowerCase().includes(q))
+    }
+    // Additive working-set filters — same semantics as GET /api/tasks:
+    // pinned equality; focus_tier matches pinned rows only, with 'satellite'
+    // meaning "pinned with no stored tier"; working_set = the whole pinned
+    // board sorted by pin_order.
+    if (typeof req.query.pinned === 'string' && req.query.pinned) {
+      if (req.query.pinned !== 'true' && req.query.pinned !== 'false') {
+        sendError(res, 400, 'bad_request', 'pinned must be "true" or "false"')
+        return
+      }
+      const want = req.query.pinned === 'true'
+      tasks = tasks.filter((t) => Boolean(t.pinned) === want)
+    }
+    if (typeof req.query.focus_tier === 'string' && req.query.focus_tier) {
+      const tiers = req.query.focus_tier.split(',').map((s) => s.trim()).filter(Boolean)
+      // Shared predicate with GET /api/tasks (focusTierMatches in
+      // task-query.ts) so the two surfaces can't drift on what 'satellite'
+      // means. The projection carries the registered custom tiers.
+      const customTierIds = new Set((projection.custom_tiers ?? []).map((c) => c.id))
+      tasks = tasks.filter((t) =>
+        Boolean(t.pinned) && focusTierMatches(t.focus_tier, tiers, customTierIds))
+    }
+    if (typeof req.query.working_set === 'string' && req.query.working_set) {
+      if (req.query.working_set !== 'true' && req.query.working_set !== 'false') {
+        sendError(res, 400, 'bad_request', 'working_set must be "true" or "false"')
+        return
+      }
+      if (req.query.working_set === 'true') {
+        // Mirror GET /api/tasks: working_set IS pinned=true, so an explicit
+        // pinned=false alongside it is a caller bug, not a filter to override.
+        if (req.query.pinned === 'false') {
+          sendError(res, 400, 'bad_request', 'working_set implies pinned=true and cannot combine with pinned=false')
+          return
+        }
+        tasks = tasks
+          .filter((t) => t.pinned)
+          .sort((a, b) => (typeof a.pin_order === 'number' ? a.pin_order : Number.POSITIVE_INFINITY)
+            - (typeof b.pin_order === 'number' ? b.pin_order : Number.POSITIVE_INFINITY))
+      }
     }
     // The projection is project-only (v2): `project` is the single grouping
     // field, with NO `category` alias. The iOS app — v1's only consumer —

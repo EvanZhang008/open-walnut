@@ -2178,7 +2178,7 @@ function rowToSlimTask(row: Record<string, any>, minimal = false): SlimTask {
 // So an imperfectly-pushable dimension costs a bigger scan, never a wrong answer.
 
 /** Timestamp columns a time window can be pushed down onto. */
-type TimestampColumn = 'created_at' | 'updated_at';
+type TimestampColumn = 'created_at' | 'updated_at' | 'due_date' | 'completed_at';
 
 /**
  * The two timestamp shapes that compare correctly LEXICOGRAPHICALLY (UTC, fixed
@@ -2299,6 +2299,25 @@ export function buildTaskQueryWhere(q: NormalizedTaskQuery, excludeSentinels: bo
     // Mirrors `Boolean(task.pinned)`: only the INTEGER 1 reads as pinned.
     conds.push(q.pinned ? 'pinned = 1' : '(pinned IS NULL OR pinned != 1)');
   }
+  if (q.focusTiers !== undefined) {
+    if (q.focusTiers.length === 0) {
+      conds.push('0'); // [] matches nothing, same as the other array filters.
+    } else {
+      // A tier filter only ever matches pinned rows.
+      conds.push('pinned = 1');
+      // 'satellite' means "no stored tier", which SQL can't enumerate without
+      // the '' / NULL / literal-'satellite' split — when it's requested, all
+      // pinned rows stay candidates (a small set) and JS decides. Otherwise
+      // exact stored values push down.
+      if (!q.focusTiers.includes('satellite')) {
+        conds.push(inList('focus_tier', [...new Set(q.focusTiers)]));
+      }
+    }
+  }
+  if (q.ids !== undefined) {
+    if (q.ids.length === 0) conds.push('0');
+    else conds.push(inList('id', [...new Set(q.ids)]));
+  }
   if (q.parentTaskId !== undefined) {
     conds.push(`parent_task_id = ${bind(q.parentTaskId)}`);
   }
@@ -2340,13 +2359,19 @@ export function buildTaskQueryWhere(q: NormalizedTaskQuery, excludeSentinels: bo
     };
     if (q.time.basis === 'created') conds.push(windowFor('created_at'));
     else if (q.time.basis === 'updated') conds.push(windowFor('updated_at'));
+    // due/completed: date-only stamps ('2026-08-01') miss the canonical GLOBs,
+    // so those rows ride the NOT-canonical branch and JS decides — superset ✓.
+    else if (q.time.basis === 'due') conds.push(windowFor('due_date'));
+    else if (q.time.basis === 'completed') conds.push(windowFor('completed_at'));
     // created_or_updated: the OR is parenthesized as a whole before ANDing.
     else conds.push(`(${windowFor('created_at')} OR ${windowFor('updated_at')})`);
   }
 
   // Deliberately NOT pushed down: blocked (needs the whole dependency graph),
   // unread (a payload boolean whose JSON encodings aren't worth a fragile
-  // expression).
+  // expression), q (LIKE case-folds ASCII only while JS folds Unicode — a
+  // title scan over a few thousand candidates is cheaper than a correct
+  // superset expression).
 
   return { conds, params };
 }
@@ -2394,6 +2419,11 @@ async function runTaskQuery(
     : rows.map((r) => rowToSlimTask(r, projection === 'minimal')) as unknown as Task[];
 
   const ctx: TaskQueryContext = {};
+  if (normalized.focusTiers?.includes('satellite')) {
+    // Satellite folds stale ids of DELETED custom tiers in, exactly like the
+    // board split — the registry is one tiny table read, only paid here.
+    ctx.customTierIds = new Set(((await readStore()).custom_tiers ?? []).map((t) => t.id));
+  }
   if (normalized.blocked !== undefined) {
     // Dependencies can point outside the candidate set, so the blocked set is
     // computed over the FULL task list. Only paid for when blocked is queried.

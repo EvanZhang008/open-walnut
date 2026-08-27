@@ -129,6 +129,11 @@ export async function buildTaskProjection(): Promise<TaskProjection> {
   const all = await listTasks()
   const customTiers = await getCustomTiers().catch(() => [])
   const cutoff = Date.now() - DONE_RETENTION_DAYS * 24 * 60 * 60 * 1000
+  // Done-retention applies to pinned rows too, DELIBERATELY: with completion
+  // no longer unpinning (2026-08-26) the done-pin population only grows, and
+  // an exemption here makes the projection (git-synced + pushed over the
+  // bridge on every task change) converge on "every task ever". The phone's
+  // working-set view shows open pins plus the last 14 days of finished ones.
   const tasks = all
     .filter((t) => {
       if (t.status !== 'done') return true

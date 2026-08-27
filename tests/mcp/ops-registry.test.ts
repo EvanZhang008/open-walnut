@@ -78,6 +78,15 @@ describe('ops registry — binding materialization', () => {
     expect(post.body).toEqual({})
   })
 
+  it('keeps a server-root-absolute bind absolute and appends its args as query', () => {
+    // task_list binds /api/tasks (the canonical composable-query route), not a
+    // /api/v1-relative path — materialization must leave the path untouched and
+    // still route every leftover arg to the query string.
+    const list = materializeBinding({ method: 'GET', path: '/api/tasks' }, { working_set: true, fields: 'list' })
+    expect(list.path).toBe('/api/tasks?working_set=true&fields=list')
+    expect(list.body).toBeUndefined()
+  })
+
   it('rejects a missing path param instead of emitting a broken URL', () => {
     expect(() => materializeBinding({ method: 'GET', path: '/tasks/:id' }, {})).toThrow(/:id/)
   })
@@ -100,6 +109,17 @@ describe('ops registry — arg validation (executor front door)', () => {
 
     const missing = await executeOp('task_get', {})
     expect(missing.ok).toBe(false)
+  })
+
+  it('task_list rejects an unknown filter and an out-of-range limit before any transport', async () => {
+    const unknown = await executeOp('task_list', { working_set: true, nope: 1 })
+    expect(unknown.ok).toBe(false)
+    if (!unknown.ok) expect(unknown.message).toContain('Invalid arguments for task_list')
+
+    // MAX_QUERY_LIMIT is 200 — the schema, not the route, is the first gate.
+    const tooMany = await executeOp('task_list', { limit: 500 })
+    expect(tooMany.ok).toBe(false)
+    if (!tooMany.ok) expect(tooMany.message).toMatch(/Invalid arguments for task_list.*limit/)
   })
 
   it('the api passthrough refuses non-/api/ paths', async () => {
@@ -159,9 +179,18 @@ function matchStack(stack: Array<Record<string, unknown>>, method: string, probe
     }
     const handle = layer.handle as { stack?: unknown[] } | undefined
     if (handle?.stack) {
-      const hit = matcher?.(probePath)
-      if (!hit) continue
-      const rest = probePath.slice(hit.path.length) || '/'
+      // Mirror Layer.match (router/lib/layer.js): a PATH-LESS mount
+      // (`router.use(child)`, e.g. the human-inbox router) takes the
+      // `this.slash` fast path — ANY path matches and none of it is consumed —
+      // without ever consulting matchers[0]. Probing the matcher alone made
+      // every route inside such a child read as unbound.
+      let rest = probePath
+      if (!(layer as { slash?: boolean }).slash) {
+        const hit = matcher?.(probePath)
+        if (!hit) continue
+        rest = probePath.slice(hit.path.length) || '/'
+        if (!rest.startsWith('/')) rest = `/${rest}`
+      }
       if (matchStack(handle.stack as Array<Record<string, unknown>>, method, rest)) return true
     }
   }
@@ -176,7 +205,10 @@ function matchStack(stack: Array<Record<string, unknown>>, method: string, probe
  */
 function probePathFor(op: { bind?: { path: string }; input: Record<string, unknown> }): string {
   const bindPath = op.bind!.path
-  return `/api/v1${bindPath.replace(/:([A-Za-z_][A-Za-z0-9_]*)/g, (_, name: string) => {
+  // Mirror the executor: a bind path that starts with /api/ is server-root
+  // absolute (task_list → GET /api/tasks); everything else is /api/v1-relative.
+  const prefix = bindPath.startsWith('/api/') ? '' : '/api/v1'
+  return `${prefix}${bindPath.replace(/:([A-Za-z_][A-Za-z0-9_]*)/g, (_, name: string) => {
     const schema = op.input[name] as { def?: { type?: string; entries?: Record<string, string> } } | undefined
     const def = schema?.def
     if (def?.type === 'enum' && def.entries) return Object.values(def.entries)[0]

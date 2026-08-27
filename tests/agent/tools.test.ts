@@ -397,6 +397,47 @@ describe('task tools', () => {
       expect(await rows({ where: { source: 'nowhere' } })).toEqual([]);
     });
 
+    it('working_set skips the hide-completed default so a finished pin comes back', async () => {
+      // Pin state is passed explicitly — task_create's own default is a
+      // separate contract and must not decide what this test measures.
+      const openPin = await make('Board open', { pinned: true });
+      const donePin = await make('Board finished', { pinned: true });
+      await make('Off the board', { pinned: false });
+      const { updateTask, reorderPins } = await import('../../src/core/task-manager.js');
+      // Completion no longer unpins — the board keeps the finished card.
+      await updateTask(donePin, { phase: 'COMPLETE' });
+      await reorderPins([donePin, openPin]);
+
+      // working_set → pinned=true + pin_order, and NO legacy completion default.
+      expect((await rows({ where: { working_set: true } })).map((t) => t.id))
+        .toEqual([donePin, openPin]);
+      // Without it, a bare pinned query still hides COMPLETE.
+      expect((await rows({ where: { pinned: true } })).map((t) => t.id)).toEqual([openPin]);
+
+      expect(await executeTool('task_query', { where: { working_set: 'yes' } }))
+        .toMatch(/^Error: working_set must be true or false/);
+    });
+
+    it('accepts a BARE-STRING focus_tier and an ids array', async () => {
+      const focus = await make('Tier focus', { pinned: true });
+      const satellite = await make('Tier satellite', { pinned: true });
+      const loose = await make('Tier none', { pinned: false });
+      const { setFocusTier } = await import('../../src/core/task-manager.js');
+      await setFocusTier(focus, 'focus');
+
+      // A model that skipped the array must still filter, not fall through.
+      expect((await rows({ where: { focus_tier: 'satellite' } })).map((t) => t.id)).toEqual([satellite]);
+      expect((await rows({ where: { focus_tier: 'focus' } })).map((t) => t.id)).toEqual([focus]);
+      expect(new Set((await rows({ where: { focus_tier: ['focus', 'satellite'] } })).map((t) => t.id)))
+        .toEqual(new Set([focus, satellite]));
+      // An unpinned row belongs to no tier, satellite included.
+      expect((await rows({ where: { focus_tier: 'satellite' } })).map((t) => t.id)).not.toContain(loose);
+
+      expect(new Set((await rows({ where: { ids: [focus, loose] } })).map((t) => t.id)))
+        .toEqual(new Set([focus, loose]));
+      expect(await rows({ where: { ids: ['no-such-task'] } })).toEqual([]);
+    });
+
     it('filters by tags_all (AND) alongside tags (OR)', async () => {
       const both = await make('Both tags', { tags: ['red', 'blue'] });
       const one = await make('One tag', { tags: ['red'] });

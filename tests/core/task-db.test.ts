@@ -34,9 +34,11 @@ import {
   deleteTasksBulk,
   listTasks,
   getTask,
+  buildTaskQueryWhere,
+  queryTasks,
   taskQueryCandidateSql,
 } from '../../src/core/task-manager.js';
-import type { TaskQuery } from '../../src/core/task-query.js';
+import { normalizeTaskQuery, type TaskQuery } from '../../src/core/task-query.js';
 import { WALNUT_HOME, TASKS_FILE, TASKS_DIR } from '../../src/constants.js';
 import type { Task } from '../../src/core/types.js';
 
@@ -216,6 +218,117 @@ describe('task-db: composable-query indexes', () => {
     });
     expect(plan).toContain('USING INDEX tasks_phase_updated_at_id');
     expect(plan).not.toContain('SCAN tasks');
+  });
+});
+
+// ── 1c. Query pushdown: the superset invariant ─────────────────────────────
+//
+// buildTaskQueryWhere only reduces CANDIDATES — matchesTaskQuery in task-query.ts
+// is the semantic truth and re-checks everything. So the one hard rule here is
+// that the SQL must be a SUPERSET of the JS predicate: keeping an extra row costs
+// a filter pass, dropping a real match is a silently wrong answer.
+
+describe('task-db: composable-query pushdown', () => {
+  const PUSHDOWN_NOW = new Date('2026-09-10T12:00:00.000Z');
+
+  const candidateConds = (query: TaskQuery): { conds: string[]; params: Record<string, unknown> } =>
+    buildTaskQueryWhere(normalizeTaskQuery(query, PUSHDOWN_NOW), true);
+
+  const hasInList = (conds: string[], col: string): boolean =>
+    conds.some((cond) => cond.startsWith(`${col} IN (`));
+
+  it('pushes an exact focus tier down as pinned = 1 plus a focus_tier IN list', () => {
+    const { conds, params } = candidateConds({ focusTiers: ['focus'] });
+    expect(conds).toContain('pinned = 1');
+    expect(hasInList(conds, 'focus_tier')).toBe(true);
+    expect(Object.values(params)).toContain('focus');
+  });
+
+  it.each([[['satellite']], [['focus', 'satellite']]])(
+    'keeps every pinned row a candidate when satellite is requested (%s)',
+    (focusTiers: string[]) => {
+      // 'satellite' means "no stored tier", which SQL can't enumerate across the
+      // '' / NULL / literal-'satellite' split — so the tier IN list is dropped
+      // and JS decides over the (small) pinned set.
+      const { conds } = candidateConds({ focusTiers });
+      expect(conds).toContain('pinned = 1');
+      expect(hasInList(conds, 'focus_tier')).toBe(false);
+    },
+  );
+
+  it('emits the false literal for an empty focusTiers list', () => {
+    const { conds } = candidateConds({ focusTiers: [] });
+    expect(conds).toContain('0');
+    expect(conds).not.toContain('pinned = 1');
+  });
+
+  it('pushes ids down as a bound IN list, and [] as the false literal', () => {
+    const { conds, params } = candidateConds({ ids: ['task-1', 'task-2'] });
+    expect(hasInList(conds, 'id')).toBe(true);
+    expect(Object.values(params)).toEqual(expect.arrayContaining(['task-1', 'task-2']));
+    // Ids ride bound parameters, never string-interpolated literals.
+    expect(conds.find((cond) => cond.startsWith('id IN ('))).toMatch(/^id IN \(@q\d+, @q\d+\)$/);
+
+    expect(candidateConds({ ids: [] }).conds).toContain('0');
+  });
+
+  it('points a due window at due_date and a completed window at completed_at', () => {
+    const due = candidateConds({ time: { basis: 'due', from: '2026-09-01', until: '2026-09-30' } }).conds.join(' AND ');
+    expect(due).toContain('due_date >=');
+    expect(due).not.toContain('updated_at');
+
+    const completed = candidateConds({ time: { basis: 'completed', last: { value: 7, unit: 'days' } } }).conds.join(' AND ');
+    expect(completed).toContain('completed_at >=');
+    expect(completed).not.toContain('due_date');
+  });
+
+  it('EXPLAINs the emitted tier filter without error', () => {
+    // The SQL the pushdown really emits has to be valid against the live schema —
+    // a typo'd column name would otherwise only fail in production.
+    const { sql, params } = taskQueryCandidateSql(
+      { focusTiers: ['focus'], ids: ['x'], time: { basis: 'due', from: '2026-09-01' } },
+      { now: PUSHDOWN_NOW },
+    );
+    expect(() => getDb()!.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(params)).not.toThrow();
+  });
+
+  it('end-to-end: a pinned, tierless, date-only-due row survives both queries', async () => {
+    const db = getDb()!;
+    const insertCols = [...TASK_COLUMNS, 'payload'];
+    const insertSql =
+      'INSERT INTO tasks (' + insertCols.join(', ') + ') VALUES (' +
+      insertCols.map((c) => '@' + c).join(', ') + ')';
+    const insert = (partial: Partial<Task>): void => {
+      const row = taskToRow(partial);
+      const bound: Record<string, unknown> = {};
+      for (const col of insertCols) bound[col] = row[col] === undefined ? null : row[col];
+      db.prepare(insertSql).run(bound);
+    };
+    const base: Partial<Task> = {
+      project: 'Walnut',
+      status: 'todo',
+      phase: 'TODO',
+      created_at: '2026-09-01T00:00:00.000Z',
+      updated_at: '2026-09-02T00:00:00.000Z',
+    };
+
+    // Pinned with NO focus_tier (the satellite default) and a DATE-ONLY due_date:
+    // exactly the two shapes SQL alone cannot decide.
+    insert({ ...base, id: 'board-1', title: 'Ship the board', pinned: true, pin_order: 0, due_date: '2026-09-15' });
+    // Pinned, also tierless, but due outside the window.
+    insert({ ...base, id: 'board-2', title: 'Later', pinned: true, pin_order: 1, due_date: '2026-11-01' });
+    // Unpinned rows have no tier at all, even when one is stored.
+    insert({ ...base, id: 'loose-1', title: 'Not on the board', focus_tier: 'focus', due_date: '2026-09-16' });
+
+    const satellite = await queryTasks({ focusTiers: ['satellite'] });
+    expect(satellite.map((t) => t.id)).toEqual(['board-1', 'board-2']);
+
+    const due = await queryTasks({ time: { basis: 'due', from: '2026-09-01', until: '2026-09-30' } });
+    expect(due.map((t) => t.id).sort()).toEqual(['board-1', 'loose-1']);
+
+    // And the board order the working set asks for.
+    const board = await queryTasks({ workingSet: true });
+    expect(board.map((t) => t.id)).toEqual(['board-1', 'board-2']);
   });
 });
 

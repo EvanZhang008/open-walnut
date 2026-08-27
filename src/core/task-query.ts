@@ -1,9 +1,10 @@
 import type { Task, TaskPhase, TaskPriority } from './types.js';
-import { VALID_PRIORITIES } from './types.js';
+import { PIN_TIER_POLICY, VALID_PRIORITIES } from './types.js';
 
 export type TaskCompletion = 'todo' | 'in_progress' | 'complete';
-export type TimeBasis = 'created' | 'updated' | 'created_or_updated';
-export type TaskQuerySort = 'updated_desc' | 'created_desc' | 'completed_desc' | 'priority' | 'title_asc';
+export type TimeBasis = 'created' | 'updated' | 'created_or_updated' | 'due' | 'completed';
+export type TaskQuerySort =
+  'updated_desc' | 'created_desc' | 'completed_desc' | 'priority' | 'title_asc' | 'pin_order';
 
 export interface TaskQueryTime {
   basis: TimeBasis;
@@ -25,6 +26,26 @@ export interface TaskQuery {
   tagsAny?: string[];
   tagsAll?: string[];
   pinned?: boolean;
+  /**
+   * Focus tiers to match — pinned rows only (an unpinned task never matches
+   * any tier). 'satellite' matches a pinned row with NO stored tier (the
+   * default tier is stored as an absent focus_tier). Any other value —
+   * 'focus' | 'backlog' | 'wait' | a custom 'ct_*' id — matches the stored
+   * value exactly. [] matches nothing.
+   */
+  focusTiers?: string[];
+  /** Case-insensitive substring on the title. Whitespace-only = no condition. */
+  q?: string;
+  /** Exact task ids to fetch in one query. [] matches nothing. */
+  ids?: string[];
+  /**
+   * Working-set shortcut: the whole pinned board in one query. Implies
+   * pinned=true (combining with pinned=false is an error) and defaults sort
+   * to 'pin_order'. Adapters that hide COMPLETE by default (the agent tool)
+   * drop that default too — completion no longer unpins, so a finished pin
+   * is still part of the board.
+   */
+  workingSet?: boolean;
   /** Read/unread marker — true = agent output the human hasn't opened. */
   unread?: boolean;
   blocked?: boolean;
@@ -61,13 +82,14 @@ export const QUERY_TASK_PHASES: readonly TaskPhase[] = [
 ];
 const TASK_PRIORITIES: readonly TaskPriority[] = VALID_PRIORITIES;
 const COMPLETIONS: readonly TaskCompletion[] = ['todo', 'in_progress', 'complete'];
-const TIME_BASES: readonly TimeBasis[] = ['created', 'updated', 'created_or_updated'];
+const TIME_BASES: readonly TimeBasis[] = ['created', 'updated', 'created_or_updated', 'due', 'completed'];
 const QUERY_SORTS: readonly TaskQuerySort[] = [
   'updated_desc',
   'created_desc',
   'completed_desc',
   'priority',
   'title_asc',
+  'pin_order',
 ];
 const ARRAY_FIELDS = [
   'completion',
@@ -78,6 +100,8 @@ const ARRAY_FIELDS = [
   'sprints',
   'tagsAny',
   'tagsAll',
+  'focusTiers',
+  'ids',
 ] as const;
 
 /** Max rows one query may return. Mirrored in the REST 400 message + tool schema. */
@@ -159,17 +183,19 @@ function validateEnum<T extends string>(value: string | undefined, allowed: read
 }
 
 // Date.parse accepts impossible dates by rolling them forward, so validate calendar fields first.
+// A bare date (YYYY-MM-DD) is accepted as UTC midnight — due_date rows are commonly stored
+// date-only, and the same shape is a convenience for time.from/until.
 function parseIsoTimestampValue(value: string): number {
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-](\d{2}):(\d{2}))$/.exec(value);
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-](\d{2}):(\d{2})))?$/.exec(value);
   if (!match) return Number.NaN;
 
   const [, yearText, monthText, dayText, hourText, minuteText, secondText, , offsetHourText, offsetMinuteText] = match;
   const year = Number(yearText);
   const month = Number(monthText);
   const day = Number(dayText);
-  const hour = Number(hourText);
-  const minute = Number(minuteText);
-  const second = Number(secondText);
+  const hour = hourText === undefined ? 0 : Number(hourText);
+  const minute = minuteText === undefined ? 0 : Number(minuteText);
+  const second = secondText === undefined ? 0 : Number(secondText);
   const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
   const daysByMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   const offsetHour = offsetHourText === undefined ? 0 : Number(offsetHourText);
@@ -201,15 +227,26 @@ export function normalizeTaskQuery(raw: TaskQuery, now: Date): NormalizedTaskQue
   validateEnumArray(raw.priorities, TASK_PRIORITIES, 'priority');
   validateEnum(raw.sort, QUERY_SORTS, 'sort');
 
-  for (const field of ['pinned', 'unread', 'blocked'] as const) {
+  for (const field of ['pinned', 'unread', 'blocked', 'workingSet'] as const) {
     if (raw[field] !== undefined && typeof raw[field] !== 'boolean') {
       queryError('invalid_boolean', `${field} must be a boolean`);
     }
   }
-  for (const field of ['parentTaskId', 'groupId'] as const) {
+  for (const field of ['parentTaskId', 'groupId', 'q'] as const) {
     if (raw[field] !== undefined && typeof raw[field] !== 'string') {
       queryError('invalid_string', `${field} must be a string`);
     }
+  }
+  // A tier value of '' would silently alias satellite — reject it so the caller
+  // states 'satellite' explicitly (the empty string is how the DEFAULT is stored,
+  // not how it is queried).
+  if (raw.focusTiers?.some((tier) => tier.trim() === '')) {
+    queryError('invalid_tier', 'focusTiers entries must be non-empty (use "satellite" for the default tier)');
+  }
+  // workingSet IS pinned=true — an explicit pinned:false alongside it can only
+  // be a caller bug, so it errors instead of one side winning silently.
+  if (raw.workingSet === true && raw.pinned === false) {
+    queryError('conflicting_working_set', 'workingSet implies pinned=true and cannot combine with pinned=false');
   }
   if (raw.limit !== undefined
       && (!Number.isInteger(raw.limit) || raw.limit < 1 || raw.limit > MAX_QUERY_LIMIT)) {
@@ -265,6 +302,10 @@ export function normalizeTaskQuery(raw: TaskQuery, now: Date): NormalizedTaskQue
     }
   }
 
+  // workingSet resolves here so every consumer (SQL pushdown, JS predicate,
+  // comparator default) sees plain pinned/sort values — no second reading of
+  // "what does workingSet mean" downstream.
+  const trimmedQ = raw.q?.trim();
   return {
     ...raw,
     completion: raw.completion?.slice(),
@@ -275,6 +316,12 @@ export function normalizeTaskQuery(raw: TaskQuery, now: Date): NormalizedTaskQue
     sprints: raw.sprints?.slice(),
     tagsAny: raw.tagsAny?.slice(),
     tagsAll: raw.tagsAll?.slice(),
+    // Trimmed so '  focus  ' can't silently match nothing — validation above
+    // already rejected entries that trim to ''.
+    focusTiers: raw.focusTiers?.map((tier) => tier.trim()),
+    ids: raw.ids?.slice(),
+    q: trimmedQ === '' ? undefined : trimmedQ,
+    ...(raw.workingSet === true ? { pinned: true, sort: raw.sort ?? 'pin_order' } : {}),
     time,
     now: nowMs,
   };
@@ -286,6 +333,39 @@ export interface TaskQueryContext {
    *  "caller never computed it" can't silently read as "nothing is blocked"
    *  (blocked:false would match every task, blocked:true none). */
   blockedIds?: ReadonlySet<string>;
+  /** Ids of the REGISTERED custom tiers (`ct_*`). Optional refinement for
+   *  focusTiers 'satellite': with it, a stale id left by a deleted custom
+   *  tier folds into Satellite exactly like the board split; without it, a
+   *  `ct_*` value is assumed registered (the id format is a cross-layer
+   *  contract) and only non-`ct_*` strays fold. */
+  customTierIds?: ReadonlySet<string>;
+}
+
+// The stored tier values that are NOT the Satellite default, derived from the
+// tier policy in types.ts so a new built-in tier reaches this predicate
+// without a second edit ('satellite' itself is stored as an ABSENT value).
+const NON_DEFAULT_BUILTIN_TIERS: readonly string[] =
+  PIN_TIER_POLICY.map((entry) => entry.tier).filter((tier) => tier !== 'satellite');
+
+/**
+ * The ONE definition of "does this stored focus_tier answer this tier list" —
+ * shared by matchesTaskQuery and the v1 projection route so the two REST
+ * surfaces can't drift. Satellite mirrors splitTiers in task-manager.ts: the
+ * default tier is stored as NO value, and any stray value that is neither a
+ * non-default built-in nor a registered custom tier falls back to Satellite
+ * (e.g. the retired 'next'). Callers must ensure the task is PINNED first —
+ * tiers are a property of the pinned board only.
+ */
+export function focusTierMatches(
+  storedRaw: string | undefined,
+  tiers: readonly string[],
+  customTierIds?: ReadonlySet<string>,
+): boolean {
+  const stored = storedRaw || '';
+  const isSatellite = stored === '' || stored === 'satellite'
+    || (!NON_DEFAULT_BUILTIN_TIERS.includes(stored)
+        && (customTierIds !== undefined ? !customTierIds.has(stored) : !stored.startsWith('ct_')));
+  return tiers.some((tier) => (tier === 'satellite' ? isSatellite : stored === tier));
 }
 
 /**
@@ -341,6 +421,14 @@ export function matchesTaskQuery(task: Task, query: NormalizedTaskQuery, ctx: Ta
   if (query.tagsAll !== undefined && !query.tagsAll.every((tag) => tags.includes(tag))) return false;
 
   if (query.pinned !== undefined && Boolean(task.pinned) !== query.pinned) return false;
+  if (query.focusTiers !== undefined) {
+    // Tier is a property of the PINNED board only — an unpinned task never
+    // matches any tier, including satellite.
+    if (!task.pinned) return false;
+    if (!focusTierMatches(task.focus_tier, query.focusTiers, ctx.customTierIds)) return false;
+  }
+  if (query.ids !== undefined && !query.ids.includes(task.id)) return false;
+  if (query.q !== undefined && !task.title.toLowerCase().includes(query.q.toLowerCase())) return false;
   if (query.unread !== undefined && Boolean(task.unread) !== query.unread) return false;
   if (query.blocked !== undefined) {
     if (!ctx.blockedIds) {
@@ -353,11 +441,20 @@ export function matchesTaskQuery(task: Task, query: NormalizedTaskQuery, ctx: Ta
   if (query.groupId !== undefined && task.group_id !== query.groupId) return false;
 
   if (query.time) {
-    const createdMatches = timestampInWindow(task.created_at, query.time);
-    const updatedMatches = timestampInWindow(task.updated_at, query.time);
-    if (query.time.basis === 'created' && !createdMatches) return false;
-    if (query.time.basis === 'updated' && !updatedMatches) return false;
-    if (query.time.basis === 'created_or_updated' && !createdMatches && !updatedMatches) return false;
+    // due/completed short-circuit first: a row with no due_date can never
+    // match a due window (timestampInWindow(undefined) is false), same for
+    // completed_at — mirroring how created/updated treat unparseable stamps.
+    if (query.time.basis === 'due') {
+      if (!timestampInWindow(task.due_date, query.time)) return false;
+    } else if (query.time.basis === 'completed') {
+      if (!timestampInWindow(task.completed_at, query.time)) return false;
+    } else {
+      const createdMatches = timestampInWindow(task.created_at, query.time);
+      const updatedMatches = timestampInWindow(task.updated_at, query.time);
+      if (query.time.basis === 'created' && !createdMatches) return false;
+      if (query.time.basis === 'updated' && !updatedMatches) return false;
+      if (query.time.basis === 'created_or_updated' && !createdMatches && !updatedMatches) return false;
+    }
   }
 
   return true;
@@ -395,6 +492,14 @@ export function compareTasksForQuery(a: Task, b: Task, sort: TaskQuerySort): num
     if (result === 0) result = compareTimestampDesc(a.created_at, b.created_at);
   } else if (sort === 'title_asc') {
     result = a.title.localeCompare(b.title);
+  } else if (sort === 'pin_order') {
+    // Board order: pinned rows by pin_order ascending; anything without a real
+    // order (unpinned, or a pinned row missing the number) sorts after them.
+    const order = (task: Task): number =>
+      task.pinned && typeof task.pin_order === 'number' ? task.pin_order : Number.POSITIVE_INFINITY;
+    const aOrder = order(a);
+    const bOrder = order(b);
+    result = aOrder === bOrder ? compareTimestampDesc(a.updated_at, b.updated_at) : aOrder - bOrder;
   }
   return result || compareStrings(a.id, b.id);
 }

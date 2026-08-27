@@ -24,7 +24,7 @@ import {
   readTaskProjection,
   projectTask,
 } from '../../src/core/task-projection.js';
-import { _resetForTesting, addTask } from '../../src/core/task-manager.js';
+import { _resetForTesting, addTask, addTaskFull } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 import type { Task } from '../../src/core/types.js';
@@ -98,6 +98,39 @@ describe('projection envelope (write side)', () => {
     const projected = projectTask(legacy);
     expect(projected.project).toBe('');
     expect(projected).not.toHaveProperty('category');
+  });
+});
+
+describe('done-retention scope', () => {
+  /** A task completed years ago, optionally still on the pinned board. */
+  async function seedAncientDone(title: string, pin?: { pin_order: number }): Promise<void> {
+    const longAgo = '2020-01-02T00:00:00.000Z';
+    await addTaskFull({
+      title, project: 'Marina',
+      status: 'done', phase: 'COMPLETE', priority: 'none', source: 'local',
+      session_ids: [], description: '', summary: '', note: '',
+      created_at: '2020-01-01T00:00:00.000Z',
+      updated_at: longAgo,
+      completed_at: longAgo,
+      ...(pin ? { pinned: true, pin_order: pin.pin_order } : {}),
+    } as unknown as Parameters<typeof addTaskFull>[0]);
+  }
+
+  it('ages out done tasks past the 14-day cutoff — pinned rows included', async () => {
+    // DELIBERATE: with completion no longer unpinning (2026-08-26), the
+    // done-pin population only grows, so exempting pins from retention would
+    // make the git-synced/bridge-pushed projection converge on "every task
+    // ever". The phone board shows open pins + the last 14 days of finished
+    // ones; older history stays on the full store surfaces.
+    await seedAncientDone('Ancient pinned chore', { pin_order: 0 });
+    await seedAncientDone('Ancient loose chore');
+
+    await exportTaskProjection();
+    const projection = await readTaskProjection();
+    expect(projection).not.toBeNull();
+    const titles = projection!.tasks.map((t) => t.title);
+    expect(titles).not.toContain('Ancient pinned chore');
+    expect(titles).not.toContain('Ancient loose chore');
   });
 });
 

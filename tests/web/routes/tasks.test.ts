@@ -199,6 +199,77 @@ describe('GET /api/tasks — canonical query params', () => {
     expect(new Set(await idsFor('?tags_any=,'))).toEqual(all);
   });
 
+  it('tag= is a single exact tag, below tags_any in precedence', async () => {
+    const { task: red } = await addTask({ title: 'Red', tags: ['red'] });
+    const { task: blue } = await addTask({ title: 'Blue', tags: ['blue'] });
+
+    expect(await idsFor('?tag=red')).toEqual([red.id]);
+    // tags_any wins when both spellings arrive (tag is the op's legacy arg name).
+    expect(await idsFor('?tags_any=blue&tag=red')).toEqual([blue.id]);
+    // Empty means no condition, like the other tag params.
+    expect(new Set(await idsFor('?tag='))).toEqual(new Set([red.id, blue.id]));
+  });
+
+  it('focus_tier matches PINNED rows only, satellite = pinned with no stored tier', async () => {
+    const { task: focus } = await addTask({ title: 'Focus pin' });
+    const { task: satellite } = await addTask({ title: 'Satellite pin' });
+    const { task: loose } = await addTask({ title: 'Never pinned' });
+    const { togglePin, setFocusTier } = await import('../../../src/core/task-manager.js');
+    await togglePin(focus.id);
+    await togglePin(satellite.id);
+    await setFocusTier(focus.id, 'focus');
+
+    // A tier is a property of the pinned board — an unpinned row matches no
+    // tier, satellite included.
+    expect(await idsFor('?focus_tier=satellite')).toEqual([satellite.id]);
+    expect(await idsFor('?focus_tier=focus')).toEqual([focus.id]);
+    expect(new Set(await idsFor('?focus_tier=focus,satellite')))
+      .toEqual(new Set([focus.id, satellite.id]));
+    expect(await idsFor('?focus_tier=focus,satellite')).not.toContain(loose.id);
+    // An empty value is NO CONDITION, matching the tag params.
+    expect(new Set(await idsFor('?focus_tier=')))
+      .toEqual(new Set([focus.id, satellite.id, loose.id]));
+  });
+
+  it('working_set=true returns the whole pinned board in pin_order, finished pins included', async () => {
+    const { task: a } = await addTask({ title: 'Board A' });
+    const { task: b } = await addTask({ title: 'Board B' });
+    const { task: finished } = await addTask({ title: 'Board finished' });
+    await addTask({ title: 'Off the board' });
+    const { togglePin, reorderPins, updateTask } = await import('../../../src/core/task-manager.js');
+    await togglePin(a.id);
+    await togglePin(b.id);
+    await togglePin(finished.id);
+    // Completion no longer unpins, so a COMPLETE pin is still on the board.
+    await updateTask(finished.id, { phase: 'COMPLETE' });
+    await reorderPins([b.id, finished.id, a.id]);
+
+    expect(await idsFor('?working_set=true')).toEqual([b.id, finished.id, a.id]);
+    // workingSet IS pinned=true, so the contradictory pair is a caller bug
+    // rather than one side winning silently.
+    expect(await expect400('?working_set=true&pinned=false')).toMatch(/pinned=false/);
+    expect(await expect400('?working_set=maybe')).toMatch(/working_set/i);
+  });
+
+  it('q is a case-insensitive substring on the title', async () => {
+    const { task: hit } = await addTask({ title: 'Renew the Passport' });
+    await addTask({ title: 'Water the plants' });
+
+    expect(await idsFor('?q=passport')).toEqual([hit.id]);
+    expect(await idsFor('?q=PASSPORT')).toEqual([hit.id]);
+    expect(await idsFor('?q=nothing-like-this')).toEqual([]);
+  });
+
+  it('ids= returns exactly the listed rows', async () => {
+    const { task: one } = await addTask({ title: 'One' });
+    const { task: two } = await addTask({ title: 'Two' });
+    await addTask({ title: 'Three' });
+
+    expect(new Set(await idsFor(`?ids=${one.id},${two.id}`))).toEqual(new Set([one.id, two.id]));
+    expect(await idsFor(`?ids=${two.id}`)).toEqual([two.id]);
+    expect(await idsFor('?ids=no-such-task')).toEqual([]);
+  });
+
   it('parent_task_id is an EXACT match on REST', async () => {
     const { task: parent } = await addTask({ title: 'Parent' });
     const { task: child } = await addTask({ title: 'Child', parent_task_id: parent.id });
@@ -239,6 +310,17 @@ describe('GET /api/tasks — canonical query params', () => {
     // until is EXCLUSIVE.
     expect(await idsFor('?time_basis=updated&time_from=2026-03-01T00:00:00Z&time_until=2026-03-05T12:00:00Z'))
       .toEqual([]);
+  });
+
+  it('time_basis=due filters a DATE-ONLY due_date row', async () => {
+    // due_date is commonly stored date-only, which misses the candidate SQL's
+    // canonical ISO globs — those rows must ride the fallback branch and be
+    // decided in JS, not silently dropped.
+    const { task: due } = await addTask({ title: 'Due mid-April', due_date: '2026-04-15' });
+    await addTask({ title: 'No deadline' });
+
+    expect(await idsFor('?time_basis=due&time_from=2026-04-01&time_until=2026-05-01')).toEqual([due.id]);
+    expect(await idsFor('?time_basis=due&time_from=2026-05-01&time_until=2026-06-01')).toEqual([]);
   });
 
   it('an extreme time_until still matches a recent row (widened bound is clamped)', async () => {

@@ -12,6 +12,7 @@ import {
   type TaskCompletion,
   type TaskQuery,
   type TaskQuerySort,
+  type TimeBasis,
 } from '../../src/core/task-query.js';
 import { PHASE_ORDER } from '../../src/core/phase.js';
 import type { Task, TaskPhase, TaskPriority } from '../../src/core/types.js';
@@ -184,6 +185,127 @@ describe('field composition', () => {
   });
 });
 
+describe('focusTiers', () => {
+  // Tier belongs to the PINNED board only, and the DEFAULT tier is stored as an
+  // ABSENT focus_tier — so the query value 'satellite' has to answer three
+  // storage shapes (absent / '' / the literal string) while every other tier
+  // ('focus' | 'backlog' | 'wait' | a custom 'ct_*' id) matches exactly.
+  const cases: [string, Partial<Task>, string[], boolean][] = [
+    ['pinned with no stored tier vs satellite', { pinned: true }, ['satellite'], true],
+    ['pinned with an empty stored tier vs satellite', { pinned: true, focus_tier: '' }, ['satellite'], true],
+    ['pinned with a literal satellite stored', { pinned: true, focus_tier: 'satellite' }, ['satellite'], true],
+    ['pinned focus vs focus', { pinned: true, focus_tier: 'focus' }, ['focus'], true],
+    ['pinned focus vs satellite', { pinned: true, focus_tier: 'focus' }, ['satellite'], false],
+    ['pinned default vs focus', { pinned: true }, ['focus'], false],
+    ['pinned custom tier vs itself', { pinned: true, focus_tier: 'ct_abc12345' }, ['ct_abc12345'], true],
+    ['pinned custom tier vs another custom tier', { pinned: true, focus_tier: 'ct_abc12345' }, ['ct_zzz99999'], false],
+    ['pinned custom tier vs satellite', { pinned: true, focus_tier: 'ct_abc12345' }, ['satellite'], false],
+    // An unpinned row has no tier at all — not even the value it still stores.
+    ['unpinned focus vs focus', { focus_tier: 'focus' }, ['focus'], false],
+    ['unpinned focus vs satellite', { focus_tier: 'focus' }, ['satellite'], false],
+    ['unpinned focus vs every tier', { focus_tier: 'focus' }, ['focus', 'satellite'], false],
+    ['unpinned with no stored tier vs satellite', {}, ['satellite'], false],
+    // Multiple tiers OR within the field.
+    ['multi-tier hits the stored focus', { pinned: true, focus_tier: 'focus' }, ['focus', 'satellite'], true],
+    ['multi-tier hits the absent tier', { pinned: true }, ['focus', 'satellite'], true],
+    ['multi-tier misses an unlisted tier', { pinned: true, focus_tier: 'backlog' }, ['focus', 'satellite'], false],
+    // [] matches nothing, same as every other array filter.
+    ['empty list vs a pinned default row', { pinned: true }, [], false],
+    ['empty list vs a pinned focus row', { pinned: true, focus_tier: 'focus' }, [], false],
+  ];
+
+  it.each(cases)('matches %s', (_label, overrides, focusTiers, expected) => {
+    expect(matchesTaskQuery(task(overrides), query({ focusTiers }))).toBe(expected);
+  });
+
+  it('ANDs the tier filter with completion and projects', () => {
+    const fixtures = [
+      task({ id: 'match', pinned: true, focus_tier: 'focus', project: 'Alpha' }),
+      task({ id: 'wrong-tier', pinned: true, focus_tier: 'backlog', project: 'Alpha' }),
+      task({ id: 'wrong-project', pinned: true, focus_tier: 'focus', project: 'Gamma' }),
+      task({ id: 'wrong-completion', pinned: true, focus_tier: 'focus', project: 'Alpha', phase: 'COMPLETE' }),
+      task({ id: 'not-pinned', focus_tier: 'focus', project: 'Alpha' }),
+    ];
+    const normalized = query({ focusTiers: ['focus'], completion: ['todo'], projects: ['alpha'] });
+    expect(fixtures.filter((fixture) => matchesTaskQuery(fixture, normalized)).map(({ id }) => id)).toEqual(['match']);
+  });
+});
+
+describe('workingSet', () => {
+  it('resolves to pinned=true with the pin_order default sort', () => {
+    const normalized = query({ workingSet: true });
+    expect(normalized.pinned).toBe(true);
+    expect(normalized.sort).toBe('pin_order');
+  });
+
+  it('lets an explicit sort win over the pin_order default', () => {
+    const normalized = query({ workingSet: true, sort: 'title_asc' });
+    expect(normalized.pinned).toBe(true);
+    expect(normalized.sort).toBe('title_asc');
+  });
+
+  it('accepts a redundant pinned:true', () => {
+    const normalized = query({ workingSet: true, pinned: true });
+    expect(normalized.pinned).toBe(true);
+    expect(normalized.sort).toBe('pin_order');
+  });
+
+  // workingSet IS pinned=true, so an explicit pinned:false can only be a caller
+  // bug — it errors instead of one side winning silently.
+  it('rejects pinned:false alongside workingSet', () => {
+    expectQueryError({ workingSet: true, pinned: false }, 'conflicting_working_set');
+  });
+
+  it('reaches the shared predicate as a plain pinned filter', () => {
+    const normalized = query({ workingSet: true });
+    expect(matchesTaskQuery(task({ pinned: true }), normalized)).toBe(true);
+    expect(matchesTaskQuery(task(), normalized)).toBe(false);
+  });
+});
+
+describe('q (title substring)', () => {
+  it('matches a case-insensitive substring of the title', () => {
+    const fixture = task({ title: 'Fix Login Flow' });
+    expect(matchesTaskQuery(fixture, query({ q: 'login' }))).toBe(true);
+    expect(matchesTaskQuery(fixture, query({ q: 'LOGIN' }))).toBe(true);
+    expect(matchesTaskQuery(fixture, query({ q: 'x Log' }))).toBe(true);
+    expect(matchesTaskQuery(fixture, query({ q: 'logout' }))).toBe(false);
+  });
+
+  it('trims q and turns a whitespace-only value into no condition', () => {
+    expect(query({ q: '  login  ' }).q).toBe('login');
+    expect(query({ q: '   ' }).q).toBeUndefined();
+    expect(query({ q: '' }).q).toBeUndefined();
+    // No condition filters NOTHING — it must not read as "matches nothing".
+    expect(matchesTaskQuery(task({ title: 'Anything' }), query({ q: '   ' }))).toBe(true);
+    expect(matchesTaskQuery(task({ title: 'Fix Login Flow' }), query({ q: '  login  ' }))).toBe(true);
+  });
+
+  // Title only: description/summary are deliberately not searched here.
+  it('does not match the description or summary', () => {
+    const fixture = task({ title: 'Untitled', description: 'login', summary: 'login' });
+    expect(matchesTaskQuery(fixture, query({ q: 'login' }))).toBe(false);
+  });
+
+  it('rejects a non-string q', () => {
+    expectQueryError({ q: 5 as unknown as string }, 'invalid_string');
+  });
+});
+
+describe('ids', () => {
+  it('matches exact ids only', () => {
+    const fixtures = [task({ id: 'a' }), task({ id: 'b' }), task({ id: 'ab' })];
+    const normalized = query({ ids: ['a', 'b'] });
+    expect(fixtures.filter((fixture) => matchesTaskQuery(fixture, normalized)).map(({ id }) => id)).toEqual(['a', 'b']);
+  });
+
+  it('matches nothing for [] and filters nothing when absent', () => {
+    expect(matchesTaskQuery(task({ id: 'a' }), query({ ids: [] }))).toBe(false);
+    expect(query().ids).toBeUndefined();
+    expect(matchesTaskQuery(task({ id: 'a' }), query())).toBe(true);
+  });
+});
+
 describe('time matching', () => {
   it('uses inclusive lower and upper bounds for relative windows', () => {
     const normalized = query({ time: { basis: 'updated', last: { value: 6, unit: 'hours' } } });
@@ -223,6 +345,37 @@ describe('time matching', () => {
     expect(matchesTaskQuery(task({ updated_at: '2026-02-30T09:00:00.000Z' }), normalized)).toBe(false);
     expect(matchesTaskQuery(task({ updated_at: '2026-01-15T12:00:00.001Z' }), normalized)).toBe(false);
   });
+
+  it('reads due_date for basis due, including a date-only stamp', () => {
+    const normalized = query({ time: { basis: 'due', from: '2026-08-01', until: '2026-10-01' } });
+    // due_date is commonly stored date-only, so that shape has to match.
+    expect(matchesTaskQuery(task({ due_date: '2026-09-01' }), normalized)).toBe(true);
+    expect(matchesTaskQuery(task({ due_date: '2026-09-01T12:00:00.000Z' }), normalized)).toBe(true);
+    expect(matchesTaskQuery(task({ due_date: '2026-07-31' }), normalized)).toBe(false);
+    // A row with no deadline can never answer a due window, even though its
+    // created_at/updated_at would be in range for the other bases.
+    expect(matchesTaskQuery(task(), normalized)).toBe(false);
+  });
+
+  it('keeps the due window half-open on bare date bounds', () => {
+    const normalized = query({ time: { basis: 'due', from: '2026-09-01', until: '2026-09-03' } });
+    expect(normalized.time).toEqual({
+      basis: 'due',
+      fromMs: Date.parse('2026-09-01T00:00:00.000Z'),
+      untilMs: Date.parse('2026-09-03T00:00:00.000Z'),
+      untilExclusive: true,
+    });
+    expect(matchesTaskQuery(task({ due_date: '2026-09-01' }), normalized)).toBe(true);
+    expect(matchesTaskQuery(task({ due_date: '2026-09-03' }), normalized)).toBe(false);
+  });
+
+  it('reads completed_at for basis completed', () => {
+    const normalized = query({ time: { basis: 'completed', last: { value: 6, unit: 'hours' } } });
+    expect(matchesTaskQuery(task({ phase: 'COMPLETE', completed_at: '2026-01-15T09:00:00.000Z' }), normalized)).toBe(true);
+    expect(matchesTaskQuery(task({ phase: 'COMPLETE', completed_at: '2026-01-15T01:00:00.000Z' }), normalized)).toBe(false);
+    // An in-window updated_at must not stand in for a missing completed_at.
+    expect(matchesTaskQuery(task({ updated_at: '2026-01-15T10:00:00.000Z' }), normalized)).toBe(false);
+  });
 });
 
 describe('normalizeTaskQuery', () => {
@@ -248,9 +401,54 @@ describe('normalizeTaskQuery', () => {
     expectQueryError({ time: { basis: 'updated', last: { value: 1, unit: undefined as unknown as 'hours' } } }, 'invalid_enum');
   });
 
+  // The Record over each union makes these lists exhaustive at COMPILE time, so
+  // a new sort key or time basis can't join the type without landing here too.
+  it('accepts every declared sort and time basis', () => {
+    const sorts: Record<TaskQuerySort, true> = {
+      updated_desc: true,
+      created_desc: true,
+      completed_desc: true,
+      priority: true,
+      title_asc: true,
+      pin_order: true,
+    };
+    for (const sort of Object.keys(sorts) as TaskQuerySort[]) {
+      expect(query({ sort }).sort).toBe(sort);
+    }
+
+    const bases: Record<TimeBasis, true> = {
+      created: true,
+      updated: true,
+      created_or_updated: true,
+      due: true,
+      completed: true,
+    };
+    for (const basis of Object.keys(bases) as TimeBasis[]) {
+      expect(query({ time: { basis, last: { value: 1, unit: 'days' } } }).time?.basis).toBe(basis);
+    }
+  });
+
   it('rejects non-arrays where arrays are expected', () => {
     expectQueryError({ completion: 'todo' as unknown as TaskCompletion[] }, 'invalid_array');
     expectQueryError({ tagsAny: 'tag' as unknown as string[] }, 'invalid_array');
+    expectQueryError({ focusTiers: 'focus' as unknown as string[] }, 'invalid_array');
+    expectQueryError({ ids: 'task-1' as unknown as string[] }, 'invalid_array');
+  });
+
+  it('rejects an empty-string focus tier', () => {
+    // '' is how the DEFAULT tier is STORED, never how it is queried — accepting
+    // it would silently alias 'satellite'.
+    expectQueryError({ focusTiers: [''] }, 'invalid_tier');
+    expectQueryError({ focusTiers: ['focus', '  '] }, 'invalid_tier');
+  });
+
+  it('accepts a bare YYYY-MM-DD bound as UTC midnight', () => {
+    const normalized = query({ time: { basis: 'updated', from: '2026-01-14', until: '2026-01-16' } });
+    expect(normalized.time?.fromMs).toBe(Date.parse('2026-01-14T00:00:00.000Z'));
+    expect(normalized.time?.untilMs).toBe(Date.parse('2026-01-16T00:00:00.000Z'));
+    // Still a validated calendar date, not just an accepted shape.
+    expectQueryError({ time: { basis: 'due', from: '2026-02-30' } }, 'invalid_timestamp');
+    expectQueryError({ time: { basis: 'due', from: '2026-1-5' } }, 'invalid_timestamp');
   });
 
   it.each([0, -1, 1.5])('rejects invalid last.value %s', (value) => {
@@ -370,7 +568,32 @@ describe('compareTasksForQuery', () => {
     expect(fixtures.sort((a, b) => compareTasksForQuery(a, b, 'title_asc')).map(({ id }) => id)).toEqual(['a', 'b']);
   });
 
-  it.each(['updated_desc', 'created_desc', 'completed_desc', 'priority', 'title_asc'] as const)(
+  it('sorts pin_order ascending with orderless rows last', () => {
+    const fixtures = [
+      // A pin_order left on an UNPINNED row is stale bookkeeping, not a board
+      // position, so it sorts with the orderless rows.
+      task({ id: 'unpinned-with-order', pin_order: 1 }),
+      task({ id: 'pinned-2', pinned: true, pin_order: 2 }),
+      task({ id: 'pinned-0', pinned: true, pin_order: 0 }),
+      task({ id: 'pinned-no-order', pinned: true }),
+      task({ id: 'pinned-1', pinned: true, pin_order: 1 }),
+    ];
+    expect(fixtures.sort((a, b) => compareTasksForQuery(a, b, 'pin_order')).map(({ id }) => id)).toEqual([
+      'pinned-0', 'pinned-1', 'pinned-2', 'pinned-no-order', 'unpinned-with-order',
+    ]);
+  });
+
+  it('breaks a pin_order tie by updated_at descending, then id', () => {
+    const fixtures = [
+      task({ id: 'same-b', pinned: true, pin_order: 3, updated_at: '2026-01-15T10:00:00.000Z' }),
+      task({ id: 'same-a', pinned: true, pin_order: 3, updated_at: '2026-01-15T10:00:00.000Z' }),
+      task({ id: 'newer', pinned: true, pin_order: 3, updated_at: '2026-01-15T11:00:00.000Z' }),
+    ];
+    expect(fixtures.sort((a, b) => compareTasksForQuery(a, b, 'pin_order')).map(({ id }) => id))
+      .toEqual(['newer', 'same-a', 'same-b']);
+  });
+
+  it.each(['updated_desc', 'created_desc', 'completed_desc', 'priority', 'title_asc', 'pin_order'] as const)(
     'uses id ascending as the final tie-breaker for %s',
     (sort) => {
       const b = task({ id: 'b', title: 'Same', completed_at: '2026-01-12T00:00:00.000Z', priority: 'important' });

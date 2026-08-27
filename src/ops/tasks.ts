@@ -27,20 +27,67 @@ function withRef(task: unknown, extra: Record<string, unknown> = {}): unknown {
   return { ...extra, task, ref: taskRefTag(id, title), instruction: REF_INSTRUCTION }
 }
 
+const SORT = z.enum(['updated_desc', 'created_desc', 'completed_desc', 'priority', 'title_asc', 'pin_order'])
+const TIME_BASIS = z.enum(['created', 'updated', 'created_or_updated', 'due', 'completed'])
+
 defineOp({
   name: 'task_list',
-  title: 'List Walnut tasks',
+  title: 'List / query Walnut tasks',
   description:
-    'List the user\'s tasks (open tasks + anything completed in the last 14 days). ' +
-    'Filters combine: status, project (exact, case-insensitive; "" = Inbox), tag (exact), ' +
-    'q (case-insensitive substring on the title). Returns slim task rows plus syncedAt.',
+    'Query the user\'s tasks with any combination of filters (fields AND together; comma lists OR ' +
+    'within a field). No status default (completed tasks included), but limit defaults to 50 — narrow ' +
+    'with filters or raise limit (max 200) instead of paging by hand. ' +
+    'Working set (the pinned board): pass working_set=true to get pinned tasks in board order, each ' +
+    'row carrying focus_tier + pin_order — an absent focus_tier on a pinned row means the Satellite ' +
+    '(default) tier. focus_tier filters match pinned rows only: "satellite" matches pinned rows with no ' +
+    'stored tier; focus/backlog/wait/ct_* match exactly. Time windows: time_basis + a window. last_hours/' +
+    'last_days look BACKWARD from now — for upcoming deadlines use time_basis=due with time_from/' +
+    'time_until (bare YYYY-MM-DD accepted; until is exclusive). basis "completed" finds recently ' +
+    'finished work. Returns { count, tasks } with slim rows; use task_get for full detail on one task.',
   input: {
-    status: STATUS.optional().describe('todo | in_progress | done'),
-    project: z.string().optional().describe('Project name; "" for the Inbox'),
-    tag: z.string().optional().describe('Exact tag match'),
+    status: STATUS.optional().describe('Legacy 3-state: todo | in_progress | done'),
+    completion: z.string().optional().describe('Comma list of todo | in_progress | complete (in_progress includes AGENT_COMPLETE)'),
+    phases: z.string().optional().describe(`Comma list of exact phases: ${PHASE_ORDER.join(' | ')}`),
+    project: z.string().optional().describe('Project name (exact, case-insensitive); "" for the Inbox'),
+    projects: z.string().optional().describe('Comma list of project names'),
+    priorities: z.string().optional().describe('Comma list of immediate | important | backlog | none'),
+    source: z.string().optional().describe('Task source (exact), e.g. "local"'),
+    sprint: z.string().optional().describe('Sprint name (exact)'),
+    tag: z.string().optional().describe('Exact tag match (single)'),
+    tags_any: z.string().optional().describe('Comma list — match tasks carrying ANY of these tags'),
+    tags_all: z.string().optional().describe('Comma list — match tasks carrying ALL of these tags'),
+    pinned: z.boolean().optional().describe('Filter pinned/unpinned tasks'),
+    focus_tier: z.string().optional().describe('Comma list of pin tiers: focus | satellite | backlog | wait | a custom ct_* id. Only pinned tasks match; satellite = pinned with no stored tier'),
+    working_set: z.boolean().optional().describe('Shortcut: the whole pinned board (all tiers, completed pins included) sorted by pin_order'),
+    unread: z.boolean().optional().describe('Tasks with agent output the human has not opened yet'),
+    blocked: z.boolean().optional().describe('Tasks blocked/unblocked by incomplete dependencies'),
+    parent_task_id: z.string().optional().describe('Children of this parent task (exact id)'),
+    group_id: z.string().optional().describe('Members of a virtual group (exact id, e.g. "g_xxx")'),
     q: z.string().optional().describe('Case-insensitive substring on the task title'),
+    ids: z.string().optional().describe('Comma list of exact task ids — fetch a specific set in one call'),
+    time_basis: TIME_BASIS.optional().describe('Which timestamp the window filters: created | updated | created_or_updated | due | completed'),
+    last_hours: z.number().int().positive().optional().describe('Relative window: the last N hours'),
+    last_days: z.number().int().positive().optional().describe('Relative window: the last N days'),
+    time_from: z.string().optional().describe('Absolute window start (inclusive), ISO-8601 or YYYY-MM-DD'),
+    time_until: z.string().optional().describe('Absolute window end (exclusive), ISO-8601 or YYYY-MM-DD'),
+    sort: SORT.optional().describe('Result order (default updated_desc; working_set defaults to pin_order)'),
+    // Defaulted, not optional: the full store is thousands of rows and several
+    // MB — an unbounded reply is useless to a model and blocks the server's
+    // event loop. Every other list op defaults its page size too.
+    limit: z.number().int().min(1).max(200).default(50).describe('Max rows (1-200, default 50), applied after sort'),
+    fields: z.enum(['list', 'full']).default('list').describe('list = slim rows (default); full = every field including note (heavy — combine with ids or a small limit)'),
   },
-  bind: { method: 'GET', path: '/tasks' },
+  // Server-root-absolute bind: /api/tasks is the canonical composable-query
+  // route (the same engine the web UI filters ride), not the frozen /api/v1
+  // mobile projection.
+  bind: { method: 'GET', path: '/api/tasks' },
+  mapResult: ({ body }) => {
+    const tasks = (body as { tasks?: unknown[] } | undefined)?.tasks
+    // An unexpected 200 body (a proxy's HTML page, a shape change) must not
+    // read as "you have 0 tasks" — pass it through so the caller sees it.
+    if (!Array.isArray(tasks)) return body
+    return { count: tasks.length, tasks }
+  },
   tags: { readonly: true, remote: 'allow' },
 })
 

@@ -593,6 +593,69 @@ describe('tasks (read-only projection)', () => {
     expect(doneBody.tasks.map((t) => t.title)).not.toContain('Buy milk')
   })
 
+  it('filters the projection by pinned, focus_tier and working_set', async () => {
+    const tm = await import('../../../src/core/task-manager.js')
+    await tm.ensureProject('General', 'local')
+    const { task: focus } = await tm.addTask({
+      title: 'v1 focus pin', project: 'General',
+      priority: 'none', description: '', status: 'todo',
+    } as Parameters<typeof tm.addTask>[0])
+    const { task: satellite } = await tm.addTask({
+      title: 'v1 satellite pin', project: 'General',
+      priority: 'none', description: '', status: 'todo',
+    } as Parameters<typeof tm.addTask>[0])
+    const { task: loose } = await tm.addTask({
+      title: 'v1 never pinned', project: 'General',
+      priority: 'none', description: '', status: 'todo',
+    } as Parameters<typeof tm.addTask>[0])
+    await tm.togglePin(focus.id)
+    await tm.togglePin(satellite.id)
+    await tm.setFocusTier(focus.id, 'focus')
+    // Board order is pin_order, not creation order.
+    await tm.reorderPins([satellite.id, focus.id])
+
+    interface Row { id: string; pinned?: boolean; pin_order?: number; focus_tier?: string }
+    const list = async (qs: string): Promise<Row[]> => {
+      const res = await fetch(apiUrl(`/api/v1/tasks${qs}`))
+      expect(res.status).toBe(200)
+      return (await res.json() as { tasks: Row[] }).tasks
+    }
+
+    const pinnedIds = (await list('?pinned=true')).map((t) => t.id)
+    expect(new Set(pinnedIds)).toEqual(new Set([focus.id, satellite.id]))
+    const unpinnedIds = (await list('?pinned=false')).map((t) => t.id)
+    expect(unpinnedIds).toContain(loose.id)
+    expect(unpinnedIds).not.toContain(focus.id)
+
+    // 'satellite' = pinned with no stored tier; an unpinned row matches no tier.
+    expect((await list('?focus_tier=satellite')).map((t) => t.id)).toEqual([satellite.id])
+    expect((await list('?focus_tier=focus')).map((t) => t.id)).toEqual([focus.id])
+    expect(new Set((await list('?focus_tier=focus,satellite')).map((t) => t.id)))
+      .toEqual(new Set([focus.id, satellite.id]))
+    expect((await list('?focus_tier=satellite')).map((t) => t.id)).not.toContain(loose.id)
+
+    // working_set = the whole pinned board, sorted by pin_order ascending.
+    const board = await list('?working_set=true')
+    expect(board.map((t) => t.id)).toEqual([satellite.id, focus.id])
+    expect(board.map((t) => t.pin_order)).toEqual([0, 1])
+
+    const bad = await fetch(apiUrl('/api/v1/tasks?pinned=garbage'))
+    expect(bad.status).toBe(400)
+    const badBody = await bad.json() as { error: { code: string; message: string } }
+    expect(badBody.error.code).toBe('bad_request')
+    expect(badBody.error.message).toMatch(/pinned/)
+
+    // Same contradiction answer as GET /api/tasks — never a silent override.
+    const conflict = await fetch(apiUrl('/api/v1/tasks?working_set=true&pinned=false'))
+    expect(conflict.status).toBe(400)
+    const conflictBody = await conflict.json() as { error: { code: string; message: string } }
+    expect(conflictBody.error.message).toMatch(/working_set/)
+
+    // Leave the shared projection unpinned for the assertions that follow.
+    await tm.togglePin(focus.id)
+    await tm.togglePin(satellite.id)
+  })
+
   it('serves the projected session list with status filter + slim shape', async () => {
     const st = await import('../../../src/core/session-tracker.js')
     const tm = await import('../../../src/core/task-manager.js')

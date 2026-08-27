@@ -344,8 +344,20 @@ function buildToolTaskQuery(params: Record<string, unknown>, where: Record<strin
     const mapped = LEGACY_STATUS_TO_COMPLETION[String(where.status)];
     if (mapped) query.completion = [mapped];
   }
+  if (where.working_set !== undefined) query.workingSet = looseBool(where.working_set, 'working_set');
+  // A bare string is a comma list, matching the task_list op's spelling —
+  // dropping it silently would return EVERYTHING instead of the asked-for set.
+  if (typeof where.ids === 'string') {
+    query.ids = where.ids.split(',').map((s) => s.trim()).filter(Boolean);
+  } else if (Array.isArray(where.ids)) {
+    query.ids = where.ids.map(String);
+  }
   // LEGACY DEFAULT, adapter-only: bare task_query hides completed tasks.
-  if (query.completion === undefined && query.phases === undefined) {
+  // working_set bypasses it (completion no longer unpins, so the board
+  // includes finished pins) and so does ids — an identity fetch answered
+  // with "doesn't exist" because the task is COMPLETE is a wrong answer.
+  if (query.completion === undefined && query.phases === undefined
+      && query.workingSet !== true && query.ids === undefined) {
     query.completion = ['todo', 'in_progress'];
   }
 
@@ -359,6 +371,10 @@ function buildToolTaskQuery(params: Record<string, unknown>, where: Record<strin
   if (where.unread !== undefined) query.unread = looseBool(where.unread, 'unread');
   if (where.blocked !== undefined) query.blocked = looseBool(where.blocked, 'blocked');
   if (where.group_id) query.groupId = String(where.group_id);
+  // A bare string is accepted as a 1-element list, like completion above.
+  if (typeof where.focus_tier === 'string') query.focusTiers = [where.focus_tier];
+  else if (Array.isArray(where.focus_tier)) query.focusTiers = where.focus_tier.map(String);
+  if (where.q !== undefined) query.q = String(where.q);
 
   if (where.time && typeof where.time === 'object' && !Array.isArray(where.time)) {
     const raw = where.time as Record<string, unknown>;
@@ -470,6 +486,12 @@ async function runTaskQueryTool(
       created_at: t.created_at,
       updated_at: t.updated_at,
     };
+    // Board fields ride pinned rows so a working_set/focus_tier result is
+    // bucketable without a follow-up call (absent focus_tier = Satellite).
+    if (t.pinned) {
+      if (t.focus_tier) entry.focus_tier = t.focus_tier;
+      if (typeof t.pin_order === 'number') entry.pin_order = t.pin_order;
+    }
     if (t.completed_at) entry.completed_at = t.completed_at;
     if (t.unread) entry.unread = true;
     if (t.due_date) entry.due_date = t.due_date;
@@ -524,6 +546,14 @@ export const tools: ToolDefinition[] = [
             priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'] },
             source: { type: 'string', description: 'Filter by task source (exact), e.g. "local".' },
             pinned: { type: 'boolean', description: 'Filter pinned/unpinned tasks. Combine with completion to find e.g. recently finished pinned work.' },
+            focus_tier: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Pin tiers to match (OR): focus | satellite | backlog | wait | a custom ct_* id. Only pinned tasks match; "satellite" = pinned with NO stored tier (the default). A bare string works too.',
+            },
+            working_set: { type: 'boolean', description: 'Shortcut: the whole pinned board in one query — all tiers, completed pins included, sorted by pin_order. Rows carry focus_tier (absent = Satellite).' },
+            q: { type: 'string', description: 'Case-insensitive substring on the task title.' },
+            ids: { type: 'array', items: { type: 'string' }, description: 'Exact task ids — fetch a specific set in one call.' },
             unread: { type: 'boolean', description: 'Filter to UNREAD tasks — the agent produced output the human has not opened yet. Set automatically when a session turn ends; cleared when the human opens the task.' },
             parent_task_id: { type: 'string', description: 'Filter to children of a parent task (by ID prefix).' },
             group_id: { type: 'string', description: 'Filter to members of a virtual group (exact group id, e.g. "g_xxx").' },
@@ -533,13 +563,13 @@ export const tools: ToolDefinition[] = [
             sprint: { type: 'string', description: 'Filter by sprint name (exact match).' },
             time: {
               type: 'object',
-              description: 'Filter by a created/updated time window. Give basis plus EITHER last_n_hours/last_n_days (relative) OR from/until (absolute ISO-8601).',
+              description: 'Filter by a time window. Give basis plus EITHER last_n_hours/last_n_days (relative) OR from/until (absolute). basis "due" finds deadline work; "completed" finds recently finished work.',
               properties: {
-                basis: { type: 'string', enum: ['created', 'updated', 'created_or_updated'], description: 'Which timestamp the window applies to.' },
+                basis: { type: 'string', enum: ['created', 'updated', 'created_or_updated', 'due', 'completed'], description: 'Which timestamp the window applies to.' },
                 last_n_hours: { type: 'number', description: 'Relative window: the last N hours (positive integer, max 8760).' },
                 last_n_days: { type: 'number', description: 'Relative window: the last N days (positive integer, max 365).' },
-                from: { type: 'string', description: 'Absolute window start, ISO-8601 (inclusive).' },
-                until: { type: 'string', description: 'Absolute window end, ISO-8601 (exclusive).' },
+                from: { type: 'string', description: 'Absolute window start, inclusive — ISO-8601 or bare YYYY-MM-DD.' },
+                until: { type: 'string', description: 'Absolute window end, exclusive — ISO-8601 or bare YYYY-MM-DD.' },
               },
               required: ['basis'],
             },
@@ -547,8 +577,8 @@ export const tools: ToolDefinition[] = [
         },
         sort: {
           type: 'string',
-          enum: ['updated_desc', 'created_desc', 'completed_desc', 'priority', 'title_asc'],
-          description: 'Result order. Default: "updated_desc". Always tie-broken by id.',
+          enum: ['updated_desc', 'created_desc', 'completed_desc', 'priority', 'title_asc', 'pin_order'],
+          description: 'Result order. Default: "updated_desc" (working_set defaults to "pin_order"). Always tie-broken by id.',
         },
         limit: {
           type: 'number',
