@@ -32,6 +32,12 @@ function parseSeparator(raw: unknown): Separator | null {
   if (r.before !== undefined && typeof r.before !== 'string') return null
   if (r.afterProject !== undefined && typeof r.afterProject !== 'string') return null
   if (r.beforeProject !== undefined && typeof r.beforeProject !== 'string') return null
+  if (r.label !== undefined && typeof r.label !== 'string') return null
+  // A named line is a section heading; empty text degrades to a plain line
+  // rather than persisting a heading that renders as nothing.
+  const label = typeof r.label === 'string' && r.label.trim() !== ''
+    ? { label: r.label.slice(0, 200) }
+    : {}
   // Each mode keeps only the anchors it can act on, so one line can never carry
   // two conflicting positions. 'project' anchors on FOLDERS (a folder is one unit
   // there), 'custom' anchors on cards.
@@ -40,6 +46,7 @@ function parseSeparator(raw: unknown): Separator | null {
       id: r.id,
       tier: r.tier,
       mode: r.mode,
+      ...label,
       // Absent stays absent: '' is Inbox, a real folder, so it cannot double as
       // "no folder on that side".
       ...(r.afterProject !== undefined ? { afterProject: r.afterProject as string } : {}),
@@ -55,6 +62,7 @@ function parseSeparator(raw: unknown): Separator | null {
     id: r.id,
     tier: r.tier,
     mode: r.mode,
+    ...label,
     after: (r.after as string | undefined) ?? '',
     before: (r.before as string | undefined) ?? '',
   }

@@ -23,16 +23,19 @@ import type { TaskPriority } from '@open-walnut/core';
 import { TodoSearchBar } from './TodoSearchBar';
 import { NewLauncherButton } from './NewLauncherButton';
 import { ProjectPlusMenu, ProjectKebabMenu, TierPlusButton } from './ProjectHeaderMenus';
-import { TierSeparatorRow } from './TierSeparatorRow';
+import { TierSeparatorRow, SortableTierSeparatorRow } from './TierSeparatorRow';
 import {
   anchorsForSlot,
+  isSeparatorId,
   newSeparatorId,
   placeSeparators,
   projectAnchorsForSlot,
   reanchorSeparatorsAfterMove,
   removeSeparator,
   snapSlotOutOfGroup,
+  syncSeparatorAnchorsFromArr,
   upsertSeparator,
+  withSeparatorSentinels,
   type SeparatorMode,
   type TierSeparator,
 } from './tier-separators';
@@ -3150,15 +3153,31 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // per project run in renderTierItems). Both skip mid-drag for the same reason.
   // In 'custom' view mode a tier SKIPS project clustering entirely — the raw pin
   // order is the render order (group clustering stays: a group must never split).
+  // Separator records — read here (early) because clusterForTier below inserts
+  // custom-mode lines into the tier id arrays as REAL sortable units. The rest of
+  // the separator machinery (drag state, add/delete/rename) lives further down.
+  const separators = ordering?.separators ?? NO_SEPARATORS;
   const clusterForTier = useCallback((tier: string, tierTasks: Task[]): string[] => {
     const grouped = clusterTierByGroup(tierTasks);
-    const projected = tierViewMode(tier) === 'custom'
+    const isCustom = tierViewMode(tier) === 'custom';
+    const projected = isCustom
       ? grouped
       : clusterTierByProject(grouped, tierTasks, ordering?.projectOrder);
     // Chip sentinels go in LAST — see withGroupSentinels for why they must not be
     // visible to the project clustering pass.
-    return withGroupSentinels(projected, tierTasks, tier);
-  }, [tierViewMode, ordering?.projectOrder]);
+    const withChips = withGroupSentinels(projected, tierTasks, tier);
+    if (!isCustom) return withChips; // project-mode lines anchor folders → plain DOM rows
+    // Custom-mode divider lines ride the items array itself (withSeparatorSentinels):
+    // in `items`, the strategy displaces a line with the cards around it, so a card
+    // can never visually cross it mid-drag (2026-08-25) and a slot can open above a
+    // top-anchored line.
+    const byId = new Map(tierTasks.map((t) => [t.id, t]));
+    return withSeparatorSentinels({
+      ids: withChips, separators, tier,
+      groupOf: (id) => byId.get(id)?.group_id ?? null,
+      isTaskId: (id) => byId.has(id),
+    });
+  }, [tierViewMode, ordering?.projectOrder, separators]);
   const focusIds_arr = useMemo(() => dragTierIds?.get('focus') ?? clusterForTier('focus', focusTasksLocal), [dragTierIds, focusTasksLocal, clusterForTier]);
   const satelliteIds_arr = useMemo(() => dragTierIds?.get('satellite') ?? clusterForTier('satellite', satelliteTasksLocal), [dragTierIds, satelliteTasksLocal, clusterForTier]);
   const backlogIds_arr = useMemo(() => dragTierIds?.get('backlog') ?? clusterForTier('backlog', backlogTasksLocal), [dragTierIds, backlogTasksLocal, clusterForTier]);
@@ -3173,6 +3192,46 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [dragTierIds, customTiers, customTasksLocal, clusterForTier]);
 
   const pinnedTaskMap = useMemo(() => new Map(pinnedTasks.map((t) => [t.id, t])), [pinnedTasks]);
+
+  // ── Separator persistence + move-time anchor maintenance ── Declared up here
+  // (not with the rest of the separator UI far below) because the drag handlers
+  // need them directly. persistSeparators is the single write path for every
+  // separator mutation.
+  const persistSeparators = useCallback((next: TierSeparator[]) => {
+    if (!ordering?.saveSeparators) return;
+    void ordering.saveSeparators(next).catch((err) => {
+      onOperationError?.(err instanceof Error ? err.message : String(err));
+    });
+  }, [ordering, onOperationError]);
+
+  // Rule 5 (tier-separators.ts): a drag that RELOCATES a card must not tow the
+  // divider lines anchored to it. Custom mode only: project-mode lines anchor
+  // FOLDERS, which stay put when one card moves.
+  const sepReanchor = useCallback((tier: string, beforeIds: string[], movedIds: string[]) => {
+    if (tierViewMode(tier) !== 'custom') return;
+    const next = reanchorSeparatorsAfterMove({
+      separators, tier, beforeIds, movedIds,
+      groupOf: (id) => pinnedTaskMap.get(id)?.group_id ?? null,
+    });
+    if (next !== separators) persistSeparators(next);
+  }, [tierViewMode, separators, persistSeparators, pinnedTaskMap]);
+
+  /** Rewrite custom-mode line anchors from the FINAL post-drop arrays, one persist
+   *  for all affected tiers. With lines living in `items`, the last frame dnd-kit
+   *  showed IS the gesture's truth — deriving anchors from it means nothing jumps
+   *  after the drop lands. */
+  const syncCustomSepAnchors = useCallback((tiers: Array<{ tier: string; arr: string[] }>) => {
+    let next = separators;
+    for (const { tier, arr } of tiers) {
+      if (tierViewMode(tier) !== 'custom') continue;
+      next = syncSeparatorAnchorsFromArr({
+        separators: next, tier, finalArr: arr,
+        isTaskId: (id) => pinnedTaskMap.has(id),
+        groupOf: (id) => pinnedTaskMap.get(id)?.group_id ?? null,
+      });
+    }
+    if (next !== separators) persistSeparators(next);
+  }, [tierViewMode, separators, persistSeparators, pinnedTaskMap]);
 
   // Snapshot of original tier arrays at drag start (for revert on cancel)
   // (activeDragPinnedId state lives above the pinned render-model memos — they
@@ -3199,6 +3258,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (members.length === 0) return null;
     return { label: taskGroups?.[gid] ?? 'Group', titles: members.map((t) => t.title), count: members.length };
   }, [activeDragPinnedId, pinnedTasks, taskGroups]);
+
+  // A dragged divider line renders a floating line under the cursor (the in-list
+  // row stays as the dimmed slot marker, like a card's).
+  const activeDragSep = useMemo(() => {
+    if (!(activeDragPinnedId && isSeparatorId(activeDragPinnedId))) return null;
+    return separators.find((s) => s.id === activeDragPinnedId) ?? null;
+  }, [activeDragPinnedId, separators]);
 
   // Recent card ids for SortableContext — must mirror SortableRecentCard's id
   // choice exactly: pinned/done cards register namespaced (static, the raw id
@@ -3240,10 +3306,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // defined ~1200 lines below (it needs ensureManualSort), and naming it in this
   // handler's dep array would read a const in its temporal dead zone.
   const requestMoveTaskRef = useRef<typeof requestMoveTask | null>(null);
-  // Same declaration-order cycle for the separator re-anchor (rule 5 in
-  // tier-separators.ts): the separator state lives ~2000 lines below, but the
-  // drag-end handler must re-anchor BEFORE it persists a move.
-  const sepReanchorRef = useRef<((tier: string, beforeIds: string[], movedIds: string[]) => void) | null>(null);
 
   // ── Unpin-by-drag ── `unpinZone` drives the portalled strip (null = no strip),
   // `unpinRectRef` is the same rect for the drop test in a handler that runs after
@@ -3309,7 +3371,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // disagree — no lit frame, no join.
   const handlePinnedDragMove = useCallback((event: DragMoveEvent) => {
     const activeId = String(event.active.id);
-    if (isGroupSentinel(activeId)) return; // dragOver owns clearing for group drags
+    if (isGroupSentinel(activeId) || isSeparatorId(activeId)) return; // dragOver owns clearing for sentinel drags
     // GROUPED-MEMBER EXEMPTION: a member dragged out has two outcomes only —
     // reorder, or pull OUT. Lighting "join" for it caused the group-absorb bug.
     const activeGid = tasksRef.current.find((t) => t.id === activeId)?.group_id;
@@ -3493,6 +3555,31 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return;
     }
 
+    // Divider-line drag: same shape as the group-sentinel branch — the strategy
+    // handles the same-tier visual, here we only move the id BETWEEN tiers so the
+    // slot opens where the pointer is. A line may only land in another CUSTOM
+    // tier (project-mode lines anchor folders, a different coordinate system).
+    if (isSeparatorId(activeId)) {
+      if (dropIntentRef.current !== null) { dropIntentRef.current = null; setGroupTargetId((prev) => (prev === null ? prev : null)); }
+      if (!dragStartSnapshot.current) return;
+      const targetTier: FocusTier | undefined = DROP_ZONE_TIERS[overId] ?? findTierOf(overId);
+      if (!targetTier || activeId === overId) return;
+      if (tierViewMode(targetTier) !== 'custom') return;
+      const currentTier: FocusTier | undefined = findTierOf(activeId);
+      if (!currentTier || currentTier === targetTier) return;
+      const addAt = (arr: string[], ovId: string) => {
+        const idx = arr.indexOf(ovId);
+        if (idx === -1) return [...arr, activeId];
+        const copy = [...arr];
+        copy.splice(idx, 0, activeId);
+        return copy;
+      };
+      setLiveArr(currentTier, getLiveArr(currentTier).filter((id) => id !== activeId));
+      setLiveArr(targetTier, addAt(getLiveArr(targetTier), overId));
+      bumpDragTick();
+      return;
+    }
+
     // Skip when hovering over the dragged item itself — its tier is determined
     // by where we already placed it, not by where it was at drag start.
     // Without this guard, the frozen snapshot says the item belongs to its
@@ -3557,7 +3644,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     setLiveArr(currentTier, remove(getLiveArr(currentTier)));
     setLiveArr(targetTier, addAt(getLiveArr(targetTier), overId));
     bumpDragTick(); // trigger visual update
-  }, [bumpDragTick, pinnedCardIds, tasks, DROP_ZONE_TIERS, findTierOf, getLiveArr, setLiveArr]);
+  }, [bumpDragTick, pinnedCardIds, tasks, DROP_ZONE_TIERS, findTierOf, getLiveArr, setLiveArr, tierViewMode]);
 
   const clearDragState = useCallback(() => {
     if (dragRafRef.current) { cancelAnimationFrame(dragRafRef.current); dragRafRef.current = 0; }
@@ -3641,8 +3728,41 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // a move (reorder, retier, group join/leave) calls this first.
     const reanchorSeps = (tier: FocusTier | undefined, movedIds: string[]) => {
       if (!tier) return;
-      sepReanchorRef.current?.(tier, taskIdsOnly(snap.tiers.get(tier) ?? []), movedIds);
+      sepReanchor(tier, taskIdsOnly(snap.tiers.get(tier) ?? []), movedIds);
     };
+
+    // ── Divider-line drag (custom mode) ── The line is a real sortable unit;
+    // dragOver may have moved it cross-tier, and a same-tier drop onto another
+    // row means "take its slot" (mirrors the card reorder). Nothing but the
+    // separator record changes — no pin order is persisted for a line move.
+    if (isSeparatorId(activeId)) {
+      const sep = separators.find((s) => s.id === activeId);
+      if (!sep) return;
+      // Landing tier = whichever live array holds the line now. A non-custom
+      // tier can't take it (its lines anchor folders, not cards) — dragOver
+      // refuses those moves, this is the belt to that suspender.
+      let tier: FocusTier = finalTierOf(activeId) ?? (sep.tier as FocusTier);
+      if (tierViewMode(tier) !== 'custom') tier = sep.tier as FocusTier;
+      const arr = [...finalArr(tier)];
+      if (overId !== activeId && !DROP_ZONE_TIERS[overId]) {
+        const ai = arr.indexOf(activeId);
+        const oi = arr.indexOf(overId);
+        if (ai !== -1 && oi !== -1 && ai !== oi) {
+          arr.splice(ai, 1);
+          arr.splice(oi, 0, activeId);
+        }
+      }
+      // Retier first (a cross-tier landing changes the record's tier), THEN derive
+      // anchors from the final array — one persist for both.
+      const next = syncSeparatorAnchorsFromArr({
+        separators: tier === sep.tier ? separators : upsertSeparator(separators, { ...sep, tier }),
+        tier, finalArr: arr,
+        isTaskId: (id) => pinnedTaskMap.has(id),
+        groupOf: (id) => pinnedTaskMap.get(id)?.group_id ?? null,
+      });
+      if (next !== separators) persistSeparators(next);
+      return;
+    }
 
     // In a project-clustered tier view, a drop that lands inside ANOTHER project's
     // run means "move to that project" — without this the reorder persists but the
@@ -3855,7 +3975,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       } else {
         const origTier: FocusTier = snapTierOf(activeId) ?? 'satellite';
         if (currentTier && origTier !== currentTier) {
-          reanchorSeps(origTier, [activeId]);
+          // Lines live in the tier arrays now — their post-move anchors are read
+          // straight off the final frames (both tiers), not rule-5-walked.
+          syncCustomSepAnchors([
+            { tier: origTier, arr: finalArr(origTier) },
+            { tier: currentTier, arr: finalArr(currentTier) },
+          ]);
           onSetTier?.(activeId, currentTier, buildOrderFromRefs());
         }
         // Independent of a tier change: a self-drop inside the SAME tier still
@@ -3890,7 +4015,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const targetTier = DROP_ZONE_TIERS[overId] ?? snapTierOf(overId) ?? finalTierOf(activeId) ?? 'satellite';
 
     if (origTier !== targetTier) {
-      reanchorSeps(origTier, [activeId]);
       onSetTier?.(activeId, targetTier, buildOrderFromRefs(targetTier));
       // Replicate the tier array buildOrderFromRefs persists (same ai/oi splice) so
       // the landing slot can be read. A tiny duplication on purpose: buildOrderFromRefs
@@ -3903,6 +4027,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         arr.splice(ai, 1);
         arr.splice(oi, 0, activeId);
       }
+      // Lines in both tiers re-anchor to the final frames (the origin lost a card,
+      // the target gained one at the landing slot). The origin filter covers the
+      // no-hover drop where dragOver never moved the card out of its live array.
+      syncCustomSepAnchors([
+        { tier: origTier, arr: finalArr(origTier).filter((id) => id !== activeId) },
+        { tier: targetTier, arr },
+      ]);
       maybeMoveProject(targetTier, arr);
       return;
     }
@@ -3928,9 +4059,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       tier === origTier ? reorderedTier : (snap.tiers.get(tier) ?? [])
     );
     maybeMoveProject(origTier, reorderedTier);
-    reanchorSeps(origTier, [activeId]);
+    // Anchors from the final frame: a card that pushed a line aside really is on
+    // the other side of it now (the strategy's preview was the truth).
+    syncCustomSepAnchors([{ tier: origTier, arr: reorderedTier }]);
     onReorderPinned?.(taskIdsOnly(newOrder));
-  }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, onUnpinTask, overUnpinZone, pinnedJoinIntent, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError]);
+  }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, onUnpinTask, overUnpinZone, pinnedJoinIntent, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError, separators, persistSeparators, sepReanchor, syncCustomSepAnchors]);
 
   // Project chips for ViewDropdown, in the flat config order. Inbox rides along as
   // INBOX_TAB (a sentinel chip) whenever any task has no project — '' is the All chip.
@@ -4354,19 +4487,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     [recentStaticId, visibleRecentTasks],
   );
   const visibleFocusIds = useMemo(
-    () => pruneOrphanSentinels(focusIds_arr.filter((id) => isGroupSentinel(id) || tierVisibleTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
+    () => pruneOrphanSentinels(focusIds_arr.filter((id) => isGroupSentinel(id) || isSeparatorId(id) || tierVisibleTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
     [focusIds_arr, tierVisibleTaskIds, pinnedTaskMap, activeDragPinnedId],
   );
   const visibleSatelliteIds = useMemo(
-    () => pruneOrphanSentinels(satelliteIds_arr.filter((id) => isGroupSentinel(id) || tierVisibleTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
+    () => pruneOrphanSentinels(satelliteIds_arr.filter((id) => isGroupSentinel(id) || isSeparatorId(id) || tierVisibleTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
     [satelliteIds_arr, tierVisibleTaskIds, pinnedTaskMap, activeDragPinnedId],
   );
   const visibleBacklogIds = useMemo(
-    () => pruneOrphanSentinels(backlogIds_arr.filter((id) => isGroupSentinel(id) || tierVisibleTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
+    () => pruneOrphanSentinels(backlogIds_arr.filter((id) => isGroupSentinel(id) || isSeparatorId(id) || tierVisibleTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
     [backlogIds_arr, tierVisibleTaskIds, pinnedTaskMap, activeDragPinnedId],
   );
   const visibleWaitIds = useMemo(
-    () => pruneOrphanSentinels(waitIds_arr.filter((id) => isGroupSentinel(id) || tierVisibleTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
+    () => pruneOrphanSentinels(waitIds_arr.filter((id) => isGroupSentinel(id) || isSeparatorId(id) || tierVisibleTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
     [waitIds_arr, tierVisibleTaskIds, pinnedTaskMap, activeDragPinnedId],
   );
   // Per-custom-tier render model: visible ids + display tasks + group meta in one
@@ -4376,7 +4509,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const map: Record<string, { visibleIds: string[]; display: Task[]; groupMeta: Map<string, GroupRenderInfo> }> = {};
     for (const def of customTiers ?? []) {
       const visibleIds = pruneOrphanSentinels(
-        (customIds_arr[def.id] ?? []).filter((id) => isGroupSentinel(id) || tierVisibleTaskIds.has(id)),
+        (customIds_arr[def.id] ?? []).filter((id) => isGroupSentinel(id) || isSeparatorId(id) || tierVisibleTaskIds.has(id)),
         pinnedTaskMap, activeDragPinnedId,
       );
       const display = visibleIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task);
@@ -5539,45 +5672,29 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     void ordering.reorderProjects(next);
   }, [ordering, tasks]);
 
-  // ── Separators (divider lines inside a tier) ── Same architecture as the
-  // project labels above: PLAIN DOM + native HTML5 drag, never a dnd-kit
-  // sortable. A separator carries no task, so it must not occupy a slot in the
-  // pinned reorder payload — and staying out of SortableContext keeps card
-  // indices (and the frozen drag refs) exactly as they were.
+  // ── Separators (divider lines / headings inside a tier) ── Two lives:
+  //
+  //  • CUSTOM mode: the line is a REAL dnd-kit sortable unit — its id rides the
+  //    tier's items (withSeparatorSentinels in clusterForTier), so cards yield
+  //    around it during drags and it can be dragged itself. The persist logic
+  //    lives with the drag handlers far above (syncCustomSepAnchors).
+  //
+  //  • PROJECT mode: PLAIN DOM + native HTML5 drag (same call the folder labels
+  //    make): folders aren't sortable units, so the line between them can't be
+  //    one either. sepDrag/sepPreview/sepDropAt below serve ONLY this mode.
   //
   // Position is stored as the ids of the rows ABOVE and BELOW the line, so a
   // reorder or a completed neighbour moves the line with its band instead of
-  // stranding it at a dead index (see tier-separators.ts).
-  const separators = ordering?.separators ?? NO_SEPARATORS;
+  // stranding it at a dead index (see tier-separators.ts). `separators` and
+  // persistSeparators are declared up next to clusterForTier.
   const [sepDrag, setSepDrag] = useState<string | null>(null);
   // Live drop target while dragging — rendered as the line's real position, so
   // the preview IS the frame that gets committed on drop.
   const [sepPreview, setSepPreview] = useState<TierSeparator | null>(null);
   const clearSepDrag = useCallback(() => { setSepDrag(null); setSepPreview(null); }, []);
 
-  const persistSeparators = useCallback((next: TierSeparator[]) => {
-    if (!ordering?.saveSeparators) return;
-    void ordering.saveSeparators(next).catch((err) => {
-      onOperationError?.(err instanceof Error ? err.message : String(err));
-    });
-  }, [ordering, onOperationError]);
-
   const sepModeFor = useCallback((tier: string): SeparatorMode =>
     (tierViewMode(tier) === 'custom' ? 'custom' : 'project'), [tierViewMode]);
-
-  // Body of the drag-end re-anchor (rule 5) — reached through sepReanchorRef,
-  // declared next to the drag handlers far above. Custom mode only: project-mode
-  // lines anchor FOLDERS, which stay put when one card moves.
-  useLayoutEffect(() => {
-    sepReanchorRef.current = (tier, beforeIds, movedIds) => {
-      if (tierViewMode(tier) !== 'custom') return;
-      const next = reanchorSeparatorsAfterMove({
-        separators, tier, beforeIds, movedIds,
-        groupOf: (id) => pinnedTaskMap.get(id)?.group_id ?? null,
-      });
-      if (next !== separators) persistSeparators(next);
-    };
-  }, [tierViewMode, separators, persistSeparators, pinnedTaskMap]);
 
   /** Resolve a pointer position inside a tier list into a separator placement.
    *  Rows are read from the DOM: what the user SEES is the only honest source for
@@ -5701,6 +5818,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     persistSeparators(removeSeparator(separators, id));
   }, [persistSeparators, separators]);
 
+  /** Name (or clear the name of) a line — a named line renders as a section
+   *  heading. Empty text removes the field so the record stays a plain line. */
+  const renameSeparator = useCallback((id: string, label: string) => {
+    const sep = separators.find((s) => s.id === id);
+    if (!sep || (sep.label ?? '') === label) return;
+    const next = { ...sep };
+    if (label) next.label = label; else delete next.label;
+    persistSeparators(upsertSeparator(separators, next));
+  }, [persistSeparators, separators]);
+
   // ── "+ → New task" targets ── The header "+" doesn't create a titled task by
   // itself; it opens the inline add row in the scope that was clicked (tier
   // bottom, or the end of one project run). Nonce-keyed so clicking "+" again
@@ -5769,11 +5896,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // null check, not truthiness — '' (Inbox) is a legal dragged project.
       labelDragProj !== null && projSeq.indexOf(labelDragProj) > projSeq.indexOf(targetProj) ? 'above' : 'below';
 
-    // Divider lines. The live drag preview is substituted for the stored entry, so
-    // what the user sees mid-drag is literally the placement that will be saved.
+    // Divider lines. CUSTOM mode: the lines are already IN `ids` as sortable
+    // sentinels (clusterForTier) — the walk below renders them in place, and
+    // placeSeparators must not run or every line would draw twice. PROJECT mode:
+    // native-drag placement, with the live drag preview substituted for the
+    // stored entry so what the user sees mid-drag is literally what gets saved.
     const sepMode: SeparatorMode = tierViewMode(tier) === 'custom' ? 'custom' : 'project';
     const sepList = sepPreview ? upsertSeparator(separators, sepPreview) : separators;
-    const sepPlacement = placeSeparators({
+    const sepPlacement = sepMode === 'project' ? placeSeparators({
       ids,
       projectOf: (id) => { const t = pinnedTaskMap.get(id); return t ? (t.project || '') : null; },
       // A group is one unit: without this a line anchored to a card that later
@@ -5782,16 +5912,32 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       tier,
       mode: sepMode,
       separators: sepList,
-    });
+    }) : null;
     const sepRow = (sep: TierSeparator) => (
-      <TierSeparatorRow key={sep.id} id={sep.id} inert={isPinnedDragActive}
+      <TierSeparatorRow key={sep.id} id={sep.id} label={sep.label} inert={isPinnedDragActive}
         isDragging={sepDrag === sep.id}
-        onDragStart={setSepDrag} onDragEnd={clearSepDrag} onDelete={deleteSeparator} />
+        onDragStart={setSepDrag} onDragEnd={clearSepDrag} onDelete={deleteSeparator}
+        onRename={renameSeparator} />
     );
+    // A tier whose visible rows are all filtered away draws no lines: nothing to
+    // divide (mirrors placeSeparators' empty-tier rule for the sentinel path).
+    const anyTaskVisible = ids.some((id) => pinnedTaskMap.has(id));
 
     let prevProject: string | null = null;
     for (let i = 0; i < ids.length; i++) {
       const id = ids[i];
+      if (isSeparatorId(id)) {
+        // Custom-mode line: a real sortable unit — the strategy moves it with the
+        // rows around it, so it can never be visually crossed mid-drag.
+        const sep = separators.find((s) => s.id === id);
+        if (sep && anyTaskVisible) {
+          out.push(
+            <SortableTierSeparatorRow key={id} id={id} tier={tier} label={sep.label}
+              onDelete={deleteSeparator} onRename={renameSeparator} />
+          );
+        }
+        continue;
+      }
       if (isGroupSentinel(id)) {
         // A sentinel sits immediately before its member run (withGroupSentinels).
         // At rest the chip is emitted by the LEAD MEMBER branch below instead, so
@@ -5823,7 +5969,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // A line placed between folders draws ABOVE this folder's label, outside the
       // folder entirely — a folder is one unit in this mode, and a line between a
       // label and its own cards would read as a split folder, not a band boundary.
-      if (sepMode === 'project' && proj !== prevProject) {
+      if (sepPlacement && proj !== prevProject) {
         for (const sep of sepPlacement.aboveProject.get(proj) ?? []) out.push(sepRow(sep));
       }
       if (showFolders && proj !== prevProject) {
@@ -5899,10 +6045,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         );
       }
       prevProject = proj;
-      // Custom order: lines sit directly above a CARD — emitted before its group
-      // chip, so a line above a grouped card reads as "band boundary", not "inside
-      // the group". (In project mode `above` is empty; folders are the unit there.)
-      for (const sep of sepPlacement.above.get(id) ?? []) out.push(sepRow(sep));
       const gi = groupMeta.get(id);
       if (gi?.isLead) {
         out.push(
@@ -5927,16 +6069,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} />
       );
     }
-    // Lines whose neighbours are all gone end up here, at the bottom of the tier:
-    // the user placed them, only their neighbourhood moved on. Then the last run's
-    // inline "add task" row.
-    for (const sep of sepPlacement.tail) out.push(sepRow(sep));
+    // Project-mode lines whose neighbours are all gone end up here, at the bottom
+    // of the tier: the user placed them, only their neighbourhood moved on. Then
+    // the last run's inline "add task" row.
+    if (sepPlacement) for (const sep of sepPlacement.tail) out.push(sepRow(sep));
     const lastScope = prevProject ?? '';
     if (sepMode === 'project' && runAddSignal?.tier === tier && runAddSignal.project === lastScope) {
       out.push(runAddRow(tier, lastScope));
     }
     return out;
-  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal]);
+  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
@@ -6532,6 +6674,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                 {activeDragGroup.titles.length > 3 && (
                   <div className="todo-pinned-group-drag-more">+{activeDragGroup.titles.length - 3} more</div>
                 )}
+              </div>
+            )}
+            {/* Divider-line drag: the cursor carries the line (+ heading text). */}
+            {activeDragSep && (
+              <div className={`tier-separator tier-separator-overlay${activeDragSep.label ? ' tier-separator-named' : ''}`}>
+                {activeDragSep.label ? <span className="tier-separator-label">{activeDragSep.label}</span> : null}
+                <span className="tier-separator-line" />
               </div>
             )}
           </DragOverlay>

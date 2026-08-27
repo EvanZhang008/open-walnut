@@ -120,6 +120,25 @@ describe('PUT /api/ordering/separators', () => {
     expect(get.body.separators[0]).toEqual({ id: 'sep_old', tier: 'focus', mode: 'project', beforeProject: 'acme' })
   })
 
+  it('round-trips a heading label in both modes, trims an empty one, rejects a non-string', async () => {
+    const app = createApp()
+    await request(app).put('/api/ordering/separators')
+      .send({ separators: [
+        { id: 'sep_h1', tier: 'focus', mode: 'custom', after: 't1', before: 't2', label: 'Now' },
+        { id: 'sep_h2', tier: 'focus', mode: 'project', beforeProject: 'marina', label: 'Next' },
+        { id: 'sep_h3', tier: 'focus', mode: 'custom', after: 't2', before: '', label: '   ' },
+      ] })
+      .expect(200)
+    const get = await request(app).get('/api/ordering')
+    expect(get.body.separators[0].label).toBe('Now')
+    expect(get.body.separators[1].label).toBe('Next')
+    // Whitespace-only degrades to a plain line, not a heading that renders as nothing.
+    expect('label' in get.body.separators[2]).toBe(false)
+    await request(app).put('/api/ordering/separators')
+      .send({ separators: [{ id: 'sep_h1', tier: 'focus', mode: 'custom', label: 7 }] })
+      .expect(400)
+  })
+
   it('keeps the project order untouched', async () => {
     const app = createApp()
     await request(app).put('/api/ordering/projects').send({ order: ['marina', 'acme'] }).expect(200)

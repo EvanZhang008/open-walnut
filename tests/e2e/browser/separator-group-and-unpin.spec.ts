@@ -24,6 +24,14 @@
  *     could never do anything. The gesture that puts a card in has to have a
  *     reverse.
  *
+ * Round 6 (2026-08-25/26): two mid-drag reports with one root cause — the line
+ * was static DOM while cards moved as CSS transforms, so cards visually CROSSED
+ * it and no slot could open above a top-anchored line. Fix: custom-mode lines
+ * became real sortable units (withSeparatorSentinels), anchors are rewritten
+ * from the final drop frame (syncSeparatorAnchorsFromArr), and a named line
+ * renders as a section heading (label). The old "fade the line mid-drag"
+ * band-aid is gone with its cause.
+ *
  * Both assertions are about THIS test's own ids: the fixture dataset is shared
  * across the specs in a run.
  */
@@ -382,41 +390,194 @@ test('a card dropped into the gap under the line lands BELOW the line', async ({
       return sep !== -1 && ci !== -1 && ai !== -1 ? (ai < sep && sep < ci) : false
     }, { timeout: 20_000, message: 'the newcomer must land under the line, not above it' })
     .toBe(true)
-  // The line's anchors were not touched — the newcomer was never an anchor.
+  // Sync-from-final keeps the stored anchors HONEST: the newcomer is the line's
+  // below-neighbour now (rendering is unchanged — `after` resolves first).
   const s = (await readSeparators()).find((x) => x.id === 'sep_gap')
-  expect(s).toMatchObject({ after: a.id, before: b.id })
+  expect(s).toMatchObject({ after: a.id, before: c.id })
 })
 
-test('divider lines fade while a card drag is live — their position is not live truth', async ({ page }) => {
+/** Live geometry of a row — boundingBox INCLUDES mid-drag CSS transforms, i.e.
+ *  exactly what the user sees. Polls until two consecutive frames agree (<0.5px)
+ *  so we measure after the make-room transition settles, not during. */
+async function settledBox(page: Page, selector: string): Promise<{ x: number; y: number; width: number; height: number }> {
+  const loc = page.locator(selector).first()
+  let prev = await loc.boundingBox()
+  for (let i = 0; i < 20; i++) {
+    await page.waitForTimeout(80)
+    const cur = await loc.boundingBox()
+    if (prev && cur && Math.abs(cur.y - prev.y) < 0.5 && Math.abs(cur.x - prev.x) < 0.5) return cur
+    prev = cur
+  }
+  if (!prev) throw new Error(`${selector}: no box`)
+  return prev
+}
+
+/** Press a card's grip and HOVER (no release) at (x, y): activation nudge, slow
+ *  stepped approach, then hold until the layout settles. */
+async function dragHoldAt(page: Page, taskId: string, x: number, y: number): Promise<void> {
+  const card = page.locator(`${TIER_SCOPE} [data-task-id="${taskId}"]`).first()
+  await card.hover()
+  const grip = card.locator('.todo-pinned-drag-handle')
+  const gb = await grip.boundingBox()
+  if (!gb) throw new Error(`no grip for ${taskId}`)
+  await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2 + 10)
+  await page.mouse.move(x, y, { steps: 20 })
+  await page.waitForTimeout(500)
+}
+
+test('the line YIELDS mid-drag: a card can never be pushed across it (round 6 report B)', async ({ page }) => {
+  // 2026-08-25: "when i drag T2 to before T1, T1 get push to below drag bar" —
+  // the line was static DOM while cards moved as transforms, so T1's make-room
+  // slide crossed it. The line is a sortable unit now: it moves WITH its band.
   test.setTimeout(120_000)
-  const proj = `SepFade${Date.now().toString(36)}`
-  const a = await createTask('fade one', proj)
-  const b = await createTask('fade two', proj)
+  const proj = `SepYield${Date.now().toString(36)}`
+  const t1 = await createTask('yield top card', proj)
+  const xx1 = await createTask('yield below-line one', proj)
+  const xx2 = await createTask('yield below-line two', proj)
+  const t2 = await createTask('yield dragged card', proj)
+  for (const t of [t1, xx1, xx2, t2]) await pinToFocus(t.id)
+  await reorderOwn([t1.id, xx1.id, xx2.id, t2.id])
+  await presetTierViewModes(page, { focus: 'custom' })
+  await putSeparators([{ id: 'sep_yield', tier: 'focus', mode: 'custom', after: t1.id, before: xx1.id }])
+
+  await openFocus(page)
+  const lineSel = `${TIER_SCOPE} [data-separator-id="sep_yield"]`
+  await expect(page.locator(lineSel)).toBeVisible({ timeout: 20_000 })
+  const t1Sel = `${TIER_SCOPE} [data-task-id="${t1.id}"]`
+  const t1Before = await settledBox(page, t1Sel)
+  const lineBefore = await settledBox(page, lineSel)
+  expect(t1Before.y, 'sanity: T1 starts above the line').toBeLessThan(lineBefore.y)
+
+  // Hold T2 over T1's top edge: T1 makes room downward — and the line moves with it.
+  await dragHoldAt(page, t2.id, t1Before.x + t1Before.width / 2, t1Before.y + 3)
+  const t1Live = await settledBox(page, t1Sel)
+  const lineLive = await settledBox(page, lineSel)
+  await page.screenshot({ path: `${SHOT_DIR}/13-line-yields-mid-drag.png` })
+  expect(t1Live.y, 'T1 must stay ABOVE the line mid-drag').toBeLessThan(lineLive.y)
+  expect(lineLive.y, 'the line yields with its band').toBeGreaterThan(lineBefore.y + 10)
+
+  await page.mouse.up()
+  await page.waitForTimeout(1200)
+  // Landed: [t2, t1, line, xx…] and the anchors did not change — t1 is still the
+  // card above the line, xx1 still the card below it.
+  const rows = await tierRows(page)
+  const sepIdx = rows.findIndex((r) => r.sep === 'sep_yield')
+  expect(rows.findIndex((r) => r.task === t2.id)).toBeLessThan(rows.findIndex((r) => r.task === t1.id))
+  expect(rows.findIndex((r) => r.task === t1.id)).toBeLessThan(sepIdx)
+  expect(rows.findIndex((r) => r.task === xx1.id)).toBeGreaterThan(sepIdx)
+  const s = (await readSeparators()).find((x) => x.id === 'sep_yield')
+  expect(s).toMatchObject({ after: t1.id, before: xx1.id })
+})
+
+test('a card dragged to the very top lands ABOVE a top-anchored line (round 6 report A)', async ({ page }) => {
+  // 2026-08-25: "to very top it doesn't show correctly … it show below the line,
+  // instead of top even if my cursor is at the top" — no slot could open above a
+  // static line. As a sortable unit the line is a real drop target: taking its
+  // slot from above puts the card above it, preview and drop alike.
+  test.setTimeout(120_000)
+  const proj = `SepTop${Date.now().toString(36)}`
+  const xx1 = await createTask('top first card', proj)
+  const xx2 = await createTask('top second card', proj)
+  const t1 = await createTask('top dragged card', proj)
+  for (const t of [xx1, xx2, t1]) await pinToFocus(t.id)
+  await reorderOwn([xx1.id, xx2.id, t1.id])
+  await presetTierViewModes(page, { focus: 'custom' })
+  await putSeparators([{ id: 'sep_top', tier: 'focus', mode: 'custom', after: '', before: xx1.id }])
+
+  await openFocus(page)
+  const lineSel = `${TIER_SCOPE} [data-separator-id="sep_top"]`
+  await expect(page.locator(lineSel)).toBeVisible({ timeout: 20_000 })
+  const lineBefore = await settledBox(page, lineSel)
+  const xx1Before = await settledBox(page, `${TIER_SCOPE} [data-task-id="${xx1.id}"]`)
+
+  // Pointer at the VERY TOP: above the line, above everything.
+  await dragHoldAt(page, t1.id, xx1Before.x + xx1Before.width / 2, lineBefore.y - 4)
+  const line = await settledBox(page, lineSel)
+  // The dragged card's own element is transformed into the insert slot — its
+  // live box IS the preview of where it will land.
+  const slot = await settledBox(page, `${TIER_SCOPE} [data-task-id="${t1.id}"]`)
+  await page.screenshot({ path: `${SHOT_DIR}/14-slot-above-top-line.png` })
+  expect(slot.y, 'the insert slot opens ABOVE the line, where the pointer is').toBeLessThan(line.y)
+
+  await page.mouse.up()
+  await page.waitForTimeout(1200)
+  const rows = await tierRows(page)
+  const sepIdx = rows.findIndex((r) => r.sep === 'sep_top')
+  expect(rows.findIndex((r) => r.task === t1.id), 'the card landed above the line').toBeLessThan(sepIdx)
+  const s = (await readSeparators()).find((x) => x.id === 'sep_top')
+  expect(s).toMatchObject({ after: t1.id, before: xx1.id })
+})
+
+test('the line itself drags as a sortable row and re-anchors where it lands', async ({ page }) => {
+  test.setTimeout(120_000)
+  const proj = `SepSelf${Date.now().toString(36)}`
+  const a = await createTask('self one', proj)
+  const b = await createTask('self two', proj)
+  const c = await createTask('self three', proj)
+  for (const t of [a, b, c]) await pinToFocus(t.id)
+  await reorderOwn([a.id, b.id, c.id])
+  await presetTierViewModes(page, { focus: 'custom' })
+  await putSeparators([{ id: 'sep_self', tier: 'focus', mode: 'custom', after: '', before: a.id }])
+
+  await openFocus(page)
+  const line = page.locator(`${TIER_SCOPE} [data-separator-id="sep_self"]`)
+  await expect(line).toBeVisible({ timeout: 20_000 })
+  const lb = await line.boundingBox()
+  expect(lb).not.toBeNull()
+  const cCard = page.locator(`${TIER_SCOPE} [data-task-id="${c.id}"]`).first()
+  const cb = await cCard.boundingBox()
+  expect(cb).not.toBeNull()
+
+  // The whole row is its own drag handle. Take c's slot from above.
+  await page.mouse.move(lb!.x + lb!.width / 2, lb!.y + lb!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(lb!.x + lb!.width / 2, lb!.y + lb!.height / 2 + 10)
+  await page.mouse.move(cb!.x + cb!.width / 2, cb!.y + 4, { steps: 12 })
+  await page.waitForTimeout(400)
+  await page.mouse.up()
+  await page.waitForTimeout(1200)
+
+  await expect
+    .poll(async () => {
+      const s = (await readSeparators()).find((x) => x.id === 'sep_self')
+      return s ? `${s.after}→${s.before}` : 'missing'
+    }, { timeout: 20_000, message: 'the dragged line must re-anchor to its landing slot' })
+    .toBe(`${b.id}→${c.id}`)
+  const rows = await tierRows(page)
+  const sepIdx = rows.findIndex((r) => r.sep === 'sep_self')
+  expect(rows.findIndex((r) => r.task === b.id)).toBeLessThan(sepIdx)
+  expect(rows.findIndex((r) => r.task === c.id)).toBeGreaterThan(sepIdx)
+})
+
+test('naming a line turns it into a heading, and the name survives a reload', async ({ page }) => {
+  test.setTimeout(120_000)
+  const proj = `SepName${Date.now().toString(36)}`
+  const a = await createTask('name one', proj)
+  const b = await createTask('name two', proj)
   for (const t of [a, b]) await pinToFocus(t.id)
   await reorderOwn([a.id, b.id])
   await presetTierViewModes(page, { focus: 'custom' })
-  await putSeparators([{ id: 'sep_fade', tier: 'focus', mode: 'custom', after: a.id, before: b.id }])
+  await putSeparators([{ id: 'sep_name', tier: 'focus', mode: 'custom', after: a.id, before: b.id }])
 
   await openFocus(page)
-  const line = page.locator(`${TIER_SCOPE} [data-separator-id="sep_fade"]`)
+  const line = page.locator(`${TIER_SCOPE} [data-separator-id="sep_name"]`)
   await expect(line).toBeVisible({ timeout: 20_000 })
-  await expect(line).not.toHaveClass(/tier-separator-inert/)
-
-  const card = page.locator(`${TIER_SCOPE} [data-task-id="${a.id}"]`).first()
-  await card.hover()
-  const grip = card.locator('.todo-pinned-drag-handle')
-  const box = await grip.boundingBox()
-  expect(box).not.toBeNull()
-  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
-  await page.mouse.down()
-  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2 + 14)
-  await expect(line).toHaveClass(/tier-separator-inert/)
+  await line.hover()
+  await line.locator('.tier-separator-edit').click()
+  await line.locator('.tier-separator-label-input').fill('Do it now')
+  await line.locator('.tier-separator-label-input').press('Enter')
+  await expect(line.locator('.tier-separator-label')).toHaveText('Do it now', { timeout: 10_000 })
   await expect
-    .poll(() => line.evaluate((el) => getComputedStyle(el).opacity), { timeout: 5_000 })
-    .toBe('0.35')
-  // Release in place: a no-op drop must bring the line back to full strength.
-  await page.mouse.up()
-  await expect(line).not.toHaveClass(/tier-separator-inert/, { timeout: 10_000 })
+    .poll(async () => (await readSeparators() as Array<{ id: string; label?: string }>).find((x) => x.id === 'sep_name')?.label,
+      { timeout: 20_000 })
+    .toBe('Do it now')
+  await page.screenshot({ path: `${SHOT_DIR}/15-heading-named.png` })
+
+  // Survives a full reload (round-trips through config).
+  await openFocus(page)
+  await expect(page.locator(`${TIER_SCOPE} [data-separator-id="sep_name"] .tier-separator-label`)).toHaveText('Do it now', { timeout: 20_000 })
 })
 
 test('a drop BESIDE a group never falls into it — joining needs the pointer on a card\'s middle', async ({ page }) => {

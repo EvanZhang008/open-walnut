@@ -68,6 +68,10 @@ export interface TierSeparator {
   /** 'focus' | 'satellite' | 'backlog' | 'wait' | `ct_*`. */
   tier: string;
   mode: SeparatorMode;
+  /** Optional heading text ("Now", "Next"…). A named line is a section heading;
+   *  an unnamed one is the plain divider it always was. Layout-only either way:
+   *  no task ever references it. */
+  label?: string;
   /** mode 'custom': task id directly above the line ('' = top of the list). */
   after?: string;
   /** mode 'custom': task id directly below the line ('' = bottom of the list). */
@@ -296,6 +300,112 @@ export function projectAnchorsForSlot(runs: string[], index: number): { afterPro
     ...(i > 0 ? { afterProject: runs[i - 1] } : {}),
     ...(i < runs.length ? { beforeProject: runs[i] } : {}),
   };
+}
+
+/**
+ * Insert a CUSTOM-mode tier's separator ids into its sentinel-bearing render
+ * array, at the slot each line resolves to.
+ *
+ * This is what makes a line a REAL dnd-kit sortable unit (same architecture as
+ * the group chip in tier-group-sentinels.ts): in `items`, the strategy displaces
+ * the line together with the cards around it during any drag, so a card can
+ * never visually cross a line that "never yields" (reported 2026-08-25: dragging
+ * T2 above T1 slid T1 below the static line; and the insert slot could not open
+ * above a top-anchored line at all).
+ *
+ * `ids` is the tier's render order AFTER withGroupSentinels (group sentinels
+ * present). A line resolves against the real task ids only, then is inserted
+ * before the card at its slot — jumping above that card's group chip when one
+ * immediately precedes it, because renderTierItems draws lines above chips.
+ * Unresolvable lines (both anchors gone) go to the end, mirroring placeSeparators'
+ * tail. An empty tier gets no lines (nothing to divide).
+ */
+export function withSeparatorSentinels(opts: {
+  ids: string[];
+  separators: TierSeparator[];
+  tier: string;
+  groupOf?: (id: string) => string | null;
+  /** Distinguishes real task ids from group sentinels in `ids`. */
+  isTaskId: (id: string) => boolean;
+}): string[] {
+  const { ids, separators, tier, groupOf = () => null, isTaskId } = opts;
+  const seps = separators.filter((s) => s.tier === tier && s.mode === 'custom');
+  if (seps.length === 0) return ids;
+  const taskIds = ids.filter(isTaskId);
+  if (taskIds.length === 0) return ids;
+
+  // Resolve every line to a task slot first (against the card order, which is
+  // stable), THEN splice into the sentinel-bearing array — inserting as we go
+  // would shift the later lines' reference frame.
+  const bySlot = new Map<number, TierSeparator[]>();
+  const tail: TierSeparator[] = [];
+  for (const sep of seps) {
+    let slot = customSlotFor(taskIds, sep);
+    if (slot === null) { tail.push(sep); continue; }
+    slot = snapSlotOutOfGroup(taskIds, slot, groupOf);
+    if (slot >= taskIds.length) { tail.push(sep); continue; }
+    const arr = bySlot.get(slot);
+    if (arr) arr.push(sep); else bySlot.set(slot, [sep]);
+  }
+
+  const out: string[] = [];
+  let taskIdx = 0;
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    if (isTaskId(id)) {
+      const here = bySlot.get(taskIdx);
+      if (here) {
+        // Lines draw above the card AND above its group chip: when the previous
+        // emitted id is this card's chip sentinel, hoist the lines above it.
+        const insertAt = out.length > 0 && !isTaskId(out[out.length - 1]) && !isSeparatorId(out[out.length - 1])
+          ? out.length - 1 : out.length;
+        out.splice(insertAt, 0, ...here.map((s) => s.id));
+      }
+      taskIdx++;
+    }
+    out.push(id);
+  }
+  for (const sep of tail) out.push(sep.id);
+  return out;
+}
+
+/**
+ * Rewrite CUSTOM-mode anchors from a tier's FINAL render array (cards + any
+ * sentinels), after a drop. With lines living in `items`, what dnd-kit previewed
+ * is the truth of the gesture — a card dropped into a line's gap that pushed the
+ * line DOWN really is above the line now. Deriving anchors from the final array
+ * keeps the stored record and the last visible frame identical, so nothing jumps
+ * after the drop lands. Returns the SAME array when nothing changed.
+ */
+export function syncSeparatorAnchorsFromArr(opts: {
+  separators: TierSeparator[];
+  tier: string;
+  finalArr: string[];
+  isTaskId: (id: string) => boolean;
+  groupOf?: (id: string) => string | null;
+}): TierSeparator[] {
+  const { separators, tier, finalArr, isTaskId, groupOf = () => null } = opts;
+  // Position of each line = how many real cards precede it.
+  const slotOf = new Map<string, number>();
+  let count = 0;
+  for (const id of finalArr) {
+    if (isSeparatorId(id)) slotOf.set(id, count);
+    else if (isTaskId(id)) count++;
+  }
+  const taskIds = finalArr.filter(isTaskId);
+  let changed = false;
+  const out = separators.map((sep) => {
+    if (sep.tier !== tier || sep.mode !== 'custom') return sep;
+    let slot = slotOf.get(sep.id);
+    if (slot === undefined) return sep; // not rendered here (filtered) — keep as-is
+    // Rule 4: a group is one unit — a drop between two members snaps below the run.
+    slot = snapSlotOutOfGroup(taskIds, slot, groupOf);
+    const { after, before } = anchorsForSlot(taskIds, slot);
+    if (after === (sep.after ?? '') && before === (sep.before ?? '')) return sep;
+    changed = true;
+    return { ...sep, after, before };
+  });
+  return changed ? out : separators;
 }
 
 /** Replace one separator in a list (by id), appending it when it's new. */

@@ -511,3 +511,105 @@ describe('list helpers', () => {
     for (const id of ids) expect(id.startsWith('sep_')).toBe(true);
   });
 });
+
+// ── The sortable-line era (2026-08-26): custom-mode lines ride the items array ──
+// withSeparatorSentinels puts each line INTO the tier's sortable ids (so the
+// strategy displaces it with the cards — a card can never visually cross a
+// static line again), and syncSeparatorAnchorsFromArr reads the post-drop truth
+// back OUT of the final array. Together they replace render-time placement for
+// custom mode.
+
+import { withSeparatorSentinels, syncSeparatorAnchorsFromArr } from '../../web/src/components/tasks/tier-separators';
+
+describe('withSeparatorSentinels (custom-mode lines become sortable items)', () => {
+  const isTaskId = (id: string) => id.startsWith('t');
+
+  it('inserts the line id at its resolved slot', () => {
+    const out = withSeparatorSentinels({
+      ids: ['t1', 't2', 't3'], separators: [sep({ after: 't1', before: 't2' })], tier: 'focus', isTaskId,
+    });
+    expect(out).toEqual(['t1', 'sep_1', 't2', 't3']);
+  });
+
+  it('a top-anchored line renders above the first card', () => {
+    const out = withSeparatorSentinels({
+      ids: ['t1', 't2'], separators: [sep({ after: '', before: 't1' })], tier: 'focus', isTaskId,
+    });
+    expect(out).toEqual(['sep_1', 't1', 't2']);
+  });
+
+  it('unresolvable anchors go to the tail; other tiers/modes are ignored', () => {
+    const out = withSeparatorSentinels({
+      ids: ['t1'], tier: 'focus', isTaskId,
+      separators: [
+        sep({ id: 'sep_lost', after: 'gone', before: 'gone2' }),
+        sep({ id: 'sep_other', tier: 'satellite', after: 't1' }),
+        { id: 'sep_proj', tier: 'focus', mode: 'project', afterProject: 'marina' },
+      ],
+    });
+    expect(out).toEqual(['t1', 'sep_lost']);
+  });
+
+  it('hoists the line above a group chip heading its slot card', () => {
+    const out = withSeparatorSentinels({
+      ids: ['t1', 'group:g1:focus', 't2', 't3'], tier: 'focus', isTaskId,
+      separators: [sep({ after: 't1', before: 't2' })],
+      groupOf: (id) => (id === 't2' || id === 't3' ? 'g1' : null),
+    });
+    expect(out).toEqual(['t1', 'sep_1', 'group:g1:focus', 't2', 't3']);
+  });
+
+  it('a slot inside a group run snaps below the whole run (rule 4)', () => {
+    const out = withSeparatorSentinels({
+      ids: ['group:g1:focus', 't1', 't2', 't3'], tier: 'focus', isTaskId,
+      separators: [sep({ after: 't1', before: 't2' })],
+      groupOf: (id) => (id === 't1' || id === 't2' ? 'g1' : null),
+    });
+    expect(out).toEqual(['group:g1:focus', 't1', 't2', 'sep_1', 't3']);
+  });
+
+  it('an empty tier gets no lines, and no lines returns the same array', () => {
+    const ids = ['group:g1:focus'];
+    expect(withSeparatorSentinels({ ids, separators: [sep()], tier: 'focus', isTaskId })).toBe(ids);
+    const ids2 = ['t1'];
+    expect(withSeparatorSentinels({ ids: ids2, separators: [], tier: 'focus', isTaskId })).toBe(ids2);
+  });
+});
+
+describe('syncSeparatorAnchorsFromArr (post-drop truth → stored anchors)', () => {
+  const isTaskId = (id: string) => id.startsWith('t');
+
+  it('a card that pushed the line aside really is on the other side now', () => {
+    // Visual result of the drop: [t2, sep, t1] — t2 landed ABOVE the line.
+    const next = syncSeparatorAnchorsFromArr({
+      separators: [sep({ after: '', before: 't1' })], tier: 'focus',
+      finalArr: ['t2', 'sep_1', 't1'], isTaskId,
+    });
+    expect(next[0]).toMatchObject({ after: 't2', before: 't1' });
+  });
+
+  it('line dragged to the very top anchors as the top band', () => {
+    const next = syncSeparatorAnchorsFromArr({
+      separators: [sep({ after: 't1', before: 't2' })], tier: 'focus',
+      finalArr: ['sep_1', 't1', 't2'], isTaskId,
+    });
+    expect(next[0]).toMatchObject({ after: '', before: 't1' });
+  });
+
+  it('keeps identity when nothing changed, skips lines not in the array, snaps out of group runs', () => {
+    const list = [
+      sep({ id: 'sep_a', after: 't1', before: 't2' }),
+      sep({ id: 'sep_hidden', after: 't9', before: '' }),
+    ];
+    const same = syncSeparatorAnchorsFromArr({
+      separators: list, tier: 'focus', finalArr: ['t1', 'sep_a', 't2'], isTaskId,
+    });
+    expect(same).toBe(list);
+    const snapped = syncSeparatorAnchorsFromArr({
+      separators: [sep({ id: 'sep_a', after: '', before: '' })], tier: 'focus',
+      finalArr: ['t1', 'sep_a', 't2', 't3'], isTaskId,
+      groupOf: (id) => (id === 't1' || id === 't2' ? 'g1' : null),
+    });
+    expect(snapped[0]).toMatchObject({ after: 't2', before: 't3' });
+  });
+});

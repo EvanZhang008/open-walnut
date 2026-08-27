@@ -12648,6 +12648,67 @@ body.walnut-dragging {
 .tier-separator-delete:hover { background: var(--bg-hover); color: var(--danger, #e5484d); }
 .tier-separator-inert .tier-separator-delete { visibility: hidden; }
 
+/* ── Heading label — a NAMED line reads as a section heading ("NOW", "NEXT"):
+   small bold letter-spaced text on the left, the hairline fills the rest. */
+.tier-separator-label {
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  cursor: text;
+}
+.tier-separator-named:hover .tier-separator-label { color: var(--fg); }
+/* Name-me pencil on an unnamed line — appears with the delete "x" on hover. */
+.tier-separator-edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-muted);
+  opacity: 0;
+  cursor: pointer;
+}
+.tier-separator:hover .tier-separator-edit,
+.tier-separator-edit:focus-visible { opacity: 1; }
+.tier-separator-edit:hover { background: var(--bg-hover); color: var(--fg); }
+.tier-separator-inert .tier-separator-edit { visibility: hidden; }
+.tier-separator-label-form { flex: none; display: inline-flex; }
+.tier-separator-label-input {
+  width: 120px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  outline: none;
+}
+.tier-separator-label-input:focus { border-color: var(--accent); }
+/* The floating copy under the cursor during a dnd-kit line drag. */
+.tier-separator-overlay {
+  min-width: 160px;
+  cursor: grabbing;
+}
+.tier-separator-overlay .tier-separator-line {
+  background: var(--accent);
+  height: 2px;
+}
+/* Sortable (custom-mode) variant: the row is its own drag handle. */
+.tier-separator-sortable { touch-action: none; }
+
 /* Starred tab golden accent */
 .todo-panel-tab-starred {
   color: var(--warning);

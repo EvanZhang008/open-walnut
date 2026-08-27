@@ -933,6 +933,10 @@ export interface Config {
       /** Which tier view mode shows it. The two modes are independent orders,
        *  so a line placed in one is meaningless in the other. */
       mode: 'project' | 'custom';
+      /** Optional heading text ("Now", "Next"…). A named line renders as a
+       *  section heading; an unnamed one stays a plain divider. Layout-only
+       *  either way — no task ever references it. */
+      label?: string;
       /** mode 'custom': task id directly ABOVE the line ('' = top of the list). */
       after?: string;
       /** mode 'custom': task id directly BELOW the line ('' = bottom of the list). */

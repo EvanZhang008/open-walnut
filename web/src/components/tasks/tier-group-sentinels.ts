@@ -17,6 +17,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
+import { isSeparatorId } from './tier-separators';
 
 export const GROUP_SENTINEL_PREFIX = 'group:';
 
@@ -39,10 +40,11 @@ export function parseGroupSentinelGid(sentinel: string): string {
   return lastColon === -1 ? body : body.slice(0, lastColon);
 }
 
-/** Strip chip sentinels — every id that leaves the panel as PIN ORDER must be a real
- *  task id (the server assigns pin_order by position, so a sentinel would eat a slot). */
+/** Strip every sentinel (group chips AND separator lines) — every id that leaves the
+ *  panel as PIN ORDER must be a real task id (the server assigns pin_order by
+ *  position, so a sentinel would eat a slot). */
 export function taskIdsOnly(ids: string[]): string[] {
-  return ids.filter((id) => !isGroupSentinel(id));
+  return ids.filter((id) => !isGroupSentinel(id) && !isSeparatorId(id));
 }
 
 /**
