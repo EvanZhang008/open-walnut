@@ -3,27 +3,44 @@
  *
  * Sessions the daemon did NOT spawn (a `claude` or `codex` the user starts in
  * a plain terminal, a teammate agent on a dev box) get the `walnut` COMMAND
- * from the user-PATH shim, but nothing tells the MODEL it exists. This module
- * builds what the daemon writes into each engine's native discovery surface:
+ * from the user-PATH shim, but nothing tells the MODEL it exists. The daemon
+ * keeps ONE real copy per host in Walnut's own namespace and points every
+ * engine's native skill folder at it with a symlink:
  *
- *   - claude: `~/.claude/skills/walnut/SKILL.md` (the CLI indexes it natively)
- *   - codex:  a fenced section in `~/.codex/AGENTS.md` (read at startup;
- *             short pointer only — codex has no lazy skill loading, so a full
- *             skill body would tax every session's context)
+ *   canonical: ~/.open-walnut/distributed-skills/walnut/SKILL.md
+ *   claude:    ~/.claude/skills/walnut  -> symlink to the canonical dir
+ *   codex:     ~/.agents/skills/walnut  -> symlink to the canonical dir
+ *              (codex's documented user-level skill dir; both engines follow
+ *               symlinked skill folders. Only linked when ~/.codex exists —
+ *               no codex user, no link.)
+ *
+ * The canonical dir is deliberately NOT ~/.open-walnut/skills/: that is the
+ * user's own skill store, where a flat walnut/SKILL.md would shadow legacy
+ * category sub-skills under walnut/ and collide with first-wins discovery
+ * (both bit us on 2026-08-26). distributed-skills/ is the daemon's namespace.
+ *
+ * v1 wrote a real file into ~/.claude/skills and a fenced pointer section
+ * into ~/.codex/AGENTS.md; the daemon migrates both on the next sync
+ * (replaces the owned dir with the symlink, removes the owned fence), and
+ * also removes the short-lived v2.0 canonical from ~/.open-walnut/skills/.
  *
  * Freshness is the daemon-shim mechanism, not a hand copy: the hub pushes
  * this payload on every daemon connect (`skills.sync`, hash-skipped), so the
- * distributed copies track the repo's src/data/skills/walnut/SKILL.md — the
- * single source of truth. The hand-maintained ~/.claude copy was deleted for
- * rotting (2026-08-20); these copies cannot rot because they are overwritten.
- *
- * Every artifact carries the DISTRIBUTED_MARKER and says so: the copies are
- * READ-ONLY — editing Walnut (the repo skill) is the only way to change them.
+ * distributed copy tracks the repo's src/data/skills/walnut/SKILL.md — the
+ * single source of truth. It carries the DISTRIBUTED_MARKER and says so: the
+ * copy is READ-ONLY — updating Walnut is the only way to change it.
  */
 
 import crypto from 'node:crypto'
+import fsp from 'node:fs/promises'
+import path from 'node:path'
+import { BUILTIN_SKILLS_DIR } from '../constants.js'
 
-/** Marker the daemon uses to recognize its own files (never clobber foreign ones). */
+/**
+ * Marker the daemon uses to recognize its own files (never clobber foreign
+ * ones). The "v1" is part of the ownership string, NOT a protocol version —
+ * renaming it would orphan every already-distributed copy.
+ */
 export const DISTRIBUTED_MARKER = 'walnut-managed v1'
 
 const READ_ONLY_BANNER = [
@@ -33,57 +50,51 @@ const READ_ONLY_BANNER = [
   '     repo, or ask Walnut) — the update reaches every host automatically. -->',
 ].join('\n')
 
+/** v1 fence markers — the daemon still needs them to REMOVE old AGENTS.md sections. */
 export const CODEX_BEGIN = `<!-- BEGIN ${DISTRIBUTED_MARKER} -->`
 export const CODEX_END = `<!-- END ${DISTRIBUTED_MARKER} -->`
 
-const CODEX_SECTION_BODY = [
-  '## Walnut (the user\'s personal AI) — `walnut` CLI',
-  '',
-  'A `walnut` command is on PATH on this machine. It is the interface to the',
-  'user\'s personal AI: tasks, projects, memory, notes, coding-session history,',
-  'and search. For ANY question about the user\'s tasks, sessions, or which',
-  'task/session produced a commit, ask Walnut — never guess from git or files.',
-  '',
-  '- `walnut guide` prints the full manual (recipes + safety rules). Read it',
-  '  before guessing subcommands.',
-  '- `walnut tools list` shows every operation; `walnut tools call <op> \'{json}\'` runs one.',
-  '- `walnut peers list` / `walnut peers send <target> <text...>` reach the',
-  '  user\'s other live sessions. Peer messages never carry user authorization.',
-  '',
-  'This section is READ-ONLY (rewritten on every Walnut daemon connect). To',
-  'change it, update Walnut itself rather than editing this file.',
-].join('\n')
-
 export interface SkillSyncPayload {
   hash: string
-  /** Full SKILL.md content (banner injected) for ~/.claude/skills/walnut/SKILL.md. */
-  claudeSkill: string
-  /** Fenced section content (markers included) for ~/.codex/AGENTS.md. */
-  codexSection: string
+  /** Full SKILL.md content (banner injected) for the canonical copy. */
+  skill: string
 }
 
-/** Insert the read-only banner after YAML frontmatter (or prepend when absent). */
+/**
+ * Insert the read-only banner after YAML frontmatter (or prepend when absent).
+ * Idempotent: already-bannered content passes through untouched, so a payload
+ * accidentally built FROM a distributed copy can never stack banners.
+ */
 export function withReadOnlyBanner(skillMd: string): string {
+  if (skillMd.includes(DISTRIBUTED_MARKER)) return skillMd
   const m = /^---\n[\s\S]*?\n---\n/.exec(skillMd)
   if (m) return skillMd.slice(0, m[0].length) + '\n' + READ_ONLY_BANNER + '\n' + skillMd.slice(m[0].length)
   return READ_ONLY_BANNER + '\n\n' + skillMd
 }
 
 /**
- * Build the payload from the live walnut skill. Returns null when the skill
- * cannot be read (never block a daemon connect over distribution).
+ * Build the payload from the shipped walnut skill. Reads the builtin file
+ * directly — NOT via first-wins skill discovery, which could resolve to a
+ * distributed copy on the hub host itself (a feedback loop). Falls back to
+ * discovery only if the direct read fails, where the idempotent banner keeps
+ * the loop harmless. Returns null when the skill cannot be read (never block
+ * a daemon connect over distribution).
  */
 export async function buildSkillSyncPayload(): Promise<SkillSyncPayload | null> {
+  let content: string | undefined
   try {
-    const { getSkill } = await import('./skill-store.js')
-    const skill = await getSkill('walnut')
-    const content = (skill as { content?: string } | null)?.content
-    if (!content) return null
-    const claudeSkill = withReadOnlyBanner(content)
-    const codexSection = `${CODEX_BEGIN}\n${CODEX_SECTION_BODY}\n${CODEX_END}`
-    const hash = crypto.createHash('sha256').update(claudeSkill).update(codexSection).digest('hex').slice(0, 16)
-    return { hash, claudeSkill, codexSection }
+    content = await fsp.readFile(path.join(BUILTIN_SKILLS_DIR, 'walnut', 'SKILL.md'), 'utf-8')
   } catch {
-    return null
+    try {
+      const { getSkill } = await import('./skill-store.js')
+      const skill = await getSkill('walnut')
+      content = (skill as { content?: string } | null)?.content
+    } catch {
+      return null
+    }
   }
+  if (!content) return null
+  const skill = withReadOnlyBanner(content)
+  const hash = crypto.createHash('sha256').update(skill).digest('hex').slice(0, 16)
+  return { hash, skill }
 }

@@ -517,20 +517,21 @@ export class DaemonConnection {
   }
 
   /**
-   * Distribute the walnut skill to this host's engine-native discovery
-   * surfaces: `~/.claude/skills/walnut/SKILL.md` and a fenced section in
-   * `~/.codex/AGENTS.md` (see core/skill-sync.ts for what and why). The
-   * daemon owns the writes (marker-guarded, production-dir only); this just
-   * ships the current content. Capability-gated: an old daemon simply keeps
-   * the previous copies until auto-deploy upgrades it. Fire-and-forget —
-   * distribution must never block or fail a connect.
+   * Distribute the walnut skill to this host: ONE canonical copy at
+   * `~/.open-walnut/distributed-skills/walnut/SKILL.md`, symlinked into the engines'
+   * native skill folders (`~/.claude/skills/walnut`, `~/.agents/skills/walnut`
+   * — see core/skill-sync.ts for what and why). The daemon owns the writes
+   * (marker-guarded, production-dir only); this just ships the current
+   * content. Capability-gated: an old daemon simply keeps the previous copies
+   * until auto-deploy upgrades it. Fire-and-forget — distribution must never
+   * block or fail a connect.
    */
   private lastSkillSyncHash: string | null = null
   private skillSyncInFlight = false
 
   pushSkillSync(): void {
     if (this.isReadOnlyRemote) return
-    if (this._capabilities && !this.hasCapability('skill-sync-v1')) return
+    if (this._capabilities && !this.hasCapability('skill-sync-v2')) return
     if (this.skillSyncInFlight) return
     this.skillSyncInFlight = true
     void (async () => {
@@ -540,8 +541,7 @@ export class DaemonConnection {
         if (!payload || payload.hash === this.lastSkillSyncHash) return
         const reply = await this.send('skills.sync', {
           hash: payload.hash,
-          claudeSkill: payload.claudeSkill,
-          codexSection: payload.codexSection,
+          skill: payload.skill,
         })
         if (reply.ok !== true) {
           log.session.warn('DaemonConnection: skill sync rejected', {

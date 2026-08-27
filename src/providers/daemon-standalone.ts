@@ -2617,63 +2617,123 @@ function cmdHooksConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
 
 // ── skills.sync: distribute the walnut skill to this host's engine stores ──
 // The hub pushes the current content on every (re)connect (hash-skipped
-// hub-side); the daemon owns the writes so hand-started sessions on this host
-// discover the `walnut` CLI. Two guards, same spirit as the user-PATH shims:
-// production daemon only, and never clobber a file we did not write (the
-// marker string is the ownership proof). ~/.codex is only touched when the
-// directory already exists — no codex user, no codex file. Keep in sync with
-// daemon-source.ts cmdSkillsSync.
+// hub-side). ONE real copy lives in the daemon's own namespace
+// (~/.open-walnut/distributed-skills/walnut/SKILL.md — deliberately NOT the
+// user's skill store ~/.open-walnut/skills/, where a flat SKILL.md shadows
+// category sub-skills); the engines' native skill folders (~/.claude/skills,
+// ~/.agents/skills — codex's documented user-level dir; both engines follow
+// symlinked skill folders) each get a walnut symlink at it. Guards, same
+// spirit as the user-PATH shims: production daemon only, and never clobber a
+// path we do not own (the marker string is the ownership proof). ~/.agents is
+// only linked when ~/.codex exists. Also migrates earlier layouts: the v1
+// real file in ~/.claude/skills, the v1 fenced ~/.codex/AGENTS.md section,
+// and the short-lived v2.0 canonical inside ~/.open-walnut/skills/. Keep in
+// sync with daemon-source.ts cmdSkillsSync.
 const SKILL_SYNC_MARKER = 'walnut-managed v1'
 
 function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
-  const claudeSkill = typeof cmd.claudeSkill === 'string' ? cmd.claudeSkill : ''
-  const codexSection = typeof cmd.codexSection === 'string' ? cmd.codexSection : ''
-  if (!claudeSkill.includes(SKILL_SYNC_MARKER) || !codexSection.includes(SKILL_SYNC_MARKER)) {
+  const skill = typeof cmd.skill === 'string' ? cmd.skill : ''
+  if (!skill.includes(SKILL_SYNC_MARKER)) {
     return sendError(ws, id, 'skills.sync: payload missing the managed marker')
   }
   if (path.resolve(DAEMON_DIR) !== path.resolve(PROD_DAEMON_DIR)) {
     return sendOk(ws, id, { applied: true, changed: false, skipped: 'non-prod' })
   }
   const wrote: string[] = []
-  // claude: ~/.claude/skills/walnut/SKILL.md
+  const canonicalDir = path.join(HOME_DIR, '.open-walnut', 'distributed-skills', 'walnut')
+  // 1. the one real copy (marker-guarded: never clobber a foreign file)
   try {
-    const dir = path.join(HOME_DIR, '.claude', 'skills', 'walnut')
-    const target = path.join(dir, 'SKILL.md')
+    const target = path.join(canonicalDir, 'SKILL.md')
     let existing: string | null = null
     try { existing = fs.readFileSync(target, 'utf-8') } catch {}
     if (existing === null || existing.includes(SKILL_SYNC_MARKER)) {
-      if (existing !== claudeSkill) {
-        fs.mkdirSync(dir, { recursive: true })
-        fs.writeFileSync(target, claudeSkill, { mode: 0o644 })
+      if (existing !== skill) {
+        fs.mkdirSync(canonicalDir, { recursive: true })
+        fs.writeFileSync(target, skill, { mode: 0o644 })
         wrote.push(target)
       }
     }
   } catch (err) {
-    logMsg('warn', 'skills.sync: claude skill write failed', { error: (err as Error).message })
+    logMsg('warn', 'skills.sync: canonical write failed', { error: (err as Error).message })
   }
-  // codex: fenced section in ~/.codex/AGENTS.md, only when ~/.codex exists
-  try {
-    const codexDir = path.join(HOME_DIR, '.codex')
-    if (fs.existsSync(codexDir)) {
-      const target = path.join(codexDir, 'AGENTS.md')
-      let existing = ''
-      try { existing = fs.readFileSync(target, 'utf-8') } catch {}
-      const begin = existing.indexOf('<!-- BEGIN ' + SKILL_SYNC_MARKER)
-      const endMark = '<!-- END ' + SKILL_SYNC_MARKER + ' -->'
-      const end = existing.indexOf(endMark)
-      let next: string
-      if (begin !== -1 && end !== -1 && end > begin) {
-        next = existing.slice(0, begin) + codexSection + existing.slice(end + endMark.length)
-      } else {
-        next = existing ? existing.replace(/\n*$/, '\n\n') + codexSection + '\n' : codexSection + '\n'
+  // 2. engine links. An existing path is handled by ownership: a symlink
+  // already resolving into the canonical dir is a no-op; an owned symlink
+  // (marker'd or dangling) is retargeted; a dir whose SKILL.md carries the
+  // marker AND holds nothing else is the pure v1 copy and becomes the
+  // symlink. A dir with ANY other entry — even alongside our marker'd
+  // SKILL.md — is never deleted (2026-08-26: user sub-skill dirs lived next
+  // to the v1 file); we refresh just our SKILL.md inside it. Anything
+  // unowned is the user's and stays untouched.
+  function ensureLink(skillsDir: string) {
+    const link = path.join(skillsDir, 'walnut')
+    try {
+      let st: ReturnType<typeof fs.lstatSync> | null = null
+      try { st = fs.lstatSync(link) } catch {}
+      if (st) {
+        try { if (fs.realpathSync(link) === fs.realpathSync(canonicalDir)) return } catch {}
+        const skillFile = path.join(link, 'SKILL.md')
+        let owned = false
+        try { owned = fs.readFileSync(skillFile, 'utf-8').includes(SKILL_SYNC_MARKER) } catch { owned = st.isSymbolicLink() }
+        if (!owned) return
+        if (st.isDirectory()) {
+          const extras = fs.readdirSync(link).filter((e) => e !== 'SKILL.md')
+          if (extras.length > 0) {
+            const cur = fs.readFileSync(skillFile, 'utf-8')
+            if (cur !== skill) { fs.writeFileSync(skillFile, skill, { mode: 0o644 }); wrote.push(skillFile) }
+            return
+          }
+        }
+        fs.rmSync(link, { recursive: true, force: true })
       }
-      if (next !== existing) {
-        fs.writeFileSync(target, next, { mode: 0o644 })
-        wrote.push(target)
+      fs.mkdirSync(skillsDir, { recursive: true })
+      fs.symlinkSync(canonicalDir, link)
+      wrote.push(link)
+    } catch (err) {
+      logMsg('warn', 'skills.sync: engine link failed', { link, error: (err as Error).message })
+    }
+  }
+  ensureLink(path.join(HOME_DIR, '.claude', 'skills'))
+  if (fs.existsSync(path.join(HOME_DIR, '.codex'))) ensureLink(path.join(HOME_DIR, '.agents', 'skills'))
+  // 2b. v2.0 migration: remove the marker'd SKILL.md that briefly lived in
+  // the user's skill store (it shadowed the category sub-skills there); the
+  // dir itself and every other entry stay. Drop the dir only when we owned
+  // the sole file in it.
+  try {
+    const legacyDir = path.join(HOME_DIR, '.open-walnut', 'skills', 'walnut')
+    if (path.resolve(legacyDir) !== path.resolve(canonicalDir)) {
+      const legacyFile = path.join(legacyDir, 'SKILL.md')
+      let cur: string | null = null
+      try { cur = fs.readFileSync(legacyFile, 'utf-8') } catch {}
+      if (cur !== null && cur.includes(SKILL_SYNC_MARKER)) {
+        fs.rmSync(legacyFile, { force: true })
+        wrote.push(legacyFile)
+        if (fs.readdirSync(legacyDir).length === 0) fs.rmdirSync(legacyDir)
       }
     }
   } catch (err) {
-    logMsg('warn', 'skills.sync: codex section write failed', { error: (err as Error).message })
+    logMsg('warn', 'skills.sync: legacy canonical cleanup failed', { error: (err as Error).message })
+  }
+  // 3. v1 migration: drop the fenced section this daemon used to keep in
+  // ~/.codex/AGENTS.md (marker-guarded; a fence-only file is removed whole)
+  try {
+    const agentsMd = path.join(HOME_DIR, '.codex', 'AGENTS.md')
+    let existing = ''
+    try { existing = fs.readFileSync(agentsMd, 'utf-8') } catch {}
+    const begin = existing.indexOf('<!-- BEGIN ' + SKILL_SYNC_MARKER)
+    const endMark = '<!-- END ' + SKILL_SYNC_MARKER + ' -->'
+    const end = existing.indexOf(endMark)
+    if (begin !== -1 && end > begin) {
+      let head = existing.slice(0, begin)
+      while (head.endsWith('\n')) head = head.slice(0, -1)
+      let tail = existing.slice(end + endMark.length)
+      while (tail.startsWith('\n')) tail = tail.slice(1)
+      const next = head === '' ? tail : (tail === '' ? head + '\n' : head + '\n\n' + tail)
+      if (next.trim() === '') fs.rmSync(agentsMd, { force: true })
+      else fs.writeFileSync(agentsMd, next, { mode: 0o644 })
+      wrote.push(agentsMd)
+    }
+  } catch (err) {
+    logMsg('warn', 'skills.sync: AGENTS.md fence removal failed', { error: (err as Error).message })
   }
   if (wrote.length > 0) logMsg('info', 'walnut skill distributed', { wrote })
   return sendOk(ws, id, { applied: true, changed: wrote.length > 0, wrote })

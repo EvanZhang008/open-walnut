@@ -3220,63 +3220,116 @@ function cmdHooksConfigure(ws, id, cmd) {
   return sendOk(ws, id, { applied: true, changed: changed, hash: next.hash });
 }
 
-// skills.sync: distribute the walnut skill into this host's engine stores
-// (claude skill dir + fenced codex AGENTS.md section). Marker-guarded and
-// production-dir only. Keep in sync with daemon-standalone.ts cmdSkillsSync.
+// skills.sync: distribute the walnut skill into this host's engine stores.
+// ONE real copy in ~/.open-walnut/distributed-skills/walnut/SKILL.md
+// (deliberately NOT the user's skill store ~/.open-walnut/skills/, where a
+// flat SKILL.md shadows category sub-skills); ~/.claude/skills and
+// ~/.agents/skills (codex's user-level dir) get walnut symlinks at it.
+// Marker-guarded, production-dir only; migrates the v1 layout (real claude
+// file + fenced codex AGENTS.md section) and the short-lived v2.0 canonical.
+// Keep in sync with daemon-standalone.ts cmdSkillsSync.
 var SKILL_SYNC_MARKER = 'walnut-managed v1';
 
 function cmdSkillsSync(ws, id, cmd) {
   var NL = String.fromCharCode(10);
-  var claudeSkill = typeof cmd.claudeSkill === 'string' ? cmd.claudeSkill : '';
-  var codexSection = typeof cmd.codexSection === 'string' ? cmd.codexSection : '';
-  if (claudeSkill.indexOf(SKILL_SYNC_MARKER) === -1 || codexSection.indexOf(SKILL_SYNC_MARKER) === -1) {
+  var skill = typeof cmd.skill === 'string' ? cmd.skill : '';
+  if (skill.indexOf(SKILL_SYNC_MARKER) === -1) {
     return sendError(ws, id, 'skills.sync: payload missing the managed marker');
   }
   if (path.resolve(DAEMON_DIR) !== path.resolve(PROD_DAEMON_DIR)) {
     return sendOk(ws, id, { applied: true, changed: false, skipped: 'non-prod' });
   }
   var wrote = [];
+  var canonicalDir = path.join(HOME_DIR, '.open-walnut', 'distributed-skills', 'walnut');
+  // 1. the one real copy (marker-guarded: never clobber a foreign file)
   try {
-    var dir = path.join(HOME_DIR, '.claude', 'skills', 'walnut');
-    var target = path.join(dir, 'SKILL.md');
+    var target = path.join(canonicalDir, 'SKILL.md');
     var existing = null;
     try { existing = fs.readFileSync(target, 'utf-8'); } catch (e) {}
     if (existing === null || existing.indexOf(SKILL_SYNC_MARKER) !== -1) {
-      if (existing !== claudeSkill) {
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(target, claudeSkill, { mode: 0o644 });
+      if (existing !== skill) {
+        fs.mkdirSync(canonicalDir, { recursive: true });
+        fs.writeFileSync(target, skill, { mode: 0o644 });
         wrote.push(target);
       }
     }
   } catch (err) {
-    logMsg('warn', 'skills.sync: claude skill write failed', { error: err.message });
+    logMsg('warn', 'skills.sync: canonical write failed', { error: err.message });
   }
-  try {
-    var codexDir = path.join(HOME_DIR, '.codex');
-    if (fs.existsSync(codexDir)) {
-      var ctarget = path.join(codexDir, 'AGENTS.md');
-      var cur = '';
-      try { cur = fs.readFileSync(ctarget, 'utf-8'); } catch (e) {}
-      var begin = cur.indexOf('<!-- BEGIN ' + SKILL_SYNC_MARKER);
-      var endMark = '<!-- END ' + SKILL_SYNC_MARKER + ' -->';
-      var end = cur.indexOf(endMark);
-      var nextText;
-      if (begin !== -1 && end !== -1 && end > begin) {
-        nextText = cur.slice(0, begin) + codexSection + cur.slice(end + endMark.length);
-      } else if (cur) {
-        var base = cur;
-        while (base.length > 0 && (base.charAt(base.length - 1) === NL || base.charAt(base.length - 1) === ' ')) base = base.slice(0, -1);
-        nextText = base + NL + NL + codexSection + NL;
-      } else {
-        nextText = codexSection + NL;
+  // 2. engine links, by ownership: symlink already at canonical = no-op;
+  // owned symlink (marker'd or dangling) = retarget; dir with our marker'd
+  // SKILL.md and NOTHING else = pure v1 copy, becomes the symlink. A dir
+  // holding any other entry is never deleted (user sub-skill dirs lived next
+  // to the v1 file); only our SKILL.md inside it is refreshed.
+  function ensureLink(skillsDir) {
+    var link = path.join(skillsDir, 'walnut');
+    try {
+      var st = null;
+      try { st = fs.lstatSync(link); } catch (e) {}
+      if (st) {
+        try { if (fs.realpathSync(link) === fs.realpathSync(canonicalDir)) return; } catch (e) {}
+        var skillFile = path.join(link, 'SKILL.md');
+        var owned = false;
+        try { owned = fs.readFileSync(skillFile, 'utf-8').indexOf(SKILL_SYNC_MARKER) !== -1; } catch (e) { owned = st.isSymbolicLink(); }
+        if (!owned) return;
+        if (st.isDirectory()) {
+          var extras = fs.readdirSync(link).filter(function (e) { return e !== 'SKILL.md'; });
+          if (extras.length > 0) {
+            var curSkill = fs.readFileSync(skillFile, 'utf-8');
+            if (curSkill !== skill) { fs.writeFileSync(skillFile, skill, { mode: 0o644 }); wrote.push(skillFile); }
+            return;
+          }
+        }
+        fs.rmSync(link, { recursive: true, force: true });
       }
-      if (nextText !== cur) {
-        fs.writeFileSync(ctarget, nextText, { mode: 0o644 });
-        wrote.push(ctarget);
+      fs.mkdirSync(skillsDir, { recursive: true });
+      fs.symlinkSync(canonicalDir, link);
+      wrote.push(link);
+    } catch (err) {
+      logMsg('warn', 'skills.sync: engine link failed', { link: link, error: err.message });
+    }
+  }
+  ensureLink(path.join(HOME_DIR, '.claude', 'skills'));
+  if (fs.existsSync(path.join(HOME_DIR, '.codex'))) ensureLink(path.join(HOME_DIR, '.agents', 'skills'));
+  // 2b. v2.0 migration: remove the marker'd SKILL.md that briefly lived in
+  // the user's skill store; the dir and every other entry stay. Drop the dir
+  // only when we owned the sole file in it.
+  try {
+    var legacyDir = path.join(HOME_DIR, '.open-walnut', 'skills', 'walnut');
+    if (path.resolve(legacyDir) !== path.resolve(canonicalDir)) {
+      var legacyFile = path.join(legacyDir, 'SKILL.md');
+      var legacyCur = null;
+      try { legacyCur = fs.readFileSync(legacyFile, 'utf-8'); } catch (e) {}
+      if (legacyCur !== null && legacyCur.indexOf(SKILL_SYNC_MARKER) !== -1) {
+        fs.rmSync(legacyFile, { force: true });
+        wrote.push(legacyFile);
+        if (fs.readdirSync(legacyDir).length === 0) fs.rmdirSync(legacyDir);
       }
     }
+  } catch (err) {
+    logMsg('warn', 'skills.sync: legacy canonical cleanup failed', { error: err.message });
+  }
+  // 3. v1 migration: drop the fenced section this daemon used to keep in
+  // ~/.codex/AGENTS.md (marker-guarded; a fence-only file is removed whole)
+  try {
+    var agentsMd = path.join(HOME_DIR, '.codex', 'AGENTS.md');
+    var cur = '';
+    try { cur = fs.readFileSync(agentsMd, 'utf-8'); } catch (e) {}
+    var begin = cur.indexOf('<!-- BEGIN ' + SKILL_SYNC_MARKER);
+    var endMark = '<!-- END ' + SKILL_SYNC_MARKER + ' -->';
+    var end = cur.indexOf(endMark);
+    if (begin !== -1 && end > begin) {
+      var head = cur.slice(0, begin);
+      while (head.length > 0 && head.charAt(head.length - 1) === NL) head = head.slice(0, -1);
+      var tail = cur.slice(end + endMark.length);
+      while (tail.length > 0 && tail.charAt(0) === NL) tail = tail.slice(1);
+      var nextText = head === '' ? tail : (tail === '' ? head + NL : head + NL + NL + tail);
+      if (nextText.trim() === '') fs.rmSync(agentsMd, { force: true });
+      else fs.writeFileSync(agentsMd, nextText, { mode: 0o644 });
+      wrote.push(agentsMd);
+    }
   } catch (err2) {
-    logMsg('warn', 'skills.sync: codex section write failed', { error: err2.message });
+    logMsg('warn', 'skills.sync: AGENTS.md fence removal failed', { error: err2.message });
   }
   if (wrote.length > 0) logMsg('info', 'walnut skill distributed', { wrote: wrote });
   return sendOk(ws, id, { applied: true, changed: wrote.length > 0, wrote: wrote });
