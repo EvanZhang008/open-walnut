@@ -192,7 +192,11 @@ describe('open-walnut done → POST /api/v1/tasks/:id/complete', () => {
     expect(task.phase).toBe('COMPLETE');
   });
 
-  it('unpins the completed task (completeTask semantics, not bare PATCH)', async () => {
+  it('keeps the pin on a completed task (auto-unpin removed 2026-08-26)', async () => {
+    // Was "unpins the completed task": completion no longer unpins anywhere, so
+    // the finished card keeps its tier slot until the user unpins it by hand.
+    // `walnut add` also puts the task on the board now, so the explicit pin below
+    // is an idempotent no-op that still documents the intent.
     const { runAdd } = await import('../../src/commands/add.js');
     const { runDone } = await import('../../src/commands/done.js');
     await runAdd('Pinned then completed', {}, { json: true });
@@ -205,8 +209,9 @@ describe('open-walnut done → POST /api/v1/tasks/:id/complete', () => {
 
     logSpy.mockClear();
     await runDone(id, { json: true });
-    const after = await api<{ task: { pinned?: boolean } }>(`/api/v1/tasks/${id}`);
-    expect(after.task.pinned).toBeFalsy();
+    const after = await api<{ task: { pinned?: boolean; status: string } }>(`/api/v1/tasks/${id}`);
+    expect(after.task.status).toBe('done');
+    expect(after.task.pinned).toBe(true);
   });
 
   // Replaces the deleted "rejects managed agents" pair: `walnut done` no longer

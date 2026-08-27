@@ -351,8 +351,10 @@ describe('task tools', () => {
     });
 
     it('rejects an unrecognized boolean string instead of silently reading it as false', async () => {
-      const pinned = await make('Pin me');
-      await make('Leave me');
+      // pinned: false on both — task_create now puts a new task on the board, so
+      // the pinned row has to be built explicitly.
+      const pinned = await make('Pin me', { pinned: false });
+      await make('Leave me', { pinned: false });
       const { togglePin } = await import('../../src/core/task-manager.js');
       await togglePin(pinned);
 
@@ -381,8 +383,10 @@ describe('task tools', () => {
     });
 
     it('filters by pinned and by source', async () => {
-      const pinned = await make('Pin me');
-      const plain = await make('Leave me');
+      // pinned: false on both — task_create now puts a new task on the board, so
+      // this filter test has to build its own pinned/unpinned pair.
+      const pinned = await make('Pin me', { pinned: false });
+      const plain = await make('Leave me', { pinned: false });
       const { togglePin } = await import('../../src/core/task-manager.js');
       await togglePin(pinned);
 
@@ -444,7 +448,8 @@ describe('task tools', () => {
       await make('Explainable');
       const [row] = await rows({});
       expect(row.status).toBe('todo');
-      expect(row.pinned).toBe(false);
+      // true, not false: task_create puts a new task on the board (Satellite).
+      expect(row.pinned).toBe(true);
       expect(typeof row.created_at).toBe('string');
       expect(typeof row.updated_at).toBe('string');
     });

@@ -270,7 +270,10 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         /** Start the new task marked unread. */
         unread?: boolean
         priority?: 'immediate' | 'important' | 'backlog' | 'none'
-        pinTier?: string // built-in tier or a registered custom tier id (ct_*)
+        // Built-in tier or a registered custom tier id (ct_*). `null` is the
+        // client's explicit "don't pin this one"; omitted leaves the new task
+        // on the board default (pinned, Satellite).
+        pinTier?: string | null
         /** Task dates (ISO) — same trio as POST /api/tasks. */
         due_date?: string
         start_date?: string

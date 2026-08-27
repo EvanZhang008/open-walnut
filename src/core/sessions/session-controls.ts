@@ -391,7 +391,7 @@ export async function forkSessionToTask(
 
   const { getSessionByClaudeId, getSessionsForTask, createSessionRecord } = await import('../session-tracker.js');
   const {
-    getTask, addTask, togglePin, setFocusTier, updateTask, groupTasks, addToGroup, renameGroup,
+    getTask, addTask, setFocusTier, updateTask, groupTasks, addToGroup, renameGroup,
   } = await import('../task-manager.js');
 
   const sourceRecord = await getSessionByClaudeId(sourceSessionId);
@@ -451,12 +451,15 @@ export async function forkSessionToTask(
       title: newTitle,
       project: sourceTask.project || '',
       source: sourceTask.source,
+      // A fork is a person splitting off live work, so it joins the board like
+      // any other hand-made task (Satellite = pinned, no stored tier).
+      pinned: true,
     });
-    // Inherit the source's pin/tier so a fork of a Focus task lands in Focus
-    // too — addTask() never sets focus_tier. Best-effort, non-fatal on failure.
+    // Inherit the source's TIER on top of that pin, so a fork of a Focus task
+    // lands in Focus too — addTask() never sets focus_tier. Best-effort,
+    // non-fatal on failure.
     if (sourceTask.pinned && sourceTask.focus_tier) {
       try {
-        await togglePin(newFork.id);
         await setFocusTier(newFork.id, sourceTask.focus_tier);
       } catch (err) {
         log.session.warn('fork: failed to inherit pin/tier from source', {

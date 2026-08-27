@@ -9,7 +9,7 @@
 
 import path from 'node:path';
 import { log } from '../../logging/index.js';
-import { addTask, getTask, updateTask, togglePin, setFocusTier, ensureProject, setProjectMetadata, InvalidProjectNameError, ProjectSourceConflictError } from '../task-manager.js';
+import { addTask, getTask, updateTask, setFocusTier, ensureProject, setProjectMetadata, InvalidProjectNameError, ProjectSourceConflictError } from '../task-manager.js';
 import { getSessionsForTask, updateSessionRecord } from '../session-tracker.js';
 import { bus, EventNames } from '../event-bus.js';
 import type { Task, SessionEngine } from '../types.js';
@@ -19,8 +19,15 @@ export interface QuickStartTaskMeta {
   /** Start the new task already marked unread. */
   unread?: boolean;
   priority?: 'immediate' | 'important' | 'backlog' | 'none';
-  /** Built-in tier ('focus' | 'satellite' | 'backlog' | 'wait') or a registered custom tier id (ct_*). */
-  pinTier?: string;
+  /**
+   * Built-in tier ('focus' | 'satellite' | 'backlog' | 'wait') or a registered
+   * custom tier id (ct_*).
+   *
+   * Three-way: a tier name pins into that tier; `null` is an explicit "do NOT
+   * pin this one" (the launcher's unpin gesture); omitted means the caller has
+   * no opinion and the new task takes the board default (pinned, Satellite).
+   */
+  pinTier?: string | null;
   /** Task dates (ISO) — same trio as POST /api/tasks; a launch IS a task create. */
   due_date?: string;
   start_date?: string;
@@ -175,12 +182,17 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
         throw err;
       }
     }
+    // Pin decision, made BEFORE the create so the task is born pinned in one
+    // write: `null` = the caller explicitly opted out (the launcher's unpin
+    // gesture, a routine run); anything else joins the board.
+    const pinNewTask = taskMeta?.pinTier !== null;
     let task: Task;
     try {
       ({ task } = await addTask({
         title,
         project,
         source: 'local',
+        ...(pinNewTask ? { pinned: true } : {}),
       }));
     } catch (err) {
       // Client-supplied project seed the registry rejects — a caller error, not
@@ -215,14 +227,12 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     if (taskMeta?.start_date) updates.start_date = taskMeta.start_date;
     if (taskMeta?.end_date) updates.end_date = taskMeta.end_date;
     await updateTask(task.id, updates, { source });
-    // Pin + tier — only for new tasks, only when the caller picked a tier.
-    //
-    // Sequencing matters: setFocusTier() throws if the task isn't pinned, so
-    // togglePin() MUST run first. Best-effort: if either call fails, we log and
-    // let the session start anyway.
-    if (taskMeta?.pinTier) {
+    // Tier — the pin itself already rode addTask above, and a pinned task with
+    // no stored tier IS Satellite, so this only runs when the caller named a
+    // different tier. Best-effort: if it fails the task keeps its Satellite
+    // slot and the session still starts.
+    if (pinNewTask && taskMeta?.pinTier) {
       try {
-        await togglePin(task.id);
         await setFocusTier(task.id, taskMeta.pinTier);
       } catch (err) {
         log.web.warn(`${source}: failed to apply pin/tier`, {

@@ -176,7 +176,9 @@ describe('POST /api/sessions/quick-start — intent=fix-walnut', () => {
     expect(task!.focus_tier).toBeUndefined();
   });
 
-  it('does not pin plain quick-starts that send no taskMeta', async () => {
+  it('pins plain quick-starts that send no taskMeta into Satellite', async () => {
+    // Board default (2026-08-26): no client opinion means the new task joins the
+    // pinned board in Satellite, which is stored as NO focus_tier.
     const app = createApp();
     const res = await request(app)
       .post('/api/sessions/quick-start')
@@ -184,7 +186,7 @@ describe('POST /api/sessions/quick-start — intent=fix-walnut', () => {
 
     expect(res.status).toBe(200);
     const task = await getTask(res.body.taskId);
-    expect(task!.pinned).toBeFalsy();
+    expect(task!.pinned).toBe(true);
     expect(task!.focus_tier).toBeUndefined();
   });
 

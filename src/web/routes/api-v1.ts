@@ -1201,7 +1201,7 @@ apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction
 apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { title, project, priority, due_date: dueDate, start_date: startDate,
-      end_date: endDate, description } = (req.body ?? {}) as {
+      end_date: endDate, description, pinned } = (req.body ?? {}) as {
       title?: unknown
       project?: unknown
       priority?: unknown
@@ -1209,6 +1209,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       start_date?: unknown
       end_date?: unknown
       description?: unknown
+      pinned?: unknown
     }
     if (typeof title !== 'string' || !title.trim()) {
       sendError(res, 400, 'bad_request', 'title must be a non-empty string')
@@ -1254,8 +1255,12 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       sendError(res, 400, 'bad_request', 'description must be a string')
       return
     }
+    if (pinned !== undefined && typeof pinned !== 'boolean') {
+      sendError(res, 400, 'bad_request', 'pinned must be a boolean')
+      return
+    }
 
-    const { addTask, ProjectSourceConflictError } = await import('../../core/task-manager.js')
+    const { addTask, newTaskPinDefault, ProjectSourceConflictError } = await import('../../core/task-manager.js')
     const { projectTask } = await import('../../core/task-projection.js')
     try {
       // asyncPush like the web create path: the client renders the task
@@ -1270,6 +1275,10 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         ...(startDate !== undefined ? { start_date: normalizeDateField(startDate) } : {}),
         ...(endDate !== undefined ? { end_date: normalizeDateField(endDate) } : {}),
         ...(description !== undefined ? { description } : {}),
+        // Human/AI create surface (phone Quick Add, `walnut add`, the
+        // task_create op) — lands on the board in Satellite unless the caller
+        // passed an explicit `pinned`. See newTaskPinDefault.
+        pinned: newTaskPinDefault(pinned),
         asyncPush: true,
       })
       log.web.info('task created via api-v1', { taskId: task.id, project: task.project })

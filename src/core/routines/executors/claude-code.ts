@@ -97,8 +97,10 @@ export function createClaudeCodeExecutor(): ExecutorDefinition {
         host: config.host,
         model: config.model,
         taskTitle: config.taskTitle || `Routine: ${job.name}`,
-        // Routines are background automation — don't grab the focus tier.
-        taskMeta: {},
+        // Routines are background automation: an explicit null keeps every run
+        // OFF the pinned board (a daily job would otherwise add a card a day),
+        // where an omitted pinTier would take the new-task board default.
+        taskMeta: { pinTier: null },
         project: 'Routines',
         source: 'routine',
       });

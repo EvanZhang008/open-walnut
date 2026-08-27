@@ -38,6 +38,7 @@ import {
   listGroups,
   getCustomTiers,
   setPluginTaskField,
+  newTaskPinDefault,
   type SlimTask,
 } from '../../core/task-manager.js'
 import { listSessions } from '../../core/session-tracker.js'
@@ -699,10 +700,14 @@ tasksRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) 
 // POST /api/tasks — create
 tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { title, priority, status } = req.body
+    const { title, priority, status, pinned } = req.body
 
     if (typeof title !== 'string' || title.trim() === '') {
       res.status(400).json({ error: 'title must be a non-empty string' })
+      return
+    }
+    if (pinned !== undefined && typeof pinned !== 'boolean') {
+      res.status(400).json({ error: 'pinned must be a boolean' })
       return
     }
     if (priority !== undefined && !VALID_PRIORITIES.includes(priority)) {
@@ -728,7 +733,10 @@ tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) =>
     // asyncPush: the web UI is optimistic (renders the task immediately), so don't block the
     // HTTP response on an external sync round-trip — push runs in the background and backfills
     // ext/sync_error via TASK_UPDATED. Local-source tasks never push regardless.
-    const result = await addTask({ ...req.body, asyncPush: true })
+    // pinned: this is the human create surface (Quick Add, the calendar popover,
+    // "create task for later"), so the task lands on the board in Satellite
+    // unless the client said otherwise — see newTaskPinDefault.
+    const result = await addTask({ ...req.body, pinned: newTaskPinDefault(pinned), asyncPush: true })
     log.web.info('task created via REST', { taskId: result.task.id, project: result.task.project || '' })
     bus.emit(EventNames.TASK_CREATED, { task: result.task }, ['web-ui', 'main-agent'], { source: 'api' })
     res.status(201).json(result)

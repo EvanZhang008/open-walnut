@@ -249,6 +249,9 @@ export async function promoteSessionSideQuestion(
     title: entry.question,
     description: entry.answer,
     ...(parentTaskId ? { parent_task_id: parentTaskId } : {}),
+    // A person clicked "promote this Q&A" — same board default as any other
+    // hand-made task (Satellite = pinned, no stored tier).
+    pinned: true,
   });
   // Link the task back to the session so it shows under that session's history.
   await linkSession(task.id, sessionId);

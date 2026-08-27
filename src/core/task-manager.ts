@@ -730,6 +730,14 @@ export interface AddTaskInput {
   sprint?: string;
   /** Explicit source override. Only needed for the first task in a new project (e.g. source='local'). */
   source?: TaskSource;
+  /**
+   * Create the task already in the pinned working set, at the BOTTOM of it
+   * (same placement rule as togglePin). NO focus_tier is written, which is how
+   * Satellite is stored — see newTaskPinDefault() for who passes this.
+   * Omitted = unpinned, which stays the core default so bulk importers and
+   * provider sync can't flood the board.
+   */
+  pinned?: boolean;
   /** Don't block the return on the external sync push. The task is written locally and
    *  returned immediately; the push to the external target runs in the background and
    *  backfills ext/external_url/sync_error via a TASK_UPDATED event. Set by the web
@@ -738,6 +746,32 @@ export interface AddTaskInput {
   asyncPush?: boolean;
   /** Skip plugin content-validation & auto-push (fork children are internal). */
   _skipPluginOps?: boolean;
+}
+
+/**
+ * Where the next pin goes: the BOTTOM of the pinned set. One definition shared
+ * by togglePin and addTask's born-pinned path so the two can't drift (a fresh
+ * arrival at the TOP is what used to wreck hand-arranged orders — see
+ * togglePin's note).
+ */
+function nextPinOrder(tasks: Task[]): number {
+  const orders = tasks.filter((t) => t.pinned).map((t) => t.pin_order ?? 0);
+  return (orders.length ? Math.max(...orders) : -1) + 1;
+}
+
+/**
+ * Pin state for a task a PERSON or the AI just created: on the board, in
+ * Satellite (pinned, no stored focus_tier). Leaving new work off the board made
+ * it invisible until someone remembered to pin it, so the board is the default
+ * and grooming happens afterwards.
+ *
+ * An explicit caller value always wins, which is what makes "don't pin this
+ * one" expressible. Automated bulk creators deliberately do NOT call this:
+ * external-session import, provider/plugin sync, the reconciler's bulk pulls,
+ * and routine runs stay unpinned so a high-volume day can't bury the board.
+ */
+export function newTaskPinDefault(explicit?: unknown): boolean {
+  return typeof explicit === 'boolean' ? explicit : true;
 }
 
 // ── Project registry (task_projects) — the single grouping layer ────────────
@@ -1884,6 +1918,11 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       ...(input.tags?.length ? { tags: [...new Set(input.tags)] } : {}),
       ...(input.cwd ? { cwd: input.cwd } : {}),
       ...(input.sprint ? { sprint: input.sprint } : {}),
+      // Born pinned (interactive/AI creates — newTaskPinDefault). No focus_tier
+      // is written, and that absence IS Satellite. pin_order lands at the BOTTOM
+      // of the pinned set, the same placement togglePin uses, so a fresh task
+      // never jumps ahead of an order the user arranged by hand.
+      ...(input.pinned ? { pinned: true, pin_order: nextPinOrder(store.tasks) } : {}),
     };
 
     // Validate and attach depends_on before pushing to store
@@ -4616,10 +4655,8 @@ export async function togglePin(taskId: string): Promise<{ pinned: boolean; pinn
       // Bottom placement keeps a new member the LAST of its group, which leaves the
       // group's anchor (and every other row) exactly where the user put it.
       // Matches the quick-add path, which has always appended (useFocusBar.addLocalPin).
-      const orders = store.tasks.filter((t) => t.pinned).map((t) => t.pin_order ?? 0);
-      const maxOrder = orders.length ? Math.max(...orders) : -1;
       task.pinned = true;
-      task.pin_order = maxOrder + 1;
+      task.pin_order = nextPinOrder(store.tasks);
       task.updated_at = now;
     }
 

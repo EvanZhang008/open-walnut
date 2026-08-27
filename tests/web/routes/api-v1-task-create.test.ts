@@ -113,6 +113,44 @@ describe('POST /api/v1/tasks', () => {
     expect(task2.project.toLowerCase()).toBe('marina launch')
   })
 
+  it('puts a new task on the board in Satellite (pinned, no focus_tier)', async () => {
+    // The board default (2026-08-26): this endpoint is the human/AI create
+    // surface (phone Quick Add, `walnut add`, the task_create op), so a task
+    // created here must not be invisible until someone remembers to pin it.
+    // Satellite is stored as pinned with NO focus_tier, so the projection shows
+    // pinned + pin_order and omits focus_tier entirely.
+    const res = await postTask({ title: 'Lands on the board' })
+    expect(res.status).toBe(201)
+    const { task } = await res.json() as { task: Record<string, unknown> }
+    expect(task.pinned).toBe(true)
+    expect(typeof task.pin_order).toBe('number')
+    expect(task).not.toHaveProperty('focus_tier')
+
+    // Visible as a pinned row on the focus surface, not just in the response.
+    const focus = await fetch(apiUrl('/api/focus/tasks'))
+    expect(focus.status).toBe(200)
+    const split = await focus.json() as { pinned_tasks: string[]; satellite_tasks: string[] }
+    expect(split.pinned_tasks).toContain(task.id)
+    expect(split.satellite_tasks).toContain(task.id)
+  })
+
+  it('honors an explicit pinned: false and rejects a non-boolean', async () => {
+    const off = await postTask({ title: 'Real backlog item', pinned: false })
+    expect(off.status).toBe(201)
+    const { task } = await off.json() as { task: Record<string, unknown> }
+    expect(task.pinned).toBeUndefined()
+
+    const focus = await fetch(apiUrl('/api/focus/tasks'))
+    const split = await focus.json() as { pinned_tasks: string[] }
+    expect(split.pinned_tasks).not.toContain(task.id)
+
+    const bad = await postTask({ title: 'bad pinned', pinned: 'yes' })
+    expect(bad.status).toBe(400)
+    const json = await bad.json() as { error: { code: string; message: string } }
+    expect(json.error.code).toBe('bad_request')
+    expect(json.error.message).toContain('pinned')
+  })
+
   it('trims the title', async () => {
     const res = await postTask({ title: '  padded title  ' })
     expect(res.status).toBe(201)

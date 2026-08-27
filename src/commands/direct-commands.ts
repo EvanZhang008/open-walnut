@@ -28,13 +28,16 @@ import type { GlobalOptions, TaskPriority } from '../core/types.js';
 export function installDirect(): void {
   installDirectRunners({
     async add(title, options, globals: GlobalOptions) {
-      const { addTask } = await import('../core/task-manager.js');
+      const { addTask, newTaskPinDefault } = await import('../core/task-manager.js');
       const { task } = await addTask({
         title,
         priority: options.priority as TaskPriority | undefined,
         // Omitted → Inbox.
         project: options.list ?? options.project,
         due_date: options.due,
+        // Same board default as the HTTP path this mirrors (POST /api/v1/tasks):
+        // a person typing `walnut add` gets the task on the board (Satellite).
+        pinned: newTaskPinDefault(),
       });
       printCreated(task as unknown as Parameters<typeof printCreated>[0], globals);
     },

@@ -46,10 +46,13 @@ describe('Focus Bar API', () => {
 
   it('create 4 tasks for testing', async () => {
     for (let i = 0; i < 4; i++) {
+      // pinned: false — POST /api/tasks now puts a new task on the board by
+      // default, and this suite is about the pin/unpin/tier API itself, so it
+      // needs to start from four OFF-board tasks.
       const r = await fetch(apiUrl('/api/tasks'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: `Focus Test ${i}`, priority: 'none', category: 'Test', project: 'Test' }),
+        body: JSON.stringify({ title: `Focus Test ${i}`, priority: 'none', category: 'Test', project: 'Test', pinned: false }),
       });
       expect(r.status).toBe(201);
       const data = await r.json();

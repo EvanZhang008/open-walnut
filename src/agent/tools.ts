@@ -27,6 +27,7 @@ import {
   getProjectRecord,
   togglePin,
   setFocusTier,
+  newTaskPinDefault,
   getCustomTiers,
   getPinnedTasks,
   groupTasks,
@@ -735,6 +736,7 @@ export const tools: ToolDefinition[] = [
         tags: { type: 'array', items: { type: 'string' }, description: 'Initial tags. Convention: "key:value" for structured data (e.g. "team:backend", "blocked").' },
         depends_on: { type: 'array', items: { type: 'string' }, description: 'Full IDs of prerequisite tasks that must complete before this one can start.' },
         cwd: { type: 'string', description: 'Task-level working directory override (type=task only). Takes precedence over project default_cwd when starting sessions.' },
+        pinned: { type: 'boolean', description: 'Whether the new task joins the pinned working set. Omit for the default (pinned, Satellite tier). Pass false only for work that is not expected within about a month.' },
       },
       required: [],
     },
@@ -824,6 +826,10 @@ export const tools: ToolDefinition[] = [
           tags: params.tags as string[] | undefined,
           depends_on: params.depends_on as string[] | undefined,
           cwd: params.cwd as string | undefined,
+          // On the board (Satellite) unless the model said otherwise — a task
+          // the AI records for the user should not be invisible. See
+          // newTaskPinDefault.
+          pinned: newTaskPinDefault(params.pinned),
         });
         bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: 'agent' });
         const syncStatus = syncResult?.success === false

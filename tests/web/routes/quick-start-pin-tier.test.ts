@@ -169,13 +169,33 @@ describe('POST /api/sessions/quick-start — taskMeta.pinTier=focus', () => {
     expect(task!.focus_tier).toBeUndefined();
   });
 
-  it('does not pin when no pinTier is supplied', async () => {
+  it('pins into Satellite when no pinTier is supplied', async () => {
+    // Board default (2026-08-26): a launch with no client opinion still lands on
+    // the pinned board, in Satellite — which is stored as NO focus_tier.
     const app = createApp();
     const res = await request(app)
       .post('/api/sessions/quick-start')
       .send({
         cwd: '/tmp/test-focus-4',
         message: 'No tier task',
+      });
+
+    expect(res.status).toBe(200);
+    const task = await getTask(res.body.taskId);
+    expect(task!.pinned).toBe(true);
+    expect(task!.focus_tier).toBeUndefined();
+  });
+
+  it('leaves the task unpinned when the client sends pinTier: null', async () => {
+    // The launcher's unpin gesture: an explicit null must still win over the
+    // board default.
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/sessions/quick-start')
+      .send({
+        cwd: '/tmp/test-focus-5',
+        message: 'Deliberately off the board',
+        taskMeta: { pinTier: null },
       });
 
     expect(res.status).toBe(200);

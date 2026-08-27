@@ -314,6 +314,9 @@ export async function promoteLaneConversationToTask(
   const { task } = await addTask({
     title,
     ...(input.project !== undefined ? { project: input.project } : {}),
+    // Promoting a conversation is a deliberate "track this" act, so the task
+    // joins the board (Satellite = pinned, no stored tier).
+    pinned: true,
   });
   const { task: linked } = await linkSession(task.id, record.claudeSessionId);
   // Back-pointer on the record: task surfaces resolve session→task through it
