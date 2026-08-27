@@ -33,8 +33,20 @@ struct TasksView: View {
     @State private var batchBusy = false
     @State private var batchError: String?
     @State private var confirmBatchDelete = false
+    /// True once the header chrome (cards / quick add / scope) has scrolled off
+    /// the top, so the compact bar takes over its two jobs (switch filter, add a
+    /// task). Driven by `onScrollGeometryChange` with hysteresis — see
+    /// `TasksChromeMetrics`.
+    @State private var chromeCollapsed = false
+    /// Continuous scroll samples live HERE, off the view graph, and the deferred
+    /// publish is coalesced through it — see `ChromeCollapseTracker`.
+    @State private var collapseTracker = ChromeCollapseTracker()
 
     private var isEditing: Bool { editMode == .active }
+
+    /// ScrollViewReader id of the first scrollable row, so the compact bar can
+    /// bring the real header back.
+    static let topAnchorId = "tasks.top"
 
     var body: some View {
         NavigationStack(path: $navPath) {
@@ -51,6 +63,11 @@ struct TasksView: View {
                 }
             }
             .navigationTitle("Tasks")
+            // Apple Reminders' actual mechanism: the large title collapses to an
+            // inline one as you scroll, and the search field (a nav-bar DRAWER,
+            // not a List row) rides up with it. `.automatic` on the drawer is
+            // what makes the field hide on scroll-down and come back on
+            // scroll-up — a `.always` drawer would pin ~44pt forever.
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search tasks & sessions")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { StatusBadge() }
@@ -231,6 +248,10 @@ struct TasksView: View {
                         .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 8, trailing: 12))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
+                        // Scroll target for the compact bar's "back to the top"
+                        // (a chip tap, which restores the search field + quick
+                        // add). Must be the FIRST row of the scrollable content.
+                        .id(Self.topAnchorId)
                 }
                 // Header chrome (cards / quick add / scope) is a TOOLBAR, not a
                 // settings group: the default insetGrouped gap belongs between
@@ -334,6 +355,61 @@ struct TasksView: View {
             }
             .listStyle(.insetGrouped)
             .accessibilityIdentifier("tasks.list")
+            // Watch how far the list is scrolled and flip the compact bar. The
+            // OBSERVER is what makes the header chrome disposable: the cards /
+            // quick add / scope picker are ordinary List rows, so they already
+            // scroll away — this is what keeps their ACTIONS reachable after
+            // they do. `contentInsets.top` is added so "scrolled" is 0 at rest
+            // regardless of how tall the (collapsing) nav bar happens to be.
+            //
+            // NOTE the shape of this handler. Writing @State straight from the
+            // action would publish INTO the layout pass that produced the sample
+            // and re-invalidate the very subtree being measured (P0-2, see
+            // ScrollBottomTracking's header — that feedback did not converge and
+            // spun the main thread at 100%). So: samples land in a reference box
+            // off the view graph, the decision is a pure function, and the ONE
+            // publish that a threshold crossing needs is hopped to the next
+            // runloop and coalesced (a second crossing while one is queued
+            // replaces it rather than stacking).
+            .onScrollGeometryChange(for: CGFloat.self) { geo in
+                geo.contentOffset.y + geo.contentInsets.top
+            } action: { _, scrolled in
+                // Edit mode owns the top of the screen with its own affordances,
+                // and a filter switch mid-selection would silently change what is
+                // selected — so the bar stays out of the way there.
+                let next = !isEditing && TasksChromeMetrics.isCollapsed(
+                    scrolled: scrolled,
+                    wasCollapsed: chromeCollapsed,
+                    filter: activeFilter,
+                    offline: !connection.online
+                )
+                collapseTracker.request(next, current: chromeCollapsed) { value in
+                    withAnimation(.snappy(duration: 0.2)) { chromeCollapsed = value }
+                }
+            }
+            // Leaving edit mode must give the bar back; entering it takes the bar
+            // away. Neither is a scroll event, so neither reaches the handler.
+            .onChange(of: isEditing) { _, editing in
+                if editing, chromeCollapsed { chromeCollapsed = false }
+            }
+            // Compact header as an OVERLAY, never a safeAreaInset: an inset that
+            // appears mid-scroll changes the List's visible rect and yanks the
+            // content offset (the scroll-jump class of bug). An overlay costs no
+            // layout and can never move a row.
+            .overlay(alignment: .top) {
+                if chromeCollapsed {
+                    TasksCompactBar(
+                        activeFilter: $activeFilter,
+                        scrollToTop: {
+                            withAnimation(.snappy(duration: 0.3)) {
+                                proxy.scrollTo(Self.topAnchorId, anchor: .top)
+                            }
+                        },
+                        addTask: { showNewTask = true }
+                    )
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
             // Batch action bar rides the bottom while selecting.
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if isEditing { batchActionBar }
