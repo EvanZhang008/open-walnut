@@ -123,6 +123,11 @@ final class TasksStore {
     /// taskId → tier id ("focus" | "satellite" | "backlog" | "wait" | "ct_*")
     /// for every currently pinned task.
     var taskTiers: [String: String] = [:]
+    /// tier id → task ids IN PIN ORDER, straight from the split. Kept alongside
+    /// the map (not derived from it) because a dictionary has no order and the
+    /// board's "a new task lands at the foot of its band" promise is exactly
+    /// that order — see TasksStore.tierOrder.
+    var taskTierOrder: [String: [String]] = [:]
     /// Custom tier registry (ct_* id → label), refreshed with the split.
     var customTiers: [FocusTierInfo] = []
     /// Debounce handle for scheduleTierRefresh (extension file).
@@ -478,7 +483,13 @@ final class TasksStore {
             // `pinned` likewise: the projection carries it, but a tier the user
             // picked is authoritative for the row we render right now.
             let row = pin.optimisticPinned.map { Self.withPinned(created, $0) } ?? created
-            if let tier = pin.optimisticTier { taskTiers[created.id] = tier }
+            if let tier = pin.optimisticTier {
+                taskTiers[created.id] = tier
+                // The FOOT of the band it was born into — the server already
+                // agrees (pin_order = max + 1), so this is not a guess, it is
+                // the same answer arriving a round trip earlier.
+                taskTierOrder[tier, default: []].append(created.id)
+            }
             pendingCreated.append(PendingCreated(task: row, createdAt: Date()))
             persistPending()
             if !tasks.contains(where: { $0.id == row.id }) {
@@ -690,9 +701,19 @@ final class TasksStore {
             }
         }
         let originalTier = taskTiers[task.id]
+        let originalOrder = taskTierOrder
         apply(pinned)
-        // New pins land in satellite (the server default tier).
+        // New pins land in satellite (the server default tier), at the FOOT of
+        // that band — the server's pin_order is max+1, so the optimistic row
+        // must go last or it would visibly hop when the split lands.
         taskTiers[task.id] = pinned ? "satellite" : nil
+        if pinned {
+            taskTierOrder["satellite", default: []].append(task.id)
+        } else {
+            for (key, ids) in taskTierOrder where ids.contains(task.id) {
+                taskTierOrder[key] = ids.filter { $0 != task.id }
+            }
+        }
         do {
             _ = pinned
                 ? try await transport.pinTask(id: task.id)
@@ -703,6 +724,7 @@ final class TasksStore {
         } catch {
             apply(task.pinned) // rollback
             taskTiers[task.id] = originalTier
+            taskTierOrder = originalOrder
             if let apiError = error as? APIError, apiError.isConflict {
                 return "Completed tasks can't be pinned."
             }
@@ -916,7 +938,14 @@ final class TasksStore {
         // Rides the memoized slices — the smart-list cards call this 5x per
         // body pass, which used to be 5 more full-projection filter walks.
         switch filter {
-        case .sessions: return sessions.count
+        // The board renders the PINNED board (tier bands), so that is what its
+        // card counts. It used to be `sessions.count`, which was right when the
+        // filter was a session list and is a lie now: it would read "351" over a
+        // board of 44 rows. `taskTiers` is the tier map, i.e. exactly one entry
+        // per pinned task, so this is O(1); before the split lands, fall back to
+        // the projection's own pin flag rather than showing 0.
+        case .sessions:
+            return taskTiers.isEmpty ? tasks.filter { $0.pinned == true }.count : taskTiers.count
         // The calendar renders its own grid, so its flat slice is empty by
         // design — count what it actually PLACES instead of that empty slice.
         case .calendar: return tasks(for: .calendar).count
@@ -976,7 +1005,11 @@ enum TaskFilter: String, CaseIterable, Identifiable {
         case .today: return "Today"
         case .calendar: return "Calendar"
         case .inProgress: return "In Progress"
-        case .sessions: return "Sessions"
+        // "Board", not "Sessions": the filter no longer shows a session list, it
+        // shows the pinned board where a session is a task that has one. The
+        // enum case keeps its name so every stored preference, accessibility id
+        // ("tasks.card.sessions") and Maestro flow keeps working.
+        case .sessions: return "Board"
         case .allOpen: return "All Open"
         case .done: return "Done"
         }
@@ -987,7 +1020,7 @@ enum TaskFilter: String, CaseIterable, Identifiable {
         case .today: return "calendar"
         case .calendar: return "calendar.badge.clock"
         case .inProgress: return "arrow.triangle.2.circlepath"
-        case .sessions: return "terminal"
+        case .sessions: return "square.stack.3d.up"
         case .allOpen: return "tray.full"
         case .done: return "checkmark"
         }

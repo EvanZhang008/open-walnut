@@ -18,7 +18,6 @@ enum TasksChromeMetrics {
     // are the `listSectionSpacing(2)` the chrome sections carry.
     static let cardStrip: CGFloat = 104
     static let quickAdd: CGFloat = 48
-    static let scopePicker: CGFloat = 44
     static let offlineBanner: CGFloat = 44
     static let sectionGap: CGFloat = 2
 
@@ -26,11 +25,17 @@ enum TasksChromeMetrics {
     /// point here is a point of a task row the user can't read.
     static let compactBarHeight: CGFloat = 44
 
-    /// Total scrollable header height for a filter. The scope picker only renders
-    /// on the Sessions filter; the offline banner only when the server is away.
+    /// Total scrollable header height for a filter.
+    ///
+    /// The BOARD (the `.sessions` filter) is now the LEANEST, not the tallest.
+    /// It used to carry an extra scope picker on top of everything else; the
+    /// board replaced that list with tier bands, and it also drops the top quick
+    /// add because each band ends in its own create ring. So it renders the card
+    /// strip and nothing else, and its thresholds are correspondingly lower —
+    /// the compact bar takes over sooner there, which is the point.
     static func chromeHeight(filter: TaskFilter, offline: Bool) -> CGFloat {
-        var total = cardStrip + sectionGap + quickAdd + sectionGap
-        if filter == .sessions { total += scopePicker + sectionGap }
+        var total = cardStrip + sectionGap
+        if filter != .sessions { total += quickAdd + sectionGap }
         if offline { total += offlineBanner + sectionGap }
         return total
     }
@@ -54,10 +59,17 @@ enum TasksChromeMetrics {
     /// Dead band between collapse and expand. Wider than any rubber-band wobble
     /// and wider than one task row, so a slow drag can't strobe the bar.
     static let hysteresisBand: CGFloat = 96
-    /// Never collapse within the first screenful-of-nothing: with the chrome
-    /// hidden (a filter that somehow renders none of it) the thresholds would
-    /// collapse at ~0 and the bar would cover the very first row at rest.
-    static let collapseFloor: CGFloat = 120
+    /// Never collapse below the dead band's own width.
+    ///
+    /// DERIVED, not measured (it used to be a flat 120, which was simply larger
+    /// than any chrome then existed): `expandThreshold` is `collapse -
+    /// hysteresisBand` clamped at 0, so a collapse threshold under the band width
+    /// would clamp the expand threshold to 0 and leave the guard NARROWER than
+    /// the flicker it exists to absorb. Anchoring the floor to the band keeps the
+    /// two invariants that matter — the bar is never present at rest, and the
+    /// dead band is always exactly `hysteresisBand` wide — true for every filter,
+    /// including the board, whose 106pt of chrome is under the old constant.
+    static let collapseFloor: CGFloat = hysteresisBand
 
     /// The state machine: given how far the list is scrolled and whether the bar
     /// is currently showing, should it show now? Pure so it can be tested without

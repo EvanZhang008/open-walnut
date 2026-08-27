@@ -39,6 +39,31 @@ extension TasksStore {
         return tierLabel(for: tierId(for: task.id) ?? "satellite")
     }
 
+    /// Pure projection of the split into `tier id → ordered task ids`.
+    ///
+    /// The ORDER is the load-bearing part and it is why this exists next to
+    /// `tierMap`: the server returns every bucket sorted by `pin_order`, and a
+    /// new pin gets `pin_order = max + 1`, so following these arrays is what
+    /// makes a freshly created task appear at the FOOT of its band instead of
+    /// wherever a client-side sort happens to put it. A dictionary alone throws
+    /// that away.
+    static func tierOrder(from split: FocusTierResult) -> [String: [String]] {
+        var order: [String: [String]] = [:]
+        order["focus"] = split.focusTasks ?? []
+        order["satellite"] = split.satelliteTasks ?? []
+        order["backlog"] = split.backlogTasks ?? []
+        order["wait"] = split.waitTasks ?? []
+        for (tier, ids) in split.customTierTasks ?? [:] { order[tier] = ids }
+        // The server omits `satellite_tasks` when it considers it empty, but
+        // satellite is also "pinned and in no explicit bucket" — derive those
+        // here so the band is ordered even on the omitting path.
+        if order["satellite"]?.isEmpty ?? true {
+            let explicit = Set(order.filter { $0.key != "satellite" }.flatMap(\.value))
+            order["satellite"] = split.pinnedTasks.filter { !explicit.contains($0) }
+        }
+        return order
+    }
+
     /// Pure join of the tier split + registry into the taskId → tier map.
     /// Static so WalnutTests can gate it without a store or network.
     static func tierMap(from split: FocusTierResult) -> [String: String] {
@@ -68,8 +93,7 @@ extension TasksStore {
             let split = try await splitReq
             let tiers = await tiersReq
             guard isActive else { return }
-            let map = Self.tierMap(from: split)
-            if map != taskTiers { taskTiers = map }
+            adoptSplit(split)
             if let tiers, tiers != customTiers { customTiers = tiers }
         } catch {
             AppLog.debug("tasks", "focus tier load failed", [
@@ -89,6 +113,16 @@ extension TasksStore {
         }
     }
 
+    /// Adopt an authoritative split into BOTH the map and the order. One place,
+    /// because a split that updated the map while leaving a stale order would
+    /// render a task under the right heading in the wrong position.
+    func adoptSplit(_ split: FocusTierResult) {
+        let map = Self.tierMap(from: split)
+        if map != taskTiers { taskTiers = map }
+        let order = Self.tierOrder(from: split)
+        if order != taskTierOrder { taskTierOrder = order }
+    }
+
     /// Move a pinned task to a tier — optimistic map write, PUT in the
     /// background, rollback + error message on failure. Returns nil on
     /// success (mirrors setPinned's contract).
@@ -96,16 +130,25 @@ extension TasksStore {
         noteUserTouched(taskId)
         let original = taskTiers[taskId]
         taskTiers[taskId] = tier
+        // Optimistic order: the row leaves its old band and joins the FOOT of the
+        // new one, which is where the server will put it (pin_order = max + 1).
+        // Without this the row would render under the new heading at whatever
+        // position the tasks-list sort implies, then hop when the split lands.
+        let originalOrder = taskTierOrder
+        for (key, ids) in taskTierOrder where ids.contains(taskId) {
+            taskTierOrder[key] = ids.filter { $0 != taskId }
+        }
+        taskTierOrder[tier, default: []].append(taskId)
         do {
             let split = try await transport.setTaskFocusTier(id: taskId, tier: tier)
             guard isActive else { return nil }
             // Adopt the authoritative split (covers server-side self-healing
             // of stale custom-tier ids to satellite).
-            let map = Self.tierMap(from: split)
-            if map != taskTiers { taskTiers = map }
+            adoptSplit(split)
             return nil
         } catch {
             taskTiers[taskId] = original
+            taskTierOrder = originalOrder
             if let apiError = error as? APIError, apiError.code == "bad_request" {
                 return "Pin the task first, then choose a tier."
             }

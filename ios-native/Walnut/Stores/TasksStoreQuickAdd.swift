@@ -196,6 +196,11 @@ extension TasksStore {
     func applyPin(taskId: String, tier: String?) async {
         let landed = tier ?? "satellite"
         taskTiers[taskId] = landed
+        // Foot of the band, matching the server's pin_order = max + 1 (see
+        // TasksStore.tierOrder) so the row doesn't hop once the split lands.
+        if !(taskTierOrder[landed]?.contains(taskId) ?? false) {
+            taskTierOrder[landed, default: []].append(taskId)
+        }
         // Flip the row's pinned flag too (the parse-tier path arrives with an
         // unpinned local row; the badge needs pinned==true to render).
         if let idx = tasks.firstIndex(where: { $0.id == taskId }), tasks[idx].pinned != true {
@@ -210,6 +215,7 @@ extension TasksStore {
             scheduleTierRefresh()
         } catch {
             taskTiers[taskId] = nil
+            taskTierOrder[landed] = taskTierOrder[landed]?.filter { $0 != taskId }
             AppLog.warn("tasks", "quick-add pin failed", ["taskId": taskId, "error": error.localizedDescription])
         }
     }

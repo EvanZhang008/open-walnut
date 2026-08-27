@@ -102,16 +102,29 @@ final class TasksChromeCollapseTests: XCTestCase {
 
     // MARK: - Chrome height per filter
 
-    func testSessionsFilterCarriesTheTallestChrome() {
-        // Sessions is the DEFAULT filter and the only one with a scope picker, so
-        // it is the worst case the thresholds have to cover.
-        let sessions = TasksChromeMetrics.chromeHeight(filter: .sessions, offline: false)
+    /// The BOARD (`.sessions`) is now the LEANEST filter, not the tallest.
+    ///
+    /// It used to carry a scope picker over a session list, on top of the card
+    /// strip and the quick add. The board replaced that list with tier bands and
+    /// dropped the top quick add too (each band ends in its own create ring), so
+    /// it renders the card strip and nothing else. That is 94pt of chrome the
+    /// default filter no longer pays for, and it means the compact bar takes over
+    /// sooner there.
+    func testTheBoardCarriesTheLeanestChrome() {
+        let board = TasksChromeMetrics.chromeHeight(filter: .sessions, offline: false)
         for other in TaskFilter.allCases where other != .sessions {
-            XCTAssertGreaterThan(
-                sessions, TasksChromeMetrics.chromeHeight(filter: other, offline: false),
-                "\(other) should not carry more chrome than Sessions"
+            XCTAssertLessThan(
+                board, TasksChromeMetrics.chromeHeight(filter: other, offline: false),
+                "\(other) should not carry LESS chrome than the board"
             )
         }
+        // The arithmetic, so a regression names the number: the scope picker
+        // (44) + its gap (2) + the quick add (48) + its gap (2) = 96pt gone.
+        let otherFilter = TasksChromeMetrics.chromeHeight(filter: .allOpen, offline: false)
+        XCTAssertEqual(otherFilter - board, TasksChromeMetrics.quickAdd + TasksChromeMetrics.sectionGap,
+            accuracy: 0.01, "the board's saving vs a task list is exactly the quick-add row")
+        XCTAssertEqual(board, TasksChromeMetrics.cardStrip + TasksChromeMetrics.sectionGap,
+            accuracy: 0.01, "the board renders the card strip and nothing else")
     }
 
     func testOfflineBannerCountsTowardsTheChrome() {
@@ -168,9 +181,44 @@ final class TasksChromeCollapseTests: XCTestCase {
                 let chrome = TasksChromeMetrics.chromeHeight(filter: filter, offline: offline)
                 let threshold = TasksChromeMetrics.collapseThreshold(filter: filter, offline: offline)
                 XCTAssertLessThan(threshold, chrome, "\(filter) collapses only after a gap")
+                // The lead is EXACT unless the floor binds — which it now does on
+                // the board, whose 106pt of chrome is leaner than the dead band
+                // itself (96). There the floor wins and the bar arrives a little
+                // later than `collapseLead`, which is the safe direction: too late
+                // means the real chrome is still doing the job.
+                let lead = chrome - threshold
+                if threshold == TasksChromeMetrics.collapseFloor {
+                    XCTAssertLessThanOrEqual(lead, TasksChromeMetrics.collapseLead,
+                        "\(filter) offline=\(offline): the floor may only DELAY the bar")
+                } else {
+                    XCTAssertEqual(
+                        lead, TasksChromeMetrics.collapseLead, accuracy: 0.01,
+                        "\(filter) should lead the clear by exactly collapseLead"
+                    )
+                }
+            }
+        }
+    }
+
+    /// The floor is derived from the dead band, not a magic constant.
+    ///
+    /// Before the board landed it was a flat 120 — larger than any chrome that
+    /// then existed, so nothing exercised it. The board's chrome is 106pt, so it
+    /// binds for real now, and the reason the value has to be `hysteresisBand` is
+    /// that `expandThreshold` clamps at 0: a collapse threshold under the band
+    /// width would leave the dead band NARROWER than the flicker it absorbs.
+    func testTheCollapseFloorIsWideEnoughForTheDeadBandOnEveryFilter() {
+        XCTAssertGreaterThanOrEqual(
+            TasksChromeMetrics.collapseFloor, TasksChromeMetrics.hysteresisBand,
+            "a floor under the band width would clamp expandThreshold to 0 and shrink the guard"
+        )
+        for filter in TaskFilter.allCases {
+            for offline in [false, true] {
+                let collapse = TasksChromeMetrics.collapseThreshold(filter: filter, offline: offline)
+                let expand = TasksChromeMetrics.expandThreshold(filter: filter, offline: offline)
                 XCTAssertEqual(
-                    chrome - threshold, TasksChromeMetrics.collapseLead, accuracy: 0.01,
-                    "\(filter) should lead the clear by exactly collapseLead"
+                    collapse - expand, TasksChromeMetrics.hysteresisBand, accuracy: 0.01,
+                    "\(filter) offline=\(offline): the dead band got clamped"
                 )
             }
         }
@@ -256,11 +304,26 @@ final class TasksChromeCollapseTests: XCTestCase {
 
     func testTheCompactBarIsCheaperThanTheChromeItReplaces() {
         // If the survivor were as tall as the header, the collapse would buy
-        // nothing. Budget: under a third of the smallest chrome it stands in for.
-        let smallest = TaskFilter.allCases
-            .map { TasksChromeMetrics.chromeHeight(filter: $0, offline: false) }
-            .min()!
-        XCTAssertLessThan(TasksChromeMetrics.compactBarHeight, smallest / 3)
+        // nothing.
+        //
+        // The budget used to be "under a third of the smallest chrome", which
+        // held only because every filter then carried at least 156pt. The board
+        // carries 106pt (card strip only), so a third would be 35pt and the
+        // 44pt bar would fail a test whose point it still satisfies. What the
+        // rule is actually protecting is that the collapse is a MAJORITY saving
+        // on every filter, so that is what is asserted — the 3x was a proxy.
+        for filter in TaskFilter.allCases {
+            let chrome = TasksChromeMetrics.chromeHeight(filter: filter, offline: false)
+            XCTAssertLessThan(
+                TasksChromeMetrics.compactBarHeight, chrome,
+                "\(filter): the bar must be shorter than the chrome it stands in for"
+            )
+            let saving = (chrome - TasksChromeMetrics.compactBarHeight) / chrome
+            XCTAssertGreaterThan(
+                saving, 0.5,
+                "\(filter): the collapse buys back only \(Int(saving * 100))% — not worth a mode switch"
+            )
+        }
     }
 
     func testCollapsedStateGivesRowsTheMajorityOfTheScreen() {

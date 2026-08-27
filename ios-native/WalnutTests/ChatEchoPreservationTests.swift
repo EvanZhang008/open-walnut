@@ -179,7 +179,12 @@ final class ChatEchoPreservationTests: XCTestCase {
 /// were below in the Server Search section.
 final class TasksEmptyPlaceholderTests: XCTestCase {
     func testFilterWordingWithoutQuery() {
-        XCTAssertEqual(TasksView.emptyPlaceholder(filter: .sessions, query: ""), "No agent sessions.")
+        // The board's empty state says how to fill it (pin something), not just
+        // that it is empty — an empty board with no next step read as broken.
+        XCTAssertEqual(
+            TasksView.emptyPlaceholder(filter: .sessions, query: ""),
+            "Nothing pinned yet — pin a task to put it on the board."
+        )
         XCTAssertEqual(TasksView.emptyPlaceholder(filter: .allOpen, query: ""), "No open tasks.")
     }
 

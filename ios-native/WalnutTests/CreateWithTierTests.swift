@@ -320,11 +320,10 @@ final class CreateWithTierTests: XCTestCase {
         )
     }
 
-    /// Every rendered tier group must map to a seed naming THAT tier — the `+` on
-    /// the Backlog header cannot seed Focus. `FocusTier.rawValue` is the wire tier
-    /// id, which is what makes the mapping a one-liner in the view; if the enum
-    /// ever renames a case, this is what catches it.
-    func testEveryRenderedTierGroupSeedsItsOwnTier() {
+    /// Every rendered band must map to a seed naming THAT tier — the create ring
+    /// at the foot of Backlog cannot seed Focus. `BoardBand.tierId` IS the wire
+    /// tier id, which is what makes the mapping a one-liner in the view.
+    func testEveryRenderedBandSeedsItsOwnTier() {
         let tasks = ["t1", "t2", "t3", "t4"].map(makePinnedTask)
         let sessions = [
             makeSession(id: "s1", taskId: "t1", tier: "focus"),
@@ -332,32 +331,36 @@ final class CreateWithTierTests: XCTestCase {
             makeSession(id: "s3", taskId: "t3", tier: "backlog"),
             makeSession(id: "s4", taskId: "t4", tier: "wait"),
         ]
-        let pinned = TasksView.pinnedScopeSessions(tasks: tasks, sessions: sessions)
-        let groups = TasksView.pinnedTierGroups(pinned: pinned, query: "")
-        XCTAssertEqual(groups.map(\.tier), [.focus, .satellite, .backlog, .wait],
+        let bands = BoardModel.bands(
+            tasks: tasks, sessions: sessions,
+            tierOf: ["t1": "focus", "t2": "satellite", "t3": "backlog", "t4": "wait"],
+            tierOrder: ["focus": ["t1"], "satellite": ["t2"], "backlog": ["t3"], "wait": ["t4"]],
+            customTiers: []
+        )
+        XCTAssertEqual(bands.map(\.tierId), ["focus", "satellite", "backlog", "wait"],
             "all four tiers render, in the desktop reading order")
 
-        for group in groups {
-            let seed = NewTaskSeed.tier(group.tier.rawValue)
-            XCTAssertEqual(seed.pin, .tier(group.tier.rawValue))
-            // The header's `+` sends the tier it names, verbatim, and no project.
-            XCTAssertEqual(seed.pin.wireFocusTier, group.tier.rawValue)
+        for band in bands {
+            let seed = NewTaskSeed.tier(band.tierId)
+            XCTAssertEqual(seed.pin, .tier(band.tierId))
+            // The band's create ring sends the tier it names, verbatim, no project.
+            XCTAssertEqual(seed.pin.wireFocusTier, band.tierId)
             XCTAssertEqual(seed.project, "")
         }
-        // And the seeds are all distinct, so one open add row can't be attributed
-        // to the wrong header.
-        let ids = groups.map { NewTaskSeed.tier($0.tier.rawValue).id }
+        // And the seeds are all distinct, so one open create row can't be
+        // attributed to the wrong band.
+        let ids = bands.map { NewTaskSeed.tier($0.tierId).id }
         XCTAssertEqual(Set(ids).count, ids.count)
     }
 
-    /// Each built-in tier's raw value is an id the server accepts — otherwise a
-    /// header `+` would 400 on every use.
-    func testTierGroupRawValuesAreValidWireTiers() {
+    /// Each built-in tier's id is one the server accepts — otherwise a band's
+    /// create ring would 400 on every use.
+    func testBandTierIdsAreValidWireTiers() {
         let builtins = TasksStore.builtinTiers.map(\.id)
-        for tier in TasksView.FocusTier.allCases {
+        for tier in builtins {
             XCTAssertTrue(
-                TaskPinChoice.tier(tier.rawValue).isResolvable(builtinIds: builtins, customTierIds: []),
-                "\(tier.rawValue) must be a tier the create endpoint accepts"
+                TaskPinChoice.tier(tier).isResolvable(builtinIds: builtins, customTierIds: []),
+                "\(tier) must be a tier the create endpoint accepts"
             )
         }
     }

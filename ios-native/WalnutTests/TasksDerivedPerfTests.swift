@@ -3,7 +3,7 @@ import XCTest
 
 /// Perf gates for the Tasks tab's derived-collection cluster (main-thread
 /// audit MAIN-5 / OBS-3 / TMR-9 / GEO-6, 2026-08-07): every TasksView body
-/// evaluation recomputes `sections` / `scopedSessions` / `pinnedTierGroups` /
+/// evaluation recomputes `sections` / the board's `bands` /
 /// 5x `count(for:)` from scratch, and the sort comparators used to parse
 /// ISO-8601 strings through a FORMATTER on EVERY comparison (~26-59us each,
 /// O(n log n) per sort). At the audited field scale (766 tasks / 351
@@ -72,23 +72,63 @@ final class TasksDerivedPerfTests: XCTestCase {
         let store = TasksStore()
         store.tasks = makeTasks(tasks)
         store.sessions = makeSessions(sessions)
+        // The board reads the tier map + order, so a store without them renders
+        // no bands and the gate would measure nothing. Mirror what the split
+        // gives: every pinned task in a tier, each band in pin order.
+        var tierOf: [String: String] = [:]
+        var order: [String: [String]] = [:]
+        let tiers = ["focus", "satellite", "backlog", "wait"]
+        for (i, task) in store.tasks.enumerated() where task.pinned == true {
+            let tier = tiers[i % tiers.count]
+            tierOf[task.id] = tier
+            order[tier, default: []].append(task.id)
+        }
+        store.taskTiers = tierOf
+        store.taskTierOrder = order
         return store
     }
 
-    /// One full TasksView body-equivalent derived pass, via the SAME static
-    /// helpers the view calls (kept pure precisely so this test can drive them).
+    /// One full TasksView body-equivalent derived pass on a TASK LIST filter, via
+    /// the SAME static helpers the view calls (kept pure precisely so this test
+    /// can drive them).
     private func fullDerivedPass(_ store: TasksStore, query: String) -> Int {
         var sink = 0
-        // sections is referenced twice per body pass (isEmpty check + ForEach).
+        // sections is bound ONCE now, but it used to be read at every reference
+        // and this is the shape that would regress — keep measuring two.
         sink += TasksView.sections(from: store.tasks(for: .allOpen), query: query).count
         sink += TasksView.sections(from: store.tasks(for: .allOpen), query: query).count
-        // Smart-list cards: 5x count(for:).
+        // Smart-list cards: one count(for:) per filter.
         for f in TaskFilter.allCases { sink += store.count(for: f) }
-        // Sessions tab derived slices.
-        let pinned = TasksView.pinnedScopeSessions(tasks: store.tasks, sessions: store.sessions)
-        sink += pinned.count
-        sink += TasksView.pinnedTierGroups(pinned: pinned, query: query).count
         sink += store.activeSessions.count
+        return sink
+    }
+
+    /// One body-equivalent pass on THE BOARD, which is the default filter and so
+    /// the one that runs most.
+    ///
+    /// Deliberately NOT `fullDerivedPass` + bands. The board renders tier bands,
+    /// not project sections, so it does not compute `sections` at all unless a
+    /// query is typed — measured, that skip is 5.17ms of an 8ms budget. Folding
+    /// both into one number would hide which surface a regression is in.
+    private func boardDerivedPass(_ store: TasksStore, query: String) -> Int {
+        var sink = 0
+        // ONE bands() call: the view binds the result and hands the same array to
+        // the rail overlay and the sections builder.
+        let bands = BoardModel.bands(
+            tasks: store.tasks, sessions: store.sessions,
+            tierOf: store.taskTiers, tierOrder: store.taskTierOrder,
+            customTiers: store.customTiers, query: query
+        )
+        sink += bands.count
+        for f in TaskFilter.allCases { sink += store.count(for: f) }
+        // A live query also appends the matching open tasks below the bands
+        // (dogfood R17), minus the ids the bands already show.
+        if !query.isEmpty {
+            sink += TasksView.sections(
+                from: store.tasks(for: .allOpen), query: query,
+                excluding: BoardModel.rowIds(bands)
+            ).count
+        }
         return sink
     }
 
@@ -101,10 +141,15 @@ final class TasksDerivedPerfTests: XCTestCase {
     func testWarmDerivedPassDoesZeroFormatterParses() {
         let store = seededStore(tasks: 2_000, sessions: 500)
         _ = fullDerivedPass(store, query: "") // warm the cache
+        _ = boardDerivedPass(store, query: "")
 
         WalnutTask.isoFormatterParses.withLock { $0 = 0 }
         _ = fullDerivedPass(store, query: "")
         _ = fullDerivedPass(store, query: "task 17")
+        // The board sorts its unpinned-live tail by `lastActiveValue`, which is a
+        // parseISO call per row — so it belongs in this gate, not outside it.
+        _ = boardDerivedPass(store, query: "")
+        _ = boardDerivedPass(store, query: "task 17")
         let parses = WalnutTask.isoFormatterParses.withLock { $0 }
         XCTAssertEqual(parses, 0,
             "\(parses) formatter parses in a warm derived pass (n=2 passes, 2,000 tasks + 500 sessions) — the parseISO memo cache regressed; comparators are re-parsing dates per comparison again")
@@ -147,6 +192,67 @@ final class TasksDerivedPerfTests: XCTestCase {
         print(String(format: "[tasks-derived] worst of %d search keystrokes: %7.2fms", query.count, worstMs))
         XCTAssertLessThan(worstMs, 8.0,
             "a search keystroke's derived recompute exceeded 8ms (n=\(query.count) keystrokes) — typing in Tasks search saturates the main thread again")
+    }
+
+    /// The BOARD is the default filter, so its keystroke cost is the one most
+    /// users pay. It gets its own gate rather than sharing the task-list one
+    /// because the two do different work: the board skips `sections` entirely
+    /// until a query exists, and then only asks it for the ids the bands don't
+    /// already show.
+    func testBoardSearchKeystrokeBudget() {
+        let store = seededStore(tasks: 2_000, sessions: 500)
+        _ = boardDerivedPass(store, query: "")
+
+        let idle = ms { _ = boardDerivedPass(store, query: "") }
+        var worstMs = 0.0
+        let query = "task 1234"
+        for i in 1...query.count {
+            let t = ms { _ = boardDerivedPass(store, query: String(query.prefix(i))) }
+            worstMs = max(worstMs, t)
+        }
+        print(String(format: "[tasks-derived] board: idle %5.2fms | worst of %d keystrokes %7.2fms",
+                     idle, query.count, worstMs))
+        XCTAssertLessThan(idle, 5.0,
+            "an idle board body pass exceeded 5ms at 2,000 tasks + 500 sessions")
+        XCTAssertLessThan(worstMs, 8.0,
+            "a board search keystroke exceeded 8ms (n=\(query.count) keystrokes)")
+    }
+
+    // MARK: - Gate 2b: the board's search cost must not grow with rows a query discards
+
+    /// The board's unpinned-live tail sorts by activity. Filtering AFTER that
+    /// sort means sorting rows the query is about to throw away, and it measured
+    /// 3.79ms per pass at fixture scale versus 0.98ms filtering during collection
+    /// (the same "bound the candidate set" rule the path resolver encodes).
+    ///
+    /// This gate is shaped to catch that specific regression rather than to
+    /// restate the overall budget: a live query must not cost MUCH more than the
+    /// same pass with no query. If someone reorders the phases, this fails long
+    /// before the total budget does.
+    func testABoardSearchDoesNotPayToSortRowsItDiscards() {
+        let store = seededStore(tasks: 2_000, sessions: 500)
+        let board = { (query: String) in
+            _ = BoardModel.bands(
+                tasks: store.tasks, sessions: store.sessions,
+                tierOf: store.taskTiers, tierOrder: store.taskTierOrder,
+                customTiers: store.customTiers, query: query
+            )
+        }
+        board("")            // warm the date cache
+        board("task 1234")
+
+        var worstEmpty = 0.0, worstQuery = 0.0
+        for _ in 0..<5 {
+            worstEmpty = max(worstEmpty, ms { board("") })
+            worstQuery = max(worstQuery, ms { board("task 1234") })
+        }
+        print(String(format: "[board-search] no query %.2fms | live query %.2fms", worstEmpty, worstQuery))
+        XCTAssertLessThan(
+            worstQuery, worstEmpty * 1.6 + 0.5,
+            "a live query costs \(worstQuery)ms vs \(worstEmpty)ms unfiltered — the filter moved back AFTER the sort"
+        )
+        XCTAssertLessThan(worstQuery, 4.0,
+            "one board pass with a live query exceeded 4ms at 2,000 tasks + 500 sessions")
     }
 
     // MARK: - Gate 3: sort semantics preserved by the decorated sorts

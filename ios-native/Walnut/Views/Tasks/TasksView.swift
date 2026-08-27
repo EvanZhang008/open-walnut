@@ -49,6 +49,22 @@ struct TasksView: View {
     /// publish is coalesced through it — see `ChromeCollapseTracker`.
     @State private var collapseTracker = ChromeCollapseTracker()
 
+    // MARK: - Board state (the default filter's tier bands)
+    //
+    // Rows expanded INTO their session, bands hiding their done rows, and which
+    // band's create row is open. All three are sets/optionals of ids rather than
+    // per-row view state so a store refresh can't reset them.
+
+    /// Expanded row ids. A SET, not one id: force-collapsing a previously open
+    /// row is what yanks the scroll position when that row sits above the
+    /// viewport — see `BoardModel.toggleExpanded`.
+    @State private var expandedRowIds: Set<String> = []
+    /// Bands whose `hide done` is on.
+    @State private var hiddenDoneTiers: Set<String> = []
+    /// Which band's foot create row is open (exactly one — two keyboards on one
+    /// list is not a thing).
+    @State private var openCreateTier: String?
+
     private var isEditing: Bool { editMode == .active }
 
     /// ScrollViewReader id of the first scrollable row, so the compact bar can
@@ -205,10 +221,16 @@ struct TasksView: View {
     // MARK: - List
 
     /// Group already-sorted task rows by project, headers A→Z.
+    ///
+    /// `excluding` drops ids that are already rendered elsewhere on the screen.
+    /// It exists for the board: a search there shows the matching bands AND the
+    /// matching open tasks, and without this a pinned task that matched appeared
+    /// TWICE — once in its tier band, once again under its project heading. Two
+    /// rows for one task on one screen is the confusion this redesign is about.
     static func sections(
-        from rows: [WalnutTask], query: String
+        from rows: [WalnutTask], query: String, excluding: Set<String> = []
     ) -> [(project: String, tasks: [WalnutTask])] {
-        let filtered = rows.filter { taskMatches($0, query: query) }
+        let filtered = rows.filter { !excluding.contains($0.id) && taskMatches($0, query: query) }
         let grouped = Dictionary(grouping: filtered) { task in
             task.project.isEmpty ? "Inbox" : task.project
         }
@@ -218,13 +240,13 @@ struct TasksView: View {
             .sorted { $0.project.localizedCaseInsensitiveCompare($1.project) == .orderedAscending }
     }
 
-    private var sections: [(project: String, tasks: [WalnutTask])] {
+    private func sections(excluding: Set<String>) -> [(project: String, tasks: [WalnutTask])] {
         // The field promises "Search tasks & sessions", but the default
-        // (Sessions) filter slices tasks to [] — a task the user KNOWS exists
-        // showed "No local matches" until they discovered the All segment
+        // (board) filter slices tasks to the PINNED board — a task the user KNOWS
+        // exists showed "No local matches" until they discovered the All segment
         // (dogfood R17). While a query is typed, search open tasks too.
         let filter = (activeFilter == .sessions && !trimmedQuery.isEmpty) ? TaskFilter.allOpen : activeFilter
-        return Self.sections(from: tasks.tasks(for: filter), query: trimmedQuery)
+        return Self.sections(from: tasks.tasks(for: filter), query: trimmedQuery, excluding: excluding)
     }
 
     // MARK: - Calendar surface
@@ -253,7 +275,21 @@ struct TasksView: View {
             // Bind the derived sections ONCE per body pass — the old computed-
             // property form was evaluated at every reference (isEmpty check +
             // ForEach = 2 full filter+group+sort walks per pass).
-            let sections = self.sections
+            // Same rule for the board's bands: the rail overlay and the sections
+            // builder both need them, which is two full join+group walks per pass
+            // if each reads the computed property (the exact anti-pattern the
+            // derived-collection perf gate exists to catch). Only computed on the
+            // board — every other filter would pay for a list it doesn't render.
+            let bands = activeFilter == .sessions ? boardBands : []
+            // …and `sections` only when something actually renders THEM. The board
+            // groups by tier, not project, and reaches for sections only to append
+            // search hits (dogfood R17). Computing them anyway cost a full
+            // filter+group+sort over the whole projection on every keystroke —
+            // measured as the single largest item in the derived pass (5.17ms of
+            // an 8ms budget), spent on rows the board never draws.
+            let sections = (activeFilter == .sessions && trimmedQuery.isEmpty)
+                ? []
+                : self.sections(excluding: activeFilter == .sessions ? boardRowIds(bands) : [])
             List {
                 if !connection.online {
                     OfflineBanner(text: "Offline — tasks are read-only from cache")
@@ -277,28 +313,35 @@ struct TasksView: View {
                 // first task row 68% down the screen (measured, dogfood R19).
                 .listSectionSpacing(2)
 
-                // Todoist-grade quick add rides the TOP of EVERY filter (the
-                // Sessions tab included — it's the default filter, and "add a
-                // todo" must always be one tap away): type a sentence, hit
-                // return, task appears instantly (the AI parse upgrades it in
-                // place; on the Sessions filter the locate-me handler switches
-                // to All Open so the new row is visible). The expand icon
-                // opens the full form sheet seeded with the sentence.
-                Section {
-                    QuickAddRow(
-                        identifier: "tasks.quickAdd",
-                        onExpand: { text, target in
-                            newTaskSeedText = text
-                            newTaskSeed = target
-                            showNewTask = true
-                        }
-                    )
+                // Todoist-grade quick add rides the TOP of every filter EXCEPT
+                // the board: type a sentence, hit return, task appears instantly
+                // (the AI parse upgrades it in place). The expand icon opens the
+                // full form sheet seeded with the sentence.
+                //
+                // Not on the board, deliberately. Every band there ends in its
+                // own create ring, so a top row would be a SEVENTH create
+                // affordance whose destination is the one thing the band feet
+                // already decide by where you tapped. It also costs 48pt + a gap
+                // at the top of the screen whose whole job is showing rows. The
+                // toolbar `+` and the compact bar's `+` still cover a
+                // no-destination add from anywhere.
+                if activeFilter != .sessions {
+                    Section {
+                        QuickAddRow(
+                            identifier: "tasks.quickAdd",
+                            onExpand: { text, target in
+                                newTaskSeedText = text
+                                newTaskSeed = target
+                                showNewTask = true
+                            }
+                        )
+                    }
+                    .listSectionSpacing(2)
                 }
-                .listSectionSpacing(2)
 
                 // Live sessions ride the top of every task filter (except the
-                // Sessions filter, which shows the full Pinned/Active/Recent
-                // list, and Calendar, which is a full-bleed month grid).
+                // board, where every row already carries its own session, and
+                // Calendar, which is a full-bleed month grid).
                 if activeFilter != .sessions && activeFilter != .calendar {
                     activeSessionsSection
                     // Pinned tasks float above the project sections (mirrors
@@ -310,10 +353,12 @@ struct TasksView: View {
                 }
 
                 if activeFilter == .sessions {
-                    sessionSections
-                    // Searching on the Sessions filter: matching TASKS render
-                    // below the session results (the sections slice switches
-                    // to All Open while a query is live — see `sections`).
+                    boardSections(bands)
+                    // Dogfood R17, still true on the board: the field promises
+                    // "Search tasks & sessions", and the board only holds PINNED
+                    // work — so a task the user knows exists would come back "no
+                    // matches" while sitting in the Inbox. Matching open tasks
+                    // render below the bands while a query is live.
                     if !trimmedQuery.isEmpty {
                         ForEach(sections, id: \.project) { section in
                             projectSection(section)
@@ -413,6 +458,18 @@ struct TasksView: View {
             // the open row may not exist any more — a row anchored to a vanished
             // group would file into a group the user can no longer see.
             .onChange(of: activeFilter) { _, _ in openAddGroup = nil }
+            // The letter rail: an OVERLAY for the same reason the compact bar is
+            // one — anything in the layout flow that appears or resizes while
+            // scrolling changes the List's visible rect and moves rows.
+            .overlay(alignment: .trailing) {
+                if bands.count > 1 {
+                    TaskBoardRail(bands: bands) { tierId in
+                        withAnimation(.snappy(duration: 0.3)) {
+                            proxy.scrollTo(TaskBoardList.anchorId(tierId), anchor: .top)
+                        }
+                    }
+                }
+            }
             // Compact header as an OVERLAY, never a safeAreaInset: an inset that
             // appears mid-scroll changes the List's visible rect and yanks the
             // content offset (the scroll-jump class of bug). An overlay costs no
@@ -504,7 +561,18 @@ struct TasksView: View {
                 // open the user is chain-adding into THAT group — switching the
                 // filter and scrolling elsewhere would rip the keyboard away
                 // (and the row is right where they are looking already).
-                if inlineAddActive || openAddGroup != nil {
+                //
+                // `openCreateTier` is the board's version of that, and leaving it
+                // out was a real regression caught in the real UI: typing into the
+                // ring at the foot of Backlog created the task AND threw the user
+                // off the board onto All Open, so the one thing the affordance
+                // promises — the new row stays where you made it — was broken by
+                // the locate-me handler that exists to help find it.
+                guard Self.shouldRelocateToNewTask(
+                    inlineAddActive: inlineAddActive,
+                    openAddGroup: openAddGroup,
+                    openCreateTier: openCreateTier
+                ) else {
                     flashHighlight(newId)
                     return
                 }
@@ -810,6 +878,19 @@ struct TasksView: View {
         Self.emptyPlaceholder(filter: activeFilter, query: trimmedQuery)
     }
 
+    /// Should a just-created task pull the user to a filter that shows it?
+    ///
+    /// NO whenever an add row is open, because then the user is chain-adding into
+    /// a place they are already looking at, and relocating them would rip the
+    /// keyboard away from a row that is right there. Pure + static so the rule is
+    /// testable: a real regression (creating from a board band threw the user onto
+    /// All Open) came from this condition missing one of its three inputs.
+    static func shouldRelocateToNewTask(
+        inlineAddActive: Bool, openAddGroup: NewTaskSeed?, openCreateTier: String?
+    ) -> Bool {
+        !inlineAddActive && openAddGroup == nil && openCreateTier == nil
+    }
+
     /// Empty-state copy for a filter, search-aware. With a query active the
     /// filter wording ("No agent sessions.", "No open tasks.") reads as "your
     /// search found nothing" while the real hits sit BELOW in Server Search —
@@ -822,7 +903,7 @@ struct TasksView: View {
         switch filter {
         case .today: return "Nothing due today."
         case .inProgress: return "No tasks in progress."
-        case .sessions: return "No agent sessions."
+        case .sessions: return "Nothing pinned yet — pin a task to put it on the board."
         case .calendar: return "" // calendar renders its own grid, never this
         case .allOpen: return "No open tasks."
         case .done: return "No recent completions."
@@ -877,185 +958,142 @@ struct TasksView: View {
         }
     }
 
-    // MARK: - Sessions tab
+    // MARK: - The board (default filter): one scroll, tier bands, expand in place
+    //
+    // This REPLACED a parallel session list (a Pinned/Recent/All scope picker over
+    // session rows). Two reasons, both from the design this implements: a session
+    // is a task that has a session, so a second list of the same work read as
+    // clutter and made "which one do I tap" a question; and a scope picker is
+    // 44pt of chrome on the screen whose job is showing rows.
 
-    /// Sub-scope within the Sessions filter — mirrors the desktop panel's
-    /// Pinned / Recent split plus an everything view.
-    enum SessionScope: String, CaseIterable, Identifiable {
-        case pinned = "Pinned", recent = "Recent", all = "All"
-        var id: String { rawValue }
-    }
-    @State private var sessionScope: SessionScope = .pinned
-
-    /// Pinned = ONE row per CURRENTLY pinned open task (its latest session).
-    /// The session projection's own `pinned` flag is too broad — done tasks
-    /// keep their pin bit, so 160+ sessions carry pinned=true while the
-    /// desktop's Pinned list holds ~44 open tasks. Cross-reference the TASKS
-    /// projection (fresh pin + status) instead; fall back to the session flag
-    /// only when the tasks list hasn't loaded.
-    static func pinnedScopeSessions(
-        tasks: [WalnutTask], sessions: [WalnutSession]
-    ) -> [WalnutSession] {
-        let pinnedOpenTaskIds = Set(
-            tasks.filter { $0.pinned == true && $0.statusKind != .done }.map(\.id)
+    /// The bands. Bound ONCE per body pass at the call site — every reference here
+    /// would otherwise re-run the whole join+group+filter walk (the derived-
+    /// collection discipline the perf gate pins; see `TasksDerivedPerfTests`).
+    private var boardBands: [BoardBand] {
+        BoardModel.bands(
+            tasks: tasks.tasks,
+            sessions: tasks.sessions,
+            tierOf: tasks.taskTiers,
+            tierOrder: tasks.taskTierOrder,
+            customTiers: tasks.customTiers,
+            query: trimmedQuery,
+            hiddenDoneTiers: hiddenDoneTiers
         )
-        var latest: [String: WalnutSession] = [:]
-        for s in sessions {
-            let isPinnedNow = pinnedOpenTaskIds.isEmpty
-                ? s.isPinned
-                : (s.taskId.map { pinnedOpenTaskIds.contains($0) } ?? false)
-            guard isPinnedNow else { continue }
-            let key = s.taskId ?? s.id
-            if let current = latest[key], WalnutSession.recencySort(current, s) { continue }
-            latest[key] = s
-        }
-        return latest.values.sorted { a, b in
-            if a.statusKind.isAlive != b.statusKind.isAlive { return a.statusKind.isAlive }
-            return WalnutSession.recencySort(a, b)
-        }
     }
 
-    private var pinnedScopeSessions: [WalnutSession] {
-        Self.pinnedScopeSessions(tasks: tasks.tasks, sessions: tasks.sessions)
-    }
-
-    private var scopedSessions: [WalnutSession] {
-        let scoped: [WalnutSession]
-        switch sessionScope {
-        case .pinned: scoped = pinnedScopeSessions
-        // Recent caps AFTER filtering so a search can surface older sessions.
-        case .recent: scoped = Array(WalnutSession.recencySorted(tasks.sessions).filter(sessionMatchesSearch).prefix(50))
-        case .all: scoped = WalnutSession.recencySorted(tasks.sessions)
-        }
-        return sessionScope == .recent ? scoped : scoped.filter(sessionMatchesSearch)
-    }
-
-    /// The Pinned scope mirrors the desktop focus bar's built-in tiers. Each pinned
-    /// task carries a focus_tier: `focus`, `backlog`, `wait`, or (default/absent/
-    /// unrecognized — incl. custom ct_* tiers, per api-v1) satellite.
-    /// Ordered Focus → Satellite → Backlog → Wait to match the desktop reading order.
-    enum FocusTier: String, CaseIterable {
-        case focus, satellite, backlog, wait
-        var title: String {
-            switch self {
-            case .focus: return "Focus"
-            case .satellite: return "Satellite"
-            case .backlog: return "Backlog"
-            case .wait: return "Wait"
-            }
-        }
-    }
-
-    private static func tier(of session: WalnutSession) -> FocusTier {
-        switch session.focusTier {
-        case "focus": return .focus
-        case "backlog": return .backlog
-        case "wait": return .wait
-        default: return .satellite
-        }
-    }
-
-    /// Pinned sessions grouped by focus tier, in Focus → Satellite → Backlog → Wait
-    /// order, dropping empty tiers.
-    static func pinnedTierGroups(
-        pinned: [WalnutSession], query: String
-    ) -> [(tier: FocusTier, sessions: [WalnutSession])] {
-        let grouped = Dictionary(
-            grouping: pinned.filter { sessionMatches($0, query: query) }, by: tier(of:)
-        )
-        return FocusTier.allCases.compactMap { t in
-            guard let rows = grouped[t], !rows.isEmpty else { return nil }
-            return (t, rows)
-        }
-    }
-
-    private var pinnedTierGroups: [(tier: FocusTier, sessions: [WalnutSession])] {
-        Self.pinnedTierGroups(pinned: pinnedScopeSessions, query: trimmedQuery)
+    /// Ids the bands already render — see `BoardModel.rowIds`.
+    private func boardRowIds(_ bands: [BoardBand]) -> Set<String> {
+        BoardModel.rowIds(bands)
     }
 
     @ViewBuilder
-    private var sessionSections: some View {
-        Section {
-            Picker("Scope", selection: $sessionScope) {
-                ForEach(SessionScope.allCases) { scope in
-                    Text(scope.rawValue).tag(scope)
-                }
-            }
-            .pickerStyle(.segmented)
-            .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 4, trailing: 12))
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
-            .accessibilityIdentifier("sessions.scope")
-        }
-        // Chrome, like the cards and quick add above it — see the note there.
-        .listSectionSpacing(2)
-
-        // Bind ONCE per body pass (each reference used to recompute the full
-        // filter+sort walk — isEmpty check, ForEach, and the count header
-        // were three separate evaluations).
-        let scoped = self.scopedSessions
-        if tasks.sessionsNotSyncedYet && tasks.sessions.isEmpty {
+    private func boardSections(_ bands: [BoardBand]) -> some View {
+        if bands.isEmpty {
             Section {
-                Text("Sessions not synced yet.")
+                Text(trimmedQuery.isEmpty
+                    ? "Nothing pinned yet — pin a task to put it on the board."
+                    : "No matches on the board.")
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 24)
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
             }
-        } else if scoped.isEmpty {
-            Section {
-                // With a live query, matching TASKS may render right below
-                // this session list — "No local matches" would be a lie then.
-                Text(!trimmedQuery.isEmpty && !sections.isEmpty
-                    ? "No session matches — matching tasks below."
-                    : emptyText)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 24)
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-            }
-        } else if sessionScope == .pinned {
-            // Pinned mirrors the desktop focus bar: split into Focus / Satellite /
-            // Backlog / Wait sub-sections (a session's tier comes from its owning task).
-            ForEach(pinnedTierGroups, id: \.tier) { group in
-                let seed = NewTaskSeed.tier(group.tier.rawValue)
-                Section {
-                    // A tier group lists SESSIONS, but its `+` creates a TASK in
-                    // that tier — which is the right thing: a session belongs to
-                    // a task, so the task is what gets filed, and the tier is
-                    // what the header names. The new task shows up here as soon
-                    // as it has a session.
-                    groupAddRow(seed)
-                    ForEach(group.sessions) { session in sessionRow(session) }
-                } header: {
-                    groupHeader(
-                        "\(group.tier.title) · \(group.sessions.count)",
-                        seed: seed, groupName: group.tier.title
+        } else {
+            TaskBoardList(
+                bands: bands,
+                tierChoices: tasks.allTierChoices,
+                expandedIds: expandedRowIds,
+                hiddenDoneTiers: hiddenDoneTiers,
+                openCreateTier: openCreateTier,
+                newRowId: highlightedTaskId,
+                tierOf: tasks.taskTiers,
+                onToggleExpanded: { row in
+                    // No animation on the expansion: `withAnimation` around a
+                    // row growing inside a List animates the rows BELOW it
+                    // sliding, and on a long band that read as the list jumping.
+                    expandedRowIds = BoardModel.toggleExpanded(expandedRowIds, row.id)
+                },
+                onToggleHideDone: { tierId in
+                    withAnimation(.snappy(duration: 0.2)) {
+                        if hiddenDoneTiers.contains(tierId) { hiddenDoneTiers.remove(tierId) }
+                        else { hiddenDoneTiers.insert(tierId) }
+                    }
+                },
+                onToggleCreate: { tierId in
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    openCreateTier = (openCreateTier == tierId) ? nil : tierId
+                },
+                onToggleDone: { row in
+                    if let task = row.task { toggleDone(task) }
+                },
+                onPickTier: { row, token in pickTier(row, token) },
+                onOpenSession: { row in openSession(row) },
+                onOpenDetail: { row in
+                    if let task = row.task { selected = task }
+                },
+                createRow: { tierId in
+                    AnyView(
+                        QuickAddRow(
+                            seed: NewTaskSeed.tier(tierId),
+                            // The band heading already states the destination;
+                            // a chip repeating it is noise.
+                            showsDestination: false,
+                            identifier: "board.createRow.\(TaskBoardList.slug(tierId))",
+                            onExpand: { text, target in
+                                newTaskSeedText = text
+                                newTaskSeed = target
+                                openCreateTier = nil
+                                showNewTask = true
+                            },
+                            autoFocus: true,
+                            onDismiss: { openCreateTier = nil }
+                        )
                     )
                 }
-            }
-            .id(sessionScope)
-        } else {
-            // Count in the HEADER: instant feedback that the scope switch did
-            // something — the top rows of all three scopes can be identical
-            // (recent sessions are usually pinned), so a bottom footer read
-            // as "the buttons do nothing".
-            Section {
-                ForEach(scoped) { session in sessionRow(session) }
-            } header: {
-                Text(scopeHeader(count: scoped.count))
-            }
-            .id(sessionScope) // force a fresh section render per scope
+            )
         }
     }
 
-    private func scopeHeader(count: Int) -> String {
-        switch sessionScope {
-        case .pinned: return "\(count) pinned — one per task"
-        case .recent: return "Last \(count) by activity"
-        case .all: return "All \(count) sessions"
+    /// A tapped tier token. The DECISION is `BoardModel.action` (pure, tested);
+    /// this only performs it. A token that is already selected costs no request.
+    private func pickTier(_ row: BoardRow, _ token: BoardModel.TierToken) {
+        guard let task = row.task else { return }
+        let current = tasks.tierId(for: task.id)
+        switch BoardModel.action(for: token, current: current) {
+        case .noop:
+            return
+        case .setTier(let tier):
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            Task {
+                // A task that isn't pinned yet can't take a tier (the endpoint
+                // 400s), so the pin rides along — which is what the user meant
+                // by tapping a tier on an unpinned row.
+                if current == nil, let error = await tasks.setPinned(task, pinned: true) {
+                    toggleError = error
+                    return
+                }
+                if let error = await tasks.setTier(taskId: task.id, tier: tier) {
+                    toggleError = error
+                }
+            }
+        case .unpin:
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            Task {
+                if let error = await tasks.setPinned(task, pinned: false) {
+                    toggleError = error
+                }
+            }
+        }
+    }
+
+    /// The one thing on a board row that genuinely lives elsewhere: the session's
+    /// conversation page. A row with no session opens the launch page instead.
+    private func openSession(_ row: BoardRow) {
+        if let session = row.session {
+            navPath.append(session)
+        } else {
+            showNewSession = true
         }
     }
 
