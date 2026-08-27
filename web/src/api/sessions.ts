@@ -120,11 +120,34 @@ export interface SessionHistoryResult {
    *  this, never the head of the tail-sliced window. Absent on deltas and on
    *  windowed/degraded payloads where the server doesn't hold the real head. */
   initialUserText?: string;
+  /** Message count at the SOURCE (before any `?tail=` slice). Lets a payload
+   *  that carries no `cursor` (the Phase-1 streams read) still tell the UI that
+   *  older messages exist, so the "Load earlier" affordance and the pinned
+   *  initial prompt render in the FIRST paint instead of appearing above the
+   *  reader a second later and shoving the conversation down. */
+  total?: number;
 }
 
 /** Lazy history: first load fetches only the last N messages (server `?tail=`).
  *  Older messages backfill on demand ("Show earlier" past what we hold). */
 export const HISTORY_TAIL_LIMIT = 400;
+
+// ── Identical-request coalescing ─────────────────────────────────────────────
+// The same history request routinely fires more than once at the same moment:
+// SessionPanel and SessionChatHistory each mount a useSessionHistory for the
+// SAME session (two full fetches per open), and a turn's batch-completed
+// triggers both the hook's delta and session-cache's background delta (two
+// identical ?since= requests, observed as pairs in the prod log). One in-flight
+// request per exact shape serves every concurrent caller. The underlying fetch
+// aborts only when EVERY subscriber has aborted — an aborted subscriber simply
+// stops caring (callers already guard with `cancelled` flags), it must not
+// kill the request for the others.
+interface InflightHistory {
+  promise: Promise<SessionHistoryResult>;
+  subscribers: number;
+  controller: AbortController;
+}
+const inflightHistory = new Map<string, InflightHistory>();
 
 export async function fetchSessionHistory(
   sessionId: string,
@@ -155,6 +178,40 @@ export async function fetchSessionHistory(
     params.anchorTail = String(opts.anchorTail ?? 0);
   }
   if (opts?.reviseIds && opts.reviseIds.length > 0) params.revise = opts.reviseIds.join(',');
+
+  const key = `${sessionId}?${new URLSearchParams(params).toString()}`;
+  let entry = inflightHistory.get(key);
+  if (!entry) {
+    const controller = new AbortController();
+    const created: InflightHistory = {
+      controller,
+      subscribers: 0,
+      promise: fetchSessionHistoryRaw(sessionId, params, opts?.source, opts?.tail, controller.signal)
+        .finally(() => { inflightHistory.delete(key); }),
+    };
+    inflightHistory.set(key, created);
+    entry = created;
+  }
+  const live = entry;
+  live.subscribers++;
+  const onAbort = () => {
+    live.subscribers--;
+    if (live.subscribers <= 0) live.controller.abort();
+  };
+  if (opts?.signal) {
+    if (opts.signal.aborted) { onAbort(); }
+    else opts.signal.addEventListener('abort', onAbort, { once: true });
+  }
+  return live.promise;
+}
+
+async function fetchSessionHistoryRaw(
+  sessionId: string,
+  params: Record<string, string>,
+  source: 'streams' | undefined,
+  tail: number | undefined,
+  signal: AbortSignal,
+): Promise<SessionHistoryResult> {
   // Remote sessions + fork chains can take 20-30s on first load (SSH pulls 3+ MB JSONL
   // serially through a corporate proxy). Streams path is local-only and fast; full path may be
   // slow — and a WHALE session (>10MB JSONL, chunked fs.readRange server-side, 120s
@@ -163,7 +220,7 @@ export async function fetchSessionHistory(
   // get a tighter ceiling: the response is bounded, and one unbounded fetch pinning a
   // browser lane for 150s starves everything else on the shared 6-connection pool
   // (that is how STT "timed out" while the server was idle — 2026-08-11).
-  const timeoutMs = opts?.source === 'streams' ? 15_000 : (opts?.tail ? 60_000 : 150_000);
+  const timeoutMs = source === 'streams' ? 15_000 : (tail ? 60_000 : 150_000);
   const res = await apiGet<{
     messages: SessionHistoryMessage[];
     revisedMessages?: SessionHistoryMessage[];
@@ -176,8 +233,9 @@ export async function fetchSessionHistory(
     historyUnavailable?: string;
     windowed?: boolean;
     initialUserText?: string;
+    total?: number;
   }>(
-    `/api/sessions/${sessionId}/history`, params, { signal: opts?.signal, timeoutMs },
+    `/api/sessions/${sessionId}/history`, params, { signal, timeoutMs },
   );
   if (res.historyUnavailable) {
     throw new Error(`HISTORY_UNAVAILABLE:${res.historyUnavailable}`);
@@ -187,7 +245,9 @@ export async function fetchSessionHistory(
   try {
     const { recordFlight } = await import('@/stream/flight-recorder');
     recordFlight(sessionId, 'history:fetch', {
-      since: opts?.since, anchor: opts?.anchorMsgId, revise: opts?.reviseIds?.length ?? 0,
+      since: params.since !== undefined ? Number(params.since) : undefined,
+      anchor: params.anchorMsgId,
+      revise: params.revise ? params.revise.split(',').length : 0,
       delta: res.delta ?? false, got: res.messages.length,
       revised: res.revisedMessages?.length ?? 0, cursor: res.cursor,
     });
@@ -208,6 +268,7 @@ export async function fetchSessionHistory(
     staleReason: res.staleReason,
     windowed: res.windowed,
     initialUserText: res.initialUserText,
+    total: res.total,
   };
 }
 

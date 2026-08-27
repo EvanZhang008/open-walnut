@@ -8,6 +8,7 @@ import {
   getHistoryCache,
   setHistoryCache,
 } from '@/cache/session-cache';
+import { idbGetHistory } from '@/cache/history-idb';
 import { computeHistoryAnchor, collectUnsettledIds } from './history-anchor';
 import { planDeltaMerge } from './history-merge';
 import { visibleInterval } from '@/utils/page-visibility';
@@ -112,6 +113,15 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       setInitialUserText(v);
     }
   };
+  // A REFRESH must never come back with fewer rows than we already show. Every
+  // full payload REPLACES messages[], so a fixed 400-row tail silently drops
+  // rows off the HEAD once deltas have pushed the held array past 400 (held
+  // 425, refetch 400 → 25 rows vanish above the reader, scrollHeight collapses
+  // by thousands of px) and it undoes a "Load earlier" full load outright. Ask
+  // for at least what we hold; the initial load, which holds nothing, keeps the
+  // plain lazy tail.
+  const refreshTail = () => Math.max(HISTORY_TAIL_LIMIT, messagesRef.current.length);
+
   // Adopt a full (possibly tail-sliced) payload's offset bookkeeping.
   // `windowed` = bounded window read: cursor === messages.length even though
   // older messages exist, so olderHidden computes to 0 — track the flag
@@ -175,8 +185,9 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
         anchorTail: anchor.anchorTail,
         reviseIds,
         // Bounds the fall-through only: an honored delta ignores tail; a DECLINED
-        // delta (anchor lost) returns a full payload, which must not be multi-MB.
-        tail: HISTORY_TAIL_LIMIT,
+        // delta (anchor lost) returns a full payload, which must not be multi-MB
+        // — but must not be SHORTER than what we hold either (refreshTail).
+        tail: refreshTail(),
         signal: controller.signal,
       })
         .then((result) => {
@@ -197,7 +208,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
               { baseOffset: baseOffsetRef.current });
             if (plan.kind === 'rebuild') {
               log.warn('session-history', `delta merge inconsistent — rebuilding (${plan.reason}, had=${messagesRef.current.length} +delta=${result.messages.length})`, { sessionId });
-              fetchSessionHistory(sessionId, { tail: HISTORY_TAIL_LIMIT, signal: controller.signal })
+              fetchSessionHistory(sessionId, { tail: refreshTail(), signal: controller.signal })
                 .then((full) => {
                   if (cancelled) return;
                   // Stale rebuild would replace a fresher local view with the
@@ -261,10 +272,10 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       return () => { cancelled = true; controller.abort(); };
     }
 
-    // Initial load (version === 0): check cache first
-    const cached = getHistoryCache(sessionId);
-    if (cached) {
-      // Cache hit → 0ms instant display, then background Phase 2 verification.
+    // Adopt a cached entry (memory or IndexedDB) for instant display, then
+    // background-verify against the server. One body for both tiers so their
+    // semantics can't drift.
+    const adoptCachedAndVerify = (cached: NonNullable<ReturnType<typeof getHistoryCache>>) => {
       setMessages(cached.messages);
       setForkBoundaryIndex(cached.forkBoundaryIndex);
       cursorRef.current = cached.msgCount;
@@ -276,11 +287,11 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       setInitialUserText(cached.initialUserText);
       setLoading(false);
       // Offscreen column: show cache, skip the background SSH re-verify until visible.
-      if (!enabled) return () => { cancelled = true; controller.abort(); };
+      if (!enabled) { setPhase2Pending(false); return; }
       setPhase2Pending(true);
 
       const endP2 = perf.start(`session:full:${sid}`);
-      fetchSessionHistory(sessionId, { tail: HISTORY_TAIL_LIMIT, signal: controller.signal })
+      fetchSessionHistory(sessionId, { tail: refreshTail(), signal: controller.signal })
         .then((result) => {
           if (cancelled) return;
           endP2(`${result.messages.length} msgs`);
@@ -319,81 +330,120 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
         .finally(() => {
           if (!cancelled) setPhase2Pending(false);
         });
+    };
 
+    // Network load (both caches missed): Phase 1 (streams) → Phase 2 (full).
+    const startNetworkLoad = () => {
+      // Session switch without a cache entry: drop the previous session's prompt.
+      initialUserTextRef.current = undefined;
+      setInitialUserText(undefined);
+
+      // Phase 1: Fast local read (streams file, ~1ms). Tail-sliced too — the
+      // response has no cursor, so no offset bookkeeping; Phase 2 replaces it.
+      const endP1 = perf.start(`session:streams:${sid}`);
+      fetchSessionHistory(sessionId, { source: 'streams', tail: HISTORY_TAIL_LIMIT, signal: controller.signal })
+        .then((result) => {
+          if (cancelled) return;
+          endP1(`${result.messages.length} msgs`);
+          diagnoseOrdering('P1:streams', sid, result.messages);
+          if (result.messages.length > 0) {
+            setMessages(result.messages);
+          }
+          if (result.forkBoundaryIndex != null) setForkBoundaryIndex(result.forkBoundaryIndex);
+          adoptInitialUserText(result.initialUserText);
+          // Phase 1 carries no cursor, but it DOES know the source count — so
+          // seed the older-message bookkeeping from it. Otherwise the pinned
+          // initial prompt and the "Load N earlier" button first appear when
+          // Phase 2 lands a second later, and since the container is
+          // overflow-anchor:none they insert ~250px ABOVE a reader who already
+          // scrolled up, shoving the conversation down under their eyes.
+          // Phase 2 re-derives both from cursor immediately after.
+          if (result.total != null && result.total > result.messages.length) {
+            const offset = result.total - result.messages.length;
+            baseOffsetRef.current = offset;
+            setOlderHidden(offset);
+          }
+          setLoading(false); // Always clear loading — even if empty, don't block on Phase 2
+        })
+        .catch(() => {
+          endP1('error');
+        })
+        .finally(() => {
+          if (cancelled) return;
+          // Offscreen column: Phase 1 (local streams) already gave instant
+          // content; skip the expensive Phase 2 SSH fetch until visible.
+          if (!enabled) { setPhase2Pending(false); return; }
+          // Phase 2: Full fetch (source of truth, may SSH for remote sessions).
+          // Lazy: only the last HISTORY_TAIL_LIMIT messages — a whale session used
+          // to pin one of the browser's 6 connections for 35-150s here.
+          const endP2 = perf.start(`session:full:${sid}`);
+          fetchSessionHistory(sessionId, { tail: refreshTail(), signal: controller.signal })
+            .then((result) => {
+              if (!cancelled) {
+                endP2(`${result.messages.length} msgs`);
+                setError(null); // successful fetch clears a previous failure (see above)
+                diagnoseOrdering('P2:full', sid, result.messages);
+                setMessages(result.messages);
+                setForkBoundaryIndex(result.forkBoundaryIndex);
+                // Degraded payload: render it (beats a blank screen) but do NOT
+                // seed cursor/cache from it — its total is the server's stale
+                // count and would corrupt the next ?since= delta.
+                if (result.stale) {
+                  setStale(result.staleReason ?? 'live read failed');
+                  return;
+                }
+                setStale(null);
+                adoptInitialUserText(result.initialUserText);
+                const fullCursor = result.cursor ?? result.messages.length;
+                cursorRef.current = fullCursor;
+                adoptOffset(result.messages.length, fullCursor, result.windowed);
+                // Write to cache for next visit
+                setHistoryCache(sessionId, {
+                  messages: result.messages,
+                  forkBoundaryIndex: result.forkBoundaryIndex,
+                  msgCount: fullCursor,
+                  baseOffset: Math.max(0, fullCursor - result.messages.length),
+                  initialUserText: result.initialUserText ?? initialUserTextRef.current,
+                });
+              }
+            })
+            .catch((e: Error) => {
+              if (!cancelled) { endP2('error'); setError(e.message); }
+            })
+            .finally(() => {
+              if (!cancelled) { setLoading(false); setPhase2Pending(false); }
+            });
+        });
+    };
+
+    // Initial load (version === 0): memory cache → persistent tier → network.
+    const cached = getHistoryCache(sessionId);
+    if (cached) {
+      // Memory hit → 0ms instant display, then background Phase 2 verification.
+      adoptCachedAndVerify(cached);
       return () => { cancelled = true; controller.abort(); };
     }
 
-    // Cache miss → normal Phase 1 (streams) → Phase 2 (full)
+    // Memory miss → the reload-surviving tier (IndexedDB, ~1-5ms) BEFORE any
+    // network round trip: a session viewed in any earlier page-load renders
+    // instantly instead of waiting 140ms-3s for the server (remote sessions
+    // pay a daemon/SSH stat even when nothing changed). The read is orders of
+    // magnitude cheaper than the fetches it may replace, so it always runs
+    // first; a miss falls through to the normal network path.
     setLoading(true);
     setPhase2Pending(true);
-    // Session switch without a cache entry: drop the previous session's prompt.
-    initialUserTextRef.current = undefined;
-    setInitialUserText(undefined);
-
-    // Phase 1: Fast local read (streams file, ~1ms). Tail-sliced too — the
-    // response has no cursor, so no offset bookkeeping; Phase 2 replaces it.
-    const endP1 = perf.start(`session:streams:${sid}`);
-    fetchSessionHistory(sessionId, { source: 'streams', tail: HISTORY_TAIL_LIMIT, signal: controller.signal })
-      .then((result) => {
+    idbGetHistory(sessionId)
+      .then((persisted) => {
         if (cancelled) return;
-        endP1(`${result.messages.length} msgs`);
-        diagnoseOrdering('P1:streams', sid, result.messages);
-        if (result.messages.length > 0) {
-          setMessages(result.messages);
+        if (persisted && persisted.messages.length > 0) {
+          // Seed the memory tier so switches within this page-load are sync.
+          setHistoryCache(sessionId, persisted);
+          adoptCachedAndVerify(persisted);
+        } else {
+          startNetworkLoad();
         }
-        if (result.forkBoundaryIndex != null) setForkBoundaryIndex(result.forkBoundaryIndex);
-        adoptInitialUserText(result.initialUserText);
-        setLoading(false); // Always clear loading — even if empty, don't block on Phase 2
       })
-      .catch(() => {
-        endP1('error');
-      })
-      .finally(() => {
-        if (cancelled) return;
-        // Offscreen column: Phase 1 (local streams) already gave instant
-        // content; skip the expensive Phase 2 SSH fetch until visible.
-        if (!enabled) { setPhase2Pending(false); return; }
-        // Phase 2: Full fetch (source of truth, may SSH for remote sessions).
-        // Lazy: only the last HISTORY_TAIL_LIMIT messages — a whale session used
-        // to pin one of the browser's 6 connections for 35-150s here.
-        const endP2 = perf.start(`session:full:${sid}`);
-        fetchSessionHistory(sessionId, { tail: HISTORY_TAIL_LIMIT, signal: controller.signal })
-          .then((result) => {
-            if (!cancelled) {
-              endP2(`${result.messages.length} msgs`);
-              setError(null); // successful fetch clears a previous failure (see above)
-              diagnoseOrdering('P2:full', sid, result.messages);
-              setMessages(result.messages);
-              setForkBoundaryIndex(result.forkBoundaryIndex);
-              // Degraded payload: render it (beats a blank screen) but do NOT
-              // seed cursor/cache from it — its total is the server's stale
-              // count and would corrupt the next ?since= delta.
-              if (result.stale) {
-                setStale(result.staleReason ?? 'live read failed');
-                return;
-              }
-              setStale(null);
-              adoptInitialUserText(result.initialUserText);
-              const fullCursor = result.cursor ?? result.messages.length;
-              cursorRef.current = fullCursor;
-              adoptOffset(result.messages.length, fullCursor, result.windowed);
-              // Write to cache for next visit
-              setHistoryCache(sessionId, {
-                messages: result.messages,
-                forkBoundaryIndex: result.forkBoundaryIndex,
-                msgCount: fullCursor,
-                baseOffset: Math.max(0, fullCursor - result.messages.length),
-                initialUserText: result.initialUserText ?? initialUserTextRef.current,
-              });
-            }
-          })
-          .catch((e: Error) => {
-            if (!cancelled) { endP2('error'); setError(e.message); }
-          })
-          .finally(() => {
-            if (!cancelled) { setLoading(false); setPhase2Pending(false); }
-          });
-      });
+      .catch(() => { if (!cancelled) startNetworkLoad(); });
 
     return () => { cancelled = true; controller.abort(); };
   }, [sessionId, version, enabled]);
@@ -423,7 +473,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     // visibleInterval: a hidden tab must not retry full history fetches every
     // 10s for hours (stale remote sessions are exactly the expensive fetch).
     const cancel = visibleInterval(() => {
-      fetchSessionHistory(sessionId, { tail: HISTORY_TAIL_LIMIT, signal: controller.signal })
+      fetchSessionHistory(sessionId, { tail: refreshTail(), signal: controller.signal })
         .then((result) => {
           if (cancelled || result.stale) return; // still down — keep the banner, retry next tick
           // Live read recovered → adopt the fresh parse and drop the banner.

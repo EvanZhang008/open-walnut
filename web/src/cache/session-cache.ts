@@ -37,6 +37,7 @@ import { planDeltaMerge } from '@/hooks/history-merge';
 import { recordFlight, trimStreamEvent } from '@/stream/flight-recorder';
 import { tracePhase } from '@/utils/main-thread-tracer';
 import { runWhenVisible } from '@/utils/page-visibility';
+import { idbSetHistory } from './history-idb';
 import { log } from '@/utils/log';
 
 const MAX_CACHED = 20;
@@ -67,6 +68,10 @@ function historyCacheSet(sid: string, data: CachedHistory): void {
     const oldest = historyCache.keys().next().value;
     if (oldest) historyCache.delete(oldest);
   }
+  // Write-through to the reload-surviving tier (debounced, fire-and-forget):
+  // every history consumer funnels here, so IndexedDB stays as fresh as the
+  // memory cache without any consumer knowing it exists.
+  idbSetHistory(sid, data);
 }
 
 export function getHistoryCache(sid: string): CachedHistory | undefined {
