@@ -82,6 +82,10 @@ export function withGroupSentinels(ids: string[], tasks: Task[], tier: FocusTier
  * hence no rect, plus a group header floating above nothing. The one exception is the
  * sentinel currently being DRAGGED — its members are deliberately collapsed away and
  * the chip stands in for the whole cluster.
+ *
+ * Separator sentinels get the same treatment when the filter removed EVERY card:
+ * renderTierItems draws no line in a card-less tier (nothing to divide), so keeping
+ * the `sep_*` ids would leave items entries with no element and no rect.
  */
 export function pruneOrphanSentinels(
   ids: string[],
@@ -90,11 +94,16 @@ export function pruneOrphanSentinels(
 ): string[] {
   // Fast path keeps array identity stable for the common sentinel-free tier
   // (SortableContext re-registers on a new `items` identity — React #185 history).
-  if (!ids.some(isGroupSentinel)) return ids;
+  if (!ids.some((id) => isGroupSentinel(id) || isSeparatorId(id))) return ids;
+  const anyTask = ids.some((id) => taskById.has(id));
   return ids.filter((id, i) => {
+    if (isSeparatorId(id)) return anyTask;
     if (!isGroupSentinel(id)) return true;
     if (id === activeDragId) return true;
-    const next = ids[i + 1];
+    // The line ids ride the array between a chip and its member — skip them when
+    // checking that the chip still heads its run.
+    let next = ids[i + 1];
+    for (let j = i + 1; next !== undefined && isSeparatorId(next); j++) next = ids[j + 1];
     return next !== undefined && !isGroupSentinel(next)
       && taskById.get(next)?.group_id === parseGroupSentinelGid(id);
   });

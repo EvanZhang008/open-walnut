@@ -12685,6 +12685,8 @@ body.walnut-dragging {
 .tier-separator-inert .tier-separator-edit { visibility: hidden; }
 .tier-separator-label-form { flex: none; display: inline-flex; }
 .tier-separator-label-input {
+  /* The row's user-select:none would otherwise block drag-selecting the text. */
+  user-select: text;
   width: 120px;
   padding: 1px 6px;
   border: 1px solid var(--border);

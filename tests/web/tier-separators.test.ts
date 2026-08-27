@@ -612,4 +612,41 @@ describe('syncSeparatorAnchorsFromArr (post-drop truth → stored anchors)', () 
     });
     expect(snapped[0]).toMatchObject({ after: 't2', before: 't3' });
   });
+
+  it('a frame with NO cards derives nothing — the record survives an emptied tier', () => {
+    // The last card was dragged away: the final frame is just the line. Writing
+    // anchorsForSlot([]) = ('','') here would strand the line at the tail after
+    // a card is pinned back (customSlotFor returns null forever).
+    const list = [sep({ after: '', before: 't1' })];
+    const next = syncSeparatorAnchorsFromArr({
+      separators: list, tier: 'focus', finalArr: ['sep_1'], isTaskId,
+    });
+    expect(next).toBe(list);
+  });
+
+  it('a line anchored to a HIDDEN (known but filtered) card keeps its durable anchor', () => {
+    // t1 is completed-but-pinned (hidden outside search): the line renders at a
+    // fallback slot. A card move in the tier must not write that fallback back.
+    const list = [sep({ after: 't1', before: 't2' })];
+    const next = syncSeparatorAnchorsFromArr({
+      separators: list, tier: 'focus', finalArr: ['sep_1', 't3', 't2'], isTaskId,
+      isKnownTaskId: (id) => ['t1', 't2', 't3'].includes(id),
+    });
+    expect(next).toBe(list);
+    // Same frame, but t1 is GONE from the dataset (deleted/unpinned): heal it.
+    const healed = syncSeparatorAnchorsFromArr({
+      separators: list, tier: 'focus', finalArr: ['sep_1', 't3', 't2'], isTaskId,
+      isKnownTaskId: (id) => ['t2', 't3'].includes(id),
+    });
+    expect(healed[0]).toMatchObject({ after: '', before: 't3' });
+  });
+
+  it('forceId overrides the hidden-anchor guard for the line the user dragged', () => {
+    const list = [sep({ after: 't1', before: 't2' })];
+    const next = syncSeparatorAnchorsFromArr({
+      separators: list, tier: 'focus', finalArr: ['t3', 't2', 'sep_1'], isTaskId,
+      isKnownTaskId: () => true, forceId: 'sep_1',
+    });
+    expect(next[0]).toMatchObject({ after: 't2', before: '' });
+  });
 });

@@ -139,6 +139,23 @@ describe('PUT /api/ordering/separators', () => {
       .expect(400)
   })
 
+  it('stores the label TRIMMED — padding would render as an indented heading', async () => {
+    const app = createApp()
+    await request(app).put('/api/ordering/separators')
+      .send({ separators: [{ id: 'sep_t', tier: 'focus', mode: 'custom', label: '  Now\n' }] })
+      .expect(200)
+    const get = await request(app).get('/api/ordering')
+    expect(get.body.separators[0].label).toBe('Now')
+  })
+
+  it('rejects an id without the sep_ prefix — the client classifies ids by prefix', async () => {
+    // A separator id colliding with a task id would duplicate that task in the
+    // dnd items array and in the pin-order payload.
+    await request(createApp()).put('/api/ordering/separators')
+      .send({ separators: [{ id: 't123', tier: 'focus', mode: 'custom', after: 't1', before: 't2' }] })
+      .expect(400)
+  })
+
   it('keeps the project order untouched', async () => {
     const app = createApp()
     await request(app).put('/api/ordering/projects').send({ order: ['marina', 'acme'] }).expect(200)

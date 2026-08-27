@@ -34,6 +34,12 @@ describe('sentinel ids', () => {
   it('taskIdsOnly keeps real ids and their order', () => {
     expect(taskIdsOnly(['group:g1:focus', 'a', 'b', 'group:g2:focus', 'c'])).toEqual(['a', 'b', 'c']);
   });
+
+  it('taskIdsOnly strips separator sentinels too — pin order must be task ids only', () => {
+    // This is the single guard between the sentinel-bearing arrays and the
+    // server's pin_order-by-position assignment; a sep_* id would eat a slot.
+    expect(taskIdsOnly(['sep_x1', 'a', 'group:g1:focus', 'b', 'sep_x2'])).toEqual(['a', 'b']);
+  });
 });
 
 describe('withGroupSentinels', () => {
@@ -103,5 +109,20 @@ describe('pruneOrphanSentinels', () => {
     // SortableContext re-registers every item on a new `items` identity (React #185).
     const ids = ['a', 'b'];
     expect(pruneOrphanSentinels(ids, byId(tasks), null)).toBe(ids);
+  });
+
+  it('drops separator ids when EVERY card is filtered out, keeps them otherwise', () => {
+    // renderTierItems draws no line in a card-less tier (nothing to divide), so a
+    // surviving sep_* id would be an items entry with no element and no rect.
+    expect(pruneOrphanSentinels(['sep_x1', 'sep_x2'], byId(tasks), null)).toEqual([]);
+    const ids = ['sep_x1', 'a'];
+    expect(pruneOrphanSentinels(ids, byId(tasks), null)).toEqual(ids);
+  });
+
+  it('a chip separated from its member by a line still heads its run', () => {
+    // Mid-drag a line can sit between a chip and the group's first member; the
+    // chip must not vanish for that frame.
+    const ids = ['group:g1:focus', 'sep_x1', 'b', 'c'];
+    expect(pruneOrphanSentinels(ids, byId(tasks), null)).toEqual(ids);
   });
 });

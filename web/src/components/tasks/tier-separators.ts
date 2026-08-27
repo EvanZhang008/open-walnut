@@ -376,6 +376,18 @@ export function withSeparatorSentinels(opts: {
  * line DOWN really is above the line now. Deriving anchors from the final array
  * keeps the stored record and the last visible frame identical, so nothing jumps
  * after the drop lands. Returns the SAME array when nothing changed.
+ *
+ * Two guards keep "the frame is the truth" from destroying durable anchors the
+ * frame never showed (both were shipped bugs, 2026-08-26 review):
+ *  • A frame with NO cards derives nothing — anchorsForSlot([]) is ('',''),
+ *    which would strand the line at the tail forever. Keep the record; pin a
+ *    card back and the line returns where the user left it.
+ *  • A line anchored to a card that EXISTS but is hidden from this frame
+ *    (completed pin, collapsed group) is rendering at a FALLBACK slot, not
+ *    where the user put it — rewriting from that fallback silently moves the
+ *    line for when the card comes back. `isKnownTaskId` tells hidden apart
+ *    from gone (gone anchors SHOULD be healed). `forceId` overrides for the
+ *    one line the user explicitly dragged: that gesture is always the truth.
  */
 export function syncSeparatorAnchorsFromArr(opts: {
   separators: TierSeparator[];
@@ -383,8 +395,12 @@ export function syncSeparatorAnchorsFromArr(opts: {
   finalArr: string[];
   isTaskId: (id: string) => boolean;
   groupOf?: (id: string) => string | null;
+  /** True for any REAL task id in the whole dataset, visible or not. */
+  isKnownTaskId?: (id: string) => boolean;
+  /** This line's anchors are rewritten even when hidden-anchored (it was dragged). */
+  forceId?: string;
 }): TierSeparator[] {
-  const { separators, tier, finalArr, isTaskId, groupOf = () => null } = opts;
+  const { separators, tier, finalArr, isTaskId, groupOf = () => null, isKnownTaskId, forceId } = opts;
   // Position of each line = how many real cards precede it.
   const slotOf = new Map<string, number>();
   let count = 0;
@@ -393,11 +409,15 @@ export function syncSeparatorAnchorsFromArr(opts: {
     else if (isTaskId(id)) count++;
   }
   const taskIds = finalArr.filter(isTaskId);
+  if (taskIds.length === 0) return separators; // nothing to divide, nothing to derive
+  const hiddenAnchor = (anchor: string | undefined) =>
+    !!anchor && !!isKnownTaskId?.(anchor) && !taskIds.includes(anchor);
   let changed = false;
   const out = separators.map((sep) => {
     if (sep.tier !== tier || sep.mode !== 'custom') return sep;
     let slot = slotOf.get(sep.id);
     if (slot === undefined) return sep; // not rendered here (filtered) — keep as-is
+    if (sep.id !== forceId && (hiddenAnchor(sep.after) || hiddenAnchor(sep.before))) return sep;
     // Rule 4: a group is one unit — a drop between two members snaps below the run.
     slot = snapSlotOutOfGroup(taskIds, slot, groupOf);
     const { after, before } = anchorsForSlot(taskIds, slot);

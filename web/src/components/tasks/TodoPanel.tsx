@@ -3228,6 +3228,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         separators: next, tier, finalArr: arr,
         isTaskId: (id) => pinnedTaskMap.has(id),
         groupOf: (id) => pinnedTaskMap.get(id)?.group_id ?? null,
+        // Hidden ≠ gone: a line anchored to a card that exists but isn't in this
+        // frame (completed pin, collapsed group) renders at a fallback slot — a
+        // card move must not write that fallback over the durable anchor.
+        isKnownTaskId: (id) => tasksRef.current.some((t) => t.id === id),
       });
     }
     if (next !== separators) persistSeparators(next);
@@ -3568,8 +3572,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const currentTier: FocusTier | undefined = findTierOf(activeId);
       if (!currentTier || currentTier === targetTier) return;
       const addAt = (arr: string[], ovId: string) => {
-        const idx = arr.indexOf(ovId);
+        let idx = arr.indexOf(ovId);
         if (idx === -1) return [...arr, activeId];
+        // Landing on a group's first member: insert ABOVE its chip sentinel, not
+        // between chip and member — pruneOrphanSentinels wants the chip heading
+        // its run, and lines draw above chips anyway (withSeparatorSentinels).
+        if (idx > 0 && isGroupSentinel(arr[idx - 1])) idx--;
         const copy = [...arr];
         copy.splice(idx, 0, activeId);
         return copy;
@@ -3753,12 +3761,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         }
       }
       // Retier first (a cross-tier landing changes the record's tier), THEN derive
-      // anchors from the final array — one persist for both.
+      // anchors from the final array — one persist for both. forceId: the user
+      // dragged THIS line, so its gesture always wins over a hidden stored anchor;
+      // the tier's other lines still get the hidden-anchor protection.
       const next = syncSeparatorAnchorsFromArr({
         separators: tier === sep.tier ? separators : upsertSeparator(separators, { ...sep, tier }),
         tier, finalArr: arr,
         isTaskId: (id) => pinnedTaskMap.has(id),
         groupOf: (id) => pinnedTaskMap.get(id)?.group_id ?? null,
+        isKnownTaskId: (id) => tasksRef.current.some((t) => t.id === id),
+        forceId: sep.id,
       });
       if (next !== separators) persistSeparators(next);
       return;

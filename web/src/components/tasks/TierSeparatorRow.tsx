@@ -97,7 +97,11 @@ function DeleteButton({ id, onDelete }: { id: string; onDelete: (id: string) => 
       // button must not arm a move (same trap the project label's "+" hit).
       draggable={false}
       onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
-      onPointerDown={(e) => e.stopPropagation()}
+      // preventDefault keeps focus where it is (click still fires): with the
+      // heading input open, a focus shift here would commit the rename on blur
+      // and race its whole-list PUT against the delete's — losing race order
+      // resurrects the just-deleted line.
+      onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
       onClick={(e) => { e.stopPropagation(); onDelete(id); }}
       title="Remove"
       aria-label="Remove separator"

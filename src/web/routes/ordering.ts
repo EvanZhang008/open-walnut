@@ -32,11 +32,17 @@ function parseSeparator(raw: unknown): Separator | null {
   if (r.before !== undefined && typeof r.before !== 'string') return null
   if (r.afterProject !== undefined && typeof r.afterProject !== 'string') return null
   if (r.beforeProject !== undefined && typeof r.beforeProject !== 'string') return null
+  // The client classifies ids by prefix (isSeparatorId) and splices them into
+  // dnd items / render arrays — an id colliding with a task id would duplicate
+  // that task in both. The UI can only mint sep_* ids (newSeparatorId); reject
+  // anything else at the trust boundary.
+  if (!r.id.startsWith('sep_')) return null
   if (r.label !== undefined && typeof r.label !== 'string') return null
   // A named line is a section heading; empty text degrades to a plain line
-  // rather than persisting a heading that renders as nothing.
+  // rather than persisting a heading that renders as nothing. Stored TRIMMED —
+  // the emptiness gate reads the trimmed value, so the stored one must match.
   const label = typeof r.label === 'string' && r.label.trim() !== ''
-    ? { label: r.label.slice(0, 200) }
+    ? { label: r.label.trim().slice(0, 200) }
     : {}
   // Each mode keeps only the anchors it can act on, so one line can never carry
   // two conflicting positions. 'project' anchors on FOLDERS (a folder is one unit
