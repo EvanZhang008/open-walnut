@@ -64,13 +64,30 @@ targets:
         # phone auto-locks mid-dictation (field data-loss incident 2026-08-09).
         UIBackgroundModes:
           - audio
+          # Human Inbox letter pushes carry `content-available`, so the app is
+          # woken on delivery to refresh the inbox list and tab badge even when
+          # the banner is never tapped. Without this the badge only catches up
+          # on the next manual open.
+          - remote-notification
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.openwalnut.ios
+        # Points at the hand-written, committed entitlements file. NOT xcodegen's
+        # `entitlements:` key — that GENERATES the plist from inline properties
+        # and would overwrite the file (losing the comments that explain the APNs
+        # environment split).
+        CODE_SIGN_ENTITLEMENTS: Walnut/Support/Walnut.entitlements
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_PREVIEWS: "YES"
+        # Which APNs gateway this build's device token belongs to. A Debug build
+        # gets a sandbox token, a Release (TestFlight/App Store) build a
+        # production one; crossing them fails like a bad token.
+        APS_ENVIRONMENT: development
+      configs:
+        Release:
+          APS_ENVIRONMENT: production
   # Hosted unit tests (@testable import Walnut). Covers LiveMarkdownWindow
   # invariants, MessageRow pure helpers, clipProvisional, and the long-session
   # markdown rendering perf gates (see WalnutTests/MarkdownPerfTests.swift).

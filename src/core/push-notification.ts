@@ -211,23 +211,13 @@ export function initPushNotifications(): void {
           break
         }
 
-        case EventNames.HUMAN_INBOX_LETTER: {
-          const data = eventData<typeof EventNames.HUMAN_INBOX_LETTER>(event)
-          // Envelope only: `textPreview` is the letter's short plain-text preview
-          // (<= 300 chars, capped at write time), never the document body — the
-          // body stays behind GET /api/v1/human-inbox/:id.
-          const prefix = data.kind === 'reply' ? 'Reply: ' : 'New letter: '
-          // Subjects are capped at 200 in the store; a lock-screen title has room
-          // for far less, so trim it here rather than letting the OS elide it.
-          const title = `${prefix}${data.subject}`.slice(0, 100)
-          await maybePush(title, data.textPreview || 'Open Walnut to read it', {
-            type: 'human_inbox_letter',
-            letterId: data.letterId,
-            letterType: data.type,
-            kind: data.kind,
-          })
-          break
-        }
+        // HUMAN_INBOX_LETTER is deliberately NOT handled here. Letters are
+        // addressed TO the human, so `maybePush`'s "any browser WS is open"
+        // gate was wrong for them: a Mac console tab left open suppressed every
+        // letter push, which is why letters never reached the phone. They now go
+        // through core/push/letter-push.ts, which decides per DEVICE from that
+        // device's own foreground state and the user's chosen mode. Adding a
+        // case back here would double every letter banner.
 
         case EventNames.CHAT_HISTORY_UPDATED: {
           const data = eventData<typeof EventNames.CHAT_HISTORY_UPDATED>(event)

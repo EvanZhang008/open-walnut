@@ -50,6 +50,16 @@ struct InboxView: View {
         .onChange(of: deepLink.pending) { _, request in
             if request != nil { openDeepLinkedLetter() }
         }
+        // Ask for notification permission HERE, not at first launch. iOS asks
+        // once per install and a denial is recoverable only through Settings, so
+        // the prompt has to land where the user can see what it is for — the
+        // Inbox, with the letters a notification would announce on screen. Gated
+        // on activation because a prewarm launch must not prompt.
+        .task {
+            LaunchGate.shared.whenActive {
+                await PushRegistration.shared.requestPermissionAndRegister()
+            }
+        }
     }
 
     @ViewBuilder

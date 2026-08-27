@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Push notifications for Human Inbox letters.
+
+  `aps-environment` selects which APNs gateway the device token is minted
+  against. It is set to `development` here and overridden to `production` for
+  Release builds via APS_ENVIRONMENT in project.yml, because a token minted in
+  one environment is rejected by the other's gateway in a way that looks exactly
+  like a malformed token. The app reports which environment it registered in
+  (PushRegistration.environment) so the server never has to guess.
+
+  This entitlement only takes effect once the App ID has the Push Notifications
+  capability enabled in the Apple Developer portal — automatic signing then mints
+  a profile that carries it. Until then a device build fails to provision, and
+  simulator builds (which are not signed) are unaffected either way.
+  Setup: docs/reference/ios-push-notifications.md
+-->
+<plist version="1.0">
+<dict>
+	<key>aps-environment</key>
+	<string>$(APS_ENVIRONMENT)</string>
+</dict>
+</plist>

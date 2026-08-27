@@ -12,8 +12,10 @@
  *   - the letter store is canonical for read state; the envelope mirrors it.
  *   - letters have no lifecycle stamp: the recovery / expiry sweeps ignore them,
  *     and an error storm cannot evict a letter envelope out of the bounded feed.
- *   - the phone push carries subject + preview + letterId, and stays gated on
- *     "no WS clients connected".
+ *   - the legacy Expo sender does NOT push letters any more. Letter pushes moved
+ *     to core/push/letter-push.ts (tests/core/letter-push.test.ts) because this
+ *     path suppresses whenever any browser WS is open, which silently swallowed
+ *     every letter push while a Mac console tab was open.
  *
  * WALNUT_HOME is redirected to an isolated tmpdir, the WS layer and config are
  * stubbed, and the Expo HTTP call is stubbed at `fetch` — nothing leaves the box.
@@ -335,29 +337,20 @@ describe('condition-system fit', () => {
     expect(feed.some(n => n.dedupKey === 'storm:209')).toBe(true);
   });
 });
-
-describe('push on a new letter', () => {
-  interface SentPush { title: string; body: string; data?: Record<string, unknown> }
-  let sent: SentPush[] = [];
-  let fetchMock: ReturnType<typeof vi.fn>;
-
-  /** Emit and let the fire-and-forget push handler settle. */
-  async function emitAndSettle(data: HumanInboxLetterEvent, expectSend = true): Promise<void> {
-    const before = fetchMock.mock.calls.length;
-    emit(data);
-    const deadline = Date.now() + 4_000;
-    while (expectSend && fetchMock.mock.calls.length === before && Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 5));
-    }
-    let seen = -1;
-    while (seen !== fetchMock.mock.calls.length && Date.now() < deadline) {
-      seen = fetchMock.mock.calls.length;
-      await new Promise(r => setTimeout(r, 15));
-    }
-  }
-
-  beforeEach(() => {
-    sent = [];
+describe('the legacy Expo sender no longer handles letters', () => {
+  /**
+   * Letters moved to core/push/letter-push.ts (covered by
+   * tests/core/letter-push.test.ts). They had to: `maybePush` suppresses
+   * whenever ANY browser WebSocket is open, so a Mac console tab left open
+   * silently swallowed every letter push and letters never reached the phone.
+   *
+   * This asserts the OLD sender stays out of it. If a HUMAN_INBOX_LETTER case is
+   * ever added back here, every letter produces TWO banners — and the one from
+   * this path is still wrongly gated on the browser.
+   */
+  it('emits no push for a letter event, whatever the WS client count', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ data: [] }) }));
+    vi.stubGlobal('fetch', fetchMock);
     clientCount.mockReturnValue(0);
     getConfig.mockResolvedValue({
       push_tokens: [{
@@ -367,54 +360,21 @@ describe('push on a new letter', () => {
         registered_at: new Date().toISOString(),
       }],
     });
-    fetchMock = vi.fn(async (_url: string, init?: { body?: string }) => {
-      const messages = JSON.parse(init?.body ?? '[]') as SentPush[];
-      sent.push(...messages);
-      return { ok: true, json: async () => ({ data: messages.map(() => ({ status: 'ok' as const })) }) };
-    });
-    vi.stubGlobal('fetch', fetchMock);
-    // Push only — the envelope bridge is not installed here, so these assertions
-    // are about the push payload and nothing else.
     initPushNotifications();
-  });
 
-  afterEach(() => { vi.unstubAllGlobals(); });
+    bus.emit(EventNames.HUMAN_INBOX_LETTER, {
+      letterId: 'lt-m9x2k1-a4f7',
+      subject: 'Sync freeze root cause found',
+      type: 'review',
+      textPreview: 'The 22h stall was an orphaned rebase lock.',
+      senderSessionId: SENDER.sessionId,
+      host: SENDER.host,
+      kind: 'new',
+    } as HumanInboxLetterEvent, ['*'], { source: 'test' });
 
-  it('pushes the subject as title and the preview as body, with the letterId', async () => {
-    const data = letterEvent();
-    await emitAndSettle(data);
-
-    expect(sent).toHaveLength(1);
-    expect(sent[0].title).toBe(`New letter: ${data.subject}`);
-    expect(sent[0].body).toBe(data.textPreview);
-    expect(sent[0].data).toMatchObject({
-      type: 'human_inbox_letter', letterId: data.letterId, letterType: 'review', kind: 'new',
-    });
-  });
-
-  it('an agent reply pushes under a Reply prefix', async () => {
-    const data = letterEvent({ kind: 'reply', textPreview: 'Same bug, yes.' });
-    await emitAndSettle(data);
-
-    expect(sent).toHaveLength(1);
-    expect(sent[0].title).toBe(`Reply: ${data.subject}`);
-    expect(sent[0].body).toBe('Same bug, yes.');
-    expect(sent[0].data).toMatchObject({ kind: 'reply', letterId: data.letterId });
-  });
-
-  it('trims a very long subject rather than letting the OS elide it', async () => {
-    await emitAndSettle(letterEvent({ subject: 'S'.repeat(300) }));
-    expect(sent[0].title).toHaveLength(100);
-  });
-
-  it('a letter with an empty preview still pushes something readable', async () => {
-    await emitAndSettle(letterEvent({ textPreview: '' }));
-    expect(sent[0].body).toBe('Open Walnut to read it');
-  });
-
-  it('does not push while a WS client is connected (user is looking)', async () => {
-    clientCount.mockReturnValue(1);
-    await emitAndSettle(letterEvent(), false);
+    // Give the fire-and-forget handler room to have done the wrong thing.
+    await new Promise(r => setTimeout(r, 150));
     expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 });

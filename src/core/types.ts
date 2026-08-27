@@ -1192,6 +1192,23 @@ export interface Config {
   api_keys?: ApiKeyEntry[];
   /** Registered push notification tokens for mobile clients */
   push_tokens?: PushTokenEntry[];
+  /** Push delivery settings. The APNs private KEY is never stored here — only a
+   *  path to it, because config can be copied between machines and a signing key
+   *  that can push to every paired device should not travel by accident. */
+  push?: {
+    apns?: {
+      /** APNs auth key id (NOT the App Store Connect API key id). */
+      key_id?: string;
+      /** Apple developer team id. */
+      team_id?: string;
+      /** Absolute path to the AuthKey_<id>.p8 file. */
+      key_path?: string;
+      /** Defaults to the app's bundle id. */
+      topic?: string;
+      /** `production` (default, TestFlight/App Store) or `sandbox` (Xcode debug builds). */
+      environment?: 'production' | 'sandbox';
+    };
+  };
   /** Daemon → cloud bridge. Default: derived from the data repo's `cloud`
    *  git remote (zero-config when cloud sync is set up). Set enabled:false
    *  to opt out; url overrides the derived wss endpoint. */
@@ -1218,14 +1235,42 @@ export interface ApiKeyEntry {
 }
 
 export interface PushTokenEntry {
-  /** Expo push token (e.g. ExponentPushToken[...]) */
+  /** APNs device token (raw hex) or a legacy `ExponentPushToken[...]`. */
   token: string;
   /** Platform: ios or android */
   platform: 'ios' | 'android';
-  /** Name of the API key this token is bound to */
+  /**
+   * Which push service this token belongs to. Inferred from the token's shape
+   * when absent (see core/push/send.ts `tokenKind`) — sending an APNs token to
+   * Expo, or the reverse, is a silent total loss, so the kind is never guessed
+   * at send time twice.
+   */
+  kind?: 'apns' | 'expo';
+  /**
+   * APNs environment this token was minted in. A sandbox (development-build)
+   * token rejected by the production gateway looks exactly like a bad token, so
+   * the app reports which one it registered against.
+   */
+  environment?: 'production' | 'sandbox';
+  /** Name of the API key / device this token is bound to */
   key_name: string;
   /** Registration timestamp */
   registered_at: string;
+  /**
+   * Per-device notification mode. `always` (default) pushes every letter;
+   * `when-inactive` stays quiet while this device reports itself foregrounded.
+   */
+  mode?: 'always' | 'when-inactive';
+  /**
+   * Epoch ms of this device's last "I am in the foreground" report. Treated as a
+   * short LEASE, not a latch — see core/push/letter-push-policy.ts.
+   */
+  active_at?: number;
+  /**
+   * Letter types this device accepts. Absent = all. A visible user choice, so a
+   * chatty `info` letter can be muted without the server guessing.
+   */
+  letter_types?: string[];
 }
 
 export interface AgentMessage {

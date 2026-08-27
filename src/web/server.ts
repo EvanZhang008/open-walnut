@@ -135,6 +135,7 @@ import { redactSensitiveText } from '../logging/redact.js'
 import { stripEntityRefs, extractFirstRefs } from '../utils/entity-refs.js'
 import { registerAuthRpc } from './routes/auth-rpc.js'
 import { initPushNotifications } from '../core/push-notification.js'
+import { initLetterPush } from '../core/push/letter-push.js'
 import { enqueueMainAgentTurn, getQueueStatus, recordLastTurnTokens, getLastTurnTokens } from './agent-turn-queue.js'
 import { effectiveTotalTokens, ESTIMATE_CORRECTION } from '../core/token-truth.js'
 import { triggerBackgroundCompaction } from './background-compaction.js'
@@ -525,6 +526,8 @@ let controlQueueFlushHandle: { stop: () => void } | null = null
 /** Cloud box only: 60s drain of cache/send-queue/ (see core/send-queue.ts). */
 let sendQueueFlushHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
+/** Primary box only: re-resumes sessions whose host/daemon died under them. */
+let autoRecoverHandle: { stop: () => void } | null = null
 let claudeSettingsWatcherStop: (() => void) | null = null
 /** Unhooks the host-connected → publishRecovery listener (daemon-connection's
  *  listener set is module-global, so an in-process restart must not stack them). */
@@ -628,7 +631,19 @@ function installExitDiagnostics(): void {
   process.on('SIGTERM', () => fatalSignal('SIGTERM', 'SIGTERM (killed by another process)'))
   process.on('SIGHUP', () => fatalSignal('SIGHUP', 'SIGHUP (terminal closed or parent died)'))
   process.on('uncaughtException', (err) => { exitLog('uncaughtException', err); process.exit(1) })
-  process.on('unhandledRejection', (reason) => { exitLog('unhandledRejection', reason) })
+  process.on('unhandledRejection', (reason) => {
+    // Fatal ONLY during boot: a rejection there means startServer itself broke
+    // (e.g. listen EADDRINUSE escaping the async main) and the deploy smoke
+    // test needs the exit-1. Once serving, any stray floating promise — a
+    // missed .catch() in a timer, a daemon probe — must NOT take down prod
+    // (one un-awaited rejection killing :3456 is an outage, not a diagnostic).
+    if (!bootCompleted) {
+      exitLog('unhandledRejection', reason)
+      process.exit(1)
+    }
+    const detail = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)
+    log.web.error('unhandledRejection (post-boot, non-fatal)', { detail })
+  })
   process.on('beforeExit', (code) => { exitLog(`beforeExit code=${code}`) })
   process.on('exit', (code) => {
     // Sync-only: last chance to log (no async allowed)
@@ -636,6 +651,11 @@ function installExitDiagnostics(): void {
     try { fs.appendFileSync('/tmp/open-walnut-exit.log', msg + '\n') } catch { /* ignore */ }
   })
 }
+
+// False while startServer() is booting (rejections are fatal), true once the
+// server is fully initialized (rejections log instead). Reset on each boot so
+// repeated startServer() calls in one process (tests) get boot-fatality again.
+let bootCompleted = false
 
 // Captured when the instance lock is acquired, so the fatal-signal path can
 // release it synchronously — a signal handler must not await a dynamic import.
@@ -767,6 +787,7 @@ async function resolveCredentialHealth(): Promise<{
  */
 export async function startServer(options: ServerOptions = {}): Promise<HttpServer> {
   if (httpServer) throw new Error('Server already running. Call stopServer() first.')
+  bootCompleted = false // boot in progress → unhandled rejections are fatal again
 
   // FIRST, before any await: install exit diagnostics + always-fatal SIGTERM/
   // SIGHUP handlers. A `kill -15` during the multi-second boot below must kill
@@ -1673,6 +1694,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // -- Push notification service --
   initPushNotifications()
+  // Human Inbox letters push on their own path, NOT through the sender above:
+  // that one suppresses whenever any browser WebSocket is open, which meant a
+  // Mac console tab silently swallowed every letter push. Letters are addressed
+  // to the human, so the decision is per DEVICE (its own foreground state + the
+  // user's chosen mode). Primary only — letters live here, and a replica relays
+  // every human-inbox route to this box.
+  if (!CLOUD_MODE) initLetterPush()
 
   // -- Forensic observability: register the incident sink so invariant violations
   //    at turn-completion become durable incidents (+ bundle + notification). The
@@ -1752,12 +1780,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Cloud mode: no daemon to reconcile against — sessions.json is read-only
   // synced state from the Mac; touching it here would mark live Mac sessions dead.
   let reconnectable: import('../core/types.js').SessionRecord[] = []
+  // Sessions whose process did NOT survive — handed to auto-recover once its
+  // watcher is up (it starts later in boot, so the list has to wait here).
+  let reconciledDead: import('../core/types.js').SessionRecord[] = []
   if (CLOUD_MODE) {
     log.session.info('cloud mode: skipping session reconciliation')
   } else try {
     const { reconcileSessions } = await import('../core/session-reconciler.js')
     const result = await reconcileSessions()
     reconnectable = result.reconnectable
+    reconciledDead = result.dead
     startupPhase(`session reconcile done (${reconnectable.length} reconnectable)`)
   } catch (err) {
     log.session.warn('session reconciliation failed on startup', {
@@ -2201,6 +2233,33 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       } else {
         const { startSessionAutoContinue } = await import('../core/session-auto-continue.js')
         autoContinueHandle = startSessionAutoContinue()
+      }
+
+      // Auto-recover: bring back sessions whose EXECUTION HOST or daemon died
+      // under them (weekly patch reboot, tunnel death, daemon upgrade). The
+      // daemon's own turn-retry cannot cover this — it dies with the host — so
+      // the Mac owns it. Primary box only, same reason as auto-continue.
+      // hooks.overrides['session-auto-recover'].enabled=false wins over the env.
+      const autoRecoverOverride = (await getAcConfig()).hooks?.overrides?.['session-auto-recover']?.enabled
+      if (autoRecoverOverride === false) {
+        log.web.info('session auto-recover disabled via hooks.overrides')
+      } else {
+        const { startSessionAutoRecover, scheduleSessionAutoRecover } =
+          await import('../core/session-auto-recover.js')
+        autoRecoverHandle = startSessionAutoRecover()
+        // Catch-up pass: sessions the startup reconciler found dead. Their cause
+        // is 'server_restart' (infra), so a Walnut restart that outlived a CLI no
+        // longer needs a human to retype the last request. Each candidate still
+        // has to clear every guard (task IN_PROGRESS, budget, per-host stagger).
+        let armed = 0
+        for (const rec of reconciledDead) {
+          if (scheduleSessionAutoRecover(rec, 'server_restart')) armed++
+        }
+        if (reconciledDead.length > 0) {
+          log.web.info('auto-recover startup catch-up', {
+            candidates: reconciledDead.length, armed,
+          })
+        }
       }
     } else {
       // Cloud box: two-way task sync. Writer half (Phase 4) — every local task
@@ -2920,6 +2979,28 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           sessionStreamBuffer.appendPermission(sessionId, requestId, toolName, input, reason, acpOptions)
         }
         sendStreamEvent(sessionId, event.name, event.data)
+        // Agent blocked on a human decision → the task goes red NOW
+        // (session:awaiting-human → AGENT_COMPLETE), not when the turn ends.
+        // 2026-08-18 user call: permission / AskUserQuestion / plan approval
+        // all mean "agent 完事要等" — same handed-back semantics as a result.
+        // Auto-approved prompts never reach this branch (bypass auto-allow and
+        // ACP full-access answer before the bus emit). The 60s re-emit lands
+        // here again but applySessionPhase no-ops on AGENT_COMPLETE.
+        void (async () => {
+          try {
+            let phaseTaskId = taskId
+            if (!phaseTaskId) {
+              const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+              phaseTaskId = (await getSessionByClaudeId(sessionId))?.taskId ?? undefined
+            }
+            if (phaseTaskId) {
+              const { applySessionPhase } = await import('../core/phase.js')
+              await applySessionPhase(phaseTaskId, 'session:awaiting-human', 'server.ts:permission-request', { sessionId })
+            }
+          } catch (err) {
+            log.web.warn('awaiting-human phase flip failed', { sessionId, error: err instanceof Error ? err.message : String(err) })
+          }
+        })()
         // Persist to the durable notification feed (survives refresh). Fire-and-forget;
         // de-duped by requestId so the 60s permission re-ask never doubles the feed.
         // The in-memory set short-circuits a re-emit BEFORE the two lookups + the
@@ -3005,6 +3086,25 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           if (outcome) {
             void resolvePermissionNotification(requestId, outcome)
               .catch(err => log.web.warn('failed to resolve permission notification', { sessionId, error: err instanceof Error ? err.message : String(err) }))
+          }
+          // Human answered (allow/deny/AskUserQuestion) → the agent resumes; pull
+          // the red row back to IN_PROGRESS. NOT for 'expired': the session died
+          // with the prompt open — nobody decided, nothing resumes, and the
+          // handed-back AGENT_COMPLETE is exactly right.
+          if (outcome === 'allowed' || outcome === 'denied') {
+            void (async () => {
+              try {
+                const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+                const phaseTaskId = (event.data as { taskId?: string }).taskId
+                  || (await getSessionByClaudeId(sessionId))?.taskId || undefined
+                if (phaseTaskId) {
+                  const { applySessionPhase } = await import('../core/phase.js')
+                  await applySessionPhase(phaseTaskId, 'session:human-answered', 'server.ts:permission-resolved', { sessionId })
+                }
+              } catch (err) {
+                log.web.warn('human-answered phase pullback failed', { sessionId, error: err instanceof Error ? err.message : String(err) })
+              }
+            })()
           }
         }
         sendStreamEvent(sessionId, event.name, event.data)
@@ -3990,6 +4090,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // happens in-conversation via skill_manage triggers.
 
   startupPhase('ALL DONE — server fully initialized')
+  bootCompleted = true // steady state → stray rejections log, never kill prod
   return httpServer!
 }
 
@@ -4445,6 +4546,12 @@ function startPluginSyncPolling(): void {
       syncing = true
       const syncT0 = Date.now()
       let changeCount = 0 // captured by ctx closures — accumulates across delta pull + reconciler.tick
+      // Per-change events for web-ui. The old contract sent ONE bulk `{task:null}`
+      // signal per tick, which every open tab answers with a full task-list
+      // refetch (5.5MB at ~6k tasks) — measured as a main contributor to the
+      // periodic UI freezes. Typical ticks change 1-3 tasks, so deliver those
+      // individually (frontend merges in place); bulk stays as the big-sync path.
+      const tickEvents: Array<{ name: string; data: unknown }> = []
       try {
         const {
           listTasks,
@@ -4518,6 +4625,7 @@ function startPluginSyncPolling(): void {
           for (const updatedTask of changed) {
             bus.emit(EventNames.TASK_UPDATED, { task: updatedTask }, [], { source: `${plugin.id}-sync` })
             changeCount++
+            tickEvents.push({ name: EventNames.TASK_UPDATED, data: { task: updatedTask } })
           }
         }
 
@@ -4608,6 +4716,7 @@ function startPluginSyncPolling(): void {
               if (changed) {
                 bus.emit(EventNames.TASK_UPDATED, { task: updatedTask }, [], { source: `${plugin.id}-sync` })
                 changeCount++
+                tickEvents.push({ name: EventNames.TASK_UPDATED, data: { task: updatedTask } })
               }
             }
             // Return updated task (or fetch fresh if not in local list)
@@ -4617,12 +4726,15 @@ function startPluginSyncPolling(): void {
             const task = await addTaskFull(taskData)
             bus.emit(EventNames.TASK_CREATED, { task }, [], { source: `${plugin.id}-sync` })
             changeCount++
+            tickEvents.push({ name: EventNames.TASK_CREATED, data: { task } })
             return task
           },
           deleteTask: async (id) => {
             const { task } = await deleteTask(id)
             bus.emit(EventNames.TASK_DELETED, { task }, [], { source: `${plugin.id}-sync` })
             changeCount++
+            // web-ui's task:deleted handler keys on `id` (the raw event carries `task`)
+            tickEvents.push({ name: EventNames.TASK_DELETED, data: { id: task?.id ?? id, task } })
           },
           emit: (event, data) => {
             // ctx.emit is for non-task plugin signals (e.g. sync:progress) — intentionally not batched
@@ -4679,11 +4791,26 @@ function startPluginSyncPolling(): void {
       } finally {
         // outer finally ensures bulk signal fires even if delta fails — reconciler runs in inner finally and may produce additional changes via ctx closures
         try {
-          // Send a single bulk signal to web-ui instead of 100+ individual events
+          // Small ticks (the overwhelmingly common case: 1-3 changed tasks) ship
+          // the per-task events to web-ui — the frontend merges them in place with
+          // a shallow-equal bail, so unaffected rows never re-render. The bulk
+          // `{task:null}` signal (frontend answers with a FULL list refetch) is
+          // reserved for big syncs and for drift safety (a site that bumped
+          // changeCount without recording its event). reemit:true so global
+          // subscribers, which already saw the originals, skip these copies.
           if (changeCount > 0) {
-            // null task = bulk signal; frontend useTasks.ts:327 handles by calling refetch()
-            bus.emit(EventNames.TASK_UPDATED, { task: null } as any, ['web-ui'], { source: `${plugin.id}-sync-batch` })
-            log.web.info(`${plugin.id} sync: batch complete`, { changeCount })
+            const MAX_INDIVIDUAL_SYNC_EVENTS = 25
+            if (changeCount === tickEvents.length && tickEvents.length <= MAX_INDIVIDUAL_SYNC_EVENTS) {
+              for (const ev of tickEvents) {
+                bus.emit(ev.name as 'task:updated', ev.data as any, ['web-ui'], { source: `${plugin.id}-sync-batch`, reemit: true })
+              }
+              log.web.info(`${plugin.id} sync: batch complete`, { changeCount, delivery: 'individual' })
+            } else {
+              // null task = bulk signal; frontend useTasks handles by calling refetch()
+              bus.emit(EventNames.TASK_UPDATED, { task: null } as any, ['web-ui'], { source: `${plugin.id}-sync-batch` })
+              log.web.info(`${plugin.id} sync: batch complete`, { changeCount, delivery: 'bulk' })
+            }
+            tickEvents.length = 0
           }
         } catch (emitErr) {
           log.web.warn(`${plugin.id} sync: bulk emit failed`, { error: emitErr instanceof Error ? emitErr.message : String(emitErr) })
@@ -4882,6 +5009,10 @@ export async function stopServer(): Promise<void> {
   if (autoContinueHandle) {
     autoContinueHandle.stop()
     autoContinueHandle = null
+  }
+  if (autoRecoverHandle) {
+    autoRecoverHandle.stop()
+    autoRecoverHandle = null
   }
   if (claudeSettingsWatcherStop) {
     claudeSettingsWatcherStop()

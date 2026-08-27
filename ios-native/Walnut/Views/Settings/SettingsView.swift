@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Typed navigation targets inside the Settings stack.
 enum SettingsRoute: Hashable {
@@ -17,6 +18,9 @@ struct SettingsView: View {
     @State private var sendingDiagnostics = false
     @State private var diagnosticsResult: String?
     @AppStorage(VoiceRecorder.micRouteKey) private var micRoute = VoiceRecorder.MicRoute.automatic.rawValue
+    /// Default is `always` — "send them all", the behavior the user asked for.
+    @AppStorage(PushRegistration.modeKey) private var notificationMode = PushRegistration.Mode.always.rawValue
+    @State private var push = PushRegistration.shared
 
     /// Wave-2 server info (GET /v1/config projection + chat stats). Best-effort:
     /// an old server without the endpoints just hides the block.
@@ -29,6 +33,7 @@ struct SettingsView: View {
                 serverSection
                 serverInfoSection
                 automationSection
+                notificationsSection
                 voiceSection
                 diagnosticsSection
                 actionsSection
@@ -40,6 +45,10 @@ struct SettingsView: View {
                 await loadServerInfo()
             }
             .task { await loadServerInfo() }
+            // Re-read the iOS permission state every time Settings opens: the
+            // user may have changed it in iOS Settings since, and a stale
+            // "granted" would hide the one row that explains the silence.
+            .task { await push.refreshAuthorization() }
             .navigationDestination(for: SettingsRoute.self) { route in
                 switch route {
                 case .routines: RoutinesView()
@@ -120,6 +129,51 @@ struct SettingsView: View {
         }
     }
 
+    /// Inbox letter notifications: the mode, plus an honest read on whether a
+    /// notification could actually arrive right now.
+    ///
+    /// Both failure states are shown rather than left to silence, because "no
+    /// notification arrived" has two very different causes the user can only act
+    /// on if they're named: iOS permission was denied (fixable in Settings), or
+    /// the server has no APNs key yet (fixable on the server).
+    private var notificationsSection: some View {
+        Section {
+            Picker("Letter Notifications", selection: $notificationMode) {
+                ForEach(PushRegistration.Mode.allCases) { mode in
+                    Text(mode.label).tag(mode.rawValue)
+                }
+            }
+            .accessibilityIdentifier("settings.notificationMode")
+            .onChange(of: notificationMode) { _, raw in
+                let mode = PushRegistration.Mode(rawValue: raw) ?? .always
+                PushRegistration.shared.modeChanged(to: mode)
+            }
+            if push.authorization == .denied {
+                Button("Open iOS Notification Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                .accessibilityIdentifier("settings.notificationPermission")
+            }
+        } header: {
+            Text("Notifications")
+        } footer: {
+            Text(notificationsFooter)
+        }
+    }
+
+    private var notificationsFooter: String {
+        if push.authorization == .denied {
+            return "Notifications are turned off for Walnut in iOS Settings, so no letter can reach you here."
+        }
+        if push.serverDeliverable == false {
+            return "This phone is registered, but your Walnut server has no APNs key configured yet, so it can't send notifications. See docs/reference/ios-push-notifications.md."
+        }
+        let mode = PushRegistration.Mode(rawValue: notificationMode) ?? .always
+        return mode.blurb
+    }
+
     private var voiceSection: some View {
         Section {
             Picker("Microphone", selection: $micRoute) {
@@ -127,6 +181,20 @@ struct SettingsView: View {
                 Text("iPhone Mic Only").tag(VoiceRecorder.MicRoute.builtInMic.rawValue)
             }
             .accessibilityIdentifier("settings.micRoute")
+            // Not a control — a pointer. The Home-screen shortcut works (proven
+            // end to end), but iOS puts it behind a long-press, which nothing in
+            // the app ever mentions, so a user can own the feature for months
+            // without meeting it. One static row next to the voice setting is
+            // the whole fix: no nag, no modal, no onboarding step, and it sits
+            // exactly where someone tuning voice input will look.
+            Label {
+                Text("Long-press the Walnut icon on your Home Screen and pick **Voice to Walnut** to start talking straight away.")
+            } icon: {
+                Image(systemName: "mic.badge.plus")
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .accessibilityIdentifier("settings.voiceQuickActionHint")
         } header: {
             Text("Voice Input")
         } footer: {

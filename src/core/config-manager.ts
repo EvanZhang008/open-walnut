@@ -9,6 +9,7 @@ import {
   VALID_AGENT_ENGINE_PROVIDERS,
   type AgentEngineProvider,
   type Config,
+  type PushTokenEntry,
   type TaskPriority,
 } from './types.js';
 import { MODEL_CATALOG } from '../agent/providers/model-catalog.js';
@@ -396,6 +397,49 @@ export async function updatePluginConfig(
     const next = { ...current, ...patch };
     plugins[pluginId] = next;
     existing.plugins = plugins;
+
+    let content = yaml.dump(existing, { indent: 2, lineWidth: 120 });
+    content = content.replace(
+      /^(\s+)available_models:/m,
+      '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
+    );
+    await writeConfigWithBackup(content);
+    return next;
+  });
+}
+
+/**
+ * Atomically read-modify-write `push_tokens` under the config write lock.
+ *
+ * `updateConfig` only locks the WRITE, so a caller that reads the array with
+ * `getConfig()`, edits it, and passes the whole array back races every other
+ * push writer: two phones registering at once, or a foreground lease renewal
+ * landing beside a preference change, and one of them is silently lost. There
+ * are four such writers (register, unregister, preferences, active), so the
+ * read has to happen inside the same lock as the write.
+ *
+ * `mutate` receives the current rows and returns the next ones, or null to make
+ * the whole thing a no-op (no write, no backup churn).
+ */
+export async function updatePushTokens(
+  mutate: (tokens: PushTokenEntry[]) => PushTokenEntry[] | null,
+): Promise<PushTokenEntry[]> {
+  return withWriteLock(async () => {
+    let existing: Record<string, unknown> = {};
+    try {
+      const raw = await readRawConfigContent();
+      existing = raw === null ? {} : ((yaml.load(raw) as Record<string, unknown>) ?? {});
+    } catch (err) {
+      log.session.warn('config-manager: push token patch could not read existing config', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    const current = Array.isArray(existing.push_tokens)
+      ? (existing.push_tokens as PushTokenEntry[])
+      : [];
+    const next = mutate(current);
+    if (next === null) return current;
+    existing.push_tokens = next;
 
     let content = yaml.dump(existing, { indent: 2, lineWidth: 120 });
     content = content.replace(

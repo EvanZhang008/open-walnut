@@ -140,8 +140,15 @@ struct RootView: View {
             if phase == .active {
                 LifecycleHub.shared.resumeAll()
                 Task { await connection.refreshStatus() }
+                // "The app is on screen" — only read by the server in
+                // `when-inactive` mode, where it's what keeps a letter quiet
+                // while the user is already looking at Walnut.
+                PushRegistration.shared.reportActive(true)
             } else if phase == .background {
                 LifecycleHub.shared.suspendAll()
+                // Release the lease immediately so the very next letter buzzes,
+                // rather than waiting for it to expire.
+                PushRegistration.shared.reportActive(false)
             }
         }
     }
