@@ -6763,6 +6763,178 @@ select {
   padding: 0 2px;
 }
 
+/* ── Unified "@" mention palette: ONE panel, Sessions + Files groups ── */
+.mention-palette {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 4px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow-hover);
+  z-index: 50;
+  overflow: hidden;
+  animation: commandPaletteIn 0.15s ease-out;
+}
+.mention-list {
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.mention-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px 2px;
+}
+.mention-group-name {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.mention-group-verb {
+  font-size: 11px;
+  color: var(--fg-muted);
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.mention-row.selected { background: var(--accent-subtle); }
+.mention-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.mention-dot.running { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent); }
+.mention-dot.waiting { background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 18%, transparent); }
+.mention-dot.error { background: var(--error); }
+.mention-dot.idle { background: var(--fg-muted); opacity: 0.55; }
+.mention-ficon { flex-shrink: 0; width: 16px; text-align: center; font-size: 13px; }
+.mention-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.mention-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-title mark, .mention-id mark {
+  background: color-mix(in srgb, var(--warning) 26%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  font-weight: 700;
+  padding: 0;
+}
+.mention-meta {
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-id {
+  flex-shrink: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--fg-muted);
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+.mention-row.selected .mention-id { color: var(--accent); }
+.mention-into { flex-shrink: 0; color: var(--fg-muted); font-size: 12px; }
+.mention-size { flex-shrink: 0; color: var(--fg-muted); font-size: 11px; }
+.mention-pick-btn {
+  flex-shrink: 0;
+  display: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card-bg);
+  color: var(--fg-muted);
+  font-size: 10.5px;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+.mention-row:hover .mention-pick-btn, .mention-row.selected .mention-pick-btn { display: inline-block; }
+.mention-empty {
+  padding: 6px 10px 8px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.mention-skeleton { display: flex; align-items: center; gap: 9px; padding: 8px 10px; }
+.mention-skeleton .sk-icon, .mention-skeleton .sk-line {
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--bg-secondary) 25%, var(--bg-tertiary, var(--bg-secondary)) 50%, var(--bg-secondary) 75%);
+  background-size: 200% 100%;
+  animation: mentionShimmer 1.2s infinite;
+}
+.mention-skeleton .sk-icon { width: 14px; height: 14px; }
+.mention-skeleton .sk-line { width: 55%; height: 10px; }
+@keyframes mentionShimmer { to { background-position: -200% 0; } }
+.mention-hintbar {
+  display: flex;
+  gap: 12px;
+  padding: 5px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.mention-hintbar b {
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+  font-size: 10px;
+  background: var(--bg-tertiary, var(--bg-secondary));
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-right: 2px;
+}
+
+/* Pre-send routing hint inside the composer: "@<ref> …" resolves → show the
+   target BEFORE the user hits Send. */
+.chat-route-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 4px 4px;
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-subtle);
+  color: var(--fg-muted);
+  font-size: 12px;
+  min-width: 0;
+}
+.chat-route-hint > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.chat-route-hint strong { color: var(--fg); font-weight: 600; }
+.chat-route-hint-id {
+  flex-shrink: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  color: var(--accent);
+}
+
 /* ── Send button (accent circle) + optional ghost "▾" menu ──
    Claude-app style: send is the ONLY filled control in the composer — a
    solid accent circle. The menu caret is a naked chevron beside it, not a

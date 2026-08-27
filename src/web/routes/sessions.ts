@@ -617,6 +617,31 @@ sessionsRouter.get('/recent', async (req: Request, res: Response, next: NextFunc
   }
 })
 
+// GET /api/sessions/mention-index — light projection powering the composer's
+// "@" session picker. The picker filters IN THE BROWSER on every keystroke, so
+// it needs the whole candidate set once, small and fast: no live-status enrich
+// (the client's WS-fed status store is fresher), no hostname enrich, no recap /
+// summary / status_history baggage. ~110 bytes/row vs ~2KB on /recent.
+sessionsRouter.get('/mention-index', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const requested = req.query.limit ? parseInt(req.query.limit as string, 10) : 800
+    const limit = Math.min(Number.isFinite(requested) && requested > 0 ? requested : 800, SEARCH_CANDIDATE_LIMIT)
+    const all = await listRecentSessionRecords(limit)
+    const sessions = all
+      .filter(s => isListableSession(s) && !s.archived)
+      .map(s => ({
+        id: s.claudeSessionId,
+        title: s.title ?? '',
+        host: s.host ?? '',
+        status: s.process_status,
+        lastActiveAt: s.lastActiveAt ?? '',
+      }))
+    res.json({ sessions })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/sessions/summaries
 sessionsRouter.get('/summaries', async (req: Request, res: Response, next: NextFunction) => {
   try {

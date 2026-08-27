@@ -7,14 +7,15 @@ import { MAX_QUEUE_SIZE } from '@/hooks/useChat';
 import { CommandPalette, type PaletteItem } from './CommandPalette';
 import { detectSlashCommand } from './slash-trigger';
 import { FileMentionPopup, type FileMentionHandle } from './FileMentionPopup';
+import { MentionPalette, type MentionPaletteHandle } from './MentionPalette';
+import { relativeTo } from './mention-path';
 import {
-  BROWSE_FILES_ITEM,
   formatSessionRef,
-  sessionToPaletteItem,
-  shouldTriggerSessionMention,
-  type SessionMentionCandidate,
-  type SessionPaletteItem,
+  parseSessionDirective,
+  resolveRefInIndex,
+  routeMention,
 } from './session-mention';
+import { ensureSessionMentionIndex, getSessionMentionIndex } from '@/stores/session-mention-index';
 import type { Task } from '@open-walnut/core';
 import { StatusBadge } from '../common/StatusBadge';
 import { MicButton } from '../common/MicButton';
@@ -96,10 +97,12 @@ interface ChatInputProps {
   mentionCwd?: string;
   /** SSH host for "@" mentions (undefined = local). */
   mentionHost?: string;
-  /** When set, "@" at the very START of the input opens a session picker
-   *  instead of the file browser (Claude Code's `@name message` direct-message
-   *  convention). The callback fuzzy-searches the user's sessions. */
-  searchMentionSessions?: (q: string) => Promise<SessionMentionCandidate[]>;
+  /** Enables the Sessions group in the "@" mention palette. A line-start "@"
+   *  leads with sessions (Claude Code's `@name message` direct-message
+   *  convention); the candidate list is the in-memory session-mention index. */
+  enableSessionMention?: boolean;
+  /** The session this composer talks to — excluded from the session picker. */
+  sessionMentionSelfId?: string;
   /** External prefill: text to drop into the input (e.g. an agent-builder template). */
   prefillText?: string;
   /** Bump this (monotonic, >0) to apply prefillText — replaces the input + focuses,
@@ -116,7 +119,7 @@ interface ChatInputProps {
   onValueChange?: (text: string) => void;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, searchMentionSessions, prefillText, prefillNonce, controlsSlot, onValueChange }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, enableSessionMention, sessionMentionSelfId, prefillText, prefillNonce, controlsSlot, onValueChange }: ChatInputProps) {
   const [value, setValue] = useState(() => {
     if (!draftKey) return '';
     try { return localStorage.getItem(draftKey) ?? ''; } catch { return ''; }
@@ -337,23 +340,32 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionCommands]);
 
-  // "@" file mention state. mentionAtIndexRef/mentionEndRef bracket the "@query"
-  // span in `value` so selection can splice in the path without relying on the
-  // live caret (which is unreliable for mouse-driven picks — the textarea may have
-  // lost focus). Both are recomputed on every detect. Imperative handle drives
-  // popup keyboard nav from handleKeyDown.
+  // "@" mention state — ONE unified palette (Sessions + Files groups; see
+  // MentionPalette) plus the legacy "@?" recents popup. mentionAtIndexRef /
+  // mentionEndRef bracket the "@query" span in `value` so selection can splice
+  // without relying on the live caret (unreliable for mouse-driven picks).
+  // routeMention decides the surface + leading group per keystroke.
   const mentionEnabled = !!mentionCwd;
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
+  const [mentionKind, setMentionKind] = useState<'palette' | 'recents'>('palette');
+  const [mentionOrder, setMentionOrder] = useState<'sessions-first' | 'files-first'>('sessions-first');
+  const [mentionAt, setMentionAt] = useState(-1);
   const mentionAtIndexRef = useRef<number>(-1);
   const mentionEndRef = useRef<number>(-1);
   // Index of an "@" the user dismissed with Esc — handleChange won't auto-reopen
   // the popup for that same "@" (only a different "@" or edited text reopens).
   const mentionDismissedAtRef = useRef<number>(-1);
-  const mentionPopupRef = useRef<FileMentionHandle>(null);
-  // Ref mirror so handleKeyDown reads latest open-state without stale closure.
+  // "+"-menu "Reference a file" wants the FILES group to lead even for a
+  // line-start "@"; recorded per @ index, cleared when that "@" goes away.
+  const mentionOrderOverrideRef = useRef<{ at: number; order: 'files-first' } | null>(null);
+  const mentionPopupRef = useRef<FileMentionHandle>(null); // "@?" recents popup
+  const mentionPaletteRef = useRef<MentionPaletteHandle>(null); // unified palette
+  // Ref mirrors so handleKeyDown reads latest state without stale closure.
   const mentionOpenRef = useRef(false);
   mentionOpenRef.current = mentionOpen;
+  const mentionKindRef = useRef<'palette' | 'recents'>('palette');
+  mentionKindRef.current = mentionKind;
 
   const closeMention = useCallback(() => {
     setMentionOpen(false);
@@ -363,56 +375,23 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     mentionOpenRef.current = false;
   }, []);
 
-  // "@" SESSION mention state (line-start "@" only; see session-mention.ts).
-  // Shares the mentionAtIndexRef/mentionEndRef span with the file popup — the
-  // two popups are mutually exclusive, and both bracket the same "@query".
-  const [sessionMentionOpen, setSessionMentionOpen] = useState(false);
-  const [sessionMentionItems, setSessionMentionItems] = useState<PaletteItem[]>([BROWSE_FILES_ITEM]);
-  const [sessionMentionIndex, setSessionMentionIndex] = useState(0);
-  const sessionMentionOpenRef = useRef(false);
-  sessionMentionOpenRef.current = sessionMentionOpen;
-  // Ref mirror for keyboard nav (same stale-closure reasoning as paletteRef).
-  const sessionMentionStateRef = useRef({ items: [BROWSE_FILES_ITEM] as PaletteItem[], index: 0 });
-  useLayoutEffect(() => {
-    sessionMentionStateRef.current = { items: sessionMentionItems, index: sessionMentionIndex };
-  }, [sessionMentionItems, sessionMentionIndex]);
-  // "@" the user routed to the FILE browser via "Browse files…" — that same "@"
-  // won't reopen the session picker (cleared when the "@" goes away).
-  const sessionMentionOptOutAtRef = useRef<number>(-1);
-  // Debounced search: seq guards against out-of-order responses.
-  const sessionSearchTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const sessionSearchSeqRef = useRef(0);
+  // Esc-dismiss: remember this "@" so handleChange doesn't instantly reopen it.
+  const dismissMention = useCallback(() => {
+    mentionDismissedAtRef.current = mentionAtIndexRef.current;
+    closeMention();
+  }, [closeMention]);
 
-  const closeSessionMention = useCallback(() => {
-    clearTimeout(sessionSearchTimerRef.current);
-    sessionSearchSeqRef.current++;
-    setSessionMentionOpen(false);
-    setSessionMentionItems([BROWSE_FILES_ITEM]);
-    setSessionMentionIndex(0);
-    sessionMentionOpenRef.current = false;
-  }, []);
-
-  const openSessionMention = useCallback((query: string) => {
-    if (!searchMentionSessions) return;
-    setSessionMentionOpen(true);
-    sessionMentionOpenRef.current = true;
-    setSessionMentionIndex(0);
-    clearTimeout(sessionSearchTimerRef.current);
-    const seq = ++sessionSearchSeqRef.current;
-    sessionSearchTimerRef.current = setTimeout(() => {
-      searchMentionSessions(query).then((sessions) => {
-        if (seq !== sessionSearchSeqRef.current) return; // stale response
-        const rows: PaletteItem[] = [
-          ...sessions.map(sessionToPaletteItem),
-          ...(mentionCwd ? [BROWSE_FILES_ITEM] : []),
-        ];
-        if (rows.length === 0) { closeSessionMention(); return; }
-        setSessionMentionItems(rows);
-        setSessionMentionIndex((i) => Math.min(i, rows.length - 1));
-        sessionMentionStateRef.current = { items: rows, index: Math.min(sessionMentionStateRef.current.index, rows.length - 1) };
-      }).catch(() => { /* search is best-effort — the Browse files row remains */ });
-    }, 150);
-  }, [searchMentionSessions, mentionCwd, closeSessionMention]);
+  // Pre-send routing hint: when the composed text IS a session directive
+  // ("@<ref> message") and the ref resolves uniquely in the in-memory index,
+  // show who will receive it. The server stays the routing authority — this is
+  // display only (0ms, no network).
+  const routeTarget = (() => {
+    if (!enableSessionMention) return null;
+    const d = parseSessionDirective(value);
+    if (!d) return null;
+    const target = resolveRefInIndex(d.ref, getSessionMentionIndex());
+    return target && target.id !== sessionMentionSelfId ? target : null;
+  })();
 
   const processFiles = useCallback((files: FileList | File[]) => {
     // Start the FileReader OUTSIDE any setState updater. The reader is a side effect;
@@ -472,8 +451,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     setImages([]);
     closePalette();
     closeMention();
-    closeSessionMention();
-    sessionMentionOptOutAtRef.current = -1;
+    mentionOrderOverrideRef.current = null;
     // Clear the "/" span + Esc-dismissal memory — a new message starts fresh
     // (otherwise a dismissed "/" at index 0 would suppress the next palette).
     slashIndexRef.current = -1;
@@ -625,47 +603,50 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     });
   }, [value, saveDraft, closeMention]);
 
-  // Rewrite the "@query" span to "@<dir>/" so the popup browses that dir (used when
-  // jumping to a recent folder from "@?" mode). Keeps the popup open (no close).
+  // Rewrite the "@query" span so the palette browses `absDir` (descend into a
+  // dir / go to the parent / jump to a recent folder). The query text IS the
+  // browse state, so navigation rewrites it: relative to the mention root when
+  // under it (short + portable), absolute otherwise. Keeps the popup open.
   const handleMentionNavigate = useCallback((absDir: string) => {
     const at = mentionAtIndexRef.current;
     const end = mentionEndRef.current;
     if (at < 0 || end < at) return;
-    const inserted = `@${absDir.replace(/\/+$/, '')}/`;
+    const rel = mentionCwd ? relativeTo(mentionCwd.replace(/\/+$/, ''), absDir) : absDir;
+    // Back at the root → bare "@" (empty query browses the cwd again).
+    const display = rel === '.' ? '' : rel.replace(/\/+$/, '');
+    const inserted = display ? `@${display}/` : '@';
     const newValue = value.slice(0, at) + inserted + value.slice(end);
     setValue(newValue);
     saveDraft(newValue);
     const newCaret = at + inserted.length;
     mentionEndRef.current = newCaret;
-    setMentionQuery(inserted.slice(1)); // drop the leading "@"
+    const query = inserted.slice(1); // drop the leading "@"
+    setMentionQuery(query);
+    // A recents jump lands in the unified palette (the query no longer starts
+    // with "?"), so keep the routing state in sync with what handleChange
+    // would have computed for this text.
+    const route = routeMention(at, query);
+    if (route.kind === 'palette') {
+      setMentionKind('palette');
+      mentionKindRef.current = 'palette';
+      setMentionOrder(enableSessionMention ? route.order : 'files-first');
+    }
     requestAnimationFrame(() => {
       const ta = textareaRef.current;
       if (ta) { ta.focus(); ta.setSelectionRange(newCaret, newCaret); }
     });
-  }, [value, saveDraft]);
+  }, [value, saveDraft, mentionCwd, enableSessionMention]);
 
-  // Session mention pick: a session row splices "@<short8> " over the "@query"
-  // span; the "Browse files…" row re-routes this same "@" to the file popup.
-  const handleSelectSessionMention = useCallback((item: PaletteItem) => {
+  // Session mention pick: splice "@<short8> " over the "@query" span.
+  const handlePickSession = useCallback((sessionId: string) => {
     const at = mentionAtIndexRef.current;
     const end = mentionEndRef.current;
-    if (item === BROWSE_FILES_ITEM || item.source === 'control') {
-      sessionMentionOptOutAtRef.current = at;
-      closeSessionMention();
-      if (mentionEnabled && at >= 0) {
-        setMentionQuery(value.slice(at + 1, end >= at ? end : value.length));
-        setMentionOpen(true);
-        mentionOpenRef.current = true;
-      }
-      return;
-    }
-    const sessionId = (item as SessionPaletteItem).sessionId;
-    if (!sessionId || at < 0 || end < at) { closeSessionMention(); return; }
+    if (!sessionId || at < 0 || end < at) { closeMention(); return; }
     const ref = formatSessionRef(sessionId);
     const newValue = value.slice(0, at) + ref + value.slice(end);
     setValue(newValue);
     saveDraft(newValue);
-    closeSessionMention();
+    closeMention();
     const newCaret = at + ref.length;
     requestAnimationFrame(() => {
       const ta = textareaRef.current;
@@ -674,7 +655,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         ta.setSelectionRange(newCaret, newCaret);
       }
     });
-  }, [value, saveDraft, closeSessionMention, mentionEnabled]);
+  }, [value, saveDraft, closeMention]);
 
   const handleKeyDown = (e: KeyboardEvent) => {
     // Shift+Tab: caller-defined mode cycle (sessions: permission mode)
@@ -684,57 +665,49 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       return;
     }
 
-    // Session mention palette keyboard nav (mutually exclusive with the file
-    // popup and the "/" palette): ↑/↓ move · Enter/Tab pick · → browse files ·
-    // Esc dismiss (remembers the "@" so it doesn't instantly reopen).
-    if (sessionMentionOpenRef.current) {
-      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-      const st = sessionMentionStateRef.current;
-      if (e.key === 'ArrowDown') { e.preventDefault(); setSessionMentionIndex((st.index + 1) % st.items.length); return; }
-      if (e.key === 'ArrowUp') { e.preventDefault(); setSessionMentionIndex((st.index - 1 + st.items.length) % st.items.length); return; }
-      if (e.key === 'ArrowRight') { e.preventDefault(); handleSelectSessionMention(BROWSE_FILES_ITEM); return; }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        mentionDismissedAtRef.current = mentionAtIndexRef.current;
-        closeSessionMention();
-        return;
-      }
-      if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault();
-        const item = st.items[st.index];
-        if (item) handleSelectSessionMention(item);
-        return;
-      }
-    }
-
-    // "@" file mention popup keyboard nav (takes priority over command palette;
-    // they're mutually exclusive since one starts with "/" and the other "@").
-    //   ↑/↓ move highlight · →/Enter open dir (or pick file) · ← parent dir ·
-    //   Cmd/Ctrl+Enter select highlighted file OR folder · Esc close.
-    // ← / → are only intercepted when the caret sits at the very edge of the input
-    // so normal text cursor movement inside the @query still works.
+    // "@" mention keyboard nav (takes priority over the "/" palette; mutually
+    // exclusive by trigger character). Unified palette: ↑/↓ move · ⇥ jump group ·
+    // ⏎ pick (a dir descends) · ⌘/Ctrl+⏎ pick as-is · ← parent (only while the
+    // query is path-shaped, so ordinary caret movement still works) · Esc close.
+    // "@?" recents popup keeps its legacy bindings (→ into · ← up · ⌘⏎ select).
     if (mentionOpenRef.current) {
       if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-      if (e.key === 'ArrowDown') { e.preventDefault(); mentionPopupRef.current?.move(1); return; }
-      if (e.key === 'ArrowUp') { e.preventDefault(); mentionPopupRef.current?.move(-1); return; }
-      if (e.key === 'ArrowRight') { e.preventDefault(); mentionPopupRef.current?.into(); return; }
-      if (e.key === 'ArrowLeft') { e.preventDefault(); mentionPopupRef.current?.up(); return; }
-      if (e.key === 'Escape') {
+      const isRecents = mentionKindRef.current === 'recents';
+      if (e.key === 'ArrowDown') {
         e.preventDefault();
-        // Remember this "@" was dismissed so handleChange doesn't immediately reopen
-        // it on the next keystroke (which fires onChange without changing the @).
-        mentionDismissedAtRef.current = mentionAtIndexRef.current;
-        closeMention();
+        if (isRecents) mentionPopupRef.current?.move(1); else mentionPaletteRef.current?.move(1);
         return;
       }
-      if (e.key === 'Enter' || e.key === 'Tab') {
+      if (e.key === 'ArrowUp') {
         e.preventDefault();
-        // Cmd/Ctrl+Enter → select current (file or dir) regardless of type. Plain
-        // Enter/Tab → open dir / pick file. This deliberately swallows Cmd/Ctrl+Enter
-        // (the global "send" shortcut) while the popup is open so the user can pick.
-        if (e.metaKey || e.ctrlKey) mentionPopupRef.current?.selectCurrent();
-        else mentionPopupRef.current?.into();
+        if (isRecents) mentionPopupRef.current?.move(-1); else mentionPaletteRef.current?.move(-1);
         return;
+      }
+      if (e.key === 'Escape') { e.preventDefault(); dismissMention(); return; }
+      if (isRecents) {
+        if (e.key === 'ArrowRight') { e.preventDefault(); mentionPopupRef.current?.into(); return; }
+        if (e.key === 'ArrowLeft') { e.preventDefault(); mentionPopupRef.current?.up(); return; }
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          e.preventDefault();
+          if (e.metaKey || e.ctrlKey) mentionPopupRef.current?.selectCurrent();
+          else mentionPopupRef.current?.into();
+          return;
+        }
+      } else {
+        if (e.key === 'Tab') { e.preventDefault(); mentionPaletteRef.current?.jumpGroup(); return; }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          // ⌘/Ctrl+Enter is deliberately swallowed (it's the global send
+          // shortcut) so the user can pick a folder as the reference.
+          if (e.metaKey || e.ctrlKey) mentionPaletteRef.current?.selectCurrent();
+          else mentionPaletteRef.current?.primary();
+          return;
+        }
+        if (e.key === 'ArrowLeft' && /\/$/.test(mentionQuery)) {
+          e.preventDefault();
+          mentionPaletteRef.current?.up();
+          return;
+        }
       }
     }
 
@@ -793,10 +766,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     saveDraft(newValue);
 
     // "@" mention detection: caret follows an "@" (at start or after whitespace)
-    // with no whitespace in between. A line-START "@" opens the SESSION picker
-    // (Claude Code's `@name message` direct-message convention) when the caller
-    // provided a session search; any other "@" is a file reference.
-    if (mentionEnabled || searchMentionSessions) {
+    // with no whitespace in between. routeMention picks the surface: "@?" → the
+    // recents popup; anything else → the unified palette, with the leading group
+    // chosen by position/shape (line-start = sessions, path/mid-text = files).
+    if (mentionEnabled || enableSessionMention) {
       const caret = textareaRef.current?.selectionStart ?? newValue.length;
       const m = detectMention(newValue, caret);
       if (m) {
@@ -809,27 +782,31 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         mentionDismissedAtRef.current = -1; // a live "@" — clear any stale dismissal
         mentionAtIndexRef.current = m.atIndex;
         mentionEndRef.current = caret; // end of the "@query" span = current caret
-        const wantSessions = !!searchMentionSessions
-          && shouldTriggerSessionMention(m.atIndex, m.query)
-          && m.atIndex !== sessionMentionOptOutAtRef.current;
-        if (wantSessions) {
-          if (mentionOpenRef.current) closeMention();
-          openSessionMention(m.query);
-          return; // "@" and "/" are mutually exclusive triggers
+        const override = mentionOrderOverrideRef.current;
+        if (override && override.at !== m.atIndex) mentionOrderOverrideRef.current = null;
+        const route = routeMention(m.atIndex, m.query);
+        if (route.kind === 'recents') {
+          if (!mentionEnabled) { if (mentionOpenRef.current) closeMention(); return; }
+          setMentionKind('recents');
+          mentionKindRef.current = 'recents';
+        } else {
+          setMentionKind('palette');
+          mentionKindRef.current = 'palette';
+          const order = override && override.at === m.atIndex
+            ? override.order
+            : enableSessionMention ? route.order : 'files-first';
+          setMentionOrder(order);
+          if (enableSessionMention) void ensureSessionMentionIndex();
         }
-        if (sessionMentionOpenRef.current) closeSessionMention();
-        if (m.atIndex !== sessionMentionOptOutAtRef.current) sessionMentionOptOutAtRef.current = -1;
-        if (mentionEnabled) {
-          setMentionQuery(m.query);
-          setMentionOpen(true);
-          mentionOpenRef.current = true;
-        }
+        setMentionAt(m.atIndex);
+        setMentionQuery(m.query);
+        setMentionOpen(true);
+        mentionOpenRef.current = true;
         return; // "@" and "/" are mutually exclusive triggers
       }
       mentionDismissedAtRef.current = -1; // no active "@" — reset dismissal memory
-      sessionMentionOptOutAtRef.current = -1;
+      mentionOrderOverrideRef.current = null;
       if (mentionOpenRef.current) closeMention();
-      if (sessionMentionOpenRef.current) closeSessionMention();
     }
 
     // Slash command detection: the caret follows a "/" at the input start or after
@@ -924,10 +901,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const inserted = (needSpace ? ' ' : '') + trigger;
     el.setSelectionRange(caret, caret);
     el.setRangeText(inserted, caret, caret, 'end');
-    // "Reference a file" must open the FILE popup even at line start where the
-    // session picker would otherwise claim the "@".
+    // "Reference a file" leads with the FILES group even at line start, where
+    // the sessions group would otherwise lead.
     const atIndex = caret + (needSpace ? 1 : 0);
-    sessionMentionOptOutAtRef.current = opts?.fileMention ? atIndex : -1;
+    mentionOrderOverrideRef.current = opts?.fileMention ? { at: atIndex, order: 'files-first' } : null;
     handleChange(el.value);
   };
 
@@ -990,15 +967,23 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           refreshing={refreshing}
         />
       )}
-      {sessionMentionOpen && (
-        <CommandPalette
-          commands={sessionMentionItems}
-          selectedIndex={sessionMentionIndex}
-          onSelect={handleSelectSessionMention}
-          showSource
+      {mentionOpen && mentionKind === 'palette' && (mentionEnabled || enableSessionMention) && (
+        <MentionPalette
+          ref={mentionPaletteRef}
+          query={mentionQuery}
+          order={mentionOrder}
+          sessionsRoute={!!enableSessionMention && mentionAt === 0}
+          sessionsEnabled={!!enableSessionMention}
+          selfSessionId={sessionMentionSelfId}
+          cwd={mentionCwd}
+          host={mentionHost}
+          onPickSession={handlePickSession}
+          onPickFile={handleMentionSelect}
+          onNavigate={handleMentionNavigate}
+          onClose={dismissMention}
         />
       )}
-      {mentionOpen && mentionCwd && (
+      {mentionOpen && mentionKind === 'recents' && mentionCwd && (
         <FileMentionPopup
           ref={mentionPopupRef}
           cwd={mentionCwd}
@@ -1006,7 +991,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           query={mentionQuery}
           onSelect={handleMentionSelect}
           onNavigate={handleMentionNavigate}
-          onClose={closeMention}
+          onClose={dismissMention}
         />
       )}
       {/* Queue indicator bar — dismissable, reappears when new messages queued */}
@@ -1045,6 +1030,15 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
               </button>
               <StatusBadge status={focusedTask.status} phase={focusedTask.phase} />
               <span className="pill-title">{focusedTask.title}</span>
+            </div>
+          )}
+          {/* Pre-send routing hint — the composed text is a session directive
+              and the ref resolves: show WHO will receive it before Send. */}
+          {routeTarget && (
+            <div className="chat-route-hint" title={`This message will be sent to session ${routeTarget.id}`}>
+              <span aria-hidden="true">↗</span>
+              <span>Sends to <strong>{routeTarget.title || '(untitled)'}</strong></span>
+              <span className="chat-route-hint-id">{routeTarget.id.slice(0, 8)}</span>
             </div>
           )}
           {/* Image preview area */}
@@ -1115,11 +1109,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
               </button>
               {/* Shortcuts — the discoverable index of the composer's special
                   commands (each row inserts its trigger and opens its picker). */}
-              {(searchMentionSessions || mentionCwd || showCommands || isSessionMode) && (
+              {(enableSessionMention || mentionCwd || showCommands || isSessionMode) && (
                 <>
                   <div className="chat-plus-menu-divider" role="separator" />
                   <div className="chat-plus-menu-label">Shortcuts</div>
-                  {searchMentionSessions && (
+                  {enableSessionMention && (
                     <button
                       className="chat-plus-menu-item"
                       onClick={() => insertShortcut('@', { lineStart: true })}

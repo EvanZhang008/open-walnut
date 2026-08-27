@@ -30,8 +30,8 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
-import { fetchSession, searchSessions, executePlanContinue, executePlanSession, updateSession, restartSession, terminateSession, investigateSession, setSessionEffort, setSessionModel, setCodexSessionModel } from '@/api/sessions';
-import { parseSessionDirective, type SessionMentionCandidate } from '@/components/chat/session-mention';
+import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, terminateSession, investigateSession, setSessionEffort, setSessionModel, setCodexSessionModel } from '@/api/sessions';
+import { parseSessionDirective } from '@/components/chat/session-mention';
 import { buildImageRefsPayload } from '@/api/image-upload';
 import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
@@ -1033,19 +1033,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   const routedNoticeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(routedNoticeTimerRef.current), []);
 
-  const searchMentionSessions = useCallback(async (q: string): Promise<SessionMentionCandidate[]> => {
-    const rows = await searchSessions(q, 12);
-    return rows
-      .filter((r) => r.claudeSessionId !== sessionId && !r.archived)
-      .slice(0, 6)
-      .map((r) => ({
-        id: r.claudeSessionId,
-        title: r.title || '',
-        host: r.host || '',
-        status: r.process_status || '',
-      }));
-  }, [sessionId]);
-
   const handleSend = useCallback(async (message: string, images?: ImageAttachment[]) => {
     const directive = parseSessionDirective(message);
     if (directive) {
@@ -1902,7 +1889,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             onControlCommand={handleControlCommand}
             mentionCwd={session?.cwd}
             mentionHost={session?.host}
-            searchMentionSessions={searchMentionSessions}
+            enableSessionMention
+            sessionMentionSelfId={sessionId}
             draftKey={`draft:session:${sessionId}`}
             prefillText={prefillText}
             prefillNonce={prefillNonce}
