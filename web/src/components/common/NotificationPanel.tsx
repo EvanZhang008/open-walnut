@@ -329,14 +329,14 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
               label="Inbox" count={counts.inbox}
               active={section === 'inbox'} onClick={() => pickSection('inbox')}
             />
-            {/* Every rail section carries a badge, and the non-action ones show
-                what the tab LISTS (not just what is unread): a rail where only
-                Needs Action had a number left the user unable to see that nine
-                errors were sitting one click away, because opening the panel
-                marks everything read. Neutral accent — only pending permissions
-                get the warning colour. */}
+            {/* Every LISTING section carries a badge showing what the tab LISTS
+                (not just what is unread): a rail where only Needs Action had a
+                number left the user unable to see that nine errors were sitting
+                one click away, because opening the panel marks everything read.
+                Errors are RED (live failures), pending permissions amber, the
+                rest the calm accent. */}
             <RailButton
-              label="Errors" count={counts.errorsTotal}
+              label="Errors" count={counts.errorsTotal} danger
               active={section === 'errors' && !activeErrorCategory}
               onClick={() => pickSection('errors')}
             />
@@ -364,8 +364,10 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
               label="System" count={systemIssues} warn dot={systemUnhealthy}
               active={section === 'system'} onClick={() => pickSection('system')}
             />
+            {/* All is the whole feed — its length is history depth, not a
+                signal, and "99+" forever read as a problem. No badge. */}
             <RailButton
-              label="All" count={counts.allTotal}
+              label="All" count={0}
               active={section === 'all'} onClick={() => pickSection('all')}
             />
           </div>
@@ -547,11 +549,13 @@ function RailSubButton({ label, count, active, onClick }: {
   );
 }
 
-function RailButton({ label, count, active, warn, dot, onClick }: {
+function RailButton({ label, count, active, warn, danger, dot, onClick }: {
   label: string;
   count: number;
   active: boolean;
   warn?: boolean;
+  /** Red badge — live errors, one step past warn's amber. */
+  danger?: boolean;
   /** Countless attention marker (the System zone: health, not a list length). */
   dot?: boolean;
   onClick: () => void;
@@ -564,7 +568,7 @@ function RailButton({ label, count, active, warn, dot, onClick }: {
     >
       <span className="nfc-rail-name">{label}</span>
       {count > 0 ? (
-        <span className={`nfc-rail-badge${warn ? ' nfc-warn' : ''}`}>{count > 99 ? '99+' : count}</span>
+        <span className={`nfc-rail-badge${warn ? ' nfc-warn' : ''}${danger ? ' nfc-danger' : ''}`}>{count > 99 ? '99+' : count}</span>
       ) : dot ? (
         <span
           className={`nfc-rail-dot${warn ? ' nfc-warn' : ''}`}

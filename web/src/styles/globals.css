@@ -29220,6 +29220,9 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 /* Pending permissions block a session — warning-styled, never the calm accent. */
 .nfc-rail-badge.nfc-warn { background: var(--warning); }
 
+/* Live errors — red, one step past warn's amber. */
+.nfc-rail-badge.nfc-danger { background: var(--danger, #ff3b30); }
+
 /* The System zone has nothing to count — a dot marks "something in here is
    unhealthy" (failing backup, broken index) without inventing a number. */
 .nfc-rail-dot {

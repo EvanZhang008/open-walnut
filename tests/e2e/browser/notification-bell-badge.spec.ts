@@ -80,6 +80,16 @@ test('asks + unread letters badge amber; read state of the ask is irrelevant', a
   // from vanishing the first time the user glances at the panel.
   await page.getByRole('button', { name: 'Notifications' }).click()
   await expect(page.locator('.notification-panel')).toBeVisible()
+
+  // Rail semantics inside the panel: Errors badge is RED (live failures), and
+  // All carries NO badge — the feed's length is history depth, not a signal.
+  const railBtn = (label: string) =>
+    page.locator('.nfc-rail .nfc-rail-btn', { has: page.locator('.nfc-rail-name', { hasText: label }) })
+  const errorsBadge = railBtn('Errors').locator('.nfc-rail-badge')
+  await expect(errorsBadge).toHaveText('3')
+  await expect(errorsBadge).toHaveClass(/nfc-danger/)
+  await expect(railBtn('All').locator('.nfc-rail-badge')).toHaveCount(0)
+
   await page.keyboard.press('Escape')
   await expect(page.locator('.notification-panel')).toBeHidden()
   await expect(badge).toHaveText('2')
