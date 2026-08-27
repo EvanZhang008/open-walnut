@@ -321,12 +321,15 @@ test('rail sorts the feed by what the user has to do, and cards carry the ask', 
   await loadHome(page)
   await waitForWs(page)
 
-  // Bell badge covers the 6 seeded unread records. Asserted as a FLOOR, not an
-  // equality: the badge is one number for the whole feed, so a real notification
-  // from the shared fixture server legitimately pushes it higher.
+  // Bell badge counts what WAITS ON THE HUMAN — here the one pending ask. The
+  // resolved twin, the errors, and the receipts no longer badge (amber
+  // attention count replaced the all-unread red counter). Asserted as a FLOOR,
+  // not an equality: a real ask or letter broadcast from the shared fixture
+  // server legitimately pushes it higher.
   const badge = page.locator('.notification-badge-count')
   await expect(badge).toBeVisible()
-  expect(Number((await badge.textContent())?.replace('+', '') ?? 0)).toBeGreaterThanOrEqual(6)
+  await expect(badge).toHaveClass(/notification-badge-attention/)
+  expect(Number((await badge.textContent())?.replace('+', '') ?? 0)).toBeGreaterThanOrEqual(1)
 
   const panel = await openCenter(page)
 

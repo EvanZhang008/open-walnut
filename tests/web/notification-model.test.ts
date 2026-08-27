@@ -18,7 +18,7 @@ import {
   sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
   linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory,
-  systemIssueCount, causeLabelOf, partitionErrorsByCause,
+  systemIssueCount, causeLabelOf, partitionErrorsByCause, attentionBadgeCount,
 } from '../../web/src/contexts/notifications/notification-model';
 import { SHOULD_TOAST } from '../../web/src/contexts/notifications/types';
 import type { Notification, NotificationKind, NotificationSeverity } from '../../web/src/contexts/notifications/types';
@@ -805,5 +805,49 @@ describe('partitionErrorsByCause', () => {
 
   it('is empty for an empty list', () => {
     expect(partitionErrorsByCause([])).toEqual({ causes: [], rest: [] });
+  });
+});
+
+/**
+ * attentionBadgeCount — the bell badge counts what WAITS ON THE HUMAN, never
+ * errors. The bug this pins: badging every unread entry kept the bell a
+ * permanent red counter that survived recoveries and drowned the one pending
+ * ask that actually mattered.
+ */
+describe('attentionBadgeCount', () => {
+  it('counts pending asks and unread letters, and nothing else', () => {
+    const feed: Notification[] = [
+      // Pending permission, already READ — still blocks the session, still counts.
+      n({ kind: 'permission', dedupKey: 'perm:a', read: true }),
+      // Unread letter envelope.
+      n({ kind: 'letter', dedupKey: 'letter:l1', letterId: 'l1', read: false }),
+      // Unread ERRORS — the noise this change removes from the badge.
+      n({ kind: 'operation-error', dedupKey: 'error:a', read: false, severity: 'error' }),
+      n({ kind: 'operation-error', dedupKey: 'error:b', read: false, severity: 'error' }),
+      // Unread automation receipt and generic entry: informational, no badge.
+      n({ kind: 'cron', dedupKey: 'cron:a', read: false }),
+      n({ kind: 'hook', dedupKey: 'hook:a', read: false }),
+    ];
+    expect(attentionBadgeCount(feed)).toBe(2);
+  });
+
+  it('drops a settled ask and a read letter (nothing left to do)', () => {
+    const feed: Notification[] = [
+      n({ kind: 'permission', dedupKey: 'perm:done', resolved: 'allowed', read: false }),
+      n({ kind: 'letter', dedupKey: 'letter:seen', letterId: 'seen', read: true }),
+    ];
+    expect(attentionBadgeCount(feed)).toBe(0);
+  });
+
+  it('is 0 for a feed of unread errors alone — errors never badge a number', () => {
+    const feed: Notification[] = [
+      n({ kind: 'operation-error', dedupKey: 'error:x', read: false, severity: 'error' }),
+      n({ kind: 'operation-error', dedupKey: 'error:y', read: false, severity: 'error' }),
+    ];
+    expect(attentionBadgeCount(feed)).toBe(0);
+  });
+
+  it('is 0 for an empty feed', () => {
+    expect(attentionBadgeCount([])).toBe(0);
   });
 });

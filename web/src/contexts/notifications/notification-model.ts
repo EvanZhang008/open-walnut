@@ -83,11 +83,12 @@ export interface SectionCounts {
   /** UNREAD letters — the Inbox rail badge (a letter is read one at a time, so
    *  unread is the meaningful number here, unlike the other rails). */
   inbox: number;
-  /** UNREAD errors — bell-badge parity, NOT what the rail badge shows. */
+  /** UNREAD errors — NOT what the rail badge shows, and never on the bell. */
   errors: number;
   /** UNREAD automation receipts. */
   automation: number;
-  /** UNREAD across the whole feed (the bell badge's number). */
+  /** UNREAD across the whole feed (drives the panel's open-marks-read sweep;
+   *  the bell badge is attentionBadgeCount, not this). */
   all: number;
   /** Letters the Inbox rail lists (non-archived). */
   inboxTotal: number;
@@ -121,8 +122,8 @@ export interface LetterCountable {
  * count what each section LISTS, which is what the rail badge shows: a badge that
  * only appeared while something was unread meant a rail with four labels and one
  * number, and the user couldn't see there were nine errors sitting under a tab
- * they had already opened once. The unread fields stay for the bell badge, which
- * legitimately means "new since you looked".
+ * they had already opened once. The unread fields stay for "new since you
+ * looked" consumers (the bell reads action + inbox via attentionBadgeCount).
  *
  * `letters` (the letter store's own list) is optional and AUTHORITATIVE when
  * given: read/pin/archive live there, and the 200-entry feed can have dropped a
@@ -156,6 +157,30 @@ export function sectionCounts(feed: Notification[], letters?: LetterCountable[])
     }
   }
   return counts;
+}
+
+/**
+ * The bell badge's number: things WAITING ON THE HUMAN — pending permission /
+ * question asks plus unread inbox letters. Deliberately EXCLUDES errors,
+ * automation receipts, and generic unread entries: an error is a diagnosis,
+ * not a to-do, and badging every unread entry kept the bell permanently red
+ * with a number nobody read (and it stayed red long after recovery). Both
+ * inputs survive the panel's open-marks-all-read sweep: a pending permission
+ * counts regardless of read state (reading it doesn't unblock the session),
+ * and letters are exempt from markAllRead (the letter store owns their read
+ * state). Feed-only derivation — the sidebar has no letter store; envelope
+ * read state follows the store via markLocalRead.
+ *
+ * KNOWN GAP vs the panel's Needs Action rail: a READ but UNANSWERED
+ * action_required letter still counts there (the panel has the letter store,
+ * which knows `answered`), but drops off this badge once its envelope is read —
+ * the envelope record carries neither the letter type nor the answered flag.
+ * Accepted: the badge means "new things waiting on you", and a read letter has
+ * been seen; the rail stays the persistent blocked-work tracker.
+ */
+export function attentionBadgeCount(feed: Notification[]): number {
+  const c = sectionCounts(feed);
+  return c.action + c.inbox;
 }
 
 /**

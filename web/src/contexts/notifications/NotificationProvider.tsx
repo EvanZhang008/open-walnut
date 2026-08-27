@@ -27,7 +27,7 @@ import {
   type Notification, type NotificationInput,
   TOAST_DURATION_MS, IS_PERSISTENT, MAX_FEED_BODY_CHARS, SHOULD_TOAST,
 } from './types';
-import { effectiveTs } from './notification-model';
+import { effectiveTs, attentionBadgeCount } from './notification-model';
 
 interface NotificationContextValue {
   /** Current top-right toast stack. */
@@ -41,8 +41,11 @@ interface NotificationContextValue {
    * so far vs. actually empty, otherwise a slow GET lands them on the wrong tab.
    */
   loaded: boolean;
-  /** Count of unread feed entries. */
+  /** Count of unread feed entries (drives the panel's open-marks-read sweep). */
   unreadCount: number;
+  /** What the bell badge shows: pending asks + unread letters — never errors.
+   *  See attentionBadgeCount in notification-model.ts. */
+  attentionCount: number;
   /** Push a notification from any source. Returns the resolved id (or null if deduped away). */
   notify: (input: NotificationInput) => void;
   /** Dismiss one toast (does not remove it from the feed). */
@@ -585,11 +588,12 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const unreadCount = useMemo(() => feed.filter(f => !f.read).length, [feed]);
+  const attentionCount = useMemo(() => attentionBadgeCount(feed), [feed]);
 
   const value = useMemo<NotificationContextValue>(() => ({
-    toasts, feed, loaded, unreadCount, notify, dismissToast, pinToast, markAllRead,
+    toasts, feed, loaded, unreadCount, attentionCount, notify, dismissToast, pinToast, markAllRead,
     markLocalRead, dismissFeed,
-  }), [toasts, feed, loaded, unreadCount, notify, dismissToast, pinToast, markAllRead,
+  }), [toasts, feed, loaded, unreadCount, attentionCount, notify, dismissToast, pinToast, markAllRead,
     markLocalRead, dismissFeed]);
 
   return (

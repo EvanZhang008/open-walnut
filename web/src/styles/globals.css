@@ -515,6 +515,13 @@ select {
   right: 8px;
 }
 
+/* Bell flavour: amber "needs you" (asks + unread letters), never a red error
+   count. Dark text — white on amber is unreadable at 10px. */
+.notification-badge-count.notification-badge-attention {
+  background: var(--tier-wait, #ff9f0a);
+  color: #3a2500;
+}
+
 /* Transparent click-away layer — no dimming. A dark backdrop made the sidebar
    read as a highlighted dark band next to the light panel; natural style is
    the panel sliding out with everything else visually unchanged. */

@@ -37,7 +37,7 @@ export function Sidebar({
   const { hasIssues } = useSystemHealth();
   const apps = useAppCatalog();
   const audio = useAudioCapture();
-  const { notify, unreadCount } = useNotifications();
+  const { notify, attentionCount } = useNotifications();
   const [notifOpen, setNotifOpen] = useState(false);
   const [voiceOpen, setVoiceOpen] = useState(false);
   // Live voice status (transcribing spinner / failure dot) from any MicButton.
@@ -235,8 +235,11 @@ export function Sidebar({
         >
           <BellIcon />
           <span className="sidebar-label">Notifications</span>
-          {unreadCount > 0 ? (
-            <span className="notification-badge-count">{unreadCount > 99 ? '99+' : unreadCount}</span>
+          {/* Amber count = things waiting on the human (asks + unread letters).
+              Errors never badge a number — they read as a diagnosis inside the
+              panel, not a permanent red counter on the bell. */}
+          {attentionCount > 0 ? (
+            <span className="notification-badge-count notification-badge-attention">{attentionCount > 99 ? '99+' : attentionCount}</span>
           ) : hasIssues ? (
             <span className="notification-badge-dot" />
           ) : null}

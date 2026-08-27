@@ -815,8 +815,10 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
       {resolved && (
         /* Labels live in resolvedLabelOf (kind-aware: 'expired' on a permission
            is "Session ended", on an error it is "Stale") so the panel and the
-           toast can't drift apart. */
-        <div className="notification-feed-item-resolved">{resolvedLabelOf(n)}</div>
+           toast can't drift apart. Pass the LOCAL resolved, not `n`: right after
+           an inline answer only `sent` knows the outcome (`n.resolved` waits for
+           the server round-trip), and `n` alone rendered an empty label. */
+        <div className="notification-feed-item-resolved">{resolvedLabelOf({ kind: n.kind, resolved })}</div>
       )}
 
       {/* The answer form / buttons. */}
