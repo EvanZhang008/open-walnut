@@ -133,6 +133,19 @@ function invalidateTaskStoreCache(): void {
   taskStoreCacheDataVersion = null;
 }
 
+/**
+ * Bumped each time a writer RE-SEEDS the cache itself (writeStore's tail).
+ * withWriteLock.finally compares this against the value it saw at section
+ * start: unchanged → the section wrote without re-seeding (row-level fast
+ * paths, targeted registry SQL) → invalidate as before; changed → the cache
+ * already holds the post-write snapshot, so dropping it would only force the
+ * next reader into a pointless ~6k-row SELECT + rowToTask rebuild. Under a
+ * write burst (session spawn storms) that rebuild ran between EVERY pair of
+ * writes and convoyed quick-start to 20-70s (2026-08-26, profiled: 42% of
+ * main-thread samples in better-sqlite3 .all() + 16% GC).
+ */
+let taskStoreCacheSeeded = 0;
+
 // ── Row shadow: makes writeStore() write only the rows that changed ──
 //
 // writeStore() takes a whole-store snapshot, so without this it re-INSERTs every
@@ -249,17 +262,20 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   const prev = writeLock;
   let resolve: () => void;
   writeLock = new Promise<void>((r) => { resolve = r; });
-  // Invalidate the whole-store read cache after EVERY locked mutation. All
-  // writers — single-row, per-row fast paths (updateTaskRaw/*Bulk), and
-  // writeStore — funnel through this lock, so this one hook keeps the cache
-  // correct without enumerating writers.
+  // Invalidate the whole-store read cache after EVERY locked mutation that did
+  // not re-seed it. Writers that end in writeStore() re-seed the cache with the
+  // just-committed snapshot (see taskStoreCacheSeeded); row-level fast paths
+  // (updateTaskRaw/*Bulk) and targeted registry SQL don't, so this hook still
+  // keeps the cache correct for them without enumerating writers.
+  let seededAtStart = -1;
   return prev
     .then(() => withFileLock(TASKS_FILE, async () => {
+      seededAtStart = taskStoreCacheSeeded;
       writeLockDepth += 1;
       try { return await fn(); } finally { writeLockDepth -= 1; }
     }))
     .finally(() => {
-      invalidateTaskStoreCache();
+      if (taskStoreCacheSeeded === seededAtStart) invalidateTaskStoreCache();
       resolve!();
     });
 }
@@ -705,13 +721,27 @@ async function writeStore(store: TaskStore): Promise<void> {
   // Transaction committed — the staged row shadow now describes what's on disk.
   commitRowShadow();
 
-  // Invalidate the read cache at COMMIT time, not just in withWriteLock.finally.
-  // Several helpers emit bus events between writeStore() and lock release
-  // (e.g. setFocusTier emits config:changed{focus_bar}); a browser that reacts
-  // to that event can GET /api/focus/tasks before .finally runs and be served
-  // the pre-write snapshot — the fork/quick-start "lands in Satellite despite
-  // focus_tier=focus" bug. The .finally invalidation stays as the backstop.
-  invalidateTaskStoreCache();
+  // RE-SEED the read cache with the just-committed snapshot at COMMIT time
+  // (this replaces the old invalidate-here + invalidate-in-finally pair).
+  // Same event-race guarantee as the invalidate it replaces: helpers emit bus
+  // events between writeStore() and lock release (e.g. setFocusTier emits
+  // config:changed{focus_bar}), and a browser reacting to that event must not
+  // be served the pre-write snapshot — a cache holding the POST-write snapshot
+  // satisfies that strictly better than an empty one, without forcing the next
+  // reader into a full-table rebuild after every single write.
+  //
+  // Gate on `projects !== undefined`: writeStore PRESERVES the registry when
+  // the snapshot omits the key (see the rewrite guard above), so caching such
+  // a snapshot would hand later readers a store with the projects erased.
+  // task_groups/custom_tiers need no gate — they are rewritten unconditionally
+  // from the snapshot, so post-commit DB state always matches it.
+  if (STORE_CACHE_ENABLED && store.projects !== undefined) {
+    taskStoreCache = cloneTaskStore(store);
+    taskStoreCacheDataVersion = readDataVersion(db);
+    taskStoreCacheSeeded += 1;
+  } else {
+    invalidateTaskStoreCache();
+  }
 }
 
 export interface AddTaskInput {

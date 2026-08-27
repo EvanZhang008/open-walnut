@@ -912,8 +912,13 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         res.json({ messages: [], total: 0 })
         return
       }
-      // skipSubagents: frontend lazy-loads each subagent via /subagent/:agentId/history on demand
-      const { messages, finishedAgentIds: p1FinishedIds, windowed: p1Windowed } = await readProviderSessionHistory(sessionId, record, undefined)
+      // skipSubagents: frontend lazy-loads each subagent via /subagent/:agentId/history on demand.
+      // Tail-bounded request → bound a COLD local read too (same contract as the
+      // full path below): an 8+ MB whale JSONL parsed whole on the event loop
+      // took seconds and stalled every other route, only for the tail slice to
+      // throw most of it away.
+      const { messages, finishedAgentIds: p1FinishedIds, windowed: p1Windowed } = await readProviderSessionHistory(sessionId, record, undefined, true,
+        tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined)
       logMessageOrdering('P1:streams', sessionId, messages, record?.host)
       const sliced = tail && tail > 0 ? messages.slice(-tail) : messages
       const p1InitialUserText = p1Windowed ? undefined : initialUserTextOf(messages)

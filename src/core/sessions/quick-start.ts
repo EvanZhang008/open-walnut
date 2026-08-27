@@ -188,10 +188,23 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     const pinNewTask = taskMeta?.pinTier !== null;
     let task: Task;
     try {
+      // ONE store write: cwd/priority/dates ride the create instead of a
+      // follow-up updateTask. Every task op is a whole-store read-modify-write
+      // behind one lock, so each op this path sheds is real launch latency —
+      // under machine load the old create → update → tier → re-read chain
+      // convoyed to 20-30s of "Starting…" (2026-08-26).
       ({ task } = await addTask({
         title,
         project,
         source: 'local',
+        cwd,
+        // 'none' is a sentinel meaning "don't write priority" — lets a caller
+        // omit the field without clearing an existing value.
+        ...(taskMeta?.priority && taskMeta.priority !== 'none' ? { priority: taskMeta.priority } : {}),
+        // Dates ride the create too (route already validated they parse).
+        ...(taskMeta?.due_date ? { due_date: taskMeta.due_date } : {}),
+        ...(taskMeta?.start_date ? { start_date: taskMeta.start_date } : {}),
+        ...(taskMeta?.end_date ? { end_date: taskMeta.end_date } : {}),
         ...(pinNewTask ? { pinned: true } : {}),
       }));
     } catch (err) {
@@ -216,33 +229,29 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
         });
       }
     }
-    // Merge taskMeta into the initial update.
-    const updates: Partial<Task> = { cwd };
-    if (taskMeta?.unread) updates.unread = true;
-    // 'none' is a sentinel meaning "don't write priority" — lets a future retry
-    // branch or other caller omit the field without clearing an existing value.
-    if (taskMeta?.priority && taskMeta.priority !== 'none') updates.priority = taskMeta.priority;
-    // Dates ride the same initial update (route already validated they parse).
-    if (taskMeta?.due_date) updates.due_date = taskMeta.due_date;
-    if (taskMeta?.start_date) updates.start_date = taskMeta.start_date;
-    if (taskMeta?.end_date) updates.end_date = taskMeta.end_date;
-    await updateTask(task.id, updates, { source });
-    // Tier — the pin itself already rode addTask above, and a pinned task with
-    // no stored tier IS Satellite, so this only runs when the caller named a
-    // different tier. Best-effort: if it fails the task keeps its Satellite
-    // slot and the session still starts.
-    if (pinNewTask && taskMeta?.pinTier) {
+    // Rare follow-up writes. `unread` doesn't ride AddTaskInput, and the tier
+    // only needs writing when the caller named one (a pinned task with no
+    // stored tier IS Satellite). Tier is best-effort: if it fails the task
+    // keeps its Satellite slot and the session still starts.
+    const wantsUnread = taskMeta?.unread === true;
+    const wantsTier = pinNewTask && taskMeta?.pinTier ? taskMeta.pinTier : undefined;
+    if (wantsUnread) {
+      await updateTask(task.id, { unread: true }, { source });
+    }
+    if (wantsTier) {
       try {
-        await setFocusTier(task.id, taskMeta.pinTier);
+        await setFocusTier(task.id, wantsTier);
       } catch (err) {
         log.web.warn(`${source}: failed to apply pin/tier`, {
           taskId: task.id,
-          tier: taskMeta.pinTier,
+          tier: wantsTier,
           error: err instanceof Error ? err.message : String(err),
         });
       }
     }
-    updatedTask = await getTask(task.id);
+    // Common path (Satellite tier, no unread): the addTask return IS the final
+    // task — skip the whole-store re-read that used to run on every launch.
+    updatedTask = wantsUnread || wantsTier ? await getTask(task.id) : task;
   }
 
   if (!existingTaskId) {

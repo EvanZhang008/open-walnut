@@ -50,6 +50,16 @@ interface Job {
 
 const config = (workerData ?? {}) as WorkerConfig;
 
+/**
+ * onnxruntime session thread caps. Left to its default, ort-node sizes its
+ * intra-op pool to the machine's cores — measured on a 14-core Mac as SEVEN
+ * threads pinned at ~45% CPU each for the hours a vector backfill runs,
+ * starving every other process (and the server's own event loop) of cores.
+ * Embedding is a background lane; two threads keep it far off the interactive
+ * path while only ~2x-ing per-batch latency.
+ */
+const ORT_SESSION_OPTIONS = { intraOpNumThreads: 2, interOpNumThreads: 1 };
+
 type Extractor = (
   texts: string[],
   opts: { pooling: 'mean'; normalize: boolean },
@@ -68,6 +78,7 @@ function loadExtractor(): Promise<Extractor> {
       const pipe = await transformers.pipeline('feature-extraction', config.modelId, {
         dtype: (config.dtype ?? 'q8') as 'q8',
         device: 'cpu',
+        session_options: ORT_SESSION_OPTIONS,
       });
       return pipe as unknown as Extractor;
     })();
@@ -89,6 +100,7 @@ async function loadLastTokenExtractor(
   const model = await transformers.AutoModel.from_pretrained(config.modelId, {
     dtype: (config.dtype ?? 'q8') as 'q8',
     device: 'cpu',
+    session_options: ORT_SESSION_OPTIONS,
   });
   return (async (texts: string[]) => {
     const inputs = await tokenizer(texts, { padding: true, truncation: true, max_length: 512 });
