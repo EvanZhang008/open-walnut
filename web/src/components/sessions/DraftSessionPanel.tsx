@@ -164,6 +164,10 @@ export function DraftSessionPanel({
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // A Start was refused because no folder is chosen (only reachable on a cold
+  // working-dirs cache, where the draft can't be given a default). Drives the
+  // one-line notice above the launch bar — see startWith.
+  const [needsFolder, setNeedsFolder] = useState(false);
   // Slash-command palette, same source a real session's composer uses: no folder
   // yet → the LOCAL list (skills + built-ins, no project commands); once a
   // folder/host is picked the list follows it (a remote host shows that host's
@@ -204,6 +208,13 @@ export function DraftSessionPanel({
   useEffect(() => {
     if (draft.openPickerNonce) setPickerOpen(true);
   }, [draft.openPickerNonce]);
+
+  // The notice describes a condition, so it retires the moment the condition
+  // does — a folder picked by any route (picker, quick chip, project default)
+  // must not leave "choose a folder" on screen next to a chosen folder.
+  useEffect(() => {
+    if (draft.cwd) setNeedsFolder(false);
+  }, [draft.cwd]);
 
   // ── Background AI backfill of the launch pills (R9) ──
   //
@@ -271,7 +282,17 @@ export function DraftSessionPanel({
   // no-cwd case (open the picker, keep the text) can never degrade into the
   // sync-false branch of dispatchSend that wipes the draft. See Props.onStart.
   const startWith = useCallback(async (body: string, images?: ImageAttachment[]): Promise<boolean> => {
-    if (!draft.cwd) { setPickerOpen(true); return false; }
+    if (!draft.cwd) {
+      // Opening the picker is the RECOVERY, not the explanation. On its own this
+      // read as a dead Start button: the click produced a file browser, no
+      // request, and nothing that said why — which is how "it can't start" got
+      // reported. Say the reason out loud, next to the pill the user has to fix.
+      // Cleared as soon as a folder lands (the effect below), so the notice can
+      // never outlive the condition it describes.
+      setNeedsFolder(true);
+      setPickerOpen(true);
+      return false;
+    }
     return onStart(draft.id, body, images);
   }, [draft.cwd, draft.id, onStart]);
 
@@ -326,6 +347,13 @@ export function DraftSessionPanel({
       </div>
 
       <div className="session-panel-input">
+        {/* Why the last Start didn't start. Above the launch bar so it sits
+            directly over the folder pill that resolves it. */}
+        {needsFolder && !draft.cwd && (
+          <div className="draft-needs-folder" role="status" data-testid="draft-needs-folder">
+            Pick a folder first — the session runs in it.
+          </div>
+        )}
         <DraftLaunchBar
           draft={draft}
           pickerOpen={pickerOpen}

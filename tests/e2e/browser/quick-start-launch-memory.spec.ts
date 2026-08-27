@@ -227,11 +227,16 @@ test('dismissing (outside click) after picking a path confirms it as the launch 
 
 test('dismissing with no path picked still just closes (no path adopted)', async ({ page }) => {
   const panel = await openPicker(page)
-  // Browse mode, nothing typed — outside click closes and adopts nothing, so the
-  // draft's cwd pill still reads its unpicked placeholder.
+  // The pill BEFORE the dismiss. A fresh draft now opens on the most recently
+  // used folder (defaultDraftDir) rather than on an empty cwd — an empty cwd
+  // can't launch, so it made Start silently open this very picker instead of
+  // starting a session. "Adopts nothing" is therefore an UNCHANGED-pill claim,
+  // not an empty-pill one: a dismiss must leave whatever was there alone.
+  const before = await cwdPill(panel).innerText()
+  // Browse mode, nothing typed — outside click closes and adopts nothing.
   await clickOutsideUntilClosed(page)
   await expect(page.locator('.session-path-selector')).toHaveCount(0)
-  await expect(cwdPill(panel)).toHaveText('Choose folder…')
+  await expect(cwdPill(panel)).toHaveText(before)
 })
 
 test('panel height is fixed — drilling into a dir with few children must not shrink it', async ({ page }) => {

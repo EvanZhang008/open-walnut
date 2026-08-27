@@ -20,9 +20,9 @@ const { peek } = vi.hoisted(() => ({ peek: vi.fn<() => WorkingDirsResult | null>
 
 vi.mock('@/api/sessions', () => ({ peekWorkingDirs: peek }));
 
-const { applyDraftParse, clearAiFields, quickDirsFor, projectForFolderPick, suggestDiff } = await import(
-  '@/components/sessions/draft-column'
-);
+const {
+  applyDraftParse, clearAiFields, defaultDraftDir, quickDirsFor, projectForFolderPick, suggestDiff,
+} = await import('@/components/sessions/draft-column');
 type DraftColumn = import('@/components/sessions/draft-column').DraftColumn;
 
 /** A working-dirs row. `count` = absolute lifetime uses, `lastUsed` = recency —
@@ -386,5 +386,54 @@ describe('projectForFolderPick — a folder is a project unless somebody said ot
   it('no-ops on an empty cwd and the filesystem root', () => {
     expect(projectForFolderPick(draft(), '', registry)).toBeNull();
     expect(projectForFolderPick(draft(), '/', registry)).toBeNull();
+  });
+});
+
+describe('defaultDraftDir — an unseeded draft opens somewhere launchable', () => {
+  // The bug this pins: a draft with cwd === '' CANNOT launch (DraftSessionPanel's
+  // startWith refuses and opens the picker), so "+ → type → Start" made a file
+  // browser instead of a session, with no request and no error. A default folder
+  // is what makes that click start something.
+  it('picks the MOST RECENTLY USED dir, not the most used', () => {
+    // /heavy is the all-time favourite but months stale; /today is where the user
+    // actually is. A starting point should follow the person, not the histogram.
+    seedDirs([
+      dir('/heavy', 900, '2026-01-01T00:00:00Z'),
+      dir('/today', 2, '2026-08-27T09:00:00Z'),
+      dir('/yesterday', 40, '2026-08-26T09:00:00Z'),
+    ]);
+    expect(defaultDraftDir()?.cwd).toBe('/today');
+  });
+
+  it('carries the host and its label, so a remote default targets the right box', () => {
+    seedDirs([dir('/srv/app', 5, '2026-08-27T09:00:00Z', 'marina')]);
+    expect(defaultDraftDir()).toEqual({ cwd: '/srv/app', host: 'marina' });
+  });
+
+  it('returns null on a COLD cache — the open path may never fetch', () => {
+    peek.mockReturnValue(null);
+    expect(defaultDraftDir()).toBeNull();
+  });
+
+  it('returns null when the store is empty (a brand-new install)', () => {
+    seedDirs([]);
+    expect(defaultDraftDir()).toBeNull();
+  });
+
+  it('ignores rows with no cwd rather than defaulting to an unlaunchable ""', () => {
+    // An empty cwd is the very state that produces the silent Start, so a blank
+    // row must never win the comparison however recent it is.
+    seedDirs([
+      dir('', 10, '2026-08-27T10:00:00Z'),
+      dir('/real', 1, '2026-08-20T10:00:00Z'),
+    ]);
+    expect(defaultDraftDir()?.cwd).toBe('/real');
+  });
+
+  it('still answers when every row has an unparseable lastUsed', () => {
+    // -Infinity for all: the reduce must still return SOME launchable dir rather
+    // than falling through to null and re-introducing the picker-first dead end.
+    seedDirs([dir('/a', 3, 'not-a-date'), dir('/b', 1, '')]);
+    expect(defaultDraftDir()?.cwd).toBe('/a');
   });
 });

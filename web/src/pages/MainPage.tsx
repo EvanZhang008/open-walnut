@@ -31,7 +31,7 @@ import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import {
-  applyDraftParse, clearAiFields, draftComposerKey, withDirLaunchMemory,
+  applyDraftParse, clearAiFields, defaultDraftDir, draftComposerKey, withDirLaunchMemory,
   launchDivergesFromDirMemory, projectForFolderPick, suggestDiff, type DraftColumn,
 } from '@/components/sessions/draft-column';
 import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
@@ -1161,12 +1161,23 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
 
     const id = `${DRAFT_COL_PREFIX}${Date.now()}-${draftSeqRef.current++}`;
-    // The seed is the ONLY path source now (a task's own cwd, or a project's
-    // default patched in asynchronously). Unseeded → '' = "choose a folder".
+    // Path source, in order: the seed (a task's own cwd, or a project's default
+    // patched in asynchronously), else the most recently used folder in the
+    // working-dirs cache (defaultDraftDir).
+    //
+    // That fallback is what makes "+ → type → Start" actually start. An empty cwd
+    // is not a neutral default: the panel REFUSES to launch on it and opens the
+    // folder picker instead, so the Start click produced a file browser, no
+    // request, and no error — indistinguishable from a dead button. A suggested
+    // folder is recoverable in one click (picker / quick chip); a silent no-op is
+    // not. Deliberately NOT `cwdPinned` — nobody chose it, so a project's async
+    // default_cwd may still refine it, exactly like the seeded-from-memory case.
+    // Cold cache → '' and the old picker-first behavior, unchanged.
     const pinnedSeed = !!(seed?.cwd && seed.cwdPinned);
-    const cwd = seed?.cwd ?? '';
-    const host = seed?.host ?? null;
-    const hostLabel = seed?.hostLabel;
+    const fallbackDir = seed?.cwd ? null : defaultDraftDir();
+    const cwd = seed?.cwd ?? fallbackDir?.cwd ?? '';
+    const host = seed?.cwd ? (seed.host ?? null) : (fallbackDir?.host ?? null);
+    const hostLabel = seed?.cwd ? seed.hostLabel : fallbackDir?.hostLabel;
     setDraftColumns(prev => [
       ...prev,
       {

@@ -21105,6 +21105,21 @@ td.usage-share-col {
   flex-direction: column;
   gap: 4px;
 }
+/* "Pick a folder first" — why the last Start didn't start (DraftSessionPanel's
+   needsFolder). Warning-toned, not an error: nothing failed and nothing was
+   lost, the launch is one click from proceeding. flex-shrink so it can never
+   compete with the composer for height in a short column. */
+.draft-needs-folder {
+  flex-shrink: 0;
+  margin: 0 2px 4px;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 1.35;
+}
 /* While the POPOUT picker is up, the bar must outrank every piece of page
    chrome: the picker is position:fixed but still this bar's DOM child, so its
    own z-index resolves INSIDE this stacking context — at the resting 20, the

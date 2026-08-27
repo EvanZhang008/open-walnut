@@ -204,8 +204,16 @@ test('pin-tier header "+" opens a draft with that tier preset in the meta row', 
   await expect(panel.locator('.draft-model-select')).toHaveAttribute('data-model', '')
 
   // A tier seed leaves everything else neutral (this is not a project route).
-  await expect(draftProjectPill(panel)).toHaveText('Inbox')
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder…')
+  // The FOLDER is deliberately not asserted as empty: a fresh draft now opens on
+  // the most recently used folder (defaultDraftDir), because an empty cwd cannot
+  // launch and made Start silently open the folder picker. What this scenario
+  // claims is that a TIER seed doesn't reach into the project — and a
+  // folder-derived project is only possible once a folder exists, so assert the
+  // project is untouched relative to whatever folder the draft defaulted to.
+  const seededCwd = (await draftCwdPill(panel).innerText()).trim()
+  if (seededCwd === 'Choose folder…') {
+    await expect(draftProjectPill(panel)).toHaveText('Inbox')
+  }
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/02-tier-plus-seeds-tier.png`, fullPage: false })
 })
@@ -480,6 +488,14 @@ test('a failing quick-parse is a silent no-op — no toast, no pill change, no c
   await loadHome(page)
 
   const panel = await openDraft(page)
+  // Read the pills BEFORE typing. "Untouched" is a comparison against the state
+  // the user left, and that state is no longer necessarily empty: a fresh draft
+  // opens on the most recently used folder (defaultDraftDir), since an empty cwd
+  // cannot launch and turned Start into a silent picker-open. Capturing the
+  // before-values keeps this asserting the actual invariant — the failed parse
+  // changed nothing — instead of a particular starting value.
+  const cwdBefore = await draftCwdPill(panel).innerText()
+  const projectBefore = await draftProjectPill(panel).innerText()
   const failed = page.waitForResponse((res) =>
     new URL(res.url()).pathname === '/api/tasks/quick-parse' && res.status() === 500)
   await draftComposer(page).type('this sentence will never be understood')
@@ -487,8 +503,8 @@ test('a failing quick-parse is a silent no-op — no toast, no pill change, no c
 
   // The pills stay untouched, nothing is badged, and no error surfaces. Asserted
   // AFTER the 500 landed, so this is the post-failure state, not a race.
-  await expect(draftProjectPill(panel)).toHaveText('Inbox')
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder…')
+  await expect(draftProjectPill(panel)).toHaveText(projectBefore)
+  await expect(draftCwdPill(panel)).toHaveText(cwdBefore)
   await expect(panel.locator('.draft-ai-badge')).toHaveCount(0)
   await expect(draftMetaAiSlot(panel)).toHaveText('')
   await expect(draftTierBtn(panel, 'satellite')).toHaveAttribute('aria-pressed', 'true')
