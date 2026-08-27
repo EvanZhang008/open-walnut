@@ -232,6 +232,11 @@ struct TasksView: View {
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                 }
+                // Header chrome (cards / quick add / scope) is a TOOLBAR, not a
+                // settings group: the default insetGrouped gap belongs between
+                // PROJECTS, and stacking it under four chrome sections pushed the
+                // first task row 68% down the screen (measured, dogfood R19).
+                .listSectionSpacing(2)
 
                 // Todoist-grade quick add rides the TOP of EVERY filter (the
                 // Sessions tab included — it's the default filter, and "add a
@@ -246,6 +251,7 @@ struct TasksView: View {
                         showNewTask = true
                     }
                 }
+                .listSectionSpacing(2)
 
                 // Live sessions ride the top of every task filter (except the
                 // Sessions filter, which shows the full Pinned/Active/Recent
@@ -779,6 +785,8 @@ struct TasksView: View {
             .listRowSeparator(.hidden)
             .accessibilityIdentifier("sessions.scope")
         }
+        // Chrome, like the cards and quick add above it — see the note there.
+        .listSectionSpacing(2)
 
         // Bind ONCE per body pass (each reference used to recompute the full
         // filter+sort walk — isEmpty check, ForEach, and the count header
@@ -1026,10 +1034,16 @@ struct SmartListCard: View {
                     .frame(width: 28, height: 28)
                     .background(accent, in: Circle())
                 Spacer()
-                Text("\(count)")
+                Text(count.formatted(.number))
                     .font(.title.weight(.bold))
                     .monospacedDigit()
                     .foregroundStyle(.primary)
+                    // A four-digit count ("2,824") is wider than the fixed 130pt
+                    // card, and Text wraps BETWEEN DIGITS rather than shrinking:
+                    // dogfood R19 caught All Open rendering as "2,82 / 4" on two
+                    // lines. One line, scaled down, is always readable.
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
             }
             Text(filter.title)
                 .font(.subheadline.weight(.semibold))
