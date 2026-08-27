@@ -23,21 +23,32 @@ extension TasksStore {
     /// Create a task from one line of natural language. Returns the created
     /// server row (the parse upgrade continues in the background). Throws
     /// only when the CREATE itself fails — the caller shows that error.
-    /// `pinSeed` pre-pins the created task (focus-area quick add).
+    ///
+    /// `seed` is WHERE the row is filed: the project and the pin tier of the
+    /// group the user typed in (a `+` on the Focus header, a project section's
+    /// add row, or the top-level quick add's explicit pin chip). It rides the
+    /// CREATE call itself (`focus_tier`), so the placement is one write that
+    /// either lands whole or fails visibly — the old path created unpinned and
+    /// pinned afterwards, and that second write's failure was best-effort,
+    /// i.e. the task silently ended up somewhere the user didn't pick.
     @discardableResult
-    func quickAdd(_ text: String, pinSeed: Bool = false) async throws -> WalnutTask {
+    func quickAdd(_ text: String, seed: NewTaskSeed = NewTaskSeed(project: "", pin: .unspecified)) async throws -> WalnutTask {
         let raw = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))
         guard !raw.isEmpty else { throw APIError.badResponse }
 
-        // 1. Instant local placeholder (never blocks on the network).
+        // 1. Instant local placeholder (never blocks on the network). It carries
+        //    the seed's project + pin so the row appears IN the group the user
+        //    typed in, not at the top of Inbox on its way there.
         let placeholderId = "quickadd-\(UUID().uuidString)"
         let nowISO = ISO8601DateFormatter().string(from: Date())
         insertPlaceholder(WalnutTask(
             id: placeholderId, title: raw, status: "todo", phase: "TODO",
-            priority: "none", project: "", dueDate: nil,
+            priority: "none", project: seed.project, dueDate: nil,
             createdAt: nowISO, updatedAt: nowISO, completedAt: nil,
-            starred: nil, pinned: pinSeed ? true : nil, tags: nil, summary: nil
+            starred: nil, pinned: seed.pin.optimisticPinned, tags: nil, summary: nil
         ))
+        // Tier badge from frame one (the map is what the group headers read).
+        if let tier = seed.pin.optimisticTier { taskTiers[placeholderId] = tier }
 
         // 2. Fire the parse NOW — it runs concurrently with the create POST,
         //    so the upgrade usually lands ~1s after the row appears.
@@ -45,26 +56,45 @@ extension TasksStore {
 
         let created: WalnutTask
         do {
-            created = try await api.createTask(title: raw)
+            created = try await transport.createTask(
+                title: raw,
+                project: seed.project.isEmpty ? nil : seed.project,
+                priority: nil, dueDate: nil, startDate: nil, endDate: nil,
+                description: nil, pin: seed.pin
+            )
         } catch {
             parseTask.cancel()
+            taskTiers[placeholderId] = nil
             removePlaceholder(id: placeholderId)
-            AppLog.warn("tasks", "quick-add create failed", ["error": error.localizedDescription])
+            AppLog.warn("tasks", "quick-add create failed", [
+                "error": error.localizedDescription, "pin": seed.pin.key,
+            ])
             throw error
         }
-        // pinSeed: adopt a locally-pinned copy so the row doesn't flash OUT of
-        // the Pinned section between create and the pin call landing (the
-        // server row is created unpinned; applyPin runs right below).
-        let adopted = pinSeed ? Self.withPinned(created) : created
+        taskTiers[placeholderId] = nil
+        // The 201 for an explicit 'satellite' omits focus_tier by contract, and
+        // the projection can lag the pin write, so the row we SHOW carries the
+        // choice — otherwise a task born in Focus flashes out of its own group.
+        let adopted = seed.pin.optimisticPinned.map { Self.withPinned(created, $0) } ?? created
+        if let tier = seed.pin.optimisticTier { taskTiers[created.id] = tier }
         adoptCreated(adopted, replacingPlaceholder: placeholderId)
-        AppLog.info("tasks", "quick-add created", ["taskId": created.id, "pinSeed": String(pinSeed)])
+        AppLog.info("tasks", "quick-add created", [
+            "taskId": created.id, "pin": seed.pin.key, "project": seed.project,
+        ])
+        // Say WHERE it landed: the add row often sits in a group the new row is
+        // not visible from (a collapsed tier, a filter that hides it).
+        if seed.pin.namesTier, let tier = seed.pin.optimisticTier {
+            transientNotice = "Added · \(tierLabel(for: tier))"
+            scheduleTierRefresh()
+        }
 
-        // 3. Background upgrade — never awaited by the caller.
+        // 3. Background upgrade — never awaited by the caller. The pin is
+        //    already done (it rode the create), so only the parse remains.
         Task { [weak self] in
-            if pinSeed {
-                await self?.applyPin(taskId: created.id, tier: nil)
-            }
-            await self?.backfillFromParse(created: created, raw: raw, parseTask: parseTask, pinAlreadySeeded: pinSeed)
+            await self?.backfillFromParse(
+                created: created, raw: raw, parseTask: parseTask,
+                pinAlreadySeeded: seed.pin.namesTier
+            )
         }
         return created
     }

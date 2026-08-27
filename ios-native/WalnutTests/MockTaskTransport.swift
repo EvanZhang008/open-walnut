@@ -23,6 +23,10 @@ final class MockTaskTransport: WalnutTaskTransport, @unchecked Sendable {
     var gate: CheckedContinuationGate?
 
     var tasksResponse = TasksResponse(tasks: [], syncedAt: "2026-08-16T00:00:00Z")
+    /// Id the default createTask answer carries (tests assert on it).
+    var createdTaskId = "t-created"
+    /// createTask answer builder — overrides the default row when set.
+    var createTaskResult: ((String, TaskPinChoice) -> WalnutTask)?
     /// updateTask answer builder — defaults to echoing the patch as a row.
     var updateTaskResult: ((String) -> WalnutTask)?
     var batchPhaseResult = BatchPhaseResult(changed: [], failed: [], syncFailed: nil)
@@ -57,6 +61,34 @@ final class MockTaskTransport: WalnutTaskTransport, @unchecked Sendable {
     func tasks() async throws -> TasksResponse {
         try await checkpoint("tasks", [])
         return tasksResponse
+    }
+
+    func createTask(
+        title: String, project: String?, priority: String?,
+        dueDate: String?, startDate: String?, endDate: String?,
+        description: String?, pin: TaskPinChoice
+    ) async throws -> WalnutTask {
+        // The pin pair joins the recorded args so a test can assert exactly what
+        // a header `+` put on the wire: "-" is an OMITTED key, which is a
+        // different thing from `false`/`""` (see TaskPinChoice's wire rules).
+        try await checkpoint("createTask", [
+            title, project ?? "-", priority ?? "-", dueDate ?? "-",
+            pin.wirePinned.map(String.init) ?? "-",
+            pin.wireFocusTier ?? "-",
+        ])
+        if let createTaskResult { return createTaskResult(title, pin) }
+        // Default answer mirrors the server's storage convention: a tier IMPLIES
+        // pinned, and an explicit 'satellite' comes back with NO focus_tier
+        // (the projection has no tier field at all, so this is just `pinned`).
+        return WalnutTask(
+            id: createdTaskId, title: title, status: "todo", phase: "TODO",
+            priority: priority ?? "none", project: project ?? "", dueDate: dueDate,
+            createdAt: "2026-08-27T00:00:00Z", updatedAt: "2026-08-27T00:00:00Z",
+            completedAt: nil, starred: nil,
+            pinned: pin.wireFocusTier != nil ? true : pin.wirePinned,
+            tags: nil, summary: nil,
+            startDate: startDate, endDate: endDate
+        )
     }
 
     func updateTask(

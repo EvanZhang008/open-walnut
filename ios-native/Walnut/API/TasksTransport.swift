@@ -12,6 +12,15 @@ import Foundation
 protocol WalnutTaskTransport {
     // Task list + edits
     func tasks() async throws -> TasksResponse
+    /// Create. `pin` carries the create-time placement (`pinned` + `focus_tier`
+    /// per TaskPinChoice) so tests can assert WHAT a header `+` sent — the
+    /// difference between a task born in Focus and one silently filed in
+    /// Satellite is exactly one field on this call.
+    func createTask(
+        title: String, project: String?, priority: String?,
+        dueDate: String?, startDate: String?, endDate: String?,
+        description: String?, pin: TaskPinChoice
+    ) async throws -> WalnutTask
     func updateTask(
         id: String, status: String?, priority: String?, dueDate: String?,
         startDate: String?, endDate: String?,

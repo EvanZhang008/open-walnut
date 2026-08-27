@@ -13,6 +13,10 @@ struct NewTaskSheet: View {
     /// pre-fills the NL field and fires the parse once on appear. The form
     /// stays fully manual regardless (parse failure changes nothing).
     var seedText: String = ""
+    /// Where the sheet was opened FROM: a project section's header seeds the
+    /// project, a pin-tier header seeds the tier. Every field stays editable —
+    /// the seed is a starting point, never a lock.
+    var seed: NewTaskSeed = NewTaskSeed(project: "", pin: .unspecified)
 
     @Environment(\.dismiss) private var dismiss
     @Environment(TasksStore.self) private var tasks
@@ -36,6 +40,10 @@ struct NewTaskSheet: View {
 
     @State private var title = ""
     @State private var project = ""
+    /// Where on the pinned board the task is born. Seeded from wherever the
+    /// sheet was opened; `.unspecified` = let the server decide (its default
+    /// puts a person's task on the board in Satellite).
+    @State private var pin: TaskPinChoice = .unspecified
     @State private var priority: Priority = .none
     @State private var hasDueDate = false
     @State private var dueDate = Calendar.current.startOfDay(for: Date()).addingTimeInterval(9 * 3600)
@@ -70,6 +78,7 @@ struct NewTaskSheet: View {
                 quickParseSection
                 titleSection
                 projectSection
+                pinSection
                 prioritySection
                 dueDateSection
                 if let createError {
@@ -99,14 +108,25 @@ struct NewTaskSheet: View {
             }
             .onAppear {
                 titleFocused = true
+                // Opened from a group header (project section / pin tier): start
+                // in that group. Guarded on "still untouched" so a re-appear
+                // (keyboard, sheet detent change) can't stomp a manual edit.
+                if project.isEmpty, !seed.project.isEmpty { project = seed.project }
+                if pin == .unspecified, seed.pin != .unspecified { pin = seed.pin }
                 // Seeded from the quick-add expand: mirror the sentence into
                 // the title NOW (manual path intact) and parse in background.
-                let seed = seedText.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !seed.isEmpty, nlText.isEmpty {
-                    nlText = seed
-                    title = seed
+                let sentence = seedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !sentence.isEmpty, nlText.isEmpty {
+                    nlText = sentence
+                    title = sentence
                     Task { await parseNL() }
                 }
+            }
+            // Custom tiers load asynchronously and are rare; fetch them so a
+            // ct_* tier is pickable. Never gates the sheet — a failure leaves
+            // the four built-ins, which is a working form.
+            .task {
+                if tasks.customTiers.isEmpty { await tasks.loadFocusTiers() }
             }
             .interactiveDismissDisabled(creating)
         }
@@ -165,6 +185,18 @@ struct NewTaskSheet: View {
             if let p = parsed.project { project = p }
             parsedNewProject = parsed.projectIsNew == true
             if let raw = parsed.priority, let p = Priority(rawValue: raw) { priority = p }
+            // The parse can name a pin tier ("focus this week"). It only FILLS
+            // an untouched choice — a tier the human already picked (or the
+            // header they added from) outranks the model, same rule as every
+            // other field here. An unknown tier is dropped rather than sent:
+            // the server would 400 the whole create over a suggestion.
+            if pin == .unspecified, let tier = parsed.pinTier,
+               TaskPinChoice.tier(tier).isResolvable(
+                   builtinIds: TasksStore.builtinTiers.map(\.id),
+                   customTierIds: tasks.customTiers.map(\.id)
+               ) {
+                pin = .tier(tier)
+            }
             if let due = QuickParsedTask.parseLocalDate(parsed.dueDate) {
                 hasDueDate = true
                 dueDate = due
@@ -226,6 +258,85 @@ struct NewTaskSheet: View {
         }
     }
 
+    /// Every place a task can be filed, in one list: off the board, the four
+    /// built-in tiers, then any custom tier the box has registered.
+    ///
+    /// A LIST of rows rather than a Picker/segmented control on purpose: the
+    /// tier set is DYNAMIC (custom `ct_*` tiers come from the server, and there
+    /// can be several with real names), and a segmented control silently
+    /// squeezes them into unreadable slivers while a menu Picker hides the
+    /// choices behind a tap — the user's complaint was that the options were
+    /// not there, so they are all visible. Same interaction as the project
+    /// suggestion rows right above, so the sheet reads as one form.
+    private var pinChoices: [(choice: TaskPinChoice, label: String, icon: String)] {
+        var rows: [(TaskPinChoice, String, String)] = [
+            (.notPinned, "Not pinned", "circle.dashed"),
+        ]
+        for tier in TasksStore.builtinTiers {
+            rows.append((.tier(tier.id), tier.label, Self.tierIcon(tier.id)))
+        }
+        // Custom tiers are rare and load asynchronously; an empty/failed fetch
+        // simply means this list is the four built-ins (never a blocked sheet).
+        for tier in tasks.customTiers {
+            rows.append((.tier(tier.id), tier.label, "square.stack.3d.up"))
+        }
+        return rows.map { (choice: $0.0, label: $0.1, icon: $0.2) }
+    }
+
+    private static func tierIcon(_ id: String) -> String {
+        switch id {
+        case "focus": return "scope"
+        case "satellite": return "circle.circle"
+        case "backlog": return "tray.full"
+        case "wait": return "pause.circle"
+        default: return "square.stack.3d.up"
+        }
+    }
+
+    private var pinSection: some View {
+        Section {
+            ForEach(pinChoices, id: \.choice.key) { row in
+                Button {
+                    // Re-tapping the current choice returns to "let the server
+                    // decide" — the same toggle-off the project rows have, so
+                    // there is always a way back out of an accidental pick.
+                    pin = (pin == row.choice) ? .unspecified : row.choice
+                } label: {
+                    HStack {
+                        Image(systemName: row.icon)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 18)
+                        Text(row.label)
+                            .font(.subheadline)
+                            .foregroundStyle(pin == row.choice ? Theme.tint : .primary)
+                        Spacer()
+                        if pin == row.choice {
+                            Image(systemName: "checkmark")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Theme.tint)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("newTask.pin.\(row.choice.key)")
+            }
+        } header: {
+            Text("Pin")
+        } footer: {
+            Text(pin == .unspecified
+                 ? "Default — lands on the pinned board in Satellite."
+                 : (pin == .notPinned
+                    ? "Stays off the pinned board."
+                    : "Born in this tier, in one write."))
+        }
+        // The rows are individually addressable (a container identifier would
+        // overwrite every descendant's and make the choices untappable by id).
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("newTask.pinSection")
+    }
+
     private var prioritySection: some View {
         Section("Priority") {
             Picker("Priority", selection: $priority) {
@@ -267,9 +378,10 @@ struct NewTaskSheet: View {
                 title: title.trimmingCharacters(in: .whitespaces),
                 project: project.trimmingCharacters(in: .whitespaces),
                 priority: priority.rawValue,
-                dueDate: hasDueDate ? ISO8601DateFormatter().string(from: dueDate) : nil
+                dueDate: hasDueDate ? ISO8601DateFormatter().string(from: dueDate) : nil,
+                pin: pin
             )
-            AppLog.info("tasks", "created task", ["taskId": created.id])
+            AppLog.info("tasks", "created task", ["taskId": created.id, "pin": pin.key])
             onCreated?(created)
             dismiss()
         } catch let APIError.server(_, code, msg, _, _) {

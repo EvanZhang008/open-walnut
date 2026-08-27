@@ -112,10 +112,18 @@ struct WalnutAPI {
     /// range" gesture sends. Both are ISO-8601 (`YYYY-MM-DD` or a full
     /// datetime); an `endDate` needs a `startDate` (the server 400s an orphan
     /// end, and an end earlier than its start).
+    ///
+    /// `pin` (additive, 2026-08-27) files the task on the pinned board in ONE
+    /// write — no create-then-pin pair whose second half can fail silently.
+    /// `TaskPinChoice` owns the wire rules (a tier implies pinned so `pinned`
+    /// is omitted beside it; `satellite` comes BACK without a `focus_tier`
+    /// because that absence is how Satellite is stored; an unknown tier is a
+    /// 400, never a quiet downgrade). `.unspecified` sends neither key, which
+    /// is byte-for-byte the old behavior.
     func createTask(
         title: String, project: String? = nil, priority: String? = nil,
         dueDate: String? = nil, startDate: String? = nil, endDate: String? = nil,
-        description: String? = nil
+        description: String? = nil, pin: TaskPinChoice = .unspecified
     ) async throws -> WalnutTask {
         struct Body: Encodable {
             let title: String
@@ -125,6 +133,8 @@ struct WalnutAPI {
             let start_date: String?
             let end_date: String?
             let description: String?
+            let pinned: Bool?
+            let focus_tier: String?
         }
         let created: TaskCreated = try await send(
             "POST", "/tasks",
@@ -135,7 +145,9 @@ struct WalnutAPI {
                 due_date: dueDate,
                 start_date: startDate,
                 end_date: endDate,
-                description: (description?.isEmpty ?? true) ? nil : description
+                description: (description?.isEmpty ?? true) ? nil : description,
+                pinned: pin.wirePinned,
+                focus_tier: pin.wireFocusTier
             )
         )
         return created.task

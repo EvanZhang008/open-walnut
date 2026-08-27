@@ -446,26 +446,50 @@ final class TasksStore {
     /// server list contains the id. Throws on failure — the sheet surfaces it.
     /// `startDate`/`endDate` create the task already on the calendar (the
     /// "tap a day / drag a range" gesture); an end needs a start.
+    ///
+    /// `pin` files the task on the pinned board IN THE CREATE CALL (one write,
+    /// no create-then-pin pair). Two things it changes here:
+    ///
+    ///  - The row is inserted with the tier ALREADY in `taskTiers`, so a task
+    ///    born in Focus renders under the Focus header on the very first frame
+    ///    instead of appearing in Satellite and hopping once the background
+    ///    tier refresh lands.
+    ///  - Nothing to roll back on failure by construction: the whole placement
+    ///    rode the one request, so a 400 (unknown tier) throws before any local
+    ///    state is written. That is the point of doing it in one call.
     @discardableResult
     func createTask(
         title: String, project: String? = nil, priority: String? = nil,
         dueDate: String? = nil, startDate: String? = nil, endDate: String? = nil,
-        description: String? = nil
+        description: String? = nil, pin: TaskPinChoice = .unspecified
     ) async throws -> WalnutTask {
-        let created = try await api.createTask(
+        // Through the transport seam (not `api`): WalnutTests drive the REAL
+        // optimistic placement + rollback against a scripted create.
+        let created = try await transport.createTask(
             title: title, project: project, priority: priority,
             dueDate: dueDate, startDate: startDate, endDate: endDate,
-            description: description
+            description: description, pin: pin
         )
+
         if isActive {
-            pendingCreated.append(PendingCreated(task: created, createdAt: Date()))
+            // The 201 for an explicit 'satellite' comes back with NO focus_tier
+            // (that absence IS Satellite server-side), so the local tier comes
+            // from the CHOICE, not from a field the response is right to omit.
+            // `pinned` likewise: the projection carries it, but a tier the user
+            // picked is authoritative for the row we render right now.
+            let row = pin.optimisticPinned.map { Self.withPinned(created, $0) } ?? created
+            if let tier = pin.optimisticTier { taskTiers[created.id] = tier }
+            pendingCreated.append(PendingCreated(task: row, createdAt: Date()))
             persistPending()
-            if !tasks.contains(where: { $0.id == created.id }) {
-                tasks.insert(created, at: 0)
+            if !tasks.contains(where: { $0.id == row.id }) {
+                tasks.insert(row, at: 0)
                 DiskCache.save(tasks, key: "tasks-list")
             }
             // Locate-me signal: the list scrolls to + highlights this row.
             lastCreatedTaskId = created.id
+            // Reconcile the tier map in the background — same debounce the
+            // pin/tier-move paths use, never a blocking refetch.
+            if pin.namesTier { scheduleTierRefresh() }
         }
         // Reconcile with the projection in the background (it may lag a few
         // seconds behind the SQLite write; mergePending keeps the new row).

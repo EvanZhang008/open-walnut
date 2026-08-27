@@ -17,6 +17,13 @@ struct TasksView: View {
     /// Sentence carried from the quick-add row into the full NewTaskSheet
     /// (the expand affordance) — parsed there into the form fields.
     @State private var newTaskSeedText = ""
+    /// Destination carried into the full NewTaskSheet alongside the sentence
+    /// (which project / pin tier the add started from).
+    @State private var newTaskSeed = NewTaskSeed(project: "", pin: .unspecified)
+    /// Which group header's `+` is currently open, by seed identity. Exactly one
+    /// inline add row at a time: two open keyboards on one list is not a thing,
+    /// and a single value makes "the other one closes" automatic.
+    @State private var openAddGroup: NewTaskSeed?
     /// Local search — filters tasks (title/project) and sessions
     /// (title/task/host/cwd) in place; no server round-trip.
     @State private var searchText = ""
@@ -133,10 +140,13 @@ struct TasksView: View {
                 }
                 .presentationDetents([.medium, .large])
             }
-            .sheet(isPresented: $showNewTask, onDismiss: { newTaskSeedText = "" }) {
+            .sheet(isPresented: $showNewTask, onDismiss: {
+                newTaskSeedText = ""
+                newTaskSeed = NewTaskSeed(project: "", pin: .unspecified)
+            }) {
                 // No onCreated action: the store's optimistic insert makes the
                 // new task appear in the list the moment the sheet dismisses.
-                NewTaskSheet(seedText: newTaskSeedText)
+                NewTaskSheet(seedText: newTaskSeedText, seed: newTaskSeed)
                     .presentationDetents([.medium, .large])
             }
             // Session rows push a full-screen conversation page instead of a sheet.
@@ -267,10 +277,14 @@ struct TasksView: View {
                 // to All Open so the new row is visible). The expand icon
                 // opens the full form sheet seeded with the sentence.
                 Section {
-                    QuickAddRow(identifier: "tasks.quickAdd") { seed in
-                        newTaskSeedText = seed
-                        showNewTask = true
-                    }
+                    QuickAddRow(
+                        identifier: "tasks.quickAdd",
+                        onExpand: { text, target in
+                            newTaskSeedText = text
+                            newTaskSeed = target
+                            showNewTask = true
+                        }
+                    )
                 }
                 .listSectionSpacing(2)
 
@@ -294,11 +308,7 @@ struct TasksView: View {
                     // to All Open while a query is live — see `sections`).
                     if !trimmedQuery.isEmpty {
                         ForEach(sections, id: \.project) { section in
-                            Section(section.project) {
-                                ForEach(section.tasks) { task in
-                                    taskRowButton(task)
-                                }
-                            }
+                            projectSection(section)
                         }
                     }
                 } else if sections.isEmpty {
@@ -312,11 +322,7 @@ struct TasksView: View {
                     }
                 } else {
                     ForEach(sections, id: \.project) { section in
-                        Section(section.project) {
-                            ForEach(section.tasks) { task in
-                                taskRowButton(task)
-                            }
-                        }
+                        projectSection(section)
                     }
                 }
 
@@ -391,7 +397,14 @@ struct TasksView: View {
             // away. Neither is a scroll event, so neither reaches the handler.
             .onChange(of: isEditing) { _, editing in
                 if editing, chromeCollapsed { chromeCollapsed = false }
+                // Selection owns the rows: an open group add row would keep a
+                // keyboard over the batch bar and its `+` is already hidden.
+                if editing { openAddGroup = nil }
             }
+            // Switching filters re-groups everything, so the header that owned
+            // the open row may not exist any more — a row anchored to a vanished
+            // group would file into a group the user can no longer see.
+            .onChange(of: activeFilter) { _, _ in openAddGroup = nil }
             // Compact header as an OVERLAY, never a safeAreaInset: an inset that
             // appears mid-scroll changes the List's visible rect and yanks the
             // content offset (the scroll-jump class of bug). An overlay costs no
@@ -479,7 +492,11 @@ struct TasksView: View {
             // from the keyboard — the row appears in place instead).
             .onChange(of: tasks.lastCreatedTaskId) { _, newId in
                 guard let newId else { return }
-                if inlineAddActive {
+                // Same rule as the bottom inline row: while a group's add row is
+                // open the user is chain-adding into THAT group — switching the
+                // filter and scrolling elsewhere would rip the keyboard away
+                // (and the row is right where they are looking already).
+                if inlineAddActive || openAddGroup != nil {
                     flashHighlight(newId)
                     return
                 }
@@ -495,6 +512,96 @@ struct TasksView: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - Group headers with a `+` (add straight into this group)
+
+    /// A section header that can add INTO its own group.
+    ///
+    /// Interaction: the `+` opens an inline add row as the first row of that
+    /// section — deliberately the SAME affordance the list already ends with
+    /// (`QuickAddRow` at the top, `InlineAddTaskRow` at the bottom), not a third
+    /// pattern. A sheet was the alternative and is worse here: the whole point
+    /// of a header `+` is that the destination is already decided by WHERE you
+    /// tapped, so a modal asking for it again is ceremony, it costs a dismiss
+    /// animation per task, and it breaks the rapid chain-add that keeps focus
+    /// after each Return. The sheet is still one tap away from the row (its
+    /// expand button) for the tasks that need dates and priorities.
+    ///
+    /// The `+` is a `.plain`-styled Button with its own hit shape so it can't
+    /// bubble into the header/section, and the header is
+    /// `.accessibilityElement(children: .contain)` — a container identifier
+    /// otherwise overwrites every descendant's and the `+` becomes unaddressable.
+    /// - Parameter groupName: the group's NAME for the `+`'s accessibility label,
+    ///   when `title` carries decoration a screen reader shouldn't read out
+    ///   ("Focus · 3" → "Add task to Focus").
+    @ViewBuilder
+    private func groupHeader(_ title: String, seed: NewTaskSeed, groupName: String? = nil) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+            Spacer(minLength: 8)
+            // Edit mode owns the rows (selection); adding mid-selection would
+            // change what is selected under the user.
+            if !isEditing {
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    // Toggle: a second tap on the same header puts it away.
+                    openAddGroup = (openAddGroup == seed) ? nil : seed
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.footnote.weight(.bold))
+                        .foregroundStyle(Theme.tint)
+                        // A bigger tap target than the glyph, still inside the
+                        // header's own height so no row moves.
+                        .frame(width: 30, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add task to \(groupName ?? title)")
+                .accessibilityIdentifier("tasks.groupAdd.\(seed.id)")
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    /// The inline add row a header `+` opens, rendered inside that section.
+    /// Nothing when this group's `+` isn't the open one, so an unopened header
+    /// costs no row at all.
+    @ViewBuilder
+    private func groupAddRow(_ seed: NewTaskSeed) -> some View {
+        if openAddGroup == seed {
+            QuickAddRow(
+                seed: seed,
+                // The header already states the destination; a chip repeating it
+                // is noise. Re-targeting belongs to the sheet from here.
+                showsDestination: false,
+                identifier: "tasks.groupAdd.\(seed.id).row",
+                onExpand: { text, target in
+                    newTaskSeedText = text
+                    newTaskSeed = target
+                    openAddGroup = nil
+                    showNewTask = true
+                },
+                autoFocus: true,
+                onDismiss: { openAddGroup = nil }
+            )
+        }
+    }
+
+    /// One project group: header with its own `+`, the (optional) inline add
+    /// row that `+` opens, then the rows. Both call sites render through here so
+    /// the search results and the normal list get the same affordance.
+    @ViewBuilder
+    private func projectSection(_ section: (project: String, tasks: [WalnutTask])) -> some View {
+        let seed = NewTaskSeed.project(section.project)
+        Section {
+            groupAddRow(seed)
+            ForEach(section.tasks) { task in
+                taskRowButton(task)
+            }
+        } header: {
+            groupHeader(section.project, seed: seed)
         }
     }
 
@@ -725,11 +832,22 @@ struct TasksView: View {
         let pinned = tasks.tasks(for: activeFilter == .done ? .done : .allOpen)
             .filter { $0.pinned == true && !$0.isDone }
         if activeFilter != .done {
+            // The Pinned section is the board as a whole, not one tier, so its
+            // add row keeps a destination chip: "pinned" alone doesn't say WHERE,
+            // and Satellite is only the default, not the only answer.
             Section("Pinned") {
                 ForEach(Array(pinned.prefix(8))) { task in
                     taskRowButton(task)
                 }
-                QuickAddRow(pinSeed: true, identifier: "focus.quickAdd")
+                QuickAddRow(
+                    seed: NewTaskSeed(project: "", pin: .tier("satellite")),
+                    identifier: "focus.quickAdd",
+                    onExpand: { text, target in
+                        newTaskSeedText = text
+                        newTaskSeed = target
+                        showNewTask = true
+                    }
+                )
             }
         }
     }
@@ -894,10 +1012,20 @@ struct TasksView: View {
             // Pinned mirrors the desktop focus bar: split into Focus / Satellite /
             // Backlog / Wait sub-sections (a session's tier comes from its owning task).
             ForEach(pinnedTierGroups, id: \.tier) { group in
+                let seed = NewTaskSeed.tier(group.tier.rawValue)
                 Section {
+                    // A tier group lists SESSIONS, but its `+` creates a TASK in
+                    // that tier — which is the right thing: a session belongs to
+                    // a task, so the task is what gets filed, and the tier is
+                    // what the header names. The new task shows up here as soon
+                    // as it has a session.
+                    groupAddRow(seed)
                     ForEach(group.sessions) { session in sessionRow(session) }
                 } header: {
-                    Text("\(group.tier.title) · \(group.sessions.count)")
+                    groupHeader(
+                        "\(group.tier.title) · \(group.sessions.count)",
+                        seed: seed, groupName: group.tier.title
+                    )
                 }
             }
             .id(sessionScope)
