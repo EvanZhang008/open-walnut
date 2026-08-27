@@ -16,7 +16,8 @@ export type UsageSource =
   | 'cron'         // cron-triggered agent turns
   | 'triage'       // session/subagent triage
   | 'background-review' // every-N-turn Personal AI self-review fork
-  | 'task-hook';   // task lifecycle → overview maintainer agent
+  | 'task-hook'    // task lifecycle → overview maintainer agent
+  | 'task-search-agent'; // AI task search (claude -p one-shot behind /api/search/agent)
 
 export interface UsageRecord {
   id: string;

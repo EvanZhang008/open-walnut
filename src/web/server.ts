@@ -22,6 +22,7 @@ import { tasksRouter } from './routes/tasks.js'
 import { dashboardRouter } from './routes/dashboard.js'
 import { sessionsRouter } from './routes/sessions.js'
 import { searchRouter } from './routes/search.js'
+import { searchAgentRouter } from './routes/search-agent.js'
 import { memoryRouter } from './routes/memory.js'
 import { configRouter } from './routes/config.js'
 import { backupRouter, setBackupScheduler } from './routes/backup.js'
@@ -1349,6 +1350,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/tasks', tasksRouter)
   app.use('/api/dashboard', dashboardRouter)
   app.use('/api/sessions', sessionsRouter)
+  // Agent search mounts BEFORE /api/search so Express never routes it there.
+  app.use('/api/search/agent', searchAgentRouter)
   app.use('/api/search', searchRouter)
   app.use('/api/memory', memoryRouter)
   app.use('/api/config', configRouter)

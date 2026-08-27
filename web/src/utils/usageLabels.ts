@@ -21,6 +21,7 @@ const USAGE_LABELS: Record<string, string> = {
   compaction: 'Compaction',
   heartbeat: 'Heartbeat',
   cron: 'Cron',
+  'task-search-agent': 'AI task search',
   // agent ids — both summarizer agents are RETIRED (2026-07: the session writes its
   // own summary via side_question; phase/notify is a code lookup). The labels stay so
   // historical usage rows keep reading correctly.

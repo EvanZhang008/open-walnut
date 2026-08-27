@@ -21,6 +21,7 @@ import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import * as ICONS from '../common/Icons';
 import type { TaskPriority } from '@open-walnut/core';
 import { TodoSearchBar } from './TodoSearchBar';
+import { AgentSearchPanel } from './AgentSearchPanel';
 import { NewLauncherButton } from './NewLauncherButton';
 import { ProjectPlusMenu, ProjectKebabMenu, TierPlusButton } from './ProjectHeaderMenus';
 import { TierSeparatorRow, SortableTierSeparatorRow } from './TierSeparatorRow';
@@ -5490,6 +5491,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onFocusTask?.(task, { openDetail: false });
   }, [onFocusTask, onOpenSession, selectedIds]);
 
+  // AI search rows carry only a taskId — resolve to the live Task and route
+  // through handleTaskClick so a click behaves exactly like a normal result row.
+  const tasksForAgentClickRef = useRef(tasks);
+  tasksForAgentClickRef.current = tasks;
+  const handleAgentResultClick = useCallback((taskId: string) => {
+    const task = tasksForAgentClickRef.current.find((t) => t.id === taskId);
+    if (task) handleTaskClick(task);
+  }, [handleTaskClick]);
+
   // Resolve the current selection to actual tasks. Grouping has NO scope rule
   // anymore — any ≥2 tasks can be grouped regardless of project (a group
   // is a pure visual cluster). `canGroup` is therefore just "≥2 selected"; it
@@ -6720,6 +6730,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
       {tasksVisible && !tasksCollapsed && (
       <div className={`todo-panel-list${!detailTarget && listCollapsed ? ' todo-panel-list-collapsed' : ''}`} style={detailTarget ? { flex: `${1 - detailRatio} 1 0%` } : isAll && (visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0) && !pinnedAreaCollapsed ? { flex: `${listRatio} 1 0%` } : undefined}>
+        {/* ✦ AI lane: a claude -p agent searches tasks AND session transcripts;
+            renders above the instant results and never blocks them. */}
+        {isSearchMode && (
+          <AgentSearchPanel query={searchQuery} onOpenTask={handleAgentResultClick} />
+        )}
         {loading && (
           <div className="empty-state" style={{ padding: '24px 8px' }}>
             <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2, margin: '0 auto' }} />
