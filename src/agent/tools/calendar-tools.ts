@@ -30,7 +30,7 @@ export const calendarTools: ToolDefinition[] = [
   {
     name: 'calendar_query',
     description:
-      "Query the user's calendars (all macOS system accounts: iCloud, Google, Exchange). Returns events in a date range, plus source status. Use list_calendars:true to enumerate the calendars themselves (for calendar_event_create targets). Dates are LOCAL tz-less ISO (YYYY-MM-DD).",
+      "Query the user's calendars (all macOS system accounts: iCloud, Google, Exchange). Returns events in a date range, plus source status. Use list_calendars:true to enumerate the calendars themselves (for calendar_event_create targets). Dates are LOCAL tz-less ISO (YYYY-MM-DD). An event may carry status:'canceled' (the organizer cancelled it; macOS still holds the row) or selfStatus:'declined' — never present either one as a meeting the user is attending.",
     input_schema: {
       type: 'object',
       properties: {
@@ -64,6 +64,8 @@ export const calendarTools: ToolDefinition[] = [
             account: e.accountName,
             ...(e.location ? { location: e.location } : {}),
             ...(e.readonly ? { readonly: true } : {}),
+            ...(e.status ? { status: e.status } : {}),
+            ...(e.selfStatus ? { selfStatus: e.selfStatus } : {}),
           })),
         };
         if (params.list_calendars) result.calendars = await service.listCalendars();

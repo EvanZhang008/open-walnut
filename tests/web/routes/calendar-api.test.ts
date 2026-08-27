@@ -64,6 +64,8 @@ interface EventShape {
   allDay: boolean;
   calendarId: string;
   readonly?: boolean;
+  status?: string;
+  selfStatus?: string;
 }
 
 describe('GET /api/calendar/events', () => {
@@ -72,12 +74,64 @@ describe('GET /api/calendar/events', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { events: EventShape[]; sources: { id: string; available: boolean }[] };
     const ids = body.events.map((e) => e.id).sort();
-    expect(ids).toEqual(['ev-gym#1770000000', 'ev-holiday', 'ev-standup']); // ev-outside (8/12) excluded
+    // ev-outside (8/12) excluded; ev-canceled/ev-declined are in range and stay
+    // in the payload — they are marked, not dropped.
+    expect(ids).toEqual([
+      'ev-canceled', 'ev-declined', 'ev-gym#1770000000', 'ev-holiday', 'ev-standup',
+    ]);
     expect(body.sources[0]).toMatchObject({ id: 'eventkit', available: true, enabled: true });
     // tz-less local ISO contract
     for (const e of body.events) {
       expect(e.start).toMatch(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?$/);
     }
+  });
+
+  it('marks cancelled and declined events instead of dropping or hiding them', async () => {
+    const res = await fetch(apiUrl('/api/calendar/events?from=2026-08-03&to=2026-08-09'));
+    const body = await res.json() as { events: EventShape[] };
+    const canceled = body.events.find((e) => e.id === 'ev-canceled');
+    expect(canceled?.status).toBe('canceled');
+    expect(canceled?.selfStatus).toBe('accepted');
+    const declined = body.events.find((e) => e.id === 'ev-declined');
+    expect(declined?.status).toBe('confirmed');
+    expect(declined?.selfStatus).toBe('declined');
+    // A plain personal event carries neither key rather than a bogus default.
+    const standup = body.events.find((e) => e.id === 'ev-standup');
+    expect(standup?.status).toBeUndefined();
+    expect(standup?.selfStatus).toBeUndefined();
+  });
+
+  it('serves a repeat read from cache but re-fetches when fresh=1 is asked for', async () => {
+    const url = '/api/calendar/events?from=2026-08-03&to=2026-08-09';
+    await fetch(apiUrl(url));
+    const afterFirst = state.calls.filter((c) => c.method === 'listEvents').length;
+    expect(afterFirst).toBe(1);
+
+    await fetch(apiUrl(url)); // inside the read TTL → no new source call
+    expect(state.calls.filter((c) => c.method === 'listEvents')).toHaveLength(afterFirst);
+
+    // Something changes behind Walnut's back (a meeting cancelled in Exchange).
+    state.events = state.events.filter((e) => e.id !== 'ev-standup');
+    const stale = await fetch(apiUrl(url)).then((r) => r.json()) as { events: EventShape[] };
+    expect(stale.events.some((e) => e.id === 'ev-standup')).toBe(true); // still cached
+
+    const fresh = await fetch(apiUrl(`${url}&fresh=1`)).then((r) => r.json()) as { events: EventShape[] };
+    expect(fresh.events.some((e) => e.id === 'ev-standup')).toBe(false);
+    expect(state.calls.filter((c) => c.method === 'listEvents').length).toBe(afterFirst + 1);
+  });
+
+  it('collapses concurrent reads of one window onto a single source fetch', async () => {
+    const url = '/api/calendar/events?from=2026-08-03&to=2026-08-09';
+    await Promise.all([fetch(apiUrl(url)), fetch(apiUrl(url)), fetch(apiUrl(url))]);
+    expect(state.calls.filter((c) => c.method === 'listEvents')).toHaveLength(1);
+  });
+
+  it('asks the source to pull from remote accounts on an explicit refresh', async () => {
+    await fetch(apiUrl('/api/calendar/events?from=2026-08-03&to=2026-08-09')); // prime a window
+    state.calls.length = 0;
+    await fetch(apiUrl('/api/calendar/refresh'), { method: 'POST' });
+    const refreshCall = state.calls.find((c) => c.method === 'listEvents');
+    expect(refreshCall?.args[2]).toEqual({ refresh: true });
   });
 
   it('rejects bad ranges with 400', async () => {

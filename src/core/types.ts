@@ -895,8 +895,14 @@ export interface Config {
      *  denylist for kiosk/demo/shared-screen setups; hidden_calendar_ids still
      *  applies on top. */
     visible_calendar_ids?: string[];
-    /** Cache TTL / periodic refresh interval. Default: 15. */
+    /** Background poll interval: how often cached windows are re-read so open
+     *  views hear about changes nobody asked for. Default: 15. This is NOT the
+     *  read staleness bound — see read_ttl_seconds. */
     refresh_minutes?: number;
+    /** How stale a served read may be before it re-reads the calendar. Default:
+     *  60. Re-reading a month window costs ~0.25s, so keep this small; 0 means
+     *  never serve from cache. */
+    read_ttl_seconds?: number;
   };
   /** Where to install plugins from ("plugin store"). Two kinds, one list:
    *  a git repo `{url, ref?, enabled?}` (cloned) or an npm registry package

@@ -32,8 +32,14 @@ All dates are **tz-less local ISO** — the server's local wall time, never a
 # Events in a date range (inclusive days)
 curl -s 'http://localhost:3456/api/calendar/events?from=2026-08-03&to=2026-08-09'
 # → { "events": [ { "id", "title", "start", "end", "allDay", "calendarId",
-#      "calendarName", "accountName", "color", "location?", "readonly?" } ],
-#     "sources": [ { "id": "eventkit", "available", "enabled", "reason?", "message?" } ] }
+#      "calendarName", "accountName", "color", "location?", "readonly?",
+#      "status?", "selfStatus?" } ],
+#     "sources": [ { "id": "eventkit", "available", "enabled", "reason?",
+#      "message?", "lastRefresh?" } ] }
+
+# Add fresh=1 when a stale answer would be worse than a slow one (~0.25s extra):
+# it bypasses the read cache and re-reads macOS.
+curl -s 'http://localhost:3456/api/calendar/events?from=2026-08-27&to=2026-08-27&fresh=1'
 
 # List the calendars themselves (to pick a create target)
 curl -s 'http://localhost:3456/api/calendar/sources'
@@ -47,6 +53,33 @@ curl -s 'http://localhost:3456/api/calendar/sources'
   `{ events: [] }` in that case rather than erroring.
 - Event ids of recurring occurrences look like `<baseId>#<epoch>`; treat the
   whole string as opaque and **URL-encode it** in paths (`#` → `%23`).
+
+### Cancelled and declined events (read this before reporting a schedule)
+
+Two optional fields say whether a meeting is actually happening. Both are
+absent for ordinary personal events, which means "nothing to report" — never
+read a missing field as "confirmed".
+
+| field | values | meaning |
+|---|---|---|
+| `status` | `confirmed`, `tentative`, `canceled` | the meeting's own state |
+| `selfStatus` | `pending`, `accepted`, `declined`, `tentative`, `delegated` | the user's response to the invite |
+
+`status: "canceled"` events are **still returned**. An invitation the organizer
+cancelled stays in the macOS store (often re-titled `Canceled: …`) until someone
+processes the cancellation, so the API reports it and marks it rather than
+quietly dropping it. When summarising a day, exclude `status: "canceled"` and
+`selfStatus: "declined"` entries from "what you have on", or call them out as
+cancelled/declined — do not present either as a meeting the user is attending.
+
+### Freshness
+
+`sources[0].lastRefresh` is when Walnut last read macOS. Reads are served from a
+short-lived cache (default 60s), and macOS syncs Exchange/Google on its own
+schedule on top of that, so a change made in Outlook seconds ago may not be
+visible yet. Use `fresh=1` to skip Walnut's cache; if an event still looks wrong
+after that, the lag is macOS↔provider sync, not Walnut, and the fix is on the
+Mac (open Calendar.app and press ⌘R).
 
 ## Write
 

@@ -51,9 +51,18 @@ describe('calendar tool registration', () => {
 describe('calendar_query', () => {
   it('returns range-filtered events with status', async () => {
     const out = await run('calendar_query', { from: '2026-08-03', to: '2026-08-09' });
-    const parsed = JSON.parse(out) as { status: { available: boolean }; events: { id: string; calendar: string }[] };
+    const parsed = JSON.parse(out) as {
+      status: { available: boolean };
+      events: { id: string; calendar: string; status?: string; selfStatus?: string }[];
+    };
     expect(parsed.status.available).toBe(true);
-    expect(parsed.events.map((e) => e.id).sort()).toEqual(['ev-gym#1770000000', 'ev-holiday', 'ev-standup']);
+    expect(parsed.events.map((e) => e.id).sort()).toEqual([
+      'ev-canceled', 'ev-declined', 'ev-gym#1770000000', 'ev-holiday', 'ev-standup',
+    ]);
+    // The agent must be able to see that one of these is off — otherwise it
+    // reports a cancelled meeting as something the user is attending.
+    expect(parsed.events.find((e) => e.id === 'ev-canceled')?.status).toBe('canceled');
+    expect(parsed.events.find((e) => e.id === 'ev-declined')?.selfStatus).toBe('declined');
   });
 
   it('filters by calendar name substring and can list calendars', async () => {

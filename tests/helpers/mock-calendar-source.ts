@@ -59,6 +59,36 @@ export function fixtureEvents(): CalendarEvent[] {
       location: 'Downtown',
     },
     {
+      // Organizer cancelled it, macOS still holds the row: must be MARKED in
+      // API responses, not dropped and not served as a normal meeting.
+      id: 'ev-canceled',
+      source: 'eventkit',
+      calendarId: 'cal-work',
+      calendarName: 'Work',
+      accountName: 'Google',
+      title: 'Canceled: Budget review',
+      start: '2026-08-06T14:00:00',
+      end: '2026-08-06T15:00:00',
+      allDay: false,
+      color: '#4285f4',
+      status: 'canceled',
+      selfStatus: 'accepted',
+    },
+    {
+      id: 'ev-declined',
+      source: 'eventkit',
+      calendarId: 'cal-work',
+      calendarName: 'Work',
+      accountName: 'Google',
+      title: 'Optional all-hands',
+      start: '2026-08-06T16:00:00',
+      end: '2026-08-06T17:00:00',
+      allDay: false,
+      color: '#4285f4',
+      status: 'confirmed',
+      selfStatus: 'declined',
+    },
+    {
       id: 'ev-outside',
       source: 'eventkit',
       calendarId: 'cal-work',
@@ -124,8 +154,8 @@ export function createMockCalendarSource(opts?: {
       return state.calendars.map((c) => ({ ...c }));
     },
 
-    async listEvents(from: string, to: string): Promise<CalendarEvent[]> {
-      guard('listEvents', [from, to]);
+    async listEvents(from: string, to: string, opts?: { refresh?: boolean }): Promise<CalendarEvent[]> {
+      guard('listEvents', [from, to, ...(opts ? [opts] : [])]);
       // The service does its own range filtering; return everything like a
       // month-window fetch would.
       return state.events.map((e) => ({ ...e }));

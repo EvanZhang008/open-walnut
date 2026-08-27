@@ -23,6 +23,12 @@ export interface CalendarEvent {
   location?: string;
   /** True when the source calendar can't be written (subscriptions, holidays). */
   readonly?: boolean;
+  /** Absent unless the source says something. 'canceled' means the organizer
+   *  cancelled it and macOS still holds the row — show it struck through rather
+   *  than as a live meeting. */
+  status?: 'confirmed' | 'tentative' | 'canceled';
+  /** The user's own answer to the invite, when the source tracks it. */
+  selfStatus?: 'pending' | 'accepted' | 'declined' | 'tentative' | 'delegated';
 }
 
 export interface CalendarSourceStatus {

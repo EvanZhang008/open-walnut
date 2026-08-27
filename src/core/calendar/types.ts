@@ -7,6 +7,18 @@
  * exactly matching the task start_date/due_date contract.
  */
 
+/**
+ * Source-reported lifecycle of the event itself. 'canceled' is the one that
+ * matters: an invitation the organizer cancelled STAYS in the EventKit store
+ * (often re-titled "Canceled: …") until someone processes the cancellation, so
+ * without this field it is indistinguishable from a live meeting.
+ * Absent means the source said nothing (normal for personal, non-invite events).
+ */
+export type CalendarEventStatus = 'confirmed' | 'tentative' | 'canceled';
+
+/** The current user's own response to an invitation, when the source tracks it. */
+export type CalendarSelfStatus = 'pending' | 'accepted' | 'declined' | 'tentative' | 'delegated';
+
 export interface CalendarEvent {
   /**
    * Stable occurrence id: "<ekEventId>" for one-off events,
@@ -27,6 +39,11 @@ export interface CalendarEvent {
   location?: string;
   /** Calendar disallows writes (subscriptions, holidays, shared read-only). */
   readonly?: boolean;
+  /** Omitted when the source reports nothing. Cancelled events are MARKED, never
+   *  dropped: the API stays honest and each caller decides how to render them. */
+  status?: CalendarEventStatus;
+  /** Omitted when the source reports nothing (e.g. an event with no attendees). */
+  selfStatus?: CalendarSelfStatus;
 }
 
 export interface CalendarInfo {
@@ -77,7 +94,10 @@ export interface CalendarSource {
   /** Cheap static availability check (platform / cloud-mode gates). */
   available(): { ok: boolean; reason?: CalendarSourceReason; message?: string };
   listCalendars(): Promise<CalendarInfo[]>;
-  listEvents(from: string, to: string): Promise<CalendarEvent[]>;
+  /** `refresh` asks the platform to pull from remote accounts first. macOS does
+   *  that pull asynchronously, so it freshens the NEXT fetch, not this one —
+   *  only the background refresh loop passes it. */
+  listEvents(from: string, to: string, opts?: { refresh?: boolean }): Promise<CalendarEvent[]>;
   updateEvent(id: string, patch: CalendarEventPatch): Promise<CalendarEvent>;
   createEvent(input: CalendarEventCreate): Promise<CalendarEvent>;
   deleteEvent(id: string): Promise<void>;

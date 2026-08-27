@@ -21,7 +21,9 @@ import type {
   CalendarEvent,
   CalendarEventCreate,
   CalendarEventPatch,
+  CalendarEventStatus,
   CalendarInfo,
+  CalendarSelfStatus,
   CalendarSource,
   CalendarSourceReason,
 } from '../types.js';
@@ -33,11 +35,15 @@ const execFileAsync = promisify(execFile);
 // bundle, launchd). Without this, changing the launcher silently revoked
 // calendar access (tccd refused: parent had no NSCalendarsUsageDescription).
 // v3: adds the side-effect-free `status` subcommand for the Permission Doctor.
+// v4: `list` reports each event's status + the current user's participant status
+// (a cancelled or declined invitation stays in the EventKit store, and dropping
+// those fields made it indistinguishable from a live meeting), and accepts a
+// `refresh` argument that pulls from the remote accounts first.
 // NOTE: every version bump (or any recompile) changes the binary's cdhash,
 // which is the identity TCC keys the grant to — so users see ONE fresh
 // permission prompt after an upgrade. That is expected, not a regression;
 // the Permission Doctor exists to walk them through it.
-const HELPER_VERSION = 'v3';
+const HELPER_VERSION = 'v4';
 const HELPER_TIMEOUT_MS = 30_000;
 
 /** Embedded plist: tccd reads usage keys from here once the helper is its own
@@ -216,9 +222,28 @@ interface RawEvent {
   allDay: boolean;
   location?: string;
   readonly: boolean;
+  /** Absent from a v3-or-older helper binary, and from events the source says
+   *  nothing about — treat "missing" as "unknown", never as "confirmed". */
+  status?: string;
+  selfStatus?: string;
+}
+
+const EVENT_STATUSES: readonly string[] = ['confirmed', 'tentative', 'canceled'];
+const SELF_STATUSES: readonly string[] = ['pending', 'accepted', 'declined', 'tentative', 'delegated'];
+
+/** Drop anything the helper reports that this build doesn't model, so a newer
+ *  helper can add states without a type lie reaching API consumers. */
+function asEventStatus(v: string | undefined): CalendarEventStatus | undefined {
+  return v && EVENT_STATUSES.includes(v) ? (v as CalendarEventStatus) : undefined;
+}
+
+function asSelfStatus(v: string | undefined): CalendarSelfStatus | undefined {
+  return v && SELF_STATUSES.includes(v) ? (v as CalendarSelfStatus) : undefined;
 }
 
 function toEvent(raw: RawEvent, colorByCalendar: Map<string, string>): CalendarEvent {
+  const status = asEventStatus(raw.status);
+  const selfStatus = asSelfStatus(raw.selfStatus);
   return {
     id: raw.id,
     source: 'eventkit',
@@ -232,6 +257,8 @@ function toEvent(raw: RawEvent, colorByCalendar: Map<string, string>): CalendarE
     color: colorByCalendar.get(raw.calendarId),
     ...(raw.location ? { location: raw.location } : {}),
     ...(raw.readonly ? { readonly: true } : {}),
+    ...(status ? { status } : {}),
+    ...(selfStatus ? { selfStatus } : {}),
   };
 }
 
@@ -275,10 +302,12 @@ export function createEventKitSource(): CalendarSource {
       }));
     },
 
-    async listEvents(from: string, to: string): Promise<CalendarEvent[]> {
+    async listEvents(from: string, to: string, opts?: { refresh?: boolean }): Promise<CalendarEvent[]> {
       // No hidden-calendar filtering here — CalendarService filters at read
       // time so its cache stays complete (unhiding needs no refetch).
-      const raw = await runHelper<RawEvent[]>(['list', from, to]);
+      const raw = await runHelper<RawEvent[]>(
+        opts?.refresh ? ['list', from, to, 'refresh'] : ['list', from, to]
+      );
       const colors = await colorMap();
       return raw.map((e) => toEvent(e, colors));
     },

@@ -2,7 +2,14 @@
  * /api/calendar — external calendar events (EventKit; all macOS
  * system-account calendars including Google/iCloud, using the Mac's logins).
  *
- * GET    /events?from=YYYY-MM-DD&to=YYYY-MM-DD → { events, sources }
+ * GET    /events?from=YYYY-MM-DD&to=YYYY-MM-DD[&fresh=1] → { events, sources }
+ *          `fresh=1` skips the read cache (~0.25s slower) — use it when a stale
+ *          answer is worse than a slow one. `sources[0].lastRefresh` always says
+ *          how old the served data actually is.
+ *          Events may carry `status` ('confirmed' | 'tentative' | 'canceled')
+ *          and `selfStatus` ('pending' | 'accepted' | 'declined' | 'tentative' |
+ *          'delegated'). Cancelled and declined events are MARKED, not dropped:
+ *          the calendar shows what macOS holds and callers decide how to render.
  * GET    /sources                              → { sources, calendars }
  * PUT    /sources/eventkit                     → { enabled?, hidden_calendar_ids?, visible_calendar_ids? }
  * POST   /refresh                              → force re-fetch all cached windows
@@ -40,14 +47,15 @@ function sendError(res: import('express').Response, err: unknown): void {
 }
 
 calendarRouter.get('/events', async (req, res) => {
-  const { from, to } = req.query as { from?: string; to?: string };
+  const { from, to, fresh } = req.query as { from?: string; to?: string; fresh?: string };
   if (!from || !to || !DAY_RE.test(from) || !DAY_RE.test(to) || from > to) {
     res.status(400).json({ error: 'from/to must be YYYY-MM-DD with from <= to' });
     return;
   }
+  const force = fresh === '1' || fresh === 'true';
   const service = getCalendarService();
   try {
-    const events = await service.getEvents(from, to);
+    const events = await service.getEvents(from, to, { force });
     res.json({ events, sources: [service.status()] });
   } catch (err) {
     // Reads degrade gracefully: the calendar view still renders tasks.

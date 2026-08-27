@@ -6,11 +6,24 @@
 //
 // Subcommands (all output JSON on stdout; errors as {"error":..., "code":...}):
 //   calendars                          → [{id,title,account,color,readonly}]
-//   list <fromISO> <toISO>             → [{id,calendarId,calendarName,account,
-//                                          title,start,end,allDay,location,readonly}]
+//   list <fromISO> <toISO> [refresh]   → [{id,calendarId,calendarName,account,
+//                                          title,start,end,allDay,location,readonly,
+//                                          status,selfStatus}]
 //   update <eventId> <startISO> <endISO> [title]
 //   create <calendarId> <title> <startISO> <endISO> [allDay]
 //   delete <eventId>
+//
+// `status`/`selfStatus` are omitted when the source says nothing useful, so a
+// plain personal event stays a plain payload. They matter for invitations: a
+// meeting the organizer cancelled keeps sitting in the EventKit store with
+// status "canceled" until someone processes the cancellation, and a meeting the
+// user declined keeps sitting there with selfStatus "declined". Dropping both
+// (as this helper used to) made those indistinguishable from live meetings.
+//
+// Passing `refresh` as the 4th arg to `list` asks EventKit to pull from the
+// remote accounts first. The pull is asynchronous inside macOS, so it freshens
+// the NEXT poll rather than this call's result — which is why only Walnut's
+// background refresh passes it, not ordinary reads.
 //
 // Dates are tz-less LOCAL wall time ("2026-08-05T09:00:00") to match Walnut's
 // task-date contract. Recurring events: `list` expands occurrences (EventKit
@@ -154,6 +167,35 @@ func calendarJson(_ c: EKCalendar) -> [String: Any] {
     ]
 }
 
+/// EKEventStatus → wire string. `.none` (most personal events) returns nil so
+/// the key is omitted entirely rather than shipping a meaningless "none".
+func statusString(_ status: EKEventStatus) -> String? {
+    switch status {
+    case .confirmed: return "confirmed"
+    case .tentative: return "tentative"
+    case .canceled: return "canceled"
+    default: return nil // .none
+    }
+}
+
+/// The CURRENT USER's response to an invitation, when the source tracks it.
+/// Only the states a caller can act on are reported; .unknown/.completed/
+/// .inProcess say nothing about whether the user is going, so they're omitted.
+func selfStatusString(_ e: EKEvent) -> String? {
+    guard let attendees = e.attendees else { return nil }
+    for a in attendees where a.isCurrentUser {
+        switch a.participantStatus {
+        case .pending: return "pending"
+        case .accepted: return "accepted"
+        case .declined: return "declined"
+        case .tentative: return "tentative"
+        case .delegated: return "delegated"
+        default: return nil
+        }
+    }
+    return nil
+}
+
 func eventJson(_ e: EKEvent) -> [String: Any] {
     // Occurrences of a recurring event share eventIdentifier; suffix the start
     // timestamp so every rendered chip has a unique, re-findable id.
@@ -173,6 +215,8 @@ func eventJson(_ e: EKEvent) -> [String: Any] {
         "readonly": !e.calendar.allowsContentModifications,
     ]
     if let loc = e.location, !loc.isEmpty { out["location"] = loc }
+    if let status = statusString(e.status) { out["status"] = status }
+    if let selfStatus = selfStatusString(e) { out["selfStatus"] = selfStatus }
     return out
 }
 
@@ -216,8 +260,12 @@ case "calendars":
 
 case "list":
     guard args.count >= 4, let from = parseLocal(args[2]), let toDay = parseLocal(args[3]) else {
-        fail("usage: list <fromISO> <toISO>", code: "usage")
+        fail("usage: list <fromISO> <toISO> [refresh]", code: "usage")
     }
+    // Ask macOS to pull from Exchange/Google/iCloud before reading. The pull is
+    // asynchronous in calendaraccessd, so this warms the next poll, not this
+    // read — callers that need "right now" should just poll more often.
+    if args.count >= 5 && args[4] == "refresh" { store.refreshSourcesIfNecessary() }
     // `to` is an inclusive day string → extend to end of that day.
     let to = args[3].contains("T") ? toDay : toDay.addingTimeInterval(24 * 3600)
     let predicate = store.predicateForEvents(withStart: from, end: to, calendars: nil)

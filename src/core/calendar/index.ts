@@ -5,6 +5,16 @@
  * service: a month-window TTL cache over the EventKit source, a periodic
  * refresh, and write-through edits that refresh the touched window and emit
  * `calendar:updated` so the web UI reflects agent/API edits live.
+ *
+ * Two separate clocks, deliberately:
+ *   - READ_TTL (`calendar.read_ttl_seconds`, default 60s) bounds how stale a
+ *     served read may be. It used to be the same knob as the poll interval,
+ *     which meant a read could be a full 15 minutes behind reality — a meeting
+ *     cancelled or moved in Exchange kept showing up long after macOS knew
+ *     better. Re-fetching a month window costs ~0.25s, so a short TTL is cheap.
+ *   - refresh_minutes (default 15) is the BACKGROUND poll: it exists to notice
+ *     changes nobody asked about and push `calendar:updated` to open views.
+ * Callers that must not be fooled at all pass `{ force: true }`.
  */
 import { createHash } from 'node:crypto';
 import { bus, EventNames } from '../event-bus.js';
@@ -24,6 +34,7 @@ export { CalendarHelperError } from './sources/eventkit.js';
 export type * from './types.js';
 
 const DEFAULT_REFRESH_MINUTES = 15;
+const DEFAULT_READ_TTL_SECONDS = 60;
 
 interface CacheEntry {
   events: CalendarEvent[];
@@ -36,11 +47,17 @@ interface CalendarConfigShape {
   hidden_calendar_ids?: string[];
   visible_calendar_ids?: string[];
   refresh_minutes?: number;
+  read_ttl_seconds?: number;
 }
 
 function eventsHash(events: CalendarEvent[]): string {
   const h = createHash('sha1');
-  for (const e of events) h.update(`${e.id}|${e.title}|${e.start}|${e.end}|${e.calendarId};`);
+  // status/selfStatus are part of the identity: a meeting being cancelled often
+  // changes nothing else, and leaving them out meant open views never heard.
+  for (const e of events)
+    h.update(
+      `${e.id}|${e.title}|${e.start}|${e.end}|${e.calendarId}|${e.status ?? ''}|${e.selfStatus ?? ''};`
+    );
   return h.digest('hex');
 }
 
@@ -66,6 +83,10 @@ export class CalendarService {
   private visibleIds: Set<string> | null = null;
   private enabled = true;
   private refreshMinutes = DEFAULT_REFRESH_MINUTES;
+  private readTtlMs = DEFAULT_READ_TTL_SECONDS * 1000;
+  /** In-flight fetch per window, so N concurrent readers (web + iOS + agent)
+   *  hitting an expired window spawn ONE helper process, not N. */
+  private inFlight = new Map<string, Promise<CalendarEvent[]>>();
   private lastRefresh: string | undefined;
   private lastError: { reason: CalendarSourceStatus['reason']; message: string } | null = null;
 
@@ -103,6 +124,8 @@ export class CalendarService {
     this.hiddenIds = new Set(cal.hidden_calendar_ids ?? []);
     this.visibleIds = cal.visible_calendar_ids ? new Set(cal.visible_calendar_ids) : null;
     this.refreshMinutes = Math.max(1, cal.refresh_minutes ?? DEFAULT_REFRESH_MINUTES);
+    // 0 is legal and means "never serve from cache" (every read re-fetches).
+    this.readTtlMs = Math.max(0, cal.read_ttl_seconds ?? DEFAULT_READ_TTL_SECONDS) * 1000;
     // Visibility is applied at read time (cache keeps everything), so a toggle
     // never changes the cache hash — announce it explicitly or the UI would
     // only notice on its next unrelated refetch.
@@ -149,7 +172,9 @@ export class CalendarService {
     return cals.map((c) => ({ ...c, hidden: this.isHidden(c.id) }));
   }
 
-  /** Events within [from, to] (inclusive day strings), served from cache.
+  /** Events within [from, to] (inclusive day strings), served from cache when it
+   *  is younger than READ_TTL. `force` skips the cache entirely — for callers
+   *  that would rather wait ~0.25s than report a cancelled meeting as live.
    *  Hidden-calendar filtering happens HERE, not in the source: the cache
    *  keeps everything, so toggling visibility applies on the next read with
    *  no refetch. */
@@ -157,18 +182,35 @@ export class CalendarService {
     if (!this.enabled || !this.source.available().ok) return [];
     const key = windowKey(from, to);
     const cached = this.cache.get(key);
-    const ttlMs = this.refreshMinutes * 60_000;
-    if (!opts?.force && cached && Date.now() - cached.fetchedAt < ttlMs) {
+    if (!opts?.force && cached && Date.now() - cached.fetchedAt < this.readTtlMs) {
       return this.visible(filterRange(cached.events, from, to));
     }
-    const window = windowRange(from, to);
-    const events = await this.trackErrors(() => this.source.listEvents(window.from, window.to));
-    const hash = eventsHash(events);
-    const changed = cached?.hash !== hash;
-    this.cache.set(key, { events, fetchedAt: Date.now(), hash });
-    this.lastRefresh = new Date().toISOString();
-    if (changed && cached) this.emitUpdated();
+    const events = await this.fetchWindow(key, from, to);
     return this.visible(filterRange(events, from, to));
+  }
+
+  /** Fetch + cache one month window, collapsing concurrent callers onto a single
+   *  helper invocation. Emits `calendar:updated` when the window really changed. */
+  private async fetchWindow(key: string, from: string, to: string): Promise<CalendarEvent[]> {
+    const pending = this.inFlight.get(key);
+    if (pending) return pending;
+    const window = windowRange(from, to);
+    const task = (async () => {
+      const before = this.cache.get(key);
+      const events = await this.trackErrors(() => this.source.listEvents(window.from, window.to));
+      const hash = eventsHash(events);
+      const changed = before?.hash !== hash;
+      this.cache.set(key, { events, fetchedAt: Date.now(), hash });
+      this.lastRefresh = new Date().toISOString();
+      if (changed && before) this.emitUpdated();
+      return events;
+    })();
+    this.inFlight.set(key, task);
+    try {
+      return await task;
+    } finally {
+      this.inFlight.delete(key);
+    }
   }
 
   /** Allowlist (when set) wins first, then the denylist applies on top. */
@@ -182,7 +224,9 @@ export class CalendarService {
     return events.filter((e) => !this.isHidden(e.calendarId));
   }
 
-  /** Re-fetch every cached window (periodic refresh / manual refresh). */
+  /** Re-fetch every cached window (periodic refresh / manual refresh). Asks the
+   *  source to pull from the remote accounts first — that pull is asynchronous
+   *  inside macOS, so it freshens the poll after this one, not this one. */
   async refreshAll(): Promise<void> {
     if (!this.enabled || !this.source.available().ok) return;
     let anyChanged = false;
@@ -190,7 +234,9 @@ export class CalendarService {
       const [fromMonth, toMonth] = key.split('..');
       const window = windowRange(`${fromMonth}-01`, `${toMonth}-01`);
       try {
-        const events = await this.trackErrors(() => this.source.listEvents(window.from, window.to));
+        const events = await this.trackErrors(() =>
+          this.source.listEvents(window.from, window.to, { refresh: true })
+        );
         const hash = eventsHash(events);
         if (hash !== entry.hash) anyChanged = true;
         this.cache.set(key, { events, fetchedAt: Date.now(), hash });
