@@ -135,6 +135,26 @@ extension WalnutAPI {
         try await get("/chat/stats?agentId=\(escape(agentID))")
     }
 
+    /// Which engine answers a chat conversation + (lane engine) its session id,
+    /// so the main-agent composer can show and switch the model. Read-only: it
+    /// never mints a lane session. No conversationID = the active conversation.
+    func chatEngine(agentID: String = "general", conversationID: String? = nil) async throws -> ChatEngineInfo {
+        var query = "agentId=\(escape(agentID))"
+        if let conversationID, !conversationID.isEmpty {
+            query += "&conversationId=\(escape(conversationID))"
+        }
+        return try await get("/chat/engine?\(query)")
+    }
+
+    /// One directory level for the session path picker. `host` "" / nil = the
+    /// primary box. `prefix` may be partial (the server lists its parent and
+    /// reports the resolved `parent` back) and may start with `~`.
+    func listDirs(prefix: String, host: String? = nil) async throws -> DirListing {
+        var query = "prefix=\(escapeQuery(prefix))"
+        if let host, !host.isEmpty { query += "&host=\(escapeQuery(host))" }
+        return try await get("/sessions/list-dirs?\(query)")
+    }
+
     // MARK: - Session file browsing
 
     /// One directory level of a session-host file tree. `host` "" / nil = the

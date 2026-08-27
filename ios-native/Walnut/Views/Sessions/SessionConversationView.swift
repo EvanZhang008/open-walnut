@@ -100,6 +100,13 @@ struct SessionConversationView: View {
                 disabled: !store.canSend,
                 disabledNotice: store.composerNotice,
                 draftKey: "session:\(session.id)",
+                // The model pill switches THIS session's model/effort live.
+                modelSource: .session(id: session.id),
+                fallbackModel: session.model,
+                // A live session's exec host is a fact, not a choice (the CLI is
+                // already running there), so it shows as provenance in the `+`.
+                // Picking a host happens at CREATION (NewSessionChatView).
+                hostProvenance: .session(hostAlias: session.host, cwd: session.cwd),
                 onSend: { text, images in await store.send(text, images: images) }
             )
         }

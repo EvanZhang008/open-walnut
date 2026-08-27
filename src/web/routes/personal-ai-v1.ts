@@ -10,6 +10,7 @@
  *   POST   /conversations/:id/answer { answers }   → { ok: true }
  *   PUT    /conversations/active { conversationId } → { activeConversationId }
  *   GET    /chat/stats?agentId&conversationId      → conversation size stats
+ *   GET    /chat/engine?agentId&conversationId     → { engine, sessionId? } (read-only)
  *   POST   /chat/clear?agentId&conversationId      → { ok: true }
  *   POST   /chat/compact?agentId&conversationId    → { ok, async|alreadyRunning } (Wave 3)
  *
@@ -125,6 +126,57 @@ async function resolveChatTarget(req: Request, res: Response): Promise<{ agentId
   const { getActiveConversationId } = await import('../../core/conversations.js')
   return { agentId, conversationId: await getActiveConversationId(agentId) }
 }
+
+// GET /api/v1/chat/engine?agentId&conversationId → { engine, sessionId?, cwd? }
+//
+// Why this exists: on the lane engine (`config.agent.provider === 'claude-code'`)
+// a chat turn runs inside a real `claude` CLI session, so the model/effort/mode
+// the answer is produced with live on THAT session record and are switchable
+// through the ordinary `/sessions/:id/model|effort|controls` endpoints. Those
+// endpoints already accept a lane session id (they resolve by record, not by the
+// listable projection); what no v1 route exposed was the id itself, so a mobile
+// client had no way to find the session behind its own conversation. The web
+// console reads it from an internal non-v1 route (POST .../lane-session), which
+// mobile cannot use.
+//
+// READ-ONLY on purpose: it never mints a lane. Minting is a side effect of
+// sending, and a picker that spawns a CLI just by being opened would start a
+// process the user never asked for. Hence `sessionId: null` until the
+// conversation has had its first turn: the client shows the model as read-only
+// (or hides the pill) rather than fabricating one.
+//
+// `engine: 'in-process'` means the config is NOT on the lane engine, so there is
+// no per-conversation session and nothing to switch: the model is whatever
+// `config.agent.main_model` says, which is a config-level fact and not this
+// endpoint's to change.
+personalAiV1Router.get('/chat/engine', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const ids = await resolveChatTarget(req, res)
+    if (!ids) return
+    const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
+    const config = await getConfig()
+    if (resolveAgentEngineProvider(config) !== 'claude-code') {
+      res.json({
+        engine: 'in-process',
+        sessionId: null,
+        ...(config.agent?.main_model ? { model: config.agent.main_model } : {}),
+      })
+      return
+    }
+    const { personalAiLaneKey } = await import('../../core/sessions/personal-ai-lane.js')
+    const { getSessionByLane } = await import('../../core/session-tracker.js')
+    const record = await getSessionByLane(personalAiLaneKey(ids.agentId, ids.conversationId))
+    res.json({
+      engine: 'lane',
+      sessionId: record?.claudeSessionId ?? null,
+      ...(record?.cwd ? { cwd: record.cwd } : {}),
+      // '' on the record means the primary box, matching ProjectedSession.host.
+      ...(record ? { host: record.host ?? '' } : {}),
+    })
+  } catch (err) {
+    next(err)
+  }
+})
 
 // GET /api/v1/chat/stats?agentId&conversationId — real conversation size
 // (API message count + token estimate incl. system/tools), cached between turns.

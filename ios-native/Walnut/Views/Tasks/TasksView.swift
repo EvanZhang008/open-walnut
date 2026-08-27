@@ -134,11 +134,19 @@ struct TasksView: View {
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }
+            // Starting a session lands in a CHAT PAGE with the folder/host and
+            // model pickable there (the phone's version of the web draft column),
+            // instead of a form you fill in before arriving somewhere else. Full
+            // height, not .medium: it hosts a composer, and a keyboard over a
+            // half sheet leaves no room for the launch bar the page is about.
             .sheet(isPresented: $showNewSession) {
-                NewSessionSheet { session in
-                    navPath.append(session)
+                NavigationStack {
+                    NewSessionChatView { session in
+                        showNewSession = false
+                        navPath.append(session)
+                    }
                 }
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.large])
             }
             .sheet(isPresented: $showNewTask, onDismiss: {
                 newTaskSeedText = ""

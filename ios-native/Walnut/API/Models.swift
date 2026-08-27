@@ -9,11 +9,50 @@ struct ServerStatus: Codable, Equatable {
         case replica = "REPLICA"
     }
 
+    /// One daemon dialled into a cloud companion. Additive AND replica-only:
+    /// the primary never sends the key at all (see the /api/v1/status route), so
+    /// nil means "this server can't tell us", which is NOT the same as an empty
+    /// list ("it can tell us, and nothing is connected").
+    struct BridgeHost: Codable, Equatable {
+        /// The primary box registers under the reserved alias "__local__".
+        let hostAlias: String
+        let since: Double?
+    }
+
     let mode: Mode
     let cloud: Bool
     let version: String
     let serverTime: String
     let lastSyncAt: String?
+    let bridgeHosts: [BridgeHost]?
+
+    private enum CodingKeys: String, CodingKey {
+        case mode, cloud, version, serverTime, lastSyncAt, bridgeHosts
+    }
+
+    init(mode: Mode, cloud: Bool, version: String, serverTime: String,
+         lastSyncAt: String? = nil, bridgeHosts: [BridgeHost]? = nil) {
+        self.mode = mode
+        self.cloud = cloud
+        self.version = version
+        self.serverTime = serverTime
+        self.lastSyncAt = lastSyncAt
+        self.bridgeHosts = bridgeHosts
+    }
+
+    /// Lenient on the additive fields only: `mode`/`cloud`/`version` stay
+    /// required (they are the frozen core of /status), but a malformed
+    /// `bridgeHosts` from a mixed-version box must not fail the whole probe and
+    /// take the app offline.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try c.decode(Mode.self, forKey: .mode)
+        cloud = try c.decode(Bool.self, forKey: .cloud)
+        version = try c.decode(String.self, forKey: .version)
+        serverTime = (try? c.decode(String.self, forKey: .serverTime)) ?? ""
+        lastSyncAt = try? c.decodeIfPresent(String.self, forKey: .lastSyncAt)
+        bridgeHosts = try? c.decodeIfPresent([BridgeHost].self, forKey: .bridgeHosts)
+    }
 }
 
 struct ConversationSummary: Codable, Identifiable, Equatable {

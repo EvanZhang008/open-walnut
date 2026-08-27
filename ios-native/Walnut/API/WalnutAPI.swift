@@ -239,28 +239,51 @@ struct WalnutAPI {
     /// nil = the primary box (Mac). `taskId` links the session to an existing
     /// task instead of creating a new one. Empty `message` = spawn idle.
     /// `mode` = permission mode (bypass/accept/default/plan); nil = server
-    /// default (bypass — same as the web launcher).
+    /// default (bypass — same as the web launcher). `model` = a catalog id or a
+    /// legacy alias; nil (or "default") = the server's own default, so an old
+    /// client's behavior is unchanged.
     func createSession(
         cwd: String, host: String? = nil, message: String = "",
-        taskId: String? = nil, mode: String? = nil
+        taskId: String? = nil, mode: String? = nil, model: String? = nil
     ) async throws -> SessionCreated {
-        struct Body: Encodable {
-            let cwd: String
-            let host: String?
-            let message: String
-            let taskId: String?
-            let mode: String?
-        }
-        return try await send(
+        try await send(
             "POST", "/sessions",
-            body: Body(
-                cwd: cwd,
-                host: (host?.isEmpty ?? true) ? nil : host,
-                message: message,
-                taskId: taskId,
-                mode: mode
+            body: Self.createSessionBody(
+                cwd: cwd, host: host, message: message,
+                taskId: taskId, mode: mode, model: model
             ),
             timeout: 60
+        )
+    }
+
+    /// The exact wire body `POST /api/v1/sessions` receives. Split out as a pure
+    /// function so the omission rules are testable without a network: each `nil`
+    /// here means "let the server apply its own default", which is what keeps an
+    /// old server's behavior identical to before these fields existed.
+    struct CreateSessionBody: Encodable, Equatable {
+        let cwd: String
+        let host: String?
+        let message: String
+        let taskId: String?
+        let mode: String?
+        let model: String?
+    }
+
+    static func createSessionBody(
+        cwd: String, host: String?, message: String,
+        taskId: String?, mode: String?, model: String?
+    ) -> CreateSessionBody {
+        CreateSessionBody(
+            cwd: cwd,
+            // "" = the primary box on the wire, but the server reads ABSENT the
+            // same way, and omitting keeps one spelling of "the Mac".
+            host: (host?.isEmpty ?? true) ? nil : host,
+            message: message,
+            taskId: taskId,
+            mode: mode,
+            // "default" is the catalog's own no-op row; the server already treats
+            // it as absent, so don't spend a wire field on it.
+            model: (model?.isEmpty ?? true) || model == "default" ? nil : model
         )
     }
 

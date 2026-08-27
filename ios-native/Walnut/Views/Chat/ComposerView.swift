@@ -46,6 +46,15 @@ struct ComposerBar: View {
     /// uses it to make sure the MAIN agent is selected, so the transcript can
     /// never land on whichever subagent the user last browsed.
     var prepareVoiceQuickAction: (() -> Void)? = nil
+    /// Where the switchable model lives for this composer (a session, or a chat
+    /// conversation's lane session). Absent = no model pill.
+    var modelSource: ComposerControlsModel.Source? = nil
+    /// The model string already known from the row, shown while the catalog loads
+    /// and kept as the label if it never arrives.
+    var fallbackModel: String? = nil
+    /// Read-only "where is this served from" for the `+` menu. Absent = the row
+    /// is omitted (nothing honest to say).
+    var hostProvenance: ComposerHostProvenance? = nil
     let onSend: (String, [SelectedImage]) async -> Bool
 
     @State private var voice = VoiceRecorder()
@@ -64,6 +73,12 @@ struct ComposerBar: View {
     /// representable syncs with its first-responder status.
     @State private var longDraftFocused = false
     @State private var drafts = ComposerDrafts.shared
+    /// Model + effort for the pill. Owned here (not by the parent) so it survives
+    /// the parent's body passes; `attach` is idempotent per source.
+    @State private var controls = ComposerControlsModel()
+    /// Photo picker presentation is now explicit: the `+` is a MENU (photos +
+    /// host provenance), so the picker is presented rather than being the button.
+    @State private var showPhotoPicker = false
 
     private static let maxImages = 5
 
@@ -114,12 +129,25 @@ struct ComposerBar: View {
                 recordingRow
             } else {
                 if !selectedImages.isEmpty { thumbnailStrip }
+                controlsRow
                 inputRow
             }
         }
         .background(.bar)
+        // The `+` menu presents the picker instead of BEING it, so photos keep
+        // working while the menu also hosts the host-provenance row.
+        .photosPicker(
+            isPresented: $showPhotoPicker,
+            selection: $pickerItems,
+            maxSelectionCount: Self.maxImages,
+            matching: .images,
+            photoLibrary: .shared()
+        )
         .onAppear {
             onScreen = true
+            if let modelSource {
+                controls.attach(modelSource, fallbackModel: fallbackModel)
+            }
             // An interruption (call / Siri) auto-transcribes the partial take.
             // For a quick-action take that text is still owed to the agent —
             // route it the same way a normal stop would.
@@ -200,9 +228,33 @@ struct ComposerBar: View {
         draft.wrappedValue.utf8.count > Self.longDraftThreshold
     }
 
+    /// Controls row ABOVE the input row: the model pill, left-aligned.
+    ///
+    /// Its own row rather than inline beside the field, for two measured reasons:
+    /// the input row already carries `+` / field / mic / send and a fifth control
+    /// squeezes the field on a 390pt-wide phone, and the model label is variable
+    /// width ("Opus 5 · Extra High") so inline it would resize the field on every
+    /// switch. This still matches the desktop's decision that the model belongs
+    /// WITH the message rather than in a settings screen (web `ChatInput` renders
+    /// its `controlsSlot` in the composer's own chrome, not in the text row).
+    ///
+    /// The row appears only when there is something true to show, so a composer
+    /// with no resolvable model is byte-for-byte the old layout.
+    @ViewBuilder
+    private var controlsRow: some View {
+        if modelSource != nil, controls.pillLabel != nil {
+            HStack(spacing: 6) {
+                ComposerModelPill(controls: controls)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 6)
+        }
+    }
+
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            photoButton
+            plusButton
 
             // Long drafts (a big paste, or several dictations appended together)
             // move to a viewport-bounded UITextView. The plain TextField must lay
@@ -364,24 +416,43 @@ struct ComposerBar: View {
 
     // MARK: - Buttons
 
-    /// Native PhotosPicker entry (no permission prompt). Disabled once the
-    /// selection is full so the user gets a clear ceiling at 5 images.
-    private var photoButton: some View {
-        PhotosPicker(
-            selection: $pickerItems,
-            maxSelectionCount: Self.maxImages,
-            matching: .images,
-            photoLibrary: .shared()
-        ) {
-            Image(systemName: "photo")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(selectedImages.count >= Self.maxImages ? Color(.tertiaryLabel) : .secondary)
+    /// The `+`: attachments, plus READ-ONLY host provenance ("where is this
+    /// served from"). Two items, so it is not a junk drawer: everything that
+    /// changes the NEXT message stays on the row (model pill) or in the row's
+    /// own buttons (mic, send), and everything that is a fact about the session
+    /// stays in the session menu. If a third item ever wants in here, it has to
+    /// argue that it is an INPUT to the message the user is composing.
+    ///
+    /// Keeps `chat.photo` as the photo item's identifier: existing automation taps
+    /// it, and the id must keep meaning "open the photo picker". The menu itself
+    /// gets `chat.plus` (a collapsed Menu renders as one accessibility element, so
+    /// the container needs its own id — the same lesson TasksView's
+    /// `sessions.new`/`sessions.create` pair encodes).
+    private var plusButton: some View {
+        Menu {
+            Button {
+                showPhotoPicker = true
+            } label: {
+                Label(
+                    selectedImages.isEmpty ? "Photos" : "Photos (\(selectedImages.count)/\(Self.maxImages))",
+                    systemImage: "photo"
+                )
+            }
+            .disabled(selectedImages.count >= Self.maxImages)
+            .accessibilityIdentifier("chat.photo")
+
+            if let hostProvenance {
+                ComposerHostRow(provenance: hostProvenance)
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.secondary)
                 .frame(width: 32, height: 32)
                 .background(Color(.tertiarySystemFill), in: Circle())
         }
-        .disabled(selectedImages.count >= Self.maxImages)
         .padding(.bottom, 3)
-        .accessibilityIdentifier("chat.photo")
+        .accessibilityIdentifier("chat.plus")
     }
 
     private var micButton: some View {
@@ -634,7 +705,18 @@ struct ComposerView: View {
                 // chat on a subagent, switch home before the mic opens (a no-op
                 // when already there).
                 chat.switchAgent(ChatStore.mainAgentID)
-            }
+            },
+            // The MAIN AGENT gets a model pill too. On the lane engine its turn
+            // runs inside a real CLI session, so the model is a genuine per-
+            // conversation property (GET /chat/engine resolves which session);
+            // on the in-process engine the pill goes read-only and says so,
+            // because the model is then a server-config fact.
+            modelSource: .chat(agentID: chat.activeAgentID, conversationID: chat.activeID),
+            // The main agent does NOT run on a selectable exec host: it runs
+            // wherever the server runs. So the honest provenance is which SERVER
+            // is answering (primary vs cloud companion), and whether the Mac is
+            // still reachable from it.
+            hostProvenance: .chat(status: connection.status, online: connection.online)
         ) { text, images in
             await chat.send(text, images: images)
         }

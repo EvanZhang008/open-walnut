@@ -313,6 +313,56 @@ struct ChatStats: Codable {
     }
 }
 
+/// GET /v1/chat/engine → which engine answers a conversation, and on the lane
+/// engine the id of the `claude` session behind it.
+///
+/// This is what lets the MAIN AGENT chat carry a model pill: on the lane engine
+/// the answer is produced by a real CLI session, so its model/effort/mode are
+/// the ordinary session-control endpoints' business. `sessionId` is nil until the
+/// conversation has had its first turn (the endpoint never mints a lane, because
+/// opening a picker must not spawn a CLI), and on `engine == "in-process"` there
+/// is no session at all: the model is a config-level setting the phone reports
+/// but must not pretend to switch.
+struct ChatEngineInfo: Codable, Equatable {
+    let engine: String
+    let sessionId: String?
+    let cwd: String?
+    /// "" = the primary box (matches ProjectedSession.host semantics).
+    let host: String?
+    /// Only on the in-process engine: config.agent.main_model.
+    let model: String?
+
+    /// A live lane session exists, so model/effort/mode are switchable.
+    var switchableSessionId: String? {
+        guard engine == "lane", let sessionId, !sessionId.isEmpty else { return nil }
+        return sessionId
+    }
+}
+
+/// GET /v1/sessions/list-dirs → one directory level for the path picker.
+/// `exists: false` still arrives as HTTP 200 (the listed dir is absent), and old
+/// servers may omit it, so decode leniently and default to true.
+struct DirListing: Codable, Equatable {
+    let dirs: [String]
+    let parent: String
+    let exists: Bool
+
+    private enum CodingKeys: String, CodingKey { case dirs, parent, exists }
+
+    init(dirs: [String], parent: String, exists: Bool) {
+        self.dirs = dirs
+        self.parent = parent
+        self.exists = exists
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        dirs = (try? c.decode([String].self, forKey: .dirs)) ?? []
+        parent = (try? c.decode(String.self, forKey: .parent)) ?? ""
+        exists = (try? c.decodeIfPresent(Bool.self, forKey: .exists)) ?? true
+    }
+}
+
 // MARK: - Session file browsing
 
 /// One row of GET /v1/files/list — a lazy single directory level.
