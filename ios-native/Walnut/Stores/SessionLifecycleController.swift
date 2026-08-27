@@ -78,7 +78,14 @@ final class SessionLifecycleController {
 
     /// Answer one prompt. Optimistic removal + rollback: the card disappears
     /// instantly; a failure puts it back with the error line.
-    func respondPermission(_ request: PendingPermission, allow: Bool) async {
+    ///
+    /// `answers` / `message` are the AskUserQuestion path: answering IS the
+    /// allow response, so the map rides along with allow=true; "Dismiss" is a
+    /// deny carrying the reason the model sees.
+    func respondPermission(
+        _ request: PendingPermission, allow: Bool,
+        answers: [String: String]? = nil, message: String? = nil
+    ) async {
         guard !answeringIds.contains(request.requestId) else { return }
         answeringIds.insert(request.requestId)
         let original = pendingPermissions
@@ -86,10 +93,12 @@ final class SessionLifecycleController {
         defer { answeringIds.remove(request.requestId) }
         do {
             _ = try await api.respondSessionPermission(
-                id: sessionId, requestId: request.requestId, allow: allow
+                id: sessionId, requestId: request.requestId, allow: allow,
+                message: message, answers: answers
             )
             AppLog.info("session-lifecycle", "permission answered", [
                 "sessionId": sessionId, "requestId": request.requestId, "allow": String(allow),
+                "answerCount": String(answers?.count ?? 0),
             ])
             await refreshDetail()
         } catch {

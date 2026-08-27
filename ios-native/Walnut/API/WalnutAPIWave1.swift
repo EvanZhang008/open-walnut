@@ -52,17 +52,30 @@ extension WalnutAPI {
     }
 
     /// Answer a live CLI tool-permission prompt. `message` = deny reason.
+    ///
+    /// `answers` is AskUserQuestion-only: question text → the chosen option
+    /// label (multi-select joined with ", "), merged server-side into the allow
+    /// response's `updatedInput`, which the tool echoes back to the model as
+    /// "User has answered your questions". An allow WITHOUT it tells the model
+    /// the user answered nothing — so the question card must always send it.
     func respondSessionPermission(
-        id: String, requestId: String, allow: Bool, message: String? = nil
+        id: String, requestId: String, allow: Bool, message: String? = nil,
+        answers: [String: String]? = nil
     ) async throws -> PermissionResolved {
         struct Body: Encodable {
             let requestId: String
             let allow: Bool
             let message: String?
+            let answers: [String: String]?
         }
         return try await send(
             "POST", "/sessions/\(escape(id))/permission",
-            body: Body(requestId: requestId, allow: allow, message: message)
+            body: Body(
+                requestId: requestId, allow: allow, message: message,
+                // Omit an empty map: the server treats {} as "no answers" anyway,
+                // and sending it would just be a confusing wire artifact.
+                answers: (answers?.isEmpty ?? true) ? nil : answers
+            )
         )
     }
 

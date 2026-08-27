@@ -94,6 +94,11 @@ struct RootView: View {
             // Maestro's launchArguments encode flags as "-timeline-harness".
             if ProcessInfo.processInfo.arguments.contains(where: { $0.contains("timeline-harness") }) {
                 NavigationStack { TimelineHarnessView() }
+            } else if ProcessInfo.processInfo.arguments.contains(where: { $0.contains("askq-harness") }) {
+                // AskUserQuestion card harness: renders the real card against a
+                // real-shape payload so the question + every option can be seen
+                // without holding a live CLI blocked mid-turn.
+                NavigationStack { AskQuestionHarnessView() }
             } else if ProcessInfo.processInfo.arguments.contains(where: { $0.contains("calendar-harness") }) {
                 // Calendar E2E harness (Maestro): boots straight into the
                 // Tasks-tab calendar against the configured server — lets the
@@ -135,8 +140,15 @@ struct RootView: View {
             if phase == .active {
                 LifecycleHub.shared.resumeAll()
                 Task { await connection.refreshStatus() }
+                // "The app is on screen" — only read by the server in
+                // `when-inactive` mode, where it's what keeps a letter quiet
+                // while the user is already looking at Walnut.
+                PushRegistration.shared.reportActive(true)
             } else if phase == .background {
                 LifecycleHub.shared.suspendAll()
+                // Release the lease immediately so the very next letter buzzes,
+                // rather than waiting for it to expire.
+                PushRegistration.shared.reportActive(false)
             }
         }
     }

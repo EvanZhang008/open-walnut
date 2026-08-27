@@ -74,10 +74,23 @@ struct SessionConversationView: View {
             ForEach(lifecycle.pendingPermissions) { request in
                 PermissionRequestCard(
                     request: request,
-                    answering: lifecycle.answeringIds.contains(request.requestId)
-                ) { allow in
-                    Task { await lifecycle.respondPermission(request, allow: allow) }
-                }
+                    answering: lifecycle.answeringIds.contains(request.requestId),
+                    onRespond: { allow in
+                        Task { await lifecycle.respondPermission(request, allow: allow) }
+                    },
+                    // AskUserQuestion: the ALLOW response carries the answers.
+                    onAnswer: { answers in
+                        Task { await lifecycle.respondPermission(request, allow: true, answers: answers) }
+                    },
+                    // Refusing the ask is a deny with the reason the model reads.
+                    onDismissQuestions: {
+                        Task {
+                            await lifecycle.respondPermission(
+                                request, allow: false, message: "User dismissed the questions"
+                            )
+                        }
+                    }
+                )
             }
             messageList
         }

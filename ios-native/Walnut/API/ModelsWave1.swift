@@ -48,6 +48,28 @@ enum JSONValue: Codable, Equatable {
         if case .string(let s) = self { return s }
         return nil
     }
+
+    /// Non-empty string only — the shape most callers actually want (a blank
+    /// `header` or `description` is the same as an absent one).
+    var nonEmptyString: String? {
+        guard let s = stringValue, !s.isEmpty else { return nil }
+        return s
+    }
+
+    var arrayValue: [JSONValue]? {
+        if case .array(let a) = self { return a }
+        return nil
+    }
+
+    var objectValue: [String: JSONValue]? {
+        if case .object(let o) = self { return o }
+        return nil
+    }
+
+    var boolValue: Bool? {
+        if case .bool(let b) = self { return b }
+        return nil
+    }
 }
 
 // MARK: - Session lifecycle
@@ -68,9 +90,20 @@ struct PendingPermission: Codable, Identifiable, Equatable {
         "pattern", "prompt", "text", "title", "message",
     ]
 
+    /// Parsed AskUserQuestion payload, or nil for every other tool. Non-nil
+    /// means the card must render the full ask (and answer via `answers`), NOT
+    /// the generic Allow/Deny pair.
+    var askQuestions: [AskQuestion]? {
+        guard toolName == AskUserQuestion.toolName else { return nil }
+        return AskUserQuestion.parse(input)
+    }
+
     /// Short human summary of what the tool wants to do ("ls docs/").
+    /// Nil for a parseable AskUserQuestion: its card renders every question in
+    /// full, and a one-line summary next to that is just noise.
     var inputSummary: String? {
         guard let input else { return nil }
+        if askQuestions != nil { return nil }
         for key in Self.summaryKeys {
             if let value = input[key]?.stringValue, !value.isEmpty {
                 let oneLine = value.replacingOccurrences(of: "\n", with: " ")
@@ -78,6 +111,112 @@ struct PendingPermission: Codable, Identifiable, Equatable {
             }
         }
         return nil
+    }
+}
+
+// MARK: - AskUserQuestion (the CLI's multiple-choice tool)
+//
+// `AskUserQuestion` is a requiresUserInteraction tool: its permission check
+// ALWAYS returns 'ask' (even under bypassPermissions), and the tool echoes the
+// `answers` field back out of the permission response's `updatedInput`. So
+// answering it is not "allow vs deny" — the ALLOW response IS the answer
+// payload, and an allow with no `answers` tells the model the user answered
+// nothing. A phone that only rendered Allow/Deny therefore both hid the
+// question and, on Allow, told the agent "no answer".
+//
+// Parsing + `answers` construction here MIRROR the web console's
+// web/src/components/sessions/ask-user-question.ts so both surfaces put the
+// same bytes on the wire.
+
+struct AskQuestionOption: Equatable, Identifiable {
+    let label: String
+    let description: String?
+
+    var id: String { label }
+}
+
+struct AskQuestion: Equatable, Identifiable {
+    let question: String
+    let header: String?
+    let options: [AskQuestionOption]
+    let multiSelect: Bool
+
+    /// The `answers` map is keyed by question TEXT (that is the wire contract),
+    /// so the text is also the stable identity for ForEach.
+    var id: String { question }
+}
+
+enum AskUserQuestion {
+    /// Tool name the CLI uses. Matching is exact — the server forwards
+    /// `request.tool_name` verbatim.
+    static let toolName = "AskUserQuestion"
+
+    /// Parse an AskUserQuestion tool input into questions, or nil when the input
+    /// doesn't look like one (then the generic Allow/Deny card renders instead).
+    /// A question with blank text is dropped: it has no usable `answers` key.
+    /// An option with a blank label is dropped: it can't be picked.
+    static func parse(_ input: [String: JSONValue]?) -> [AskQuestion]? {
+        guard let raw = input?["questions"]?.arrayValue else { return nil }
+        let parsed: [AskQuestion] = raw.compactMap { entry in
+            guard let q = entry.objectValue else { return nil }
+            guard let text = q["question"]?.nonEmptyString else { return nil }
+            let options: [AskQuestionOption] = (q["options"]?.arrayValue ?? []).compactMap { opt in
+                guard let o = opt.objectValue, let label = o["label"]?.nonEmptyString else { return nil }
+                return AskQuestionOption(label: label, description: o["description"]?.nonEmptyString)
+            }
+            return AskQuestion(
+                question: text,
+                header: q["header"]?.nonEmptyString,
+                options: options,
+                multiSelect: q["multiSelect"]?.boolValue == true
+            )
+        }
+        return parsed.isEmpty ? nil : parsed
+    }
+
+    /// Build the `answers` map (question text → answer string) the server merges
+    /// into the tool's input. Free text WINS over the option pills (an "Other"
+    /// answer is a deliberate override); multi-select options join with ", " the
+    /// way the CLI's own multi-select summary reads. Questions left entirely
+    /// blank are OMITTED rather than sent as "" — the tool then reports only
+    /// real answers.
+    static func buildAnswers(
+        questions: [AskQuestion],
+        selections: [String: [String]],
+        otherText: [String: String]
+    ) -> [String: String] {
+        var answers: [String: String] = [:]
+        for q in questions {
+            let custom = (otherText[q.question] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let picked = (selections[q.question] ?? []).filter { !$0.isEmpty }
+            let answer = custom.isEmpty ? picked.joined(separator: ", ") : custom
+            if !answer.isEmpty { answers[q.question] = answer }
+        }
+        return answers
+    }
+
+    /// True when every question has an answer — gates the Submit button.
+    static func allAnswered(
+        questions: [AskQuestion],
+        selections: [String: [String]],
+        otherText: [String: String]
+    ) -> Bool {
+        let answers = buildAnswers(questions: questions, selections: selections, otherText: otherText)
+        return !questions.isEmpty && questions.allSatisfy { answers[$0.question] != nil }
+    }
+
+    /// Apply a tap on an option pill. Single-select replaces the selection (and
+    /// tapping the selected pill again clears it); multi-select toggles.
+    static func toggleSelection(
+        current: [String]?,
+        label: String,
+        multiSelect: Bool
+    ) -> [String] {
+        let cur = current ?? []
+        if multiSelect {
+            return cur.contains(label) ? cur.filter { $0 != label } : cur + [label]
+        }
+        return cur.first == label ? [] : [label]
     }
 }
 
