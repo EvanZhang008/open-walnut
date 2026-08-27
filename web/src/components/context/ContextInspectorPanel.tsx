@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { ContextInspectorResponse } from '@/api/context';
-import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { useRenderedMarkdown } from '@/hooks/useEntityLabels';
 import { ContextSection } from './ContextSection';
 import { ToolCard } from './ToolCard';
 import { ApiMessageBlock } from './ApiMessageBlock';
@@ -15,7 +15,7 @@ interface ContextInspectorPanelProps {
 /** Memoized markdown block for context sections */
 function ContextMarkdown({ content, fallback }: { content: string; fallback?: string }) {
   const text = content || fallback || '';
-  const html = useMemo(() => renderMarkdownWithRefs(text), [text]);
+  const html = useRenderedMarkdown(text);
   return (
     <div
       className="context-markdown markdown-body"

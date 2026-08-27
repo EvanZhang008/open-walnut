@@ -23,6 +23,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
+import { useTaskLabel } from '@/hooks/useEntityLabels';
 import { formatRelative } from '@/contexts/notifications';
 import { log } from '@/utils/log';
 import {
@@ -70,6 +71,23 @@ export interface LetterViewProps {
 
 /** Coalesce a burst of letter events into one detail re-read. */
 const LIVE_REFRESH_MS = 350;
+
+/** Task chip in the letter footer: current title from the entity-label store,
+ *  the raw id only when the task can't be resolved. Own component so the
+ *  per-id store subscription isn't a hook-in-a-loop in LetterView. */
+function TaskRefChip({ taskId }: { taskId: string }) {
+  const label = useTaskLabel(taskId);
+  return (
+    <a
+      className="task-link"
+      data-task-id={taskId}
+      href={`/tasks/${taskId}`}
+      title={label?.project ? `${label.project} / ${label.title}` : taskId}
+    >
+      {label?.title ?? taskId}
+    </a>
+  );
+}
 
 export function LetterView({
   letterId, envelope, onLetterUpdated, onMarkRead, onTogglePin, onToggleArchive,
@@ -315,14 +333,7 @@ export function LetterView({
               <div className="hib-taskrefs" onClick={onBodyClick}>
                 <span className="hib-taskrefs-label">Tasks</span>
                 {letter.taskRefs?.map((taskId) => (
-                  <a
-                    key={taskId}
-                    className="task-link"
-                    data-task-id={taskId}
-                    href={`/tasks/${taskId}`}
-                  >
-                    {taskId}
-                  </a>
+                  <TaskRefChip key={taskId} taskId={taskId} />
                 ))}
               </div>
             )}

@@ -5,6 +5,7 @@ import {
   extractContentBlockImages, findImagePaths, isImageFilePath, resolveImagePath,
 } from '@/utils/markdown';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
+import { useEntityLabelsVersion, useRenderedMarkdown } from '@/hooks/useEntityLabels';
 import { useLivePlanContent } from '@/contexts/PlanContentContext';
 import { fetchSubagentHistory } from '@/api/sessions';
 import { getSubagentCache, setSubagentCache } from '@/cache/session-cache';
@@ -213,7 +214,7 @@ export function PlanCard({ content }: { content: string }) {
   const livePlan = useLivePlanContent();
   const displayContent = livePlan ?? content;
   const [open, setOpen] = useState(true);
-  const html = useMemo(() => renderMarkdownWithRefs(displayContent), [displayContent]);
+  const html = useRenderedMarkdown(displayContent);
 
   const handleExpandClick = useCallback(() => {
     // Open the unified plan modal (listened by SessionPanel)
@@ -274,9 +275,11 @@ function injectedContextLabel(text: string): string {
  *  one-line context row (Claude Code app style), click to expand the content. */
 function InjectedContextRow({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
+  const labelsVersion = useEntityLabelsVersion();
   const html = useMemo(
     () => (open ? renderMarkdownWithRefs(text) : ''),
-    [open, text],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
+    [open, text, labelsVersion],
   );
   return (
     <div className="tool-run-row">
@@ -589,6 +592,9 @@ export const GenericToolCall = memo(function GenericToolCall(props: GenericToolC
 
 function GenericToolCallInner({ tool, status: statusProp = 'done', result: resultProp, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick, onFileOpen }: GenericToolCallProps) {
   const [open, setOpen] = useState(false);
+  // Pill titles resolve from the entity-label store — memo boundary is at
+  // GenericToolCall, so this leaf must subscribe itself to see title changes.
+  const labelsVersion = useEntityLabelsVersion();
   // Merge result from explicit prop (streaming path) and tool.result (persisted history path)
   const result = resultProp ?? (tool as { result?: string }).result;
   // Persisted history carries isError (tool_result.is_error) — a failed tool must
@@ -623,7 +629,8 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
     if (!open || !tool.input) return [];
     const input = (typeof tool.input === 'object') ? tool.input : {};
     return extractMarkdownFields(input);
-  }, [tool.input, open]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
+  }, [tool.input, open, labelsVersion]);
 
   // Expanded JSON with pill links injected
   const expandedJsonHtml = useMemo(() => {
@@ -662,7 +669,8 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
     // 3. Render remaining text as markdown (with truncation)
     const text = renderMarkdownWithRefs(result.length > 3000 ? result.slice(0, 3000) : result);
     return { resultImages: images, resultTextHtml: text };
-  }, [result, open, sessionCwd]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
+  }, [result, open, sessionCwd, labelsVersion]);
 
   // Input image preview: if file_path/path/filename points to an image file, show thumbnail
   const inputImageSrc = useMemo(() => {
@@ -843,6 +851,9 @@ function TaskGroup({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, o
   const [lazyChildren, setLazyChildren] = useState<SessionHistoryMessage[] | null>(null);
   const [loadingChildren, setLoadingChildren] = useState(false);
   const [innerOffset, setInnerOffset] = useState(0);
+  // Subscribe pill titles (the inline renderMarkdownWithRefs below) — the memo
+  // boundary at MergedHistoryToolRun would otherwise freeze them.
+  useEntityLabelsVersion();
 
   const description = typeof tool.input?.description === 'string'
     ? tool.input.description
@@ -1040,6 +1051,10 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
 
   // Unified click handler for entity ref links + file links in message content
   const handleContentClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
+
+  // Subscribe pill titles for the inline renderMarkdownWithRefs below — this
+  // component is memoized, so it must re-render itself on label changes.
+  useEntityLabelsVersion();
 
   return (
     <div className={`session-msg ${isUser ? 'session-msg-user' : 'session-msg-assistant'}`}>

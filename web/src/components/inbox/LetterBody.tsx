@@ -14,6 +14,7 @@
  */
 import { useMemo } from 'react';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import type { LetterBodyFormat } from '@/api/human-inbox';
 
 /** Grants popups only: no scripts, no same-origin, no top-level navigation. */
@@ -68,9 +69,11 @@ export function LetterBody({ body, format, subject, onClick }: {
   /** Delegated markdown link clicks (task pills, file paths). HTML: unused. */
   onClick?: (e: React.MouseEvent) => void;
 }) {
+  const labelsVersion = useEntityLabelsVersion();
   const html = useMemo(
     () => (format === 'html' ? wrapLetterHtml(body) : renderMarkdownWithRefs(body)),
-    [body, format],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
+    [body, format, labelsVersion],
   );
 
   if (format === 'html') {

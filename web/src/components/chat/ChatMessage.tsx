@@ -9,6 +9,8 @@ import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { Lightbox } from '@/components/common/Lightbox';
 import { FileViewer } from '@/components/common/FileViewer';
 import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields, renderMarkdownWithRefs } from '@/utils/markdown';
+import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
+import { lookupTaskLabel } from '@/stores/entity-label-store';
 import { useSelectionFrozen } from '@/utils/selection-guard';
 import { parseAskQuestionInput } from './QuestionPopover';
 import { SubagentBlock } from './SubagentBlock';
@@ -669,10 +671,15 @@ export function ToolCallSection({ block, taskLookup, onTaskClick, onSessionClick
     ? renderJsonWithTaskLinks(block.input, taskLookup, onTaskClick, handleSessionClick, onFileOpen)
     : null;
 
+  // Pill titles resolve from the entity-label store — re-render when an
+  // observed title changes or the store loads after this message (boot race).
+  const labelsVersion = useEntityLabelsVersion();
+
   // Render tool result as markdown with entity refs as clickable pills
   const resultHtml = useMemo(
     () => block.result ? renderToolResultWithRefs(block.result) : null,
-    [block.result],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
+    [block.result, labelsVersion],
   );
 
   // Phase 2: Detect long multiline string values in input and render as markdown
@@ -680,7 +687,8 @@ export function ToolCallSection({ block, taskLookup, onTaskClick, onSessionClick
   const markdownFields = useMemo(() => {
     if (!open || !block.input) return [];
     return extractMarkdownFields(block.input);
-  }, [block.input, open]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
+  }, [block.input, open, labelsVersion]);
 
   return (
     <div className={`chat-tool-block chat-tool-block-${block.status}`}>
@@ -837,7 +845,9 @@ function MemoizedTextBlock({ content, cardScope, onClick }: { content: string; c
   // `cards` covers a mounted card AND a half-arrived one being hidden: the raw
   // string path would leak the hidden body as prose (see useSuggestSegments).
   const { segments, useSegments: cards } = useSuggestSegments(displayContent, cardScope);
-  const html = useMemo(() => (cards ? '' : renderMarkdownWithRefs(displayContent)), [cards, displayContent]);
+  const labelsVersion = useEntityLabelsVersion();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
+  const html = useMemo(() => (cards ? '' : renderMarkdownWithRefs(displayContent)), [cards, displayContent, labelsVersion]);
   // Distinct keys, so the mid-stream flip from "plain html" to "segments"
   // REMOUNTS the host instead of asking React to turn a
   // dangerouslySetInnerHTML node into a children node in place.
@@ -881,6 +891,10 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
   // Unified entity click handler for .task-link, .session-link, and .file-link anchors
   const handleEntityClick = useEntityClickHandler(onTaskClick, onSessionClick, handleFileOpen);
 
+  // Pill titles resolve from the entity-label store — the version dep below
+  // re-renders refs when an observed title changes or the store loads late.
+  const labelsVersion = useEntityLabelsVersion();
+
   // Intercept clicks on task-link, session-link anchors, and lightbox images
   // NOTE: ALL hooks must be declared before any early returns (Rules of Hooks).
   const handleContentClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
@@ -915,7 +929,8 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
       return (role === 'user' && source !== 'triage') ? renderUserMessage(content) : renderMarkdownWithRefs(content);
     }
     return null;
-  }, [content, blocks, source, notification, role]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
+  }, [content, blocks, source, notification, role, labelsVersion]);
 
   // Cards on the legacy path: only assistant text without blocks can carry one
   // (user text renders verbatim, and the blocks path goes through
@@ -1079,10 +1094,15 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
       return `⚡ ${cleaned}`.slice(0, 160);
     }
     if (isTriage) {
-      // Extract task label from <task-ref label="..."/> or legacy [id|label] format
+      // Task label for the lane header: current title from the entity-label
+      // store first (resolved by id), the embedded label/legacy title only as
+      // fallback — same precedence as the pill renderer.
+      const xmlIdMatch = content.match(/<task-ref\s+id="([^"]*)"/);
       const xmlRefMatch = content.match(/<task-ref[^>]*label="([^"]*)"/);
       const legacyRefMatch = !xmlRefMatch ? content.match(/\[([^|\]]+)\|([^\]]+)\]/) : null;
-      const taskLabel = xmlRefMatch?.[1] ?? legacyRefMatch?.[2] ?? '';
+      const resolvedTitle = (xmlIdMatch?.[1] && lookupTaskLabel(xmlIdMatch[1])?.title)
+        || (legacyRefMatch?.[1] && lookupTaskLabel(legacyRefMatch[1])?.title);
+      const taskLabel = resolvedTitle || (xmlRefMatch?.[1] ?? legacyRefMatch?.[2] ?? '');
 
       // Extract notification message (unified-path triage with notify)
       const notifyLabelIdx = content.indexOf('**Main AI Notification:**');
@@ -1115,7 +1135,8 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
     // Default: first line, stripped of bold markers
     const firstLine = content.split('\n').find(l => l.trim()) ?? '';
     return firstLine.replace(/\*\*/g, '').slice(0, 120);
-  }, [content, shouldAutoCollapse, isTriage, isQuickStartEcho]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates the store lookups inside
+  }, [content, shouldAutoCollapse, isTriage, isQuickStartEcho, labelsVersion]);
 
   // Notification header with optional UI Only badge + collapse toggle + collapsed summary
   const notificationHeader = (isCron || isNotification || isTriage || isQuickStartEcho || isLongPlainUser) ? (

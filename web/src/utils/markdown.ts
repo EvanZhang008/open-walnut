@@ -1,6 +1,14 @@
 import { marked, Marked, type MarkedExtension, type Tokens } from 'marked';
 import DOMPurify from 'dompurify';
 import { trimUrlCjkTail } from './url-display';
+// Relative import on purpose: the markdown test tier runs this file in a bare
+// node env where only marked/dompurify are aliased — `@/` may not resolve.
+// entity-label-store is dependency-free by contract.
+import {
+  getEntityLabelsVersion,
+  lookupSessionTitle,
+  lookupTaskLabel,
+} from '../stores/entity-label-store';
 
 /**
  * GFM `del` retuned to require DOUBLE tildes — shared by EVERY renderer here.
@@ -234,8 +242,10 @@ marked.use({
       },
       renderer(token) {
         const { taskId, title } = token as unknown as { taskId: string; title: string };
-        const escaped = escapeHtmlText(title);
-        return `<a href="/tasks/${taskId}" class="task-link" data-task-id="${taskId}">${escaped}</a>`;
+        // Same precedence as <task-ref/>: current title from the store first,
+        // the bracket's embedded title only as fallback.
+        const escaped = escapeHtmlText(lookupTaskLabel(taskId)?.title ?? title);
+        return `<a href="/tasks/${taskId}" class="task-link" data-task-id="${taskId}" title="${escapeHtmlText(taskRefHover(taskId))}">${escaped}</a>`;
       },
     },
     {
@@ -301,15 +311,44 @@ function decodeRefAttr(s: string): string {
 }
 
 /**
+ * The ONE display-precedence rule for entity refs, shared by every render path
+ * so it can't drift: CURRENT title from the entity-label store > the AI's
+ * `label` attribute (alias, only a fallback for unresolvable ids) > the id.
+ *
+ * Escaping split: store titles are raw JSON text and must NOT go through
+ * decodeRefAttr (a title legitimately containing the literal `&quot;` would be
+ * corrupted); only the label went through taskRefTag's `"` → `&quot;` escaping.
+ */
+function resolveTaskRefDisplay(id: string, label?: string): string {
+  const resolved = lookupTaskLabel(id);
+  if (resolved) return resolved.title;
+  return label ? decodeRefAttr(label) : id;
+}
+
+function resolveSessionRefDisplay(id: string, label?: string): string {
+  const resolved = lookupSessionTitle(id);
+  if (resolved) return resolved;
+  return label ? decodeRefAttr(label) : id;
+}
+
+/** Hover text for a task pill: `Project / Title` when resolved, the id when
+ *  not (so a stale/fallback pill tells you which id failed to resolve). */
+function taskRefHover(id: string): string {
+  const resolved = lookupTaskLabel(id);
+  if (!resolved) return id;
+  return resolved.project ? `${resolved.project} / ${resolved.title}` : resolved.title;
+}
+
+/**
  * Strip entity refs down to plain-text labels (no links) — for plain-text
  * surfaces like the notification feed where anchors can't render. Mirrors the
  * server-side stripEntityRefs (src/utils/entity-refs.ts).
  */
 export function stripEntityRefsToText(text: string): string {
   return text
-    .replace(TASK_REF_RE, (_m, id: string, label?: string) => decodeRefAttr(label || id))
-    .replace(SESSION_REF_RE, (_m, id: string, label?: string) => decodeRefAttr(label || id))
-    .replace(LEGACY_REF_RE, (_m, _id: string, label: string) => label);
+    .replace(TASK_REF_RE, (_m, id: string, label?: string) => resolveTaskRefDisplay(id, label))
+    .replace(SESSION_REF_RE, (_m, id: string, label?: string) => resolveSessionRefDisplay(id, label))
+    .replace(LEGACY_REF_RE, (_m, id: string, label: string) => lookupTaskLabel(id)?.title ?? label);
 }
 
 /**
@@ -335,16 +374,15 @@ export function extractFirstRefIds(text: string): { sessionId?: string; taskId?:
 export function entityRefsToHtml(text: string): string {
   let result = text;
   result = result.replace(TASK_REF_RE, (_match, id: string, label?: string) => {
-    // Decode the emitter's attribute escaping first, then HTML-escape for the
-    // anchor body — otherwise `&quot;` double-escapes to a literal `&quot;`.
-    const display = decodeRefAttr(label || id);
-    const escaped = display.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    return `<a href="/tasks/${id}" class="task-link" data-task-id="${id}">${escaped}</a>`;
+    // Current-title-first (resolveTaskRefDisplay), decode-then-escape for the
+    // label fallback — otherwise `&quot;` double-escapes to a literal `&quot;`.
+    const escaped = escapeHtmlText(resolveTaskRefDisplay(id, label));
+    const hover = escapeHtmlText(taskRefHover(id));
+    return `<a href="/tasks/${id}" class="task-link" data-task-id="${id}" title="${hover}">${escaped}</a>`;
   });
   result = result.replace(SESSION_REF_RE, (_match, id: string, label?: string) => {
-    const display = decodeRefAttr(label || id);
-    const escaped = display.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    return `<a href="/sessions?id=${id}" class="session-link" data-session-id="${id}">${escaped}</a>`;
+    const escaped = escapeHtmlText(resolveSessionRefDisplay(id, label));
+    return `<a href="/sessions?id=${id}" class="session-link" data-session-id="${id}" title="${escapeHtmlText(id)}">${escaped}</a>`;
   });
   return result;
 }
@@ -358,11 +396,11 @@ export function entityRefsToHtml(text: string): string {
 export function entityRefsToMarkdownLinks(text: string): string {
   let result = text;
   result = result.replace(TASK_REF_RE, (_match, id: string, label?: string) => {
-    const display = (label || id).replace(/[\[\]]/g, '\\$&');
+    const display = resolveTaskRefDisplay(id, label).replace(/[\[\]]/g, '\\$&');
     return `[${display}](/tasks/${id})`;
   });
   result = result.replace(SESSION_REF_RE, (_match, id: string, label?: string) => {
-    const display = (label || id).replace(/[\[\]]/g, '\\$&');
+    const display = resolveSessionRefDisplay(id, label).replace(/[\[\]]/g, '\\$&');
     return `[${display}](/sessions?id=${id})`;
   });
   return result;
@@ -958,8 +996,20 @@ function proxyImageSrcs(html: string, cwd?: string, host?: string): string {
 const mdCache = new Map<string, string>();
 const MD_CACHE_MAX = 200;
 const MD_CACHE_SKIP_LENGTH = 10_000; // skip caching very long texts to avoid memory bloat
+/** Entity-label store version the cache was filled under. A pill's text now
+ *  depends on the store, so a version bump (an OBSERVED task/session title
+ *  changed) invalidates every entry. Pull-checked here rather than pushed via
+ *  subscribe: a push callback races React subscribers (whichever runs first),
+ *  while the check makes any post-bump render coherent regardless of order.
+ *  Version-in-key would instead strand stale entries in the 200 LRU slots. */
+let mdCacheLabelsVersion = -1;
 
 export function renderMarkdownWithRefs(text: string, sessionCwd?: string, host?: string): string {
+  const labelsVersion = getEntityLabelsVersion();
+  if (labelsVersion !== mdCacheLabelsVersion) {
+    mdCache.clear();
+    mdCacheLabelsVersion = labelsVersion;
+  }
   const key = host ? `${text}\0${sessionCwd ?? ''}\0${host}` : sessionCwd ? `${text}\0${sessionCwd}` : text;
   const cached = text.length <= MD_CACHE_SKIP_LENGTH ? mdCache.get(key) : undefined;
   if (cached !== undefined) {

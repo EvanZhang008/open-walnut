@@ -1,6 +1,5 @@
-import { useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { useRenderedMarkdown } from '@/hooks/useEntityLabels';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 
 interface PlanPopupProps {
@@ -11,7 +10,7 @@ interface PlanPopupProps {
 export function PlanPopup({ content, onClose }: PlanPopupProps) {
   useModalOverlay(onClose);
 
-  const html = useMemo(() => renderMarkdownWithRefs(content), [content]);
+  const html = useRenderedMarkdown(content);
 
   return createPortal(
     <div className="plan-popup-overlay" role="dialog" aria-modal="true" aria-label="Plan preview" onClick={onClose}>

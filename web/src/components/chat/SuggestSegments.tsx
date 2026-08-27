@@ -35,6 +35,7 @@
  */
 import { useMemo } from 'react';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { SuggestCard } from './SuggestCard';
 import {
   splitSuggestSegments, hasCardSegment, needsSegments, type SuggestSegment,
@@ -67,6 +68,8 @@ export function SuggestSegments({ segments, cwd, onClick }: {
   cwd?: string;
   onClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
 }) {
+  // Subscribe pill titles for the inline renderMarkdownWithRefs in the map.
+  useEntityLabelsVersion();
   return (
     <>
       {segments.map((seg, i) => seg.kind === 'card' ? (

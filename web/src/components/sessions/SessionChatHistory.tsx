@@ -6,6 +6,7 @@ import { useSessionStream, type StreamingBlock } from '@/hooks/useSessionStream'
 import { useEvent } from '@/hooks/useWebSocket';
 import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
+import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { SessionMessage, SessionThinking, PlanCard, CollapsedPlanWrite, GenericToolCall, TaskGroupPrompt, agentModelLabel, ToolRunShell, toolRunPhrase, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, MergedHistoryToolRun, SystemGroupRun, SystemLineCollapsible, systemGroupMemberFromHistory, type SystemGroupMember } from './SessionMessage';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
 import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-unavailable';
@@ -176,7 +177,9 @@ function StreamingTextBlock({ content, msgId, sessionCwd, sessionHost, sessionId
   // the same key after a reload. Split on the FROZEN value so the selection
   // freeze covers the card too.
   const { segments, useSegments } = useSuggestSegments(displayContent, msgId);
-  const html = useMemo(() => (useSegments ? '' : renderMarkdownWithRefs(displayContent, sessionCwd)), [useSegments, displayContent, sessionCwd]);
+  const labelsVersion = useEntityLabelsVersion();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
+  const html = useMemo(() => (useSegments ? '' : renderMarkdownWithRefs(displayContent, sessionCwd)), [useSegments, displayContent, sessionCwd, labelsVersion]);
   const imagePaths = useMemo(() => findImagePaths(displayContent), [displayContent]);
   const handleClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
   return (

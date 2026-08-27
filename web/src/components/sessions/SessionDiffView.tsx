@@ -12,6 +12,7 @@ import { ApiError } from '@/api/client';
 import { buildFileData } from '@/components/sessions/diffPatch';
 import { buildDiffTree, flattenFiles, allContainerIds, isMarkdownPath, type DiffTreeNode, type DiffTreeRepoNode } from '@/components/sessions/diffTree';
 import { languageForPath, diffRefractor } from '@/components/sessions/diffHighlight';
+import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { buildCommentMessage, buildReviewMessage } from '@/components/sessions/diffPrefill';
 import { markdownBlocksWithLines, markdownCommentRange, type MarkdownBlock } from '@/components/sessions/diffMarkdownBlocks';
 import { computeExpandGaps, oldSourceLineCount, UNFOLD_CHUNK, type ExpandGap } from '@/components/sessions/diffExpand';
@@ -768,6 +769,9 @@ const FileDiffPane = memo(function FileDiffPane({
 
   // The line the user clicked the gutter on → an open comment draft anchored there.
   const [draft, setDraft] = useState<CommentDraft | null>(null);
+  // Pill titles in the rendered-markdown view resolve from the entity-label
+  // store — re-render when an observed title changes (memo boundary above).
+  const labelsVersion = useEntityLabelsVersion();
   // True while the open composer holds unsaved text. A ref (not state) so typing
   // doesn't re-render the whole diff, and so the gutter handlers can read the
   // latest value synchronously. While dirty, opening a DIFFERENT draft is blocked
@@ -818,7 +822,8 @@ const FileDiffPane = memo(function FileDiffPane({
   const renderedBlocks = useMemo(() => {
     if (!rendered) return null;
     return markdownBlocksWithLines(change.after || change.before || '', sessionCwd, sessionHost);
-  }, [rendered, change.after, change.before, sessionCwd, sessionHost]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
+  }, [rendered, change.after, change.before, sessionCwd, sessionHost, labelsVersion]);
 
   // Open a comment draft over a contiguous range [i..j] of RENDERED-MARKDOWN
   // blocks (indices into renderedBlocks). A single block (i===j) reads

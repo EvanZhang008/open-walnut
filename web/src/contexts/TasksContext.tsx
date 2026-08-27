@@ -1,7 +1,8 @@
-import { createContext, useContext, useMemo, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react';
 import { useTasks, type CreateHooks } from '@/hooks/useTasks';
 import type { Task } from '@open-walnut/core';
 import type { BatchTaskOutcome, CreateTaskInput, UpdateTaskInput } from '@/api/tasks';
+import { syncTasks as syncEntityLabels } from '@/stores/entity-label-store';
 
 /** The shape exposed by TasksContext — mirrors useTasks() return. */
 export interface TasksContextValue {
@@ -45,6 +46,14 @@ const TasksContext = createContext<TasksContextValue | null>(null);
 /** Provider that wraps useTasks() into a shared context — one fetch for all consumers. */
 export function TasksProvider({ children }: { children: ReactNode }) {
   const t = useTasks();
+
+  // Feed the entity-label store (task-ref pill titles). Every mutation path
+  // (REST refetch, WS events, optimistic edits) funnels into t.tasks, so this
+  // one effect covers them all. The loading guard matters: the pre-fetch []
+  // would otherwise wipe the registry on boot.
+  useEffect(() => {
+    if (!t.loading) syncEntityLabels(t.tasks);
+  }, [t.tasks, t.loading]);
 
   // Stabilize context value: useMemo prevents new object identity on every render.
   // useTasks callbacks are already stable (useCallback), so only data fields trigger updates.

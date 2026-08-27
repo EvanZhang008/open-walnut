@@ -15,6 +15,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { log } from '@/utils/log';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { invokeAction } from '@/api/actions';
 import { readCardRecord, recordCardAction, terminalVerdict, type ActionVerdict } from '@/utils/suggest-card-state';
 import type { SuggestAction, SuggestCardSpec } from '@/utils/suggest-parse';
@@ -77,9 +78,11 @@ export function SuggestCard({ card, onContentClick }: {
     () => Object.values(persisted?.actions ?? {}).includes('dismissed'),
   );
 
+  const labelsVersion = useEntityLabelsVersion();
   const bodyHtml = useMemo(
     () => (card.body ? renderMarkdownWithRefs(card.body) : ''),
-    [card.body],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
+    [card.body, labelsVersion],
   );
 
   const setState = useCallback((actionId: string, next: ActionState) => {

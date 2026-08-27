@@ -31,6 +31,7 @@ import { loadFileScroll, saveFileScroll } from '@/utils/file-view-state';
 import { highlightLines } from '@/utils/code-highlight';
 import { vaultRelativeNotePath } from '@/utils/notes-link';
 import { useRevealFile } from '@/hooks/useRevealFile';
+import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useConfirm } from '@/hooks/useConfirm';
 import { ICON_NEW_TAB } from '@/components/common/Icons';
 import { FileSourceEditor, type FileSourceEditorHandle } from '@/components/common/FileSourceEditor';
@@ -1126,11 +1127,13 @@ export function FileContentView({
     </>
   );
 
+  const labelsVersion = useEntityLabelsVersion();
   const markdownHtml = useMemo(() => {
     if (!isMarkdown || !data?.content) return '';
     const dir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : undefined;
     return renderMarkdownWithRefs(data.content, dir, host);
-  }, [isMarkdown, data, host, filePath]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
+  }, [isMarkdown, data, host, filePath, labelsVersion]);
 
   // ── "Open in Notes": OPT-IN jump to /notes for a vault note ────────────────
   // A file click used to divert here automatically; that was reverted (the app

@@ -10,6 +10,14 @@ import {
   seedTaskSessionStatuses,
   sessionStatusStore,
 } from '@/stores/session-status-store';
+import { registerSessionTitle } from '@/stores/entity-label-store';
+
+/** Opportunistic <session-ref/> pill-title seeding: there is no client-side
+ *  all-sessions store, so any fetched record's title is registered here and
+ *  unresolved pills keep their label fallback. */
+function seedSessionTitle(session: { claudeSessionId?: string; title?: string } | null | undefined): void {
+  if (session?.claudeSessionId) registerSessionTitle(session.claudeSessionId, session.title);
+}
 
 export async function fetchSessions(): Promise<SessionSummary[]> {
   const res = await apiGet<{ sessions: SessionSummary[] }>('/api/sessions');
@@ -31,7 +39,10 @@ export async function searchSessions(q: string, limit = 30): Promise<SessionReco
   const params: Record<string, string> = { limit: String(limit) };
   if (q.trim()) params.q = q.trim();
   const res = await apiGet<{ sessions: SessionRecord[] }>('/api/sessions/recent', params);
-  for (const session of res.sessions) seedSessionStatus(session, 'rest:session-list');
+  for (const session of res.sessions) {
+    seedSessionStatus(session, 'rest:session-list');
+    seedSessionTitle(session);
+  }
   return res.sessions;
 }
 
@@ -248,12 +259,16 @@ export interface WorkflowProgressSnapshot {
 export async function updateSession(sessionId: string, updates: { title?: string; human_note?: string; archived?: boolean; archive_reason?: string; mode?: string }): Promise<SessionRecord> {
   const res = await apiPatch<{ session: SessionRecord }>(`/api/sessions/${sessionId}`, updates);
   seedSessionStatus(res.session, 'rest:session');
+  seedSessionTitle(res.session);
   return res.session;
 }
 
 export async function fetchSessionsForTask(taskId: string): Promise<SessionRecord[]> {
   const res = await apiGet<{ sessions: SessionRecord[] }>(`/api/sessions/task/${taskId}`);
-  for (const session of res.sessions) seedSessionStatus(session, 'rest:session-list');
+  for (const session of res.sessions) {
+    seedSessionStatus(session, 'rest:session-list');
+    seedSessionTitle(session);
+  }
   return res.sessions;
 }
 
@@ -268,6 +283,7 @@ export async function fetchSession(sessionId: string): Promise<SessionRecord | n
   try {
     const res = await apiGet<{ session: SessionRecord }>(`/api/sessions/${sessionId}`);
     seedSessionStatus(res.session, 'rest:session');
+    seedSessionTitle(res.session);
     return res.session;
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) return null;

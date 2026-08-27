@@ -3,6 +3,7 @@ import { fetchTriageHistory, type ChatEntry } from '@/api/chat';
 import { fetchSessionHistory, type SessionHistoryMessage } from '@/api/sessions';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
+import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { timeAgo } from '@/utils/time';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { SessionMessage } from '@/components/sessions/SessionMessage';
@@ -67,6 +68,8 @@ function TriageSessionSection({
 
   const content = typeof entry.content === 'string' ? entry.content : '';
   const { taskRef, summary } = parseTriageContent(content);
+  // Subscribe pill titles for the inline renders below (taskRefHtml + summary).
+  useEntityLabelsVersion();
   const taskRefHtml = taskRef ? renderMarkdownWithRefs(`[${taskRef}]`) : '';
   const preview = summary.length > 200 ? summary.slice(0, 200) + '...' : summary;
   const hasSessionId = !!entry.sessionId;

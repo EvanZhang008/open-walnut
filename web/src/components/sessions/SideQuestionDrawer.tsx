@@ -19,6 +19,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { renderMarkdown } from '@/components/chat/ChatMessage';
+import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
@@ -44,6 +45,8 @@ export function SideQuestionDrawer({ sessionId }: SideQuestionDrawerProps) {
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<SideQuestion[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Subscribe pill titles for the inline renderMarkdown(q.answer) below.
+  useEntityLabelsVersion();
 
   // Keep the newest card / spinner in view as the stack grows.
   useEffect(() => {

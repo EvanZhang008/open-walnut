@@ -1312,7 +1312,7 @@ await fs.writeFile(
         content: [
           {
             type: 'text',
-            text: 'I found your task <task-ref id="pw-task-001" label="Walnut / Playwright test task"/>. I also checked session <session-ref id="pw-plan-session-completed" label="Plan: investigate auth module"/>. Here is another ref without label: <task-ref id="pw-task-in-progress"/>.',
+            text: 'I found your task <task-ref id="pw-task-001" label="Walnut / Playwright test task"/>. I also checked session <session-ref id="pw-plan-session-completed" label="Plan: investigate auth module"/>. Here is another ref without label: <task-ref id="pw-task-in-progress"/>. A stale paraphrase: <task-ref id="pw-task-in-progress" label="Totally Wrong Pill Name"/>. And a deleted task: <task-ref id="pw-task-ghost-404" label="Ghost Task Alias"/>.',
           },
         ],
         timestamp: new Date(Date.now() - 25_000).toISOString(),

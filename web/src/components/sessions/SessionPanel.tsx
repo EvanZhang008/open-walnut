@@ -24,7 +24,7 @@ import { UserMessagesSummary } from './UserMessagesSummary';
 // PlanPreviewSection replaced by inline plan popover in meta bar
 import { ChatInput } from '@/components/chat/ChatInput';
 import { SideQuestionDrawer } from '@/components/sessions/SideQuestionDrawer';
-import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { useRenderedMarkdown } from '@/hooks/useEntityLabels';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
@@ -127,7 +127,7 @@ class SessionPanelErrorBoundary extends Component<SessionPanelErrorBoundaryProps
 
 /** Renders plan markdown content inside the plan popover with scrollable area */
 function PlanPopoverContent({ content, cwd }: { content: string; cwd?: string }) {
-  const html = useMemo(() => renderMarkdownWithRefs(content, cwd), [content, cwd]);
+  const html = useRenderedMarkdown(content, cwd);
   return (
     <div
       className="markdown-body"
