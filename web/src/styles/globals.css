@@ -24514,6 +24514,23 @@ a.file-link:hover {
   flex-direction: column;
 }
 
+/* Chrome rows are PLAIN flex rows in fullscreen — never sticky. The toolbar and
+   the reloading chip are sticky in the pane (correct there: they ride the pane's
+   own scroll), but fullscreen makes .file-content-view position:fixed, and WebKit
+   still resolves a sticky descendant against the nearest SCROLL CONTAINER
+   (.session-file-explorer-preview / .file-mention-preview) even with a fixed
+   ancestor in between — so the toolbar pinned to the pane's top edge and floated
+   ~110px INTO the fullscreened document (reported from the Mac app, which is a
+   WKWebView; Blink resolves against the fixed box and looked fine). */
+.file-content-view.fv-fullscreen > .fv-html-toolbar,
+.file-content-view.fv-fullscreen > .fv-reloading-badge,
+.file-content-view.fv-fullscreen > .fv-search-bar,
+.file-content-view.fv-fullscreen > .fv-save-error,
+.file-content-view.fv-fullscreen > .file-viewer-truncated {
+  position: static;
+  flex: 0 0 auto;
+}
+
 .file-content-view.fv-fullscreen .fv-html-preview,
 .file-content-view.fv-fullscreen .fv-md-preview,
 .file-content-view.fv-fullscreen .fv-media-preview,
@@ -24523,6 +24540,15 @@ a.file-link:hover {
   flex: 1;
   height: auto;
   min-height: 0;
+}
+
+/* Read-only <pre> body (truncated / non-editable text): it owns no flex sizing of
+   its own, so in the fixed column it overflowed past the bottom edge with nothing
+   to scroll. Make it the growing, scrolling row. */
+.file-content-view.fv-fullscreen > .file-viewer-code {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 
 .fv-line {
