@@ -888,13 +888,44 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Start local daemon for session management. All sessions (local + remote)
   // go through a daemon — local uses the daemon on this machine, remote uses
   // a daemon on the SSH target. Must be running before any createSessionManager().
-  // Cloud companion boxes have no Claude Code CLI — no daemon to run.
-  if (CLOUD_MODE) {
+  //
+  // Cloud companion: by DEFAULT it has no Claude Code CLI, so no daemon to run.
+  // With `cloud.exec.enabled` it becomes a real execution host and starts THE
+  // SAME daemon over loopback (no SSH, no bridge, no deploy — the binary is
+  // already in dist/daemon-binaries from its own build). See core/cloud-exec.ts
+  // for the transport/auth/ownership reasoning.
+  const cloudExec = CLOUD_MODE
+    ? await (async () => {
+      try {
+        const [{ readCloudExecConfig, cloudExecStatus }, { getConfig }] = await Promise.all([
+          import('../core/cloud-exec.js'),
+          import('../core/config-manager.js'),
+        ])
+        const cfg = await getConfig()
+        const status = cloudExecStatus(cfg, true)
+        if (!status.enabled) {
+          log.web.info('cloud mode: session execution disabled', { reason: status.reason })
+        }
+        return readCloudExecConfig(cfg, true)
+      } catch (err) {
+        // Config unreadable → stay a pure relay. Failing OPEN into exec mode on
+        // an internet-facing box would be the wrong default.
+        log.web.warn('cloud exec config unreadable — staying relay-only', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+        return null
+      }
+    })()
+    : null
+  if (CLOUD_MODE && !cloudExec?.enabled) {
     log.web.info('cloud mode: skipping local session daemon startup')
   } else try {
     const { localDaemon } = await import('../providers/local-daemon.js')
     await localDaemon.ensureRunning()
-    log.web.info('local daemon ready', { port: localDaemon.port })
+    log.web.info('local daemon ready', {
+      port: localDaemon.port,
+      ...(cloudExec?.enabled ? { cloudExec: true, cwdRoots: cloudExec.cwdRoots.length } : {}),
+    })
   } catch (err) {
     log.web.error('failed to start local daemon — local sessions will fail', {
       error: err instanceof Error ? err.message : String(err),

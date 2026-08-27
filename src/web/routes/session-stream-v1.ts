@@ -95,8 +95,11 @@ function channelKey(sessionId: string): string {
 const LINGER_MS = 30_000
 const interested = new Map<string, { conns: number; linger?: NodeJS.Timeout }>()
 let busSubscribed = false
+/** Latched by the first cloud-OWNED stream attach — see ensureBusSubscriber. */
+let busAllowedOnCloud = false
 
-function addInterest(sessionId: string): void {
+function addInterest(sessionId: string, allowOnCloud = false): void {
+  if (allowOnCloud) busAllowedOnCloud = true
   const entry = interested.get(sessionId) ?? { conns: 0 }
   if (entry.linger) { clearTimeout(entry.linger); entry.linger = undefined }
   entry.conns += 1
@@ -130,7 +133,12 @@ export function resetSessionStreamInterest(): void {
 // the web UI default.
 
 function ensureBusSubscriber(): void {
-  if (busSubscribed || CLOUD_MODE) return
+  // CLOUD_MODE normally has no local session events to map (they arrive from the
+  // bridge as pre-mapped SSE frames). A cloud-exec companion DOES run sessions
+  // locally, so the subscriber is needed there — `allowOnCloud` is passed only
+  // from the cloud-owned branch, never from the relay branch, so a relay-only box
+  // keeps its zero-subscriber behavior.
+  if (busSubscribed || (CLOUD_MODE && !busAllowedOnCloud)) return
   busSubscribed = true
   bus.subscribe('session-sse', async (event) => {
     const d = event.data as Record<string, unknown>
@@ -188,6 +196,14 @@ function ensureBusSubscriber(): void {
 // ─── Cloud path: session → host lookup + bridge send sequence ───────────────
 
 async function projectedSession(sessionId: string): Promise<{ host: string; cwd?: string; model?: string } | null> {
+  // OWN-REGISTRY FIRST. A session THIS companion spawned (cloud.exec) never
+  // appears in the Mac-authored projection — see core/cloud-owned-session.ts for
+  // why the order matters in both directions. Cheap no-op on a relay-only box.
+  const { cloudOwnedSession, cloudOwnedHostAlias } = await import('../../core/cloud-owned-session.js')
+  const owned = await cloudOwnedSession(sessionId)
+  if (owned) {
+    return { host: cloudOwnedHostAlias, ...(owned.cwd ? { cwd: owned.cwd } : {}), ...(owned.model ? { model: owned.model } : {}) }
+  }
   const { readSessionProjection } = await import('../../core/session-projection.js')
   const projection = await readSessionProjection()
   const s = projection?.sessions.find((p) => p.id === sessionId)
@@ -647,7 +663,15 @@ sessionStreamV1Router.post('/sessions/:id/messages', async (req: Request, res: R
       return
     }
 
-    if (CLOUD_MODE) {
+    // Cloud-owned session (cloud.exec): the CLI is on THIS box, so it takes the
+    // primary-box path below — same durable queue, same session-runner delivery,
+    // same images-on-local-disk handling. The bridge exists for sessions on
+    // OTHER machines; relaying our own session to the Mac would hand it to a
+    // machine with no such process.
+    const servedLocally = CLOUD_MODE
+      ? (await (await import('../../core/cloud-owned-session.js')).cloudOwnedSession(sessionId)) !== null
+      : true
+    if (CLOUD_MODE && !servedLocally) {
       // The CLI runs on a different machine than this EC2 replica, so images
       // are saved on the SESSION'S HOST via the narrow bridge-allowlisted
       // `image.save` daemon command (deliberately NOT fs.write — see the
@@ -724,7 +748,14 @@ sessionStreamV1Router.get('/sessions/:id/stream', async (req: Request, res: Resp
       return
     }
 
-    if (CLOUD_MODE) {
+    // Cloud-owned session: its CLI is on THIS box, so its stream comes from the
+    // local event bus exactly like on the primary — there is no bridge to attach
+    // (a self-bridge would loop our own frames back at us). Falls through below.
+    const ownedLocally = CLOUD_MODE
+      ? (await (await import('../../core/cloud-owned-session.js')).cloudOwnedSession(sessionId)) !== null
+      : false
+
+    if (CLOUD_MODE && !ownedLocally) {
       // Cloud path: attach the daemon's jsonl stream over the bridge, then
       // hook this response onto the session's SSE channel. Whether the bridge
       // is up or not the response is 200 — the client keys off the
@@ -782,7 +813,9 @@ sessionStreamV1Router.get('/sessions/:id/stream', async (req: Request, res: Resp
     // snapshot livelocked the client in a reconnect→same-snapshot loop
     // (audit IO-3). The phone renders only the newest ~96K chars anyway.
     const snapshot = budgetSnapshotBlocks(sessionStreamBuffer.getSnapshot(sessionId))
-    addInterest(sessionId)
+    // ownedLocally is the ONLY thing that unlatches the bus subscriber on a
+    // cloud box: we have already proved this session's CLI is here.
+    addInterest(sessionId, ownedLocally)
     attachSse(channelKey(sessionId), req, res, {
       onAttach: (write) => {
         write('snapshot', {

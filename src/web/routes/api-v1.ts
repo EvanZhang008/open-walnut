@@ -157,6 +157,17 @@ apiV1Router.get('/status', async (_req: Request, res: Response) => {
       bridgeHostsList = bridgeHosts().map((b) => ({ hostAlias: b.hostAlias, since: b.since }))
     } catch { /* registry unavailable — omit */ }
   }
+  // Can this companion RUN sessions itself (cloud.exec), and if not, why? A
+  // feature that is off because nobody configured it and one that is off because
+  // its config is unusable are different problems, and only the box knows which.
+  let cloudExec: Record<string, unknown> | undefined
+  if (CLOUD_MODE) {
+    try {
+      const { cloudExecStatus } = await import('../../core/cloud-exec.js')
+      const { getConfig } = await import('../../core/config-manager.js')
+      cloudExec = cloudExecStatus(await getConfig(), true) as unknown as Record<string, unknown>
+    } catch { /* config unreadable — omit rather than claim a posture */ }
+  }
   res.json({
     mode: CLOUD_MODE ? 'REPLICA' : 'LIVE',
     cloud: CLOUD_MODE,
@@ -164,6 +175,7 @@ apiV1Router.get('/status', async (_req: Request, res: Response) => {
     serverTime: new Date().toISOString(),
     ...(lastSyncAt ? { lastSyncAt } : {}),
     ...(bridgeHostsList ? { bridgeHosts: bridgeHostsList } : {}),
+    ...(cloudExec ? { cloudExec } : {}),
   })
 })
 
@@ -1566,14 +1578,38 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
       await exportSessionProjection().catch(() => { /* serve last good file below */ })
     }
     const projection = await readSessionProjection()
-    if (!projection) {
+    // Sessions THIS cloud box owns (cloud.exec) never enter the Mac-authored
+    // projection — the exporter is primary-only and that file must keep exactly
+    // ONE writer (no content clock: two writers would let git-sync's commit-time
+    // LWW replace a whole 500-row list). So the union happens HERE, at read time,
+    // on the box that holds both halves. Own rows are re-tagged to the cloud host
+    // alias by unionOwnedSessions: their stored host is '', which downstream
+    // means "the primary box" and would route their sends to the wrong machine.
+    let ownRows: Array<Record<string, unknown> & { id: string }> = []
+    if (CLOUD_MODE) {
+      try {
+        const { cloudExecActive } = await import('../../core/cloud-owned-session.js')
+        if (await cloudExecActive()) {
+          const { buildSessionProjection } = await import('../../core/session-projection.js')
+          ownRows = (await buildSessionProjection()).sessions as unknown as typeof ownRows
+        }
+      } catch (err) {
+        // A failed own-session read degrades to the projection-only list rather
+        // than 500ing a read-only endpoint the phone polls.
+        log.web.warn('cloud exec: own session list unavailable', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    if (!projection && ownRows.length === 0) {
       sendError(res, 503, 'unavailable', 'Session projection not synced yet')
       return
     }
-    let sessions = projection.sessions
+    const { unionOwnedSessions } = await import('../../core/cloud-exec.js')
+    let sessions = unionOwnedSessions(projection?.sessions ?? [], ownRows)
     const status = typeof req.query.status === 'string' ? req.query.status : undefined
-    if (status) sessions = sessions.filter((s) => s.process_status === status)
-    res.json({ sessions, syncedAt: projection.exportedAt })
+    if (status) sessions = sessions.filter((s) => (s as { process_status?: string }).process_status === status)
+    res.json({ sessions, syncedAt: projection?.exportedAt ?? new Date().toISOString() })
   } catch (err) {
     next(err)
   }

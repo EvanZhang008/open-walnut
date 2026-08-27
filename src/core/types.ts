@@ -1216,6 +1216,28 @@ export interface Config {
     enabled?: boolean;
     url?: string;
   };
+  /** Cloud-companion-only settings (ignored on the primary box). */
+  cloud?: {
+    /** Let the cloud companion RUN sessions itself instead of only relaying
+     *  them to the primary, so the phone still works while the Mac is asleep.
+     *  See src/core/cloud-exec.ts for the transport/auth/ownership model.
+     *
+     *  OFF by default, and enabling it needs BOTH `enabled: true` and at least
+     *  one absolute `cwd_roots` entry: the box is internet-facing, so becoming
+     *  an execution host is an explicit operator decision with an explicit
+     *  directory sandbox, never an implicit consequence of deploying. */
+    exec?: {
+      enabled?: boolean;
+      /** Absolute directory roots a cloud session may run inside (`~` ok).
+       *  A launch whose cwd falls outside every root is refused. Entries must
+       *  contain no symlink pointing out of the root — containment is a pure
+       *  path check (no realpath I/O on the request path). */
+      cwd_roots?: string[];
+      /** Max concurrent CLI sessions here. Default 2 — the reference companion
+       *  is a 2-vCPU/2GB box and shares it with the HTTP API. */
+      max_sessions?: number;
+    };
+  };
   /** Data-sync transition knobs (Phase 3 of the data-architecture plan). */
   sync?: {
     /** While true (DEFAULT), the projection exporters also write the legacy

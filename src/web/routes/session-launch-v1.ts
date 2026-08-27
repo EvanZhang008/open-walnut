@@ -67,6 +67,36 @@ const PRIMARY_BRIDGE_ALIAS = '__local__'
 // over the 15s bridge default. Options is a pair of file reads — default is fine.
 const LAUNCH_RELAY_TIMEOUT_MS = 30_000
 
+/**
+ * Buffer a relay's `res.status().json()` instead of sending it, so the cloud box
+ * can merge its own data into the primary's answer (or discard it and answer
+ * differently) before a single byte is written.
+ *
+ * Needed because relayLaunchAction writes the response itself — it is the shared
+ * failure ladder and must stay that way. `flush()` replays whatever it buffered
+ * onto the real response, which is how the honest 503 still reaches the client
+ * when there is nothing better to say.
+ */
+function captureJson(real: Response): {
+  res: Response
+  status: () => number
+  body: () => unknown
+  flush: () => void
+} {
+  let status = 200
+  let body: unknown
+  const fake = {
+    status(code: number) { status = code; return fake },
+    json(payload: unknown) { body = payload; return fake },
+  } as unknown as Response
+  return {
+    res: fake,
+    status: () => status,
+    body: () => body,
+    flush: () => { if (!real.headersSent) real.status(status).json(body) },
+  }
+}
+
 /** errorKind from the relay reply → frozen v1 HTTP status. */
 function relayErrorStatus(errorKind: string): number {
   if (errorKind === 'not_found') return 404
@@ -143,12 +173,58 @@ async function relayLaunchAction(
   sendError(res, relayErrorStatus(errorKind), errorKind, reason)
 }
 
+/**
+ * The cloud companion's own host row, appended to whatever the primary said.
+ * Only THIS box knows whether it is configured to execute (`cloud.exec`), so
+ * the primary's relayed answer can never contain it.
+ */
+async function cloudExecEntry(): Promise<{ alias: string; label: string } | null> {
+  try {
+    const [{ cloudExecHostEntry }, { getConfig }] = await Promise.all([
+      import('../../core/cloud-exec.js'),
+      import('../../core/config-manager.js'),
+    ])
+    return cloudExecHostEntry(await getConfig(), CLOUD_MODE)
+  } catch {
+    return null
+  }
+}
+
 // GET /api/v1/sessions/launch-options — hosts + suggested working dirs for
 // the mobile New Session sheet (computed on the primary; relayed on cloud).
 sessionLaunchV1Router.get('/sessions/launch-options', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     if (CLOUD_MODE) {
-      await relayLaunchAction(res, 'options', undefined, 200)
+      const entry = await cloudExecEntry()
+      // Relay first (the Mac owns the host list + frequent dirs), then append
+      // our own executable host. Capture the relay body instead of letting it
+      // stream so the merge happens before anything is written.
+      const captured = captureJson(res)
+      await relayLaunchAction(captured.res, 'options', undefined, 200)
+      const relayed = captured.body()
+      if (captured.status() === 200 && relayed && typeof relayed === 'object') {
+        const body = relayed as { hosts?: Array<{ alias: string; label: string }> }
+        const hosts = Array.isArray(body.hosts) ? body.hosts : []
+        res.status(200).json({
+          ...body,
+          hosts: entry && !hosts.some((h) => h.alias === entry.alias) ? [...hosts, entry] : hosts,
+        })
+        return
+      }
+      // Primary unreachable. Today this is a bare 503 and the phone shows "you
+      // cannot start anything" with no reason and no alternative. If we can
+      // execute, answer locally with OUR host + primaryOffline so the client can
+      // ask "the Mac is offline — run on the cloud companion?". Deliberately NOT
+      // a silent fallback: the user still picks the host.
+      const { launchOptionsWhenPrimaryOffline } = await import('../../core/cloud-exec.js')
+      const { getConfig } = await import('../../core/config-manager.js')
+      const degraded = launchOptionsWhenPrimaryOffline(await getConfig(), CLOUD_MODE)
+      if (degraded) {
+        log.web.info('launch-options: primary offline, offering cloud exec host')
+        res.status(200).json(degraded)
+        return
+      }
+      captured.flush()
       return
     }
     res.json(await computeLaunchOptions())
@@ -200,6 +276,51 @@ sessionLaunchV1Router.post('/sessions', async (req: Request, res: Response, next
     }
 
     if (CLOUD_MODE) {
+      // host === CLOUD_HOST_ALIAS is an EXPLICIT "run it on the companion".
+      // Anything else (including absent/'') still means the primary box and is
+      // relayed unchanged — a silent fallback to this box when the Mac is
+      // offline would run work on the wrong machine, which is worse than the
+      // honest 503 the relay already returns.
+      const { resolveLaunchTarget, launchHostForCore } = await import('../../core/cloud-exec.js')
+      const { getConfig } = await import('../../core/config-manager.js')
+      const target = resolveLaunchTarget(input.host, input.cwd, await getConfig(), true)
+      if (target.kind === 'refused') {
+        sendError(res, 400, 'cloud_exec_unavailable', target.message)
+        return
+      }
+      if (target.kind === 'run-here') {
+        try {
+          // The alias is an EDGE concept: handed to the core as undefined, the
+          // existing local-spawn path takes over unchanged (quickStartSession →
+          // SESSION_START → handleStart resolves no sshTarget →
+          // createSessionManager routes to this box's daemon). No new branch in
+          // the session core, so the generic local path cannot regress here.
+          const result = await performMobileLaunch(
+            { ...input, host: launchHostForCore(input.host) }, 'cloud-exec-launch',
+          )
+          // Seed id→host so this box's OWN subsequent stream/send/transcript
+          // calls resolve to the cloud host instead of missing the (Mac-owned)
+          // projection and 404ing — the 2026-08-07 failure shape, except here
+          // the projection will NEVER carry the row, so the seed is load-bearing
+          // beyond its TTL. cloudOwnedSession() below is the durable answer.
+          if (result.sessionId) {
+            const { seedLaunchedSession } = await import('../../core/sessions/launch-seed.js')
+            const { CLOUD_HOST_ALIAS } = await import('../../core/cloud-exec.js')
+            seedLaunchedSession(result.sessionId, { host: CLOUD_HOST_ALIAS, cwd: input.cwd })
+          }
+          log.web.info('cloud exec: session launched on the companion', {
+            sessionId: result.sessionId, taskId: result.taskId, cwd: input.cwd,
+          })
+          res.status(201).json(result)
+        } catch (err) {
+          if (err instanceof QuickStartError) {
+            sendError(res, err.statusCode, launchErrorCode(err.statusCode), err.message)
+            return
+          }
+          throw err
+        }
+        return
+      }
       await relayLaunchAction(res, 'launch', (req.body ?? {}) as Record<string, unknown>, 201)
       return
     }

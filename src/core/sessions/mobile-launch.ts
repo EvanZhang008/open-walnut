@@ -164,12 +164,29 @@ export function validateDelegateLaunchBody(body: unknown): MobileLaunchInput {
 export async function computeLaunchOptions(): Promise<LaunchOptionsResult> {
   const config = await getConfig();
   const hostsCfg = config.hosts ?? {};
+  const { reservedHostAliasConflicts } = await import('../cloud-exec.js');
+  // A config.hosts entry named '__local__'/'__cloud__' would SHADOW a reserved
+  // alias in the picker, and a launch on it would silently run on the wrong
+  // machine. Drop it from the offer and say so — never throw: one bad host entry
+  // must not take down the whole launcher.
+  const reserved = new Set(reservedHostAliasConflicts(Object.keys(hostsCfg)));
+  if (reserved.size > 0) {
+    log.session.warn('launch options: dropping config.hosts entries that shadow reserved aliases', {
+      aliases: [...reserved],
+    });
+  }
   const hosts = [
     { alias: '', label: 'This Mac' },
     ...Object.entries(hostsCfg)
-      .filter(([, h]) => h.enabled !== false)
+      .filter(([alias, h]) => h.enabled !== false && !reserved.has(alias))
       .map(([alias, h]) => ({ alias, label: h.label ?? alias })),
   ];
+  // NOTE: the cloud companion's own host row is NOT added here. This function
+  // answers the primary's relay too, and the PRIMARY cannot know whether the
+  // companion is configured to execute — only the companion knows that. The
+  // cloud route appends its own entry to the relayed result
+  // (routes/session-launch-v1.ts), which is also the only box that can honor a
+  // launch targeting it.
   const offeredAliases = new Set(hosts.map((h) => h.alias));
 
   const raw = await getFrequentDirs();
