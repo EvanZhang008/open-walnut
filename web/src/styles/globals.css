@@ -23521,6 +23521,15 @@ td.usage-share-col {
 }
 .notes-search-folder .notes-tree-name { font-weight: 600; }
 
+/* Search results grouped by folder: each group = one folder header + its file
+   rows nested under it. The indent + connecting edge read as tree structure,
+   so a hit's location is visible without a per-row path suffix. */
+.notes-search-group { margin-bottom: 4px; }
+.notes-search-result-nested {
+  margin-left: 14px;
+  border-left: 1px solid var(--border);
+}
+
 /* ─── Context Menu ─── */
 
 .notes-context-menu {

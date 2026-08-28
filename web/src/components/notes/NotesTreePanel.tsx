@@ -123,6 +123,15 @@ interface NotesTreePanelProps {
 }
 
 /** Cumulative folder prefixes of a vault path: `a/b/c.md` → ['a', 'a/b', 'a/b/c.md']. */
+/** One folder's slice of the search results: header + its ranked file rows. */
+interface SearchGroup {
+  /** Vault-relative parent folder; '' = vault root (rendered header-less). */
+  folder: string;
+  rows: SearchResult[];
+  /** Set when the folder's own NAME matched the query (count comes from the server). */
+  nameMatched?: SearchFolderGroup;
+}
+
 function ancestorFolderPaths(p: string): string[] {
   const segs = p.split('/');
   const out: string[] = [];
@@ -355,6 +364,56 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       return next;
     });
   }, []);
+
+  // Exit search and reveal a folder expanded in the tree — the natural answer
+  // to "where do these notes live?". Shared by every folder header in the
+  // search results.
+  const revealFolderInTree = useCallback((folderPath: string) => {
+    setSearchQuery('');
+    setSearchResults(null);
+    setSearchFolders([]);
+    setExpandedFolders(prev => {
+      const next = new Set(prev);
+      for (const p of ancestorFolderPaths(folderPath)) next.add(p);
+      return next;
+    });
+    // Defer so the newly-expanded rows exist before we scroll.
+    setTimeout(() => {
+      bodyRef.current
+        ?.querySelector(`[data-node-path="${CSS.escape(folderPath)}"]`)
+        ?.scrollIntoView({ block: 'nearest' });
+    }, 60);
+  }, []);
+
+  // ── Search results grouped by FOLDER, rank-preserving (2026-08-27) ──
+  // The flat ranked list reduced the vault's structure to a gray per-row path
+  // suffix, but the folder is how the user REMEMBERS a note — so search shows
+  // it: clickable folder headers with the matching files nested under them.
+  //
+  // Grouping is by CONSECUTIVE RUN, not by first appearance: the list keeps
+  // strict global rank order and a header is inserted wherever the folder
+  // changes between neighbors. A folder holding both a strong and a weak hit
+  // therefore appears as two runs — its weak hit can never ride up under the
+  // strong one and displace another folder's better match (the user's exact
+  // objection to first-appearance grouping).
+  // Name-matched folders (query token == folder name) get a flagged first
+  // run; ones none of whose notes ranked still render header-only at the end.
+  const searchGroups = useMemo<SearchGroup[]>(() => {
+    if (!searchResults) return [];
+    const order: SearchGroup[] = [];
+    for (const r of searchResults) {
+      const folder = r.path.includes('/') ? r.path.slice(0, r.path.lastIndexOf('/')) : '';
+      const last = order[order.length - 1];
+      if (last && last.folder === folder) last.rows.push(r);
+      else order.push({ folder, rows: [r] });
+    }
+    for (const f of searchFolders) {
+      const first = order.find(g => g.folder === f.path);
+      if (first) first.nameMatched = f;
+      else order.push({ folder: f.path, rows: [], nameMatched: f });
+    }
+    return order;
+  }, [searchResults, searchFolders]);
 
   const handleNewItem = useCallback((parentPath: string | null, type: 'file' | 'folder') => {
     setCreatingIn(parentPath ?? '');
@@ -774,89 +833,70 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       >
         {searchResults ? (
           <div className="notes-search-results">
-            {/* Matching FOLDERS first. Clicking one exits search and reveals the
-                folder expanded in the tree — the natural answer to "where do my
-                dairy notes live?". Path shown so two same-named folders differ. */}
-            {searchFolders.map(f => (
-              <div
-                key={`folder:${f.path}`}
-                className="notes-tree-item notes-tree-folder notes-search-folder"
-                onContextMenu={(e) => handleContextMenu(e, { name: f.name, path: f.path, type: 'folder' })}
-                onClick={() => {
-                  setSearchQuery('');
-                  setSearchResults(null);
-                  setSearchFolders([]);
-                  setExpandedFolders(prev => {
-                    const next = new Set(prev);
-                    for (const p of ancestorFolderPaths(f.path)) next.add(p);
-                    return next;
-                  });
-                  // Defer so the newly-expanded rows exist before we scroll.
-                  setTimeout(() => {
-                    bodyRef.current
-                      ?.querySelector(`[data-node-path="${CSS.escape(f.path)}"]`)
-                      ?.scrollIntoView({ block: 'nearest' });
-                  }, 60);
-                }}
-                title={f.path}
-              >
-                <FolderIcon />
-                <div className="notes-search-result-content">
-                  <span className="notes-tree-name">
-                    <HighlightedTitle text={f.name} query={searchQuery} />
-                  </span>
-                  <span className="notes-search-snippet">
-                    {f.path}
-                    {' · '}
-                    {f.noteCount} {f.noteCount === 1 ? 'note' : 'notes'}
-                  </span>
-                </div>
-              </div>
-            ))}
-            {searchResults.length === 0 && searchFolders.length === 0 ? (
+            {searchGroups.length === 0 ? (
               <div className="notes-tree-empty">No results</div>
             ) : (
-              searchResults.map(r => (
-                <div
-                  key={r.path}
-                  className={`notes-tree-item notes-tree-file notes-search-result ${selectedPath === r.path ? 'selected' : ''}`}
-                  onContextMenu={(e) => handlePathContextMenu(e, r.path)}
-                  onClick={() => {
-                    // Attachment hits (OCR/PDF text) open in the preview pane —
-                    // the note loader .md-suffixes the path and 404s on binaries.
-                    if (r.matchType === 'attachment') onPreviewAttachment(r.path);
-                    else {
-                      // Jump to the MATCH, not the top of the note: the snippet's
-                      // <mark> holds the exact matched span (falls back to the raw
-                      // query for semantic hits, which carry no mark).
-                      const m = r.snippet?.match(/<mark>([^<]{1,80})<\/mark>/);
-                      onSelect(r.path, { scrollToText: m?.[1] || searchQuery.trim() });
-                    }
-                    setSearchQuery('');
-                    setSearchResults(null);
-                  }}
-                >
-                  <FileIcon />
-                  <div className="notes-search-result-content">
-                    <span className="notes-tree-name">
-                      {/* Server highlights snippets only — titles get a client-side first-match mark. */}
-                      <HighlightedTitle
-                        text={r.title || r.name || r.path.split('/').pop()?.replace(/\.md$/, '') || ''}
-                        query={searchQuery}
-                      />
-                    </span>
-                    {/* WHERE the note lives — without this, same-named notes in
-                        different folders are indistinguishable in the result list. */}
-                    {r.path.includes('/') && (
-                      <span className="notes-search-path" title={r.path}>
-                        {r.path.slice(0, r.path.lastIndexOf('/'))}
-                      </span>
-                    )}
-                    <span className="notes-search-snippet">
-                      {/* Snippet carries literal <mark> tags from the server — render real marks, never raw HTML. */}
-                      <HighlightedText text={r.snippet} />
-                    </span>
-                  </div>
+              searchGroups.map((g, gi) => (
+                // Index-keyed: run-grouping can legitimately repeat a folder.
+                <div key={`group:${gi}:${g.folder || '/'}`} className="notes-search-group">
+                  {/* Folder header — clicking exits search and reveals the folder
+                      in the tree. Root-level hits render header-less. */}
+                  {g.folder !== '' && (
+                    <div
+                      className="notes-tree-item notes-tree-folder notes-search-folder"
+                      onContextMenu={(e) => handleContextMenu(e, { name: g.folder.split('/').pop() ?? g.folder, path: g.folder, type: 'folder' })}
+                      onClick={() => revealFolderInTree(g.folder)}
+                      title={g.folder}
+                    >
+                      <FolderIcon />
+                      <div className="notes-search-result-content">
+                        <span className="notes-tree-name">
+                          <HighlightedTitle text={g.folder} query={searchQuery} />
+                        </span>
+                        {g.nameMatched && (
+                          <span className="notes-search-snippet">
+                            {g.nameMatched.noteCount} {g.nameMatched.noteCount === 1 ? 'note' : 'notes'} inside
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {g.rows.map(r => (
+                    <div
+                      key={r.path}
+                      className={`notes-tree-item notes-tree-file notes-search-result${g.folder ? ' notes-search-result-nested' : ''} ${selectedPath === r.path ? 'selected' : ''}`}
+                      onContextMenu={(e) => handlePathContextMenu(e, r.path)}
+                      onClick={() => {
+                        // Attachment hits (OCR/PDF text) open in the preview pane —
+                        // the note loader .md-suffixes the path and 404s on binaries.
+                        if (r.matchType === 'attachment') onPreviewAttachment(r.path);
+                        else {
+                          // Jump to the MATCH, not the top of the note: the snippet's
+                          // <mark> holds the exact matched span (falls back to the raw
+                          // query for semantic hits, which carry no mark).
+                          const m = r.snippet?.match(/<mark>([^<]{1,80})<\/mark>/);
+                          onSelect(r.path, { scrollToText: m?.[1] || searchQuery.trim() });
+                        }
+                        setSearchQuery('');
+                        setSearchResults(null);
+                      }}
+                    >
+                      <FileIcon />
+                      <div className="notes-search-result-content">
+                        <span className="notes-tree-name">
+                          {/* Server highlights snippets only — titles get a client-side first-match mark. */}
+                          <HighlightedTitle
+                            text={r.title || r.name || r.path.split('/').pop()?.replace(/\.md$/, '') || ''}
+                            query={searchQuery}
+                          />
+                        </span>
+                        <span className="notes-search-snippet">
+                          {/* Snippet carries literal <mark> tags from the server — render real marks, never raw HTML. */}
+                          <HighlightedText text={r.snippet} />
+                        </span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               ))
             )}
