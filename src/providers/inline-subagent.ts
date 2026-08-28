@@ -17,7 +17,9 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { bus, EventNames } from '../core/event-bus.js';
 import { log } from '../logging/index.js';
@@ -68,6 +70,10 @@ export interface InlineSubagentOptions {
    *  utility child is systemPromptMode:'replace' + tools + settingSources:''
    *  + bare:true. */
   bare?: boolean;
+  /** Called for every parsed streaming block (text / tool_call / system) as
+   *  the child emits it — lets the caller mirror the child's activity into
+   *  its own progress channel. Exceptions are swallowed. */
+  onBlock?: (block: StreamingBlock) => void;
   /** One-flag preset for utility children: applies the full slim combo
    *  (systemPromptMode 'replace', tools [], settingSources '', bare, neutral
    *  tmpdir cwd) wherever the caller left the field unset — explicit fields
@@ -115,6 +121,34 @@ function releaseSemaphore(): void {
     activeCount++;
     next();
   }
+}
+
+// ── User-settings env pass-through for settings-less children ──
+
+/** The env block of ~/.claude/settings.json, read once per process. When a
+ *  child runs with `--setting-sources ""` it never loads that file, and for
+ *  Bedrock users their whole auth (CLAUDE_CODE_USE_BEDROCK, AWS creds) lives
+ *  there — so a slim child would fail auth (shipped 502, 2026-08-28). We
+ *  re-apply just the env block, exactly the CLI's own semantics (settings
+ *  env is assigned OVER process env). */
+let userSettingsEnvCache: Record<string, string> | null = null;
+function readUserSettingsEnv(): Record<string, string> {
+  if (userSettingsEnvCache) return userSettingsEnvCache;
+  try {
+    const raw = readFileSync(path.join(homedir(), '.claude', 'settings.json'), 'utf8');
+    const env = (JSON.parse(raw) as { env?: Record<string, unknown> }).env ?? {};
+    userSettingsEnvCache = Object.fromEntries(
+      Object.entries(env).filter(([, v]) => typeof v === 'string'),
+    ) as Record<string, string>;
+  } catch {
+    userSettingsEnvCache = {};
+  }
+  return userSettingsEnvCache;
+}
+
+/** Test hook. */
+export function _resetUserSettingsEnvCacheForTesting(): void {
+  userSettingsEnvCache = null;
 }
 
 // ── Track active processes for cleanup ──
@@ -178,6 +212,11 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
   // Clean env — remove CLAUDECODE to prevent nested session detection.
   // API keys (ANTHROPIC_API_KEY etc.) are intentionally preserved so the subprocess can authenticate.
   const { CLAUDECODE: _drop, ...cleanEnv } = process.env;
+  // A settings-less child never reads ~/.claude/settings.json — re-apply its
+  // env block (Bedrock auth lives there) with the CLI's own precedence.
+  if (settingSources === '') {
+    Object.assign(cleanEnv, readUserSettingsEnv());
+  }
   // Mark the transcript so the session-import scan never lists this child as
   // an importable session (we spawn MANY of these; they are not user work).
   cleanEnv.CLAUDE_CODE_ENTRYPOINT = WALNUT_UTILITY_ENTRYPOINT;
@@ -226,6 +265,8 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
     for (const block of blockList) {
       // Accumulate (merges tool results with tool calls)
       blocks = accumulateBlock(blocks, block);
+
+      try { opts.onBlock?.(block); } catch { /* a listener must never break the stream */ }
 
       // Emit streaming event to frontend
       bus.emit(EventNames.AGENT_SUBAGENT_STREAM, {

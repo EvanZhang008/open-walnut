@@ -4,7 +4,7 @@
  * round cap, cache off) and the tool's serialization of both search lanes.
  * If any of these drift the lane silently degrades — pin them.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 const { aiDisabledRef, loopMock, searchMock, recordMock } = vi.hoisted(() => ({
@@ -31,6 +31,14 @@ import {
   _resetAgentSearchStateForTesting,
 } from '../../src/core/task-search-agent.js';
 import { SYSTEM_PROMPT_TOOL_LOOP } from '../../src/core/task-search-agent-contract.js';
+
+// The in-process engine is the OPT-IN since the claude -p default (2026-08-28).
+const prevEngine = process.env.WALNUT_AGENT_SEARCH_ENGINE;
+process.env.WALNUT_AGENT_SEARCH_ENGINE = 'inprocess';
+afterAll(() => {
+  if (prevEngine === undefined) delete process.env.WALNUT_AGENT_SEARCH_ENGINE;
+  else process.env.WALNUT_AGENT_SEARCH_ENGINE = prevEngine;
+});
 
 const EMPTY_ANSWER = { response: '{"results":[]}', messages: [], newMessages: [] };
 

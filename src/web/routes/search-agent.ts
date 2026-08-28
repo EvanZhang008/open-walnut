@@ -22,13 +22,13 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express';
 
-/** Route deadline: the engine's own timeout is 50s; this outer race answers
+/** Route deadline: the engine's own timeout is 80s; this outer race answers
  *  the HTTP request either way (the child keeps running to completion and a
  *  retry joins the still-warm cache / in-flight entry). Env override exists
- *  for tests — a 60s wait is untestable wall-clock. */
+ *  for tests — a 90s wait is untestable wall-clock. */
 function routeDeadlineMs(): number {
   const fromEnv = Number(process.env.WALNUT_AGENT_SEARCH_DEADLINE_MS);
-  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 60_000;
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 90_000;
 }
 
 export const searchAgentRouter = Router();

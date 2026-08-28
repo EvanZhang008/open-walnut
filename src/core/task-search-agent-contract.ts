@@ -12,7 +12,7 @@
 import type { Task } from './types.js';
 
 /** Bump to invalidate cached agent answers when the prompt contract changes. */
-export const AGENT_SEARCH_PROMPT_V = 'v2';
+export const AGENT_SEARCH_PROMPT_V = 'v3';
 
 export const AGENT_SEARCH_MAX_RESULTS = 5;
 const EVIDENCE_MAX_CHARS = 200;
@@ -39,24 +39,26 @@ NEVER invent or reconstruct a task_id; an id not present in a tool result is dis
 Do NOT output titles, phases, or projects — those are attached from the database.`;
 
 /**
- * System prompt for the claude -p child (WALNUT_AGENT_SEARCH_ENGINE=cli). The
- * child has the CLI's own tools (Bash), so its search surface is the `walnut`
- * CLI ops registry.
+ * System prompt for the claude -p child (the default engine; slim shell,
+ * Bash-only). The child's search surface is the `walnut` CLI ops registry.
  */
 export const SYSTEM_PROMPT = `${PROMPT_HEADER}
 
-## Method — search via the walnut CLI (Bash). Budget ~40s, ~6 searches max.
+## Method — search via the walnut CLI (Bash). Every extra Bash call costs seconds; fewest calls wins.
   walnut tools call search '{"q":"<terms>","types":"task,session","limit":15}'
-1. Start with the user's own words; then variants with DIFFERENT vocabulary — the literal strings a transcript would contain: package names, file extensions, commands, API names.
-2. If nothing convincing, TRANSLATE the query (English <-> Chinese) and search both languages.
-3. Optionally confirm a finalist: walnut tools call task_get '{"id":"<task id>"}'.
+0. The user message already contains SEED RESULTS: the raw query was searched for you. If they clearly identify the owning task, answer IMMEDIATELY — run nothing.
+1. Otherwise run ALL your query variants in ONE Bash command, concurrently:
+  for q in 'variant one' 'variant two' '变体三'; do walnut tools call search "{\\"q\\":\\"$q\\",\\"types\\":\\"task,session\\",\\"limit\\":15}" & done; wait
+   Use DIFFERENT vocabulary — the literal strings a transcript would contain (package names, file extensions, commands, API names) plus an English <-> Chinese translation. The seed query counts as already used.
+2. At most ONE more such batched command if nothing was convincing.
 Stop as soon as you are confident. Never repeat a query.
 
 ${PROMPT_FOOTER}`;
 
 /**
- * System prompt for the in-process engine (default): the model has ONE native
- * tool, `search`. Latency is dominated by model round-trips, so the method
+ * System prompt for the in-process engine (WALNUT_AGENT_SEARCH_ENGINE=
+ * inprocess): the model has ONE native tool, `search`. Latency is dominated
+ * by model round-trips, so the method
  * section pushes hard on batching query variants as PARALLEL tool calls in a
  * single round — profiled 2026-08-27: every extra round costs ~2-3s of model
  * time while a search call itself is ~150ms.

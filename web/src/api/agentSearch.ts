@@ -35,9 +35,9 @@ export function peekAgentSearch(q: string): AgentSearchPayload | undefined {
   return memo.get(memoKey(q));
 }
 
-/** The engine runs up to ~50s server-side; 65s keeps the client from giving
- *  up before the route's own 60s deadline answers. */
-const CLIENT_TIMEOUT_MS = 65_000;
+/** The engine runs up to ~80s server-side; 95s keeps the client from giving
+ *  up before the route's own 90s deadline answers. */
+const CLIENT_TIMEOUT_MS = 95_000;
 
 export async function fetchAgentSearch(
   q: string,

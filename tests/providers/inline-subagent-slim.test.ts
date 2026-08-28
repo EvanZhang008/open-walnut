@@ -11,15 +11,30 @@ import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
-const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+const { spawnMock, settingsJsonRef } = vi.hoisted(() => ({
+  spawnMock: vi.fn(),
+  settingsJsonRef: { value: null as string | null },
+}));
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-inline-subagent-slim'));
 vi.mock('node:child_process', () => ({ spawn: spawnMock }));
 vi.mock('../../src/core/claude-cli-detect.js', () => ({
   resolveClaudeCliExecutable: () => '/usr/local/bin/claude',
 }));
+vi.mock('node:fs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...real,
+    readFileSync: ((p: unknown, ...rest: unknown[]) => {
+      if (settingsJsonRef.value !== null && /\.claude[/\\]settings\.json$/.test(String(p))) {
+        return settingsJsonRef.value;
+      }
+      return real.readFileSync(p as never, ...(rest as never[]));
+    }) as typeof real.readFileSync,
+  };
+});
 
-import { runInlineSubagent } from '../../src/providers/inline-subagent.js';
+import { runInlineSubagent, _resetUserSettingsEnvCacheForTesting } from '../../src/providers/inline-subagent.js';
 
 function fakeProc(): EventEmitter & { stdout: PassThrough; stderr: PassThrough; stdin: { write: () => void; end: () => void }; kill: () => void } {
   const proc = new EventEmitter() as ReturnType<typeof fakeProc>;
@@ -77,6 +92,24 @@ describe('runInlineSubagent slim preset', () => {
     for (const opts of [{ slim: true }, {}]) {
       const { spawnOpts } = await run(opts);
       expect(spawnOpts.env?.CLAUDE_CODE_ENTRYPOINT).toBe('walnut-utility');
+    }
+  });
+
+  it('a settings-less child gets ~/.claude/settings.json env re-applied (Bedrock auth lives there)', async () => {
+    settingsJsonRef.value = JSON.stringify({ env: { WALNUT_TEST_BEDROCK_FLAG: '1', WALNUT_TEST_REGION: 'us-west-2', NOT_A_STRING: 42 } });
+    try {
+      _resetUserSettingsEnvCacheForTesting();
+      const { spawnOpts } = await run({ slim: true });
+      expect(spawnOpts.env?.WALNUT_TEST_BEDROCK_FLAG).toBe('1');
+      expect(spawnOpts.env?.WALNUT_TEST_REGION).toBe('us-west-2');
+      expect(spawnOpts.env?.NOT_A_STRING).toBeUndefined();
+      // Not slim → the CLI loads settings itself; no injection.
+      _resetUserSettingsEnvCacheForTesting();
+      const plain = await run({});
+      expect(plain.spawnOpts.env?.WALNUT_TEST_BEDROCK_FLAG).toBeUndefined();
+    } finally {
+      settingsJsonRef.value = null;
+      _resetUserSettingsEnvCacheForTesting();
     }
   });
 });
