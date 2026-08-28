@@ -47,7 +47,10 @@ function useAgentProgress(sid: string | undefined): ProgressEntry[] {
         case 'seed':
           return [...prev, { key: '__seed', kind: 'seed', q: evt.q, count: evt.count }];
         case 'search':
-          return [...prev, { key: `s:${evt.q}`, kind: 'search', q: evt.q }];
+          // A new search proves the earlier "writing answer…" was just the
+          // model's preamble text before its tool calls, not the real answer —
+          // drop the stale line so the timeline reads in order.
+          return [...prev.filter((e) => e.kind !== 'answering'), { key: `s:${evt.q}`, kind: 'search', q: evt.q }];
         case 'search_done': {
           const idx = prev.findIndex((e) => e.key === `s:${evt.q}` && e.kind === 'search');
           if (idx >= 0) {

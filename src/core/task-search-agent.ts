@@ -155,6 +155,10 @@ async function inProcessEngine(
 
   const searchTool = {
     name: 'search',
+    // Read-only ⇒ a batch of variant searches executes concurrently in the
+    // loop (one search latency instead of N; the prompt tells the model to
+    // batch its variants in one reply).
+    parallelSafe: true,
     description: 'Search the user\'s Walnut tasks and session transcripts. Returns JSON rows; a row with type "session" carries taskId = the task that OWNS that transcript. Batch query variants as parallel calls in one reply.',
     input_schema: {
       type: 'object' as const,
@@ -198,6 +202,10 @@ async function inProcessEngine(
     callbacks: {
       onToolCall: (toolName, input, toolUseId) => {
         if (toolName !== 'search') return;
+        // Text before a tool call was preamble, not the answer — re-arm the
+        // 'answering' latch so the REAL answer turn emits it again (the panel
+        // drops the stale line when this 'search' event arrives).
+        answering = false;
         const q = String((input as { q?: unknown }).q ?? '');
         qByToolUse.set(toolUseId, q);
         progress({ kind: 'search', q });

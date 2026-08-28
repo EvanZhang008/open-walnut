@@ -64,6 +64,8 @@ describe('in-process default engine wiring', () => {
     expect(options.system).toBe(SYSTEM_PROMPT_TOOL_LOOP);
     expect(options.tools).toHaveLength(1);
     expect(options.tools[0].name).toBe('search');
+    // Read-only ⇒ the loop runs a batch of variant searches concurrently.
+    expect(options.tools[0].parallelSafe).toBe(true);
     // Default config → bedrock catalog sonnet (the quality floor the user set).
     expect(options.modelConfig).toEqual({ model: 'global.anthropic.claude-sonnet-4-6', provider: 'bedrock', maxTokens: 2000 });
     expect(options.maxToolRounds).toBe(2);

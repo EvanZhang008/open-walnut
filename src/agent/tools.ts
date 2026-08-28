@@ -171,6 +171,12 @@ export interface ToolDefinition {
   description: string;
   input_schema: Record<string, unknown>;
   execute: (params: Record<string, unknown>, meta?: ToolExecuteMeta) => Promise<ToolResultContent>;
+  /** Mark ONLY read-only tools with no ordering contract. When the model
+   *  batches several tool_use blocks in one reply and EVERY tool in the batch
+   *  is parallelSafe, the loop executes them concurrently instead of one
+   *  await at a time. Side-effecting tools (writes, Bash) must stay unset —
+   *  parallel execution would let them race. */
+  parallelSafe?: boolean;
 }
 
 function json(data: unknown): string {

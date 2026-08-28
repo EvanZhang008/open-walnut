@@ -596,13 +596,13 @@ export async function runAgentLoop(
     }
 
     // Execute tool calls and build tool_result blocks
-    const toolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: ToolResultContent; is_error?: boolean }> = [];
-    for (const toolUse of toolUseBlocks) {
+    const runOneToolUse = async (
+      toolUse: { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> },
+    ): Promise<{ type: 'tool_result'; tool_use_id: string; content: ToolResultContent; is_error?: boolean }> => {
       // Abort checkpoint 3: before each tool execution
       if (signal?.aborted) {
         log.agent.info(`${logTag} aborted, skipping tool: ${toolUse.name}`);
-        toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: '[Aborted by user]' });
-        continue;
+        return { type: 'tool_result', tool_use_id: toolUse.id, content: '[Aborted by user]' };
       }
 
       log.agent.debug(`${logTag} calling tool: ${toolUse.name}`, {
@@ -634,12 +634,30 @@ export async function runAgentLoop(
         log.agent.warn(`${logTag} tool ${toolUse.name} returned error`, { displayResult });
       }
 
-      toolResults.push({
+      return {
         type: 'tool_result',
         tool_use_id: toolUse.id,
         content: toolResult,
         ...(isError ? { is_error: true } : {}),
-      });
+      };
+    };
+
+    // A batch where EVERY tool is parallelSafe (read-only, no ordering
+    // contract) runs concurrently — a model batching e.g. 6 search variants
+    // in one reply should pay ONE search latency, not six in sequence. Any
+    // unmarked tool in the batch forces the sequential path (side-effecting
+    // tools may race each other). Promise.all keeps tool_result order aligned
+    // with the tool_use order.
+    const canParallelize = toolUseBlocks.length > 1
+      && toolUseBlocks.every((t) => customTools?.find((c) => c.name === t.name)?.parallelSafe === true);
+    let toolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: ToolResultContent; is_error?: boolean }>;
+    if (canParallelize) {
+      toolResults = await Promise.all(toolUseBlocks.map(runOneToolUse));
+    } else {
+      toolResults = [];
+      for (const toolUse of toolUseBlocks) {
+        toolResults.push(await runOneToolUse(toolUse));
+      }
     }
 
     // Feed tool results back to the model
