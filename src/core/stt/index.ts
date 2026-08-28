@@ -107,7 +107,7 @@ let cachedSecondaryKey = '';
 function engineKey(engine: string | undefined, s: SttSection | undefined): string {
   if (!engine || !s) return '';
   // Note: prompt is NOT in the key — vocab is loaded per-request from stt-vocab.txt, no engine restart needed.
-  return `${engine}|${s.whisper_server_path ?? ''}|${s.whisper_server_model ?? ''}|${s.whisper_server_port ?? ''}|${s.whisper_cpp_path ?? ''}|${s.whisper_cpp_model ?? ''}|${s.openai_api_key ?? ''}|${s.sherpa_model_dir ?? ''}|${s.mlx_python_path ?? ''}|${s.mlx_model ?? ''}|${s.mlx_port ?? ''}`;
+  return `${engine}|${s.whisper_server_path ?? ''}|${s.whisper_server_model ?? ''}|${s.whisper_server_port ?? ''}|${s.whisper_server_idle_ttl_minutes ?? ''}|${s.whisper_cpp_path ?? ''}|${s.whisper_cpp_model ?? ''}|${s.openai_api_key ?? ''}|${s.sherpa_model_dir ?? ''}|${s.mlx_python_path ?? ''}|${s.mlx_model ?? ''}|${s.mlx_port ?? ''}|${s.mlx_idle_ttl_minutes ?? ''}`;
 }
 
 export function getOrCreateEngine(config: Config): SttEngine | null {
