@@ -18,6 +18,7 @@
 
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -329,7 +330,42 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
   // — the batches run on the production server's one event loop). A fresh
   // pass (cursor null) starts after each drain: upsert() drops a changed
   // doc's vectors, so the periodic pass re-embeds whatever went missing.
-  const VEC_BATCH_PAUSE_MS = 100;
+  // Load-aware pacing (2026-08-27, user request): the fixed 100ms pause had
+  // two failure modes — an idle machine still dawdled through the ~12k-doc
+  // backfill for hours, and a busy one still had CPU stolen from live work.
+  // Sample real CPU busy-time deltas between batches (os.cpus() times, NOT
+  // loadavg — wedged blocked processes inflate load average while the CPU
+  // sits idle) and scale the inter-batch pause: idle → near-continuous,
+  // busy → back way off. The busy fraction INCLUDES our own embed worker, so
+  // the thresholds leave headroom by construction: full-speed embedding costs
+  // ~2-3 cores, which keeps us under the 0.55 tier on an otherwise-idle box,
+  // and anything pushing past it is someone else's work we yield to.
+  let lastCpuSample = os.cpus();
+  const cpuBusyFraction = (): number => {
+    const now = os.cpus();
+    let busy = 0;
+    let total = 0;
+    for (let i = 0; i < now.length && i < lastCpuSample.length; i++) {
+      const a = lastCpuSample[i].times;
+      const b = now[i].times;
+      const idle = b.idle - a.idle;
+      const all = (b.user - a.user) + (b.nice - a.nice) + (b.sys - a.sys) + (b.irq - a.irq) + idle;
+      busy += all - idle;
+      total += all;
+    }
+    lastCpuSample = now;
+    return total > 0 ? busy / total : 0;
+  };
+  const vecBatchPauseMs = (): number => {
+    // Extreme-only memory guard: macOS keeps freemem tiny by design (file
+    // cache counts as used), so only genuine exhaustion should trip this.
+    if (os.freemem() / os.totalmem() < 0.03) return 15_000;
+    const busy = cpuBusyFraction();
+    if (busy < 0.35) return 25;
+    if (busy < 0.55) return 250;
+    if (busy < 0.75) return 1_500;
+    return 10_000;
+  };
   let vecTotal = 0;
   let vecCursor: MissingVecCursor | null = null;
   const scheduleVectorBackfill = (delayMs: number) => {
@@ -352,7 +388,7 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
           if (vecTotal > 0 && vecTotal % 800 < 16) {
             log.memory.info('search-v2 vector backfill progress', { embedded: vecTotal });
           }
-          scheduleVectorBackfill(VEC_BATCH_PAUSE_MS);
+          scheduleVectorBackfill(vecBatchPauseMs());
         } catch (err) {
           log.memory.warn('search-v2 vector backfill failed — retrying next sweep interval', {
             error: err instanceof Error ? err.message : String(err),
@@ -392,7 +428,7 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
         });
       }, FILE_SWEEP_INTERVAL_MS);
       sweepTimer.unref?.();
-      scheduleVectorBackfill(VEC_BATCH_PAUSE_MS);
+      scheduleVectorBackfill(vecBatchPauseMs());
     })();
   }, 15_000);
   backfillTimer.unref?.();
