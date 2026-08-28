@@ -294,6 +294,28 @@ describe('search: folder-name matching', () => {
     ]);
   });
 
+  it('a MULTI-WORD query matches folders token-wise (folder name + topic word)', async () => {
+    // The reported symptom (2026-08-27): "walnut promo" found nothing from the
+    // walnut/ folder because the folder leg required the WHOLE phrase as a path
+    // substring. One query token exactly equal to a folder segment must be
+    // enough to surface that folder's notes; a residual token appearing in the
+    // note body ranks that note above its folder siblings.
+    await writeNote('orchard/MarketingHook.md', '# Hooks\n\nCampaign hook ideas, promption plans.');
+    await writeNote('orchard/Roadmap.md', '# Roadmap\n\nQuarterly campaign milestones.');
+    await writeNote('unrelated.md', '# Unrelated\n\ncampaign word appears here too.');
+    await syncIndex();
+
+    const app = createApp();
+    const res = await request(app).get('/api/notes-v2/search?q=orchard%20campaign&mode=string');
+
+    expect(res.status).toBe(200);
+    const paths = res.body.results.map((r: any) => r.path);
+    expect(paths).toContain('orchard/MarketingHook.md');
+    expect(paths).toContain('orchard/Roadmap.md');
+    const withResidual = res.body.results.find((r: any) => r.path === 'orchard/MarketingHook.md');
+    expect(withResidual.folderMatch).toBe('orchard');
+  });
+
   it('a real TITLE match still outranks notes that merely live in the folder', async () => {
     await writeNote('Journal.md', '# Journal\n\nThe note actually called Journal.');
     await writeNote('Areas/Journal/2026-01-01.md', '# 2026-01-01\n\nA dated entry.');

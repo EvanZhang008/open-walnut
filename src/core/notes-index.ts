@@ -944,17 +944,46 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
   // in `Areas/Journal/Dairy/` (their titles are dates). Users read that as
   // "search can't find my notes". Matching is on path SEGMENTS only, so the
   // query can't accidentally match a mid-path substring of the filename.
+  // Multi-word queries also match folders TOKEN-wise: "walnut promo" must
+  // surface the walnut/ folder's notes even though no path contains the whole
+  // phrase — the folder name + a topic word is how people actually scope a
+  // vault search, and requiring the full phrase made this leg silently dead
+  // for every multi-word query. Noise bound: a token only counts when it
+  // EXACTLY equals a path segment (no prefix/substring), so short common words
+  // can't drag whole folders in. Residual tokens that also appear in the
+  // note's title/body lift that note above its folder siblings.
+  const folderTokens = q.trim().split(/\s+/).filter((t) => t.length >= 3)
+  const tokenWise = folderTokens.length >= 2
+  const folderLikeParams = [
+    `%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`,
+    ...(tokenWise ? folderTokens.map((t) => `%${t.replace(/[\\%_]/g, (m) => '\\' + m)}%`) : []),
+  ]
   const folderRows = d
     .prepare(
       `SELECT id, path, title, body, modified FROM notes
-       WHERE path LIKE ? ESCAPE '\\'${excl.sql}
+       WHERE (${folderLikeParams.map(() => `path LIKE ? ESCAPE '\\'`).join(' OR ')})${excl.sql}
        ORDER BY path
        LIMIT ?`,
     )
-    .all(`%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`, ...excl.params, limit * 4) as RawHit[]
+    .all(...folderLikeParams, ...excl.params, limit * 4) as RawHit[]
   for (const r of folderRows) {
     const segments = r.path.split('/').slice(0, -1) // folders only, drop the filename
-    const band = folderScore(segments, q)
+    let band = folderScore(segments, q)
+    let matchedQ = q
+    if (band == null && tokenWise) {
+      for (const tok of folderTokens) {
+        if (!segments.some((s) => s.toLowerCase() === tok.toLowerCase())) continue
+        // Exact-segment token match: base band sits below every whole-query
+        // folder band (0.88–0.89) and above headings (0.87). A residual token
+        // found in the title/body upgrades the note toward the folder band.
+        const residuals = folderTokens.filter((t) => t !== tok)
+        const hay = `${r.title}\n${r.body}`.toLowerCase()
+        const residualHit = residuals.some((t) => hay.includes(t.toLowerCase()))
+        band = residualHit ? 0.879 : 0.875
+        matchedQ = tok
+        break
+      }
+    }
     if (band == null) continue
     if (seen.has(r.id)) continue
     seen.add(r.id)
@@ -964,7 +993,7 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
       title: r.title,
       body: r.body,
       stringScore: band,
-      folderMatch: matchedFolderPath(segments, q),
+      folderMatch: matchedFolderPath(segments, matchedQ),
       modified: r.modified,
     })
   }
