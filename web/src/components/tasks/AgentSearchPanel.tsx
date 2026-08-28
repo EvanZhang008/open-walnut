@@ -8,10 +8,11 @@
  * no markdown, no dangerouslySetInnerHTML, no injection surface.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAgentTaskSearch } from '@/hooks/useAgentTaskSearch';
+import { useEvent } from '@/hooks/useWebSocket';
 
-/** Elapsed-seconds ticker for the long claude -p wait (10-30s is normal). */
+/** Elapsed-seconds ticker for the model wait (5-13s is normal). */
 function ElapsedHint() {
   const [seconds, setSeconds] = useState(0);
   useEffect(() => {
@@ -19,6 +20,58 @@ function ElapsedHint() {
     return () => clearInterval(timer);
   }, []);
   return <span className="agent-search-elapsed">{seconds > 2 ? `searching… ${seconds}s` : 'searching…'}</span>;
+}
+
+interface ProgressEntry {
+  key: string;
+  kind: 'seed' | 'search' | 'search_done' | 'answering';
+  q?: string;
+  count?: number;
+}
+
+/** Live mini-session lines: the server streams what the search agent is doing
+ *  ('search-agent:progress' WS events keyed by this fetch's sid), so the wait
+ *  reads as work happening, not a spinner. */
+function useAgentProgress(sid: string | undefined): ProgressEntry[] {
+  const [entries, setEntries] = useState<ProgressEntry[]>([]);
+  const sidRef = useRef(sid);
+  if (sidRef.current !== sid) {
+    sidRef.current = sid;
+  }
+  useEffect(() => { setEntries([]); }, [sid]);
+  useEvent('search-agent:progress', (raw) => {
+    const evt = raw as { id?: string; kind?: ProgressEntry['kind']; q?: string; count?: number };
+    if (!sidRef.current || evt.id !== sidRef.current || !evt.kind) return;
+    setEntries((prev) => {
+      switch (evt.kind) {
+        case 'seed':
+          return [...prev, { key: '__seed', kind: 'seed', q: evt.q, count: evt.count }];
+        case 'search':
+          return [...prev, { key: `s:${evt.q}`, kind: 'search', q: evt.q }];
+        case 'search_done': {
+          const idx = prev.findIndex((e) => e.key === `s:${evt.q}` && e.kind === 'search');
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = { ...next[idx], kind: 'search_done', count: evt.count };
+            return next;
+          }
+          return [...prev, { key: `s:${evt.q}`, kind: 'search_done', q: evt.q, count: evt.count }];
+        }
+        case 'answering':
+          return prev.some((e) => e.kind === 'answering') ? prev : [...prev, { key: '__answering', kind: 'answering' }];
+        default:
+          return prev;
+      }
+    });
+  });
+  return entries;
+}
+
+function progressLabel(e: ProgressEntry): string {
+  if (e.kind === 'answering') return 'writing answer…';
+  if (e.kind === 'search') return `searching “${e.q}”…`;
+  const hits = typeof e.count === 'number' ? ` · ${e.count} ${e.count === 1 ? 'hit' : 'hits'}` : '';
+  return `searched “${e.q}”${hits}`;
 }
 
 function shortModel(model: string): string {
@@ -33,7 +86,8 @@ export function AgentSearchPanel({ query, onOpenTask }: {
   query: string;
   onOpenTask: (taskId: string) => void;
 }) {
-  const { state, data, enabled, toggle, retry } = useAgentTaskSearch(query);
+  const { state, data, sid, enabled, toggle, retry } = useAgentTaskSearch(query);
+  const progress = useAgentProgress(sid);
 
   if (state === 'hidden' && enabled) return null;
   // Done with zero results renders nothing — the AI adds no noise when it has
@@ -69,7 +123,16 @@ export function AgentSearchPanel({ query, onOpenTask }: {
           onClick={toggle}
         >✦</button>
       </header>
-      {state === 'loading' && (
+      {state === 'loading' && progress.length > 0 && (
+        <ul className="agent-search-progress" role="status" aria-busy="true" aria-label="AI search in progress">
+          {progress.map((e) => (
+            <li key={e.key} className={`agent-search-progress-line${e.kind === 'search' || e.kind === 'answering' ? ' is-pending' : ''}`}>
+              {progressLabel(e)}
+            </li>
+          ))}
+        </ul>
+      )}
+      {state === 'loading' && progress.length === 0 && (
         <div className="agent-search-skeleton" role="status" aria-busy="true" aria-label="AI search in progress">
           <span /><span /><span />
         </div>

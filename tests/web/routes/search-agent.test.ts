@@ -53,7 +53,15 @@ describe('GET /api/search/agent', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual(payload);
     expect(res.headers['cache-control']).toBe('no-store');
-    expect(runMock).toHaveBeenCalledWith('which task adds docx');
+    expect(runMock).toHaveBeenCalledWith('which task adds docx', {});
+  });
+
+  it('forwards a well-formed sid as progressId and ignores a malformed one', async () => {
+    runMock.mockResolvedValue({ results: [], model: 'm', tookMs: 1, cached: false });
+    await request(createApp()).get('/api/search/agent?q=which task adds docx&sid=abc123-def');
+    expect(runMock).toHaveBeenLastCalledWith('which task adds docx', { progressId: 'abc123-def' });
+    await request(createApp()).get(`/api/search/agent?q=which task adds docx&sid=${encodeURIComponent('no spaces!')}`);
+    expect(runMock).toHaveBeenLastCalledWith('which task adds docx', {});
   });
 
   it.each([

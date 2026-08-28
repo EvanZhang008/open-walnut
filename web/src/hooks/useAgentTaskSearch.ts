@@ -9,6 +9,7 @@ import {
   clearAgentSearchLatch,
   createAgentSearchController,
   type AgentPanelState,
+  type AgentSearchSnapshot,
 } from '@/hooks/agentSearchController';
 import { AGENT_SEARCH_TOGGLE_KEY } from '@/hooks/agentSearchTrigger';
 
@@ -23,11 +24,13 @@ function readToggle(): boolean {
 export function useAgentTaskSearch(query: string): {
   state: AgentPanelState;
   data?: AgentSearchPayload;
+  /** Progress-stream id while loading — see AgentSearchSnapshot.sid. */
+  sid?: string;
   enabled: boolean;
   toggle: () => void;
   retry: () => void;
 } {
-  const [snapshot, setSnapshot] = useState<{ state: AgentPanelState; data?: AgentSearchPayload }>({ state: 'hidden' });
+  const [snapshot, setSnapshot] = useState<AgentSearchSnapshot>({ state: 'hidden' });
   const [enabled, setEnabled] = useState(readToggle);
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
@@ -66,5 +69,5 @@ export function useAgentTaskSearch(query: string): {
 
   const retry = useCallback(() => controllerRef.current?.retry(), []);
 
-  return { state: snapshot.state, data: snapshot.data, enabled, toggle, retry };
+  return { state: snapshot.state, data: snapshot.data, sid: snapshot.sid, enabled, toggle, retry };
 }

@@ -30407,7 +30407,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   margin-top: 12px;
 }
 
-/* ── Agent task search (✦ AI section above the normal search results) ────── */
+/* ── Agent task search (✦ AI section pinned atop the task panel) ─────────── */
 .agent-search-panel {
   margin: 6px 8px 8px;
   padding: 8px 10px;
@@ -30415,6 +30415,9 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   border-radius: 8px;
   background: color-mix(in srgb, var(--accent) 5%, transparent);
   font-size: 12.5px;
+  /* Lives directly under the toolbar in the panel's flex column, outside every
+     scroll container — never squeezed by the list flexing below it. */
+  flex: 0 0 auto;
 }
 .agent-search-header {
   display: flex;
@@ -30458,13 +30461,40 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 @media (prefers-reduced-motion: reduce) {
   .agent-search-skeleton span { animation: none; opacity: 0.6; }
 }
+/* Live mini-session lines while the agent works (replaces the skeleton as
+   soon as the first progress event lands). */
+.agent-search-progress {
+  list-style: none;
+  margin: 6px 0 2px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.agent-search-progress-line {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-search-progress-line::before {
+  content: '·';
+  color: var(--accent);
+  margin-right: 6px;
+}
+.agent-search-progress-line.is-pending { animation: walnut-ai-shimmer 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .agent-search-progress-line.is-pending { animation: none; }
+}
 .agent-search-summary {
   margin: 6px 0 2px;
   color: var(--fg-muted);
   font-size: 12px;
   line-height: 1.4;
 }
-.agent-search-results { list-style: none; margin: 4px 0 0; padding: 0; }
+.agent-search-results { list-style: none; margin: 4px 0 0; padding: 0; max-height: 40vh; overflow-y: auto; }
 .agent-search-row {
   display: flex;
   flex-direction: column;

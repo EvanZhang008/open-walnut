@@ -66,7 +66,7 @@ describe('in-process default engine wiring', () => {
     expect(options.tools[0].name).toBe('search');
     // Default config → bedrock catalog sonnet (the quality floor the user set).
     expect(options.modelConfig).toEqual({ model: 'global.anthropic.claude-sonnet-4-6', provider: 'bedrock', maxTokens: 2000 });
-    expect(options.maxToolRounds).toBe(4);
+    expect(options.maxToolRounds).toBe(3);
     expect(options.cacheConfig).toBe(false);
     expect(options.source).toBe('task-search-agent');
     expect(options.signal).toBeInstanceOf(AbortSignal);
@@ -97,6 +97,50 @@ describe('in-process default engine wiring', () => {
     loopMock.mockResolvedValue({ ...EMPTY_ANSWER, aborted: true });
     await expect(runTaskSearchAgent('which task adds docx timeout'))
       .rejects.toMatchObject({ statusCode: 502, extra: { code: 'agent_failed' } });
+  });
+
+  it('streams live progress events (seed / search / search_done / answering) keyed by progressId', async () => {
+    const { bus } = await import('../../src/core/event-bus.js');
+    const seen: Array<Record<string, unknown>> = [];
+    bus.subscribe('web-ui', (event) => {
+      if (event.name === 'search-agent:progress') seen.push(event.data as Record<string, unknown>);
+    });
+    try {
+      searchMock.mockResolvedValue([{ type: 'task', title: 'T', snippet: 's', taskId: 't1', score: 1, matchField: 'task' }]);
+      loopMock.mockImplementation(async (_p, _h, callbacks, options) => {
+        const tool = options.tools[0];
+        callbacks?.onToolCall?.('search', { q: 'docx 预览' }, 'tu-1');
+        callbacks?.onToolResult?.('search', await tool.execute({ q: 'docx 预览' }), 'tu-1');
+        callbacks?.onTextDelta?.('{');
+        return EMPTY_ANSWER;
+      });
+      await runTaskSearchAgent('which task adds docx progress', { progressId: 'pw-progress-1' });
+      // Bus delivery is async — give queued emits a tick to land.
+      await new Promise((r) => setTimeout(r, 50));
+      const kinds = seen.map((e) => e.kind);
+      expect(kinds).toEqual(['seed', 'search', 'search_done', 'answering']);
+      expect(seen.every((e) => e.id === 'pw-progress-1')).toBe(true);
+      expect(seen[1]).toMatchObject({ kind: 'search', q: 'docx 预览' });
+      expect(seen[2]).toMatchObject({ kind: 'search_done', q: 'docx 预览', count: 1 });
+    } finally {
+      bus.unsubscribe('web-ui');
+    }
+  });
+
+  it('emits NO progress events without a progressId', async () => {
+    const { bus } = await import('../../src/core/event-bus.js');
+    const seen: unknown[] = [];
+    bus.subscribe('web-ui', (event) => {
+      if (event.name === 'search-agent:progress') seen.push(event.data);
+    });
+    try {
+      loopMock.mockResolvedValue(EMPTY_ANSWER);
+      await runTaskSearchAgent('which task adds docx silent');
+      await new Promise((r) => setTimeout(r, 50));
+      expect(seen).toEqual([]);
+    } finally {
+      bus.unsubscribe('web-ui');
+    }
   });
 
   it('token usage flows to the tracker under the task-search-agent source', async () => {

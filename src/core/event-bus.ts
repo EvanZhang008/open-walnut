@@ -35,6 +35,9 @@ export const EventNames = {
   // Inline subagent streaming
   AGENT_SUBAGENT_STREAM: 'agent:subagent-stream',
 
+  // ✦ AI task-search live progress (mini-session lines in the search panel)
+  SEARCH_AGENT_PROGRESS: 'search-agent:progress',
+
   // Agent events (chat streaming)
   AGENT_TEXT_DELTA: 'agent:text-delta',
   AGENT_TOOL_ACTIVITY: 'agent:tool-activity',

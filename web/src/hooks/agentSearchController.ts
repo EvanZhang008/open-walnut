@@ -12,13 +12,21 @@ export type AgentPanelState = 'hidden' | 'loading' | 'done' | 'error';
 export interface AgentSearchSnapshot {
   state: AgentPanelState;
   data?: AgentSearchPayload;
+  /** Progress-stream id of the in-flight fetch — the panel filters
+   *  'search-agent:progress' WS events by it while loading. */
+  sid?: string;
 }
 
 interface ControllerDeps {
-  fetcher: (q: string, opts: { signal?: AbortSignal }) => Promise<AgentSearchPayload>;
+  fetcher: (q: string, opts: { signal?: AbortSignal; sid?: string }) => Promise<AgentSearchPayload>;
   peek: (q: string) => AgentSearchPayload | undefined;
   onState: (snapshot: AgentSearchSnapshot) => void;
   isEnabled: () => boolean;
+}
+
+function newSid(): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  return uuid ?? `sid-${Math.random().toString(36).slice(2, 12)}${Date.now().toString(36)}`;
 }
 
 // Module-level latch: 503 ai_disabled means the whole deployment can't serve
@@ -52,10 +60,11 @@ export function createAgentSearchController(deps: ControllerDeps): {
   const run = (q: string) => {
     const gen = ++generation;
     cancelInflight();
-    deps.onState({ state: 'loading' });
+    const sid = newSid();
+    deps.onState({ state: 'loading', sid });
     const controller = new AbortController();
     abort = controller;
-    deps.fetcher(q, { signal: controller.signal })
+    deps.fetcher(q, { signal: controller.signal, sid })
       .then((data) => {
         if (gen !== generation || controller.signal.aborted) return;
         deps.onState({ state: 'done', data });

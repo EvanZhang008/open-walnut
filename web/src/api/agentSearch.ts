@@ -41,11 +41,11 @@ const CLIENT_TIMEOUT_MS = 65_000;
 
 export async function fetchAgentSearch(
   q: string,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; sid?: string } = {},
 ): Promise<AgentSearchPayload> {
   const payload = await apiGet<AgentSearchPayload>(
     '/api/search/agent',
-    { q: q.trim() },
+    { q: q.trim(), ...(opts.sid ? { sid: opts.sid } : {}) },
     { signal: opts.signal, timeoutMs: CLIENT_TIMEOUT_MS },
   );
   // Memoize BEFORE any abort bail upstream — a late landing still warms the

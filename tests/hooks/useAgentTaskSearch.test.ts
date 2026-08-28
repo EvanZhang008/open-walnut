@@ -65,6 +65,20 @@ describe('agentSearchController', () => {
     expect(fetcher.mock.calls[0][0]).toBe(QUERY);
   });
 
+  it('mints a fresh sid per fetch, exposed on the loading snapshot and passed to the fetcher', async () => {
+    const { controller, fetcher, states } = setup();
+    controller.setQuery(QUERY);
+    await vi.advanceTimersByTimeAsync(AGENT_SEARCH_DEBOUNCE_MS + 10);
+    controller.setQuery('another eligible question entirely');
+    await vi.advanceTimersByTimeAsync(AGENT_SEARCH_DEBOUNCE_MS + 10);
+    const sids = fetcher.mock.calls.map((c) => c[1].sid);
+    expect(sids).toHaveLength(2);
+    expect(sids[0]).toBeTruthy();
+    expect(sids[0]).not.toBe(sids[1]);
+    const loadingWithSid = states.filter((s) => s.state === 'loading' && s.sid);
+    expect(loadingWithSid.map((s) => s.sid)).toEqual(sids);
+  });
+
   it('drops an older generation response (nonce)', async () => {
     let resolveFirst!: (v: AgentSearchPayload) => void;
     const fetcher = vi.fn()

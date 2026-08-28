@@ -47,6 +47,11 @@ searchAgentRouter.get('/', async (req: Request, res: Response, next: NextFunctio
     }
     res.setHeader('Cache-Control', 'no-store');
 
+    // Optional progress id: the panel subscribes to 'search-agent:progress'
+    // WS events carrying this id and renders live mini-session lines.
+    const rawSid = req.query.sid;
+    const sid = typeof rawSid === 'string' && /^[A-Za-z0-9_-]{6,64}$/.test(rawSid) ? rawSid : undefined;
+
     const { runTaskSearchAgent, AgentSearchError } = await import('../../core/task-search-agent.js');
     const timeout = new Promise<never>((_, reject) => {
       deadline = setTimeout(
@@ -54,7 +59,7 @@ searchAgentRouter.get('/', async (req: Request, res: Response, next: NextFunctio
         routeDeadlineMs(),
       );
     });
-    res.json(await Promise.race([runTaskSearchAgent(q), timeout]));
+    res.json(await Promise.race([runTaskSearchAgent(q, sid ? { progressId: sid } : {}), timeout]));
   } catch (err) {
     const { AgentSearchError } = await import('../../core/task-search-agent.js');
     if (err instanceof AgentSearchError) {

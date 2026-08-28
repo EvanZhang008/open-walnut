@@ -6206,6 +6206,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             Cmd/Ctrl/Shift-click — no separate toolbar button (keeps the bar clean). */}
       </div>
 
+      {/* ✦ AI lane: an in-process agent searches tasks AND session transcripts,
+          streaming its progress live. Anchored here — directly under the search
+          bar, OUTSIDE every scroll container — so it is always visible at the
+          very top while searching, wherever the list is scrolled. */}
+      {isSearchMode && (
+        <AgentSearchPanel query={searchQuery} onOpenTask={handleAgentResultClick} />
+      )}
+
       {/* Active conditions strip: one removable chip per value, above the tabs so
           it reads as "what this whole panel is showing". */}
       <TaskFilterChips
@@ -6730,11 +6738,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
       {tasksVisible && !tasksCollapsed && (
       <div className={`todo-panel-list${!detailTarget && listCollapsed ? ' todo-panel-list-collapsed' : ''}`} style={detailTarget ? { flex: `${1 - detailRatio} 1 0%` } : isAll && (visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0) && !pinnedAreaCollapsed ? { flex: `${listRatio} 1 0%` } : undefined}>
-        {/* ✦ AI lane: a claude -p agent searches tasks AND session transcripts;
-            renders above the instant results and never blocks them. */}
-        {isSearchMode && (
-          <AgentSearchPanel query={searchQuery} onOpenTask={handleAgentResultClick} />
-        )}
         {loading && (
           <div className="empty-state" style={{ padding: '24px 8px' }}>
             <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2, margin: '0 auto' }} />

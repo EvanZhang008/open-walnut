@@ -635,6 +635,16 @@ export interface AgentSubagentStreamEvent {
   };
 }
 
+/** Live progress of one ✦ AI task-search run, keyed by the client-chosen
+ *  progress id (GET /api/search/agent?sid=…). Best-effort: a second browser
+ *  sharing an in-flight run sees no lines, only the final payload. */
+export interface SearchAgentProgressEvent {
+  id: string;
+  kind: 'seed' | 'search' | 'search_done' | 'answering';
+  q?: string;
+  count?: number;
+}
+
 // ── Agent events (chat streaming, sent via WebSocket RPC) ──
 
 export interface AgentTextDeltaEvent { delta: string; source?: string }
@@ -888,6 +898,7 @@ export interface EventPayloadMap {
   'subagent:error': SubagentErrorEvent;
 
   'agent:subagent-stream': AgentSubagentStreamEvent;
+  'search-agent:progress': SearchAgentProgressEvent;
   'agent:text-delta': AgentTextDeltaEvent;
   'agent:tool-activity': AgentToolActivityEvent;
   'agent:tool-call': AgentToolCallEvent;

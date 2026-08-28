@@ -18,6 +18,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { bus, EventNames } from './event-bus.js';
 import { backgroundAiDisabled } from './cheap-model.js';
 import { resolveClaudeCliExecutable } from './claude-cli-detect.js';
 import { listTasks } from './task-manager.js';
@@ -63,6 +64,9 @@ export interface AgentSearchEngineOptions {
   timeoutMs: number;
   /** Raw (trimmed) query — the in-process engine pre-runs it as seed results. */
   query?: string;
+  /** Client-chosen id: when set, the in-process engine emits live
+   *  'search-agent:progress' events (mini-session lines in the panel). */
+  progressId?: string;
 }
 
 /** The seam: returns the child's final answer text. */
@@ -73,8 +77,13 @@ export type AgentSearchEngine = (
 
 const CLI_ENGINE_MODEL = 'haiku';
 const CLI_ENGINE_TIMEOUT_MS = 50_000;
-const IN_PROCESS_TIMEOUT_MS = 30_000;
-const IN_PROCESS_MAX_ROUNDS = 4;
+// 45s, not 30: a hard query legitimately runs seed + 2 variant rounds + the
+// answer turn (~35s of sonnet round-trips; a live 3-round run hit 30.8s and
+// 502'd). The route's 60s deadline and the client's 65s stay the outer walls.
+const IN_PROCESS_TIMEOUT_MS = 45_000;
+// 3 tool rounds max: the prompt allows two SEARCH rounds after the seed; the
+// third is slack, anything more is the model wandering, not searching.
+const IN_PROCESS_MAX_ROUNDS = 3;
 
 /** Escape hatch back to the original claude -p child. */
 function useCliEngine(): boolean {
@@ -142,6 +151,16 @@ async function inProcessEngine(
   const { buildSeedResultsBlock } = await import('./task-search-agent-contract.js');
   const { model, provider } = await resolveInProcessModel();
 
+  // Live progress → browser panel (mini-session lines). Best-effort: never
+  // let a broken emit fail the search.
+  const pid = options.progressId;
+  const progress = (data: { kind: 'seed' | 'search' | 'search_done' | 'answering'; q?: string; count?: number }) => {
+    if (!pid) return;
+    try {
+      bus.emit(EventNames.SEARCH_AGENT_PROGRESS, { id: pid, ...data }, ['web-ui'], { source: 'task-search-agent' });
+    } catch { /* progress is decoration */ }
+  };
+
   const searchTool = {
     name: 'search',
     description: 'Search the user\'s Walnut tasks and session transcripts. Returns JSON rows; a row with type "session" carries taskId = the task that OWNS that transcript. Batch query variants as parallel calls in one reply.',
@@ -167,13 +186,33 @@ async function inProcessEngine(
     try {
       const seed = await search(options.query, { types: ['task', 'session'], limit: SEARCH_ROW_LIMIT });
       prompt += buildSeedResultsBlock(serializeRows(seed));
+      progress({ kind: 'seed', q: options.query, count: seed.length });
     } catch { /* seeding is an optimization — the loop can still search */ }
   }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs);
+  const qByToolUse = new Map<string, string>();
+  let answering = false;
   try {
     const result = await runAgentLoop(prompt, [], {
+      onToolCall: (toolName, input, toolUseId) => {
+        if (toolName !== 'search') return;
+        const q = String((input as { q?: unknown }).q ?? '');
+        qByToolUse.set(toolUseId, q);
+        progress({ kind: 'search', q });
+      },
+      onToolResult: (toolName, result, toolUseId) => {
+        if (toolName !== 'search') return;
+        let count: number | undefined;
+        try { count = (JSON.parse(result) as unknown[]).length; } catch { /* row count is decoration */ }
+        progress({ kind: 'search_done', q: qByToolUse.get(toolUseId), count });
+      },
+      onTextDelta: () => {
+        if (answering) return;
+        answering = true;
+        progress({ kind: 'answering' });
+      },
       onUsage: (usage) => {
         try {
           usageTracker.record({
@@ -237,6 +276,8 @@ let cliAvailable: boolean | null = null;
 export interface RunTaskSearchAgentOptions {
   engine?: AgentSearchEngine;
   timeoutMs?: number;
+  /** Forwarded to the engine for live progress events (best-effort). */
+  progressId?: string;
 }
 
 /**
@@ -294,6 +335,7 @@ async function inner(
       model: CLI_ENGINE_MODEL,
       timeoutMs: opts.timeoutMs ?? (cliEngine ? CLI_ENGINE_TIMEOUT_MS : IN_PROCESS_TIMEOUT_MS),
       query: trimmed,
+      ...(opts.progressId ? { progressId: opts.progressId } : {}),
     });
   } catch (err) {
     count('search.agent.result', 1, { outcome: 'engine_error' });
