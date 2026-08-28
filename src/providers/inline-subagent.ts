@@ -17,6 +17,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { bus, EventNames } from '../core/event-bus.js';
 import { log } from '../logging/index.js';
@@ -30,6 +31,15 @@ import {
 } from './claude-stream-parser.js';
 
 // ── Types ──
+
+/** CLAUDE_CODE_ENTRYPOINT for every Walnut-spawned utility child. The CLI
+ *  records it verbatim in the transcript head (it never overwrites a preset
+ *  value), and the external-session import scan only accepts the entrypoints
+ *  on its allowlists (cli/claude-desktop/sdk-cli/sdk-ts) — so children marked
+ *  with this value can NEVER surface as import candidates, regardless of cwd.
+ *  Verified live 2026-08-28: transcript records "entrypoint":"walnut-utility",
+ *  child behavior unchanged. */
+export const WALNUT_UTILITY_ENTRYPOINT = 'walnut-utility';
 
 export interface InlineSubagentOptions {
   prompt: string;
@@ -58,6 +68,16 @@ export interface InlineSubagentOptions {
    *  utility child is systemPromptMode:'replace' + tools + settingSources:''
    *  + bare:true. */
   bare?: boolean;
+  /** One-flag preset for utility children: applies the full slim combo
+   *  (systemPromptMode 'replace', tools [], settingSources '', bare, neutral
+   *  tmpdir cwd) wherever the caller left the field unset — explicit fields
+   *  always win (e.g. slim:true + tools:['Bash']). The neutral cwd matters
+   *  twice over: it keeps the transcript OUT of the server repo's
+   *  ~/.claude/projects dir (so session-import scans never see these
+   *  children), and a claude process in the repo cwd could adopt
+   *  {cwd}/.claude/scheduled_tasks.json durable crons — adoption is
+   *  DIRECTORY-scoped (2026-08-13 incident). */
+  slim?: boolean;
 }
 
 export interface InlineSubagentResult {
@@ -111,19 +131,20 @@ process.once('exit', () => {
 // ── Core runner ──
 
 export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<InlineSubagentResult> {
+  const slim = opts.slim === true;
   const {
     prompt,
-    cwd,
+    cwd = slim ? tmpdir() : undefined,
     model = 'opus',
     timeoutMs = 120_000,
     systemPrompt,
     permissionMode = 'bypassPermissions',
     toolUseId,
     background = false,
-    systemPromptMode = 'append',
-    tools,
-    settingSources,
-    bare = false,
+    systemPromptMode = slim ? 'replace' : 'append',
+    tools = slim ? [] : undefined,
+    settingSources = slim ? '' : undefined,
+    bare = slim,
   } = opts;
 
   await acquireSemaphore();
@@ -157,6 +178,9 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
   // Clean env — remove CLAUDECODE to prevent nested session detection.
   // API keys (ANTHROPIC_API_KEY etc.) are intentionally preserved so the subprocess can authenticate.
   const { CLAUDECODE: _drop, ...cleanEnv } = process.env;
+  // Mark the transcript so the session-import scan never lists this child as
+  // an importable session (we spawn MANY of these; they are not user work).
+  cleanEnv.CLAUDE_CODE_ENTRYPOINT = WALNUT_UTILITY_ENTRYPOINT;
 
   log.agent.info('inline subagent spawning', {
     toolUseId,

@@ -104,6 +104,11 @@ describe('buildSpawnEnv — strips every auth-routing var (COMPLIANCE)', () => {
     expect(env.PATH).toBe('/usr/bin');
   });
 
+  it('stamps the walnut-utility entrypoint so the import scan never lists these children', () => {
+    const env = buildSpawnEnv({ PATH: '/usr/bin', CLAUDE_CODE_ENTRYPOINT: 'cli' });
+    expect(env.CLAUDE_CODE_ENTRYPOINT).toBe('walnut-utility');
+  });
+
   it('does not mutate the source env object', () => {
     const base = { ANTHROPIC_API_KEY: 'sk-secret', PATH: '/x' };
     buildSpawnEnv(base);

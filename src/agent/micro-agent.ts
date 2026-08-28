@@ -17,15 +17,25 @@
  *
  * What it standardizes so callers stop hand-rolling it:
  *   - model tier resolution against the configured provider's catalog
+ *     (overridable: explicit `model` + `provider` win)
  *   - wall-clock timeout via AbortController (the loop stops after the
- *     current tool; `aborted` is surfaced, never swallowed)
+ *     current tool; `aborted` is surfaced, never swallowed), composed with an
+ *     optional caller `signal`
  *   - per-call usage accounting under the caller's UsageSource
  *   - tight defaults: 3 tool rounds, 2000 max output tokens, 30s
+ *   - multi-turn reuse: pass a prior run's `messages` back as `history`, or
+ *     use createMicroSession() which threads it for you
+ *
+ * These runs are in-process API turns — they create NO session record, no
+ * transcript on disk, nothing the session import scan could ever pick up.
+ * (The claude -p escape hatches DO write CLI transcripts; see
+ * inline-subagent.ts `slim` for how those stay out of the repo's project dir.)
  *
  * First consumer: the ✦ AI task-search lane (core/task-search-agent.ts).
  */
 
 import type { AgentCallbacks } from './loop.js';
+import type { MessageParam } from './model.js';
 import type { ToolDefinition } from './tools.js';
 import type { UsageSource } from '../core/usage/types.js';
 
@@ -33,15 +43,22 @@ export interface MicroAgentOptions {
   /** Small, caller-owned system prompt. This is ALL the model knows. */
   system: string;
   userMessage: string;
+  /** Prior turns to continue from (e.g. a previous run's `messages`).
+   *  Default: fresh conversation. */
+  history?: MessageParam[];
   /** Native in-process tools (plain functions, no process spawns). */
   tools?: ToolDefinition[];
   /** Explicit model id wins; otherwise `tier` picks from the provider catalog. */
   model?: string;
+  /** Explicit provider for `model`; otherwise the configured main provider. */
+  provider?: string;
   /** Catalog pick when `model` is absent: first non-1M id containing this. */
   tier?: 'haiku' | 'sonnet' | 'opus';
   maxTokens?: number;
   maxToolRounds?: number;
   timeoutMs?: number;
+  /** External cancellation (composes with the timeout — whichever fires first). */
+  signal?: AbortSignal;
   /** Every micro agent is accounted — no anonymous background model calls. */
   usageSource: UsageSource;
   /** Streaming/progress callbacks; onUsage composes with the built-in recorder. */
@@ -52,6 +69,9 @@ export interface MicroAgentResult {
   response: string;
   model: string;
   aborted: boolean;
+  /** Full updated history (input history + this turn) — feed it back as
+   *  `history` to continue the conversation. */
+  messages: MessageParam[];
 }
 
 const DEFAULT_TIER = 'sonnet';
@@ -78,13 +98,20 @@ export async function runMicroAgent(opts: MicroAgentOptions): Promise<MicroAgent
   const { usageTracker } = await import('../core/usage/index.js');
 
   const { model, provider } = opts.model
-    ? { model: opts.model, provider: (await resolveTierModel(opts.tier ?? DEFAULT_TIER)).provider }
+    ? {
+        model: opts.model,
+        provider: opts.provider ?? (await resolveTierModel(opts.tier ?? DEFAULT_TIER)).provider,
+      }
     : await resolveTierModel(opts.tier ?? DEFAULT_TIER);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  // Compose the caller's signal with the timeout: either aborts the loop.
+  const onExternalAbort = () => controller.abort();
+  if (opts.signal?.aborted) controller.abort();
+  else opts.signal?.addEventListener('abort', onExternalAbort, { once: true });
   try {
-    const result = await runAgentLoop(opts.userMessage, [], {
+    const result = await runAgentLoop(opts.userMessage, opts.history ?? [], {
       ...opts.callbacks,
       onUsage: (usage) => {
         try {
@@ -110,8 +137,35 @@ export async function runMicroAgent(opts: MicroAgentOptions): Promise<MicroAgent
       signal: controller.signal,
       source: opts.usageSource,
     });
-    return { response: result.response, model, aborted: result.aborted === true };
+    return { response: result.response, model, aborted: result.aborted === true, messages: result.messages };
   } finally {
     clearTimeout(timer);
+    opts.signal?.removeEventListener('abort', onExternalAbort);
   }
+}
+
+/**
+ * Stateful wrapper for multi-turn reuse: one micro session, N sends, history
+ * threaded automatically. Each send accepts per-call overrides (model, tools,
+ * timeout, …) on top of the base options.
+ *
+ *   const session = createMicroSession({ system, usageSource: 'x' });
+ *   const a = await session.send('first question');
+ *   const b = await session.send('follow-up');   // sees turn 1
+ */
+export function createMicroSession(base: Omit<MicroAgentOptions, 'userMessage' | 'history'>): {
+  send: (userMessage: string, overrides?: Partial<Omit<MicroAgentOptions, 'userMessage' | 'history'>>) => Promise<MicroAgentResult>;
+  history: () => MessageParam[];
+} {
+  let history: MessageParam[] = [];
+  return {
+    send: async (userMessage, overrides) => {
+      const result = await runMicroAgent({ ...base, ...overrides, userMessage, history });
+      // A timed-out turn keeps history at the last COMPLETE turn — a partial
+      // exchange would poison every later send.
+      if (!result.aborted) history = result.messages;
+      return result;
+    },
+    history: () => history,
+  };
 }

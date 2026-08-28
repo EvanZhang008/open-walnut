@@ -63,16 +63,13 @@ describe('claude -p fallback engine wiring', () => {
     expect(opts.systemPrompt).toContain('type:"session"');
     expect(opts.prompt).toContain('which task adds docx');
     expect(typeof opts.toolUseId).toBe('string');
-    // Slim shell — without these the child inhales ~32.5k tokens of CLI
-    // system prompt + tool manuals + the repo's CLAUDE.md chain (vs 3.6k).
-    expect(opts.systemPromptMode).toBe('replace');
+    // Slim preset — without it the child inhales ~32.5k tokens of CLI
+    // system prompt + tool manuals + the repo's CLAUDE.md chain (vs 3.6k),
+    // runs in the server's repo cwd (cron-adoption hazard), and its
+    // transcript lands in the repo's ~/.claude/projects dir where the
+    // session-import scan would list it. Bash stays on for the walnut CLI.
+    expect(opts.slim).toBe(true);
     expect(opts.tools).toEqual(['Bash']);
-    expect(opts.settingSources).toBe('');
-    expect(opts.bare).toBe(true);
-    // Neutral cwd — never the server's repo cwd (CLAUDE.md chain + the
-    // directory-scoped cron-adoption hazard live there).
-    expect(typeof opts.cwd).toBe('string');
-    expect(opts.cwd).not.toContain('walnut');
   });
 
   it('maps a failed child to 502 agent_failed', async () => {

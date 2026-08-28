@@ -18,7 +18,6 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { tmpdir } from 'node:os';
 import { bus, EventNames } from './event-bus.js';
 import { backgroundAiDisabled } from './cheap-model.js';
 import { resolveClaudeCliExecutable } from './claude-cli-detect.js';
@@ -105,19 +104,12 @@ async function claudeCliEngine(
     timeoutMs: options.timeoutMs,
     systemPrompt: options.system,
     toolUseId: `task-search-${randomUUID()}`,
-    // Slim shell: replace the CLI system prompt, keep ONLY Bash (for the
-    // walnut CLI), load no settings/CLAUDE.md. 32.5k → 3.6k tokens measured;
-    // the default shell also inhales this repo's whole CLAUDE.md chain
-    // because the server's cwd is the repo.
-    systemPromptMode: 'replace',
+    // Slim preset: replace the CLI system prompt, no settings/CLAUDE.md,
+    // --bare, neutral tmpdir cwd (32.5k → 3.6k tokens measured; see
+    // inline-subagent.ts). Bash stays on — the child searches via the
+    // walnut CLI.
+    slim: true,
     tools: ['Bash'],
-    settingSources: '',
-    bare: true,
-    // Neutral cwd, NOT the server's (= this repo): the child needs no repo
-    // files (walnut CLI is on PATH, searches ride HTTP), and a claude process
-    // in the repo cwd could adopt {cwd}/.claude/scheduled_tasks.json durable
-    // crons — adoption is DIRECTORY-scoped (2026-08-13 incident).
-    cwd: tmpdir(),
   });
   if (!run.success) throw new Error(run.error ?? 'claude -p exited with an error');
   return { response: run.result, model: options.model, costUsd: run.costUsd };

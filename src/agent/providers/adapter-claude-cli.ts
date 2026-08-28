@@ -36,6 +36,7 @@ import type {
   MessageParam, TextBlockParam, UsageStats,
 } from './types.js';
 import { parseClaudeJsonlLine, type ClaudeStreamResult } from '../../providers/claude-stream-parser.js';
+import { WALNUT_UTILITY_ENTRYPOINT } from '../../providers/inline-subagent.js';
 import { abortedResult } from './retry.js';
 import { log } from '../../logging/index.js';
 import { resolveClaudeCliExecutable } from '../../core/claude-cli-detect.js';
@@ -461,6 +462,10 @@ export function buildSpawnEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Pro
   for (const key of AUTH_ENV_TO_STRIP) {
     delete env[key];
   }
+  // These children are the Personal AI's own turn engine, not user work
+  // sessions — the marker keeps their transcripts out of the session-import
+  // scan (which otherwise lists every sdk-cli transcript in a real cwd).
+  env.CLAUDE_CODE_ENTRYPOINT = WALNUT_UTILITY_ENTRYPOINT;
   return env;
 }
 

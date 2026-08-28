@@ -16,7 +16,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-micro-agent'
 vi.mock('../../src/agent/loop.js', () => ({ runAgentLoop: loopMock }));
 vi.mock('../../src/core/usage/index.js', () => ({ usageTracker: { record: recordMock } }));
 
-import { runMicroAgent, resolveTierModel } from '../../src/agent/micro-agent.js';
+import { runMicroAgent, createMicroSession, resolveTierModel } from '../../src/agent/micro-agent.js';
 
 const DONE = { response: 'ok', messages: [], newMessages: [] };
 
@@ -43,7 +43,35 @@ describe('runMicroAgent', () => {
     expect(options.modelConfig).toEqual({ model: 'global.anthropic.claude-sonnet-4-6', provider: 'bedrock', maxTokens: 2000 });
     expect(options.source).toBe('task-search-agent');
     expect(options.signal).toBeInstanceOf(AbortSignal);
-    expect(out).toEqual({ response: 'ok', model: 'global.anthropic.claude-sonnet-4-6', aborted: false });
+    expect(out).toEqual({ response: 'ok', model: 'global.anthropic.claude-sonnet-4-6', aborted: false, messages: [] });
+  });
+
+  it('threads history in and returns the updated messages for the next turn', async () => {
+    const prior = [{ role: 'user', content: 'earlier' }, { role: 'assistant', content: 'yes' }];
+    const updated = [...prior, { role: 'user', content: 'go' }, { role: 'assistant', content: 'ok' }];
+    loopMock.mockResolvedValue({ ...DONE, messages: updated });
+    const out = await runMicroAgent({
+      system: 's', userMessage: 'go', usageSource: 'task-search-agent',
+      history: prior as never,
+    });
+    expect(loopMock.mock.calls[0][1]).toBe(prior);
+    expect(out.messages).toBe(updated);
+  });
+
+  it('an external signal aborts the loop (composed with the timeout)', async () => {
+    const external = new AbortController();
+    let loopSignal: AbortSignal | undefined;
+    loopMock.mockImplementation(async (_u, _h, _c, options) => {
+      loopSignal = options.signal;
+      external.abort();
+      await new Promise((r) => setTimeout(r, 10));
+      return { ...DONE, aborted: loopSignal?.aborted === true };
+    });
+    const out = await runMicroAgent({
+      system: 's', userMessage: 'u', usageSource: 'task-search-agent', signal: external.signal,
+    });
+    expect(loopSignal?.aborted).toBe(true);
+    expect(out.aborted).toBe(true);
   });
 
   it('tier picks from the catalog; explicit model wins over tier', async () => {
@@ -77,5 +105,28 @@ describe('runMicroAgent', () => {
       source: 'task-search-agent', model: 'm', input_tokens: 10, output_tokens: 2,
     }));
     expect(callerUsage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('createMicroSession', () => {
+  it('threads history across sends; per-send overrides apply; aborted turns do not poison history', async () => {
+    const turn1 = [{ role: 'user', content: 'a' }, { role: 'assistant', content: '1' }];
+    loopMock.mockResolvedValueOnce({ ...DONE, messages: turn1 });
+    const session = createMicroSession({ system: 's', usageSource: 'task-search-agent' });
+
+    await session.send('a');
+    expect(loopMock.mock.calls[0][1]).toEqual([]);
+
+    // Turn 2 times out — history must stay at turn 1.
+    loopMock.mockResolvedValueOnce({ ...DONE, aborted: true, messages: [...turn1, { role: 'user', content: 'b' }] });
+    await session.send('b');
+    expect(loopMock.mock.calls[1][1]).toBe(turn1);
+    expect(session.history()).toBe(turn1);
+
+    // Turn 3 continues from turn 1, with a per-send model override.
+    loopMock.mockResolvedValueOnce(DONE);
+    await session.send('c', { model: 'global.anthropic.claude-opus-5' });
+    expect(loopMock.mock.calls[2][1]).toBe(turn1);
+    expect(loopMock.mock.calls[2][3].modelConfig.model).toBe('global.anthropic.claude-opus-5');
   });
 });
