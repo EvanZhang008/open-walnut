@@ -267,6 +267,10 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
   return {
     name: 'whisper-server',
 
+    async warmup() {
+      await ensureServerRunning();
+    },
+
     shutdown() {
       killServer();
       process.removeListener('exit', cleanup);

@@ -1221,6 +1221,12 @@ export interface Config {
     mlx_port?: number;
     /** Idle TTL in minutes — daemon auto-shuts after inactivity (default: 10) */
     mlx_idle_ttl_minutes?: number;
+    /** Load the STT models at server startup instead of on the first dictation.
+     *  Daemon engines (mlx, whisper-server) pay their 5-15s model load once per
+     *  boot; prewarming moves that off the user's first utterance. Costs the
+     *  models' RAM even if dictation is never used that boot (idle TTL still
+     *  frees them). Default: false. */
+    prewarm_on_start?: boolean;
   };
   /** API keys for remote client authentication (iOS app, etc.) */
   api_keys?: ApiKeyEntry[];

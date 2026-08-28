@@ -352,6 +352,10 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
   return {
     name: 'mlx',
 
+    async warmup() {
+      await ensureServerRunning();
+    },
+
     shutdown() {
       killServer();
       if (scriptDir) {

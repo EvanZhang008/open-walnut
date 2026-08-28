@@ -28,4 +28,10 @@ export interface SttEngine {
    * Optional — engines that hold no persistent resources can omit this.
    */
   shutdown?(): void;
+  /**
+   * Load the model into memory ahead of the first transcription. For
+   * daemon-based engines this starts the daemon so the first dictation skips
+   * the multi-second cold start. Optional — one-shot engines omit it.
+   */
+  warmup?(): Promise<void>;
 }

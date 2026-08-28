@@ -1778,6 +1778,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         log.web.warn('audio recording resume failed', { error: err instanceof Error ? err.message : String(err) })
       })
     }
+
+    // -- STT prewarm (opt-in): load dictation models now, not on first use --
+    void (async () => {
+      const { getConfig } = await import('../core/config-manager.js')
+      const config = await getConfig()
+      if (!config.stt?.prewarm_on_start) return
+      const { prewarmSttEngines } = await import('../core/stt/index.js')
+      await prewarmSttEngines(config)
+    })().catch((err) => {
+      log.web.warn('STT prewarm failed', { error: err instanceof Error ? err.message : String(err) })
+    })
   }
 
   // -- Startup timing: track each phase to diagnose slow startups --

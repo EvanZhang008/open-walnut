@@ -149,6 +149,32 @@ export function getOrCreateSecondaryEngine(config: Config): SttEngine | null {
   return cachedSecondary;
 }
 
+/**
+ * Load the STT models into memory at server startup (stt.prewarm_on_start)
+ * instead of on the first dictation — daemon engines pay a 5-15s model load
+ * once per boot, and prewarming moves that wait off the user's first
+ * utterance. Fire-and-forget: never throws, failures only log (the lazy path
+ * still works). Engines without warmup (one-shot CLIs) are skipped.
+ */
+export async function prewarmSttEngines(config: Config): Promise<void> {
+  const engines = [getOrCreateEngine(config), getOrCreateSecondaryEngine(config)];
+  await Promise.all(engines.map(async engine => {
+    if (!engine?.warmup) return;
+    try {
+      const avail = await engine.isAvailable();
+      if (!avail.available) {
+        log.stt.warn(`STT prewarm skipped for ${engine.name}: ${avail.error}`);
+        return;
+      }
+      const t0 = Date.now();
+      await engine.warmup();
+      log.stt.info(`STT prewarm: ${engine.name} ready in ${Date.now() - t0}ms`);
+    } catch (err) {
+      log.stt.warn(`STT prewarm failed for ${engine.name}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }));
+}
+
 // ── Vocabulary file ──
 // config/share/stt-vocab.txt — one word per line, # comments.
 // Read on each transcription so edits take effect immediately.
