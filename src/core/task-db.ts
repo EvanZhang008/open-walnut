@@ -1219,7 +1219,7 @@ function migrateWaitToTodo(handle: DatabaseType): void {
   }
 }
 
-// ── v9: virtual groups → per-project folders ────────────────────────────────
+// ── v10: virtual groups → per-project folders ────────────────────────────────
 
 /**
  * Backfill the folder model onto the legacy group data. Three steps, all in one
@@ -1306,7 +1306,7 @@ function migrateGroupsToFolders(handle: DatabaseType): void {
   })();
 
   if (summary.folders > 0 || summary.evicted > 0 || summary.dropped > 0) {
-    log.task.info('task-db v9: groups migrated to per-project folders', summary);
+    log.task.info('task-db v10: groups migrated to per-project folders', summary);
   }
 }
 
