@@ -36,6 +36,9 @@ import { buildDaemonStartCmd } from './daemon-start-cmd.js'
 import { buildTurnRetryEnv } from './daemon-core.js'
 import type { SshTarget } from './session-io.js'
 import { localDaemon } from './local-daemon.js'
+// Leaf module (zero runtime imports) — safe to import statically from a provider.
+import { isRecoverableSessionError, isRescuableStoppedRecord } from '../core/session-error-kind.js'
+import type { SessionRecord } from '../core/types.js'
 
 const execFileAsync = promisify(execFileCb)
 
@@ -2919,6 +2922,14 @@ export class DaemonConnection {
       } = await import('../core/session-tracker.js')
       const sessions = await listSessions()
 
+      // Bound the stopped-record rescue probes per pass: each is one `status`
+      // RPC, and the 24h recency window in isRescuableStoppedRecord already
+      // keeps the candidate set small, but a pathological store must not turn
+      // one reconnect into an unbounded probe storm.
+      const MAX_STOPPED_PROBES = 25
+      let stoppedProbes = 0
+      let clippedStoppedProbes = 0
+
       for (const s of sessions) {
         // Normalize host before comparing: local sessions persist no `host`
         // field (host=null/undefined), but the local connection's hostKey is
@@ -2939,13 +2950,61 @@ export class DaemonConnection {
         // keeps running — any new CLI output after reconnect is fan'd out to a
         // dead subscriber set and lost. Skipping `idle` here was the cause of
         // "messages deliver but Claude never replies in UI" after any WS flap.
-        // `stopped` is terminal (CLI dead); `error` without "Connection lost"
-        // is a real user-visible error, don't auto-recover — let the next
-        // user message trigger a fresh --resume spawn.
-        const isTerminal = s.process_status === 'stopped'
+        // `stopped` is terminal (CLI dead). An `error` whose cause is positively
+        // the work's own fault (refusal, auth, a stop the user asked for) is left
+        // alone — the next user message can spawn a fresh --resume.
+        //
+        // The classification MUST be structural (session-error-kind), not a match
+        // on the message text. `!s.errorMessage?.includes('Connection lost')` is
+        // what this line used to say, and the C2 snapshot projection writes
+        // 'error' with NO message, so every snapshot-projected error read as
+        // "non-recoverable" and was skipped here forever — 51 sessions, including
+        // one that stayed dead for 3.5h after its host came back
+        // (inc-1787439819342).
+        // 'stopped' is otherwise a dead end no recovery path ever re-examines,
+        // so skipping it is only safe when the stop is POSITIVELY intentional
+        // (user action / terminal-class reason). A recent 'stopped' with an
+        // infra or unknown cause is a claim about process death the daemon can
+        // cheaply refute — inc-1787511363340: a spawn whose `start` command
+        // timed out was marked stopped, the command executed 15s later anyway,
+        // and the live CLI ran 1.6h behind a record every loop here skipped.
+        // Codex/ACP records stay skipped: their liveness probe is acpState on
+        // acpRuntimeId, and the branch below would relabel a dead one 'idle'.
+        const rescuableStopped = s.process_status === 'stopped'
+          && s.engine !== 'codex'
+          && isRescuableStoppedRecord(s)
+        const isTerminal = s.process_status === 'stopped' && !rescuableStopped
         const isNonRecoverableError = s.process_status === 'error'
-          && !s.errorMessage?.includes('Connection lost')
+          && !isRecoverableSessionError(s)
         if (isTerminal || isNonRecoverableError) continue
+
+        // pid to re-adopt onto a rescued record. A rescued-stopped record has
+        // pid null (spawn "failed" before a pid arrived, or the terminal-clear
+        // stripped it); leaving it null re-wedges within 2min — the health
+        // monitor's orphan dead-pool drain marks any local pid-less
+        // non-terminal record 'stopped' again. Written AFTER the status flips
+        // (a pid written onto a still-'stopped' record is immediately stripped
+        // by the tracker's terminal-state PID clear).
+        let rescuedPid: number | null = null
+        if (rescuableStopped) {
+          // Cheap registry probe FIRST: only a LIVE process justifies running
+          // the full recovery flow on a record that already claims death. Dead,
+          // unknown, or over budget → leave the record exactly as it is (no
+          // writes, no auto-resume): probing must cost nothing when the record
+          // was right.
+          if (stoppedProbes >= MAX_STOPPED_PROBES) { clippedStoppedProbes++; continue }
+          stoppedProbes++
+          try {
+            const probe = await this.send('status', { sid: s.claudeSessionId })
+            if (!(probe.ok && probe.alive)) continue
+            rescuedPid = typeof probe.pid === 'number' ? probe.pid : null
+          } catch { continue }
+          log.session.info('DaemonConnection: live CLI behind a stopped record — rescuing', {
+            sessionId: s.claudeSessionId, host: this.hostKey, pid: rescuedPid,
+            statusReason: s.status_reason ?? null,
+            changedBy: s.status_changed_by ?? null,
+          })
+        }
 
         if (s.engine === 'codex') {
           if (!s.acpRuntimeId) {
@@ -3090,7 +3149,23 @@ export class DaemonConnection {
             // re-subscription is still ours (the daemon dropped us from
             // session.subscribers on close).
             if (result.ok && result.alive) {
+              // Transport-fact patch (no status fields → bypasses the C2 gate):
+              // the projection never writes pid, and a rescued record without
+              // one is re-orphaned by the health monitor's dead-pool drain.
+              if (rescuedPid != null) {
+                await updateSessionRecord(s.claudeSessionId, { pid: rescuedPid } as any)
+                  .catch(() => {})
+              }
               await this.reattachRecoveredSession(s.claudeSessionId, true)
+            } else {
+              // The daemon is back and says the process is GONE. The projection
+              // will write 'error'/'stopped' and we must not fight it — but the
+              // record alone never comes back to life, so this branch used to be
+              // a dead end (the whole 3.5h stall in inc-1787439819342 lived
+              // exactly here). Arm an auto-resume: it goes through the normal
+              // send path, which respawns via --resume and lets the runner write
+              // the status legitimately.
+              await this.scheduleAutoRecoverIfDead(s.claudeSessionId)
             }
             continue
           }
@@ -3098,8 +3173,12 @@ export class DaemonConnection {
           if (result.ok && result.alive) {
             // Preserve 'idle' if that's what the session was before reconnect —
             // FIFO sessions sit in 'idle' between turns and forcing 'running'
-            // would lie to the UI (no turn actually in flight).
-            const recoveredStatus = s.process_status === 'idle' ? 'idle' : 'running'
+            // would lie to the UI (no turn actually in flight). A 'stopped'
+            // record whose CLI turns out to be alive is the same shape: the
+            // process sits between turns, so 'idle' is the honest label — the
+            // stream projection flips it to 'running' if a turn really starts.
+            const recoveredStatus =
+              s.process_status === 'idle' || s.process_status === 'stopped' ? 'idle' : 'running'
             const updated = await updateSessionRecord(s.claudeSessionId, {
               process_status: recoveredStatus,
               errorMessage: undefined,
@@ -3108,6 +3187,16 @@ export class DaemonConnection {
               status_reason: 'daemon_reconnected',
               status_changed_by: 'daemon',
             } as any)
+            // Separate transport-fact patch (no status fields → bypasses the C2
+            // gate, which drops the WHOLE stamped patch above for covered
+            // sessions): a recovered record left with pid null is re-orphaned
+            // by the health monitor's dead-pool drain within 2min. The daemon's
+            // `status` reply carries the authoritative pid.
+            const daemonPid = typeof result.pid === 'number' ? result.pid : rescuedPid
+            if (daemonPid != null && s.pid !== daemonPid) {
+              await updateSessionRecord(s.claudeSessionId, { pid: daemonPid } as any)
+                .catch(() => {})
+            }
             emitSessionStatusChanged(
               updated,
               {},
@@ -3147,6 +3236,12 @@ export class DaemonConnection {
               sessionId: s.claudeSessionId, host: this.hostKey,
               priorStatus: s.process_status,
             })
+            // Same reasoning as the snapshot branch: relabelling to 'stopped'
+            // makes the session resumable but nothing actually resumes it. If
+            // the work was in flight and the cause was infrastructure, resume it.
+            // (Classified from the PRE-relabel record `s` — the relabel above
+            // deliberately clears the cause we need to read.)
+            await this.scheduleAutoRecoverIfDead(s.claudeSessionId, s)
           }
         } catch (err) {
           log.session.debug('DaemonConnection: failed to probe session during recovery', {
@@ -3155,9 +3250,53 @@ export class DaemonConnection {
           })
         }
       }
+      if (clippedStoppedProbes > 0) {
+        log.session.warn('DaemonConnection: stopped-record rescue probes clipped this pass', {
+          host: this.hostKey, probed: stoppedProbes, clipped: clippedStoppedProbes,
+        })
+      }
     } catch (err) {
       log.session.warn('DaemonConnection: recoverDisconnectedSessions failed', {
         host: this.hostKey,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  /**
+   * Arm an auto-resume for a session the daemon just reported dead.
+   *
+   * `causeRecord` is the record as it looked BEFORE any relabel in this pass —
+   * the relabel clears errorMessage/errorKind, which is exactly the evidence the
+   * classifier needs. When omitted, the freshly-read record is used (the snapshot
+   * branch, where the projection keeps the cause the gate handed it).
+   *
+   * Never throws: recovery is best-effort and must not abort the sweep over the
+   * host's other sessions.
+   */
+  private async scheduleAutoRecoverIfDead(
+    sessionId: string,
+    causeRecord?: SessionRecord,
+  ): Promise<void> {
+    try {
+      const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+      const fresh = await getSessionByClaudeId(sessionId)
+      if (!fresh) return
+      // Budget/archive/type come from the CURRENT record; the cause comes from the
+      // pre-relabel one when the caller has it.
+      const forClassify: SessionRecord = causeRecord
+        ? {
+          ...fresh,
+          errorKind: causeRecord.errorKind,
+          errorMessage: causeRecord.errorMessage,
+          status_reason: causeRecord.status_reason,
+        }
+        : fresh
+      const { scheduleSessionAutoRecover } = await import('../core/session-auto-recover.js')
+      scheduleSessionAutoRecover(forClassify, forClassify.status_reason ?? 'daemon_reported_exit')
+    } catch (err) {
+      log.session.debug('DaemonConnection: auto-recover scheduling failed', {
+        sessionId, host: this.hostKey,
         error: err instanceof Error ? err.message : String(err),
       })
     }
@@ -3276,6 +3415,27 @@ const failureCache = new Map<string, { time: number; error: string }>()
 const FAILURE_CACHE_TTL_MS = 60_000  // 60s — longer than the worst-case SSH timeout (~42s) to avoid retrying mid-failure
 
 /**
+ * Compress a connect failure to ONE greppable line for the cached-failure error.
+ *
+ * The cached message is re-thrown to every caller for 60s, and every caller logs
+ * it at warn. A raw ssh failure is multi-line (the full command, "Connection
+ * closed by UNKNOWN port 65535", sometimes a ws stack trace), so ONE real outage
+ * produced 864 near-identical multi-line warns inside a single hour on
+ * 2026-08-22 — the log became unreadable exactly when it was needed. The full
+ * text is still logged once, at the moment the connect actually failed.
+ */
+export function summarizeConnectFailure(raw: string, maxLen = 160): string {
+  const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean)
+  // Prefer the line that says what went wrong over the echoed command.
+  const signal = lines.find((l) => /^(ssh|Connection|Permission|Host|kex_|Timeout|error:|Error:)/i.test(l)
+    && !l.startsWith('Command failed:'))
+    ?? lines.find((l) => !l.startsWith('Command failed:') && !l.includes(' -o '))
+    ?? lines[0] ?? raw
+  const oneLine = signal.replace(/\s+/g, ' ')
+  return oneLine.length > maxLen ? `${oneLine.slice(0, maxLen - 1)}…` : oneLine
+}
+
+/**
  * Hot-push the daemon-hook rules to every currently connected daemon.
  * Call after ~/.open-walnut/hooks/*.yaml or the cron_policy config changes —
  * a hook edit takes effect without a daemon restart. Fire-and-forget per
@@ -3303,7 +3463,8 @@ export async function getDaemonConnection(hostKey: string, sshTarget: SshTarget)
   // Check failure cache — avoid retrying a recently-failed host
   const cached = failureCache.get(hostKey)
   if (cached && Date.now() - cached.time < FAILURE_CACHE_TTL_MS) {
-    throw new Error(`Connection to ${hostKey} failed recently (${Math.round((Date.now() - cached.time) / 1000)}s ago): ${cached.error}`)
+    // One line, not the whole ssh transcript — see summarizeConnectFailure.
+    throw new Error(`Connection to ${hostKey} failed ${Math.round((Date.now() - cached.time) / 1000)}s ago: ${cached.error}`)
   }
 
   // Dedup: if another caller is already connecting, wait for their result
@@ -3323,10 +3484,13 @@ export async function getDaemonConnection(hostKey: string, sshTarget: SshTarget)
     return conn!
   }).catch((err) => {
     connectingPromises.delete(hostKey)
-    // Cache the failure so subsequent requests fail fast
-    failureCache.set(hostKey, {
-      time: Date.now(),
-      error: err instanceof Error ? err.message : String(err),
+    // Cache the failure so subsequent requests fail fast. Store the SUMMARY: this
+    // string is re-thrown to (and logged by) every caller for the next 60s.
+    const raw = err instanceof Error ? err.message : String(err)
+    failureCache.set(hostKey, { time: Date.now(), error: summarizeConnectFailure(raw) })
+    // The full text, once, where it actually happened.
+    log.session.warn('DaemonConnection: connect failed (full error logged once, summary cached)', {
+      host: hostKey, error: raw,
     })
     throw err
   })
@@ -3428,7 +3592,11 @@ export interface DaemonStatus {
  * Used by the unified session liveness check.
  */
 export function isDaemonConnected(hostKey: string): boolean {
-  return connectionPool.get(hostKey)?.connected ?? false
+  // Same direct-pool fallback as getConnectedDaemonConnection: the LOCAL
+  // daemon's pooled connection is keyed `direct:<wsUrl>`, not '__local__', so a
+  // bare map lookup answered "disconnected" for every '__local__' query and
+  // silently excluded local sessions from callers' recovery/liveness logic.
+  return getConnectedDaemonConnection(hostKey) !== null
 }
 
 export function getDaemonDisconnectedSince(hostKey: string): number | null {
@@ -3490,13 +3658,18 @@ export function getDaemonPoolStatus(): DaemonStatus[] {
 export async function probeDaemonSession(
   hostKey: string,
   sessionId: string,
-): Promise<{ alive: boolean } | null> {
-  const conn = connectionPool.get(hostKey)
-  if (!conn?.connected) return null
+): Promise<{ alive: boolean; pid?: number } | null> {
+  // Direct-pool fallback (see isDaemonConnected): '__local__' lives under a
+  // `direct:<wsUrl>` key, so a bare map lookup could never probe local sessions.
+  const conn = getConnectedDaemonConnection(hostKey)
+  if (!conn) return null
   try {
     const result = await conn.send('status', { sid: sessionId })
     // result.ok = daemon recognized the session; result.alive = OS process is still running. Both required.
-    return { alive: !!(result.ok && result.alive) }
+    return {
+      alive: !!(result.ok && result.alive),
+      ...(typeof result.pid === 'number' ? { pid: result.pid } : {}),
+    }
   } catch (err) {
     log.session.debug('probeDaemonSession: status probe failed', {
       hostKey, sessionId,

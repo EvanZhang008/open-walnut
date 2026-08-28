@@ -67,6 +67,15 @@ export class RemoteSessionManager implements SessionManager {
   // those we fall back to the uuid Set below. -1 = nothing seen yet.
   private _lastSeenV = -1
   private _imageCache = new Map<string, string>()
+  /**
+   * The exact text of the last outbound user message AFTER prepareOutbound()
+   * (remote sessions: local image paths uploaded + rewritten to remote paths).
+   * This is what the CLI actually echoes into the canonical JSONL, so echo
+   * claims must be registered with THIS text, not the pre-rewrite queue text
+   * (inc-1787704938224: every image message's claim held local paths, never
+   * bound, and the optimistic bubble pinned at the bottom until remount).
+   */
+  private _lastPreparedOutbound: string | undefined
   private unsubscribeEvent: (() => void) | null = null
   private _onOutput: ((event: { line: string; v?: number }) => void) | null = null
   private _onExit: ((code: number, stderr?: string) => void) | null = null
@@ -115,6 +124,8 @@ export class RemoteSessionManager implements SessionManager {
   /** Remote sessions have no local output file. Returns null. */
   get outputFile(): string | null { return null }
   get hasPipe(): boolean { return this._hasPipe }
+  /** See _lastPreparedOutbound — the echo-claim text source for delivery points. */
+  get lastPreparedOutbound(): string | undefined { return this._lastPreparedOutbound }
   get tailOffset(): number { return this._fileSize }
   get fileSize(): number { return this._fileSize }
   get host(): string | null { return this.hostKey }
@@ -193,6 +204,7 @@ export class RemoteSessionManager implements SessionManager {
 
     // Upload local images to remote host and rewrite paths before sending
     const preparedMessage = await this.prepareOutbound(opts.message)
+    this._lastPreparedOutbound = preparedMessage
 
     const startPayload = {
       sid: this.tmpId,
@@ -478,6 +490,7 @@ export class RemoteSessionManager implements SessionManager {
 
     try {
       const prepared = await this.prepareOutbound(message)
+      this._lastPreparedOutbound = prepared
       const result = await conn.send('send', { sid, message: prepared })
       if (result.ok) {
         // Bump lastEventAt on successful delivery. Without this, the

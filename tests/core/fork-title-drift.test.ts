@@ -7,9 +7,11 @@
  * itself answers a TITLE field (no separate cheap-model call; user direction
  * 2026-08-16). Directives:
  *   `unchanged`            → nothing (the default posture)
- *   `prefix: <1-3 words>`  → prepend, REPLACING any previous auto-prefix
- *                            (never stacks — the 千层饼 feedback, 2026-08-15)
- *   `rewrite: <new title>` → full replacement for a long/stale title
+ *   `prefix: <1-3 words>`  → prepend; up to TWO prefixes stack newest-first, a
+ *                            third rotates the oldest out, the tail never drops
+ *                            (user direction 2026-08-25 — supersedes the
+ *                            2026-08-15 never-stack feedback; labels stay short)
+ *   `rewrite: <new title>` → full replacement for a vague/long/stale title
  * A concurrent rename (human wins) makes an in-flight directive stale.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -42,14 +44,16 @@ describe('prependTopicToTitle', () => {
     expect(prependTopicToTitle('anything', '')).toBeNull();
   });
 
-  it('REPLACES the previous auto-prefix instead of stacking — only one layer ever', () => {
+  it('stacks up to two prefixes newest-first; a third rotates the oldest out, the tail survives', () => {
     const t1 = prependTopicToTitle('My precious title', 'Productize')!;
     expect(t1).toBe('Productize · My precious title');
     const t2 = prependTopicToTitle(t1, 'Load Test')!;
-    expect(t2).toBe('Load Test · My precious title');
-    // Never the mille-feuille shape: exactly one separator.
-    expect(t2.split(' · ')).toHaveLength(2);
-    expect(t2.endsWith('My precious title')).toBe(true);
+    expect(t2).toBe('Load Test · Productize · My precious title');
+    const t3 = prependTopicToTitle(t2, 'Benchmarks')!;
+    // Oldest prefix (Productize) rotates out; the ORIGINAL tail never drops.
+    expect(t3).toBe('Benchmarks · Load Test · My precious title');
+    expect(t3.split(' · ')).toHaveLength(3);
+    expect(t3.endsWith('My precious title')).toBe(true);
   });
 });
 
@@ -75,14 +79,26 @@ describe('applyTitleDirective', () => {
     );
   });
 
-  it('prefix: replaces a previous auto-prefix instead of stacking', async () => {
+  it('prefix: stacks in front of a previous auto-prefix, keeping the tail', async () => {
     getTaskMock.mockResolvedValue({ id: 't1', title: 'Productize · GC Load test' });
 
     await applyTitleDirective('t1', 'prefix: Memory Profiling', 'Productize · GC Load test');
 
     expect(updateTaskMock).toHaveBeenCalledWith(
       't1',
-      { title: 'Memory Profiling · GC Load test' },
+      { title: 'Memory Profiling · Productize · GC Load test' },
+      { source: 'title-drift' },
+    );
+  });
+
+  it('prefix: at two stacked prefixes, a third rotates the oldest out', async () => {
+    getTaskMock.mockResolvedValue({ id: 't1', title: 'Memory Profiling · Productize · GC Load test' });
+
+    await applyTitleDirective('t1', 'prefix: Flame Graphs', 'Memory Profiling · Productize · GC Load test');
+
+    expect(updateTaskMock).toHaveBeenCalledWith(
+      't1',
+      { title: 'Flame Graphs · Memory Profiling · GC Load test' },
       { source: 'title-drift' },
     );
   });

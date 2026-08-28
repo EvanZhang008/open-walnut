@@ -9,6 +9,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSpeechToText } from '@/hooks/useSpeechToText';
+import { SttDiffModal } from '@/components/common/SttDiffModal';
 import { useSttStatus } from '@/hooks/useSttStatus';
 import { fetchSttDetection, fetchVocab, addVocabWord, fetchRecordings, retranscribeRecording, MODEL_CATALOG, type GgmlModel, type VoiceRecording } from '@/api/stt';
 import { registerVoiceInsertTarget } from '@/utils/voice-status';
@@ -70,6 +71,11 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
   // Voice history (server-side recordings — survives lost responses)
   const [recordings, setRecordings] = useState<VoiceRecording[]>([]);
   const [retranscribingId, setRetranscribingId] = useState<string | null>(null);
+  // Expanded history item: shows BOTH engines' full text + latency side by side
+  // (the A/B comparison view). The most recent recording auto-expands on open.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Recording open in the full-size diff popup (null = closed)
+  const [diffRec, setDiffRec] = useState<VoiceRecording | null>(null);
 
   const dismissTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -156,11 +162,37 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
     );
     promises.push(
       fetchRecordings(8)
-        .then(res => setRecordings(res.recordings))
+        .then(res => {
+          setRecordings(res.recordings);
+          // Auto-expand the most recent recording — the comparison the user
+          // opened this panel to see.
+          setExpandedId(res.recordings[0]?.id ?? null);
+        })
         .catch(() => {})
     );
     await Promise.all(promises);
   }, [dropdownOpen, downloadedModels.length, modelsLoading]);
+
+  // While the dropdown or diff popup is open, poll briefly so the shadow
+  // engine's result (which lands a few seconds after the primary) appears
+  // without reopening.
+  useEffect(() => {
+    if (!dropdownOpen && !diffRec) return;
+    let ticks = 0;
+    const timer = setInterval(() => {
+      if (++ticks > 10) { clearInterval(timer); return; } // ~30s then stop
+      fetchRecordings(8).then(res => setRecordings(res.recordings)).catch(() => {});
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [dropdownOpen, !!diffRec]);
+
+  // Keep an open diff popup in sync with refreshed recordings (its shadow
+  // result may arrive while it's on screen).
+  useEffect(() => {
+    if (!diffRec) return;
+    const fresh = recordings.find(r => r.id === diffRec.id);
+    if (fresh && fresh !== diffRec) setDiffRec(fresh);
+  }, [recordings, diffRec]);
 
   // Re-transcribe a stored recording server-side and insert the text.
   const handleRecordingRetry = useCallback(async (rec: VoiceRecording) => {
@@ -181,18 +213,10 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
     }
   }, [language, onTranscribe]);
 
-  // Insert an already-transcribed recording's text (no re-run needed).
-  const handleRecordingInsert = useCallback((rec: VoiceRecording) => {
-    if (rec.result?.text) {
-      onTranscribe(rec.result.text);
-      setDropdownOpen(false);
-    }
-  }, [onTranscribe]);
-
-  // Insert the SHADOW engine's text for a recording (A/B comparison pick).
-  const handleSecondaryInsert = useCallback((rec: VoiceRecording) => {
-    if (rec.secondary?.text) {
-      onTranscribe(rec.secondary.text);
+  // Insert a recording's text — primary or shadow, whichever the user picked.
+  const handleTextInsert = useCallback((text?: string) => {
+    if (text) {
+      onTranscribe(text);
       setDropdownOpen(false);
     }
   }, [onTranscribe]);
@@ -286,6 +310,8 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
     const cat = MODEL_CATALOG.find(c => c.filename === m.name || c.name === m.name);
     return cat?.displayName ?? m.name.replace('ggml-', '').replace('.bin', '');
   };
+
+  const fmtLatency = (ms?: number) => (typeof ms === 'number' ? `${(ms / 1000).toFixed(1)}s` : '');
 
   return (
     <div className="mic-btn-wrapper" ref={wrapperRef}>
@@ -423,18 +449,31 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
                 const time = rec.timestamp ? new Date(rec.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
                 const text = rec.result?.text ?? '';
                 const failed = !text;
+                const expanded = expandedId === rec.id;
                 return (
-                  <div key={rec.id} className={`mic-history-item${failed ? ' mic-history-failed' : ''}`}>
-                    <div className="mic-history-main">
+                  <div key={rec.id} className={`mic-history-item${failed ? ' mic-history-failed' : ''}${expanded ? ' mic-history-open' : ''}`}>
+                    {/* Header row — click toggles the full A/B comparison */}
+                    <div className="mic-history-main" role="button" tabIndex={0}
+                      title={expanded ? 'Collapse' : 'Expand to compare both engines'}
+                      onClick={() => setExpandedId(expanded ? null : rec.id)}>
+                      <span className={`mic-history-caret${expanded ? ' mic-history-caret-open' : ''}`}>▸</span>
                       <span className="mic-history-time">{time}</span>
-                      <span className="mic-history-text" title={failed ? (rec.error ?? 'No transcription') : text}>
-                        {failed ? (rec.error ? `Failed: ${rec.error}` : 'No transcription') : text}
-                      </span>
+                      {!expanded && (
+                        <span className="mic-history-text" title={failed ? (rec.error ?? 'No transcription') : text}>
+                          {failed ? (rec.error ? `Failed: ${rec.error}` : 'No transcription') : text}
+                        </span>
+                      )}
                     </div>
                     <div className="mic-history-actions">
-                      {text && (
+                      {rec.secondary && (
+                        <button type="button" className="mic-history-btn mic-history-btn-diff" title="Compare both engines in a popup"
+                          onClick={() => setDiffRec(rec)}>
+                          Diff
+                        </button>
+                      )}
+                      {text && !expanded && (
                         <button type="button" className="mic-history-btn" title="Insert this text"
-                          onClick={() => handleRecordingInsert(rec)}>
+                          onClick={() => handleTextInsert(text)}>
                           Insert
                         </button>
                       )}
@@ -444,9 +483,48 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
                         {retranscribingId === rec.id ? '…' : 'Redo'}
                       </button>
                     </div>
-                    {/* Shadow engine's take on the same audio (A/B during engine
-                        transition) — its own Insert so the user can pick either. */}
-                    {rec.secondary && (
+                    {/* Expanded: both engines' FULL text + latency, each insertable —
+                        the side-by-side comparison this panel exists for. */}
+                    {expanded && (
+                      <div className="mic-history-expanded">
+                        <div className="mic-history-full">
+                          <div className="mic-history-full-head">
+                            <span className="mic-history-alt-engine">{rec.engine ?? 'primary'}</span>
+                            <span className="mic-history-lat">{fmtLatency(rec.result?.durationMs)}</span>
+                            {text && (
+                              <button type="button" className="mic-history-btn" title="Insert this text"
+                                onClick={() => handleTextInsert(text)}>
+                                Insert
+                              </button>
+                            )}
+                          </div>
+                          <div className={`mic-history-full-text${failed ? ' mic-history-alt-error' : ''}`}>
+                            {failed ? (rec.error ? `Failed: ${rec.error}` : 'No transcription') : text}
+                          </div>
+                        </div>
+                        {rec.secondary ? (
+                          <div className="mic-history-full">
+                            <div className="mic-history-full-head">
+                              <span className="mic-history-alt-engine">{rec.secondary.engine}</span>
+                              <span className="mic-history-lat">{fmtLatency(rec.secondary.durationMs)}</span>
+                              {rec.secondary.text && (
+                                <button type="button" className="mic-history-btn" title="Insert the secondary engine's text"
+                                  onClick={() => handleTextInsert(rec.secondary?.text)}>
+                                  Insert
+                                </button>
+                              )}
+                            </div>
+                            <div className={`mic-history-full-text${rec.secondary.error ? ' mic-history-alt-error' : ''}`}>
+                              {rec.secondary.error ? `Failed: ${rec.secondary.error}` : rec.secondary.text}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mic-history-full-pending">secondary engine still running…</div>
+                        )}
+                      </div>
+                    )}
+                    {/* Collapsed: one-line shadow preview */}
+                    {!expanded && rec.secondary && (
                       <div className="mic-history-secondary">
                         <span className="mic-history-alt-engine" title={`Secondary engine: ${rec.secondary.engine}`}>
                           {rec.secondary.engine}
@@ -459,7 +537,7 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
                         </span>
                         {rec.secondary.text && (
                           <button type="button" className="mic-history-btn" title="Insert the secondary engine's text"
-                            onClick={() => handleSecondaryInsert(rec)}>
+                            onClick={() => handleTextInsert(rec.secondary?.text)}>
                             Insert
                           </button>
                         )}
@@ -482,6 +560,15 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
             </>
           )}
         </div>
+      )}
+
+      {/* Full-size A/B diff popup (word-level, latency per engine) */}
+      {diffRec && (
+        <SttDiffModal
+          rec={diffRec}
+          onInsert={(t) => { handleTextInsert(t); setDiffRec(null); }}
+          onClose={() => setDiffRec(null)}
+        />
       )}
     </div>
   );

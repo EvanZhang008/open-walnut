@@ -55,10 +55,10 @@ import { createSessionManager, registerSessionManager, unregisterSessionManager 
 import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists, CwdMissingError } from './cwd-check.js'
-import { classifyDeliveryFailure } from './delivery-failure.js'
+import { classifyDeliveryFailure, isDaemonCommandOutcomeUnknown } from './delivery-failure.js'
 import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp } from './acp-session.js'
 import { extractImageFilePathFromInput } from '../core/session-history.js'
-import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort } from '../core/types.js'
+import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind } from '../core/types.js'
 import {
   SESSION_MODEL_CLI_MAP, modelSupportsEffort, VALID_SESSION_EFFORT_IDS,
   SESSION_MODE_CLI_MAP, VALID_SESSION_MODE_IDS, sessionModeFromCli,
@@ -877,6 +877,23 @@ export class ClaudeCodeSession {
     return n
   }
 
+  /** Backgrounded (is_backgrounded:true) tasks still non-terminal — real work in
+   *  flight that deliberately does NOT gate turn-over (incident 07fffbe5: the CLI's
+   *  own turn-end doesn't wait for them, so the reply must still deliver). But the
+   *  SESSION is not idle while one runs (user decision 2026-08-28,
+   *  inc-1787893885321: an idle badge over a live 40-min background STT bench):
+   *  the result boundary keeps process_status 'running', and SESSION_RESULT
+   *  carries `detachedBgActive` so server.ts skips the AGENT_COMPLETE phase flip
+   *  until the followup-closure drains the last one. */
+  private _detachedBgCount(): number {
+    let n = 0
+    for (const t of this._bgTasks.values()) {
+      if (!t.isBackgrounded || t.endedPerLevel) continue
+      if (!ClaudeCodeSession._BG_TERMINAL_STATUSES.has(t.status)) n++
+    }
+    return n
+  }
+
   /** True when any background subagent / dynamic-workflow task is still running.
    *  Single choke point: every "is this turn's result intermediate?" decision consults
    *  THIS, so adding a future bg mechanism only touches one place.
@@ -1025,8 +1042,12 @@ export class ClaudeCodeSession {
     if (!sid) return
     const outcome = this._deferredOutcome
     this._deferredOutcome = undefined
-    this._activity = undefined
-    this._processStatus = 'idle'
+    // Detached (run_in_background) commands may outlive the gating drain — the
+    // session stays 'running' for them (user decision 2026-08-28); the
+    // followup-closure branch settles to idle when the last one drains.
+    const detachedBgActive = this._detachedBgCount() > 0
+    this._activity = detachedBgActive ? 'Background command running' : undefined
+    this._processStatus = detachedBgActive ? 'running' : 'idle'
     this._turnResultEmitted = true
     // Idle is the CLI's authoritative turn-over signal, and this lane completes a
     // turn whose `result` was withheld — nothing here will run the result case's
@@ -1037,9 +1058,10 @@ export class ClaudeCodeSession {
     // advance the watermark to it so a replay of this whole turn (result + idle)
     // is positionally suppressed after a restart.
     this._advanceConsumedOffset()
-    this.emitStatusChanged('AGENT_COMPLETE', outcome?.isError ? (outcome.resultText ?? '').slice(0, 500) || undefined : undefined)
+    this.emitStatusChanged(detachedBgActive ? 'IN_PROGRESS' : 'AGENT_COMPLETE', outcome?.isError ? (outcome.resultText ?? '').slice(0, 500) || undefined : undefined)
     bus.emit(EventNames.SESSION_RESULT, {
       sessionId: sid, taskId: this.taskId,
+      ...(detachedBgActive ? { detachedBgActive: true } : {}),
       // Turn generation at emit time — lets a LATE consumer detect that a newer
       // turn has since started (stale-result gate, core/phase.ts).
       turnGen: this._turnGen,
@@ -1521,6 +1543,13 @@ export class ClaudeCodeSession {
   /** Whether this session has an active write pipe (FIFO). */
   get hasPipe(): boolean {
     return this._transport?.hasPipe ?? false
+  }
+
+  /** The transport's post-prepareOutbound text of the last outbound message —
+   *  what the CLI actually echoes. Echo-claim registration must use this
+   *  (falling back to the queue text only when the transport doesn't track it). */
+  get lastPreparedOutbound(): string | undefined {
+    return this._transport?.lastPreparedOutbound
   }
 
   /**
@@ -2037,9 +2066,24 @@ export class ClaudeCodeSession {
         // not 'running' before this resume attempt anyway for a dead remote), so
         // settleResumeFailure has nothing to re-assert.
         if (!onSpawnSettled) {
-          this._processStatus = 'stopped'
+          // Connection-class failure (send timeout / dead socket): the daemon may
+          // STILL execute the buffered `start` once it unwedges, so the outcome is
+          // UNKNOWN — never a terminal verdict. Record 'error' with a structural
+          // infra stamp so both recovery loops (daemon-reconnect C31 + the health
+          // monitor's 30s recoverInfraFailedSessions) probe the daemon and either
+          // adopt the live CLI or confirm the death. A bare 'stopped' here was
+          // inc-1787511363340: the "failed" start spawned 15s later and ran for
+          // 1.6h behind a record every recovery path skipped unconditionally.
+          const outcomeUnknown = isDaemonCommandOutcomeUnknown(err)
+          this._processStatus = outcomeUnknown ? 'error' : 'stopped'
           this._activity = undefined
-          this.emitStatusChanged('AGENT_COMPLETE')
+          this.emitStatusChanged(
+            'AGENT_COMPLETE',
+            outcomeUnknown ? (err instanceof Error ? err.message : String(err)).slice(0, 500) : undefined,
+            outcomeUnknown
+              ? { status_reason: 'spawn_outcome_unknown', status_changed_by: 'session-runner', errorKind: 'infra' }
+              : undefined,
+          )
           // No errorKind here: without a settle callback this is a NEW-session
           // start whose message is not in the disk queue (not 'delivery_failed').
           // (The second SESSION_ERROR was what fed the session-runner's own handler
@@ -2929,22 +2973,33 @@ export class ClaudeCodeSession {
     // or rename race causes false negatives → premature handleProcessDeath().
     if (this._transport?.isRemote) return
 
+    // The whole tick is wrapped: an async setInterval callback has no caller to
+    // catch into, so a throw from isAlive()/handleProcessDeath() becomes an
+    // unhandledRejection on a floating promise — exactly the class the server's
+    // post-boot handler now survives, but it should never fire from here.
     this.livenessTimer = setInterval(async () => {
-      if (this.pid === null || this.resultEmitted) {
-        this.stopLivenessMonitor()
-        return
-      }
+      try {
+        if (this.pid === null || this.resultEmitted) {
+          this.stopLivenessMonitor()
+          return
+        }
 
-      if (!this._transport) return
+        if (!this._transport) return
 
-      if (!await this._transport.isAlive()) {
-        log.session.info('session process exited (transport check)', {
+        if (!await this._transport.isAlive()) {
+          log.session.info('session process exited (transport check)', {
+            sessionId: this.claudeSessionId,
+            taskId: this.taskId,
+            pid: this.pid,
+            isRemote: this._transport.isRemote,
+          })
+          this.handleProcessDeath()
+        }
+      } catch (err) {
+        log.session.warn('liveness monitor tick failed', {
           sessionId: this.claudeSessionId,
-          taskId: this.taskId,
-          pid: this.pid,
-          isRemote: this._transport.isRemote,
+          error: err instanceof Error ? err.message : String(err),
         })
-        this.handleProcessDeath()
       }
     }, LIVENESS_INTERVAL_MS)
   }
@@ -4726,21 +4781,51 @@ export class ClaudeCodeSession {
             this._idleDebt = Math.min(this._idleDebt + 1, 4)
           } else if (this._turnResultEmitted && this._runningBgCount() === 0
             && this._processStatus === 'running') {
-            // Followup-cycle CLOSURE for an already-settled turn. When the hold
-            // settled BEFORE the followup arrived (drain idle or level reconcile),
-            // the followup's own session_state_changed{running} pulled the status
-            // back to 'running' — and this origin-marked result is the only event
-            // guaranteed to end that cycle (its trailing idle can be lost, and the
-            // idle handler's already-completed branch was a no-op). Close the
-            // status only: the turn's SESSION_RESULT already fired at the settle,
-            // re-emitting it would double-run triage.
-            log.session.info('followup result after settled turn — closing followup cycle to idle', {
-              sessionId: this.claudeSessionId, taskId: this.taskId,
-            })
-            this._processStatus = 'idle'
-            this._activity = undefined
-            this.emitStatusChanged('AGENT_COMPLETE')
-            this._idleDebt = Math.min(this._idleDebt + 1, 4)
+            if (this._detachedBgCount() > 0) {
+              // OTHER detached commands still working — this followup closed one
+              // of several. The session stays 'running' (user decision
+              // 2026-08-28); the LAST task's followup takes the branch below.
+              log.session.info('followup result — other detached background tasks still running', {
+                sessionId: this.claudeSessionId, taskId: this.taskId,
+                detachedBgTasks: this._detachedBgCount(),
+              })
+            } else {
+              // Followup-cycle CLOSURE for an already-settled turn. When the hold
+              // settled BEFORE the followup arrived (drain idle or level reconcile),
+              // the followup's own session_state_changed{running} pulled the status
+              // back to 'running' — and this origin-marked result is the only event
+              // guaranteed to end that cycle (its trailing idle can be lost, and the
+              // idle handler's already-completed branch was a no-op). Close the
+              // status only: the turn's SESSION_RESULT already fired at the settle,
+              // re-emitting it would double-run triage.
+              log.session.info('followup result after settled turn — closing followup cycle to idle', {
+                sessionId: this.claudeSessionId, taskId: this.taskId,
+              })
+              this._processStatus = 'idle'
+              this._activity = undefined
+              this.emitStatusChanged('AGENT_COMPLETE')
+              this._idleDebt = Math.min(this._idleDebt + 1, 4)
+              // Final hand-back: the turn's own AGENT_COMPLETE flip was skipped
+              // while detached work ran (server.ts detachedBgActive guard), and
+              // this followup result is the guaranteed closer of the cycle. Flip
+              // the phase directly — deliberately NOT a SESSION_RESULT re-emit,
+              // which would double-run triage. No-ops when the phase already
+              // settled (ordinary sessions with no detached work).
+              if (this.taskId) {
+                const followupTaskId = this.taskId
+                const followupSid = this.claudeSessionId ?? undefined
+                import('../core/phase.js').then(({ applySessionPhase }) =>
+                  applySessionPhase(followupTaskId, 'session:result', 'session-runner:followup-closure', {
+                    sessionId: followupSid, turnGen: this._turnGen,
+                  }),
+                ).catch((err) => {
+                  log.session.warn('followup-closure phase flip failed', {
+                    sessionId: followupSid, taskId: followupTaskId,
+                    error: err instanceof Error ? err.message : String(err),
+                  })
+                })
+              }
+            }
           }
           break
         }
@@ -4974,6 +5059,14 @@ export class ClaudeCodeSession {
             // doesn't mistake the poll sleep for an idle session.
             this._processStatus = 'running'
             this._activity = 'Team subagents working'
+          } else if (this._detachedBgCount() > 0) {
+            // Detached (run_in_background) command still working — the TURN is
+            // over (reply delivered, _turnResultEmitted set below) but the
+            // SESSION is not idle. Mirrors the team branch; the followup-closure
+            // branch in the task-notification result handler flips to idle when
+            // the last detached task drains.
+            this._processStatus = 'running'
+            this._activity = 'Background command running'
           } else {
             this._processStatus = 'idle'  // Turn done, process alive, waiting for next writeMessage()
             this._activity = undefined
@@ -5150,8 +5243,13 @@ export class ClaudeCodeSession {
           // have been idle for the full timeout period.
           this._scheduleTeamIdleCheck(resultText, result.total_cost_usd, result.duration_ms)
         } else {
-          this.emitStatusChanged('AGENT_COMPLETE')
-          log.session.info('session result emitted', { sessionId: this.claudeSessionId, taskId: this.taskId, resultLength: resultText?.length ?? 0 })
+          // Detached bg still working: the reply is delivered (real turn-over)
+          // but the task must not flip AGENT_COMPLETE and the status hint stays
+          // IN_PROGRESS — server.ts skips the phase flip on this flag, and the
+          // followup-closure branch hands back when the last detached task drains.
+          const detachedBgActive = this._detachedBgCount() > 0
+          this.emitStatusChanged(detachedBgActive ? 'IN_PROGRESS' : 'AGENT_COMPLETE')
+          log.session.info('session result emitted', { sessionId: this.claudeSessionId, taskId: this.taskId, resultLength: resultText?.length ?? 0, detachedBgActive })
           // retryExhausted: terminal upstream retry-exhaustion signature. Text match
           // (shared with session-auto-continue — keep ONE signature list) covers the
           // CLI's timeout result texts; the api_timeout debug marker covers turns
@@ -5173,6 +5271,7 @@ export class ClaudeCodeSession {
             duration: result.duration_ms,
             isError: effectiveIsError ?? false,
             retryExhausted,
+            ...(detachedBgActive ? { detachedBgActive: true } : {}),
           }, ['main-ai', 'session-runner'], { source: 'session-runner' })
           // Turn-end read-back of the CLI's true settings (effort + model, fire-and-
           // forget). Same rationale as _completeTurnOnIdle: keep the badge in sync with
@@ -5612,15 +5711,25 @@ export class ClaudeCodeSession {
     }
   }
 
-  private emitStatusChanged(phase: TaskPhase, errorMessage?: string): void {
+  private emitStatusChanged(phase: TaskPhase, errorMessage?: string, stamp?: {
+    status_reason: StatusReason
+    status_changed_by: StatusChangedBy
+    errorKind?: SessionErrorKind
+  }): void {
     const sessionId = this.claudeSessionId
     if (!sessionId) return
+    // Default shape is deliberately UN-stamped (no status_reason/changed_by) —
+    // that is this projector's signature at the C2 gate (session-snapshot-gate).
+    // A caller passes `stamp` only when the write IS a classification verdict
+    // the recovery loops must be able to read structurally (e.g. the spawn-catch
+    // 'spawn_outcome_unknown'); stamped-but-unlisted pairs pass the gate.
     const updates = {
       process_status: this._processStatus,
       activity: this._activity,
       mode: this._mode,
       planCompleted: this.planCompleted,
       errorMessage,
+      ...(stamp ? { ...stamp, last_status_change: new Date().toISOString() } : {}),
     }
     const commit = this._statusCommit.then(async () => {
       const {
@@ -9182,7 +9291,10 @@ export class SessionRunner {
       this.batchMessageIds.set(sessionId, [...(this.batchMessageIds.get(sessionId) ?? []), ...newMsgs.map((m) => m.id)])
       // Echo-claim: the CLI re-logs this send as a canonical user line; bind its
       // uuid to these qm ids at the next history parse (exact-id dedup upstream).
-      registerEchoClaims(sessionId, newMsgs.map((m) => m.id), combined)
+      // Use the transport's PREPARED text — remote sessions rewrite local image
+      // paths to remote ones inside writeMessage, and the echo carries the
+      // rewritten form (inc-1787704938224: pre-rewrite text never bound).
+      registerEchoClaims(sessionId, newMsgs.map((m) => m.id), targetSession.lastPreparedOutbound ?? combined)
       log.session.info('handleSend: message injected mid-turn via stdin', { sessionId, count: newMsgs.length })
       this.logDeliveryLatency(sessionId, 'mid-turn', newMsgs, targetSession)
 
@@ -9270,7 +9382,10 @@ export class SessionRunner {
     }
     // Echo-claim: --resume delivers the same combined payload via stdin — the
     // CLI echoes it as one canonical user line; bind at the next history parse.
-    registerEchoClaims(sessionId, msgs.map((m) => m.id), msgs.map((m) => m.message).join('\n\n'))
+    // start() ran prepareOutbound on the payload (image paths rewritten to the
+    // remote host), so the claim must hold THAT text (inc-1787704938224).
+    registerEchoClaims(sessionId, msgs.map((m) => m.id),
+      session.lastPreparedOutbound ?? msgs.map((m) => m.message).join('\n\n'))
     removeProcessed(sessionId, msgs.map((m) => m.id)).catch((err) => {
       log.session.warn('eager removeProcessed failed after --resume spawn', { sessionId, error: err instanceof Error ? err.message : String(err) })
     })
@@ -9723,7 +9838,9 @@ export class SessionRunner {
           this.logDeliveryLatency(sessionId, 'stdin', msgs, targetSession)
           // Echo-claim: bind the canonical user-echo uuid to these qm ids at the
           // next history parse (exact-id optimistic dedup upstream of text match).
-          registerEchoClaims(sessionId, msgs.map((m) => m.id), combined)
+          // The claim holds the transport's PREPARED text — the echo carries the
+          // remote-rewritten image paths, not the queue text (inc-1787704938224).
+          registerEchoClaims(sessionId, msgs.map((m) => m.id), targetSession.lastPreparedOutbound ?? combined)
 
           // Write synthetic user events to streams file so Phase 1 has user messages.
           // One event per queued message so each optimistic copy can dedup by ID.

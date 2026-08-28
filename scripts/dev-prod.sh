@@ -216,6 +216,164 @@ fi
 
 npm run web:build
 
+# ── Stage the dist on the temp volume before ANY boot ───────────────────────
+# 2026-08-27: four consecutive deploys burned their whole readiness window and
+# rolled back — a byte-identical cli.js booted in ~1s from the LKG copy under
+# /var/folders but produced not one log line in 6+ minutes when launched from
+# the repo path under /Users. Cause: on-access endpoint scanners hold the
+# first open of every freshly written file, and a deploy always boots a
+# freshly built dist at the exact moment the machine (and the scan queue) is
+# busiest. The temp volume is outside the scan scope, so EVERY boot this
+# script performs (smoke AND prod) runs from a staged copy there, never from
+# the repo path. Staging itself is clonefile (metadata-only, no content
+# reads), so it cannot stall on the scanner either.
+STAGE_ROOT="${TMPDIR:-/tmp}"
+STAGE_DIR="$STAGE_ROOT/open-walnut-stage.$(date +%s).$$"
+STAGE_IN_USE=0
+
+stage_dist() {
+  mkdir -p "$STAGE_DIR" || return 1
+  local copied=0
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    if cp -Rc "$REPO_ROOT/dist" "$STAGE_DIR/dist" 2>/dev/null; then copied=1; fi
+  fi
+  if (( ! copied )); then
+    rm -rf "$STAGE_DIR/dist" 2>/dev/null || true
+    cp -R "$REPO_ROOT/dist" "$STAGE_DIR/dist" || return 1
+  fi
+  ln -sfn "$REPO_ROOT/node_modules" "$STAGE_DIR/node_modules" || return 1
+}
+
+# A stage that never became the running server is trash on exit (smoke failure,
+# staging failure, aborted deploy). One that DID launch stays: the server reads
+# web assets from it per-request for its whole lifetime.
+stage_cleanup() {
+  if [[ -n "${STAGE_DIR:-}" && "$STAGE_IN_USE" != "1" ]]; then
+    rm -rf "$STAGE_DIR" 2>/dev/null || true
+  fi
+}
+
+if ! stage_dist; then
+  # Pre-kill: the old server is still serving. A staging failure usually means
+  # the disk is full — this deploy would only get worse past this point.
+  rm -rf "$STAGE_DIR" 2>/dev/null || true
+  echo "Failed to stage dist at $STAGE_DIR (disk full?); deploy aborted, prod untouched." >&2
+  exit 1
+fi
+CLI_JS="$STAGE_DIR/dist/cli.js"
+echo "Staged dist for boot: $CLI_JS"
+
+# ── Pre-kill smoke boot ─────────────────────────────────────────────────────
+# 2026-08-22/23 outages: a dist built from a broken working tree hangs in module
+# init and never binds — but the old flow only discovered that AFTER killing the
+# healthy prod server, so a bad build meant prod down until a human intervened.
+# Boot the freshly built dist ONCE, fully isolated, BEFORE touching prod: if it
+# can't serve /api/config (serveable the instant the port binds), fail the
+# deploy here with the old server still serving.
+# Isolation notes (each learned from source, not guessed):
+#   - temp home must NOT match {tmpdir}/open-walnut-* — resolveOpenWalnutHome()
+#     silently reverts such paths to ~/.open-walnut for non-ephemeral processes,
+#     which would boot the smoke server ON PROD DATA.
+#   - WALNUT_DAEMON_DIR must be overridden too, else the smoke server attaches
+#     to (or version-bump RESTARTS) the production local daemon.
+#   - the smoke server spawns a detached local daemon; reap it via daemon.pid
+#     (parent-liveness heartbeat is only a ≤30s backstop, tightened via env).
+SMOKE_SECS="${WALNUT_DEVPROD_SMOKE_SECS:-120}"
+SMOKE_LOG="${TMPDIR:-/tmp}/open-walnut-devprod-smoke.log"
+SMOKE_PID=""
+SMOKE_TMP=""
+
+smoke_cleanup() {
+  if [[ -n "$SMOKE_PID" ]] && kill -0 "$SMOKE_PID" 2>/dev/null; then
+    kill -15 "$SMOKE_PID" 2>/dev/null || true
+    for _ in {1..10}; do
+      kill -0 "$SMOKE_PID" 2>/dev/null || break
+      sleep 0.5
+    done
+    if kill -0 "$SMOKE_PID" 2>/dev/null; then
+      kill -9 "$SMOKE_PID" 2>/dev/null || true
+    fi
+  fi
+  SMOKE_PID=""
+  # The smoke server's local daemon detaches and outlives it; its own heartbeat
+  # would reap it within seconds, this makes cleanup immediate. Input floor:
+  # never signal pid <= 1, and only a process that still looks like a daemon.
+  if [[ -n "$SMOKE_TMP" && -f "$SMOKE_TMP/daemon/daemon.pid" ]]; then
+    dpid="$(cat "$SMOKE_TMP/daemon/daemon.pid" 2>/dev/null || true)"
+    if [[ "$dpid" =~ ^[0-9]+$ ]] && (( 10#$dpid > 1 )) && kill -0 "$dpid" 2>/dev/null; then
+      dcmd="$(ps -o command= -p "$dpid" 2>/dev/null || true)"
+      case "$dcmd" in
+        *daemon*|*open-walnut*)
+          kill -15 "$dpid" 2>/dev/null || true
+          for _ in {1..6}; do
+            kill -0 "$dpid" 2>/dev/null || break
+            sleep 0.5
+          done
+          if kill -0 "$dpid" 2>/dev/null; then
+            kill -9 "$dpid" 2>/dev/null || true
+          fi
+          ;;
+      esac
+    fi
+  fi
+  if [[ -n "$SMOKE_TMP" ]]; then
+    rm -rf "$SMOKE_TMP" 2>/dev/null || true
+  fi
+  SMOKE_TMP=""
+}
+trap 'smoke_cleanup; stage_cleanup; release_lock' EXIT
+
+# Distinct from listener_pids so that function's tested contract stays untouched.
+port_is_free() {
+  case "$PORT_PROBE" in
+    lsof)  [[ -z "$(lsof -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null || true)" ]] ;;
+    ss)    ! ss -ltn "sport = :$1" 2>/dev/null | grep -q LISTEN ;;
+    fuser) ! fuser -n tcp "$1" >/dev/null 2>&1 ;;
+  esac
+}
+
+if [[ "${WALNUT_DEVPROD_SKIP_SMOKE:-0}" != "1" ]]; then
+  smoke_port=""
+  for cand in $(( 20000 + $$ % 20000 )) $(( 20001 + $$ % 20000 )) $(( 20002 + $$ % 20000 )); do
+    if port_is_free "$cand"; then smoke_port="$cand"; break; fi
+  done
+  if [[ -z "$smoke_port" ]]; then
+    echo "Smoke boot skipped: no free probe port found (machine state is odd)." >&2
+  else
+    SMOKE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/walnut-smoke.XXXXXX")"
+    mkdir -p "$SMOKE_TMP/home" "$SMOKE_TMP/daemon"
+    : > "$SMOKE_LOG"
+    env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR \
+      OPEN_WALNUT_HOME="$SMOKE_TMP/home" \
+      WALNUT_DAEMON_DIR="$SMOKE_TMP/daemon" \
+      WALNUT_DISABLE_SEARCH=1 \
+      WALNUT_DAEMON_HEARTBEAT_MS=2000 \
+      "$NODE_BIN" "$CLI_JS" web --port "$smoke_port" \
+      >>"$SMOKE_LOG" 2>&1 &
+    SMOKE_PID=$!
+    smoke_ok=0
+    for _ in $(seq 1 $(( SMOKE_SECS * 2 ))); do
+      if ! kill -0 "$SMOKE_PID" 2>/dev/null; then
+        break
+      fi
+      if curl --connect-timeout 1 --max-time 2 -sf \
+        "http://localhost:$smoke_port/api/config" >/dev/null 2>&1; then
+        smoke_ok=1
+        break
+      fi
+      sleep 0.5
+    done
+    smoke_cleanup
+    if [[ "$smoke_ok" != "1" ]]; then
+      echo "Smoke boot FAILED: fresh dist did not serve /api/config within ${SMOKE_SECS}s." >&2
+      echo "Production server on :$PORT was NOT touched. Smoke log tail ($SMOKE_LOG):" >&2
+      tail -n 25 "$SMOKE_LOG" >&2 || true
+      exit 1
+    fi
+    echo "Smoke boot OK: fresh dist binds and serves."
+  fi
+fi
+
 use_launchd=0
 if [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1; then
   use_launchd=1
@@ -266,8 +424,14 @@ for spid in $stray_pids; do
   [[ -n "$spid" && "$spid" != "$self_pid" ]] || continue
   kill -0 "$spid" 2>/dev/null || continue
   cmd="$(ps -o command= -p "$spid" 2>/dev/null || true)"
-  # Only OUR repo's production server; never an ephemeral/test instance.
-  [[ "$cmd" == *"$REPO_ROOT/dist/cli.js"* ]] || continue
+  # Only OUR production server; never an ephemeral/test instance. Three launch
+  # shapes over time: repo dist (old deploys), staged dist (current deploys),
+  # LKG dist (rollback servers).
+  if [[ "$cmd" != *"$REPO_ROOT/dist/cli.js"* \
+     && "$cmd" != *"open-walnut-stage."*"/dist/cli.js"* \
+     && "$cmd" != *"open-walnut-lkg/dist/cli.js"* ]]; then
+    continue
+  fi
   # `[[ … ]] && continue` would return 1 when it does NOT match, and under
   # `set -e` that aborts the deploy — the 2026-07-25 lesson about guards that
   # kill the script they protect. Use an explicit if/continue.
@@ -293,11 +457,28 @@ for spid in $stray_pids; do
   fi
 done
 
-pid=""
-if (( use_launchd )); then
-  # launchd gives jobs a minimal PATH (/usr/bin:/bin:...) — pass the caller's
-  # full PATH through so child tools (ffmpeg, git, ssh, brew, agent CLIs)
-  # resolve exactly as they would from the deploying shell.
+# Every prior server is dead at this point, so no process is serving web assets
+# out of an older stage — safe to reap them all. (Reaping earlier would yank
+# static files out from under the still-running prod server; failed deploys
+# exit before reaching here and leave old stages alone.)
+for old_stage in "$STAGE_ROOT"/open-walnut-stage.*; do
+  if [[ ! -d "$old_stage" || "$old_stage" == "$STAGE_DIR" ]]; then
+    continue
+  fi
+  rm -rf "$old_stage" 2>/dev/null || true
+done
+
+# Rollback source: a dist snapshot taken only AFTER a deploy passes readiness.
+LKG_DIR="${WALNUT_DEVPROD_LKG_DIR:-${TMPDIR:-/tmp}/open-walnut-lkg}"
+
+# One launchctl submit for the given cli.js. launchd gives jobs a minimal PATH
+# (/usr/bin:/bin:...) — pass the caller's full PATH through so child tools
+# (ffmpeg, git, ssh, brew, agent CLIs) resolve exactly as they would from the
+# deploying shell.
+submit_launchd_job() {
+  # Callers hold use_launchd=1 (Darwin-only); the guard keeps the helper inert
+  # if one is ever added on another path.
+  [[ "$(uname -s)" == "Darwin" ]] || return 1
   launchctl submit \
     -l "$LAUNCH_LABEL" \
     -o "$SERVER_LOG" \
@@ -309,16 +490,124 @@ if (( use_launchd )); then
     -u WALNUT_DAEMON_DIR \
     -u VITEST \
     PATH="$PATH" \
-    "$NODE_BIN" "$REPO_ROOT/dist/cli.js" web --port "$PORT"
-else
-  nohup env -u OPEN_WALNUT_EPHEMERAL \
-    -u OPEN_WALNUT_HOME \
-    -u WALNUT_DAEMON_DIR \
-    -u VITEST \
-    "$NODE_BIN" "$REPO_ROOT/dist/cli.js" web --port "$PORT" \
-    </dev/null >>"$SERVER_LOG" 2>&1 &
-  pid=$!
-fi
+    "$NODE_BIN" "$1" web --port "$PORT"
+}
+
+# The job's live PID — empty when the label is registered but has no process.
+launchd_job_pid() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  launchctl list "$LAUNCH_LABEL" 2>/dev/null \
+    | sed -n 's/.*"PID" = \([0-9][0-9]*\);.*/\1/p' | head -n 1
+}
+
+remove_launchd_job() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  launchctl remove "$LAUNCH_LABEL" >/dev/null 2>&1 || true
+}
+
+# Launch a server for the given cli.js on :$PORT — launchd (KeepAlive, nice 0)
+# on macOS, nohup elsewhere. Sets the global `pid` on the nohup path.
+launch_server() {
+  local cli_js="$1"
+  pid=""
+  if (( use_launchd )); then
+    if ! submit_launchd_job "$cli_js"; then
+      # Still on the use_launchd path: degrade to nohup rather than abort.
+      echo "launchd submit failed outright; falling back to nohup." >&2
+      use_launchd=0
+    # use_launchd path: prove the submit actually registered. 2026-08-23: a
+    # submit from one shell context silently created NOTHING (no job, no
+    # process, zero log bytes) and the readiness window burned 180s probing a
+    # server that never existed. Fall back to nohup; flipping use_launchd keeps
+    # stop_new_server and the readiness death-check pointed at the right thing.
+    elif ! launchctl list "$LAUNCH_LABEL" >/dev/null 2>&1; then
+      echo "launchctl submit did not register '$LAUNCH_LABEL'; falling back to nohup." >&2
+      use_launchd=0
+    else
+      # Registered is NOT spawned. 2026-08-27 (twice, morning + evening): the
+      # job existed but launchd never gave it a process — zero output, zero
+      # exit-trap line, while the very next submit of the same label spawned
+      # instantly. Poll for a real PID; if none appears, retry the submit once,
+      # then degrade to nohup (a direct fork can't silently no-spawn).
+      spawned=""
+      for attempt in 1 2; do
+        for _ in {1..10}; do
+          spawned="$(launchd_job_pid)"
+          [[ -n "$spawned" ]] && break
+          sleep 0.5
+        done
+        if [[ -n "$spawned" ]]; then break; fi
+        echo "launchd job '$LAUNCH_LABEL' registered but never spawned (attempt $attempt); resubmitting." >&2
+        remove_launchd_job
+        sleep 1
+        if (( attempt == 2 )) || ! submit_launchd_job "$cli_js"; then
+          break
+        fi
+      done
+      if [[ -z "$spawned" ]]; then
+        echo "launchd would not spawn '$LAUNCH_LABEL'; falling back to nohup." >&2
+        remove_launchd_job
+        use_launchd=0
+      fi
+    fi
+  fi
+  if (( ! use_launchd )); then
+    nohup env -u OPEN_WALNUT_EPHEMERAL \
+      -u OPEN_WALNUT_HOME \
+      -u WALNUT_DAEMON_DIR \
+      -u VITEST \
+      "$NODE_BIN" "$cli_js" web --port "$PORT" \
+      </dev/null >>"$SERVER_LOG" 2>&1 &
+    pid=$!
+  fi
+}
+
+# Bounded /api/config poll used by the rollback path (the primary readiness
+# loop below also checks the server's nice level; rollback only needs alive).
+wait_for_config_ready() {
+  local secs="$1"
+  for _ in $(seq 1 $(( secs * 2 ))); do
+    if (( ! use_launchd )) && [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+      return 1
+    fi
+    if curl --connect-timeout 1 --max-time 2 -sf \
+      "http://localhost:$PORT/api/config" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+# Best-effort dist snapshot for rollback. Clonefile (cp -c) is ~instant on
+# APFS; plain cp -R elsewhere. node_modules rides as a symlink to the repo's —
+# the bundle resolves native/spawned deps from there, same as a repo launch.
+snapshot_lkg() {
+  rm -rf "$LKG_DIR.tmp" 2>/dev/null || true
+  mkdir -p "$LKG_DIR.tmp" || return 1
+  local copied=0
+  # Snapshot from the STAGE, not the repo: it is the exact artifact that just
+  # passed readiness (byte-identical by construction), and the temp volume is
+  # exempt from the on-access scanners that stall /Users reads under load.
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    if cp -Rc "$STAGE_DIR/dist" "$LKG_DIR.tmp/dist" 2>/dev/null; then copied=1; fi
+  fi
+  if (( ! copied )); then
+    rm -rf "$LKG_DIR.tmp/dist" 2>/dev/null || true
+    cp -R "$STAGE_DIR/dist" "$LKG_DIR.tmp/dist" || return 1
+  fi
+  ln -sfn "$REPO_ROOT/node_modules" "$LKG_DIR.tmp/node_modules" || return 1
+  rm -rf "$LKG_DIR" 2>/dev/null || true
+  mv "$LKG_DIR.tmp" "$LKG_DIR" || return 1
+}
+
+# First-output baseline: a candidate that appends NOTHING to the server log is
+# a process that never started (launchctl submit registering nothing, instant
+# module-init death) — judged in seconds below, not after the whole window.
+server_log_baseline="$(wc -c < "$SERVER_LOG" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+
+STAGE_IN_USE=1
+launch_server "$CLI_JS"
 
 stop_new_server() {
   if (( use_launchd )); then
@@ -326,6 +615,28 @@ stop_new_server() {
   elif [[ -n "$pid" ]]; then
     kill -15 "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
+  fi
+}
+
+# ── Last-known-good rollback ── shared by EVERY post-kill failure exit. The
+# old server is already dead by the time any of these run, so exiting without
+# restoring service leaves :$PORT dark until a human notices (2026-08-23:
+# 7.5 min of prod down after a readiness failure — and the process-death and
+# nice-abort exits had the same hole with no rollback at all). The deploy
+# still FAILS (callers exit 1); this only restores service with the last dist
+# that passed readiness. If the rollback server is slow, it is left running
+# (launchd KeepAlive / nohup) rather than killed — availability wins.
+rollback_to_lkg() {
+  if [[ -f "$LKG_DIR/dist/cli.js" ]]; then
+    echo "Rolling back to last-known-good dist: $LKG_DIR/dist" >&2
+    launch_server "$LKG_DIR/dist/cli.js"
+    if wait_for_config_ready 90; then
+      echo "Rollback server is serving on :$PORT (this deploy itself still failed)." >&2
+    else
+      echo "Rollback server not ready after 90s; left running in case it settles late." >&2
+    fi
+  else
+    echo "No last-known-good dist at $LKG_DIR; :$PORT is left unserved." >&2
   fi
 }
 
@@ -337,12 +648,28 @@ stop_new_server() {
 # The check stays bounded; it just has to outlast the slowest observed boot
 # with real margin.
 READY_SECS="${WALNUT_DEVPROD_READY_SECS:-180}"
+# Fast-fail judge: 2026-08-27, a candidate that never existed (silent launchctl
+# submit) burned the full 180s window while :$PORT stayed dark. Zero bytes of
+# output this far in means zero chance of readiness — roll back in seconds.
+FIRSTLOG_SECS="${WALNUT_DEVPROD_FIRSTLOG_SECS:-15}"
 ready=0
+elapsed_halves=0
 for _ in $(seq 1 $(( READY_SECS * 2 ))); do
+  elapsed_halves=$(( elapsed_halves + 1 ))
   if (( ! use_launchd )) && ! kill -0 "$pid" 2>/dev/null; then
     wait "$pid" || true
     echo "Server process exited before becoming ready." >&2
+    rollback_to_lkg
     exit 1
+  fi
+  if (( elapsed_halves == FIRSTLOG_SECS * 2 )); then
+    server_log_now="$(wc -c < "$SERVER_LOG" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+    if [[ "$server_log_now" == "$server_log_baseline" ]]; then
+      stop_new_server
+      echo "No server output after ${FIRSTLOG_SECS}s — the process never started." >&2
+      rollback_to_lkg
+      exit 1
+    fi
   fi
   config_json="$(curl --connect-timeout 1 --max-time 2 -sf \
     "http://localhost:$PORT/api/config" 2>/dev/null || true)"
@@ -359,6 +686,9 @@ for _ in $(seq 1 $(( READY_SECS * 2 ))); do
     if [[ "$process_nice" =~ ^-?[0-9]+$ ]] && (( process_nice > 0 )); then
       stop_new_server
       echo "New server inherited nice=$process_nice; deployment aborted." >&2
+      # The rollback launches from this same (niced) shell, so it may inherit
+      # the nice too — degraded scheduling still beats a dark port.
+      rollback_to_lkg
       exit 1
     fi
     if [[ ! "$process_nice" =~ ^-?[0-9]+$ ]]; then
@@ -374,7 +704,12 @@ done
 if [[ "$ready" != "1" ]]; then
   stop_new_server
   echo "Server failed its bounded readiness check." >&2
+  rollback_to_lkg
   exit 1
+fi
+
+if ! snapshot_lkg; then
+  echo "Warning: last-known-good snapshot failed; rollback will use the previous one." >&2
 fi
 
 pid="$(listener_pids | head -n 1)"

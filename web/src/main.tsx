@@ -1,3 +1,8 @@
+// MUST be the first import: patches the async dispatchers (timers, rAF,
+// MessagePort/WebSocket onmessage) so main-thread blocks self-attribute.
+// React's scheduler creates its MessageChannel at react-dom module init, so
+// any later install misses it.
+import './utils/trace-dispatchers';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';

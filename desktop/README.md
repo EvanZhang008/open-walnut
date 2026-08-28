@@ -15,6 +15,8 @@ codebase. This wrapper only:
 - Starts the server (`dist/cli.js web`) on port **3456** (falls back to 4567),
   reclaiming a stale server orphaned by a previous crash, and loads
   `http://localhost:<port>` in the window.
+- Restarts an owned server automatically after an unexpected exit, with bounded
+  backoff to prevent a crash loop.
 - Cleanly stops the server it started when you quit.
 
 ## Requirements

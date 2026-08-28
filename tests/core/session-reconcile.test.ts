@@ -370,7 +370,14 @@ describe('reconcileProcessStatus — convergence (incidents B/D shape)', () => {
     expect(after?.errorMessage).toContain('reconciled')
   })
 
-  it('INCIDENT D shape: backgrounded bash still running does not block convergence', async () => {
+  // SEMANTICS REVERSED 2026-08-28 (inc-1787893885321, user decision: "如果是
+  // Running Background 那当然应该是一个 Running 状态"). A live detached
+  // (run_in_background) command means the session IS working — the 'running'
+  // record is truthful, so the reconciler must refuse to converge it (it would
+  // fight the snapshot lane, which projects detachedBgCount>0 as 'running').
+  // The old expectation here (converge to idle) was the incident-D-era display
+  // decision this reverses; turn-over gating (07fffbe5) is unchanged.
+  it('backgrounded bash still running BLOCKS convergence (record running is truthful)', async () => {
     const sid = 'conv-backgrounded'
     await writeStream(sid, [
       initEvent(sid), userEvent(sid),
@@ -380,7 +387,16 @@ describe('reconcileProcessStatus — convergence (incidents B/D shape)', () => {
     const record = await stuckRunningRecord(sid, { pid: process.pid })
 
     const outcome = await reconcileProcessStatus(record, { isAlive: true })
-    expect(outcome).toEqual({ converged: true, from: 'running', to: 'idle' })
+    expect(outcome).toEqual({ converged: false, reason: 'detached-bg-running' })
+    // Once the command's terminal bookend lands, convergence proceeds as before.
+    await writeStream(sid, [
+      initEvent(sid), userEvent(sid),
+      taskStarted(sid, 'bg-grep'), taskBackgrounded(sid, 'bg-grep'),
+      resultEvent(sid), stateEvent(sid, 'idle'),
+      taskDone(sid, 'bg-grep'),
+    ])
+    const drained = await reconcileProcessStatus(record, { isAlive: true })
+    expect(drained).toEqual({ converged: true, from: 'running', to: 'idle' })
   })
 
   it('emits session:status-changed with the converged status', async () => {

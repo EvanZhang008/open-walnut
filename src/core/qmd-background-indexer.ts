@@ -19,6 +19,7 @@ import {
   setQmdRuntimeModel,
 } from './qmd-model.js';
 import { assertQmdBackgroundIndexPowerAvailable } from './qmd-power.js';
+import { registerManagedDbHolder } from './instance-lock.js';
 
 export interface QmdBackgroundIndexOptions {
   initialize?: boolean;
@@ -53,6 +54,7 @@ interface ActiveWorker {
   child: ChildProcess | null;
   reservation: QmdIndexReservation;
   stopRequested: boolean;
+  unregisterDbHolder: () => void;
   finished: Promise<void>;
   finish: () => void;
   settle: (error?: Error) => void;
@@ -63,6 +65,7 @@ const queue: QueueEntry[] = [];
 let stopping = false;
 const STDERR_TAIL_MAX_CHARS = 8_192;
 const EMBEDDING_FAILURE_RETRY_AFTER_MS = 6 * 60 * 60_000;
+const WORKER_FORCE_KILL_MS = 1_000;
 
 function workerExitError(message: string, stderrTail: string): Error {
   const stderr = stderrTail.trim();
@@ -201,6 +204,7 @@ async function drainQueue(): Promise<void> {
     child: null,
     reservation,
     stopRequested: false,
+    unregisterDbHolder: () => {},
     finished,
     finish: finishedResolve,
     settle: () => {},
@@ -209,6 +213,7 @@ async function drainQueue(): Promise<void> {
   const settle = (error?: Error): void => {
     if (settled) return;
     settled = true;
+    record.unregisterDbHolder();
     reservation.release();
     if (activeWorker === record) activeWorker = null;
 
@@ -261,6 +266,9 @@ async function drainQueue(): Promise<void> {
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     });
     record.child = child;
+    if (child.pid) {
+      record.unregisterDbHolder = registerManagedDbHolder(child.pid);
+    }
     child.stderr?.setEncoding('utf8');
     child.stderr?.on('data', (chunk: string) => {
       workerStderrTail = `${workerStderrTail}${chunk}`.slice(-STDERR_TAIL_MAX_CHARS);
@@ -340,12 +348,14 @@ export async function stopQmdBackgroundIndex(): Promise<void> {
     record.stopRequested = true;
     if (record.child) {
       record.child.kill('SIGTERM');
+      // commands/web.ts gives the whole server four seconds to stop. Escalate
+      // well inside that budget so the parent cannot leave an orphan DB holder.
       const forceTimer = setTimeout(() => {
         const child = record.child;
-        if (child && child.exitCode === null && child.signalCode === null) {
+        if (child && child.exitCode === null) {
           child.kill('SIGKILL');
         }
-      }, 5_000);
+      }, WORKER_FORCE_KILL_MS);
       forceTimer.unref();
       await record.finished;
       clearTimeout(forceTimer);

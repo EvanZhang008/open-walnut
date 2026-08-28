@@ -183,6 +183,16 @@ export interface SessionManager {
    */
   writeSyntheticUserEvent(message: string, walnutMessageId: string): void
 
+  /**
+   * The last outbound user message AFTER prepareOutbound() — the exact text the
+   * CLI echoes into the canonical JSONL (remote sessions rewrite local image
+   * paths to remote ones on the way out). Echo claims MUST be registered with
+   * this text; the pre-rewrite queue text never matches the echo for image
+   * sends (inc-1787704938224: bubble pinned at the bottom until remount).
+   * Optional: transports that never rewrite may omit it.
+   */
+  readonly lastPreparedOutbound?: string | undefined
+
   // ── Process Control ──
 
   /**

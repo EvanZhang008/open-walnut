@@ -156,3 +156,35 @@ final class ProcessOutputReader {
         return stopped
     }
 }
+
+struct ServerRestartPolicy {
+    static let healthyResetInterval: TimeInterval = 120
+    static let ordinaryStartupTimeout: TimeInterval = 180
+    static let nativeRebuildStartupTimeout: TimeInterval = 300
+    static let delays: [TimeInterval] = [1, 2, 4, 8, 16]
+
+    private(set) var attemptCount = 0
+
+    mutating func nextDelay(healthyFor: TimeInterval?) -> TimeInterval? {
+        if let healthyFor, healthyFor >= Self.healthyResetInterval {
+            attemptCount = 0
+        }
+        guard attemptCount < Self.delays.count else { return nil }
+        let delay = Self.delays[attemptCount]
+        attemptCount += 1
+        return delay
+    }
+
+    mutating func reset() {
+        attemptCount = 0
+    }
+}
+
+func shouldAutomaticallyRestartServer(
+    portConfirmed: Bool,
+    ownsServer: Bool,
+    isTerminating: Bool,
+    isCurrentProcess: Bool
+) -> Bool {
+    return portConfirmed && ownsServer && !isTerminating && isCurrentProcess
+}

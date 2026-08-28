@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   mapServerTaskSearchResults,
+  taskIdsFromSearchResults,
   taskReferenceMatchField,
 } from '../../web/src/components/tasks/search-results';
 
@@ -20,6 +21,29 @@ function task(
 }
 
 describe('task search result merging', () => {
+  it('maps session hits to their owning task', () => {
+    expect(taskIdsFromSearchResults([
+      { type: 'session', sessionId: 'matched-session', taskId: 'owning-task' },
+    ])).toEqual(['owning-task']);
+  });
+
+  it('drops orphan sessions and preserves the remaining server order', () => {
+    expect(taskIdsFromSearchResults([
+      { type: 'session', sessionId: 'orphan-session' },
+      { type: 'task', taskId: 'direct-task' },
+      { type: 'session', sessionId: 'owned-session', taskId: 'session-owner' },
+    ])).toEqual(['direct-task', 'session-owner']);
+  });
+
+  it('keeps the first rank when task and session hits share an owner', () => {
+    expect(taskIdsFromSearchResults([
+      { type: 'session', sessionId: 'best-evidence', taskId: 'shared-task' },
+      { type: 'task', taskId: 'other-task' },
+      { type: 'task', taskId: 'shared-task' },
+      { type: 'session', sessionId: 'later-evidence', taskId: 'shared-task' },
+    ])).toEqual(['shared-task', 'other-task']);
+  });
+
   it('uses server task IDs after the response even when a stale local session link matches', () => {
     const staleLocalOwner = task('stale-local-owner', { session_ids: [SESSION_ID] });
     const authoritativeOwner = task('authoritative-owner');

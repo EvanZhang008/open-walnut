@@ -16,7 +16,10 @@ import {
   type LogFn,
 } from '../../lib/hybrid-search/index.js';
 import { GLOBAL_SKILLS_DIR, MEMORY_DIR, NOTES_DIR } from '../../constants.js';
+import { disconnectAllDaemons } from '../../providers/daemon-connection.js';
+import { closeDb as closeSessionDb } from '../session-db.js';
 import { listTasks } from '../task-manager.js';
+import { closeDb as closeTaskDb } from '../task-db.js';
 import { listSessions } from '../session-tracker.js';
 import { readSessionHistoryTail } from '../session-history.js';
 import { buildIndexedContent } from '../session-content-indexer.js';
@@ -185,6 +188,15 @@ export async function buildFullSearchIndex(options: BuildOptions): Promise<Build
       ms: Math.round(performance.now() - t0),
     };
   } finally {
-    index.close();
+    // This entry point owns a standalone full build. Release production source
+    // handles before the process returns so a completed backfill cannot block
+    // the next server startup.
+    closeTaskDb();
+    closeSessionDb();
+    try {
+      index.close();
+    } finally {
+      disconnectAllDaemons();
+    }
   }
 }

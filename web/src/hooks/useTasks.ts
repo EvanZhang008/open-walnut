@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, startTransition } from 'react';
 import { READ_MARKER_KEYS } from '@open-walnut/core';
 import type { Task } from '@open-walnut/core';
 import { useEvent } from './useWebSocket';
@@ -9,6 +9,7 @@ import { perf } from '@/utils/perf-logger';
 import { log } from '@/utils/log';
 import { scrollLog } from '@/utils/scroll-debug';
 import { isRetryableTaskFetchError } from '@/utils/task-fetch-errors';
+import { tasksShallowEqual, mergeFetchedTasks } from './task-list-merge';
 
 /**
  * Optimistic default status for a newly-linked session (before the first
@@ -25,48 +26,6 @@ const OPTIMISTIC_STARTING_STATUS = { process_status: 'running' as const };
  * If a brand-new session ID appears, an optimistic in_progress/running default is used
  * so the badge never shows "? / ?".
  */
-/**
- * Shallow equality over UI-visible task fields. Used to suppress no-op
- * `setTasks` calls from secondary WS echoes (e.g. plugin sync writes
- * `ext`/`_syncedAt` and re-emits TASK_UPDATED — nothing UI-visible changed,
- * but a naive `setTasks` still creates a new tasks array identity and
- * re-renders every row). The list below intentionally excludes `ext`,
- * `_syncedAt`, and other backend-only fields.
- */
-function tasksShallowEqual(a: Task, b: Task): boolean {
-  const scalarKeys: (keyof Task)[] = [
-    'title', 'status', 'phase', 'priority', 'project',
-    'parent_task_id', 'group_id', 'due_date', 'start_date', 'completed_at', 'updated_at',
-    'sync_error', 'external_url', 'unread', 'source', 'sprint',
-    'cwd', 'session_id', 'plan_session_id', 'exec_session_id',
-    // Session-resume touch updates ONLY this field now (the pin-bump side
-    // effect was removed), so it must count as a UI-visible diff — without it
-    // the Recent sort never refreshes live after chatting with a task.
-    'last_session_update',
-    // Focus Bar state is now DERIVED from task objects (useFocusBar), so pin
-    // changes must count as UI-visible diffs — without these keys a task:updated
-    // echo whose only change is pin/tier would bail as "shallow equal".
-    'pinned', 'focus_tier', 'pin_order',
-  ];
-  for (const k of scalarKeys) if (a[k] !== b[k]) return false;
-  const arrKeys: (keyof Task)[] = ['tags', 'depends_on'];
-  for (const k of arrKeys) {
-    const av = (a[k] as string[] | undefined) ?? [];
-    const bv = (b[k] as string[] | undefined) ?? [];
-    if (av.length !== bv.length) return false;
-    for (let i = 0; i < av.length; i++) if (av[i] !== bv[i]) return false;
-  }
-  // Session status slots (nested objects) — compare on the process_status/activity
-  // fields we actually render; deeper equality not needed because session:status-changed
-  // is a separate WS event that delivers those changes with its own merge path.
-  const cmpStatus = (x: Task['session_status'], y: Task['session_status']): boolean =>
-    (x?.process_status ?? null) === (y?.process_status ?? null) &&
-    (x?.activity ?? null) === (y?.activity ?? null);
-  return cmpStatus(a.session_status, b.session_status)
-    && cmpStatus(a.plan_session_status, b.plan_session_status)
-    && cmpStatus(a.exec_session_status, b.exec_session_status);
-}
-
 function mergeTask(existing: Task, incoming: Task): Task {
   // Preserve enriched session_id: REST API backfills it from session records,
   // but WS events send the raw task where session_id may be unset.
@@ -431,10 +390,19 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         const elapsed = Math.round(performance.now() - t0);
         endPerf?.(`${tasks.length} tasks`);
         log.info('tasks', 'fetch complete', { count: tasks.length, elapsed, attempt });
-        setTasks(tasks);
         hasLoadedRef.current = true;
-        setLoading(false);
-        setRefreshing(false);
+        // startTransition: adopting ~6k tasks renders thousands of rows — as a
+        // sync render that was a 2-3s main-thread block on every page load.
+        // Time-sliced, the page stays responsive while rows mount. Loading
+        // flips ride the same transition so there is no "loaded but empty"
+        // flash between the states.
+        startTransition(() => {
+          // Identity-preserving merge: a refetch that changes 1 of ~6k tasks must
+          // not mint 6k fresh objects (that re-renders every memoized row).
+          setTasks((prev) => mergeFetchedTasks(prev, tasks));
+          setLoading(false);
+          setRefreshing(false);
+        });
       })
       .catch((e: Error) => {
         if (generation !== fetchGeneration.current) return;
@@ -495,6 +463,27 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // WS event counters for startup diagnostics — resets on refetch
   const wsEventCounts = useRef({ created: 0, updated: 0, completed: 0, sessionChanged: 0, lastLogAt: 0 });
 
+  // Bulk-signal refetch coalescing: several payload-less bulk events inside a
+  // window (multi-plugin syncs, git pull + import) used to trigger a full
+  // list fetch EACH (5.5MB + parse + re-render per fetch). Trailing 2s debounce
+  // folds a burst into one fetch.
+  const bulkRefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleBulkRefetch = useCallback(() => {
+    if (bulkRefetchTimer.current) clearTimeout(bulkRefetchTimer.current);
+    bulkRefetchTimer.current = setTimeout(() => {
+      bulkRefetchTimer.current = null;
+      refetch();
+    }, 2_000);
+  }, [refetch]);
+  // Keyed on refetch (which changes with `filter`): a pending timer armed under
+  // the OLD filter must not fire a stale-closure fetch after the filter changed.
+  useEffect(() => () => {
+    if (bulkRefetchTimer.current) {
+      clearTimeout(bulkRefetchTimer.current);
+      bulkRefetchTimer.current = null;
+    }
+  }, [refetch]);
+
   // Real-time event handlers — single source of truth for state changes
   // Server emits { task: <Task> } wrapper objects
   useEvent('task:created', (data) => {
@@ -528,7 +517,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   useEvent('task:updated', (data) => {
     wsEventCounts.current.updated++;
     const { task } = data as { task?: Task };
-    if (!task) { log.info('tasks', 'ws task:updated bulk → refetch'); scrollLog('drag-trace-ws-updated-bulk-refetch'); refetch(); return; }
+    if (!task) { log.info('tasks', 'ws task:updated bulk → refetch (debounced)'); scrollLog('drag-trace-ws-updated-bulk-refetch'); scheduleBulkRefetch(); return; }
     if (consumeEcho(`move:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-move', { id: task.id.slice(0,12) }); return; }
     if (consumeEcho(`update:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-update', { id: task.id.slice(0,12) }); return; }
     if (consumeEcho(`phase:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-phase', { id: task.id.slice(0,12) }); return; }
@@ -559,7 +548,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   useEvent('task:completed', (data) => {
     wsEventCounts.current.completed++;
     const { task } = data as { task?: Task };
-    if (!task) { log.info('tasks', 'ws task:completed bulk → refetch'); refetch(); return; }
+    if (!task) { log.info('tasks', 'ws task:completed bulk → refetch (debounced)'); scheduleBulkRefetch(); return; }
     if (consumeEcho(`complete:${task.id}`)) return;
     setTasks((prev) => {
       const idx = prev.findIndex((t) => t.id === task.id);
@@ -606,13 +595,22 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     };
     const providerSessionId = status?.sessionId ?? sessionId;
     if (!providerSessionId || !phase) return;
-    setTasks((prev) => prev.map((t) => {
-      const matchesSingle = t.session_id === providerSessionId;
-      const matchesPlan = t.plan_session_id === providerSessionId;
-      const matchesExec = t.exec_session_id === providerSessionId;
-      if (!matchesSingle && !matchesPlan && !matchesExec) return t;
-      return t.phase === phase ? t : { ...t, phase: phase as Task['phase'] };
-    }));
+    setTasks((prev) => {
+      // No-op bail: this event fires for EVERY session transition (several per
+      // minute with a few agents running). Returning a fresh array when zero
+      // tasks changed re-rendered the whole tree each time.
+      let changed = false;
+      const next = prev.map((t) => {
+        const matchesSingle = t.session_id === providerSessionId;
+        const matchesPlan = t.plan_session_id === providerSessionId;
+        const matchesExec = t.exec_session_id === providerSessionId;
+        if (!matchesSingle && !matchesPlan && !matchesExec) return t;
+        if (t.phase === phase) return t;
+        changed = true;
+        return { ...t, phase: phase as Task['phase'] };
+      });
+      return changed ? next : prev;
+    });
   });
 
   // Shared error handler for optimistic operations: show banner + refetch truth from server

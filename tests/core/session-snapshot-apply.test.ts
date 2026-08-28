@@ -48,6 +48,7 @@ import {
   getSessionByClaudeId,
   _resetSessionTrackerForTesting,
 } from '../../src/core/session-tracker.js'
+import { addTask, updateTaskRaw, getTask } from '../../src/core/task-manager.js'
 import { closeDb } from '../../src/core/session-db.js'
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js'
 import { log } from '../../src/logging/index.js'
@@ -1137,5 +1138,172 @@ describe('applySnapshot — epoch-less record with a provably-stale watermark (i
     expect(after?.process_status).toBe('running')
     expect(after?.consumedOffset).toBe(134_248_535)
     expect(after?.streamEpoch).toBeUndefined()
+  })
+})
+
+// ── turn-start phase pullback (inc-1787512825254) ────────────────────────────
+// A CLI self-woken turn (background task-notification dequeued from its
+// internal queue) emits NO session_state_changed{running}, so the event-lane
+// turn-start edges never fire and the task stays on the previous turn's
+// AGENT_COMPLETE while the snapshot lane paints the session green. The apply
+// path is the one place that observes the new turn, so it must pull the phase
+// back — except when the 'running' projection is really a permission pause
+// (awaiting-human red row is by design).
+describe('applySnapshot — turn-start phase pullback', () => {
+  async function seedLinkedTask(phase: string): Promise<string> {
+    const { task } = await addTask({ title: 'pullback', project: 'p' })
+    await updateTaskRaw(task.id, { phase: phase as never })
+    return task.id
+  }
+
+  async function seedSessionWithTask(sid: string, taskId: string, extra: Record<string, unknown> = {}): Promise<void> {
+    await createSessionRecord(sid, taskId, 'proj', '/tmp/snap-apply', { pid: process.pid })
+    await updateSessionRecord(sid, { process_status: 'idle', ...extra } as never)
+  }
+
+  async function expectPhaseEventually(taskId: string, phase: string): Promise<void> {
+    const deadline = Date.now() + 3000
+    while (Date.now() < deadline) {
+      if ((await getTask(taskId)).phase === phase) return
+      await new Promise((r) => setTimeout(r, 25))
+    }
+    expect((await getTask(taskId)).phase).toBe(phase)
+  }
+
+  async function expectPhaseStays(taskId: string, phase: string): Promise<void> {
+    await new Promise((r) => setTimeout(r, 200))
+    expect((await getTask(taskId)).phase).toBe(phase)
+  }
+
+  it('INCIDENT SHAPE: idle record + red task + running snapshot → IN_PROGRESS', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'pullback-incident'
+    const taskId = await seedLinkedTask('AGENT_COMPLETE')
+    await seedSessionWithTask(sid, taskId)
+
+    const res = await applySnapshot(sid, snap({ v: 300, cliState: 'running', turnActive: true }), 'daemon-push')
+    expect(res).toMatchObject({ outcome: 'applied', projected: 'running' })
+    await expectPhaseEventually(taskId, 'IN_PROGRESS')
+  })
+
+  it('heals a boot-adopted mismatch: record already running (predicate-false write) still pulls the phase', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'pullback-boot-adopt'
+    const taskId = await seedLinkedTask('AGENT_COMPLETE')
+    await seedSessionWithTask(sid, taskId, { process_status: 'running' })
+
+    const res = await applySnapshot(sid, snap({ v: 300, cliState: 'running', turnActive: true }), 'pull-30s')
+    expect(res).toMatchObject({ outcome: 'skipped', reason: 'predicate-false' })
+    await expectPhaseEventually(taskId, 'IN_PROGRESS')
+  })
+
+  it("permission pause ('waiting' + pendingPermission) keeps the awaiting-human red row", async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'pullback-waiting'
+    const taskId = await seedLinkedTask('AGENT_COMPLETE')
+    await seedSessionWithTask(sid, taskId)
+
+    const res = await applySnapshot(sid, snap({
+      v: 300, cliState: 'waiting', turnActive: true,
+      pendingPermission: { requestId: 'req-1', toolName: 'Bash' },
+    }), 'daemon-push')
+    expect(res.projected).toBe('running') // waiting projects running for the frozen enum…
+    await expectPhaseStays(taskId, 'AGENT_COMPLETE') // …but the phase must NOT be pulled back
+  })
+
+  it('record-side pendingPermission also blocks the pullback (out-of-band prompt the fold missed)', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'pullback-record-pending'
+    const taskId = await seedLinkedTask('AGENT_COMPLETE')
+    await seedSessionWithTask(sid, taskId, {
+      pendingPermission: { requestId: 'req-2', toolName: 'AskUserQuestion', receivedAt: new Date().toISOString() },
+    })
+
+    await applySnapshot(sid, snap({ v: 300, cliState: 'running', turnActive: true }), 'daemon-push')
+    await expectPhaseStays(taskId, 'AGENT_COMPLETE')
+  })
+
+  it('never overwrites a terminal phase', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'pullback-terminal'
+    const taskId = await seedLinkedTask('COMPLETE')
+    await seedSessionWithTask(sid, taskId)
+
+    await applySnapshot(sid, snap({ v: 300, cliState: 'running', turnActive: true }), 'daemon-push')
+    await expectPhaseStays(taskId, 'COMPLETE')
+  })
+
+  it('shadow mode never touches the phase', async () => {
+    setSnapshotModeForTests('shadow')
+    const sid = 'pullback-shadow'
+    const taskId = await seedLinkedTask('AGENT_COMPLETE')
+    await seedSessionWithTask(sid, taskId)
+
+    const res = await applySnapshot(sid, snap({ v: 300, cliState: 'running', turnActive: true }), 'daemon-push')
+    expect(res.outcome).toBe('shadow')
+    await expectPhaseStays(taskId, 'AGENT_COMPLETE')
+  })
+})
+
+// ── detachedBgCount projection (user decision 2026-08-28, inc-1787893885321):
+// a live run_in_background command means the session is RUNNING even though
+// the CLI's turn settled around it. Absent field (pre-field daemon) = idle. ──
+describe('projectProcessStatus — detached background work', () => {
+  it('idle cliState + detachedBgCount>0 → running', () => {
+    expect(projectProcessStatus(snap({
+      cliState: 'idle', turnActive: false, detachedBgCount: 1,
+      lastResult: { isError: false, numTurns: 1, endOffset: 90 },
+    }))).toBe('running')
+  })
+
+  it('detached work outranks a trailing error result (work continues; error re-surfaces at drain)', () => {
+    expect(projectProcessStatus(snap({
+      cliState: 'idle', turnActive: false, detachedBgCount: 2,
+      lastResult: { isError: true, endOffset: 90 },
+    }))).toBe('running')
+  })
+
+  it('dead still wins over detached work', () => {
+    expect(projectProcessStatus(snap({
+      cliState: 'dead', turnActive: false, exitCode: 0, detachedBgCount: 1,
+      lastResult: { isError: false, endOffset: 90 },
+    }))).toBe('stopped')
+  })
+
+  it('absent field (pre-field daemon) keeps the old idle projection', () => {
+    expect(projectProcessStatus(snap({
+      cliState: 'idle', turnActive: false,
+      lastResult: { isError: false, numTurns: 1, endOffset: 90 },
+    }))).toBe('idle')
+  })
+
+  it('detachedBgCount:0 explicitly → idle', () => {
+    expect(projectProcessStatus(snap({
+      cliState: 'idle', turnActive: false, detachedBgCount: 0,
+    }))).toBe('idle')
+  })
+
+  it('enforce apply: detached-running snapshot converges an idle record to running AND pulls the phase back', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'detached-running'
+    const { task } = await addTask({ title: 'bg', project: 'p' })
+    await updateTaskRaw(task.id, { phase: 'AGENT_COMPLETE' as never })
+    await createSessionRecord(sid, task.id, 'proj', '/tmp/snap-apply', { pid: process.pid })
+    await updateSessionRecord(sid, { process_status: 'idle' } as never)
+
+    const res = await applySnapshot(sid, snap({
+      v: 400, cliState: 'idle', turnActive: false, detachedBgCount: 1,
+      lastResult: { isError: false, numTurns: 1, endOffset: 380 },
+    }), 'daemon-push')
+    expect(res).toMatchObject({ outcome: 'applied', projected: 'running' })
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.process_status).toBe('running')
+    // Phase pullback rides the same running projection (fire-and-forget).
+    const deadline = Date.now() + 3000
+    while (Date.now() < deadline) {
+      if ((await getTask(task.id)).phase === 'IN_PROGRESS') break
+      await new Promise((r) => setTimeout(r, 25))
+    }
+    expect((await getTask(task.id)).phase).toBe('IN_PROGRESS')
   })
 })

@@ -457,3 +457,112 @@ describe('B6: recoverDisconnectedSessions host normalization (local sessions)', 
     expect(statusCalls.length).toBe(0)
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════
+//  B7: recoverDisconnectedSessions rescues a live CLI behind a wrongly
+//  'stopped' record (inc-1787511363340)
+//
+//  A spawn whose daemon `start` timed out was recorded 'stopped'; the
+//  buffered command executed 15s later anyway, and the live CLI ran for
+//  1.6h behind a record every recovery loop skipped unconditionally.
+//  The loop now probes a RECENT, NON-intentional 'stopped' and recovers
+//  it when the daemon reports the process alive — and adopts the
+//  daemon's pid so the orphan dead-pool drain can't re-wedge it.
+// ═══════════════════════════════════════════════════════════════════
+
+describe('B7: recoverDisconnectedSessions stopped-record rescue', () => {
+  afterEach(() => { vi.resetModules() })
+
+  async function runRecoverWith(
+    sessionRecords: Array<Record<string, unknown>>,
+    sendImpl?: (cmd: string, payload: Record<string, unknown>) => Record<string, unknown>,
+  ) {
+    const updateSessionRecord = vi.fn(async (
+      sessionId: string,
+      updates: Record<string, unknown>,
+    ) => ({
+      ...sessionRecords.find((record) => record.claudeSessionId === sessionId),
+      ...updates,
+    }))
+    vi.doMock('../../src/core/session-tracker.js', () => ({
+      listSessions: vi.fn().mockResolvedValue(sessionRecords),
+      updateSessionRecord,
+      emitSessionStatusChanged: vi.fn(),
+    }))
+    vi.doMock('../../src/core/event-bus.js', () => ({
+      bus: { emit: vi.fn() },
+      EventNames: { SESSION_STATUS_CHANGED: 'session:status-changed' },
+    }))
+    const { DaemonConnection: DC } = await import('../../src/providers/daemon-connection.js')
+    const conn = new DC('__local__', null)
+    const priv = conn as unknown as Record<string, (...a: unknown[]) => unknown>
+    const send = vi.spyOn(priv, 'send').mockImplementation(async (...args: unknown[]) => {
+      const [cmd, payload] = args as [string, Record<string, unknown>]
+      return sendImpl ? sendImpl(cmd, payload) : { ok: true, alive: true }
+    })
+    await (priv.recoverDisconnectedSessions as () => Promise<void>)()
+    return { send, updateSessionRecord }
+  }
+
+  const RECENT = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+  const STALE = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
+
+  function stoppedRecord(o: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      claudeSessionId: 'wedged-1',
+      host: null,
+      process_status: 'stopped',
+      archived: false,
+      last_status_change: RECENT,
+      pid: null,
+      ...o,
+    }
+  }
+
+  it('rescues a recent un-stamped stopped record when the daemon says alive — and adopts the pid', async () => {
+    const { updateSessionRecord } = await runRecoverWith(
+      [stoppedRecord()],
+      () => ({ ok: true, alive: true, pid: 4242 }),
+    )
+    const statusWrite = updateSessionRecord.mock.calls.find(
+      ([, u]) => (u as { process_status?: string }).process_status === 'running',
+    )
+    expect(statusWrite, 'expected a running recovery write').toBeDefined()
+    const pidWrite = updateSessionRecord.mock.calls.find(
+      ([, u]) => (u as { pid?: number }).pid === 4242,
+    )
+    expect(pidWrite, 'expected the daemon pid to be re-adopted').toBeDefined()
+  })
+
+  it('leaves the record alone when the daemon confirms the process is dead', async () => {
+    const { send, updateSessionRecord } = await runRecoverWith(
+      [stoppedRecord()],
+      () => ({ ok: true, alive: false }),
+    )
+    // Probed once, but the record was right — no writes at all.
+    expect(send.mock.calls.filter(([cmd]) => cmd === 'status').length).toBe(1)
+    expect(updateSessionRecord).not.toHaveBeenCalled()
+  })
+
+  it('never probes an intentional stop (user) or a terminal-class reason', async () => {
+    const { send } = await runRecoverWith([
+      stoppedRecord({ claudeSessionId: 'user-stop', status_changed_by: 'user' }),
+      stoppedRecord({ claudeSessionId: 'idle-reaped', status_reason: 'idle_timeout' }),
+    ])
+    expect(send.mock.calls.filter(([cmd]) => cmd === 'status').length).toBe(0)
+  })
+
+  it('never probes outside the recency window — old stopped records are settled', async () => {
+    const { send } = await runRecoverWith([
+      stoppedRecord({ claudeSessionId: 'old-1', last_status_change: STALE }),
+    ])
+    expect(send.mock.calls.filter(([cmd]) => cmd === 'status').length).toBe(0)
+  })
+
+  it('never touches a stopped codex/ACP record — its liveness is acpState-keyed', async () => {
+    const { send } = await runRecoverWith([
+      stoppedRecord({ claudeSessionId: 'codex-1', engine: 'codex', acpRuntimeId: 'rt-1' }),
+    ])
+    expect(send.mock.calls.length).toBe(0)
+  })
+})

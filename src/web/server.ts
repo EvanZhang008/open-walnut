@@ -3562,7 +3562,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // teammates (Claude Code team mode). Intermediate results should NOT move
         // the task to AGENT_COMPLETE or trigger triage. The final result (after
         // TeamDelete) will go through the normal path.
-        if (!teamActive) {
+        // Detached (run_in_background) command still working: the reply was
+        // delivered (real turn-over — triage and session:ended proceed as
+        // normal below) but the agent is NOT done, so the task must not flip
+        // AGENT_COMPLETE (user decision 2026-08-28, inc-1787893885321). The
+        // runner's followup-closure applies the final flip when the last
+        // detached task drains.
+        const detachedBgActive = (event.data as Record<string, unknown>)?.detachedBgActive === true
+        if (!teamActive && !detachedBgActive) {
           try {
             const { applySessionPhase } = await import('../core/phase.js')
             // turnGen threads the emitting session's turn generation into the
@@ -3574,7 +3581,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             log.web.warn('failed to apply session:result phase', { taskId, error: String(err) })
           }
         } else {
-          log.web.info('team active — skipping AGENT_COMPLETE phase transition', { sessionId, taskId })
+          log.web.info(teamActive
+            ? 'team active — skipping AGENT_COMPLETE phase transition'
+            : 'detached background work active — skipping AGENT_COMPLETE phase transition', { sessionId, taskId })
         }
 
         // Triage dispatch is now handled by SessionHookDispatcher

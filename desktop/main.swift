@@ -71,6 +71,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var retryTimer: Timer?
     var bootstrapProcess: Process?
     var serverOutputReader: ProcessOutputReader?
+    var serverRestartPolicy = ServerRestartPolicy()
+    var serverRestartWorkItem: DispatchWorkItem?
+    var serverReadyAt: Date?
+    var isRecoveringServer = false
+    var isTerminating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DesktopLogger.shared.log("app_launched", fields: [
@@ -109,6 +114,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        isTerminating = true
         DesktopLogger.shared.log("app_terminating")
         bootstrapProcess?.terminate()
         stopServer()
@@ -675,8 +681,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         DesktopLogger.shared.log("existing_server_attached", fields: [
                             "port": String(port)
                         ])
+                        self.serverRestartPolicy.reset()
+                        self.isRecoveringServer = false
                         self.ownsServer = false
                         self.serverPort = port
+                        self.serverReadyAt = nil
                         self.loadWebUI()
                     }
                 } else {
@@ -716,7 +725,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let home = walnutHome, let source = walnutSourceDir else { return }
         guard index < portsToTry.count else {
             let tail = lastServerOutput.isEmpty ? "" : "\n\nLast server output:\n\(lastServerOutput)"
-            showError("Could not start the Walnut server on ports \(portsToTry.map(String.init).joined(separator: ", ")).\(tail)")
+            handleServerStartupFailure(
+                "Could not start the Walnut server on ports \(portsToTry.map(String.init).joined(separator: ", ")).\(tail)"
+            )
             return
         }
 
@@ -766,12 +777,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let handle = pipe.fileHandleForReading
         var outputBuffer = ""
         var portConfirmed = false
-        // Guards the two failure paths (child death vs 15s timeout) so exactly one
+        // Guards the two failure paths (child death vs startup timeout) so exactly one
         // acts. Mutated only on the main queue, so no locking is needed.
         var settled = false
         // Set when the server reports it is recompiling a native addon; the startup
-        // deadline is then re-armed instead of firing (a from-source build easily
-        // exceeds 15s, and killing it mid-compile corrupts the module).
+        // deadline is then extended (a from-source build can exceed the
+        // ordinary limit, and killing it mid-compile corrupts the module).
         var rebuildingNativeModule = false
 
         let outputReader = ProcessOutputReader(
@@ -805,6 +816,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     ])
                     self?.ownsServer = true
                     self?.serverPort = port
+                    self?.serverReadyAt = Date()
+                    self?.isRecoveringServer = false
                     self?.pollForServer()
                 }
             }
@@ -829,7 +842,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 "port": String(port)
             ])
             DispatchQueue.main.async { [weak self] in
-                self?.showError("Failed to start server: \(error.localizedDescription)")
+                self?.handleServerStartupFailure(
+                    "Failed to start server: \(error.localizedDescription)"
+                )
             }
             return
         }
@@ -841,14 +856,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 "status": String(proc.terminationStatus)
             ])
             DispatchQueue.main.async {
-                clearSpawnedServerPid() // it died on its own — nothing to reclaim
                 guard let self = self else { return }
+                let isCurrentProcess = self.serverProcess === process
+                if recordedSpawnedServerPid() == proc.processIdentifier {
+                    clearSpawnedServerPid()
+                }
                 if self.serverOutputReader === outputReader {
                     self.serverOutputReader = nil
                 }
+                if shouldAutomaticallyRestartServer(
+                    portConfirmed: portConfirmed,
+                    ownsServer: self.ownsServer,
+                    isTerminating: self.isTerminating,
+                    isCurrentProcess: isCurrentProcess
+                ) {
+                    let healthyFor = self.serverReadyAt.map { Date().timeIntervalSince($0) }
+                    self.serverProcess = nil
+                    self.serverPort = nil
+                    self.serverReadyAt = nil
+                    self.ownsServer = false
+                    self.scheduleServerRecovery(
+                        reason: "owned_process_exited",
+                        healthyFor: healthyFor,
+                        detail: "The Walnut server exited with code \(proc.terminationStatus)."
+                    )
+                    return
+                }
                 guard !portConfirmed, !settled else { return }
                 settled = true
-                self.serverProcess = nil
+                if isCurrentProcess {
+                    self.serverProcess = nil
+                }
 
                 // Keep the tail of the child's output for diagnostics.
                 let trimmed = outputBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -865,7 +903,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.tryStartServerOnPort(index: index + 1)
                 } else {
                     let detail = self.lastServerOutput.isEmpty ? "No output was captured." : self.lastServerOutput
-                    self.showError(
+                    self.handleServerStartupFailure(
                         "The Walnut server exited during startup (exit code \(proc.terminationStatus)).\n\n"
                         + "\(detail)\n\n"
                         + "This is usually a stale build. In the source directory run:\n"
@@ -874,14 +912,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Startup deadline. Re-arms itself while a native-module rebuild is running,
-        // up to a hard ceiling, so a slow compile isn't mistaken for a hang.
-        func armStartupDeadline(secondsRemaining: Int) {
+        // High machine load can delay startup well beyond 15 seconds. Keep a
+        // finite five-minute ceiling for native rebuilds and a three-minute
+        // ceiling for ordinary starts.
+        let startupBeganAt = Date()
+        func armStartupDeadline() {
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
                 guard let self = self, !portConfirmed, !settled, self.serverProcess === process else { return }
-                let remaining = rebuildingNativeModule ? max(secondsRemaining, 300) - 5 : secondsRemaining - 5
-                if remaining > 0 {
-                    armStartupDeadline(secondsRemaining: remaining)
+                let timeout = rebuildingNativeModule
+                    ? ServerRestartPolicy.nativeRebuildStartupTimeout
+                    : ServerRestartPolicy.ordinaryStartupTimeout
+                if Date().timeIntervalSince(startupBeganAt) < timeout {
+                    armStartupDeadline()
                     return
                 }
                 settled = true
@@ -889,8 +931,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 DesktopLogger.shared.log("server_startup_timed_out", fields: [
                     "port": String(port)
                 ])
-                // A hang (never printed "listening"), not a crash — terminate and try
-                // the next port. terminationHandler fires but bails on `settled`.
+                // A hang (never printed "listening"), not a port conflict. Terminate
+                // and report or recover; terminationHandler bails on `settled`.
                 if process.isRunning {
                     process.terminate()
                 }
@@ -898,10 +940,69 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let trimmed = outputBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
                 self.lastServerOutput = trimmed.split(separator: "\n", omittingEmptySubsequences: false)
                     .suffix(15).joined(separator: "\n")
-                self.tryStartServerOnPort(index: index + 1)
+                let detail = self.lastServerOutput.isEmpty ? "No output was captured." : self.lastServerOutput
+                self.handleServerStartupFailure(
+                    "The Walnut server did not become ready within \(Int(timeout)) seconds.\n\n\(detail)"
+                )
             }
         }
-        armStartupDeadline(secondsRemaining: 15)
+        armStartupDeadline()
+    }
+
+    func handleServerStartupFailure(_ message: String) {
+        if isRecoveringServer {
+            scheduleServerRecovery(
+                reason: "recovery_start_failed",
+                healthyFor: nil,
+                detail: message
+            )
+        } else {
+            showError(message)
+        }
+    }
+
+    func scheduleServerRecovery(
+        reason: String,
+        healthyFor: TimeInterval?,
+        detail: String
+    ) {
+        guard !isTerminating else { return }
+        serverRestartWorkItem?.cancel()
+        serverRestartWorkItem = nil
+        retryTimer?.invalidate()
+        retryTimer = nil
+
+        guard let delay = serverRestartPolicy.nextDelay(healthyFor: healthyFor) else {
+            isRecoveringServer = false
+            DesktopLogger.shared.log("server_auto_restart_exhausted", fields: [
+                "reason": reason,
+                "attempts": String(serverRestartPolicy.attemptCount)
+            ])
+            showError(
+                "Walnut could not keep the server running after "
+                + "\(serverRestartPolicy.attemptCount) automatic restart attempts.\n\n"
+                + detail
+            )
+            return
+        }
+
+        isRecoveringServer = true
+        showLoadingScreen()
+        statusLabel?.stringValue = "Server stopped. Restarting in \(Int(delay)) second\(delay == 1 ? "" : "s")..."
+        DesktopLogger.shared.log("server_auto_restart_scheduled", fields: [
+            "reason": reason,
+            "attempt": String(serverRestartPolicy.attemptCount),
+            "delay_seconds": String(Int(delay))
+        ])
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self, !self.isTerminating else { return }
+            self.serverRestartWorkItem = nil
+            self.serverPort = nil
+            self.startServer()
+        }
+        serverRestartWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
     func pollForServer() {
@@ -928,7 +1029,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             if attempts > 60 {
                 timer.invalidate()
-                self?.showError("Server started on port \(port) but never became ready.")
+                self?.retryTimer = nil
+                // Through the recovery router, not showError: during auto-recovery a
+                // dead-end alert here would strand the restart loop (every other
+                // startup-failure edge already routes through this).
+                self?.handleServerStartupFailure("Server started on port \(port) but never became ready.")
             }
         }
     }
@@ -980,12 +1085,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             "owned": String(ownsServer),
             "port": serverPort.map(String.init) ?? "none"
         ])
+        serverRestartWorkItem?.cancel()
+        serverRestartWorkItem = nil
+        isRecoveringServer = false
         retryTimer?.invalidate()
         retryTimer = nil
         serverOutputReader?.stop(reason: "app_stop")
         serverOutputReader = nil
 
-        if ownsServer, let proc = serverProcess, proc.isRunning {
+        let shouldTerminateOwnedServer = ownsServer
+        ownsServer = false
+        serverReadyAt = nil
+        if shouldTerminateOwnedServer, let proc = serverProcess, proc.isRunning {
             proc.terminate()
             clearSpawnedServerPid() // clean shutdown — no orphan to reclaim later
             DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
@@ -1314,6 +1425,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func retryStart() {
         stopServer()
+        serverRestartPolicy.reset()
         serverPort = nil
         showLoadingScreen()
         startServer()
@@ -1336,6 +1448,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.beginSheetModal(for: window) { [weak self] response in
             guard response == .alertSecondButtonReturn, let self = self else { return }
             self.stopServer()
+            self.serverRestartPolicy.reset()
             self.serverPort = nil
             try? FileManager.default.removeItem(at: configFilePath())
             self.walnutHome = nil

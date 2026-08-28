@@ -76,6 +76,7 @@ export const SLOW_TEST_FILES = [
   'tests/web/routes/api-v1-notes-extras.test.ts', // real QMD note indexing
   'tests/web/routes/sessions-compare-modes-diverge.test.ts', // 2s
   'tests/web/routes/sessions-git-diff.test.ts', // 2s
+  'tests/web/human-inbox-routes.test.ts', // boots a real server (route mount + ops parity)
 
   // ── Real timers / pollers / plugin discovery ───────────────────────────────
   'tests/unit/subagent-poller.test.ts', // 15s

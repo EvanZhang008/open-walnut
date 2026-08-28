@@ -57,6 +57,56 @@ test('reciprocal-rank semantic results are not labeled less relevant', async ({ 
   await expect(page.locator('.todo-search-score-pill')).toHaveCount(0);
 });
 
+test('a session search hit renders its owning task', async ({ page }) => {
+  const query = 'archived conversation signal';
+  await page.route('**/api/search?**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('q') !== query) {
+      await route.continue();
+      return;
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        results: [
+          {
+            type: 'session',
+            sessionId: 'matched-session',
+            taskId: TARGET_TASK_ID,
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.goto('/');
+  await expect(page.locator('.todo-panel')).toBeVisible();
+  const searchRequestPromise = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === '/api/search' && url.searchParams.get('q') === query;
+  });
+  await page.locator('.todo-search-input').fill(query);
+
+  const searchUrl = new URL((await searchRequestPromise).url());
+  expect(searchUrl.searchParams.get('types')).toBe('task,session');
+  expect(searchUrl.searchParams.get('limit')).toBe('80');
+
+  const owningTask = page.locator(
+    `.todo-search-results .todo-panel-item[data-task-id="${TARGET_TASK_ID}"]`,
+  );
+  await expect(owningTask).toBeVisible({ timeout: 3_000 });
+  await expect(page.locator('.todo-search-spinner')).toBeHidden();
+
+  await owningTask.getByRole('button', { name: 'More actions' }).click();
+  await page.locator('.task-kebab-menu')
+    .getByRole('button', { name: 'Details', exact: true })
+    .click();
+  await expect(page.locator('.task-detail-modal .todo-detail-title'))
+    .toHaveText('Playwright test task');
+});
+
 test('a stale semantic response cannot replace a newer query', async ({ page }) => {
   const firstQuery = 'first semantic query';
   const secondQuery = 'second semantic query';

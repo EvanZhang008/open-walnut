@@ -9,6 +9,8 @@ import {
 } from '../core/qmd-maintenance.js';
 import { closeQmdStores } from '../core/qmd-store.js';
 import { collectQmdCorpusStats } from '../core/qmd-stats.js';
+import { closeDb as closeSessionDb } from '../core/session-db.js';
+import { closeDb as closeTaskDb } from '../core/task-db.js';
 import type {
   QmdFullIndexWork,
   QmdIndexWork,
@@ -33,6 +35,11 @@ function parseOptions(): QmdIndexWork {
 function normalizeWork(options: WorkerOptions): QmdIndexWork {
   if ('kind' in options) return options;
   return { kind: 'full', ...options };
+}
+
+function closeSourceDatabases(): void {
+  closeTaskDb();
+  closeSessionDb();
 }
 
 /**
@@ -61,11 +68,15 @@ export async function executeQmdIndexWork(
     }
     const stats = await collectQmdCorpusStats();
     log.memory.info('QMD background worker complete', {
+      pid: process.pid,
       kind: work.kind,
       ...(cleanup ? { cleanup } : {}),
     });
     emit({ type: 'complete', stats });
   } finally {
+    // Release source-of-truth handles first. Native model cleanup may take
+    // longer, but a finished worker must never block the next server startup.
+    closeSourceDatabases();
     await closeQmdStores().catch(() => undefined);
     disconnectAllDaemons();
   }
@@ -87,6 +98,7 @@ async function main(): Promise<void> {
     // Reading priority is also best-effort on unsupported platforms.
   }
   log.memory.info('QMD background worker started', {
+    pid: process.pid,
     kind: work.kind,
     initialize: work.kind === 'full' && work.initialize === true,
     force: work.kind === 'full' && work.force === true,
@@ -109,6 +121,7 @@ const isDirectEntry = process.argv[1]
 
 if (isDirectEntry) {
   const onParentDisconnect = () => {
+    closeSourceDatabases();
     disconnectAllDaemons();
     process.exit(1);
   };
@@ -116,6 +129,8 @@ if (isDirectEntry) {
 
   void main().finally(() => {
     process.off('disconnect', onParentDisconnect);
+    // Do not call process.exit() here. Metal residency sets can outlive the
+    // awaited store close briefly, and forced normal exit triggers GGML_ASSERT.
     if (process.connected) process.disconnect();
   });
 }

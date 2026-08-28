@@ -110,6 +110,8 @@ sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Reque
         format,
         language: effectiveLanguage || 'auto',
         audioSizeBytes: Math.round(audio.length * 3 / 4),
+        // Model-override retries run one-shot whisper-cli; otherwise the configured engine
+        engine: model ? 'whisper-cpp' : getOrCreateEngine(config)?.name,
         result,
       }).catch(() => undefined);
       log.stt.info(`Recording saved: ${saved.audioPath}`);
@@ -164,6 +166,7 @@ sttRouter.post('/recordings/:id/transcribe', express.json(), async (req: Request
       format: stored.format,
       language: effectiveLanguage || 'auto',
       audioSizeBytes: Math.round(stored.audio.length * 3 / 4),
+      engine: getOrCreateEngine(config)?.name,
       result,
     }).catch(() => undefined);
     // Re-run the shadow too, so the stored comparison reflects the same audio

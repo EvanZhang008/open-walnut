@@ -225,6 +225,42 @@ describe('applySessionPhase: read/unread marker rides the phase write', () => {
     expect(task.unread).toBe(false)
   })
 
+  it('permission request (awaiting-human) → AGENT_COMPLETE + UNREAD (agent blocked on a human)', async () => {
+    // 2026-08-18 user call: permission / AskUserQuestion / plan approval all
+    // mean the agent is done until a human acts — same red row as a result.
+    const taskId = await taskInPhase('IN_PROGRESS')
+    const res = await applySessionPhase(taskId, 'session:awaiting-human', 'test', { sessionId: 'sid-p' })
+    expect(res.changed).toBe(true)
+    const task = await getTask(taskId)
+    expect(task.phase).toBe('AGENT_COMPLETE')
+    expect(task.unread).toBe(true)
+  })
+
+  it('awaiting-human no-ops on AGENT_COMPLETE (60s re-emit must not churn)', async () => {
+    const taskId = await taskInPhase('AGENT_COMPLETE')
+    const res = await applySessionPhase(taskId, 'session:awaiting-human', 'test', { sessionId: 'sid-p' })
+    expect(res.changed).toBe(false)
+  })
+
+  it('awaiting-human never overwrites a terminal phase', async () => {
+    const taskId = await taskInPhase('COMPLETE')
+    const res = await applySessionPhase(taskId, 'session:awaiting-human', 'test', { sessionId: 'sid-p' })
+    expect(res.changed).toBe(false)
+    expect((await getTask(taskId)).phase).toBe('COMPLETE')
+  })
+
+  it('human answered → IN_PROGRESS + READ (the agent resumes, red clears)', async () => {
+    const taskId = await taskInPhase('IN_PROGRESS')
+    await applySessionPhase(taskId, 'session:awaiting-human', 'test', { sessionId: 'sid-p' })
+    expect((await getTask(taskId)).phase).toBe('AGENT_COMPLETE')
+
+    const res = await applySessionPhase(taskId, 'session:human-answered', 'test', { sessionId: 'sid-p' })
+    expect(res.changed).toBe(true)
+    const task = await getTask(taskId)
+    expect(task.phase).toBe('IN_PROGRESS')
+    expect(task.unread).toBe(false)
+  })
+
   it('a task the user already read goes unread again on the NEXT turn end', async () => {
     // Full round trip: agent finishes → unread → user opens it (read) → agent
     // finishes another turn → unread again. The old code could not express the

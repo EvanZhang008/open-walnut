@@ -21,6 +21,7 @@ import {
   InstanceLockError,
   stepForeignWriterWatch,
   initialForeignWriterWatchState,
+  registerManagedDbHolder,
   TASK_DB_WRITERS_RECOVERY_KEY,
 } from '../../src/core/instance-lock.js';
 import { WALNUT_HOME, TASKS_DIR } from '../../src/constants.js';
@@ -119,6 +120,16 @@ describe('foreign DB-holder detection (lsof layer)', () => {
       const holders = await listForeignDbHolders();
       expect(holders.some((h) => h.pid === holder.pid)).toBe(true);
       expect(holders.some((h) => h.pid === process.pid)).toBe(false);
+
+      const unregister = registerManagedDbHolder(holder.pid!);
+      expect(
+        (await listForeignDbHolders()).some((h) => h.pid === holder.pid),
+      ).toBe(false);
+      unregister();
+      expect(
+        (await listForeignDbHolders()).some((h) => h.pid === holder.pid),
+      ).toBe(true);
+
       // Persistence check (short gap): same pid across both probes survives.
       const persistent = await listPersistentForeignDbHolders(200);
       expect(persistent.some((h) => h.pid === holder.pid)).toBe(true);

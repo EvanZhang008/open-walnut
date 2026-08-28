@@ -18,6 +18,8 @@ export interface VoiceRecording {
   format: string;
   language: string;
   audioSizeBytes: number;
+  /** Engine that produced `result` (e.g. "mlx", "whisper-server") */
+  engine?: string;
   result?: { text: string; durationMs: number };
   error?: string;
   /** Shadow engine's take on the same audio (stt.secondary_engine A/B) */

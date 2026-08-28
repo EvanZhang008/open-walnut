@@ -107,9 +107,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._reply(400, {"error": "missing or non-temp wav path"})
                 return
             kwargs = {}
-            # Guard against silent truncation on long audio: mlx-audio's default
-            # max_tokens (8192) stops mid-file without any error.
-            kwargs["max_tokens"] = int(req.get("max_tokens") or 65536)
+            # max_tokens must scale with the AUDIO LENGTH. Two failure modes bound it:
+            # too low silently truncates long audio (mlx-audio's 8192 default), and
+            # too high lets a degenerate repetition loop on a 30s dictation run for
+            # many minutes while holding gen_lock — which starves every queued
+            # request behind it (observed live 2026-08-28: one wedged generate froze
+            # voice input entirely). ~32 tok/s of speech is 3-4x real zh-en density.
+            try:
+                import wave
+                with wave.open(wav, "rb") as wf:
+                    dur_s = wf.getnframes() / (wf.getframerate() or 16000)
+            except Exception:
+                dur_s = 600.0
+            cap = max(1024, min(int(dur_s * 32) + 256, 65536))
+            req_max = int(req.get("max_tokens") or cap)
+            kwargs["max_tokens"] = min(req_max, cap)
             kwargs["chunk_duration"] = float(req.get("chunk_duration") or 30.0)
             if req.get("language"):
                 kwargs["language"] = req["language"]
@@ -250,6 +262,13 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
           return serverPort;
         }
       } catch {
+        // A daemon mid-generation can hold the GIL long enough to miss the 2s
+        // probe. If a request is in flight it is BUSY, not dead — killing it
+        // here would abort someone else's transcription. Queue behind it.
+        if (inFlight > 0) {
+          log.stt.info('mlx daemon busy (health probe timed out with requests in flight) — queuing');
+          return serverPort;
+        }
         log.stt.warn('mlx daemon health check failed — restarting');
         killServer(probed);
       }
@@ -369,7 +388,12 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
       const wavPath = await convertToWav(req.audio, req.format);
       inFlight++; // after convertToWav — a convert throw must not leak the counter
       try {
-        log.stt.info(`Sending ${wavPath} to mlx daemon :${port} (model=${model})`);
+        // Timeout scales with audio length (16kHz mono s16le = 32000 bytes/s):
+        // transcription runs ~15x realtime on Metal, so 8x realtime + 90s floor
+        // is generous headroom without letting a dictation hang for 15 minutes.
+        const wavBytes = (await stat(wavPath)).size;
+        const timeoutMs = Math.min(15 * 60_000, Math.max(90_000, (wavBytes / 32_000) * 8_000));
+        log.stt.info(`Sending ${wavPath} to mlx daemon :${port} (model=${model}, timeout=${Math.round(timeoutMs / 1000)}s)`);
         const res = await fetch(`http://127.0.0.1:${port}/inference`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -378,9 +402,7 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
             language: mlxLanguageName(req.language),
             system_prompt: req.prompt || undefined,
           }),
-          // Generous but finite: a wedged generate() must not hang the caller's
-          // HTTP request forever. Long recordings run ~15x realtime on Metal.
-          signal: AbortSignal.timeout(15 * 60_000),
+          signal: AbortSignal.timeout(timeoutMs),
         });
         if (!res.ok) {
           let detail = '';

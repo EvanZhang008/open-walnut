@@ -33,6 +33,13 @@ export interface SessionSnapshot {
   pendingPermission: { requestId: string; toolName?: string; sinceTs?: number } | null
   /** Non-backgrounded, non-terminal background tasks (#870 semantics). */
   gatingBgCount: number
+  /** Backgrounded (is_backgrounded:true), non-terminal tasks — detached from
+   *  turn-over gating (incident 07fffbe5: the CLI's own turn-end does not wait
+   *  for them) but still REAL WORK IN FLIGHT. The status projection maps
+   *  count>0 to 'running' (user decision 2026-08-28: a session with a live
+   *  background command is running, not idle). Optional so snapshots from
+   *  pre-field daemons (absent = undefined) keep the old idle behavior. */
+  detachedBgCount?: number
   teamActive: boolean
   /** A CronCreate succeeded and no CronDelete removed it — the CLI's cron
    *  scheduler (/loop) is armed, so idle reapers must treat this session as
@@ -305,7 +312,12 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
       next.bgTasks = { ...next.bgTasks }
       next.bgTasks[taskId] = {
         terminal: prev ? prev.terminal : false,
-        isBackgrounded: prev ? prev.isBackgrounded : false,
+        // A run_in_background Bash task carries is_backgrounded:true TOP-LEVEL
+        // on its task_started (verified live, local_bash 2026-08-28) — reading
+        // only task_updated patches misfiled it as GATING, which held
+        // turnActive instead of counting it detached (same 'running'
+        // projection, lying counters). Sticky, same as the patch path.
+        isBackgrounded: parsed.is_backgrounded === true || (prev ? prev.isBackgrounded : false),
       }
     } else if (taskId && subtype === 'task_updated') {
       const prev = next.bgTasks[taskId]
@@ -456,9 +468,12 @@ export function assembleSnapshot(input: {
 }): SessionSnapshot {
   const s = input.foldState
   let gating = 0
+  let detached = 0
   for (const id of Object.keys(s.bgTasks)) {
     const t = s.bgTasks[id]
-    if (!t.terminal && !t.isBackgrounded && !t.endedPerLevel) gating++
+    if (t.terminal || t.endedPerLevel) continue
+    if (t.isBackgrounded) detached++
+    else gating++
   }
   const ctrl = input.pendingCtrl
   return {
@@ -473,6 +488,7 @@ export function assembleSnapshot(input: {
         }
       : null,
     gatingBgCount: gating,
+    detachedBgCount: detached,
     teamActive: s.teamActive,
     cronActive: Object.keys(s.cronIds).length > 0,
     lastResult: s.lastResult ? { ...s.lastResult } : null,
@@ -493,7 +509,9 @@ export function assembleSnapshot(input: {
  */
 export function snapshotDiffers(a: SessionSnapshot, b: SessionSnapshot): boolean {
   if (a.cliState !== b.cliState || a.turnActive !== b.turnActive
-    || a.gatingBgCount !== b.gatingBgCount || a.teamActive !== b.teamActive
+    || a.gatingBgCount !== b.gatingBgCount
+    || (a.detachedBgCount ?? 0) !== (b.detachedBgCount ?? 0)
+    || a.teamActive !== b.teamActive
     || a.cronActive !== b.cronActive
     || a.pid !== b.pid || a.exitCode !== b.exitCode
     || (a.streamEpoch ?? null) !== (b.streamEpoch ?? null)) return true

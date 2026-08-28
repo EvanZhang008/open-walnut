@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, memo, Fragment, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
+import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, Fragment, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
@@ -49,7 +49,6 @@ import { log } from '@/utils/log';
 import { visibleInterval } from '@/utils/page-visibility';
 import {
   mapServerTaskSearchResults,
-  rankOpenTasksFirst,
   taskReferenceMatchField,
 } from './search-results';
 import { useTaskSearch } from '@/hooks/useTaskSearch';
@@ -448,9 +447,13 @@ interface SortableTaskItemProps {
   depth?: number;               // Nesting depth (0 = top-level, 1 = child, 2 = grandchild, etc.)
   childCount?: number;
   isExpanded?: boolean;           // Whether children are visible (only for parents)
-  onToggleExpand?: () => void;    // Toggle children visibility
-  /** Receives the mouse event so callers can detect Cmd/Ctrl/Shift multi-select. */
-  onClick: (e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => void;
+  /** Toggle children visibility. Takes the task id so call sites can pass ONE
+   *  stable callback instead of a per-row lambda (per-row lambdas defeat the
+   *  memo() wrapper and re-render every mounted row on each panel render). */
+  onToggleExpand?: (taskId: string) => void;
+  /** Receives the task + mouse event so callers can detect Cmd/Ctrl/Shift
+   *  multi-select. Task-first for the same stable-callback reason as above. */
+  onClick: (task: Task, e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => void;
   /** True when this task is part of the current multi-select set (group-building). */
   isSelected?: boolean;
   /** When true, the panel is in explicit select mode: show a leading checkbox and a
@@ -626,7 +629,11 @@ function buildTierGroupMeta(displayed: Task[], labels?: Record<string, string>):
   return map;
 }
 
-function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onStartSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveToProject, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup }: SortableTaskItemProps) {
+// memo: with ~6k tasks the mounted-row count is what turns every panel render
+// into a main-thread block. All props are stable references (useCallback
+// handlers, per-task objects reused by the useTasks identity-preserving merge),
+// so shallow compare skips unchanged rows.
+const SortableTaskItem = memo(function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onStartSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveToProject, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup }: SortableTaskItemProps) {
   // Live circle: error red / waiting red-pulse / running green-pulse.
   const circleClass = useTaskCircle(task);
   const {
@@ -769,13 +776,13 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
     // the natural click target) — forward the event so the row handler sees the
     // metaKey/ctrlKey/shiftKey instead of treating it as a plain focus click.
     if (e.metaKey || e.ctrlKey || e.shiftKey) {
-      onClick(e);
+      onClick(task, e);
       return;
     }
     // First click on an unfocused task → focus it (open detail panel).
     // Only enter editing mode when task is already focused.
     if (!isFocused) {
-      onClick();
+      onClick(task);
       return;
     }
     if (!onUpdateTitle) return;
@@ -845,9 +852,9 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
         if (selectMode) { onSelectToggle?.(task.id); return; }
         // Title has its own click handler (focus first, edit on second click)
         if ((e.target as HTMLElement).closest('.todo-item-title')) return;
-        onClick(e);
+        onClick(task, e);
       }}
-      onKeyDown={(e) => { if (e.key === 'Enter' && !isEditing) onClick(); }}
+      onKeyDown={(e) => { if (e.key === 'Enter' && !isEditing) onClick(task); }}
       {...activeAttributes}
       {...activeListeners}
     >
@@ -870,7 +877,7 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
         <button
           className={`collapse-chevron${isExpanded ? ' expanded' : ''}`}
           title={isExpanded ? 'Collapse child tasks' : `Expand ${childCount} child task(s)`}
-          onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
+          onClick={(e) => { e.stopPropagation(); onToggleExpand?.(task.id); }}
         >
           {CHEVRON_ICON}
         </button>
@@ -982,7 +989,7 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
     </div>
     </>
   );
-}
+});
 
 // ── Static task item for DragOverlay ──
 
@@ -2387,7 +2394,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const activeSectionRef = useRef<TodoSection>(activeSection);
   const handleSectionChange = useCallback((section: TodoSection) => {
     if (isSearchModeRef.current) { setSearchSection(section); return; }
-    setActiveSection(section);
+    // startTransition: switching into a big section (Tasks/All = thousands of
+    // mounted rows) is a multi-second render. Time-slice it so the click never
+    // freezes the page — typing/scrolling stay responsive while rows mount.
+    startTransition(() => setActiveSection(section));
     persistSection(section);
   }, []);
   // Self-heal a stale custom-tier tab: if the active tab is a deleted tier's id
@@ -2484,8 +2494,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // (RECENT_VISIBLE_MAX * 30) with no way to pull it taller.
   const recentResize = useResizableHeight('open-walnut-focus-tier-height-recent', { min: 60, max: 1200 });
 
-  // Determine if search mode is active (query entered)
-  const isSearchMode = searchQuery.trim().length > 0;
+  // Typing responsiveness (2026-08-26): the search input tracks `searchQuery`
+  // synchronously, but every EXPENSIVE consumer (match recompute over thousands
+  // of tasks, the section-layout flip, the pinned/recent search-mode filters)
+  // reads this deferred copy instead. React renders the keystroke first and the
+  // heavy pass at deferred (interruptible) priority, so fast typing never waits
+  // on a full panel recompute per character.
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+
+  // Determine if search mode is active (query entered). Derived from the
+  // DEFERRED query so mode-dependent consumers flip in the same pass that
+  // computes their matches (an urgent flip with a stale deferred query would
+  // run one frame of "search mode with empty query" = match-everything).
+  const isSearchMode = deferredSearchQuery.trim().length > 0;
 
   // ── Section-tab view resolution ──
   // Search defaults to the stacked All view so EVERY region (pinned tiers, Recent,
@@ -2920,16 +2941,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, []);
 
   // ── Sticky pin membership during the grace window ──
-  // Completing a task AUTO-UNPINS it server-side (task-manager.ts: "Auto-unpin
-  // completed tasks so they don't linger in Focus Bar"), and getPinnedTasks() also
-  // filters done tasks defensively. So the id leaves `pinnedTaskIds`/`focusTaskIds`
-  // the moment it completes and the Focus/Satellite/Wait card is yanked out of the
-  // dataset — the grace filters never even see it, which is why a completed card
-  // vanished instantly from Focus while the Recent copy sat there for 3s.
-  //
-  // Fix: remember the pin membership each task had just BEFORE it completed, and keep
-  // serving it for the length of the grace window. The server state is untouched (the
-  // auto-unpin is correct); this only defers when the UI stops drawing the card.
+  // HISTORICAL SHIM, now a fallback: completing a task used to AUTO-UNPIN it
+  // server-side and getPinnedTasks() filtered done tasks, so the card was
+  // yanked out of the tier dataset before the grace filters ever saw it. Both
+  // behaviors were removed 2026-08-26 (completed pins now stay in their tier),
+  // so on a current server this snapshot is a no-op. It stays as cover for the
+  // transition (stale replicas / older servers still emitting the unpin).
   const lastPinStateRef = useRef<Map<string, { pinned: boolean; tier: string }>>(new Map());
   useEffect(() => {
     for (const t of tasks) {
@@ -3027,15 +3044,22 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // single filter propagates to every tier + clustering + drag for free.
   // FROZEN during a pinned drag: external churn must not add/remove/replace pinned
   // Task objects mid-drag (cards would remount → dnd-kit useRect loop → React #185).
+  // Completed pins keep their MEMBERSHIP (completion no longer unpins,
+  // 2026-08-26) but the tier only DISPLAYS them during search: a query match
+  // in Focus/Satellite must surface even when the task is done, while the
+  // everyday tier view stays clutter-free (grace still covers the completion
+  // animation there).
   const pinnedTasksLive = useMemo(() => {
     if (pinnedIdsWithGrace.size === 0) return [];
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
     return [...pinnedIdsWithGrace]
       .map((id) => taskMap.get(id))
       .filter((t): t is Task => !!t
-        && ((t.status !== 'done' && t.phase !== 'COMPLETE') || keepWhileCompleting(t))
+        && (isSearchMode
+          || (t.status !== 'done' && t.phase !== 'COMPLETE')
+          || keepWhileCompleting(t))
         && !(t.group_id && hiddenGroups?.has(t.group_id)));
-  }, [tasks, pinnedIdsWithGrace, hiddenGroups, keepWhileCompleting, recentTick]);
+  }, [tasks, pinnedIdsWithGrace, hiddenGroups, keepWhileCompleting, recentTick, isSearchMode]);
   const pinnedTasks = useFrozenWhile(pinnedTasksLive, isPinnedDragActive);
 
   // Hidden groups that HAVE pinned members — these were collapsed out of the tiers
@@ -3125,14 +3149,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (t.completed_at && t.completed_at > m) m = t.completed_at;
       return m;
     };
+    // Completed tasks join the feed DURING SEARCH (2026-08-26, user request —
+    // a matching done task must be findable in Recent too); the everyday feed
+    // keeps the "Show completed" gate (+ the completion-animation grace).
     return tasks
       .filter(t => {
         const isDone = t.status === 'done' || t.phase === 'COMPLETE';
-        return isDone ? (showCompleted || keepWhileCompleting(t)) : true;
+        return isDone ? (isSearchMode || showCompleted || keepWhileCompleting(t)) : true;
       })
       .sort((a, b) => recentTime(b).localeCompare(recentTime(a)))
       .slice(0, 50);
-  }, [tasks, showCompleted, keepWhileCompleting, recentTick, recentSortMode]);
+  }, [tasks, showCompleted, keepWhileCompleting, recentTick, recentSortMode, isSearchMode]);
   const recentTasks = useFrozenWhile(recentTasksLive, isPinnedDragActive);
 
   // Stable sensor config — inline objects in useSensor destabilize dnd-kit's internal
@@ -4471,7 +4498,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const eligibleTasks = hasActiveTaskQuery(taskQueryState)
       ? tasks.filter(matchesCanonicalQuery)
       : tasks;
-    const lowerQuery = searchQuery.trim().toLowerCase();
+    const lowerQuery = deferredSearchQuery.trim().toLowerCase();
     // Keep the urgent pass on small metadata fields; descriptions and summaries can
     // contain enough text to block an input frame across a large task collection.
     const metadataMatches = eligibleTasks.filter((t) =>
@@ -4482,13 +4509,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
     if (!searchResults) {
       const metadataTaskIds = new Set(metadataMatches.map((task) => task.id));
-      return rankOpenTasksFirst([
+      return [
         ...metadataMatches,
         ...eligibleTasks.filter((task) =>
           !metadataTaskIds.has(task.id)
-          && taskReferenceMatchField(task, searchQuery) !== null
+          && taskReferenceMatchField(task, deferredSearchQuery) !== null
         ),
-      ]);
+      ];
     }
 
     // Direct metadata matches (literal substring of what the user typed) rank BEFORE
@@ -4498,16 +4525,23 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // no-server fallback above, so arriving semantic results refine the tail instead
     // of reshuffling the head. Reference ownership remains server-authoritative
     // because local session fields can be stale.
+    //
+    // No open-before-done partition on top (removed 2026-08-26 by user request):
+    // order is pure relevance rank, so a completed task that IS the best match
+    // ranks above barely-relevant open ones. Live work stays competitive via
+    // the server's completedLivenessPenalty (core/search.ts, 2026-08-28) —
+    // stale completed matches sink within their coverage tier, strong exact
+    // matches are structurally exempt.
     const serverMatches = mapServerTaskSearchResults(
       eligibleTasks,
       searchResults.map((result) => result.taskId),
     );
     const metadataTaskIds = new Set(metadataMatches.map((task) => task.id));
-    return rankOpenTasksFirst([
+    return [
       ...metadataMatches,
       ...serverMatches.filter((task) => !metadataTaskIds.has(task.id)),
-    ]);
-  }, [tasks, filtered, isSearchMode, searchQuery, searchResults, taskQueryState, matchesCanonicalQuery]);
+    ];
+  }, [tasks, filtered, isSearchMode, deferredSearchQuery, searchResults, taskQueryState, matchesCanonicalQuery]);
 
   // Counts and cross-section visibility use the complete match set, but the main
   // list mounts a bounded number of rows so neither search phase can stall typing.
@@ -5561,6 +5595,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
     return map;
   }, [grouped, fullGrouped, onReorder, ensureManualSort]);
+
+  // Stable move-up dispatcher: the map above rebuilds (fresh closures) on every
+  // tasks change, and passing those closures straight down gave every row a new
+  // onMoveUp identity per render — defeating the row memo() list-wide. Rows get
+  // this ONE function (eligibility still decided per row via moveUpMap.has).
+  // useLayoutEffect, not a render-phase write: this component renders inside
+  // startTransition, where React may discard or replay a render — a ref
+  // mutated during render can then hold a map from a thrown-away tree.
+  const moveUpMapRef = useRef(moveUpMap);
+  useLayoutEffect(() => { moveUpMapRef.current = moveUpMap; }, [moveUpMap]);
+  const handleMoveUpById = useCallback((taskId: string) => {
+    moveUpMapRef.current.get(taskId)?.();
+  }, []);
 
   const draggedTask = activeDragId ? sorted.find((t) => t.id === activeDragId) : null;
 
@@ -6889,7 +6936,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         )}
         {!loading && isSearchMode && searchFiltered.length === 0 && (
           <div className="empty-state" style={{ padding: '24px 8px' }}>
-            <p className="text-sm">No tasks match &lsquo;{searchQuery}&rsquo;</p>
+            {/* While the server pass is still in flight, "no matches yet" is a
+                pending state, not an answer — declaring "No tasks match" early
+                reads as a (wrong) final verdict for queries with no literal
+                title hit. */}
+            {isSearching
+              ? <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2, margin: '0 auto' }} />
+              : <p className="text-sm">No tasks match &lsquo;{deferredSearchQuery}&rsquo;</p>}
           </div>
         )}
         {!loading && !isSearchMode && filtered.length === 0 && (
@@ -6952,8 +7005,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     depth={depthMap.get(task.id) ?? 0}
                     childCount={searchChildCount.get(task.id)}
                     isExpanded={expandedParents.has(task.id)}
-                    onToggleExpand={() => toggleParentExpand(task.id)}
-                    onClick={(e) => handleTaskClick(task, e)}
+                    onToggleExpand={toggleParentExpand}
+                    onClick={handleTaskClick}
                   isSelected={selectedIds.has(task.id)}
                   selectMode={selectMode}
                   onSelectToggle={onSelectToggle}
@@ -6972,7 +7025,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     onUnpinTask={onUnpinTask}
                     onSetTier={onSetTier}
                     onUnparent={onReparentTask ? handleUnparent : undefined}
-                    onMoveUp={moveUpMap.get(task.id)}
+                    onMoveUp={moveUpMap.has(task.id) ? handleMoveUpById : undefined}
                     onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
                     isPinned={pinnedTaskIds?.has(task.id)}
                     pinnedTier={getTier(task.id)}
@@ -7003,8 +7056,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   depth={depthMap.get(task.id) ?? 0}
                   childCount={trueChildCountMap.get(task.id)}
                   isExpanded={expandedParents.has(task.id)}
-                  onToggleExpand={() => toggleParentExpand(task.id)}
-                  onClick={(e) => handleTaskClick(task, e)}
+                  onToggleExpand={toggleParentExpand}
+                  onClick={handleTaskClick}
                   isSelected={selectedIds.has(task.id)}
                   selectMode={selectMode}
                   onSelectToggle={onSelectToggle}
@@ -7022,7 +7075,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   onPinTask={onPinTask}
                   onUnpinTask={onUnpinTask}
                   onUnparent={onReparentTask ? handleUnparent : undefined}
-                  onMoveUp={moveUpMap.get(task.id)}
+                  onMoveUp={moveUpMap.has(task.id) ? handleMoveUpById : undefined}
                   onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
                   isPinned={pinnedTaskIds?.has(task.id)}
                   searchContext={task.project || 'Inbox'}
@@ -7119,8 +7172,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 depth={depthMap.get(task.id) ?? 0}
                                 childCount={trueChildCountMap.get(task.id)}
                                 isExpanded={expandedParents.has(task.id)}
-                                onToggleExpand={() => toggleParentExpand(task.id)}
-                                onClick={(e) => handleTaskClick(task, e)}
+                                onToggleExpand={toggleParentExpand}
+                                onClick={handleTaskClick}
                                 isSelected={selectedIds.has(task.id)}
                                 selectMode={selectMode}
                                 onSelectToggle={onSelectToggle}
@@ -7139,7 +7192,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 onUnpinTask={onUnpinTask}
                                 onSetTier={onSetTier}
                                 onUnparent={onReparentTask ? handleUnparent : undefined}
-                                onMoveUp={moveUpMap.get(task.id)}
+                                onMoveUp={moveUpMap.has(task.id) ? handleMoveUpById : undefined}
                                 onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
                                 isPinned={pinnedTaskIds?.has(task.id)}
                                 pinnedTier={getTier(task.id)}

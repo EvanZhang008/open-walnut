@@ -7,34 +7,28 @@ export interface TaskReferenceFields {
   external_url?: string;
 }
 
-/** Fields the open-first search ranking reads. */
-export interface TaskSearchRankFields {
-  id: string;
-  status?: string;
-  title?: string;
+/** Collect owning task IDs from ranked search rows, keeping the best rank once. */
+export function taskIdsFromSearchResults<T extends { taskId?: string }>(
+  results: readonly T[],
+): string[] {
+  const taskIds: string[] = [];
+  const seen = new Set<string>();
+
+  for (const result of results) {
+    const taskId = result.taskId;
+    if (!taskId || seen.has(taskId)) continue;
+    seen.add(taskId);
+    taskIds.push(taskId);
+  }
+
+  return taskIds;
 }
 
-/**
- * Rank a search match list so OPEN tasks come before completed ones, stably.
- *
- * Search intentionally ignores every view filter — including "Show completed" —
- * so the raw match set is dominated by history (a mature install has ~20x more
- * done tasks than open ones). Without this, a broad query like "check" fills
- * the whole render cap with finished work and the one live task the user was
- * hunting for never mounts.
- *
- * Order WITHIN each bucket is preserved: relevance ordering (metadata-exact
- * first, then the server's semantic ranking) is decided by the caller, and this
- * only partitions by open-vs-done on top of it.
- */
-export function rankOpenTasksFirst<T extends TaskSearchRankFields>(
-  matches: readonly T[],
-): T[] {
-  const open: T[] = [];
-  const done: T[] = [];
-  for (const task of matches) (task.status === 'done' ? done : open).push(task);
-  return [...open, ...done];
-}
+// rankOpenTasksFirst (open-before-done partition on top of relevance) was
+// REMOVED 2026-08-26 by user request: search order is pure relevance rank, so
+// the best match wins even when it's completed. The original worry (broad
+// queries burying the one live task under 20x more finished history) is
+// covered by the engine's recency scoring component instead.
 
 const MIN_PARTIAL_REFERENCE_LENGTH = 8;
 

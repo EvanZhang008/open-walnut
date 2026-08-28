@@ -993,3 +993,121 @@ describe('property — batch foldLines matches foldSessionTail verdict (3000 see
     expect(multiAnchorRuns, 'generator produced no multi-anchor sequences').toBeGreaterThan(500)
   })
 })
+
+// ── detachedBgCount (run_in_background commands; user decision 2026-08-28,
+// inc-1787893885321: a live detached command means the session is RUNNING,
+// not idle — the projection maps count>0 to 'running') ──
+
+function detached(s: FoldState): number {
+  return assembleSnapshot({ foldState: s, pendingCtrl: null, dead: false, pid: 1, exitCode: null }).detachedBgCount ?? -1
+}
+
+describe('assembleSnapshot — detachedBgCount', () => {
+  it('a backgrounded non-terminal task counts as detached, not gating', () => {
+    const s = fold([
+      userEvent('run the bench'),
+      taskStarted('bg1'),
+      taskUpdated('bg1', { is_backgrounded: true }),
+      resultEvent(),
+      stateEvent('idle'),
+    ])
+    expect(gating(s)).toBe(0)      // detached from turn-over (07fffbe5)
+    expect(detached(s)).toBe(1)    // …but still real work in flight
+    // Turn settles (idle + no gating) — cliState idle while the command runs;
+    // the PROJECTION (session-snapshot-apply) maps detached>0 to 'running'.
+    const snap = assembleSnapshot({ foldState: s, pendingCtrl: null, dead: false, pid: 1, exitCode: null })
+    expect(snap.cliState).toBe('idle')
+    expect(snap.turnActive).toBe(false)
+  })
+
+  it('terminal bookend (task_notification) drains the detached count', () => {
+    const s = fold([
+      userEvent(),
+      taskStarted('bg1'),
+      taskUpdated('bg1', { is_backgrounded: true }),
+      resultEvent(),
+      stateEvent('idle'),
+      taskDone('bg1', 'completed'),
+    ])
+    expect(detached(s)).toBe(0)
+    expect(gating(s)).toBe(0)
+  })
+
+  it('mixed: gating and detached tasks are counted separately', () => {
+    const s = fold([
+      userEvent(),
+      taskStarted('gate1'),
+      taskStarted('bg1'),
+      taskUpdated('bg1', { is_backgrounded: true }),
+    ])
+    expect(gating(s)).toBe(1)
+    expect(detached(s)).toBe(1)
+  })
+
+  it('a real user anchor resets detached tasks (window reset), progress re-adds', () => {
+    const s = fold([
+      userEvent('turn 1'),
+      taskStarted('bg1'),
+      taskUpdated('bg1', { is_backgrounded: true }),
+      userEvent('turn 2'),
+    ])
+    expect(detached(s)).toBe(0)
+    // The live command re-enters via its next task_progress (self-heal), but a
+    // bare progress line has no is_backgrounded knowledge — it re-enters as
+    // GATING until a task_updated patch re-marks it (safe direction: over-gate).
+    const healed = fold([
+      userEvent('turn 1'),
+      taskStarted('bg1'),
+      taskUpdated('bg1', { is_backgrounded: true }),
+      userEvent('turn 2'),
+      taskProgress('bg1'),
+      taskUpdated('bg1', { is_backgrounded: true }),
+    ])
+    expect(detached(healed)).toBe(1)
+    expect(gating(healed)).toBe(0)
+  })
+
+  it('endedPerLevel excludes a detached task from the count', () => {
+    const s = fold([
+      userEvent(),
+      taskStarted('bg1'),
+      taskUpdated('bg1', { is_backgrounded: true }),
+      bgTasksChanged(['bg1']),
+      bgTasksChanged([]),   // level omits it after listing → endedPerLevel
+    ])
+    expect(detached(s)).toBe(0)
+  })
+})
+
+describe('foldLine — is_backgrounded arrives TOP-LEVEL on task_started (local_bash shape)', () => {
+  function taskStartedBackgrounded(taskId: string): string {
+    return JSON.stringify({
+      type: 'system', subtype: 'task_started', session_id: SID,
+      task_id: taskId, task_type: 'local_bash', is_backgrounded: true,
+    })
+  }
+
+  it('counts as detached from the start — turn settles around it', () => {
+    const s = fold([
+      userEvent('run bench'),
+      taskStartedBackgrounded('bg1'),
+      resultEvent(),
+      stateEvent('idle'),
+    ])
+    expect(gating(s)).toBe(0)
+    expect(detached(s)).toBe(1)
+    const snap = assembleSnapshot({ foldState: s, pendingCtrl: null, dead: false, pid: 1, exitCode: null })
+    expect(snap.cliState).toBe('idle')   // settled; projection maps detached>0 → running
+    expect(snap.turnActive).toBe(false)
+  })
+
+  it('sticky across later bare task_progress lines', () => {
+    const s = fold([
+      userEvent(),
+      taskStartedBackgrounded('bg1'),
+      taskProgress('bg1'),
+    ])
+    expect(detached(s)).toBe(1)
+    expect(gating(s)).toBe(0)
+  })
+})

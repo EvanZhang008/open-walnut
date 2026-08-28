@@ -23,6 +23,7 @@ import { runPeriodic, type PeriodicHandle, type TickContext } from './periodic-t
 import type { SessionRecord, Task, TaskPhase } from './types.js'
 import type { SessionWillReapEvent } from './event-types.js'
 import { emitSessionStatusChanged } from './session-tracker.js'
+import { classifySessionError, isRescuableStoppedRecord } from './session-error-kind.js'
 const HEALTH_CHECK_INTERVAL_MS = 30_000
 /** Adaptive slow-down: with an empty active set there is nothing to watch. */
 const HEALTH_CHECK_IDLE_INTERVAL_MS = 5 * 60_000
@@ -260,7 +261,7 @@ export class SessionHealthMonitor {
 
     // Auto-recover remote sessions stuck in 'error' due to connection loss
     if (!ctx.overBudget()) {
-      await this.recoverConnectionLostSessions(allSessions, updateSessionRecord)
+      await this.recoverInfraFailedSessions(allSessions, updateSessionRecord)
     }
     const tRecover = Date.now()
 
@@ -427,13 +428,19 @@ export class SessionHealthMonitor {
 
         // Remote session: daemon disconnection ≠ process death.
         // The remote process may still be alive — we just can't verify it right now.
-        // Always use recoverable 'error' + "Connection lost" path regardless of
-        // process_status or task phase, so recoverConnectionLostSessions() can
-        // probe and restore the session after the daemon reconnects.
+        // Always use the recoverable-'error' path regardless of process_status or
+        // task phase, so recoverInfraFailedSessions() can probe and restore the
+        // session after the daemon reconnects.
+        //
+        // `errorKind: 'infra'` is the load-bearing part: recoverability must be a
+        // FIELD, not a prose match on this message. In enforce mode this whole
+        // write is a category-① pair the snapshot gate drops, and the gate stashes
+        // this diagnosis for the projection to adopt (session-snapshot-gate.ts).
         if (session.host) {
           const updated = await updateSessionRecord(session.claudeSessionId, {
             process_status: 'error',
             errorMessage: 'Connection lost — unable to reach remote host',
+            errorKind: 'infra',
             activity: undefined,
             last_status_change: now,
             status_reason: 'remote_unreachable',
@@ -1182,6 +1189,15 @@ export class SessionHealthMonitor {
    */
   private reconcileAttemptAt = new Map<string, number>()
 
+  /** Negative cache for rescuable-'stopped' probes: a probe that confirmed the
+   *  process dead writes nothing (by design), so without this the same dead
+   *  row is re-probed every 30s for its whole 24h window — and with stable
+   *  rowid iteration a death cohort of 10+ starves the 'error' rescues this
+   *  loop exists for (live DB measured 100 stopped candidates vs 4 error rows,
+   *  all past the budget). Keyed on last_status_change so any real state
+   *  change re-arms the probe immediately. */
+  private stoppedProbeAt = new Map<string, { at: number; stamp: string | undefined }>()
+
   private async reconcileStuckRunningSessions(sessions: SessionRecord[], taskMap?: Map<string, Task>): Promise<Set<string>> {
     const ACTIVITY_FRESH_MS = 3 * 60 * 1000   // events this recent = genuinely streaming
     const RECONCILE_RETRY_MS = 5 * 60 * 1000  // min gap between tail reads per session
@@ -1381,7 +1397,7 @@ export class SessionHealthMonitor {
    *   - Daemon connected + process dead → set 'stopped' (resumable)
    *   - Daemon not connected → update activity to "Reconnecting..." (UI shows yellow banner)
    */
-  private async recoverConnectionLostSessions(
+  private async recoverInfraFailedSessions(
     sessions: SessionRecord[],
     updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<SessionRecord>,
   ): Promise<void> {
@@ -1392,21 +1408,81 @@ export class SessionHealthMonitor {
       // timeout on a bad host; unbounded, one flaky host eats the whole tick
       // budget. Remaining candidates get the next tick.
       const MAX_RECOVER_PER_TICK = 10
+      // Stopped rescues get their OWN budget (mirroring MAX_STOPPED_PROBES in
+      // daemon-connection.ts): they are speculative "is the record lying?"
+      // checks, and sharing the error budget let a cohort of confirmed-dead
+      // stopped rows starve the genuinely wedged 'error' sessions for 24h.
+      const MAX_STOPPED_PROBES_PER_TICK = 5
+      const STOPPED_REPROBE_COOLDOWN_MS = 10 * 60 * 1000
       let probed = 0
+      let stoppedProbed = 0
+      if (this.stoppedProbeAt.size > 1000) this.stoppedProbeAt.clear()
 
       for (const s of sessions) {
-        if (probed >= MAX_RECOVER_PER_TICK) break
-        // Only target remote sessions in error state with "Connection lost" message
-        if (!s.host) continue
-        if (s.process_status !== 'error') continue
-        if (!s.errorMessage?.includes('Connection lost')) continue
+        if (probed >= MAX_RECOVER_PER_TICK && stoppedProbed >= MAX_STOPPED_PROBES_PER_TICK) break
+        // Remote sessions in 'error' that are worth rescuing. Two shapes qualify,
+        // and the second one is the incident:
+        //   infra   — the substrate died; probe and restore or resume.
+        //   unknown AND unexplained — an 'error' with no message at all. This is
+        //             what the C2 snapshot projection writes, and the old gate
+        //             (`!s.errorMessage?.includes('Connection lost')`) read it as
+        //             "a real user-visible error, leave it alone", so 51 sessions
+        //             sat here forever (inc-1787439819342).
+        //
+        // An unknown cause that DOES explain itself is left exactly as it is: the
+        // record is already honest ("Error getting AWS credentials…"), relabelling
+        // it to 'stopped' would wipe that text, and probing 100+ historical rows
+        // every tick would spend the whole per-tick budget on sessions nobody can
+        // rescue anyway.
+        //
+        // Local sessions (host null) go through the LOCAL daemon since the
+        // daemon-uniform migration — normalize to '__local__' instead of the old
+        // `if (!s.host) continue`, which silently excluded every local session
+        // from this recovery (inc-1787511363340: a local session's wedged record
+        // had no 30s-tick path back to the truth).
+        //
+        // A recent 'stopped' with a non-intentional cause is probed too: it is a
+        // claim about process death the daemon can cheaply refute, and 'stopped'
+        // otherwise has NO recovery path at all (same incident: the live CLI ran
+        // 1.6h behind a bare 'stopped' record every loop skipped). Probe-dead →
+        // leave it exactly as it is.
         if (s.archived) continue
-        probed++
+        const hostKey = s.host ?? '__local__'
+        let wasStopped = false
+        if (s.process_status === 'error') {
+          // Local codex/ACP records keep their pre-existing exclusion (`!s.host`
+          // skipped them): their liveness is acpState-keyed, not `status`/sid —
+          // a sid probe always answers dead and would relabel a resumable one.
+          if (!s.host && s.engine === 'codex') continue
+          const errorClass = classifySessionError(s)
+          if (errorClass === 'terminal') continue
+          if (errorClass === 'unknown' && s.errorMessage) continue
+          if (probed >= MAX_RECOVER_PER_TICK) continue
+        } else if (s.engine !== 'codex' && isRescuableStoppedRecord(s)) {
+          if (stoppedProbed >= MAX_STOPPED_PROBES_PER_TICK) continue
+          // Probe-confirmed dead rows write nothing, so gate re-probes on a
+          // cooldown keyed to last_status_change (a real change re-arms).
+          const seen = this.stoppedProbeAt.get(s.claudeSessionId)
+          if (seen && seen.stamp === s.last_status_change
+              && Date.now() - seen.at < STOPPED_REPROBE_COOLDOWN_MS) continue
+          wasStopped = true
+        } else {
+          continue
+        }
+        if (wasStopped) {
+          stoppedProbed++
+          this.stoppedProbeAt.set(s.claudeSessionId, {
+            at: Date.now(), stamp: s.last_status_change,
+          })
+        } else {
+          probed++
+        }
 
         try {
-          if (isDaemonConnected(s.host)) {
-            // Daemon is connected — probe the remote process
-            const probe = await probeDaemonSession(s.host, s.claudeSessionId)
+          if (isDaemonConnected(hostKey)) {
+            // Daemon is connected — probe the process (local or remote: the
+            // daemon on that host owns per-session truth either way)
+            const probe = await probeDaemonSession(hostKey, s.claudeSessionId)
 
             if (probe === null) {
               // Probe failed (daemon disconnected mid-probe) — retry next cycle
@@ -1415,15 +1491,32 @@ export class SessionHealthMonitor {
 
             const now = new Date().toISOString()
             if (probe.alive) {
-              // Process still running — restore session
+              // Process still running — restore session. errorKind must clear
+              // too (it wins over everything in classifySessionError, so a
+              // surviving 'infra' stamp makes a healthy record rescuable for
+              // 24h and can later arm an auto-resume of finished work).
+              // A rescued-'stopped' record relabels to 'idle', not 'running':
+              // the probe only proves process liveness, not a turn in flight,
+              // and a false green Running badge also shields the record from
+              // idle-capacity eviction. The reconciler/snapshot lane promotes
+              // a genuinely streaming session to 'running' within seconds.
               const updated = await updateSessionRecord(s.claudeSessionId, {
-                process_status: 'running',
+                process_status: wasStopped ? 'idle' : 'running',
                 errorMessage: undefined,
+                errorKind: undefined,
                 activity: undefined,
                 last_status_change: now,
                 status_reason: 'auto_recovered',
                 status_changed_by: 'health-monitor',
               } as any)
+              // Separate transport-fact patch (no status fields → bypasses the
+              // C2 gate, which drops the WHOLE stamped patch above for covered
+              // sessions): a recovered record left with pid null is re-orphaned
+              // by the dead-pool drain within 2min.
+              if (typeof probe.pid === 'number' && s.pid !== probe.pid) {
+                await updateSessionRecord(s.claudeSessionId, { pid: probe.pid } as any)
+                  .catch(() => {})
+              }
               emitSessionStatusChanged(
                 updated,
                 {},
@@ -1431,13 +1524,34 @@ export class SessionHealthMonitor {
                 { source: 'health-monitor', urgency: 'urgent' },
               )
               log.session.info('health monitor: auto-recovered connection-lost session', {
-                sessionId: s.claudeSessionId, host: s.host, alive: true,
+                sessionId: s.claudeSessionId, host: hostKey, alive: true,
+                rescuedFromStopped: wasStopped || undefined,
               })
+            } else if (wasStopped) {
+              // The record already said 'stopped' and the daemon agrees the
+              // process is gone — the record was right. No writes, no
+              // auto-resume, no phase sync: probing must cost nothing here.
+              continue
             } else {
-              // Process dead — mark stopped (user's next message will --resume)
+              // Process dead — mark stopped (resumable).
+              //
+              // NOTE for snapshot-covered sessions: this pair is itself category-①,
+              // so the gate drops it and the record STAYS 'error'. That is fine and
+              // is exactly why auto-recover below cannot depend on this write
+              // landing — a fresh spawn is the only thing that relabels a covered
+              // record, and the spawn is what we actually want.
+              // Keep errorKind:'infra' — this branch is only reached for an
+              // infra/unexplained error whose death the daemon just confirmed
+              // while the host is reachable (the host-reboot shape), which IS
+              // an infra death. fire() re-reads the record and requires
+              // isInfraSessionError(); clearing the kind here (and stamping a
+              // reason in neither classifier set) made every armed recovery
+              // abort with "cause is no longer infra" while `if (armed)
+              // continue` had already skipped the phase advance.
               const updated = await updateSessionRecord(s.claudeSessionId, {
                 process_status: 'stopped',
                 errorMessage: undefined,
+                errorKind: 'infra',
                 activity: undefined,
                 last_status_change: now,
                 status_reason: 'auto_recovered_dead',
@@ -1452,6 +1566,19 @@ export class SessionHealthMonitor {
               log.session.info('health monitor: auto-recovered connection-lost session (process dead)', {
                 sessionId: s.claudeSessionId, host: s.host, alive: false,
               })
+
+              // AUTO-RECOVER: the host is reachable again but the process is gone —
+              // the classic host-reboot shape. If the work is still in flight,
+              // resume it instead of handing a dead session back to the human
+              // (inc-1787439819342: 3.5h of nothing on fully resumable work).
+              //
+              // Ordering is load-bearing: arming a recovery and ALSO advancing the
+              // phase to AGENT_COMPLETE would contradict each other, and fire()
+              // requires the phase to still be IN_PROGRESS. So only advance the
+              // phase when no recovery was armed.
+              const { scheduleSessionAutoRecover } = await import('./session-auto-recover.js')
+              const armed = scheduleSessionAutoRecover(s, s.status_reason ?? 'daemon_reported_exit')
+              if (armed) continue
 
               // Phase sync: remote process died during connection loss — result may
               // have been lost. Advance task phase so it doesn't stay stuck at IN_PROGRESS.
@@ -1472,7 +1599,9 @@ export class SessionHealthMonitor {
             }
           } else {
             // Daemon not connected — update activity so UI shows "Reconnecting..." banner
-            // Only update if not already showing reconnecting message (avoid churn)
+            // Only update if not already showing reconnecting message (avoid churn).
+            // Never scribble on a 'stopped' record — it may simply be done.
+            if (wasStopped) continue
             if (s.activity !== 'Reconnecting to remote host...') {
               const updated = await updateSessionRecord(s.claudeSessionId, {
                 activity: 'Reconnecting to remote host...',
@@ -1488,7 +1617,7 @@ export class SessionHealthMonitor {
         }
       }
     } catch (err) {
-      log.session.warn('health monitor: recoverConnectionLostSessions failed', {
+      log.session.warn('health monitor: recoverInfraFailedSessions failed', {
         error: err instanceof Error ? err.message : String(err),
       })
     }

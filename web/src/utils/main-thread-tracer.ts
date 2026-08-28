@@ -21,6 +21,8 @@
  * lines, so blocks self-identify in /tmp/open-walnut/open-walnut-<date>.log.
  */
 
+import { installCallbackTracing, slowCallbacksSince } from './trace-dispatchers';
+
 const SAMPLE_INTERVAL_MS = 100;
 const REPORT_THRESHOLD_MS = 250;
 const RECENT_PHASE_BUFFER = 8;
@@ -80,6 +82,7 @@ function describePhases(blockStart: number): { active: string[]; recent: string[
 
 export function initMainThreadTracer(): void {
   if (typeof window === 'undefined') return;
+  installCallbackTracing();
 
   let windowStart = Date.now();
   let reportsThisWindow = 0;
@@ -120,11 +123,13 @@ export function initMainThreadTracer(): void {
       if (reportsThisWindow < MAX_REPORTS_PER_MIN) {
         reportsThisWindow++;
         const { active: activeNames, recent } = describePhases(blockStart);
+        const slowCbs = slowCallbacksSince(blockStart);
         console.warn('[perf] main-thread block', {
           blockedMs: Math.round(lateBy),
           sincePageLoadMs: Math.round(now),
           activePhases: activeNames.length ? activeNames : undefined,
           endedDuringBlock: recent.length ? recent : undefined,
+          slowCallbacks: slowCbs.length ? slowCbs : undefined,
           url: window.location.pathname,
         });
       } else {

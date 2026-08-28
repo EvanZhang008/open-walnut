@@ -29,12 +29,20 @@ import { createHash } from 'node:crypto'
 import { WebSocket } from 'ws'
 import { log } from '../logging/index.js'
 import { DAEMON_BINARIES_DIR } from '../constants.js'
+import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js'
+import {
+  DAEMON_OWNER_FILE,
+  PROD_DAEMON_DIR,
+  classifyAdoptedDaemonOwner,
+  currentProdClaimPosture,
+  prodDaemonClaimRefusal,
+  type DaemonOwnerStamp,
+} from './daemon-ownership.js'
 import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 
 // Env-aware default so the singleton (exported below) isolates a demo server's
 // daemon when WALNUT_DAEMON_DIR is set. Tests pass `daemonDir` explicitly and are
 // unaffected. Production sets nothing → /tmp/open-walnut.
-const PROD_DAEMON_DIR = '/tmp/open-walnut'
 const DEFAULT_DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR
 
 export function getLocalDaemonBinaryName(
@@ -85,10 +93,6 @@ export function parentWatchdogEnv(daemonDir: string): { WALNUT_DAEMON_PARENT_PID
   return { WALNUT_DAEMON_PARENT_PID: String(process.pid) }
 }
 
-// True when running under vitest (or any test runner that sets NODE_ENV=test).
-// Used by ensureRunning() to refuse touching the production daemon dir.
-const IS_TEST_ENV = !!(process.env.VITEST || process.env.VITEST_WORKER_ID || process.env.NODE_ENV === 'test')
-
 // ESM-safe __dirname equivalent
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -106,10 +110,13 @@ export class LocalDaemon {
   private _spawnedPid: number | null = null
   private _instanceId: string | null = null
   private _ensureInFlight: Promise<number> | null = null
+  /** claude CLI resolvable in the env handed to the daemon we spawned (owner stamp). */
+  private _spawnClaudeCli: string | null = null
   private readonly daemonDir: string
   private readonly portFile: string
   private readonly pidFile: string
   private readonly instanceIdFile: string
+  private readonly ownerFile: string
   private readonly overrideBinaryPath: string | undefined
 
   constructor(opts: LocalDaemonOptions = {}) {
@@ -117,6 +124,7 @@ export class LocalDaemon {
     this.portFile = path.join(this.daemonDir, 'daemon.port')
     this.pidFile = path.join(this.daemonDir, 'daemon.pid')
     this.instanceIdFile = path.join(this.daemonDir, 'daemon.instance')
+    this.ownerFile = path.join(this.daemonDir, DAEMON_OWNER_FILE)
     this.overrideBinaryPath = opts.binaryPath
   }
 
@@ -128,21 +136,18 @@ export class LocalDaemon {
   get instanceId(): string | null { return this._instanceId ?? this.readInstanceIdFile() }
 
   async ensureRunning(): Promise<number> {
-    // Test guard: a vitest-spawned server (e.g. an e2e's startServer()) must NEVER
-    // touch the production daemon at /tmp/open-walnut — it would (a) restart it on
-    // any version mismatch, killing live session plumbing, and (b) warm a daemon
-    // that inherits the test env (VITEST / OPEN_WALNUT_HOME), poisoning every
-    // Claude CLI it later spawns (incident inc-1783280584117: a dev:prod run inside
-    // such a CLI booted a "production" 3456 against the empty test-global home —
-    // every session 404'd). Tests that intentionally exercise a real daemon must
-    // opt in via WALNUT_DAEMON_DIR or an explicit `daemonDir`. startServer() catches
-    // this throw and logs "local sessions will fail" — the right outcome for tests
-    // that mock the daemon transport anyway.
-    if (IS_TEST_ENV && path.resolve(this.daemonDir) === '/tmp/open-walnut') {
-      throw new Error(
-        'Refusing to touch the production daemon dir /tmp/open-walnut from a test process. ' +
-        'Set WALNUT_DAEMON_DIR to an isolated temp dir (or pass daemonDir explicitly).',
-      )
+    // Posture guard: only an instance running as the real user may claim the
+    // production daemon (daemon-ownership.ts documents the two incidents this
+    // encodes and the one posture that is deliberately still allowed). It must
+    // refuse ADOPTION too, not just spawning: a foreign-posture server driving
+    // production's daemon would restart it on any version mismatch and inject
+    // its own registry into it. Tests and demos that want a real daemon opt in
+    // via WALNUT_DAEMON_DIR or an explicit `daemonDir`. startServer() catches
+    // this throw and logs "local sessions will fail", which is the right outcome
+    // for a process that should not have local sessions in the first place.
+    if (path.resolve(this.daemonDir) === PROD_DAEMON_DIR) {
+      const refusal = prodDaemonClaimRefusal(currentProdClaimPosture())
+      if (refusal) throw new Error(refusal)
     }
     // In-flight guard: server startup, session-manager lazy init, and
     // reconnect callbacks all call this concurrently. Without it each caller
@@ -183,6 +188,9 @@ export class LocalDaemon {
             this._port = existingPort
             this._wsUrl = `ws://localhost:${existingPort}`
             this._instanceId = helloResult.instanceId ?? this.readInstanceIdFile()
+            // Deferring the upgrade still means driving that daemon, so it gets
+            // the same ownership audit as the version-match path below.
+            this.auditOwnerOnAdopt(this._instanceId)
             return existingPort
           }
           log.session.info('local daemon version mismatch — restarting', {
@@ -200,6 +208,7 @@ export class LocalDaemon {
             version: helloResult.version,
             instanceId: this._instanceId,
           })
+          this.auditOwnerOnAdopt(this._instanceId)
           return existingPort
         }
       } else {
@@ -223,6 +232,7 @@ export class LocalDaemon {
       version: expectedVersion,
       instanceId: this._instanceId,
     })
+    this.writeOwnerStamp(this._instanceId)
     return port
   }
 
@@ -274,6 +284,88 @@ export class LocalDaemon {
       return content || null
     } catch {
       return null
+    }
+  }
+
+  /** Record the env we just handed a daemon we spawned. Best-effort by design:
+   *  a diagnostic that cannot start a daemon must never stop one either. */
+  private writeOwnerStamp(instanceId: string | null): void {
+    const identity = currentProdClaimPosture()
+    const stamp: DaemonOwnerStamp = {
+      walnutHome: identity.walnutHome,
+      envHome: identity.envHome,
+      realHome: identity.realHome,
+      instanceId,
+      daemonPid: this._spawnedPid ?? this.readPidFile(),
+      serverPid: process.pid,
+      claudeCli: this._spawnClaudeCli,
+      at: new Date().toISOString(),
+    }
+    try {
+      fs.writeFileSync(this.ownerFile, JSON.stringify(stamp, null, 2) + '\n')
+    } catch (err) {
+      log.session.debug('could not write daemon owner stamp', {
+        file: this.ownerFile, error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  readOwnerStamp(): DaemonOwnerStamp | null {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(this.ownerFile, 'utf-8')) as DaemonOwnerStamp
+      return typeof parsed === 'object' && parsed !== null ? parsed : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * We are about to drive a daemon somebody else started. Say WHOSE env it has.
+   *
+   * A daemon serves sessions with its own inherited environment, so adopting one
+   * that a foreign instance spawned is the 2026-08-28 outage: every new session
+   * dies with exit 127 while the server looks healthy. The posture guard in
+   * ensureRunning() stops walnut from CREATING that situation; this makes an
+   * already-broken machine self-describing instead of costing an investigation.
+   * Never re-stamps — see DaemonOwnerStamp.
+   */
+  private auditOwnerOnAdopt(instanceId: string | null): void {
+    const stamp = this.readOwnerStamp()
+    const mine = currentProdClaimPosture()
+    const verdict = classifyAdoptedDaemonOwner(stamp, mine, instanceId)
+    if (verdict === 'ours') return
+    if (verdict === 'unstamped') {
+      log.session.warn('local daemon has no owner stamp — spawned before this build, or by another instance', {
+        daemonDir: this.daemonDir, instanceId,
+      })
+      return
+    }
+    const detail = {
+      daemonDir: this.daemonDir,
+      liveInstanceId: instanceId,
+      stampedInstanceId: stamp?.instanceId,
+      stampedWalnutHome: stamp?.walnutHome,
+      stampedEnvHome: stamp?.envHome,
+      stampedClaudeCli: stamp?.claudeCli,
+      stampedServerPid: stamp?.serverPid,
+      myWalnutHome: mine.walnutHome,
+      myEnvHome: mine.envHome,
+    }
+    if (verdict === 'foreign-identity') {
+      log.session.error(
+        'local daemon was started by a DIFFERENT walnut instance — its sessions run with THAT env, '
+        + 'so new sessions may fail with "claude: not found" (exit 127). Restart the daemon from a '
+        + 'normal shell to reclaim it.',
+        detail,
+      )
+    } else if (verdict === 'no-claude') {
+      log.session.error(
+        'local daemon was spawned from an environment with no resolvable claude CLI — new sessions '
+        + 'will fail with exit 127 until it is restarted from a shell that has claude on PATH.',
+        detail,
+      )
+    } else {
+      log.session.warn('adopting a local daemon whose owner stamp is stale (a newer daemon replaced the stamped one)', detail)
     }
   }
 
@@ -411,6 +503,28 @@ export class LocalDaemon {
     // the daemon can never become a carrier again (incident 2026-07-14).
     delete env.OPEN_WALNUT_EPHEMERAL
     if (env.NODE_ENV === 'test') delete env.NODE_ENV
+
+    // Preflight the ONE thing a daemon cannot recover from: the CLI it exists to
+    // spawn. The daemon inherits this env verbatim, and its spawn preamble looks
+    // in the same places this resolver does (PATH, then $HOME/.toolbox/bin,
+    // $HOME/.local/bin, …). A miss here means every session will exit 127, so
+    // say it once, loudly, at the moment of spawn — the 2026-08-28 outage
+    // reported itself only as a per-session "claude: not found" 20 times over.
+    // Not fatal: the preamble also sources the user's shell rc, which can still
+    // put claude on PATH, so a miss is a strong warning rather than a verdict.
+    this._spawnClaudeCli = resolveClaudeCliExecutable(env)
+    if (!this._spawnClaudeCli) {
+      log.session.error(
+        'spawning the local daemon with an environment where the claude CLI cannot be resolved — '
+        + 'sessions will fail with exit 127 unless your shell rc adds it to PATH',
+        {
+          daemonDir: this.daemonDir,
+          envHome: env.HOME,
+          realHome: currentProdClaimPosture().realHome,
+          pathEntries: (env.PATH ?? '').split(path.delimiter).length,
+        },
+      )
+    }
 
     // Source-fallback daemons are plain .cjs scripts (no compiled binary in
     // published npm installs) — run them under the current Node runtime.

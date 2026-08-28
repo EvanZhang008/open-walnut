@@ -50,6 +50,60 @@ struct ProcessOutputReaderTests {
             "Expected one start and one stop lifecycle event"
         )
 
-        print("ProcessOutputReader EOF regression test passed")
+        var restartPolicy = ServerRestartPolicy()
+        precondition(restartPolicy.nextDelay(healthyFor: nil) == 1)
+        precondition(restartPolicy.nextDelay(healthyFor: 5) == 2)
+        precondition(restartPolicy.nextDelay(healthyFor: 5) == 4)
+        precondition(restartPolicy.nextDelay(healthyFor: 5) == 8)
+        precondition(restartPolicy.nextDelay(healthyFor: 5) == 16)
+        precondition(
+            restartPolicy.nextDelay(healthyFor: 5) == nil,
+            "Repeated short-lived crashes must stop automatic restart"
+        )
+        precondition(
+            restartPolicy.nextDelay(healthyFor: 120) == 1,
+            "A healthy run must reset the restart backoff"
+        )
+        precondition(
+            ServerRestartPolicy.ordinaryStartupTimeout == 180,
+            "Ordinary startup must tolerate a loaded machine"
+        )
+        precondition(
+            ServerRestartPolicy.nativeRebuildStartupTimeout == 300,
+            "Native rebuild startup must retain its longer deadline"
+        )
+
+        precondition(shouldAutomaticallyRestartServer(
+            portConfirmed: true,
+            ownsServer: true,
+            isTerminating: false,
+            isCurrentProcess: true
+        ))
+        precondition(!shouldAutomaticallyRestartServer(
+            portConfirmed: true,
+            ownsServer: true,
+            isTerminating: true,
+            isCurrentProcess: true
+        ))
+        precondition(!shouldAutomaticallyRestartServer(
+            portConfirmed: false,
+            ownsServer: true,
+            isTerminating: false,
+            isCurrentProcess: true
+        ))
+        precondition(!shouldAutomaticallyRestartServer(
+            portConfirmed: true,
+            ownsServer: false,
+            isTerminating: false,
+            isCurrentProcess: true
+        ))
+        precondition(!shouldAutomaticallyRestartServer(
+            portConfirmed: true,
+            ownsServer: true,
+            isTerminating: false,
+            isCurrentProcess: false
+        ))
+
+        print("Desktop lifecycle regression tests passed")
     }
 }

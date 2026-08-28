@@ -110,4 +110,4 @@ program.action(async () => {
   }
 });
 
-program.parseAsync(process.argv);
+await program.parseAsync(process.argv);

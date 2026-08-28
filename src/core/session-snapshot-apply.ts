@@ -78,6 +78,13 @@ export function projectProcessStatus(s: SessionSnapshot): ProcessStatus {
   }
   if (s.cliState === 'waiting') return 'running' // paused mid-turn on a prompt
   if (s.turnActive) return 'running'
+  // A detached (run_in_background) task is real work in flight even though the
+  // CLI's turn ended around it — the session IS running (user decision
+  // 2026-08-28, inc-1787893885321: an idle badge over a live 40-min STT bench).
+  // Checked before the error branch: an errored turn whose background command
+  // keeps working is still working; the error re-surfaces at drain. Absent
+  // field (pre-field daemon) = 0 = old behavior.
+  if ((s.detachedBgCount ?? 0) > 0) return 'running'
   if (s.lastResult?.isError) return 'error' // matches reconcileProcessStatus target semantics
   return 'idle'
 }
@@ -354,6 +361,35 @@ export async function applySnapshot(
       }
     }
     return { outcome: 'shadow', diverged, projected }
+  }
+
+  // ── Turn-start phase pullback on snapshot evidence (inc-1787512825254) ──
+  // The CLI emits NO session_state_changed{running} for self-woken turns (a
+  // background task-notification dequeued from its internal queue starts a
+  // real turn with no external send), so neither event-lane turn-start edge
+  // (state-running / init-after-result) fires and the task stays on the
+  // previous turn's AGENT_COMPLETE while the CLI is visibly working. The fold
+  // DOES see the new turn's bytes — this projection is the very evidence that
+  // paints the green Running dot, so it must pull the phase back too, or the
+  // UI ships "Running session + red handed-back row". Runs on every live
+  // running projection (not just applied writes) so a boot-adopted running
+  // record with a stale red phase also heals; applySessionPhase no-ops on
+  // IN_PROGRESS and never overwrites terminal phases. 'waiting' / pending
+  // permission are excluded: paused-on-a-prompt projects 'running' as well,
+  // but that red row is the awaiting-human feature working as designed.
+  if (projected === 'running' && snapshot.cliState !== 'waiting'
+    && !snapshot.pendingPermission && !record.pendingPermission && record.taskId) {
+    const pullbackTaskId = record.taskId
+    import('./phase.js').then(({ applySessionPhase }) =>
+      applySessionPhase(pullbackTaskId, 'session:turn-start', `snapshot-apply:${source}`, {
+        sessionId,
+      }),
+    ).catch((err) => {
+      log.session.warn('snapshot turn-start phase pullback failed', {
+        sessionId, taskId: pullbackTaskId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
   }
 
   // ── enforce ──

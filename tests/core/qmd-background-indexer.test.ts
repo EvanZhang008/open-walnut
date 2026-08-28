@@ -8,6 +8,7 @@ interface FakeReservation {
 }
 
 interface FakeChild extends EventEmitter {
+  pid: number;
   exitCode: number | null;
   signalCode: string | null;
   stderr: PassThrough;
@@ -32,6 +33,8 @@ const mocks = vi.hoisted(() => ({
   fork: vi.fn(),
   getRuntimeModel: vi.fn(async () => 'hf:test/runtime-model.gguf'),
   assertPowerAvailable: vi.fn(async () => undefined),
+  managedHolderReleases: [] as Array<ReturnType<typeof vi.fn>>,
+  registerManagedDbHolder: vi.fn(),
   reservations: [] as FakeReservation[],
   reserve: vi.fn(),
   setRuntimeModel: vi.fn(),
@@ -75,6 +78,10 @@ vi.mock('../../src/core/qmd-power.js', () => ({
   assertQmdBackgroundIndexPowerAvailable: mocks.assertPowerAvailable,
 }));
 
+vi.mock('../../src/core/instance-lock.js', () => ({
+  registerManagedDbHolder: mocks.registerManagedDbHolder,
+}));
+
 vi.mock('../../src/core/qmd-store.js', () => ({
   closeQmdStores: mocks.closeStores,
 }));
@@ -83,6 +90,7 @@ import * as backgroundIndexer from '../../src/core/qmd-background-indexer.js';
 
 function makeChild(): FakeChild {
   const child = new EventEmitter() as FakeChild;
+  child.pid = 10_000 + mocks.children.length;
   child.exitCode = null;
   child.signalCode = null;
   child.stderr = new PassThrough();
@@ -157,6 +165,12 @@ beforeEach(() => {
   mocks.existsSync.mockReset().mockReturnValue(true);
   mocks.getRuntimeModel.mockReset().mockResolvedValue('hf:test/runtime-model.gguf');
   mocks.assertPowerAvailable.mockReset().mockResolvedValue(undefined);
+  mocks.managedHolderReleases.length = 0;
+  mocks.registerManagedDbHolder.mockReset().mockImplementation(() => {
+    const release = vi.fn();
+    mocks.managedHolderReleases.push(release);
+    return release;
+  });
   mocks.setRuntimeModel.mockClear();
   mocks.reserve.mockReset().mockImplementation(() => {
     const reservation: FakeReservation = {
@@ -208,9 +222,13 @@ describe('QMD background worker scheduler', () => {
     });
     expect(options.stdio).toEqual(['ignore', 'ignore', 'pipe', 'ipc']);
     expect(mocks.reserve).toHaveBeenCalledWith({ blockReads: false });
+    expect(mocks.registerManagedDbHolder).toHaveBeenCalledWith(
+      mocks.children[0].pid,
+    );
 
     emitExit(mocks.children[0], 0);
     await expect(run).resolves.toBeUndefined();
+    expect(mocks.managedHolderReleases[0]).toHaveBeenCalledOnce();
     expect(mocks.reservations[0].release).toHaveBeenCalledOnce();
   });
 
@@ -384,5 +402,42 @@ describe('QMD background worker scheduler', () => {
     await settled;
     expect(mocks.children[0].kill).toHaveBeenCalledWith('SIGTERM');
     expect(mocks.reservations[0].release).toHaveBeenCalledOnce();
+  });
+
+  it('force-kills a worker that ignores the graceful shutdown signal', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.fork.mockImplementationOnce(() => {
+        const child = makeChild();
+        child.kill = vi.fn((signal = 'SIGTERM') => {
+          if (signal === 'SIGKILL') {
+            child.signalCode = signal;
+            queueMicrotask(() => child.emit('exit', null, signal));
+          }
+          return true;
+        });
+        mocks.children.push(child);
+        return child;
+      });
+
+      const run = backgroundIndexer.runQmdBackgroundIndex();
+      const rejection = expect(run).rejects.toThrow(
+        'QMD background index stopped',
+      );
+      await vi.waitFor(() => expect(mocks.fork).toHaveBeenCalledOnce());
+
+      const stop = backgroundIndexer.stopQmdBackgroundIndex();
+      expect(mocks.children[0].kill).toHaveBeenCalledWith('SIGTERM');
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await stop;
+      await rejection;
+
+      expect(mocks.children[0].kill).toHaveBeenCalledWith('SIGKILL');
+      expect(mocks.managedHolderReleases[0]).toHaveBeenCalledOnce();
+      expect(mocks.reservations[0].release).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

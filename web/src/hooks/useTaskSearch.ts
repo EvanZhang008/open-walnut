@@ -1,17 +1,17 @@
 /**
- * useTaskSearch — debounced search hook for the TODO panel.
- * Any non-empty query triggers debounced server-side QMD search.
+ * useTaskSearch: debounced search hook for the TODO panel.
+ * Any non-empty query triggers debounced server-side search.
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { apiGet } from '@/api/client';
+import { taskIdsFromSearchResults } from '@/components/tasks/search-results';
 
 export interface TaskSearchResult {
   taskId: string;
 }
 
 interface ServerSearchItem {
-  type: 'task' | 'memory';
   taskId?: string;
 }
 
@@ -24,8 +24,15 @@ export interface UseTaskSearchReturn {
 }
 
 // Update query/generation immediately on every keystroke, but wait before the
-// HTTP request. Debouncing in the input component left a 500ms window where an
+// HTTP request. Debouncing in the input component left a window where an
 // older response could be accepted under newly typed text.
+//
+// Two-lane timing (2026-08-26, user request): the QUICK lane (client-side
+// title/project/tag substring matching in TodoPanel) reacts to every keystroke
+// at deferred render priority, so typing gets instant feedback with no HTTP
+// involved. This debounce gates only the SERVER (semantic) lane, which refines
+// the quick results when the user pauses — firing it faster than a typing
+// pause just wastes requests and churns the list mid-word.
 const DEBOUNCE_MS = 500;
 
 export function useTaskSearch(): UseTaskSearchReturn {
@@ -42,8 +49,8 @@ export function useTaskSearch(): UseTaskSearchReturn {
     setResults(null);
     setIsSearching(false);
     if (abortRef.current) {
-      // QMD does not expose inference cancellation, so this only stops the
-      // browser from waiting. The generation check below is the correctness
+      // Server-side search does not expose computation cancellation, so this only
+      // stops the browser from waiting. The generation check below is the correctness
       // guard when an older server computation still finishes later.
       abortRef.current.abort();
       abortRef.current = null;
@@ -59,8 +66,8 @@ export function useTaskSearch(): UseTaskSearchReturn {
     setQueryState(q);
 
     if (abortRef.current) {
-      // QMD does not expose inference cancellation, so this only stops the
-      // browser from waiting. The generation check below is the correctness
+      // Server-side search does not expose computation cancellation, so this only
+      // stops the browser from waiting. The generation check below is the correctness
       // guard when an older server computation still finishes later.
       abortRef.current.abort();
       abortRef.current = null;
@@ -76,13 +83,12 @@ export function useTaskSearch(): UseTaskSearchReturn {
       return;
     }
 
-    // Clear stale QMD results immediately so the UI falls back to client-side
-    // substring/reference matches in TodoPanel while the
-    // debounced QMD request is in flight. Without this, the old query's results
-    // linger and the list looks stale.
+    // Clear stale server results immediately so the UI falls back to client-side
+    // substring/reference matches in TodoPanel while the debounced request is in
+    // flight. Without this, the old query's results linger and the list looks stale.
     setResults(null);
 
-    // Debounced server-side QMD search — fires in background, merges in when ready.
+    // Debounced server-side search runs in the background and merges in when ready.
     setIsSearching(true);
 
     debounceRef.current = setTimeout(async () => {
@@ -93,9 +99,10 @@ export function useTaskSearch(): UseTaskSearchReturn {
       try {
         const params: Record<string, string> = {
           q: q.trim(),
-          types: 'task',
-          // QMD 2.1 caps its fused candidate pool at 40.
-          limit: '40',
+          types: 'task,session',
+          // Use extra merged depth to reduce task-result dilution after adding
+          // the session lane. The final UI still caps the rendered task list.
+          limit: '80',
         };
         const res = await apiGet<{ results: ServerSearchItem[] }>(
           '/api/search',
@@ -108,11 +115,8 @@ export function useTaskSearch(): UseTaskSearchReturn {
           || generation !== requestGenerationRef.current
         ) return;
 
-        const taskResults: TaskSearchResult[] = res.results
-          .filter((r) => r.type === 'task' && r.taskId)
-          .map((r) => ({
-            taskId: r.taskId!,
-          }));
+        const taskResults = taskIdsFromSearchResults(res.results)
+          .map((taskId) => ({ taskId }));
 
         setResults(taskResults);
       } catch (err) {

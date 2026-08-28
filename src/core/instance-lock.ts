@@ -26,7 +26,7 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { WALNUT_HOME, TASKS_DIR } from '../constants.js'
-import { log } from '../logging/index.js'
+import { log, redactSensitiveText } from '../logging/index.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -146,6 +146,31 @@ export interface DbHolder {
   command: string
 }
 
+async function readProcessCommand(pid: number, fallback: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync(
+      'ps',
+      ['-p', String(pid), '-o', 'command='],
+      { timeout: 2000 },
+    )
+    const command = stdout.trim()
+    return command ? redactSensitiveText(command).slice(0, 1000) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+// Child workers owned by this server may read the production databases while
+// building derived indexes. A fresh server has an empty set, so an orphan from
+// the previous server remains foreign and still blocks startup.
+const managedDbHolderPids = new Set<number>()
+
+export function registerManagedDbHolder(pid: number): () => void {
+  if (!Number.isInteger(pid) || pid <= 0) return () => {}
+  managedDbHolderPids.add(pid)
+  return () => managedDbHolderPids.delete(pid)
+}
+
 /** Processes (other than us) currently holding tasks.sqlite open. */
 export async function listForeignDbHolders(): Promise<DbHolder[]> {
   try {
@@ -155,12 +180,20 @@ export async function listForeignDbHolders(): Promise<DbHolder[]> {
     let pid: number | null = null
     for (const line of stdout.split('\n')) {
       if (line.startsWith('p')) pid = Number(line.slice(1))
-      else if (line.startsWith('c') && pid !== null && pid !== process.pid) {
+      else if (
+        line.startsWith('c')
+        && pid !== null
+        && pid !== process.pid
+        && !managedDbHolderPids.has(pid)
+      ) {
         holders.push({ pid, command: line.slice(1) })
         pid = null
       }
     }
-    return holders
+    return Promise.all(holders.map(async (holder) => ({
+      ...holder,
+      command: await readProcessCommand(holder.pid, holder.command),
+    })))
   } catch {
     return [] // no holders (lsof exit 1), lsof absent, or timeout — fail open
   }

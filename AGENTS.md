@@ -69,6 +69,15 @@ open and starting a second server against the same data dir). Ratchets:
 `tests/scripts/dev-prod-portability.test.ts` (the dry run executes the whole script, on
 Linux too, in CI's quick tier) and `tests/scripts/cross-platform-ratchet.test.ts`.
 
+**Deploys smoke-test before killing prod, and roll back on failure.** dev-prod.sh boots the
+freshly built dist ONCE in full isolation (temp data dir + temp daemon dir + probe port) and
+requires it to serve `/api/config` BEFORE touching the running server — a dist that hangs in
+module init (2026-08-22/23 outages) now fails the deploy while prod keeps serving. After a
+successful readiness check the dist is snapshotted as last-known-good; a post-kill readiness
+failure re-launches that snapshot instead of leaving :3456 dark. Knobs:
+`WALNUT_DEVPROD_SMOKE_SECS` (default 120), `WALNUT_DEVPROD_SKIP_SMOKE=1`,
+`WALNUT_DEVPROD_LKG_DIR`. Ratchets: `tests/scripts/dev-prod-smoke-rollback.test.ts`.
+
 **⚠️ Launch dev:prod from a non-niced shell.** A server started from a niced parent (e.g. a
 background agent session) inherits the positive nice and gets scheduler-starved under machine
 load — HTTP latency spikes that look like app bugs. The server logs an error at startup and

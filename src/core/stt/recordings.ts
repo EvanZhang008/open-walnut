@@ -51,6 +51,8 @@ export interface RecordingMeta {
   format: string;
   language: string;
   audioSizeBytes: number;
+  /** Name of the engine that produced `result` (e.g. "mlx", "whisper-server") */
+  engine?: string;
   /** Present when transcription succeeded */
   result?: SttResult;
   /** Present when the engine threw */
@@ -141,6 +143,7 @@ export async function listRecordings(limit = 20): Promise<RecordingMeta[]> {
         format: raw.format ?? 'webm',
         language: raw.language ?? 'auto',
         audioSizeBytes: raw.audioSizeBytes ?? 0,
+        engine: raw.engine ?? undefined,
         result: raw.result ?? undefined,
         error: raw.error ?? undefined,
         secondary: raw.secondary ?? undefined,

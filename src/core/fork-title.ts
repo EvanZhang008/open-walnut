@@ -198,17 +198,19 @@ export function titleCoversLabel(title: string, label: string): boolean {
 
 /** Separator between the drift-prepended topic label and the original title. */
 const TOPIC_SEP = ' · ';
-/** Exactly ONE auto-prepended topic — a new topic REPLACES it, never stacks.
- *  (Was 2; stacked prefixes read like "Productize Personal Mode Testing ·
- *  Productize Local Test Setup · GC Load test" — user: too confusing.) */
-const MAX_TOPIC_PREFIXES = 1;
+/** Up to TWO auto-prepended topics (3 segments total with the original tail).
+ *  Newest lands in front; when full, the OLDEST prefix drops — the original
+ *  tail never does (user direction 2026-08-25: the first name is usually good,
+ *  keep it; drift should append, and only the middle history rotates out). */
+const MAX_TOPIC_PREFIXES = 2;
 
 /**
  * Prepend a drifted topic to a title WITHOUT losing anything the human (or the
- * original auto-namer) wrote: `New Topic · original title`. This is the
- * additive alternative to rewriting — safe on EVERY title, not just auto-fork
- * ones, because the original tail is never modified or dropped. At most ONE
- * auto-prefix exists at a time: a later drift replaces it (no stacking).
+ * original auto-namer) wrote: `New Topic · original title`, then
+ * `Newer Topic · New Topic · original title`. This is the additive alternative
+ * to rewriting — safe on EVERY title, not just auto-fork ones, because the
+ * original tail is never modified or dropped. Prefixes stack newest-first up
+ * to MAX_TOPIC_PREFIXES; overflow drops the oldest prefix, keeping the tail.
  * Returns null when the topic is already covered (no change needed) — the
  * default posture is "don't touch the title".
  */
