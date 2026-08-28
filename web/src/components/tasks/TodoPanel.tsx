@@ -108,6 +108,7 @@ import {
   type TaskQueryContext,
 } from '@open-walnut/task-query';
 import { INBOX_TAB, LS_TAB_KEY } from './task-tabs';
+import { staleDonePinIds } from './pin-search-fold';
 import { DatePicker, formatDateDisplay, formatDateTimeDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
 import { useVerticalSplitter } from '@/hooks/useVerticalSplitter';
 import { useResizableHeight } from '@/hooks/useResizableHeight';
@@ -4487,9 +4488,33 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // hit would render twice (once per surface) and be double-counted. Recent is
   // untouched: it's an activity feed, not a second copy of the pinned tiers.
   const tierVisibleTaskIds = pinnedQueryActive ? EMPTY_ID_SET : visibleTaskIds;
+  const [showStaleDonePins, setShowStaleDonePins] = useState(false);
+  useEffect(() => {
+    if (!isSearchMode) setShowStaleDonePins(false);
+  }, [isSearchMode]);
+  // Stale-done-pin folding (search only): the tiers directly show a done pin
+  // only while its completion is fresh (≤30d); older matches fold into a
+  // one-line count so a broad query's first screen isn't a wall of
+  // strikethrough history. They stay findable in the ranked list below.
+  const staleDoneIds = useMemo(
+    () => (isSearchMode ? staleDonePinIds(pinnedTasks) : EMPTY_ID_SET),
+    [isSearchMode, pinnedTasks],
+  );
+  const staleDonePinMatchCount = useMemo(() => {
+    if (!isSearchMode) return 0;
+    let n = 0;
+    for (const id of staleDoneIds) if (tierVisibleTaskIds.has(id)) n += 1;
+    return n;
+  }, [isSearchMode, staleDoneIds, tierVisibleTaskIds]);
+  const tierDisplayTaskIds = useMemo(() => {
+    if (!isSearchMode || showStaleDonePins || staleDonePinMatchCount === 0) return tierVisibleTaskIds;
+    const next = new Set(tierVisibleTaskIds);
+    for (const id of staleDoneIds) next.delete(id);
+    return next;
+  }, [isSearchMode, showStaleDonePins, staleDonePinMatchCount, tierVisibleTaskIds, staleDoneIds]);
   const visiblePinnedTasks = useMemo(
-    () => pinnedTasks.filter((task) => tierVisibleTaskIds.has(task.id)),
-    [pinnedTasks, tierVisibleTaskIds],
+    () => pinnedTasks.filter((task) => tierDisplayTaskIds.has(task.id)),
+    [pinnedTasks, tierDisplayTaskIds],
   );
   const visibleRecentTasks = useMemo(
     () => recentTasks.filter((task) => visibleTaskIds.has(task.id)),
@@ -4500,20 +4525,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     [recentStaticId, visibleRecentTasks],
   );
   const visibleFocusIds = useMemo(
-    () => pruneOrphanSentinels(focusIds_arr.filter((id) => isGroupSentinel(id) || isSeparatorId(id) || tierVisibleTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
-    [focusIds_arr, tierVisibleTaskIds, pinnedTaskMap, activeDragPinnedId],
+    () => pruneOrphanSentinels(focusIds_arr.filter((id) => isGroupSentinel(id) || isSeparatorId(id) || tierDisplayTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
+    [focusIds_arr, tierDisplayTaskIds, pinnedTaskMap, activeDragPinnedId],
   );
   const visibleSatelliteIds = useMemo(
-    () => pruneOrphanSentinels(satelliteIds_arr.filter((id) => isGroupSentinel(id) || isSeparatorId(id) || tierVisibleTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
-    [satelliteIds_arr, tierVisibleTaskIds, pinnedTaskMap, activeDragPinnedId],
+    () => pruneOrphanSentinels(satelliteIds_arr.filter((id) => isGroupSentinel(id) || isSeparatorId(id) || tierDisplayTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
+    [satelliteIds_arr, tierDisplayTaskIds, pinnedTaskMap, activeDragPinnedId],
   );
   const visibleBacklogIds = useMemo(
-    () => pruneOrphanSentinels(backlogIds_arr.filter((id) => isGroupSentinel(id) || isSeparatorId(id) || tierVisibleTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
-    [backlogIds_arr, tierVisibleTaskIds, pinnedTaskMap, activeDragPinnedId],
+    () => pruneOrphanSentinels(backlogIds_arr.filter((id) => isGroupSentinel(id) || isSeparatorId(id) || tierDisplayTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
+    [backlogIds_arr, tierDisplayTaskIds, pinnedTaskMap, activeDragPinnedId],
   );
   const visibleWaitIds = useMemo(
-    () => pruneOrphanSentinels(waitIds_arr.filter((id) => isGroupSentinel(id) || isSeparatorId(id) || tierVisibleTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
-    [waitIds_arr, tierVisibleTaskIds, pinnedTaskMap, activeDragPinnedId],
+    () => pruneOrphanSentinels(waitIds_arr.filter((id) => isGroupSentinel(id) || isSeparatorId(id) || tierDisplayTaskIds.has(id)), pinnedTaskMap, activeDragPinnedId),
+    [waitIds_arr, tierDisplayTaskIds, pinnedTaskMap, activeDragPinnedId],
   );
   // Per-custom-tier render model: visible ids + display tasks + group meta in one
   // memo (the built-ins keep their three separate memos; a custom tier bundles them
@@ -4522,14 +4547,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const map: Record<string, { visibleIds: string[]; display: Task[]; groupMeta: Map<string, GroupRenderInfo> }> = {};
     for (const def of customTiers ?? []) {
       const visibleIds = pruneOrphanSentinels(
-        (customIds_arr[def.id] ?? []).filter((id) => isGroupSentinel(id) || isSeparatorId(id) || tierVisibleTaskIds.has(id)),
+        (customIds_arr[def.id] ?? []).filter((id) => isGroupSentinel(id) || isSeparatorId(id) || tierDisplayTaskIds.has(id)),
         pinnedTaskMap, activeDragPinnedId,
       );
       const display = visibleIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task);
       map[def.id] = { visibleIds, display, groupMeta: buildTierGroupMeta(display, taskGroups) };
     }
     return map;
-  }, [customTiers, customIds_arr, tierVisibleTaskIds, pinnedTaskMap, taskGroups, activeDragPinnedId]);
+  }, [customTiers, customIds_arr, tierDisplayTaskIds, pinnedTaskMap, taskGroups, activeDragPinnedId]);
   // tier id → its visible render ids, for logic that must work for ANY tier
   // (separator placement) instead of naming the four built-ins.
   const tierIdsByTier = useMemo(() => {
@@ -6570,6 +6595,25 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                 </>
               )}
             </div>
+          )}
+
+          {/* Stale-done fold — search only: pins completed >30d ago that match the
+              query fold into this one line instead of flooding the tiers with
+              strikethrough history. Expand shows them in place; the ranked task
+              list below always carries them regardless. */}
+          {anyTierVisible && isSearchMode && staleDonePinMatchCount > 0 && (
+            <button
+              type="button"
+              className="todo-pinned-stale-fold"
+              onClick={() => setShowStaleDonePins((v) => !v)}
+              title={showStaleDonePins
+                ? 'Hide completed matches older than 30 days'
+                : 'Show them in their pinned positions'}
+            >
+              {showStaleDonePins
+                ? `✓ hide ${staleDonePinMatchCount} older completed`
+                : `✓ ${staleDonePinMatchCount} older completed match${staleDonePinMatchCount === 1 ? '' : 'es'} hidden`}
+            </button>
           )}
 
           {/* Hidden-groups strip — compact chips for groups collapsed out of the tiers

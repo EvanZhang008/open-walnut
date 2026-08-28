@@ -122,6 +122,33 @@ export const TITLE_LANE_MIN_MATCHED = 2;
 // gap stays wide; the 3-row cap bounds whatever lands between.
 const TITLE_LANE_MIN_F1 = 0.4;
 
+/** Liveness penalty for COMPLETED tasks in ranked search (2026-08-28).
+ *
+ * The engine's own recency component is 0.03-weighted with a 180-day
+ * half-life — negligible — and phase never reaches the index, so pure text
+ * relevance let 20x more finished history bury the one running task. This
+ * additive penalty sinks stale completed matches WITHOUT the old binary
+ * open-first partition (removed 2026-08-26 by user request): it applies at
+ * the score level, below the coverage sort tier, so a full-coverage (exact)
+ * completed match still wins — the "strong match is exempt" rule falls out
+ * of the sort structure instead of a special case.
+ *
+ * Freshly completed ≈ no penalty; half the max at 14 days; full 0.12 for old
+ * history. Running/TODO/AGENT_COMPLETE (awaiting the human) pay nothing. */
+export const LIVENESS_PENALTY_MAX = 0.12;
+export const LIVENESS_HALF_LIFE_DAYS = 14;
+
+export function completedLivenessPenalty(
+  task: { phase?: string; status?: string; completed_at?: string; updated_at?: string },
+  now: number = Date.now(),
+): number {
+  const done = task.phase === 'COMPLETE' || task.status === 'done';
+  if (!done) return 0;
+  const stamp = Date.parse(task.completed_at ?? task.updated_at ?? '');
+  const ageDays = Number.isNaN(stamp) ? Infinity : Math.max(0, (now - stamp) / 86_400_000);
+  return -LIVENESS_PENALTY_MAX * (1 - Math.exp(-ageDays * Math.LN2 / LIVENESS_HALF_LIFE_DAYS));
+}
+
 export function titleMatchScore(title: string | undefined, query: string): number {
   if (!title) return 0;
   // Stopword-free terms: an agent-phrased query ("WHICH task removed THE star
@@ -686,6 +713,13 @@ async function searchInner(
       for (const result of bm25ScoreTasks(allTasks, normalizedQuery)) {
         appendTaskResult(result);
       }
+    }
+    // Liveness: sink stale completed tasks within their coverage tier.
+    // References are untouched in practice — isReference sorts above score.
+    const taskById = new Map(allTasks.map((t) => [t.id, t]));
+    for (const row of taskResults) {
+      const owner = row.taskId ? taskById.get(row.taskId) : undefined;
+      if (owner) row.score += completedLivenessPenalty(owner);
     }
     results.push(...taskResults);
   }

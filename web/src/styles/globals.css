@@ -30409,6 +30409,22 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   margin-top: 12px;
 }
 
+/* Stale-done fold (search mode): one muted line standing in for the pins
+   completed >30d ago that matched the query. */
+.todo-pinned-stale-fold {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 3px 14px 5px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  opacity: 0.75;
+}
+.todo-pinned-stale-fold:hover { opacity: 1; color: var(--accent); }
+
 /* ── Agent task search (✦ AI section pinned atop the task panel) ─────────── */
 .agent-search-panel {
   margin: 6px 8px 8px;
