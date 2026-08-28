@@ -23501,17 +23501,26 @@ td.usage-share-col {
 
 /* ─── Search Results ─── */
 
+/* Compact search rows: icon INLINE with the title (the column layout stacked
+   a full-size icon above every title and tripled row height — the "so ugly in
+   real prod" report, 2026-08-28), snippet tucked under the title. */
 .notes-tree-item.notes-search-result {
-  flex-direction: column;
   align-items: flex-start;
-  gap: 2px;
-  padding: 8px 12px;
+  gap: 7px;
+  padding: 5px 10px;
+}
+.notes-tree-item.notes-search-result .notes-tree-icon,
+.notes-tree-item.notes-search-result > svg {
+  width: 14px;
+  height: 14px;
+  margin-top: 3px;
+  opacity: 0.55;
 }
 
 .notes-search-result-content {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
   overflow: hidden;
 }
@@ -23548,20 +23557,44 @@ td.usage-share-col {
   100% { background-color: transparent; }
 }
 
-/* Folder hits sit above the note rows; the accent left-edge + weight separates
-   "this is a place" from "this is a note". */
+/* Folder headers: a tinted chip row — accent left-edge + soft fill separates
+   "this is a place" from "this is a note". Count sits inline on the right. */
 .notes-search-folder {
   border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-radius: 0 7px 7px 0;
+  padding: 5px 10px;
+  gap: 7px;
 }
-.notes-search-folder .notes-tree-name { font-weight: 600; }
+.notes-search-folder .notes-tree-name {
+  font-weight: 600;
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notes-search-folder .notes-tree-icon,
+.notes-search-folder > svg {
+  width: 14px;
+  height: 14px;
+  opacity: 0.7;
+}
+.notes-search-folder-count {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 10.5px;
+  color: var(--fg-muted);
+}
 
 /* Search results grouped by folder: each group = one folder header + its file
    rows nested under it. The indent + connecting edge read as tree structure,
    so a hit's location is visible without a per-row path suffix. */
-.notes-search-group { margin-bottom: 4px; }
+.notes-search-group { margin-bottom: 6px; }
+.notes-search-group .notes-search-folder { margin-bottom: 2px; }
 .notes-search-result-nested {
   margin-left: 14px;
   border-left: 1px solid var(--border);
+  border-radius: 0 7px 7px 0;
 }
 
 /* ─── Context Menu ─── */

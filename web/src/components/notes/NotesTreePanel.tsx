@@ -849,19 +849,25 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                       title={g.folder}
                     >
                       <FolderIcon />
-                      <div className="notes-search-result-content">
-                        <span className="notes-tree-name">
-                          <HighlightedTitle text={g.folder} query={searchQuery} />
-                        </span>
-                        {g.nameMatched && (
-                          <span className="notes-search-snippet">
-                            {g.nameMatched.noteCount} {g.nameMatched.noteCount === 1 ? 'note' : 'notes'} inside
-                          </span>
-                        )}
-                      </div>
+                      <span className="notes-tree-name">
+                        <HighlightedTitle text={g.folder} query={searchQuery} />
+                      </span>
+                      {g.nameMatched && (
+                        <span className="notes-search-folder-count">{g.nameMatched.noteCount}</span>
+                      )}
                     </div>
                   )}
-                  {g.rows.map(r => (
+                  {g.rows.map(r => {
+                    // The snippet earns its row only when it shows the MATCHED
+                    // QUOTE or real body context. When it merely repeats the
+                    // title (a body that opens with its own H1 — makeSnippet
+                    // windows from the start when the match sits there), the
+                    // highlighted title already carries the information.
+                    const rowTitle = r.title || r.name || r.path.split('/').pop()?.replace(/\.md$/, '') || '';
+                    const snippetPlain = (r.snippet || '').replace(/<\/?mark>/g, '').replace(/^[#\s.]+/, '').trim();
+                    const snippetIsTitleEcho = !!snippetPlain
+                      && snippetPlain.toLowerCase().startsWith(rowTitle.toLowerCase().slice(0, 60));
+                    return (
                     <div
                       key={r.path}
                       className={`notes-tree-item notes-tree-file notes-search-result${g.folder ? ' notes-search-result-nested' : ''} ${selectedPath === r.path ? 'selected' : ''}`}
@@ -890,13 +896,16 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                             query={searchQuery}
                           />
                         </span>
-                        <span className="notes-search-snippet">
-                          {/* Snippet carries literal <mark> tags from the server — render real marks, never raw HTML. */}
-                          <HighlightedText text={r.snippet} />
-                        </span>
+                        {!snippetIsTitleEcho && (
+                          <span className="notes-search-snippet">
+                            {/* Snippet carries literal <mark> tags from the server — render real marks, never raw HTML. */}
+                            <HighlightedText text={r.snippet} />
+                          </span>
+                        )}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ))
             )}
