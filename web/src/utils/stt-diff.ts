@@ -35,6 +35,9 @@ export function tokenizeSpeech(text: string): string[] {
 
 export function diffSpeech(a: string, b: string): SttDiffSeg[] {
   const parts = diffArrays(tokenizeSpeech(a), tokenizeSpeech(b));
+  // jsdiff orders deletions before insertions in a replacement, so engine A's
+  // (primary) words always render before B's crossed-out variant — the merged
+  // view reads as A's transcript with B's differences struck through after.
   return parts.map(p => {
     const text = p.value.join('');
     const kind: SttDiffSeg['kind'] = p.added ? 'b' : p.removed ? 'a' : 'same';

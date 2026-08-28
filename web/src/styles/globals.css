@@ -7406,8 +7406,6 @@ select {
   font-style: italic;
   padding: 2px 2px 0;
 }
-.mic-history-btn-diff { color: var(--fg-muted); }
-
 /* ── STT A/B diff popup ─────────────────────────────────────────────────── */
 .stt-diff-modal {
   width: min(680px, calc(100vw - 48px));
@@ -7444,15 +7442,17 @@ select {
   border-radius: 5px;
   padding: 1px 7px;
 }
+/* Primary (the engine whose text is the source) — green, kept */
 .stt-diff-chip-a {
-  color: #b3562a;
-  background: rgba(217, 108, 50, 0.14);
-  border: 1px solid rgba(217, 108, 50, 0.35);
-}
-.stt-diff-chip-b {
   color: #2f7d4f;
   background: rgba(56, 142, 92, 0.14);
   border: 1px solid rgba(56, 142, 92, 0.35);
+}
+/* Secondary — orange, its differing words render crossed out */
+.stt-diff-chip-b {
+  color: #b3562a;
+  background: rgba(217, 108, 50, 0.14);
+  border: 1px solid rgba(217, 108, 50, 0.35);
 }
 .stt-diff-note {
   font-size: 11px;
@@ -7469,17 +7469,19 @@ select {
   max-height: 240px;
   word-break: break-word;
 }
+/* The merged view READS as the primary (qwen) transcript: primary-only words
+   are green and kept, the secondary engine's variants are crossed out. */
 .stt-diff-a {
+  color: #2f7d4f;
+  background: rgba(56, 142, 92, 0.16);
+  border-radius: 3px;
+}
+.stt-diff-b {
   color: #b3562a;
   background: rgba(217, 108, 50, 0.16);
   border-radius: 3px;
   text-decoration: line-through;
   text-decoration-thickness: 1px;
-}
-.stt-diff-b {
-  color: #2f7d4f;
-  background: rgba(56, 142, 92, 0.16);
-  border-radius: 3px;
 }
 .stt-diff-trivial {
   opacity: 0.45;
@@ -7548,7 +7550,39 @@ select {
   display: flex;
   gap: 4px;
   flex-shrink: 0;
+  position: relative; /* anchors the ⋯ action menu */
 }
+.mic-history-menu-btn {
+  min-width: 26px;
+  color: var(--fg-muted);
+}
+.mic-history-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 3px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 96px;
+  padding: 3px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+}
+.mic-history-menu-item {
+  text-align: left;
+  padding: 5px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg);
+  background: none;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.mic-history-menu-item:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.05)); }
+.mic-history-menu-item:disabled { opacity: 0.5; cursor: default; }
 .mic-history-btn {
   padding: 1px 7px;
   font-size: 10.5px;

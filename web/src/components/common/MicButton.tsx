@@ -76,6 +76,8 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
   const [expandedId, setExpandedId] = useState<string | null>(null);
   // Recording open in the full-size diff popup (null = closed)
   const [diffRec, setDiffRec] = useState<VoiceRecording | null>(null);
+  // Per-recording "⋯" menu holding the row actions (Diff / Insert / Redo)
+  const [actionMenuId, setActionMenuId] = useState<string | null>(null);
 
   const dismissTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -136,6 +138,26 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
   }, [dropdownOpen]);
 
   useEffect(() => () => clearTimeout(dismissTimer.current), []);
+
+  // Close the per-row action menu on outside click or when the dropdown closes.
+  useEffect(() => {
+    if (!dropdownOpen) setActionMenuId(null);
+  }, [dropdownOpen]);
+  useEffect(() => {
+    if (!actionMenuId) return;
+    const handler = (e: MouseEvent) => {
+      if (!(e.target as Element).closest?.('.mic-history-actions')) setActionMenuId(null);
+    };
+    const keyHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setActionMenuId(null);
+    };
+    document.addEventListener('mousedown', handler);
+    document.addEventListener('keydown', keyHandler);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('keydown', keyHandler);
+    };
+  }, [actionMenuId]);
 
   const handleChevronClick = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -465,23 +487,32 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
                       )}
                     </div>
                     <div className="mic-history-actions">
-                      {rec.secondary && (
-                        <button type="button" className="mic-history-btn mic-history-btn-diff" title="Compare both engines in a popup"
-                          onClick={() => setDiffRec(rec)}>
-                          Diff
-                        </button>
-                      )}
-                      {text && !expanded && (
-                        <button type="button" className="mic-history-btn" title="Insert this text"
-                          onClick={() => handleTextInsert(text)}>
-                          Insert
-                        </button>
-                      )}
-                      <button type="button" className="mic-history-btn" title="Re-transcribe from stored audio"
-                        disabled={retranscribingId === rec.id}
-                        onClick={() => void handleRecordingRetry(rec)}>
-                        {retranscribingId === rec.id ? '…' : 'Redo'}
+                      <button type="button" className="mic-history-btn mic-history-menu-btn" title="Actions"
+                        aria-haspopup="menu" aria-expanded={actionMenuId === rec.id}
+                        onClick={() => setActionMenuId(actionMenuId === rec.id ? null : rec.id)}>
+                        {retranscribingId === rec.id ? '…' : '⋯'}
                       </button>
+                      {actionMenuId === rec.id && (
+                        <div className="mic-history-menu" role="menu">
+                          {rec.secondary && (
+                            <button type="button" className="mic-history-menu-item" title="Compare both engines in a popup"
+                              onClick={() => { setActionMenuId(null); setDiffRec(rec); }}>
+                              Diff
+                            </button>
+                          )}
+                          {text && (
+                            <button type="button" className="mic-history-menu-item" title="Insert this text"
+                              onClick={() => { setActionMenuId(null); handleTextInsert(text); }}>
+                              Insert
+                            </button>
+                          )}
+                          <button type="button" className="mic-history-menu-item" title="Re-transcribe from stored audio"
+                            disabled={retranscribingId === rec.id}
+                            onClick={() => { setActionMenuId(null); void handleRecordingRetry(rec); }}>
+                            Redo
+                          </button>
+                        </div>
+                      )}
                     </div>
                     {/* Expanded: both engines' FULL text + latency, each insertable —
                         the side-by-side comparison this panel exists for. */}
