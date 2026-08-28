@@ -7323,9 +7323,39 @@ select {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap; /* the shadow-engine row (if any) wraps to its own line */
   gap: 8px;
   padding: 5px 12px;
   font-size: 12px;
+}
+/* Shadow (secondary) engine's take on the same audio — second line under the
+   primary text, labeled with the engine name, with its own Insert button. */
+.mic-history-secondary {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 2px;
+}
+.mic-history-alt-engine {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--fg-muted);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.mic-history-secondary .mic-history-text {
+  flex: 1;
+  color: var(--fg-muted);
+}
+.mic-history-alt-error {
+  color: var(--danger, #d9534f);
+  font-style: italic;
 }
 .mic-history-item:hover {
   background: var(--bg-hover, rgba(0, 0, 0, 0.04));

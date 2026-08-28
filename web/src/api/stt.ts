@@ -20,6 +20,8 @@ export interface VoiceRecording {
   audioSizeBytes: number;
   result?: { text: string; durationMs: number };
   error?: string;
+  /** Shadow engine's take on the same audio (stt.secondary_engine A/B) */
+  secondary?: { engine: string; text?: string; durationMs?: number; error?: string };
 }
 
 export interface SttStatus {

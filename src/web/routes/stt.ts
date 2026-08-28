@@ -7,7 +7,7 @@ import { unlink, stat, readFile, appendFile, rm, mkdir } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path';
 import { WALNUT_HOME, STT_VOCAB_FILE } from '../../constants.js';
 import { getConfig, updateConfig } from '../../core/config-manager.js';
-import { transcribeAudio, createEngine, getOrCreateEngine, ensureSttVocabMigrated, type SttEngine, type SttResult } from '../../core/stt/index.js';
+import { transcribeAudio, runShadowTranscription, createEngine, getOrCreateEngine, ensureSttVocabMigrated, type SttEngine, type SttResult } from '../../core/stt/index.js';
 import { saveRecordingAudio, writeRecordingResult, listRecordings, readRecordingAudio } from '../../core/stt/recordings.js';
 import { createWhisperCppEngine } from '../../core/stt/engine-whisper-cpp.js';
 import { detectSystem } from '../../core/stt/detect.js';
@@ -106,13 +106,17 @@ sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Reque
     }
 
     if (saved) {
-      await writeRecordingResult(saved.id, {
+      const stamp = await writeRecordingResult(saved.id, {
         format,
         language: effectiveLanguage || 'auto',
         audioSizeBytes: Math.round(audio.length * 3 / 4),
         result,
-      }).catch(() => {});
+      }).catch(() => undefined);
       log.stt.info(`Recording saved: ${saved.audioPath}`);
+      // Shadow engine (A/B during engine transition): runs after the primary
+      // result is stored, never blocks or fails this response. Skipped for
+      // explicit model-override retries — those are already a comparison run.
+      if (!model) void runShadowTranscription(config, sttReq, saved.id, stamp).catch(() => {});
     }
 
     res.json({ ...result, debugAudioPath: saved?.audioPath, recordingId: saved?.id });
@@ -156,12 +160,19 @@ sttRouter.post('/recordings/:id/transcribe', express.json(), async (req: Request
       format: stored.format,
       language: effectiveLanguage,
     });
-    await writeRecordingResult(id, {
+    const stamp = await writeRecordingResult(id, {
       format: stored.format,
       language: effectiveLanguage || 'auto',
       audioSizeBytes: Math.round(stored.audio.length * 3 / 4),
       result,
-    }).catch(() => {});
+    }).catch(() => undefined);
+    // Re-run the shadow too, so the stored comparison reflects the same audio
+    // pass; the epoch stamp keeps a slow older shadow from attaching to it.
+    void runShadowTranscription(config, {
+      audio: stored.audio,
+      format: stored.format,
+      language: effectiveLanguage,
+    }, id, stamp).catch(() => {});
     res.json({ ...result, recordingId: id });
   } catch (err) {
     next(err);

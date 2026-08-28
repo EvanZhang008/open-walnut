@@ -28,7 +28,9 @@ import { useConfirm } from '@/hooks/useConfirm';
 
 // ── Types ──────────────────────────────────────────────
 
-type SttEngine = 'whisper-cpp' | 'whisper-server' | 'sherpa-onnx' | 'openai';
+// 'mlx' has no setup card yet — it's configured via config.yaml (stt.mlx_*),
+// but the panel must still accept it as the active engine without a type error.
+type SttEngine = 'whisper-cpp' | 'whisper-server' | 'sherpa-onnx' | 'openai' | 'mlx';
 
 interface EngineOption {
   value: SttEngine;

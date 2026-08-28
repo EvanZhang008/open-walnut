@@ -16,15 +16,28 @@ import { createSherpaEngine } from './engine-sherpa.js';
 import { createOpenAiEngine } from './engine-openai.js';
 import { createWhisperCppEngine } from './engine-whisper-cpp.js';
 import { createWhisperServerEngine } from './engine-whisper-server.js';
+import { createMlxEngine } from './engine-mlx.js';
+import { writeRecordingSecondary } from './recordings.js';
 
 export type { SttEngine, SttRequest, SttResult } from './types.js';
+
+type SttSection = NonNullable<Config['stt']>;
+type EngineName = NonNullable<SttSection['engine']>;
 
 /** Create an STT engine from config. Returns null if not configured. */
 export function createEngine(config: Config): SttEngine | null {
   const stt = config.stt;
   if (!stt?.engine) return null;
+  return createEngineByName(stt.engine, stt);
+}
 
-  switch (stt.engine) {
+/**
+ * Create a specific engine from the shared stt config section. The primary and
+ * the secondary (shadow) engine both resolve through here — they share the same
+ * per-engine fields, only the engine NAME differs.
+ */
+export function createEngineByName(engine: EngineName, stt: SttSection): SttEngine | null {
+  switch (engine) {
     case 'sherpa-onnx':
       return createSherpaEngine({
         modelDir: stt.sherpa_model_dir ?? '',
@@ -54,8 +67,17 @@ export function createEngine(config: Config): SttEngine | null {
           ? stt.whisper_server_idle_ttl_minutes * 60_000
           : undefined,
       });
+    case 'mlx':
+      return createMlxEngine({
+        pythonPath: stt.mlx_python_path ?? '',
+        model: stt.mlx_model,
+        port: stt.mlx_port,
+        idleTtlMs: stt.mlx_idle_ttl_minutes
+          ? stt.mlx_idle_ttl_minutes * 60_000
+          : undefined,
+      });
     default:
-      log.stt.warn(`Unknown STT engine: ${stt.engine}`);
+      log.stt.warn(`Unknown STT engine: ${engine}`);
       return null;
   }
 }
@@ -78,16 +100,18 @@ export function createEngine(config: Config): SttEngine | null {
 
 let cachedEngine: SttEngine | null = null;
 let cachedEngineKey = '';
+// Separate singleton for the shadow engine — same rationale, same lifecycle.
+let cachedSecondary: SttEngine | null = null;
+let cachedSecondaryKey = '';
 
-function configKey(config: Config): string {
-  const s = config.stt;
-  if (!s?.engine) return '';
+function engineKey(engine: string | undefined, s: SttSection | undefined): string {
+  if (!engine || !s) return '';
   // Note: prompt is NOT in the key — vocab is loaded per-request from stt-vocab.txt, no engine restart needed.
-  return `${s.engine}|${s.whisper_server_path ?? ''}|${s.whisper_server_model ?? ''}|${s.whisper_server_port ?? ''}|${s.whisper_cpp_path ?? ''}|${s.whisper_cpp_model ?? ''}|${s.openai_api_key ?? ''}|${s.sherpa_model_dir ?? ''}`;
+  return `${engine}|${s.whisper_server_path ?? ''}|${s.whisper_server_model ?? ''}|${s.whisper_server_port ?? ''}|${s.whisper_cpp_path ?? ''}|${s.whisper_cpp_model ?? ''}|${s.openai_api_key ?? ''}|${s.sherpa_model_dir ?? ''}|${s.mlx_python_path ?? ''}|${s.mlx_model ?? ''}|${s.mlx_port ?? ''}`;
 }
 
 export function getOrCreateEngine(config: Config): SttEngine | null {
-  const key = configKey(config);
+  const key = engineKey(config.stt?.engine, config.stt);
   if (cachedEngine && cachedEngineKey === key) return cachedEngine;
 
   // Config changed — shut down the old engine to release resources (e.g. kill daemon)
@@ -99,6 +123,30 @@ export function getOrCreateEngine(config: Config): SttEngine | null {
   cachedEngine = createEngine(config);
   cachedEngineKey = key;
   return cachedEngine;
+}
+
+/** Singleton for the shadow engine (stt.secondary_engine). Null when not set. */
+export function getOrCreateSecondaryEngine(config: Config): SttEngine | null {
+  const s = config.stt;
+  // Same engine as the primary would spawn a SECOND daemon loading the identical
+  // model (double RAM/GPU) for a byte-identical comparison — refuse it.
+  const secondary = s?.secondary_engine && s.secondary_engine !== s.engine
+    ? s.secondary_engine
+    : undefined;
+  if (s?.secondary_engine && !secondary && cachedSecondaryKey !== '') {
+    log.stt.warn(`stt.secondary_engine equals the primary engine (${s.engine}) — shadow disabled`);
+  }
+  const key = secondary ? engineKey(secondary, s) : '';
+  if (cachedSecondary && cachedSecondaryKey === key) return cachedSecondary;
+
+  if (cachedSecondary?.shutdown) {
+    log.stt.info(`STT secondary config changed — shutting down previous ${cachedSecondary.name} engine`);
+    cachedSecondary.shutdown();
+  }
+
+  cachedSecondary = secondary && s ? createEngineByName(secondary, s) : null;
+  cachedSecondaryKey = key;
+  return cachedSecondary;
 }
 
 // ── Vocabulary file ──
@@ -191,4 +239,50 @@ export async function transcribeAudio(config: Config, req: SttRequest): Promise<
   const result = await engine.transcribe(req);
   log.stt.info(`Transcription complete: ${result.text.length} chars in ${result.durationMs}ms`);
   return result;
+}
+
+/**
+ * Run the shadow (secondary) engine on the same audio and attach its result to
+ * the stored recording. Fire-and-forget by design: called AFTER the primary
+ * result has been sent to the client, and never throws — a shadow failure is
+ * recorded in the metadata, not surfaced to the user. The whole point is a
+ * zero-risk side-by-side during an engine transition: primary text goes to the
+ * chat, the shadow's text shows up in the mic dropdown's history.
+ */
+export async function runShadowTranscription(
+  config: Config,
+  req: SttRequest,
+  recordingId: string,
+  /** Epoch token from writeRecordingResult — a stale shadow (Redo re-ran the
+   *  primary meanwhile) drops instead of attaching to the newer result. */
+  expectTimestamp?: string,
+): Promise<void> {
+  let engine: SttEngine | null = null;
+  try {
+    engine = getOrCreateSecondaryEngine(config);
+    if (!engine) return;
+    const { available, error } = await engine.isAvailable();
+    if (!available) {
+      await writeRecordingSecondary(recordingId, { engine: engine.name, error: `not available: ${error}` }, expectTimestamp);
+      return;
+    }
+    if (!req.prompt) {
+      const vocab = await loadVocabPrompt();
+      if (vocab) req = { ...req, prompt: vocab };
+    }
+    log.stt.info(`Shadow transcription with ${engine.name} (recording=${recordingId})`);
+    const result = await engine.transcribe(req);
+    await writeRecordingSecondary(recordingId, {
+      engine: engine.name,
+      text: result.text,
+      durationMs: result.durationMs,
+    }, expectTimestamp);
+    log.stt.info(`Shadow transcription complete: ${result.text.length} chars in ${result.durationMs}ms (${engine.name})`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.stt.warn(`Shadow transcription failed (${engine?.name ?? 'secondary'}): ${msg}`);
+    if (engine) {
+      await writeRecordingSecondary(recordingId, { engine: engine.name, error: msg }, expectTimestamp).catch(() => {});
+    }
+  }
 }

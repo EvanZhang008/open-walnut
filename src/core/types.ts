@@ -1183,7 +1183,14 @@ export interface Config {
   };
   /** Speech-to-text configuration for voice input */
   stt?: {
-    engine?: 'sherpa-onnx' | 'openai' | 'whisper-cpp' | 'whisper-server';
+    engine?: 'sherpa-onnx' | 'openai' | 'whisper-cpp' | 'whisper-server' | 'mlx';
+    /**
+     * Optional shadow engine for A/B comparison during an engine transition.
+     * Runs AFTER the primary engine answers (never blocks the response); its
+     * text lands in the recording's metadata and shows in the mic dropdown.
+     * Reuses the same per-engine config fields as `engine`.
+     */
+    secondary_engine?: 'sherpa-onnx' | 'openai' | 'whisper-cpp' | 'whisper-server' | 'mlx';
     /** ISO 639-1 language hint (e.g. zh, en). Empty = auto-detect. */
     language?: string;
     // sherpa-onnx — local (SenseVoice / Whisper / Paraformer / other ONNX models)
@@ -1206,6 +1213,14 @@ export interface Config {
     whisper_server_port?: number;
     /** Idle TTL in minutes — server auto-shuts after inactivity (default: 10) */
     whisper_server_idle_ttl_minutes?: number;
+    // mlx — local daemon on Apple Silicon (mlx-audio ASR models, e.g. Qwen3-ASR)
+    /** Python interpreter with mlx-audio installed (venv path) */
+    mlx_python_path?: string;
+    /** HF model id or local path (default: mlx-community/Qwen3-ASR-1.7B-8bit) */
+    mlx_model?: string;
+    mlx_port?: number;
+    /** Idle TTL in minutes — daemon auto-shuts after inactivity (default: 10) */
+    mlx_idle_ttl_minutes?: number;
   };
   /** API keys for remote client authentication (iOS app, etc.) */
   api_keys?: ApiKeyEntry[];

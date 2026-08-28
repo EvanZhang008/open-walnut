@@ -189,6 +189,14 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
     }
   }, [onTranscribe]);
 
+  // Insert the SHADOW engine's text for a recording (A/B comparison pick).
+  const handleSecondaryInsert = useCallback((rec: VoiceRecording) => {
+    if (rec.secondary?.text) {
+      onTranscribe(rec.secondary.text);
+      setDropdownOpen(false);
+    }
+  }, [onTranscribe]);
+
   const handleRetryModel = useCallback(async (modelName: string) => {
     setDropdownOpen(false);
     clearTimeout(dismissTimer.current);
@@ -436,6 +444,27 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
                         {retranscribingId === rec.id ? '…' : 'Redo'}
                       </button>
                     </div>
+                    {/* Shadow engine's take on the same audio (A/B during engine
+                        transition) — its own Insert so the user can pick either. */}
+                    {rec.secondary && (
+                      <div className="mic-history-secondary">
+                        <span className="mic-history-alt-engine" title={`Secondary engine: ${rec.secondary.engine}`}>
+                          {rec.secondary.engine}
+                        </span>
+                        <span
+                          className={`mic-history-text${rec.secondary.error ? ' mic-history-alt-error' : ''}`}
+                          title={rec.secondary.error ?? rec.secondary.text}
+                        >
+                          {rec.secondary.error ? `Failed: ${rec.secondary.error}` : rec.secondary.text}
+                        </span>
+                        {rec.secondary.text && (
+                          <button type="button" className="mic-history-btn" title="Insert the secondary engine's text"
+                            onClick={() => handleSecondaryInsert(rec)}>
+                            Insert
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}

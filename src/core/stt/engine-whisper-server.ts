@@ -84,6 +84,11 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
   let serverProcess: ChildProcess | null = null;
   let serverPort: number | null = null;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  // Concurrent transcribe() calls (routine now that a shadow engine can run
+  // beside the primary) must share one in-flight start: during startup the
+  // port isn't listening yet, and a second caller's health probe would misread
+  // that as a dead daemon and kill it.
+  let startingPromise: Promise<number> | null = null;
   const idleTtlMs = cfg.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
 
   function resetIdleTimer() {
@@ -94,7 +99,10 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
     }, idleTtlMs);
   }
 
-  function killServer() {
+  /** Kill the daemon. With `only`, no-op unless it is still the CURRENT child —
+   *  a stale caller must never take down its successor. */
+  function killServer(only?: ChildProcess) {
+    if (only && serverProcess !== only) return;
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
     if (serverProcess) {
       log.stt.info(`Killing whisper-server (pid=${serverProcess.pid})`);
@@ -137,8 +145,13 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
   }
 
   async function ensureServerRunning(): Promise<number> {
+    // A start is already in flight — join it (checked BEFORE the health probe,
+    // which would misread a starting-but-not-listening child as dead).
+    if (startingPromise) return startingPromise;
+
     // Already running? Quick health check
     if (serverProcess && serverPort) {
+      const probed = serverProcess;
       try {
         const res = await fetch(`http://127.0.0.1:${serverPort}/`, { signal: AbortSignal.timeout(2000) });
         if (res.ok) {
@@ -148,10 +161,17 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
       } catch {
         // Server died, restart below
         log.stt.warn('whisper-server health check failed — restarting');
-        killServer();
+        killServer(probed);
       }
     }
 
+    if (!startingPromise) {
+      startingPromise = startServer().finally(() => { startingPromise = null; });
+    }
+    return startingPromise;
+  }
+
+  async function startServer(): Promise<number> {
     const bin = resolvedBinaryPath ?? cfg.binaryPath;
     const port = cfg.port ?? await findFreePort();
 
@@ -219,7 +239,7 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
     // Wait for server to be ready
     const outcome = await waitForReady(proc, port, STARTUP_TIMEOUT_MS);
     if (outcome !== 'ready') {
-      killServer();
+      killServer(proc);
       // Surface the child's own last words — "ffmpeg: command not found" beats
       // a generic timeout. Filter to likely-diagnostic lines (skip GPU init spam).
       const diagnostic = outputTail

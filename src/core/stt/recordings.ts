@@ -37,6 +37,14 @@ const MAX_RECORDINGS = 100;
 const ID_RE = /^[0-9A-Za-z-]+$/;
 const AUDIO_EXTS = ['webm', 'mp4', 'ogg', 'wav', 'mp3', 'm4a', 'flac'];
 
+/** Shadow (secondary) engine outcome — text or error, never both. */
+export interface SecondaryResult {
+  engine: string;
+  text?: string;
+  durationMs?: number;
+  error?: string;
+}
+
 export interface RecordingMeta {
   id: string;
   timestamp: string;
@@ -47,6 +55,8 @@ export interface RecordingMeta {
   result?: SttResult;
   /** Present when the engine threw */
   error?: string;
+  /** Present when a shadow engine (stt.secondary_engine) also ran */
+  secondary?: SecondaryResult;
 }
 
 export function recordingsDir(): string {
@@ -65,18 +75,48 @@ export async function saveRecordingAudio(
   return { id, audioPath };
 }
 
-/** Write (or overwrite) the metadata/result JSON for a recording. */
+/**
+ * Write (or overwrite) the metadata/result JSON for a recording.
+ * Returns the stamped timestamp — the epoch token a later shadow merge must
+ * present so it can't attach to a NEWER primary result (Redo re-runs).
+ */
 export async function writeRecordingResult(
   id: string,
   meta: Omit<RecordingMeta, 'id' | 'timestamp'> & { timestamp?: string },
-): Promise<void> {
+): Promise<string> {
   if (!ID_RE.test(id)) throw new Error(`Invalid recording id: ${id}`);
   await mkdir(dir(), { recursive: true });
-  await writeFile(
-    join(dir(), `${id}.json`),
-    JSON.stringify({ timestamp: new Date().toISOString(), ...meta }, null, 2),
-  );
+  const stamped = { timestamp: new Date().toISOString(), ...meta };
+  await writeFile(join(dir(), `${id}.json`), JSON.stringify(stamped, null, 2));
   await pruneOldRecordings().catch(() => {});
+  return stamped.timestamp;
+}
+
+/**
+ * Merge a shadow engine's result into an existing recording's metadata.
+ * Read-merge-write (not overwrite): the shadow runs AFTER the primary result
+ * was written, and must never clobber it. No-op if the metadata JSON is
+ * missing/unreadable — a shadow result without its primary recording is noise.
+ *
+ * `expectTimestamp` (the token writeRecordingResult returned) makes the merge
+ * epoch-safe: if the recording was re-written since (a Redo re-ran the primary),
+ * this stale shadow silently drops instead of attaching to the wrong result.
+ */
+export async function writeRecordingSecondary(
+  id: string,
+  secondary: SecondaryResult,
+  expectTimestamp?: string,
+): Promise<void> {
+  if (!ID_RE.test(id)) throw new Error(`Invalid recording id: ${id}`);
+  const path = join(dir(), `${id}.json`);
+  let existing: Record<string, unknown>;
+  try {
+    existing = JSON.parse(await readFile(path, 'utf-8'));
+  } catch {
+    return;
+  }
+  if (expectTimestamp && existing.timestamp !== expectTimestamp) return;
+  await writeFile(path, JSON.stringify({ ...existing, secondary }, null, 2));
 }
 
 /** List recent recordings, newest first. */
@@ -103,6 +143,7 @@ export async function listRecordings(limit = 20): Promise<RecordingMeta[]> {
         audioSizeBytes: raw.audioSizeBytes ?? 0,
         result: raw.result ?? undefined,
         error: raw.error ?? undefined,
+        secondary: raw.secondary ?? undefined,
       });
     } catch {
       // Unreadable metadata — skip
