@@ -554,11 +554,14 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
                         )}
                       </div>
                     )}
-                    {/* Collapsed: one-line shadow preview */}
+                    {/* Collapsed: one-line shadow preview. Single-letter engine
+                        badge — the full name ("WHISPER-SERVER") eats half the
+                        row and hurts readability; it lives in the tooltip and
+                        the expanded/diff views instead. */}
                     {!expanded && rec.secondary && (
                       <div className="mic-history-secondary">
-                        <span className="mic-history-alt-engine" title={`Secondary engine: ${rec.secondary.engine}`}>
-                          {rec.secondary.engine}
+                        <span className="mic-history-alt-engine mic-history-alt-badge" title={`Secondary engine: ${rec.secondary.engine}`}>
+                          {(rec.secondary.engine?.[0] ?? '?').toUpperCase()}
                         </span>
                         <span
                           className={`mic-history-text${rec.secondary.error ? ' mic-history-alt-error' : ''}`}

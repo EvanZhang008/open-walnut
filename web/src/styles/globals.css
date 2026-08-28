@@ -7353,6 +7353,13 @@ select {
   flex: 1;
   color: var(--fg-muted);
 }
+/* Single-letter engine badge on the collapsed shadow row */
+.mic-history-alt-badge {
+  min-width: 15px;
+  text-align: center;
+  padding: 0 2px;
+  cursor: help;
+}
 .mic-history-alt-error {
   color: var(--danger, #d9534f);
   font-style: italic;
