@@ -104,8 +104,15 @@ function Highlighted({ text, positions }: { text: string; positions: number[] })
   return <>{out}</>;
 }
 
-const SESSION_LIMIT = 8;
-const FILE_LIMIT = 12;
+// Half-half budget: with BOTH groups on screen, neither may fill the panel —
+// the other group must be VISIBLE without scrolling (a full-height Sessions
+// list hid the Files group entirely, so nobody knew files were reachable).
+// A group only gets the whole panel when it is alone or the other group came
+// back empty.
+const SESSION_LIMIT_SOLO = 8;
+const SESSION_LIMIT_SHARED = 4;
+const FILE_LIMIT_SOLO = 12;
+const FILE_LIMIT_SHARED = 5;
 
 export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPaletteProps>(
   function MentionPalette(
@@ -115,9 +122,9 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     // ---- Sessions group: synchronous, in-memory -------------------------
     const index = useSyncExternalStore(subscribeSessionMentionIndex, getSessionMentionIndex);
     useEffect(() => { if (sessionsEnabled) void ensureSessionMentionIndex(); }, [sessionsEnabled]);
-    const sessionRows = useMemo<RankedSessionMention[]>(() => {
+    const sessionRowsAll = useMemo<RankedSessionMention[]>(() => {
       if (!sessionsEnabled) return [];
-      return rankSessionMentions(query, index, { excludeId: selfSessionId, limit: SESSION_LIMIT });
+      return rankSessionMentions(query, index, { excludeId: selfSessionId, limit: SESSION_LIMIT_SOLO });
     }, [sessionsEnabled, query, index, selfSessionId]);
 
     // ---- Files group: the query doubles as a path (parseQuery) ----------
@@ -174,17 +181,30 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [targetDir, filesEnabled]);
 
-    const fileRows = useMemo(() => {
+    const fileRowsAll = useMemo(() => {
       if (!filesEnabled) return [] as Array<{ entry: DirEntry; positions: number[] }>;
       const q = filterTerm.trim();
-      if (!q) return entries.slice(0, FILE_LIMIT).map((entry) => ({ entry, positions: [] as number[] }));
+      if (!q) return entries.slice(0, FILE_LIMIT_SOLO).map((entry) => ({ entry, positions: [] as number[] }));
       const hits: Array<{ entry: DirEntry; positions: number[]; score: number }> = [];
       for (const entry of entries) {
         const m = fuzzyMatch(q, entry.name);
         if (m) hits.push({ entry, positions: m.positions, score: m.score });
       }
-      return hits.sort((a, b) => b.score - a.score).slice(0, FILE_LIMIT);
+      return hits.sort((a, b) => b.score - a.score).slice(0, FILE_LIMIT_SOLO);
     }, [filesEnabled, entries, filterTerm]);
+
+    // Apply the half-half budget. Sessions shrink as soon as the files group
+    // occupies screen space (rows OR the loading skeleton — otherwise the list
+    // would snap from 8 to 4 rows when the async listing lands); files shrink
+    // when any session matched. Either group takes the full budget back the
+    // moment the other is empty.
+    const filesTakeSpace = filesEnabled && (filesLoading || fileRowsAll.length > 0);
+    const sessionRows = useMemo(
+      () => (filesTakeSpace ? sessionRowsAll.slice(0, SESSION_LIMIT_SHARED) : sessionRowsAll),
+      [sessionRowsAll, filesTakeSpace],
+    );
+    const fileLimit = sessionRowsAll.length > 0 ? FILE_LIMIT_SHARED : FILE_LIMIT_SOLO;
+    const fileRows = useMemo(() => fileRowsAll.slice(0, fileLimit), [fileRowsAll, fileLimit]);
 
     // ---- Flat row model (selection by key, stable across async loads) ---
     const rows = useMemo<Row[]>(() => {

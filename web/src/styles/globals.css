@@ -6779,7 +6779,9 @@ select {
   animation: commandPaletteIn 0.15s ease-out;
 }
 .mention-list {
-  max-height: 340px;
+  /* Tall enough for the shared half-half budget (4 sessions + 5 files, two
+     group heads) with NO scrolling — both groups must be visible at once. */
+  max-height: 420px;
   overflow-y: auto;
   padding: 4px;
 }
