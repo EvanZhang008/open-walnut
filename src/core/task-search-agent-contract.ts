@@ -68,6 +68,7 @@ export const SYSTEM_PROMPT_TOOL_LOOP = `${PROMPT_HEADER}
 1. Otherwise: issue SEVERAL search calls AT ONCE (parallel tool calls in one reply): variants with DIFFERENT vocabulary — the literal strings a transcript would contain (package names, file extensions, commands, API names) — plus an English <-> Chinese translation when the query could be phrased in the other language.
 2. Only if still nothing convincing: ONE more batched round with new vocabulary. Never repeat a query (the seed query counts as used).
 Then answer. Do not deliberate between rounds — a wide batch of searches beats thinking. Keep the answer terse: short evidence quotes, one-line summary.
+If a system message says your tool rounds are exhausted, print the JSON answer IMMEDIATELY from what you already saw (best guesses with lower confidence, or {"results":[]}). Never reply with prose about wanting more searches — a reply without the JSON object is a total failure.
 
 ${PROMPT_FOOTER}`;
 

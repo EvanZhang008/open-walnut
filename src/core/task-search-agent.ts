@@ -81,9 +81,12 @@ const CLI_ENGINE_TIMEOUT_MS = 50_000;
 // answer turn (~35s of sonnet round-trips; a live 3-round run hit 30.8s and
 // 502'd). The route's 60s deadline and the client's 65s stay the outer walls.
 const IN_PROCESS_TIMEOUT_MS = 45_000;
-// 3 tool rounds max: the prompt allows two SEARCH rounds after the seed; the
-// third is slack, anything more is the model wandering, not searching.
-const IN_PROCESS_MAX_ROUNDS = 3;
+// 2 tool rounds max — exactly the contract in SYSTEM_PROMPT_TOOL_LOOP (seed is
+// pre-run; at most two batched variant rounds). More is the model wandering,
+// and at slow-Bedrock hours (~10s/round measured) a third round races the 45s
+// timeout. Exhaustion falls into the loop's final no-tools call, which the
+// prompt requires to be the JSON answer.
+const IN_PROCESS_MAX_ROUNDS = 2;
 
 /** Escape hatch back to the original claude -p child. */
 function useCliEngine(): boolean {
@@ -104,22 +107,6 @@ async function claudeCliEngine(
   });
   if (!run.success) throw new Error(run.error ?? 'claude -p exited with an error');
   return { response: run.result, model: options.model, costUsd: run.costUsd };
-}
-
-/** Sonnet for the configured provider (quality floor per user decision);
- *  WALNUT_AGENT_SEARCH_MODEL overrides. */
-async function resolveInProcessModel(): Promise<{ model: string; provider: string }> {
-  const { getConfig } = await import('./config-manager.js');
-  const config = await getConfig();
-  const provider = config.agent?.main_provider ?? 'bedrock';
-  const envModel = process.env.WALNUT_AGENT_SEARCH_MODEL?.trim();
-  if (envModel) return { model: envModel, provider };
-  const { MODEL_CATALOG } = await import('../agent/providers/model-catalog.js');
-  const entry = MODEL_CATALOG[provider]?.find((m) => {
-    const id = m.id.toLowerCase();
-    return id.includes('sonnet') && !id.includes('1m');
-  });
-  return { model: entry?.id ?? config.agent?.model ?? 'sonnet', provider };
 }
 
 // Every input token is round-trip latency in the answer turn (profiled: a
@@ -146,10 +133,9 @@ async function inProcessEngine(
   userPrompt: string,
   options: AgentSearchEngineOptions,
 ): Promise<{ response: string; model?: string; costUsd?: number }> {
-  const { runAgentLoop } = await import('../agent/loop.js');
+  const { runMicroAgent } = await import('../agent/micro-agent.js');
   const { search } = await import('./search.js');
   const { buildSeedResultsBlock } = await import('./task-search-agent-contract.js');
-  const { model, provider } = await resolveInProcessModel();
 
   // Live progress → browser panel (mini-session lines). Best-effort: never
   // let a broken emit fail the search.
@@ -190,12 +176,20 @@ async function inProcessEngine(
     } catch { /* seeding is an optimization — the loop can still search */ }
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs);
   const qByToolUse = new Map<string, string>();
   let answering = false;
-  try {
-    const result = await runAgentLoop(prompt, [], {
+  const result = await runMicroAgent({
+    system: options.system,
+    userMessage: prompt,
+    tools: [searchTool],
+    tier: 'sonnet',
+    // Quality floor per user decision is sonnet; env overrides for experiments.
+    model: process.env.WALNUT_AGENT_SEARCH_MODEL?.trim() || undefined,
+    maxTokens: ANSWER_MAX_TOKENS,
+    maxToolRounds: IN_PROCESS_MAX_ROUNDS,
+    timeoutMs: options.timeoutMs,
+    usageSource: 'task-search-agent',
+    callbacks: {
       onToolCall: (toolName, input, toolUseId) => {
         if (toolName !== 'search') return;
         const q = String((input as { q?: unknown }).q ?? '');
@@ -213,32 +207,10 @@ async function inProcessEngine(
         answering = true;
         progress({ kind: 'answering' });
       },
-      onUsage: (usage) => {
-        try {
-          usageTracker.record({
-            source: 'task-search-agent',
-            model: usage.model ?? model,
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            cache_creation_input_tokens: usage.cache_creation_input_tokens,
-            cache_read_input_tokens: usage.cache_read_input_tokens,
-          });
-        } catch { /* accounting must never fail the search */ }
-      },
-    }, {
-      system: options.system,
-      tools: [searchTool],
-      modelConfig: { model, provider, maxTokens: ANSWER_MAX_TOKENS },
-      maxToolRounds: IN_PROCESS_MAX_ROUNDS,
-      cacheConfig: false,
-      signal: controller.signal,
-      source: 'task-search-agent',
-    });
-    if (result.aborted) throw new Error(`AI search timed out after ${options.timeoutMs}ms`);
-    return { response: result.response, model };
-  } finally {
-    clearTimeout(timer);
-  }
+    },
+  });
+  if (result.aborted) throw new Error(`AI search timed out after ${options.timeoutMs}ms`);
+  return { response: result.response, model: result.model };
 }
 
 const MAX_CONCURRENT_CALLS = 2;

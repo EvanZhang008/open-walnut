@@ -66,7 +66,7 @@ describe('in-process default engine wiring', () => {
     expect(options.tools[0].name).toBe('search');
     // Default config → bedrock catalog sonnet (the quality floor the user set).
     expect(options.modelConfig).toEqual({ model: 'global.anthropic.claude-sonnet-4-6', provider: 'bedrock', maxTokens: 2000 });
-    expect(options.maxToolRounds).toBe(3);
+    expect(options.maxToolRounds).toBe(2);
     expect(options.cacheConfig).toBe(false);
     expect(options.source).toBe('task-search-agent');
     expect(options.signal).toBeInstanceOf(AbortSignal);
