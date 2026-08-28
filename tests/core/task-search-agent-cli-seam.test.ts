@@ -1,9 +1,10 @@
 /**
- * Gotcha ratchet on the default claude -p engine: the exact arguments the
- * one-shot child is spawned with. If any of these drift (model, timeout,
- * system prompt, prompt shape), the feature silently degrades — pin them.
+ * Gotcha ratchet on the claude -p fallback engine (WALNUT_AGENT_SEARCH_ENGINE=cli):
+ * the exact arguments the one-shot child is spawned with. If any of these drift
+ * (model, timeout, system prompt, prompt shape), the fallback silently degrades
+ * — pin them.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 const { aiDisabledRef, inlineMock, cliResolveMock } = vi.hoisted(() => ({
@@ -32,6 +33,14 @@ import {
   _resetAgentSearchStateForTesting,
 } from '../../src/core/task-search-agent.js';
 
+// The CLI engine is the opt-in fallback since the in-process default (2026-08-27).
+const prevEngine = process.env.WALNUT_AGENT_SEARCH_ENGINE;
+process.env.WALNUT_AGENT_SEARCH_ENGINE = 'cli';
+afterAll(() => {
+  if (prevEngine === undefined) delete process.env.WALNUT_AGENT_SEARCH_ENGINE;
+  else process.env.WALNUT_AGENT_SEARCH_ENGINE = prevEngine;
+});
+
 beforeEach(async () => {
   aiDisabledRef.value = false;
   inlineMock.mockReset();
@@ -42,7 +51,7 @@ beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
-describe('claude -p default engine wiring', () => {
+describe('claude -p fallback engine wiring', () => {
   it('spawns the one-shot child with the pinned contract', async () => {
     inlineMock.mockResolvedValue({ success: true, result: '{"results":[]}', costUsd: 0.01, durationMs: 5, blocks: [] });
     await runTaskSearchAgent('which task adds docx');

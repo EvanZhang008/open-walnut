@@ -1,9 +1,9 @@
 /**
  * Agent search trigger policy — pure functions, no React.
  *
- * The AI lane costs a whole claude -p run (10-30s, subscription quota), so it
- * fires only for queries that look like a QUESTION about tasks, never for the
- * short substrings and pasted ids the instant lane already handles.
+ * The AI lane costs a real multi-round model run (in-process sonnet, ~5-10s),
+ * so it fires only for queries that look like a QUESTION about tasks, never
+ * for the short substrings and pasted ids the instant lane already handles.
  */
 
 /** Longer than the instant lane's 500ms (useTaskSearch) so the AI lane only

@@ -2,11 +2,15 @@
  * Agent task search — orchestration: gates, cache, in-flight dedup, the
  * concurrency slot gate, and the engine seam.
  *
- * Default engine spawns a one-shot `claude -p` (haiku) whose child searches
- * through the walnut CLI (`walnut tools call search`) — the user's explicit
- * choice: a real claude-code agent, accepted as heavy (10-30s). The engine is
- * a function seam (pattern: ReviewRunner in agent/background-review.ts) so an
- * in-process runAgentLoop fast path can replace it without touching callers.
+ * Default engine is an IN-PROCESS runAgentLoop (sonnet) with one native
+ * `search` tool. The original claude -p child (haiku + `walnut tools call`)
+ * remains behind WALNUT_AGENT_SEARCH_ENGINE=cli. Profiled 2026-08-27: the CLI
+ * harness taxes every round (huge CLI system prompt -> slow first token,
+ * thinking warm-up, ~1s Bash+walnut spawn per search), 13-20s/query at
+ * $0.06-0.13 on haiku and 27s at $0.68 on sonnet; in-process cuts both the
+ * per-round tax and the tool spawn to ~zero, so sonnet quality fits the
+ * latency budget. The seam (pattern: ReviewRunner in background-review.ts)
+ * is what made this swap caller-invisible.
  *
  * NOTE: backgroundAiDisabled() gates this feature, so it is OFF on every test
  * server (vitest/Playwright fixtures) and under WALNUT_DISABLE_BACKGROUND_AI=1
@@ -23,6 +27,7 @@ import { log } from '../logging/index.js';
 import {
   AGENT_SEARCH_PROMPT_V,
   SYSTEM_PROMPT,
+  SYSTEM_PROMPT_TOOL_LOOP,
   buildUserPrompt,
   normalizeQueryKey,
   parseAgentAnswer,
@@ -56,6 +61,8 @@ export interface AgentSearchEngineOptions {
   system: string;
   model: string;
   timeoutMs: number;
+  /** Raw (trimmed) query — the in-process engine pre-runs it as seed results. */
+  query?: string;
 }
 
 /** The seam: returns the child's final answer text. */
@@ -64,8 +71,15 @@ export type AgentSearchEngine = (
   options: AgentSearchEngineOptions,
 ) => Promise<{ response: string; model?: string; costUsd?: number }>;
 
-const ENGINE_MODEL = 'haiku';
-const ENGINE_TIMEOUT_MS = 50_000;
+const CLI_ENGINE_MODEL = 'haiku';
+const CLI_ENGINE_TIMEOUT_MS = 50_000;
+const IN_PROCESS_TIMEOUT_MS = 30_000;
+const IN_PROCESS_MAX_ROUNDS = 4;
+
+/** Escape hatch back to the original claude -p child. */
+function useCliEngine(): boolean {
+  return process.env.WALNUT_AGENT_SEARCH_ENGINE === 'cli';
+}
 
 async function claudeCliEngine(
   userPrompt: string,
@@ -81,6 +95,111 @@ async function claudeCliEngine(
   });
   if (!run.success) throw new Error(run.error ?? 'claude -p exited with an error');
   return { response: run.result, model: options.model, costUsd: run.costUsd };
+}
+
+/** Sonnet for the configured provider (quality floor per user decision);
+ *  WALNUT_AGENT_SEARCH_MODEL overrides. */
+async function resolveInProcessModel(): Promise<{ model: string; provider: string }> {
+  const { getConfig } = await import('./config-manager.js');
+  const config = await getConfig();
+  const provider = config.agent?.main_provider ?? 'bedrock';
+  const envModel = process.env.WALNUT_AGENT_SEARCH_MODEL?.trim();
+  if (envModel) return { model: envModel, provider };
+  const { MODEL_CATALOG } = await import('../agent/providers/model-catalog.js');
+  const entry = MODEL_CATALOG[provider]?.find((m) => {
+    const id = m.id.toLowerCase();
+    return id.includes('sonnet') && !id.includes('1m');
+  });
+  return { model: entry?.id ?? config.agent?.model ?? 'sonnet', provider };
+}
+
+// Every input token is round-trip latency in the answer turn (profiled: a
+// 7.4k-token round 2 took 10.4s), so both the per-search row count and the
+// snippet length are capped tighter than the UI's instant lane.
+const SEARCH_ROW_LIMIT = 8;
+const SNIPPET_CAP = 240;
+const ANSWER_MAX_TOKENS = 2000;
+
+type SearchRows = Awaited<ReturnType<typeof import('./search.js')['search']>>;
+
+function serializeRows(rows: SearchRows): string {
+  return JSON.stringify(rows.map((r) => ({
+    type: r.type,
+    title: r.title,
+    snippet: [...(r.snippet ?? '')].slice(0, SNIPPET_CAP).join(''),
+    ...(r.taskId ? { taskId: r.taskId } : {}),
+    ...(r.sessionId ? { sessionId: r.sessionId } : {}),
+    score: r.score,
+  })));
+}
+
+async function inProcessEngine(
+  userPrompt: string,
+  options: AgentSearchEngineOptions,
+): Promise<{ response: string; model?: string; costUsd?: number }> {
+  const { runAgentLoop } = await import('../agent/loop.js');
+  const { search } = await import('./search.js');
+  const { buildSeedResultsBlock } = await import('./task-search-agent-contract.js');
+  const { model, provider } = await resolveInProcessModel();
+
+  const searchTool = {
+    name: 'search',
+    description: 'Search the user\'s Walnut tasks and session transcripts. Returns JSON rows; a row with type "session" carries taskId = the task that OWNS that transcript. Batch query variants as parallel calls in one reply.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        q: { type: 'string', description: 'Search terms — one query per call' },
+      },
+      required: ['q'],
+    },
+    execute: async (params: Record<string, unknown>) => {
+      const q = String(params.q ?? '').trim();
+      if (!q) return 'Error: empty query';
+      const rows = await search(q, { types: ['task', 'session'], limit: SEARCH_ROW_LIMIT });
+      return serializeRows(rows);
+    },
+  };
+
+  // Pre-run the raw query so the common case is ONE model round (answer
+  // directly from the seed) instead of two (search round + answer round).
+  let prompt = userPrompt;
+  if (options.query) {
+    try {
+      const seed = await search(options.query, { types: ['task', 'session'], limit: SEARCH_ROW_LIMIT });
+      prompt += buildSeedResultsBlock(serializeRows(seed));
+    } catch { /* seeding is an optimization — the loop can still search */ }
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs);
+  try {
+    const result = await runAgentLoop(prompt, [], {
+      onUsage: (usage) => {
+        try {
+          usageTracker.record({
+            source: 'task-search-agent',
+            model: usage.model ?? model,
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+            cache_read_input_tokens: usage.cache_read_input_tokens,
+          });
+        } catch { /* accounting must never fail the search */ }
+      },
+    }, {
+      system: options.system,
+      tools: [searchTool],
+      modelConfig: { model, provider, maxTokens: ANSWER_MAX_TOKENS },
+      maxToolRounds: IN_PROCESS_MAX_ROUNDS,
+      cacheConfig: false,
+      signal: controller.signal,
+      source: 'task-search-agent',
+    });
+    if (result.aborted) throw new Error(`AI search timed out after ${options.timeoutMs}ms`);
+    return { response: result.response, model };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const MAX_CONCURRENT_CALLS = 2;
@@ -155,9 +274,10 @@ async function inner(
   if (backgroundAiDisabled()) {
     throw new AgentSearchError('AI search is disabled in this environment', 503, { code: 'ai_disabled' });
   }
-  // Only the default engine needs the claude binary; injected engines (tests,
-  // future in-process loop) must not be blocked by a CLI-less machine.
-  if (!opts.engine) {
+  // Only the CLI engine needs the claude binary; the in-process default and
+  // injected engines (tests) must not be blocked by a CLI-less machine.
+  const cliEngine = !opts.engine && useCliEngine();
+  if (cliEngine) {
     cliAvailable ??= resolveClaudeCliExecutable() !== null;
     if (!cliAvailable) {
       throw new AgentSearchError('claude CLI not available on this host', 503, { code: 'ai_disabled' });
@@ -168,11 +288,12 @@ async function inner(
   const t0 = Date.now();
   let answer: { response: string; model?: string; costUsd?: number };
   try {
-    const engine = opts.engine ?? claudeCliEngine;
+    const engine = opts.engine ?? (cliEngine ? claudeCliEngine : inProcessEngine);
     answer = await engine(buildUserPrompt(trimmed), {
-      system: SYSTEM_PROMPT,
-      model: ENGINE_MODEL,
-      timeoutMs: opts.timeoutMs ?? ENGINE_TIMEOUT_MS,
+      system: cliEngine ? SYSTEM_PROMPT : SYSTEM_PROMPT_TOOL_LOOP,
+      model: CLI_ENGINE_MODEL,
+      timeoutMs: opts.timeoutMs ?? (cliEngine ? CLI_ENGINE_TIMEOUT_MS : IN_PROCESS_TIMEOUT_MS),
+      query: trimmed,
     });
   } catch (err) {
     count('search.agent.result', 1, { outcome: 'engine_error' });
@@ -183,7 +304,7 @@ async function inner(
     releaseCallSlot();
   }
 
-  const model = answer.model ?? ENGINE_MODEL;
+  const model = answer.model ?? CLI_ENGINE_MODEL;
   if (answer.costUsd !== undefined) {
     try {
       usageTracker.record({

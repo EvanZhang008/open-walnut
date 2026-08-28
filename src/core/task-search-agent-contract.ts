@@ -12,29 +12,18 @@
 import type { Task } from './types.js';
 
 /** Bump to invalidate cached agent answers when the prompt contract changes. */
-export const AGENT_SEARCH_PROMPT_V = 'v1';
+export const AGENT_SEARCH_PROMPT_V = 'v2';
 
 export const AGENT_SEARCH_MAX_RESULTS = 5;
 const EVIDENCE_MAX_CHARS = 200;
 const SUMMARY_MAX_CHARS = 300;
 
-/**
- * System prompt for the claude -p child. The child has the CLI's own tools
- * (Bash), so its search surface is the `walnut` CLI ops registry.
- */
-export const SYSTEM_PROMPT = `You find WHICH of the user's Walnut tasks matches a search phrase. You are a search tool, not a chat assistant. Reply with JSON only.
+const PROMPT_HEADER = `You find WHICH of the user's Walnut tasks matches a search phrase. You are a search tool, not a chat assistant. Reply with JSON only.
 
 ## The failure you exist to prevent
-A task's own title/note are often WRONG or EMPTY (tasks auto-created for a coding session start as "Session: <folder>" with a blank note); the real intent lives ONLY in the session transcript. Task-lane-only search misses these.
+A task's own title/note are often WRONG or EMPTY (tasks auto-created for a coding session start as "Session: <folder>" with a blank note); the real intent lives ONLY in the session transcript. Task-lane-only search misses these.`;
 
-## Method — search via the walnut CLI (Bash). Budget ~40s, ~6 searches max.
-  walnut tools call search '{"q":"<terms>","types":"task,session","limit":15}'
-1. Start with the user's own words; then variants with DIFFERENT vocabulary — the literal strings a transcript would contain: package names, file extensions, commands, API names.
-2. If nothing convincing, TRANSLATE the query (English <-> Chinese) and search both languages.
-3. Optionally confirm a finalist: walnut tools call task_get '{"id":"<task id>"}'.
-Stop as soon as you are confident. Never repeat a query.
-
-## Owner rule
+const PROMPT_FOOTER = `## Owner rule
 - A result with type:"task": its taskId is a candidate answer.
 - A result with type:"session": its taskId is the task that OWNS that transcript — return THAT task. A session hit with a placeholder title but a matching snippet is a STRONG hit, not a weak one.
 - The same task reached via both lanes is ONE result. Never list a session as a result.
@@ -48,6 +37,46 @@ Stop as soon as you are confident. Never repeat a query.
 At most 3 results, best first. Zero matches -> {"results":[]} — that is a correct answer.
 NEVER invent or reconstruct a task_id; an id not present in a tool result is discarded and counts as a wrong answer.
 Do NOT output titles, phases, or projects — those are attached from the database.`;
+
+/**
+ * System prompt for the claude -p child (WALNUT_AGENT_SEARCH_ENGINE=cli). The
+ * child has the CLI's own tools (Bash), so its search surface is the `walnut`
+ * CLI ops registry.
+ */
+export const SYSTEM_PROMPT = `${PROMPT_HEADER}
+
+## Method — search via the walnut CLI (Bash). Budget ~40s, ~6 searches max.
+  walnut tools call search '{"q":"<terms>","types":"task,session","limit":15}'
+1. Start with the user's own words; then variants with DIFFERENT vocabulary — the literal strings a transcript would contain: package names, file extensions, commands, API names.
+2. If nothing convincing, TRANSLATE the query (English <-> Chinese) and search both languages.
+3. Optionally confirm a finalist: walnut tools call task_get '{"id":"<task id>"}'.
+Stop as soon as you are confident. Never repeat a query.
+
+${PROMPT_FOOTER}`;
+
+/**
+ * System prompt for the in-process engine (default): the model has ONE native
+ * tool, `search`. Latency is dominated by model round-trips, so the method
+ * section pushes hard on batching query variants as PARALLEL tool calls in a
+ * single round — profiled 2026-08-27: every extra round costs ~2-3s of model
+ * time while a search call itself is ~150ms.
+ */
+export const SYSTEM_PROMPT_TOOL_LOOP = `${PROMPT_HEADER}
+
+## Method — every model round costs the user seconds. Fewest rounds wins.
+0. The user message already contains SEED RESULTS: the raw query was searched for you. If they clearly identify the owning task, answer IMMEDIATELY — no tool calls at all.
+1. Otherwise: issue SEVERAL search calls AT ONCE (parallel tool calls in one reply): variants with DIFFERENT vocabulary — the literal strings a transcript would contain (package names, file extensions, commands, API names) — plus an English <-> Chinese translation when the query could be phrased in the other language.
+2. Only if still nothing convincing: ONE more batched round with new vocabulary. Never repeat a query (the seed query counts as used).
+Then answer. Do not deliberate between rounds — a wide batch of searches beats thinking. Keep the answer terse: short evidence quotes, one-line summary.
+
+${PROMPT_FOOTER}`;
+
+/** Appended to the user prompt by the in-process engine: the raw query's own
+ *  search results, pre-fetched server-side so the common case needs ONE model
+ *  round instead of two (search round + answer round). */
+export function buildSeedResultsBlock(rowsJson: string): string {
+  return `\n\nSEED RESULTS — the raw query was already searched for you (search tool, same format):\n${rowsJson}\nIf these identify the owning task, answer now without any tool calls.`;
+}
 
 export function buildUserPrompt(query: string): string {
   return `Find the Walnut task matching this search:\n"""${query}"""`;
