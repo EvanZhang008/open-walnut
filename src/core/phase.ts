@@ -20,6 +20,17 @@
  *                        possibly badly — and the ball is back with the human;
  *                        the session's own Error badge carries the "it failed"
  *                        signal, the phase only says "handed back, look at it")
+ *   session:awaiting-human → AGENT_COMPLETE  unconditional (permission request /
+ *                        AskUserQuestion / plan approval: the agent is BLOCKED
+ *                        on a human decision — same handed-back semantics as a
+ *                        finished turn, 2026-08-18 user call: "只要是 Agent 完事
+ *                        要等,都是把它变成 Agent Complete". The red row is the
+ *                        attention signal; the session's red Waiting badge says
+ *                        WHY. Auto-approved prompts never emit the event.)
+ *   session:human-answered → IN_PROGRESS     unconditional (the human decided —
+ *                        allow/deny/answer — and the agent resumes the turn;
+ *                        skipped for 'expired' resolutions, where nobody decided
+ *                        and the session is dead)
  *   session:streaming  → (retired 2026-08-18 with the WAIT phase) it existed
  *                        only to undo a stale error→WAIT repaint; error now
  *                        lands on AGENT_COMPLETE and session:turn-start already
@@ -252,6 +263,27 @@ export function sessionStreamingPhase(_current: TaskPhase): TaskPhase | null {
   return null
 }
 
+/** Agent blocked on a human decision (permission / AskUserQuestion / plan
+ *  approval) → AGENT_COMPLETE. Unconditional. Same handed-back semantics as a
+ *  finished turn: the agent cannot make progress until the human acts, so the
+ *  row must go red NOW, not when the turn eventually ends (2026-08-18 user
+ *  call). The session's red "Waiting" badge (pendingPermission-derived)
+ *  carries the WHY; the phase only says "look at it". */
+export function sessionAwaitingHumanPhase(current: TaskPhase): TaskPhase | null {
+  if (TERMINAL_PHASES.has(current) || current === 'AGENT_COMPLETE') return null
+  return 'AGENT_COMPLETE'
+}
+
+/** Human answered the prompt (allow / deny / AskUserQuestion answer) →
+ *  IN_PROGRESS. Unconditional. The agent resumes the turn immediately; leaving
+ *  the row red after the human already acted would be a stale attention signal.
+ *  Callers must NOT fire this for 'expired' resolutions (session died with the
+ *  prompt open — nobody decided, nothing resumes). */
+export function sessionHumanAnsweredPhase(current: TaskPhase): TaskPhase | null {
+  if (TERMINAL_PHASES.has(current) || current === 'IN_PROGRESS') return null
+  return 'IN_PROGRESS'
+}
+
 // ── applySessionPhase() — single entry point for all session → phase updates ──
 
 export type PhaseTransitionTrigger =
@@ -260,6 +292,8 @@ export type PhaseTransitionTrigger =
   | 'session:error'
   | 'session:streaming'
   | 'session:turn-start'
+  | 'session:awaiting-human'
+  | 'session:human-answered'
   | 'triage-sync'
   | 'reconciler'
 
@@ -303,6 +337,8 @@ export async function applySessionPhase(
     case 'session:error':   newPhase = sessionErrorPhase(task.phase); break
     case 'session:streaming': newPhase = sessionStreamingPhase(task.phase); break
     case 'session:turn-start': newPhase = sessionTurnStartPhase(task.phase); break
+    case 'session:awaiting-human': newPhase = sessionAwaitingHumanPhase(task.phase); break
+    case 'session:human-answered': newPhase = sessionHumanAnsweredPhase(task.phase); break
     // triage-sync: RETIRED 2026-08-17 (incident inc-1786983019552). It auto-
     // upgraded AGENT_COMPLETE → WAIT a few minutes after every normal turn,
     // which added zero information (both render red+unread) and diluted WAIT —

@@ -16,6 +16,16 @@ import type { SessionRecord } from './types.js'
 export interface ReconcileResult {
   reconciled: number
   reconnectable: SessionRecord[]
+  /**
+   * Sessions this sweep marked 'stopped' because their process did not survive.
+   * Handed to session-auto-recover by the caller (NOT scheduled here): at
+   * reconcile time the auto-recover watcher has not been started yet, and the
+   * server should not have two places deciding whether to resume work.
+   *
+   * These carry `status_reason: 'server_restart'`, which the classifier treats as
+   * infra — a Walnut restart is not the session's fault.
+   */
+  dead: SessionRecord[]
 }
 
 /**
@@ -46,7 +56,7 @@ export async function reconcileSessions(): Promise<ReconcileResult> {
     log.session.warn('session reconciler: failed to read sessions', {
       error: err instanceof Error ? err.message : String(err),
     })
-    return { reconciled: 0, reconnectable: [] }
+    return { reconciled: 0, reconnectable: [], dead: [] }
   }
   // Only reconcile interactive sessions (CLI with detached processes).
   // Embedded types (triage/hook/cron/subagent) have no PID — no process to check.
@@ -60,7 +70,7 @@ export async function reconcileSessions(): Promise<ReconcileResult> {
 
   if (zombieCandidates.length === 0) {
     log.session.info('session reconciler: no non-terminal interactive sessions found')
-    return { reconciled: 0, reconnectable: [] }
+    return { reconciled: 0, reconnectable: [], dead: [] }
   }
 
   log.session.info('session reconciler: checking sessions', { count: zombieCandidates.length })
@@ -84,6 +94,7 @@ export async function reconcileSessions(): Promise<ReconcileResult> {
 
   let reconciled = 0
   const reconnectable: SessionRecord[] = []
+  const dead: SessionRecord[] = []
 
   // Process results — updateSessionRecord calls are serialized by the write lock
   for (const r of results) {
@@ -170,6 +181,7 @@ export async function reconcileSessions(): Promise<ReconcileResult> {
       }
 
       reconciled++
+      dead.push(updated)
 
       emitSessionStatusChanged(
         updated,
@@ -194,8 +206,9 @@ export async function reconcileSessions(): Promise<ReconcileResult> {
   log.session.info('session reconciler: done', {
     reconciled,
     reconnectable: reconnectable.length,
+    dead: dead.length,
     total: zombieCandidates.length,
   })
 
-  return { reconciled, reconnectable }
+  return { reconciled, reconnectable, dead }
 }

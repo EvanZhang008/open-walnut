@@ -100,6 +100,11 @@ export interface SessionTailFold {
   bgTasks: Record<string, { status: string; isBackgrounded?: boolean; endedPerLevel?: boolean }>
   /** In-flight bg tasks that GATE turn-over (non-terminal AND not backgrounded). */
   gatingBgCount: number
+  /** In-flight bg tasks DETACHED from turn-over (non-terminal AND backgrounded).
+   *  Not part of turn settle — but a session with one is still WORKING, so the
+   *  reconciler must not converge its 'running' record to idle (mirrors the
+   *  daemon fold's detachedBgCount and the snapshot projection's running rule). */
+  detachedBgCount: number
   /** TeamCreate seen after the anchor without a closing TeamDelete. */
   teamActive: boolean
   /** CronCreate seen in the window without a closing CronDelete. Best-effort
@@ -234,6 +239,7 @@ export function foldSessionTail(
     trailingIdle: false,
     bgTasks: {},
     gatingBgCount: 0,
+    detachedBgCount: 0,
     teamActive: false,
     turnEnded: false,
     ...(opts?.syntheticAnchor ? { anchorSynthetic: true, sawTurnActivity: false } : {}),
@@ -331,7 +337,10 @@ export function foldSessionTail(
         // Terminal is terminal: a late/replayed start or progress can't revive a task.
         fold.bgTasks[taskId] = {
           status: prev && BG_TERMINAL.has(prev.status) ? prev.status : 'running',
-          isBackgrounded: prev?.isBackgrounded,
+          // A run_in_background Bash task carries is_backgrounded:true TOP-LEVEL
+          // on its task_started (verified live, local_bash 2026-08-28). Sticky,
+          // same as the task_updated patch path. Keep in parity with daemon-fold.
+          isBackgrounded: parsed.is_backgrounded === true || prev?.isBackgrounded,
         }
       } else if (taskId && subtype === 'task_updated') {
         const prev = fold.bgTasks[taskId]
@@ -408,7 +417,9 @@ export function foldSessionTail(
   }
 
   for (const t of Object.values(fold.bgTasks)) {
-    if (!t.isBackgrounded && !t.endedPerLevel && !BG_TERMINAL.has(t.status)) fold.gatingBgCount++
+    if (t.endedPerLevel || BG_TERMINAL.has(t.status)) continue
+    if (t.isBackgrounded) fold.detachedBgCount++
+    else fold.gatingBgCount++
   }
 
   if (fold.lastResult) {
@@ -708,6 +719,13 @@ export async function reconcileProcessStatus(
   const { fold } = evidence
 
   if (!fold.turnEnded) return { converged: false, reason: 'turn-not-terminal' }
+  // A detached (run_in_background) task is real work in flight: the record's
+  // 'running' is TRUTHFUL even though the turn settled around it (user decision
+  // 2026-08-28, inc-1787893885321). Converging it to idle here would fight the
+  // snapshot lane, which projects detachedBgCount>0 as 'running'.
+  if (fold.detachedBgCount > 0) {
+    return { converged: false, reason: 'detached-bg-running' }
+  }
   if (inputs.teamActiveHint && fold.workStatus !== 'error') {
     return { converged: false, reason: 'team-active' }
   }
