@@ -392,7 +392,7 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
         // transcription runs ~15x realtime on Metal, so 8x realtime + 90s floor
         // is generous headroom without letting a dictation hang for 15 minutes.
         const wavBytes = (await stat(wavPath)).size;
-        const timeoutMs = Math.min(15 * 60_000, Math.max(90_000, (wavBytes / 32_000) * 8_000));
+        const timeoutMs = Math.round(Math.min(15 * 60_000, Math.max(90_000, (wavBytes / 32_000) * 8_000)));
         log.stt.info(`Sending ${wavPath} to mlx daemon :${port} (model=${model}, timeout=${Math.round(timeoutMs / 1000)}s)`);
         const res = await fetch(`http://127.0.0.1:${port}/inference`, {
           method: 'POST',
