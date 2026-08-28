@@ -69,6 +69,10 @@ describe('claude -p fallback engine wiring', () => {
     expect(opts.tools).toEqual(['Bash']);
     expect(opts.settingSources).toBe('');
     expect(opts.bare).toBe(true);
+    // Neutral cwd — never the server's repo cwd (CLAUDE.md chain + the
+    // directory-scoped cron-adoption hazard live there).
+    expect(typeof opts.cwd).toBe('string');
+    expect(opts.cwd).not.toContain('walnut');
   });
 
   it('maps a failed child to 502 agent_failed', async () => {

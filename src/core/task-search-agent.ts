@@ -18,6 +18,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { bus, EventNames } from './event-bus.js';
 import { backgroundAiDisabled } from './cheap-model.js';
 import { resolveClaudeCliExecutable } from './claude-cli-detect.js';
@@ -112,6 +113,11 @@ async function claudeCliEngine(
     tools: ['Bash'],
     settingSources: '',
     bare: true,
+    // Neutral cwd, NOT the server's (= this repo): the child needs no repo
+    // files (walnut CLI is on PATH, searches ride HTTP), and a claude process
+    // in the repo cwd could adopt {cwd}/.claude/scheduled_tasks.json durable
+    // crons — adoption is DIRECTORY-scoped (2026-08-13 incident).
+    cwd: tmpdir(),
   });
   if (!run.success) throw new Error(run.error ?? 'claude -p exited with an error');
   return { response: run.result, model: options.model, costUsd: run.costUsd };
