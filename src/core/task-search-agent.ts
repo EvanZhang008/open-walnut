@@ -104,6 +104,14 @@ async function claudeCliEngine(
     timeoutMs: options.timeoutMs,
     systemPrompt: options.system,
     toolUseId: `task-search-${randomUUID()}`,
+    // Slim shell: replace the CLI system prompt, keep ONLY Bash (for the
+    // walnut CLI), load no settings/CLAUDE.md. 32.5k → 3.6k tokens measured;
+    // the default shell also inhales this repo's whole CLAUDE.md chain
+    // because the server's cwd is the repo.
+    systemPromptMode: 'replace',
+    tools: ['Bash'],
+    settingSources: '',
+    bare: true,
   });
   if (!run.success) throw new Error(run.error ?? 'claude -p exited with an error');
   return { response: run.result, model: options.model, costUsd: run.costUsd };

@@ -40,6 +40,24 @@ export interface InlineSubagentOptions {
   permissionMode?: string;  // default: bypassPermissions
   toolUseId: string;        // parent tool call ID (for event correlation)
   background?: boolean;     // background mode — return immediately after spawn
+  /** 'append' (default) rides the full Claude Code system prompt; 'replace'
+   *  swaps it for systemPrompt alone. Measured (empty dir, 2026-08-28): the
+   *  default shell is 32.5k tokens; replace + tools:['Bash'] +
+   *  settingSources:'' is 3.6k. Slim every utility child. */
+  systemPromptMode?: 'append' | 'replace';
+  /** Restrict the CLI's toolset (--tools). [] = no tools at all;
+   *  undefined = the full default set (~20k tokens of tool manuals). */
+  tools?: string[];
+  /** --setting-sources value. '' = load NO settings and NO CLAUDE.md chain
+   *  (the cwd's project CLAUDE.md alone can be tens of KB). undefined = CLI
+   *  default (load everything). */
+  settingSources?: string;
+  /** --bare: skip hooks/LSP/plugins AND the repo-derived context that
+   *  settingSources alone does not remove (measured: slim flags in this repo's
+   *  cwd still carried 7.9k tokens; +bare = 133). The full slim combo for a
+   *  utility child is systemPromptMode:'replace' + tools + settingSources:''
+   *  + bare:true. */
+  bare?: boolean;
 }
 
 export interface InlineSubagentResult {
@@ -102,6 +120,10 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
     permissionMode = 'bypassPermissions',
     toolUseId,
     background = false,
+    systemPromptMode = 'append',
+    tools,
+    settingSources,
+    bare = false,
   } = opts;
 
   await acquireSemaphore();
@@ -120,7 +142,16 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
     '--permission-mode', permissionMode,
   ];
   if (systemPrompt) {
-    args.push('--append-system-prompt', systemPrompt);
+    args.push(systemPromptMode === 'replace' ? '--system-prompt' : '--append-system-prompt', systemPrompt);
+  }
+  if (tools !== undefined) {
+    args.push('--tools', tools.join(','));
+  }
+  if (settingSources !== undefined) {
+    args.push('--setting-sources', settingSources);
+  }
+  if (bare) {
+    args.push('--bare');
   }
 
   // Clean env — remove CLAUDECODE to prevent nested session detection.

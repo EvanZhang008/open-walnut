@@ -63,6 +63,12 @@ describe('claude -p fallback engine wiring', () => {
     expect(opts.systemPrompt).toContain('type:"session"');
     expect(opts.prompt).toContain('which task adds docx');
     expect(typeof opts.toolUseId).toBe('string');
+    // Slim shell — without these the child inhales ~32.5k tokens of CLI
+    // system prompt + tool manuals + the repo's CLAUDE.md chain (vs 3.6k).
+    expect(opts.systemPromptMode).toBe('replace');
+    expect(opts.tools).toEqual(['Bash']);
+    expect(opts.settingSources).toBe('');
+    expect(opts.bare).toBe(true);
   });
 
   it('maps a failed child to 502 agent_failed', async () => {
