@@ -37,6 +37,9 @@ import {
   renameGroup,
   setGroupHidden,
   listGroups,
+  createFolder,
+  deleteFolder,
+  setFolderParent,
   getCustomTiers,
   setPluginTaskField,
   newTaskPinDefault,
@@ -931,7 +934,7 @@ tasksRouter.post('/groups', async (req: Request, res: Response, next: NextFuncti
     }
     res.json(result)
   } catch (err) {
-    next(err)
+    sendFolderError(res, err)
   }
 })
 
@@ -948,7 +951,7 @@ tasksRouter.post('/groups/:groupId/add', async (req: Request, res: Response, nex
     bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui', 'main-agent'], { source: 'api' })
     res.json(result)
   } catch (err) {
-    next(err)
+    sendFolderError(res, err)
   }
 })
 
@@ -1001,6 +1004,72 @@ tasksRouter.patch('/groups/:groupId/hidden', async (req: Request, res: Response,
     res.json(result)
   } catch (err) {
     next(err)
+  }
+})
+
+// ── Folders (the group model's v9 face: per-project, nestable, empty-valid) ──
+
+/** Folder op errors: unknown ids → 404, everything else (same-project rule,
+ *  nesting depth/cycle, empty label) is caller-fixable → 400. */
+function sendFolderError(res: Response, err: unknown): void {
+  const msg = err instanceof Error ? err.message : String(err)
+  res.status(/not found/i.test(msg) ? 404 : 400).json({ error: msg })
+}
+
+// POST /api/tasks/folders — create an EMPTY folder under a project ('' = Inbox),
+// optionally nested via parent_id. The "project + → New folder" entry point.
+tasksRouter.post('/folders', async (req: Request, res: Response) => {
+  try {
+    const { label, project, parent_id } = req.body as { label?: string; project?: string; parent_id?: string }
+    if (typeof label !== 'string' || !label.trim()) {
+      res.status(400).json({ error: 'label must be a non-empty string' })
+      return
+    }
+    if (typeof project !== 'string') {
+      res.status(400).json({ error: "project must be a string ('' = Inbox)" })
+      return
+    }
+    if (parent_id !== undefined && typeof parent_id !== 'string') {
+      res.status(400).json({ error: 'parent_id must be a string when provided' })
+      return
+    }
+    const result = await createFolder(label, project, parent_id)
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui', 'main-agent'], { source: 'api' })
+    res.status(201).json(result)
+  } catch (err) {
+    sendFolderError(res, err)
+  }
+})
+
+// PATCH /api/tasks/folders/:groupId — move a folder in the nesting tree.
+// Body: { parent_id: string | null } (null = make it top-level).
+tasksRouter.patch('/folders/:groupId', async (req: Request, res: Response) => {
+  try {
+    const groupId = param(req.params.groupId)
+    const { parent_id } = req.body as { parent_id?: string | null }
+    if (parent_id !== null && typeof parent_id !== 'string') {
+      res.status(400).json({ error: 'parent_id must be a string or null' })
+      return
+    }
+    const result = await setFolderParent(groupId, parent_id)
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id }, ['web-ui', 'main-agent'], { source: 'api' })
+    res.json(result)
+  } catch (err) {
+    sendFolderError(res, err)
+  }
+})
+
+// DELETE /api/tasks/folders/:groupId — delete a folder. Consequence-free:
+// members fall back to the project in place, child folders re-parent, no task
+// is ever deleted.
+tasksRouter.delete('/folders/:groupId', async (req: Request, res: Response) => {
+  try {
+    const groupId = param(req.params.groupId)
+    const result = await deleteFolder(groupId)
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { dissolved_group_ids: [result.group_id] }, ['web-ui', 'main-agent'], { source: 'api' })
+    res.json(result)
+  } catch (err) {
+    sendFolderError(res, err)
   }
 })
 

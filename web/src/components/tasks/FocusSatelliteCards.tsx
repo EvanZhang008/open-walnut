@@ -65,16 +65,18 @@ export function GroupChip({ groupId, tier, label, onRename, onDissolve, onHide }
       style={style}
       data-group-id={groupId}
       className={`task-group-chip${isDragging ? ' task-group-chip-dragging' : ''}`}
-      title="Grouped tasks — drag the grip to move the whole group"
+      title="Folder — drag the grip to move the whole folder"
     >
-      {/* Grip = the whole-group drag handle. Kept distinct from the label (rename) and
+      {/* Grip = the whole-folder drag handle. Kept distinct from the label (rename) and
           the ⊘/✕ buttons so those gestures never conflict with the drag. */}
-      <span className="task-group-chip-grip" {...attributes} {...listeners} title="Drag to move the whole group" aria-label="Drag group">⣿</span>
-      <span className="task-group-chip-icon" aria-hidden="true">⑂</span>
+      <span className="task-group-chip-grip" {...attributes} {...listeners} title="Drag to move the whole folder" aria-label="Drag folder">⣿</span>
+      <span className="task-group-chip-icon" aria-hidden="true">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z" /></svg>
+      </span>
       <span
         className="task-group-chip-label"
         onClick={(e) => { e.stopPropagation(); onRename?.(groupId, label); }}
-        title="Rename group"
+        title="Rename folder"
       >
         {label}
       </span>
@@ -82,8 +84,8 @@ export function GroupChip({ groupId, tier, label, onRename, onDissolve, onHide }
         <button
           className="task-group-chip-hide"
           onClick={(e) => { e.stopPropagation(); onHide(groupId); }}
-          aria-label="Hide this group from Focus"
-          title="Hide from Focus — collapse this group (unhide from the strip below)"
+          aria-label="Hide this folder from Focus"
+          title="Hide from Focus — collapse this folder (unhide from the strip below)"
         >
           ⊘
         </button>
@@ -92,8 +94,8 @@ export function GroupChip({ groupId, tier, label, onRename, onDissolve, onHide }
         <button
           className="task-group-chip-dissolve"
           onClick={(e) => { e.stopPropagation(); onDissolve(groupId); }}
-          aria-label="Ungroup these tasks"
-          title="Ungroup — dissolve this group"
+          aria-label="Delete this folder"
+          title="Delete folder — tasks stay, back in the project"
         >
           ✕
         </button>

@@ -606,7 +606,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
             </>
           )}
 
-          {/* Ungroup — remove this task from its virtual group */}
+          {/* Remove from folder — the task falls back to the project in place */}
           {onUngroup && task.group_id && (
             <>
               <div className="task-kebab-divider" />
@@ -619,7 +619,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
                 }}
               >
                 <span className="task-kebab-icon">⑂</span>
-                <span>Remove from group</span>
+                <span>Remove from folder</span>
               </button>
             </>
           )}
@@ -636,7 +636,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
               }}
             >
               <span className="task-kebab-icon">⊙</span>
-              <span>Unhide group in Focus</span>
+              <span>Unhide folder in Focus</span>
             </button>
           )}
 

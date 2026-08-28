@@ -282,26 +282,42 @@ interface UseTasksReturn {
   patchTasksLocal: (patches: Record<string, Partial<Task>>) => void;
   /** Suppress the next WS echo for a key (e.g. `update:<id>`) — pair with own API call. */
   guardEcho: (key: string) => void;
-  /** Virtual-group name registry: group_id → label. */
+  /** Folder name registry: group_id → label. */
   taskGroups: Record<string, string>;
   /** Set of group_ids currently hidden from the Focus (pinned) area. */
   hiddenGroups: Set<string>;
-  /** Create a virtual group from ≥2 task ids (label AI-generated if omitted). */
+  /** Folder metadata: group_id → owning project / parent / live member count.
+   *  Includes EMPTY folders (0 members) — they render as droppable rows. */
+  folderMeta: Record<string, FolderMeta>;
+  /** Create a folder from ≥2 same-project task ids (label AI-generated if omitted). */
   groupTasks: (taskIds: string[], label?: string) => void;
-  /** Add task(s) to an existing group (used by drag-onto-a-grouped-task). */
+  /** Add task(s) to an existing folder (used by drag-onto-a-foldered-task). */
   addToGroup: (groupId: string, taskIds: string[]) => void;
-  /** Remove task(s) from their virtual group. */
+  /** Take task(s) out of their folder (they fall back to the project in place). */
   ungroupTasks: (taskIds: string[]) => void;
-  /** Rename a virtual group. */
+  /** Rename a folder. */
   renameGroup: (groupId: string, label: string) => void;
-  /** Show/hide a group in the Focus (pinned) area (membership untouched). */
+  /** Show/hide a folder in the Focus (pinned) area (membership untouched). */
   setGroupHidden: (groupId: string, hidden: boolean) => void;
+  /** Create an EMPTY folder under a project ('' = Inbox), optionally nested. */
+  createFolder: (label: string, project: string, parentId?: string) => void;
+  /** Delete a folder: members fall back in place, child folders re-parent. */
+  deleteFolder: (groupId: string) => void;
+  /** Move a folder in the nesting tree (null = top-level). */
+  setFolderParent: (groupId: string, parentId: string | null) => void;
+}
+
+export interface FolderMeta {
+  project: string;
+  parent_id?: string;
+  memberCount: number;
 }
 
 export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskGroups, setTaskGroups] = useState<Record<string, string>>({});
   const [hiddenGroups, setHiddenGroups] = useState<Set<string>>(new Set());
+  const [folderMeta, setFolderMeta] = useState<Record<string, FolderMeta>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -320,12 +336,19 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       .then((groups) => {
         const map: Record<string, string> = {};
         const hidden = new Set<string>();
+        const meta: Record<string, FolderMeta> = {};
         for (const g of groups) {
           map[g.group_id] = g.label;
           if (g.hidden) hidden.add(g.group_id);
+          meta[g.group_id] = {
+            project: g.project ?? '',
+            ...(g.parent_id ? { parent_id: g.parent_id } : {}),
+            memberCount: g.member_ids.length,
+          };
         }
         setTaskGroups(map);
         setHiddenGroups(hidden);
+        setFolderMeta(meta);
       })
       .catch(() => { /* groups are best-effort UI sugar — ignore fetch errors */ });
   }, []);
@@ -951,5 +974,39 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       .catch((err) => { onOpError(err); refetchGroups(); });
   }, [onOpError, refetchGroups]);
 
-  return { tasks, taskGroups, hiddenGroups, loading, refreshing, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, reorder, moveTask, reparentTask, bakeOrder, deleteTask, batchSetPhase, batchDelete, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb };
+  const createFolderCb = useCallback((label: string, project: string, parentId?: string) => {
+    tasksApi.createEmptyFolder(label, project, parentId)
+      .then((f) => {
+        setTaskGroups((prev) => ({ ...prev, [f.group_id]: f.label }));
+        setFolderMeta((prev) => ({
+          ...prev,
+          [f.group_id]: { project: f.project, ...(f.parent_id ? { parent_id: f.parent_id } : {}), memberCount: 0 },
+        }));
+      })
+      .catch((err) => { onOpError(err); refetchGroups(); });
+  }, [onOpError, refetchGroups]);
+
+  const deleteFolderCb = useCallback((groupId: string) => {
+    // Optimistic: drop the folder row and release its members in place.
+    setTaskGroups((prev) => { const next = { ...prev }; delete next[groupId]; return next; });
+    setFolderMeta((prev) => { const next = { ...prev }; delete next[groupId]; return next; });
+    setTasks((prev) => prev.map((t) => t.group_id === groupId ? { ...t, group_id: undefined } : t));
+    tasksApi.deleteTaskFolder(groupId)
+      .then(() => { refetch(); refetchGroups(); })
+      .catch((err) => { onOpError(err); refetch(); refetchGroups(); });
+  }, [onOpError, refetch, refetchGroups]);
+
+  const setFolderParentCb = useCallback((groupId: string, parentId: string | null) => {
+    setFolderMeta((prev) => {
+      const cur = prev[groupId];
+      if (!cur) return prev;
+      const next = { ...cur };
+      if (parentId) next.parent_id = parentId; else delete next.parent_id;
+      return { ...prev, [groupId]: next };
+    });
+    tasksApi.setTaskFolderParent(groupId, parentId)
+      .catch((err) => { onOpError(err); refetchGroups(); });
+  }, [onOpError, refetchGroups]);
+
+  return { tasks, taskGroups, hiddenGroups, folderMeta, loading, refreshing, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, reorder, moveTask, reparentTask, bakeOrder, deleteTask, batchSetPhase, batchDelete, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb, createFolder: createFolderCb, deleteFolder: deleteFolderCb, setFolderParent: setFolderParentCb };
 }

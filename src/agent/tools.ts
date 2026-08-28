@@ -1209,21 +1209,21 @@ For projects (type='project'): set default_host and default_cwd for session defa
 
   {
     name: 'task_group',
-    description: `Group related tasks together into a lightweight VISUAL group — they render boxed together in the task list, ordered right after the group's lead (top-sorted) task.
+    description: `Put related tasks into a FOLDER — a local sub-folder inside one project that renders the tasks together in the task list.
 
-This is NOT a parent/subtask relationship: grouped tasks stay flat and fully independent (separate lifecycles, no inherited fields, none is "under" another). Use it to say "these tasks belong together" (e.g. a task and its forks, or several tasks tackling one theme) without the heaviness of subtasks.
+This is NOT a parent/subtask relationship: foldered tasks stay flat and fully independent (separate lifecycles, no inherited fields, none is "under" another). Use it to say "these tasks belong together" (e.g. a task and its forks, or several tasks tackling one theme) without the heaviness of subtasks.
 
 Rules:
-- Any tasks can be grouped together — there is no project restriction (a group is a pure visual cluster).
-- A group needs ≥2 tasks. Removing members until fewer than 2 remain dissolves the group automatically.
-- The group name is AI-suggested but you can set/override it via 'label'.
+- A folder belongs to exactly one project — every member must be in the same project (move the task first if needed). Moving a task to another project automatically takes it out of its folder.
+- Creating needs ≥2 tasks; removing members never auto-deletes the folder (an empty folder is valid until a human deletes it).
+- The folder name is AI-suggested but you can set/override it via 'label'.
 
 Actions:
-- create: make a new group from 2+ tasks (task_ids). If a task is already grouped, its existing group is merged in.
-- add: add task(s) to an existing group (group_id + task_ids).
-- remove: remove task(s) from their group (task_ids).
-- rename: change a group's name (group_id + label).
-- list: list all groups with their members.`,
+- create: make a new folder from 2+ same-project tasks (task_ids). If a task is already in a folder, that folder is merged in.
+- add: add task(s) to an existing folder (group_id + task_ids).
+- remove: take task(s) out of their folder (task_ids) — they fall back to the project in place.
+- rename: change a folder's name (group_id + label).
+- list: list all folders with their members.`,
     input_schema: {
       type: 'object',
       properties: {
@@ -1269,10 +1269,7 @@ Actions:
           if (taskIds.length < 1) return 'Error: "remove" requires task_ids.';
           const result = await removeFromGroup(taskIds);
           bus.emit(EventNames.TASK_GROUPS_CHANGED, { dissolved_group_ids: result.dissolved_group_ids }, ['web-ui'], { source: 'agent' });
-          const dissolvedNote = result.dissolved_group_ids.length
-            ? ` (${result.dissolved_group_ids.length} group(s) dissolved — fewer than 2 members left)`
-            : '';
-          return `Removed ${result.removed_ids.length} task(s) from their group${dissolvedNote}.`;
+          return `Removed ${result.removed_ids.length} task(s) from their folder (the folder itself stays until a human deletes it).`;
         }
 
         if (action === 'rename') {

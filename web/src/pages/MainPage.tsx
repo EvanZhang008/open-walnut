@@ -339,7 +339,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const { health, loading: healthLoading } = useSystemHealth();
   const { connectionState } = useWebSocket();
   const { notify } = useNotifications();
-  const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, toggleComplete, setPhase, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden } = useTasksContext();
+  const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, toggleComplete, setPhase, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, folderMeta, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden, createFolder, deleteFolder } = useTasksContext();
   const favorites = useFavorites();
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
@@ -2714,12 +2714,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onBakeOrder={bakeOrder}
           taskGroups={taskGroups}
           hiddenGroups={hiddenGroups}
+          folderMeta={folderMeta}
           onGroupTasks={groupTasks}
           onAddToGroup={addToGroup}
           onUngroupTask={(taskId) => ungroupTasks([taskId])}
           onUngroupTasks={ungroupTasks}
           onRenameGroup={renameGroup}
           onSetGroupHidden={setGroupHidden}
+          onCreateFolder={createFolder}
+          onDeleteFolder={deleteFolder}
           onOpenSession={handleToggleSession}
           onStartSession={handleStartSessionForTask}
           openSessionIds={openSessionIdSet}

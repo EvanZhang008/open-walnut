@@ -1,23 +1,29 @@
 /**
- * E2E tests for the virtual task-group REST API: REST → core store → event bus
+ * E2E tests for the task FOLDER REST API: REST → core store → event bus
  * → WebSocket, exercised through a real server (startServer({ port: 0, dev: true })).
  *
- * Virtual groups are a local-only VISUAL grouping (NOT subtasks): tasks sharing a
- * `group_id` render boxed together but keep independent lifecycles. The core store
- * ops live in src/core/task-manager.ts and have dedicated unit coverage in
+ * A folder (storage name: "group" — `Task.group_id` + the task_groups registry) is a
+ * local-only sub-folder INSIDE ONE PROJECT: tasks sharing a `group_id` render inside
+ * it but keep independent lifecycles. The core store ops live in
+ * src/core/task-manager.ts and have dedicated unit coverage in
  * tests/core/task-groups.test.ts — this file does NOT duplicate those. Instead it
  * verifies the full HTTP path and its DOWNSTREAM effects:
  *
  *   1. POST /api/tasks/groups → response body has group_id + member_ids, the
  *      `task:groups-changed` WS event fires, GET /api/tasks/groups lists the new
- *      group (group_id + label + member_ids), and the grouped tasks have group_id
- *      persisted (re-fetched via GET /api/tasks/:id).
- *   2. POST /api/tasks/groups with cross-project tasks → HTTP 200, group created
- *      (grouping has NO scope rule — any tasks can be grouped).
- *   3. POST /api/tasks/groups/remove dropping a 2-member group to 1 → group SURVIVES
- *      with the lone member (acts like a tag); only removing the last member (0 left)
- *      dissolves it (response reports dissolved_group_ids then).
+ *      folder (group_id + label + project + member_ids), and the grouped tasks have
+ *      group_id persisted (re-fetched via GET /api/tasks/:id).
+ *   2. POST /api/tasks/groups with cross-project tasks → HTTP 400 (the folder model: a
+ *      folder belongs to exactly one project), nothing created.
+ *   3. POST /api/tasks/groups/remove → the folder is NEVER auto-pruned: dropping it
+ *      to 1 member and then to 0 both keep the registry row (GET still lists it with
+ *      member_ids []), and `dissolved_group_ids` is always [].
  *   4. PATCH /api/tasks/groups/:groupId → response body + WS event carry the new label.
+ *   5. PATCH /api/tasks/groups/:groupId/hidden → listing + WS reflect the flag.
+ *   6. POST /api/tasks/folders → 201 for an EMPTY folder (the "project + → New
+ *      folder" entry point), PATCH /api/tasks/folders/:gid nests / un-nests it,
+ *      DELETE /api/tasks/folders/:gid releases its members in place, and the error
+ *      contract is 404 for an unknown id vs 400 for a caller-fixable violation.
  *
  * Each test asserts on the HTTP response body + WS events + persisted GET — never on
  * internal state — so each fails if the feature were reverted.
@@ -61,6 +67,15 @@ interface GroupSummary {
   label: string;
   hidden?: boolean;
   member_ids: string[];
+  project: string;
+  parent_id?: string;
+}
+
+interface FolderResult {
+  group_id: string;
+  label: string;
+  project: string;
+  parent_id?: string;
 }
 
 // ── Server state ──
@@ -123,11 +138,29 @@ async function createTask(
 }
 
 /** Re-fetch a single task via GET so we assert on PERSISTED state, not internals. */
-async function getTask(id: string): Promise<{ id: string; group_id?: string }> {
+async function getTask(id: string): Promise<{ id: string; group_id?: string; project?: string }> {
   const res = await fetch(apiUrl(`/api/tasks/${id}`));
   expect(res.status).toBe(200);
-  const body = (await res.json()) as { task: { id: string; group_id?: string } };
+  const body = (await res.json()) as { task: { id: string; group_id?: string; project?: string } };
   return body.task;
+}
+
+/** POST /api/tasks/folders — create an EMPTY folder. Returns the raw response. */
+function createFolder(body: Record<string, unknown>): Promise<Response> {
+  return fetch(apiUrl('/api/tasks/folders'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+/** PATCH /api/tasks/folders/:gid — move a folder in the nesting tree. */
+function setFolderParent(groupId: string, parentId: string | null): Promise<Response> {
+  return fetch(apiUrl(`/api/tasks/folders/${groupId}`), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ parent_id: parentId }),
+  });
 }
 
 /** GET the aggregate group listing (asserts 200 — the route-order regression guard). */
@@ -207,6 +240,9 @@ describe('task-group REST API (REST → core → bus → WS)', () => {
       ).toBeDefined();
       expect(listed!.label).toBe('My E2E Group');
       expect(listed!.member_ids.sort()).toEqual([a.id, b.id].sort());
+      // Folder model: the listing carries the folder's owning project, top-level by default.
+      expect(listed!.project).toBe(a.project);
+      expect(listed!.parent_id).toBeUndefined();
 
       // (d) group_id persisted on BOTH tasks under the same group (re-fetched via GET)
       const pa = await getTask(a.id);
@@ -221,50 +257,86 @@ describe('task-group REST API (REST → core → bus → WS)', () => {
   });
 
   /**
-   * Test 2: POST /api/tasks/groups across two different projects.
-   *   A group is a pure visual cluster with NO scope rule — this must succeed (200)
-   *   and persist group_id on both cross-project tasks.
-   * Fails if reverted: if the old same-project scope rule came back, this
-   *   cross-project group would 409 instead of 200.
+   * Test 2: POST /api/tasks/groups across two different projects → 400.
+   *   The folder model: a folder belongs to exactly ONE project, so a cross-project
+   *   selection has no valid home. The route must answer 400 with the
+   *   caller-fixable message and create nothing.
+   * Fails if reverted: the old no-scope-rule behaviour answered 200 and grouped
+   *   the two tasks anyway.
    */
-  it('POST /groups with cross-project tasks creates the group (no scope rule)', async () => {
-    // Distinct projects — used to be rejected; now allowed.
+  it('POST /groups with cross-project tasks is rejected 400 (a folder belongs to one project)', async () => {
     const a = await createTask('Cross-scope A', 'e2e-grp-alpha');
     const b = await createTask('Cross-scope B', 'e2e-grp-home');
     expect(a.project).not.toBe(b.project);
 
+    const before = await listGroups();
     const res = await fetch(apiUrl('/api/tasks/groups'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task_ids: [a.id, b.id] }),
     });
-    expect(res.status).toBe(200);
-    const created = (await res.json()) as GroupResult;
-    expect(created.member_ids.sort()).toEqual([a.id, b.id].sort());
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toMatch(/A folder belongs to one project/);
 
-    // Downstream: both cross-project tasks now carry the new group_id (persisted).
-    expect((await getTask(a.id)).group_id).toBe(created.group_id);
-    expect((await getTask(b.id)).group_id).toBe(created.group_id);
+    // Downstream: neither task was grouped, and no folder was minted.
+    expect((await getTask(a.id)).group_id).toBeUndefined();
+    expect((await getTask(b.id)).group_id).toBeUndefined();
+    expect(await listGroups()).toHaveLength(before.length);
   });
 
-  /**
-   * Test 3: POST /api/tasks/groups/remove dropping a 2-member group to 1.
-   *   A group survives down to 1 member (acts like a tag) — removing one of two does
-   *   NOT dissolve it. Only removing the LAST member (0 left) dissolves the group.
-   *   - First remove: response reports removed_ids=[a], dissolved_group_ids=[]; the
-   *     lone survivor b keeps the group_id.
-   *   - Second remove (b): now dissolved_group_ids=[group], b loses group_id.
-   * Fails if reverted: if the old ≥2-member auto-dissolve came back, the FIRST remove
-   *   would dissolve the group instead of keeping b as a lone member.
-   */
-  it('POST /groups/remove keeps a lone member, dissolving only when the last is removed', async () => {
-    const a = await createTask('Dissolve A');
-    const b = await createTask('Dissolve B');
+  /** Test 2b: joining a folder from another project is the same 400. */
+  it('POST /groups/:groupId/add rejects a cross-project task with 400', async () => {
+    const a = await createTask('Join A', 'e2e-grp-alpha');
+    const b = await createTask('Join B', 'e2e-grp-alpha');
+    const outsider = await createTask('Outsider', 'e2e-grp-home');
 
     const createRes = await fetch(apiUrl('/api/tasks/groups'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ task_ids: [a.id, b.id], label: 'Dissolve Me' }),
+      body: JSON.stringify({ task_ids: [a.id, b.id], label: 'Alpha only' }),
+    });
+    expect(createRes.status).toBe(200);
+    const created = (await createRes.json()) as GroupResult;
+
+    const res = await fetch(apiUrl(`/api/tasks/groups/${created.group_id}/add`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_ids: [outsider.id] }),
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error?: string }).error).toMatch(/A folder belongs to one project/);
+    expect((await getTask(outsider.id)).group_id).toBeUndefined();
+  });
+
+  /** Test 2c: an unknown folder id is a 404, not a 400 (the error contract). */
+  it('POST /groups/:groupId/add answers 404 for an unknown folder id', async () => {
+    const a = await createTask('Orphan join');
+    const res = await fetch(apiUrl('/api/tasks/groups/g_does_not_exist/add'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_ids: [a.id] }),
+    });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error?: string }).error).toMatch(/not found/i);
+  });
+
+  /**
+   * Test 3: POST /api/tasks/groups/remove emptying a 2-member folder.
+   *   The folder model: folders are NEVER auto-pruned. Removing one member leaves the lone
+   *   survivor foldered; removing the LAST one leaves an EMPTY folder that GET
+   *   /api/tasks/groups still lists (member_ids []). `dissolved_group_ids` is always [].
+   * Fails if reverted: the old auto-dissolve reported the group in
+   *   dissolved_group_ids and dropped it from the listing, losing the user's folder.
+   */
+  it('POST /groups/remove never dissolves the folder — it persists empty in the listing', async () => {
+    const a = await createTask('Empty Me A');
+    const b = await createTask('Empty Me B');
+
+    const createRes = await fetch(apiUrl('/api/tasks/groups'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_ids: [a.id, b.id], label: 'Outlives Its Tasks' }),
     });
     expect(createRes.status).toBe(200);
     const created = (await createRes.json()) as GroupResult;
@@ -275,7 +347,7 @@ describe('task-group REST API (REST → core → bus → WS)', () => {
 
     const ws = await connectWs();
     try {
-      // First removal: a leaves, b stays as the lone member — group NOT dissolved.
+      // First removal: a leaves, b stays as the lone member.
       const res = await fetch(apiUrl('/api/tasks/groups/remove'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -289,11 +361,11 @@ describe('task-group REST API (REST → core → bus → WS)', () => {
       expect(result.removed_ids).toContain(a.id);
       expect(result.dissolved_group_ids).toEqual([]);
 
-      // Downstream: a ungrouped, b STILL in the group (lone-member group survives).
+      // Downstream: a ungrouped, b STILL in the folder.
       expect((await getTask(a.id)).group_id).toBeUndefined();
       expect((await getTask(b.id)).group_id).toBe(created.group_id);
 
-      // Second removal: b is the last member → now the group dissolves.
+      // Second removal: b is the last member — the folder STILL survives.
       const eventPromise = waitForWsEvent(ws, 'task:groups-changed');
       const res2 = await fetch(apiUrl('/api/tasks/groups/remove'), {
         method: 'POST',
@@ -302,11 +374,18 @@ describe('task-group REST API (REST → core → bus → WS)', () => {
       });
       expect(res2.status).toBe(200);
       const result2 = (await res2.json()) as { dissolved_group_ids: string[] };
-      expect(result2.dissolved_group_ids).toContain(created.group_id);
+      expect(result2.dissolved_group_ids).toEqual([]);
 
       const frame = await eventPromise;
       expect(frame.name).toBe('task:groups-changed');
       expect((await getTask(b.id)).group_id).toBeUndefined();
+
+      // The registry row is still there, now with zero members.
+      const listed = (await listGroups()).find((g) => g.group_id === created.group_id);
+      expect(listed, 'the emptied folder must still be listed').toBeDefined();
+      expect(listed!.label).toBe('Outlives Its Tasks');
+      expect(listed!.member_ids).toEqual([]);
+      expect(listed!.project).toBe(a.project);
     } finally {
       ws.close();
       await delay(50);
@@ -437,5 +516,175 @@ describe('task-group REST API (REST → core → bus → WS)', () => {
       body: JSON.stringify({ hidden: 'yes' }),
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('folder REST API (/api/tasks/folders)', () => {
+  /**
+   * Create an EMPTY folder. This is the "project + → New folder" entry point, so
+   * the folder must be listable BEFORE its first task arrives — otherwise the user
+   * has nothing to drag onto. Asserts 201 + the body shape + the WS event + the
+   * downstream GET /api/tasks/groups listing (member_ids []).
+   * Fails if reverted: no route (404), or the empty folder missing from the listing.
+   */
+  it('POST /folders creates an empty folder (201), emits the event, and lists it with no members', async () => {
+    const ws = await connectWs();
+    try {
+      const eventPromise = waitForWsEvent(ws, 'task:groups-changed');
+      const res = await createFolder({ label: 'Empty by design', project: 'e2e-grp-alpha' });
+      expect(res.status).toBe(201);
+      const created = (await res.json()) as FolderResult;
+      expect(created.label).toBe('Empty by design');
+      expect(created.project).toBe('e2e-grp-alpha');
+      expect(created.parent_id).toBeUndefined();
+      expect(typeof created.group_id).toBe('string');
+
+      const frame = await eventPromise;
+      expect((frame.data as { group_id?: string }).group_id).toBe(created.group_id);
+
+      const listed = (await listGroups()).find((g) => g.group_id === created.group_id);
+      expect(listed, 'an empty folder must be listed immediately').toBeDefined();
+      expect(listed!.label).toBe('Empty by design');
+      expect(listed!.project).toBe('e2e-grp-alpha');
+      expect(listed!.member_ids).toEqual([]);
+      expect(listed!.hidden).toBe(false);
+    } finally {
+      ws.close();
+      await delay(50);
+    }
+  });
+
+  /** An empty label is caller-fixable input → 400, nothing created. */
+  it('POST /folders rejects an empty label with 400', async () => {
+    const before = await listGroups();
+    const res = await createFolder({ label: '   ', project: 'e2e-grp-alpha' });
+    expect(res.status).toBe(400);
+    expect(await listGroups()).toHaveLength(before.length);
+  });
+
+  /** An unknown parent id is 404; a parent in ANOTHER project is 400. */
+  it('POST /folders answers 404 for an unknown parent and 400 for a cross-project parent', async () => {
+    const ghost = await createFolder({
+      label: 'Orphan child',
+      project: 'e2e-grp-alpha',
+      parent_id: 'g_does_not_exist',
+    });
+    expect(ghost.status).toBe(404);
+    expect(((await ghost.json()) as { error?: string }).error).toMatch(/not found/i);
+
+    const elsewhere = (await (await createFolder({ label: 'Home root', project: 'e2e-grp-home' })).json()) as FolderResult;
+    const crossed = await createFolder({
+      label: 'Wrong project child',
+      project: 'e2e-grp-alpha',
+      parent_id: elsewhere.group_id,
+    });
+    expect(crossed.status).toBe(400);
+    expect(((await crossed.json()) as { error?: string }).error).toMatch(/same project/i);
+  });
+
+  /**
+   * PATCH nests a folder under another, then `parent_id: null` promotes it back to
+   * the top level; the listing carries parent_id both ways. Cross-project + self
+   * parenting are refused.
+   * Fails if reverted: no route, or parent_id missing from GET /api/tasks/groups.
+   */
+  it('PATCH /folders/:gid nests a folder, then un-nests it with parent_id null', async () => {
+    const parent = (await (await createFolder({ label: 'Nest parent', project: 'e2e-grp-alpha' })).json()) as FolderResult;
+    const child = (await (await createFolder({ label: 'Nest child', project: 'e2e-grp-alpha' })).json()) as FolderResult;
+
+    const ws = await connectWs();
+    try {
+      const eventPromise = waitForWsEvent(ws, 'task:groups-changed');
+      const nested = await setFolderParent(child.group_id, parent.group_id);
+      expect(nested.status).toBe(200);
+      expect(await nested.json()).toEqual({ group_id: child.group_id, parent_id: parent.group_id });
+      await eventPromise;
+
+      let listed = (await listGroups()).find((g) => g.group_id === child.group_id);
+      expect(listed!.parent_id).toBe(parent.group_id);
+
+      const promoted = await setFolderParent(child.group_id, null);
+      expect(promoted.status).toBe(200);
+      expect(await promoted.json()).toEqual({ group_id: child.group_id });
+      listed = (await listGroups()).find((g) => g.group_id === child.group_id);
+      expect(listed!.parent_id).toBeUndefined();
+    } finally {
+      ws.close();
+      await delay(50);
+    }
+  });
+
+  it('PATCH /folders/:gid answers 404 for an unknown id and 400 for self/cross-project parents', async () => {
+    const alpha = (await (await createFolder({ label: 'Alpha self', project: 'e2e-grp-alpha' })).json()) as FolderResult;
+    const home = (await (await createFolder({ label: 'Home other', project: 'e2e-grp-home' })).json()) as FolderResult;
+
+    const unknown = await setFolderParent('g_does_not_exist', alpha.group_id);
+    expect(unknown.status).toBe(404);
+
+    const self = await setFolderParent(alpha.group_id, alpha.group_id);
+    expect(self.status).toBe(400);
+    expect(((await self.json()) as { error?: string }).error).toMatch(/its own parent/i);
+
+    const crossed = await setFolderParent(home.group_id, alpha.group_id);
+    expect(crossed.status).toBe(400);
+    expect(((await crossed.json()) as { error?: string }).error).toMatch(/same project/i);
+  });
+
+  /**
+   * DELETE is consequence-free: member tasks fall back to the project IN PLACE
+   * (group_id cleared, task still exists), child folders re-parent, no task dies.
+   * Fails if reverted: no route, or the members disappearing with the folder.
+   */
+  it('DELETE /folders/:gid releases members in place and re-parents children', async () => {
+    const a = await createTask('Folder delete A');
+    const b = await createTask('Folder delete B');
+
+    const parent = (await (await createFolder({ label: 'Delete parent', project: 'e2e-grp-alpha' })).json()) as FolderResult;
+    const doomed = (await (await createFolder({ label: 'Doomed', project: 'e2e-grp-alpha', parent_id: parent.group_id })).json()) as FolderResult;
+    const grandchild = (await (await createFolder({ label: 'Grandchild', project: 'e2e-grp-alpha', parent_id: doomed.group_id })).json()) as FolderResult;
+
+    const added = await fetch(apiUrl(`/api/tasks/groups/${doomed.group_id}/add`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_ids: [a.id, b.id] }),
+    });
+    expect(added.status).toBe(200);
+    expect((await getTask(a.id)).group_id).toBe(doomed.group_id);
+
+    const ws = await connectWs();
+    try {
+      const eventPromise = waitForWsEvent(ws, 'task:groups-changed');
+      const res = await fetch(apiUrl(`/api/tasks/folders/${doomed.group_id}`), { method: 'DELETE' });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        group_id: string;
+        released_task_ids: string[];
+        reparented_folder_ids: string[];
+      };
+      expect(body.group_id).toBe(doomed.group_id);
+      expect(body.released_task_ids.sort()).toEqual([a.id, b.id].sort());
+      expect(body.reparented_folder_ids).toEqual([grandchild.group_id]);
+      await eventPromise;
+
+      // Members survive as ordinary tasks in the same project.
+      const ra = await getTask(a.id);
+      expect(ra.group_id).toBeUndefined();
+      expect(ra.project).toBe('e2e-grp-alpha');
+      expect((await getTask(b.id)).group_id).toBeUndefined();
+
+      const groups = await listGroups();
+      expect(groups.find((g) => g.group_id === doomed.group_id)).toBeUndefined();
+      // The grandchild moved up to the deleted folder's parent.
+      expect(groups.find((g) => g.group_id === grandchild.group_id)!.parent_id).toBe(parent.group_id);
+    } finally {
+      ws.close();
+      await delay(50);
+    }
+  });
+
+  it('DELETE /folders/:gid answers 404 for an unknown id', async () => {
+    const res = await fetch(apiUrl('/api/tasks/folders/g_does_not_exist'), { method: 'DELETE' });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error?: string }).error).toMatch(/not found/i);
   });
 });

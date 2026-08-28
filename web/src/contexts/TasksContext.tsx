@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react';
-import { useTasks, type CreateHooks } from '@/hooks/useTasks';
+import { useTasks, type CreateHooks, type FolderMeta } from '@/hooks/useTasks';
 import type { Task } from '@open-walnut/core';
 import type { BatchTaskOutcome, CreateTaskInput, UpdateTaskInput } from '@/api/tasks';
 import { syncTasks as syncEntityLabels } from '@/stores/entity-label-store';
@@ -34,11 +34,15 @@ export interface TasksContextValue {
   guardEcho: (key: string) => void;
   taskGroups: Record<string, string>;
   hiddenGroups: Set<string>;
+  folderMeta: Record<string, FolderMeta>;
   groupTasks: (taskIds: string[], label?: string) => void;
   addToGroup: (groupId: string, taskIds: string[]) => void;
   ungroupTasks: (taskIds: string[]) => void;
   renameGroup: (groupId: string, label: string) => void;
   setGroupHidden: (groupId: string, hidden: boolean) => void;
+  createFolder: (label: string, project: string, parentId?: string) => void;
+  deleteFolder: (groupId: string) => void;
+  setFolderParent: (groupId: string, parentId: string | null) => void;
 }
 
 const TasksContext = createContext<TasksContextValue | null>(null);

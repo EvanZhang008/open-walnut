@@ -10527,6 +10527,29 @@ body.walnut-dragging {
 .task-group-chip-icon {
   font-size: 11px;
   opacity: 0.85;
+  display: inline-flex;
+  align-items: center;
+}
+/* Empty folder row — a created-but-unfilled folder rendered as a standalone,
+   droppable row inside its project bucket. Dashed + closed border (no member
+   box hangs below it) and a muted look until a drag hovers it. */
+.task-group-chip-empty {
+  border: 1.5px dashed var(--group-outline);
+  border-radius: 7px;
+  margin-bottom: 4px;
+  opacity: 0.75;
+}
+.task-group-chip-empty:hover { opacity: 1; }
+.task-group-chip-drop {
+  opacity: 1;
+  border-style: solid;
+  background: rgba(0, 122, 255, 0.08);
+}
+.task-group-chip-count {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--fg-muted, #8a8f98);
+  margin-left: 2px;
 }
 /* Whole-group drag grip — grab here to move the entire cluster. Kept subtle until
    the chip is hovered so it doesn't compete with the label. */

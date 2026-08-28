@@ -87,6 +87,9 @@ const ICON_MENU_SESSION = (
 const ICON_MENU_SEPARATOR = (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M2 8h12" /></svg>
 );
+const ICON_MENU_FOLDER = (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z" /></svg>
+);
 
 export interface PlusAction {
   key: string;
@@ -177,7 +180,7 @@ function PlusControl({ actions, restLabel, wrapClassName }: {
   );
 }
 
-export function ProjectPlusMenu({ project, onAddSession, onAddTask, onAddSeparator }: {
+export function ProjectPlusMenu({ project, onAddSession, onAddTask, onAddSeparator, onAddFolder }: {
   project: string;
   /** Open a new draft session column seeded with this project (and its default
    *  cwd/host, patched in when the project detail resolves). Omit for Inbox —
@@ -187,11 +190,14 @@ export function ProjectPlusMenu({ project, onAddSession, onAddTask, onAddSeparat
   onAddTask?: (project: string) => void;
   /** Drop a divider line at the top of this project's run. */
   onAddSeparator?: (project: string) => void;
+  /** Create an empty folder inside this project (name prompted inline). */
+  onAddFolder?: (project: string) => void;
 }) {
   const label = project || 'Inbox';
   const actions: PlusAction[] = [];
   if (onAddTask) actions.push({ key: 'task', icon: ICON_MENU_TASK, label: 'New task', run: () => onAddTask(project) });
   if (onAddSession) actions.push({ key: 'session', icon: ICON_MENU_SESSION, label: 'New task with session', soloTitle: `New session in ${label}`, run: () => onAddSession(project) });
+  if (onAddFolder) actions.push({ key: 'folder', icon: ICON_MENU_FOLDER, label: 'New folder', run: () => onAddFolder(project) });
   if (onAddSeparator) actions.push({ key: 'separator', icon: ICON_MENU_SEPARATOR, label: 'Add separator', run: () => onAddSeparator(project) });
   return <PlusControl actions={actions} restLabel={label} />;
 }

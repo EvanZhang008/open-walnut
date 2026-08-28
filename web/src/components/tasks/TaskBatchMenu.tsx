@@ -140,10 +140,10 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
       <button
         className="task-selection-group-btn"
         disabled={!canGroup}
-        title={count < 2 ? 'Select at least 2 tasks' : 'Group these tasks together'}
+        title={count < 2 ? 'Select at least 2 same-project tasks' : 'Put these tasks into a folder'}
         onClick={onGroup}
       >
-        ⑂ Group
+        ⑂ Folder
       </button>
 
       <button

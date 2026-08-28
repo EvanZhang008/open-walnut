@@ -237,6 +237,14 @@ interface TodoPanelProps {
   onRenameGroup?: (groupId: string, label: string) => void;
   /** Show/hide a group in the Focus (pinned) area (membership untouched). */
   onSetGroupHidden?: (groupId: string, hidden: boolean) => void;
+  /** Folder metadata: group_id → owning project / parent / member count. Drives
+   *  empty-folder rows (a created-but-unfilled folder must render) and the
+   *  per-project scoping of folder rows. */
+  folderMeta?: Record<string, { project: string; parent_id?: string; memberCount: number }>;
+  /** Create an EMPTY folder under a project ('' = Inbox). */
+  onCreateFolder?: (label: string, project: string, parentId?: string) => void;
+  /** Delete a folder: members fall back to the project in place. */
+  onDeleteFolder?: (groupId: string) => void;
 }
 
 
@@ -795,28 +803,30 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
 
   return (
     <>
-    {/* Group header chip — only above the lead member; names the whole cluster. */}
+    {/* Folder header chip — only above the lead member; names the whole folder. */}
     {groupInfo?.isLead && (
       <div
         className="task-group-chip"
         style={depth > 0 ? { marginLeft: `${depth * 22}px` } : undefined}
-        title="Forked / grouped tasks — independent tasks shown together"
+        title="Folder — independent tasks kept together inside this project"
       >
-        <span className="task-group-chip-icon" aria-hidden="true">⑂</span>
+        <span className="task-group-chip-icon" aria-hidden="true">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z" /></svg>
+        </span>
         <span
           className="task-group-chip-label"
           onClick={(e) => { e.stopPropagation(); onRenameGroup?.(groupInfo.groupId, groupInfo.label); }}
-          title="Rename group"
+          title="Rename folder"
         >
           {groupInfo.label}
         </span>
-        {/* Dissolve the whole group — the discoverable counterpart to grouping. */}
+        {/* Delete the folder — tasks fall back to the project in place. */}
         {onDissolveGroup && (
           <button
             className="task-group-chip-dissolve"
             onClick={(e) => { e.stopPropagation(); onDissolveGroup(groupInfo.groupId); }}
-            aria-label="Ungroup these tasks"
-            title="Ungroup — dissolve this group"
+            aria-label="Delete this folder"
+            title="Delete folder — tasks stay, back in the project"
           >
             ✕
           </button>
@@ -1035,6 +1045,55 @@ function DroppableHeader({ id, project, disabled, children }: DroppableHeaderPro
   return <>{children({ isOver, setNodeRef })}</>;
 }
 
+// ── Empty folder row — a created-but-unfilled folder inside a project bucket ──
+// Renders where the folder's members will live and is a drop target: dragging a
+// same-project task onto it files the task (the folder's first member). Rename
+// and ✕ (delete) match the member-backed chip so the affordances stay uniform.
+export const EMPTY_FOLDER_DROP_PREFIX = 'folder-empty:';
+
+function EmptyFolderRow({ groupId, label, project, onRename, onDelete }: {
+  groupId: string;
+  label: string;
+  project: string;
+  onRename?: (groupId: string, currentLabel: string) => void;
+  onDelete?: (groupId: string) => void;
+}) {
+  const { isOver, setNodeRef } = useDroppable({
+    id: `${EMPTY_FOLDER_DROP_PREFIX}${groupId}`,
+    data: { type: 'empty-folder', groupId, project },
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`task-group-chip task-group-chip-empty${isOver ? ' task-group-chip-drop' : ''}`}
+      data-group-id={groupId}
+      title="Empty folder — drag a task here to file it"
+    >
+      <span className="task-group-chip-icon" aria-hidden="true">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z" /></svg>
+      </span>
+      <span
+        className="task-group-chip-label"
+        onClick={(e) => { e.stopPropagation(); onRename?.(groupId, label); }}
+        title="Rename folder"
+      >
+        {label}
+      </span>
+      <span className="task-group-chip-count" aria-hidden="true">empty</span>
+      {onDelete && (
+        <button
+          className="task-group-chip-dissolve"
+          onClick={(e) => { e.stopPropagation(); onDelete(groupId); }}
+          aria-label="Delete this folder"
+          title="Delete folder"
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ── Order-aware sort comparator ──
 
 function orderedSort(items: string[], orderList: string[]): string[] {
@@ -1201,9 +1260,10 @@ const typeAwareCollision: CollisionDetection = (args) => {
   const filtered = args.droppableContainers.filter((container) => {
     const cType = (container.data?.current as { type?: string })?.type ?? 'task';
 
-    // Tasks can collide with all tasks (cross-group) and header drop zones
+    // Tasks can collide with all tasks (cross-group), header drop zones, and
+    // empty-folder rows (dropping files the task as the folder's first member).
     if (activeType === 'task') {
-      return cType === 'task' || cType === 'header-drop';
+      return cType === 'task' || cType === 'header-drop' || cType === 'empty-folder';
     }
 
     // Project group drags: same-type only. Project groups are GLOBALLY sortable
@@ -2134,7 +2194,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -4840,6 +4900,25 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // SINGLE member — a 1-member group is valid (acts like a tag) and stays boxed
   // until the user dissolves it; a lone member is both lead and last (chip on top +
   // rounded bottom = a complete one-card box).
+  // Empty folders per project (lower-cased key): registry entries with zero live
+  // members. They have no task rows to anchor a chip to, so the bucket renders
+  // them as standalone droppable rows. Live membership beats the (possibly
+  // stale) fetched memberCount — a just-emptied folder shows up immediately.
+  const emptyFoldersByProject = useMemo(() => {
+    const map = new Map<string, Array<{ groupId: string; label: string }>>();
+    if (!folderMeta) return map;
+    const liveMembership = new Set<string>();
+    for (const t of tasks) if (t.group_id) liveMembership.add(t.group_id);
+    for (const [gid, meta] of Object.entries(folderMeta)) {
+      if (liveMembership.has(gid)) continue;
+      const key = (meta.project ?? '').toLowerCase();
+      let arr = map.get(key);
+      if (!arr) { arr = []; map.set(key, arr); }
+      arr.push({ groupId: gid, label: taskGroups?.[gid] ?? gid });
+    }
+    return map;
+  }, [folderMeta, taskGroups, tasks]);
+
   const groupRenderMap = useMemo(() => {
     const map = new Map<string, GroupRenderInfo>();
     // Count members per group from the *displayed* set (`sorted`), not the full task
@@ -5223,6 +5302,18 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     let targetProject: string;
     let insertNearTaskId: string | undefined;
 
+    // Dropped on an EMPTY folder row → file the task as its first member.
+    // Same-project only (a folder belongs to one project); a cross-project drop
+    // is a no-op rather than a surprise project move.
+    if (overId.startsWith(EMPTY_FOLDER_DROP_PREFIX)) {
+      const folderData = over.data?.current as { groupId?: string; project?: string } | undefined;
+      if (folderData?.groupId && onAddToGroup &&
+          (folderData.project ?? '').toLowerCase() === activeTaskProject.toLowerCase()) {
+        onAddToGroup(folderData.groupId, [activeId]);
+      }
+      return;
+    }
+
     if (taskGroupMap.has(overId)) {
       // Dropped on a task
       targetProject = taskGroupMap.get(overId)!;
@@ -5392,19 +5483,27 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onRenameGroup(groupId, trimmed);
   }, [onRenameGroup, prompt]);
 
-  // Group chip ✕ → dissolve the whole cluster (ungroup every member at once). The
-  // backend dissolves a group once it drops below 2 members, so removing all members
-  // tears it down cleanly. This is the discoverable inverse of grouping.
+  // Folder chip ✕ → DELETE the folder. Consequence-free by design: member tasks
+  // fall back to the project in place and are never deleted (folders are no
+  // longer auto-pruned server-side, so ungrouping members would leave an empty
+  // shell — delete is the real inverse of creating a folder). Falls back to
+  // ungroup-all for a consumer that wired the old callbacks only.
   const handleDissolveGroup = useCallback((groupId: string) => {
+    if (onDeleteFolder) { onDeleteFolder(groupId); return; }
     const memberIds = tasks.filter((t) => t.group_id === groupId).map((t) => t.id);
     if (memberIds.length === 0) return;
-    // Prefer the single batch call (one API round-trip + one refetch). The per-task
-    // fallback exists only for a consumer that wires onUngroupTask but not onUngroupTasks
-    // (today MainPage passes both); it would fan out into N calls, so it's a safety net,
-    // not the hot path.
     if (onUngroupTasks) onUngroupTasks(memberIds);
     else if (onUngroupTask) memberIds.forEach((id) => onUngroupTask(id));
-  }, [onUngroupTasks, onUngroupTask, tasks]);
+  }, [onDeleteFolder, onUngroupTasks, onUngroupTask, tasks]);
+
+  // "+ → New folder" on a project header: prompt a name, create it empty.
+  const handleCreateFolder = useCallback(async (project: string) => {
+    if (!onCreateFolder) return;
+    const name = await prompt({ title: 'New folder', placeholder: 'Folder name', confirmLabel: 'Create' });
+    const trimmed = name?.trim();
+    if (!trimmed) return;
+    onCreateFolder(trimmed, project);
+  }, [onCreateFolder, prompt]);
 
   // Group chip ⊘ → hide the whole cluster from the Focus area. Unlike dissolve this
   // keeps the group + membership intact — only the pinned rendering collapses it.
@@ -6086,6 +6185,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   onAddSession={proj && onOpenLauncherForProject ? onOpenLauncherForProject : undefined}
                   onAddTask={(p) => addTaskToRun(tier, p)}
                   onAddSeparator={(p) => addSeparator(tier, p)}
+                  onAddFolder={onCreateFolder ? handleCreateFolder : undefined}
                 />
               </span>
           </div>
@@ -6989,6 +7089,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 project={project}
                                 onAddSession={project ? onOpenLauncherForProject : undefined}
                                 onAddTask={(p) => setHeaderAddSignal({ project: p, nonce: Date.now() })}
+                                onAddFolder={onCreateFolder ? handleCreateFolder : undefined}
                               />
                               {project && (
                                 <ProjectKebabMenu
@@ -7053,6 +7154,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                               />
                             );
                           })}
+                          {(emptyFoldersByProject.get((project || '').toLowerCase()) ?? []).map((f) => (
+                            <EmptyFolderRow
+                              key={f.groupId}
+                              groupId={f.groupId}
+                              label={f.label}
+                              project={project}
+                              onRename={handleRenameGroup}
+                              onDelete={onDeleteFolder ? handleDissolveGroup : undefined}
+                            />
+                          ))}
                           <InlineAdd
                             label={`Add to ${project || 'Inbox'}\u2026`}
                             openSignal={headerAddSignal?.project === project ? headerAddSignal.nonce : undefined}

@@ -485,11 +485,16 @@ async function readStore(): Promise<TaskStore> {
   }
 
   const groupRows = db
-    .prepare('SELECT id, label, hidden FROM task_groups')
-    .all() as { id: string; label: string; hidden: number }[];
+    .prepare('SELECT id, label, hidden, project, parent_id FROM task_groups')
+    .all() as { id: string; label: string; hidden: number; project: string | null; parent_id: string | null }[];
   const taskGroups: Record<string, TaskGroupRecord> = {};
   for (const row of groupRows) {
-    taskGroups[row.id] = { label: row.label, ...(row.hidden ? { hidden: true } : {}) };
+    taskGroups[row.id] = {
+      label: row.label,
+      project: row.project ?? '',
+      ...(row.parent_id ? { parent_id: row.parent_id } : {}),
+      ...(row.hidden ? { hidden: true } : {}),
+    };
   }
 
   const tierRows = db
@@ -697,14 +702,19 @@ async function writeStore(store: TaskStore): Promise<void> {
       }
     }
 
-    // Full-snapshot rewrite of the group-name registry (mirrors task_projects).
-    // Membership lives on tasks.group_id; this table only holds labels.
+    // Full-snapshot rewrite of the folder registry (mirrors task_projects).
+    // Membership lives on tasks.group_id; this table holds the folder records.
     handle.prepare('DELETE FROM task_groups').run();
     const groupInsert = handle.prepare(
-      'INSERT INTO task_groups (id, label, hidden) VALUES (@id, @label, @hidden)'
+      'INSERT INTO task_groups (id, label, hidden, project, parent_id) VALUES (@id, @label, @hidden, @project, @parent_id)'
     );
     for (const [id, rec] of Object.entries(store.task_groups ?? {})) {
-      if (rec?.label) groupInsert.run({ id, label: rec.label, hidden: rec.hidden ? 1 : 0 });
+      if (rec?.label) {
+        groupInsert.run({
+          id, label: rec.label, hidden: rec.hidden ? 1 : 0,
+          project: rec.project ?? '', parent_id: rec.parent_id ?? null,
+        });
+      }
     }
 
     // Full-snapshot rewrite of the custom-tier registry (mirrors task_groups).
@@ -3169,8 +3179,9 @@ export async function updateTask(
     if (requested && !registryKey) assertValidProjectName(requested);
     const newProject = registryKey ?? requested;  // canonical spelling wins
     let assigned = false;
+    const projectChanged = newProject.toLowerCase() !== (task.project || '').toLowerCase();
 
-    if (newProject.toLowerCase() !== (task.project || '').toLowerCase()) {
+    if (projectChanged) {
       const config = await getConfig();
       const targetSource: TaskSource | undefined = !newProject
         ? 'local'
@@ -3223,6 +3234,9 @@ export async function updateTask(
     }
 
     if (!assigned) task.project = newProject;
+    // A folder is the project's private structure — it never follows a task
+    // across projects. Any project move drops the membership.
+    if (projectChanged && task.group_id) delete task.group_id;
   }
   if (updates.phase !== undefined && VALID_PHASES.has(updates.phase)) {
     // CAS guard: if caller specified ifPhase, only apply phase change if current phase matches
@@ -4019,11 +4033,9 @@ export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
     throw new ActiveSessionError(task.id, activeIds);
   }
 
-  // Remove from store
-  const deletedGroupId = task.group_id;
+  // Remove from store. The task's folder (if any) stays — folders are never
+  // auto-pruned; an emptied folder persists until explicitly deleted.
   store.tasks = store.tasks.filter((t) => t.id !== task.id);
-  // A group survives down to 1 member; deleting the LAST member empties it — prune at 0.
-  if (deletedGroupId) pruneVirtualGroup(store, deletedGroupId);
   await writeStore(store);
 
   // Ledger the remote id as deleted BEFORE attempting the remote delete: even
@@ -4127,10 +4139,8 @@ export async function deleteTasksByIds(
     const store = await readStore();
     const targetIds = new Set(targets.map((t) => t.id));
     const removed = store.tasks.filter((t) => targetIds.has(t.id));
-    const touchedGroups = new Set(removed.map((t) => t.group_id).filter(Boolean) as string[]);
     store.tasks = store.tasks.filter((t) => !targetIds.has(t.id));
-    // A group survives down to 1 member; prune only the ones left with 0.
-    for (const gid of touchedGroups) pruneVirtualGroup(store, gid);
+    // Folders are never auto-pruned — an emptied folder persists until deleted.
     await writeStore(store);
     return removed;
   });
@@ -4217,9 +4227,7 @@ export async function mergeTaskInto(
     }
 
     const victimSnapshot = structuredClone(victim);
-    const deletedGroupId = victim.group_id;
     store.tasks = store.tasks.filter((t) => t.id !== victimId);
-    if (deletedGroupId) pruneVirtualGroup(store, deletedGroupId);
     await writeStore(store);
     return { survivor: structuredClone(survivor), victim: victimSnapshot };
   });
@@ -4268,38 +4276,55 @@ export async function mergeTaskInto(
 // ─────────────────────────────────────────────────────────────────────────────
 // Virtual task groups (local-only)
 //
-// A "group" is a lightweight visual grouping: tasks sharing a `group_id` render
-// boxed together in the list, ordered after the group's lead (top-sorted member).
-// This is NOT a parent/subtask relationship — grouped tasks stay flat and fully
-// independent (separate lifecycles, no inherited fields, never moved). A group is
-// purely a visual cluster: ANY tasks can be grouped together regardless of their
-// project (there is no scope restriction — the box just renders them as a
-// unit, anchored at the lead's position in whatever list is showing them). The
-// group_id lives on each task (round-trips via the SQLite payload blob); the
-// human-readable name lives in store.task_groups. Nothing here is ever pushed to
-// external sync backends.
+// A FOLDER (storage name: "group" — Task.group_id + store.task_groups) is a
+// local sub-folder inside ONE project: tasks sharing a group_id render inside
+// the folder, and folders can nest (parent_id → another folder in the same
+// project, depth-capped). This is NOT a parent/subtask relationship — foldered
+// tasks stay flat and fully independent (separate lifecycles, no inherited
+// fields). The group_id lives on each task (round-trips via the SQLite payload
+// blob); the folder record (label, project, parent_id, hidden) lives in
+// store.task_groups. Nothing here is ever pushed to external sync backends.
 //
-// Invariant: CREATING a group needs ≥2 tasks, but once created a group survives
-// down to a SINGLE member — a 1-member group is valid and keeps rendering (it can
-// act like a tag/label on one task). A group is only dissolved when it hits ZERO
-// members (the last member removed/deleted) or when the user explicitly dissolves
-// it (ungroups all members at once). This is why pruneVirtualGroup only prunes at 0.
+// Invariants (schema v9, the group→folder cutover):
+// - A folder belongs to exactly one project ('' = Inbox). Joining requires the
+//   same project; moving a task to another project auto-clears its group_id
+//   (a folder is the project's private structure — it doesn't follow the task).
+// - Folders are NEVER auto-pruned. An EMPTY folder is valid (create first, drag
+//   tasks in later; emptying one leaves it in place, like a real directory).
+//   Only an explicit deleteFolder removes one — members fall back to the
+//   project in place, child folders re-parent to the deleted folder's parent,
+//   and no task is ever deleted.
+// - Joining/leaving a folder never changes task.project.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * In-place: if `groupId` has NO live members left, dissolve it — remove the
- * name-registry entry. A group with ≥1 member is kept (a lone member is a valid
- * group that still renders, like a tag). Mutates `store`. Caller is responsible
- * for writeStore(). Returns true if the group was pruned (i.e. it had 0 members).
- */
-function pruneVirtualGroup(store: TaskStore, groupId: string): boolean {
-  const members = store.tasks.filter((t) => t.group_id === groupId);
-  if (members.length >= 1) return false;
-  if (store.task_groups?.[groupId]) {
-    delete store.task_groups[groupId];
-    if (Object.keys(store.task_groups).length === 0) delete store.task_groups;
+/** Nesting ceiling: a parent chain longer than this is rejected on write. */
+export const FOLDER_MAX_DEPTH = 5;
+
+/** Depth of a folder = 1 + number of ancestors. Broken/cyclic chains count as
+ *  the walked length (the cycle guard rejects them separately on write). */
+function folderDepth(store: TaskStore, groupId: string): number {
+  let depth = 1;
+  const seen = new Set<string>([groupId]);
+  let cur = store.task_groups?.[groupId]?.parent_id;
+  while (cur && !seen.has(cur)) {
+    depth += 1;
+    seen.add(cur);
+    cur = store.task_groups?.[cur]?.parent_id;
   }
-  return true;
+  return depth;
+}
+
+/** The project a folder belongs to. Falls back to deriving from the first live
+ *  member for records that predate the v9 backfill (defensive only). */
+function folderProject(store: TaskStore, groupId: string): string {
+  const rec = store.task_groups?.[groupId];
+  if (rec?.project !== undefined) return rec.project;
+  return store.tasks.find((t) => t.group_id === groupId)?.project ?? '';
+}
+
+/** Case-insensitive project identity (matches the registry's COLLATE NOCASE). */
+function sameProject(a: string | undefined, b: string | undefined): boolean {
+  return (a ?? '').toLowerCase() === (b ?? '').toLowerCase();
 }
 
 /** Resolve a list of id-prefixes to full tasks, erroring on miss/ambiguity. */
@@ -4321,23 +4346,31 @@ export interface GroupResult {
 }
 
 /**
- * Create a new virtual group from ≥2 tasks (by id or prefix). Tasks may belong to
- * any project — a group is a pure visual cluster with no scope rule. If
- * any task is already in a group, its existing group is merged in (all those
- * members are absorbed into the new group) — this is what lets a multi-select that
- * mixes already-grouped and ungrouped tasks "add to the existing group" rather than
- * fragment it. The label is set synchronously to the provided value, or a
- * placeholder (the lead task's title) the caller can refine asynchronously via
- * summarizeGroupLabel + renameGroup (see the fork handler / the task_group agent
- * tool). Returns the new group id + member ids.
+ * Create a new folder from ≥2 tasks (by id or prefix). All tasks must belong to
+ * the SAME project — a folder is a project's private sub-structure. If any task
+ * is already in a folder, its existing folder is merged in (all those members
+ * are absorbed) — this is what lets a multi-select that mixes already-foldered
+ * and loose tasks "add to the existing folder" rather than fragment it. The
+ * label is set synchronously to the provided value, or a placeholder (the lead
+ * task's title) the caller can refine asynchronously via summarizeGroupLabel +
+ * renameGroup (see the fork handler / the task_group agent tool). Returns the
+ * new folder id + member ids.
  */
 export async function groupTasks(idPrefixes: string[], label?: string): Promise<GroupResult> {
   return withWriteLock(async () => {
     const store = await readStore();
     const seed = resolveTasksByPrefix(store, [...new Set(idPrefixes)]);
     if (seed.length < 2) throw new Error('A group needs at least 2 tasks.');
+    const project = seed[0].project ?? '';
+    const stray = seed.find((t) => !sameProject(t.project, project));
+    if (stray) {
+      throw new Error(
+        `A folder belongs to one project: "${stray.title}" is in "${stray.project || 'Inbox'}", not "${project || 'Inbox'}". Move the task first or pick same-project tasks.`,
+      );
+    }
 
-    // Absorb any pre-existing groups the seed tasks belong to (merge semantics).
+    // Absorb any pre-existing folders the seed tasks belong to (merge semantics).
+    // Post-v9 those folders are same-project by invariant.
     const absorbedGroupIds = new Set(seed.map((t) => t.group_id).filter(Boolean) as string[]);
     const memberSet = new Set(seed.map((t) => t.id));
     for (const t of store.tasks) {
@@ -4347,12 +4380,12 @@ export async function groupTasks(idPrefixes: string[], label?: string): Promise<
 
     const groupId = `g_${generateId()}`;
     for (const t of members) t.group_id = groupId;
-    // Drop absorbed group name entries (their members now live under groupId).
+    // Drop absorbed folder records (their members now live under groupId).
     if (store.task_groups) {
       for (const old of absorbedGroupIds) delete store.task_groups[old];
     }
     const resolvedLabel = (label?.trim()) || members[0].title;
-    store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label: resolvedLabel } };
+    store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label: resolvedLabel, project } };
 
     await writeStore(store);
     return { group_id: groupId, label: resolvedLabel, member_ids: members.map((t) => t.id) };
@@ -4360,8 +4393,10 @@ export async function groupTasks(idPrefixes: string[], label?: string): Promise<
 }
 
 /**
- * Add tasks to an existing group. Tasks may belong to any project (a
- * group has no scope rule). No-op-safe: tasks already in the group are skipped.
+ * Add tasks to an existing folder. Every task must be in the folder's project
+ * (join never changes task.project — move the task first if you want it in).
+ * No-op-safe: tasks already in the folder are skipped. Donor folders the tasks
+ * came from are left in place even when emptied (folders are never auto-pruned).
  */
 export async function addToGroup(groupId: string, idPrefixes: string[]): Promise<GroupResult> {
   return withWriteLock(async () => {
@@ -4370,18 +4405,19 @@ export async function addToGroup(groupId: string, idPrefixes: string[]): Promise
     if (existing.length === 0 && !store.task_groups?.[groupId]) {
       throw new Error(`Group "${groupId}" not found.`);
     }
+    const project = folderProject(store, groupId);
     const toAdd = resolveTasksByPrefix(store, [...new Set(idPrefixes)]);
-    // Capture any groups we're stealing tasks from so we can prune a donor that
-    // drops below 2 members (otherwise it'd keep a lone member + stale registry).
-    const donorGroups = new Set(
-      toAdd.map((t) => t.group_id).filter((g): g is string => !!g && g !== groupId),
-    );
+    const stray = toAdd.find((t) => !sameProject(t.project, project));
+    if (stray) {
+      throw new Error(
+        `A folder belongs to one project: "${stray.title}" is in "${stray.project || 'Inbox'}", but this folder lives in "${project || 'Inbox'}". Move the task first.`,
+      );
+    }
     for (const t of toAdd) t.group_id = groupId;
-    for (const donor of donorGroups) pruneVirtualGroup(store, donor);
     const members = store.tasks.filter((t) => t.group_id === groupId);
     const label = store.task_groups?.[groupId]?.label ?? members[0]?.title ?? groupId;
     if (!store.task_groups?.[groupId]) {
-      store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label } };
+      store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label, project } };
     }
     await writeStore(store);
     return { group_id: groupId, label, member_ids: members.map((t) => t.id) };
@@ -4389,28 +4425,146 @@ export async function addToGroup(groupId: string, idPrefixes: string[]): Promise
 }
 
 /**
- * Remove tasks from their group (clears group_id). If a group drops below 2
- * members it is dissolved. Returns the affected group ids.
+ * Remove tasks from their folder (clears group_id; the tasks fall back to the
+ * project in place). Folders are never auto-pruned — emptying one leaves it in
+ * place. `dissolved_group_ids` is kept in the return shape for API compat and
+ * is always empty (explicit deleteFolder is the only way a folder dies).
  */
 export async function removeFromGroup(idPrefixes: string[]): Promise<{ removed_ids: string[]; dissolved_group_ids: string[] }> {
   return withWriteLock(async () => {
     const store = await readStore();
     const tasks = resolveTasksByPrefix(store, [...new Set(idPrefixes)]);
-    const touchedGroups = new Set<string>();
     const removedIds: string[] = [];
     for (const t of tasks) {
       if (t.group_id) {
-        touchedGroups.add(t.group_id);
         delete t.group_id;
         removedIds.push(t.id);
       }
     }
-    const dissolved: string[] = [];
-    for (const gid of touchedGroups) {
-      if (pruneVirtualGroup(store, gid)) dissolved.push(gid);
+    await writeStore(store);
+    return { removed_ids: removedIds, dissolved_group_ids: [] };
+  });
+}
+
+/**
+ * Create an EMPTY folder under a project (''= Inbox), optionally nested inside
+ * a parent folder in the same project. This is the "project + → New folder"
+ * entry point — no members required; drag tasks in later.
+ */
+export async function createFolder(
+  label: string,
+  project: string,
+  parentId?: string,
+): Promise<{ group_id: string; label: string; project: string; parent_id?: string }> {
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const trimmed = label.trim();
+    if (!trimmed) throw new Error('Folder name cannot be empty.');
+    const proj = project.trim();
+    if (parentId !== undefined) {
+      const parent = store.task_groups?.[parentId];
+      if (!parent) throw new Error(`Parent folder "${parentId}" not found.`);
+      if (!sameProject(folderProject(store, parentId), proj)) {
+        throw new Error('A folder can only nest inside a folder of the same project.');
+      }
+      if (folderDepth(store, parentId) >= FOLDER_MAX_DEPTH) {
+        throw new Error(`Folders can nest at most ${FOLDER_MAX_DEPTH} levels deep.`);
+      }
+    }
+    const groupId = `g_${generateId()}`;
+    store.task_groups = {
+      ...(store.task_groups ?? {}),
+      [groupId]: { label: trimmed, project: proj, ...(parentId ? { parent_id: parentId } : {}) },
+    };
+    await writeStore(store);
+    return { group_id: groupId, label: trimmed, project: proj, ...(parentId ? { parent_id: parentId } : {}) };
+  });
+}
+
+/**
+ * Delete a folder. Consequence-free by design: member tasks fall back to the
+ * project in place (group_id cleared), child folders re-parent to the deleted
+ * folder's parent, and no task is ever deleted.
+ */
+export async function deleteFolder(
+  groupId: string,
+): Promise<{ group_id: string; released_task_ids: string[]; reparented_folder_ids: string[] }> {
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const rec = store.task_groups?.[groupId];
+    const members = store.tasks.filter((t) => t.group_id === groupId);
+    if (!rec && members.length === 0) throw new Error(`Group "${groupId}" not found.`);
+    const released: string[] = [];
+    for (const t of members) {
+      delete t.group_id;
+      released.push(t.id);
+    }
+    const reparented: string[] = [];
+    if (store.task_groups) {
+      for (const [gid, child] of Object.entries(store.task_groups)) {
+        if (child.parent_id === groupId) {
+          if (rec?.parent_id) child.parent_id = rec.parent_id;
+          else delete child.parent_id;
+          reparented.push(gid);
+        }
+      }
+      delete store.task_groups[groupId];
+      if (Object.keys(store.task_groups).length === 0) delete store.task_groups;
     }
     await writeStore(store);
-    return { removed_ids: removedIds, dissolved_group_ids: dissolved };
+    return { group_id: groupId, released_task_ids: released, reparented_folder_ids: reparented };
+  });
+}
+
+/**
+ * Move a folder under another folder (or to the top level with parentId=null).
+ * Same-project only; cycles rejected (a folder can't become its own ancestor);
+ * combined depth capped at FOLDER_MAX_DEPTH.
+ */
+export async function setFolderParent(
+  groupId: string,
+  parentId: string | null,
+): Promise<{ group_id: string; parent_id?: string }> {
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const rec = store.task_groups?.[groupId];
+    if (!rec) throw new Error(`Group "${groupId}" not found.`);
+    if (parentId === null) {
+      delete rec.parent_id;
+      await writeStore(store);
+      return { group_id: groupId };
+    }
+    if (parentId === groupId) throw new Error('A folder cannot be its own parent.');
+    const parent = store.task_groups?.[parentId];
+    if (!parent) throw new Error(`Parent folder "${parentId}" not found.`);
+    if (!sameProject(folderProject(store, parentId), folderProject(store, groupId))) {
+      throw new Error('A folder can only nest inside a folder of the same project.');
+    }
+    // Cycle guard: walking up from the new parent must never reach groupId.
+    let cur: string | undefined = parentId;
+    const seen = new Set<string>();
+    while (cur) {
+      if (cur === groupId) throw new Error('That move would make the folder its own ancestor.');
+      if (seen.has(cur)) break;
+      seen.add(cur);
+      cur = store.task_groups?.[cur]?.parent_id;
+    }
+    // Depth cap: the subtree rooted at groupId must still fit under the parent.
+    const subtreeDepth = (gid: string, guard: Set<string>): number => {
+      if (guard.has(gid)) return 1;
+      guard.add(gid);
+      let deepest = 1;
+      for (const [cid, child] of Object.entries(store.task_groups ?? {})) {
+        if (child.parent_id === gid) deepest = Math.max(deepest, 1 + subtreeDepth(cid, guard));
+      }
+      return deepest;
+    };
+    if (folderDepth(store, parentId) + subtreeDepth(groupId, new Set()) > FOLDER_MAX_DEPTH) {
+      throw new Error(`Folders can nest at most ${FOLDER_MAX_DEPTH} levels deep.`);
+    }
+    rec.parent_id = parentId;
+    await writeStore(store);
+    return { group_id: groupId, parent_id: parentId };
   });
 }
 
@@ -4421,8 +4575,13 @@ export async function renameGroup(groupId: string, label: string): Promise<{ gro
     const trimmed = label.trim();
     if (!trimmed) throw new Error('Group label cannot be empty.');
     const hasMembers = store.tasks.some((t) => t.group_id === groupId);
-    if (!hasMembers && !store.task_groups?.[groupId]) throw new Error(`Group "${groupId}" not found.`);
-    store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label: trimmed } };
+    const existing = store.task_groups?.[groupId];
+    if (!hasMembers && !existing) throw new Error(`Group "${groupId}" not found.`);
+    // Preserve project/parent_id/hidden — a rename must not flatten the folder.
+    store.task_groups = {
+      ...(store.task_groups ?? {}),
+      [groupId]: { ...(existing ?? { project: folderProject(store, groupId) }), label: trimmed },
+    };
     await writeStore(store);
     return { group_id: groupId, label: trimmed };
   });
@@ -4440,16 +4599,31 @@ export async function setGroupHidden(groupId: string, hidden: boolean): Promise<
     const hasMembers = store.tasks.some((t) => t.group_id === groupId);
     const existing = store.task_groups?.[groupId];
     if (!hasMembers && !existing) throw new Error(`Group "${groupId}" not found.`);
-    // Preserve the label; default it to the lead member's title if somehow missing.
+    // Preserve the label (default: lead member's title) and the folder fields.
     const label = existing?.label ?? store.tasks.find((t) => t.group_id === groupId)?.title ?? groupId;
-    store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label, ...(hidden ? { hidden: true } : {}) } };
+    const base = existing ?? { label, project: folderProject(store, groupId) };
+    const next: TaskGroupRecord = { ...base, label };
+    if (hidden) next.hidden = true;
+    else delete next.hidden;
+    store.task_groups = { ...(store.task_groups ?? {}), [groupId]: next };
     await writeStore(store);
     return { group_id: groupId, hidden };
   });
 }
 
-/** List all groups with their labels + hidden flag + member ids (members with ≥1 task only). */
-export async function listGroups(): Promise<Array<{ group_id: string; label: string; hidden: boolean; member_ids: string[] }>> {
+export interface FolderListing {
+  group_id: string;
+  label: string;
+  hidden: boolean;
+  member_ids: string[];
+  project: string;
+  parent_id?: string;
+}
+
+/** List all folders: the UNION of registry records (so EMPTY folders show — an
+ *  explicitly created folder must be visible before its first task arrives) and
+ *  membership-derived groups (defensive: a record the registry somehow lost). */
+export async function listGroups(): Promise<FolderListing[]> {
   const store = await readStore();
   const byGroup = new Map<string, string[]>();
   for (const t of store.tasks) {
@@ -4458,10 +4632,29 @@ export async function listGroups(): Promise<Array<{ group_id: string; label: str
       byGroup.get(t.group_id)!.push(t.id);
     }
   }
-  const out: Array<{ group_id: string; label: string; hidden: boolean; member_ids: string[] }> = [];
+  const out: FolderListing[] = [];
+  const emitted = new Set<string>();
+  for (const [gid, rec] of Object.entries(store.task_groups ?? {})) {
+    const ids = byGroup.get(gid) ?? [];
+    out.push({
+      group_id: gid,
+      label: rec.label,
+      hidden: !!rec.hidden,
+      member_ids: ids,
+      project: rec.project ?? (ids.length ? (store.tasks.find((t) => t.id === ids[0])?.project ?? '') : ''),
+      ...(rec.parent_id ? { parent_id: rec.parent_id } : {}),
+    });
+    emitted.add(gid);
+  }
   for (const [gid, ids] of byGroup) {
-    const rec = store.task_groups?.[gid];
-    out.push({ group_id: gid, label: rec?.label ?? ids[0], hidden: !!rec?.hidden, member_ids: ids });
+    if (emitted.has(gid)) continue;
+    out.push({
+      group_id: gid,
+      label: store.tasks.find((t) => t.id === ids[0])?.title ?? ids[0],
+      hidden: false,
+      member_ids: ids,
+      project: store.tasks.find((t) => t.id === ids[0])?.project ?? '',
+    });
   }
   return out;
 }
@@ -5540,6 +5733,17 @@ function prepareRawUpdate(task: Task, updates: Partial<Task>): Partial<Task> | n
     delete safeUpdates.phase;
     delete safeUpdates.status;
     delete safeUpdates.completed_at;
+  }
+
+  // A folder never follows a task across projects (raw twin of the updateTask
+  // rule): a sync-driven project move drops the membership. `null` is the
+  // payload explicit-clear marker (taskToRow drops the key from the blob).
+  if (
+    typeof safeUpdates.project === 'string' &&
+    safeUpdates.project.toLowerCase() !== (task.project ?? '').toLowerCase() &&
+    task.group_id && safeUpdates.group_id === undefined
+  ) {
+    (safeUpdates as Record<string, unknown>).group_id = null;
   }
 
   // Dirty check: skip disk write + event if nothing actually changed

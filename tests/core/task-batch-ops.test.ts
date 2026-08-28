@@ -217,18 +217,24 @@ describe('deleteTasksByIds', () => {
     expect(failed[0].error).toMatch(/No task found/);
   });
 
-  it('prunes a group only once every member is deleted', async () => {
+  it('never prunes the folder — it survives even after every member is deleted', async () => {
+    // The folder model: a folder is the user's structure, not a by-product of its
+    // members. Batch-deleting the rows inside one must leave the (now empty)
+    // folder in place; only an explicit deleteFolder removes it.
     const [a, b, c] = await makeTasks(['A', 'B', 'C']);
     const g = await groupTasks([a, b, c], 'Cluster');
 
-    // Deleting 2 of 3 leaves a lone member — a 1-member group is still valid.
+    // Deleting 2 of 3 leaves a lone member — still one folder.
     await deleteTasksByIds([a, b]);
-    expect(await listGroups()).toHaveLength(1);
+    expect((await listGroups()).map((x) => x.member_ids)).toEqual([[c]]);
 
-    // Deleting the last member empties it → pruned.
+    // Deleting the last member empties it, but the folder row stays.
     await deleteTasksByIds([c]);
-    expect(await listGroups()).toHaveLength(0);
-    expect(g.group_id).toBeTruthy();
+    const groups = await listGroups();
+    expect(groups).toHaveLength(1);
+    expect(groups[0].group_id).toBe(g.group_id);
+    expect(groups[0].label).toBe('Cluster');
+    expect(groups[0].member_ids).toEqual([]);
   });
 
   it('is a no-op for an empty selection', async () => {

@@ -540,13 +540,15 @@ export interface Task {
   /** @deprecated Use session_status instead. Kept for backward compat during migration. */
   exec_session_status?: { process_status: ProcessStatus; activity?: string; mode?: SessionMode; provider?: SessionProvider; engine?: SessionEngine };
   parent_task_id?: string;     // If set, this is a child task of the parent
-  /** Local-only virtual grouping. Tasks sharing a group_id render as ONE visual
-   *  group in the list (boxed together, ordered after the group's lead task) —
-   *  this is NOT a parent/subtask relationship: the tasks stay flat and fully
-   *  independent (separate lifecycles). All members must share the same
-   *  project. Never pushed to external sync backends; round-trips via
-   *  the SQLite `payload` blob (not a dedicated column). The human-readable group
-   *  name lives in TaskStore.task_groups. */
+  /** Local-only FOLDER membership (formerly "virtual group"). Tasks sharing a
+   *  group_id render inside ONE folder in the list — this is NOT a parent/subtask
+   *  relationship: the tasks stay flat and fully independent (separate
+   *  lifecycles). A folder belongs to exactly one project (schema v10 enforces
+   *  this: joining a folder requires the same project, and moving a task to
+   *  another project auto-clears its group_id). Never pushed to external sync
+   *  backends; round-trips via the SQLite `payload` blob (not a dedicated
+   *  column). The folder record (label, project, parent) lives in
+   *  TaskStore.task_groups. */
   group_id?: string;
   depends_on?: string[];       // Full IDs of tasks that must complete before this one
   description: string;
@@ -658,9 +660,11 @@ export interface TaskStore {
   /** Project registry, keyed by project name (case-insensitive identity — the
    *  SQLite PK is COLLATE NOCASE). Never contains a '' (Inbox) key. */
   projects?: Record<string, ProjectRecord>;
-  /** Virtual task-group name registry: group_id → { label }. Maps the local-only
-   *  Task.group_id to a human-readable (AI-generated) group name. Groups with
-   *  fewer than 2 live members are pruned. Local-only; never synced. */
+  /** Folder registry: group_id → { label, project, parent_id, hidden }. Maps the
+   *  local-only Task.group_id to a per-project folder (nestable via parent_id).
+   *  Folders are never auto-pruned — an empty folder is valid (create first, drag
+   *  tasks in later); only an explicit deleteFolder removes one. Local-only;
+   *  never synced. */
   task_groups?: Record<string, TaskGroupRecord>;
   /** User-defined focus tiers (ordered). Ids are `ct_` + 8 base36 chars; a task's
    *  focus_tier may reference one. Tasks pointing at a deleted/unknown tier
@@ -676,11 +680,20 @@ export interface CustomTierRecord {
 }
 
 export interface TaskGroupRecord {
-  /** Human-readable group name (AI-generated on creation; user-renamable). */
+  /** Human-readable folder name (AI-generated on creation; user-renamable). */
   label: string;
-  /** When true, the group is collapsed/hidden from the Focus (pinned) area — its
+  /** The project this folder belongs to ('' = Inbox). Every member task must be
+   *  in the same project; backfilled by the v10 migration (majority project wins,
+   *  minority members leave the folder). Optional in the type only for
+   *  pre-migration snapshots — post-v10 it is always present. */
+  project?: string;
+  /** Parent folder id (nesting). Must reference another folder in the SAME
+   *  project; cycles rejected, depth capped (see FOLDER_MAX_DEPTH). Absent =
+   *  top-level folder directly under the project. */
+  parent_id?: string;
+  /** When true, the folder is collapsed/hidden from the Focus (pinned) area — its
    *  members and membership are untouched, only the pinned rendering skips them.
-   *  The group still renders normally on the /tasks page; unhide via a member's
+   *  The folder still renders normally elsewhere; unhide via a member's
    *  kebab menu. Local-only, never synced. */
   hidden?: boolean;
 }

@@ -437,13 +437,16 @@ const SCHEMA_SQL = `
 
   ${TASK_PROJECTS_DDL}
 
-  -- Virtual task-group name registry (local-only). Maps Task.group_id (stored in
-  -- the tasks.payload blob) to a human-readable group label. Membership itself
-  -- lives on the tasks (tasks.group_id); this table only holds the names.
+  -- Folder registry (local-only; formerly "virtual groups"). Maps Task.group_id
+  -- (stored in the tasks.payload blob) to a per-project folder: label + owning
+  -- project ('' = Inbox) + optional parent folder (nesting). Membership itself
+  -- lives on the tasks (tasks.group_id); this table holds the folder records.
   CREATE TABLE IF NOT EXISTS task_groups (
     id TEXT PRIMARY KEY,
     label TEXT NOT NULL,
-    hidden INTEGER NOT NULL DEFAULT 0
+    hidden INTEGER NOT NULL DEFAULT 0,
+    project TEXT NOT NULL DEFAULT '',
+    parent_id TEXT
   );
 
   -- User-defined focus tiers (local-only). Ids are ct_* strings referenced by
@@ -500,7 +503,7 @@ const SCHEMA_SQL = `
  * Exported so migration tests can assert "the DB ended up current" without
  * hardcoding a number that every future bump would break.
  */
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 10;
 
 function runOneTimeMigrations(handle: DatabaseType): void {
   const current = handle.pragma('user_version', { simple: true }) as number;
@@ -575,6 +578,22 @@ function runOneTimeMigrations(handle: DatabaseType): void {
     // 2026-08-18: a separate parked phase confused humans and agents alike;
     // deliberate parking lives on the 'wait' PIN TIER, a different axis).
     migrateWaitToTodo(handle);
+  }
+
+  if (current < 10) {
+    // v9 → v10: virtual groups become per-project FOLDERS (nestable). Adds the
+    // project/parent_id columns and backfills each folder's project from its
+    // members (majority wins; minority members leave the folder — a folder
+    // belongs to exactly one project by design).
+    //
+    // Numbered 10, not 9: the production DB was found stamped user_version=9
+    // by an interim build (the WAIT-phase removal briefly shipped as v9 before
+    // being renumbered to v8 on commit), so a `< 9` guard would silently skip
+    // this migration there and the new columns would never exist. The body is
+    // fully idempotent (column sniffs, INSERT OR IGNORE, recompute-from-live-
+    // members) so any starting state — 8, the stray 9, or a fresh DB — lands
+    // in the same place.
+    migrateGroupsToFolders(handle);
   }
 
   handle.pragma('user_version = ' + SCHEMA_VERSION);
@@ -1197,6 +1216,97 @@ function migrateWaitToTodo(handle: DatabaseType): void {
 
   if (summary.migrated > 0) {
     log.task.info('task-db v8: WAIT phase removed — rows moved to TODO', summary);
+  }
+}
+
+// ── v9: virtual groups → per-project folders ────────────────────────────────
+
+/**
+ * Backfill the folder model onto the legacy group data. Three steps, all in one
+ * transaction: (1) add the project/parent_id columns (fresh DBs already have
+ * them from SCHEMA_SQL — sniff first); (2) give every group with live members a
+ * project = the majority project of its members (case-insensitive; ties go to
+ * the first member) and evict minority members (a folder belongs to exactly one
+ * project — measured on real data this touches 3 of 59 groups); (3) drop
+ * registry rows with zero live members — they were invisible before (listing
+ * derived from membership) and must not resurrect as visible empty folders.
+ */
+function migrateGroupsToFolders(handle: DatabaseType): void {
+  const summary = handle.transaction(() => {
+    const cols = handle.prepare(`PRAGMA table_info(task_groups)`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'project')) {
+      handle.exec(`ALTER TABLE task_groups ADD COLUMN project TEXT NOT NULL DEFAULT '';`);
+    }
+    if (!cols.some((c) => c.name === 'parent_id')) {
+      handle.exec(`ALTER TABLE task_groups ADD COLUMN parent_id TEXT;`);
+    }
+
+    const rows = handle
+      .prepare(
+        `SELECT id, COALESCE(project, '') AS project, title,
+                json_extract(payload, '$.group_id') AS gid
+           FROM tasks
+          WHERE payload IS NOT NULL AND json_valid(payload)
+            AND json_extract(payload, '$.group_id') IS NOT NULL`,
+      )
+      .all() as { id: string; project: string; title: string; gid: string }[];
+
+    const byGid = new Map<string, { id: string; project: string; title: string }[]>();
+    for (const r of rows) {
+      if (!byGid.has(r.gid)) byGid.set(r.gid, []);
+      byGid.get(r.gid)!.push(r);
+    }
+
+    const setProject = handle.prepare(`UPDATE task_groups SET project = ? WHERE id = ?`);
+    // Registry rows are lazily backfilled at runtime, so a membership-derived
+    // group may have no row yet — mint one so the folder survives the cutover.
+    const insertRow = handle.prepare(
+      `INSERT OR IGNORE INTO task_groups (id, label, hidden, project) VALUES (?, ?, 0, ?)`,
+    );
+    const clearMembership = handle.prepare(
+      `UPDATE tasks SET payload = json_remove(payload, '$.group_id') WHERE id = ?`,
+    );
+
+    let folders = 0;
+    let evicted = 0;
+    for (const [gid, members] of byGid) {
+      const counts = new Map<string, number>();
+      for (const m of members) {
+        const key = m.project.toLowerCase();
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+      let winnerKey = members[0].project.toLowerCase();
+      let best = 0;
+      for (const m of members) {
+        const key = m.project.toLowerCase();
+        const c = counts.get(key)!;
+        if (c > best) { best = c; winnerKey = key; }
+      }
+      const winner = members.find((m) => m.project.toLowerCase() === winnerKey)!.project;
+      insertRow.run(gid, members[0].title || gid, winner);
+      setProject.run(winner, gid);
+      folders += 1;
+      for (const m of members) {
+        if (m.project.toLowerCase() !== winnerKey) {
+          clearMembership.run(m.id);
+          evicted += 1;
+        }
+      }
+    }
+
+    const dropped = handle
+      .prepare(
+        `DELETE FROM task_groups WHERE id NOT IN (
+           SELECT DISTINCT json_extract(payload, '$.group_id') FROM tasks
+            WHERE payload IS NOT NULL AND json_valid(payload)
+              AND json_extract(payload, '$.group_id') IS NOT NULL)`,
+      )
+      .run().changes;
+    return { folders, evicted, dropped };
+  })();
+
+  if (summary.folders > 0 || summary.evicted > 0 || summary.dropped > 0) {
+    log.task.info('task-db v9: groups migrated to per-project folders', summary);
   }
 }
 

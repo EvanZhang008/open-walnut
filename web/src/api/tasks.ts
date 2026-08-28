@@ -353,14 +353,18 @@ export async function removeDependency(taskId: string, depId: string): Promise<T
   return updateTask(taskId, { remove_depends_on: [depId] } as UpdateTaskInput);
 }
 
-// ── Virtual task groups ──
+// ── Folders (per-project, nestable; storage name "groups") ──
 
 export interface TaskGroup {
   group_id: string;
   label: string;
-  /** When true, the group is collapsed/hidden from the Focus (pinned) area. */
+  /** When true, the folder is collapsed/hidden from the Focus (pinned) area. */
   hidden?: boolean;
   member_ids: string[];
+  /** Owning project ('' = Inbox). Every member is in this project. */
+  project?: string;
+  /** Parent folder id (nesting, same project). Absent = top-level. */
+  parent_id?: string;
 }
 
 export async function fetchTaskGroups(): Promise<TaskGroup[]> {
@@ -388,4 +392,28 @@ export async function renameTaskGroup(groupId: string, label: string): Promise<{
 /** Show/hide a group in the Focus (pinned) area (membership untouched). */
 export async function setTaskGroupHidden(groupId: string, hidden: boolean): Promise<{ group_id: string; hidden: boolean }> {
   return apiPatch(`/api/tasks/groups/${groupId}/hidden`, { hidden });
+}
+
+/** Create an EMPTY folder under a project ('' = Inbox), optionally nested. */
+export async function createEmptyFolder(
+  label: string,
+  project: string,
+  parentId?: string,
+): Promise<{ group_id: string; label: string; project: string; parent_id?: string }> {
+  return apiPost('/api/tasks/folders', { label, project, ...(parentId ? { parent_id: parentId } : {}) });
+}
+
+/** Delete a folder: members fall back to the project in place, children re-parent. */
+export async function deleteTaskFolder(
+  groupId: string,
+): Promise<{ group_id: string; released_task_ids: string[]; reparented_folder_ids: string[] }> {
+  return apiDelete(`/api/tasks/folders/${groupId}`);
+}
+
+/** Move a folder in the nesting tree (null = make it top-level). */
+export async function setTaskFolderParent(
+  groupId: string,
+  parentId: string | null,
+): Promise<{ group_id: string; parent_id?: string }> {
+  return apiPatch(`/api/tasks/folders/${groupId}`, { parent_id: parentId });
 }

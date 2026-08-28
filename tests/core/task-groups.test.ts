@@ -1,14 +1,22 @@
 /**
- * Virtual task groups — lightweight visual grouping (NOT subtasks).
+ * Per-project FOLDERS (storage name: "group" — Task.group_id + store.task_groups).
  *
  * Covers the core store ops in task-manager.ts: groupTasks / addToGroup /
- * removeFromGroup / renameGroup / listGroups, plus the invariants:
- *  - any tasks can be grouped — NO project scope rule (a group is a pure visual
- *    cluster; cross-project members, Inbox included, are allowed)
- *  - CREATING a group needs ≥2 tasks, but a created group survives down to 1 member
- *    (a lone-member group is valid, acts like a tag); only 0 members dissolves it
+ * removeFromGroup / createFolder / deleteFolder / setFolderParent / renameGroup /
+ * setGroupHidden / listGroups, plus the folder-model invariants:
+ *  - a folder belongs to exactly ONE project ('' = Inbox is a real project):
+ *    grouping or joining across projects throws ("A folder belongs to one
+ *    project"); the compare is case-insensitive, matching the registry's
+ *    COLLATE NOCASE
+ *  - folders are NEVER auto-pruned: removing every member, deleting every member,
+ *    or a donor folder losing its last task to another folder all leave the
+ *    registry row in place with 0 members. Only deleteFolder removes one
+ *  - an EMPTY folder is valid and listable (createFolder makes one)
+ *  - folders nest via parent_id (same project, no cycles, depth ≤ FOLDER_MAX_DEPTH)
+ *  - moving a task to another project auto-unfolders it (the folder is the
+ *    project's private structure, so it never follows the task) — both on
+ *    updateTask and on the raw sync path
  *  - group_id round-trips through the SQLite payload blob (no dedicated column)
- *  - deleting a task prunes a group it would leave with <2 members
  *  - group_id is local-only (never part of a plugin push) — verified structurally
  *    by it living only in payload (covered by the round-trip test).
  */
@@ -23,17 +31,22 @@ import {
   listTasks,
   getTask,
   deleteTask,
+  updateTask,
   groupTasks,
   addToGroup,
   removeFromGroup,
+  createFolder,
+  deleteFolder,
+  setFolderParent,
   renameGroup,
   setGroupHidden,
   listGroups,
   updateTaskRaw,
   updateTasksBulk,
+  FOLDER_MAX_DEPTH,
   _resetForTesting,
 } from '../../src/core/task-manager.js';
-import { closeDb } from '../../src/core/task-db.js';
+import { closeDb, getDb } from '../../src/core/task-db.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 
 beforeEach(async () => {
@@ -57,13 +70,26 @@ async function makeTasks(titles: string[], project = 'Marina'): Promise<string[]
   return ids;
 }
 
+/** Raw payload blob for a task — proves what physically landed in SQLite. */
+function rawPayload(id: string): string | null {
+  const row = getDb()!.prepare('SELECT payload FROM tasks WHERE id = ?').get(id) as
+    | { payload: string | null }
+    | undefined;
+  return row?.payload ?? null;
+}
+
+/** One folder from the listing, by id. */
+async function folder(groupId: string) {
+  return (await listGroups()).find((g) => g.group_id === groupId);
+}
+
 describe('groupTasks', () => {
-  it('groups ≥2 same-scope tasks under one group_id and records a label', async () => {
+  it('groups ≥2 same-project tasks under one group_id and records label + project', async () => {
     const [a, b] = await makeTasks(['Task A', 'Task B']);
-    const result = await groupTasks([a, b], 'My Group');
+    const result = await groupTasks([a, b], 'My Folder');
 
     expect(result.member_ids.sort()).toEqual([a, b].sort());
-    expect(result.label).toBe('My Group');
+    expect(result.label).toBe('My Folder');
 
     const ta = await getTask(a);
     const tb = await getTask(b);
@@ -72,8 +98,11 @@ describe('groupTasks', () => {
 
     const groups = await listGroups();
     expect(groups).toHaveLength(1);
-    expect(groups[0].label).toBe('My Group');
+    expect(groups[0].label).toBe('My Folder');
     expect(groups[0].member_ids.sort()).toEqual([a, b].sort());
+    // Folder model: the folder carries the project it belongs to, top-level by default.
+    expect(groups[0].project).toBe('Marina');
+    expect(groups[0].parent_id).toBeUndefined();
   });
 
   it('defaults the label to the first member title when none is given', async () => {
@@ -87,20 +116,51 @@ describe('groupTasks', () => {
     await expect(groupTasks([a])).rejects.toThrow(/at least 2/);
   });
 
-  it('groups tasks from different projects, Inbox included (no scope rule)', async () => {
-    // A group is a pure visual cluster — cross-project members are allowed.
+  it('rejects tasks that span projects (a folder belongs to one project)', async () => {
+    // Folder cutover: a folder is a project's private sub-structure, so a
+    // cross-project selection has no valid home and must be refused outright
+    // rather than silently picking one project's side.
     const [a] = await makeTasks(['A'], 'Marina');
-    const [b] = await makeTasks(['B'], '');  // Inbox
-    const result = await groupTasks([a, b]);
-    expect(result.member_ids.sort()).toEqual([a, b].sort());
-    expect((await getTask(a)).group_id).toBe(result.group_id);
-    expect((await getTask(b)).group_id).toBe(result.group_id);
+    const [b] = await makeTasks(['B'], 'Acme');
+    await expect(groupTasks([a, b])).rejects.toThrow(/A folder belongs to one project/);
+    // Nothing partially applied.
+    expect((await getTask(a)).group_id).toBeUndefined();
+    expect((await getTask(b)).group_id).toBeUndefined();
+    expect(await listGroups()).toHaveLength(0);
   });
 
-  it('absorbs a pre-existing group when a member is already grouped (merge)', async () => {
+  it("rejects mixing Inbox ('') with a named project", async () => {
+    // Inbox is a real project, not a wildcard — it can hold folders of its own,
+    // but it cannot be lumped in with a named one.
+    const [a] = await makeTasks(['A'], 'Marina');
+    const [b] = await makeTasks(['B'], ''); // Inbox
+    await expect(groupTasks([a, b])).rejects.toThrow(/A folder belongs to one project/);
+  });
+
+  it("groups Inbox tasks together ('' is a valid project for a folder)", async () => {
+    const [a, b] = await makeTasks(['Inbox A', 'Inbox B'], '');
+    const result = await groupTasks([a, b], 'Inbox cluster');
+    expect(result.member_ids.sort()).toEqual([a, b].sort());
+    expect((await folder(result.group_id))?.project).toBe('');
+  });
+
+  it('treats project names case-insensitively (matches the registry COLLATE NOCASE)', async () => {
+    const [a, b] = await makeTasks(['A', 'B'], 'Marina');
+    // Raw write: a differently-cased spelling of the SAME project must not read
+    // as a different project (the registry itself is case-insensitive).
+    await updateTaskRaw(b, { project: 'marina' });
+    expect((await getTask(b)).project).toBe('marina');
+
+    const result = await groupTasks([a, b]);
+    expect(result.member_ids.sort()).toEqual([a, b].sort());
+    // The folder keeps the lead member's spelling.
+    expect((await folder(result.group_id))?.project).toBe('Marina');
+  });
+
+  it('absorbs a pre-existing folder when a member is already grouped (merge)', async () => {
     const [a, b, c] = await makeTasks(['A', 'B', 'C']);
     const g1 = await groupTasks([a, b], 'First');
-    // Group c with a → should merge b in too (all under one new group).
+    // Group c with a → should merge b in too (all under one new folder).
     const g2 = await groupTasks([a, c]);
     expect(g2.member_ids.sort()).toEqual([a, b, c].sort());
 
@@ -112,7 +172,7 @@ describe('groupTasks', () => {
 });
 
 describe('addToGroup', () => {
-  it('adds a task to an existing group', async () => {
+  it('adds a task to an existing folder', async () => {
     const [a, b, c] = await makeTasks(['A', 'B', 'C']);
     const g = await groupTasks([a, b], 'G');
     const result = await addToGroup(g.group_id, [c]);
@@ -120,21 +180,51 @@ describe('addToGroup', () => {
     expect((await getTask(c)).group_id).toBe(g.group_id);
   });
 
-  it('adds an out-of-scope task to an existing group (no scope rule)', async () => {
-    // Cross-project members are allowed — grouping has no scope rule.
+  it("rejects a task from another project (join never moves the task's project)", async () => {
     const [a, b] = await makeTasks(['A', 'B'], 'Marina');
-    const [c] = await makeTasks(['C'], 'Home');
+    const [c] = await makeTasks(['C'], 'Acme');
     const g = await groupTasks([a, b]);
-    const result = await addToGroup(g.group_id, [c]);
-    expect(result.member_ids.sort()).toEqual([a, b, c].sort());
-    expect((await getTask(c)).group_id).toBe(g.group_id);
+
+    await expect(addToGroup(g.group_id, [c])).rejects.toThrow(/A folder belongs to one project/);
+    expect((await getTask(c)).group_id).toBeUndefined();
+    // The folder is untouched by the rejected join.
+    expect((await folder(g.group_id))?.member_ids.sort()).toEqual([a, b].sort());
+  });
+
+  it('fills an empty folder created by createFolder', async () => {
+    const [a, b] = await makeTasks(['A', 'B'], 'Marina');
+    const f = await createFolder('Later', 'Marina');
+    const result = await addToGroup(f.group_id, [a, b]);
+    expect(result.label).toBe('Later');
+    expect(result.member_ids.sort()).toEqual([a, b].sort());
+    expect((await folder(f.group_id))?.project).toBe('Marina');
+  });
+
+  it('leaves an emptied DONOR folder in place (folders are never auto-pruned)', async () => {
+    const [a, b, c, d] = await makeTasks(['A', 'B', 'C', 'D']);
+    const keep = await groupTasks([a, b], 'Keeper');
+    const donor = await groupTasks([c, d], 'Donor');
+
+    // Steal BOTH of the donor's tasks — it drops to 0 members.
+    await addToGroup(keep.group_id, [c, d]);
+
+    const groups = await listGroups();
+    expect(groups).toHaveLength(2);
+    expect((await folder(keep.group_id))?.member_ids.sort()).toEqual([a, b, c, d].sort());
+    const emptied = await folder(donor.group_id);
+    expect(emptied, 'the emptied donor folder must survive').toBeDefined();
+    expect(emptied!.member_ids).toEqual([]);
+    expect(emptied!.label).toBe('Donor');
+  });
+
+  it('throws for an unknown folder id', async () => {
+    const [a] = await makeTasks(['A']);
+    await expect(addToGroup('g_nope', [a])).rejects.toThrow(/not found/);
   });
 });
 
 describe('removeFromGroup', () => {
-  it('keeps the group alive with a lone member when one of two is removed', async () => {
-    // A group survives down to 1 member (acts like a tag) — removing one of two does
-    // NOT dissolve it; the lone survivor stays grouped until explicitly dissolved.
+  it('keeps the folder alive with a lone member when one of two is removed', async () => {
     const [a, b] = await makeTasks(['A', 'B']);
     const g = await groupTasks([a, b]);
 
@@ -142,7 +232,7 @@ describe('removeFromGroup', () => {
     expect(result.removed_ids).toEqual([a]);
     expect(result.dissolved_group_ids).toEqual([]);
 
-    // a is ungrouped; b stays in the group as the lone member.
+    // a is ungrouped; b stays in the folder as the lone member.
     expect((await getTask(a)).group_id).toBeUndefined();
     expect((await getTask(b)).group_id).toBe(g.group_id);
     const groups = await listGroups();
@@ -150,19 +240,29 @@ describe('removeFromGroup', () => {
     expect(groups[0].member_ids).toEqual([b]);
   });
 
-  it('dissolves the group only when its LAST member is removed (0 left)', async () => {
+  it('leaves the folder in place when its LAST member is removed (0 members is valid)', async () => {
+    // Folder model: emptying a folder is like emptying a directory — it stays until the
+    // user deletes it. Auto-pruning destroyed structure the user had built.
     const [a, b] = await makeTasks(['A', 'B']);
-    const g = await groupTasks([a, b]);
-    await removeFromGroup([a]);          // → b is the lone member, group still alive
-    const result = await removeFromGroup([b]); // → 0 members, now it dissolves
-    expect(result.dissolved_group_ids).toEqual([g.group_id]);
+    const g = await groupTasks([a, b], 'Survives Empty');
+
+    await removeFromGroup([a]);
+    const result = await removeFromGroup([b]);
+    expect(result.removed_ids).toEqual([b]);
+    expect(result.dissolved_group_ids).toEqual([]); // nothing dissolves, ever
+
     expect((await getTask(b)).group_id).toBeUndefined();
-    expect(await listGroups()).toHaveLength(0);
+    const groups = await listGroups();
+    expect(groups).toHaveLength(1);
+    expect(groups[0].group_id).toBe(g.group_id);
+    expect(groups[0].label).toBe('Survives Empty');
+    expect(groups[0].member_ids).toEqual([]);
+    expect(groups[0].project).toBe('Marina');
   });
 
-  it('keeps the group alive when ≥2 members remain', async () => {
+  it('keeps the folder alive when ≥2 members remain', async () => {
     const [a, b, c] = await makeTasks(['A', 'B', 'C']);
-    const g = await groupTasks([a, b, c]);
+    await groupTasks([a, b, c]);
 
     const result = await removeFromGroup([a]);
     expect(result.dissolved_group_ids).toEqual([]);
@@ -171,6 +271,255 @@ describe('removeFromGroup', () => {
     const groups = await listGroups();
     expect(groups).toHaveLength(1);
     expect(groups[0].member_ids.sort()).toEqual([b, c].sort());
+  });
+});
+
+describe('createFolder', () => {
+  it('creates an EMPTY folder that is immediately listed with its project', async () => {
+    // The "project + → New folder" entry point: a folder must be visible before
+    // its first task arrives, or the user has nothing to drag onto.
+    const created = await createFolder('Reading list', 'Marina');
+    expect(created.label).toBe('Reading list');
+    expect(created.project).toBe('Marina');
+    expect(created.parent_id).toBeUndefined();
+
+    const groups = await listGroups();
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({
+      group_id: created.group_id,
+      label: 'Reading list',
+      project: 'Marina',
+      hidden: false,
+      member_ids: [],
+    });
+  });
+
+  it("creates an Inbox folder for project ''", async () => {
+    const created = await createFolder('Inbox pile', '');
+    expect(created.project).toBe('');
+    expect((await folder(created.group_id))?.project).toBe('');
+  });
+
+  it('rejects an empty label', async () => {
+    await expect(createFolder('   ', 'Marina')).rejects.toThrow(/empty/i);
+    expect(await listGroups()).toHaveLength(0);
+  });
+
+  it('nests under a parent folder in the same project', async () => {
+    const parent = await createFolder('Parent', 'Marina');
+    const child = await createFolder('Child', 'Marina', parent.group_id);
+    expect(child.parent_id).toBe(parent.group_id);
+    expect((await folder(child.group_id))?.parent_id).toBe(parent.group_id);
+  });
+
+  it('rejects an unknown parent, and a parent in another project', async () => {
+    await expect(createFolder('Child', 'Marina', 'g_ghost')).rejects.toThrow(/not found/);
+    const other = await createFolder('Elsewhere', 'Acme');
+    await expect(createFolder('Child', 'Marina', other.group_id)).rejects.toThrow(
+      /same project/i,
+    );
+  });
+
+  it(`refuses to create a child past FOLDER_MAX_DEPTH (${FOLDER_MAX_DEPTH})`, async () => {
+    let parentId: string | undefined;
+    const chain: string[] = [];
+    for (let i = 0; i < FOLDER_MAX_DEPTH; i += 1) {
+      const f = await createFolder(`Level ${i + 1}`, 'Marina', parentId);
+      chain.push(f.group_id);
+      parentId = f.group_id;
+    }
+    expect(chain).toHaveLength(FOLDER_MAX_DEPTH);
+    await expect(createFolder('Too deep', 'Marina', parentId)).rejects.toThrow(
+      new RegExp(`at most ${FOLDER_MAX_DEPTH} levels`),
+    );
+    expect(await listGroups()).toHaveLength(FOLDER_MAX_DEPTH);
+  });
+});
+
+describe('deleteFolder', () => {
+  it('releases members in place — the tasks survive, ungrouped', async () => {
+    const [a, b] = await makeTasks(['A', 'B']);
+    const g = await groupTasks([a, b], 'Doomed');
+
+    const result = await deleteFolder(g.group_id);
+    expect(result.group_id).toBe(g.group_id);
+    expect(result.released_task_ids.sort()).toEqual([a, b].sort());
+    expect(result.reparented_folder_ids).toEqual([]);
+
+    // No task is ever deleted by a folder delete.
+    expect((await listTasks()).map((t) => t.id).sort()).toEqual([a, b].sort());
+    expect((await getTask(a)).group_id).toBeUndefined();
+    expect((await getTask(b)).group_id).toBeUndefined();
+    // The task keeps its project — only the folder membership went away.
+    expect((await getTask(a)).project).toBe('Marina');
+    expect(await listGroups()).toHaveLength(0);
+  });
+
+  it("re-parents child folders to the deleted folder's parent", async () => {
+    const grand = await createFolder('Grand', 'Marina');
+    const parent = await createFolder('Parent', 'Marina', grand.group_id);
+    const childA = await createFolder('Child A', 'Marina', parent.group_id);
+    const childB = await createFolder('Child B', 'Marina', parent.group_id);
+
+    const result = await deleteFolder(parent.group_id);
+    expect(result.reparented_folder_ids.sort()).toEqual([childA.group_id, childB.group_id].sort());
+    expect((await folder(childA.group_id))?.parent_id).toBe(grand.group_id);
+    expect((await folder(childB.group_id))?.parent_id).toBe(grand.group_id);
+    expect(await folder(parent.group_id)).toBeUndefined();
+  });
+
+  it('promotes children to top-level when the deleted folder was top-level', async () => {
+    const parent = await createFolder('Parent', 'Marina');
+    const child = await createFolder('Child', 'Marina', parent.group_id);
+
+    await deleteFolder(parent.group_id);
+    const listed = await folder(child.group_id);
+    expect(listed).toBeDefined();
+    expect(listed!.parent_id).toBeUndefined();
+  });
+
+  it('deletes an EMPTY folder (no members, nothing released)', async () => {
+    const f = await createFolder('Empty', 'Marina');
+    const result = await deleteFolder(f.group_id);
+    expect(result.released_task_ids).toEqual([]);
+    expect(await listGroups()).toHaveLength(0);
+  });
+
+  it('throws for an unknown folder id', async () => {
+    await expect(deleteFolder('g_does_not_exist')).rejects.toThrow(/not found/);
+  });
+});
+
+describe('setFolderParent (nesting)', () => {
+  it('moves a folder under another folder in the same project, then back to top level', async () => {
+    const parent = await createFolder('Parent', 'Marina');
+    const child = await createFolder('Loose', 'Marina');
+    expect((await folder(child.group_id))?.parent_id).toBeUndefined();
+
+    const moved = await setFolderParent(child.group_id, parent.group_id);
+    expect(moved).toEqual({ group_id: child.group_id, parent_id: parent.group_id });
+    expect((await folder(child.group_id))?.parent_id).toBe(parent.group_id);
+
+    // null = back to the top level (directly under the project).
+    const promoted = await setFolderParent(child.group_id, null);
+    expect(promoted).toEqual({ group_id: child.group_id });
+    expect((await folder(child.group_id))?.parent_id).toBeUndefined();
+  });
+
+  it('rejects making a folder its own parent', async () => {
+    const f = await createFolder('Self', 'Marina');
+    await expect(setFolderParent(f.group_id, f.group_id)).rejects.toThrow(/its own parent/);
+    expect((await folder(f.group_id))?.parent_id).toBeUndefined();
+  });
+
+  it('rejects a move that would make a folder its own ancestor (cycle)', async () => {
+    const top = await createFolder('Top', 'Marina');
+    const mid = await createFolder('Mid', 'Marina', top.group_id);
+    const leaf = await createFolder('Leaf', 'Marina', mid.group_id);
+
+    await expect(setFolderParent(top.group_id, leaf.group_id)).rejects.toThrow(/own ancestor/);
+    // The tree is unchanged.
+    expect((await folder(top.group_id))?.parent_id).toBeUndefined();
+    expect((await folder(mid.group_id))?.parent_id).toBe(top.group_id);
+    expect((await folder(leaf.group_id))?.parent_id).toBe(mid.group_id);
+  });
+
+  it('rejects nesting across projects', async () => {
+    const marina = await createFolder('Marina folder', 'Marina');
+    const acme = await createFolder('Acme folder', 'Acme');
+    await expect(setFolderParent(acme.group_id, marina.group_id)).rejects.toThrow(/same project/i);
+    expect((await folder(acme.group_id))?.parent_id).toBeUndefined();
+  });
+
+  it("rejects a move whose SUBTREE would exceed FOLDER_MAX_DEPTH", async () => {
+    // A full-depth chain, plus a 2-deep subtree parked at the top level.
+    let parentId: string | undefined;
+    const chain: string[] = [];
+    for (let i = 0; i < FOLDER_MAX_DEPTH; i += 1) {
+      const f = await createFolder(`L${i + 1}`, 'Marina', parentId);
+      chain.push(f.group_id);
+      parentId = f.group_id;
+    }
+    const subRoot = await createFolder('Sub root', 'Marina');
+    const subLeaf = await createFolder('Sub leaf', 'Marina', subRoot.group_id);
+
+    // Under the deepest link (depth 5) even a 1-deep folder would land at 6.
+    await expect(setFolderParent(subLeaf.group_id, chain[FOLDER_MAX_DEPTH - 1])).rejects.toThrow(
+      new RegExp(`at most ${FOLDER_MAX_DEPTH} levels`),
+    );
+    // The 2-deep subtree doesn't fit under depth 4 either (4 + 2 = 6).
+    await expect(setFolderParent(subRoot.group_id, chain[FOLDER_MAX_DEPTH - 2])).rejects.toThrow(
+      new RegExp(`at most ${FOLDER_MAX_DEPTH} levels`),
+    );
+    // ...but it does fit under depth 3 (3 + 2 = 5).
+    await setFolderParent(subRoot.group_id, chain[FOLDER_MAX_DEPTH - 3]);
+    expect((await folder(subRoot.group_id))?.parent_id).toBe(chain[FOLDER_MAX_DEPTH - 3]);
+  });
+
+  it('throws for an unknown folder or parent id', async () => {
+    const f = await createFolder('Real', 'Marina');
+    await expect(setFolderParent('g_ghost', f.group_id)).rejects.toThrow(/not found/);
+    await expect(setFolderParent(f.group_id, 'g_ghost')).rejects.toThrow(/not found/);
+  });
+});
+
+describe('project move auto-unfolders the task', () => {
+  it('updateTask clears group_id when the project actually changes', async () => {
+    // A folder is the project's private structure — it must not follow a task
+    // into another project (where its siblings do not exist).
+    const [a, b] = await makeTasks(['A', 'B'], 'Marina');
+    const g = await groupTasks([a, b], 'Marina folder');
+
+    const { task } = await updateTask(a, { project: 'Acme' });
+    expect(task.project).toBe('Acme');
+    expect(task.group_id).toBeUndefined();
+    expect((await getTask(a)).group_id).toBeUndefined();
+
+    // The folder itself survives (never auto-pruned) and keeps its own project.
+    const listed = await folder(g.group_id);
+    expect(listed?.project).toBe('Marina');
+    expect(listed?.member_ids).toEqual([b]);
+  });
+
+  it('updateTask keeps group_id when the "move" is the same project (or just recased)', async () => {
+    const [a, b] = await makeTasks(['A', 'B'], 'Marina');
+    const g = await groupTasks([a, b]);
+
+    await updateTask(a, { project: 'Marina' });
+    expect((await getTask(a)).group_id).toBe(g.group_id);
+    // Case-only difference resolves to the SAME project → membership stays.
+    await updateTask(a, { project: 'marina' });
+    expect((await getTask(a)).group_id).toBe(g.group_id);
+  });
+
+  it('updateTaskRaw (sync path) clears group_id and drops it from the payload blob', async () => {
+    const [a, b] = await makeTasks(['A', 'B'], 'Marina');
+    const g = await groupTasks([a, b]);
+    expect(rawPayload(a)).toContain('group_id');
+
+    await updateTaskRaw(a, { project: 'Acme' });
+
+    const reloaded = await getTask(a);
+    expect(reloaded.project).toBe('Acme');
+    expect(reloaded.group_id).toBeUndefined();
+    // The physical blob no longer carries the key (the null-clear marker path),
+    // so it can't reappear on the next payload rewrite.
+    expect(rawPayload(a) ?? '').not.toContain('group_id');
+
+    // Survives a real reload from SQLite, and b is untouched.
+    closeDb();
+    _resetForTesting();
+    expect((await getTask(a)).group_id).toBeUndefined();
+    expect((await getTask(b)).group_id).toBe(g.group_id);
+  });
+
+  it('updateTaskRaw keeps group_id when the project is unchanged', async () => {
+    const [a, b] = await makeTasks(['A', 'B'], 'Marina');
+    const g = await groupTasks([a, b]);
+    await updateTaskRaw(a, { project: 'Marina', unread: true });
+    const reloaded = await getTask(a);
+    expect(reloaded.unread).toBe(true);
+    expect(reloaded.group_id).toBe(g.group_id);
   });
 });
 
@@ -188,10 +537,25 @@ describe('renameGroup', () => {
     const g = await groupTasks([a, b]);
     await expect(renameGroup(g.group_id, '   ')).rejects.toThrow(/empty/);
   });
+
+  it('preserves project + parent_id (a rename must not flatten the folder)', async () => {
+    const parent = await createFolder('Parent', 'Marina');
+    const child = await createFolder('Child', 'Marina', parent.group_id);
+    const [a, b] = await makeTasks(['A', 'B'], 'Marina');
+    await addToGroup(child.group_id, [a, b]);
+
+    await renameGroup(child.group_id, 'Renamed child');
+
+    const listed = await folder(child.group_id);
+    expect(listed?.label).toBe('Renamed child');
+    expect(listed?.project).toBe('Marina');
+    expect(listed?.parent_id).toBe(parent.group_id);
+    expect(listed?.member_ids.sort()).toEqual([a, b].sort());
+  });
 });
 
 describe('setGroupHidden (Focus-area collapse)', () => {
-  it('marks a group hidden and unhidden without touching membership', async () => {
+  it('marks a folder hidden and unhidden without touching membership', async () => {
     // Hiding is a pure rendering flag: members + labels + group_id all survive; only
     // the `hidden` bit flips. This is what lets the Focus area collapse a cluster
     // while /tasks still shows it (and unhide restores it).
@@ -237,6 +601,23 @@ describe('setGroupHidden (Focus-area collapse)', () => {
     expect(reloaded?.member_ids.sort()).toEqual([a, b].sort());
   });
 
+  it('preserves project + parent_id across hide/unhide', async () => {
+    const parent = await createFolder('Parent', 'Marina');
+    const child = await createFolder('Child', 'Marina', parent.group_id);
+
+    await setGroupHidden(child.group_id, true);
+    let listed = await folder(child.group_id);
+    expect(listed?.hidden).toBe(true);
+    expect(listed?.project).toBe('Marina');
+    expect(listed?.parent_id).toBe(parent.group_id);
+
+    await setGroupHidden(child.group_id, false);
+    listed = await folder(child.group_id);
+    expect(listed?.hidden).toBe(false);
+    expect(listed?.project).toBe('Marina');
+    expect(listed?.parent_id).toBe(parent.group_id);
+  });
+
   it('throws for an unknown group id', async () => {
     await expect(setGroupHidden('g_does_not_exist', true)).rejects.toThrow(/not found/);
   });
@@ -254,6 +635,20 @@ describe('group_id persistence', () => {
     const reloaded = (await listTasks()).filter((t) => [a, b].includes(t.id));
     expect(reloaded).toHaveLength(2);
     for (const t of reloaded) expect(t.group_id).toBe(g.group_id);
+  });
+
+  it('round-trips project + parent_id on the folder record', async () => {
+    const parent = await createFolder('Parent', 'Marina');
+    const child = await createFolder('Child', 'Marina', parent.group_id);
+
+    closeDb();
+    _resetForTesting();
+
+    const listed = await folder(child.group_id);
+    expect(listed?.project).toBe('Marina');
+    expect(listed?.parent_id).toBe(parent.group_id);
+    // An empty folder still lists after the reload.
+    expect(listed?.member_ids).toEqual([]);
   });
 });
 
@@ -279,7 +674,7 @@ describe('group_id survives raw partial updates (regression: vanishing groups)',
     const reloaded = await getTask(a);
     expect(reloaded.unread).toBe(true);                   // the patch applied
     expect(reloaded.group_id).toBe(g.group_id);           // ...and group_id survived
-    // The group still lists both members.
+    // The folder still lists both members.
     const groups = await listGroups();
     expect(groups).toHaveLength(1);
     expect(groups[0].member_ids.sort()).toEqual([a, b].sort());
@@ -307,31 +702,39 @@ describe('group_id survives raw partial updates (regression: vanishing groups)',
   });
 });
 
-describe('deleteTask group cleanup', () => {
-  it('keeps a group alive when a deletion leaves a single member (lone group survives)', async () => {
+describe('deleteTask folder cleanup', () => {
+  it('keeps the folder alive when a deletion leaves a single member', async () => {
     const [a, b] = await makeTasks(['A', 'B']);
     const g = await groupTasks([a, b]);
 
     await deleteTask(a);
-    // b is now the lone member, but the group survives (acts like a tag).
+    // b is now the lone member, and the folder survives.
     expect((await getTask(b)).group_id).toBe(g.group_id);
     const groups = await listGroups();
     expect(groups).toHaveLength(1);
     expect(groups[0].member_ids).toEqual([b]);
   });
 
-  it('prunes the group only when its LAST member is deleted (0 left)', async () => {
+  it('leaves the folder in place even when its LAST member is deleted', async () => {
+    // Deleting tasks must never destroy the folder the user built around them —
+    // only an explicit deleteFolder does that.
     const [a, b] = await makeTasks(['A', 'B']);
-    await groupTasks([a, b]);
+    const g = await groupTasks([a, b], 'Outlives its tasks');
 
-    await deleteTask(a);  // lone member b remains, group alive
-    await deleteTask(b);  // 0 members → group pruned
-    expect(await listGroups()).toHaveLength(0);
+    await deleteTask(a);
+    await deleteTask(b);
+
+    const groups = await listGroups();
+    expect(groups).toHaveLength(1);
+    expect(groups[0].group_id).toBe(g.group_id);
+    expect(groups[0].label).toBe('Outlives its tasks');
+    expect(groups[0].member_ids).toEqual([]);
+    expect(groups[0].project).toBe('Marina');
   });
 
-  it('keeps the group when ≥2 members remain after deletion', async () => {
+  it('keeps the folder when ≥2 members remain after deletion', async () => {
     const [a, b, c] = await makeTasks(['A', 'B', 'C']);
-    const g = await groupTasks([a, b, c]);
+    await groupTasks([a, b, c]);
 
     await deleteTask(a);
     const groups = await listGroups();

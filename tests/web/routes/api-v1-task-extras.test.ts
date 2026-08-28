@@ -96,10 +96,19 @@ describe('task groups', () => {
     expect(hidden.status).toBe(200)
     expect(hidden.body.hidden).toBe(true)
 
-    // Removing every member dissolves the group.
+    // Removing every member NO LONGER dissolves the folder (the folder cutover): an empty
+    // folder is valid, so it keeps its registry row and still lists with no members.
     const removed = await request(app).post('/api/v1/tasks/groups/remove').send({ task_ids: [a, b, c] })
     expect(removed.status).toBe(200)
-    expect(removed.body.dissolved_group_ids).toContain(groupId)
+    expect(removed.body.removed_ids.sort()).toEqual([a, b, c].sort())
+    expect(removed.body.dissolved_group_ids).toEqual([])
+    expect((await getTask(a))?.group_id).toBeUndefined()
+
+    const after = await request(app).get('/api/v1/tasks/groups')
+    const listed = after.body.groups.find((g: { group_id: string }) => g.group_id === groupId)
+    expect(listed, 'the emptied folder must still be listed').toBeDefined()
+    expect(listed.member_ids).toEqual([])
+    expect(listed.label).toBe('Renamed batch')
   })
 
   it('404 not_found for an unknown group id', async () => {
