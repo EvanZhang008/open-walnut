@@ -277,3 +277,53 @@ describe('addAIMessages — turnId on the assistant entry', () => {
     }
   });
 });
+
+// `onlyIfTurnAbsent` exists for ONE caller: api-v1's rescue path. A turn that
+// throws in its prelude (a lazy import, the console-agent profile, the history
+// read) never reaches the eager persist, so the user's words were lost outright
+// while the phone showed its own bubble and an un-retryable error. The error
+// handler now writes them — and must not double them when the persist DID run.
+describe('addUserMessage — onlyIfTurnAbsent (the api-v1 rescue path)', () => {
+  async function rawEntries(): Promise<Array<Record<string, unknown>>> {
+    const raw = JSON.parse(await fsp.readFile(CHAT_HISTORY_FILE(), 'utf-8'));
+    return raw.entries ?? [];
+  }
+
+  it('writes the message when the turn never persisted it', async () => {
+    const turnId = crypto.randomUUID();
+    await addUserMessage('the words that used to vanish', {
+      displayText: 'the words that used to vanish', turnId, onlyIfTurnAbsent: true,
+    });
+
+    const entries = await rawEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].content).toBe('the words that used to vanish');
+    expect(entries[0].turnId).toBe(turnId);
+  });
+
+  it('is a no-op when that turnId is already on disk', async () => {
+    const turnId = crypto.randomUUID();
+    await addUserMessage('the real one', { displayText: 'the real one', turnId });
+    await addUserMessage('the rescue copy', {
+      displayText: 'the rescue copy', turnId, onlyIfTurnAbsent: true,
+    });
+
+    const entries = await rawEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].content).toBe('the real one');
+  });
+
+  it('matches on turnId, not on text — a different turn still writes', async () => {
+    await addUserMessage('turn one', { displayText: 'turn one', turnId: crypto.randomUUID() });
+    await addUserMessage('turn two', {
+      displayText: 'turn two', turnId: crypto.randomUUID(), onlyIfTurnAbsent: true,
+    });
+    expect(await rawEntries()).toHaveLength(2);
+  });
+
+  it('writes unconditionally when no turnId is given (the guard needs one)', async () => {
+    await addUserMessage('no id', { displayText: 'no id', onlyIfTurnAbsent: true });
+    await addUserMessage('no id', { displayText: 'no id', onlyIfTurnAbsent: true });
+    expect(await rawEntries()).toHaveLength(2);
+  });
+});

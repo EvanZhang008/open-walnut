@@ -759,7 +759,11 @@ async function persistAndEmitTurnError(
   errMsg: string,
   /** Additive engine marker for the terminal frame (see runApiV1Turn). */
   engineMark: Record<string, string> = {},
+  /** The user's own text, when the caller knows the turn may have died BEFORE
+   *  the eager persist. See `rescueUserMessage`. */
+  rescue?: { text: string; turnId: string },
 ): Promise<void> {
+  if (rescue) await rescueUserMessage(agentId, conversationId, rescue.text, rescue.turnId)
   await chatHistory.addAIMessages(
     [{ role: 'assistant', content: [{ type: 'text', text: `[Error: ${errMsg}]` }] }] as MessageParam[],
     { source: 'agent-error', agentId, conversationId },
@@ -778,6 +782,49 @@ async function persistAndEmitTurnError(
     conversationId,
   })
   broadcastEvent(EventNames.AGENT_ERROR, { error: errMsg, agentId, conversationId })
+}
+
+/**
+ * Write the user's message if the turn died before the eager persist did.
+ *
+ * A turn normally persists the user message early precisely so it survives a
+ * mid-turn crash. But everything between "the turn was accepted" and that
+ * persist — engine resolution, the console-agent profile load, the history read
+ * — can still throw, and then the message is gone: the conversation file is left
+ * with `entries: []` while the phone shows the bubble it typed and an error
+ * under it. Refreshing makes the bubble vanish, so the user's words are lost
+ * with no way to retry them (observed 2026-08-27 23:03 on a relayed turn: the
+ * conversation file carried 134 bytes and an empty `entries` array).
+ *
+ * Idempotent by turnId: the ordinary path already wrote this message, so a
+ * second copy would double it. Best-effort — an error handler must never throw.
+ */
+async function rescueUserMessage(
+  agentId: string,
+  conversationId: string,
+  text: string,
+  turnId: string,
+): Promise<void> {
+  try {
+    // `onlyIfTurnAbsent` does the check INSIDE chat-history's write lock — a
+    // read here followed by a write would race the ordinary persist and could
+    // double the message (see chat-history.addUserMessage).
+    await chatHistory.addUserMessage(text, {
+      displayText: text, turnId, agentId, conversationId, onlyIfTurnAbsent: true,
+    })
+  } catch (err) {
+    // The store itself is what refused the write — which is also one of the
+    // things that can crash a prelude (a corrupt conversation file makes the
+    // history read throw, and then the rescue's own write throws the same way).
+    // Say so with the text INCLUDED, so the words exist in the log even when
+    // they cannot exist on disk. A log line is a poor place for a user's message
+    // and still better than nowhere.
+    log.web.error('api-v1: could not rescue the user message of a failed turn', {
+      conversationId, turnId, agentId,
+      error: err instanceof Error ? err.message : String(err),
+      lostText: text,
+    })
+  }
 }
 
 /**
@@ -922,6 +969,17 @@ async function runApiV1Turn(
     // set — the same construction the WS chat performs (chat.ts).
     let agentSystem: string | undefined
     let agentTools: import('../../agent/tools.js').ToolDefinition[] | undefined
+    let history: MessageParam[]
+    let userContent: string | unknown[]
+    let savedImages: Array<{ filePath: string; filename: string; mediaType: string }>
+    // Everything from here to `message-start` is the PRELUDE, and it needs its own
+    // catch. It used to have none, so a throw in any of it — a lazy import, the
+    // console-agent profile, the history read, the image rewrite — escaped the
+    // queue callback entirely: the eager persist never ran, the error handler
+    // never ran, and the user's message was simply GONE (the conversation file
+    // left at `entries: []`) while the phone showed its own bubble plus an error
+    // it could not retry. Observed 2026-08-27 23:03 on a relayed turn.
+    try {
     if (agentId !== DEFAULT_AGENT_ID) {
       const { getConsoleAgent } = await import('../../core/agent-registry.js')
       const { buildSubagentToolSet } = await import('../../agent/subagent-context.js')
@@ -941,15 +999,15 @@ async function runApiV1Turn(
       agentTools = await buildSubagentToolSet(agentDef)
     }
 
-    const history = await chatHistory.getApiMessages(agentId, conversationId)
+    history = await chatHistory.getApiMessages(agentId, conversationId)
 
     // Build the user content: images (if any) become base64 content blocks
     // followed by a text block prefixed with the <attached-images> annotation
     // — same shape chat.ts feeds runAgentLoop. Persist the path-based form so
     // chat-history.json stays small (base64 → { type:'image', path } refs).
-    const savedImages = imageData?.savedImages ?? []
+    savedImages = imageData?.savedImages ?? []
     const imageContentBlocks = imageData?.imageContentBlocks ?? null
-    let userContent: string | unknown[] = text
+    userContent = text
     if (imageContentBlocks) {
       const blocks = [...imageContentBlocks]
       blocks.push({ type: 'text', text: buildImageAnnotation(savedImages) + text })
@@ -969,6 +1027,19 @@ async function runApiV1Turn(
       agentId,
       conversationId,
     })
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      log.web.error('api-v1 turn failed before it started', {
+        conversationId, turnId, agentId, error: errMsg,
+        ...(err instanceof Error && err.stack ? { stack: err.stack } : {}),
+      })
+      unregisterAbort()
+      // `rescue` writes the user's text, since the persist above is exactly what
+      // may not have run. `message-start` was never emitted, so the client sees
+      // one terminal `error` frame — enough to unlock its composer.
+      await persistAndEmitTurnError(agentId, conversationId, errMsg, engineMark, { text, turnId })
+      return
+    }
 
     emitSse(conversationId, 'message-start', { turnId })
 
@@ -1059,7 +1130,14 @@ async function runApiV1Turn(
       triggerBackgroundCompaction('api-v1', { agentId, conversationId })
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
-      log.web.error('api-v1 turn error', { conversationId, turnId, agentId, error: errMsg })
+      // With the STACK: an SDK message alone is not locatable. A real failure
+      // here read only "Could not load credentials from any providers" — the AWS
+      // SDK's own words, thrown from somewhere inside a lazily-imported module
+      // graph, with no way afterwards to tell WHICH call made it (2026-08-27).
+      log.web.error('api-v1 turn error', {
+        conversationId, turnId, agentId, error: errMsg,
+        ...(err instanceof Error && err.stack ? { stack: err.stack } : {}),
+      })
       await persistAndEmitTurnError(agentId, conversationId, errMsg, engineMark)
     } finally {
       unregisterAbort()

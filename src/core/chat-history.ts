@@ -737,12 +737,22 @@ export async function addUserMessage(
     turnId?: string;
     agentId?: string;
     conversationId?: string;
+    /** Write only if no entry already carries this `turnId`. For the rescue path
+     *  in api-v1: a turn that dies before its eager persist loses the user's
+     *  message entirely, and the error handler re-writes it — but it cannot know
+     *  whether the persist got in first. Checked INSIDE the write lock, so the
+     *  answer can't go stale between the read and the push. */
+    onlyIfTurnAbsent?: boolean;
   },
 ): Promise<void> {
   const aid = options?.agentId;
   const cid = options?.conversationId;
   return withWriteLock(async () => {
     const store = await readStore(aid, cid);
+    if (options?.onlyIfTurnAbsent && options.turnId
+        && (store.entries ?? []).some((e) => e.turnId === options.turnId)) {
+      return;
+    }
     const entry: ChatEntry = {
       tag: 'ai',
       role: 'user',
