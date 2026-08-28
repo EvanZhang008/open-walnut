@@ -35,6 +35,7 @@ import {
   PROD_DAEMON_DIR,
   classifyAdoptedDaemonOwner,
   currentProdClaimPosture,
+  ownerAuditKey,
   prodDaemonClaimRefusal,
   type DaemonOwnerStamp,
 } from './daemon-ownership.js'
@@ -112,6 +113,10 @@ export class LocalDaemon {
   private _ensureInFlight: Promise<number> | null = null
   /** claude CLI resolvable in the env handed to the daemon we spawned (owner stamp). */
   private _spawnClaudeCli: string | null = null
+  /** Last ownership verdict logged, so an audit that holds for the whole process
+   *  is stated once instead of on every ensureRunning() (13 lines in a minute on
+   *  the first deploy: session send, reconnect and startup all call it). */
+  private _lastOwnerAudit: string | null = null
   private readonly daemonDir: string
   private readonly portFile: string
   private readonly pidFile: string
@@ -334,6 +339,10 @@ export class LocalDaemon {
     const mine = currentProdClaimPosture()
     const verdict = classifyAdoptedDaemonOwner(stamp, mine, instanceId)
     if (verdict === 'ours') return
+    // Same verdict about the same daemon = same news (see ownerAuditKey).
+    const auditKey = ownerAuditKey(verdict, instanceId, stamp?.instanceId)
+    if (this._lastOwnerAudit === auditKey) return
+    this._lastOwnerAudit = auditKey
     if (verdict === 'unstamped') {
       log.session.warn('local daemon has no owner stamp — spawned before this build, or by another instance', {
         daemonDir: this.daemonDir, instanceId,

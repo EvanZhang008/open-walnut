@@ -20,6 +20,7 @@ import {
   prodDaemonClaimRefusal,
   currentProdClaimPosture,
   classifyAdoptedDaemonOwner,
+  ownerAuditKey,
   type ProdClaimPosture,
   type DaemonOwnerStamp,
   type DaemonOwnerIdentity,
@@ -165,6 +166,17 @@ describe('classifyAdoptedDaemonOwner', () => {
 
   it('calls an older incarnation of our own daemon a stale stamp, not a hijack', () => {
     expect(classifyAdoptedDaemonOwner(stamp({ instanceId: 'd-1' }), identity(), 'd-2')).toBe('stale-stamp')
+  })
+})
+
+describe('ownerAuditKey', () => {
+  it('suppresses the same news but not a daemon that changed under us', () => {
+    const a = ownerAuditKey('unstamped', 'd-1', null)
+    expect(ownerAuditKey('unstamped', 'd-1', null)).toBe(a)
+    // A new incarnation, or a stamp appearing, must produce a NEW key: otherwise
+    // the latch would hide a real takeover behind an earlier benign warning.
+    expect(ownerAuditKey('unstamped', 'd-2', null)).not.toBe(a)
+    expect(ownerAuditKey('foreign-identity', 'd-1', 'd-0')).not.toBe(a)
   })
 })
 

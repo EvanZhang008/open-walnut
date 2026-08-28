@@ -143,6 +143,20 @@ export const DAEMON_OWNER_FILE = 'daemon.owner'
 export type AdoptedDaemonOwnerVerdict =
   | 'ours' | 'unstamped' | 'foreign-identity' | 'no-claude' | 'stale-stamp'
 
+/**
+ * De-dup key for the adoption audit. Both instance ids are in it on purpose: the
+ * latch must suppress the same news repeated on every ensureRunning(), yet still
+ * speak up when the daemon is replaced mid-run or a stamp appears. Keying on the
+ * verdict alone would hide a real takeover behind an earlier benign warning.
+ */
+export function ownerAuditKey(
+  verdict: AdoptedDaemonOwnerVerdict,
+  liveInstanceId: string | null,
+  stampInstanceId: string | null | undefined,
+): string {
+  return `${verdict}:${liveInstanceId ?? ''}:${stampInstanceId ?? ''}`
+}
+
 export function classifyAdoptedDaemonOwner(
   stamp: DaemonOwnerStamp | null,
   mine: DaemonOwnerIdentity,
