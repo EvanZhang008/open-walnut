@@ -146,7 +146,7 @@ export interface SearchIndex {
    *  back in; safe to interleave with writes. A doc whose embed fails twice
    *  is quarantined with a zero vector (upsert clears it, so the next content
    *  change retries). */
-  backfillVectors(options?: { batchDocs?: number; cursor?: MissingVecCursor | null }): Promise<BackfillVectorsResult>;
+  backfillVectors(options?: { batchDocs?: number; cursor?: MissingVecCursor | null; excludeKinds?: string[] }): Promise<BackfillVectorsResult>;
   /** Stored raw text of a doc (snippet extraction, rescoring). */
   getDoc(kind: string, ref: string): StoredDoc | null;
   rebuildAll(docs: Iterable<Doc> | AsyncIterable<Doc>): Promise<{ inserted: number }>;
@@ -428,7 +428,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       if (!embedder || closed) return { embedded: 0, drained: true, cursor: null };
       const batchDocs = backfillOptions.batchDocs ?? 16;
       const { docs, cursor } = writer.listDocsMissingVectors(
-        batchDocs, backfillOptions.cursor,
+        batchDocs, backfillOptions.cursor, backfillOptions.excludeKinds,
       );
       if (docs.length === 0) return { embedded: 0, drained: true, cursor };
       let embedded = 0;

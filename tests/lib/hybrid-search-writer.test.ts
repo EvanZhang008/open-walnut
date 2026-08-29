@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createSearchIndex, type SearchIndex, type Doc } from '../../src/lib/hybrid-search/index.js';
+import { createWriter } from '../../src/lib/hybrid-search/writer.js';
 
 const open = (dbPath = ':memory:') => createSearchIndex({ dbPath });
 
@@ -198,5 +199,23 @@ describe('hybrid-search writer', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('missing-vectors walk honours excludeKinds (light kinds before chunked whales)', () => {
+    const index = track(open());
+    index.upsert(doc({ kind: 'note', ref: 'n1', updatedAt: 3 }));
+    index.upsert(doc({ kind: 'session', ref: 's1', updatedAt: 2 }));
+    index.upsert(doc({ kind: 'note', ref: 'n2', updatedAt: 1 }));
+    const writer = createWriter(index.db);
+    const light = writer.listDocsMissingVectors(10, null, ['session']);
+    expect(light.docs.map((d) => d.ref)).toEqual(['n1', 'n2']);
+    // Keyset resume stays inside the filtered walk.
+    const first = writer.listDocsMissingVectors(1, null, ['session']);
+    const rest = writer.listDocsMissingVectors(10, first.cursor, ['session']);
+    expect(first.docs.map((d) => d.ref)).toEqual(['n1']);
+    expect(rest.docs.map((d) => d.ref)).toEqual(['n2']);
+    // Unfiltered walk still sees everything.
+    const all = writer.listDocsMissingVectors(10, null);
+    expect(all.docs.map((d) => d.ref)).toEqual(['n1', 's1', 'n2']);
   });
 });

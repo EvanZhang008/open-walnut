@@ -368,6 +368,14 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
   };
   let vecTotal = 0;
   let vecCursor: MissingVecCursor | null = null;
+  // Two-phase walk: single-vector kinds first, chunked whales after. In
+  // updated_at order alone, ten thousand chunked sessions (minutes of
+  // inference each batch) starved two thousand one-vector notes for a DAY —
+  // the cheap 95% of search quality was hostage to the expensive tail.
+  const chunkedKinds = Object.entries(SEARCH_V2_KIND_WEIGHTS)
+    .filter(([, cfg]) => (cfg as { chunkVectors?: boolean }).chunkVectors)
+    .map(([kind]) => kind);
+  let vecPhase: 'light' | 'all' = 'light';
   const scheduleVectorBackfill = (delayMs: number) => {
     if (stopped) return;
     vecTimer = setTimeout(() => {
@@ -375,13 +383,22 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
         try {
           const { embedded, drained, cursor } = await index.backfillVectors({
             batchDocs: 16, cursor: vecCursor,
+            excludeKinds: vecPhase === 'light' ? chunkedKinds : undefined,
           });
           vecCursor = cursor;
           vecTotal += embedded;
           if (drained) {
+            if (vecPhase === 'light') {
+              // Light kinds done — move straight on to the chunked ones.
+              vecPhase = 'all';
+              vecCursor = null;
+              scheduleVectorBackfill(vecBatchPauseMs());
+              return;
+            }
             if (vecTotal > 0) log.memory.info('search-v2 vector backfill drained', { embedded: vecTotal });
             vecTotal = 0;
             vecCursor = null; // next pass rescans from the top (self-heal)
+            vecPhase = 'light';
             scheduleVectorBackfill(FILE_SWEEP_INTERVAL_MS);
             return;
           }

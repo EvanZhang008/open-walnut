@@ -61,7 +61,7 @@ export interface Writer {
    *  every note body dragged through a sort) per batch — the batches run on
    *  the host thread of a live web server. Note bodies are fetched by id for
    *  just the returned batch. */
-  listDocsMissingVectors(limit: number, cursor?: MissingVecCursor | null): {
+  listDocsMissingVectors(limit: number, cursor?: MissingVecCursor | null, excludeKinds?: string[]): {
     docs: Array<{
       id: number; kind: string; ref: string; title: string; summary: string; note: string;
     }>;
@@ -225,27 +225,51 @@ export function createWriter(db: SearchDb): Writer {
     }
   });
 
-  const missingVecIdsStmt = db.prepare(
-    `SELECT d.id, d.updated_at FROM doc d
-     WHERE NOT EXISTS (SELECT 1 FROM doc_vec v WHERE v.doc_id = d.id)
-     ORDER BY d.updated_at DESC, d.id DESC
-     LIMIT ?`,
-  );
-  const missingVecIdsAfterStmt = db.prepare(
-    `SELECT d.id, d.updated_at FROM doc d
-     WHERE (d.updated_at < ? OR (d.updated_at = ? AND d.id < ?))
-       AND NOT EXISTS (SELECT 1 FROM doc_vec v WHERE v.doc_id = d.id)
-     ORDER BY d.updated_at DESC, d.id DESC
-     LIMIT ?`,
-  );
+  // One prepared pair per exclude-set (in practice: none, and "the chunked
+  // kinds") — the caller uses excludeKinds to vectorize cheap single-vector
+  // kinds before multi-chunk whales, so a few thousand notes are not starved
+  // for hours behind ten thousand chunked sessions.
+  type PreparedPair = { first: ReturnType<SearchDb['prepare']>; after: ReturnType<SearchDb['prepare']> };
+  const missingVecStmts = new Map<string, PreparedPair>();
+  function missingStmtsFor(excludeKinds: string[]): PreparedPair {
+    const key = excludeKinds.join(' ');
+    let pair = missingVecStmts.get(key);
+    if (!pair) {
+      const excl = excludeKinds.length
+        ? ` AND d.kind NOT IN (${excludeKinds.map(() => '?').join(',')})`
+        : '';
+      pair = {
+        first: db.prepare(
+          `SELECT d.id, d.updated_at FROM doc d
+           WHERE NOT EXISTS (SELECT 1 FROM doc_vec v WHERE v.doc_id = d.id)${excl}
+           ORDER BY d.updated_at DESC, d.id DESC
+           LIMIT ?`,
+        ),
+        after: db.prepare(
+          `SELECT d.id, d.updated_at FROM doc d
+           WHERE (d.updated_at < ? OR (d.updated_at = ? AND d.id < ?))
+             AND NOT EXISTS (SELECT 1 FROM doc_vec v WHERE v.doc_id = d.id)${excl}
+           ORDER BY d.updated_at DESC, d.id DESC
+           LIMIT ?`,
+        ),
+      };
+      missingVecStmts.set(key, pair);
+    }
+    return pair;
+  }
 
   function listDocsMissingVectors(
     limit: number,
     cursor?: MissingVecCursor | null,
+    excludeKinds?: string[],
   ): ReturnType<Writer['listDocsMissingVectors']> {
-    const idRows = (cursor
-      ? missingVecIdsAfterStmt.all(cursor.updatedAt, cursor.updatedAt, cursor.id, limit)
-      : missingVecIdsStmt.all(limit)) as Array<{ id: number; updated_at: number }>;
+    const stmts = missingStmtsFor(excludeKinds ?? []);
+    const kindParams: Array<string | number> = excludeKinds ?? [];
+    const args: Array<string | number> = cursor
+      ? [cursor.updatedAt, cursor.updatedAt, cursor.id, ...kindParams, limit]
+      : [...kindParams, limit];
+    const idRows = (cursor ? stmts.after : stmts.first)
+      .all(...args) as Array<{ id: number; updated_at: number }>;
     if (idRows.length === 0) return { docs: [], cursor: cursor ?? null };
     const last = idRows[idRows.length - 1];
     const docs = db.prepare(

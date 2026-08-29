@@ -736,10 +736,11 @@ const QUERY_STOPWORDS = new Set([
   'her', 'him', 'she', 'were', 'notes', 'note',
 ])
 
-/** Content-bearing query tokens: lowercase, ≥3 chars, minus function words. */
+/** Content-bearing query tokens: lowercase, ≥3 chars (CJK: ≥2 — a Chinese
+ *  word is typically two characters), minus function words. */
 function contentTokens(q: string): string[] {
   return q.toLowerCase().trim().split(/\s+/)
-    .filter((t) => t.length >= 3 && !QUERY_STOPWORDS.has(t))
+    .filter((t) => (t.length >= 3 || (t.length >= 2 && hasCjk(t))) && !QUERY_STOPWORDS.has(t))
 }
 
 /** Folder names use '-'/'_' as word separators ("canada-immigration"). One
@@ -796,6 +797,17 @@ function titleScore(title: string, q: string): number | null {
       new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(tok)}`, 'u').test(t),
     )
     if (allInTitle) return 0.88
+    // The QUERY covers the whole TITLE ("dna test results" ⊇ title "DNA
+    // Test"; "masters application resume" ⊇ "Resume-Application"): the user
+    // typed the note's full name plus extra words. Stronger than any folder
+    // membership (0.875-0.89), weaker than a word-boundary phrase hit (0.93).
+    // ≥2 content words so a one-word title can't claim every query naming it.
+    const titleWords = t.split(/[^\p{L}\p{N}]+/u)
+      .filter((w) => w.length >= 3 && !QUERY_STOPWORDS.has(w))
+    if (
+      titleWords.length >= 2 &&
+      titleWords.every((w) => tokens.some((tok) => tokenMatchesWord(tok, w)))
+    ) return 0.91
   }
   return null
 }
@@ -1131,13 +1143,18 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
     if (raw) prefetchToks.push(raw)
   }
   const tokLikes = prefetchToks.map((t) => `%${t.replace(/[\\%_]/g, (m) => '\\' + m)}%`)
+  // limit*6 window: the OR over tokens returns rows in table order, and a
+  // common title word ("resume") can fill a small window with one folder's
+  // files before the note the query actually names is even scanned. Each
+  // token probes the PATH too — a note whose display title is unrelated (a
+  // resume's H1 is the person's name) is still named by its FILENAME.
   const titleRows = d
     .prepare(
       `SELECT id, path, title, body, modified FROM notes
-       WHERE (title LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\'${' OR title LIKE ? ESCAPE \'\\\''.repeat(tokLikes.length)})${excl.sql}
+       WHERE (title LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\'${" OR title LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\'".repeat(tokLikes.length)})${excl.sql}
        LIMIT ?`,
     )
-    .all(titleLike, titleLike, ...tokLikes, ...excl.params, limit * 2) as RawHit[]
+    .all(titleLike, titleLike, ...tokLikes.flatMap((t) => [t, t]), ...excl.params, limit * 6) as RawHit[]
   // Mid-token substring hits (band ≤0.30) are collected but NOT marked seen and
   // only appended AFTER the strong legs: a later leg (heading/FTS body) may score
   // the same note higher, and they must never crowd word matches out of `out`.
@@ -1249,26 +1266,36 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
        LIMIT ?`,
     )
     .all(...folderLikeParams, ...excl.params, limit * 4) as RawHit[]
+  // Token-wise folder rows are capped: ONE shared word ("reference") can pull
+  // a 50-note folder, and at 0.875 apiece those fill the whole return window,
+  // crowding out every weaker-band leg (the fuzzy retry most of all). The
+  // folders[] row upstream carries the full count; a sample is enough.
+  // Whole-query folder matches stay uncapped — those are precise.
+  let folderTokenHits = 0
   for (const r of folderRows) {
     const segments = r.path.split('/').slice(0, -1) // folders only, drop the filename
     let band = folderScore(segments, q)
     let matchedQ = q
     let explicitFolder: string | undefined
-    if (band == null && tokenWise) {
+    if (band == null && tokenWise && folderTokenHits < 12) {
       for (const tok of folderTokens) {
         if (!segments.some((s) => normalizeSeparators(s.toLowerCase()) === tok)) continue
         // Exact-segment token match: base band sits below every whole-query
         // folder band (0.88–0.89) and above headings (0.87). A residual token
-        // found in the title/body upgrades the note toward the folder band.
+        // found in the note upgrades it toward the folder band — in the TITLE
+        // slightly above in the body, so "health doctor" ranks the note NAMED
+        // doctor above the folder siblings that merely mention one.
         const residuals = folderTokens.filter((t) => t !== tok)
-        const hay = `${r.title}\n${r.body}`.toLowerCase()
-        const residualHit = residuals.some((t) => hay.includes(t))
-        band = residualHit ? 0.879 : 0.875
+        const titleHay = r.title.toLowerCase()
+        const residualInTitle = residuals.some((t) => titleHay.includes(t))
+        const bodyHay = r.body.toLowerCase()
+        const residualInBody = residuals.some((t) => bodyHay.includes(t))
+        band = residualInTitle ? 0.8795 : residualInBody ? 0.879 : 0.875
         matchedQ = tok
         break
       }
     }
-    if (band == null && tokenWise) {
+    if (band == null && tokenWise && folderTokenHits < 12) {
       // Word-WITHIN-segment match for sentence-named folders ("Should I break
       // variable mortgage/"). Needs ≥2 query tokens hitting words of the SAME
       // segment (inflection-tolerant) — a single shared word is noise. Band
@@ -1284,6 +1311,7 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
       }
     }
     if (band == null) continue
+    if (band < 0.88) folderTokenHits++ // token-wise bands only; see cap above
     addHit({
       id: r.id,
       path: r.path,
@@ -1415,6 +1443,31 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
     }
   }
 
+  // Per-token AND-LIKE for CJK/mixed multi-word queries. FTS5's unicode61
+  // treats a contiguous CJK run as ONE token (so "律师"* cannot match inside
+  // "给律师发邮件") and the whole-phrase LIKE above requires the query's exact
+  // spacing — "h1b 律师 邮件" with all three somewhere in one note matched
+  // nothing. Every content token must appear (title or body); CJK body floor.
+  if (cjkQuery) {
+    const likeToks = contentTokens(q).slice(0, 4)
+    if (likeToks.length >= 2) {
+      const conds = likeToks
+        .map(() => `(title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')`)
+        .join(' AND ')
+      const params = likeToks.flatMap((t) => {
+        const l = `%${likeEscape(t)}%`
+        return [l, l]
+      })
+      const rows = d
+        .prepare(`SELECT id, path, title, body, modified FROM notes WHERE ${conds}${excl.sql} LIMIT ?`)
+        .all(...params, ...excl.params, limit) as RawHit[]
+      for (const r of rows) {
+        const nameBand = nameScore(r.title, r.path, q)
+        addHit({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: nameBand ?? 0.5, modified: r.modified })
+      }
+    }
+  }
+
   // Weak name hits (mid-token title substrings) join only now, after every
   // stronger leg had its chance to claim the same note at a better band.
   for (const w of weakNameHits) {
@@ -1435,8 +1488,12 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
   if (!options.noFuzzy && !hasCjk(q)) {
     const allTokenCount = q.trim().split(/\s+/).filter(Boolean).length
     const keywordish = qContentTokens.length * 2 >= allTokenCount
+    // ≥0.88 = whole-query title/folder bands only. Token-wise folder rows
+    // (0.873-0.8795) are one shared word of scoping evidence — "calory
+    // reference" pulling five reference/ rows must not convince us the query
+    // needs no spelling help.
     let structuralHits = 0
-    for (const h of byId.values()) if (h.stringScore >= 0.87) structuralHits++
+    for (const h of byId.values()) if (h.stringScore >= 0.88) structuralHits++
     if (keywordish && structuralHits < 3) {
       const corrected = correctQueryTokens(q, d)
       if (corrected && corrected !== q.trim().toLowerCase()) {
