@@ -83,106 +83,151 @@ export function cosineInt8(a: Int8Array, b: Int8Array): number {
   return dot / Math.sqrt(na * nb);
 }
 
+/** One worker + its in-flight bookkeeping. The embedder runs TWO of these —
+ *  a resident QUERY lane and a reap-when-idle PASSAGE lane — so an
+ *  interactive query embed can never queue behind a backfill/re-embed
+ *  inference (measured: one 2KB passage is ~0.5-1s on a busy machine, which
+ *  alone eats an interactive deadline; a batch used to be 22s). */
+interface Lane {
+  submit(texts: string[], recallK?: number): { id: number; promise: Promise<WorkerReply> } | null;
+  /** Caller gave up on a job (deadline) — drop its live closure. */
+  abandon(id: number): void;
+  /** Deliberate shutdown (idle reap / dispose) — never counted as a crash. */
+  terminate(): Promise<void>;
+}
+
 export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embedder {
-  let worker: Worker | null = null;
-  let nextId = 1;
-  let crashes = 0;
   let disposed = false;
-  const pending = new Map<number, Pending>();
 
-  function failAllPending(reason: string): void {
-    for (const [, p] of pending) p.reject(new Error(reason));
-    pending.clear();
-  }
+  function makeLane(role: string): Lane {
+    let worker: Worker | null = null;
+    let nextId = 1;
+    let crashes = 0;
+    let expectedExit = false;
+    const pending = new Map<number, Pending>();
 
-  function getWorker(): Worker | null {
-    if (disposed || crashes >= MAX_CONSECUTIVE_CRASHES) return null;
-    if (worker) return worker;
-    const scriptPath = config.workerPath ?? new URL('./embed-worker.js', import.meta.url);
-    try {
-      worker = new Worker(scriptPath, {
-        workerData: {
-          modelId: config.modelId,
-          dims: config.dims,
-          dtype: config.dtype,
-          cacheDir: config.cacheDir,
-          pooling: config.pooling,
-          dbPath: config.dbPath,
-        },
-      });
-    } catch (err) {
-      crashes++;
-      log('warn', 'hybrid-search: embed worker failed to spawn', {
-        error: err instanceof Error ? err.message : String(err),
-        scriptPath: String(scriptPath),
-      });
-      return null;
+    function failAllPending(reason: string): void {
+      for (const [, p] of pending) p.reject(new Error(reason));
+      pending.clear();
     }
-    worker.unref();
-    worker.on('message', (msg: {
-      id: number;
-      buf?: ArrayBuffer;
-      dims?: number;
-      error?: string;
-      recall?: RecallHit[];
-    }) => {
-      // Only a SUCCESSFUL reply proves health. Resetting on error replies (or
-      // counting any reply) lets a worker that answers a few batches and then
-      // dies on a poison input reload the model forever without ever tripping
-      // the 3-strike containment.
-      if (msg.error === undefined) crashes = 0;
-      const p = pending.get(msg.id);
-      if (!p) return; // deadline already gave up on this job
-      pending.delete(msg.id);
-      if (msg.error !== undefined || !msg.buf || !msg.dims) {
-        p.reject(new Error(msg.error ?? 'embed worker returned no data'));
-        return;
-      }
-      const flat = new Int8Array(msg.buf);
-      const rows: Int8Array[] = [];
-      for (let i = 0; i < p.count; i++) {
-        rows.push(flat.slice(i * msg.dims, (i + 1) * msg.dims));
-      }
-      p.resolve({ rows, recall: msg.recall ?? [] });
-    });
-    worker.on('error', (err) => {
-      log('warn', 'hybrid-search: embed worker error', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
-    worker.on('exit', (code) => {
-      worker = null;
-      if (disposed) return;
-      crashes++;
-      failAllPending(`embed worker exited (code ${code})`);
-      if (crashes >= MAX_CONSECUTIVE_CRASHES) {
-        log('error', 'hybrid-search: embed worker crashed repeatedly — semantic lane disabled for this process', {
-          crashes,
+
+    function getWorker(): Worker | null {
+      if (disposed || crashes >= MAX_CONSECUTIVE_CRASHES) return null;
+      if (worker) return worker;
+      const scriptPath = config.workerPath ?? new URL('./embed-worker.js', import.meta.url);
+      try {
+        worker = new Worker(scriptPath, {
+          workerData: {
+            modelId: config.modelId,
+            dims: config.dims,
+            dtype: config.dtype,
+            cacheDir: config.cacheDir,
+            pooling: config.pooling,
+            dbPath: config.dbPath,
+          },
         });
+      } catch (err) {
+        crashes++;
+        log('warn', 'hybrid-search: embed worker failed to spawn', {
+          role,
+          error: err instanceof Error ? err.message : String(err),
+          scriptPath: String(scriptPath),
+        });
+        return null;
       }
-    });
-    return worker;
+      expectedExit = false;
+      worker.unref();
+      worker.on('message', (msg: {
+        id: number;
+        buf?: ArrayBuffer;
+        dims?: number;
+        error?: string;
+        recall?: RecallHit[];
+      }) => {
+        // Only a SUCCESSFUL reply proves health. Resetting on error replies (or
+        // counting any reply) lets a worker that answers a few batches and then
+        // dies on a poison input reload the model forever without ever tripping
+        // the 3-strike containment.
+        if (msg.error === undefined) crashes = 0;
+        const p = pending.get(msg.id);
+        if (!p) return; // deadline already gave up on this job
+        pending.delete(msg.id);
+        if (msg.error !== undefined || !msg.buf || !msg.dims) {
+          p.reject(new Error(msg.error ?? 'embed worker returned no data'));
+          return;
+        }
+        const flat = new Int8Array(msg.buf);
+        const rows: Int8Array[] = [];
+        for (let i = 0; i < p.count; i++) {
+          rows.push(flat.slice(i * msg.dims, (i + 1) * msg.dims));
+        }
+        p.resolve({ rows, recall: msg.recall ?? [] });
+      });
+      worker.on('error', (err) => {
+        log('warn', 'hybrid-search: embed worker error', {
+          role,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+      worker.on('exit', (code) => {
+        worker = null;
+        if (disposed || expectedExit) return;
+        crashes++;
+        failAllPending(`embed worker exited (code ${code})`);
+        if (crashes >= MAX_CONSECUTIVE_CRASHES) {
+          log('error', 'hybrid-search: embed worker crashed repeatedly — semantic lane disabled for this process', {
+            role,
+            crashes,
+          });
+        }
+      });
+      return worker;
+    }
+
+    return {
+      submit(texts, recallK) {
+        const w = getWorker();
+        if (!w) return null;
+        const id = nextId++;
+        const promise = new Promise<WorkerReply>((resolve, reject) => {
+          pending.set(id, { resolve, reject, count: texts.length });
+          w.postMessage({ id, texts, ...(recallK ? { recallK } : {}) });
+        });
+        return { id, promise };
+      },
+      abandon(id) {
+        pending.delete(id);
+      },
+      async terminate() {
+        const w = worker;
+        if (!w) return;
+        expectedExit = true;
+        worker = null;
+        failAllPending('embed worker terminated');
+        await w.terminate();
+      },
+    };
   }
 
-  function submitJob(
-    texts: string[],
-    recallK?: number,
-  ): { id: number; promise: Promise<WorkerReply> } | null {
-    const w = getWorker();
-    if (!w) return null;
-    const id = nextId++;
-    const promise = new Promise<WorkerReply>((resolve, reject) => {
-      pending.set(id, { resolve, reject, count: texts.length });
-      w.postMessage({ id, texts, ...(recallK ? { recallK } : {}) });
-    });
-    return { id, promise };
+  // Query lane stays resident: the first search pays the model load once and
+  // every later query hits a warm, never-contended worker. The passage lane
+  // holds a SECOND model copy, so it exists only while embedding work exists —
+  // reaped after idle, steady-state RAM is one model, not two.
+  const queryLane = makeLane('query');
+  const passageLane = makeLane('passage');
+  const PASSAGE_IDLE_KILL_MS = 5 * 60_000;
+  let passageIdleTimer: ReturnType<typeof setTimeout> | undefined;
+  function armPassageReaper(): void {
+    if (passageIdleTimer) clearTimeout(passageIdleTimer);
+    passageIdleTimer = setTimeout(() => { void passageLane.terminate(); }, PASSAGE_IDLE_KILL_MS);
+    passageIdleTimer.unref?.();
   }
 
   return {
     async embedQuery(text, deadlineMs = 150, recallK) {
       const prefixed = (config.queryPrefix ?? '') + text.slice(0, MAX_EMBED_CHARS);
       // Recall requires a real db file the worker can open on its own.
-      const job = submitJob([prefixed], config.dbPath ? recallK : undefined);
+      const job = queryLane.submit([prefixed], config.dbPath ? recallK : undefined);
       if (!job) return null;
       job.promise.catch(() => {}); // settled after we gave up ≠ unhandled
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -197,7 +242,7 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
             timer = setTimeout(() => resolve(null), deadlineMs);
           }),
         ]);
-        if (!reply) pending.delete(job.id); // deadline: drop the live closure
+        if (!reply) queryLane.abandon(job.id); // deadline: drop the live closure
         return reply ? { vec: reply.rows[0], recall: reply.recall } : null;
       } catch {
         return null;
@@ -208,17 +253,19 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
 
     async embedPassages(texts) {
       const prefixed = texts.map((t) => (config.passagePrefix ?? '') + t.slice(0, MAX_EMBED_CHARS));
-      const job = submitJob(prefixed);
+      const job = passageLane.submit(prefixed);
       if (!job) return Promise.reject(new Error('embed worker unavailable'));
-      return (await job.promise).rows;
+      try {
+        return (await job.promise).rows;
+      } finally {
+        armPassageReaper();
+      }
     },
 
     async dispose() {
       disposed = true;
-      failAllPending('embedder disposed');
-      const w = worker;
-      worker = null;
-      if (w) await w.terminate();
+      if (passageIdleTimer) clearTimeout(passageIdleTimer);
+      await Promise.all([queryLane.terminate(), passageLane.terminate()]);
     },
   };
 }
