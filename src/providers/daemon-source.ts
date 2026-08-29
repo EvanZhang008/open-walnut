@@ -2685,11 +2685,19 @@ async function cmdStart(ws, id, cmd) {
     // (pid === PGID) and reapSession() kills the whole process group, so a background
     // shell is reaped with the CLI. Verified that enabling it leaves the running→idle
     // turn-completion signal intact. Keep in sync with daemon-standalone.ts.
+    // CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=1: per-user-message file checkpoints,
+    // which in non-interactive (print) mode exist ONLY behind this env var. Rewind's
+    // file half (rewind_files control_request) is dead without it. Bounded cost:
+    // hardlinked backups, 100 snapshots per session. WALNUT_DISABLE_FILE_CHECKPOINTS=1
+    // opts a host out. Keep in sync with daemon-standalone.ts.
     env: {
       ...process.env,
       MCP_CONNECTION_NONBLOCKING: '1',
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
       CLAUDE_CODE_MAX_RETRIES: cliMaxRetries,
+      ...(process.env.WALNUT_DISABLE_FILE_CHECKPOINTS === '1'
+        ? {}
+        : { CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1' }),
       // Agent gateway (peer sessions): the wn CLI inside this session reads
       // these two to reach the on-host gateway socket. The sid may be a fresh
       // spawn's tmp id — gatewaySidAliases (cmdRename) resolves it to the

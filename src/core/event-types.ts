@@ -68,6 +68,13 @@ export interface SessionStartEvent {
   fromPlanSessionId?: string;
   forkedFromSessionId?: string;
   /**
+   * REWIND (core/sessions/session-rewind.ts): resume the parent transcript only up
+   * to this message uuid, via the CLI's `--resume-session-at`. Only honored
+   * together with forkedFromSessionId — a rewind always lands in a fresh
+   * transcript, never appended under the turns it discarded.
+   */
+  resumeSessionAtMessageUuid?: string;
+  /**
    * Caller-chosen session id (UUID), passed to the CLI as `--session-id`.
    *
    * Why: the CLI's own id normally only becomes known when it emits its first

@@ -1030,6 +1030,8 @@ export async function createSessionRecord(
     type?: SessionType;
     fromPlanSessionId?: string;
     forkedFromSessionId?: string;
+    /** Rewind bookkeeping: the parent message uuid this session resumed at. */
+    rewoundAtMessageUuid?: string;
     cliModel?: string;
     effort?: import('./types.js').SessionEffort;
     /** Launch-config bundle re-applied on every cold resume (see SessionProfile). */
@@ -1156,6 +1158,7 @@ export async function createSessionRecord(
         type: extra?.type ?? 'interactive',
         ...(extra?.fromPlanSessionId ? { fromPlanSessionId: extra.fromPlanSessionId } : {}),
         ...(extra?.forkedFromSessionId ? { forkedFromSessionId: extra.forkedFromSessionId } : {}),
+        ...(extra?.rewoundAtMessageUuid ? { rewoundAtMessageUuid: extra.rewoundAtMessageUuid } : {}),
         ...(extra?.cliModel ? { cliModel: extra.cliModel } : {}),
         ...(extra?.effort ? { effort: extra.effort } : {}),
         ...(extra?.profile ? { profile: extra.profile } : {}),

@@ -2405,11 +2405,23 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
     // (SIGTERM→SIGKILL), so any background shell is cleaned up with the CLI. Verified
     // by live capture that enabling it leaves the running→idle turn-completion signal
     // intact.
+    // CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=1: the CLI takes a file checkpoint
+    // per user message ONLY when file history is enabled, and in non-interactive
+    // (print) mode that is gated behind this env var alone — no CLI flag exists.
+    // It is what makes Rewind's file half possible (rewind_files control_request,
+    // see core/sessions/session-rewind.ts); without it every rewind answers "File
+    // rewinding is not enabled." Backups are hardlinked and capped at 100
+    // snapshots per session by the CLI, so the disk cost is bounded.
+    // WALNUT_DISABLE_FILE_CHECKPOINTS=1 on the daemon opts a host out.
+    // Keep in sync with daemon-source.ts.
     env: {
       ...process.env,
       MCP_CONNECTION_NONBLOCKING: '1',
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
       CLAUDE_CODE_MAX_RETRIES: cliMaxRetries,
+      ...(process.env.WALNUT_DISABLE_FILE_CHECKPOINTS === '1'
+        ? {}
+        : { CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1' }),
       // Agent gateway (peer sessions): the `walnut` CLI inside this session reads
       // these two to reach the on-host gateway socket. The sid may be a fresh
       // spawn's tmp id — gatewaySidAliases (cmdRename) resolves it to the

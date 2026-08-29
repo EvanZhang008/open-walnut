@@ -30844,3 +30844,258 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   font-size: 12px;
   padding: 0;
 }
+
+/* ── Pinned-message outline (SessionPinnedToc) ───────────────────────────────
+   Sticky in the timeline's top-left corner. `height: 0` + a negative bottom
+   margin keep it out of the flex flow entirely: the ticks float over the
+   transcript's left gutter instead of pushing the first message down (same trick
+   as .scroll-to-bottom-btn at the other end of the container). */
+.session-toc {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  align-self: flex-start;
+  height: 0;
+  margin-bottom: -4px;
+  /* The rail sits in the container's left padding, where no message text goes. */
+  margin-left: calc(-1 * clamp(16px, 3%, 30px));
+  pointer-events: auto;
+}
+
+.session-toc-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: flex-start;
+  padding: 6px 8px 6px 2px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.12s ease;
+}
+
+.session-toc:hover .session-toc-rail,
+.session-toc.is-open .session-toc-rail { opacity: 0; }
+
+.session-toc-tick {
+  display: block;
+  width: 11px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--fg-muted);
+}
+/* Your own pinned messages read heavier than the assistant's — same weighting as
+   the dashes in the expanded panel. */
+.session-toc-tick--user { width: 15px; background: var(--fg); }
+
+.session-toc-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  min-width: 220px;
+  max-width: min(420px, 62vw);
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+  animation: session-toc-in 0.1s ease-out;
+}
+
+@keyframes session-toc-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-toc-panel { animation: none; }
+}
+
+.session-toc-row { display: flex; align-items: center; gap: 2px; }
+
+.session-toc-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 5px 6px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--fg);
+  font-size: 12.5px;
+}
+.session-toc-item:hover { background: var(--bg-hover); }
+
+.session-toc-dash {
+  flex-shrink: 0;
+  width: 11px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--fg-muted);
+}
+.session-toc-dash--user { width: 15px; background: var(--fg); }
+
+.session-toc-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-toc-time { flex-shrink: 0; color: var(--fg-muted); font-size: 10.5px; }
+
+.session-toc-unpin {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  border-radius: 5px;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.session-toc-row:hover .session-toc-unpin { opacity: 1; }
+.session-toc-unpin:hover { background: var(--bg-hover); color: var(--fg); }
+
+.session-toc-back {
+  display: block;
+  width: 100%;
+  margin-top: 2px;
+  padding: 5px 6px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+}
+.session-toc-back:hover { background: var(--bg-hover); }
+
+/* ── Per-message hover strip: pin / rewind / time ── */
+/* Sticky variant = the live tail's last reply, whose actions stay on screen. */
+.session-msg .session-msg-actions--sticky,
+.session-msg-bare .session-msg-actions--sticky {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.msg-pin-btn.is-pinned { color: var(--accent); }
+
+/* The time reads as an age; the exact stamp rides a hover tooltip, because
+   "how long ago" is the question a transcript actually gets asked. */
+.msg-time {
+  position: relative;
+  margin-left: 4px;
+  color: var(--fg-muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.msg-time::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: rgba(28, 28, 30, 0.95);
+  color: #fff;
+  font-size: 11.5px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+  z-index: 20;
+}
+.msg-time:hover::after { opacity: 1; }
+
+/* Inside the blue user bubble the muted greys are unreadable. */
+.session-msg-user .msg-copy-btn,
+.session-msg-user .msg-time { color: rgba(255, 255, 255, 0.8); }
+.session-msg-user .msg-copy-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+.session-msg-user .msg-pin-btn.is-pinned { color: #fff; }
+
+/* ── Rewind confirm dialog ── */
+.rewind-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay-bg);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.rewind-dialog {
+  width: min(480px, 92vw);
+  max-height: 82vh;
+  overflow-y: auto;
+  padding: 18px 20px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.28);
+}
+
+.rewind-dialog-title { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+.rewind-dialog-target {
+  margin-bottom: 10px;
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.rewind-dialog-line { font-size: 13px; line-height: 1.5; margin-bottom: 10px; }
+.rewind-dialog-error {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--error, #dc2626);
+  background: color-mix(in srgb, var(--error, #dc2626) 10%, transparent);
+}
+.rewind-dialog-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  cursor: pointer;
+}
+.rewind-dialog-check.is-disabled { cursor: default; color: var(--fg-muted); }
+.rewind-dialog-stats { color: var(--fg-muted); }
+.rewind-dialog-files {
+  margin: 8px 0 0 24px;
+  max-height: 132px;
+  overflow-y: auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+.rewind-dialog-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rewind-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}

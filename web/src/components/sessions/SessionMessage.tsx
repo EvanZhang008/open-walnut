@@ -9,7 +9,7 @@ import { useEntityLabelsVersion, useRenderedMarkdown } from '@/hooks/useEntityLa
 import { useLivePlanContent } from '@/contexts/PlanContentContext';
 import { fetchSubagentHistory } from '@/api/sessions';
 import { getSubagentCache, setSubagentCache } from '@/cache/session-cache';
-import { CopyMessageButtons } from '@/components/common/CopyMessageButtons';
+import { MessageMetaRow } from './MessageMetaRow';
 import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
 import { BashToolCall } from './BashToolCall';
 import { log } from '@/utils/log';
@@ -1112,11 +1112,17 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
             </div>
           );
         })()}
-        {showCopyActions && text && text.trim() && (
-          <div className="session-msg-actions">
-            <CopyMessageButtons markdown={text} />
-          </div>
-        )}
+        {/* Hover strip: copy / pin / rewind / time. Every message gets one (the
+            CSS keeps it invisible until the row is hovered); the live tail's last
+            reply keeps its actions on screen, which is what showCopyActions has
+            always meant. */}
+        <MessageMetaRow
+          msgId={message.msgId ?? message.walnutMessageId}
+          role={role}
+          text={text}
+          timestamp={timestamp}
+          alwaysVisible={showCopyActions}
+        />
       </div>
     </div>
   );

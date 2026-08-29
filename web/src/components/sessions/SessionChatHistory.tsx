@@ -15,6 +15,8 @@ import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence } from '@/
 import { getFinishedAgentIds, subscribeFinishedAgentIds } from '@/cache/finished-agents-store';
 import { groupStreamingBlocks, groupLaneChildren, countAgentTree, GROUPABLE_STREAM_TOOLS, type GroupedStreamItem } from '@/stream/group-blocks';
 import { TeamCard } from './TeamCard';
+import { SessionPinnedToc } from './SessionPinnedToc';
+import { useSessionPinsApi } from '@/contexts/SessionPinsContext';
 import { WorkflowProgress } from './WorkflowProgress';
 import { LoadingSpinner } from '../common/LoadingSpinner';
 import { Lightbox } from '../common/Lightbox';
@@ -909,6 +911,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const renderWindowAnchor = useRef<RenderWindowAnchor | null>(null);
   const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
 
+  // ── Outline (pinned messages) ──
+  // Pins live on the session record; the panel provides them through context so
+  // the memoized message rows can host the pin button without prop drilling.
+  const pinsApi = useSessionPinsApi();
+  /** scrollTop the last outline jump left from — armed for one "Back". */
+  const jumpReturnTop = useRef<number | null>(null);
+  const [canGoBack, setCanGoBack] = useState(false);
+
   // ── blockIndexMap: assigns each optimistic message a fixed position in the streaming timeline ──
   // Key: queueId, Value: blocks.length at creation time. Set once, never updated.
   const blockIndexMap = useRef(new Map<string, number>());
@@ -1423,6 +1433,77 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     el.addEventListener('expand-to-message', handler);
     return () => el.removeEventListener('expand-to-message', handler);
   }, [messages.length, truncationOffset]);
+
+  // ── Outline (pinned messages) ──────────────────────────────────────────────
+  // Entries are ordered by TRANSCRIPT position, not by when they were pinned: the
+  // outline is a map of the conversation, so it has to read in the conversation's
+  // own order. A pin whose message isn't in the loaded array yet (older tail not
+  // fetched, /compact rewrote it) sorts last on its pin time rather than being
+  // dropped — the row still jumps correctly once the message loads, and silently
+  // hiding a pin the user made is worse than showing it out of order.
+  const tocEntries = useMemo(() => {
+    if (pinsApi.pins.length === 0) return [];
+    const indexOf = new Map<string, number>();
+    for (let i = 0; i < messages.length; i++) {
+      const id = messages[i].msgId ?? messages[i].walnutMessageId;
+      if (id && !indexOf.has(id)) indexOf.set(id, i);
+    }
+    return pinsApi.pins
+      .map((pin) => ({ pin, at: indexOf.get(pin.msgId) ?? Number.MAX_SAFE_INTEGER }))
+      .sort((a, b) => (a.at !== b.at ? a.at - b.at : a.pin.pinnedAt.localeCompare(b.pin.pinnedAt)))
+      .map(({ pin }) => ({
+        msgId: pin.msgId,
+        label: pin.label || (pin.role === 'user' ? 'Your message' : 'Reply'),
+        role: pin.role,
+        ...(pin.timestamp ? { timestamp: pin.timestamp } : {}),
+      }));
+  }, [pinsApi.pins, messages]);
+
+  /** Jump to a pinned message: reveal it (the render window is a tail slice), then
+   *  centre + flash it. The pre-jump scrollTop is remembered so "Back" can undo a
+   *  jump — losing your reading place is the cost of a look at a pin otherwise. */
+  const jumpToMsgId = useCallback((msgId: string) => {
+    const el = containerRef.current;
+    if (!el || !msgId) return;
+    const index = messages.findIndex((m) => (m.msgId ?? m.walnutMessageId) === msgId);
+    if (index < 0) {
+      log.warn('session', 'pin jump: message not in the loaded transcript', { sessionId, msgId });
+      return;
+    }
+    jumpReturnTop.current = el.scrollTop;
+    setCanGoBack(true);
+    // A jump is the user leaving the live tail on purpose; without this the
+    // follow-bottom paths would drag them straight back down on the next delta.
+    isAtBottom.current = false;
+    const needed = messages.length - index;
+    if (needed > INITIAL_RENDER_LIMIT + truncationOffset) {
+      setTruncationOffset(needed - INITIAL_RENDER_LIMIT);
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        // Identity first (`data-message-id`), index second: merged tool runs carry
+        // only the index of their first member.
+        const target = el.querySelector(`[data-message-id="${CSS.escape(msgId)}"]`)
+          ?? el.querySelector(`[data-msg-index="${index}"]`);
+        if (!target) {
+          log.warn('session', 'pin jump: target row did not render', { sessionId, msgId, index });
+          return;
+        }
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.classList.add('user-messages-highlight');
+        setTimeout(() => target.classList.remove('user-messages-highlight'), 1500);
+      });
+    });
+  }, [messages, truncationOffset, sessionId]);
+
+  const jumpBack = useCallback(() => {
+    const el = containerRef.current;
+    const top = jumpReturnTop.current;
+    if (!el || top === null) return;
+    jumpReturnTop.current = null;
+    setCanGoBack(false);
+    el.scrollTo({ top, behavior: 'smooth' });
+  }, []);
 
   // Scroll handler: track whether user is near bottom.
   // Ignores scroll events caused by container resizes (which corrupt isAtBottom).
@@ -2218,6 +2299,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
       {/* Main conversation — hidden when a team tab is active */}
       <div className="session-history" ref={containerRef} onClick={handleContainerClick} style={activeTeamTab ? { display: 'none' } : undefined}>
+        {/* Pinned-message outline — sticky in the top-left corner of the timeline,
+            collapsed to ticks until hovered. Self-hides with no pins. Lives INSIDE
+            the scroll container (like the ↓ button) so it can't stack over the
+            panel header or the composer. */}
+        <SessionPinnedToc
+          entries={tocEntries}
+          onJump={jumpToMsgId}
+          onUnpin={pinsApi.unpin}
+          canGoBack={canGoBack}
+          onBack={jumpBack}
+        />
         {/* Loading / empty / error states rendered INSIDE the scroll container */}
         {loading && messages.length === 0 && blocks.length === 0 && <LoadingSpinner />}
         {/* Gate on the RAW flag: when an unavailable answer is suppressed because

@@ -235,6 +235,55 @@ export interface SessionPatchInput {
   archived?: unknown;
   archive_reason?: unknown;
   mode?: unknown;
+  /** Full replacement list of pinned messages (the client owns the order). */
+  pinned_messages?: unknown;
+}
+
+/** Hard caps for the pin list. A pin is a navigation aid, not storage: the whole
+ *  list rides every session record read (and the mobile projection), so a
+ *  runaway client must not be able to grow it without bound. */
+const MAX_PINNED_MESSAGES = 200;
+const MAX_PIN_LABEL_CHARS = 300;
+const MAX_PIN_ID_CHARS = 200;
+
+/**
+ * Validate + normalize a `pinned_messages` patch into records we're willing to
+ * persist. Rejects the whole patch (400) rather than silently dropping bad
+ * entries: a pin the client believes it saved but that vanished on reload is
+ * worse than a visible error.
+ *
+ * Duplicate msgIds collapse to the FIRST occurrence (a double-click on the pin
+ * button must not create two TOC rows pointing at one message).
+ */
+export function normalizePinnedMessages(value: unknown): import('../types.js').SessionPinnedMessage[] {
+  if (!Array.isArray(value)) {
+    throw new SessionControlError('pinned_messages must be an array', 400);
+  }
+  if (value.length > MAX_PINNED_MESSAGES) {
+    throw new SessionControlError(`pinned_messages holds at most ${MAX_PINNED_MESSAGES} entries`, 400);
+  }
+  const out: import('../types.js').SessionPinnedMessage[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') {
+      throw new SessionControlError('each pinned_messages entry must be an object', 400);
+    }
+    const entry = raw as Record<string, unknown>;
+    const msgId = entry.msgId;
+    if (typeof msgId !== 'string' || !msgId.trim() || msgId.length > MAX_PIN_ID_CHARS) {
+      throw new SessionControlError('pinned_messages[].msgId must be a non-empty string', 400);
+    }
+    if (seen.has(msgId)) continue;
+    seen.add(msgId);
+    const role = entry.role === 'user' || entry.role === 'assistant' || entry.role === 'system'
+      ? entry.role
+      : 'assistant';
+    const label = typeof entry.label === 'string' ? entry.label.trim().slice(0, MAX_PIN_LABEL_CHARS) : '';
+    const timestamp = typeof entry.timestamp === 'string' ? entry.timestamp : undefined;
+    const pinnedAt = typeof entry.pinnedAt === 'string' ? entry.pinnedAt : new Date().toISOString();
+    out.push({ msgId, label, role, ...(timestamp ? { timestamp } : {}), pinnedAt });
+  }
+  return out;
 }
 
 /**
@@ -244,7 +293,7 @@ export interface SessionPatchInput {
  * all side effects, so callers can't optimistically merge stale fields.
  */
 export async function patchSession(sessionId: string, input: SessionPatchInput): Promise<SessionRecord> {
-  const { title, activity, human_note, archived, archive_reason, mode } = input;
+  const { title, activity, human_note, archived, archive_reason, mode, pinned_messages } = input;
 
   if (title !== undefined && (typeof title !== 'string' || title.length > 500)) {
     throw new SessionControlError('title must be a string (max 500 chars)', 400);
@@ -281,6 +330,7 @@ export async function patchSession(sessionId: string, input: SessionPatchInput):
   if (title !== undefined) updates.title = title as string;
   if (activity !== undefined) updates.activity = activity as string;
   if (human_note !== undefined) updates.human_note = human_note as string;
+  if (pinned_messages !== undefined) updates.pinnedMessages = normalizePinnedMessages(pinned_messages);
   if (archived !== undefined) {
     updates.archived = archived as boolean;
     if (archived && archive_reason) updates.archive_reason = archive_reason as string;

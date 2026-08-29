@@ -3,6 +3,10 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { copyTextDeferred } from '@/utils/clipboard';
 import { SessionChatHistory } from './SessionChatHistory';
 import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNotes';
+import { useSessionPins } from '@/hooks/useSessionPins';
+import { SessionPinsContext } from '@/contexts/SessionPinsContext';
+import { SessionRewindContext, type SessionRewindApi } from '@/contexts/SessionRewindContext';
+import { SessionRewindDialog } from './SessionRewindDialog';
 import { SessionFileExplorer } from './SessionFileExplorer';
 import { sessionScope } from '@/utils/file-view-state';
 import { SessionTerminal } from './SessionTerminal';
@@ -611,6 +615,16 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   const [notesOpen, setNotesOpen] = useState(false);
   // Shared note state feeding both the pill (empty) and the bar (has note)
   const noteState = useSessionNote(sessionId, session?.human_note);
+  // Pinned messages (the timeline outline) + the rewind entry point. Both reach
+  // the memoized transcript rows through context, never props.
+  const pinsApi = useSessionPins(sessionId, session?.pinnedMessages);
+  const [rewindTarget, setRewindTarget] = useState<{ msgId: string; label?: string } | null>(null);
+  const rewindApi = useMemo<SessionRewindApi>(() => ({
+    // Codex/ACP has no equivalent of --resume-session-at or rewind_files, so the
+    // button hides there instead of failing on click.
+    available: !!sessionId && session?.engine !== 'codex',
+    request: (msgId, label) => setRewindTarget({ msgId, ...(label ? { label } : {}) }),
+  }), [sessionId, session?.engine]);
   const [messagesOpen, setMessagesOpen] = useState(false);
   // Changed / Files / Terminal all share ONE full-screen split: [ left panel | chat ].
   // null = none open. Opening any view promotes the panel to fullscreen.
@@ -1191,8 +1205,29 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
 
   return (
     <PlanContentContext.Provider value={planContentValue}>
+    <SessionPinsContext.Provider value={pinsApi}>
+    <SessionRewindContext.Provider value={rewindApi}>
     <SessionPanelErrorBoundary sessionId={sessionId} onClose={onClose}>
       {FullscreenBackdrop}
+      {rewindTarget && (
+        <SessionRewindDialog
+          sessionId={sessionId}
+          msgId={rewindTarget.msgId}
+          {...(rewindTarget.label ? { label: rewindTarget.label } : {})}
+          onClose={() => setRewindTarget(null)}
+          onRewound={(result) => {
+            setRewindTarget(null);
+            // No toast: the column itself swapping onto the rewound session (with a
+            // shorter transcript, and the code restored underneath) is the receipt.
+            // The rewound session continues the SAME task, so this replaces the
+            // panel rather than opening a second one for the same work.
+            log.info('session-panel', 'rewound session replaces this column', {
+              sessionId, rewoundId: result.sessionId, filesRestored: !!result.files?.canRewind,
+            });
+            onSessionReplaced?.(sessionId, result.sessionId);
+          }}
+        />
+      )}
       {/* is-changed-open must sit on the SAME element as open-walnut-fullscreen
           (the .session-panel root) so the `.open-walnut-fullscreen.is-changed-open`
           rule that drops the 1400px cap actually matches — otherwise the split
@@ -1933,6 +1968,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
         </div>{/* .session-panel-split */}
       </div>
     </SessionPanelErrorBoundary>
+    </SessionRewindContext.Provider>
+    </SessionPinsContext.Provider>
     </PlanContentContext.Provider>
   );
 });

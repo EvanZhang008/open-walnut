@@ -1137,7 +1137,28 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         for (const f of fetched) {
           for (const id of f.finishedAgentIds ?? []) finishedAgentIdSet.add(id)
         }
-        const allSourceMessages = fetched.flatMap(f => f.messages)
+        let allSourceMessages = fetched.flatMap(f => f.messages)
+        // ── REWIND cut ──
+        // A rewound session IS a fork, so the block above just pulled in the
+        // parent's FULL transcript, including the turns the human rewound away (the
+        // parent's JSONL is never edited). Reconcile the two views here — the one
+        // place they are concatenated. See cutAncestorHistoryAtRewindPoint.
+        if (record.rewoundAtMessageUuid) {
+          const { cutAncestorHistoryAtRewindPoint } = await import('../../core/sessions/session-rewind.js')
+          const cut = cutAncestorHistoryAtRewindPoint(allSourceMessages, record.rewoundAtMessageUuid)
+          allSourceMessages = cut.messages
+          if (cut.found) {
+            if (cut.dropped > 0) {
+              log.web.debug('rewind: trimmed ancestor transcript at the rewind point', {
+                sessionId, rewoundAt: record.rewoundAtMessageUuid, dropped: cut.dropped,
+              })
+            }
+          } else {
+            log.web.warn('rewind: rewind point not found in the ancestor transcript — history may show rewound turns', {
+              sessionId, rewoundAt: record.rewoundAtMessageUuid, ancestorMessages: allSourceMessages.length,
+            })
+          }
+        }
         if (allSourceMessages.length > 0) {
           messages = [...allSourceMessages, ...messages]
           forkBoundaryIndex = allSourceMessages.length
@@ -2146,6 +2167,53 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
         task_id, create_child_task, child_title, message, title, model,
         ...(imageContext ? { imageContext } : {}),
       }, 'web-api')
+      // Web and mobile now share the SAME core result shape (including the
+      // additive `title` field); clients ignore fields they don't know.
+      res.json(result)
+    } catch (err) {
+      if (err instanceof SessionControlError) {
+        res.status(err.statusCode).json({ error: err.message, ...(err.extra ?? {}) })
+        return
+      }
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/sessions/:sessionId/rewind — take the conversation back to a message.
+//   { message_uuid, dry_run?, restore_files?, keep_source?, message? }
+// dry_run answers with the blast radius (files changed, +/- lines, dropped
+// messages) and writes NOTHING, so the confirm dialog can show it. Core logic +
+// the reasoning about which CLI channel does what lives in
+// core/sessions/session-rewind.ts.
+sessionsRouter.post('/:sessionId/rewind', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sessionId = String(req.params.sessionId)
+    const { message_uuid, dry_run, restore_files, keep_source, message } = (req.body ?? {}) as {
+      message_uuid?: string
+      dry_run?: boolean
+      restore_files?: boolean
+      keep_source?: boolean
+      message?: string
+    }
+    const { SessionControlError } = await import('../../core/sessions/session-controls.js')
+    const { previewSessionRewind, rewindSessionToMessage } = await import('../../core/sessions/session-rewind.js')
+    try {
+      if (dry_run) {
+        res.json({ preview: await previewSessionRewind(sessionId, String(message_uuid ?? '')) })
+        return
+      }
+      const result = await rewindSessionToMessage(sessionId, {
+        messageUuid: String(message_uuid ?? ''),
+        ...(restore_files !== undefined ? { restoreFiles: !!restore_files } : {}),
+        ...(keep_source !== undefined ? { keepSource: !!keep_source } : {}),
+        ...(message !== undefined ? { message: String(message) } : {}),
+      }, 'web-api')
+      log.web.info('session rewound via REST', {
+        sessionId, rewoundId: result.sessionId, restoreFiles: !!restore_files,
+      })
       // Web and mobile now share the SAME core result shape (including the
       // additive `title` field); clients ignore fields they don't know.
       res.json(result)

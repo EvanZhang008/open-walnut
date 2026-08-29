@@ -1610,6 +1610,16 @@ export class ClaudeCodeSession {
       /** Marks this session as bound to a UI conversation lane — persisted so
        *  capacity counting and the default session lists skip it. */
       lane?: string
+      /**
+       * REWIND: resume the parent transcript only up to (and including) this
+       * message uuid — the CLI's hidden `--resume-session-at`. Requires a resume,
+       * and Walnut always pairs it with `--fork-session`, because the CLI APPENDS
+       * to whichever transcript it resumes: rewinding in place would leave the
+       * discarded turns in the same JSONL for the history parser to re-serve.
+       * One-shot (spawn-time only) — the fork's own transcript is already
+       * truncated, so later cold resumes must NOT re-send it.
+       */
+      resumeSessionAt?: string
     },
   ): void {
     const args = ['-p', '--output-format', 'stream-json', '--verbose']
@@ -1690,6 +1700,13 @@ export class ClaudeCodeSession {
     }
     if (resumeSessionId) {
       args.push('--resume', resumeSessionId)
+      // Rewind: cut the resumed transcript at a message. Only meaningful with a
+      // resume (the CLI errors out otherwise) and only ever emitted alongside
+      // --fork-session, so the truncated conversation lands in a FRESH transcript
+      // instead of appending under the discarded turns.
+      if (opts?.resumeSessionAt && forkSession) {
+        args.push('--resume-session-at', opts.resumeSessionAt)
+      }
       if (forkSession) {
         // Fork creates a NEW session ID — don't claim the source ID as ours
         args.push('--fork-session')
@@ -5892,6 +5909,52 @@ export class ClaudeCodeSession {
   }
 
   /**
+   * Restore every file this session changed since `userMessageUuid`, via the
+   * `rewind_files` control_request (fork print.ts:2995 → handleRewindFiles).
+   *
+   * `dryRun` asks the CLI what it WOULD do — it answers with the changed-file
+   * list and insertion/deletion counts and writes nothing, which is what the
+   * confirm dialog shows before the human commits.
+   *
+   * Two gates live in the CLI, and both surface as thrown errors here rather than
+   * as a silent no-op:
+   *  - file checkpointing is OFF by default in non-interactive (print) mode; the
+   *    daemon spawns every CLI with CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=1,
+   *    so a session started by an older daemon answers "File rewinding is not
+   *    enabled.";
+   *  - snapshots exist only for USER messages, so any other uuid answers "No file
+   *    checkpoint found for this message."
+   *
+   * strict=true: a rewind that didn't happen must never be reported as success.
+   */
+  async rewindFiles(
+    userMessageUuid: string,
+    dryRun = false,
+    timeoutMs = 30_000,
+  ): Promise<import('../core/sessions/session-rewind.js').RewindFilesReport> {
+    const payload = await this.readControlPayloadWithRequest(
+      `rwd-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+      { subtype: 'rewind_files', user_message_id: userMessageUuid, dry_run: dryRun },
+      timeoutMs,
+      true,
+    )
+    const report = (payload ?? {}) as Record<string, unknown>
+    log.session.info('rewind_files answered', {
+      sessionId: this.claudeSessionId, taskId: this.taskId,
+      userMessageUuid, dryRun,
+      canRewind: report.canRewind === true,
+      filesChanged: Array.isArray(report.filesChanged) ? report.filesChanged.length : null,
+    })
+    return {
+      canRewind: report.canRewind === true,
+      ...(typeof report.error === 'string' ? { error: report.error } : {}),
+      ...(Array.isArray(report.filesChanged) ? { filesChanged: report.filesChanged as string[] } : {}),
+      ...(typeof report.insertions === 'number' ? { insertions: report.insertions } : {}),
+      ...(typeof report.deletions === 'number' ? { deletions: report.deletions } : {}),
+    }
+  }
+
+  /**
    * Ask the CLI to generate a session title from a description (usually the
    * user's first real message) via the `generate_session_title` control_request
    * subtype — the same Haiku titler the CLI uses natively, riding the session's
@@ -8509,6 +8572,10 @@ export class SessionRunner {
     profile?: import('../core/types.js').SessionProfile
     /** Lane binding — exempts the session from capacity + default lists. */
     lane?: string
+    /** REWIND (core/sessions/session-rewind.ts): resume the parent transcript
+     *  only up to this message uuid. Rides the fork spawn as
+     *  `--resume-session-at`; ignored without forkedFromSessionId. */
+    resumeSessionAtMessageUuid?: string
   }): Promise<{ sessionReady: Promise<string>; title: string }> {
     const { taskId, project, mode, model } = data
     let cwd = data.cwd
@@ -8739,6 +8806,10 @@ export class SessionRunner {
       ...(data.preassignedSessionId ? { preassignedSessionId: data.preassignedSessionId } : {}),
       ...(resolvedProfile ? { profile: resolvedProfile } : {}),
       ...(data.lane ? { lane: data.lane } : {}),
+      // Rewind rides the fork spawn; send() only emits the flag when both are set.
+      ...(isFork && data.resumeSessionAtMessageUuid
+        ? { resumeSessionAt: data.resumeSessionAtMessageUuid }
+        : {}),
     }
     session.send(message, cwd, resumeId, mode, resolvedModel, appendSystemPrompt, data.host, sshTarget, isFork, config.session?.permission_prompt, spillFile, config.session?.stream_partial_messages, resolvedEffort, undefined, Object.keys(sendOpts).length > 0 ? sendOpts : undefined)
 

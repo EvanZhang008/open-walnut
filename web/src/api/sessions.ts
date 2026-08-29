@@ -317,7 +317,7 @@ export interface WorkflowProgressSnapshot {
   }[];
 }
 
-export async function updateSession(sessionId: string, updates: { title?: string; human_note?: string; archived?: boolean; archive_reason?: string; mode?: string }): Promise<SessionRecord> {
+export async function updateSession(sessionId: string, updates: { title?: string; human_note?: string; archived?: boolean; archive_reason?: string; mode?: string; pinned_messages?: import('@/types/session').SessionPinnedMessage[] }): Promise<SessionRecord> {
   const res = await apiPatch<{ session: SessionRecord }>(`/api/sessions/${sessionId}`, updates);
   seedSessionStatus(res.session, 'rest:session');
   seedSessionTitle(res.session);
@@ -864,6 +864,55 @@ export async function forkSessionInWalnut(
     body.images = images.map(img => ({ data: img.data, mediaType: img.mediaType }));
   }
   return apiPost(`/api/sessions/${sessionId}/fork`, body);
+}
+
+// ── Rewind ──
+
+/** What a rewind WOULD do (server dry run). Mirrors RewindPreview in
+ *  src/core/sessions/session-rewind.ts. */
+export interface RewindPreview {
+  canRewind: boolean;
+  error?: string;
+  filesChanged?: string[];
+  insertions?: number;
+  deletions?: number;
+  messageUuid: string;
+  messageLabel?: string;
+  droppedMessages: number;
+  filesUnavailableReason?: 'session_not_live' | 'engine_unsupported';
+}
+
+export interface RewindResult {
+  status: 'rewound';
+  sourceSessionId: string;
+  sessionId: string;
+  taskId?: string;
+  title: string;
+  host?: string;
+  files?: { canRewind: boolean; error?: string; filesChanged?: string[]; insertions?: number; deletions?: number; skippedReason?: string };
+  sourceArchived: boolean;
+}
+
+/** Dry run — shows the blast radius, changes nothing. */
+export async function previewRewind(sessionId: string, messageUuid: string): Promise<RewindPreview> {
+  const res = await apiPost<{ preview: RewindPreview }>(`/api/sessions/${sessionId}/rewind`, {
+    message_uuid: messageUuid, dry_run: true,
+  });
+  return res.preview;
+}
+
+/** Commit the rewind: optional file restore, then a rewound continuation session. */
+export async function rewindSession(
+  sessionId: string,
+  messageUuid: string,
+  opts?: { restoreFiles?: boolean; keepSource?: boolean; message?: string },
+): Promise<RewindResult> {
+  return apiPost(`/api/sessions/${sessionId}/rewind`, {
+    message_uuid: messageUuid,
+    ...(opts?.restoreFiles !== undefined ? { restore_files: opts.restoreFiles } : {}),
+    ...(opts?.keepSource !== undefined ? { keep_source: opts.keepSource } : {}),
+    ...(opts?.message !== undefined ? { message: opts.message } : {}),
+  });
 }
 
 // ── Forensic Observability ──

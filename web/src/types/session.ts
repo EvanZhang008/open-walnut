@@ -7,6 +7,16 @@ export type SessionMode = 'bypass' | 'accept' | 'default' | 'plan' | 'auto' | 'd
 export type SessionProvider = 'cli' | 'sdk' | 'embedded';
 export type SessionEngine = 'claude' | 'codex';
 
+/** One pinned message. Mirrors SessionPinnedMessage in src/core/types.ts. */
+export interface SessionPinnedMessage {
+  /** Stable message id (SessionHistoryMessage.msgId) — identity, not position. */
+  msgId: string;
+  label: string;
+  role: 'user' | 'assistant' | 'system';
+  timestamp?: string;
+  pinnedAt: string;
+}
+
 export interface SessionRecord {
   claudeSessionId: string;
   taskId: string;
@@ -34,6 +44,11 @@ export interface SessionRecord {
   /** Current ACP base model for Codex sessions. */
   acpModel?: string;
   human_note?: string;
+  /** Messages the human pinned — the timeline's table of contents. */
+  pinnedMessages?: SessionPinnedMessage[];
+  /** Set on a session born from a rewind: the parent message uuid its spawn
+   *  resumed at. Labels the boundary divider as a rewind, not a plain fork. */
+  rewoundAtMessageUuid?: string;
   /** Claude model used by this session (e.g. "claude-opus-4-6"). */
   model?: string;
   /** REQUESTED reasoning-effort level (low/medium/high/xhigh/max). User intent — the

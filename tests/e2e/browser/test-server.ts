@@ -173,6 +173,29 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Outline (pinned messages) + rewind fixture. Its own session so the
+        // transcript can carry REAL uuids on the user lines: `--resume-session-at`
+        // and rewind_files only accept transcript uuids, so the rewind button
+        // only offers itself on rows that have one.
+        id: 'pw-task-pins',
+        title: 'Outline fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-pins-session'],
+        active_session_ids: [],
+        session_id: 'pw-pins-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         id: 'pw-task-changed',
         title: 'Changed fixture task',
         status: 'in_progress',
@@ -920,6 +943,65 @@ await fs.writeFile(
       '',
     ].join('\n'),
   )
+  // Outline + rewind fixture (session-outline-rewind.spec.ts). Two properties
+  // this transcript must keep:
+  //  · user lines carry REAL uuids — the rewind button is gated on a transcript
+  //    uuid (synthetic `<timestamp>-<index>` ids can't be resumed at), so without
+  //    them the spec would be asserting an absent button;
+  //  · every message text is unique, so the outline's row label identifies exactly
+  //    one row to jump to.
+  await fs.writeFile(
+    path.join(jsonlDir, 'pw-pins-session.jsonl'),
+    [
+      JSON.stringify({
+        type: 'user',
+        uuid: '0199aa01-1111-4aaa-8bbb-000000000001',
+        sessionId: 'pw-pins-session',
+        timestamp: new Date(sessionFixtureNow - 60_000).toISOString(),
+        message: { role: 'user', content: 'Set up the release checklist' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        uuid: '0199aa01-2222-4aaa-8bbb-000000000002',
+        sessionId: 'pw-pins-session',
+        timestamp: new Date(sessionFixtureNow - 58_000).toISOString(),
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Checklist drafted with four steps.' }] },
+      }),
+      JSON.stringify({
+        type: 'user',
+        uuid: '0199aa01-3333-4aaa-8bbb-000000000003',
+        sessionId: 'pw-pins-session',
+        timestamp: new Date(sessionFixtureNow - 40_000).toISOString(),
+        message: { role: 'user', content: 'Now bump the version' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        uuid: '0199aa01-4444-4aaa-8bbb-000000000004',
+        sessionId: 'pw-pins-session',
+        timestamp: new Date(sessionFixtureNow - 38_000).toISOString(),
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Version bumped to 9.9.9.' }] },
+      }),
+      // Filler so the outline jump has somewhere to scroll FROM (a timeline that
+      // fits in the viewport can't prove the jump moved anything).
+      ...Array.from({ length: 24 }, (_, i) => [
+        JSON.stringify({
+          type: 'user',
+          uuid: `0199aa02-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+          sessionId: 'pw-pins-session',
+          timestamp: new Date(sessionFixtureNow - 30_000 + i * 400).toISOString(),
+          message: { role: 'user', content: `outline filler ask ${i + 1}` },
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          uuid: `0199aa03-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+          sessionId: 'pw-pins-session',
+          timestamp: new Date(sessionFixtureNow - 29_800 + i * 400).toISOString(),
+          message: { role: 'assistant', content: [{ type: 'text', text: `outline filler reply ${i + 1}` }] },
+        }),
+      ]).flat(),
+      '',
+    ].join('\n'),
+  )
   // Changed-tab code-intel fixture (changed-code-intel.spec.ts): a session whose
   // JSONL records a Write of sync-controller.go — the Changed tab reconstructs
   // the diff from exactly these tool_use blocks, and the on-disk twin (written
@@ -992,6 +1074,19 @@ await fs.writeFile(
         messageCount: 1,
         cwd: vscodeFixtureRoot,
         title: 'Editor fixture session',
+      },
+      {
+        claudeSessionId: 'pw-pins-session',
+        taskId: 'pw-task-pins',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 28_000).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 52,
+        cwd: vscodeFixtureRoot,
+        title: 'Outline fixture session',
       },
       {
         claudeSessionId: 'pw-changed-session',

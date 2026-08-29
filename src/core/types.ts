@@ -1607,6 +1607,30 @@ export interface SessionStatusSnapshot {
   statusUpdatedAt: string;
 }
 
+/**
+ * One message the human pinned in a session transcript. The timeline's table of
+ * contents is built from these — pins are the ONLY thing in it, so an empty list
+ * means no TOC at all.
+ *
+ * Stored on the session record (payload spill, no schema migration) rather than
+ * in browser storage: a pin is user content, and it must survive a new browser,
+ * another device, and the phone.
+ */
+export interface SessionPinnedMessage {
+  /** Stable message id = SessionHistoryMessage.msgId (the API `message.id` for
+   *  assistant rows, the JSONL line uuid for user rows). Identity, not position:
+   *  the transcript's indices shift under /compact and windowed tail reads. */
+  msgId: string;
+  /** Short label for the TOC row (first line of the message, trimmed). */
+  label: string;
+  role: 'user' | 'assistant' | 'system';
+  /** The message's own timestamp (ISO), so the TOC can sort in transcript order
+   *  even when pins were added out of order. */
+  timestamp?: string;
+  /** When the human pinned it (ISO). */
+  pinnedAt: string;
+}
+
 /** Stable subset of ACP initialize capabilities used by routes and UI guards. */
 export interface AcpSessionCapabilities {
   loadSession: boolean;
@@ -1699,6 +1723,17 @@ export interface SessionRecord {
   fromPlanSessionId?: string;
   /** Source session ID when this session was forked from another session. */
   forkedFromSessionId?: string;
+  /**
+   * Set only on a session born from a REWIND: the parent message uuid its spawn
+   * resumed at (`--resume-session-at`). Two consumers depend on it:
+   *  - the history route, which truncates the prepended ANCESTOR transcript here
+   *    (without the cut, the messages the human just rewound away come straight
+   *    back from the parent's JSONL and the rewind looks like it did nothing);
+   *  - the UI, which labels the boundary as a rewind rather than a plain fork.
+   */
+  rewoundAtMessageUuid?: string;
+  /** Messages the human pinned, in pin order. Drives the timeline's TOC. */
+  pinnedMessages?: SessionPinnedMessage[];
   /**
    * Git commit SHAs this session produced (extracted from `git commit` tool
    * results by the session indexer, in commit order). The structured half of
