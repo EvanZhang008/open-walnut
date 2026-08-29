@@ -6,7 +6,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { transcribeAudio } from '@/api/stt';
+import { transcribeAudio, draftTranscribe } from '@/api/stt';
 import { setVoiceStatus } from '@/utils/voice-status';
 import { log } from '@/utils/log';
 
@@ -44,6 +44,12 @@ export interface UseSpeechToTextReturn {
    * mic. Auto-clears as soon as sound is detected. null = no warning.
    */
   silenceWarning: string | null;
+  /**
+   * Live draft transcription of what has been said SO FAR, updated every couple
+   * of seconds while recording. Preview only — the final transcription on stop
+   * is the authoritative one. null = no draft yet / not recording.
+   */
+  liveDraft: string | null;
 }
 
 // Mic-silence detection tunables.
@@ -61,6 +67,14 @@ const DEAD_STREAM_RMS = 0.0008;      // RMS at/below this = dead-stream territor
 const SAMPLE_INTERVAL_MS = 100;      // how often we sample RMS
 const SILENCE_WARN_TICKS = 30;       // ~3s of actual sampling with no sound → show warning
 
+// Live-draft tunables. Each tick re-transcribes the WHOLE clip so far (webm
+// chunks are only decodable as a from-the-start concatenation), which is fine
+// while clips are short: the local engine runs ~15x realtime. Drop-if-busy
+// keeps at most one draft request in flight, and past the size cap we stop
+// drafting entirely and let the final pass handle it.
+const DRAFT_INTERVAL_MS = 2000;
+const DRAFT_MAX_BYTES = 4 * 1024 * 1024; // ~4MB opus ≈ several minutes
+
 const isMediaRecorderSupported =
   typeof window !== 'undefined' &&
   typeof navigator !== 'undefined' &&
@@ -75,6 +89,11 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
   const [hasLastRecording, setHasLastRecording] = useState(false);
   const [level, setLevel] = useState(0);
   const [silenceWarning, setSilenceWarning] = useState<string | null>(null);
+  const [liveDraft, setLiveDraft] = useState<string | null>(null);
+  // Live-draft machinery: interval timer + in-flight guard (drop ticks while a
+  // draft request is still running instead of queuing behind it).
+  const draftTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const draftBusyRef = useRef(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -110,6 +129,10 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
   }, []);
 
   const stopStream = useCallback(() => {
+    if (draftTimerRef.current !== undefined) {
+      clearInterval(draftTimerRef.current);
+      draftTimerRef.current = undefined;
+    }
     if (sampleTimerRef.current !== undefined) {
       clearInterval(sampleTimerRef.current);
       sampleTimerRef.current = undefined;
@@ -221,6 +244,7 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
         const deadStream = analyserAttachedRef.current && !sawAnyNonDeadRef.current;
         stopStream();
         setIsRecording(false);
+        setLiveDraft(null);
 
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
         chunksRef.current = [];
@@ -308,8 +332,48 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
         setError(errMsg);
       };
 
-      recorder.start();
+      // Timeslice so chunks accumulate during recording — the live draft below
+      // needs decodable audio-so-far (a from-the-start concat of webm chunks).
+      recorder.start(1000);
       setIsRecording(true);
+      setLiveDraft(null);
+
+      // Live draft: every couple of seconds transcribe what's been said so far
+      // and show it as a grey preview. Best-effort — any failure just means no
+      // preview this tick; the final transcription on stop is untouched by this.
+      const draftFormat = mimeType.includes('webm') ? 'webm' : mimeType.includes('mp4') ? 'mp4' : 'webm';
+      draftBusyRef.current = false;
+      draftTimerRef.current = setInterval(async () => {
+        if (draftBusyRef.current) return;                       // previous draft still in flight
+        if (mediaRecorderRef.current !== recorder || recorder.state === 'inactive') return;
+        const chunks = chunksRef.current;
+        if (chunks.length === 0) return;
+        const blob = new Blob(chunks, { type: recorder.mimeType });
+        if (blob.size > DRAFT_MAX_BYTES) {                      // very long clip — stop drafting
+          if (draftTimerRef.current !== undefined) { clearInterval(draftTimerRef.current); draftTimerRef.current = undefined; }
+          return;
+        }
+        draftBusyRef.current = true;
+        try {
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve((reader.result as string).split(',')[1] ?? '');
+            reader.onerror = () => reject(new Error('draft blob read failed'));
+            reader.readAsDataURL(blob);
+          });
+          const { text } = await draftTranscribe(base64, draftFormat, languageRef.current);
+          // Only show while THIS recording is still live (a stale draft landing
+          // after stop must not flash over the final result). stopStream() nulls
+          // mediaRecorderRef on stop, so this identity check is sufficient.
+          if (isMountedRef.current && mediaRecorderRef.current === recorder && text) {
+            setLiveDraft(text);
+          }
+        } catch {
+          // No preview this tick — silent by design.
+        } finally {
+          draftBusyRef.current = false;
+        }
+      }, DRAFT_INTERVAL_MS);
     } catch (err) {
       stopStream();
       if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
@@ -365,5 +429,6 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
     hasLastRecording,
     level,
     silenceWarning,
+    liveDraft,
   };
 }

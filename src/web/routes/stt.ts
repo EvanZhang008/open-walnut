@@ -10,6 +10,7 @@ import { getConfig, updateConfig } from '../../core/config-manager.js';
 import { transcribeAudio, runShadowTranscription, createEngine, getOrCreateEngine, ensureSttVocabMigrated, type SttEngine, type SttResult } from '../../core/stt/index.js';
 import { saveRecordingAudio, writeRecordingResult, listRecordings, readRecordingAudio } from '../../core/stt/recordings.js';
 import { createWhisperCppEngine } from '../../core/stt/engine-whisper-cpp.js';
+import { startMicRecording, stopMicRecording, isMicRecording } from '../../core/stt/mic-record.js';
 import { detectSystem } from '../../core/stt/detect.js';
 import { installViaBrew, downloadGgmlModel, MODEL_CATALOG, VAD_MODEL, getModelDir, SHERPA_MODEL_CATALOG, downloadSherpaModel, getSherpaModelDir, findSherpaModels, type SetupEvent } from '../../core/stt/setup.js';
 import { log } from '../../logging/index.js';
@@ -122,6 +123,96 @@ sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Reque
     }
 
     res.json({ ...result, debugAudioPath: saved?.audioPath, recordingId: saved?.id });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/stt/draft
+ * Live-draft transcription of an IN-PROGRESS recording: the browser sends the
+ * audio captured so far every couple of seconds and shows the returned text as
+ * a grey preview while the user is still speaking. Deliberately lightweight:
+ * no recording persisted, no shadow engine, no history entry — the final
+ * /transcribe on mic release is the authoritative pass.
+ * Body: { audio: string (base64), format: string, language?: string }
+ */
+sttRouter.post('/draft', express.json({ limit: '12mb' }), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { audio, format, language } = req.body;
+    if (!audio || typeof audio !== 'string' || !format || !ALLOWED_FORMATS.has(format)) {
+      res.status(400).json({ error: 'Missing/invalid audio or format' });
+      return;
+    }
+    // Drafts re-transcribe the whole clip-so-far on every tick, so cap them at
+    // ~8MB base64 (≈ several minutes of opus). Beyond that the client stops
+    // drafting and the final pass handles it.
+    if (audio.length > 8 * 1024 * 1024) {
+      res.status(413).json({ error: 'Draft audio too large' });
+      return;
+    }
+    const config = await getConfig();
+    const result = await transcribeAudio(config, { audio, format, language: language || config.stt?.language });
+    res.json({ text: result.text, durationMs: result.durationMs });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Global dictation: walnut records the Mac's microphone itself, so any thin
+ * client (Hammerspoon hotkey, Alfred, curl) can dictate without holding a
+ * macOS mic permission of its own.
+ *
+ * POST /api/stt/dictation/start → { recording: true }
+ * POST /api/stt/dictation/stop  → { text, durationMs, recordingId? } (transcribed like /transcribe)
+ * GET  /api/stt/dictation       → { recording: boolean }
+ */
+sttRouter.get('/dictation', (_req: Request, res: Response) => {
+  res.json({ recording: isMicRecording() });
+});
+
+sttRouter.post('/dictation/start', async (_req: Request, res: Response) => {
+  try {
+    await startMicRecording();
+    res.json({ recording: true });
+  } catch (err) {
+    res.status(409).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+sttRouter.post('/dictation/stop', express.json(), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { audioBase64 } = await stopMicRecording();
+    const config = await getConfig();
+    const language = (req.body?.language as string | undefined) || config.stt?.language;
+    const sttReq = { audio: audioBase64, format: 'wav', language };
+
+    // Same persistence contract as /transcribe: audio saved first, result (or
+    // failure) recorded next to it, so dictations appear in the mic history.
+    const saved = await saveRecordingAudio(audioBase64, 'wav').catch(() => null);
+    let result: SttResult;
+    try {
+      result = await transcribeAudio(config, sttReq);
+    } catch (engineErr) {
+      if (saved) {
+        await writeRecordingResult(saved.id, {
+          format: 'wav', language: language || 'auto',
+          audioSizeBytes: Math.round(audioBase64.length * 3 / 4),
+          error: engineErr instanceof Error ? engineErr.message : String(engineErr),
+        }).catch(() => {});
+      }
+      throw engineErr;
+    }
+    if (saved) {
+      await writeRecordingResult(saved.id, {
+        format: 'wav', language: language || 'auto',
+        audioSizeBytes: Math.round(audioBase64.length * 3 / 4),
+        engine: getOrCreateEngine(config)?.name,
+        result,
+      }).catch(() => {});
+    }
+    res.json({ ...result, recordingId: saved?.id });
   } catch (err) {
     next(err);
   }

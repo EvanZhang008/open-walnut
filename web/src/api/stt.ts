@@ -116,6 +116,26 @@ export async function transcribeAudio(
   return res.json();
 }
 
+/**
+ * Live-draft transcription of the audio captured so far (recording still in
+ * progress). Cheap fire-and-forget preview: no recording saved server-side.
+ */
+export async function draftTranscribe(
+  audioBase64: string,
+  format: string,
+  language?: string,
+  signal?: AbortSignal,
+): Promise<{ text: string; durationMs: number }> {
+  const res = await fetch('/api/stt/draft', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ audio: audioBase64, format, language }),
+    signal: signal ?? AbortSignal.timeout(20_000),
+  });
+  if (!res.ok) throw new Error(`draft transcription failed: ${res.status}`);
+  return res.json();
+}
+
 // ── Vocabulary ──
 
 export function fetchVocab(): Promise<{ words: string[]; path: string }> {

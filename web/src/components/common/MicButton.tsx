@@ -51,7 +51,7 @@ function MicWaveform({ level }: { level: number }) {
 }
 
 export function MicButton({ onTranscribe, language, disabled, size = 'md' }: MicButtonProps) {
-  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, silenceWarning } = useSpeechToText({
+  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, silenceWarning, liveDraft } = useSpeechToText({
     onTranscribe,
     language,
   });
@@ -361,6 +361,13 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
           </svg>
         )}
       </button>
+      {/* Live draft — what the engine heard so far, refreshed every ~2s while
+          recording. Grey preview only; the final pass on release is authoritative. */}
+      {isRecording && liveDraft && !silenceWarning && (
+        <div className="mic-live-draft" role="status" aria-live="polite">
+          {liveDraft}
+        </div>
+      )}
       {/* Non-destructive dead-mic warning — shown WHILE recording; recording is never
           auto-stopped, and this clears itself the moment sound is detected again. */}
       {isRecording && silenceWarning && (

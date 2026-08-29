@@ -7109,6 +7109,27 @@ select {
   animation: none;
 }
 
+/* Live draft preview while recording — grey "what I heard so far" bubble */
+.mic-live-draft {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  max-width: 420px;
+  max-height: 130px;
+  overflow-y: auto;
+  padding: 7px 11px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  background: var(--bg-elevated, #fff);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  white-space: normal;
+  word-break: break-word;
+  z-index: 40;
+}
+
 /* Floating non-destructive dead-mic warning, anchored above the mic button */
 .mic-silence-warning {
   position: absolute;
