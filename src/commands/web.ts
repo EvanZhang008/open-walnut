@@ -15,6 +15,13 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import {
+  registryPath,
+  registerEphemeralDir,
+  unregisterEphemeralDir,
+  reapStaleEphemeralDirs,
+  countLiveEphemeralServers,
+} from './ephemeral-registry.js'
 
 /** Auto-shutdown after 10 minutes of no HTTP requests. */
 const EPHEMERAL_IDLE_TTL_MS = 10 * 60 * 1000
@@ -30,6 +37,13 @@ const POLL_INTERVAL_MS = 200
 
 /** Maximum concurrent ephemeral servers (each is a full Express + WS server). */
 const DEFAULT_EPHEMERAL_LIMIT = 3
+
+/**
+ * Top-level WALNUT_HOME entries the ephemeral snapshot does not copy because
+ * their owners already treat them as regenerable. See the filter in
+ * runEphemeralLauncher() for the measured sizes and the anchoring rationale.
+ */
+const SNAPSHOT_SKIP_TOP_LEVEL = new Set(['.git', '.smart-env', 'cache'])
 
 export async function runWeb(options: {
   port?: string
@@ -136,10 +150,10 @@ async function runEphemeralLauncher(): Promise<void> {
   const { WALNUT_HOME } = await import('../constants.js')
 
   // 1. Reap stale dirs from previous runs
-  reapStaleEphemeralDirs()
+  reapStaleEphemeralDirs(WALNUT_HOME)
 
   // 2. Enforce ephemeral server concurrency limit
-  const liveCount = countLiveEphemeralServers()
+  const liveCount = countLiveEphemeralServers(WALNUT_HOME)
   if (liveCount >= DEFAULT_EPHEMERAL_LIMIT) {
     // Output JSON error to stdout so the calling session can parse it
     console.log(JSON.stringify({
@@ -159,9 +173,23 @@ async function runEphemeralLauncher(): Promise<void> {
   // 4. Ensure WALNUT_HOME exists (first run on a fresh machine)
   fs.mkdirSync(WALNUT_HOME, { recursive: true })
 
+  // Record the snapshot BEFORE copying into it. A launcher killed mid-copy (agent
+  // Bash timeouts do exactly this) never reaches any cleanup, so the registry row
+  // written here is the only thing that makes the half-copied dir findable later.
+  const registryFile = registryPath(WALNUT_HOME)
+  registerEphemeralDir(registryFile, tmpDir)
+
   // 5. Copy data snapshot (skip large/lockable files)
   fs.cpSync(WALNUT_HOME, tmpDir, {
     recursive: true,
+    // NOTE: do not bother passing mode: COPYFILE_FICLONE here hoping for a
+    // copy-on-write snapshot. Measured on macOS 15 / APFS with Node 25: cloning
+    // works on this volume (/bin/cp -c duplicates a 2G file for 0 bytes) but Node
+    // never uses clonefile(2) — both fs.cpSync and fs.copyFileSync with
+    // COPYFILE_FICLONE consumed the full 2G. Getting CoW here would mean shelling
+    // out to `cp -Rc` (macOS) / `cp -R --reflink=auto` (Linux), which cannot honour
+    // the filter below, so the snapshot stays a real copy and we keep it small by
+    // excluding regenerable data instead.
     // Keep relative symlinks RELATIVE. The default rewrites them to absolute
     // paths into the LIVE data dir (measured: notes/CLAUDE.md -> AGENTS.md became
     // an absolute link back into ~/.open-walnut), so the "isolated" snapshot
@@ -180,8 +208,25 @@ async function runEphemeralLauncher(): Promise<void> {
       // Skip images dir (can be large)
       if (src.includes(path.join(path.sep, 'images', path.sep)) ||
           src.endsWith(path.join(path.sep, 'images'))) return false
+      // Skip regenerable TOP-LEVEL dirs: .git (2.7G of data-dir history — git-sync
+      // checks isRepo() and re-inits when absent, so the snapshot self-heals into
+      // a fresh repo), .smart-env (1.2G embeddings store), cache (1.5G derived,
+      // 1.4G of it cache/history). All three are already classified as
+      // regenerable by their owners: backup/scan.ts excludes them and git-sync
+      // gitignores them. Sizes measured against a 17G home on 2026-08-27.
+      //
+      // Anchored to the FIRST path segment under WALNUT_HOME on purpose. A
+      // substring test like includes('/cache/') would also drop a note folder the
+      // user happens to have named "cache", or a nested repo inside notes/ —
+      // silently thinning the snapshot the tests then trust.
+      const rel = path.relative(WALNUT_HOME, src)
+      if (rel && SNAPSHOT_SKIP_TOP_LEVEL.has(rel.split(path.sep)[0])) return false
       // Skip lock files
       if (src.endsWith('.lock')) return false
+      // Skip the single-instance lock — a snapshot carrying the LIVE server's
+      // server.lock.json makes the child refuse its own fresh dir (the lock
+      // names a pid that really is alive: the production server).
+      if (src.endsWith('server.lock.json')) return false
       // Skip anything that isn't a plain file/dir/symlink — cpSync dies on
       // sockets and FIFOs (ERR_INTERNAL_ASSERTION "Unreachable code" during a
       // directory walk; typed ERR_FS_CP_SOCKET/ERR_FS_CP_FIFO_PIPE when hit
@@ -218,6 +263,7 @@ async function runEphemeralLauncher(): Promise<void> {
   child.on('error', (err) => {
     process.stderr.write(`ephemeral: spawn failed — ${err.message}\n`)
     try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
+    unregisterEphemeralDir(registryFile, tmpDir)
     process.exit(1)
   })
 
@@ -227,6 +273,7 @@ async function runEphemeralLauncher(): Promise<void> {
   if (childPid == null) {
     process.stderr.write('ephemeral: child.pid is undefined — spawn may have failed\n')
     try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
+    unregisterEphemeralDir(registryFile, tmpDir)
     process.exit(1)
     return
   }
@@ -256,6 +303,7 @@ async function runEphemeralLauncher(): Promise<void> {
     // Kill child and clean up
     try { process.kill(childPid, 'SIGTERM') } catch { /* may already be dead */ }
     try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
+    unregisterEphemeralDir(registryFile, tmpDir)
     process.exit(1)
   }
 }
@@ -297,90 +345,6 @@ function pollForControlFile(controlFile: string): Promise<{
   })
 }
 
-/**
- * Scan /tmp/open-walnut-* directories for dead ephemeral servers.
- * If ephemeral.json exists with a PID that's dead, remove the dir.
- */
-function reapStaleEphemeralDirs(): void {
-  const tmpBase = os.tmpdir()
-  let entries: string[]
-  try {
-    entries = fs.readdirSync(tmpBase).filter((e) => e.startsWith('open-walnut-'))
-  } catch {
-    return
-  }
-
-  for (const entry of entries) {
-    const dir = path.join(tmpBase, entry)
-    const controlFile = path.join(dir, 'ephemeral.json')
-
-    try {
-      const stat = fs.statSync(dir)
-      if (!stat.isDirectory()) continue
-    } catch {
-      continue
-    }
-
-    try {
-      const raw = fs.readFileSync(controlFile, 'utf-8')
-      const data = JSON.parse(raw)
-      if (data.pid && !isProcessAlive(data.pid)) {
-        fs.rmSync(dir, { recursive: true, force: true })
-      }
-    } catch {
-      // No control file or can't parse — check if dir is very old (>1h)
-      try {
-        const stat = fs.statSync(dir)
-        const ageMs = Date.now() - stat.mtimeMs
-        if (ageMs > 60 * 60 * 1000) {
-          fs.rmSync(dir, { recursive: true, force: true })
-        }
-      } catch {
-        // Can't stat — another reaper got it first, fine
-      }
-    }
-  }
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
-/**
- * Count currently live ephemeral servers by scanning /tmp/open-walnut-* dirs.
- * Only counts directories with an ephemeral.json whose PID is still alive.
- * Called AFTER reapStaleEphemeralDirs() so stale dirs are already cleaned.
- */
-function countLiveEphemeralServers(): number {
-  const tmpBase = os.tmpdir()
-  let entries: string[]
-  try {
-    entries = fs.readdirSync(tmpBase).filter((e) => e.startsWith('open-walnut-'))
-  } catch {
-    return 0
-  }
-
-  let count = 0
-  for (const entry of entries) {
-    const controlFile = path.join(tmpBase, entry, 'ephemeral.json')
-    try {
-      const raw = fs.readFileSync(controlFile, 'utf-8')
-      const data = JSON.parse(raw)
-      if (data.pid && isProcessAlive(data.pid)) {
-        count++
-      }
-    } catch {
-      // No control file or can't parse — not a live server
-    }
-  }
-  return count
-}
-
 // ── Ephemeral Child (detached server daemon) ─────────────────────────────
 
 /**
@@ -398,7 +362,7 @@ async function runEphemeralChild(): Promise<void> {
     return
   }
 
-  const { startServer, stopServer } = await import('../web/server.js')
+  const { startServer, stopServer, armGracefulSignalExit } = await import('../web/server.js')
 
   // Start server on random port — identical to production
   const httpServer = await startServer({ port: 0 })
@@ -460,4 +424,11 @@ async function runEphemeralChild(): Promise<void> {
 
   process.on('SIGINT', () => cleanup('SIGINT'))
   process.on('SIGTERM', () => cleanup('SIGTERM'))
+  // Claim ownership of the signal, or startServer()'s own always-fatal handler
+  // wins the race: it sees no armed owner, removeAllListeners('SIGTERM') and
+  // re-raises with the default disposition, so the process dies instantly and
+  // cleanup() above never reaches its rmSync. Measured: a SIGTERMed child left
+  // its whole 3.2G snapshot behind. Must come AFTER the handlers are registered
+  // (server.ts documents that ordering).
+  armGracefulSignalExit()
 }
