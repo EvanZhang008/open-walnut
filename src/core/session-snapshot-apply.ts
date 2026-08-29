@@ -41,6 +41,7 @@ import {
   clearSuppressedErrorReason,
   _clearSnapshotRegistryForTests,
 } from './session-snapshot-gate.js'
+import { engineCaps } from './agents/engine-registry.js'
 
 // Re-export the gate surface so consumers can treat this module as the C2
 // entry point (the gate stays import-free for session-tracker's sake).
@@ -142,7 +143,7 @@ export function _resetSnapshotApplyForTests(): void {
 
 /** Hard exclusions per contract §5 step 4 — these session classes are C3+. */
 function isExcluded(record: SessionRecord): string | null {
-  if (record.engine === 'codex') return 'engine-codex'
+  if (!engineCaps(record.engine).snapshotPull) return 'engine-codex'
   if (record.provider === 'embedded' || record.provider === 'sdk') return `provider-${record.provider}`
   if (record.status_reason === 'awaiting_spawn') return 'awaiting-spawn'
   return null

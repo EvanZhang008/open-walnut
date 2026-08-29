@@ -24,6 +24,7 @@ import { readSessionHistoryTail } from './session-history.js';
 import { buildIndexedContent } from './session-content-indexer.js';
 import { log } from '../logging/index.js';
 import { pruneStaleQmdDocuments } from './qmd-sync-utils.js';
+import { engineCaps } from './agents/engine-registry.js';
 import type { SessionRecord, Task } from './types.js';
 
 const COLLECTION = 'sessions';
@@ -101,7 +102,7 @@ const REMOTE_TAIL_BYTES = 1 * 1024 * 1024;
 async function readConversationBody(
   session: SessionRecord,
 ): Promise<ConversationBodyRead> {
-  if (session.engine === 'codex') {
+  if (engineCaps(session.engine).historySource === 'acp-journal') {
     let acpTimeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const { readAcpSessionHistoryState } =

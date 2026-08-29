@@ -53,6 +53,10 @@ const DAEMON_SOURCE_FILES = [
   // ACP worker stack — compiled into the daemon deploy unit (worker artifact
   // ships with the daemon; version skew impossible by construction).
   'src/providers/acp-daemon.ts',
+  // Unified agent.* command routing table (agent-commands-v1) — bundled into
+  // the standalone twin and inlined in the source twin; a routing-table-only
+  // edit must still move the version or no daemon self-upgrades.
+  'src/providers/agent-command-map.ts',
   'src/providers/acp-worker/worker.ts',
   'src/providers/acp-worker/worker-main.ts',
   'src/providers/acp-worker/journal.ts',

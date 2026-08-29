@@ -28,6 +28,7 @@ import {
 import { broadcastEvent } from '../ws/handler.js'
 import { EventNames } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
+import { isKnownEngine } from '../../core/agents/engine-registry.js'
 
 export function createConversationsRouter(): Router {
   const router = Router()
@@ -144,7 +145,7 @@ export function createConversationsRouter(): Router {
       const agentId = validateAgentId(req.params.agentId as string)
       const cid = validateConversationId(req.params.cid as string)
       const engine = (req.body as { engine?: string } | undefined)?.engine
-      if (engine !== 'claude' && engine !== 'codex') {
+      if (!isKnownEngine(engine)) {
         res.status(400).json({ error: "engine must be 'claude' or 'codex'" })
         return
       }

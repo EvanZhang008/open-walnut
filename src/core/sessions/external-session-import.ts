@@ -31,6 +31,7 @@ import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
 import type { Task } from '../types.js';
 import type { ExternalSessionCandidate } from '../../providers/external-session-scan-core.js';
+import { engineCaps, normalizeEngine } from '../agents/engine-registry.js';
 
 /** Daemon capability gating the scan RPC. */
 const SCAN_CAPABILITY = 'external-scan-v1';
@@ -238,8 +239,9 @@ async function importCandidate(
   }
 
   const title = candidate.title
-    || `${candidate.engine === 'codex' ? 'Codex' : 'Claude'} session ${candidate.sessionId.slice(0, 8)}`;
+    || `${engineCaps(candidate.engine).displayName} session ${candidate.sessionId.slice(0, 8)}`;
   const project = externalImportProject(host);
+  const importedEngine = normalizeEngine(candidate.engine);
 
   // Task title = the session's own auto-generated name. Normal 1-session-per-
   // task shape, so the session goes in the task's SLOT (linkSession), exactly
@@ -275,7 +277,7 @@ async function importCandidate(
       provider: 'cli',
       // engine drives which history reader the UI uses — a codex record read as
       // claude renders an empty transcript.
-      ...(candidate.engine === 'codex' ? { engine: 'codex' as const } : {}),
+      ...(importedEngine ? { engine: importedEngine } : {}),
       human_note: `Imported automatically — started outside Walnut (${candidate.origin}).`,
     });
   } catch (err) {

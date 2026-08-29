@@ -29,6 +29,8 @@ import { getConfig } from '../config-manager.js';
 import { getSessionByLane, createSessionRecord } from '../session-tracker.js';
 import { personalAiProfile, consoleAgentProfile } from './profiles.js';
 import { buildSessionSkillsPrompt } from '../skill-loader.js';
+import type { SessionEngine } from '../types.js';
+import { isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 import { log } from '../../logging/index.js';
 
 /** The lane key a Personal AI conversation's session is bound to. */
@@ -183,7 +185,7 @@ export interface LaneSession {
    */
   created: boolean;
   /** Coding-agent engine backing this lane ('claude' default). */
-  engine: 'claude' | 'codex';
+  engine: SessionEngine;
 }
 
 /**
@@ -205,7 +207,7 @@ const inFlight = new Map<string, Promise<LaneSession>>();
 export function getOrCreateLaneSession(
   agentId: string,
   conversationId: string,
-  opts?: { firstMessage?: string; engine?: 'claude' | 'codex' },
+  opts?: { firstMessage?: string; engine?: SessionEngine },
 ): Promise<LaneSession> {
   const lane = personalAiLaneKey(agentId, conversationId);
   const pending = inFlight.get(lane);
@@ -237,7 +239,7 @@ export function getOrCreateLaneSession(
 export async function swapLaneEngine(
   agentId: string,
   conversationId: string,
-  engine: 'claude' | 'codex',
+  engine: SessionEngine,
 ): Promise<LaneSession> {
   const lane = personalAiLaneKey(agentId, conversationId);
   // A resolve may be mid-flight (the eager mount fires one on every switch) —
@@ -246,7 +248,7 @@ export async function swapLaneEngine(
   if (pending) await pending.catch(() => {});
 
   const existing = await getSessionByLane(lane);
-  const currentEngine: 'claude' | 'codex' = existing?.engine === 'codex' ? 'codex' : 'claude';
+  const currentEngine = resolveEngine(existing?.engine);
   if (existing && currentEngine === engine) {
     return { sessionId: existing.claudeSessionId, created: false, engine };
   }
@@ -450,7 +452,7 @@ async function resolveLane(
   agentId: string,
   conversationId: string,
   firstMessage: string,
-  engine?: 'claude' | 'codex',
+  engine?: SessionEngine,
 ): Promise<LaneSession> {
   const config = await getConfig();
   // One-time cleanup of the retired CLAUDE.md delivery path (see
@@ -459,14 +461,14 @@ async function resolveLane(
 
   const existing = await getSessionByLane(lane);
   if (existing) {
-    const existingEngine: 'claude' | 'codex' = existing.engine === 'codex' ? 'codex' : 'claude';
+    const existingEngine = resolveEngine(existing.engine);
     // Profile drift repair: the prompt/effort live on the RECORD (spawn-time
     // args, no live channel), so a lane minted before a personalAiProfile upgrade
     // would otherwise keep the stale persona forever. Refreshing the record here
     // makes the next cold resume (~idle timeout) pick the current one up; the
     // live CLI process keeps the old prompt until then, which is acceptable.
     // claude engine only — ACP has no profile channel (no system-prompt param).
-    if (existingEngine === 'claude') {
+    if (!isAcpEngine(existingEngine)) {
       const { profile, effort } = await buildLaneProfile(config, agentId);
       if (existing.profile?.systemPrompt !== profile.systemPrompt) {
         const { updateSessionRecord } = await import('../session-tracker.js');
@@ -489,7 +491,7 @@ async function resolveLane(
 
   const title = agentId === 'general' ? 'Main AI chat' : `Main AI chat (${agentId})`;
 
-  if (engine === 'codex') {
+  if (isAcpEngine(engine)) {
     // Codex lane: the ACP worker mints the session id itself, so there is no
     // record to seed up front — emit the start (the runner routes engine:'codex'
     // to handleAcpStart, which creates the lane-bound record on establish) and

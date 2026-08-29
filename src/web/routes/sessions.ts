@@ -55,6 +55,7 @@ import {
 } from '../../core/sessions/session-extras.js'
 import { filterSessionsByQuery } from '../../core/session-search.js'
 import { QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
+import { engineCaps, isAcpEngine, normalizeEngine } from '../../core/agents/engine-registry.js'
 
 /** Client-supplied session ids must be well-formed UUIDs (they become CLI --session-id args and file names). */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -448,7 +449,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       // gave up at 15s, pending panel showed a false "Failed" and Retry created
       // a duplicate session). With the client owning the id, it can poll
       // GET /api/sessions/<id> regardless of the response's fate.
-      const isNativeEngine = engine !== 'codex'
+      const isNativeEngine = !isAcpEngine(engine)
       const clientSessionId = typeof (req.body as { sessionId?: unknown }).sessionId === 'string'
         && UUID_RE.test((req.body as { sessionId: string }).sessionId)
         ? (req.body as { sessionId: string }).sessionId : undefined
@@ -456,7 +457,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       const updatedTask = await quickStartSession({
         message: sessionMessage, messagePrefix, cwd, host, model, mode,
         existingTaskId, taskMeta: fixWalnutTaskMeta, source: 'quick-start', requestTs,
-        engine: engine === 'codex' ? 'codex' : undefined,
+        engine: normalizeEngine(engine),
         preassignedSessionId,
         // Client project seed (project-header "+ → Add session"). fixWalnutExtras
         // spreads AFTER so a repair launch always files under 'Walnut' — and a
@@ -476,7 +477,9 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         const rawPickerModel = typeof rawModel === 'string' && rawModel && rawModel !== 'default' ? rawModel : undefined
         recordLaunchPrefs(cwd, host ?? null, {
           model: rawPickerModel,
-          engine: engine === 'codex' ? 'codex' : undefined,
+          // LaunchPrefs stores the persisted shape ('codex' or absent), which is
+          // exactly normalizeEngine's contract.
+          engine: normalizeEngine(engine) as 'codex' | undefined,
         }).catch(() => {})
       }
       // sessionId is present for native starts (see preassignedSessionId above).
@@ -530,7 +533,7 @@ function markUnsettled(messages: readonly SessionHistoryMessage[]): SessionHisto
 }
 
 function unavailableHistoryReason(record: SessionRecord): string {
-  if (record.engine === 'codex') {
+  if (engineCaps(record.engine).historySource === 'acp-journal') {
     if (!record.acpRuntimeId) {
       return 'Codex session has no ACP runtime ID, so its history journal cannot be located'
     }
@@ -904,7 +907,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     const record = await getSessionByClaudeId(sessionId)
 
     if (source === 'streams') {
-      if (record?.engine === 'codex') {
+      if (record && engineCaps(record.engine).historySource === 'acp-journal') {
         // Tail-bounded P1: bound a COLD fold to the journal's last few MB so a
         // whale journal paints instantly; the fold cache serves the follow-ups.
         const { messages, windowed } = await readProviderSessionHistory(sessionId, record, record.host, true,
@@ -1258,7 +1261,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         res.status(503).json({ error: 'fork ancestor history unavailable (transient) — retry' })
         return
       }
-      if (record?.engine !== 'codex') {
+      if (engineCaps(record?.engine).historySource !== 'acp-journal') {
         const anchorReq = {
           since,
           anchorMsgId,
@@ -1654,7 +1657,7 @@ sessionsRouter.get('/:sessionId/model-catalog', async (req: Request, res: Respon
       res.status(404).json({ error: 'session not found' })
       return
     }
-    if (record.engine !== 'codex') {
+    if (engineCaps(record.engine).modelCatalog !== 'provider-advertised') {
       res.status(409).json({ error: 'model catalog is only available for Codex ACP sessions' })
       return
     }

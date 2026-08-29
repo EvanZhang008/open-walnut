@@ -30,6 +30,7 @@
 import { log } from '../logging/index.js';
 import { CLOUD_MODE } from '../constants.js';
 import { backgroundAiDisabled } from './cheap-model.js';
+import { engineCaps } from './agents/engine-registry.js';
 
 const SWEEP_INTERVAL_MS = 5 * 60_000;
 /** First sweep waits for boot to settle (session reconnects, daemon dials). */
@@ -252,7 +253,7 @@ async function firstUserMessage(
 ): Promise<string> {
   try {
     let history;
-    if (session.engine === 'codex') {
+    if (engineCaps(session.engine).historySource === 'acp-journal') {
       const { readAcpSessionHistory } = await import('../providers/acp-session-history.js');
       history = await readAcpSessionHistory(session);
     } else {

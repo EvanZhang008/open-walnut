@@ -21,6 +21,8 @@ import { getConfig } from '../config-manager.js';
 import { getFrequentDirs, scoreFrequentDir } from '../frequent-dirs.js';
 import { quickStartSession, QuickStartError } from './quick-start.js';
 import { resolveModelSwitchValue, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
+import type { SessionEngine } from '../types.js';
+import { engineCaps, isKnownEngine, normalizeEngine } from '../agents/engine-registry.js';
 import { log } from '../../logging/index.js';
 
 /** Launch-time permission modes — the full registry set (core/types.ts). */
@@ -45,7 +47,7 @@ export interface MobileLaunchInput {
   project?: string;
   model?: string;
   mode?: string;
-  engine?: 'claude' | 'codex';
+  engine?: SessionEngine;
 }
 
 /** HTTP status → frozen v1 error code (also the relay errorKind vocabulary). */
@@ -107,7 +109,7 @@ function validateLaunchBody(body: unknown, allowEngine: boolean): MobileLaunchIn
   if (project !== undefined && (typeof project !== 'string' || project.length > 256)) {
     throw new QuickStartError('project must be a string up to 256 characters', 400);
   }
-  if (allowEngine && engine !== undefined && engine !== 'claude' && engine !== 'codex') {
+  if (allowEngine && engine !== undefined && !isKnownEngine(engine)) {
     throw new QuickStartError('engine must be claude or codex', 400);
   }
 
@@ -244,7 +246,7 @@ export async function performMobileLaunch(
     }
   }
 
-  const preassignedSessionId = input.engine === 'codex' ? undefined : randomUUID();
+  const preassignedSessionId = engineCaps(input.engine).idProvisioning === 'provider-issued' ? undefined : randomUUID();
   const task = await quickStartSession({
     message: input.message,
     cwd: input.cwd,
@@ -256,7 +258,7 @@ export async function performMobileLaunch(
     project: input.project,
     source,
     requestTs: Date.now(),
-    engine: input.engine === 'codex' ? 'codex' : undefined,
+    engine: normalizeEngine(input.engine),
     preassignedSessionId,
   });
   log.web.info(`${source}: session created`, {

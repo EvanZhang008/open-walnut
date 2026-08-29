@@ -14,6 +14,7 @@ import { getSessionsForTask, updateSessionRecord } from '../session-tracker.js';
 import { bus, EventNames } from '../event-bus.js';
 import type { Task, SessionEngine } from '../types.js';
 import { spillLargePromptToFile } from './quick-start-spill.js';
+import { isAcpEngine } from '../agents/engine-registry.js';
 
 export interface QuickStartTaskMeta {
   /** Start the new task already marked unread. */
@@ -289,7 +290,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   // Safe against the orphan sweepers: a pid-less non-terminal row is only reaped
   // after a 2-minute grace period on last_status_change (session-health-monitor's
   // ORPHAN_GRACE_MS), which is far longer than any spawn.
-  if (preassignedSessionId && engine !== 'codex') {
+  if (preassignedSessionId && !isAcpEngine(engine)) {
     try {
       const { createSessionRecord } = await import('../session-tracker.js');
       await createSessionRecord(preassignedSessionId, updatedTask.id, project, cwd, {
@@ -326,7 +327,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     requestTs,
     engine,
     // ACP (codex) mints its own ids inside the adapter — only forward for native.
-    ...(preassignedSessionId && engine !== 'codex' ? { preassignedSessionId } : {}),
+    ...(preassignedSessionId && !isAcpEngine(engine) ? { preassignedSessionId } : {}),
   }, ['session-runner'], { source });
 
   // TEXT-FIRST auto-title: the launch message rides SESSION_START, which the
@@ -336,7 +337,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   // native engine only — ACP mints its own ids and has no control pipe. The
   // placeholder check here skips callers with a real title (fix-walnut,
   // routines, retries of an already-titled task) without the helper's poll.
-  if (preassignedSessionId && engine !== 'codex' && message.trim()
+  if (preassignedSessionId && !isAcpEngine(engine) && message.trim()
       && updatedTask.title === defaultSessionTaskTitle(cwd)) {
     import('../session-hooks/builtins.js')
       .then(({ autoTitleFromLaunch }) => autoTitleFromLaunch(preassignedSessionId, updatedTask.id, message, cwd))

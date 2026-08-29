@@ -1868,6 +1868,44 @@ function handleCommand(ws, msg) {
   }
 }
 
+// Unified agent.* command family (agent-commands-v1) — inlined twin of
+// resolveAgentCommand. Keep in sync with src/providers/agent-command-map.ts.
+// This template runs on a plain remote Node with no imports, so the routing
+// table is inlined here verbatim instead of being required.
+var AGENT_CODEX_ROUTES = {
+  start: 'acpStart', send: 'acpSend', steer: 'acpSteer', cancel: 'acpCancel',
+  respond: 'acpRespond', setOption: 'acpSetConfigOption', state: 'acpState',
+  newSession: 'acpNewSession', stop: 'acpStop', subscribe: 'acpSubscribe',
+};
+// steer → send: a FIFO write IS the native mid-turn path.
+var AGENT_NATIVE_ROUTES = {
+  start: 'start', send: 'send', steer: 'send', cancel: null, respond: null,
+  setOption: 'setMode', state: 'getState', newSession: null, stop: 'stop',
+  subscribe: null,
+};
+var AGENT_NATIVE_UNSUPPORTED = {
+  cancel: 'native interrupts ride sendRaw control frames',
+  respond: 'native permission resolution happens over the CLI control protocol, not a daemon command',
+  newSession: 'native sessions are created via start',
+  subscribe: 'native subscription is implicit in start/attach',
+};
+
+function resolveAgentCommand(engine, op) {
+  if (typeof op !== 'string' || !Object.prototype.hasOwnProperty.call(AGENT_NATIVE_ROUTES, op)) {
+    return { ok: false, error: 'unknown agent op: ' + String(op), errorKind: 'agent_op_unknown' };
+  }
+  if (engine === 'codex') return { ok: true, cmd: AGENT_CODEX_ROUTES[op] };
+  var nativeCmd = AGENT_NATIVE_ROUTES[op];
+  if (!nativeCmd) {
+    return {
+      ok: false,
+      error: 'agent.' + op + ' is not supported for the native engine (' + AGENT_NATIVE_UNSUPPORTED[op] + ')',
+      errorKind: 'agent_op_unsupported',
+    };
+  }
+  return { ok: true, cmd: nativeCmd };
+}
+
 function dispatchCommand(ws, id, cmd) {
   switch (cmd.cmd) {
     case 'start': return cmdStart(ws, id, cmd);
@@ -1949,6 +1987,30 @@ function dispatchCommand(ws, id, cmd) {
     case 'acpSubscribe': {
       try { ws.send(JSON.stringify({ id, ok: false, error: 'ACP sessions are not supported on this host yet', errorKind: 'acp_unsupported' })); } catch {}
       return;
+    }
+    // Unified agent.* family (agent-commands-v1): one namespace, engine-routed
+    // onto the legacy per-engine handlers (see resolveAgentCommand above).
+    // Codex-routed ops land on the acp* cases above and get the structured
+    // acp_unsupported reply — the desired degradation on a source daemon.
+    // SECURITY: the re-dispatch bypasses the bridge allowlist check (it runs
+    // BEFORE dispatch), so no 'agent.*' name may ever join
+    // BRIDGE_ALLOWED_COMMANDS. Pinned by test.
+    case 'agent.start':
+    case 'agent.send':
+    case 'agent.steer':
+    case 'agent.cancel':
+    case 'agent.respond':
+    case 'agent.setOption':
+    case 'agent.state':
+    case 'agent.newSession':
+    case 'agent.stop':
+    case 'agent.subscribe': {
+      var agentRoute = resolveAgentCommand(cmd.engine, String(cmd.cmd).slice('agent.'.length));
+      if (!agentRoute.ok) {
+        try { ws.send(JSON.stringify({ id, ok: false, error: agentRoute.error, errorKind: agentRoute.errorKind })); } catch {}
+        return;
+      }
+      return dispatchCommand(ws, id, Object.assign({}, cmd, { cmd: agentRoute.cmd }));
     }
     case 'ping': return sendOk(ws, id, { pong: true });
     case 'hello': return sendOk(ws, id, {

@@ -21,6 +21,7 @@ import { log } from '../../logging/index.js';
 import type { SessionRecord, SessionMode } from '../types.js';
 import { SESSION_MODE_IDS } from '../types.js';
 import type { SessionHistoryMessage } from '../session-history.js';
+import { DEFAULT_ENGINE, engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 
 // ── Shared helpers (moved from src/web/routes/sessions.ts) ──────────────────
 
@@ -53,7 +54,7 @@ export async function readProviderSessionHistory(
    *  Absent/empty for Codex and for parses with no orphans. */
   finishedAgentIds?: string[];
 }> {
-  if (record?.engine === 'codex') {
+  if (record && engineCaps(record.engine).historySource === 'acp-journal') {
     const { readAcpSessionHistoryState } = await import('../../providers/acp-session-history.js');
     const state = await readAcpSessionHistoryState(record,
       opts?.maxColdReadBytes ? { maxColdReadBytes: opts.maxColdReadBytes } : {});
@@ -119,7 +120,7 @@ async function applySessionModeControl(
   mode: SessionMode,
 ): Promise<void> {
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
-  if (record.engine === 'codex') {
+  if (engineCaps(record.engine).modeControl === 'config-options') {
     const session = await sessionRunner.findOrAttachAcpSession(sessionId).catch((err: unknown) => {
       log.session.warn('Codex mode compatibility update could not attach; persisting record only', {
         sessionId, mode, error: err instanceof Error ? err.message : String(err),
@@ -527,9 +528,13 @@ export type RetryResult =
  */
 async function resumeConversationExists(record: SessionRecord): Promise<boolean> {
   // Only the claude CLI has this on-disk layout; ACP/other engines manage
-  // their own persistence — don't second-guess them.
+  // their own persistence — don't second-guess them. An engine this build
+  // does NOT know must also fail open here: engineCaps degrades unknowns to
+  // claude-shaped defaults, and probing ~/.claude for a foreign engine would
+  // answer "absent" and send retrySession down the archive-and-replace path.
   if (record.provider && record.provider !== 'cli') return true;
-  if (record.engine && record.engine !== 'claude') return true;
+  if (record.engine && record.engine !== DEFAULT_ENGINE) return true;
+  if (engineCaps(record.engine).historySource !== 'provider-jsonl') return true;
   try {
     if (!record.host || record.host === '__local__') {
       const { findLocalJsonlPath } = await import('../session-file-reader.js');
@@ -720,7 +725,7 @@ export async function respondSessionPermission(
   // 404'd every approve clicked in that window (2026-08-10 incident).
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);
-  const acpSession = record?.engine === 'codex'
+  const acpSession = isAcpEngine(record?.engine)
     ? await sessionRunner.findOrAttachAcpSession(sessionId)
     : sessionRunner.findAcpSession(sessionId);
   if (acpSession) {
@@ -790,12 +795,12 @@ export async function getSessionPendingPermissions(
 ): Promise<SessionPendingPermission[]> {
   try {
     const { sessionRunner } = await import('../../providers/claude-code-session.js');
-    const liveSession = record.engine === 'codex'
+    const liveSession = isAcpEngine(record.engine)
       ? sessionRunner.findAcpSession(record.claudeSessionId)
       : sessionRunner.findByClaudeId(record.claudeSessionId);
     if (liveSession) return liveSession.getPendingPermissionRequests();
 
-    const canAttach = record.engine === 'codex'
+    const canAttach = isAcpEngine(record.engine)
       && (record.process_status === 'running' || record.process_status === 'idle');
     if (canAttach) {
       void sessionRunner.findOrAttachAcpSession(record.claudeSessionId).catch((err: unknown) => {
@@ -1018,7 +1023,7 @@ export function isHistoryStartupWindow(record: SessionRecord, nowMs = Date.now()
 }
 
 function unavailableHistoryReason(record: SessionRecord): string {
-  if (record.engine === 'codex') {
+  if (engineCaps(record.engine).historySource === 'acp-journal') {
     if (!record.acpRuntimeId) {
       return 'Codex session has no ACP runtime ID, so its history journal cannot be located';
     }

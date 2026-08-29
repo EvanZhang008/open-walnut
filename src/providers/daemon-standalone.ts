@@ -66,6 +66,7 @@ import {
   type SessionSnapshot,
 } from './daemon-fold.js'
 import { createAcpDaemon, type AcpStartParams } from './acp-daemon.js'
+import { resolveAgentCommand } from './agent-command-map.js'
 import { computeGitDiff, GitDiffError, type GitDiffBase } from './git-diff-core.js'
 import {
   computeHostLocalChanges,
@@ -1485,6 +1486,23 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'acpNewSession': return cmdAcpOp(ws, id as number, cmd, 'newSession')
     case 'acpStop': return cmdAcpStop(ws, id as number, cmd)
     case 'acpSubscribe': return cmdAcpSubscribe(ws, id as number, cmd)
+    // Unified agent.* family (agent-commands-v1): one namespace, engine-routed
+    // onto the legacy per-engine handlers. See src/providers/agent-command-map.ts.
+    // SECURITY: the re-dispatch below bypasses the bridge allowlist check (it
+    // runs BEFORE dispatch), so no 'agent.*' name may ever join
+    // BRIDGE_ALLOWED_COMMANDS — that would hand the cloud box every routed
+    // target, including start (arbitrary-argv spawn). Pinned by test.
+    case 'agent.start': case 'agent.send': case 'agent.steer': case 'agent.cancel':
+    case 'agent.respond': case 'agent.setOption': case 'agent.state':
+    case 'agent.newSession': case 'agent.stop': case 'agent.subscribe': {
+      const route = resolveAgentCommand(cmd.engine, String(cmd.cmd).slice('agent.'.length))
+      if (!route.ok) {
+        logMsg('error', 'command error', { id, error: route.error, errorKind: route.errorKind })
+        safeSend(ws, JSON.stringify({ id, ok: false, error: route.error, errorKind: route.errorKind }))
+        return
+      }
+      return dispatchCommand(ws, id as number, { ...cmd, cmd: route.cmd })
+    }
     case 'ping': return sendOk(ws, id as number, { pong: true })
     case 'hello': return sendOk(ws, id as number, {
       version: DAEMON_VERSION,

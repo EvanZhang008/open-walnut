@@ -75,6 +75,7 @@ import {
   writeTranscriptCache,
 } from './projection-cache.js'
 import type { SessionRecord, Task } from './types.js'
+import { engineCaps } from './agents/engine-registry.js'
 
 /** LEGACY git-synced paths — dual-written while `sync.legacy_projection_files`
  *  is on (see projection-cache.ts); the cache/ paths are the live copies. */
@@ -246,7 +247,7 @@ export async function buildSessionTranscript(sessionId: string): Promise<Session
   // (2026-08-16: cache/transcripts/<sid>.json stuck at messages:[] while the
   // web console showed the whole thread). Same branch the /history route takes.
   let history: import('./session-history.js').SessionHistoryMessage[]
-  if (record?.engine === 'codex') {
+  if (record && engineCaps(record.engine).historySource === 'acp-journal') {
     const { readAcpSessionHistory } = await import('../providers/acp-session-history.js')
     history = await readAcpSessionHistory(record)
   } else {

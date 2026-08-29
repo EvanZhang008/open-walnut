@@ -31,6 +31,7 @@ import {
 import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
+import { engineCaps } from '../agents/engine-registry.js';
 
 export class SessionControlError extends Error {
   constructor(
@@ -182,7 +183,7 @@ export async function applySessionModelChange(
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('session not found', 404);
 
-  if (record.engine === 'codex') {
+  if (engineCaps(record.engine).modelSwitch === 'config-option') {
     const acpSession = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined);
     const applied = acpSession
       ? await acpSession.setModel(rawModel).catch((err: unknown) => {
@@ -401,7 +402,7 @@ export async function forkSessionToTask(
   // ACP session.fork, and falling through to Claude's native --fork-session
   // creates an orphan task before failing to find the conversation. Fail
   // before validating or mutating any target task.
-  if (sourceRecord.engine === 'codex') {
+  if (!engineCaps(sourceRecord.engine).fork) {
     throw new SessionControlError('Fork is unavailable for this Codex session', 409, {
       code: 'ACP_FORK_UNSUPPORTED',
     });

@@ -24,6 +24,7 @@ import type { SessionRecord, Task, TaskPhase } from './types.js'
 import type { SessionWillReapEvent } from './event-types.js'
 import { emitSessionStatusChanged } from './session-tracker.js'
 import { classifySessionError, isRescuableStoppedRecord } from './session-error-kind.js'
+import { engineCaps } from './agents/engine-registry.js'
 const HEALTH_CHECK_INTERVAL_MS = 30_000
 /** Adaptive slow-down: with an empty active set there is nothing to watch. */
 const HEALTH_CHECK_IDLE_INTERVAL_MS = 5 * 60_000
@@ -288,7 +289,7 @@ export class SessionHealthMonitor {
         // ACP-backed sessions (engine='codex') NEVER carry a PID — the worker is
         // a daemon child keyed by acpRuntimeId, and even a reaped worker stays
         // resumable via session/load. pid==null is their normal state, not orphanhood.
-        s.engine !== 'codex' &&
+        engineCaps(s.engine).sidLivenessProbe &&
         s.process_status !== 'stopped' && s.process_status !== 'error' &&
         (nowMs - new Date(s.last_status_change ?? s.startedAt ?? 0).getTime()) > ORPHAN_GRACE_MS
       if (isOrphan) { orphanIds.push(s.claudeSessionId); return false }
@@ -1110,7 +1111,7 @@ export class SessionHealthMonitor {
       const candidates = sessions
         .filter((s) => {
           if (s.process_status !== 'running' && s.process_status !== 'idle') return false
-          if (s.engine === 'codex') return false
+          if (!engineCaps(s.engine).snapshotPull) return false
           if (s.provider === 'embedded' || s.provider === 'sdk') return false
           if (s.status_reason === 'awaiting_spawn') return false
           const lastPull = this.snapshotPullAt.get(s.claudeSessionId) ?? 0
@@ -1453,12 +1454,12 @@ export class SessionHealthMonitor {
           // Local codex/ACP records keep their pre-existing exclusion (`!s.host`
           // skipped them): their liveness is acpState-keyed, not `status`/sid —
           // a sid probe always answers dead and would relabel a resumable one.
-          if (!s.host && s.engine === 'codex') continue
+          if (!s.host && !engineCaps(s.engine).sidLivenessProbe) continue
           const errorClass = classifySessionError(s)
           if (errorClass === 'terminal') continue
           if (errorClass === 'unknown' && s.errorMessage) continue
           if (probed >= MAX_RECOVER_PER_TICK) continue
-        } else if (s.engine !== 'codex' && isRescuableStoppedRecord(s)) {
+        } else if (engineCaps(s.engine).sidLivenessProbe && isRescuableStoppedRecord(s)) {
           if (stoppedProbed >= MAX_STOPPED_PROBES_PER_TICK) continue
           // Probe-confirmed dead rows write nothing, so gate re-probes on a
           // cooldown keyed to last_status_change (a real change re-arms).

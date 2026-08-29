@@ -33,6 +33,7 @@ import path from 'node:path'
 import { SESSION_STREAMS_DIR } from '../constants.js'
 import { daemonStreamPathCandidates } from '../core/session-reconcile.js'
 import type { SessionRecord } from '../core/types.js'
+import { engineCaps } from '../core/agents/engine-registry.js'
 
 /**
  * Ground-truth freshness check for a LOCAL session's JSONL stream file — a veto
@@ -91,7 +92,7 @@ export async function isSessionProcessAlive(session: SessionRecord): Promise<boo
   // daemon child keyed by acpRuntimeId, and a reaped worker is still resumable
   // (lazy session/load). Record-level liveness is therefore not PID/daemon-CLI
   // based; treat like embedded (the acp daemon family owns real lifecycle).
-  if (session.engine === 'codex') return true
+  if (!engineCaps(session.engine).sidLivenessProbe) return true
 
   // If the session was already marked stopped (e.g. by health monitor idle timeout),
   // it's definitively dead — no need to probe PIDs or daemon connections.

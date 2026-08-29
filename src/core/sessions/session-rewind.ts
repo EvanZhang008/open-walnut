@@ -51,6 +51,7 @@ import { readProviderSessionHistory } from './session-lifecycle.js';
 import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import type { SessionHistoryMessage } from '../session-history.js';
+import { engineCaps } from '../agents/engine-registry.js';
 
 /** File-rewind outcome as the CLI reports it (SDKControlRewindFilesResponse). */
 export interface RewindFilesReport {
@@ -168,7 +169,7 @@ async function resolveRewindTarget(sessionId: string, messageUuid: string): Prom
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('Session not found', 404);
-  if (record.engine === 'codex') {
+  if (engineCaps(record.engine).rewind !== 'fork-based') {
     throw new SessionControlError('Rewind is unavailable for this Codex session', 409, {
       code: 'REWIND_ENGINE_UNSUPPORTED',
     });

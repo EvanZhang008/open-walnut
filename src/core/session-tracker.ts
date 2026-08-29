@@ -33,6 +33,7 @@ import {
 // Also a zero-import leaf — see the file header for why classification cannot
 // live in a prose match.
 import { classifyStatusReasonKind } from './session-error-kind.js';
+import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
 
 let sessionInitialized = false;
 
@@ -130,7 +131,7 @@ function canonicalStatusProjection(
     pendingPermissionTool: record.pendingPermission
       ? (record.pendingPermission.toolName ?? 'unknown') : null,
     provider: record.provider ?? 'cli',
-    engine: record.engine ?? 'claude',
+    engine: resolveEngine(record.engine),
     taskId: record.taskId || null,
   };
 }
@@ -1973,8 +1974,8 @@ export async function rollbackAcpSessionIdMigration(
       const oldRecord = rowToSession(oldRow);
       const replacement = rowToSession(newRow);
       if (getAcpIdentityReplacementTarget(oldRecord) !== newClaudeSessionId
-        || oldRecord.engine !== 'codex'
-        || replacement.engine !== 'codex'
+        || !isAcpEngine(oldRecord.engine)
+        || !isAcpEngine(replacement.engine)
         || oldRecord.acpRuntimeId !== replacement.acpRuntimeId
         || oldRecord.taskId !== replacement.taskId) {
         return false;

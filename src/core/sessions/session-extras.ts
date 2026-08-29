@@ -20,14 +20,15 @@ import { SessionControlError } from './session-controls.js';
 import { CLAUDE_SESSION_MODES, changeSessionMode, persistSessionModeChange } from './session-lifecycle.js';
 import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
-import type { SessionEffort, SessionMode } from '../types.js';
+import type { SessionEffort, SessionEngine, SessionMode } from '../types.js';
 import { VALID_SESSION_EFFORT_IDS, SESSION_MODE_LABELS } from '../types.js';
 import { listLocalDirs, listRemoteDirs } from './dir-listing.js';
+import { engineCaps } from '../agents/engine-registry.js';
 
 // ── Provider controls ────────────────────────────────────────────────────────
 
 export interface SessionControlsPayload {
-  engine: 'codex' | 'claude';
+  engine: SessionEngine;
   controls: unknown[];
 }
 
@@ -51,7 +52,7 @@ export async function getSessionControls(sessionId: string): Promise<SessionCont
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('session not found', 404);
-  if (record.engine === 'codex') {
+  if (engineCaps(record.engine).modeControl === 'config-options') {
     const { sessionRunner } = await import('../../providers/claude-code-session.js');
     const session = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined);
     if (!session) throw new SessionControlError('Codex ACP session is not available', 409);
@@ -76,7 +77,7 @@ export async function applySessionControl(
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('session not found', 404);
 
-  if (record.engine === 'codex') {
+  if (engineCaps(record.engine).modeControl === 'config-options') {
     const { sessionRunner } = await import('../../providers/claude-code-session.js');
     const session = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined);
     if (!session) throw new SessionControlError('Codex ACP session is not available', 409);

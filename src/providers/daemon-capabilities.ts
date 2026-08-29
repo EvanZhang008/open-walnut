@@ -202,6 +202,10 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // an old daemon answers unknown-command, and AcpSession.steer() degrades to
   // the queue-until-turn-end path (pre-steering behavior).
   'acpSteer',
+  // 'agent-commands-v1' — unified agent.* command family (engine-routed aliases
+  // over the legacy start/send/... and acp* families). Optional: without it the
+  // server keeps speaking the legacy families directly.
+  'agent-commands-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

@@ -17,6 +17,7 @@ import type {
   OnMessageSendPayload,
   OnToolUsePayload,
 } from './types.js';
+import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 
 // ── Triage dedup state ──
 // Prevents burst triage dispatches when daemon replays old JSONL events after
@@ -1165,7 +1166,7 @@ async function askAndApplyTitle(
       // performs, verify the engine ourselves before dispatching into it.
       try {
         const { getSessionByClaudeId } = await import('../session-tracker.js');
-        if ((await getSessionByClaudeId(sessionId))?.engine === 'codex') live = undefined;
+        if (isAcpEngine((await getSessionByClaudeId(sessionId))?.engine)) live = undefined;
       } catch { live = undefined; }
     }
     // No session-delivered channel AND the backend channel is gated off →
@@ -1486,7 +1487,7 @@ export const sessionAutoTitleTurnCompleteHook: SessionHookDefinition = {
         const { getSessionByClaudeId } = await import('../session-tracker.js');
         engineSession = await getSessionByClaudeId(p.sessionId) ?? engineSession;
       }
-      if (engineSession?.engine === 'codex') {
+      if (engineSession && engineCaps(engineSession.engine).historySource === 'acp-journal') {
         const { readAcpSessionHistory } = await import('../../providers/acp-session-history.js');
         const history = await readAcpSessionHistory(engineSession);
         message = history.find((m) => m.role === 'user' && m.text.trim())?.text.trim() ?? '';

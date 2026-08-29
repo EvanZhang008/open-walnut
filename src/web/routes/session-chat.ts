@@ -10,6 +10,7 @@ import { registerMethod } from '../ws/handler.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { VALID_SESSION_EFFORT_IDS, resolveModelSwitchValue } from '../../core/types.js'
 import type { SessionEffort, SessionMode } from '../../core/types.js'
+import { normalizeEngine } from '../../core/agents/engine-registry.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQueued, unparkMessage } from '../../core/session-message-queue.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
@@ -49,7 +50,7 @@ export function registerSessionChatRpc(): void {
       effort: typeof data.effort === 'string' && VALID_SESSION_EFFORT_IDS.has(data.effort)
         ? (data.effort as SessionEffort) : undefined,
       host: typeof data.host === 'string' ? data.host : undefined,
-      engine: data.engine === 'codex' ? 'codex' : undefined,
+      engine: normalizeEngine(data.engine),
     }, ['session-runner'], { source: 'web-ui' })
   })
 
