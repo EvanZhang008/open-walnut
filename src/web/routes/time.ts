@@ -6,8 +6,11 @@
  *   GET  /api/time/blocks?date=&kinds=&raw=1 — ONE day as intervals, for the
  *        timeline. `raw=1` switches from per-task merged blocks to ONE serial
  *        ribbon (non-overlapping by construction); see core/time-tracking/blocks.ts.
+ *   GET  /api/time/apps?date= — ONE day of OUTSIDE activity: per Mac app, and per
+ *        site for a browser, plus how much of it was inside Walnut.
+ *   POST /api/time/apps/toggle — turn outside sampling on/off (opt-in, persisted).
  *
- * All three answer fast or answer DEGRADED, never hang: the reads race a
+ * All of them answer fast or answer DEGRADED, never hang: the reads race a
  * deadline and return whatever is already in hand (flagged `degraded: true`)
  * rather than pinning a connection while disk/store work finishes. One stalled
  * response starves the browser's 6-connection pool.
@@ -19,10 +22,13 @@ import { Router, type Request, type Response } from 'express';
 import { CLOUD_MODE } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import {
-  dayBoundsMs, foldDayBlocks, foldDaySlices, getIndex, hydrate, localDateKey, readDayRecords, recentDateKeys,
-  recordTime, resetTimeStore, sanitizeSamples, startAgentTimeCollector, stopAgentTimeCollector,
-  summarize, withLedgerBackfill, TIME_KINDS,
-  type DayBlocks, type RollupIndex, type TimeKind, type TimeRecord, type TimeSummary,
+  dayBoundsMs, foldDayBlocks, foldDaySlices, foldOutsideApps, getIndex, hydrate, isOutsideCollectorRunning,
+  localDateKey, outsideDayRows, readDayRecords, recentDateKeys,
+  outsideHelperReason, recordTime, resetOutsideStore, resetTimeStore, sanitizeSamples, startAgentTimeCollector,
+  startOutsideCollector, stopAgentTimeCollector, stopOutsideCollector, summarize, walnutHostsFromConfig,
+  withLedgerBackfill, TIME_KINDS,
+  type DayBlocks, type HelperUnavailable, type OutsideApp, type RollupIndex, type TimeKind, type TimeRecord,
+  type TimeSummary,
 } from '../../core/time-tracking/index.js';
 
 export const timeRouter = Router();
@@ -42,6 +48,9 @@ export function startTimeTracking(): void {
   startAgentTimeCollector();
   // Warm the rollup off the request path so the first /summary is already hot.
   void hydrate();
+  // Opt-in and self-gating: returns immediately unless config enables it, and a
+  // first run's swiftc compile happens off the boot path.
+  void startOutsideCollector().catch(() => undefined);
 }
 
 /**
@@ -54,6 +63,10 @@ export function startTimeTracking(): void {
 export function stopTimeTracking(): void {
   stopAgentTimeCollector();
   resetTimeStore();
+  // The helper child must die with the server: an orphan would keep sampling
+  // into a store nobody reads (it also exits on its own once stdout closes).
+  stopOutsideCollector();
+  resetOutsideStore();
 }
 
 /** Session→task resolution is bounded: at most this many lookups per request. */
@@ -269,3 +282,145 @@ async function readTaskTitles(ids: string[]): Promise<Record<string, string>> {
     return {}; // an unlabelled block still shows WHEN the time went
   }
 }
+
+// ── GET /api/time/apps?date=YYYY-MM-DD ──
+// ONE day of OUTSIDE activity. The fold and the inside-Walnut rule live in
+// core/time-tracking/outside-view.ts and are unit tested there; this route only
+// reads config (for the toggle + the companion hostname) and one day of buckets.
+
+/** Budget for one day of apps (one config read + one day read). */
+const APPS_DEADLINE_MS = 2_000;
+/** A first enable pays a one-time swiftc compile — never hold the toggle for it. */
+const TOGGLE_START_DEADLINE_MS = 1_500;
+
+export interface DayAppsResponse {
+  date: string;
+  /** config.time.outside.enabled — sampling is opt-in and off by default. */
+  enabled: boolean;
+  /** A helper process is attached and streaming right now. */
+  running: boolean;
+  totalMs: number;
+  /** Of totalMs, how much was the Walnut desktop app or a Walnut-hosted page. */
+  walnutMs: number;
+  /** False only when a browser WAS used and no sample carried a host (the UI
+   *  turns that into the Automation-permission hint). */
+  browserHostsSeen: boolean;
+  apps: OutsideApp[];
+  /** Why sampling cannot run here, when it cannot: no macOS, no Xcode command
+   *  line tools for the one-time compile, or the compile itself failed. Absent
+   *  means nothing is wrong (or nothing has been attempted yet). */
+  reason?: HelperUnavailable;
+  /** True when the answer had to be given up on before it was complete. */
+  degraded?: boolean;
+}
+
+/** Whichever failure the UI should explain: platform first, then the compile. */
+function helperReason(): HelperUnavailable | undefined {
+  if (process.platform !== 'darwin') return 'not_macos';
+  return outsideHelperReason() ?? undefined;
+}
+
+/** Last successfully read toggle state, so a degraded answer reports what we
+ *  last knew instead of asserting 'off' — which would read as "you turned it off". */
+let lastKnownOutsideEnabled = false;
+
+timeRouter.get('/apps', async (req: Request, res: Response) => {
+  if (CLOUD_MODE) {
+    res.status(501).json({ error: 'not_supported_cloud', message: 'outside activity is sampled on the primary box only' });
+    return;
+  }
+  const raw = typeof req.query.date === 'string' && req.query.date ? req.query.date : localDateKey(new Date());
+  // Same rule as /blocks: a bad date is rejected, never quietly answered for
+  // today, and it keeps the store's `${date}.jsonl` path to real calendar days.
+  if (!dayBoundsMs(raw)) {
+    res.status(400).json({ error: 'invalid_date', message: 'date must be a real YYYY-MM-DD' });
+    return;
+  }
+  const date = raw;
+  const reason = helperReason();
+  const empty = (): DayAppsResponse => ({
+    date,
+    enabled: lastKnownOutsideEnabled,
+    running: isOutsideCollectorRunning(),
+    totalMs: 0,
+    walnutMs: 0,
+    browserHostsSeen: true,
+    apps: [],
+    ...(reason ? { reason } : {}),
+    degraded: true,
+  });
+  const bail = deadline(APPS_DEADLINE_MS);
+  // The loser of the race keeps running, so absorb its failure here rather than
+  // letting it become an unhandled rejection after the response is sent.
+  const build = buildApps(date).catch((err: unknown) => {
+    log.web.warn('time apps failed', { date, error: err instanceof Error ? err.message : String(err) });
+    return empty();
+  });
+
+  try {
+    res.json(await Promise.race([build, bail.promise.then(empty)]));
+  } finally {
+    bail.cancel();
+  }
+});
+
+async function buildApps(date: string): Promise<DayAppsResponse> {
+  const { getConfig } = await import('../../core/config-manager.js');
+  const config = await getConfig().catch(() => undefined);
+  if (config) lastKnownOutsideEnabled = config.time?.outside?.enabled === true;
+  const rows = await outsideDayRows(date);
+  const fold = foldOutsideApps(rows, { walnutHosts: walnutHostsFromConfig(config) });
+  const reason = helperReason();
+  return {
+    date,
+    enabled: lastKnownOutsideEnabled,
+    running: isOutsideCollectorRunning(),
+    totalMs: fold.totalMs,
+    walnutMs: fold.walnutMs,
+    browserHostsSeen: fold.browserHostsSeen,
+    apps: fold.apps,
+    ...(reason ? { reason } : {}),
+  };
+}
+
+// POST /api/time/apps/toggle — flips config.time.outside.enabled and applies it
+// immediately. An explicit { enabled } in the body wins, so a UI that fires twice
+// cannot flip twice.
+timeRouter.post('/apps/toggle', async (req: Request, res: Response) => {
+  if (CLOUD_MODE) {
+    res.status(501).json({ error: 'not_supported_cloud', message: 'outside activity is sampled on the primary box only' });
+    return;
+  }
+  // Persisting `enabled: true` on a box that can never sample would leave the UI
+  // showing a toggle that is on while nothing ever runs. Refuse instead of lying.
+  if (process.platform !== 'darwin') {
+    res.status(501).json({ error: 'not_supported_platform', message: 'outside activity sampling needs macOS' });
+    return;
+  }
+  try {
+    const { getConfig, updateConfig } = await import('../../core/config-manager.js');
+    const config = await getConfig();
+    const current = config.time?.outside?.enabled === true;
+    const body = (req.body ?? {}) as { enabled?: unknown };
+    const next = typeof body.enabled === 'boolean' ? body.enabled : !current;
+    if (next !== current) {
+      // updateConfig replaces the whole `time` key, so its siblings ride along.
+      await updateConfig({ time: { ...config.time, outside: { ...config.time?.outside, enabled: next } } });
+    }
+    lastKnownOutsideEnabled = next;
+    if (next) {
+      const bail = deadline(TOGGLE_START_DEADLINE_MS);
+      try {
+        await Promise.race([startOutsideCollector().catch(() => undefined), bail.promise]);
+      } finally {
+        bail.cancel();
+      }
+    } else {
+      stopOutsideCollector();
+    }
+    res.json({ enabled: next, running: isOutsideCollectorRunning() });
+  } catch (err) {
+    log.web.warn('time apps toggle failed', { error: err instanceof Error ? err.message : String(err) });
+    res.status(500).json({ error: 'toggle_failed', message: 'could not persist the outside-activity setting' });
+  }
+});

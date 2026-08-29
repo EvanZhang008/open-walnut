@@ -379,6 +379,10 @@ sessions/streams/
 # Ephemeral working area — daemon stream files (multi-MB, constantly appended).
 # Syncing them would be the 15 GB data-repo starvation incident all over again.
 tmp/
+# Outside-activity samples (which app / which site, every 5s) are Mac-local by
+# design: browsing hosts are a category of data change versus task ids, and the
+# /api/time/apps routes answer 501 on the cloud replica anyway.
+time-tracking/outside/
 
 # SQLite (binary, self-managed)
 *.sqlite
@@ -425,6 +429,11 @@ session-message-queue.json
 # stale due time back from the other box and re-fires jobs (2026-08-04 storm).
 # Job DEFINITIONS (cron-jobs.json) still sync.
 cron-state.json
+# Reply-request ledger: deadlineAt is a machine-local due time and the whole
+# thing only means anything on the primary (the sweeper is !CLOUD_MODE). Syncing
+# it would let LWW roll a settled row back to pending and re-notify — same class
+# as the cron-state storm above.
+session-requests.json
 *.lock/
 *.lock
 
@@ -597,8 +606,16 @@ function criticalTrackedTargets(files: string[]): Map<string, { recursive: boole
  * the heal writes one next to the file it repairs, and an untracked sidecar in
  * the data repo would be committed by the very next auto-save, putting the
  * marker text back into history under a new name.
+ *
+ * `time-tracking/outside/` — outside-activity samples (which app / which site,
+ * every 5s) are Mac-local by design: browsing hosts are a category of data change
+ * versus task ids, and the /api/time/apps routes answer 501 on the cloud replica
+ * anyway. Listed here as well as in GITIGNORE_CONTENT so an EXISTING install stops
+ * committing them (one auto-save per 30s would be ~2880 commits a day).
  */
-const EXTRA_IGNORE_PATTERNS = ['memory/**/*.bak.*', 'tmp/', '*.conflicted-*', '*.corrupt-*'];
+const EXTRA_IGNORE_PATTERNS = [
+  'memory/**/*.bak.*', 'tmp/', 'time-tracking/outside/', '*.conflicted-*', '*.corrupt-*',
+];
 
 /**
  * Append missing CRITICAL_IGNORES / EXTRA_IGNORE_PATTERNS to an existing

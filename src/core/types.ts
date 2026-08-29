@@ -1098,6 +1098,15 @@ export interface Config {
   /** Keep the Mac awake (lid closed included) while local sessions run.
    *  Advanced, opt-in, macOS console only — see src/core/keep-awake.ts. */
   keep_awake?: import('./keep-awake.js').KeepAwakeConfig;
+  /** Time tracking. The human/agent lanes are always on (they cost nothing but
+   *  data Walnut already has); `outside` samples which OTHER Mac app you are in,
+   *  so it is opt-in and defaults to DISABLED. See src/core/time-tracking/. */
+  time?: {
+    outside?: {
+      /** Master switch for outside-activity sampling. Default: false. */
+      enabled?: boolean;
+    };
+  };
   tools?: {
     exec?: {
       security?: string;
