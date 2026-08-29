@@ -314,6 +314,126 @@ describe('node daemon twin: wn output through a pipe', () => {
     const parsed = JSON.parse(result.out) as { result: { ops: unknown[] } };
     expect(parsed.result.ops).toHaveLength(4000);
   }, 30_000);
+
+  // ── tools.call payloads that cannot ride argv ──
+  // The source-deploy twin is the CLI face a REMOTE session actually gets (the
+  // on-PATH `walnut` shim execs `bun daemon.cjs wn`), and it is a separate
+  // hand-inlined implementation from wn-cli.ts. It parsed argv only, so a letter
+  // with an inline base64 audio digest died on the client with "Argument list
+  // too long": Linux caps ONE argv entry at MAX_ARG_STRLEN (128KB) regardless of
+  // ARG_MAX, and execve fails before any Walnut code runs. Every payload here is
+  // deliberately over that ceiling, so a regression to argv-only fails the test
+  // on Linux instead of surfacing months later on a remote host.
+  const OVER_ARGV_LIMIT = 200 * 1024;
+
+  /** Run the twin's wn CLI against a socket that records the request line. */
+  async function runTwinCall(
+    args: string[],
+    opts: { stdin?: string } = {},
+  ): Promise<{ code: number | null; out: string; err: string; received: string }> {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wn-args-'));
+    const twin = path.join(dir, 'daemon.cjs');
+    materializeNodeTwin(twin);
+    const sock = path.join(dir, 'agent-gateway.sock');
+    let received = '';
+    const server = net.createServer((c) => {
+      c.on('data', (d) => {
+        received += d.toString('utf-8');
+        if (received.includes('\n')) c.write(JSON.stringify({ ok: true, result: { ok: true } }) + '\n');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(sock, () => resolve()));
+    fs.chmodSync(sock, 0o600);
+
+    const result = await new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
+      const child = spawn(process.execPath, [twin, 'wn', ...args], {
+        env: {
+          ...process.env,
+          WALNUT_DAEMON_DIR: dir,
+          WALNUT_AGENT_SOCKET: sock,
+          WALNUT_SESSION_ID: 'probe-sid',
+        },
+        stdio: [opts.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      });
+      let out = '';
+      let err = '';
+      child.stdout.on('data', (d) => { out += d; });
+      child.stderr.on('data', (d) => { err += d; });
+      child.on('close', (code) => resolve({ code, out, err }));
+      if (opts.stdin !== undefined) child.stdin!.end(opts.stdin);
+    });
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+    return { ...result, received };
+  }
+
+  /** A payload too big for one argv entry, with a tail marker to catch truncation. */
+  function bigPayload(): { json: string; tail: string } {
+    const tail = 'TAIL-MARKER-END';
+    const filler = 'A'.repeat(OVER_ARGV_LIMIT);
+    return { json: JSON.stringify({ subject: 's', html: filler + tail }), tail };
+  }
+
+  it('reads a >128KB payload from @file', async () => {
+    const { json, tail } = bigPayload();
+    expect(Buffer.byteLength(json, 'utf-8')).toBeGreaterThan(128 * 1024);
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wn-payload-')), 'letter.json');
+    fs.writeFileSync(file, json);
+
+    const r = await runTwinCall(['tools', 'call', 'human_inbox_send', `@${file}`]);
+    expect(r.err).toBe('');
+    expect(r.code).toBe(0);
+    const sent = JSON.parse(r.received.trim()) as { op: string; args: { name: string; args: { html: string } } };
+    expect(sent.op).toBe('tools.call');
+    expect(sent.args.name).toBe('human_inbox_send');
+    // Whole, not clipped at any buffer boundary.
+    expect(sent.args.args.html.endsWith(tail)).toBe(true);
+    expect(sent.args.args.html.length).toBe(OVER_ARGV_LIMIT + tail.length);
+  }, 30_000);
+
+  it('reads a >128KB payload from explicit stdin (-)', async () => {
+    const { json, tail } = bigPayload();
+    const r = await runTwinCall(['tools', 'call', 'human_inbox_send', '-'], { stdin: json });
+    expect(r.err).toBe('');
+    expect(r.code).toBe(0);
+    const sent = JSON.parse(r.received.trim()) as { args: { args: { html: string } } };
+    expect(sent.args.args.html.endsWith(tail)).toBe(true);
+  }, 30_000);
+
+  it('reads a >128KB payload from a piped stdin with no positional argument', async () => {
+    const { json, tail } = bigPayload();
+    const r = await runTwinCall(['tools', 'call', 'human_inbox_send'], { stdin: json });
+    expect(r.err).toBe('');
+    expect(r.code).toBe(0);
+    const sent = JSON.parse(r.received.trim()) as { args: { args: { html: string } } };
+    expect(sent.args.args.html.endsWith(tail)).toBe(true);
+  }, 30_000);
+
+  it('still accepts a small inline JSON argument', async () => {
+    const r = await runTwinCall(['tools', 'call', 'task_get', '{"id":"abc"}']);
+    expect(r.code).toBe(0);
+    const sent = JSON.parse(r.received.trim()) as { args: { args: { id: string } } };
+    expect(sent.args.args.id).toBe('abc');
+  }, 30_000);
+
+  it('fails usefully on an unreadable @file, a bare @, and malformed JSON', async () => {
+    const missing = await runTwinCall(['tools', 'call', 'task_get', '@/nope/missing.json']);
+    expect(missing.code).toBe(2);
+    expect(missing.err).toContain('cannot read arguments from /nope/missing.json');
+    expect(missing.received).toBe('');
+
+    const bare = await runTwinCall(['tools', 'call', 'task_get', '@']);
+    expect(bare.code).toBe(2);
+    expect(bare.err).toContain('needs a file path');
+
+    const bad = await runTwinCall(['tools', 'call', 'task_get', '{not json']);
+    expect(bad.code).toBe(2);
+    expect(bad.err).toContain('invalid JSON arguments');
+
+    const arr = await runTwinCall(['tools', 'call', 'task_get', '[1,2]']);
+    expect(arr.code).toBe(2);
+    expect(arr.err).toContain('must be a JSON object');
+  }, 60_000);
 });
 
 // ── hub: external is provenance, not authorization ──

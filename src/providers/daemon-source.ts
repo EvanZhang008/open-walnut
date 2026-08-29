@@ -314,7 +314,7 @@ process.umask(0o077);
 // (this template cannot import). Invoked from the argv dispatch in Main below
 // (async: the socket handlers call process.exit). Keep exit codes + command
 // surface in sync with wn-cli.ts and daemon-standalone.ts.
-function runWnMinimal(argv) {
+function runWnMinimal(argv, stdinText) {
   // 'walnut guide | head' closes the pipe early: EPIPE on stdout is the reader
   // saying "enough", not an error — exit clean instead of an uncaught stack.
   process.stdout.on('error', function (e) { if (e && e.code === 'EPIPE') process.exit(0); });
@@ -337,7 +337,58 @@ function runWnMinimal(argv) {
     if (flushTimer.unref) flushTimer.unref();
     try { process.stdout.write(text, finishExit); } catch (e) { finishExit(); }
   };
-  var usage = 'usage: walnut guide | walnut peers list [--json] | walnut peers send <target> <text...> | walnut tools list|call <op> [json]';
+  // ── where tools.call reads its JSON arguments from ──
+  // Twin of src/providers/tool-args-source.ts (this template cannot import).
+  // Not a convenience: Linux caps ONE argv entry at MAX_ARG_STRLEN (128KB) no
+  // matter how much room ARG_MAX leaves, and that failure happens inside execve
+  // before this process exists ("Argument list too long", which looks nothing
+  // like a size limit). A letter carrying an inline base64 audio digest is
+  // megabytes, so @file and stdin are the ONLY ways it can reach the gateway.
+  // Keep the four spellings identical across all three CLI faces.
+  var wnArgsSource = function (raw) {
+    if (raw === undefined) return process.stdin.isTTY === true ? { kind: 'none' } : { kind: 'stdin' };
+    var value = String(raw).trim();
+    if (value === '-') return { kind: 'stdin' };
+    if (value.charAt(0) === '@') {
+      var p = value.slice(1);
+      if (!p) return { kind: 'usage-error', message: '@ needs a file path, e.g. @/tmp/letter.json' };
+      return { kind: 'file', path: p };
+    }
+    if (!value) return { kind: 'none' };
+    return { kind: 'inline', json: raw };
+  };
+  var wnParseToolArgs = function (text) {
+    if (!String(text).trim()) return { ok: true, args: {} };
+    var parsedValue;
+    try { parsedValue = JSON.parse(text); } catch (e) { return { ok: false, message: 'invalid JSON arguments: ' + e.message }; }
+    if (parsedValue === null || typeof parsedValue !== 'object' || Array.isArray(parsedValue)) {
+      return { ok: false, message: 'arguments must be a JSON object' };
+    }
+    return { ok: true, args: parsedValue };
+  };
+  // Locate the tools.call payload slot the same way the parse below does (flags
+  // count only before positionals) so a piped payload can be drained BEFORE the
+  // parse: the tail of this function is callback-based and cannot await. On the
+  // re-entry the text rides an in-memory array, so no execve limit applies.
+  var wnCallSlot = function (a) {
+    if (a[0] !== 'tools') return null;
+    var r = a.slice(1);
+    while (r.length && r[0] === '--json') r.shift();
+    var s = r.shift();
+    while (r.length && r[0] === '--json') r.shift();
+    if (s !== 'call' || r.length < 1) return null;
+    return { name: r[0], raw: r[1] };
+  };
+  var wnSlot = wnCallSlot(argv);
+  var wnSrc = wnSlot ? wnArgsSource(wnSlot.raw) : null;
+  if (stdinText === undefined && wnSrc && wnSrc.kind === 'stdin') {
+    var stdinBuf = '';
+    process.stdin.setEncoding('utf-8');
+    process.stdin.on('data', function (c) { stdinBuf += c; });
+    process.stdin.on('end', function () { runWnMinimal(argv, stdinBuf); });
+    return;
+  }
+  var usage = 'usage: walnut guide | walnut peers list [--json] | walnut peers send <target> <text...> | walnut tools list|call <op> [json|@file|-]';
   if (argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') { out(usage); return exitWn(0); }
   if (argv[0] !== 'peers' && argv[0] !== 'tools' && argv[0] !== 'guide') { errOut('walnut: unknown command; ' + usage); return exitWn(2); }
   // Mirror wn-cli.ts: --json is recognized only BEFORE positional args, so
@@ -364,13 +415,19 @@ function runWnMinimal(argv) {
     else if ((sub === 'call' || sub === 'help') && rest.length >= 1) {
       if (sub === 'help') { op = 'tools.list'; args = {}; }
       else {
-        var callArgs = {};
-        if (rest[1] !== undefined) {
-          try { callArgs = JSON.parse(rest[1]); } catch (e) { errOut('walnut: invalid JSON arguments'); return exitWn(2); }
-          if (callArgs === null || typeof callArgs !== 'object' || Array.isArray(callArgs)) { errOut('walnut: arguments must be a JSON object'); return exitWn(2); }
+        var src = wnSrc || wnArgsSource(rest[1]);
+        if (src.kind === 'usage-error') { errOut('walnut: ' + src.message); return exitWn(2); }
+        var rawText = '';
+        if (src.kind === 'inline') rawText = src.json;
+        else if (src.kind === 'stdin') rawText = stdinText || '';
+        else if (src.kind === 'file') {
+          try { rawText = fs.readFileSync(src.path, 'utf-8'); }
+          catch (e) { errOut('walnut: cannot read arguments from ' + src.path + ': ' + e.message); return exitWn(2); }
         }
+        var parsedCall = wnParseToolArgs(rawText);
+        if (!parsedCall.ok) { errOut('walnut: ' + parsedCall.message); return exitWn(2); }
         op = 'tools.call';
-        args = { name: rest[0], args: callArgs };
+        args = { name: rest[0], args: parsedCall.args };
       }
     } else { errOut('walnut: ' + usage); return exitWn(2); }
   }

@@ -37,6 +37,8 @@ in it always exist:
 walnut tools list                          # every op, with a one-line purpose
 walnut tools help search                   # one op's exact arguments
 walnut tools call walnut_status '{}'       # run it (~0.2s — every data command is this fast)
+walnut tools call <op> @/tmp/args.json     # read the payload from a file (required over ~128KB)
+walnut tools call <op> -                    # read the payload from stdin
 ```
 
 Measured cost of skipping this (2026-08-19 A/B): asked for the server mode, an
@@ -182,8 +184,17 @@ walnut tools call human_inbox_send '{"subject":"Sync freeze: root cause found","
 Body is `markdown` OR `html`, exactly one. Markdown is capped at 200KB; `html`
 gets 10MB so a letter can carry inline media (a data-URI image, or an audio
 digest as `<audio src="data:audio/mpeg;base64,…">`). No scripts, no remote
-subresources: both readers block them. When the human answers or replies, it
-arrives in this session as a message; answer into the same thread:
+subresources: both readers block them.
+
+**A body that big cannot ride the command line.** One argv entry is capped at 128KB on Linux, and the failure happens inside `execve` ("Argument list too long") before Walnut sees the call at all. Write the JSON to a file and pass it by descriptor:
+
+```bash
+walnut tools call human_inbox_send @/tmp/digest.json      # read the file
+walnut tools call human_inbox_send - < /tmp/digest.json   # read stdin
+```
+
+When the human answers or replies, it arrives in this session as a message;
+answer into the same thread:
 
 ```bash
 walnut tools call human_inbox_reply '{"letter":"<letter-id>","text":"..."}'

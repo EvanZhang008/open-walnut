@@ -1333,6 +1333,32 @@ describe('agent gateway listener daemon-standalone vs daemon-source parity', () 
       expect(src).not.toMatch(/Buffer\.byteLength\((?:d\.)?buf/);
     }
   });
+
+  /**
+   * `walnut tools call` exists THREE times, and the third one is easy to forget:
+   * wn-cli.ts (bundled into the bun binary), src/commands/tools.ts (the hub CLI),
+   * and a hand-inlined minimal twin inside this template. A source-deployed host
+   * runs the template one — its on-PATH `walnut` shim execs `bun daemon.cjs wn` —
+   * so wiring @file/stdin into only the first two left every remote session
+   * unable to send a letter bigger than one argv entry (128KB on Linux), which is
+   * every letter with an inline audio digest. Raising the gateway cap to 12MB is
+   * useless on those hosts without this.
+   */
+  it('the template wn CLI accepts @file and stdin payloads, not argv only', () => {
+    // The classifier's four spellings, hand-inlined (the template cannot import).
+    expect(templateSrc).toMatch(/wnArgsSource/);
+    expect(templateSrc).toMatch(/kind: 'file'/);
+    expect(templateSrc).toMatch(/kind: 'stdin'/);
+    expect(templateSrc).toMatch(/value === '-'/);
+    expect(templateSrc).toMatch(/charAt\(0\) === '@'/);
+    // stdin is drained BEFORE the callback-based tail, then re-entered with the text.
+    expect(templateSrc).toMatch(/runWnMinimal\(argv, stdinBuf\)/);
+    expect(templateSrc).toMatch(/function runWnMinimal\(argv, stdinText\)/);
+    // The argv-only shape is gone: no direct JSON.parse of the positional slot.
+    expect(templateSrc).not.toMatch(/JSON\.parse\(rest\[1\]\)/);
+    // And the usage line tells an agent the payload can arrive by descriptor.
+    expect(templateSrc).toMatch(/json\|@file\|-/);
+  });
 });
 
 // ── Tailer self-heal parity (incident 6c8428ac: frozen watcher offset) ──
