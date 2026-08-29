@@ -229,6 +229,12 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
   const W_COSINE = 0.20;
   /** Doc-level KNN neighbours requested from the worker per query. */
   const RECALL_K = 30;
+  /** Neighbours requested when the caller restricts kinds. The worker's KNN
+   *  scans ALL kinds and the kind filter runs here AFTER the top-K cut, so a
+   *  minority kind (notes in a session-heavy corpus) can lose every slot to
+   *  neighbours the filter then discards. Overfetch so enough of the wanted
+   *  kind survives; the scan itself is full-matrix either way. */
+  const RECALL_K_KIND_FILTERED = 150;
   /** Score weight for a recall doc's KNN RANK. A keyword-less doc's only
    *  evidence is that it out-cosined ~12k others — rank is model-agnostic
    *  where raw cosine units are not. Linear decay to 0 at rank K keeps the
@@ -279,7 +285,8 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         searchOptions,
         Math.max(limit, Math.min(100, Math.max(60, limit * 3))),
       );
-      const reply = await embedder.embedQuery(query, deadline, RECALL_K);
+      const recallK = searchOptions.kinds?.length ? RECALL_K_KIND_FILTERED : RECALL_K;
+      const reply = await embedder.embedQuery(query, deadline, recallK);
       if (!reply || closed) {
         return pool.slice(0, limit).map((h) => toScored(h, 'timeout'));
       }
@@ -310,7 +317,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
             const recency = Math.exp(
               -Math.max(0, now - row.updated_at) / (RECENCY_HALF_LIFE_DAYS * 86_400_000),
             );
-            const rankStrength = 1 - (recallRank.get(row.id) ?? RECALL_K) / RECALL_K;
+            const rankStrength = 1 - (recallRank.get(row.id) ?? recallK) / recallK;
             recallDocIds.add(row.id);
             pool.push({
               docId: row.id,

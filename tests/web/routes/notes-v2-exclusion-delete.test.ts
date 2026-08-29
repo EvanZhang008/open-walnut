@@ -22,6 +22,12 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants('notes-v2-excl-del-test'));
 
+// This file exercises the QMD semantic lane BY NAME (memoryNotesSearch mock
+// below). Search v2 is default-on, which routes hybrid searches to its own
+// leg and never calls the mock — pin the flag off for the QMD path this test
+// was written against. Retire with Phase 4 (QMD deletion).
+process.env.WALNUT_SEARCH_V2 = '0';
+
 // Controllable semantic leg (same pattern as the sibling hybrid test).
 let semanticHits: any[] = [];
 vi.mock('../../../src/core/memory-search.js', () => ({

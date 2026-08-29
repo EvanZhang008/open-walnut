@@ -686,6 +686,9 @@ export interface StringSearchOptions {
    *  SQL so excluded rows never consume the LIMIT window. Content stays
    *  indexed — this is a view filter, not an index filter. */
   excludeFolders?: string[]
+  /** Internal: set on the fuzzy retry so a corrected query can never recurse
+   *  into a second round of correction. */
+  noFuzzy?: boolean
 }
 
 /** Normalize exclusion entries: trim slashes/whitespace, drop empties. */
@@ -714,6 +717,49 @@ export function isPathExcluded(relPath: string, excludes: string[]): boolean {
   if (excludes.length === 0) return false
   const p = relPath.toLowerCase()
   return excludes.some((e) => p.startsWith(e.toLowerCase() + '/'))
+}
+
+/**
+ * Function words that carry no retrieval signal in a natural-language query
+ * ("trying to have a baby", "is it worth breaking the mortgage"). Used by the
+ * relaxed FTS pass and the token-wise folder leg — NEVER applied to note
+ * content, only to the user's query tokens.
+ */
+const QUERY_STOPWORDS = new Set([
+  'the', 'and', 'for', 'was', 'are', 'has', 'had', 'not', 'you', 'your',
+  'this', 'that', 'with', 'from', 'into', 'over', 'under', 'about', 'after',
+  'before', 'between', 'during', 'without', 'within', 'what', 'when', 'where',
+  'why', 'how', 'who', 'which', 'can', 'could', 'should', 'would', 'will',
+  'have', 'having', 'been', 'being', 'than', 'then', 'them', 'they', 'their',
+  'there', 'here', 'our', 'but', 'all', 'any', 'some', 'more', 'most', 'out',
+  'off', 'per', 'via', 'does', 'did', 'done', 'get', 'got', 'its', 'his',
+  'her', 'him', 'she', 'were', 'notes', 'note',
+])
+
+/** Content-bearing query tokens: lowercase, ≥3 chars, minus function words. */
+function contentTokens(q: string): string[] {
+  return q.toLowerCase().trim().split(/\s+/)
+    .filter((t) => t.length >= 3 && !QUERY_STOPWORDS.has(t))
+}
+
+/** Folder names use '-'/'_' as word separators ("canada-immigration"). One
+ *  normal form so a spaced query can match a hyphenated segment and back. */
+function normalizeSeparators(s: string): string {
+  return s.replace(/[-_]+/g, ' ')
+}
+
+/** Words of one path segment ("Should I break variable mortgage" → 5 words). */
+function segmentWords(seg: string): string[] {
+  return normalizeSeparators(seg.toLowerCase()).split(/\s+/).filter(Boolean)
+}
+
+/** Query token vs segment/vocab word, inflection-tolerant: exact, or one is a
+ *  prefix of the other with the shorter side ≥5 chars ("break"/"breaking") —
+ *  short words never prefix-claim ("the" must not match "theory"). */
+function tokenMatchesWord(tok: string, word: string): boolean {
+  if (tok === word) return true
+  const [short, long] = tok.length <= word.length ? [tok, word] : [word, tok]
+  return short.length >= 5 && long.startsWith(short)
 }
 
 /**
@@ -806,16 +852,20 @@ function escapeRegExp(s: string): string {
 function folderScore(segments: string[], q: string): number | null {
   const ql = q.toLowerCase().trim()
   if (!ql) return null
+  // Separator-normalized forms so "canada immigration" matches the segment
+  // "canada-immigration" (and a hyphenated query matches a spaced folder).
+  const qn = normalizeSeparators(ql)
   let best: number | null = null
   for (const seg of segments) {
     const s = seg.toLowerCase()
+    const sn = normalizeSeparators(s)
     let band: number | null = null
-    if (s === ql) band = 0.89
-    else if (s.startsWith(ql)) band = 0.888
+    if (s === ql || sn === qn) band = 0.89
+    else if (s.startsWith(ql) || sn.startsWith(qn)) band = 0.888
     else if (new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(ql)}`, 'u').test(s)) band = 0.885
     // Mid-token folder substring: only meaningful for CJK / long queries (same
     // rationale as titleScore — "sin" inside "Business/" is noise, not a folder).
-    else if ((hasCjk(ql) || ql.length >= 5) && s.includes(ql)) band = 0.88
+    else if ((hasCjk(ql) || ql.length >= 5) && (s.includes(ql) || sn.includes(qn))) band = 0.88
     if (band != null && (best == null || band > best)) best = band
   }
   return best
@@ -849,6 +899,182 @@ export function escapeFts(q: string): string {
   return tokens.map((t) => `"${t.replace(/"/g, '""')}"*`).join(' ')
 }
 
+// ── Fuzzy correction: typo in the QUERY ("glucoma") or in the NOTE ("Bevar") ──
+
+interface VaultVocab { counts: Map<string, number>; list: string[]; builtAt: number }
+let vocabCache: VaultVocab | null = null
+const VOCAB_TTL_MS = 60_000
+
+/** Latin words of every note title + path segment, WITH occurrence counts
+ *  (the vault's own spelling, typos included — that's the point: correcting
+ *  the query TOWARD the vault finds notes whose author misspelled them, and
+ *  counts let us prefer the majority spelling when both exist). ~15-25k words. */
+function getVaultVocab(d: DatabaseType): VaultVocab | null {
+  if (vocabCache && Date.now() - vocabCache.builtAt < VOCAB_TTL_MS) return vocabCache
+  try {
+    const rows = d.prepare('SELECT title, path FROM notes').all() as Array<{ title: string; path: string }>
+    const counts = new Map<string, number>()
+    for (const r of rows) {
+      for (const w of `${r.title} ${r.path}`.toLowerCase().split(/[^a-z0-9]+/)) {
+        if (w.length >= 3 && w.length <= 24 && !/^\d+$/.test(w)) {
+          counts.set(w, (counts.get(w) ?? 0) + 1)
+        }
+      }
+    }
+    vocabCache = { counts, list: [...counts.keys()], builtAt: Date.now() }
+    return vocabCache
+  } catch {
+    return null
+  }
+}
+
+/** Test hook: a rebuilt index (fresh WALNUT_HOME) must not see stale words. */
+export function resetVaultVocabForTests(): void {
+  vocabCache = null
+}
+
+/** Banded Levenshtein: distance if ≤ max, else null (early row-min bailout). */
+function editDistanceAtMost(a: string, b: string, max: number): number | null {
+  if (Math.abs(a.length - b.length) > max) return null
+  let prev: number[] = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    const cur: number[] = [i]
+    let rowMin = i
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      const v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+      cur.push(v)
+      if (v < rowMin) rowMin = v
+    }
+    if (rowMin > max) return null
+    prev = cur
+  }
+  return prev[b.length] <= max ? prev[b.length] : null
+}
+
+/**
+ * Rewrite query tokens the vault has never seen toward their nearest vault
+ * word. Three forms, cheapest evidence first: token already a PREFIX of a
+ * vault word → leave it (FTS `"tok"*` already matches); a vault word is a
+ * PREFIX of the token (note says "impro", query says "improvement") → shrink
+ * to the vault form; else edit distance ≤1 (short) / ≤2. Returns the corrected
+ * query, or null when nothing changed.
+ */
+function correctQueryTokens(q: string, d: DatabaseType): string | null {
+  const vocab = getVaultVocab(d)
+  if (!vocab || vocab.counts.size === 0) return null
+  let changed = false
+  const corrected = q.trim().split(/\s+/).map((raw) => {
+    const tok = raw.toLowerCase()
+    if (tok.length < 4 || hasCjk(tok) || QUERY_STOPWORDS.has(tok)) return raw
+    if (!/^[a-z0-9'-]+$/.test(tok)) return raw
+    const tokCount = vocab.counts.get(tok) ?? 0
+    if (tokCount > 0) {
+      // The token IS a vault word — but the vault may hold both a typo'd and a
+      // correct spelling ("glucoma" in one old note, "glaucoma" everywhere
+      // else). Only a distance-1 neighbour that clearly DOMINATES the token's
+      // own count may add its results; anything weaker leaves the query alone.
+      let best: string | null = null
+      let bestCount = 0
+      for (const w of vocab.list) {
+        const c = vocab.counts.get(w) ?? 0
+        if (c < Math.max(2, 2 * tokCount) || c <= bestCount) continue
+        if (editDistanceAtMost(tok, w, 1) === 1) { best = w; bestCount = c }
+      }
+      if (!best) return raw
+      changed = true
+      return best
+    }
+    if (vocab.list.some((w) => w.startsWith(tok))) return raw
+    let best: string | null = null
+    let bestDist = Infinity
+    const maxDist = tok.length <= 5 ? 1 : 2
+    for (const w of vocab.list) {
+      if (w.length >= 4 && w.length < tok.length && tok.startsWith(w)) {
+        // Prefix-shrink: better than a distance-2 guess, worse than distance-1.
+        if (bestDist > 1.5) { best = w; bestDist = 1.5 }
+        continue
+      }
+      const dist = editDistanceAtMost(tok, w, maxDist)
+      if (dist != null && dist > 0 && dist < bestDist) {
+        best = w
+        bestDist = dist
+        if (dist === 1) break // can't beat 1 (0 was excluded by the count check)
+      }
+    }
+    if (!best) return raw
+    changed = true
+    return best
+  })
+  return changed ? corrected.join(' ') : null
+}
+
+// ── Direct folder-name search (folders with no notes are otherwise invisible) ──
+
+interface FolderList { list: string[]; builtAt: number }
+let folderListCache: FolderList | null = null
+
+/** Every folder path that exists in the vault, derived from note AND
+ *  attachment paths — a folder holding only PDFs has zero note rows, so the
+ *  note-driven folder leg can never surface it. Cached briefly. */
+function getFolderList(d: DatabaseType): FolderList {
+  if (folderListCache && Date.now() - folderListCache.builtAt < VOCAB_TTL_MS) return folderListCache
+  const dirs = new Set<string>()
+  for (const sql of ['SELECT path FROM notes', 'SELECT path FROM attachment_text']) {
+    try {
+      for (const r of d.prepare(sql).all() as Array<{ path: string }>) {
+        const segs = r.path.split('/')
+        for (let i = 1; i < segs.length; i++) dirs.add(segs.slice(0, i).join('/'))
+      }
+    } catch { /* attachment table may not exist on old indexes */ }
+  }
+  folderListCache = { list: [...dirs], builtAt: Date.now() }
+  return folderListCache
+}
+
+/** Test hook (paired with resetVaultVocabForTests). */
+export function resetFolderListForTests(): void {
+  folderListCache = null
+}
+
+/**
+ * Folders whose OWN name matches the query — independent of whether they
+ * contain any notes. Same match rules as the folder leg (whole-query segment
+ * match, or ≥2 content tokens hitting words of the name), plus the fuzzy
+ * correction pass when the literal query matches nothing.
+ */
+export function searchFolders(q: string, limit = 5, options: StringSearchOptions = {}): string[] {
+  const d = getNotesIndexDb()
+  if (!d) return []
+  const folders = getFolderList(d)
+  const excludes = options.excludeFolders ?? []
+  const tryMatch = (query: string): string[] => {
+    const hits: string[] = []
+    const toks = contentTokens(query)
+    for (const f of folders.list) {
+      if (isPathExcluded(f + '/', excludes) || isPathExcluded(f, excludes)) continue
+      const last = f.split('/').pop() ?? f
+      let matched = folderScore([last], query) != null
+      if (!matched && toks.length >= 2) {
+        const words = segmentWords(last)
+        matched = words.length >= 2
+          && toks.filter((t) => words.some((w) => tokenMatchesWord(t, w))).length >= 2
+      }
+      if (matched) {
+        hits.push(f)
+        if (hits.length >= limit) break
+      }
+    }
+    return hits
+  }
+  let res = tryMatch(q)
+  if (res.length === 0 && !options.noFuzzy && !hasCjk(q)) {
+    const corrected = correctQueryTokens(q, d)
+    if (corrected && corrected !== q.trim().toLowerCase()) res = tryMatch(corrected)
+  }
+  return res
+}
+
 /**
  * Exact/substring string search over the structural index.
  * FTS5 first (sublinear token/prefix match), then a capped LIKE fallback for
@@ -857,8 +1083,31 @@ export function escapeFts(q: string): string {
 export function stringSearch(q: string, limit: number, options: StringSearchOptions = {}): StringHit[] {
   const d = getNotesIndexDb()
   if (!d) return []
-  const seen = new Set<string>()
-  const out: StringHit[] = []
+  // Max-merge bookkeeping: several legs can hit the SAME note, and leg order
+  // is evidence order, not score order — the title leg's weak partial (0.75)
+  // must not block the folder leg's 0.873 or the fuzzy retry's corrected title
+  // band for that note. Every leg funnels through addHit(); the best band
+  // wins, and structural annotations (folderMatch/headingMatch/tags) merge in.
+  const byId = new Map<string, StringHit>()
+  const addHit = (hit: StringHit): void => {
+    const prev = byId.get(hit.id)
+    if (!prev) {
+      byId.set(hit.id, hit)
+      return
+    }
+    if (hit.stringScore > prev.stringScore) {
+      byId.set(hit.id, {
+        ...hit,
+        folderMatch: hit.folderMatch ?? prev.folderMatch,
+        headingMatch: hit.headingMatch ?? prev.headingMatch,
+        matchedTags: hit.matchedTags ?? prev.matchedTags,
+      })
+    } else {
+      if (hit.folderMatch && !prev.folderMatch) prev.folderMatch = hit.folderMatch
+      if (hit.headingMatch && !prev.headingMatch) prev.headingMatch = hit.headingMatch
+      if (hit.matchedTags && !prev.matchedTags) prev.matchedTags = hit.matchedTags
+    }
+  }
   const excl = exclusionSql('path', options.excludeFolders ?? [])
 
   type RawHit = { id: string; path: string; title: string; body: string; headings?: string; rank?: number; modified?: string }
@@ -872,29 +1121,67 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
   // rank at their title band. Matching `path` catches basename-only hits
   // (file `SIN number.md` whose display title never says "SIN").
   const titleLike = `%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`
-  const firstTok = q.trim().split(/\s+/)[0] ?? ''
-  const firstTokLike = `%${firstTok.replace(/[\\%_]/g, (m) => '\\' + m)}%`
+  // Prefetch on EVERY content token, not just the first — "my daily rhythm"
+  // must pull the note titled "RHYTHM" into the candidate set even though the
+  // full phrase and the first word both miss it. Function words are skipped
+  // ('%my%' would pull 60 arbitrary rows); ≤4 tokens keeps the OR bounded.
+  const prefetchToks = contentTokens(q).slice(0, 4)
+  if (prefetchToks.length === 0) {
+    const raw = q.trim().split(/\s+/)[0] ?? ''
+    if (raw) prefetchToks.push(raw)
+  }
+  const tokLikes = prefetchToks.map((t) => `%${t.replace(/[\\%_]/g, (m) => '\\' + m)}%`)
   const titleRows = d
     .prepare(
       `SELECT id, path, title, body, modified FROM notes
-       WHERE (title LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')${excl.sql}
+       WHERE (title LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\'${' OR title LIKE ? ESCAPE \'\\\''.repeat(tokLikes.length)})${excl.sql}
        LIMIT ?`,
     )
-    .all(titleLike, firstTokLike, titleLike, ...excl.params, limit * 2) as RawHit[]
+    .all(titleLike, titleLike, ...tokLikes, ...excl.params, limit * 2) as RawHit[]
   // Mid-token substring hits (band ≤0.30) are collected but NOT marked seen and
   // only appended AFTER the strong legs: a later leg (heading/FTS body) may score
   // the same note higher, and they must never crowd word matches out of `out`.
   const weakNameHits: StringHit[] = []
+  const qContentTokens = contentTokens(q)
+  let partialTitleHits = 0
   for (const r of titleRows) {
-    const band = nameScore(r.title, r.path, q)
+    let band = nameScore(r.title, r.path, q)
+    // Partial-title band: a multi-word query where SOME content token is a
+    // real title/filename word ("my daily rhythm" → note titled "RHYTHM")
+    // still names the note — full-phrase and all-words-in-title failed, but
+    // one deliberate title word beats any body-only match. Graded so a title
+    // that IS the token (0.858) outranks one merely containing it (0.855);
+    // the whole band sits under tag (0.86), above the best body-FTS (0.85).
+    // Capped: incidental one-word overlaps must never flood the list.
+    if (band == null && qContentTokens.length >= 2 && partialTitleHits < 8) {
+      let bestTok = 0
+      let bestTokWord = ''
+      for (const tok of qContentTokens) {
+        const s = nameScore(r.title, r.path, tok) ?? 0
+        if (s > bestTok) { bestTok = s; bestTokWord = tok }
+      }
+      if (bestTok >= 0.92) {
+        // Supported = every OTHER content token also appears somewhere in the
+        // note. One title word + the rest of the query present is a real name
+        // hit; one title word alone ("gap" naming an unrelated note for query
+        // "insurence gap") is a coincidence and must rank under the corrected/
+        // relaxed full-evidence bands.
+        const hay = `${r.title}\n${r.path}\n${r.body}`.toLowerCase()
+        const supported = qContentTokens.every((tok) => tok === bestTokWord || hay.includes(tok))
+        if (supported) {
+          band = bestTok >= 0.96 ? 0.858 : bestTok >= 0.93 ? 0.856 : 0.855
+        } else {
+          band = 0.75
+        }
+        partialTitleHits++
+      }
+    }
     if (band == null) continue // matched a token but not as a scorable name hit
-    if (seen.has(r.id)) continue
     const hit = { id: r.id, path: r.path, title: r.title, body: r.body, stringScore: band, modified: r.modified }
     if (band <= 0.3) {
       weakNameHits.push(hit)
     } else {
-      seen.add(r.id)
-      out.push(hit)
+      addHit(hit)
     }
   }
 
@@ -909,11 +1196,9 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
     )
     .all(titleLike, ...excl.params, limit * 2) as RawHit[]
   for (const r of headingRows) {
-    if (seen.has(r.id)) continue
     const hs = headingScore(r.headings ?? '', q)
     if (!hs) continue
-    seen.add(r.id)
-    out.push({
+    addHit({
       id: r.id, path: r.path, title: r.title, body: r.body,
       stringScore: hs.band, headingMatch: hs.heading, modified: r.modified,
     })
@@ -932,9 +1217,7 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
       )
       .all(tagSlug, tagSlug.replace(/[\\%_]/g, (m) => '\\' + m) + '/%', ...tagExcl.params, limit) as RawHit[]
     for (const r of tagRows) {
-      if (seen.has(r.id)) continue
-      seen.add(r.id)
-      out.push({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: 0.86, matchedTags: [tagSlug], modified: r.modified })
+      addHit({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: 0.86, matchedTags: [tagSlug], modified: r.modified })
     }
   }
 
@@ -952,7 +1235,7 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
   // EXACTLY equals a path segment (no prefix/substring), so short common words
   // can't drag whole folders in. Residual tokens that also appear in the
   // note's title/body lift that note above its folder siblings.
-  const folderTokens = q.trim().split(/\s+/).filter((t) => t.length >= 3)
+  const folderTokens = contentTokens(q)
   const tokenWise = folderTokens.length >= 2
   const folderLikeParams = [
     `%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`,
@@ -970,30 +1253,44 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
     const segments = r.path.split('/').slice(0, -1) // folders only, drop the filename
     let band = folderScore(segments, q)
     let matchedQ = q
+    let explicitFolder: string | undefined
     if (band == null && tokenWise) {
       for (const tok of folderTokens) {
-        if (!segments.some((s) => s.toLowerCase() === tok.toLowerCase())) continue
+        if (!segments.some((s) => normalizeSeparators(s.toLowerCase()) === tok)) continue
         // Exact-segment token match: base band sits below every whole-query
         // folder band (0.88–0.89) and above headings (0.87). A residual token
         // found in the title/body upgrades the note toward the folder band.
         const residuals = folderTokens.filter((t) => t !== tok)
         const hay = `${r.title}\n${r.body}`.toLowerCase()
-        const residualHit = residuals.some((t) => hay.includes(t.toLowerCase()))
+        const residualHit = residuals.some((t) => hay.includes(t))
         band = residualHit ? 0.879 : 0.875
         matchedQ = tok
         break
       }
     }
+    if (band == null && tokenWise) {
+      // Word-WITHIN-segment match for sentence-named folders ("Should I break
+      // variable mortgage/"). Needs ≥2 query tokens hitting words of the SAME
+      // segment (inflection-tolerant) — a single shared word is noise. Band
+      // sits just under the exact-segment token band.
+      for (let i = segments.length - 1; i >= 0; i--) {
+        const words = segmentWords(segments[i])
+        if (words.length < 2) continue
+        const matched = folderTokens.filter((tok) => words.some((w) => tokenMatchesWord(tok, w)))
+        if (matched.length < 2) continue
+        band = matched.length >= 3 ? 0.874 : 0.873
+        explicitFolder = segments.slice(0, i + 1).join('/')
+        break
+      }
+    }
     if (band == null) continue
-    if (seen.has(r.id)) continue
-    seen.add(r.id)
-    out.push({
+    addHit({
       id: r.id,
       path: r.path,
       title: r.title,
       body: r.body,
       stringScore: band,
-      folderMatch: matchedFolderPath(segments, matchedQ),
+      folderMatch: explicitFolder ?? matchedFolderPath(segments, matchedQ),
       modified: r.modified,
     })
   }
@@ -1022,7 +1319,6 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
       const worst = Math.max(...ranks)
       const span = worst - best
       for (const r of rows) {
-        if (seen.has(r.id)) continue
         const nameBand = nameScore(r.title, r.path, q)
         let score: number
         if (nameBand != null && nameBand > 0.3) {
@@ -1031,12 +1327,59 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
           const norm = span > 0 ? (worst - (r.rank ?? 0)) / span : 1 // 1=best
           score = 0.5 + 0.35 * norm
         }
-        seen.add(r.id)
-        out.push({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: score, modified: r.modified })
+        addHit({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: score, modified: r.modified })
       }
     } catch (err) {
       // Malformed MATCH shouldn't happen after escapeFts, but never throw.
       log.memory.debug('notes-index: FTS match failed, using LIKE only', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  // Relaxed FTS pass: implicit-AND dies on natural-language queries — "trying
+  // to have a baby" demands "to"* AND "a"* AND … in one note, so the leg
+  // returns nothing for exactly the phrasings humans type. Re-run with the
+  // content tokens only, banded strictly BELOW the full-query FTS best (0.85)
+  // so a full-phrase match always outranks its relaxation. A row whose TITLE
+  // or FILENAME is one of the content tokens ("my daily rhythm" → RHYTHM.md)
+  // gets a fixed 0.855 — combined title+body evidence, still under every
+  // tag/heading/folder/title band.
+  const relaxedTokens = contentTokens(q)
+  const rawTokenCount = q.trim().split(/\s+/).filter(Boolean).length
+  if (relaxedTokens.length >= 1 && relaxedTokens.length < rawTokenCount && !hasCjk(q)) {
+    try {
+      const relaxedMatch = relaxedTokens.map((t) => `"${t.replace(/"/g, '""')}"*`).join(' ')
+      const ftsExcl = exclusionSql('n.path', options.excludeFolders ?? [])
+      const rows = d
+        .prepare(
+          `SELECT n.id, n.path, n.title, n.body, n.modified, bm25(notes_fts) AS rank
+           FROM notes_fts f JOIN notes n ON n.rowid = f.rowid
+           WHERE notes_fts MATCH ?${ftsExcl.sql}
+           ORDER BY rank
+           LIMIT ?`,
+        )
+        .all(relaxedMatch, ...ftsExcl.params, limit) as RawHit[]
+      const ranks = rows.map((r) => r.rank ?? 0)
+      const best = Math.min(...ranks)
+      const worst = Math.max(...ranks)
+      const span = worst - best
+      for (const r of rows) {
+        const relaxedQ = relaxedTokens.join(' ')
+        const nameBand = nameScore(r.title, r.path, relaxedQ)
+        let score: number
+        if (nameBand != null && nameBand > 0.3) {
+          score = nameBand
+        } else if (relaxedTokens.some((tok) => (nameScore(r.title, r.path, tok) ?? 0) >= 0.93)) {
+          score = 0.855
+        } else {
+          const norm = span > 0 ? (worst - (r.rank ?? 0)) / span : 1
+          score = 0.5 + 0.33 * norm // [0.50, 0.83] — always under the full-query band
+        }
+        addHit({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: score, modified: r.modified })
+      }
+    } catch (err) {
+      log.memory.debug('notes-index: relaxed FTS pass failed', {
         error: err instanceof Error ? err.message : String(err),
       })
     }
@@ -1048,7 +1391,7 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
   // queries this leg is the PRIMARY body path, must always run, and scores at
   // the FTS body floor (0.5) instead of the noise band.
   const cjkQuery = hasCjk(q)
-  if (out.length < limit || cjkQuery) {
+  if (byId.size < limit || cjkQuery) {
     const like = `%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`
     const rows = d
       .prepare(
@@ -1058,7 +1401,7 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
       )
       .all(like, like, ...excl.params, limit) as RawHit[]
     for (const r of rows) {
-      if (seen.has(r.id)) continue
+      if (byId.has(r.id)) continue // fallback never outbids a real leg
       const nameBand = nameScore(r.title, r.path, q)
       // Body-only LIKE hit: CJK gets the FTS-floor band (this IS its body leg);
       // Latin word-boundary hits 0.25; raw mid-token substrings 0.10 so noise
@@ -1068,23 +1411,52 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
         : new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(q.toLowerCase())}`, 'u').test(r.body.toLowerCase())
           ? 0.25
           : 0.1
-      seen.add(r.id)
-      out.push({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: nameBand ?? bodyBand, modified: r.modified })
+      addHit({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: nameBand ?? bodyBand, modified: r.modified })
     }
   }
 
   // Weak name hits (mid-token title substrings) join only now, after every
   // stronger leg had its chance to claim the same note at a better band.
   for (const w of weakNameHits) {
-    if (seen.has(w.id)) continue
-    seen.add(w.id)
-    out.push(w)
+    if (byId.has(w.id)) continue
+    byId.set(w.id, w)
+  }
+
+  // Fuzzy retry: when the legs above produced no structural hit, correct
+  // unknown query tokens toward the vault's own vocabulary and run the whole
+  // search once more ("glucoma" → "glaucoma"; "history" → the note's own typo
+  // "histroy"). Guardrails, each one a measured failure: (a) only keyword-ish
+  // queries — a stopword-heavy sentence is paraphrase territory and correction
+  // just invents junk ("trying to have a baby" once became a folder full of
+  // stock notes); (b) "strong" means a structural band (≥0.87) — counting
+  // body/partial hits let 60 incidental rows suppress the retry; (c) corrected
+  // hits are remapped into [0.60, 0.80] (order-preserving) so a guessed word
+  // can never outrank ANY band the literal query earned, semantic included.
+  if (!options.noFuzzy && !hasCjk(q)) {
+    const allTokenCount = q.trim().split(/\s+/).filter(Boolean).length
+    const keywordish = qContentTokens.length * 2 >= allTokenCount
+    let structuralHits = 0
+    for (const h of byId.values()) if (h.stringScore >= 0.87) structuralHits++
+    if (keywordish && structuralHits < 3) {
+      const corrected = correctQueryTokens(q, d)
+      if (corrected && corrected !== q.trim().toLowerCase()) {
+        let added = 0
+        for (const h of stringSearch(corrected, limit, { ...options, noFuzzy: true })) {
+          if (added >= 15) break
+          added++
+          // addHit max-merges, so a note the literal query only reached weakly
+          // (an unsupported partial) still gets its corrected-query band.
+          addHit({ ...h, stringScore: 0.6 + 0.2 * Math.min(1, h.stringScore) })
+        }
+      }
+    }
   }
 
   // Highest relevance first; EQUAL bands break by recency (newest first).
   // Title-word queries routinely tie a whole family of notes at one band
   // (a street name → 8 notes at .93) — without this, order degrades to SQL
   // row order and the note touched yesterday sorts below years-old ones.
+  const out = [...byId.values()]
   out.sort(
     (a, b) => b.stringScore - a.stringScore || (b.modified ?? '').localeCompare(a.modified ?? ''),
   )

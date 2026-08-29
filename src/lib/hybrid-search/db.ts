@@ -136,6 +136,10 @@ export function openSearchDb(options: OpenOptions): OpenResult {
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = NORMAL');
   db.pragma('foreign_keys = ON');
+  // Without a busy timeout any second connection (a diagnostic script, a test
+  // server on the same home) makes writes fail INSTANTLY with SQLITE_BUSY —
+  // observed as vector-backfill writes dying with "database is locked".
+  db.pragma('busy_timeout = 5000');
   db.exec(DDL);
 
   let needsRebuild = false;

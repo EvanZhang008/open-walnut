@@ -52,6 +52,7 @@ import {
   notePathsForTag,
   getNoteIdByPath,
   countNotesUnderFolder,
+  searchFolders,
   updateNotePath,
   docCount,
   dbSizeBytes,
@@ -954,6 +955,14 @@ const SEMANTIC_ONLY_CAP = 10
 const FOLDER_ONLY_CAP = 5
 
 /**
+ * How many attachment (OCR/PDF text) rows may appear. Attachments are real
+ * string evidence but extraction noise makes them junk-prone: a vague query
+ * once put SIX scanned-form PDFs above every authored note. Three keeps the
+ * legit "find my scanned document" case working without the flooding.
+ */
+const ATTACHMENT_CAP = 3
+
+/**
  * Interactive-search relevance floor for the RRF-only (rerank-disabled) semantic
  * leg. Without the local reranker QMD scores a hit as `1 / rrfRank`, so the
  * [0,1] cosine-like scale SEMANTIC_FLOOR assumes no longer applies: rank 1 =
@@ -1094,6 +1103,18 @@ async function performNotesSearchInner(opts: {
 
     let degraded: 'semantic-unavailable' | undefined
     if (semanticSettled.status === 'fulfilled') {
+      // The v2 leg's raw scores are ADDITIVE components in ~[0, 1.3] — a scale
+      // the string bands (≤1.0, title ≥0.90 > folder 0.875-0.89 > heading 0.87
+      // > tag 0.86 > body 0.50-0.85) were never designed against. Fed raw into
+      // the tier-1 max() below, dozens of body+semantic 'both' rows outscored a
+      // PERFECT title match (query "goals" buried the note literally titled
+      // "GOALS" at rank 20). Map v2 scores into the body band [0.55, 0.85]:
+      // monotonic (semantic-only ordering and caps keep v2's own ranking), and
+      // by construction never above any title/folder/heading/tag band — a
+      // semantic opinion can lift a body hit to the top of the body band, but
+      // can never outrank deliberate authored structure.
+      const toSemanticBand = (raw: number): number =>
+        v2Active ? 0.55 + 0.3 * Math.min(1, raw) : raw
       for (const h of semanticSettled.value) {
         // Folder exclusion for the semantic leg: QMD returns absolute paths,
         // so filter on the vault-relative form (JS mirror of the SQL filter).
@@ -1105,7 +1126,7 @@ async function performNotesSearchInner(opts: {
           // Already a string hit → promote to 'both' (no floor — string match
           // already proves relevance). Keep the highlighted string snippet.
           existing.matchType = 'both'
-          existing.semanticScore = h.score
+          existing.semanticScore = toSemanticBand(h.score)
           if (!existing.snippet.includes('<mark>') && h.snippet) {
             existing.snippet = cleanSnippetText(h.snippet)
           }
@@ -1118,7 +1139,7 @@ async function performNotesSearchInner(opts: {
             snippet: cleanSnippetText(h.snippet || ''),
             matchType: 'semantic',
             score: 0,
-            semanticScore: h.score,
+            semanticScore: toSemanticBand(h.score),
           })
         }
       }
@@ -1163,6 +1184,14 @@ async function performNotesSearchInner(opts: {
     // recursive note count from the index (not a count of rows in this window).
     const matchedFolders = new Set<string>()
     for (const r of results) if (r.folderMatch) matchedFolders.add(r.folderMatch)
+    // Direct folder-name scan: a folder holding only attachments (a PDF dossier
+    // folder) has zero note rows, so no result can ever carry its folderMatch —
+    // without this it is simply unfindable by name.
+    if (wantString) {
+      try {
+        for (const p of searchFolders(q, 5, { excludeFolders })) matchedFolders.add(p)
+      } catch { /* folder scan is best-effort */ }
+    }
     const folders: FolderGroupRow[] = [...matchedFolders]
       .map((p) => ({
         path: p,
@@ -1182,17 +1211,29 @@ async function performNotesSearchInner(opts: {
     const capped: SearchResultRow[] = []
     let semanticOnly = 0
     let folderOnly = 0
+    let attachments = 0
+    // "Strong semantic" under the two scales: QMD cosine-like ≥0.5; v2 after
+    // toSemanticBand ≥0.70 (raw ≥0.5). The band floor is 0.595, so the old 0.5
+    // would exempt EVERY v2 semantic hit from the folder-only cap.
+    const strongSemantic = v2Active ? 0.7 : 0.5
     for (const r of results) {
       if (r.matchType === 'semantic') {
         if (semanticOnly >= SEMANTIC_ONLY_CAP) continue
         semanticOnly++
+      }
+      // Attachments are OCR/PDF text — real string evidence but junk-prone
+      // (stopwordy queries match boilerplate in scanned forms). A few rows is
+      // signal; six PDF rows burying every authored note is flooding.
+      if (r.matchType === 'attachment') {
+        if (attachments >= ATTACHMENT_CAP) continue
+        attachments++
       }
       // folderMatch + a stringScore still in the folder band (<0.90, i.e. no title
       // hit and no body-FTS hit outranked it) ⇒ the folder name is the only reason
       // this note is here. A strong semantic hit exempts it — that's a real
       // content match, not folder membership.
       const isFolderOnly =
-        !!r.folderMatch && (r.stringScore ?? 0) < 0.9 && (r.semanticScore ?? 0) < 0.5
+        !!r.folderMatch && (r.stringScore ?? 0) < 0.9 && (r.semanticScore ?? 0) < strongSemantic
       if (isFolderOnly) {
         if (folderOnly >= FOLDER_ONLY_CAP) continue
         folderOnly++
