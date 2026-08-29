@@ -194,21 +194,28 @@ struct Letter: Codable, Identifiable, Equatable {
 
     // MARK: - Body clipping for the phone
 
-    /// Longest body the phone renders inline. A letter is meant to be one phone
-    /// screen; a 200KB body (the server's cap) is a report that belongs behind
-    /// a link, and parsing it into markdown blocks on a phone is a freeze.
-    /// Clipping is ANNOUNCED (`bodyWasClipped`) — a silently truncated document
-    /// is worse than a short one plus a note.
+    /// Longest MARKDOWN body the phone renders inline. The cost this bounds is
+    /// specific: parsing a long document into markdown blocks on the main thread
+    /// is a freeze. Clipping is ANNOUNCED (`bodyWasClipped`) — a silently
+    /// truncated document is worse than a short one plus a note.
     static let phoneBodyCap = 60_000
 
-    /// The body to render, clipped at `phoneBodyCap` characters.
+    /// The body to render.
+    ///
+    /// HTML is NEVER clipped, and that is the point: a WKWebView is a browser,
+    /// so length is not what hurts there, while cutting an HTML body at a fixed
+    /// character count lands in the middle of whatever was longest — which for
+    /// a digest letter is the base64 inside `<audio src="data:audio/mpeg;base64,
+    /// …">`. Half a data URI is not a shorter document, it is a corrupt one:
+    /// the player renders and then fails to decode. Size is already bounded at
+    /// the source (the server caps an html body at 10MB, markdown at 200KB).
     var displayBody: String {
         let raw = body ?? ""
-        guard raw.count > Self.phoneBodyCap else { return raw }
+        guard !isHTMLBody, raw.count > Self.phoneBodyCap else { return raw }
         return String(raw.prefix(Self.phoneBodyCap))
     }
 
-    var bodyWasClipped: Bool { (body ?? "").count > Self.phoneBodyCap }
+    var bodyWasClipped: Bool { !isHTMLBody && (body ?? "").count > Self.phoneBodyCap }
 }
 
 /// GET /api/v1/human-inbox[?archived=1] → { letters, unreadCount }.

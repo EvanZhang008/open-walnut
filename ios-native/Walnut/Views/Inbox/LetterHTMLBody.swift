@@ -12,10 +12,14 @@ import WebKit
 ///   document; nothing in one needs to run code.
 /// - **`baseURL: nil`** so no relative reference can resolve to anything, on
 ///   this server or elsewhere.
-/// - **CSP `default-src 'none'`** with only `data:`/`blob:` images and inline
-///   styles allowed. Without it a tracker pixel in a letter would report the
-///   exact moment (and IP) the human read it. Declared as a `<meta>` because
-///   that is honoured for every load, `loadHTMLString` included.
+/// - **CSP `default-src 'none'`** with only `data:`/`blob:` images and media
+///   plus inline styles allowed. Without it a tracker pixel in a letter would
+///   report the exact moment (and IP) the human read it. Declared as a `<meta>`
+///   because that is honoured for every load, `loadHTMLString` included.
+///   `media-src` is what lets a daily digest embed its podcast as
+///   `<audio src="data:audio/mpeg;base64,…">`: under `default-src 'none'` the
+///   player renders and silently refuses to play. Still no network — an
+///   `https://` media URL stays blocked, so opening a letter reveals nothing.
 /// - **Navigation lockdown**: only the initial in-memory document ever renders.
 ///   A real link tap opens in Safari; every other navigation is cancelled.
 /// - **Ephemeral data store**: nothing is persisted or shared with the app's
@@ -53,7 +57,7 @@ struct LetterHTMLBody: View {
         <!DOCTYPE html><html><head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data:">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; media-src data: blob:; style-src 'unsafe-inline'; font-src data:">
         <style>
         :root { color-scheme: light dark; }
         html, body { margin: 0; padding: 0; background: transparent; }
@@ -70,6 +74,7 @@ struct LetterHTMLBody: View {
         h1 { font-size: 1.35em; } h2 { font-size: 1.2em; } h3 { font-size: 1.08em; }
         p, ul, ol, blockquote, table { margin: 0.55em 0; }
         img, video, svg { max-width: 100%; height: auto; }
+        audio { width: 100%; }
         pre, code, kbd { font-family: ui-monospace, Menlo, monospace; font-size: 0.88em; }
         pre { overflow-x: auto; padding: 8px 10px; border-radius: 8px; background: rgba(120,120,128,0.16); }
         code { padding: 1px 4px; border-radius: 4px; background: rgba(120,120,128,0.16); }

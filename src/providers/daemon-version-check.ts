@@ -46,6 +46,10 @@ const DAEMON_SOURCE_FILES = [
   // bundled into the daemon binary. Same order as scripts/build-daemon.sh.
   'src/providers/gateway-core.ts',
   'src/providers/wn-cli.ts',
+  // How `walnut tools call` reads its args (inline / @file / stdin). Bundled
+  // into the CLI above, so a change here must move the version — an unchanged
+  // version means no host redeploys and @file silently stays unsupported.
+  'src/providers/tool-args-source.ts',
   // ACP worker stack — compiled into the daemon deploy unit (worker artifact
   // ships with the daemon; version skew impossible by construction).
   'src/providers/acp-daemon.ts',

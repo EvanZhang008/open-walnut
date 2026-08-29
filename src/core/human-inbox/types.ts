@@ -78,7 +78,7 @@ export interface LetterRecord {
 export interface NewLetter {
   subject: string;
   type: LetterType;
-  /** Exactly one of html | markdown, each capped at LETTER_BODY_MAX_BYTES. */
+  /** Exactly one of html | markdown — see letterFieldMaxBytes for the caps. */
   html?: string;
   markdown?: string;
   /** Short plain-text preview; derived from the body when absent. */
@@ -128,8 +128,30 @@ export const LETTER_TYPES: readonly LetterType[] = [
   'info',
 ];
 
-/** Same cap on every transport: the gateway request line bounds us at 256KB. */
+/**
+ * Cap for the PLAIN fields — a markdown body, a thread turn's text, an answer's
+ * note. Prose written for one phone screen; anything this big is already a
+ * file's job.
+ */
 export const LETTER_BODY_MAX_BYTES = 200 * 1024;
+
+/**
+ * Cap for an HTML body, which is the one field that legitimately carries inline
+ * MEDIA: a daily audio digest embeds its podcast as a base64 `<audio src="data:
+ * audio/mpeg;base64,…">`, which is 2-5MB for a few minutes of speech. Splitting
+ * it out (rather than raising the plain cap too) keeps the fields that live in
+ * index.json, and the preview work every letter pays, as small as they were.
+ *
+ * Everything on the path has to clear this: the daemon's gateway request line
+ * (GATEWAY_MAX_LINE_BYTES, the reason this used to be 200KB on every transport)
+ * and the express body limit (15mb).
+ */
+export const LETTER_HTML_MAX_BYTES = 10 * 1024 * 1024;
+
+/** Which cap one field is held to. Unknown names get the plain cap. */
+export function letterFieldMaxBytes(field: string): number {
+  return field === 'html' ? LETTER_HTML_MAX_BYTES : LETTER_BODY_MAX_BYTES;
+}
 
 /** Envelope preview / push body budget. */
 export const LETTER_PREVIEW_MAX_CHARS = 300;

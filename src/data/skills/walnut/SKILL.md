@@ -120,7 +120,7 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `project_metadata_update` | Update project settings (write, primary-only) | name (string): Project name; Inbox has no metadata row; default_cwd? (string\|null): Absolute default working directory; null clears it; default_host? (string\|null): Default execution host alias; null clears it |
 | `task_pin_set` | Pin or unpin a task (write) | id (string): Task id or unique prefix; pinned (boolean): true to pin; false to unpin |
 | `task_focus_tier_set` | Set a pinned task focus tier (write) | id (string): Pinned task id or unique prefix; tier (string): focus, satellite, backlog, wait, or a custom tier id |
-| `human_inbox_send` | Send the human a letter (write) | subject (string): One line the human reads first, like an email subject; type (completion\|action_required\|review\|info): completion \| action_required \| review \| info; markdown? (string): Letter body as markdown (exactly one of markdown \| html); html? (string): Letter body as self-contained HTML, no scripts (inline styles only); text? (string): Short plain-text preview for the envelope row and the phone push; actions? (array<object>): action_required only: the options rendered as buttons; task_refs? (array<string>): Task ids this letter is about; rendered as clickable pills; pin? (boolean): Pin it to the top of the inbox (digests, standing reports) |
+| `human_inbox_send` | Send the human a letter (write) | subject (string): One line the human reads first, like an email subject; type (completion\|action_required\|review\|info): completion \| action_required \| review \| info; markdown? (string): Letter body as markdown (exactly one of markdown \| html); html? (string): Letter body as self-contained HTML, no scripts (inline styles only). The one body that may carry inline media as data: URIs : a chart image, or an audio digest as <audio controls src="data:audio/mpeg;base64,...">. Up to 10MB; remote URLs are blocked.; text? (string): Short plain-text preview for the envelope row and the phone push; actions? (array<object>): action_required only: the options rendered as buttons; task_refs? (array<string>): Task ids this letter is about; rendered as clickable pills; pin? (boolean): Pin it to the top of the inbox (digests, standing reports) |
 | `human_inbox_reply` | Reply in a letter thread (write) | letter (string): Letter id from human_inbox_send (lt-...); text (string): Your reply as plain text (always required: it is the thread line); markdown? (string): Optional richer body rendered under the reply; html? (string): Optional self-contained HTML body, no scripts |
 
 Use `walnut tools help <op>` or `wn tools help <op>` for the full live description. Use the generic `api` operation only when no named operation exists.
@@ -179,8 +179,11 @@ write it yourself.
 walnut tools call human_inbox_send '{"subject":"Sync freeze: root cause found","type":"action_required","markdown":"The freeze is a stale lock left by an interrupted rebase, not the network.\n\n- **A** self-heal on startup (safe, ~1 day)\n- **B** fail loudly and let the human clear it (1 hour)\n\nRecommend A.","text":"Root cause found; pick A (self-heal) or B (fail loud).","actions":[{"id":"a","label":"Self-heal on startup","description":"Recommended"},{"id":"b","label":"Fail loudly"}]}'
 ```
 
-Body is `markdown` OR `html`, exactly one, 200KB max. When the human answers or
-replies, it arrives in this session as a message; answer into the same thread:
+Body is `markdown` OR `html`, exactly one. Markdown is capped at 200KB; `html`
+gets 10MB so a letter can carry inline media (a data-URI image, or an audio
+digest as `<audio src="data:audio/mpeg;base64,…">`). No scripts, no remote
+subresources: both readers block them. When the human answers or replies, it
+arrives in this session as a message; answer into the same thread:
 
 ```bash
 walnut tools call human_inbox_reply '{"letter":"<letter-id>","text":"..."}'

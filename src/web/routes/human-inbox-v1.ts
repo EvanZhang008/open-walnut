@@ -27,7 +27,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError } from './v1-control-relay.js'
-import { LETTER_BODY_MAX_BYTES, type AgentReplyInput, type NewLetter } from '../../core/human-inbox/types.js'
+import { letterFieldMaxBytes, type AgentReplyInput, type NewLetter } from '../../core/human-inbox/types.js'
 
 export const humanInboxV1Router = Router()
 
@@ -106,10 +106,15 @@ function letterId(req: Request): string {
   return Array.isArray(id) ? id.join('/') : String(id ?? '')
 }
 
-/** Reject an oversize body BEFORE the store writes anything. */
-function oversizeField(fields: Record<string, unknown>): string | null {
+/**
+ * Reject an oversize body BEFORE the store writes anything. Per FIELD, not one
+ * number: an html body may carry inline media (a base64 audio digest) and gets
+ * the 10MB cap, while markdown and plain text keep the 200KB prose cap.
+ */
+function oversizeField(fields: Record<string, unknown>): { name: string; max: number } | null {
   for (const [name, value] of Object.entries(fields)) {
-    if (typeof value === 'string' && Buffer.byteLength(value, 'utf-8') > LETTER_BODY_MAX_BYTES) return name
+    const max = letterFieldMaxBytes(name)
+    if (typeof value === 'string' && Buffer.byteLength(value, 'utf-8') > max) return { name, max }
   }
   return null
 }
@@ -131,7 +136,7 @@ humanInboxV1Router.post('/human-inbox', async (req: Request, res: Response, next
     const over = oversizeField({ html: b.html, markdown: b.markdown, text: b.text })
     if (over) {
       sendError(res, 413, 'too_large',
-        `${over} is over the ${LETTER_BODY_MAX_BYTES}-byte letter cap — link a file instead of inlining a big artifact`)
+        `${over.name} is over the ${over.max}-byte letter cap — link a file instead of inlining a big artifact`)
       return
     }
     if (CLOUD_MODE) {
@@ -189,7 +194,7 @@ humanInboxV1Router.post('/human-inbox/:id/reply', async (req: Request, res: Resp
     const b = body(req)
     const over = oversizeField({ html: b.html, markdown: b.markdown, text: b.text })
     if (over) {
-      sendError(res, 413, 'too_large', `${over} is over the ${LETTER_BODY_MAX_BYTES}-byte letter cap`)
+      sendError(res, 413, 'too_large', `${over.name} is over the ${over.max}-byte letter cap`)
       return
     }
     if (CLOUD_MODE) {
@@ -280,7 +285,7 @@ humanInboxV1Router.post('/human-inbox/:id/human-reply', async (req: Request, res
     const id = letterId(req)
     const over = oversizeField({ text: b.text })
     if (over) {
-      sendError(res, 413, 'too_large', `text is over the ${LETTER_BODY_MAX_BYTES}-byte cap`)
+      sendError(res, 413, 'too_large', `text is over the ${over.max}-byte cap`)
       return
     }
     if (CLOUD_MODE) {

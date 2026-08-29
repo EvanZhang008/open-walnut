@@ -3,7 +3,8 @@
  *
  *   walnut tools list [--readonly]        catalog: name + one-line summary
  *   walnut tools help <op>                description, parameters, call syntax
- *   walnut tools call <op> ['{json}']     execute (args also accepted on stdin)
+ *   walnut tools call <op> ['{json}']     execute with inline JSON
+ *   walnut tools call <op> @<file> | -    execute with the JSON from a file / stdin
  *
  * Same tools-list/help/call contract as other MCP-as-CLI binaries, so agents
  * that know that pattern can drive Walnut with zero new conventions. Output on
@@ -125,6 +126,7 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       : `'{}'`
     console.log(`  walnut tools call ${op.name} ${example}`)
     console.log(`  echo ${example} | walnut tools call ${op.name}`)
+    console.log(`  walnut tools call ${op.name} @/tmp/args.json   # payloads over ~128KB must not go in argv`)
     return
   }
 
@@ -155,32 +157,43 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
         return
       }
     } else {
-      let rawJson = rest[0]
-      if (rawJson === undefined && !process.stdin.isTTY) {
-        // Args on stdin (echo '{...}' | walnut tools call op) — same as the
-        // builder-mcp contract.
+      // Inline JSON, @file, - (stdin), or a piped stdin — one rule set shared
+      // with the in-session `walnut` CLI (providers/tool-args-source.ts). A
+      // payload over ~128KB must use @file or stdin: the kernel rejects an argv
+      // entry that big before this process starts.
+      const { classifyArgsSource, parseToolArgs } = await import('../providers/tool-args-source.js')
+      const source = classifyArgsSource(rest[0], process.stdin.isTTY === true)
+      if (source.kind === 'usage-error') {
+        console.error(source.message)
+        process.exitCode = 1
+        return
+      }
+      let rawJson = ''
+      if (source.kind === 'inline') rawJson = source.json
+      else if (source.kind === 'stdin') {
         rawJson = await new Promise<string>((resolve) => {
           let buf = ''
           process.stdin.setEncoding('utf-8')
           process.stdin.on('data', (c) => { buf += c })
           process.stdin.on('end', () => resolve(buf))
         })
-      }
-      if (rawJson && rawJson.trim()) {
+      } else if (source.kind === 'file') {
+        const fsp = await import('node:fs/promises')
         try {
-          const v = JSON.parse(rawJson)
-          if (v === null || typeof v !== 'object' || Array.isArray(v)) {
-            console.error('arguments must be a JSON object, e.g. \'{"id":"abc"}\'')
-            process.exitCode = 1
-            return
-          }
-          parsed = v as Record<string, unknown>
+          rawJson = await fsp.readFile(source.path, 'utf-8')
         } catch (err) {
-          console.error(`invalid JSON arguments: ${err instanceof Error ? err.message : String(err)}`)
+          console.error(`cannot read arguments from ${source.path}: ${err instanceof Error ? err.message : String(err)}`)
           process.exitCode = 1
           return
         }
       }
+      const args = parseToolArgs(rawJson)
+      if (!args.ok) {
+        console.error(args.message)
+        process.exitCode = 1
+        return
+      }
+      parsed = args.args
     }
     const r = await executeOp(name, parsed)
     if (!r.ok) {

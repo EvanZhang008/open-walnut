@@ -40,6 +40,7 @@ vi.mock('../../src/core/session-message-queue.js', async (importOriginal) => {
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { CALLER_SID_HEADER, executeOp } from '../../src/ops/index.js'
+import { LETTER_BODY_MAX_BYTES, LETTER_HTML_MAX_BYTES } from '../../src/core/human-inbox/types.js'
 
 let server: HttpServer
 let port: number
@@ -215,9 +216,43 @@ describe('POST /api/v1/human-inbox — send + sender stamping', () => {
     expect((await listLetters()).letters).toHaveLength(0)
   })
 
-  it('refuses an oversize body with 413 instead of writing it', async () => {
+  it('refuses an oversize markdown body with 413 instead of writing it', async () => {
     const res = await post('/api/v1/human-inbox', {
-      subject: 'Whale', type: 'review', markdown: 'x'.repeat(200 * 1024 + 1),
+      subject: 'Whale', type: 'review', markdown: 'x'.repeat(LETTER_BODY_MAX_BYTES + 1),
+    }, SENDER_SID)
+    expect(res.status).toBe(413)
+    expect((await res.json()).error.code).toBe('too_large')
+    expect((await listLetters()).letters).toHaveLength(0)
+  })
+
+  /**
+   * The audio-digest case, end to end over real HTTP: an html body may be far
+   * over the markdown cap (a base64 `<audio>` podcast is 2-5MB), and what comes
+   * back out has to be byte-identical — a body truncated anywhere inside the
+   * base64 is a player that renders and never plays.
+   */
+  it('accepts a multi-MB html body and returns it byte-identical', async () => {
+    const audio = 'A'.repeat(1024 * 1024 + 7)
+    const html = `<h1>Daily digest</h1><audio controls src="data:audio/mpeg;base64,${audio}"></audio>`
+    const id = await sendLetter({
+      subject: 'Your Thursday digest', type: 'info', html, text: 'Four minutes of audio.',
+    }, SENDER_SID)
+
+    const { letter } = await getLetter(id)
+    expect(letter.bodyFormat).toBe('html')
+    expect(letter.body).toBe(html)
+    // The envelope stays a phone-sized envelope: no base64 in the preview.
+    expect(letter.textPreview).toBe('Four minutes of audio.')
+
+    // The list route carries envelopes only — the body must not ride it.
+    const listed = (await listLetters()).letters.find(l => l.id === id)
+    expect(listed).toBeTruthy()
+    expect(JSON.stringify(listed)).not.toContain('AAAA')
+  })
+
+  it('still refuses an html body over the 10MB media cap', async () => {
+    const res = await post('/api/v1/human-inbox', {
+      subject: 'Whale', type: 'review', html: 'x'.repeat(LETTER_HTML_MAX_BYTES + 1),
     }, SENDER_SID)
     expect(res.status).toBe(413)
     expect((await res.json()).error.code).toBe('too_large')

@@ -34,7 +34,10 @@ defineOp({
     subject: z.string().min(1).describe('One line the human reads first, like an email subject'),
     type: LETTER_TYPE.describe('completion | action_required | review | info'),
     markdown: z.string().optional().describe('Letter body as markdown (exactly one of markdown | html)'),
-    html: z.string().optional().describe('Letter body as self-contained HTML, no scripts (inline styles only)'),
+    html: z.string().optional().describe(
+      'Letter body as self-contained HTML, no scripts (inline styles only). The one body that may '
+      + 'carry inline media as data: URIs — a chart image, or an audio digest as '
+      + '<audio controls src="data:audio/mpeg;base64,...">. Up to 10MB; remote URLs are blocked.'),
     text: z.string().optional().describe('Short plain-text preview for the envelope row and the phone push'),
     actions: z.array(ACTION).optional().describe('action_required only: the options rendered as buttons'),
     task_refs: z.array(z.string()).optional().describe('Task ids this letter is about; rendered as clickable pills'),

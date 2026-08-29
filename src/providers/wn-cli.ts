@@ -17,6 +17,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import type { GatewayError, GatewayErrorCode, GatewayOp, GatewayRequest, GatewayResponse } from './gateway-core.js'
 import { EXTERNAL_CALLER_SID, wellKnownGatewaySocketPath } from './gateway-core.js'
+import { classifyArgsSource, parseToolArgs } from './tool-args-source.js'
 
 /** Client-side wait for the daemon's single response line. */
 export const WN_CLIENT_TIMEOUT_MS = 30_000
@@ -245,12 +246,21 @@ const HELP_TOOLS = `walnut tools — call Walnut operations (tasks, search, memo
 USAGE
   walnut tools list [--json]           catalog of available operations
   walnut tools help <op>               parameters + call syntax for one operation
-  walnut tools call <op> ['{json}']    execute (args also accepted on stdin)
+  walnut tools call <op> ['{json}']    execute with inline JSON
+  walnut tools call <op> @<file>       execute with the JSON in a file
+  walnut tools call <op> -             execute with the JSON on stdin
 
 EXAMPLES
   walnut tools call task_list '{"status":"todo"}'
   walnut tools call search '{"q":"login bug"}'
   walnut tools call task_create '{"title":"Fix login bug","project":"Walnut"}'
+  walnut tools call human_inbox_send @/tmp/digest.json
+  jq -n --rawfile b body.html '{subject:"Digest",type:"info",html:$b}' | walnut tools call human_inbox_send -
+
+BIG PAYLOADS: use @<file> or stdin, never inline. One command-line argument is
+capped at 128KB on Linux (MAX_ARG_STRLEN), and the kernel rejects the call
+before walnut starts — so an inline letter with embedded audio fails with
+"Argument list too long", which reads like a bug and is really a transport limit.
 
 Requests relay through the Walnut daemon to the hub — works on ANY host with a
 Walnut-managed session, no server or tunnel setup needed. Destructive operations
@@ -412,6 +422,16 @@ async function writeStdout(text: string): Promise<void> {
   })
 }
 
+/** Drain stdin to a string (a payload too big for argv arrives here). */
+function readStdin(): Promise<string> {
+  return new Promise<string>((resolve) => {
+    let buf = ''
+    process.stdin.setEncoding('utf-8')
+    process.stdin.on('data', (c) => { buf += c })
+    process.stdin.on('end', () => resolve(buf))
+  })
+}
+
 export async function runWnCli(argv: string[]): Promise<number> {
   // `walnut guide | head` closes the pipe early: EPIPE on stdout is the reader
   // saying "enough", not an error — without this Node prints an uncaught stack.
@@ -434,31 +454,36 @@ export async function runWnCli(argv: string[]): Promise<number> {
   }
   const { socketPath, sid } = endpoint
 
-  // tools.call args: inline JSON wins; otherwise stdin (echo '{...}' | walnut tools call op).
+  // tools.call args: inline JSON, @file, - (stdin), or a piped stdin. A big
+  // payload MUST use @file or stdin — one argv entry is capped at 128KB on
+  // Linux (MAX_ARG_STRLEN), and that failure happens in execve, before this
+  // process exists. See tool-args-source.ts.
   let callArgs: Record<string, unknown> = {}
   if (parsed.kind === 'tools.call') {
-    let rawJson = parsed.rawJson
-    if (rawJson === undefined && !process.stdin.isTTY) {
-      rawJson = await new Promise<string>((resolve) => {
-        let buf = ''
-        process.stdin.setEncoding('utf-8')
-        process.stdin.on('data', (c) => { buf += c })
-        process.stdin.on('end', () => resolve(buf))
-      })
+    const source = classifyArgsSource(parsed.rawJson, process.stdin.isTTY === true)
+    if (source.kind === 'usage-error') {
+      process.stderr.write(`walnut: ${source.message}\n`)
+      return 2
     }
-    if (rawJson && rawJson.trim()) {
+    let rawJson = ''
+    if (source.kind === 'inline') rawJson = source.json
+    else if (source.kind === 'stdin') rawJson = await readStdin()
+    else if (source.kind === 'file') {
       try {
-        const v = JSON.parse(rawJson)
-        if (v === null || typeof v !== 'object' || Array.isArray(v)) {
-          process.stderr.write('walnut: arguments must be a JSON object, e.g. \'{"id":"abc"}\'\n')
-          return 2
-        }
-        callArgs = v as Record<string, unknown>
+        rawJson = fs.readFileSync(source.path, 'utf-8')
       } catch (err) {
-        process.stderr.write(`walnut: invalid JSON arguments: ${err instanceof Error ? err.message : String(err)}\n`)
+        process.stderr.write(
+          `walnut: cannot read arguments from ${source.path}: ${err instanceof Error ? err.message : String(err)}\n`,
+        )
         return 2
       }
     }
+    const args = parseToolArgs(rawJson)
+    if (!args.ok) {
+      process.stderr.write(`walnut: ${args.message}\n`)
+      return 2
+    }
+    callArgs = args.args
   }
 
   // tools.help renders from the hub's tools.list (the schema lives hub-side);

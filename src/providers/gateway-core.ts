@@ -47,8 +47,22 @@ export function isExternalCallerSid(sid: string): boolean {
   return sid === EXTERNAL_CALLER_SID;
 }
 
-/** Hard cap on a single NDJSON request line (bytes). Oversized → reject + close. */
-export const GATEWAY_MAX_LINE_BYTES = 256 * 1024;
+/**
+ * Hard cap on a single NDJSON request line (bytes). Oversized → reject + close.
+ *
+ * 12MB, not the original 256KB: one `walnut tools call human_inbox_send` is ONE
+ * line, so this bound WAS the letter body cap (200KB), and a daily digest that
+ * embeds its podcast as base64 audio is 2-5MB. Sized off
+ * LETTER_HTML_MAX_BYTES (10MB) plus room for JSON escaping and the envelope —
+ * lowering it below that silently breaks audio letters again, so keep the two
+ * together (ratchet: tests/unit/peers/gateway-core.test.ts).
+ *
+ * Safe to be this big: the socket is 0600 owner-only, that mode IS the
+ * credential, and the daemon reads one request per connection. The twins count
+ * bytes and scan for the newline INCREMENTALLY (never re-measuring the whole
+ * buffer per chunk), so a 10MB line is one linear pass, not a quadratic one.
+ */
+export const GATEWAY_MAX_LINE_BYTES = 12 * 1024 * 1024;
 
 /** Default wait for the Mac hub to answer a relayed gateway request. */
 export const GATEWAY_HUB_TIMEOUT_MS = 20_000;

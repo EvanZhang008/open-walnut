@@ -34,8 +34,8 @@ import {
   type LetterStoreFile,
 } from './normalize.js';
 import {
-  LETTER_BODY_MAX_BYTES,
   LETTER_TYPES,
+  letterFieldMaxBytes,
   type AgentReplyInput,
   type LetterDetail,
   type LetterList,
@@ -151,9 +151,10 @@ function bodyExt(format: 'html' | 'markdown'): 'html' | 'md' {
 
 function assertBodySize(body: string, field: string): void {
   const bytes = Buffer.byteLength(body, 'utf-8');
-  if (bytes > LETTER_BODY_MAX_BYTES) {
+  const max = letterFieldMaxBytes(field);
+  if (bytes > max) {
     throw invalid(
-      `${field} is ${bytes} bytes, over the ${LETTER_BODY_MAX_BYTES}-byte letter cap — `
+      `${field} is ${bytes} bytes, over the ${max}-byte letter cap — `
       + 'link a file instead of inlining a big artifact',
     );
   }

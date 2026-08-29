@@ -103,8 +103,9 @@ final class InboxStore {
         Task { await refresh() }
     }
 
-    /// Full letter (body + thread bodies). Not cached: a body can be 200KB and
-    /// the thread grows behind our back whenever the agent replies.
+    /// Full letter (body + thread bodies). Not cached: a body can be megabytes
+    /// (an html digest embeds its audio) and the thread grows behind our back
+    /// whenever the agent replies.
     func detail(id: String) async throws -> Letter {
         do {
             let letter = try await api.letter(id: id)

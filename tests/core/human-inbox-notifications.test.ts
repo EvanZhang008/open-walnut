@@ -244,6 +244,31 @@ describe('letter store → envelope (the bridge installs itself)', () => {
     expect(after!.body).toContain('the index was rebuilt');
   });
 
+  /**
+   * The phone must stay lightweight however heavy the document is. An audio
+   * digest's html body is multi-MB (base64 `<audio>`), and everything downstream
+   * of the store — the bus event, the envelope notification, and the APNs
+   * payload built from it — carries only the 300-char preview. This is the
+   * ratchet for that: no body bytes past the store.
+   */
+  it('a multi-MB html letter still emits a phone-sized envelope', async () => {
+    const audio = 'A'.repeat(1024 * 1024);
+    const letter = await sendLetter({
+      subject: 'Your Thursday digest',
+      type: 'info',
+      html: `<h1>Digest</h1><audio controls src="data:audio/mpeg;base64,${audio}"></audio>`,
+      text: 'Four minutes of audio: three decisions, one blocker.',
+      sender: SENDER,
+    });
+
+    const rec = await envelopeWhen(letter.id);
+    expect(rec!.body).toBe('Four minutes of audio: three decisions, one blocker.');
+    // The whole envelope record, serialized, must stay far under an APNs
+    // payload (4KB) — a body leak would blow this by three orders of magnitude.
+    expect(JSON.stringify(rec).length).toBeLessThan(2_000);
+    expect(JSON.stringify(rec)).not.toContain('AAAA');
+  });
+
   it('reading a letter in the store mirrors onto the envelope, both ways', async () => {
     const letter = await sendLetter({
       subject: 'Decision needed',

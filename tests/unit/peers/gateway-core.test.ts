@@ -17,6 +17,7 @@ import {
   GATEWAY_SOCKET_FILENAME,
   GATEWAY_OPS,
 } from '../../../src/providers/gateway-core.js';
+import { LETTER_HTML_MAX_BYTES } from '../../../src/core/human-inbox/types.js';
 
 function expectError(line: string, code: string): void {
   const res = parseGatewayLine(line);
@@ -49,9 +50,20 @@ describe('parseGatewayLine', () => {
     if (res.ok) expect(res.request.args).toEqual({});
   });
 
-  it('rejects a line over the 256KB cap', () => {
+  it('rejects a line over the cap', () => {
     const filler = 'x'.repeat(GATEWAY_MAX_LINE_BYTES + 1);
     expectError(`{"v":1,"op":"peers.send","sid":"abc","args":{"text":"${filler}"}}`, 'bad_request');
+  });
+
+  /**
+   * RATCHET. One `walnut tools call human_inbox_send` is ONE line, so this cap
+   * IS the ceiling on a letter body: it was 256KB, which is why the letter cap
+   * was 200KB. A digest letter embeds its podcast as base64 audio (2-5MB), so
+   * lowering the line cap back under the html letter cap silently breaks audio
+   * letters on every host — the failure lands in the daemon, far from here.
+   */
+  it('leaves room for the biggest letter body a session may send', () => {
+    expect(GATEWAY_MAX_LINE_BYTES).toBeGreaterThan(LETTER_HTML_MAX_BYTES);
   });
 
   it('accepts a line just under the cap', () => {

@@ -222,6 +222,22 @@ final class InboxContractTests: XCTestCase {
         XCTAssertEqual(letter.displayBody.count, Letter.phoneBodyCap)
     }
 
+    /// An html body is never clipped: the clip exists for markdown block parsing,
+    /// and cutting html at a character count lands inside the base64 of an
+    /// embedded `<audio src="data:…">`, which makes the player fail to decode
+    /// rather than making the letter shorter.
+    func testHTMLBodyWithEmbeddedAudioIsNeverClipped() throws {
+        let audio = String(repeating: "A", count: Letter.phoneBodyCap + 500)
+        let html = "<h1>Digest</h1><audio controls src=\\\"data:audio/mpeg;base64,\(audio)\\\"></audio>"
+        let letter = try decode(Letter.self, """
+        { "id": "lt-x-abcd", "subject": "S", "type": "info", "bodyFormat": "html", "body": "\(html)" }
+        """)
+        XCTAssertTrue(letter.isHTMLBody)
+        XCTAssertFalse(letter.bodyWasClipped)
+        XCTAssertTrue(letter.displayBody.hasSuffix("></audio>"))
+        XCTAssertGreaterThan(letter.displayBody.count, Letter.phoneBodyCap)
+    }
+
     func testOrdinaryBodyIsNotClipped() throws {
         let letter = try decode(Letter.self, """
         { "id": "lt-x-abcd", "subject": "S", "type": "review", "body": "# Short\\nfine" }

@@ -2230,7 +2230,9 @@ function cmdMessageResult(ws, id, cmd) {
 var GATEWAY_SOCK_PATH = path.join(DAEMON_DIR, 'agent-gateway.sock');
 var GATEWAY_SHIM_DIR = path.join(DAEMON_DIR, 'bin');
 var GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'walnut');
-var GATEWAY_MAX_LINE_BYTES = 256 * 1024;
+// 12MB (keep in sync with gateway-core.ts): one human_inbox_send is ONE line,
+// and a digest letter that embeds base64 audio is 2-5MB.
+var GATEWAY_MAX_LINE_BYTES = 12 * 1024 * 1024;
 var GATEWAY_OPS = ['peers.list', 'peers.send', 'tools.list', 'tools.call'];
 // 20s default (shorter than the 45s launch relay — peers ops have no long
 // validation chain); WALNUT_GATEWAY_TIMEOUT_MS overrides (tests only).
@@ -2372,22 +2374,32 @@ function startGatewayListener() {
   try { fs.unlinkSync(GATEWAY_SOCK_PATH); } catch {}
   try {
     var server = net.createServer(function (socket) {
-      var buf = '';
+      // Raw chunks, decoded once (mirrors daemon-standalone.ts): per-chunk
+      // decoding corrupts a multi-byte character split across a chunk boundary,
+      // and re-measuring the accumulated string per chunk is O(line²) — both
+      // only bite now that a line can be 10MB of base64 audio.
+      var chunks = [];
+      var bytes = 0;
       var done = false;
       var reply = function (resp) {
         if (done) return;
         done = true;
+        chunks = [];
         try { socket.end(JSON.stringify(resp) + '\\n'); } catch {}
       };
       socket.on('data', function (chunk) {
         if (done) return;
-        buf += chunk.toString('utf-8');
-        if (Buffer.byteLength(buf, 'utf8') > GATEWAY_MAX_LINE_BYTES) {
+        bytes += chunk.length;
+        if (bytes > GATEWAY_MAX_LINE_BYTES) {
           return reply(gatewayError('bad_request', 'request line too large'));
         }
-        var nl = buf.indexOf('\\n');
+        // 0x0A can never be a UTF-8 continuation byte, so a raw scan is exact.
+        var nl = chunk.indexOf(0x0a);
+        chunks.push(nl === -1 ? chunk : chunk.subarray(0, nl));
         if (nl === -1) return;
-        handleGatewayLine(buf.slice(0, nl), reply);
+        var line = Buffer.concat(chunks).toString('utf-8');
+        chunks = [];
+        handleGatewayLine(line, reply);
       });
       socket.on('error', function () { /* client went away — pending timer self-cleans */ });
     });

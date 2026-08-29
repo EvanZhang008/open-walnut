@@ -1994,7 +1994,14 @@ function startGatewayListener() {
   // otherwise (the file outlives the process).
   try { fs.unlinkSync(GATEWAY_SOCK_PATH) } catch {}
   try {
-    type GwSockData = { buf: string; done: boolean; out?: Buffer; sent?: number }
+    // Bytes are accumulated RAW and decoded once, for two reasons that both
+    // only bite now that a request line can be 10MB (a letter body with inline
+    // base64 audio) instead of 256KB: decoding each chunk on its own splits any
+    // multi-byte character that straddles a chunk boundary into replacement
+    // characters (corrupt JSON), and re-measuring/re-scanning the accumulated
+    // string per chunk is O(line²) — ~1.6GB of rescanning for 10MB in 64KB
+    // chunks.
+    type GwSockData = { chunks: Uint8Array[]; bytes: number; done: boolean; out?: Buffer; sent?: number }
     type GwSocket = { data: GwSockData; write(s: string | Buffer): number; end(): void }
     // Bun.listen raw sockets do PARTIAL writes: write() returns the bytes the
     // kernel buffer took (~8KB) and end() closes immediately, silently
@@ -2022,20 +2029,26 @@ function startGatewayListener() {
     Bun.listen<GwSockData>({
       unix: GATEWAY_SOCK_PATH,
       socket: {
-        open(socket) { socket.data = { buf: '', done: false } },
+        open(socket) { socket.data = { chunks: [], bytes: 0, done: false } },
         data(socket, chunk) {
           const d = socket.data
           if (d.done) return
-          d.buf += chunk.toString('utf-8')
-          if (Buffer.byteLength(d.buf, 'utf8') > GATEWAY_MAX_LINE_BYTES) {
+          d.bytes += chunk.byteLength
+          if (d.bytes > GATEWAY_MAX_LINE_BYTES) {
             d.done = true
+            d.chunks = []
             reply(socket, gatewayError('bad_request', 'request line too large'))
             return
           }
-          const nl = d.buf.indexOf('\n')
+          // '\n' (0x0A) can never be a continuation byte of a multi-byte
+          // character, so scanning raw bytes for it is exact.
+          const nl = chunk.indexOf(0x0a)
+          d.chunks.push(nl === -1 ? chunk : chunk.subarray(0, nl))
           if (nl === -1) return
           d.done = true
-          handleGatewayLine(d.buf.slice(0, nl), (resp) => reply(socket, resp))
+          const line = Buffer.concat(d.chunks).toString('utf-8')
+          d.chunks = []
+          handleGatewayLine(line, (resp) => reply(socket, resp))
         },
         drain(socket) { pump(socket) },
         error() { /* client went away — pending timer self-cleans */ },

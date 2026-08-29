@@ -1277,10 +1277,63 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     expect(versionCheck).toMatch(/'src\/providers\/daemon-fold\.ts'/)
   })
 
+  /**
+   * Same failure mode as the scan-core / path-resolve-core notes in
+   * daemon-version-check.ts: a file bundled into the daemon but missing from the
+   * hash lists means an edit produces an IDENTICAL version, no host redeploys,
+   * and the new behaviour (here: `walnut tools call <op> @file`, the only way to
+   * pass a payload over the 128KB argv limit) silently never ships.
+   */
+  it('tool-args-source.ts is in both version-hash source lists', () => {
+    expect(readFile(path.join(ROOT, 'scripts/build-daemon.sh')))
+      .toMatch(/src\/providers\/tool-args-source\.ts/)
+    expect(readFile(path.join(ROOT, 'src/providers/daemon-version-check.ts')))
+      .toMatch(/'src\/providers\/tool-args-source\.ts'/)
+  })
+
   function coreSrcC1(): string {
     return readFile(path.join(ROOT, 'src/providers/daemon-core.ts'))
   }
 })
+
+// ── Agent-gateway listener parity ──
+// The request line carries a whole letter body (one `human_inbox_send` is one
+// line), so a digest with embedded base64 audio is a ~10MB line. The twins are
+// hand-synced, and a twin left at the old 256KB would reject exactly the letters
+// the other accepts — on whichever hosts happen to run the JS fallback.
+describe('agent gateway listener daemon-standalone vs daemon-source parity', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'));
+  const templateSrc = readFile(sourcePath);
+
+  it('both twins cap a request line at the same 12MB', async () => {
+    // The bun twin imports the shared constant; the JS template cannot import,
+    // so it carries a hand-inlined copy that has to agree with it.
+    const { GATEWAY_MAX_LINE_BYTES } = await import('../../src/providers/gateway-core.js');
+    expect(GATEWAY_MAX_LINE_BYTES).toBe(12 * 1024 * 1024);
+    expect(standaloneSrc).toMatch(/GATEWAY_MAX_LINE_BYTES/);
+    expect(standaloneSrc).not.toMatch(/GATEWAY_MAX_LINE_BYTES\s*=/);
+    expect(templateSrc).toMatch(/GATEWAY_MAX_LINE_BYTES\s*=\s*12 \* 1024 \* 1024/);
+  });
+
+  /**
+   * Both twins must count bytes from the CHUNK and decode once at the newline.
+   * Decoding per chunk splits a multi-byte character across a boundary into
+   * replacement characters (corrupt JSON), and re-measuring the accumulated
+   * buffer per chunk is O(line²) — invisible at 256KB, ~1.6GB of rescanning at
+   * 10MB.
+   */
+  it('neither twin decodes or re-measures per chunk', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      // The newline scan is over raw bytes, and the decode happens once.
+      expect(src).toMatch(/indexOf\(0x0a\)/);
+      expect(src).toMatch(/Buffer\.concat\(chunks\)\.toString\('utf-8'\)|Buffer\.concat\(d\.chunks\)\.toString\('utf-8'\)/);
+    }
+    // The old quadratic shape is gone from both.
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).not.toMatch(/Buffer\.byteLength\((?:d\.)?buf/);
+    }
+  });
+});
 
 // ── Tailer self-heal parity (incident 6c8428ac: frozen watcher offset) ──
 // The poll loop's catch must LOG (no-silent-failures) and force a watcher

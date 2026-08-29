@@ -22,6 +22,7 @@
 import fs from 'node:fs/promises'
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
+import { TINY_MP3_BASE64 } from './fixtures/tiny-audio'
 
 const SCREENSHOT_DIR = '/tmp/human-inbox'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -38,6 +39,9 @@ const UNREAD_SUBJECT = `PW LTR quiet ${NONCE}`
 /** Markers that must survive (or must NOT appear) inside the sandboxed body. */
 const HTML_BODY_MARKER = `LETTER-HTML-BODY-${NONCE}`
 const SCRIPT_RAN_MARKER = `SCRIPT-DID-RUN-${NONCE}`
+/** The audio-digest letter: subject scope + a tail marker a clip would eat. */
+const AUDIO_SUBJECT = `PW LTR audio ${NONCE}`
+const AUDIO_TAIL_MARKER = `LETTER-AUDIO-TAIL-${NONCE}`
 
 let fixtureRoot = ''
 /** The origin session every delivery assertion is made against. */
@@ -366,4 +370,94 @@ test('opening the notification panel does not mark a letter read', async ({ page
   const reopened = await openCenter(page)
   await openInbox(reopened)
   await expect(envelope(reopened, UNREAD_SUBJECT)).toHaveClass(/hib-unread/, { timeout: 15_000 })
+})
+
+// ── 4. The audio digest: a multi-MB html letter whose podcast has to PLAY ──
+
+/**
+ * The daily digest case, through the real UI.
+ *
+ * Two failures this pins, both of which shipped and both of which are silent:
+ *   - a body clipped anywhere (the phone did it at 60k chars) cuts the base64 in
+ *     half, so the player renders and then fails to DECODE — nothing logs;
+ *   - `default-src 'none'` with no `media-src` refuses a `data:` audio source
+ *     outright, so the player renders and never plays — also nothing logs.
+ *
+ * The receipt for both is a DURATION read off the element. The reader's iframe
+ * has no `allow-scripts`, so nothing can be evaluated inside it; the check
+ * instead loads the identical document the console fed that iframe (its `srcdoc`,
+ * CSP meta included) in a plain page and measures the media there.
+ */
+test('a multi-MB letter with embedded base64 audio arrives whole and plays', async ({ page, request, browser }) => {
+  test.setTimeout(180_000)
+
+  // Over 1MB, the way a real digest is: a data-URI player plus enough prose to
+  // push the body past every cap in the chain (gateway line, express, store).
+  const filler = `<p>${'Yesterday the sync queue drained cleanly. '.repeat(30_000)}</p>`
+  const html = `<h2>Audio digest</h2>`
+    + `<audio controls preload="metadata" src="data:audio/mpeg;base64,${TINY_MP3_BASE64}"></audio>`
+    + `${filler}<p>${AUDIO_TAIL_MARKER}</p>`
+  expect(Buffer.byteLength(html)).toBeGreaterThan(1024 * 1024)
+
+  await sendLetter(request, {
+    subject: AUDIO_SUBJECT,
+    type: 'info',
+    html,
+    text: `Audio digest with an embedded player (${NONCE}).`,
+  })
+
+  await loadHome(page)
+  const panel = await openCenter(page)
+  await openInbox(panel)
+
+  // The envelope stays phone-sized: the base64 must not reach the list.
+  const row = envelope(panel, AUDIO_SUBJECT)
+  await expect(row).toBeVisible({ timeout: 15_000 })
+  expect(await row.textContent() ?? '').not.toContain(TINY_MP3_BASE64.slice(0, 40))
+
+  await row.click()
+  const reader = page.locator('.hib-reader')
+  await expect(reader).toBeVisible({ timeout: 15_000 })
+  const frame = reader.locator('.hib-html-frame')
+  await expect(frame).toBeVisible({ timeout: 15_000 })
+
+  // Nothing was clipped: the audio source is byte-identical AND the paragraph
+  // that follows a megabyte of prose is still there (a tail check catches a
+  // truncation the src alone would not).
+  const audio = page.frameLocator('.hib-html-frame').locator('audio')
+  await expect(audio).toHaveCount(1, { timeout: 15_000 })
+  expect(await audio.getAttribute('src')).toBe(`data:audio/mpeg;base64,${TINY_MP3_BASE64}`)
+  await expect(page.frameLocator('.hib-html-frame').locator('body')).toContainText(AUDIO_TAIL_MARKER)
+  await shot(page, 'e2e-09-audio-letter-reader')
+
+  // The security floor is unchanged, and media is allowed from data:/blob: ONLY.
+  await expect(frame).toHaveAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox')
+  const srcdoc = await frame.getAttribute('srcdoc') ?? ''
+  const policy = srcdoc.match(/content="(default-src[^"]*)"/)?.[1] ?? ''
+  expect(policy).toContain("default-src 'none'")
+  expect(policy).toContain('media-src data: blob:')
+  expect(policy).not.toMatch(/https?:/)
+
+  // Does it actually decode? Same document, same CSP, a page that can be asked.
+  const probe = await browser.newPage()
+  const blocked: string[] = []
+  probe.on('console', (m) => {
+    if (/Content Security Policy|Refused to load/i.test(m.text())) blocked.push(m.text())
+  })
+  await probe.setContent(srcdoc, { waitUntil: 'load' })
+  const media = await probe.evaluate(async () => {
+    const el = document.querySelector('audio') as HTMLAudioElement | null
+    if (!el) return { duration: 0, error: 'no audio element' }
+    await new Promise<void>((resolve) => {
+      if (el.readyState >= 1) return resolve()
+      el.addEventListener('loadedmetadata', () => resolve(), { once: true })
+      el.addEventListener('error', () => resolve(), { once: true })
+      setTimeout(() => resolve(), 15_000)
+    })
+    return { duration: el.duration, error: el.error ? `code ${el.error.code}` : null }
+  })
+  await probe.close()
+  expect(blocked, `CSP blocked the letter's own audio: ${blocked.join(' | ')}`).toHaveLength(0)
+  expect(media.error).toBeNull()
+  expect(media.duration).toBeGreaterThan(0)
 })

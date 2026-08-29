@@ -38,7 +38,12 @@ import {
   setPinned,
   setRead,
 } from '../../src/core/human-inbox/store.js';
-import type { LetterSender, NewLetter } from '../../src/core/human-inbox/types.js';
+import {
+  LETTER_BODY_MAX_BYTES,
+  LETTER_HTML_MAX_BYTES,
+  type LetterSender,
+  type NewLetter,
+} from '../../src/core/human-inbox/types.js';
 
 const SENDER: LetterSender = {
   sessionId: 'sess-abc123',
@@ -195,14 +200,42 @@ describe('human inbox store — validation', () => {
     );
   });
 
-  it('rejects a body over the 200KB cap and writes nothing', async () => {
-    const huge = 'x'.repeat(200 * 1024 + 1);
+  it('rejects a markdown body over the 200KB prose cap and writes nothing', async () => {
+    const huge = 'x'.repeat(LETTER_BODY_MAX_BYTES + 1);
     await expect(sendLetter(letterInput({ markdown: huge }))).rejects.toThrow(/letter cap/);
     // Just under the cap is accepted.
-    const ok = await sendLetter(letterInput({ markdown: 'y'.repeat(200 * 1024) }));
+    const ok = await sendLetter(letterInput({ markdown: 'y'.repeat(LETTER_BODY_MAX_BYTES) }));
     expect(ok.id).toBeTruthy();
     const { letters } = await listLetters();
     expect(letters).toHaveLength(1);
+  });
+
+  /**
+   * The whole point of the html cap: an audio digest embeds its podcast as a
+   * base64 data URI, which is 2-5MB — far over the prose cap the same letter's
+   * markdown would be held to. Stored BYTE-IDENTICAL, since a body silently
+   * truncated mid-base64 is an audio player that renders and never plays.
+   */
+  it('accepts an html body far over the prose cap and stores it verbatim', async () => {
+    const audio = 'A'.repeat(3 * 1024 * 1024);
+    const html = `<h1>Daily digest</h1><audio controls src="data:audio/mpeg;base64,${audio}"></audio>`;
+    const record = await sendLetter(letterInput({
+      markdown: undefined, html, text: 'Your Thursday digest, 4 minutes.',
+    }));
+    expect(record.bodyFormat).toBe('html');
+    // The envelope stays tiny — the base64 never leaks into the preview.
+    expect(record.textPreview).toBe('Your Thursday digest, 4 minutes.');
+
+    const detail = await getLetter(record.id);
+    expect(detail?.body).toBe(html);
+    expect(Buffer.byteLength(detail!.body, 'utf-8')).toBeGreaterThan(3 * 1024 * 1024);
+  });
+
+  it('still rejects an html body over the 10MB media cap', async () => {
+    const huge = 'x'.repeat(LETTER_HTML_MAX_BYTES + 1);
+    await expect(sendLetter(letterInput({ markdown: undefined, html: huge })))
+      .rejects.toThrow(/letter cap/);
+    expect((await listLetters()).letters).toHaveLength(0);
   });
 
   it('throws a not_found LetterError when mutating an unknown letter', async () => {
