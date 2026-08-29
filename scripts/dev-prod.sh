@@ -242,6 +242,9 @@ stage_dist() {
     cp -R "$REPO_ROOT/dist" "$STAGE_DIR/dist" || return 1
   fi
   ln -sfn "$REPO_ROOT/node_modules" "$STAGE_DIR/node_modules" || return 1
+  # getVersion() walks UP from dist/cli.js for the nearest package.json; a stage
+  # without one reports 0.0.0 and every version-gated builtin plugin turns off.
+  cp "$REPO_ROOT/package.json" "$STAGE_DIR/package.json" || return 1
 }
 
 # A stage that never became the running server is trash on exit (smoke failure,
@@ -597,6 +600,8 @@ snapshot_lkg() {
     cp -R "$STAGE_DIR/dist" "$LKG_DIR.tmp/dist" || return 1
   fi
   ln -sfn "$REPO_ROOT/node_modules" "$LKG_DIR.tmp/node_modules" || return 1
+  # Same reason as stage_dist: without a package.json the LKG boots as 0.0.0.
+  cp "$REPO_ROOT/package.json" "$LKG_DIR.tmp/package.json" || return 1
   rm -rf "$LKG_DIR" 2>/dev/null || true
   mv "$LKG_DIR.tmp" "$LKG_DIR" || return 1
 }
