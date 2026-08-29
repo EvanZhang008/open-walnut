@@ -1235,11 +1235,13 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
         // relaxed full-evidence bands.
         const hay = `${r.title}\n${r.path}\n${r.body}`.toLowerCase()
         // A month NAME in the query supports against the month NUMBER in a
-        // dated filename ("written in august" ⇒ tsla-full-eval-2026-08.md).
+        // dated filename ("written in august" / "四月 日记" ⇒ …-2026-08.md).
         const monthNum = (tok: string): string | undefined => ({
           january: '1', february: '2', march: '3', april: '4', june: '6', july: '7',
           august: '8', september: '9', october: '10', november: '11', december: '12',
-        } as Record<string, string>)[tok] // 'may' omitted: too common as a verb
+          一月: '1', 二月: '2', 三月: '3', 四月: '4', 五月: '5', 六月: '6', 七月: '7',
+          八月: '8', 九月: '9', 十月: '10', 十一月: '11', 十二月: '12',
+        } as Record<string, string>)[tok] // english 'may' omitted: too common as a verb
         const tokSupported = (tok: string): boolean => {
           if (hay.includes(tok)) return true
           const m = monthNum(tok)

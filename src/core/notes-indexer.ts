@@ -605,13 +605,21 @@ export async function scanForDrift(): Promise<{ changed: number; deleted: number
       })
     }
   }
-  // Deletions: indexed but no longer on disk.
+  // Deletions: indexed under a path spelling that no longer exists on disk.
+  // Remove the row DIRECTLY — never via reconcileNote: on a case-insensitive
+  // filesystem (macOS APFS) a stale-cased path ("Archive/x.md" after the
+  // folder became "archive/") still READS fine, so reconcile re-indexed the
+  // old spelling instead of deleting it, and every scan flip-flopped 400+
+  // rows between the two spellings forever (changed:418/deleted:415 loop).
+  // The on-disk spelling's row is created/updated by the loop above; whether
+  // the file truly died or merely changed case, this exact-path row is stale.
   for (const relPath of indexed.keys()) {
     if (onDiskSet.has(relPath)) continue
     if (stopped || rebuilding) break
     await yieldIfSliceSpent()
     try {
-      await reconcileNote(relPath) // ENOENT branch removes from both indexes
+      await withFileLock(NOTES_INDEX_PATH, async () => { deleteNoteByPath(relPath) })
+      await removeSemantic(relPath)
       deleted++
     } catch { /* logged inside */ }
   }

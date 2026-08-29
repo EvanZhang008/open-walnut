@@ -589,6 +589,35 @@ describe('drift scan: offline changes reconciled at boot', () => {
     expect(changed).toBe(0);
     expect(deleted).toBe(0);
   });
+
+  it('CONVERGES after a folder case-rename (no flip-flop loop)', async () => {
+    // On case-insensitive filesystems (macOS APFS) a stale-cased index path
+    // still READS fine, so the old deletion path re-indexed "Folder/x.md"
+    // while the main loop indexed "folder/x.md" — 400+ rows flip-flopped
+    // between spellings on EVERY scan, forever. The invariant that kills the
+    // bug class on any filesystem: a second scan must find nothing to do.
+    await writeNote('CaseFold/inner.md', '# Inner\n\nCase-rename survivor.');
+    await syncIndex();
+
+    stopNotesIndexer();
+    const oldDir = path.join(NOTES_DIR, 'CaseFold');
+    const tmpDir = path.join(NOTES_DIR, 'casefold-tmp');
+    await fs.rename(oldDir, tmpDir); // two-step: case-only rename is a no-op on APFS
+    await fs.rename(tmpDir, path.join(NOTES_DIR, 'casefold'));
+    resetNotesIndexer();
+
+    const first = await scanForDrift();
+    expect(first.deleted).toBeGreaterThanOrEqual(1); // the stale-cased row
+    const second = await scanForDrift();
+    expect(second).toEqual({ changed: 0, deleted: 0 });
+
+    // Exactly one spelling survives in search results.
+    const app = createApp();
+    const res = await request(app).get('/api/notes-v2/search?q=inner&mode=string');
+    const hits = res.body.results.filter((r: any) => r.path.toLowerCase() === 'casefold/inner.md');
+    expect(hits).toHaveLength(1);
+    expect(hits[0].path).toBe('casefold/inner.md');
+  });
 });
 
 // ─── Index rebuild reproduces state (rebuildable sidecar) ────────────────────
