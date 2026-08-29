@@ -203,6 +203,11 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
   /** Per-process embed-failure counts; at 2 the doc is quarantined with a
    *  zero vector so ONE poison doc can never wedge the whole backfill. */
   const vecFailures = new Map<number, number>();
+  /** Last time searchSemantic reached for the worker. The backfill yields the
+   *  (single) worker whenever a query ran in the last quiet window — the human
+   *  is searching NOW, passages can wait. */
+  let lastQueryAt = 0;
+  const BACKFILL_QUERY_QUIET_MS = 2_500;
 
   function runKeyword(query: string, searchOptions: SearchOptions, limit?: number): KeywordHit[] {
     return searchKeyword(db, query, {
@@ -286,7 +291,9 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         Math.max(limit, Math.min(100, Math.max(60, limit * 3))),
       );
       const recallK = searchOptions.kinds?.length ? RECALL_K_KIND_FILTERED : RECALL_K;
+      lastQueryAt = Date.now();
       const reply = await embedder.embedQuery(query, deadline, recallK);
+      lastQueryAt = Date.now();
       if (!reply || closed) {
         return pool.slice(0, limit).map((h) => toScored(h, 'timeout'));
       }
@@ -443,9 +450,19 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         }
         try {
           const vectors: Int8Array[] = [];
-          // Sub-batch so one whale doc cannot balloon a single inference call.
-          for (let i = 0; i < passages.length; i += 32) {
-            vectors.push(...await embedder.embedPassages(passages.slice(i, i + 32)));
+          // ONE passage per inference call. CPU inference is linear in total
+          // tokens (measured: 1×2KB ≈ 540ms, 32×2KB ≈ 22s), so batching buys
+          // no throughput — it only builds a 22s head-of-line block in the
+          // single worker, behind which every interactive query embed blew its
+          // deadline and silently degraded to keyword order. Between calls,
+          // yield the worker to live queries: partial vectors are discarded
+          // (the doc stays missing and re-lists), which is the right trade —
+          // backfill wastes a little work only while a human is searching.
+          for (const passage of passages) {
+            if (Date.now() - lastQueryAt < BACKFILL_QUERY_QUIET_MS) {
+              return { embedded, drained: false, cursor: backfillOptions.cursor ?? null };
+            }
+            vectors.push(...await embedder.embedPassages([passage]));
           }
           if (closed) return { embedded, drained: true, cursor };
           writer.writeVectors(doc.id, vectors);

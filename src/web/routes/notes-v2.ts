@@ -979,12 +979,12 @@ const ATTACHMENT_CAP = 3
 const SEMANTIC_RRF_FLOOR = 1 / 6
 
 /**
- * Same job for the search-v2 leg (WALNUT_SEARCH_V2=1), different scale: v2
- * scores are additive components in ~[0, 1.3], not 1/rank. Noise-only hits
- * (one relaxed-lane subword, nothing else) land under ~0.1; a real keyword or
- * semantic match clears 0.15 comfortably.
+ * Same job for the search-v2 leg (WALNUT_SEARCH_V2=1), different scale: the v2
+ * leg is banded on its COSINE component. qwen3 cosines for genuinely related
+ * notes sit ≥0.5; loosely-topical neighbours ~0.4; below 0.35 is noise that
+ * only crowds the page.
  */
-const SEARCH_V2_NOTE_FLOOR = 0.15
+const SEARCH_V2_NOTE_COS_FLOOR = 0.35
 
 export interface NotesSearchPayload {
   results: SearchResultRow[]
@@ -1051,10 +1051,20 @@ async function performNotesSearchInner(opts: {
     const v2SemanticLeg = async () => {
       const { searchV2Lane } = await import('../../core/search/wiring.js')
       const { extractSnippet } = await import('../../core/search.js')
-      const hits = await searchV2Lane(q, { kinds: ['note'], limit: limit * 2 })
+      // 1s deadline (default 150ms): a query landing while the embed worker is
+      // mid-passage (backfill / session re-embed) waits for that one inference
+      // call (~0.5-0.7s measured). At 150ms EVERY such query silently degraded
+      // to keyword order — junk rows labelled 'semantic'. The backfill yields
+      // between passages, so only the first query of a burst ever waits.
+      const hits = await searchV2Lane(q, { kinds: ['note'], limit: limit * 2, semanticDeadlineMs: 1000 })
       return hits.map((h) => ({
         filepath: h.ref,
         score: h.score,
+        // The pure similarity component, only when the rescore really ran —
+        // the additive `score` mixes bm25/coverage/recency, which the string
+        // leg already banded; on a degraded leg the order is keyword, not
+        // semantic, and must not be dressed up as a semantic opinion.
+        cos: h.semantic === 'ok' ? h.components.cosine : undefined,
         snippet: extractSnippet(h.text, q),
         title: h.title,
       }))
@@ -1114,23 +1124,30 @@ async function performNotesSearchInner(opts: {
       // semantic opinion can lift a body hit to the top of the body band, but
       // can never outrank deliberate authored structure.
       const toSemanticBand = (raw: number): number =>
-        v2Active ? 0.55 + 0.3 * Math.min(1, raw) : raw
+        v2Active ? 0.55 + 0.35 * Math.max(0, Math.min(1, raw)) : raw
       for (const h of semanticSettled.value) {
         // Folder exclusion for the semantic leg: QMD returns absolute paths,
         // so filter on the vault-relative form (JS mirror of the SQL filter).
         const relForFilter = path.relative(NOTES_DIR, h.filepath).replace(/\\/g, '/')
         if (isPathExcluded(relForFilter, excludeFolders)) continue
+        // v2 bands from COSINE, not the leg's additive score: the additive mix
+        // re-counts keyword evidence the string leg already banded (a body-
+        // noise doc containing all query words rode it to the 0.85 ceiling as
+        // a fake 'both'), while a doc with no cosine at all carries no
+        // semantic opinion worth merging.
+        const sem = v2Active ? (h as { cos?: number }).cos : h.score
+        if (sem === undefined) continue
         const id = idFromQmdPath(h.filepath)
         const existing = byId.get(id)
         if (existing) {
           // Already a string hit → promote to 'both' (no floor — string match
           // already proves relevance). Keep the highlighted string snippet.
           existing.matchType = 'both'
-          existing.semanticScore = toSemanticBand(h.score)
+          existing.semanticScore = toSemanticBand(sem)
           if (!existing.snippet.includes('<mark>') && h.snippet) {
             existing.snippet = cleanSnippetText(h.snippet)
           }
-        } else if (h.score >= (v2Active ? SEARCH_V2_NOTE_FLOOR : SEMANTIC_RRF_FLOOR)) {
+        } else if (sem >= (v2Active ? SEARCH_V2_NOTE_COS_FLOOR : SEMANTIC_RRF_FLOOR)) {
           // Semantic-only: keep only above the relevance floor (drops noise).
           byId.set(id, {
             id,
@@ -1139,7 +1156,7 @@ async function performNotesSearchInner(opts: {
             snippet: cleanSnippetText(h.snippet || ''),
             matchType: 'semantic',
             score: 0,
-            semanticScore: toSemanticBand(h.score),
+            semanticScore: toSemanticBand(sem),
           })
         }
       }
@@ -1213,8 +1230,8 @@ async function performNotesSearchInner(opts: {
     let folderOnly = 0
     let attachments = 0
     // "Strong semantic" under the two scales: QMD cosine-like ≥0.5; v2 after
-    // toSemanticBand ≥0.70 (raw ≥0.5). The band floor is 0.595, so the old 0.5
-    // would exempt EVERY v2 semantic hit from the folder-only cap.
+    // toSemanticBand ≥0.70 (cosine ≥0.43). The band floor is ~0.67, so the old
+    // 0.5 would exempt EVERY v2 semantic hit from the folder-only cap.
     const strongSemantic = v2Active ? 0.7 : 0.5
     for (const r of results) {
       if (r.matchType === 'semantic') {

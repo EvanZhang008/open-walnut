@@ -116,9 +116,18 @@ function firstH1(body: string): string | null {
 function sectionHeadings(body: string): string {
   const noCode = body.replace(/```[\s\S]*?```/g, '')
   const out: string[] = []
-  for (const m of noCode.matchAll(/^#{2,6}\s+(.+)$/gm)) {
-    const h = m[1].replace(/[*_`~]+/g, '').trim()
-    if (h) out.push(h)
+  // Each line = the heading's ancestor path, " > "-joined ("Eye > prescription"
+  // for an `### prescription` under `## Eye`): a query naming the section the
+  // way a human remembers it ("eye prescription") spans levels, and the leaf
+  // alone is often a one-word label that matches nothing.
+  const stack: Array<{ level: number; text: string }> = []
+  for (const m of noCode.matchAll(/^(#{2,6})\s+(.+)$/gm)) {
+    const level = m[1].length
+    const h = m[2].replace(/[*_`~]+/g, '').trim()
+    if (!h) continue
+    while (stack.length && stack[stack.length - 1].level >= level) stack.pop()
+    stack.push({ level, text: h })
+    out.push(stack.map((s) => s.text).join(' > '))
   }
   return out.join('\n')
 }

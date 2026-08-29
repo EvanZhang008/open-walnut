@@ -340,6 +340,22 @@ describe('rescore guards (fake worker: query always embeds to [127,0,0,0])', () 
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('backfill yields the worker to a live query (quiet window)', async () => {
+    const index = createSearchIndex({ dbPath: ':memory:', kinds: KINDS, embedder: FAKE_EMBEDDER });
+    index.upsert({ kind: 'task', ref: 't1', title: 'alpha work', updatedAt: 1 });
+    // No query yet → backfill embeds freely.
+    const first = await index.backfillVectors();
+    expect(first.embedded).toBe(1);
+    index.upsert({ kind: 'task', ref: 't2', title: 'beta work', updatedAt: 2 });
+    // A query marks the worker hot; the very next backfill call must yield
+    // without embedding and hand back the INCOMING cursor so nothing skips.
+    await index.searchSemantic('alpha', { semanticDeadlineMs: 5000 });
+    const yielded = await index.backfillVectors();
+    expect(yielded).toEqual({ embedded: 0, drained: false, cursor: null });
+    expect(vecCount(index)).toBe(1); // t2 still waiting, not skipped
+    index.close();
+  });
+
   it('semantic recall admits a doc with ZERO keyword overlap (file-backed db)', async () => {
     // Cross-lingual shape: the query shares no token with the doc, so the
     // keyword pool is empty — only the worker's level-0 KNN can reach it.

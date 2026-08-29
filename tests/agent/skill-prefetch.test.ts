@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// These tests mock the QMD lane (memoryNotesSearch) by name; search v2 went
+// default-ON (f395723a), which routes prefetch elsewhere. Pin the flag so the
+// QMD path stays covered until Phase 4 retires it.
+process.env.WALNUT_SEARCH_V2 = '0';
+
 vi.mock('../../src/core/memory-search.js', () => ({
   memoryNotesSearch: vi.fn(),
 }));

@@ -24,7 +24,7 @@ export const NOTES_INDEX_PATH = path.join(WALNUT_HOME, 'notes-index.sqlite')
  * The attachment_text tables need no bump — SCHEMA_SQL's IF NOT EXISTS adds
  * them on open, and a rebuild clears notes/links/tags only (attachment_text
  * SURVIVES: OCR is expensive and its rows are keyed by content hash). */
-export const NOTES_INDEX_SCHEMA_VERSION = 2
+export const NOTES_INDEX_SCHEMA_VERSION = 3 // v3: headings lines carry ancestor paths ("Eye > prescription")
 
 export type LinkStatus = 'resolved' | 'unresolved' | 'ambiguous'
 
@@ -734,6 +734,9 @@ const QUERY_STOPWORDS = new Set([
   'there', 'here', 'our', 'but', 'all', 'any', 'some', 'more', 'most', 'out',
   'off', 'per', 'via', 'does', 'did', 'done', 'get', 'got', 'its', 'his',
   'her', 'him', 'she', 'were', 'notes', 'note',
+  // Authoring chrome in agent/sentence phrasing ("full evaluation of tesla
+  // stock WRITTEN in august") — never note content, only breaks coverage.
+  'written', 'wrote', 'created', 'updated', 'edited', 'saved',
 ])
 
 /** Content-bearing query tokens: lowercase, ≥3 chars (CJK: ≥2 — a Chinese
@@ -804,9 +807,16 @@ function titleScore(title: string, q: string): number | null {
     // ≥2 content words so a one-word title can't claim every query naming it.
     const titleWords = t.split(/[^\p{L}\p{N}]+/u)
       .filter((w) => w.length >= 3 && !QUERY_STOPWORDS.has(w))
+    // Title-side abbreviation: an authored short label covered by a longer
+    // query token ("Gov document" found by "goverment document", "eval" by
+    // "evaluation"). Only valid HERE, where every other title word must also
+    // be covered — as a general matcher it would let "app" claim "apple".
+    const coversWord = (tok: string, w: string): boolean =>
+      tokenMatchesWord(tok, w)
+      || (w.length >= 3 && tok.length >= w.length + 3 && tok.startsWith(w))
     if (
       titleWords.length >= 2 &&
-      titleWords.every((w) => tokens.some((tok) => tokenMatchesWord(tok, w)))
+      titleWords.every((w) => tokens.some((tok) => coversWord(tok, w)))
     ) return 0.91
   }
   return null
@@ -836,15 +846,33 @@ function nameScore(title: string, relPath: string, q: string): number | null {
  * author-written label — stronger evidence than any body mention, weaker than
  * the note being titled/named that. Returns the matched heading for the UI.
  */
-function headingScore(headings: string, q: string): { band: number; heading: string } | null {
+function headingScore(headings: string, q: string, title = ''): { band: number; heading: string } | null {
   if (!headings) return null
   const ql = q.toLowerCase().trim()
   if (!ql) return null
   const cjk = hasCjk(ql)
+  // Lines are ancestor paths ("Eye > prescription"); headingMatch must be the
+  // LEAF — it anchors the snippet to the section's own text in the body.
+  const leaf = (h: string): string => h.split(' > ').pop() ?? h
   for (const h of headings.split('\n')) {
     const hl = h.toLowerCase()
     if (cjk ? hl.includes(ql) : new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(ql)}`, 'u').test(hl)) {
-      return { band: 0.87, heading: h }
+      return { band: 0.87, heading: leaf(h) }
+    }
+  }
+  // Token-wise across one path line, with the note TITLE as the virtual root
+  // (the title IS the H1): "goals review log" names the `## Review log`
+  // section of GOALS.md; "eye prescription" a `### prescription` under
+  // `## Eye`. No single heading holds the phrase, the composed path does.
+  // Slightly under the whole-phrase band so an exact heading still wins.
+  const toks = contentTokens(ql)
+  if (toks.length >= 2) {
+    const titleWords = title.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+    for (const h of headings.split('\n')) {
+      const words = [...titleWords, ...h.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)]
+      if (toks.every((t) => words.some((w) => tokenMatchesWord(t, w)))) {
+        return { band: 0.868, heading: leaf(h) }
+      }
     }
   }
   return null
@@ -1000,18 +1028,39 @@ function correctQueryTokens(q: string, d: DatabaseType): string | null {
     if (vocab.list.some((w) => w.startsWith(tok))) return raw
     let best: string | null = null
     let bestDist = Infinity
+    let bestPrefix = -1
+    let bestCount = 0
     const maxDist = tok.length <= 5 ? 1 : 2
+    // Equal-distance ties MUST break on real signal — longest common prefix
+    // (typos rarely hit the first letters), then vault count. Breaking on
+    // vocab-list order made the winner depend on the notes table's physical
+    // row order: an index rebuild reshuffled it and a query word silently
+    // started correcting to an unrelated same-distance word.
+    const commonPrefix = (a: string, b: string): number => {
+      let i = 0
+      while (i < a.length && i < b.length && a[i] === b[i]) i++
+      return i
+    }
     for (const w of vocab.list) {
+      let dist: number
       if (w.length >= 4 && w.length < tok.length && tok.startsWith(w)) {
         // Prefix-shrink: better than a distance-2 guess, worse than distance-1.
-        if (bestDist > 1.5) { best = w; bestDist = 1.5 }
-        continue
+        dist = 1.5
+      } else {
+        const d = editDistanceAtMost(tok, w, maxDist)
+        if (d == null || d === 0) continue
+        dist = d
       }
-      const dist = editDistanceAtMost(tok, w, maxDist)
-      if (dist != null && dist > 0 && dist < bestDist) {
+      const pfx = commonPrefix(tok, w)
+      const cnt = vocab.counts.get(w) ?? 0
+      if (
+        dist < bestDist
+        || (dist === bestDist && (pfx > bestPrefix || (pfx === bestPrefix && cnt > bestCount)))
+      ) {
         best = w
         bestDist = dist
-        if (dist === 1) break // can't beat 1 (0 was excluded by the count check)
+        bestPrefix = pfx
+        bestCount = cnt
       }
     }
     if (!best) return raw
@@ -1161,6 +1210,7 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
   const weakNameHits: StringHit[] = []
   const qContentTokens = contentTokens(q)
   let partialTitleHits = 0
+  let partialTitleWeak = 0
   for (const r of titleRows) {
     let band = nameScore(r.title, r.path, q)
     // Partial-title band: a multi-word query where SOME content token is a
@@ -1184,13 +1234,36 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
         // "insurence gap") is a coincidence and must rank under the corrected/
         // relaxed full-evidence bands.
         const hay = `${r.title}\n${r.path}\n${r.body}`.toLowerCase()
-        const supported = qContentTokens.every((tok) => tok === bestTokWord || hay.includes(tok))
+        // A month NAME in the query supports against the month NUMBER in a
+        // dated filename ("written in august" ⇒ tsla-full-eval-2026-08.md).
+        const monthNum = (tok: string): string | undefined => ({
+          january: '1', february: '2', march: '3', april: '4', june: '6', july: '7',
+          august: '8', september: '9', october: '10', november: '11', december: '12',
+        } as Record<string, string>)[tok] // 'may' omitted: too common as a verb
+        const tokSupported = (tok: string): boolean => {
+          if (hay.includes(tok)) return true
+          const m = monthNum(tok)
+          return m !== undefined && new RegExp(`[-_./ ]0?${m}(?=\\D|$)`).test(hay)
+        }
+        // Long sentence queries tolerate ONE unsupported word: "full
+        // evaluation of tesla stock written in august" names a note that
+        // never says "stock". Short queries keep the strict rule — with two
+        // tokens, one miss IS the "insurence gap" coincidence.
+        const misses = qContentTokens
+          .filter((tok) => tok !== bestTokWord && !tokSupported(tok)).length
+        const supported = misses === 0 || (qContentTokens.length >= 5 && misses === 1)
+        // Separate caps: unsupported 0.75s are the flood risk, and counting
+        // them against the shared cap let 8 table-order-earlier "stock" rows
+        // starve the one real supported name hit scanned after them.
         if (supported) {
           band = bestTok >= 0.96 ? 0.858 : bestTok >= 0.93 ? 0.856 : 0.855
-        } else {
+          partialTitleHits++
+        } else if (partialTitleWeak < 8) {
           band = 0.75
+          partialTitleWeak++
+        } else {
+          band = null
         }
-        partialTitleHits++
       }
     }
     if (band == null) continue // matched a token but not as a scorable name hit
@@ -1205,15 +1278,34 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
   // Heading leg: notes whose SECTION HEADINGS contain the query as a word
   // ("## SIN" in a grab-bag "Gov document" note). An author-written label —
   // outranks any body mention (band .87), sits below name/folder bands.
-  const headingRows = d
+  // Whole-phrase prefetch, plus a per-token AND prefetch for the cross-level
+  // case ("eye prescription" = `### prescription` under `## Eye`): the phrase
+  // never appears contiguously, but every token does — headingScore then
+  // verifies the tokens land in ONE ancestor-path line.
+  const headingToks = contentTokens(q)
+  const headingRowsById = new Map<string, RawHit>()
+  for (const r of d
     .prepare(
       `SELECT id, path, title, body, headings, modified FROM notes
        WHERE headings LIKE ? ESCAPE '\\'${excl.sql}
        LIMIT ?`,
     )
-    .all(titleLike, ...excl.params, limit * 2) as RawHit[]
-  for (const r of headingRows) {
-    const hs = headingScore(r.headings ?? '', q)
+    .all(titleLike, ...excl.params, limit * 2) as RawHit[]) headingRowsById.set(r.id, r)
+  if (headingToks.length >= 2) {
+    // Each token may sit in the headings OR the title (the virtual root).
+    const conds = headingToks.map(() => `(headings LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')`).join(' AND ')
+    for (const r of d
+      .prepare(
+        `SELECT id, path, title, body, headings, modified FROM notes
+         WHERE ${conds}${excl.sql}
+         LIMIT ?`,
+      )
+      .all(...headingToks.flatMap((t) => [`%${likeEscape(t)}%`, `%${likeEscape(t)}%`]), ...excl.params, limit * 2) as RawHit[]) {
+      headingRowsById.set(r.id, r)
+    }
+  }
+  for (const r of headingRowsById.values()) {
+    const hs = headingScore(r.headings ?? '', q, r.title)
     if (!hs) continue
     addHit({
       id: r.id, path: r.path, title: r.title, body: r.body,

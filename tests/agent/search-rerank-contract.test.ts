@@ -23,6 +23,11 @@
  * in the core — either alone can regress silently.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// The contract under test is the QMD lane's rerank:false; search v2 went
+// default-ON (f395723a) and routes task_search elsewhere. Pin the flag so the
+// QMD path stays covered until Phase 4 retires it.
+process.env.WALNUT_SEARCH_V2 = '0';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 const mocks = vi.hoisted(() => ({

@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// The QMD integration blocks below mock memoryNotesSearch by name; search v2
+// went default-ON (f395723a) and routes those lanes elsewhere. Pin the flag so
+// the QMD path stays covered until Phase 4 retires it.
+process.env.WALNUT_SEARCH_V2 = '0';
 import {
   scoreMatch,
   extractSnippet,
