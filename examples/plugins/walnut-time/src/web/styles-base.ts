@@ -1,7 +1,8 @@
 /**
- * Page chrome and the two report tabs: tokens, header, tab bar, filters, stat
+ * Page chrome and the two report tabs: tokens, header, tab bar, the scope bar, stat
  * cards, per-task bars, the 7-day trend. The timeline and its three views live in
- * styles-views.ts, and styles.ts joins the two.
+ * styles-views.ts (including the day nav both surfaces share), and styles.ts joins
+ * the two.
  *
  * Two rules shape both files. First, EVERY class is prefixed `wt-`: injected CSS is
  * global while the plugin is mounted, and the console already ships a Time Tracking
@@ -15,9 +16,6 @@ export const BASE_CSS = `
   /* iOS purple: reads as "not me" next to the accent, and no task colour uses it. */
   --wt-agent: #af52de;
   --wt-focus: var(--tier-focus, var(--accent));
-  /* The trend's non-focus half. --tier-focus resolves to the accent, so a stack of
-     accent-on-accent had no visible split; this is the same hue, stepped back. */
-  --wt-other: color-mix(in srgb, var(--accent) 42%, var(--fg-muted));
   /* Idle / away. A MIX, not --bg-secondary: in the dark theme that token is
      byte-identical to the card background, so idle time would have no shape and the
      tape's whole "grey = away" idea would silently stop working. */
@@ -215,6 +213,15 @@ export const BASE_CSS = `
 .wt-stat-label { font-size: 12px; color: var(--fg-secondary); }
 .wt-stat-hint { font-size: 11px; color: var(--fg-muted); }
 
+/* The second lane on a card. Deliberately much smaller than the headline: it is the
+   same question about a different actor, not half of one total. */
+.wt-stat-sub {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--wt-agent);
+  font-variant-numeric: tabular-nums;
+}
+
 /* The parallel-agents caption. Never a headline number. */
 .wt-agent-note {
   margin: -10px 0 22px;
@@ -230,6 +237,20 @@ export const BASE_CSS = `
   gap: 10px;
   margin-bottom: 10px;
 }
+
+/* A pointer to another tab, not an action: reads as a link, sits at the far end. */
+.wt-section-link {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.wt-section-link:hover { text-decoration: underline; }
 
 .wt-bars { display: flex; flex-direction: column; gap: 6px; }
 
@@ -270,19 +291,21 @@ export const BASE_CSS = `
 .wt-bar-value-human { color: var(--wt-human); }
 .wt-bar-value-agent { color: var(--wt-agent); }
 
-/* ── 7-day trend (plain divs, no chart dependency) ── */
+/* ── 7-day trend: two bars per day, no chart dependency ── */
 
 .wt-trend {
   display: flex;
   align-items: flex-end;
-  gap: 12px;
-  height: 170px;
+  gap: 6px;
+  height: 190px;
   padding: 10px 8px 0;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-md, 12px);
 }
 
+/* A button, because a day is selectable. All the button chrome is stripped: the
+   affordance is the hover fill and the selected outline, not a raised rectangle. */
 .wt-trend-day {
   flex: 1 1 0;
   min-width: 0;
@@ -291,24 +314,45 @@ export const BASE_CSS = `
   align-items: center;
   height: 100%;
   gap: 6px;
+  border: 0;
+  background: transparent;
+  border-radius: 8px 8px 6px 6px;
+  padding: 4px 2px 3px;
+  font: inherit;
+  cursor: pointer;
 }
 
-.wt-trend-stack {
+.wt-trend-day:hover { background: var(--bg-hover, color-mix(in srgb, var(--fg-muted) 10%, transparent)); }
+
+.wt-trend-day.is-selected {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* The pair shares one baseline and one y-scale, so a day's two answers can be
+   compared by eye without either becoming part of the other. */
+.wt-trend-pair {
   flex: 1 1 auto;
   width: 100%;
-  max-width: 56px;
+  max-width: 58px;
   min-height: 0;
   display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  border-radius: 4px 4px 0 0;
-  overflow: hidden;
-  background: color-mix(in srgb, var(--border) 45%, transparent);
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+  padding-bottom: 1px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
-.wt-trend-seg { width: 100%; }
-.wt-trend-focus { background: var(--wt-focus); }
-.wt-trend-other { background: var(--wt-other); }
+.wt-trend-bar {
+  flex: 1 1 0;
+  min-width: 3px;
+  max-width: 22px;
+  border-radius: 3px 3px 0 0;
+}
+
+.wt-trend-bar-human { background: var(--wt-human); }
+.wt-trend-bar-agent { background: var(--wt-agent); }
 
 .wt-trend-label {
   flex: 0 0 auto;
@@ -337,8 +381,9 @@ export const BASE_CSS = `
   flex: 0 0 auto;
 }
 
-/* No agent swatch: the reports keep the lanes in separate TABS, and the timeline's
-   agent legend has its own hatched .wt-tt-swatch-agent (styles-views.ts). */
-.wt-swatch-human { background: var(--wt-other); }
+/* Each swatch matches the mark it explains: the trend's two bar fills, and the round
+   focus dot that prefixes a focus-tier task row. */
+.wt-swatch-human { background: var(--wt-human); }
+.wt-swatch-agent { background: var(--wt-agent); }
 .wt-swatch-focus { background: var(--wt-focus); border-radius: 50%; }
 `

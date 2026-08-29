@@ -5,8 +5,8 @@
  * installs no plugins by design (a spec there asserts a stock install has zero app
  * entries), and this app only exists once a plugin is linked. So this file provisions
  * a throwaway data home, LINKS the example plugin into it exactly the way
- * `walnut-plugin link` does, seeds a dense day of time records, and starts the real
- * server with Vite in front.
+ * `walnut-plugin link` does, seeds a dense day of time records plus three days of
+ * outside activity, and starts the real server with Vite in front.
  *
  * Never :3456 and never the developer's data: OPEN_WALNUT_HOME, HOME and the daemon
  * dirs all point inside one temp directory that is removed on shutdown.
@@ -201,6 +201,81 @@ for (const [date, lines] of byDate) {
   await fs.writeFile(path.join(tmpBase, 'time-tracking', `${date}.jsonl`), `${lines.join('\n')}\n`)
 }
 
+// ── Outside activity (the Apps tab) ──
+// A different store with a different shape: time-tracking/outside/<date>.jsonl, one
+// bucket per (app, host). Seeded on disk for the same reason the lanes above are —
+// the collector that normally writes these is a macOS helper, and a browser test must
+// never spawn (or compile) it.
+
+/** Noon-anchored, so a DST transition cannot move a seeded day. */
+function shiftDay(date: string, deltaDays: number): string {
+  const [y, m, d] = date.split('-').map((part) => parseInt(part, 10))
+  const at = new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1, 12, 0, 0, 0)
+  at.setDate(at.getDate() + deltaDays)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`
+}
+
+/** The Walnut desktop shell (core/time-tracking/outside-view.ts owns this id). */
+const WALNUT_DESKTOP_BUNDLE_ID = 'com.local.walnut-desktop'
+const outsideEmptyDate = shiftDay(anchor.date, -1)
+const outsideHintDate = shiftDay(anchor.date, -2)
+
+/**
+ * A realistic mix: a browser that spent part of its day ON Walnut (localhost, which
+ * the fold counts as inside), a Walnut desktop bucket, chat, a terminal, and a second
+ * browser that carried no host at all. Ten hosts on purpose, so the row has to fold
+ * its tail behind the "+N more" expander.
+ */
+const OUTSIDE_BUCKETS: Array<{ app: string; bundleId: string; host?: string; minutes: number }> = [
+  { app: 'Google Chrome', bundleId: 'com.google.Chrome', host: 'github.com', minutes: 25 },
+  { app: 'Google Chrome', bundleId: 'com.google.Chrome', host: 'news.ycombinator.com', minutes: 15 },
+  { app: 'Google Chrome', bundleId: 'com.google.Chrome', host: 'localhost', minutes: 12 },
+  { app: 'Google Chrome', bundleId: 'com.google.Chrome', host: 'docs.python.org', minutes: 6 },
+  { app: 'Google Chrome', bundleId: 'com.google.Chrome', host: 'developer.mozilla.org', minutes: 5 },
+  { app: 'Google Chrome', bundleId: 'com.google.Chrome', host: 'en.wikipedia.org', minutes: 4 },
+  { app: 'Google Chrome', bundleId: 'com.google.Chrome', host: 'stackoverflow.com', minutes: 3 },
+  { app: 'Google Chrome', bundleId: 'com.google.Chrome', host: 'www.npmjs.com', minutes: 2 },
+  { app: 'Google Chrome', bundleId: 'com.google.Chrome', host: 'crates.io', minutes: 1.5 },
+  { app: 'Google Chrome', bundleId: 'com.google.Chrome', host: 'pkg.go.dev', minutes: 1 },
+  { app: 'Walnut', bundleId: WALNUT_DESKTOP_BUNDLE_ID, minutes: 41 },
+  { app: 'Slack', bundleId: 'com.tinyspeck.slackmacgap', minutes: 18 },
+  { app: 'Terminal', bundleId: 'com.apple.Terminal', minutes: 11 },
+  // A browser bucket with no host: one row, no sites, and it must NOT trigger the
+  // Automation hint, because another browser DID report hosts today.
+  { app: 'Safari', bundleId: 'com.apple.Safari', minutes: 6 },
+]
+
+/** Two days back: a browser was used and nothing came back — the missing grant. */
+const OUTSIDE_HINT_BUCKETS: Array<{ app: string; bundleId: string; minutes: number }> = [
+  { app: 'Google Chrome', bundleId: 'com.google.Chrome', minutes: 22 },
+  { app: 'Terminal', bundleId: 'com.apple.Terminal', minutes: 9 },
+]
+
+const outsideDir = path.join(tmpBase, 'time-tracking', 'outside')
+await fs.mkdir(outsideDir, { recursive: true })
+
+function outsideLine(date: string, index: number, bucket: { app: string; bundleId: string; host?: string; minutes: number }): string {
+  return JSON.stringify({
+    date,
+    ts: `${date}T09:${String(index % 60).padStart(2, '0')}:00.000Z`,
+    durationMs: Math.round(bucket.minutes * 60_000),
+    app: bucket.app,
+    bundleId: bucket.bundleId,
+    ...(bucket.host ? { host: bucket.host } : {}),
+  })
+}
+
+await fs.writeFile(
+  path.join(outsideDir, `${anchor.date}.jsonl`),
+  `${OUTSIDE_BUCKETS.map((b, i) => outsideLine(anchor.date, i, b)).join('\n')}\n`,
+)
+await fs.writeFile(
+  path.join(outsideDir, `${outsideHintDate}.jsonl`),
+  `${OUTSIDE_HINT_BUCKETS.map((b, i) => outsideLine(outsideHintDate, i, b)).join('\n')}\n`,
+)
+// outsideEmptyDate gets NO file: the tab has to say so rather than draw nothing.
+
 // Install the plugin the documented author way: a symlink in the data home's
 // plugins/ directory, which is exactly what `walnut-plugin link` writes.
 const pluginSource = path.join(repoRoot, 'examples/plugins/walnut-time')
@@ -209,6 +284,18 @@ await fs.symlink(pluginSource, path.join(tmpBase, 'plugins', 'walnut-time'), 'di
 
 const { startServer, stopServer } = await import('../../../src/web/server.js')
 const apiServer = await startServer({ port: 0, dev: true })
+
+/**
+ * Outside sampling is enabled AFTER the server booted, deliberately.
+ *
+ * The setting is what the Apps tab reads, but boot ALSO calls startOutsideCollector(),
+ * which on macOS compiles a Swift helper with `xcrun swiftc` and then spawns a process
+ * that watches the real screen. A browser test must do neither. Writing the setting
+ * once nothing is left to read it gives the tab `enabled: true, running: false` — a
+ * state the tab has its own line for, and the one this fixture wants.
+ */
+const { updateConfig } = await import('../../../src/core/config-manager.js')
+await updateConfig({ time: { outside: { enabled: true } } })
 const apiAddress = apiServer.address()
 if (!apiAddress || typeof apiAddress === 'string') throw new Error('Time App fixture did not bind a TCP port')
 const apiTarget = `http://127.0.0.1:${apiAddress.port}`
@@ -229,7 +316,15 @@ const viteServer = await createViteServer({
 })
 await viteServer.listen()
 
-const fixture = { port, home: tmpBase, date: anchor.date, taskIds, previousDate: previous }
+const fixture = {
+  port,
+  home: tmpBase,
+  date: anchor.date,
+  taskIds,
+  previousDate: previous,
+  outsideEmptyDate,
+  outsideHintDate,
+}
 await fs.writeFile(path.join(tmpBase, 'fixture.json'), JSON.stringify(fixture, null, 2))
 console.log(`TIME_APP_READY ${JSON.stringify(fixture)}`)
 

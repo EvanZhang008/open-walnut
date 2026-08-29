@@ -24,12 +24,24 @@ import { expect, test, type Page } from '@playwright/test'
  *      the plugin's own row in Settings → Plugins, live and durably.
  *   2. Its tabs are real URLs (a reload on /timeline comes back on the timeline, not on
  *      tab one).
- *   3. Attention is SERIAL: no two segments of the tape may overlap vertically. That
+ *   3. The Overview answers three questions AT ONCE (your time, agent time, the 7-day
+ *      daily average) and switches days the way the Timeline does. The old
+ *      Today/Yesterday/Last-7-days pills are gone, and their absence is asserted: a
+ *      canned range could not answer "what about Tuesday?", which is most of what
+ *      anyone asks a time report.
+ *   4. Attention is SERIAL: no two segments of the tape may overlap vertically. That
  *      is the whole reason these views were rebuilt, so it is asserted, not eyeballed.
- *   4. The three views agree about the day, and agents appear in the swimlanes only.
+ *   5. The three views agree about the day, and agents appear in the swimlanes only.
+ *   6. The Apps tab splits the day into Outside / In Walnut and never sums them into a
+ *      number nobody spent; a browser's sites nest under it; and while the setting is
+ *      off the tab is an invitation with one button, not an empty report.
  */
 
 const SCREENSHOT_DIR = '/tmp/action-cards-time'
+/** The Overview's own shots, taken at a laptop canvas so a human can read them. */
+const OVERVIEW_SHOT_DIR = '/tmp/walnut-time-overview'
+/** The Apps tab's own shots, same laptop canvas. */
+const APPS_SHOT_DIR = '/tmp/walnut-time-apps'
 
 interface Fixture {
   port: number
@@ -37,6 +49,10 @@ interface Fixture {
   date: string
   taskIds: string[]
   previousDate: string
+  /** One day before the seeded outside day: sampled nothing, on purpose. */
+  outsideEmptyDate: string
+  /** Two days before: a browser was used and no site came back (missing grant). */
+  outsideHintDate: string
 }
 
 let child: ChildProcessWithoutNullStreams | null = null
@@ -84,8 +100,10 @@ function waitForReady(): Promise<Fixture> {
   })
 }
 
-async function shoot(page: Page, name: string): Promise<void> {
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/${name}.png` })
+async function shoot(page: Page, name: string, dir = SCREENSHOT_DIR): Promise<void> {
+  // Viewport, not fullPage: the App renders inside the host's own scroll container, so
+  // fullPage returns the same pixels and only doubles the bytes.
+  await page.screenshot({ path: `${dir}/${name}.png` })
 }
 
 async function expandSidebar(page: Page): Promise<void> {
@@ -121,21 +139,77 @@ function localToday(): string {
   return `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
 }
 
+function shiftDate(date: string, deltaDays: number): string {
+  const [y, m, d] = date.split('-').map((p) => parseInt(p, 10))
+  const anchor = new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1, 12, 0, 0, 0)
+  anchor.setDate(anchor.getDate() + deltaDays)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${anchor.getFullYear()}-${pad(anchor.getMonth() + 1)}-${pad(anchor.getDate())}`
+}
+
+/**
+ * What the day nav prints for a date. Computed here on purpose: asserting the label
+ * merely CHANGED would pass on an off-by-one step, and "which day am I looking at" is
+ * the whole point of the control.
+ */
+function navLabel(date: string): string {
+  const [y, m, d] = date.split('-').map((p) => parseInt(p, 10))
+  return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1)
+    .toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' })
+}
+
+/** What the week scope prints for one end of its range. */
+function rangeLabel(date: string): string {
+  const [y, m, d] = date.split('-').map((p) => parseInt(p, 10))
+  return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1).toLocaleDateString('en', { month: 'short', day: 'numeric' })
+}
+
+/** "2h 05m" / "42m" / "30s" → minutes, so two scopes can be compared. */
+function toMinutes(text: string): number {
+  const hours = /(\d+)h/.exec(text)
+  const minutes = /(\d+)m/.exec(text)
+  const seconds = /^(\d+)s$/.exec(text)
+  return (hours ? Number(hours[1]) * 60 : 0)
+    + (minutes ? Number(minutes[1]) : 0)
+    + (seconds ? Number(seconds[1]) / 60 : 0)
+}
+
 /** Walk the day nav back if the fixture had to seed yesterday. */
 async function landOnSeededDay(page: Page): Promise<void> {
   if (fixture!.date !== localToday()) await page.getByTestId('time-app-prev').click()
 }
 
 /**
- * Same problem one tab over. The reports default to the Today range, but the fixture
- * seeds YESTERDAY whenever the run starts within its span of local midnight
- * (`seedAnchor`, time-app-server.ts) — so between midnight and ~02:40 the report is
- * honestly empty and every assertion below it reads as a rendering bug. Pick the range
- * that actually contains the seeded day instead of trusting the wall clock.
+ * Same problem one tab over. The reports default to today, but the fixture seeds
+ * YESTERDAY whenever the run starts within its span of local midnight (`seedAnchor`,
+ * time-app-server.ts) — so between midnight and ~02:40 the report is honestly empty and
+ * every assertion below it reads as a rendering bug. Walk the scope nav to the seeded
+ * day instead of trusting the wall clock.
  */
-async function landOnSeededRange(page: Page): Promise<void> {
+async function landOnSeededScope(page: Page): Promise<void> {
   if (fixture!.date === localToday()) return
-  await page.getByTestId('time-app-range-yesterday').click()
+  await page.getByTestId('time-app-scope-prev').click()
+}
+
+/** The duration a stat card is showing, e.g. "4h 12m". */
+async function statValue(page: Page, testId: string): Promise<string> {
+  return (await page.getByTestId(testId).locator('.wt-stat-value').innerText()).trim()
+}
+
+/**
+ * The Apps tab has its OWN day nav (a day is its own question there), so it opens on
+ * today and has to be walked back the same way the timeline is.
+ */
+async function landOnSeededAppsDay(page: Page): Promise<void> {
+  if (fixture!.date !== localToday()) await page.getByTestId('time-app-apps-prev').click()
+  await expect(page.getByTestId('time-app-apps-date')).toContainText(navLabel(fixture!.date))
+}
+
+/** Open the Apps tab by clicking it, and wait for the day it answers with. */
+async function openAppsTab(page: Page): Promise<void> {
+  await page.getByTestId('time-app-tab-apps').click()
+  await expect(page).toHaveURL(/\/apps\/walnut-time~main\/apps$/)
+  await expect(page.getByTestId('time-app-apps')).toBeVisible({ timeout: 30_000 })
 }
 
 test.beforeAll(async () => {
@@ -143,6 +217,8 @@ test.beforeAll(async () => {
   // and booting a server plus Vite takes longer than that whenever the machine is busy.
   test.setTimeout(240_000)
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
+  await fs.mkdir(OVERVIEW_SHOT_DIR, { recursive: true })
+  await fs.mkdir(APPS_SHOT_DIR, { recursive: true })
   const port = await reservePort()
   child = spawn('./node_modules/.bin/tsx', ['tests/e2e/browser/time-app-server.ts'], {
     cwd: process.cwd(),
@@ -232,10 +308,10 @@ test('the plugin App page holds the reports and its tabs are real URLs', async (
 
   await openTimeApp(page)
 
-  // Tab one is the report, and the page is a page: the reports have a filter bar.
+  // Tab one is the Overview, and the page is a page: it has a scope bar and filters.
   await expect(page.getByTestId('time-app-view-mine')).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId('time-app-project-filter')).toBeVisible()
-  await landOnSeededRange(page)
+  await landOnSeededScope(page)
   await expect(page.getByTestId('time-app-group-focus')).toBeVisible()
   await expect(page.getByTestId('time-app-trend').locator('.wt-trend-day')).toHaveCount(7)
   await shoot(page, 'views-app-my-time')
@@ -265,6 +341,244 @@ test('the plugin App page holds the reports and its tabs are real URLs', async (
   await expect(page.getByTestId('time-app')).toBeVisible({ timeout: 60_000 })
 
   expect(pageErrors, 'the plugin App must not throw in the browser').toEqual([])
+})
+
+test('the Overview answers both clocks at once and switches days like the timeline', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  // Narrower than the file default: the four cards and the paired trend have to hold up
+  // on a laptop canvas, and this is the shot a human reviews.
+  await page.setViewportSize({ width: 1280, height: 1000 })
+
+  await openTimeApp(page)
+  await expect(page.getByTestId('time-app-view-mine')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('time-app-trend').locator('.wt-trend-day')).toHaveCount(7, { timeout: 30_000 })
+
+  // The canned ranges are GONE. They could not answer "what about Tuesday?", so the
+  // scope is the Timeline's own gesture plus a length toggle.
+  await expect(page.getByTestId('time-app-range-today')).toHaveCount(0)
+  await expect(page.getByTestId('time-app-range-yesterday')).toHaveCount(0)
+  await expect(page.getByTestId('time-app-range-7d')).toHaveCount(0)
+  for (const id of ['time-app-scope-prev', 'time-app-scope-next', 'time-app-scope-date',
+    'time-app-scope-today', 'time-app-scope-day', 'time-app-scope-week']) {
+    await expect(page.getByTestId(id), id).toBeVisible()
+  }
+
+  // ‹ steps one real day back, and Today comes straight back to it.
+  const label = page.getByTestId('time-app-scope-date')
+  const today = localToday()
+  await expect(label).toContainText(navLabel(today))
+  await page.getByTestId('time-app-scope-prev').click()
+  await expect(label).toContainText(navLabel(shiftDate(today, -1)))
+  await page.getByTestId('time-app-scope-today').click()
+  await expect(label).toContainText(navLabel(today))
+
+  await landOnSeededScope(page)
+  const scopedDay = fixture!.date
+
+  // BOTH clocks on one screen, each its own number: agents run in parallel, so the two
+  // are never summed, and neither may be missing from the answer.
+  const humanText = await statValue(page, 'time-app-stat-human')
+  const agentText = await statValue(page, 'time-app-stat-agent')
+  expect(toMinutes(humanText), `your time on ${scopedDay} (${humanText})`).toBeGreaterThan(0)
+  expect(toMinutes(agentText), `agent runtime on ${scopedDay} (${agentText})`).toBeGreaterThan(0)
+  // The 7-day average carries the agent lane as a subline, never folded into its value.
+  const average = page.getByTestId('time-app-stat-average')
+  await expect(average).toContainText('Daily average, last 7 days')
+  await expect(average.locator('.wt-stat-sub')).toContainText('Agents')
+  expect(toMinutes(await statValue(page, 'time-app-stat-average'))).toBeGreaterThan(0)
+  await expect(page.getByTestId('time-app-stat-focus')).toBeVisible()
+  // Above the fold is the claim being made: all four numbers on one screen.
+  await shoot(page, 'overview-day', OVERVIEW_SHOT_DIR)
+
+  // The week scope is a real widening: its label is the range, and it can only hold
+  // MORE of your time than the day inside it.
+  await page.getByTestId('time-app-scope-week').click()
+  await expect(label).toContainText(`${rangeLabel(shiftDate(scopedDay, -6))} to ${rangeLabel(scopedDay)}`)
+  expect(toMinutes(await statValue(page, 'time-app-stat-human')))
+    .toBeGreaterThanOrEqual(toMinutes(humanText))
+  await shoot(page, 'overview-week', OVERVIEW_SHOT_DIR)
+
+  // A trend bar is a day selector: clicking one reads that day, which is a day scope.
+  const seededBar = page.locator(`[data-testid="time-app-trend-day"][data-date="${scopedDay}"]`)
+  await expect(seededBar).toBeVisible()
+  await seededBar.click()
+  await expect(label).toContainText(navLabel(scopedDay))
+  await expect(seededBar).toHaveClass(/is-selected/)
+  await expect(page.getByTestId('time-app-scope-day')).toHaveClass(/is-active/)
+  // Two bars per day, one per lane, so the day the fixture seeded has both drawn.
+  await expect(seededBar.locator('.wt-trend-bar-human')).toHaveCount(1)
+  await expect(seededBar.locator('.wt-trend-bar-agent')).toHaveCount(1)
+
+  // The agent list is a pointer, not the report: five rows at most, and a way over to
+  // the tab that owns the question. The fixture seeds exactly one agent run.
+  const agentsTop = page.getByTestId('time-app-agents-top')
+  await expect(agentsTop.locator('.wt-bar-row')).toHaveCount(1)
+  await page.getByTestId('time-app-open-agents').click()
+  await expect(page).toHaveURL(/\/apps\/walnut-time~main\/agents$/)
+  await expect(page.getByTestId('time-app-view-agents')).toBeVisible()
+  // One scope for both report tabs: the day survives the hop, or the link would answer
+  // a different question than the card it was clicked from.
+  await expect(page.getByTestId('time-app-scope-date')).toContainText(navLabel(scopedDay))
+  await shoot(page, 'overview-agents-tab', OVERVIEW_SHOT_DIR)
+
+  expect(pageErrors, 'the plugin App must not throw in the browser').toEqual([])
+})
+
+test('the Apps tab answers for the screen time Walnut never sees', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  // The laptop canvas: this is the shot a human reviews, and the nested site rows have
+  // to survive a 1280px-wide page.
+  await page.setViewportSize({ width: 1280, height: 1000 })
+
+  await openTimeApp(page)
+  await openAppsTab(page)
+  await expect(page.getByTestId('time-app')).toHaveAttribute('data-tab', 'apps')
+
+  // Its own day question, so the shared scope bar is not on this tab at all: two day
+  // switchers on one screen would disagree the first time one of them moved.
+  await expect(page.getByTestId('time-app-scope-date')).toHaveCount(0)
+  await expect(page.getByTestId('time-app-project-filter')).toHaveCount(0)
+  for (const id of ['time-app-apps-prev', 'time-app-apps-next', 'time-app-apps-date', 'time-app-apps-today']) {
+    await expect(page.getByTestId(id), id).toBeVisible()
+  }
+
+  await landOnSeededAppsDay(page)
+  await expect(page.getByTestId('time-app-apps-list')).toBeVisible({ timeout: 30_000 })
+
+  // The split is the whole point of the tab: the outside number is the one the other
+  // three tabs cannot produce, and the two parts add up to the total rather than being
+  // three independent readings of it.
+  const outside = page.getByTestId('time-app-apps-outside')
+  await expect(outside).toContainText('Outside Walnut')
+  await expect(page.getByTestId('time-app-apps-inside')).toContainText('In Walnut')
+  const outsideMin = toMinutes(await statValue(page, 'time-app-apps-outside'))
+  const insideMin = toMinutes(await statValue(page, 'time-app-apps-inside'))
+  const totalMin = toMinutes(await statValue(page, 'time-app-apps-total'))
+  expect(insideMin, 'Walnut time on the seeded day').toBeGreaterThan(0)
+  expect(outsideMin, 'outside time on the seeded day').toBeGreaterThan(insideMin)
+  // One minute of slack: each card rounds its own value independently.
+  expect(Math.abs(outsideMin + insideMin - totalMin), `${outsideMin} + ${insideMin} vs ${totalMin}`)
+    .toBeLessThanOrEqual(1)
+
+  // The collector is deliberately NOT running in a test (it is a compiled macOS helper
+  // that watches the real screen), so the tab has to say the setting is on while the
+  // sampler is not.
+  await expect(page.getByTestId('time-app-apps-idle')).toContainText('Tracker is starting')
+
+  // Longest first, and it is the ranking the server sent rather than DOM order luck.
+  const rows = page.getByTestId('time-app-apps-row')
+  await expect.poll(() => rows.count(), { timeout: 30_000 }).toBeGreaterThan(3)
+  const rowMinutes = await rows.evaluateAll((nodes) => nodes.map((node) => ({
+    app: (node as HTMLElement).dataset.app ?? '',
+    value: node.querySelector('.wt-bar-value')?.textContent?.trim() ?? '',
+  })))
+  const ranked = rowMinutes.map((row) => toMinutes(row.value))
+  for (let i = 1; i < ranked.length; i += 1) {
+    expect(ranked[i], `row ${i} (${rowMinutes[i]!.app}) vs row ${i - 1}`).toBeLessThanOrEqual(ranked[i - 1]!)
+  }
+  expect(rowMinutes.map((row) => row.app)).toContain('Google Chrome')
+
+  // Exactly one row is ENTIRELY Walnut time. The browser that spent part of its day on
+  // a Walnut page is not that row: its Walnut share is already inside `In Walnut`, and
+  // chipping it would claim the whole browser.
+  await expect(page.getByTestId('time-app-apps-chip')).toHaveCount(1)
+  const walnutRow = page.locator('[data-testid="time-app-apps-row"]', {
+    has: page.getByTestId('time-app-apps-chip'),
+  })
+  await expect(walnutRow).toHaveAttribute('data-app', 'Walnut')
+
+  // A browser breaks down by site, nested under its own row and scaled inside it. The
+  // tail folds: ten hosts, eight drawn, the rest behind one expander.
+  const chromeRow = page.locator('[data-testid="time-app-apps-row"][data-app="Google Chrome"]')
+  const sites = chromeRow.locator('.wt-ap-site')
+  await expect(sites).toHaveCount(8)
+  await expect(chromeRow.locator('[data-host="localhost"]')).toBeVisible()
+  await expect(chromeRow.locator('[data-host="github.com"]')).toBeVisible()
+  const more = chromeRow.getByTestId('time-app-apps-more')
+  await expect(more).toHaveText('+2 more')
+  await more.click()
+  await expect(sites).toHaveCount(10)
+  await expect(more).toHaveText('Fewer sites')
+  await shoot(page, 'apps-day', APPS_SHOT_DIR)
+
+  // ‹ steps to a real day that sampled nothing, and the tab says which day that was
+  // instead of drawing an empty chart.
+  await page.getByTestId('time-app-apps-prev').click()
+  await expect(page.getByTestId('time-app-apps-date')).toContainText(navLabel(fixture!.outsideEmptyDate))
+  await expect(page.getByTestId('time-app-apps-empty')).toContainText('Nothing sampled')
+  await expect(page.getByTestId('time-app-apps-empty')).toContainText(navLabel(fixture!.outsideEmptyDate))
+  await expect(page.getByTestId('time-app-apps-list')).toHaveCount(0)
+  await shoot(page, 'apps-empty-day', APPS_SHOT_DIR)
+
+  // ‹ again: a day a browser was used and not one site came back. That is a missing
+  // macOS grant, not a browser that visited nowhere, so the tab explains the grant.
+  await page.getByTestId('time-app-apps-prev').click()
+  await expect(page.getByTestId('time-app-apps-date')).toContainText(navLabel(fixture!.outsideHintDate))
+  const hint = page.getByTestId('time-app-apps-automation')
+  await expect(hint).toBeVisible()
+  await expect(hint).toContainText('Automation')
+  await expect(page.getByTestId('time-app-apps-row').first()).toBeVisible()
+  await expect(page.getByTestId('time-app-apps-sites')).toHaveCount(0)
+  await shoot(page, 'apps-automation-hint', APPS_SHOT_DIR)
+
+  // Today comes straight back, the same gesture the other day navs make.
+  await page.getByTestId('time-app-apps-today').click()
+  await expect(page.getByTestId('time-app-apps-date')).toContainText(navLabel(localToday()))
+
+  // A deep link is the tab, exactly like the timeline's.
+  await page.reload()
+  await expect(page.getByTestId('time-app-apps')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('time-app')).toHaveAttribute('data-tab', 'apps')
+
+  expect(pageErrors, 'the Apps tab must not throw in the browser').toEqual([])
+})
+
+/*
+ * AFTER the populated test, and never the other way round: it turns the setting off,
+ * and turning it back ON through the API would start the real collector (a Swift
+ * compile plus a process that watches the screen), which a browser test must never do.
+ */
+test('with tracking off the Apps tab is an invitation, not an empty report', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.setViewportSize({ width: 1280, height: 1000 })
+
+  // The same call the tab's own Pause button makes. Explicit `enabled`, so it is
+  // idempotent: a flip would depend on what the previous test left behind.
+  const off = await page.request.post(`http://127.0.0.1:${fixture!.port}/api/time/apps/toggle`, {
+    data: { enabled: false },
+  })
+  expect(off.ok(), await off.text()).toBe(true)
+  expect((await off.json()) as { enabled: boolean }).toMatchObject({ enabled: false })
+
+  await openTimeApp(page)
+  await openAppsTab(page)
+
+  const invite = page.getByTestId('time-app-apps-invite')
+  await expect(invite).toBeVisible({ timeout: 30_000 })
+  await expect(invite).toContainText('See where the rest of your screen time went')
+  // What it would collect is on the page BEFORE the button, not behind it.
+  await expect(invite).toContainText('every few seconds')
+  await expect(invite).toContainText('leaves this Mac')
+  await expect(invite).toContainText('once per browser')
+
+  // Present and enabled, and NOT clicked: enabling for real compiles the macOS helper
+  // and starts sampling the machine running this test.
+  const enable = page.getByTestId('time-app-apps-enable')
+  await expect(enable).toBeVisible()
+  await expect(enable).toBeEnabled()
+
+  // No numbers while it is off: a zeroed split strip would read as a day spent nowhere.
+  // And no day nav either — there is no day question until something is being sampled.
+  await expect(page.getByTestId('time-app-apps-date')).toHaveCount(0)
+  await expect(page.getByTestId('time-app-apps-outside')).toHaveCount(0)
+  await expect(page.getByTestId('time-app-apps-list')).toHaveCount(0)
+  await expect(page.getByTestId('time-app-apps-pause')).toHaveCount(0)
+  await shoot(page, 'apps-disabled', APPS_SHOT_DIR)
+
+  expect(pageErrors, 'the disabled Apps tab must not throw in the browser').toEqual([])
 })
 
 test('all three timeline views hold up on the dense day', async ({ page }) => {

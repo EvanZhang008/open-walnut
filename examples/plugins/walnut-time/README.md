@@ -2,11 +2,11 @@
 
 A first-party plugin App that answers two questions about a day, and keeps them apart: where your attention went, and what your agents ran.
 
-It contributes ONE App with three tabs and no server entry. Time collection, storage, and the `/api/time/*` endpoints all stay in Walnut; this plugin is only a reader of them, so uninstalling it cannot affect a single recorded minute.
+It contributes ONE App with four tabs and no server entry. Time collection, storage, and the `/api/time/*` endpoints all stay in Walnut; this plugin is only a reader of them (the single exception is the Apps tab's on/off switch, which writes a setting, never a record), so uninstalling it cannot affect a single recorded minute.
 
 **This is the whole Time UI.** Walnut used to carry a second copy as a Settings section; that section is gone, so this App is where a recorded minute becomes something you can look at. Because time is captured for every install whether or not anything renders it, the plugin **ships as a builtin**: it is present and enabled on a stock install with no install step. Turn it off with `plugins.walnut-time.enabled: false` in `config.yaml`, or from the Plugin Store section of Settings.
 
-## The three tabs
+## The four tabs
 
 Each tab is a real URL, so any of them can be bookmarked or linked:
 
@@ -14,7 +14,10 @@ Each tab is a real URL, so any of them can be bookmarked or linked:
 |---|---|---|
 | My time | `/apps/walnut-time~main/my-time` | Where did my attention go? Human time only, with range, project and kind filters, plus a 7-day trend. |
 | Agents | `/apps/walnut-time~main/agents` | What did my agents run? Agent runtime only, never mixed into the human numbers. |
+| Apps | `/apps/walnut-time~main/apps` | Where did the rest of the screen time go? One day per Mac app, and per site for a browser. |
 | Timeline | `/apps/walnut-time~main/timeline` | How did this one day actually go? |
+
+The Apps tab is the only one that looks outside Walnut, and it is **off until you turn it on**: while disabled it just says what it would collect (the frontmost app every few seconds; browser hosts, never full addresses; no idle or locked time; nothing leaves the Mac) and offers one button. Once enabled it leads with the split that the other three tabs cannot answer, `Outside` / `In Walnut` / `Total`, then ranks apps with a browser's sites nested underneath. Site names need a one-time macOS Automation grant per browser; when a browser was used and no site came back, the tab says so instead of pretending the browser was one opaque block. Both the Apps and Timeline tabs own their own day switcher, so the shared scope bar is hidden on them.
 
 The Timeline tab carries three switchable readings of the same day, sharing one hour axis so switching never moves the day under your eye:
 
@@ -26,10 +29,11 @@ The view choice and the agents toggle persist in `localStorage` under `open-waln
 
 ## What it reads
 
-Everything comes from three host endpoints through `walnut.http.fetch`, which is same-origin and carries the device credential, so the plugin never handles a token:
+Everything comes from host endpoints through `walnut.http.fetch`, which is same-origin and carries the device credential, so the plugin never handles a token:
 
 - `GET /api/time/summary?days=7` for both report tabs.
 - `GET /api/time/blocks?date=…` twice per day view: once with `raw=1` (the serial ribbon the tape and the chapters draw) and once merged per task (what the swimlanes draw).
+- `GET /api/time/apps?date=…` for the Apps tab, plus `POST /api/time/apps/toggle` behind its Enable / Pause buttons. The toggle is the plugin's only write, and what it writes is `config.time.outside.enabled`: the host owns the sampler that setting starts and stops.
 - `GET /api/tasks?fields=list` for titles and the project filter. This one is a nice-to-have: `blocks` joins its own titles server-side, so a failure here costs the reports their names and nothing else.
 
 ## Install

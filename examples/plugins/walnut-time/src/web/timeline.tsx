@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import type { PluginLogger } from '@open-walnut/plugin-api/web'
 import type { DayBlocks, TimeApi, TimeKind } from './api'
+import { DayNav, type DayNavTestIds } from './day-nav'
 import {
   HOUR_MIN, NOTE_FLOOR_MS,
   axisRange, dayLabel, dayLengthMin, dayStartMs, formatDuration, minuteOfDay, shiftDate,
@@ -54,6 +55,14 @@ const LEGACY_VIEW_KEY = 'open-walnut-time-timeline-view'
 const LEGACY_AGENTS_KEY = 'open-walnut-time-timeline-agents'
 /** The tape and the chapters are about a person's attention: never agent runtime. */
 const HUMAN_KINDS: readonly TimeKind[] = ['session', 'triage', 'chat']
+
+/** Kept unprefixed: these ids predate the Overview's own nav and specs address them. */
+const TIMELINE_NAV_IDS: DayNavTestIds = {
+  prev: 'time-app-prev',
+  next: 'time-app-next',
+  date: 'time-app-date',
+  today: 'time-app-today',
+}
 
 type ViewKey = 'tape' | 'chapters' | 'lanes'
 
@@ -262,38 +271,14 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
       aria-label="Tracked time by hour"
       onKeyDown={onKeyDown}
     >
-      <div className="wt-tt-nav">
-        <button
-          className="wt-tt-nav-btn"
-          data-testid="time-app-prev"
-          aria-label="Previous day"
-          disabled={date <= oldest}
-          onClick={() => setDate(shiftDate(date, -1))}
-        >
-          ‹
-        </button>
-        <span className="wt-tt-nav-date" data-testid="time-app-date">
-          {dayLabel(date)}
-          {isToday && <em className="wt-tt-nav-today">today</em>}
-        </span>
-        <button
-          className="wt-tt-nav-btn"
-          data-testid="time-app-next"
-          aria-label="Next day"
-          disabled={date >= newest}
-          onClick={() => setDate(shiftDate(date, 1))}
-        >
-          ›
-        </button>
-        <button
-          className="wt-tt-nav-reset"
-          data-testid="time-app-today"
-          disabled={isToday}
-          onClick={() => setDate(today)}
-        >
-          Today
-        </button>
-
+      <DayNav
+        date={date}
+        today={today}
+        oldest={oldest}
+        newest={newest}
+        testIds={TIMELINE_NAV_IDS}
+        onDate={setDate}
+      >
         <div className="wt-tt-switch" role="tablist" aria-label="Timeline view">
           {VIEWS.map((v) => (
             <button
@@ -322,7 +307,7 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
             <span>Include agents</span>
           </label>
         )}
-      </div>
+      </DayNav>
 
       {drawn && day && (
         <div className="wt-tt-totals">

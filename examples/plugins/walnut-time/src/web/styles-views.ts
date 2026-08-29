@@ -1,7 +1,11 @@
 /**
- * The timeline shell (day nav, view switcher, totals) and the two VERTICAL views: the
- * tape and the chapters. Page chrome and the reports are in styles-base.ts, the
- * swimlanes in styles-lanes.ts.
+ * The timeline shell (view switcher, totals) and the two VERTICAL views: the tape and
+ * the chapters. Page chrome and the reports are in styles-base.ts, the swimlanes in
+ * styles-lanes.ts.
+ *
+ * The `.wt-tt-nav*` rules dress the day nav, which the Overview's scope bar mounts too
+ * (day-nav.tsx). They stay here, next to the surface they were designed on, rather than
+ * being split across two files the day a second caller appeared.
  *
  * Both vertical views lean on one shared idea: nothing important is written inside a
  * coloured rectangle. A chapter puts its title on a card, so no label is ever

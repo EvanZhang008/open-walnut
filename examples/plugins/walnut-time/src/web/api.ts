@@ -4,9 +4,13 @@ import type { WalnutWebApi } from '@open-walnut/plugin-api/web'
  * The host endpoints this app reads, and nothing else.
  *
  * Collection and storage stay entirely in Walnut: the plugin never writes a time
- * record, it only asks the same three read endpoints the console asks. Requests go
- * through `walnut.http.fetch`, which is same-origin and carries the device
- * credential, so the plugin never handles a token itself.
+ * record, it only reads the host's own endpoints. Requests go through
+ * `walnut.http.fetch`, which is same-origin and carries the device credential, so
+ * the plugin never handles a token itself.
+ *
+ * ONE call here is not a read: the outside-activity toggle. It writes a SETTING
+ * (config.time.outside.enabled), never a record, and the host owns everything that
+ * setting starts or stops.
  *
  * The types are this app's own reading of the `/api/time/*` responses (served by
  * src/web/routes/time.ts). A plugin bundles standalone, so it cannot import the
@@ -76,6 +80,46 @@ export interface DayBlocks {
   raw?: boolean
 }
 
+/** One site inside a browser's row. Host only, never a full URL. */
+export interface OutsideSite {
+  host: string
+  ms: number
+}
+
+export interface OutsideApp {
+  app: string
+  bundleId?: string
+  ms: number
+  /** Present only when the WHOLE row is Walnut time — never a partial flag. */
+  walnut?: true
+  /** Browser rows only, and only for samples that carried a host. */
+  sites?: OutsideSite[]
+}
+
+/** One day of activity OUTSIDE Walnut: which Mac app, and for a browser, which site. */
+export interface DayApps {
+  date: string
+  /** Sampling is opt-in and off by default. */
+  enabled: boolean
+  /** A helper process is attached and streaming right now. */
+  running: boolean
+  totalMs: number
+  /** Of totalMs, the Walnut desktop app plus any Walnut-hosted page. Bucket-accurate,
+   *  so `totalMs - walnutMs` is right even for a browser row that mixes the two. */
+  walnutMs: number
+  /** False only when a browser WAS used and no sample carried a host: the
+   *  Automation grant is missing. True when no browser was used at all. */
+  browserHostsSeen: boolean
+  /** Descending by ms; a browser's `sites` are descending too. */
+  apps: OutsideApp[]
+  degraded?: boolean
+}
+
+export interface AppsToggle {
+  enabled: boolean
+  running: boolean
+}
+
 /** Only the three fields the reports need out of the console's task list. */
 export interface TaskRef {
   id: string
@@ -86,6 +130,11 @@ export interface TaskRef {
 export interface TimeApi {
   summary(days: number): Promise<TimeSummary>
   blocks(date: string, opts?: { kinds?: readonly TimeKind[]; raw?: boolean }): Promise<DayBlocks>
+  /** ONE day of outside activity. */
+  appsDay(date: string): Promise<DayApps>
+  /** Turn outside sampling on or off. Always explicit, never a blind flip: the UI
+   *  knows the current state, and a double-click must not toggle twice. */
+  setAppsEnabled(enabled: boolean): Promise<AppsToggle>
   /** The task list, for titles and the project filter. */
   tasks(): Promise<TaskRef[]>
 }
@@ -95,6 +144,17 @@ const TIMEOUT_MS = 10_000
 export function createTimeApi(walnut: WalnutWebApi): TimeApi {
   async function getJson<T>(path: string): Promise<T> {
     const response = await walnut.http.fetch(path, { timeoutMs: TIMEOUT_MS })
+    if (!response.ok) throw new Error(`HTTP ${response.status} from ${path}`)
+    return response.json<T>()
+  }
+
+  async function postJson<T>(path: string, body: unknown): Promise<T> {
+    const response = await walnut.http.fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      timeoutMs: TIMEOUT_MS,
+    })
     if (!response.ok) throw new Error(`HTTP ${response.status} from ${path}`)
     return response.json<T>()
   }
@@ -109,6 +169,14 @@ export function createTimeApi(walnut: WalnutWebApi): TimeApi {
       if (opts.kinds && opts.kinds.length > 0) params.set('kinds', opts.kinds.join(','))
       if (opts.raw) params.set('raw', '1')
       return getJson<DayBlocks>(`/api/time/blocks?${params.toString()}`)
+    },
+
+    appsDay(date) {
+      return getJson<DayApps>(`/api/time/apps?date=${encodeURIComponent(date)}`)
+    },
+
+    setAppsEnabled(enabled) {
+      return postJson<AppsToggle>('/api/time/apps/toggle', { enabled })
     },
 
     async tasks() {
