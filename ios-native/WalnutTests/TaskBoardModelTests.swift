@@ -420,29 +420,9 @@ final class TaskBoardModelTests: XCTestCase {
         XCTAssertEqual(BoardModel.railLetter(for: "Wait", taken: &taken), "1")
     }
 
-    // MARK: - Expand / collapse
-
-    func testExpandThenCollapseTheSameRow() {
-        var open = BoardModel.toggleExpanded([], "t1")
-        XCTAssertEqual(open, ["t1"])
-        open = BoardModel.toggleExpanded(open, "t1")
-        XCTAssertTrue(open.isEmpty)
-    }
-
-    /// Expanding a second row must NOT collapse the first. Force-collapsing a row
-    /// that sits above the viewport shrinks content ABOVE the visible area, which
-    /// is precisely how a list yanks its scroll position.
-    func testExpandingASecondRowLeavesTheFirstOpen() {
-        var open = BoardModel.toggleExpanded([], "above")
-        open = BoardModel.toggleExpanded(open, "tapped")
-        XCTAssertEqual(open, ["above", "tapped"],
-            "one-at-a-time would resize a row above the viewport and move every visible row")
-    }
-
-    func testCollapsingAnUnknownRowIsANoop() {
-        XCTAssertEqual(BoardModel.toggleExpanded(["a"], "b"), ["a", "b"])
-        XCTAssertEqual(BoardModel.toggleExpanded([], "x"), ["x"])
-    }
+    // Expansion is GONE (2026-08-28). A board row's tap opens the session
+    // directly; the tier picker and the task's own page moved to the row's
+    // swipe/long-press gestures, so there is no expanded state left to toggle.
 
     // MARK: - Tier tokens → mutation
 

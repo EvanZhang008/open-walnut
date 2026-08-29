@@ -51,14 +51,11 @@ struct TasksView: View {
 
     // MARK: - Board state (the default filter's tier bands)
     //
-    // Rows expanded INTO their session, bands hiding their done rows, and which
-    // band's create row is open. All three are sets/optionals of ids rather than
-    // per-row view state so a store refresh can't reset them.
+    // Bands hiding their done rows, and which band's create row is open. Both are
+    // sets/optionals of ids rather than per-row view state so a store refresh
+    // can't reset them. (There is no expanded-row state: a row's tap opens its
+    // session — the row itself never grows.)
 
-    /// Expanded row ids. A SET, not one id: force-collapsing a previously open
-    /// row is what yanks the scroll position when that row sits above the
-    /// viewport — see `BoardModel.toggleExpanded`.
-    @State private var expandedRowIds: Set<String> = []
     /// Bands whose `hide done` is on.
     @State private var hiddenDoneTiers: Set<String> = []
     /// Which band's foot create row is open (exactly one — two keyboards on one
@@ -1003,17 +1000,10 @@ struct TasksView: View {
             TaskBoardList(
                 bands: bands,
                 tierChoices: tasks.allTierChoices,
-                expandedIds: expandedRowIds,
                 hiddenDoneTiers: hiddenDoneTiers,
                 openCreateTier: openCreateTier,
                 newRowId: highlightedTaskId,
                 tierOf: tasks.taskTiers,
-                onToggleExpanded: { row in
-                    // No animation on the expansion: `withAnimation` around a
-                    // row growing inside a List animates the rows BELOW it
-                    // sliding, and on a long band that read as the list jumping.
-                    expandedRowIds = BoardModel.toggleExpanded(expandedRowIds, row.id)
-                },
                 onToggleHideDone: { tierId in
                     withAnimation(.snappy(duration: 0.2)) {
                         if hiddenDoneTiers.contains(tierId) { hiddenDoneTiers.remove(tierId) }

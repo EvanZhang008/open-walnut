@@ -237,3 +237,61 @@ describe('POST /api/v1/chat/compact (Wave 3)', () => {
     expect(ghost.status).toBe(404)
   })
 })
+
+/**
+ * The chat engine pair: a read-only GET, and a POST that mints.
+ *
+ * Why the POST exists: the phone's model pill was permanently read-only on any
+ * conversation that had not been sent to ("Send a message first"), so the
+ * ordinary chat had no working model control while a task's session had one
+ * immediately. The GET must stay read-only — a poll or a prefetch spawning a CLI
+ * is a process the user never asked for — so minting became an explicit request.
+ *
+ * The lane session is not spawned here (that needs a session runner), so these
+ * assert the ROUTING: which shape each engine answers with, and that the POST
+ * refuses outright when the box is not on the lane engine.
+ */
+describe('GET/POST /api/v1/chat/engine — the model pill\'s two halves', () => {
+  /** Point the config at one engine. */
+  async function setEngine(provider: 'walnut-agent' | 'claude-code'): Promise<void> {
+    const yaml = await import('js-yaml')
+    const { CONFIG_FILE } = await import('../../../src/constants.js')
+    await fs.writeFile(CONFIG_FILE, yaml.dump({
+      version: 1, user: {}, defaults: { priority: 'none' },
+      agent: { provider, main_model: 'us.anthropic.claude-haiku-4-5-20251001-v1:0' },
+    }), 'utf-8')
+  }
+
+  it('GET reports in-process + the config model, and the POST refuses to mint', async () => {
+    await setEngine('walnut-agent')
+    const meta = await createConversation('general', 'in-process chat')
+
+    const info = await request(createApp()).get(`/api/v1/chat/engine?conversationId=${meta.id}`)
+    expect(info.status).toBe(200)
+    expect(info.body.engine).toBe('in-process')
+    expect(info.body.sessionId).toBeNull()
+    // The model is reported so the pill can SHOW it, never switch it.
+    expect(info.body.model).toBe('us.anthropic.claude-haiku-4-5-20251001-v1:0')
+
+    // 409, not a silently-minted orphan CLI: the in-process loop has no lane.
+    const minted = await request(createApp()).post(`/api/v1/chat/engine/session?conversationId=${meta.id}`)
+    expect(minted.status).toBe(409)
+  })
+
+  it('GET reports the lane engine with no session before the first turn', async () => {
+    await setEngine('claude-code')
+    const meta = await createConversation('general', 'lane chat')
+
+    const info = await request(createApp()).get(`/api/v1/chat/engine?conversationId=${meta.id}`)
+    expect(info.status).toBe(200)
+    expect(info.body.engine).toBe('lane')
+    // Null is the state the POST exists to resolve — the GET never mints.
+    expect(info.body.sessionId).toBeNull()
+  })
+
+  it('both halves 404 an unknown conversation rather than inventing one', async () => {
+    await setEngine('claude-code')
+    expect((await request(createApp()).get('/api/v1/chat/engine?conversationId=conv-ghost')).status).toBe(404)
+    expect((await request(createApp()).post('/api/v1/chat/engine/session?conversationId=conv-ghost')).status).toBe(404)
+  })
+})

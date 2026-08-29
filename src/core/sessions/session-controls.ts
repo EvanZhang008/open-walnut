@@ -714,7 +714,15 @@ export type SessionControlAction =
   // phone talking to a cloud replica gets the Mac's configured engine
   // (claude-code) instead of the replica's in-process fallback loop.
   // Accept-only + reverse-lane streaming: routes/chat-turn-relay.ts.
-  | 'server.chat.turn';
+  | 'server.chat.turn'
+  // Which engine ANSWERS a relayed chat turn, and the lane session behind it.
+  // The companion to server.chat.turn: since the turn runs on the primary, the
+  // engine and model belong to the primary too — a replica answering from its
+  // own config told the phone "in-process" about a turn the Mac was about to
+  // answer on claude-code, so the model pill showed a fact that was not true of
+  // any turn. `ensure: true` mints the lane (the explicit half of the
+  // read-only-GET / minting-POST pair in routes/personal-ai-v1.ts).
+  | 'server.chat.engine';
 
 // ── Task op relay payload validation (server.tasks.apply) ───────────────────
 
@@ -1168,6 +1176,13 @@ export async function handleSessionControlRelay(
       case 'server.chat.turn': {
         const { handlePrimaryChatTurnRelay } = await import('../../web/routes/chat-turn-relay.js');
         result = await handlePrimaryChatTurnRelay(p) as unknown as Record<string, unknown>;
+        break;
+      }
+      // Report (and optionally mint) the lane behind a relayed conversation, so
+      // the phone's model pill describes the box that actually answers.
+      case 'server.chat.engine': {
+        const { handlePrimaryChatEngineRelay } = await import('../../web/routes/chat-turn-relay.js');
+        result = await handlePrimaryChatEngineRelay(p);
         break;
       }
       // ── Human inbox family: one handler, same functions the routes call ──

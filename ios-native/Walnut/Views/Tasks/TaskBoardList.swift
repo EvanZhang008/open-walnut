@@ -14,18 +14,15 @@ import SwiftUI
 struct TaskBoardList: View {
     let bands: [BoardBand]
     let tierChoices: [(id: String, label: String)]
-    /// Rows currently expanded, by row id.
-    let expandedIds: Set<String>
     /// Bands whose `hide done` is on.
     let hiddenDoneTiers: Set<String>
     /// Which band's create row is open (nil = none).
     let openCreateTier: String?
     /// Just-created row id — keeps a green edge so its landing place is visible.
     let newRowId: String?
-    /// taskId → tier id, for the token selection state.
+    /// taskId → tier id, for the tier menu's checkmark.
     let tierOf: [String: String]
 
-    let onToggleExpanded: (BoardRow) -> Void
     let onToggleHideDone: (String) -> Void
     let onToggleCreate: (String) -> Void
     let onToggleDone: (BoardRow) -> Void
@@ -45,17 +42,20 @@ struct TaskBoardList: View {
                     TaskBoardRow(
                         row: row,
                         state: BoardModel.state(task: row.task, session: row.session),
-                        expanded: expandedIds.contains(row.id),
-                        currentTier: row.task.flatMap { tierOf[$0.id] },
-                        tierChoices: tierChoices,
                         isNew: row.id == newRowId,
-                        onToggleExpanded: { onToggleExpanded(row) },
+                        onToggleDone: { onToggleDone(row) },
+                        onOpenSession: { onOpenSession(row) }
+                    )
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 12))
+                    .modifier(BoardRowGestures(
+                        row: row,
+                        tierChoices: tierChoices,
+                        currentTier: row.task.flatMap { tierOf[$0.id] },
                         onToggleDone: { onToggleDone(row) },
                         onPickTier: { onPickTier(row, $0) },
                         onOpenSession: { onOpenSession(row) },
                         onOpenDetail: { onOpenDetail(row) }
-                    )
-                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 12))
+                    ))
                 }
                 // Create at the FOOT of the band — where the just-created row
                 // then stays put, because a new pin's pin_order is max+1. The
@@ -162,6 +162,84 @@ struct TaskBoardList: View {
         case BoardModel.activeTierId: return Theme.success
         default: return Theme.tint
         }
+    }
+}
+
+/// The row's SECOND affordance: everything about the task that isn't "open the
+/// session".
+///
+/// This exists because the row's tap was spent on the session, on purpose. The
+/// rejected design put all of this inline — a tier picker, a Details button, an
+/// Open button — so one tap produced a menu and the user did the routing. Here
+/// the tap is a destination and the settings live where iOS already puts row
+/// settings: swipe for the two frequent toggles, long-press for the rest.
+///
+/// It is a ViewModifier rather than lines inside `TaskBoardRow` because
+/// `swipeActions` only works on a direct child of a `List` row — applied inside
+/// the row's own body it silently does nothing.
+private struct BoardRowGestures: ViewModifier {
+    let row: BoardRow
+    let tierChoices: [(id: String, label: String)]
+    let currentTier: String?
+    let onToggleDone: () -> Void
+    let onPickTier: (BoardModel.TierToken) -> Void
+    let onOpenSession: () -> Void
+    let onOpenDetail: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            // Leading swipe = done↔reopen, matching Reminders and the other task
+            // list in this app (TasksView's own rows do exactly this).
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                Button(action: onToggleDone) {
+                    Label(row.isDone ? "Reopen" : "Done",
+                          systemImage: row.isDone ? "arrow.uturn.backward.circle" : "checkmark.circle.fill")
+                }
+                .tint(row.isDone ? .secondary : Theme.success)
+            }
+            // Trailing swipe = the task's own page. The row's tap opens the
+            // SESSION, so this is the other half of the pair the user asked for:
+            // "one is tapping the session, one is going into the task".
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button(action: onOpenDetail) {
+                    Label("Task", systemImage: "info.circle")
+                }
+                .tint(Theme.tint)
+            }
+            .contextMenu {
+                Button(action: onOpenSession) {
+                    Label(row.session == nil ? "Start Session" : "Open Session",
+                          systemImage: row.session == nil ? "play.circle" : "bubble.left.and.text.bubble.right")
+                }
+                Button(action: onToggleDone) {
+                    Label(row.isDone ? "Mark as To Do" : "Mark as Done",
+                          systemImage: row.isDone ? "circle" : "checkmark.circle.fill")
+                }
+                // Tier move — this is where the wrapping token row went. A menu
+                // shows the same closed set without spending any row height, and
+                // it can't be clipped by the letter rail (which is what forced
+                // the inline version to wrap in the first place).
+                if row.canRetier {
+                    Menu {
+                        ForEach(BoardModel.tokens(current: currentTier, choices: tierChoices)) { token in
+                            Button {
+                                onPickTier(token)
+                            } label: {
+                                if token.selected {
+                                    Label(token.label, systemImage: "checkmark")
+                                } else {
+                                    Text(token.label)
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("Move to Tier", systemImage: "square.stack.3d.up")
+                    }
+                }
+                Button(action: onOpenDetail) {
+                    Label("Details, dates & priority", systemImage: "slider.horizontal.3")
+                }
+            }
     }
 }
 

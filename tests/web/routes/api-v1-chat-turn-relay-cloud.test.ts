@@ -532,3 +532,78 @@ describe('degradation: no bridge → the replica answers locally, and says so', 
     }
   }, 60_000)
 })
+
+/**
+ * The model pill's engine question is relayed too.
+ *
+ * A relayed turn runs on the primary, so "which engine answers this
+ * conversation, and on which lane session" are facts about the PRIMARY. The
+ * replica used to answer from its own config: it reported `in-process` with its
+ * own `main_model` (usually absent), which is true only of the rare bridge-down
+ * fallback and false of every relayed turn — so the phone's model pill showed
+ * either the wrong model or, with no model to name, nothing at all.
+ */
+describe('the chat engine question is answered by the box that answers the turn', () => {
+  async function getEngine(conversationId: string): Promise<{ status: number; body: Record<string, unknown> }> {
+    const res = await fetch(apiUrl(`/api/v1/chat/engine?conversationId=${conversationId}`), {
+      headers: { Authorization: `Bearer ${deviceToken}` },
+    })
+    return { status: res.status, body: await res.json().catch(() => ({})) as Record<string, unknown> }
+  }
+
+  async function mintEngineSession(conversationId: string): Promise<{ status: number; body: Record<string, unknown> }> {
+    const res = await fetch(apiUrl(`/api/v1/chat/engine/session?conversationId=${conversationId}`), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${deviceToken}`, 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    return { status: res.status, body: await res.json().catch(() => ({})) as Record<string, unknown> }
+  }
+
+  it('GET relays and reports the PRIMARY lane, without asking it to mint', async () => {
+    const primary = connectFakePrimary()
+    primary.onControl = () => ({
+      ok: true,
+      result: { engine: 'lane', sessionId: 'primary-lane-1', cwd: '/Users/x/.open-walnut', host: '' },
+    })
+
+    const conv = await createConversation('general')
+    const got = await getEngine(conv.id)
+    expect(got.status).toBe(200)
+    // The PRIMARY's answer, verbatim — not this replica's in-process config.
+    expect(got.body.engine).toBe('lane')
+    expect(got.body.sessionId).toBe('primary-lane-1')
+
+    const uplink = primary.received.find((f) => f.action === 'server.chat.engine')
+    expect(uplink, 'the engine question must cross the bridge').toBeTruthy()
+    expect(uplink!.params).toEqual({ agentId: 'general', conversationId: conv.id })
+    // No `ensure` on a GET: a poll or a prefetch must never spawn a CLI.
+    expect(uplink!.params).not.toHaveProperty('ensure')
+  }, 30_000)
+
+  it('POST asks the primary to MINT, carrying ensure:true', async () => {
+    const primary = connectFakePrimary()
+    primary.onControl = () => ({
+      ok: true,
+      result: { engine: 'lane', sessionId: 'primary-lane-2', cwd: '/Users/x/.open-walnut', host: '' },
+    })
+
+    const conv = await createConversation('general')
+    const minted = await mintEngineSession(conv.id)
+    expect(minted.status).toBe(200)
+    expect(minted.body.sessionId).toBe('primary-lane-2')
+
+    const uplink = primary.received.find((f) => f.action === 'server.chat.engine')
+    expect(uplink!.params).toMatchObject({ agentId: 'general', conversationId: conv.id, ensure: true })
+  }, 30_000)
+
+  it('bridge down → answers from THIS box rather than erroring', async () => {
+    // No bridge at all. The degradation is honest, not a failure: with the bridge
+    // down the next turn really would run on this replica's own engine, so this
+    // box's answer is the true one.
+    const conv = await createConversation('general')
+    const got = await getEngine(conv.id)
+    expect(got.status).toBe(200)
+    expect(typeof got.body.engine).toBe('string')
+  }, 30_000)
+})

@@ -146,6 +146,26 @@ extension WalnutAPI {
         return try await get("/chat/engine?\(query)")
     }
 
+    /// Mint this conversation's lane session if it has none yet, and return it.
+    ///
+    /// The pair to `chatEngine`: the GET stays read-only (a poll must never spawn
+    /// a CLI), and this is the explicit ask. Without it the model pill was
+    /// permanently read-only on any conversation that had not been sent to —
+    /// "Send a message first" where the desktop offers a picker, because the web
+    /// console mints eagerly on mount and the phone had no way to.
+    ///
+    /// Throws `APIError` 409 when the box is not on the lane engine.
+    func chatEngineSession(agentID: String = "general", conversationID: String? = nil) async throws -> ChatEngineInfo {
+        var query = "agentId=\(escape(agentID))"
+        if let conversationID, !conversationID.isEmpty {
+            query += "&conversationId=\(escape(conversationID))"
+        }
+        // `getOrCreateLaneSession` is idempotent — a second call returns the same
+        // session — so a transient retry cannot mint two CLIs.
+        return try await send("POST", "/chat/engine/session?\(query)",
+                             body: [String: String](), retrySafe: true)
+    }
+
     /// One directory level for the session path picker. `host` "" / nil = the
     /// primary box. `prefix` may be partial (the server lists its parent and
     /// reports the resolved `parent` back) and may start with `~`.

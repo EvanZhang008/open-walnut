@@ -218,9 +218,9 @@ afterEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
-describe('agent.provider unset (default) → in-process loop', () => {
+describe("explicit 'walnut-agent' → in-process loop", () => {
   it('runs runAgentLoop and never creates a lane session', async () => {
-    await boot({})
+    await boot({ provider: 'walnut-agent' })
     const ws = await connectWs()
     try {
       const res = await sendRpc(ws, 'chat', { message: 'hello Personal AI' })
@@ -242,27 +242,38 @@ describe('agent.provider unset (default) → in-process loop', () => {
       ws.close()
     }
   })
+})
 
-  it("explicit 'walnut-agent' behaves the same as unset", async () => {
-    await boot({ provider: 'walnut-agent' })
+// Both no-explicit-choice cases route to the LANE engine as of 2026-08-28.
+// Previously they routed to the in-process loop, on the theory that the frozen
+// engine was the safe harbour. The 2026-08-28 06:03 incident inverted that: the
+// in-process loop needs Bedrock credentials of its own, which a CLI-only install
+// does not keep, so "degrade to the loop" degraded to an engine that answers
+// "Could not load credentials from any providers" instead of answering at all.
+describe('no explicit engine choice → the lane engine', () => {
+  it('an unset agent section rides the lane, not the in-process loop', async () => {
+    await boot({})
     const ws = await connectWs()
     try {
-      await sendRpc(ws, 'chat', { message: 'hi' })
-      expect(runAgentLoop).toHaveBeenCalledTimes(1)
-      expect(started).toHaveLength(0)
+      const res = await sendRpc(ws, 'chat', { message: 'hello Personal AI' })
+      expect(res.ok).toBe(true)
+      expect(runAgentLoop).not.toHaveBeenCalled()
+      expect(started).toHaveLength(1)
     } finally {
       ws.close()
     }
   })
 
-  it('an unknown provider string degrades to the in-process loop', async () => {
-    // A hand-edited config must never leave the Personal AI with "no engine".
+  it('an unknown provider string degrades to the lane engine too', async () => {
+    // A hand-edited config must never leave the Personal AI with "no engine" —
+    // and "an engine that cannot reach credentials" is the same outage wearing a
+    // different message. resolveAgentEngineProvider logs the bad value instead.
     await boot({ provider: 'wat' })
     const ws = await connectWs()
     try {
       await sendRpc(ws, 'chat', { message: 'hi' })
-      expect(runAgentLoop).toHaveBeenCalledTimes(1)
-      expect(started).toHaveLength(0)
+      expect(runAgentLoop).not.toHaveBeenCalled()
+      expect(started).toHaveLength(1)
     } finally {
       ws.close()
     }
@@ -432,7 +443,9 @@ describe("agent.provider = 'claude-code' → lane session", () => {
   })
 
   it('lane-session endpoint answers 409 when the engine flag is off', async () => {
-    await boot({})
+    // Explicitly off: an unset config is the LANE engine now, so "off" has to be
+    // stated. Boot with the in-process loop chosen on purpose.
+    await boot({ provider: 'walnut-agent' })
     const { getActiveConversationId } = await import('../../../src/core/conversations.js')
     const conv = await getActiveConversationId('general')
     const res = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-session`, { method: 'POST' })

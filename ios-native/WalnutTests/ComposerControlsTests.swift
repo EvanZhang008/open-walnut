@@ -193,8 +193,11 @@ final class ComposerControlsTests: XCTestCase {
         XCTAssertEqual(info.switchableSessionId, "sess-1")
     }
 
-    /// A lane with NO session yet is not switchable: /chat/engine never mints one,
-    /// because opening a picker must not spawn a CLI.
+    /// A lane with NO session yet is not switchable FROM THIS PAYLOAD: the GET
+    /// never mints one, because a poll or a prefetch must not spawn a CLI. The
+    /// composer's answer to this state is to ask for a mint explicitly
+    /// (`POST /chat/engine/session`) and re-read — not to go read-only, which is
+    /// what left the ordinary chat without a model control.
     func testLaneEngineWithoutASessionIsNotSwitchable() {
         let info = ChatEngineInfo(engine: "lane", sessionId: nil, cwd: nil, host: nil, model: nil)
         XCTAssertNil(info.switchableSessionId)

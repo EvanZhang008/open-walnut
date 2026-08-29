@@ -370,25 +370,9 @@ enum BoardModel {
         return ids
     }
 
-    // MARK: - Expand / collapse
+    // MARK: - Tier tokens (move tier from the row's long-press menu)
 
-    /// Toggle a row's expansion.
-    ///
-    /// Deliberately a SET, not a single id. Force-collapsing the previously open
-    /// row is the thing that yanks the scroll position: if that row sits above
-    /// the viewport, its expansion shrinking away moves every visible row up by
-    /// the height of a session panel. A disclosure list has no reason to enforce
-    /// one-at-a-time, and the row you tapped is by definition on screen — so
-    /// nothing above the viewport ever changes height.
-    static func toggleExpanded(_ current: Set<String>, _ id: String) -> Set<String> {
-        var next = current
-        if next.contains(id) { next.remove(id) } else { next.insert(id) }
-        return next
-    }
-
-    // MARK: - Tier tokens (move tier in two taps, no drag)
-
-    /// One token in an expanded row's picker.
+    /// One tier choice for a row.
     struct TierToken: Identifiable, Equatable {
         let tierId: String
         let label: String

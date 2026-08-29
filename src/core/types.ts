@@ -799,16 +799,31 @@ export const VALID_AGENT_ENGINE_PROVIDERS: ReadonlySet<string> = new Set<AgentEn
   'claude-code',
 ]);
 
-/** The default engine when `agent.provider` is unset. */
-export const DEFAULT_AGENT_ENGINE_PROVIDER: AgentEngineProvider = 'walnut-agent';
+/**
+ * The default engine when `agent.provider` is unset.
+ *
+ * 'claude-code' since 2026-08-28. The in-process loop needs Bedrock credentials
+ * of its own, which an install configured for the CLI simply does not keep — so
+ * defaulting to it turned every config-read hiccup into "Could not load
+ * credentials from any providers" on a box whose chat was working fine a minute
+ * earlier. The lane engine rides the credentials the `claude` CLI already owns
+ * (the minimum-Claude decision), so it is the only default that can answer on a
+ * fresh install.
+ */
+export const DEFAULT_AGENT_ENGINE_PROVIDER: AgentEngineProvider = 'claude-code';
 
 /**
- * Where an UNRECOGNIZED `agent.provider` value degrades. Deliberately a separate
- * constant from the default: when the default flips to 'claude-code', a
- * hand-edited/corrupt config must still land on the frozen in-process loop —
- * never silently on the new engine, and never on "no engine".
+ * Where an UNRECOGNIZED `agent.provider` value degrades. Kept as a separate
+ * constant from the default so the two can diverge again if the in-process loop
+ * ever needs to be the safe harbour.
+ *
+ * Also 'claude-code': a typo in a hand-edited config used to route the user onto
+ * an engine that CANNOT answer on a CLI-only install, which reads as a
+ * credential outage rather than as the typo it is. An unrecognized value is
+ * logged loudly by resolveAgentEngineProvider instead of being absorbed by the
+ * engine choice.
  */
-export const FALLBACK_AGENT_ENGINE_PROVIDER: AgentEngineProvider = 'walnut-agent';
+export const FALLBACK_AGENT_ENGINE_PROVIDER: AgentEngineProvider = 'claude-code';
 
 export interface AgentConfig {
   model?: string;

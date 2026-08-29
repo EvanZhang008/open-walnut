@@ -614,6 +614,62 @@ export async function handlePrimaryChatTurnRelay(
   return { accepted: true, turnId, engine }
 }
 
+/**
+ * Primary: answer "which engine will answer this conversation, and on what lane
+ * session" for a REPLICA (`session.control` action 'server.chat.engine').
+ *
+ * The companion to handlePrimaryChatTurnRelay. A relayed turn runs HERE, so the
+ * engine and the switchable model are facts about THIS box — a replica answering
+ * from its own config reported `in-process` with its own `main_model`, which was
+ * true of a fallback turn that almost never happens and false of every relayed
+ * turn that does. The phone's model pill was therefore either wrong or (with no
+ * `main_model` on the replica) absent entirely.
+ *
+ * `ensure: true` mints the lane. Deliberately a PARAMETER rather than always-on:
+ * the read side is used by a poll, and a poll must never spawn a CLI.
+ */
+export async function handlePrimaryChatEngineRelay(
+  params: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const agentId = typeof params.agentId === 'string' && params.agentId ? params.agentId : 'general'
+  const ensure = params.ensure === true
+  const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
+  const config = await getConfig()
+  if (resolveAgentEngineProvider(config) !== 'claude-code') {
+    return {
+      engine: 'in-process',
+      sessionId: null,
+      ...(config.agent?.main_model ? { model: config.agent.main_model } : {}),
+    }
+  }
+
+  // Resolve the conversation on THIS box: a replica may pass an explicit id, or
+  // none at all (its "active conversation" is its own bookkeeping, not ours).
+  const { getActiveConversationId } = await import('../../core/conversations.js')
+  const conversationId = typeof params.conversationId === 'string' && params.conversationId
+    ? params.conversationId
+    : await getActiveConversationId(agentId)
+
+  const { getSessionByLane, getSessionByClaudeId } = await import('../../core/session-tracker.js')
+  const { personalAiLaneKey } = await import('../../core/sessions/personal-ai-lane.js')
+  let record = await getSessionByLane(personalAiLaneKey(agentId, conversationId))
+  if (!record && ensure) {
+    const { getOrCreateLaneSession } = await import('../../core/sessions/personal-ai-lane.js')
+    const lane = await getOrCreateLaneSession(agentId, conversationId)
+    record = await getSessionByClaudeId(lane.sessionId)
+    log.web.info('chat-engine relay minted the lane for a replica', {
+      agentId, conversationId, sessionId: lane.sessionId, created: lane.created,
+    })
+  }
+  return {
+    engine: 'lane',
+    sessionId: record?.claudeSessionId ?? null,
+    ...(record?.cwd ? { cwd: record.cwd } : {}),
+    // '' on the record means this box, matching ProjectedSession.host.
+    ...(record ? { host: record.host ?? '' } : {}),
+  }
+}
+
 /** This box's configured chat engine, for the accept reply's telemetry. */
 async function resolvePrimaryEngineLabel(): Promise<string> {
   try {

@@ -218,10 +218,9 @@ describe('config loss recovery via sidecar backup', () => {
 });
 
 describe('resolveAgentEngineProvider: default vs fallback are SEPARATE roles', () => {
-  // The default (unset key) and the degrade target (unrecognized string) are two
-  // different constants so that flipping the default engine to 'claude-code' can
-  // never route a corrupt/hand-edited config onto the new engine. These tests pin
-  // the ROLE split, not the current values.
+  // The default (unset key) and the degrade target (unrecognized string) stay two
+  // separate constants so the two roles can diverge again. These tests pin the
+  // ROLE split; the value assertions below pin what each role currently means.
   const cfg = (agent?: Record<string, unknown>): Config =>
     ({ version: 1, user: {}, defaults: { priority: 'none' }, agent } as unknown as Config);
 
@@ -235,7 +234,7 @@ describe('resolveAgentEngineProvider: default vs fallback are SEPARATE roles', (
     expect(resolveAgentEngineProvider(cfg({ provider: 'walnut-agent' }))).toBe('walnut-agent');
   });
 
-  it('an unrecognized string → the FALLBACK engine (frozen in-process loop), regardless of the default', () => {
+  it('an unrecognized string → the FALLBACK engine, regardless of the default', () => {
     expect(resolveAgentEngineProvider(cfg({ provider: 'wat' }))).toBe(FALLBACK_AGENT_ENGINE_PROVIDER);
     expect(resolveAgentEngineProvider(cfg({ provider: '' }))).toBe(FALLBACK_AGENT_ENGINE_PROVIDER);
     // Non-string garbage degrades the same way.
@@ -243,9 +242,98 @@ describe('resolveAgentEngineProvider: default vs fallback are SEPARATE roles', (
     expect(resolveAgentEngineProvider(cfg({ provider: null }))).toBe(FALLBACK_AGENT_ENGINE_PROVIDER);
   });
 
-  it('the fallback must stay the frozen loop even if the default flips', () => {
-    // This is the safety property task P4 depends on: a hand-edited config must
-    // degrade to walnut-agent forever, independent of the default's value.
-    expect(FALLBACK_AGENT_ENGINE_PROVIDER).toBe('walnut-agent');
+  // Both roles resolve to the lane engine as of 2026-08-28. The previous rule
+  // ("degrade to walnut-agent forever") was written to keep a corrupt config off
+  // a NEW engine, but the incident it caused inverted the risk: the in-process
+  // loop needs Bedrock credentials of its own, which a CLI-only install does not
+  // keep, so degrading onto it means degrading onto an engine that CANNOT answer
+  // at all. On 2026-08-28 06:03 one relayed turn resolved 'walnut-agent' and the
+  // phone reported "Could not load credentials from any providers" — an engine
+  // surprise wearing a credential error's clothes. An unrecognized value is now
+  // made audible by a warn log instead of by a silent engine switch.
+  it('neither role degrades onto an engine a CLI-only install cannot run', () => {
+    expect(DEFAULT_AGENT_ENGINE_PROVIDER).toBe('claude-code');
+    expect(FALLBACK_AGENT_ENGINE_PROVIDER).toBe('claude-code');
+  });
+});
+
+/**
+ * A config-read hiccup must never change which engine answers chat.
+ *
+ * The 2026-08-28 06:03 incident: one relayed turn resolved 'walnut-agent' while
+ * every other turn that day resolved 'claude-code', so it reached for Bedrock
+ * credentials this box does not keep and the phone showed "Could not load
+ * credentials from any providers". Nothing had thrown, so nothing was logged —
+ * the file had simply been read in a state where `agent:` was absent, and the
+ * engine choice absorbed it silently.
+ *
+ * Each case here is a state config.yaml can genuinely be observed in, not a
+ * mocked failure. The engine must survive all of them.
+ */
+describe('a config-read hiccup never changes the chat engine', () => {
+  const engineOf = async () => resolveAgentEngineProvider(await getConfig());
+
+  it('survives a HALF-WRITTEN file that stops before the agent: section', async () => {
+    // The real window: fs.writeFile truncates then writes, and `agent:` sits at
+    // line 12 of a 281-line config. A reader landing mid-write got valid YAML
+    // with no agent section at all.
+    await fs.writeFile(CONFIG_FILE, 'version: 1\nuser: {}\ndefaults:\n  priority: none\n', 'utf-8');
+    expect(await engineOf()).toBe('claude-code');
+  });
+
+  it('survives an EMPTY file (yaml.load returns undefined, which spread away every setting)', async () => {
+    await fs.writeFile(CONFIG_FILE, '', 'utf-8');
+    expect(await engineOf()).toBe('claude-code');
+  });
+
+  it('survives an UNPARSEABLE file — the getConfig catch must keep provider', async () => {
+    // The bug was in this exact branch: the catch returned
+    // `{ ...DEFAULT_CONFIG, agent: { available_models, main_model } }`, replacing
+    // the agent object and dropping `provider` with it.
+    await fs.writeFile(CONFIG_FILE, '{ this is not yaml: [oops', 'utf-8');
+    expect(await engineOf()).toBe('claude-code');
+  });
+
+  it('recovers an explicit walnut-agent choice from the sidecar rather than defaulting', async () => {
+    // The mirror image: a user who deliberately chose the in-process loop must
+    // not be flipped onto the lane engine by a truncated primary either.
+    await fs.writeFile(`${CONFIG_FILE}.bak`, yaml.dump({
+      version: 1, user: {}, defaults: { priority: 'none' }, agent: { provider: 'walnut-agent' },
+    }), 'utf-8');
+    await fs.writeFile(CONFIG_FILE, '', 'utf-8');
+    expect(await engineOf()).toBe('walnut-agent');
+  });
+});
+
+/**
+ * config.yaml is replaced atomically (temp + rename), so a concurrent reader sees
+ * either the old file or the new one — never a prefix. Without this, the reader
+ * above had a real window to land in.
+ */
+describe('config writes are atomic', () => {
+  it('a reader racing a write never observes a partial file', async () => {
+    const full = yaml.dump({
+      version: 1, user: {}, defaults: { priority: 'none' },
+      agent: { provider: 'claude-code' },
+      // Padding so a non-atomic write would take multiple syscalls to land.
+      hosts: Object.fromEntries(Array.from({ length: 400 }, (_, i) => [`h${i}`, { hostname: `host-${i}.invalid` }])),
+    });
+    await fs.writeFile(CONFIG_FILE, full, 'utf-8');
+
+    const writes = (async () => {
+      for (let i = 0; i < 30; i++) await updateConfig({ user: { name: `w${i}` } } as any);
+    })();
+    // Read hard while the writer runs: every read must yield the lane engine,
+    // never the default-from-a-prefix.
+    const reads: Promise<void>[] = [];
+    for (let i = 0; i < 120; i++) {
+      reads.push((async () => {
+        const raw = await fs.readFile(CONFIG_FILE, 'utf-8').catch(() => null);
+        if (raw === null) return; // rename window: ENOENT is acceptable, a prefix is not
+        const parsed = yaml.load(raw) as { agent?: { provider?: string } } | undefined;
+        expect(parsed?.agent?.provider).toBe('claude-code');
+      })());
+    }
+    await Promise.all([writes, ...reads]);
   });
 });

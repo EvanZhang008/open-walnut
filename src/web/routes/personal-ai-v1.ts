@@ -30,6 +30,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
+import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { broadcastEvent } from '../ws/handler.js'
 import { EventNames } from '../../core/event-bus.js'
@@ -127,6 +128,51 @@ async function resolveChatTarget(req: Request, res: Response): Promise<{ agentId
   return { agentId, conversationId: await getActiveConversationId(agentId) }
 }
 
+/**
+ * On a REPLICA, ask the primary the engine question and answer with its reply.
+ * Returns true when it answered (so the caller returns), false on the primary
+ * itself or when the bridge can't serve it.
+ *
+ * Degrading to the local answer rather than erroring is deliberate: with the
+ * bridge down a relayed turn falls back to this box's in-process loop, so the
+ * local engine really is the one that would answer the next message. The answer
+ * stays honest in both states.
+ */
+async function relayChatEngine(
+  res: Response,
+  ids: { agentId: string; conversationId: string },
+  ensure: boolean,
+): Promise<boolean> {
+  if (!CLOUD_MODE) return false
+  try {
+    const { callPrimaryControl } = await import('./v1-control-relay.js')
+    // '__server__' is the established box-level sid for a `server.*` action (the
+    // daemon executes nothing itself and forwards the action opaquely).
+    const outcome = await callPrimaryControl(
+      'server.chat.engine' as never,
+      '__server__',
+      { agentId: ids.agentId, conversationId: ids.conversationId, ...(ensure ? { ensure: true } : {}) },
+      15_000,
+    )
+    if (!outcome.ok) {
+      log.web.info('chat engine relay refused — answering from this box', {
+        ...ids, ensure, failureKind: outcome.failure.kind, reason: outcome.failure.message,
+      })
+      return false
+    }
+    if (typeof outcome.result?.engine !== 'string') return false
+    res.json(outcome.result)
+    return true
+  } catch (err) {
+    // Bridge offline, or an OLD primary that doesn't know this action ("Unknown
+    // control action"). Fall through to the local answer.
+    log.web.info('chat engine relay unavailable — answering from this box', {
+      ...ids, ensure, error: err instanceof Error ? err.message : String(err),
+    })
+    return false
+  }
+}
+
 // GET /api/v1/chat/engine?agentId&conversationId → { engine, sessionId?, cwd? }
 //
 // Why this exists: on the lane engine (`config.agent.provider === 'claude-code'`)
@@ -153,6 +199,11 @@ personalAiV1Router.get('/chat/engine', async (req: Request, res: Response, next:
   try {
     const ids = await resolveChatTarget(req, res)
     if (!ids) return
+    // On a REPLICA the answering box is the primary (chat turns are relayed
+    // there), so the engine question belongs there too. Answering from this
+    // box's own config described a fallback turn that almost never runs, and the
+    // phone's model pill showed a model no relayed turn would ever use.
+    if (await relayChatEngine(res, ids, false)) return
     const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
     const config = await getConfig()
     if (resolveAgentEngineProvider(config) !== 'claude-code') {
@@ -172,6 +223,58 @@ personalAiV1Router.get('/chat/engine', async (req: Request, res: Response, next:
       ...(record?.cwd ? { cwd: record.cwd } : {}),
       // '' on the record means the primary box, matching ProjectedSession.host.
       ...(record ? { host: record.host ?? '' } : {}),
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/chat/engine/session?agentId&conversationId → { sessionId, cwd, host, created }
+//
+// Mint the lane session for this conversation if it doesn't have one yet, so the
+// phone's model pill is a PICKER rather than a read-only label on a conversation
+// that hasn't been sent to.
+//
+// The GET above stays read-only, and this is why it can be: minting is now an
+// explicit request. The old shape ("sessionId is null until the first turn") left
+// the pill permanently disabled on every new conversation — the user's report was
+// exactly that: the model control works in tasks and not in the ordinary chat.
+//
+// Why minting here is not a new side effect: the WEB console already mints on
+// MOUNT (`useLaneSession` resolves eagerly, deliberately, so the CLI is warm by
+// the time the first message lands). A conversation the user has opened on the
+// phone is in the same position. What is still avoided is minting from a GET —
+// a poll or a prefetch must never spawn a process.
+//
+// 409 when the engine flag is off: the in-process loop has no lane, and minting
+// one anyway would leave an orphan CLI.
+personalAiV1Router.post('/chat/engine/session', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const ids = await resolveChatTarget(req, res)
+    if (!ids) return
+    // A replica has no session runner: minting must happen on the primary, which
+    // is also the box whose lane will answer the next message.
+    if (await relayChatEngine(res, ids, true)) return
+    const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
+    if (resolveAgentEngineProvider(await getConfig()) !== 'claude-code') {
+      res.status(409).json({ error: 'Lane engine is not active' })
+      return
+    }
+    const { getOrCreateLaneSession } = await import('../../core/sessions/personal-ai-lane.js')
+    const lane = await getOrCreateLaneSession(ids.agentId, ids.conversationId)
+    const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
+    const record = await getSessionByClaudeId(lane.sessionId)
+    const { WALNUT_HOME } = await import('../../constants.js')
+    log.web.info('api-v1 lane session resolved for the chat model pill', {
+      ...ids, sessionId: lane.sessionId, created: lane.created, engine: lane.engine,
+    })
+    res.json({
+      engine: 'lane',
+      sessionId: lane.sessionId,
+      cwd: record?.cwd ?? WALNUT_HOME,
+      // '' on the record means the primary box, matching ProjectedSession.host.
+      host: record?.host ?? '',
+      created: lane.created,
     })
   } catch (err) {
     next(err)

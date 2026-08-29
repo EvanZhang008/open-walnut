@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import yaml from 'js-yaml';
 import { log } from '../logging/index.js';
-import { CONFIG_FILE } from '../constants.js';
+import { CLOUD_MODE, CONFIG_FILE } from '../constants.js';
 import {
   VALID_PRIORITIES,
   DEFAULT_AGENT_ENGINE_PROVIDER,
@@ -39,17 +39,36 @@ const DEFAULT_CONFIG: Config = {
  * Read through this rather than `config.agent?.provider` directly: getConfig()
  * merges the parsed YAML over DEFAULT_CONFIG at the top level only, so any user
  * config with an `agent:` section drops the default — and an unknown string from
- * a hand-edited file must degrade to today's behavior, never to "no engine".
+ * a hand-edited file must degrade to a real engine, never to "no engine".
+ *
+ * A CLOUD REPLICA always answers 'walnut-agent' regardless of config: it has no
+ * session runner and no `claude` CLI, so the lane engine is not something it can
+ * be configured INTO. Its phone turns reach the lane by being relayed to the
+ * primary (routes/chat-turn-relay.ts); this value governs only the local
+ * fallback that runs when the relay is unavailable, and that fallback has to be
+ * an engine this box can actually execute. Keeping the constraint here rather
+ * than at the seven call sites means a replica cannot be pushed onto an engine
+ * it can't run by a synced config or a flipped default.
  */
 export function resolveAgentEngineProvider(config: Config): AgentEngineProvider {
+  if (CLOUD_MODE) return 'walnut-agent';
   const raw = config.agent?.provider;
   if (typeof raw === 'string' && VALID_AGENT_ENGINE_PROVIDERS.has(raw)) {
     return raw as AgentEngineProvider;
   }
-  // Unset → the default engine. An unrecognized STRING → the fallback engine
-  // (the frozen in-process loop) — two separate constants on purpose, so
-  // flipping the default can never route a corrupt config onto the new engine.
-  return raw === undefined ? DEFAULT_AGENT_ENGINE_PROVIDER : FALLBACK_AGENT_ENGINE_PROVIDER;
+  // Unset → the default engine, silently: that is the ordinary state of a
+  // config that never touched the setting. Anything ELSE present but
+  // unrecognized is a typo in a file a human edited, and it must be audible —
+  // absorbing it is how an engine surprise became a "credential" error report.
+  if (raw !== undefined) {
+    log.session.warn('config-manager: agent.provider is not a known engine — using the default', {
+      value: typeof raw === 'string' ? raw : `<${typeof raw}>`,
+      using: FALLBACK_AGENT_ENGINE_PROVIDER,
+      valid: [...VALID_AGENT_ENGINE_PROVIDERS].join(', '),
+    });
+    return FALLBACK_AGENT_ENGINE_PROVIDER;
+  }
+  return DEFAULT_AGENT_ENGINE_PROVIDER;
 }
 
 // ── One-time config migration: category removal (project-only model) ────────
@@ -175,7 +194,14 @@ const CONFIG_BACKUP_FILE = `${CONFIG_FILE}.bak`;
  */
 async function readRawConfigContent(): Promise<string | null> {
   try {
-    return await fs.readFile(CONFIG_FILE, 'utf-8');
+    const primary = await fs.readFile(CONFIG_FILE, 'utf-8');
+    // A readable-but-EMPTY primary is the same loss as a missing one, and it
+    // used to return straight through: `yaml.load('')` is `undefined`, the
+    // spread over DEFAULT_CONFIG threw away every machine-local setting, and
+    // nothing threw so nothing was logged. Treat it like an unreadable file and
+    // let the sidecar answer.
+    if (primary.trim()) return primary;
+    throw new Error('config.yaml is empty');
   } catch (primaryErr) {
     let backup: string;
     try {
@@ -198,11 +224,37 @@ async function readRawConfigContent(): Promise<string | null> {
   }
 }
 
+/**
+ * Replace a file's whole content atomically: write a sibling temp, then rename.
+ *
+ * `fs.writeFile` truncates first and writes after, so a concurrent reader can
+ * observe a HALF file — and half a config.yaml is worse than none, because it
+ * still parses. The `agent:` section sits at line 12 of a 281-line file, so a
+ * reader landing in that window got valid YAML with no `agent.provider` and the
+ * Personal AI silently answered on the in-process engine (observed
+ * 2026-08-28 06:03: one relayed turn resolved `walnut-agent` while every other
+ * turn that day resolved `claude-code`, and no unreadable-config error was
+ * logged because nothing ever threw).
+ *
+ * Temp lives in the SAME directory so the rename is a same-filesystem atomic
+ * swap (an EXDEV across /tmp would fall back to copy, reopening the window).
+ */
+export async function writeFileAtomic(filePath: string, content: string): Promise<void> {
+  const tmp = `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}`;
+  try {
+    await fs.writeFile(tmp, content, 'utf-8');
+    await fs.rename(tmp, filePath);
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
 /** Mirror freshly written config to the sidecar. Never throws. */
 async function writeConfigWithBackup(content: string): Promise<void> {
-  await fs.writeFile(CONFIG_FILE, content, 'utf-8');
+  await writeFileAtomic(CONFIG_FILE, content);
   try {
-    await fs.writeFile(CONFIG_BACKUP_FILE, content, 'utf-8');
+    await writeFileAtomic(CONFIG_BACKUP_FILE, content);
   } catch (err) {
     log.session.warn('config-manager: failed to update config backup', {
       error: err instanceof Error ? err.message : String(err),
@@ -251,7 +303,16 @@ export async function getConfig(): Promise<Config> {
     if (firstRun) log.session.info('config-manager: no config.yaml and no backup — first run, using defaults', detail);
     else log.session.error('config-manager: config.yaml UNREADABLE and backup did not cover it — falling back to DEFAULTS. Machine-local settings (hosts/plugins/stt/provider) are missing until this is fixed.', detail);
     const defaultModels = (MODEL_CATALOG.bedrock ?? []).map(m => m.id);
-    return { ...DEFAULT_CONFIG, agent: { available_models: defaultModels, main_model: defaultModels[0] } };
+    // Spread DEFAULT_CONFIG.agent — do NOT replace the object. Replacing it
+    // dropped `provider`, so the chat engine resolved to the default rather
+    // than the configured one: on 2026-08-28 06:03 one relayed turn answered on
+    // the in-process loop, reached for Bedrock credentials that this box does
+    // not keep, and the phone showed "Could not load credentials from any
+    // providers" — a config-read hiccup surfacing as a credential error.
+    return {
+      ...DEFAULT_CONFIG,
+      agent: { ...DEFAULT_CONFIG.agent, available_models: defaultModels, main_model: defaultModels[0] },
+    };
   }
 }
 

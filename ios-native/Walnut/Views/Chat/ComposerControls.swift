@@ -266,18 +266,28 @@ final class ComposerControlsModel {
                 guard !Task.isCancelled else { return }
                 if let id = info.switchableSessionId {
                     sessionID = id
-                } else {
-                    // Honest read-only states, distinguished because the fixes
-                    // differ: send a message vs change the server's config.
-                    if info.engine == "in-process" {
-                        currentModelID = info.model
-                        readOnly = true
-                        readOnlyReason = "This box answers chat in-process — the model comes from the server's config."
-                    } else {
-                        readOnly = true
-                        readOnlyReason = "Send a message first — the model can be switched once this conversation has a session."
-                    }
+                } else if info.engine == "in-process" {
+                    // The one genuinely read-only case: no per-conversation
+                    // session exists to carry a model, and the fix is a server
+                    // config change rather than anything the user can do here.
+                    currentModelID = info.model
+                    readOnly = true
+                    readOnlyReason = "This box answers chat in-process — the model comes from the server's config."
                     return
+                } else {
+                    // Lane engine, no session yet: MINT one. This used to be a
+                    // read-only "Send a message first", which meant the ordinary
+                    // chat had no working model control at all until the
+                    // conversation had been used — while a task's session had one
+                    // immediately. The web console has always minted eagerly on
+                    // mount (useLaneSession), so this is parity, not a new
+                    // behaviour: the CLI it starts is the one that would answer
+                    // the next message anyway, and starting it now means it is
+                    // warm when that message lands.
+                    guard let minted = try await mintLaneSession(agentID: agentID, conversationID: conversationID)
+                    else { return }
+                    guard !Task.isCancelled else { return }
+                    sessionID = minted
                 }
             } catch let error as APIError where error.isCancelled {
                 return
@@ -309,6 +319,36 @@ final class ComposerControlsModel {
             if currentModelID == nil, fallbackLabel != nil { currentModelID = fallbackLabel }
             readOnly = true
             readOnlyReason = "Model options aren't reachable right now."
+        }
+    }
+
+    /// Mint this conversation's lane session, returning its id.
+    ///
+    /// Returns nil (and leaves an honest read-only reason) when the box refuses:
+    /// a 409 means it is not on the lane engine after all — the config changed
+    /// between the GET and this POST, which is rare but not impossible.
+    private func mintLaneSession(agentID: String, conversationID: String?) async throws -> String? {
+        do {
+            let minted = try await api.chatEngineSession(agentID: agentID, conversationID: conversationID)
+            guard let id = minted.switchableSessionId else {
+                readOnly = true
+                readOnlyReason = "This conversation has no session to switch the model on."
+                return nil
+            }
+            return id
+        } catch let error as APIError where error.isCancelled {
+            return nil
+        } catch {
+            // Old server without the endpoint, offline, or a 409. Degrade to the
+            // previous behaviour rather than losing the pill: the model still
+            // becomes switchable after the first message, which is what this box
+            // could do before.
+            AppLog.info("chat", "composer model: lane mint failed", [
+                "agentId": agentID, "error": error.localizedDescription,
+            ])
+            readOnly = true
+            readOnlyReason = "Send a message first — the model can be switched once this conversation has a session."
+            return nil
         }
     }
 
