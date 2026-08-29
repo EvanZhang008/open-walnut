@@ -243,6 +243,41 @@ async function loadVocabPrompt(): Promise<string> {
   }
 }
 
+/**
+ * Strip a trailing "vocab echo" from a transcription.
+ *
+ * The vocabulary list is injected as decoder context (whisper --prompt /
+ * qwen system_prompt) to bias spelling. On trailing silence the decoder has
+ * no acoustic evidence and sometimes copies words straight out of that
+ * context, so dictations come back ending in "... Kubernetes, DynamoDB,
+ * Walnut" (observed live 2026-08-28). An echo is a comma-separated run of vocab
+ * words, so: peel trailing vocab words off the end and drop them only if
+ * TWO OR MORE were peeled — a single vocab word at the end ("我们管它叫
+ * Walnut") is almost always real speech and is kept.
+ */
+export function stripVocabEcho(text: string, vocabPrompt: string): string {
+  const words = vocabPrompt.split(',').map(w => w.trim()).filter(Boolean);
+  if (!words.length) return text;
+  // Longest first so "Claude Code" wins over "Claude".
+  const sorted = [...words].sort((a, b) => b.length - a.length);
+  let t = text.trimEnd();
+  let peeled = 0;
+  for (;;) {
+    const base = t.replace(/[\s,，、.。!！?？]+$/u, '');
+    const hit = sorted.find(w => base.toLowerCase().endsWith(w.toLowerCase()));
+    if (!hit) break;
+    const cut = base.slice(0, base.length - hit.length);
+    // Word boundary: don't peel "Walnut" out of "MyWalnut".
+    if (cut && /[A-Za-z0-9]$/.test(cut)) break;
+    t = cut;
+    peeled++;
+  }
+  if (peeled < 2) return text;
+  const cleaned = t.replace(/[\s,，、]+$/u, '');
+  log.stt.info(`Stripped trailing vocab echo (${peeled} words) from transcription`);
+  return cleaned;
+}
+
 /** Transcribe audio using the configured engine. */
 export async function transcribeAudio(config: Config, req: SttRequest): Promise<SttResult> {
   const engine = getOrCreateEngine(config);
@@ -264,6 +299,7 @@ export async function transcribeAudio(config: Config, req: SttRequest): Promise<
   log.stt.info(`Transcribing with ${engine.name} (format=${req.format}, lang=${req.language ?? 'auto'}, prompt=${req.prompt ? req.prompt.length + ' chars' : 'none'})`);
   const result = await engine.transcribe(req);
   log.stt.info(`Transcription complete: ${result.text.length} chars in ${result.durationMs}ms`);
+  if (req.prompt) result.text = stripVocabEcho(result.text, req.prompt);
   return result;
 }
 
@@ -298,6 +334,7 @@ export async function runShadowTranscription(
     }
     log.stt.info(`Shadow transcription with ${engine.name} (recording=${recordingId})`);
     const result = await engine.transcribe(req);
+    if (req.prompt) result.text = stripVocabEcho(result.text, req.prompt);
     await writeRecordingSecondary(recordingId, {
       engine: engine.name,
       text: result.text,

@@ -43,7 +43,7 @@ import {
   listRecordings,
   recordingsDir,
 } from '../../src/core/stt/recordings.js';
-import { createEngineByName, runShadowTranscription, getOrCreateSecondaryEngine } from '../../src/core/stt/index.js';
+import { createEngineByName, runShadowTranscription, getOrCreateSecondaryEngine, stripVocabEcho } from '../../src/core/stt/index.js';
 import { mlxLanguageName, DEFAULT_MLX_MODEL } from '../../src/core/stt/engine-mlx.js';
 import type { Config } from '../../src/core/types.js';
 
@@ -215,5 +215,38 @@ describe('runShadowTranscription', () => {
     const [rec] = await listRecordings();
     expect(rec.result?.text).toBe('primary');
     expect(rec.secondary).toEqual({ engine: 'sherpa-onnx', text: 'stub shadow text', durationMs: 7 });
+  });
+});
+
+describe('stripVocabEcho', () => {
+  const VOCAB = 'Kubernetes, DynamoDB, PostgreSQL, Walnut, Claude, Anthropic';
+
+  it('strips a trailing comma-separated echo of the vocab list', () => {
+    const t = '冷启动和热启动是怎么work的? Kubernetes, DynamoDB, PostgreSQL';
+    expect(stripVocabEcho(t, VOCAB)).toBe('冷启动和热启动是怎么work的?');
+  });
+
+  it('is case-insensitive and tolerates trailing punctuation', () => {
+    const t = '好的。 kubernetes, walnut.';
+    expect(stripVocabEcho(t, VOCAB)).toBe('好的。');
+  });
+
+  it('keeps a single trailing vocab word — that is real speech', () => {
+    const t = '我们管这个项目叫 Walnut';
+    expect(stripVocabEcho(t, VOCAB)).toBe(t);
+  });
+
+  it('keeps vocab words mid-sentence', () => {
+    const t = 'Walnut 和 Claude 都部署好了吗';
+    expect(stripVocabEcho(t, VOCAB)).toBe(t);
+  });
+
+  it('respects word boundaries — no peeling out of a larger word', () => {
+    const t = '这个库叫 MyWalnut, Claude';
+    expect(stripVocabEcho(t, VOCAB)).toBe(t);
+  });
+
+  it('empty vocab is a no-op', () => {
+    expect(stripVocabEcho('anything Kubernetes, DynamoDB', '')).toBe('anything Kubernetes, DynamoDB');
   });
 });
