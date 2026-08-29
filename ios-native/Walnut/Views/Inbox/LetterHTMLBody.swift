@@ -45,6 +45,16 @@ struct LetterHTMLBody: View {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.defaultWebpagePreferences.allowsContentJavaScript = false
+        // A `<video>` in a digest must play WHERE IT SITS. This defaults to false
+        // on iOS, which makes WebKit refuse to start a clip in place and hand it
+        // to the fullscreen player instead — and with scripting off there is
+        // nothing in the document that could ask for fullscreen, so the clip just
+        // does nothing when tapped. Audio was never affected, which is why this
+        // only showed up once letters started carrying video.
+        config.allowsInlineMediaPlayback = true
+        // Playback still requires the human to tap: no autoplay, and therefore no
+        // letter that starts making noise the moment it is opened.
+        config.mediaTypesRequiringUserActionForPlayback = .all
         return config
     }
 

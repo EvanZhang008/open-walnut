@@ -110,6 +110,7 @@ import { personalAiV1Router } from './routes/personal-ai-v1.js'
 import { searchMemoryV1Router } from './routes/search-memory-v1.js'
 import { eventsV1Router, startMobileEventsFeed, stopMobileEventsFeed } from './routes/events-v1.js'
 import { sttV1Router, sttPayloadTooLargeHandler } from './routes/stt-v1.js'
+import { inboxPayloadTooLargeHandler } from './routes/human-inbox-v1.js'
 import { pastesRouter } from './routes/pastes.js'
 import { mediaV1Router } from './routes/media-v1.js'
 import { routinesV1Router } from './routes/routines-v1.js'
@@ -1057,6 +1058,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // raises before any router runs, and Express skips routers in error mode.
   app.use(['/api/v1/stt/transcribe', '/api/stt/transcribe'], sttPayloadTooLargeHandler)
   app.use('/api/plugins/:pluginId', createPluginBodyParser(registry, CLOUD_MODE))
+  // Letters carry inline media (a digest's base64 audio/video), so their write
+  // routes get their own parser above the 15mb default — same shape as the STT
+  // route right above. 32mb ≈ LETTER_HTML_MAX_BYTES (24MB) plus JSON envelope
+  // headroom; past that the handler below answers with a contract-shaped 413
+  // instead of Express's bare HTML one. Kept OFF the global parser deliberately:
+  // every other route should still refuse a 30MB body outright.
+  app.use(['/api/v1/human-inbox', '/api/human-inbox'], express.json({ limit: '32mb' }))
+  app.use(['/api/v1/human-inbox', '/api/human-inbox'], inboxPayloadTooLargeHandler)
   app.use(express.json({ limit: '15mb' }))
   // Paste spill-over (>200K chars from the web UI) — needs req.body, so must
   // mount AFTER the json parser above.

@@ -137,16 +137,32 @@ export const LETTER_BODY_MAX_BYTES = 200 * 1024;
 
 /**
  * Cap for an HTML body, which is the one field that legitimately carries inline
- * MEDIA: a daily audio digest embeds its podcast as a base64 `<audio src="data:
- * audio/mpeg;base64,…">`, which is 2-5MB for a few minutes of speech. Splitting
- * it out (rather than raising the plain cap too) keeps the fields that live in
- * index.json, and the preview work every letter pays, as small as they were.
+ * MEDIA: a daily digest embeds its podcast as a base64
+ * `<audio src="data:audio/mpeg;base64,…">`, and a short clip the same way with
+ * `<video>`. Splitting it out (rather than raising the plain cap too) keeps the
+ * fields that live in index.json, and the preview work every letter pays, as
+ * small as they were.
  *
- * Everything on the path has to clear this: the daemon's gateway request line
- * (GATEWAY_MAX_LINE_BYTES, the reason this used to be 200KB on every transport)
- * and the express body limit (15mb).
+ * WHY A CAP EXISTS AT ALL, since the obvious question is "why not unlimited":
+ * this body is carried INLINE inside the letter JSON, and on the phone that JSON
+ * crosses the cloud replica's bridge as ONE WebSocket frame. `ws` enforces its
+ * maxPayload (32MB, see attachWss) by CLOSING the socket with 1009 before any
+ * handler runs, which would take out every other in-flight phone request with
+ * it. So the inline ceiling is a property of the transport, not a policy, and
+ * the number below is that ceiling minus headroom for the JSON wrapper.
+ *
+ * 24MB covers any realistic audio digest (speech at 64kbps is ~480KB/min, ~640KB
+ * a minute once base64'd, so this is roughly a 35-minute podcast) and a short
+ * inline video. Media bigger than that should not be inlined at all: it wants a
+ * served URL with Range support so the reader streams and seeks instead of
+ * decoding the whole thing into memory. See docs/plan/human-inbox.md.
+ *
+ * Ordering invariant, pinned by tests/core/human-inbox-caps.test.ts:
+ *   LETTER_HTML_MAX_BYTES < GATEWAY_MAX_LINE_BYTES < WS frame maxPayload
+ * Raise one without the others and the cap becomes a lie: the request dies a
+ * layer earlier with an error that says nothing about size.
  */
-export const LETTER_HTML_MAX_BYTES = 10 * 1024 * 1024;
+export const LETTER_HTML_MAX_BYTES = 24 * 1024 * 1024;
 
 /** Which cap one field is held to. Unknown names get the plain cap. */
 export function letterFieldMaxBytes(field: string): number {

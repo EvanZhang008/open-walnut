@@ -1305,14 +1305,21 @@ describe('agent gateway listener daemon-standalone vs daemon-source parity', () 
   const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'));
   const templateSrc = readFile(sourcePath);
 
-  it('both twins cap a request line at the same 12MB', async () => {
+  it('both twins cap a request line at the same size', async () => {
     // The bun twin imports the shared constant; the JS template cannot import,
-    // so it carries a hand-inlined copy that has to agree with it.
+    // so it carries a hand-inlined copy that has to agree with it. DERIVED from
+    // the constant, never hardcoded: a literal here just goes stale the next time
+    // the cap moves and fails a correct change (which is what it did when the cap
+    // went 12MB → 28MB for inline video).
     const { GATEWAY_MAX_LINE_BYTES } = await import('../../src/providers/gateway-core.js');
-    expect(GATEWAY_MAX_LINE_BYTES).toBe(12 * 1024 * 1024);
+    expect(GATEWAY_MAX_LINE_BYTES % (1024 * 1024)).toBe(0);
+    const mb = GATEWAY_MAX_LINE_BYTES / (1024 * 1024);
     expect(standaloneSrc).toMatch(/GATEWAY_MAX_LINE_BYTES/);
     expect(standaloneSrc).not.toMatch(/GATEWAY_MAX_LINE_BYTES\s*=/);
-    expect(templateSrc).toMatch(/GATEWAY_MAX_LINE_BYTES\s*=\s*12 \* 1024 \* 1024/);
+    expect(templateSrc).toContain(`GATEWAY_MAX_LINE_BYTES = ${mb} * 1024 * 1024`);
+    // And it must still clear the letter body it exists to carry.
+    const { LETTER_HTML_MAX_BYTES } = await import('../../src/core/human-inbox/types.js');
+    expect(GATEWAY_MAX_LINE_BYTES).toBeGreaterThan(LETTER_HTML_MAX_BYTES);
   });
 
   /**

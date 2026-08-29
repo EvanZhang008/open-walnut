@@ -23,9 +23,10 @@ export const LETTER_IFRAME_SANDBOX = 'allow-popups allow-popups-to-escape-sandbo
  * styles and data-URI images stay allowed (that is exactly what agents are told
  * to write); a link click still opens a new tab, since CSP doesn't gate that.
  *
- * `media-src data: blob:` is the same bargain for sound: a daily digest embeds
- * its podcast as `<audio src="data:audio/mpeg;base64,…">`, and under
- * `default-src 'none'` that is silently refused — the player renders and simply
+ * `media-src data: blob:` is the same bargain for sound and picture: a daily
+ * digest embeds its podcast as `<audio src="data:audio/mpeg;base64,…">` and a
+ * clip as `<video src="data:video/mp4;base64,…">`, and under
+ * `default-src 'none'` both are silently refused — the player renders and simply
  * never plays, with no error anywhere. Still no network: an `https://` media URL
  * stays blocked, so opening a letter reveals nothing about when it was read.
  * The iOS reader carries the identical policy (LetterHTMLBody.swift), so the two
@@ -42,6 +43,9 @@ const FRAME_RESET = `<style>
   @media (prefers-color-scheme: dark) { body { color: #f5f5f7; } }
   img, table, pre, audio, video { max-width: 100%; }
   audio { width: 100%; }
+  /* A clip has intrinsic dimensions; keep its aspect ratio when the frame is
+     narrower than the source instead of squashing it to the max-width. */
+  video { height: auto; }
   pre { overflow-x: auto; }
   table { border-collapse: collapse; }
   th, td { border: 1px solid rgba(128,128,128,0.35); padding: 4px 8px; text-align: left; }

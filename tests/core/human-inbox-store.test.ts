@@ -231,12 +231,32 @@ describe('human inbox store — validation', () => {
     expect(Buffer.byteLength(detail!.body, 'utf-8')).toBeGreaterThan(3 * 1024 * 1024);
   });
 
-  it('still rejects an html body over the 10MB media cap', async () => {
+  /**
+   * A long podcast, and a clip, are both bigger than the ORIGINAL 10MB media cap
+   * — this is the case that made the cap look arbitrary from the outside. Anchored
+   * at a fixed 12MB rather than a fraction of the constant so lowering the cap
+   * back under a real digest fails here instead of passing quietly.
+   */
+  it('accepts a 12MB html body carrying inline video (over the original 10MB cap)', async () => {
+    const clip = 'V'.repeat(12 * 1024 * 1024);
+    const html = `<h1>Daily digest</h1><video controls src="data:video/mp4;base64,${clip}"></video>`;
+    expect(Buffer.byteLength(html, 'utf-8')).toBeLessThanOrEqual(LETTER_HTML_MAX_BYTES);
+    const record = await sendLetter(letterInput({
+      markdown: undefined, html, text: 'Digest with a clip.',
+    }));
+    const detail = await getLetter(record.id);
+    expect(detail?.body).toBe(html);
+    // Byte-identical: a body clipped mid-base64 is a player that never plays.
+    expect(Buffer.byteLength(detail!.body, 'utf-8')).toBe(Buffer.byteLength(html, 'utf-8'));
+    expect(record.textPreview).toBe('Digest with a clip.');
+  }, 60_000);
+
+  it('still rejects an html body over the media cap', async () => {
     const huge = 'x'.repeat(LETTER_HTML_MAX_BYTES + 1);
     await expect(sendLetter(letterInput({ markdown: undefined, html: huge })))
       .rejects.toThrow(/letter cap/);
     expect((await listLetters()).letters).toHaveLength(0);
-  });
+  }, 60_000);
 
   it('throws a not_found LetterError when mutating an unknown letter', async () => {
     await expect(setRead('lt-abc-000000', true)).rejects.toMatchObject({

@@ -250,14 +250,35 @@ describe('POST /api/v1/human-inbox — send + sender stamping', () => {
     expect(JSON.stringify(listed)).not.toContain('AAAA')
   })
 
-  it('still refuses an html body over the 10MB media cap', async () => {
+  /**
+   * The write path end to end at a size the ORIGINAL 10MB cap refused, over real
+   * HTTP: this is what proves the express body limit was raised alongside the
+   * store cap. Without its own parser mount the request dies in the body parser
+   * at 15mb, and the caller gets Express's bare HTML 413 with no `error.code`.
+   */
+  it('accepts a 12MB inline-video html body over HTTP and serves it back byte-identical', async () => {
+    const clip = 'V'.repeat(12 * 1024 * 1024)
+    const html = `<h1>Digest</h1><video controls src="data:video/mp4;base64,${clip}"></video>`
+    const id = await sendLetter({
+      subject: 'Clip', type: 'info', html, text: 'Digest with a clip.',
+    }, SENDER_SID)
+
+    const { letter } = await getLetter(id)
+    expect(letter.body).toBe(html)
+
+    // The envelope the list (and the phone push) reads stays tiny.
+    const listed = (await listLetters()).letters.find(l => l.id === id)
+    expect(JSON.stringify(listed)).not.toContain('VVVV')
+  }, 120_000)
+
+  it('still refuses an html body over the media cap, with a contract-shaped error', async () => {
     const res = await post('/api/v1/human-inbox', {
       subject: 'Whale', type: 'review', html: 'x'.repeat(LETTER_HTML_MAX_BYTES + 1),
     }, SENDER_SID)
     expect(res.status).toBe(413)
     expect((await res.json()).error.code).toBe('too_large')
     expect((await listLetters()).letters).toHaveLength(0)
-  })
+  }, 120_000)
 })
 
 describe('read / pin / archive', () => {

@@ -2287,9 +2287,11 @@ function cmdMessageResult(ws, id, cmd) {
 var GATEWAY_SOCK_PATH = path.join(DAEMON_DIR, 'agent-gateway.sock');
 var GATEWAY_SHIM_DIR = path.join(DAEMON_DIR, 'bin');
 var GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'walnut');
-// 12MB (keep in sync with gateway-core.ts): one human_inbox_send is ONE line,
-// and a digest letter that embeds base64 audio is 2-5MB.
-var GATEWAY_MAX_LINE_BYTES = 12 * 1024 * 1024;
+// 28MB (keep in sync with gateway-core.ts): one human_inbox_send is ONE line,
+// and a digest letter that embeds base64 audio or video is megabytes. Must stay
+// above LETTER_HTML_MAX_BYTES (24MB) and below the 32MB WS frame this request
+// also crosses on a remote host.
+var GATEWAY_MAX_LINE_BYTES = 28 * 1024 * 1024;
 var GATEWAY_OPS = ['peers.list', 'peers.send', 'tools.list', 'tools.call'];
 // 20s default (shorter than the 45s launch relay — peers ops have no long
 // validation chain); WALNUT_GATEWAY_TIMEOUT_MS overrides (tests only).

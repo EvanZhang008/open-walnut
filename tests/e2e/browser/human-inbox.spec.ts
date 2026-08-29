@@ -23,6 +23,8 @@ import fs from 'node:fs/promises'
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { TINY_MP3_BASE64 } from './fixtures/tiny-audio'
+import { TINY_MP4_BASE64 } from './fixtures/tiny-video'
+import { LETTER_HTML_MAX_BYTES } from '../../../src/core/human-inbox/types.js'
 
 const SCREENSHOT_DIR = '/tmp/human-inbox'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -42,6 +44,8 @@ const SCRIPT_RAN_MARKER = `SCRIPT-DID-RUN-${NONCE}`
 /** The audio-digest letter: subject scope + a tail marker a clip would eat. */
 const AUDIO_SUBJECT = `PW LTR audio ${NONCE}`
 const AUDIO_TAIL_MARKER = `LETTER-AUDIO-TAIL-${NONCE}`
+const VIDEO_SUBJECT = `PW LTR video ${NONCE}`
+const VIDEO_TAIL_MARKER = `LETTER-VIDEO-TAIL-${NONCE}`
 
 let fixtureRoot = ''
 /** The origin session every delivery assertion is made against. */
@@ -460,4 +464,90 @@ test('a multi-MB letter with embedded base64 audio arrives whole and plays', asy
   expect(blocked, `CSP blocked the letter's own audio: ${blocked.join(' | ')}`).toHaveLength(0)
   expect(media.error).toBeNull()
   expect(media.duration).toBeGreaterThan(0)
+})
+
+/**
+ * The same contract for VIDEO, at a size the original 10MB cap refused.
+ *
+ * Two things this pins that the audio test cannot. First, the raised cap is real
+ * end to end: a >10MB body has to clear the store cap, the express parser mounted
+ * on the inbox routes, and the gateway line, and a stale limit anywhere in that
+ * chain fails here. Second, `<video>` decodes under the same policy as `<audio>`
+ * — `media-src` covers both, so a letter can carry a clip, and reading a DURATION
+ * off it is the only proof that separates "allowed" from "rendered and silently
+ * refused".
+ */
+test('a >10MB letter with embedded base64 video arrives whole and plays', async ({ page, request, browser }) => {
+  test.setTimeout(300_000)
+
+  // Deliberately past the ORIGINAL 10MB html cap: this is the case the user hit.
+  const filler = `<p>${'The overnight run finished and the digest was cut. '.repeat(230_000)}</p>`
+  const html = `<h2>Video digest</h2>`
+    + `<audio controls preload="metadata" src="data:audio/mpeg;base64,${TINY_MP3_BASE64}"></audio>`
+    + `<video controls preload="metadata" src="data:video/mp4;base64,${TINY_MP4_BASE64}"></video>`
+    + `${filler}<p>${VIDEO_TAIL_MARKER}</p>`
+  const bytes = Buffer.byteLength(html)
+  expect(bytes).toBeGreaterThan(10 * 1024 * 1024)
+  expect(bytes).toBeLessThan(LETTER_HTML_MAX_BYTES)
+
+  await sendLetter(request, {
+    subject: VIDEO_SUBJECT,
+    type: 'info',
+    html,
+    text: `Video digest with an embedded clip (${NONCE}).`,
+  })
+
+  await loadHome(page)
+  const panel = await openCenter(page)
+  await openInbox(panel)
+
+  const row = envelope(panel, VIDEO_SUBJECT)
+  await expect(row).toBeVisible({ timeout: 20_000 })
+  // A 12MB body must not reach the envelope the list (and the push) reads.
+  expect(await row.textContent() ?? '').not.toContain(TINY_MP4_BASE64.slice(0, 40))
+
+  await row.click()
+  const frame = page.locator('.hib-reader .hib-html-frame')
+  await expect(frame).toBeVisible({ timeout: 30_000 })
+
+  const inner = page.frameLocator('.hib-html-frame')
+  const video = inner.locator('video')
+  await expect(video).toHaveCount(1, { timeout: 30_000 })
+  // Byte-identical sources, and a tail marker after 12MB of prose: together they
+  // rule out truncation anywhere in the body.
+  expect(await video.getAttribute('src')).toBe(`data:video/mp4;base64,${TINY_MP4_BASE64}`)
+  expect(await inner.locator('audio').getAttribute('src')).toBe(`data:audio/mpeg;base64,${TINY_MP3_BASE64}`)
+  await expect(inner.locator('body')).toContainText(VIDEO_TAIL_MARKER, { timeout: 30_000 })
+  await shot(page, 'e2e-10-video-letter-reader')
+
+  const srcdoc = await frame.getAttribute('srcdoc') ?? ''
+  const policy = srcdoc.match(/content="(default-src[^"]*)"/)?.[1] ?? ''
+  expect(policy).toContain('media-src data: blob:')
+  expect(policy).not.toMatch(/https?:/)
+
+  // Does the clip actually decode? Same document, same CSP, in a page that can
+  // be asked (the reader iframe has no allow-scripts, so it cannot answer).
+  const probe = await browser.newPage()
+  const blocked: string[] = []
+  probe.on('console', (m) => {
+    if (/Content Security Policy|Refused to load/i.test(m.text())) blocked.push(m.text())
+  })
+  await probe.setContent(srcdoc, { waitUntil: 'load' })
+  const clip = await probe.evaluate(async () => {
+    const el = document.querySelector('video') as HTMLVideoElement | null
+    if (!el) return { duration: 0, width: 0, error: 'no video element' }
+    await new Promise<void>((resolve) => {
+      if (el.readyState >= 1) return resolve()
+      el.addEventListener('loadedmetadata', () => resolve(), { once: true })
+      el.addEventListener('error', () => resolve(), { once: true })
+      setTimeout(() => resolve(), 20_000)
+    })
+    return { duration: el.duration, width: el.videoWidth, error: el.error ? `code ${el.error.code}` : null }
+  })
+  await probe.close()
+  expect(blocked, `CSP blocked the letter's own video: ${blocked.join(' | ')}`).toHaveLength(0)
+  expect(clip.error).toBeNull()
+  expect(clip.duration).toBeGreaterThan(0)
+  // videoWidth only becomes non-zero once a real frame was decoded.
+  expect(clip.width).toBeGreaterThan(0)
 })

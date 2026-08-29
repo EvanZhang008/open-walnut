@@ -50,19 +50,22 @@ export function isExternalCallerSid(sid: string): boolean {
 /**
  * Hard cap on a single NDJSON request line (bytes). Oversized → reject + close.
  *
- * 12MB, not the original 256KB: one `walnut tools call human_inbox_send` is ONE
+ * 28MB, not the original 256KB: one `walnut tools call human_inbox_send` is ONE
  * line, so this bound WAS the letter body cap (200KB), and a daily digest that
- * embeds its podcast as base64 audio is 2-5MB. Sized off
- * LETTER_HTML_MAX_BYTES (10MB) plus room for JSON escaping and the envelope —
- * lowering it below that silently breaks audio letters again, so keep the two
- * together (ratchet: tests/unit/peers/gateway-core.test.ts).
+ * embeds its podcast as base64 audio or video is megabytes. It must sit ABOVE
+ * LETTER_HTML_MAX_BYTES (24MB) with room for JSON escaping and the envelope, and
+ * BELOW the 32MB WS frame maxPayload that the same request crosses on a remote
+ * host — lowering it below the letter cap silently breaks media letters again,
+ * raising it past the frame trades a clean 413 for a socket the peer closes with
+ * 1009. Ratchets: tests/unit/peers/gateway-core.test.ts and
+ * tests/core/human-inbox-caps.test.ts (the whole ordering).
  *
  * Safe to be this big: the socket is 0600 owner-only, that mode IS the
  * credential, and the daemon reads one request per connection. The twins count
  * bytes and scan for the newline INCREMENTALLY (never re-measuring the whole
- * buffer per chunk), so a 10MB line is one linear pass, not a quadratic one.
+ * buffer per chunk), so a 28MB line is one linear pass, not a quadratic one.
  */
-export const GATEWAY_MAX_LINE_BYTES = 12 * 1024 * 1024;
+export const GATEWAY_MAX_LINE_BYTES = 28 * 1024 * 1024;
 
 /** Default wait for the Mac hub to answer a relayed gateway request. */
 export const GATEWAY_HUB_TIMEOUT_MS = 20_000;
@@ -79,6 +82,9 @@ export function gatewayHubTimeoutMs(): number {
 
 // ── Protocol types ──
 
+// peers.* are tombstones: still ACCEPTED on the wire so the capability router
+// can answer with a pointer to the replacement op instead of a bare
+// unknown-op error (old daemons / stale session guidance still say "peers").
 export const GATEWAY_OPS = ['peers.list', 'peers.send', 'tools.list', 'tools.call'] as const;
 export type GatewayOp = (typeof GATEWAY_OPS)[number];
 

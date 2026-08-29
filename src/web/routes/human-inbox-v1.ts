@@ -27,7 +27,10 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError } from './v1-control-relay.js'
-import { letterFieldMaxBytes, type AgentReplyInput, type NewLetter } from '../../core/human-inbox/types.js'
+import {
+  LETTER_HTML_MAX_BYTES, letterFieldMaxBytes,
+  type AgentReplyInput, type NewLetter,
+} from '../../core/human-inbox/types.js'
 
 export const humanInboxV1Router = Router()
 
@@ -111,6 +114,24 @@ function letterId(req: Request): string {
  * number: an html body may carry inline media (a base64 audio digest) and gets
  * the 10MB cap, while markdown and plain text keep the 200KB prose cap.
  */
+/**
+ * Express raises `entity.too.large` from the body parser BEFORE any router runs,
+ * so an oversized letter would otherwise leave as a bare 413 with an HTML body
+ * and no `error.code` — the shape the phone keys its retry UX off. Mirrors
+ * sttPayloadTooLargeHandler; must be mounted at app level next to the parser.
+ */
+export function inboxPayloadTooLargeHandler(
+  err: Error, _req: Request, res: Response, next: NextFunction,
+): void {
+  if ((err as { type?: string }).type === 'entity.too.large') {
+    sendError(res, 413, 'too_large',
+      `letter body too large for one request (max ${LETTER_HTML_MAX_BYTES} bytes of html) — `
+      + 'link or attach a file instead of inlining it')
+    return
+  }
+  next(err)
+}
+
 function oversizeField(fields: Record<string, unknown>): { name: string; max: number } | null {
   for (const [name, value] of Object.entries(fields)) {
     const max = letterFieldMaxBytes(name)

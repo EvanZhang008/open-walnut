@@ -36,8 +36,11 @@ defineOp({
     markdown: z.string().optional().describe('Letter body as markdown (exactly one of markdown | html)'),
     html: z.string().optional().describe(
       'Letter body as self-contained HTML, no scripts (inline styles only). The one body that may '
-      + 'carry inline media as data: URIs — a chart image, or an audio digest as '
-      + '<audio controls src="data:audio/mpeg;base64,...">. Up to 10MB; remote URLs are blocked.'),
+      + 'carry inline media as data: URIs — a chart image, an audio digest as '
+      + '<audio controls src="data:audio/mpeg;base64,...">, or a clip as '
+      + '<video controls src="data:video/mp4;base64,...">. Up to 24MB (about a 35-minute podcast); '
+      + 'remote URLs are blocked. A payload this big cannot ride argv: pass it with '
+      + '`walnut tools call human_inbox_send @/path/payload.json`.'),
     text: z.string().optional().describe('Short plain-text preview for the envelope row and the phone push'),
     actions: z.array(ACTION).optional().describe('action_required only: the options rendered as buttons'),
     task_refs: z.array(z.string()).optional().describe('Task ids this letter is about; rendered as clickable pills'),
