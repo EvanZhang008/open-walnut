@@ -70,6 +70,15 @@ export function resetAppPreferences(): void {
   publish(createAppPreferences())
 }
 
+/**
+ * Forget only the ORDER, keeping hidden/unpinned/placement decisions. Offered in
+ * the sidebar's right-click menu: "my rail is in a weird order" should be one
+ * click to the product default, not a reset of everything the user configured.
+ */
+export function resetAppOrder(): void {
+  publish({ ...getCurrent(), order: [] })
+}
+
 export function resetAppPreferencesForTesting(): void {
   snapshot = null
 }

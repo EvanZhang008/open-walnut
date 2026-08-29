@@ -11,6 +11,10 @@
 
 import { useEffect, useRef, type ReactNode } from 'react';
 import { ICON_CLOSE } from '@/components/common/Icons';
+import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
+import { revealNote } from '@/api/notes-v2';
+import { copyTextDeferred } from '@/utils/clipboard';
+import { log } from '@/utils/log';
 
 export type TabKind = 'note' | 'attachment';
 
@@ -34,6 +38,16 @@ interface NotesTabStripProps {
    * own header/content.
    */
   trailing?: ReactNode;
+  /** Right-click menu — close the other tabs / every tab (all optional: the
+   *  menu simply drops the rows whose handler wasn't supplied). */
+  onCloseOthers?: (path: string) => void;
+  onCloseAll?: () => void;
+  /** Select + scroll the tab's note into view in the tree ("Reveal in tree"). */
+  onLocate?: (path: string) => void;
+  /** Pop the note out into its own window. */
+  onOpenInNewWindow?: (path: string) => void;
+  isFavorite?: (path: string) => boolean;
+  onToggleFavorite?: (path: string) => void;
 }
 
 /** Vault-relative path → Obsidian-style tab label (basename, no .md). */
@@ -42,13 +56,68 @@ function tabLabel(path: string): string {
   return base.replace(/\.md$/, '');
 }
 
-export function NotesTabStrip({ tabs, activePath, onActivate, onClose, onNewTab, trailing }: NotesTabStripProps) {
+export function NotesTabStrip({
+  tabs, activePath, onActivate, onClose, onNewTab, trailing,
+  onCloseOthers, onCloseAll, onLocate, onOpenInNewWindow, isFavorite, onToggleFavorite,
+}: NotesTabStripProps) {
   const activeRef = useRef<HTMLDivElement>(null);
+  const menu = useContextMenu<OpenTab>();
 
   // Keep the active tab visible when activated (the strip scrolls horizontally on overflow).
   useEffect(() => {
     activeRef.current?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   }, [activePath]);
+
+  /**
+   * "Copy full path" / "Reveal in Finder" need the ABSOLUTE path, which only the
+   * server knows (the tab holds a vault-relative one). Same pattern as the tree:
+   * hand the clipboard a promise minted inside the gesture (copyTextDeferred) —
+   * awaiting the round trip first voids the user activation in WKWebView (the Mac
+   * app) and every copy fails.
+   */
+  const revealTab = (path: string, mode: 'finder' | 'app' | 'vscode') => {
+    revealNote(path, mode).catch((err) => {
+      log.warn('notes', 'tab reveal failed', { path, mode, error: err instanceof Error ? err.message : String(err) });
+    });
+  };
+
+  const buildItems = (tab: OpenTab): ContextMenuItem[] => {
+    const isNote = tab.kind === 'note';
+    const others = tabs.length > 1;
+    return [
+      { key: 'close', label: 'Close', onSelect: () => onClose(tab.path) },
+      { key: 'close-others', label: 'Close others', when: !!onCloseOthers && others, onSelect: () => onCloseOthers?.(tab.path) },
+      { key: 'close-all', label: 'Close all', when: !!onCloseAll, onSelect: () => onCloseAll?.() },
+      { divider: true },
+      { key: 'locate', label: 'Reveal in tree', when: !!onLocate, onSelect: () => onLocate?.(tab.path) },
+      {
+        key: 'popout', label: 'Open in new window',
+        when: !!onOpenInNewWindow && isNote,
+        onSelect: () => onOpenInNewWindow?.(tab.path),
+      },
+      {
+        key: 'favorite',
+        label: isFavorite?.(tab.path) ? 'Remove bookmark' : 'Bookmark',
+        when: !!onToggleFavorite && isNote,
+        onSelect: () => onToggleFavorite?.(tab.path),
+      },
+      { divider: true },
+      {
+        key: 'copy-vault-path', label: 'Copy vault path', title: tab.path,
+        onSelect: () => { void copyTextDeferred(Promise.resolve(tab.path)); },
+      },
+      {
+        key: 'copy-path', label: 'Copy full path',
+        onSelect: () => { void copyTextDeferred(revealNote(tab.path, 'path')); },
+      },
+      { key: 'finder', label: 'Reveal in Finder', onSelect: () => revealTab(tab.path, 'finder') },
+      { key: 'vscode', label: 'Open in VS Code', onSelect: () => revealTab(tab.path, 'vscode') },
+      {
+        key: 'default-app', label: 'Open in default app', when: !isNote,
+        onSelect: () => revealTab(tab.path, 'app'),
+      },
+    ];
+  };
 
   return (
     <div className="notes-tab-strip" role="tablist">
@@ -65,6 +134,9 @@ export function NotesTabStrip({ tabs, activePath, onActivate, onClose, onNewTab,
             onClick={() => onActivate(tab.path)}
             // Middle-click closes (browser convention).
             onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); onClose(tab.path); } }}
+            // A tab is an app object: the browser's own menu ("Back / Reload /
+            // Inspect Element" in the Mac app) says nothing about this note.
+            onContextMenu={(e) => menu.open(e, tab)}
           >
             <span className="notes-tab-label">{tabLabel(tab.path)}</span>
             <button
@@ -86,6 +158,15 @@ export function NotesTabStrip({ tabs, activePath, onActivate, onClose, onNewTab,
         </svg>
       </button>
       {trailing && <div className="notes-tab-trailing">{trailing}</div>}
+      {menu.state && (
+        <ContextMenu
+          point={menu.state.point}
+          items={buildItems(menu.state.payload)}
+          onClose={menu.close}
+          ariaLabel={`Tab actions for ${tabLabel(menu.state.payload.path)}`}
+          testId="notes-tab-ctx-menu"
+        />
+      )}
     </div>
   );
 }

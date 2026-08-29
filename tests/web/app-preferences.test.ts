@@ -281,6 +281,49 @@ describe('App preferences', () => {
     ])
   })
 
+  it('forgets the stored CORE order when migrating v1 → v2, keeping plugin slots', () => {
+    // A v1 client froze the OLD core default (tasks above home). Shipping a new
+    // core default must reach it, or the change only lands for fresh installs.
+    const parsed = parseAppPreferences(JSON.stringify({
+      version: 1,
+      order: ['core:tasks', 'core:home', 'plugin-a:main', 'core:settings'],
+      unpinned: ['plugin-a:main'],
+      hidden: ['core:tasks'],
+      placement: { 'plugin-a:main': 'sidebar' },
+    }))
+
+    expect(parsed.version).toBe(2)
+    expect(parsed.order).toEqual(['plugin-a:main'])
+    // Everything that is NOT an ordering decision survives untouched.
+    expect(parsed.unpinned).toEqual(['plugin-a:main'])
+    expect(parsed.hidden).toEqual(['core:tasks'])
+    expect(parsed.placement).toEqual({ 'plugin-a:main': 'sidebar' })
+    // Core keys fall back to the registry default, around the kept plugin slot.
+    expect(resolveApps(apps, parsed).all.map((item) => item.key)).toEqual([
+      'core:home',
+      'core:tasks',
+      'plugin-a:main',
+      'core:settings',
+    ])
+  })
+
+  it('keeps a v2 order verbatim — a deliberate re-order is not migrated twice', () => {
+    const parsed = parseAppPreferences(JSON.stringify({
+      version: 2,
+      order: ['core:tasks', 'core:home', 'plugin-a:main', 'core:settings'],
+      unpinned: [],
+      hidden: [],
+      placement: {},
+    }))
+
+    expect(parsed.order).toEqual(['core:tasks', 'core:home', 'plugin-a:main', 'core:settings'])
+  })
+
+  it('starts clean on a version this build does not know', () => {
+    expect(parseAppPreferences(JSON.stringify({ version: 99, order: ['core:tasks'] })))
+      .toEqual(createAppPreferences())
+  })
+
   it('recovers from malformed storage and preserves absent App keys for reinstall', () => {
     expect(parseAppPreferences('{bad json')).toEqual(createAppPreferences())
     const parsed = parseAppPreferences(JSON.stringify({

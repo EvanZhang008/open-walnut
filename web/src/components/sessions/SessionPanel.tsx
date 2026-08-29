@@ -1574,6 +1574,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                   onSetTier={handleSetTier}
                   onOpenTaskDetail={onOpenTaskDetail}
                   slot="kebab"
+                  // Right-clicking the panel header opens this same menu at the
+                  // cursor: the header is the session's object, so its actions
+                  // belong to the gesture people already try there.
+                  contextMenuScope=".session-panel-header"
                   extraSection={(close) => (
                     <SessionKebabSection
                       sessionId={sessionId}

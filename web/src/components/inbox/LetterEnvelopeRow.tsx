@@ -9,6 +9,8 @@
 import { memo } from 'react';
 import { formatRelative } from '@/contexts/notifications';
 import { LETTER_TYPE_LABEL, type LetterEnvelope } from '@/api/human-inbox';
+import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
+import { copyTextRobust } from '@/utils/clipboard';
 import '@/styles/human-inbox.css';
 
 /** Sender line: friendly session title, else a short id, else "external". */
@@ -43,6 +45,27 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
   const sender = letter.sender ?? { sessionId: '', host: '' };
   const replies = letter.thread?.length ?? 0;
   const answered = letter.answered;
+  // Right-click = the row's own buttons without hunting for them, plus the two
+  // ids you need when following a letter into the logs or a session.
+  const menu = useContextMenu<void>();
+  const menuItems = (): ContextMenuItem[] => [
+    { key: 'open', label: 'Open', onSelect: onOpen },
+    { divider: true },
+    { key: 'read', label: letter.read ? 'Mark unread' : 'Mark read', onSelect: onToggleRead },
+    { key: 'pin', label: letter.pinned ? 'Unpin' : 'Pin', onSelect: onTogglePin },
+    { key: 'archive', label: letter.archived ? 'Unarchive' : 'Archive', onSelect: onToggleArchive },
+    { divider: true },
+    {
+      key: 'copy-subject', label: 'Copy subject', when: !!letter.subject,
+      onSelect: () => { void copyTextRobust(letter.subject); },
+    },
+    {
+      key: 'copy-session', label: 'Copy sender session ID',
+      when: !!sender.sessionId && sender.sessionId !== 'external',
+      title: sender.sessionId,
+      onSelect: () => { void copyTextRobust(sender.sessionId!); },
+    },
+  ];
 
   return (
     <div
@@ -53,6 +76,7 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); }
       }}
+      onContextMenu={(e) => menu.open(e, undefined)}
     >
       <div className="hib-row-head">
         <span
@@ -106,6 +130,15 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
           {letter.archived ? 'Unarchive' : 'Archive'}
         </button>
       </div>
+      {menu.state && (
+        <ContextMenu
+          point={menu.state.point}
+          items={menuItems()}
+          onClose={menu.close}
+          ariaLabel="Letter actions"
+          testId="letter-ctx-menu"
+        />
+      )}
     </div>
   );
 });

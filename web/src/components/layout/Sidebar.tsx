@@ -1,13 +1,23 @@
 import { useState, useEffect, type RefObject } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
 import { useAppCatalog } from '@/apps/hooks';
 import { CalendarIcon, PuzzleIcon } from '@/apps/icons';
+import { effectiveAppPlacement, supportsPlacementOverride } from '@/apps/preferences';
+import {
+  getAppPreferences,
+  moveAppPreference,
+  resetAppOrder,
+  updateAppDisposition,
+  updateAppPlacement,
+} from '@/apps/store';
+import type { RegisteredApp } from '@/apps/registry';
 import { useNotifications } from '@/contexts/notifications';
 import { NotificationPanel } from '@/components/common/NotificationPanel';
 import { VoicePanel } from '@/components/common/VoicePanel';
 import { PluginBoundary } from '@/components/common/PluginBoundary';
+import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { subscribeVoiceStatus, getVoiceStatus, type VoiceStatus } from '@/utils/voice-status';
 
 const SS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
@@ -36,6 +46,10 @@ export function Sidebar({
   const cls = `sidebar${open ? ' open' : ''}${collapsed ? ' collapsed' : ''}`;
   const { hasIssues } = useSystemHealth();
   const apps = useAppCatalog();
+  const navigate = useNavigate();
+  // overrideLinks: a rail row is an <a> only because SPA routing needs one —
+  // "Open Link in New Tab" is not what right-clicking an app icon is for.
+  const appMenu = useContextMenu<RegisteredApp>({ overrideLinks: true });
   const audio = useAudioCapture();
   const { notify, attentionCount } = useNotifications();
   const [notifOpen, setNotifOpen] = useState(false);
@@ -104,6 +118,53 @@ export function Sidebar({
   };
   const handleNavClick = (event: React.MouseEvent<HTMLElement>) => {
     if ((event.target as Element).closest('a[href]')) onNavigate();
+  };
+
+  /**
+   * Right-click on an app icon. The rail is the one surface where "this is in the
+   * wrong place" is the obvious thought, and until now the only answer lived in
+   * Settings → Plugins (and reordering had no UI at all). Ordering acts on the
+   * SIDEBAR list, so "up"/"down" mean what the user sees, and the item is dropped
+   * at the ends rather than offered as a no-op.
+   *
+   * Home and Settings carry lockVisibility (they are how you get back to
+   * everything else), so unpin/hide never appear for them — the same rule
+   * resolveApps already enforces, spelled out here so the menu can't offer an
+   * action that would silently do nothing.
+   */
+  const buildAppMenu = (app: RegisteredApp): ContextMenuItem[] => {
+    const list = apps.sidebar;
+    const index = list.findIndex((item) => item.key === app.key);
+    const placement = effectiveAppPlacement(app, getAppPreferences());
+    return [
+      { key: 'title', section: true, label: app.title },
+      {
+        key: 'up', label: 'Move up', when: index > 0,
+        onSelect: () => moveAppPreference(list, app.key, 'up'),
+      },
+      {
+        key: 'down', label: 'Move down', when: index >= 0 && index < list.length - 1,
+        onSelect: () => moveAppPreference(list, app.key, 'down'),
+      },
+      { key: 'reset-order', label: 'Reset sidebar order', onSelect: resetAppOrder },
+      { divider: true },
+      {
+        key: 'placement', label: placement === 'settings' ? 'Move to Sidebar' : 'Move to Settings',
+        when: supportsPlacementOverride(app),
+        onSelect: () => updateAppPlacement(app.key, placement === 'settings' ? 'sidebar' : 'settings'),
+      },
+      {
+        key: 'unpin', label: 'Unpin from sidebar', when: !app.lockVisibility,
+        title: 'Keeps the app reachable by deep link and in Settings',
+        onSelect: () => updateAppDisposition(app.key, 'unpinned'),
+      },
+      {
+        key: 'hide', label: 'Hide app', when: !app.lockVisibility, danger: true,
+        onSelect: () => updateAppDisposition(app.key, 'hidden'),
+      },
+      { divider: true },
+      { key: 'manage', label: 'Manage apps…', onSelect: () => navigate('/settings') },
+    ];
   };
 
   return (
@@ -189,6 +250,7 @@ export function Sidebar({
                 ? `sidebar-core-app-${app.id}`
                 : `sidebar-app-${app.kind === 'webview' ? app.id : app.key}`}
               data-app-kind={app.kind}
+              onContextMenu={(e) => appMenu.open(e, app)}
             >
               {icon}
               <span className="sidebar-label">{app.title}</span>
@@ -245,6 +307,16 @@ export function Sidebar({
           ) : null}
         </button>
       </div>
+
+      {appMenu.state && (
+        <ContextMenu
+          point={appMenu.state.point}
+          items={buildAppMenu(appMenu.state.payload)}
+          onClose={appMenu.close}
+          ariaLabel={`${appMenu.state.payload.title} app actions`}
+          testId="sidebar-app-ctx-menu"
+        />
+      )}
 
       <NotificationPanel
         open={notifOpen}

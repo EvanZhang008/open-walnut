@@ -4,8 +4,14 @@ export const APP_PREFERENCES_KEY = 'open-walnut-app-preferences-v1'
 
 export type AppDisposition = 'pinned' | 'unpinned' | 'hidden'
 
+/**
+ * Storage schema version. Bumped 1 → 2 when the core rail order changed
+ * (Home, Notes, Calendar, Tasks, Routines, Settings): see CORE_ORDER_MIGRATION.
+ */
+export const APP_PREFERENCES_VERSION = 2
+
 export interface AppPreferences {
-  version: 1
+  version: typeof APP_PREFERENCES_VERSION
   order: string[]
   unpinned: string[]
   hidden: string[]
@@ -66,17 +72,35 @@ function placementOverrides(value: unknown): Record<string, AppPlacement> {
 }
 
 export function createAppPreferences(): AppPreferences {
-  return { version: 1, order: [], unpinned: [], hidden: [], placement: {} }
+  return { version: APP_PREFERENCES_VERSION, order: [], unpinned: [], hidden: [], placement: {} }
+}
+
+/**
+ * v1 → v2: forget the stored position of the CORE apps, keep everything else.
+ *
+ * A stored order is written wholesale (every visible key, core ones included) the
+ * first time anything is moved in Settings → Apps, so almost every existing client
+ * carries a frozen copy of the OLD core default. Shipping a new default order
+ * would then change nothing for exactly the people who already use the app. Only
+ * `core:*` entries are dropped: a plugin/webview App the user positioned by hand
+ * keeps its slot, and `mergedOrder` re-inserts the core keys at their new default
+ * positions relative to the ones that stayed.
+ */
+function migrateCoreOrder(order: string[]): string[] {
+  return order.filter((key) => !key.startsWith('core:'))
 }
 
 export function parseAppPreferences(raw: string | null): AppPreferences {
   if (!raw) return createAppPreferences()
   try {
     const value = JSON.parse(raw) as Record<string, unknown>
-    if (!value || value.version !== 1) return createAppPreferences()
+    if (!value) return createAppPreferences()
+    // Unknown/future versions get a clean slate rather than a half-read record.
+    if (value.version !== 1 && value.version !== APP_PREFERENCES_VERSION) return createAppPreferences()
+    const order = uniqueStrings(value.order)
     return {
-      version: 1,
-      order: uniqueStrings(value.order),
+      version: APP_PREFERENCES_VERSION,
+      order: value.version === 1 ? migrateCoreOrder(order) : order,
       unpinned: uniqueStrings(value.unpinned),
       hidden: uniqueStrings(value.hidden),
       placement: placementOverrides(value.placement),

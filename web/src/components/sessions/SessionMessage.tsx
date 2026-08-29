@@ -9,7 +9,13 @@ import { useEntityLabelsVersion, useRenderedMarkdown } from '@/hooks/useEntityLa
 import { useLivePlanContent } from '@/contexts/PlanContentContext';
 import { fetchSubagentHistory } from '@/api/sessions';
 import { getSubagentCache, setSubagentCache } from '@/cache/session-cache';
-import { MessageMetaRow } from './MessageMetaRow';
+import { MessageMetaRow, UUID_RE } from './MessageMetaRow';
+import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
+import { useSessionPinsApi } from '@/contexts/SessionPinsContext';
+import { useSessionRewindApi } from '@/contexts/SessionRewindContext';
+import { pinLabelFor } from '@/hooks/useSessionPins';
+import { copyRichText, copyTextRobust } from '@/utils/clipboard';
+import { markdownToRichHtml } from '@/utils/markdown';
 import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
 import { BashToolCall } from './BashToolCall';
 import { log } from '@/utils/log';
@@ -1056,8 +1062,50 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
   // component is memoized, so it must re-render itself on label changes.
   useEntityLabelsVersion();
 
+  /**
+   * Right-click a transcript row: the same actions as the hover strip
+   * (MessageMetaRow), reachable without hunting for a strip that only appears on
+   * hover — plus the message id, which is what you need when tracing one message
+   * through the logs. Selecting text first still yields the browser's own menu.
+   */
+  const rowMenu = useContextMenu<void>();
+  const pins = useSessionPinsApi();
+  const rewind = useSessionRewindApi();
+  const msgId = message.msgId ?? message.walnutMessageId;
+  const rowMenuItems = (): ContextMenuItem[] => {
+    const hasText = !!text && !!text.trim();
+    return [
+      { key: 'copy', label: 'Copy message', when: hasText, onSelect: () => { void copyTextRobust(text!); } },
+      {
+        key: 'copy-rich', label: 'Copy as rich text', when: hasText,
+        title: 'Keeps formatting when pasted into a doc or email',
+        onSelect: () => { void copyRichText(markdownToRichHtml(text!), text!); },
+      },
+      { divider: true },
+      {
+        key: 'pin', label: pins.isPinned(msgId) ? 'Unpin from outline' : 'Pin to outline', when: !!msgId,
+        onSelect: () => pins.toggle({ msgId, role, text, timestamp }),
+      },
+      {
+        // Same predicate as the hover strip: only the user's own messages, and
+        // only CLI transcript uuids, are rewindable.
+        key: 'rewind', label: 'Rewind to here',
+        when: rewind.available && isUser && !!msgId && UUID_RE.test(msgId),
+        onSelect: () => rewind.request(msgId!, pinLabelFor(text, 'this message')),
+      },
+      { divider: true },
+      {
+        key: 'copy-id', label: 'Copy message ID', when: !!msgId, title: msgId,
+        onSelect: () => { void copyTextRobust(msgId!); },
+      },
+    ];
+  };
+
   return (
-    <div className={`session-msg ${isUser ? 'session-msg-user' : 'session-msg-assistant'}`}>
+    <div
+      className={`session-msg ${isUser ? 'session-msg-user' : 'session-msg-assistant'}`}
+      onContextMenu={(e) => rowMenu.open(e, undefined)}
+    >
       <div className="session-msg-content" onClick={handleContentClick}>
         {thinking && <SessionThinking text={thinking} />}
         {text && (useSegments ? (
@@ -1117,13 +1165,22 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
             reply keeps its actions on screen, which is what showCopyActions has
             always meant. */}
         <MessageMetaRow
-          msgId={message.msgId ?? message.walnutMessageId}
+          msgId={msgId}
           role={role}
           text={text}
           timestamp={timestamp}
           alwaysVisible={showCopyActions}
         />
       </div>
+      {rowMenu.state && (
+        <ContextMenu
+          point={rowMenu.state.point}
+          items={rowMenuItems()}
+          onClose={rowMenu.close}
+          ariaLabel="Message actions"
+          testId="session-msg-ctx-menu"
+        />
+      )}
     </div>
   );
 });

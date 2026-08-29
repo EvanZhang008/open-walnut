@@ -17,6 +17,9 @@ import { SubagentBlock } from './SubagentBlock';
 import { SuggestSegments, useSuggestSegments } from './SuggestSegments';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
+import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
+import { copyRichText, copyTextRobust } from '@/utils/clipboard';
+import { markdownToRichHtml } from '@/utils/markdown';
 export interface RouteInfo {
   direction: 'sent' | 'received';
   event: string;
@@ -1074,6 +1077,44 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
     if (shouldAutoCollapse) setIsCollapsed(true);
   }
 
+  /**
+   * Right-click menu for a chat bubble. The main chat has no hover toolbar (the
+   * session transcript does — MessageMetaRow), so before this the ONLY way to
+   * copy a whole reply was to select it by hand, and in the Mac app the browser
+   * menu on a bubble offers "Back / Reload / Inspect Element".
+   *
+   * A right-click ON a text selection still gets the native menu (Copy / Look Up
+   * / Translate act on the chosen characters) — see utils/context-menu.ts.
+   */
+  const msgMenu = useContextMenu<void>();
+  const copyableText = useMemo(() => {
+    if (content && content.trim()) return content;
+    // Assistant messages carry their prose in text blocks, not `content`.
+    return (blocks ?? [])
+      .filter((b): b is Extract<MessageBlock, { type: 'text' }> => b.type === 'text')
+      .map((b) => b.content)
+      .join('\n\n')
+      .trim();
+  }, [content, blocks]);
+
+  const messageMenuItems = (): ContextMenuItem[] => [
+    {
+      key: 'copy', label: 'Copy message', when: !!copyableText,
+      onSelect: () => { void copyTextRobust(copyableText); },
+    },
+    {
+      key: 'copy-rich', label: 'Copy as rich text', when: !!copyableText,
+      title: 'Keeps formatting when pasted into a doc or email',
+      onSelect: () => { void copyRichText(markdownToRichHtml(copyableText), copyableText); },
+    },
+    { divider: true },
+    {
+      key: 'collapse', label: isCollapsed ? 'Expand message' : 'Collapse message',
+      when: shouldAutoCollapse,
+      onSelect: () => setIsCollapsed((c) => !c),
+    },
+  ];
+
   // CSS class: cron, heartbeat, notification, and triage messages get their own style
   const messageClass = isHeartbeat
     ? 'chat-message chat-message-heartbeat'
@@ -1165,7 +1206,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
   if (role === 'assistant' && blocks && blocks.length > 0) {
     return (
       <>
-        <div className={messageClass}>
+        <div className={messageClass} onContextMenu={(e) => msgMenu.open(e, undefined)}>
           {notificationHeader ?? (
             <div className="chat-message-header">
               <div className="chat-message-role">{roleLabel}</div>
@@ -1253,6 +1294,15 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
             </div>
           )}
         </div>
+        {msgMenu.state && (
+          <ContextMenu
+            point={msgMenu.state.point}
+            items={messageMenuItems()}
+            onClose={msgMenu.close}
+            ariaLabel="Message actions"
+            testId="chat-msg-ctx-menu"
+          />
+        )}
         {lightboxSrc && <Lightbox src={lightboxSrc} onClose={closeLightbox} />}
         {fileViewerState && (
           <FileViewer
@@ -1267,7 +1317,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
 
   return (
     <>
-      <div className={messageClass}>
+      <div className={messageClass} onContextMenu={(e) => msgMenu.open(e, undefined)}>
         {notificationHeader ?? (
           <div className="chat-message-header">
             <div className="chat-message-role">{roleLabel}</div>
@@ -1350,6 +1400,15 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
         )}
       </div>
       {lightboxSrc && <Lightbox src={lightboxSrc} onClose={closeLightbox} />}
+      {msgMenu.state && (
+        <ContextMenu
+          point={msgMenu.state.point}
+          items={messageMenuItems()}
+          onClose={msgMenu.close}
+          ariaLabel="Message actions"
+          testId="chat-msg-ctx-menu"
+        />
+      )}
       {fileViewerState && (
         <FileViewer
           path={fileViewerState.path}

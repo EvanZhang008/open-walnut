@@ -58,6 +58,26 @@ export function copyTextDeferred(textPromise: Promise<string>): Promise<CopyResu
   return textPromise.then(copyTextRobust);
 }
 
+/**
+ * Copy formatted content: `text/html` for editors that keep formatting (Docs,
+ * Word, mail) plus `text/plain` for everything else. Rich copy needs a live
+ * gesture, so call it synchronously from the click; when the rich write isn't
+ * possible (no ClipboardItem, insecure context, WKWebView refusal) it degrades
+ * to the plain text through the robust path rather than copying nothing.
+ */
+export async function copyRichText(html: string, plain: string): Promise<CopyResult> {
+  try {
+    if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/html': new Blob([html], { type: 'text/html' }),
+        'text/plain': new Blob([plain], { type: 'text/plain' }),
+      })]);
+      return 'clipboard';
+    }
+  } catch { /* fall back to plain text below */ }
+  return copyTextRobust(plain);
+}
+
 export async function copyTextRobust(text: string): Promise<CopyResult> {
   if (desktopBridgeCopy(text)) return 'clipboard';
 

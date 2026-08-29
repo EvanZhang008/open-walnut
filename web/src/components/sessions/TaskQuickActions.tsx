@@ -18,6 +18,7 @@ import type { FocusTier } from '@/api/focus';
 import { getIntegrationMeta, useIntegrations } from '@/hooks/useIntegrations';
 import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '@/components/common/DatePicker';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { keepNativeContextMenu } from '@/utils/context-menu';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { TIER_OPTIONS, tierColor, PRIORITY_OPTIONS } from './task-meta-constants';
 import { MoveToProjectSection } from '@/components/tasks/TaskKebabMenu';
@@ -66,9 +67,17 @@ interface TaskQuickActionsProps {
   extraSection?: (close: () => void) => ReactNode;
   /** Open the task's full-screen detail modal (same one the home task panel opens). */
   onOpenTaskDetail?: (taskId: string) => void;
+  /**
+   * CSS selector of an ancestor whose RIGHT-CLICK opens this kebab at the cursor
+   * (e.g. '.session-panel-header'). Opt-in per call site, because a blanket
+   * listener would fight the one TaskKebabMenu already installs on task rows.
+   * Same pattern and same exemptions as that one: an editable target keeps the
+   * native menu, and only the innermost matching ancestor owns the gesture.
+   */
+  contextMenuScope?: string;
 }
 
-export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', extraSection, onOpenTaskDetail }: TaskQuickActionsProps) {
+export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', extraSection, onOpenTaskDetail, contextMenuScope }: TaskQuickActionsProps) {
   const integrations = useIntegrations();
   // Built-ins + the user's custom tiers. Safe hook: this kebab also renders on
   // surfaces that may sit outside the FocusBarProvider.
@@ -79,17 +88,48 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
   ];
   const [task, setTask] = useState<Task | null>(externalTask ?? null);
   const [kebabOpen, setKebabOpen] = useState(false);
+  /** Set only by the right-click path, which anchors the menu at the cursor. */
+  const [cursorAnchor, setCursorAnchor] = useState<{ x: number; y: number } | null>(null);
   const kebabBtnRef = useRef<HTMLButtonElement>(null);
   const kebabMenuRef = useRef<HTMLDivElement>(null);
-  const closeKebab = useCallback(() => setKebabOpen(false), []);
+  const closeKebab = useCallback(() => { setKebabOpen(false); setCursorAnchor(null); }, []);
   // Measured placement — this menu is the tallest in the app (task actions +
   // an inline date picker + the Session section), so its height must never be
   // guessed. See useMenuPlacement for why.
   const kebabPos = useMenuPlacement(kebabOpen, kebabBtnRef, kebabMenuRef, {
+    anchorPoint: cursorAnchor,
     // The row can be filtered out or re-rendered away while the menu is open;
     // without this the menu is stranded off-screen with no way back.
     onAnchorLost: closeKebab,
   });
+
+  // Right-click anywhere on the opted-in ancestor opens this kebab at the cursor.
+  // The header of a session panel is an app object, not a document, so the
+  // browser's menu ("Back / Reload / Inspect Element" in the Mac app) is replaced
+  // by the actions that panel actually has.
+  useEffect(() => {
+    if (!contextMenuScope || slot === 'phase') return;
+    const scope = kebabBtnRef.current?.closest<HTMLElement>(contextMenuScope);
+    if (!scope) return;
+    const handleContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      // Editable targets (the inline title editor) and a live text selection keep
+      // the native menu — the shared rules, so every surface behaves the same.
+      const selection = window.getSelection();
+      if (keepNativeContextMenu(target, {
+        selectionText: selection && !selection.isCollapsed ? selection.toString() : '',
+        selectionAnchor: selection?.anchorNode ?? null,
+        scope,
+      })) return;
+      if (target.closest(contextMenuScope) !== scope) return;
+      e.preventDefault();
+      setCursorAnchor({ x: e.clientX, y: e.clientY });
+      setKebabOpen(true);
+    };
+    scope.addEventListener('contextmenu', handleContextMenu);
+    return () => scope.removeEventListener('contextmenu', handleContextMenu);
+  }, [contextMenuScope, slot]);
 
   // Fetch task if not provided externally
   useEffect(() => {
@@ -135,6 +175,10 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     const handleScroll = (e: Event) => {
       if (kebabMenuRef.current?.contains(e.target as Node)) return;
       if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout')) return;
+      // A cursor anchor is a frozen viewport point: once the page scrolls it no
+      // longer points at what was right-clicked, so close outright (the button
+      // path instead follows its trigger — see the comment above).
+      if (cursorAnchor) { closeKebab(); return; }
       const r = kebabBtnRef.current?.getBoundingClientRect();
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) closeKebab();
     };
@@ -146,7 +190,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       document.removeEventListener('keydown', handleKey);
       window.removeEventListener('scroll', handleScroll, true);
     };
-  }, [kebabOpen, closeKebab]);
+  }, [kebabOpen, closeKebab, cursorAnchor]);
 
   const handlePhaseChange = useCallback((phase: string) => {
     if (!task || task.phase === phase) return;
@@ -241,6 +285,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
 
   const handleKebabToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
+    setCursorAnchor(null);   // button path anchors to the button, not a cursor
     setKebabOpen(!kebabOpen);
   };
 

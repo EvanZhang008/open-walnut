@@ -507,6 +507,19 @@ export function NotesPage() {
     });
   }, []);
 
+  // Tab right-click: keep only the clicked tab / drop the whole workspace. Both
+  // go through the same setTabs+setActivePath pair as handleCloseTab so the
+  // active slot can never point at a tab that is gone.
+  const handleCloseOtherTabs = useCallback((path: string) => {
+    setTabs((prev) => prev.filter((t) => t.path === path));
+    setActivePath(path);
+  }, []);
+
+  const handleCloseAllTabs = useCallback(() => {
+    setTabs([]);
+    setActivePath(null);
+  }, []);
+
   // Context-menu "Start Claude Code session": quick-start in the notes vault
   // (cwd = NOTES_DIR so the CLI's native CLAUDE.md discovery picks up the vault
   // instructions). Message is EMPTY on purpose: spawn + init only (SessionStart
@@ -818,6 +831,12 @@ export function NotesPage() {
             onClose={handleCloseTab}
             onNewTab={handleNewTab}
             trailing={aiToggleButton}
+            onCloseOthers={handleCloseOtherTabs}
+            onCloseAll={handleCloseAllTabs}
+            onLocate={revealInTree}
+            onOpenInNewWindow={(path) => openPopout('note', { path })}
+            isFavorite={isNoteFavorite}
+            onToggleFavorite={toggleFavoriteNote}
           />
         ) : (
           <div className="notes-tab-strip notes-tab-strip-empty">

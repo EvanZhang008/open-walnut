@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { markdownToRichHtml } from '@/utils/markdown';
+// Shared with the right-click "Copy as rich text" item (components/common/ContextMenu
+// call sites) so both paths degrade the same way when the rich write is refused.
+import { copyRichText, copyTextRobust } from '@/utils/clipboard';
 import { log } from '@/utils/log';
 
 /** ⧉ copy glyph — matches the kebab CopyItem style, sized for a message toolbar. */
@@ -15,24 +18,6 @@ const ICON_CHECK = (
     <path d="M3 8.5l3.5 3.5 6.5-8" />
   </svg>
 );
-
-/**
- * Write rich HTML to the clipboard as BOTH text/html (so paste into Docs/Word/email
- * keeps formatting) and text/plain (the markdown source, for plain-text targets).
- * Falls back to plain-text writeText when ClipboardItem is unavailable (older Safari,
- * insecure context).
- */
-async function copyRich(html: string, plain: string): Promise<void> {
-  if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
-    const item = new ClipboardItem({
-      'text/html': new Blob([html], { type: 'text/html' }),
-      'text/plain': new Blob([plain], { type: 'text/plain' }),
-    });
-    await navigator.clipboard.write([item]);
-    return;
-  }
-  await navigator.clipboard.writeText(plain);
-}
 
 type CopyState = null | 'md' | 'rich';
 
@@ -59,16 +44,22 @@ export function CopyMessageButtons({ markdown }: CopyMessageButtonsProps) {
 
   const onCopyMd = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(markdown)
-      .then(() => flash('md'))
+    copyTextRobust(markdown)
+      .then((result) => {
+        if (result === 'failed') { log.warn('session', 'copy markdown failed', {}); return; }
+        flash('md');
+      })
       .catch((err) => log.warn('session', 'copy markdown failed', { error: String(err) }));
   }, [markdown, flash]);
 
   const onCopyRich = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     const html = markdownToRichHtml(markdown);
-    copyRich(html, markdown)
-      .then(() => flash('rich'))
+    copyRichText(html, markdown)
+      .then((result) => {
+        if (result === 'failed') { log.warn('session', 'copy rich text failed', {}); return; }
+        flash('rich');
+      })
       .catch((err) => log.warn('session', 'copy rich text failed', { error: String(err) }));
   }, [markdown, flash]);
 

@@ -31099,3 +31099,109 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   gap: 8px;
   margin-top: 16px;
 }
+
+/* ─── Shared right-click menu (components/common/ContextMenu.tsx) ───────────
+   One skin for every surface that replaces the browser's context menu. Looks
+   like .task-kebab-menu on purpose: a right-click menu and a kebab menu on the
+   same object must not read as two different menus.
+
+   overflow-y/overflow-x here are LOAD-BEARING, not cosmetic — the menu is
+   position:fixed (placed by useMenuPlacement, which hands it a maxHeight), so
+   without them the rows past the viewport edge would be unreachable rather than
+   scrollable, and a horizontal scrollbar would break the hook's re-measure loop.
+   See the .task-kebab-menu block above for the full reasoning. */
+.wn-context-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;   /* just under the menu (menuPlacementStyle uses 9999) */
+}
+
+.wn-context-menu {
+  min-width: 180px;
+  max-width: 340px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+  padding: 4px 0;
+  font-size: 12px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+.wn-context-menu:focus-visible { outline: none; }
+
+.wn-context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 12px;
+  border: none;
+  background: none;
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.wn-context-menu-item:hover,
+.wn-context-menu-item.focused {   /* keyboard focus reads the same as hover */
+  background: var(--accent-subtle);
+}
+
+.wn-context-menu-item:disabled {
+  color: var(--fg-muted);
+  cursor: default;
+  background: none;
+}
+
+.wn-context-menu-item.danger { color: var(--error); }
+
+.wn-context-menu-item.danger:hover,
+.wn-context-menu-item.danger.focused {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+}
+
+.wn-context-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex: 0 0 14px;
+  color: var(--fg-muted);
+}
+
+.wn-context-menu-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wn-context-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+.wn-context-menu-section {
+  padding: 6px 12px 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.wn-context-menu-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+}

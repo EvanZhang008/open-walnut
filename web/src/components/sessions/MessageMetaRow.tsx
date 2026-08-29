@@ -34,7 +34,7 @@ const ICON_REWIND = (
  *  rewind button must not offer itself there. Same predicate as the server's
  *  isRewindableMessageId — kept in both places on purpose: the server refuses,
  *  the client doesn't offer. */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function absoluteTime(ts: string): string {
   const d = new Date(ts);
