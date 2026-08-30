@@ -125,6 +125,16 @@ struct RootView: View {
         // Gated: a background/prewarm launch must not start network work.
         .task {
             LaunchGate.shared.whenActive { connection.reportDeviceInfo() }
+            // In-app attention time → the console's human-time clocks. Gated on
+            // first activation like everything else here: a background/prewarm
+            // launch must start no timer and post nothing. `start()` subscribes
+            // the attention signal + the lifecycle fan-out; `setActive(true)`
+            // opens the first window, since no scenePhase CHANGE fires for the
+            // phase the app launched into.
+            LaunchGate.shared.whenActive {
+                TimeHeartbeatReporter.shared.start()
+                TimeHeartbeatReporter.shared.setActive(true)
+            }
         }
         // `.background` is the ONLY suspend trigger. `willResignActive` also
         // fires for transient interruptions the app never leaves for — the
@@ -137,6 +147,13 @@ struct RootView: View {
             // starts during an interruption looks identical to one that starts
             // in normal use unless the phase trail is in the log.
             Breadcrumbs.scenePhase(Self.phaseName(phase))
+            // Attention time counts ONLY while the app is genuinely in front of
+            // the user, so this reads every phase — `.inactive` included (the app
+            // switcher, a system alert, the screen locking). Idempotent, and this
+            // is the ONLY writer of that flag: the reporter deliberately does not
+            // take presence from LifecycleHub, whose teardown also fires while the
+            // app is in the foreground (Settings → Disconnect).
+            TimeHeartbeatReporter.shared.setActive(phase == .active)
             if phase == .active {
                 LifecycleHub.shared.resumeAll()
                 Task { await connection.refreshStatus() }
@@ -176,6 +193,15 @@ struct MainTabView: View {
     /// launch can land on any tab, so neither consumer can assume it is on
     /// screen when the request arrives.
     enum Tab: Hashable { case chat, inbox, notes, tasks, settings }
+
+    /// Which time-tracking lane a tab counts as. The Chat tab is the main-agent
+    /// conversation, so it is `chat`; every other tab is `triage` — the board,
+    /// the inbox, notes, settings are all "looking after my stuff", which is what
+    /// the console means by that lane. A session conversation is NOT here: it is
+    /// pushed on top of a tab and takes its own claim (see AttentionContext).
+    static func attentionTarget(for tab: Tab) -> AttentionTarget {
+        tab == .chat ? .chat : .triage
+    }
 
     @State private var selection: Tab = .chat
     @State private var quickAction = VoiceQuickAction.shared
@@ -229,6 +255,14 @@ struct MainTabView: View {
             } else if letterLink.pending != nil {
                 selection = .inbox
             }
+            // The selected tab IS the base time-tracking lane. Read from the
+            // selection rather than from each tab's onAppear: TabView keeps
+            // off-screen tabs alive, so appear/disappear is the less reliable of
+            // the two signals, and this is one place instead of five.
+            AttentionContext.shared.setBase(Self.attentionTarget(for: selection))
+        }
+        .onChange(of: selection) { _, tab in
+            AttentionContext.shared.setBase(Self.attentionTarget(for: tab))
         }
         .onChange(of: quickAction.pending) { _, request in
             if request != nil { selection = .chat }

@@ -199,6 +199,11 @@ struct SessionConversationView: View {
         // Freeze reports name THIS session (8-char prefix of the uuid) so a
         // field freeze can be tied back to a specific giant transcript.
         .freezeScreen("session:\(session.id.prefix(8))")
+        // Time tracking: attention spent here is `session` time on THIS session's
+        // task. `session.id` is the CLAUDE session id (the projection fills it
+        // from claudeSessionId), which is what the server resolves; `taskId`
+        // rides along when known so the lookup can be skipped entirely.
+        .attentionContext(.session(id: session.id, taskId: session.taskId))
         .task {
             // Route image fetches (/api/v1/media) to this session's exec host.
             MediaContext.currentSessionID = session.id
