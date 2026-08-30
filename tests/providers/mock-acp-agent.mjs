@@ -178,6 +178,17 @@ async function handlePrompt(id, params) {
     return;
   }
 
+  if (text.includes('straggler-reply')) {
+    // OpenCode's real ordering: the prompt RPC resolves BEFORE the turn's
+    // final message chunks are flushed. The sleep guarantees the worker has
+    // processed the response (turnActive=false) before the chunks arrive.
+    reply(id, { stopReason: 'end_turn' });
+    await sleep(50);
+    chunk(sessionId, 'STRAGGLER-');
+    chunk(sessionId, 'PONG');
+    return;
+  }
+
   if (text.includes('EXEC_SUMMARY:') && text.includes('PHASE_SIGNAL:')) {
     chunk(sessionId, [
       'EXEC_SUMMARY: Codex browser session completed and persisted its latest work.',

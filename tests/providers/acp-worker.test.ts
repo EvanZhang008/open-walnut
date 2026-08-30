@@ -145,6 +145,54 @@ describe('AcpWorker lifecycle', () => {
     expect(ended && 'stopReason' in ended && ended.stopReason).toBe('end_turn')
   })
 
+  it('tags post-turn straggler chunks live so the reply is not dropped (opencode ordering)', async () => {
+    // REPRODUCE of the eaten-reply incident: opencode resolves the prompt RPC
+    // BEFORE flushing the turn's final agent_message_chunks. Those stragglers
+    // used to be tagged source='control' (the between-prompts default) and the
+    // projector dropped them — the visible answer vanished from history.
+    worker = await initWorker()
+    await op(worker, 'newSession', { cwd: tmpDir })
+    const resp = await op(worker, 'prompt', {
+      commandId: 'acp-prompt:qm-straggler',
+      walnutMessageId: 'qm-straggler',
+      text: 'straggler-reply',
+    })
+    expect(resp.ok).toBe(true)
+
+    const recs = await waitForJournal((rs) =>
+      rs.some((r) => r.kind === 'acp'
+        && JSON.stringify(r.frame).includes('PONG')))
+    const endedIndex = recs.findIndex((r) => r.kind === 'meta' && r.event.type === 'turn-ended')
+    const chunks = recs.filter((r) => r.kind === 'acp' && JSON.stringify(r.frame).includes('STRAGGLER'))
+    expect(endedIndex).toBeGreaterThanOrEqual(0)
+    expect(chunks.length).toBeGreaterThanOrEqual(1)
+    for (const c of chunks) {
+      // They arrive after turn-ended…
+      expect(recs.indexOf(c)).toBeGreaterThan(endedIndex)
+      // …and still belong to the user's turn.
+      expect(c.kind === 'acp' && c.source).toBe('live')
+    }
+  })
+
+  it("a control prompt's stragglers stay control — title text must not leak into chat", async () => {
+    worker = await initWorker()
+    await op(worker, 'newSession', { cwd: tmpDir })
+    const resp = await op(worker, 'prompt', {
+      commandId: 'acp-self-report:straggler',
+      control: 'self-report',
+      text: 'straggler-reply',
+    })
+    expect(resp.ok).toBe(true)
+
+    const recs = await waitForJournal((rs) =>
+      rs.some((r) => r.kind === 'acp' && JSON.stringify(r.frame).includes('PONG')))
+    const chunks = recs.filter((r) => r.kind === 'acp' && JSON.stringify(r.frame).includes('STRAGGLER'))
+    expect(chunks.length).toBeGreaterThanOrEqual(1)
+    for (const c of chunks) {
+      expect(c.kind === 'acp' && c.source).toBe('control')
+    }
+  })
+
   it('rejects a user prompt without its durable message ID before adapter dispatch', async () => {
     const promptLog = path.join(tmpDir, 'missing-message-id-prompts.jsonl')
     worker = await initWorker({ MOCK_ACP_PROMPT_LOG: promptLog })

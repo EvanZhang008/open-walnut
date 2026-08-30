@@ -34,6 +34,7 @@ import type {
   PermissionOptionId,
 } from '@agentclientprotocol/sdk'
 import { AcpJournal, readJournal } from './journal.js'
+import { mergeAcpSpawnEnv } from './protocol.js'
 import type {
   AcpMcpServer,
   WorkerRequest,
@@ -73,6 +74,11 @@ export class AcpWorker {
   private providerSessionId: string | null = null
   private cwd = ''
   private turnActive = false
+  /** What ended most recently — decides who owns a chunk that arrives in the
+   *  gap between prompts. Providers may resolve the prompt RPC BEFORE flushing
+   *  the turn's final message chunks (opencode does), and those stragglers are
+   *  still the USER's reply; a control prompt's stragglers stay control. */
+  private lastEnded: 'turn' | 'control' | null = null
   private turnCommandId: string | null = null
   private controlPrompt: { commandId: string; purpose: 'self-report' } | null = null
   private loadingSession = false
@@ -163,7 +169,9 @@ export class AcpWorker {
     const adapter = spawn(cmd, cmdArgs, {
       cwd: params.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ...params.env },
+      // Same unset semantics as the daemon's worker spawn: '' deletes. A raw
+      // re-merge here resurrected env vars the daemon had already unset.
+      env: mergeAcpSpawnEnv(process.env, params.env),
     })
     await new Promise<void>((resolve, reject) => {
       adapter.once('spawn', resolve)
@@ -354,12 +362,14 @@ export class AcpWorker {
       if (this.turnCommandId !== params.commandId) return
       this.turnActive = false
       this.turnCommandId = null
+      this.lastEnded = 'turn'
       this.journal.appendMeta({ type: 'turn-ended', commandId: params.commandId, stopReason: resp.stopReason })
       this.notifyJournal()
     }).catch((e) => {
       if (this.turnCommandId !== params.commandId) return
       this.turnActive = false
       this.turnCommandId = null
+      this.lastEnded = 'turn'
       this.journal.appendMeta({
         type: 'error',
         errorKind: 'protocol',
@@ -489,6 +499,7 @@ export class AcpWorker {
   private finishControlPrompt(commandId: string, stopReason: string, error?: string): void {
     if (this.controlPrompt?.commandId !== commandId) return
     this.controlPrompt = null
+    this.lastEnded = 'control'
     this.journal.appendMeta({
       type: 'control-ended',
       commandId,
@@ -859,7 +870,13 @@ export class AcpWorker {
   private frameSource(): AcpFrameSource {
     if (this.loadingSession) return 'provider-replay'
     if (this.controlPrompt) return 'control'
-    return this.turnActive ? 'live' : 'control'
+    if (this.turnActive) return 'live'
+    // Gap between prompts: a provider may resolve the prompt RPC before its
+    // final agent_message_chunks are dispatched here (opencode), so a straggler
+    // right after a USER turn is that turn's reply — dropping it as 'control'
+    // ate the visible answer. A straggler after a CONTROL prompt (title
+    // generation) stays control, or the title text would leak into the chat.
+    return this.lastEnded === 'turn' ? 'live' : 'control'
   }
 
   // ── Helpers ──

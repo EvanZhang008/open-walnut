@@ -490,6 +490,41 @@ export function buildAcpAdapterEnv(
   return Object.keys(env).length > 0 ? env : undefined
 }
 
+/**
+ * Operator env overlay for an engine's adapter process, from walnut config:
+ *
+ *   engines:
+ *     goose:
+ *       env:
+ *         AWS_PROFILE: my-bedrock-profile   # set for the adapter
+ *         AWS_BEARER_TOKEN_BEDROCK: null    # UNSET an inherited variable
+ *
+ * This is how a provider CLI gets its credentials when walnut launches it:
+ * the adapter inherits the SERVER's env, not the user's shell, so a goose or
+ * opencode that works in a terminal still fails from the UI without this.
+ *
+ * A YAML `null` maps to '' here; the spawn site (mergeAcpSpawnEnv) DELETES
+ * empty-string entries from the merged env instead of setting them — an unset
+ * must remove the inherited value (an empty AWS_BEARER_TOKEN_BEDROCK would
+ * still be preferred over a profile by the AWS SDK's credential chain).
+ * Values are used verbatim; anything that is not a string or null is ignored.
+ */
+export function engineEnvOverlayFromConfig(
+  config: unknown,
+  engineId: SessionEngine,
+): Record<string, string> | undefined {
+  const raw = (config as { engines?: Record<string, { env?: unknown } | undefined> } | null | undefined)
+    ?.engines?.[engineId]?.env
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const overlay: Record<string, string> = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!key) continue
+    if (value === null) overlay[key] = ''
+    else if (typeof value === 'string') overlay[key] = value
+  }
+  return Object.keys(overlay).length > 0 ? overlay : undefined
+}
+
 export interface AcpSessionConfig {
   taskId: string
   project: string
@@ -992,10 +1027,22 @@ export class AcpSession {
    * adapter-specific env contract — the allowed zone for a vendor check).
    * Other ACP engines get only walnut's managed-session identity; per-engine
    * env contracts get their own gate here when they are actually needed.
+   *
+   * On top of that, EVERY engine merges the operator's `engines.<id>.env`
+   * config (credentials wiring: AWS_PROFILE for a Bedrock-backed goose,
+   * GEMINI_API_KEY, …). Walnut's own managed keys win over the overlay, and a
+   * YAML `null` value means "unset this inherited variable" — the daemon's
+   * spawn site deletes empty-string entries instead of setting them, because a
+   * stale AWS_BEARER_TOKEN_BEDROCK inherited from the server's own env
+   * otherwise outranks the profile the operator configured (real failure:
+   * goose sent a bearer Authorization header → IncompleteSignatureException).
    */
   private async buildAdapterEnv(systemCodex: string | undefined): Promise<Record<string, string> | undefined> {
+    const overlay = await this.resolveConfiguredEngineEnv()
     if (this.engineId !== 'codex') {
-      return buildAcpAdapterEnv(undefined, { sessionId: this.runtimeId })
+      const managed = buildAcpAdapterEnv(undefined, { sessionId: this.runtimeId })
+      if (!overlay) return managed
+      return { ...overlay, ...(managed ?? {}) }
     }
     const parsedBaseConfig = parseCodexBaseConfig(process.env.CODEX_CONFIG)
     // Startup approval preset: the session's OWN persisted choice wins (it is
@@ -1029,13 +1076,27 @@ export class AcpSession {
         defaultInstructions = (await buildSessionContext(this.taskId, this.cfg.cwd)).systemPrompt || undefined
       } catch { /* context is additive — never block establish */ }
     }
-    return buildAcpAdapterEnv(systemCodex, {
+    const managed = buildAcpAdapterEnv(systemCodex, {
       disableProjectInstructions: this.cfg.disableProjectInstructions,
       developerInstructions: this.cfg.developerInstructions ?? defaultInstructions,
       baseConfig: parsedBaseConfig,
       sessionId: this.runtimeId,
       initialAgentMode,
     })
+    if (!overlay) return managed
+    return { ...overlay, ...(managed ?? {}) }
+  }
+
+  /** Operator env overlay from `engines.<id>.env` (see engineEnvOverlayFromConfig). */
+  private async resolveConfiguredEngineEnv(): Promise<Record<string, string> | undefined> {
+    try {
+      const { getConfig } = await import('../core/config-manager.js')
+      return engineEnvOverlayFromConfig(await getConfig(), this.engineId)
+    } catch {
+      // Unreadable config = no overlay; the engine still launches with the
+      // inherited env (same degradation as resolveConfiguredAdapterCmd).
+      return undefined
+    }
   }
 
   private async resolveArtifacts(): Promise<{ workerCmd: string[]; adapterCmd: string[] }> {

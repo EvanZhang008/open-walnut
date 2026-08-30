@@ -600,9 +600,24 @@ export function ModelPicker({
               })
             )
           ) : (
-            <div className="model-picker-status">
-              {engineUi.displayName} models come from ACP discovery when the session starts — the launch uses the {engineUi.displayName} default.
-            </div>
+            <>
+              {/* A draft has no catalog yet (models are discovered at session
+                  start), but an empty pane reads as broken — render the one
+                  choice that IS true right now: the engine's own default. */}
+              <button
+                type="button"
+                className="model-picker-row model-picker-row-active"
+                role="option"
+                aria-selected
+                title={`${engineUi.displayName} picks its configured default model at launch`}
+              >
+                <span className="model-picker-row-check" aria-hidden>✓</span>
+                <span className="model-picker-row-name">{engineUi.displayName} default</span>
+              </button>
+              <div className="model-picker-status">
+                Models are discovered when the session starts — open this picker again on the running session to switch.
+              </div>
+            </>
           )}
         </div>
         {onAcpSwitch && acpHasEfforts && (

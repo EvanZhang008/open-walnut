@@ -18,7 +18,8 @@ import {
   updateSessionRecord,
 } from '../../src/core/session-tracker.js';
 import { _resetForTesting } from '../../src/core/task-manager.js';
-import { AcpSession, splitAcpModelId } from '../../src/providers/acp-session.js';
+import { AcpSession, splitAcpModelId, engineEnvOverlayFromConfig } from '../../src/providers/acp-session.js';
+import { mergeAcpSpawnEnv } from '../../src/providers/acp-worker/protocol.js';
 import type { AcpCapabilitySnapshot } from '../../src/providers/acp-worker/protocol.js';
 
 const ARTIFACTS = { workerCmd: ['worker'], adapterCmd: ['adapter'] };
@@ -302,5 +303,51 @@ describe('AcpSession resume pre-empt', () => {
   it('still resumes when the adapter advertises loadSession', async () => {
     const { startParams } = await establishWithSeededCapabilities(true);
     expect(startParams.providerSessionId).toBe('gemini-old-true');
+  });
+});
+
+describe('engines.<id>.env overlay (credentials wiring)', () => {
+  it('reads string values and maps null to the unset sentinel, ignoring junk', () => {
+    const config = {
+      engines: {
+        goose: {
+          env: {
+            AWS_PROFILE: 'my-bedrock-profile',
+            AWS_REGION: 'us-west-2',
+            AWS_BEARER_TOKEN_BEDROCK: null,   // unset an inherited credential
+            BAD_NUMBER: 7,                    // not a string/null → ignored
+            BAD_OBJ: { nested: true },        // ignored
+          },
+        },
+      },
+    };
+    expect(engineEnvOverlayFromConfig(config, 'goose')).toEqual({
+      AWS_PROFILE: 'my-bedrock-profile',
+      AWS_REGION: 'us-west-2',
+      AWS_BEARER_TOKEN_BEDROCK: '',
+    });
+  });
+
+  it('returns undefined for a missing/empty/non-object env section', () => {
+    expect(engineEnvOverlayFromConfig({}, 'goose')).toBeUndefined();
+    expect(engineEnvOverlayFromConfig({ engines: { goose: {} } }, 'goose')).toBeUndefined();
+    expect(engineEnvOverlayFromConfig({ engines: { goose: { env: [] } } }, 'goose')).toBeUndefined();
+    expect(engineEnvOverlayFromConfig({ engines: { goose: { env: { X: 42 } } } }, 'goose')).toBeUndefined();
+    // Another engine's env never leaks across engines.
+    expect(engineEnvOverlayFromConfig({ engines: { goose: { env: { A: 'b' } } } }, 'opencode')).toBeUndefined();
+  });
+
+  it('mergeAcpSpawnEnv sets values, DELETES empty-string keys, and never mutates the base', () => {
+    const base = { PATH: '/usr/bin', AWS_BEARER_TOKEN_BEDROCK: 'stale-token', KEEP: 'yes' } as NodeJS.ProcessEnv;
+    const merged = mergeAcpSpawnEnv(base, {
+      AWS_PROFILE: 'my-bedrock-profile',
+      AWS_BEARER_TOKEN_BEDROCK: '',   // unset: must be ABSENT, not ''
+    });
+    expect(merged.AWS_PROFILE).toBe('my-bedrock-profile');
+    expect('AWS_BEARER_TOKEN_BEDROCK' in merged).toBe(false);
+    expect(merged.KEEP).toBe('yes');
+    expect(base.AWS_BEARER_TOKEN_BEDROCK).toBe('stale-token');
+    // No overlay → plain copy of base.
+    expect(mergeAcpSpawnEnv(base, undefined)).toEqual(base);
   });
 });

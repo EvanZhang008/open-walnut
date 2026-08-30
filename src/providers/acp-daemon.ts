@@ -25,7 +25,7 @@ import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import readline from 'node:readline'
 import { StringDecoder } from 'node:string_decoder'
-import type { AcpMcpServer } from './acp-worker/protocol.js'
+import { mergeAcpSpawnEnv, type AcpMcpServer } from './acp-worker/protocol.js'
 
 const ACP_IDLE_KILL_MS = 2 * 60 * 60 * 1000   // mirror native SESSION_IDLE_KILL_MS
 // A turn parked on a permission request produces ZERO journal/RPC traffic, so
@@ -312,7 +312,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       proc = spawn(workerCmd[0], [...workerCmd.slice(1), '--journal', journalPath], {
         cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, ...env },
+        env: mergeAcpSpawnEnv(process.env, env),
         // Worker becomes PGID leader; adapter, provider, and tool descendants
         // inherit the group so an explicit abort can terminate all of them.
         detached: true,

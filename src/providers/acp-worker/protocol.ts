@@ -403,3 +403,25 @@ export type JournalMetaEvent =
   | { type: 'config-option-set'; configId: string; value: string | boolean }
   | { type: 'command-accepted'; op: string; commandId: string }
   | { type: 'error'; errorKind: string; message: string; commandId?: string }
+
+/**
+ * Spawn env for the worker (daemon side) and the adapter (worker side): base
+ * process env overlaid with the session's adapter env. An EMPTY-STRING overlay
+ * value means "unset the inherited variable" — the server maps
+ * `engines.<id>.env: {VAR: null}` to '' on the wire, and BOTH spawn sites must
+ * apply it identically or the second merge resurrects what the first deleted
+ * (real failure: the worker re-set AWS_BEARER_TOKEN_BEDROCK='' over a cleaned
+ * env, and the AWS SDK's bearer chain still outranked the AWS_PROFILE the
+ * operator configured → IncompleteSignatureException on every goose turn).
+ */
+export function mergeAcpSpawnEnv(
+  base: NodeJS.ProcessEnv,
+  overlay: Record<string, string> | undefined,
+): NodeJS.ProcessEnv {
+  const merged: NodeJS.ProcessEnv = { ...base }
+  for (const [key, value] of Object.entries(overlay ?? {})) {
+    if (value === '') delete merged[key]
+    else merged[key] = value
+  }
+  return merged
+}
