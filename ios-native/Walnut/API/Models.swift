@@ -358,6 +358,7 @@ extension WalnutTask {
     var isDone: Bool { statusKind == .done }
 
     var dueDateValue: Date? { Self.parseISO(dueDate) }
+    var startDateValue: Date? { Self.parseISO(startDate) }
     var createdAtValue: Date? { Self.parseISO(createdAt) }
     var updatedAtValue: Date? { Self.parseISO(updatedAt) }
     var completedAtValue: Date? { Self.parseISO(completedAt) }

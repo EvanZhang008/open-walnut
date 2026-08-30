@@ -24,17 +24,12 @@ struct SessionTimelineBody: View {
     @State private var previewTarget: FilePreviewTarget?
 
     var body: some View {
+        // LAYER ORDER IS LOAD-BEARING (DOCK-c, 2026-08-29) — same fix as
+        // `ChatTimelineBody`, see the note there. The placeholders used to sit UNDER
+        // `TimelineHost`'s collection view, so the AX-size degrade-to-scroll could
+        // never be touched; they are painted LAST now and take touches only while they
+        // are genuinely scrollable.
         ZStack {
-            if store.messages.isEmpty && !store.streaming {
-                // Loading until the first transcript answer; empty state for
-                // BOTH "no tail exported" and "tail with zero renderable rows"
-                // (same conditions as the original page).
-                if store.loadedOnce || store.transcriptMissing {
-                    SessionTimelineEmptyState()
-                } else {
-                    SessionTimelineLoadingState()
-                }
-            }
             TimelineHost(
                 messages: store.messages,
                 streaming: store.streaming,
@@ -63,9 +58,23 @@ struct SessionTimelineBody: View {
                 },
                 onRefresh: onRefresh
             )
+            if store.messages.isEmpty && !store.streaming {
+                // Loading until the first transcript answer; empty state for
+                // BOTH "no tail exported" and "tail with zero renderable rows"
+                // (same conditions as the original page).
+                if store.loadedOnce || store.transcriptMissing {
+                    SessionTimelineEmptyState()
+                } else {
+                    SessionTimelineLoadingState()
+                }
+            }
         }
+        // First open only (a link tap in the transcript). Collapsing this sheet
+        // banks the scroll position and leaves the report in the app-level dock
+        // bar; REOPENING is presented by `FilePreviewDockOverlay`, so it works
+        // from any tab and not just from the page the link was on.
         .sheet(item: $previewTarget) { target in
-            HTMLFilePreviewSheet(path: target.path, host: target.host)
+            HTMLFilePreviewSheet(target: target)
         }
     }
 }
@@ -79,7 +88,7 @@ struct SessionTimelineLoadingState: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 120)
+        .timelinePlaceholderInset(vertical: 120)
     }
 }
 
@@ -91,13 +100,16 @@ struct SessionTimelineEmptyState: View {
                 .foregroundStyle(.tertiary)
             Text("No transcript yet")
                 .font(.headline)
+                // Wraps rather than truncates at accessibility sizes, same rule as
+                // the chat empty state (see `TimelinePlaceholderInset`, round 2).
+                .multilineTextAlignment(.center)
             Text("Send a message to pick up where this session left off.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 100)
+        .timelinePlaceholderInset(vertical: 100)
         .padding(.horizontal, 32)
     }
 }

@@ -321,8 +321,18 @@ final class CreateWithTierTests: XCTestCase {
     }
 
     /// Every rendered band must map to a seed naming THAT tier — the create ring
-    /// at the foot of Backlog cannot seed Focus. `BoardBand.tierId` IS the wire
-    /// tier id, which is what makes the mapping a one-liner in the view.
+    /// at the foot of Backlog cannot seed Focus.
+    ///
+    /// This used to read `BoardBand.tierId` and build the seed itself
+    /// (`NewTaskSeed.tier(band.tierId)`), which mirrored a mapping the VIEW was
+    /// doing. The board-filters work renamed that field to `bandId` and gave the
+    /// band a `createSeed`, because under `.project` grouping a band id is
+    /// `proj:<name>` and is no longer a wire tier id at all: a view that kept
+    /// deriving the destination from the id would have had to learn a second
+    /// mapping, and the tail band (the COMPLEMENT of the others) has no
+    /// destination to derive. So the assertion now drives the band's OWN seed,
+    /// which is the thing the view actually files into. Same guarantee, one
+    /// indirection fewer, and it can no longer pass while the view disagrees.
     func testEveryRenderedBandSeedsItsOwnTier() {
         let tasks = ["t1", "t2", "t3", "t4"].map(makePinnedTask)
         let sessions = [
@@ -337,19 +347,20 @@ final class CreateWithTierTests: XCTestCase {
             tierOrder: ["focus": ["t1"], "satellite": ["t2"], "backlog": ["t3"], "wait": ["t4"]],
             customTiers: []
         )
-        XCTAssertEqual(bands.map(\.tierId), ["focus", "satellite", "backlog", "wait"],
+        XCTAssertEqual(bands.map(\.bandId), ["focus", "satellite", "backlog", "wait"],
             "all four tiers render, in the desktop reading order")
 
         for band in bands {
-            let seed = NewTaskSeed.tier(band.tierId)
-            XCTAssertEqual(seed.pin, .tier(band.tierId))
+            XCTAssertNotNil(band.createSeed, "a tier band always offers a create ring")
+            XCTAssertEqual(band.createSeed?.pin, .tier(band.bandId))
             // The band's create ring sends the tier it names, verbatim, no project.
-            XCTAssertEqual(seed.pin.wireFocusTier, band.tierId)
-            XCTAssertEqual(seed.project, "")
+            XCTAssertEqual(band.createSeed?.pin.wireFocusTier, band.bandId)
+            XCTAssertEqual(band.createSeed?.project, "")
         }
         // And the seeds are all distinct, so one open create row can't be
         // attributed to the wrong band.
-        let ids = bands.map { NewTaskSeed.tier($0.tierId).id }
+        let ids = bands.compactMap(\.createSeed).map(\.id)
+        XCTAssertEqual(ids.count, bands.count, "every tier band contributed a seed")
         XCTAssertEqual(Set(ids).count, ids.count)
     }
 

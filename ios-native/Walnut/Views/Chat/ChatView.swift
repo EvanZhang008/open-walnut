@@ -24,6 +24,14 @@ struct ChatView: View {
                 }
                 MessageListView()
             }
+            // Pin the stack to the height the page offered. `safeAreaInset` places
+            // the composer relative to THIS content, so any sibling that reports a
+            // taller ideal size than the keyboard-shrunk proposal pushes the
+            // composer down by half its overflow — which is exactly how the send
+            // button ended up under the predictive bar (P0, 2026-08-29: the empty
+            // state's fixed 120pt padding overflowed by 48, and 24 of it landed on
+            // chat.send). See `KeyboardSafeComposerContent`.
+            .keyboardSafeComposerContent()
             // safeAreaInset (not a VStack sibling) so the bar rides the
             // keyboard: the keyboard grows the bottom safe area and the inset
             // content stays above it. A plain VStack child does NOT get that

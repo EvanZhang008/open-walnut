@@ -94,12 +94,24 @@ struct SessionConversationView: View {
             }
             messageList
         }
+        // Same keyboard-safety rule as ChatView, and this page needs it more: the
+        // permission cards above are unbounded siblings (an AskUserQuestion with
+        // several options), and any sibling that overflows the keyboard-shrunk
+        // proposal pushes the inset composer down by half that overflow, straight
+        // under the predictive bar. See `KeyboardSafeComposerContent`.
+        .keyboardSafeComposerContent()
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ComposerBar(
                 placeholder: "Message this session",
                 disabled: !store.canSend,
                 disabledNotice: store.composerNotice,
                 draftKey: "session:\(session.id)",
+                // The SCREEN this composer is on, for the file-preview dock's
+                // clearance. Paired with the `.composerSurface(...)` claim below: the
+                // claim says "this page is on top of its tab", this says "the composer
+                // registered here is mine". The dock crosses the two so a composer on a
+                // retained tab behind this page cannot move the seat (2026-08-30 P1).
+                surface: .session(session.id),
                 // The model pill switches THIS session's model/effort live.
                 modelSource: .session(id: session.id),
                 fallbackModel: session.model,
@@ -204,6 +216,13 @@ struct SessionConversationView: View {
         // from claudeSessionId), which is what the server resolves; `taskId`
         // rides along when known so the lookup can be skipped entirely.
         .attentionContext(.session(id: session.id, taskId: session.taskId))
+        // This page owns the COMPOSER SURFACE while it is on top of its tab, so the
+        // file-preview seat clears THIS composer and not the retained Chat tab's one
+        // behind it. Same claim-stack shape as `.attentionContext` above, and for the
+        // same reason: a tab's own composer cannot tell "my tab is in front" from "my
+        // view is mounted", so visibility is published rather than inferred. See
+        // `ComposerSurfaceID`.
+        .composerSurface(.session(session.id))
         .task {
             // Route image fetches (/api/v1/media) to this session's exec host.
             MediaContext.currentSessionID = session.id

@@ -32,6 +32,27 @@ import PhotosUI
 /// Image input: photo button opens the native PhotosPicker (iOS 16+, sandboxed
 /// — no photo-library permission prompt). Picked images are downscaled + JPEG
 /// encoded on-device and shown as a removable thumbnail strip above the field.
+///
+/// Layout (two rows, matching the reference composer the user asked us to copy):
+/// the FIELD owns a full-width row of its own, and every control sits on a BOTTOM
+/// row below it, left to right `+`, model pill, then mic and send pushed right.
+/// The previous shape put `+`/field/mic/send in ONE row with the model pill
+/// stranded on a row above; that had two measured problems the two-row shape
+/// dissolves rather than mitigates:
+///  - A fifth control in the text row squeezes the field on a 390pt phone, and a
+///    variable-width model label ("Opus 5 · Extra High") resized the field on
+///    every model switch. With the field on its own row, nothing competes with it
+///    for width, so the label can be as long as it likes.
+///  - The old model row was CONDITIONAL (no model ⇒ no row), so the composer's
+///    height changed the moment an async model lookup resolved. The composer
+///    lives in a `safeAreaInset` over the transcript, and a height change there
+///    moves the scroll view's visible rect: exactly the class of geometry churn
+///    the freeze work spent three rounds bounding. The bottom row is now
+///    UNCONDITIONAL (it owns mic and send), and the pill is a ≤32pt chip inside a
+///    row whose height the 32pt buttons already fix, so a model resolving changes
+///    the composer's width usage and never its height.
+/// The cost of the shape is one extra row of vertical space at all times. That is
+/// the trade the reference makes, and the one the user picked.
 struct ComposerBar: View {
     let placeholder: String
     var busy: Bool = false
@@ -39,7 +60,18 @@ struct ComposerBar: View {
     var disabledNotice: String? = nil
     /// Identity of the thread this composer writes into ("chat:<conversation>",
     /// "session:<id>"). Scopes the durable draft.
+    ///
+    /// NOT a stable identity for "which screen am I on": the chat key follows
+    /// `ChatStore.activeID`, which starts nil and is filled by hydration, so the SAME
+    /// mounted composer reports under a new key mid-life with no appear/disappear pair
+    /// around it. That is why the dock is told the SURFACE separately, and why a key
+    /// change retracts the key it leaves behind (see the publishers on the body).
     var draftKey: String = "chat"
+    /// WHICH SCREEN this composer is on, for the file-preview dock's clearance. Left
+    /// `.unattached` a composer answers for whatever surface is in front, which is the
+    /// safe direction but not the true one — every composer the dock bar can be seen
+    /// over declares its surface. See `ComposerSurfaceID`.
+    var surface: ComposerSurfaceID = .unattached
     /// Opt in to serving the Home-screen voice Quick Action (chat composer only).
     var acceptsVoiceQuickAction: Bool = false
     /// Run right before a quick-action take opens the mic — the chat composer
@@ -56,6 +88,20 @@ struct ComposerBar: View {
     /// is omitted (nothing honest to say).
     var hostProvenance: ComposerHostProvenance? = nil
     let onSend: (String, [SelectedImage]) async -> Bool
+
+    /// Optional so roots that never inject a dock still build (RootView's DEBUG
+    /// harness entry points bypass the store wiring), and so a composer inside a
+    /// sheet is not required to have one.
+    @Environment(FilePreviewDock.self) private var dock: FilePreviewDock?
+
+    /// Drives the published-height channel's two lifecycle rules: a retraction is
+    /// only honest while the app is active, and returning from the background
+    /// re-asserts the measurement (see the three publishers on the body).
+    @Environment(\.scenePhase) private var scenePhase
+
+    /// Last height this composer measured, so returning to a retained tab or coming
+    /// back from the background can re-publish it (see the publishers on the body).
+    @State private var measuredHeight: CGFloat = 0
 
     @State private var voice = VoiceRecorder()
     @State private var pickerItems: [PhotosPickerItem] = []
@@ -129,11 +175,123 @@ struct ComposerBar: View {
                 recordingRow
             } else {
                 if !selectedImages.isEmpty { thumbnailStrip }
-                controlsRow
-                inputRow
+                fieldRow
+                bottomControlRow
             }
         }
         .background(.bar)
+        // Publish the composer's WHOLE height (notices + voice-retry row +
+        // thumbnail strip + field + control row) so the file-preview dock bar can
+        // seat itself above all of it.
+        //
+        // This channel exists because the dock used to guess with
+        // `tabBar + 32 + 6 + 8 + gap`, and the guess only counted the control row:
+        // measured, `file.dock.bar` [12,694][390,739] fully CONTAINED
+        // `chat.composer` [28,714][374,736], i.e. the seat sat ON the text field
+        // (P2, 2026-08-29). No constant can be right here — the field grows to six
+        // lines and every row above it is conditional — so the composer reports and
+        // the dock reads.
+        //
+        // `onGeometryChange` (iOS 18) rather than a `GeometryReader` background
+        // writing `@State`: the value is delivered AFTER the layout pass has finished
+        // instead of during it.
+        //
+        // THE STORE FIELD IT WRITES *IS* OBSERVED, and the earlier version of this
+        // comment claimed the opposite ("`@ObservationIgnored`… nothing in the view
+        // graph observes it"). Both halves were false by the time it was written: the
+        // first cut really did mark it `@ObservationIgnored`, by analogy with the P0-2
+        // freeze rule, and the dock bar then never re-rendered when the height
+        // changed, so the seat stayed frozen where the chat composer used to be on
+        // every tab (measured [12,626][390,670] on all three). Making it observed is
+        // the fix, and the reason it is SAFE is not "nobody observes it" but that the
+        // P0-2 hazard is a CYCLE, and there is no edge back here:
+        //  - writer: this composer, inside a tab.
+        //  - reader: `FilePreviewDockOverlay`, an overlay on the `TabView`. A DISJOINT
+        //    subtree, and the bar's own layout cannot change this composer's height,
+        //    so a publish can never re-invalidate the thing being measured.
+        //  - cost is bounded anyway: the store quantises to whole points and drops an
+        //    unchanged value, and the reader is a leaf whose body is one capsule.
+        //
+        // A REPORT IS NOT A CLAIM OF EXCLUSIVITY, and that distinction is the P1's
+        // real root cause (instrumented 2026-08-29; the trail is in
+        // `ComposerPresence`). A `TabView` keeps the tabs it is not showing mounted,
+        // so the Chat tab's composer is alive while the user is on a session page, and
+        // SwiftUI re-runs its `onAppear`/`onDisappear` around every scene-phase
+        // transition. When the store held ONE composer slot, that invisible composer's
+        // goodbye erased the VISIBLE composer's presence and the bar dropped onto the
+        // control row. Nothing in this view can tell "my tab is in front" apart from
+        // "my view is mounted", so the store keeps presence per composer instead of
+        // asking these publishers to be more honest than SwiftUI lets them be.
+        //
+        // FOUR publishers, and all four are needed, each covering a hole the others
+        // leave:
+        //  1. this geometry sink: EDGE-triggered. A `TabView` retains the tabs it is
+        //     not showing, so a composer the user comes back to is still mounted at an
+        //     unchanged height and this closure never fires again. Measured with only
+        //     this half: after a trip to Notes and back the chat composer had reported
+        //     nothing, so the seat sat at [12,746][390,791] straight across
+        //     `chat.composer` [28,714][374,736].
+        //  2. `onAppear`: the level-triggered re-assert for that trip.
+        //  3. `onChange(of: scenePhase)`: the same re-assert for a BACKGROUND/return,
+        //     which `onAppear` does NOT cover (measured 3/3 on a session conversation
+        //     page, the P1 in `ComposerClearance`).
+        //  4. `onChange(of: draftKey)`: the HAND-OFF, and the second P1's root cause
+        //     (2026-08-30). This composer's key is not stable — `ChatStore.activeID`
+        //     starts nil, hydration fills it, `switchAgent` clears it again — and a key
+        //     change re-identifies nothing, so SwiftUI runs neither `onDisappear` (which
+        //     is the only thing that ever retracts) nor `onAppear`. The old key stayed
+        //     registered for the life of the process, presence could never empty, and
+        //     every composer-less tab inherited its height: `file.dock.bar` measured
+        //     [12,575][390,620] IDENTICALLY on Settings, Notes, Inbox and Tasks. So a
+        //     key change says goodbye for the key it leaves behind.
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.height
+        } action: { height in
+            // Only real measurements are remembered. Backgrounding lays the hierarchy
+            // out at zero height for the snapshot, and keeping that would leave the
+            // foreground re-assert below with nothing to re-assert.
+            if height > 0 { measuredHeight = height }
+            dock?.reportComposer(key: draftKey, surface: surface, height: height)
+        }
+        // The level-triggered half: coming back on screen re-asserts whatever was
+        // last measured. The store drops an unchanged value, so this is free when
+        // the composer never left.
+        .onAppear {
+            if measuredHeight > 0 {
+                dock?.reportComposer(key: draftKey, surface: surface, height: measuredHeight)
+            }
+        }
+        // The hand-off. Retract the key this composer just stopped being, then re-assert
+        // under the new one in the same breath so the surface is never momentarily
+        // composer-less (which would hide the seat for a frame).
+        .onChange(of: draftKey) { previous, current in
+            dock?.reportComposer(key: previous, surface: surface, height: nil)
+            if measuredHeight > 0 {
+                dock?.reportComposer(key: current, surface: surface, height: measuredHeight)
+            }
+        }
+        // The MISSING recovery leg (P1, 2026-08-29). Backgrounding the app on a
+        // session conversation page and returning left the published height unknown
+        // with the composer still on screen, and the bar then painted straight across
+        // `chat.plus`/pill/`chat.mic`/`chat.send`, and a tap meant for SEND hit
+        // `file.dock.close`, throwing the docked report away without sending the
+        // draft. `onAppear` does not fire on the way back (the view was never
+        // removed), and `onGeometryChange` does not either (the height is unchanged),
+        // so the only honest trigger is the scene phase.
+        //
+        // Who may re-assert: the composer the user can SEE (`onScreen`), or one whose
+        // SURFACE is the one on screen. The old form of this guard asked whether this
+        // composer still owned the store's single channel (`composerKey == draftKey`),
+        // which stopped meaning anything once presence became a set — with several keys
+        // registered, "newest" is whichever invisible tab reported last. Surface
+        // identity answers the question the guard was actually asking, and a report
+        // that lands on a surface nobody is looking at can no longer move the seat at
+        // all (see `ComposerSurfaceID`).
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, measuredHeight > 0 else { return }
+            guard onScreen || dock?.isActiveComposerSurface(surface) == true else { return }
+            dock?.reportComposer(key: draftKey, surface: surface, height: measuredHeight)
+        }
         // The `+` menu presents the picker instead of BEING it, so photos keep
         // working while the menu also hosts the host-provenance row.
         .photosPicker(
@@ -164,6 +322,29 @@ struct ComposerBar: View {
         }
         .onDisappear {
             onScreen = false
+            // Retract the published height, KEYED, so leaving a session page cannot
+            // erase the height of the composer that is now on screen (SwiftUI runs
+            // the incoming view's appear before the outgoing view's disappear).
+            //
+            // Only while the app is ACTIVE. A backgrounding fires this for composers
+            // that are still on screen and never fires the matching `onAppear` on the
+            // way back, and a retraction believed then is indistinguishable from "he
+            // switched to Settings": the bar dropped to tab-bar-only clearance and
+            // painted over the composer (the P1 in `ComposerClearance`). The store
+            // holds the same line from the other side (`retractComposer` ignores a
+            // retraction once `.background` has been seen) because the two triggers
+            // fire at different moments: this guard covers the `.inactive` window
+            // before the store is told anything.
+            //
+            // Neither guard was sufficient, and the reason is worth keeping: the
+            // retraction that actually broke the bar arrived while the app really WAS
+            // active, from a composer that really HAD disappeared — the retained Chat
+            // tab's. A guard on the app's phase cannot see that, so the fix lives in
+            // the store's shape (`ComposerPresence`), and this retraction is now
+            // scoped to this composer's own entry.
+            if scenePhase == .active {
+                dock?.reportComposer(key: draftKey, height: nil)
+            }
             // The recorder is registered app-wide with LifecycleHub but its UI
             // lives in THIS view. Navigating away mid-recording (tab switch,
             // pop, sheet dismiss) hid the recording row while the mic stayed
@@ -228,55 +409,92 @@ struct ComposerBar: View {
         draft.wrappedValue.utf8.count > Self.longDraftThreshold
     }
 
-    /// Controls row ABOVE the input row: the model pill, left-aligned.
+    /// Does the bottom row carry a model pill?
     ///
-    /// Its own row rather than inline beside the field, for two measured reasons:
-    /// the input row already carries `+` / field / mic / send and a fifth control
-    /// squeezes the field on a 390pt-wide phone, and the model label is variable
-    /// width ("Opus 5 · Extra High") so inline it would resize the field on every
-    /// switch. This still matches the desktop's decision that the model belongs
-    /// WITH the message rather than in a settings screen (web `ChatInput` renders
-    /// its `controlsSlot` in the composer's own chrome, not in the text row).
+    /// A static pure function so a test can drive the REAL rule without a store,
+    /// a network, or a hosted view. Two conditions, and they are different
+    /// questions: `modelSource` is whether this composer has anywhere for a model
+    /// to LIVE (a new-session draft has no session yet, so it passes nil), and
+    /// `pillLabel` is whether the lookup has produced something true to SAY. Both
+    /// must hold; an empty label counts as nothing, because a blank capsule is a
+    /// control that answers no question.
     ///
-    /// The row appears only when there is something true to show, so a composer
-    /// with no resolvable model is byte-for-byte the old layout.
-    @ViewBuilder
-    private var controlsRow: some View {
-        if modelSource != nil, controls.pillLabel != nil {
-            HStack(spacing: 6) {
-                ComposerModelPill(controls: controls)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 6)
-        }
+    /// This used to gate the whole row, which meant an async model lookup
+    /// resolving CHANGED THE COMPOSER'S HEIGHT under a `safeAreaInset` (see the
+    /// type comment). It now gates only the chip, so the row's height is fixed by
+    /// its 32pt buttons whatever the model does.
+    static func showsModelPill(modelSource: ComposerControlsModel.Source?, pillLabel: String?) -> Bool {
+        guard modelSource != nil else { return false }
+        guard let pillLabel, !pillLabel.isEmpty else { return false }
+        return true
     }
 
-    private var inputRow: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            plusButton
+    private var showsModelPill: Bool {
+        Self.showsModelPill(modelSource: modelSource, pillLabel: controls.pillLabel)
+    }
 
-            // Long drafts (a big paste, or several dictations appended together)
-            // move to a viewport-bounded UITextView. The plain TextField must lay
-            // the WHOLE string out to apply `lineLimit(1...6)`, so its cost grows
-            // with the draft and there is no cap on the draft; the editor's cost
-            // is constant. Text is never truncated either way — only the
-            // MEASUREMENT is bounded.
-            Group {
-                if useLongDraftEditor {
-                    LongDraftEditor(text: draft, isFocused: $longDraftFocused)
-                        .frame(maxWidth: .infinity)
-                } else {
-                    TextField(busy ? "Waiting for reply…" : placeholder, text: draft, axis: .vertical)
-                        .lineLimit(1...6)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 9)
-                        .focused($focused)
-                        .accessibilityIdentifier("chat.composer")
-                }
+    /// The text field, alone on a full-width row.
+    ///
+    /// Nothing shares this row, which is the whole point of the two-row shape: the
+    /// field's width is now independent of how long the model's name is and of how
+    /// many buttons the composer carries.
+    private var fieldRow: some View {
+        // Long drafts (a big paste, or several dictations appended together) move
+        // to a viewport-bounded UITextView. The plain TextField must lay the WHOLE
+        // string out to apply `lineLimit(1...6)`, so its cost grows with the draft
+        // and there is no cap on the draft; the editor's cost is constant. Text is
+        // never truncated either way: only the MEASUREMENT is bounded.
+        //
+        // Both branches get IDENTICAL row treatment: full width, the same rounded
+        // background, and the same `chat.composer` identifier (the editor sets that
+        // one on its own UITextView). So crossing the threshold mid-draft changes
+        // the field's cost model and nothing a user or a maestro flow can observe.
+        Group {
+            if useLongDraftEditor {
+                LongDraftEditor(text: draft, isFocused: $longDraftFocused)
+            } else {
+                TextField(busy ? "Waiting for reply…" : placeholder, text: draft, axis: .vertical)
+                    .lineLimit(1...6)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
+                    .focused($focused)
+                    .accessibilityIdentifier("chat.composer")
             }
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 19, style: .continuous))
+        }
+        .frame(maxWidth: .infinity)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 19, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+    }
 
+    /// The bottom control row: `+`, model pill, then mic and send pushed right.
+    ///
+    /// UNCONDITIONAL, because it owns mic and send, so it exists on every composer.
+    /// Only the PILL is conditional (`showsModelPill`), and it is a chip shorter
+    /// than the 32pt buttons beside it, so its arrival cannot change the row's
+    /// height.
+    ///
+    /// DELIBERATELY NO IDENTIFIER ON THE HSTACK. An id here would flatten onto
+    /// every descendant and clobber `chat.plus` / `composer.modelPill` /
+    /// `chat.mic` / `chat.send` (the lesson `pendingVoiceRow` records, learned when
+    /// Maestro stopped finding `chat.voiceRetry`), and the `children: .contain`
+    /// that makes a container id safe would still add an accessibility element no
+    /// flow asks for. The row's existence is already observable through
+    /// `chat.mic`, which is always on it. Leaving the wrapper bare keeps this
+    /// restructure provably a no-op for the accessibility tree.
+    private var bottomControlRow: some View {
+        HStack(spacing: 8) {
+            plusButton
+            // The pill is the only flexible thing on this row: its label is
+            // `lineLimit(1)` and the three buttons carry fixed 32pt frames, so an
+            // absurdly long model name TRUNCATES rather than shoving send off the
+            // edge. (Worst real label today, "GPT-5.6 Sol · Extra High", has ~246pt
+            // of room on a 390pt phone, so truncation is the guard rail and not the
+            // everyday case.)
+            if showsModelPill {
+                ComposerModelPill(controls: controls)
+            }
+            Spacer(minLength: 0)
             // Mic is ALWAYS present — transcription appends to the draft, so
             // voice input composes with typed text instead of replacing it.
             // The send button joins it once there's something to send.
@@ -286,11 +504,12 @@ struct ComposerBar: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
     }
 
     /// Horizontal strip of picked-image thumbnails above the field, each with a
-    /// remove affordance. Sits between any notices and the input row.
+    /// remove affordance. Sits between any notices and the field row.
     private var thumbnailStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -423,6 +642,14 @@ struct ComposerBar: View {
     /// stays in the session menu. If a third item ever wants in here, it has to
     /// argue that it is an INPUT to the message the user is composing.
     ///
+    /// The host row is what the user asked for in the `+` specifically ("可能在那个
+    /// 加号里显示这是哪个 host"), and it stays READ-ONLY: `ComposerHostProvenance`
+    /// is the single source of truth for how this app names an exec host, and it
+    /// answers two different questions (a session's chosen host vs which server is
+    /// answering the main agent) without letting either pretend to be a picker.
+    /// Host is only choosable at session CREATION, so a chooser here would be a
+    /// control that cannot change anything.
+    ///
     /// Keeps `chat.photo` as the photo item's identifier: existing automation taps
     /// it, and the id must keep meaning "open the photo picker". The menu itself
     /// gets `chat.plus` (a collapsed Menu renders as one accessibility element, so
@@ -451,7 +678,10 @@ struct ComposerBar: View {
                 .frame(width: 32, height: 32)
                 .background(Color(.tertiarySystemFill), in: Circle())
         }
-        .padding(.bottom, 3)
+        // No bottom nudge any more: the old `.padding(.bottom, 3)` on all three
+        // buttons optically aligned 32pt circles against a field that grew to six
+        // lines beside them. On a dedicated control row there is nothing to align
+        // against, so the nudge would just be an asymmetric row.
         .accessibilityIdentifier("chat.plus")
     }
 
@@ -472,7 +702,6 @@ struct ComposerBar: View {
             }
         }
         .disabled(voice.state != .idle)
-        .padding(.bottom, 3)
         .accessibilityIdentifier("chat.mic")
     }
 
@@ -485,7 +714,6 @@ struct ComposerBar: View {
                 .background(canSend ? Theme.tint : Color(.tertiarySystemFill), in: Circle())
         }
         .disabled(!canSend)
-        .padding(.bottom, 3)
         .accessibilityIdentifier("chat.send")
     }
 
@@ -697,6 +925,13 @@ struct ComposerView: View {
             // the agent-scoped key so text typed before the server assigns an id
             // isn't orphaned when it does.
             draftKey: "chat:\(chat.activeID ?? "new-\(chat.activeAgentID)")",
+            // The SCREEN, which the draft key above deliberately is not: the key
+            // follows the conversation (and is nil-then-real across hydration), while
+            // the surface is "the Chat tab" for this composer's whole life. The dock's
+            // clearance is derived from the surface, so switching conversations or
+            // agents can no longer leave a second chat composer registered forever
+            // (the 2026-08-30 P1 — see `ComposerSurfaceID`).
+            surface: .chatTab,
             // The chat composer is the ONLY consumer of the Home-screen voice
             // Quick Action — it is the surface that talks to the main agent.
             acceptsVoiceQuickAction: true,

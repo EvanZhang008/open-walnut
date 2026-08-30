@@ -1,53 +1,40 @@
 import XCTest
 @testable import Walnut
 
-/// The Tasks tab's HEADER CHROME — the smart-list cards, quick add, and scope
-/// picker that sit above the rows. Dogfood R19 measured the cost of treating
-/// each of them as an `insetGrouped` section: on an iPhone 16 Pro (402x874pt)
-/// the first task row started 591pt down, so 68% of the screen was chrome and
-/// spacing on the tab whose whole job is showing tasks.
+/// The Tasks tab's HEADER CHROME — the nav row and quick add that sit above the
+/// rows. Dogfood R19 measured the cost of treating each of them as an
+/// `insetGrouped` section: on an iPhone 16 Pro (402x874pt) the first task row
+/// started 591pt down, so 68% of the screen was chrome and spacing on the tab
+/// whose whole job is showing tasks.
 ///
 /// Geometry can't be asserted without a running app, so what's pinned here is
-/// the ARITHMETIC the fix depends on plus the count formatting that shares the
-/// same fixed-width card. The visual result is verified on the simulator (see
-/// the round's screenshots) and by `TasksHeaderChromeUITests`.
+/// the ARITHMETIC the fix depends on plus the count formatting the chips share.
+/// The visual result is verified on the simulator.
+///
+/// # The fixed-width-card arithmetic is GONE (2026-08-29, T84)
+///
+/// This class used to carry `testGroupedCountStaysOnOneLineWithinTheCard`, which
+/// derived that `minimumScaleFactor(0.6)` gave a four-digit count enough headroom
+/// inside a 130pt smart-list card. It is deleted rather than rewritten because
+/// there is no card and no fixed width any more: the header is three intrinsically
+/// sized chips (`TasksNavRow`) and the counts that survived live on
+/// `TasksCompactBar` and `BoardBandBar`, also intrinsically sized, so a count can
+/// never be wider than its own capsule.
+///
+/// What that test was really protecting — a grouped count must not wrap BETWEEN
+/// DIGITS ("2,82" / "4", the real dogfood R19 defect) — is still protected, by the
+/// formatting cases below plus `lineLimit(1)` + `monospacedDigit()` on every chip
+/// count. The lesson kept: a count inside a box with a hard width is the bug; the
+/// fix was never the scale factor, it was not having the hard width.
 final class TasksHeaderChromeTests: XCTestCase {
 
-    /// Every card is a fixed 130pt box, so a long count has nowhere to grow.
-    /// This is the width the view hard-codes; if it changes, the scale factor
-    /// below needs re-deriving.
-    private let cardWidth: CGFloat = 130
-    private let cardHorizontalPadding: CGFloat = 12
-
-    // MARK: - Card count formatting
+    // MARK: - Chip count formatting
 
     func testFourDigitCountIsGroupedNotRaw() {
         // 2824 open tasks is the real store's number. Raw interpolation gives
-        // "2824"; the card shows a grouped, locale-aware count.
+        // "2824"; a chip shows a grouped, locale-aware count.
         XCTAssertEqual(2824.formatted(.number), format(2824))
-        XCTAssertNotEqual("2824", format(2824), "the card must group thousands")
-    }
-
-    func testGroupedCountStaysOnOneLineWithinTheCard() {
-        // The bug: `Text` wrapped "2,824" BETWEEN DIGITS ("2,82" / "4") because
-        // the grouped string is wider than the card's content box. The fix pairs
-        // lineLimit(1) with minimumScaleFactor(0.6); this asserts 0.6 is enough
-        // headroom for the widest count the app can show.
-        let content = cardWidth - cardHorizontalPadding * 2   // 106pt
-        // .title is 28pt; monospaced digits are ~0.6em wide, separators ~0.28em.
-        let digitWidth = 28.0 * 0.6
-        let separatorWidth = 28.0 * 0.28
-        for count in [0, 9, 15, 207, 500, 2824, 99_999] {
-            let s = format(count)
-            let digits = s.filter(\.isNumber).count
-            let separators = s.count - digits
-            let natural = Double(digits) * digitWidth + Double(separators) * separatorWidth
-            let scaled = natural * 0.6
-            XCTAssertLessThanOrEqual(
-                scaled, Double(content),
-                "count \(s) still overflows the card at the 0.6 floor"
-            )
-        }
+        XCTAssertNotEqual("2824", format(2824), "the chip must group thousands")
     }
 
     func testCountFormattingNeverProducesANewline() {
@@ -55,6 +42,16 @@ final class TasksHeaderChromeTests: XCTestCase {
         // line — a newline here would defeat lineLimit(1) by splitting earlier.
         for count in [0, 1, 1000, 2824, 1_234_567] {
             XCTAssertFalse(format(count).contains("\n"), "\(count) formatted with a newline")
+        }
+    }
+
+    /// A chip count is one short token: no spaces to break on, nothing that could
+    /// make an intrinsically sized capsule reflow into two lines.
+    func testCountFormattingIsASingleUnbrokenToken() {
+        for count in [0, 9, 207, 2824, 99_999, 1_234_567] {
+            let text = format(count)
+            XCTAssertFalse(text.contains(" "), "\(text) would let the capsule wrap")
+            XCTAssertFalse(text.isEmpty)
         }
     }
 
@@ -102,14 +99,22 @@ final class TasksChromeCollapseTests: XCTestCase {
 
     // MARK: - Chrome height per filter
 
-    /// The BOARD (`.sessions`) is now the LEANEST filter, not the tallest.
+    /// The BOARD (`.sessions`) is still the LEANEST filter.
     ///
-    /// It used to carry a scope picker over a session list, on top of the card
-    /// strip and the quick add. The board replaced that list with tier bands and
-    /// dropped the top quick add too (each band ends in its own create ring), so
-    /// it renders the card strip and nothing else. That is 94pt of chrome the
-    /// default filter no longer pays for, and it means the compact bar takes over
-    /// sooner there.
+    /// Its chrome is the nav row plus the tier chip row (header rows 1 and 2). It does
+    /// not pay for the top quick add, because every band ends in its own create ring,
+    /// and the chip row is 4pt cheaper than that row — so the board's chrome leaves
+    /// soonest, which is the point on the screen whose job is showing rows.
+    ///
+    /// The NUMBER was unchanged by the 2026-08-29 reorder; what it is made of was not.
+    /// The second 44pt used to be a clear RESERVE row under a permanently floating
+    /// overlay (which is why the chips drew above the nav pills); it is now the chip
+    /// row itself, in second place, with only its pinned copy floating.
+    ///
+    /// R27 DID change the number, on every filter: `listHeaderPadding` was always on
+    /// screen above the first section and simply missing from this arithmetic, which is
+    /// what made the board's pin threshold fire early. Counting it moves each filter's
+    /// chrome up by the same 10.66pt, so the comparisons between filters are untouched.
     func testTheBoardCarriesTheLeanestChrome() {
         let board = TasksChromeMetrics.chromeHeight(filter: .sessions, offline: false)
         for other in TaskFilter.allCases where other != .sessions {
@@ -118,13 +123,41 @@ final class TasksChromeCollapseTests: XCTestCase {
                 "\(other) should not carry LESS chrome than the board"
             )
         }
-        // The arithmetic, so a regression names the number: the scope picker
-        // (44) + its gap (2) + the quick add (48) + its gap (2) = 96pt gone.
+        // The arithmetic, so a regression names the number. `listHeaderPadding` is part of
+        // it: the List puts that much above its first section, and leaving it out of the
+        // chrome arithmetic is what made the board's pin threshold fire 10.66pt early
+        // (R27 — see `TasksBoardChipRowPinTests.testThePinFiresExactlyWhereTheTwoCardsCoincide`).
+        XCTAssertEqual(
+            board,
+            TasksChromeMetrics.listHeaderPadding
+                + TasksChromeMetrics.navRow + TasksChromeMetrics.sectionGap
+                + TasksChromeMetrics.bandBar + TasksChromeMetrics.sectionGap,
+            accuracy: 0.01,
+            "the board renders the nav row then the chip row, nothing else"
+        )
         let otherFilter = TasksChromeMetrics.chromeHeight(filter: .allOpen, offline: false)
-        XCTAssertEqual(otherFilter - board, TasksChromeMetrics.quickAdd + TasksChromeMetrics.sectionGap,
-            accuracy: 0.01, "the board's saving vs a task list is exactly the quick-add row")
-        XCTAssertEqual(board, TasksChromeMetrics.cardStrip + TasksChromeMetrics.sectionGap,
-            accuracy: 0.01, "the board renders the card strip and nothing else")
+        XCTAssertEqual(
+            otherFilter - board,
+            TasksChromeMetrics.quickAdd - TasksChromeMetrics.bandBar,
+            accuracy: 0.01,
+            "the board trades the quick-add row for the chip row"
+        )
+    }
+
+    /// The inline chip row and its pinned copy are the SAME constant (`bandBar`) on
+    /// purpose, and the value cannot drop below a List row's own minimum height.
+    ///
+    /// That floor is not decoration: the row is rendered inside a `List`, and a List
+    /// row will not shrink below ~44pt however small its content asks to be. So a
+    /// `bandBar` under 44 would make the PINNED copy shorter than the row it stands in
+    /// for, and the hand-off would jump — the two are only invisible to each other
+    /// while the heights agree.
+    func testTheChipRowCanBeExpressedAsAListRow() {
+        let listRowMinimumHeight: CGFloat = 44
+        XCTAssertGreaterThanOrEqual(
+            TasksChromeMetrics.bandBar, listRowMinimumHeight,
+            "a row shorter than a List row's minimum cannot hold the bar it draws"
+        )
     }
 
     func testOfflineBannerCountsTowardsTheChrome() {
@@ -173,53 +206,72 @@ final class TasksChromeCollapseTests: XCTestCase {
         }
     }
 
+    /// The bar arrives BEFORE the chrome fully clears, on every filter, by exactly
+    /// `collapseLead`. Otherwise the actions blink out for the length of the lead
+    /// and the user sees a bare list with no way to switch filters.
+    ///
+    /// This is the assertion that killed `collapseFloor` (2026-08-29, T84). The old
+    /// floor was `hysteresisBand` (96), derived when the leanest chrome was 106pt so
+    /// that it never bound. The header rebuild took every filter to 92-96pt, at
+    /// which point the floor bound on ALL of them and inverted this very invariant:
+    /// a threshold of 96 against 96pt of chrome means the bar shows up only once the
+    /// chrome is gone. The floor is now `collapseLead` itself, which is a bound on
+    /// the OTHER side (see below) and cannot delay the bar.
     func testTheBarArrivesBeforeTheChromeFullyClears() {
-        // Otherwise the actions blink out for the length of `collapseLead` and the
-        // user sees a bare list with no way to switch filters.
         for filter in TaskFilter.allCases {
             for offline in [false, true] {
                 let chrome = TasksChromeMetrics.chromeHeight(filter: filter, offline: offline)
                 let threshold = TasksChromeMetrics.collapseThreshold(filter: filter, offline: offline)
                 XCTAssertLessThan(threshold, chrome, "\(filter) collapses only after a gap")
-                // The lead is EXACT unless the floor binds — which it now does on
-                // the board, whose 106pt of chrome is leaner than the dead band
-                // itself (96). There the floor wins and the bar arrives a little
-                // later than `collapseLead`, which is the safe direction: too late
-                // means the real chrome is still doing the job.
-                let lead = chrome - threshold
-                if threshold == TasksChromeMetrics.collapseFloor {
-                    XCTAssertLessThanOrEqual(lead, TasksChromeMetrics.collapseLead,
-                        "\(filter) offline=\(offline): the floor may only DELAY the bar")
-                } else {
-                    XCTAssertEqual(
-                        lead, TasksChromeMetrics.collapseLead, accuracy: 0.01,
-                        "\(filter) should lead the clear by exactly collapseLead"
-                    )
-                }
+                XCTAssertEqual(
+                    chrome - threshold, TasksChromeMetrics.collapseLead, accuracy: 0.01,
+                    "\(filter) offline=\(offline) should lead the clear by exactly collapseLead"
+                )
             }
         }
     }
 
-    /// The floor is derived from the dead band, not a magic constant.
+    /// The lower bound on the collapse threshold, and what it is actually for.
     ///
-    /// Before the board landed it was a flat 120 — larger than any chrome that
-    /// then existed, so nothing exercised it. The board's chrome is 106pt, so it
-    /// binds for real now, and the reason the value has to be `hysteresisBand` is
-    /// that `expandThreshold` clamps at 0: a collapse threshold under the band
-    /// width would leave the dead band NARROWER than the flicker it absorbs.
-    func testTheCollapseFloorIsWideEnoughForTheDeadBandOnEveryFilter() {
-        XCTAssertGreaterThanOrEqual(
-            TasksChromeMetrics.collapseFloor, TasksChromeMetrics.hysteresisBand,
-            "a floor under the band width would clamp expandThreshold to 0 and shrink the guard"
-        )
+    /// A threshold under `collapseLead` would sit inside touch slop: one wobble at
+    /// rest would collapse the chrome the user is still looking at. It only binds
+    /// for a chrome shorter than 2x the lead (48pt), which nothing ships today —
+    /// asserted anyway, because the previous bound went years without binding and
+    /// then bound on every filter at once the moment the header changed.
+    func testTheCollapseThresholdNeverFallsInsideTouchSlop() {
+        for filter in TaskFilter.allCases {
+            for offline in [false, true] {
+                XCTAssertGreaterThanOrEqual(
+                    TasksChromeMetrics.collapseThreshold(filter: filter, offline: offline),
+                    TasksChromeMetrics.collapseLead,
+                    "\(filter) offline=\(offline) could be collapsed by a touch-slop wobble"
+                )
+            }
+        }
+    }
+
+    /// The dead band is as wide as the travel allows: the full `hysteresisBand`
+    /// when the chrome affords it, and everything down to the top when it does not.
+    ///
+    /// The clamp is the normal case now (103-107pt of chrome against a 96pt band), and
+    /// it is a guard rather than a hole: `isCollapsed` is sticky, so once collapsed
+    /// the bar stays until the list is back at the very top, and no wobble at the
+    /// collapse threshold can flip it back.
+    func testTheDeadBandIsAsWideAsTheTravelAllows() {
         for filter in TaskFilter.allCases {
             for offline in [false, true] {
                 let collapse = TasksChromeMetrics.collapseThreshold(filter: filter, offline: offline)
                 let expand = TasksChromeMetrics.expandThreshold(filter: filter, offline: offline)
                 XCTAssertEqual(
-                    collapse - expand, TasksChromeMetrics.hysteresisBand, accuracy: 0.01,
-                    "\(filter) offline=\(offline): the dead band got clamped"
+                    collapse - expand,
+                    min(TasksChromeMetrics.hysteresisBand, collapse), accuracy: 0.01,
+                    "\(filter) offline=\(offline): the dead band is neither full nor clamped"
                 )
+                XCTAssertEqual(
+                    TasksChromeMetrics.deadBand(filter: filter, offline: offline),
+                    collapse - expand, accuracy: 0.01
+                )
+                XCTAssertGreaterThan(expand, -0.01, "\(filter): expand must never go negative")
             }
         }
     }
@@ -249,9 +301,13 @@ final class TasksChromeCollapseTests: XCTestCase {
             let collapse = TasksChromeMetrics.collapseThreshold(filter: filter, offline: false)
             let expand = TasksChromeMetrics.expandThreshold(filter: filter, offline: false)
             XCTAssertLessThan(expand, collapse, "\(filter) has no dead band")
-            XCTAssertEqual(
-                collapse - expand, TasksChromeMetrics.hysteresisBand, accuracy: 0.01,
-                "\(filter)'s dead band should be exactly hysteresisBand wide"
+            // Width is `min(hysteresisBand, collapse)` — see
+            // `testTheDeadBandIsAsWideAsTheTravelAllows` for why the clamp is the
+            // normal case since the header rebuild. What matters HERE is only that
+            // the band exists and is wider than a rubber-band wobble.
+            XCTAssertGreaterThan(
+                collapse - expand, 20,
+                "\(filter)'s dead band is narrow enough for a bounce to cross twice"
             )
         }
     }
@@ -281,6 +337,11 @@ final class TasksChromeCollapseTests: XCTestCase {
     func testASlowDragNeverStrobesTheBar() {
         // Walk the whole travel one point at a time, then back, and count the
         // transitions. A monotone drag must produce exactly ONE each way.
+        //
+        // `.sessions` has the leanest chrome and therefore the narrowest (clamped)
+        // dead band, which makes it the hardest case for this assertion even though
+        // it is the one filter that draws no compact bar — `isCollapsed` is pure
+        // geometry and runs for every filter.
         let filter = TaskFilter.sessions
         let top = Int(TasksChromeMetrics.chromeHeight(filter: filter, offline: false)) + 200
         var collapsed = false
@@ -302,28 +363,94 @@ final class TasksChromeCollapseTests: XCTestCase {
 
     // MARK: - What the bar costs
 
+    /// Where a compact bar EXISTS, it must buy back the majority of the chrome it
+    /// stands in for. Otherwise the collapse is a mode switch for nothing.
+    ///
+    /// The budget used to be "under a third of the smallest chrome", which held only
+    /// because every filter then carried at least 156pt; it became a majority-saving
+    /// rule when the board's chrome dropped to 106pt (the 3x was always a proxy).
+    /// The header rebuild pushed that further, and the honest answer stopped being a
+    /// looser number at all: what disqualifies the board is not a ratio but that its
+    /// row 2 ALREADY floats, so a compact bar there would be a second floating row
+    /// (`testNoFilterEverFloatsTwoBarsAtOnce`). So the board has no compact bar, and
+    /// this test asserts the rule per filter rather than relaxing the ratio to fit a
+    /// case it no longer fits.
+    ///
+    /// The saving is spelled out HERE and nowhere else. It used to live in a
+    /// `TasksChromeMetrics.collapseSaving` helper, which had zero production callers and
+    /// existed only so this test and the board test below could agree (2026-08-29
+    /// review): a function whose whole audience is two tests is not a rule the app
+    /// follows, it is a shared fixture pretending to be one. The rule the APP follows is
+    /// `hasCompactBar`, and the arithmetic that justifies it is written out once, right
+    /// where it is asserted.
     func testTheCompactBarIsCheaperThanTheChromeItReplaces() {
-        // If the survivor were as tall as the header, the collapse would buy
-        // nothing.
-        //
-        // The budget used to be "under a third of the smallest chrome", which
-        // held only because every filter then carried at least 156pt. The board
-        // carries 106pt (card strip only), so a third would be 35pt and the
-        // 44pt bar would fail a test whose point it still satisfies. What the
-        // rule is actually protecting is that the collapse is a MAJORITY saving
-        // on every filter, so that is what is asserted — the 3x was a proxy.
-        for filter in TaskFilter.allCases {
+        for filter in TaskFilter.allCases where TasksChromeMetrics.hasCompactBar(filter) {
             let chrome = TasksChromeMetrics.chromeHeight(filter: filter, offline: false)
             XCTAssertLessThan(
                 TasksChromeMetrics.compactBarHeight, chrome,
                 "\(filter): the bar must be shorter than the chrome it stands in for"
             )
+            // Every filter that HAS a bar reserves nothing for a permanent overlay, so
+            // all of its chrome is chrome that scrolls away.
             let saving = (chrome - TasksChromeMetrics.compactBarHeight) / chrome
             XCTAssertGreaterThan(
                 saving, 0.5,
                 "\(filter): the collapse buys back only \(Int(saving * 100))% — not worth a mode switch"
             )
         }
+    }
+
+    /// The board has no compact bar because its SECOND HEADER ROW already pins, and
+    /// the user asked for exactly one floating row there.
+    ///
+    /// This test used to argue the point from a 2pt saving (`navRow + sectionGap -
+    /// compactBarHeight`), on the premise that the board's other 44pt was a reserve
+    /// that never scrolls away because the bar it reserved for was a permanent
+    /// overlay. That premise is gone with the reorder: the chip row is real content
+    /// now, all 92pt of the board's chrome scrolls away, and a compact bar there would
+    /// free 48pt — a perfectly good saving. So the honest rule is not arithmetic, it is
+    /// the count of floating rows, and that is what is asserted: no filter may float
+    /// two bars at once.
+    func testNoFilterEverFloatsTwoBarsAtOnce() {
+        XCTAssertFalse(TasksChromeMetrics.hasCompactBar(.sessions))
+        // The board's one floating row is the pinned chip row.
+        XCTAssertTrue(TasksChromeMetrics.showsPinnedChips(filter: .sessions, pinned: true))
+        XCTAssertFalse(TasksChromeMetrics.showsCompactBar(filter: .sessions, collapsed: true))
+        // Worst case for every filter: fully scrolled AND fully pinned.
+        for filter in TaskFilter.allCases {
+            let floating =
+                (TasksChromeMetrics.showsCompactBar(filter: filter, collapsed: true) ? 1 : 0)
+                + (TasksChromeMetrics.showsPinnedChips(filter: filter, pinned: true) ? 1 : 0)
+            XCTAssertLessThanOrEqual(
+                floating, 1,
+                "\(filter) floats \(floating) bars — the user asked for one"
+            )
+        }
+    }
+
+    /// Calendar has no bar either, and for a different reason: it is not the shared
+    /// `List` at all (`TasksView.calendarSurface` is full-bleed), so nothing there
+    /// observes scroll geometry, nothing collapses, and the overlay this answer feeds is
+    /// never on screen. `hasCompactBar` said `true` for it until 2026-08-29 — a lie that
+    /// a "every filter except the board keeps one" loop happily confirmed.
+    func testCalendarHasNoCompactBarBecauseThatSurfaceNeverDrawsOne() {
+        XCTAssertFalse(TasksChromeMetrics.hasCompactBar(.calendar))
+        XCTAssertFalse(TasksChromeMetrics.showsCompactBar(filter: .calendar, collapsed: true))
+
+        // The list filters all keep one, so the collapse is not silently dead.
+        for filter in TaskFilter.allCases where filter != .sessions && filter != .calendar {
+            XCTAssertTrue(TasksChromeMetrics.hasCompactBar(filter), "\(filter) lost its bar")
+        }
+    }
+
+    /// The view asks exactly one question, and it answers no on the board however
+    /// far it is scrolled — the collapse state still tracks (the observer runs for
+    /// every filter), the BAR just never draws there.
+    func testShowsCompactBarNeedsBothCollapsedAndAFilterThatHasOne() {
+        XCTAssertFalse(TasksChromeMetrics.showsCompactBar(filter: .sessions, collapsed: true))
+        XCTAssertFalse(TasksChromeMetrics.showsCompactBar(filter: .sessions, collapsed: false))
+        XCTAssertTrue(TasksChromeMetrics.showsCompactBar(filter: .allOpen, collapsed: true))
+        XCTAssertFalse(TasksChromeMetrics.showsCompactBar(filter: .allOpen, collapsed: false))
     }
 
     func testCollapsedStateGivesRowsTheMajorityOfTheScreen() {
@@ -346,6 +473,14 @@ final class TasksChromeCollapseTests: XCTestCase {
         XCTAssertGreaterThan((tabBarTop - firstRow) / screen, 0.75, "rows should get 75%+ of the whole screen")
     }
 }
+
+// `TasksBoardChipRowPinTests` moved to `WalnutTests/TasksBoardChipRowPinTests.swift`
+// (R26). It carried two subjects that had nothing to do with each other: the board's
+// PIN state machine, and four cases restating `BoardBandBar`'s column arithmetic — and
+// those four asserted a criterion the platform cannot satisfy (a chip in a horizontal
+// `ScrollView` always reports its unclipped frame), against static forwarders that had
+// no call site in the app target. The pin cases live in the new file; the rail's real
+// geometry, stated in pixels and taps, is `WalnutTests/TasksBoardChipRowTests.swift`.
 
 /// `ChromeCollapseTracker` — the gate between the geometry stream and the one
 /// `@State` write a crossing needs. Its whole reason to exist is that publishing
@@ -457,6 +592,13 @@ final class ChromeCollapseTrackerTests: XCTestCase {
 
         XCTAssertEqual(tracker.publishes, 2, "one collapse + one expand, regardless of sample count")
         XCTAssertEqual(applied, [true, false])
-        XCTAssertGreaterThan(tracker.samples, 300, "the drag really was fine-grained")
+        // Derived from the travel rather than a magic 300: the header rebuild took
+        // the board's chrome from 106pt to 92pt, and a hardcoded floor would have
+        // turned "the fixture got 14pt shorter" into a failing amplification test
+        // that had nothing to say about amplification.
+        XCTAssertGreaterThanOrEqual(
+            tracker.samples, travel,
+            "the drag really was fine-grained (2pt steps over \(travel)pt, both ways)"
+        )
     }
 }

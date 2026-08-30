@@ -12,6 +12,9 @@ struct WalnutApp: App {
     @State private var notes: NotesStore
     @State private var tasks: TasksStore
     @State private var inbox: InboxStore
+    /// App-scoped so a collapsed HTML preview survives leaving the tab it was
+    /// opened from — the whole point of the dock (see FilePreviewDock).
+    @State private var filePreview: FilePreviewDock
 
     init() {
         // Arm the activation gate before anything else so every subsystem
@@ -61,6 +64,11 @@ struct WalnutApp: App {
         _notes = State(initialValue: notes)
         _tasks = State(initialValue: tasks)
         _inbox = State(initialValue: inbox)
+        // Cheap by construction: two nils, an empty array, a lifecycle
+        // registration and one notification observer. No network, no disk, no
+        // WKWebView until a file is actually previewed — so it is safe on the
+        // launch path that must report syncDiskLoads=0.
+        _filePreview = State(initialValue: FilePreviewDock())
     }
 
     var body: some Scene {
@@ -71,6 +79,7 @@ struct WalnutApp: App {
                 .environment(notes)
                 .environment(tasks)
                 .environment(inbox)
+                .environment(filePreview)
                 .tint(Theme.tint)
         }
     }
@@ -186,6 +195,12 @@ struct MainTabView: View {
     @Environment(NotesStore.self) private var notes
     @Environment(TasksStore.self) private var tasks
     @Environment(InboxStore.self) private var inbox
+    /// WRITTEN, never read in `body`. Holding the reference costs nothing: Observation
+    /// only records a dependency when a property is READ during a body pass, and this
+    /// five-tab body reads none — which is the same reason the dock bar lives in its own
+    /// leaf overlay (`FilePreviewDockOverlay`) instead of here. Optional because
+    /// `RootView`'s DEBUG harness roots bypass the store wiring.
+    @Environment(FilePreviewDock.self) private var filePreview: FilePreviewDock?
 
     /// Tab identity, needed so out-of-band entry points can bring the right tab
     /// forward: the voice Quick Action needs Chat (its composer owns the mic),
@@ -201,6 +216,26 @@ struct MainTabView: View {
     /// pushed on top of a tab and takes its own claim (see AttentionContext).
     static func attentionTarget(for tab: Tab) -> AttentionTarget {
         tab == .chat ? .chat : .triage
+    }
+
+    /// Which COMPOSER SURFACE a tab is, for the file-preview dock's clearance.
+    ///
+    /// Identity only. Nothing here says whether a tab has a composer — that is the
+    /// composers' own business (they register for a surface), and a list of
+    /// "composer-less tabs" maintained here is exactly the kind of thing that goes stale
+    /// the day a tab grows an input. What this table buys is that the seat can stop
+    /// clearing a composer on ANOTHER tab: with a preview docked, `file.dock.bar`
+    /// measured [12,575][390,620] identically on Settings, Notes, Inbox and Tasks —
+    /// stranded ~171pt up, over a row of content — because the dock had no way to ask
+    /// which surface was in front. See `ComposerSurfaceID`.
+    static func composerSurface(for tab: Tab) -> ComposerSurfaceID {
+        switch tab {
+        case .chat: return .chatTab
+        case .inbox: return .tab("inbox")
+        case .notes: return .tab("notes")
+        case .tasks: return .tab("tasks")
+        case .settings: return .tab("settings")
+        }
     }
 
     @State private var selection: Tab = .chat
@@ -241,6 +276,16 @@ struct MainTabView: View {
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(Tab.settings)
         }
+        // The collapsed HTML preview's seat. An OVERLAY, never a
+        // `safeAreaInset`: an inset that appears mid-scroll changes the enclosing
+        // list's visible rect and yanks the content offset, and this bar appears
+        // exactly when the user has just dismissed something and is scrolling
+        // again. Painted over the content, the scroll view never learns it is
+        // there. It lives on the TAB VIEW rather than inside a tab because the
+        // whole point of the seat is surviving the trip to another tab to go ask
+        // the AI something. `FilePreviewDockOverlay` reads the dock store itself
+        // so this five-tab body is not invalidated by dock state changes.
+        .overlay(alignment: .bottom) { FilePreviewDockOverlay() }
         // Voice Quick Action: switch to Chat so its composer is on screen and
         // can pick the request up. Both edges are needed — a cold launch has the
         // mailbox already armed before this view exists (`onAppear`), a warm one
@@ -260,9 +305,16 @@ struct MainTabView: View {
             // off-screen tabs alive, so appear/disappear is the less reliable of
             // the two signals, and this is one place instead of five.
             AttentionContext.shared.setBase(Self.attentionTarget(for: selection))
+            // Same signal, second consumer: which surface the file-preview seat has to
+            // clear. Also read from the SELECTION and for a sharper version of the same
+            // reason — a retained tab's composer keeps reporting (and re-running its
+            // `onAppear`) while the user is somewhere else, so a composer that exists is
+            // no evidence at all about what is on screen.
+            filePreview?.setComposerSurfaceBase(Self.composerSurface(for: selection))
         }
         .onChange(of: selection) { _, tab in
             AttentionContext.shared.setBase(Self.attentionTarget(for: tab))
+            filePreview?.setComposerSurfaceBase(Self.composerSurface(for: tab))
         }
         .onChange(of: quickAction.pending) { _, request in
             if request != nil { selection = .chat }

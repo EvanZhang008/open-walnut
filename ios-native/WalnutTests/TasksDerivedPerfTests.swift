@@ -113,20 +113,27 @@ final class TasksDerivedPerfTests: XCTestCase {
     private func boardDerivedPass(_ store: TasksStore, query: String) -> Int {
         var sink = 0
         // ONE bands() call: the view binds the result and hands the same array to
-        // the rail overlay and the sections builder.
+        // the band bar's chips and the sections builder.
         let bands = BoardModel.bands(
             tasks: store.tasks, sessions: store.sessions,
             tierOf: store.taskTiers, tierOrder: store.taskTierOrder,
             customTiers: store.customTiers, query: query
         )
         sink += bands.count
+        // The floating band bar's chips and the chip-narrowed rows are both views
+        // OVER that one array. They are in this pass so a future "just re-query the
+        // tier for this chip" would show up as a second bands()-shaped cost here
+        // rather than only as a correctness bug.
+        sink += BoardModel.chips(bands).count
+        let visible = BoardModel.filtered(bands, selected: nil)
+        sink += visible.count
         for f in TaskFilter.allCases { sink += store.count(for: f) }
         // A live query also appends the matching open tasks below the bands
-        // (dogfood R17), minus the ids the bands already show.
+        // (dogfood R17), minus the ids the VISIBLE bands already show.
         if !query.isEmpty {
             sink += TasksView.sections(
                 from: store.tasks(for: .allOpen), query: query,
-                excluding: BoardModel.rowIds(bands)
+                excluding: BoardModel.rowIds(visible)
             ).count
         }
         return sink
@@ -199,6 +206,25 @@ final class TasksDerivedPerfTests: XCTestCase {
     /// because the two do different work: the board skips `sections` entirely
     /// until a query exists, and then only asks it for the ids the bands don't
     /// already show.
+    ///
+    /// Budget re-baselined 2026-08-29 (idle 5→12ms, keystroke 8→18ms) and the
+    /// reason matters, because "the number went up so I raised the number" is how
+    /// a perf gate stops being one:
+    ///
+    /// The original 5/8ms was measured when the tail band was SESSION-GATED, so a
+    /// board pass built ~10 tail rows out of 2,000 tasks. The disappearing-task
+    /// fix deliberately made that band the COMPLEMENT of the tier bands ("a tier
+    /// decides WHICH band, never WHETHER"), so the same pass now builds ~1,780
+    /// rows. That is not a regression, it is the feature: the old number was the
+    /// cost of a board that could lose a task. Honest floor for the new shape is
+    /// ~7.3ms idle / ~11.3ms per keystroke, measured stable across runs on a
+    /// loaded machine (7.25/7.24/7.40 idle), and these gates sit ~1.5x above it.
+    ///
+    /// What keeps this from being a rubber stamp is
+    /// `testTheBoardPassScalesLinearlyWithTheTaskList` below: an absolute budget
+    /// on a machine this contended can only be loose, so the SHAPE assertion is
+    /// the real gate, and it is the one that catches the class of bug this
+    /// re-baseline was paired with (see that test).
     func testBoardSearchKeystrokeBudget() {
         let store = seededStore(tasks: 2_000, sessions: 500)
         _ = boardDerivedPass(store, query: "")
@@ -212,10 +238,72 @@ final class TasksDerivedPerfTests: XCTestCase {
         }
         print(String(format: "[tasks-derived] board: idle %5.2fms | worst of %d keystrokes %7.2fms",
                      idle, query.count, worstMs))
-        XCTAssertLessThan(idle, 5.0,
-            "an idle board body pass exceeded 5ms at 2,000 tasks + 500 sessions")
-        XCTAssertLessThan(worstMs, 8.0,
-            "a board search keystroke exceeded 8ms (n=\(query.count) keystrokes)")
+        XCTAssertLessThan(idle, 12.0,
+            "an idle board body pass exceeded 12ms at 2,000 tasks + 500 sessions")
+        XCTAssertLessThan(worstMs, 18.0,
+            "a board search keystroke exceeded 18ms (n=\(query.count) keystrokes)")
+    }
+
+    /// The gate that actually holds the line: doubling the SESSION list must
+    /// roughly double one board pass, not square it.
+    ///
+    /// Written after a real quadratic shipped into `unfiledRows` and no gate here
+    /// named it. The session loop had grown a `tasks.contains(where:)` membership
+    /// test; at this fixture's scale it took one board pass from ~1ms to ~33ms.
+    /// Every absolute budget in this file failed at once, which sounds like
+    /// detection but is the opposite: three red numbers with no shape information
+    /// read exactly like "the machine is busy", and the machine WAS busy (load
+    /// 85). The temptation was to raise the numbers and move on. A ratio cannot be
+    /// argued with that way, and it needs no calibration against whatever else the
+    /// Mac is doing, because load scales both halves of it.
+    ///
+    /// SESSIONS is the axis, and picking it took an experiment rather than a
+    /// guess. The scan is nominally O(sessions x tasks), so scaling TASKS looks
+    /// like the obvious probe, and it does not work: it was tried first, with the
+    /// bug deliberately reintroduced, and measured 1.26x for a 2x task list, well
+    /// inside any sane tolerance. The reason is the fixture: `contains(where:)`
+    /// stops at the first match, every session's `t-<i>` sits at index `i`, and
+    /// those indices are bounded by the SESSION count, not the task count. So
+    /// doubling tasks adds rows nobody scans past, while doubling sessions doubles
+    /// both the number of scans and the depth of each one.
+    ///
+    /// Threshold comes from measuring BOTH states, not from taste. Bug present:
+    /// 2.00x (7.95 → 15.87ms). Bug fixed: 1.05x / 1.09x / 1.13x over three runs
+    /// (session count barely moves a pass whose work is the 2,000-task walk).
+    /// 1.5x sits in the gap with room on both sides. Note the first threshold
+    /// tried here was 2.6x, chosen by "loose enough for n log n plus noise", and
+    /// it would have watched this exact bug sail through at 2.00x. A tolerance has
+    /// to be justified by the separation it achieves, not by how defensible it
+    /// sounds.
+    ///
+    /// Two things this encodes beyond the one bug. A scaling gate is only as good
+    /// as the axis it varies AND the threshold it picks, and both have to be
+    /// confirmed against a real reintroduction of the defect rather than derived
+    /// from the big-O on paper. And a perf gate that a busy machine can turn red
+    /// teaches people to raise it; one built from a ratio of two measurements
+    /// taken microseconds apart cannot be dismissed that way.
+    func testTheBoardPassScalesLinearlyWithTheSessionList() {
+        let small = seededStore(tasks: 2_000, sessions: 250)
+        let large = seededStore(tasks: 2_000, sessions: 500)
+        // Warm both: the date cache is shared and process-wide, so an unwarmed
+        // second store would charge the formatter to the size difference.
+        _ = boardDerivedPass(small, query: "")
+        _ = boardDerivedPass(large, query: "")
+
+        // Best-of, not worst-of. A scheduler hiccup can only inflate a sample, so
+        // the minimum is the closest thing to the code's own cost, and taking it
+        // on both sides keeps the ratio honest under contention.
+        var bestSmall = Double.greatestFiniteMagnitude
+        var bestLarge = Double.greatestFiniteMagnitude
+        for _ in 0..<5 {
+            bestSmall = min(bestSmall, ms { _ = boardDerivedPass(small, query: "") })
+            bestLarge = min(bestLarge, ms { _ = boardDerivedPass(large, query: "") })
+        }
+        let ratio = bestLarge / bestSmall
+        print(String(format: "[board-scaling] 250 sessions %.2fms | 500 sessions %.2fms | ratio %.2fx (gate 1.5x)",
+                     bestSmall, bestLarge, ratio))
+        XCTAssertLessThan(ratio, 1.5,
+            "doubling the session list cost \(ratio)x (expected ~1.1x, and the known quadratic reads 2.0x): a per-session scan over the TASK list is back in the board pass")
     }
 
     // MARK: - Gate 2b: the board's search cost must not grow with rows a query discards
@@ -229,6 +317,15 @@ final class TasksDerivedPerfTests: XCTestCase {
     /// restate the overall budget: a live query must not cost MUCH more than the
     /// same pass with no query. If someone reorders the phases, this fails long
     /// before the total budget does.
+    ///
+    /// The ratio assertion is the load-independent half and is unchanged. The
+    /// absolute ceiling moved 4→12ms for the reason spelled out on
+    /// `testBoardSearchKeystrokeBudget`: the tail band is now the complement of
+    /// the tier bands (~1,780 rows at this fixture, not ~10), which is the
+    /// disappearing-task fix and not a regression. Note the ratio is now BELOW 1
+    /// in practice (a live query is CHEAPER than none, because filtering during
+    /// collection means fewer rows to sort), which is the direction this test
+    /// wants and the clearest sign the phases are still in the right order.
     func testABoardSearchDoesNotPayToSortRowsItDiscards() {
         let store = seededStore(tasks: 2_000, sessions: 500)
         let board = { (query: String) in
@@ -251,8 +348,8 @@ final class TasksDerivedPerfTests: XCTestCase {
             worstQuery, worstEmpty * 1.6 + 0.5,
             "a live query costs \(worstQuery)ms vs \(worstEmpty)ms unfiltered — the filter moved back AFTER the sort"
         )
-        XCTAssertLessThan(worstQuery, 4.0,
-            "one board pass with a live query exceeded 4ms at 2,000 tasks + 500 sessions")
+        XCTAssertLessThan(worstQuery, 12.0,
+            "one board pass with a live query exceeded 12ms at 2,000 tasks + 500 sessions")
     }
 
     // MARK: - Gate 3: sort semantics preserved by the decorated sorts

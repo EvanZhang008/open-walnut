@@ -13,10 +13,16 @@ struct ChatTimelineBody: View {
     @State private var previewTarget: FilePreviewTarget?
 
     var body: some View {
+        // LAYER ORDER IS LOAD-BEARING (DOCK-c, 2026-08-29). The empty state used to be
+        // the FIRST child, i.e. under `TimelineHost` — and `TimelineHost` is a
+        // `UICollectionView` filling the whole area, so every touch aimed at the
+        // placeholder went to the (empty) transcript instead. At accessibility sizes
+        // the placeholder degrades to a SCROLL to keep every word reachable
+        // (`TimelinePlaceholderInset`), and a scroll view that cannot be touched is
+        // just a truncation with extra steps. The placeholder is painted LAST now, and
+        // it only takes touches when it is actually scrollable, so pull-to-refresh on
+        // an empty transcript still works.
         ZStack {
-            if chat.messages.isEmpty && !chat.loadingMessages && !chat.streaming {
-                ChatTimelineEmptyState()
-            }
             TimelineHost(
                 messages: chat.messages,
                 streaming: chat.streaming,
@@ -49,10 +55,17 @@ struct ChatTimelineBody: View {
                 },
                 onRefresh: onRefresh
             )
+            if chat.messages.isEmpty && !chat.loadingMessages && !chat.streaming {
+                ChatTimelineEmptyState()
+            }
         }
         .redacted(reason: chat.loadingMessages && chat.messages.isEmpty ? .placeholder : [])
+        // First open only (a link tap in the transcript). Collapsing this sheet
+        // banks the scroll position and leaves the report in the app-level dock
+        // bar; REOPENING is presented by `FilePreviewDockOverlay`, so it works
+        // from any tab and not just from the page the link was on.
         .sheet(item: $previewTarget) { target in
-            HTMLFilePreviewSheet(path: target.path, host: target.host)
+            HTMLFilePreviewSheet(target: target)
         }
     }
 }
@@ -65,11 +78,19 @@ struct ChatTimelineEmptyState: View {
                 .foregroundStyle(.tertiary)
             Text("Your Personal AI is listening")
                 .font(.headline)
+                // Both lines WRAP now instead of truncating (see
+                // `TimelinePlaceholderInset`, round 2): at accessibility sizes the
+                // headline was rendering as "Your Personal…". Wrapped copy has to be
+                // centred and kept off the screen edges, or the fix trades an
+                // ellipsis for a ragged left edge against the bezel.
+                .multilineTextAlignment(.center)
             Text("Ask anything — tasks, notes, or what happened today.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 120)
+        .timelinePlaceholderInset(vertical: 120)
+        .padding(.horizontal, 24)
     }
 }
