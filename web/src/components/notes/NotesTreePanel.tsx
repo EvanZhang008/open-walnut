@@ -4,6 +4,7 @@ import type { NoteTreeNode, SearchResult, SearchFolderGroup } from '@/api/notes-
 import { NotesBookmarksGroup } from './NotesBookmarksGroup';
 import { NotesRecentGroup, RECENT_GROUP_KEY } from './NotesRecentGroup';
 import { HighlightedText, HighlightedTitle } from './HighlightedText';
+import { jumpNeedles } from './jump-target';
 import { useConfirm, useAlert } from '@/hooks/useConfirm';
 import { copyTextDeferred } from '@/utils/clipboard';
 
@@ -83,10 +84,11 @@ interface NotesTreePanelProps {
   selectedPath: string | null;
   /**
    * Open a note. `opts.newTab` (⌘-click / context-menu) opens it in a new tab;
-   * `opts.scrollToText` (search-result click) scrolls the editor to the first
+   * `opts.scrollToText` (search-result click; string or ordered candidates)
+   * scrolls the editor to the first
    * occurrence of the matched text instead of landing at the top.
    */
-  onSelect: (path: string, opts?: { newTab?: boolean; scrollToText?: string }) => void;
+  onSelect: (path: string, opts?: { newTab?: boolean; scrollToText?: string | string[] }) => void;
   /** Preview an attachment (image/pdf) — distinct from onSelect, which markdown-loads. */
   onPreviewAttachment: (path: string) => void;
   onCreateNote: (path: string) => void;
@@ -882,11 +884,16 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                         // the note loader .md-suffixes the path and 404s on binaries.
                         if (r.matchType === 'attachment') onPreviewAttachment(r.path);
                         else {
-                          // Jump to the MATCH, not the top of the note: the snippet's
-                          // <mark> holds the exact matched span (falls back to the raw
-                          // query for semantic hits, which carry no mark).
-                          const m = r.snippet?.match(/<mark>([^<]{1,80})<\/mark>/);
-                          onSelect(r.path, { scrollToText: m?.[1] || searchQuery.trim() });
+                          // Jump to the MATCH, not the top of the note: candidates
+                          // are ordered most-specific first (snippet context window
+                          // → first mark → heading → raw query).
+                          onSelect(r.path, {
+                            scrollToText: jumpNeedles({
+                              snippet: r.snippet,
+                              headingMatch: r.headingMatch,
+                              query: searchQuery.trim(),
+                            }),
+                          });
                         }
                         setSearchQuery('');
                         setSearchResults(null);

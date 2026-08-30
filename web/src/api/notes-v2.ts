@@ -96,6 +96,9 @@ export interface SearchResult {
   matchedTags?: string[];
   /** Folder whose NAME matched the query (query "dairy" → "Areas/Journal/Dairy"). */
   folderMatch?: string;
+  /** Section heading that matched the query (query "sin" → "SIN") — also the
+   *  jump anchor when a result row is clicked. */
+  headingMatch?: string;
 }
 
 /** A folder whose NAME matched the search query — rendered above the note rows. */

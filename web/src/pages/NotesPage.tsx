@@ -138,26 +138,58 @@ function hydrateTabs(searchParams: URLSearchParams): PersistedTabs {
 }
 
 /**
- * Find `needle` (case-insensitive) in the rendered editor DOM and return the
- * enclosing element. Editor text nodes are split by inline marks (bold, links),
- * so if the full needle isn't inside one node, fall back to its longest token.
+ * Find the first candidate needle in the rendered editor DOM and return the
+ * innermost BLOCK element containing it.
+ *
+ * Block-level (not per-text-node): editor text nodes are split by inline marks
+ * (bold, links), so any needle longer than one run of plain text could never
+ * match a single node — which silently downgraded every jump to its
+ * longest-single-word fallback and landed on the first occurrence anywhere
+ * (usually the title). Matching against each block's whitespace-normalized
+ * textContent makes long, near-unique context needles actually work.
  */
-function findTextInDom(root: HTMLElement, needle: string): HTMLElement | null {
+const JUMP_BLOCK_SEL = 'p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, pre';
+
+function findTextInDom(root: HTMLElement, needles: string[]): HTMLElement | null {
+  const blockText = (el: HTMLElement) => (el.textContent ?? '').replace(/\s+/g, ' ').toLowerCase();
   const tryFind = (n: string): HTMLElement | null => {
-    const lower = n.toLowerCase();
-    if (!lower) return null;
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    let node: Node | null;
-    while ((node = walker.nextNode())) {
-      if ((node.textContent ?? '').toLowerCase().includes(lower)) {
-        return node.parentElement;
-      }
+    if (n.length < 2) return null;
+    let el = [...root.querySelectorAll<HTMLElement>(JUMP_BLOCK_SEL)]
+      .find((b) => blockText(b).includes(n)) ?? null;
+    // Descend to the innermost matching block (a p inside a li inside a td).
+    while (el) {
+      const inner = [...el.querySelectorAll<HTMLElement>(JUMP_BLOCK_SEL)]
+        .find((b) => blockText(b).includes(n));
+      if (!inner) break;
+      el = inner;
     }
-    return null;
+    return el;
   };
-  const direct = tryFind(needle.trim());
-  if (direct) return direct;
-  const longest = needle.trim().split(/\s+/).sort((a, b) => b.length - a.length)[0] ?? '';
+  // A context needle routinely CROSSES a block boundary (the snippet window
+  // doesn't know where the note's heading ends and its paragraph begins), so
+  // no single block can contain the whole thing. Shrink from the right one
+  // word at a time until it fits inside one block — e.g. "Non-Resident Rental
+  // Income (Section 216) Non-residents can elect…" shrinks to exactly the
+  // heading's own text and lands on the heading. Without this, a cross-block
+  // needle fell through to a single-word fallback whose FIRST occurrence in
+  // the document is usually an unrelated early paragraph.
+  const tryShrinking = (raw: string): HTMLElement | null => {
+    let words = raw.replace(/\s+/g, ' ').trim().toLowerCase().split(' ');
+    for (let step = 0; step < 16 && words.length >= 2; step++) {
+      const el = tryFind(words.join(' '));
+      if (el) return el;
+      words = words.slice(0, -1);
+      if (words.join(' ').length < 8) break;
+    }
+    return words.length === 1 ? tryFind(words[0]) : null;
+  };
+  for (const raw of needles) {
+    const el = tryShrinking(raw);
+    if (el) return el;
+  }
+  // Last resort: the longest single word of the final (loosest) candidate.
+  const longest = (needles[needles.length - 1] ?? '').trim().toLowerCase().split(/\s+/)
+    .sort((a, b) => b.length - a.length)[0] ?? '';
   return longest.length >= 2 ? tryFind(longest) : null;
 }
 
@@ -367,10 +399,10 @@ export function NotesPage() {
     } catch { /* ignore quota / disabled storage */ }
   }, [tabs, activePath]);
 
-  // Jump-to-match request state: {path, text} of the search hit to scroll to
-  // (set by handleSelect below); the nonce re-fires the effect when the target
-  // note is ALREADY open (content/path unchanged → effect wouldn't rerun).
-  const pendingJumpRef = useRef<{ path: string; text: string } | null>(null);
+  // Jump-to-match request state: {path, needles} of the search hit to scroll
+  // to (set by handleSelect below); the nonce re-fires the effect when the
+  // target note is ALREADY open (content/path unchanged → effect wouldn't rerun).
+  const pendingJumpRef = useRef<{ path: string; needles: string[] } | null>(null);
   const [jumpNonce, setJumpNonce] = useState(0);
 
   // ── Jump-to-match: after a search-result open renders, scroll to the hit. ──
@@ -404,13 +436,15 @@ export function NotesPage() {
     const tryJump = () => {
       if (cancelled) return;
       const root = document.querySelector('.notes-editor .tiptap') as HTMLElement | null;
-      const el = root && findTextInDom(root, pending.text);
+      const el = root && findTextInDom(root, pending.needles);
       if (el) {
         el.scrollIntoView({ block: 'center' });
         setTimeout(() => settle(el), 250);
         return;
       }
-      if (++attempts < 10) setTimeout(tryJump, 120);
+      // ~3s of retries: tiptap mounts after the loading spinner clears, and on
+      // a loaded machine that can take well over the old 1.2s budget.
+      if (++attempts < 25) setTimeout(tryJump, 120);
     };
     setTimeout(tryJump, 80);
     return () => { cancelled = true; };
@@ -481,9 +515,11 @@ export function NotesPage() {
 
   // Thin wrappers preserve the existing prop names consumed by tree / palette /
   // backlinks / wiki-link clicks — they all open in the ACTIVE tab by default.
-  const handleSelect = useCallback((path: string, opts?: { newTab?: boolean; scrollToText?: string }) => {
-    pendingJumpRef.current = opts?.scrollToText ? { path, text: opts.scrollToText } : null;
-    if (opts?.scrollToText) setJumpNonce((n) => n + 1);
+  const handleSelect = useCallback((path: string, opts?: { newTab?: boolean; scrollToText?: string | string[] }) => {
+    const needles = (Array.isArray(opts?.scrollToText) ? opts.scrollToText : [opts?.scrollToText])
+      .filter((t): t is string => !!t && !!t.trim());
+    pendingJumpRef.current = needles.length ? { path, needles } : null;
+    if (needles.length) setJumpNonce((n) => n + 1);
     openInTab(path, 'note', opts);
   }, [openInTab]);
   const handlePreviewAttachment = useCallback((path: string) => openInTab(path, 'attachment'), [openInTab]);

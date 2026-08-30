@@ -25,6 +25,7 @@ import { fetchNotesList, searchNotesHybrid } from '@/api/notes-v2';
 import type { NoteListItem, SearchResult, MatchType } from '@/api/notes-v2';
 import { renderNoteSnippet } from './notes-markdown';
 import { HighlightedTitle } from './HighlightedText';
+import { jumpNeedles } from './jump-target';
 import { log } from '@/utils/log';
 
 interface CommandPaletteProps {
@@ -32,7 +33,7 @@ interface CommandPaletteProps {
    * Navigate to a note path (SPA — never page.goto). `opts.scrollToText` is set
    * for search hits so the editor jumps to the matched span, not the note top.
    */
-  onNavigate: (path: string, opts?: { scrollToText?: string }) => void;
+  onNavigate: (path: string, opts?: { scrollToText?: string | string[] }) => void;
   /**
    * Create (and open) a new note. `title` empty = a blank/untitled note with 0
    * required decisions (⌘↵ quick-capture). Returns the created path so the
@@ -54,6 +55,8 @@ interface PaletteRow {
   snippetHtml?: string;
   /** Raw BE snippet (with literal <mark> tags) — source of the jump-to-match text. */
   snippetRaw?: string;
+  /** Matched section heading — an exact jump anchor. */
+  headingMatch?: string;
   matchType?: MatchType;
 }
 
@@ -224,6 +227,7 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
       title: r.title || r.name || basenameNoExt(r.path),
       snippetHtml: r.snippet ? renderNoteSnippet(r.snippet) : undefined,
       snippetRaw: r.snippet,
+      headingMatch: r.headingMatch,
       matchType: r.matchType,
     }));
     const lower = q.toLowerCase();
@@ -265,10 +269,12 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
         onPreviewAttachment(row.path);
       } else {
         pushRecent(row.path);
-        // Search hits jump to the matched span (<mark> text, else the query).
-        const m = row.snippetRaw?.match(/<mark>([^<]{1,80})<\/mark>/);
-        const scrollToText = row.kind === 'search' ? (m?.[1] || query.trim() || undefined) : undefined;
-        onNavigate(row.path, scrollToText ? { scrollToText } : undefined);
+        // Search hits jump to the matched region (ordered candidates: snippet
+        // context window → first mark → heading → raw query).
+        const scrollToText = row.kind === 'search'
+          ? jumpNeedles({ snippet: row.snippetRaw, headingMatch: row.headingMatch, query })
+          : [];
+        onNavigate(row.path, scrollToText.length ? { scrollToText } : undefined);
       }
     }
     setOpen(false);
