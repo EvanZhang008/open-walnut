@@ -515,7 +515,7 @@ interface GroupRenderInfo {
  * THIS tier cluster — a lone pinned member of a group stays in place. Pure and
  * order-stable, so re-running on already-clustered input is a no-op. Returns ids.
  */
-function clusterTierByGroup(tasks: Task[]): string[] {
+function clusterTierByGroup(tasks: Task[], sinkFolders = false): string[] {
   const byGroup = new Map<string, string[]>();
   for (const t of tasks) {
     if (t.group_id) {
@@ -526,6 +526,20 @@ function clusterTierByGroup(tasks: Task[]): string[] {
   }
   const emitted = new Set<string>();
   const out: string[] = [];
+  if (sinkFolders) {
+    // A1 ordering (project view): loose tasks first, folder clusters sink AFTER
+    // them. Two-pass emit keeps each side's relative order → still idempotent.
+    // NOT applied in custom view, where the user's hand order is authority.
+    for (const t of tasks) {
+      if (!t.group_id) out.push(t.id);
+    }
+    for (const t of tasks) {
+      if (!t.group_id || emitted.has(t.group_id)) continue;
+      emitted.add(t.group_id);
+      out.push(...(byGroup.get(t.group_id) ?? []));
+    }
+    return out;
+  }
   for (const t of tasks) {
     const members = t.group_id ? byGroup.get(t.group_id) : undefined;
     if (t.group_id && members && members.length >= 1) {
@@ -878,6 +892,11 @@ const SortableTaskItem = memo(function SortableTaskItem({ task, isFocused, isDet
       {...activeAttributes}
       {...activeListeners}
     >
+      {/* Highlight layer (A1 gutter): state backgrounds paint on this inset pill
+          (starts 14px in), NOT on the row itself — content-visibility's paint
+          containment clips anything outside the row's padding box, so the unread
+          dot must stay INSIDE the row while the highlight starts after it. */}
+      <span className="todo-row-pill" aria-hidden="true" />
       {/* Select-mode checkbox — explicit multi-select affordance (leading the row). */}
       {selectMode && (
         <button
@@ -3267,8 +3286,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // the separator machinery (drag state, add/delete/rename) lives further down.
   const separators = ordering?.separators ?? NO_SEPARATORS;
   const clusterForTier = useCallback((tier: string, tierTasks: Task[]): string[] => {
-    const grouped = clusterTierByGroup(tierTasks);
     const isCustom = tierViewMode(tier) === 'custom';
+    // Project view sinks folder clusters below the loose tasks (A1); custom view
+    // keeps the lead-anchored cluster so the user's hand order stays authoritative.
+    const grouped = clusterTierByGroup(tierTasks, !isCustom);
     const projected = isCustom
       ? grouped
       : clusterTierByProject(grouped, tierTasks, ordering?.projectOrder);
@@ -4775,19 +4796,21 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const children = childrenOf.get(task.id);
       if (children) for (const child of children) emitWithChildren(child);
     }
+    // A1 ordering: loose tasks first, folder clusters sink AFTER them. The
+    // main list buckets this order by project, so within every project the
+    // loose tasks render on top and folders collect at the bottom.
     for (const task of topLevel) {
-      if (visited.has(task.id)) continue;
+      if (visited.has(task.id) || task.group_id) continue;
+      emitWithChildren(task);
+    }
+    for (const task of topLevel) {
+      if (visited.has(task.id) || !task.group_id) continue;
       // Group lead: emit the whole cluster contiguously, then mark it done so
       // later members (already visited) are skipped in place.
-      const members = task.group_id && !emittedGroups.has(task.group_id)
-        ? groupTopMembers.get(task.group_id)
-        : undefined;
-      if (members && members.length >= 1) {
-        emittedGroups.add(task.group_id!);
-        for (const m of members) emitWithChildren(m);
-      } else {
-        emitWithChildren(task);
-      }
+      if (emittedGroups.has(task.group_id)) continue;
+      emittedGroups.add(task.group_id);
+      const members = groupTopMembers.get(task.group_id) ?? [task];
+      for (const m of members) emitWithChildren(m);
     }
     return order;
   }, [sortBy]);

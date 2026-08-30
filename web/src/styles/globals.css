@@ -10062,9 +10062,13 @@ body.walnut-dragging {
 }
 
 .todo-pinned-card {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
+  /* A1 gutter: 14px margin keeps a fixed dot column outside the card's own
+     background/border, mirroring .todo-panel-item. */
+  margin-left: 14px;
   padding: 4px 6px;
   border-radius: 6px;
   cursor: pointer;
@@ -10388,9 +10392,11 @@ body.walnut-dragging {
 /* ── Focus card styles — same neutral base as .todo-pinned-card ── */
 
 .todo-focus-card {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
+  margin-left: 14px; /* A1 dot gutter — see .todo-pinned-card */
   padding: 4px 6px;
   border-radius: 6px;
   cursor: pointer;
@@ -10571,6 +10577,18 @@ body.walnut-dragging {
   display: flex;
   align-items: flex-start;
   gap: 4px;
+  /* A1 gutter (2026-08-30): the left 14px of the row is a fixed dot gutter.
+     content-visibility's paint containment clips anything painted outside the
+     row's padding box, so the gutter must stay INSIDE the row: state
+     backgrounds paint on the .todo-row-pill child (absolute, left:14px) via
+     --row-pill-bg, never on the row element itself — the highlight starts at
+     the phase-circle side and the unread dot floats in the gutter, so circles
+     align whether or not a dot is present. --dot-pull is the dot's left offset
+     relative to .todo-item-title-row; contexts that move the title-row
+     (project buckets, folder members) re-derive it so the dot stays at a FIXED
+     far-left column (~3px from the panel edge). */
+  --dot-pull: -19px;
+  isolation: isolate;
   padding: 4px 6px 4px 22px;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
@@ -10608,7 +10626,7 @@ body.walnut-dragging {
 }
 .todo-panel-item:focus-visible {
   outline: none;
-  background: var(--accent-subtle);
+  --row-pill-bg: var(--accent-subtle);
 }
 
 .todo-panel-item:last-child {
@@ -10616,7 +10634,31 @@ body.walnut-dragging {
 }
 
 .todo-panel-item:hover {
-  background: var(--accent-subtle);
+  --row-pill-bg: var(--accent-subtle);
+}
+
+/* The A1 highlight layer: every row-state background paints HERE (via
+   --row-pill-bg), inset 14px from the row's left edge, so the unread-dot
+   gutter never gets tinted and the highlight visually starts at the phase
+   circle. A child span (not a pseudo) because ::before is the folder rail and
+   ::after the done-overlay. z-index:-1 + isolation:isolate on the row keeps it
+   under the row content but inside the row's own stacking context. */
+.todo-row-pill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 14px;
+  right: 0;
+  border-radius: 7px;
+  background: var(--row-pill-bg, transparent);
+  border-left: 0 solid var(--accent); /* .task-focused widens to 3px; .task-filter-override dashes it */
+  pointer-events: none;
+  z-index: -1;
+  transition: background 0.15s;
+}
+/* Folder members: the pill starts at the member indent, not the row edge. */
+.todo-panel-item.task-grouped .todo-row-pill {
+  left: 30px;
 }
 
 /* "Needs action" — phase is AGENT_COMPLETE / WAIT. Same red
@@ -10624,11 +10666,11 @@ body.walnut-dragging {
    surface speaks one language: red row = act on me. Phase-driven, so it stays
    on until the human completes the task or a new turn starts. */
 .todo-panel-item-needs-action {
-  background: rgba(255, 59, 48, 0.08);
+  --row-pill-bg: rgba(255, 59, 48, 0.08);
 }
 
 .todo-panel-item-needs-action:hover {
-  background: rgba(255, 59, 48, 0.14);
+  --row-pill-bg: rgba(255, 59, 48, 0.14);
 }
 
 .todo-panel-item-done {
@@ -10658,7 +10700,9 @@ body.walnut-dragging {
   to   { background: rgba(52, 199, 89, 0.06); }
 }
 .todo-panel-item-recently-done {
-  background: rgba(52, 199, 89, 0.06);
+  --row-pill-bg: rgba(52, 199, 89, 0.06);
+}
+.todo-panel-item-recently-done .todo-row-pill {
   animation: todo-recently-done-flash 360ms ease-out;
 }
 /* Completed grace period: the row sits COMPLETELY STILL (green tint, check-mark flip
@@ -10947,12 +10991,26 @@ body.walnut-dragging {
    whole folder. Shared by the home Todo panel (.todo-panel-item), the /tasks
    list (.task-card), and the pinned-tier cards (.todo-focus-card /
    .todo-pinned-card). --group-outline tracks the theme accent at low strength. */
-.todo-panel-item.task-grouped,
 .task-card.task-grouped,
 .todo-focus-card.task-grouped,
 .todo-pinned-card.task-grouped {
   position: relative;
   margin-left: 30px;
+}
+/* Panel rows can't use margin for the member indent: content-visibility clips
+   descendant painting at the row's padding box, so the far-left unread dot must
+   stay INSIDE the row — indent via padding instead (36px = 22 base + 14 step;
+   project buckets override to 44). The rail moves to a positive offset. */
+.todo-panel-item.task-grouped {
+  --dot-pull: -33px;
+  padding-left: 36px;
+}
+/* Tier member cards keep the margin indent (no content-visibility there), but
+   their unread dot must sit in the shared far-left column (outer x≈3), clear
+   of the rail line at x≈21 — left:-11 would land ON the rail. */
+.todo-focus-card.task-grouped > .task-unread-dot,
+.todo-pinned-card.task-grouped > .task-unread-dot {
+  left: -27px;
 }
 .todo-panel-item.task-grouped::before,
 .task-card.task-grouped::before,
@@ -10967,6 +11025,12 @@ body.walnut-dragging {
   border-radius: 1px;
   background: var(--group-outline);
   pointer-events: none;
+}
+/* Panel rows indent via padding (see above), so their rail sits at a positive
+   offset INSIDE the row box (x=21, between the folder head edge and the member
+   pill at 30) — a negative offset would be clipped by content-visibility. */
+.todo-panel-item.task-grouped::before {
+  left: 21px;
 }
 /* The last member's rail stops at its own bottom edge (no bridge below). */
 .todo-panel-item.task-group-last::before,
@@ -11176,44 +11240,37 @@ body.walnut-dragging {
   background: var(--error);
 }
 
-/* Pinned / Focus / Satellite cards are narrow flex rows (gap:6px). The dot must
-   NOT shift the phase circle (unread rows would misalign with their neighbors),
-   so its flex footprint must net to ZERO: dot margins + width + the extra 6px
-   gap it introduces must sum to 0. The corridor [drag handle → circle ring] is
-   only ~10px, so to give the dot a breathable ~8px gap to the circle ring
-   (user-picked design, 2026-08-13) the element just BEFORE the dot (drag handle /
-   select checkbox / tier dot — hence sibling :has, not a class) slides 4px left.
-   Net: -4 (prev sibling) + 6 (gap) - 7 (ml) + 7 (w) - 2 (mr) = 0; circle stays
-   pixel-identical to non-unread rows. */
+/* Pinned / Focus / Satellite cards (A1 gutter): the dot floats absolutely in the
+   card's 14px left gutter (margin-left on the card), so it takes NO flex slot —
+   the old net-zero margin dance is gone and circles align with or without a dot. */
 .todo-pinned-card > .task-unread-dot,
 .todo-focus-card > .task-unread-dot {
-  margin-left: -7px;
-  margin-right: -2px;
-}
-.todo-pinned-card > :has(+ .task-unread-dot),
-.todo-focus-card > :has(+ .task-unread-dot) {
-  margin-left: -4px;
+  position: absolute;
+  left: -11px;
+  top: 50%;
+  transform: translateY(-50%);
+  margin: 0;
 }
 
-/* List-row form — pinned into .todo-panel-item's left padding gutter so it never
-   shifts the phase icon. Two magic numbers, both load-bearing:
-   - left:-13px is empirical: phase-icon left edge measured at x=90, dot at x=77 →
-     13px gutter. It is RELATIVE to .todo-panel-item's padding-left (22px); changing
-     that padding requires re-deriving this offset.
-   - top:50%+translateY (NOT a fixed top:11px, which was tried and broke alignment
-     when titles wrap to multiple lines) keeps it centered against the phase icon. */
+/* List-row form — floated into the A1 gutter left of the row's highlight.
+   left = var(--dot-pull), RELATIVE to .todo-item-title-row (position:relative);
+   each indent context re-derives the pull so the dot lands at panel x≈3 (see
+   .todo-panel-item). top:50%+translateY (NOT a fixed top:11px, which was tried
+   and broke alignment when titles wrap) keeps it centered on the phase icon. */
 .todo-item-title-row .task-unread-dot {
   position: absolute;
-  left: -13px;
+  left: var(--dot-pull, -19px);
   top: 50%;
   transform: translateY(-50%);
 }
-/* Parent tasks render an absolutely-positioned collapse chevron in that same gutter
-   (left:2px, 18px wide → occupies x≈[2,20] of .todo-panel-item). The default dot
-   sits at x≈[9,16] and would overlap the chevron glyph. When a chevron is present,
-   tuck the dot just right of the chevron box (item x≈15) so both stay legible. */
-.todo-panel-item:has(> .collapse-chevron) .todo-item-title-row .task-unread-dot {
-  left: -7px;
+/* Parent tasks render a collapse chevron in that same gutter (box at panel
+   x≈[2,20]) which would sit on top of the far-left dot. When a chevron is
+   present, tuck the dot just INSIDE the highlight, right of the chevron box. */
+.todo-panel-item:has(> .collapse-chevron) {
+  --dot-pull: -7px;
+}
+.todo-group-project .todo-panel-item:has(> .collapse-chevron) {
+  --dot-pull: -8px;
 }
 
 .todo-item-title {
@@ -13205,10 +13262,17 @@ body.walnut-dragging {
 }
 
 /* Tasks under a project group: align with the project name's first letter
-   (chevron + gap ≈ 30px). Descendant selector (not >) because SortableContext
-   inserts wrapper divs. */
+   (content at panel x=30: 14px gutter margin + 16px padding). Descendant
+   selector (not >) because SortableContext inserts wrapper divs. */
 .todo-group-project .todo-panel-item {
+  --dot-pull: -27px;
   padding-left: 30px;
+}
+/* Folder members in a bucket: content sits one indent step deeper (44px); the
+   unread dot stays in the SAME far-left column as every other row. */
+.todo-group-project .todo-panel-item.task-grouped {
+  --dot-pull: -41px;
+  padding-left: 44px;
 }
 
 /* Drag overlay (floating copy while dragging) */
@@ -13748,14 +13812,16 @@ body.walnut-dragging {
 /* ===== Task Focus State ===== */
 
 .task-focused {
-  background: var(--accent-subtle);
-  border-left: 3px solid var(--accent);
-  padding-left: 5px;
-  transition: background 0.2s ease, border-left 0.2s ease;
+  --row-pill-bg: var(--accent-subtle);
+}
+/* Accent bar rides the pill's left edge (the highlight start), so it never
+   shifts row content and never tints the unread-dot gutter. */
+.task-focused .todo-row-pill {
+  border-left-width: 3px;
 }
 
 .task-focused:hover {
-  background: var(--accent-subtle);
+  --row-pill-bg: var(--accent-subtle);
 }
 
 /* ===== Drop-intent: NEST as subtask (right indent zone) =====
@@ -13763,14 +13829,15 @@ body.walnut-dragging {
  * another task card, that target lights up with a full ring — dropping there nests
  * the dragged task as a subtask. (Main list only; Pin tiers have no subtasks.) */
 .todo-panel-item-nest-target {
-  background: var(--accent-subtle);
+  --row-pill-bg: var(--accent-subtle);
+}
+.todo-panel-item-nest-target .todo-row-pill {
   box-shadow: inset 0 0 0 2px var(--accent);
-  border-radius: 6px;
   animation: todo-nest-pulse 1.1s ease-in-out infinite;
 }
 
 .todo-panel-item-nest-target:hover {
-  background: var(--accent-subtle);
+  --row-pill-bg: var(--accent-subtle);
 }
 
 @keyframes todo-nest-pulse {
@@ -13786,7 +13853,14 @@ body.walnut-dragging {
  * echoing the group cluster's left outline. Uses inset box-shadow (no layout shift)
  * and an explicit accent fill so it's unmistakable against the nest ring. Applies to
  * both the main list (.todo-panel-item) and pinned-tier cards. */
-.todo-panel-item-group-target {
+.todo-panel-item-group-target .todo-row-pill {
+  box-shadow: inset 3px 0 0 0 var(--accent), inset 0 0 0 1.5px var(--group-outline, rgba(0,122,255,0.32));
+  animation: todo-group-pulse 1.1s ease-in-out infinite;
+}
+/* Tier cards reuse the group-target class but have no .todo-row-pill layer —
+   they keep the ring on the card itself. */
+.todo-focus-card.todo-panel-item-group-target,
+.todo-pinned-card.todo-panel-item-group-target {
   box-shadow: inset 3px 0 0 0 var(--accent), inset 0 0 0 1.5px var(--group-outline, rgba(0,122,255,0.32));
   border-radius: 6px;
   animation: todo-group-pulse 1.1s ease-in-out infinite;
@@ -13798,7 +13872,7 @@ body.walnut-dragging {
 
 /* ===== Focus override: task temporarily shown outside current filters ===== */
 
-.task-filter-override {
+.task-filter-override .todo-row-pill {
   border-left-style: dashed;
 }
 
