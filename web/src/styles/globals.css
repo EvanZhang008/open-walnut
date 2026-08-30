@@ -10740,22 +10740,28 @@ body.walnut-dragging {
 /* The chip sits flush on TOP of the cluster box and forms its top edge: left/right/top
    walls + top rounding mirror the member outline so chip + members read as one ring.
    No fill — keeps it lightweight and lets nothing compete with member status colors. */
+/* Folder header row (V2 tree look, 2026-08-30): a folder renders like a light
+   sub-header INSIDE its project — chevron + hollow folder icon + name + count —
+   with its member rows indented under a left rail. Replaces the old "chip band
+   + box outline" look, which was visually indistinguishable from a project
+   label (both were folder-icon + text at zero indent). Projects use the SOLID
+   folder icon + a small "project" tag; folders stay hollow + indented. */
 .task-group-chip {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px 2px;
-  margin-top: 6px;
-  font-size: 11px;
+  gap: 5px;
+  padding: 4px 8px 3px;
+  margin-top: 4px;
+  margin-left: 14px;
+  font-size: 12px;
   font-weight: 600;
-  color: var(--accent);
-  border: 1.5px solid var(--group-outline);
-  border-bottom: none;
-  border-top-left-radius: 7px;
-  border-top-right-radius: 7px;
+  color: var(--text-secondary, #6b7280);
+  border: none;
+  border-radius: 7px;
   background: transparent;
   user-select: none;
 }
+.task-group-chip .collapse-chevron { margin-left: -4px; }
 .task-group-chip-icon {
   font-size: 11px;
   opacity: 0.85;
@@ -10766,16 +10772,47 @@ body.walnut-dragging {
    droppable row inside its project bucket. Dashed + closed border (no member
    box hangs below it) and a muted look until a drag hovers it. */
 .task-group-chip-empty {
-  border: 1.5px dashed var(--group-outline);
-  border-radius: 7px;
+  border: 1.5px dashed transparent;
   margin-bottom: 4px;
-  opacity: 0.75;
+  opacity: 0.7;
 }
-.task-group-chip-empty:hover { opacity: 1; }
+.task-group-chip-empty:hover { opacity: 1; border-color: var(--group-outline); }
 .task-group-chip-drop {
   opacity: 1;
-  border-style: solid;
+  border: 1.5px solid var(--accent);
   background: rgba(0, 122, 255, 0.08);
+}
+.task-group-chip-empty-hint {
+  font-size: 11px;
+  font-style: italic;
+  font-weight: 400;
+  color: var(--fg-muted, #8a8f98);
+  margin-left: 2px;
+}
+/* Solid project icon on the main-list bucket headers (matches the pinned
+   By-project labels). */
+.todo-group-project-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--fg-muted, #8a8f98);
+  opacity: 0.85;
+}
+/* Tiny "project" kind-tag on project labels — with folders now nesting inside
+   projects, the label row spells out which level it is (solid icon + this tag =
+   project; hollow icon + indent = folder). */
+.project-kind-tag {
+  flex: none;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted, #8a8f98);
+  border: 1px solid var(--border-strong, #d1d5db);
+  border-radius: 4px;
+  padding: 0 3px;
+  line-height: 1.5;
+  opacity: 0.65;
+  user-select: none;
 }
 .task-group-chip-count {
   font-size: 10px;
@@ -10902,45 +10939,45 @@ body.walnut-dragging {
   border-radius: 6px;
   background: rgba(120, 120, 128, 0.16);
 }
-/* Cluster outline — a lightweight BOX drawn around the group's members, NOT a
-   background fill. Rationale: members carry their own state colors (red attention,
-   active, session-open). A tinted fill or left rail would override/clash with those
-   — so a grouped task used to lose its red attention background. Instead we only draw
-   a thin border "ring": left + right walls on every member, top edge + rounding on the
-   lead, bottom edge + rounding on the last. The card's own background (incl. status
-   colors) shows through untouched. Shared by the home Todo panel (.todo-panel-item),
-   the /tasks list (.task-card), and the pinned-tier cards (.todo-focus-card /
+/* Folder members — indent + left RAIL (V2 tree look). The rail is a ::before
+   pseudo line drawn OUTSIDE the card's box (left: -8px), so it never fights the
+   card's own state background (red attention, active, session-open) the way a
+   border-left or tinted fill would. It over-extends 3px top/bottom to bridge
+   the flex `gap` between tier cards so the line reads continuous down the
+   whole folder. Shared by the home Todo panel (.todo-panel-item), the /tasks
+   list (.task-card), and the pinned-tier cards (.todo-focus-card /
    .todo-pinned-card). --group-outline tracks the theme accent at low strength. */
 .todo-panel-item.task-grouped,
 .task-card.task-grouped,
 .todo-focus-card.task-grouped,
 .todo-pinned-card.task-grouped {
-  border-left: 1.5px solid var(--group-outline);
-  border-right: 1.5px solid var(--group-outline);
-  /* Square the per-card corners so members fuse into one continuous box. The only
-     rounding is the chip's top corners + .task-group-last's bottom corners (below). */
-  border-radius: 0;
+  position: relative;
+  margin-left: 30px;
 }
-/* Focus/Pinned tiers lay cards out in a flex column with `gap: 2px`, which would
-   slice a 2px page-background stripe between every grouped member (the "line break"
-   the box look must avoid). Pull each grouped member up by exactly that gap so its
-   side walls run flush into the previous member's — and the lead's flush into the
-   chip's — making the whole cluster read as a single outlined box. (The home list
-   and /tasks list use border-bottom separators, no gap, so they need no pull.) */
-.todo-focus-card.task-grouped,
-.todo-pinned-card.task-grouped {
-  margin-top: -2px;
+.todo-panel-item.task-grouped::before,
+.task-card.task-grouped::before,
+.todo-focus-card.task-grouped::before,
+.todo-pinned-card.task-grouped::before {
+  content: '';
+  position: absolute;
+  left: -9px;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--group-outline);
+  pointer-events: none;
 }
-/* The lead's top edge is supplied by the chip sitting directly above it (the chip
-   draws the box's top wall + rounding), so the lead itself only needs the side walls
-   from .task-grouped — no extra top border, or it'd double up against the chip. */
-.todo-panel-item.task-group-last,
-.task-card.task-group-last,
-.todo-focus-card.task-group-last,
-.todo-pinned-card.task-group-last {
-  border-bottom: 1.5px solid var(--group-outline);
-  border-bottom-left-radius: 7px;
-  border-bottom-right-radius: 7px;
+/* The last member's rail stops at its own bottom edge (no bridge below). */
+.todo-panel-item.task-group-last::before,
+.task-card.task-group-last::before,
+.todo-focus-card.task-group-last::before,
+.todo-pinned-card.task-group-last::before {
+  bottom: 2px;
+}
+/* Rows hidden by a collapsed folder — the folder header row stays, members go. */
+.task-folder-collapsed {
+  display: none;
 }
 
 /* ── Multi-select (group building) ── */

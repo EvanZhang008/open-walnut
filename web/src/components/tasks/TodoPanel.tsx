@@ -492,14 +492,20 @@ interface SortableTaskItemProps {
   onDissolveGroup?: (groupId: string) => void;                       // Ungroup ALL members (dissolve the cluster)
   isGroupHidden?: boolean;                                           // This task's group is hidden from Focus
   onUnhideGroup?: (groupId: string) => void;                         // Restore a Focus-hidden group
+  /** Folder collapse (main list): true = this row's folder is folded, hide the
+   *  row (the header row above the lead stays visible and carries the chevron). */
+  folderCollapsed?: boolean;
+  /** Stable toggle (takes the group id) — presence renders the chevron. */
+  onToggleFolder?: (groupId: string) => void;
 }
 
-/** Per-task virtual-group render metadata (computed in TodoPanel, consumed by SortableTaskItem). */
+/** Per-task folder render metadata (computed in TodoPanel, consumed by SortableTaskItem). */
 interface GroupRenderInfo {
   groupId: string;
   label: string;
-  isLead: boolean;   // first member in sorted order — chip + top rounding go here
-  isLast: boolean;   // last member — bottom rounding goes here
+  isLead: boolean;   // first member in sorted order — the folder header row goes here
+  isLast: boolean;   // last member — the rail stops here
+  count: number;     // displayed member count (shown on the header row)
 }
 
 /**
@@ -624,6 +630,7 @@ function buildTierGroupMeta(displayed: Task[], labels?: Record<string, string>):
       label: labels?.[gid] ?? '',
       isLead,
       isLast: lastIdxByGroup.get(gid) === i,
+      count: counts.get(gid) ?? 0,
     });
   });
   return map;
@@ -633,7 +640,7 @@ function buildTierGroupMeta(displayed: Task[], labels?: Record<string, string>):
 // into a main-thread block. All props are stable references (useCallback
 // handlers, per-task objects reused by the useTasks identity-preserving merge),
 // so shallow compare skips unchanged rows.
-const SortableTaskItem = memo(function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onStartSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveToProject, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup }: SortableTaskItemProps) {
+const SortableTaskItem = memo(function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onStartSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveToProject, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup, folderCollapsed, onToggleFolder }: SortableTaskItemProps) {
   // Live circle: error red / waiting red-pulse / running green-pulse.
   const circleClass = useTaskCircle(task);
   const {
@@ -678,6 +685,7 @@ const SortableTaskItem = memo(function SortableTaskItem({ task, isFocused, isDet
     groupInfo ? 'task-grouped' : '',
     groupInfo?.isLead ? 'task-group-lead' : '',
     groupInfo?.isLast ? 'task-group-last' : '',
+    groupInfo && folderCollapsed ? 'task-folder-collapsed' : '',
     isSelected ? 'task-multi-selected' : '',
   ].filter(Boolean).join(' ');
 
@@ -810,13 +818,24 @@ const SortableTaskItem = memo(function SortableTaskItem({ task, isFocused, isDet
 
   return (
     <>
-    {/* Folder header chip — only above the lead member; names the whole folder. */}
+    {/* Folder header row — only above the lead member; names the whole folder.
+        V2 tree look: chevron (collapse) + hollow folder icon + name + count; the
+        member rows indent under a rail. Stays visible when collapsed. */}
     {groupInfo?.isLead && (
       <div
         className="task-group-chip"
-        style={depth > 0 ? { marginLeft: `${depth * 22}px` } : undefined}
+        style={depth > 0 ? { marginLeft: `${14 + depth * 22}px` } : undefined}
         title="Folder — independent tasks kept together inside this project"
       >
+        {onToggleFolder && (
+          <button
+            className={`collapse-chevron${!folderCollapsed ? ' expanded' : ''}`}
+            onClick={(e) => { e.stopPropagation(); onToggleFolder(groupInfo.groupId); }}
+            title={folderCollapsed ? `Expand ${groupInfo.count} task(s)` : 'Collapse folder'}
+          >
+            {CHEVRON_ICON}
+          </button>
+        )}
         <span className="task-group-chip-icon" aria-hidden="true">
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z" /></svg>
         </span>
@@ -827,6 +846,7 @@ const SortableTaskItem = memo(function SortableTaskItem({ task, isFocused, isDet
         >
           {groupInfo.label}
         </span>
+        <span className="task-group-chip-count" aria-hidden="true">{groupInfo.count}</span>
         {/* Delete the folder — tasks fall back to the project in place. */}
         {onDissolveGroup && (
           <button
@@ -1086,7 +1106,7 @@ function EmptyFolderRow({ groupId, label, project, onRename, onDelete }: {
       >
         {label}
       </span>
-      <span className="task-group-chip-count" aria-hidden="true">empty</span>
+      <span className="task-group-chip-empty-hint" aria-hidden="true">empty — drag a task here</span>
       {onDelete && (
         <button
           className="task-group-chip-dissolve"
@@ -4974,10 +4994,29 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         label: taskGroups?.[gid] ?? '',
         isLead,
         isLast: lastIdxByGroup.get(gid) === i,
+        count: counts.get(gid) ?? 0,
       });
     });
     return map;
   }, [sorted, taskGroups]);
+
+  // Folder collapse (main list). Persisted so a fold survives reloads; keyed by
+  // group id. The folder header row stays and carries the chevron; member rows
+  // get .task-folder-collapsed (display:none) so dnd ids stay mounted.
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem('open-walnut-collapsed-folders');
+      return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
+    } catch { return new Set(); }
+  });
+  const toggleFolderCollapse = useCallback((groupId: string) => {
+    setCollapsedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId); else next.add(groupId);
+      try { localStorage.setItem('open-walnut-collapsed-folders', JSON.stringify([...next])); } catch { /* quota — non-fatal */ }
+      return next;
+    });
+  }, []);
 
   // Determine if a child task should be hidden (any ancestor is collapsed — walks full chain)
   const isChildHidden = useCallback((taskId: string) => {
@@ -6202,8 +6241,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             }}
             title="Drag to reorder projects"
           >
-            <span className="tier-project-label-icon">{ICONS.ICON_FOLDER}</span>
+            {/* SOLID icon + kind-tag = project; folders inside render with the
+                hollow icon + indent, so the two levels never read the same. */}
+            <span className="tier-project-label-icon">{ICONS.ICON_FOLDER_SOLID}</span>
             <span className="tier-project-label-name">{proj || 'Inbox'}</span>
+            <span className="project-kind-tag">project</span>
             {/* Project "+" (GAP-2) — the same control the All-view project header
                 carries, so a by-project tier reads and behaves the same way: new
                 task / new task with session / add separator. The SESSION item is
@@ -7116,7 +7158,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                               </button>
                               {/* Inbox is the ABSENCE of a project — no registry row, so no detail pane and no favorite star. */}
                               <button className="todo-group-name-btn" onClick={() => showProjectDetail(project)} disabled={!project} title={project ? 'View project details' : 'Tasks with no project'}>
+                                {/* SOLID icon + kind-tag = project (folders inside use the hollow icon + indent). */}
+                                <span className="todo-group-project-icon">{ICONS.ICON_FOLDER_SOLID}</span>
                                 <span className="todo-group-project-name">{project || 'Inbox'}</span>
+                                <span className="project-kind-tag">project</span>
                                 <ProjectSourceBadge source={projectRegistry.sourceByName.get(project.toLowerCase())} />
                                 <span className="todo-group-count text-xs text-muted">{projTasks.length}</span>
                               </button>
@@ -7204,6 +7249,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 isGroupHidden={!!(task.group_id && hiddenGroups?.has(task.group_id))}
                                 onUnhideGroup={handleUnhideGroup}
                                 onDissolveGroup={handleDissolveGroup}
+                                folderCollapsed={!!(task.group_id && collapsedFolders.has(task.group_id))}
+                                onToggleFolder={toggleFolderCollapse}
                               />
                             );
                           })}
