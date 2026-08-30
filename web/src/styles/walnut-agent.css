@@ -33,53 +33,61 @@
   }
 }
 
-/* ── Draft mode tabs (Start Task | Ask Walnut) ── */
-/* The approved mockup's grammar (user round 7: "两个大的 button 在中间…visually
-   更清楚"): two FULL-WIDTH halves, centered labels, generous padding, on a
-   muted strip; the active half lifts to the panel background with a 2px
-   colored underline. Deliberately bigger than the app's content-width tab
-   strips — this is the entry fork, not a filter. */
-.draft-mode-tabs {
+/* ── Draft entry fork: two big intent cards (Start Task | Ask Walnut) ── */
+/* The approved mockup's Design-2 card grammar (user round 8: "两个大的圆的",
+   not a tab strip): rounded cards with icon + title + one-line description,
+   centered in the empty body; hover lifts, the selected card gets the colored
+   border + soft ring. This is the entry fork, decided before the first
+   keystroke — it deserves the space. */
+.draft-intent-stack {
   display: flex;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.draft-mode-tab {
-  flex: 1;
-  display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 11px 10px;
-  border: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;   /* tab underline sits ON the divider */
-  background: none;
-  font-family: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
-  white-space: nowrap;
+  gap: 18px;
+  width: 100%;
 }
-.draft-mode-tab:hover { color: var(--fg); }
-.draft-mode-tab.is-active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
+.draft-intent-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  width: min(520px, 94%);
+}
+.draft-intent-card {
+  border: 1.5px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 16px 16px;
   background: var(--bg);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s, transform 0.15s;
+}
+.draft-intent-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+}
+.draft-intent-card:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 2px;
+}
+.draft-intent-ic { display: block; font-size: 22px; margin-bottom: 10px; }
+.draft-intent-t { display: block; font-weight: 700; font-size: 14px; margin-bottom: 5px; color: var(--fg); }
+.draft-intent-d { display: block; font-size: 12px; color: var(--fg-muted); line-height: 1.5; }
+.draft-intent-card.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
   cursor: default;
 }
-.draft-mode-tab-walnut.is-active {
-  color: var(--walnut-accent);
-  border-bottom-color: var(--walnut-accent);
+.draft-intent-card.is-active:hover { transform: none; }
+.draft-intent-card.is-active .draft-intent-t { color: var(--accent); }
+.draft-intent-card-walnut.is-active {
+  border-color: var(--walnut-accent);
+  background: color-mix(in srgb, var(--walnut-accent) 7%, var(--bg));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--walnut-accent) 14%, transparent);
 }
-.draft-mode-tab:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
-  outline-offset: -2px;
-}
-.draft-mode-tab-walnut:focus-visible {
+.draft-intent-card-walnut.is-active .draft-intent-t { color: var(--walnut-accent); }
+.draft-intent-card-walnut:focus-visible {
   outline-color: color-mix(in srgb, var(--walnut-accent) 60%, transparent);
 }
 
