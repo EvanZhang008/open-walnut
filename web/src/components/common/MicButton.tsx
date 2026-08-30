@@ -18,6 +18,13 @@ import { log } from '@/utils/log';
 interface MicButtonProps {
   /** Called with transcribed text */
   onTranscribe: (text: string) => void;
+  /**
+   * Opt in to live drafting: called with the running transcription of what has
+   * been said so far, every ~2s while recording. Each call REPLACES the text of
+   * the previous one, and the final onTranscribe replaces it too, so the words
+   * appear in the caller's text box as the user speaks. Omit for final-only.
+   */
+  onDraft?: (text: string) => void;
   /** ISO 639-1 language hint */
   language?: string;
   /** Disable the button */
@@ -50,9 +57,10 @@ function MicWaveform({ level }: { level: number }) {
   );
 }
 
-export function MicButton({ onTranscribe, language, disabled, size = 'md' }: MicButtonProps) {
-  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, silenceWarning, liveDraft } = useSpeechToText({
+export function MicButton({ onTranscribe, onDraft, language, disabled, size = 'md' }: MicButtonProps) {
+  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, silenceWarning } = useSpeechToText({
     onTranscribe,
+    onDraft,
     language,
   });
   const sttStatus = useSttStatus();
@@ -361,13 +369,6 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
           </svg>
         )}
       </button>
-      {/* Live draft — what the engine heard so far, refreshed every ~2s while
-          recording. Grey preview only; the final pass on release is authoritative. */}
-      {isRecording && liveDraft && !silenceWarning && (
-        <div className="mic-live-draft" role="status" aria-live="polite">
-          {liveDraft}
-        </div>
-      )}
       {/* Non-destructive dead-mic warning — shown WHILE recording; recording is never
           auto-stopped, and this clears itself the moment sound is detected again. */}
       {isRecording && silenceWarning && (

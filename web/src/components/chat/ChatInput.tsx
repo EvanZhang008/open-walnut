@@ -127,6 +127,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Span of composer text currently owned by an in-progress dictation, so each
+  // live draft replaces the previous one instead of stacking. null = no active
+  // dictation (the final result releases it).
+  const dictationSpanRef = useRef<{ start: number; length: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // "+" attach menu + send split-button dropdown (Claude-style). Both close on
@@ -852,6 +856,44 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     }
   };
 
+  /**
+   * Write dictated text into the composer. Drafts arrive every ~2s while the
+   * user is still speaking and each one SUPERSEDES the last, so we remember the
+   * span we wrote and overwrite it in place instead of appending. The final
+   * transcription overwrites that same span and then releases it, which is what
+   * makes the text usable the moment the user stops talking: the words they
+   * watched appear are already in the box, at the caret, ready to send.
+   *
+   * Anything the user types elsewhere while dictating is untouched, because we
+   * only ever replace [start, start+length) and re-derive the tail each time.
+   */
+  const writeDictation = (text: string, isDraft: boolean) => {
+    const el = textareaRef.current;
+    const span = dictationSpanRef.current;
+    // Fresh dictation: anchor at the caret, adding separators only once so the
+    // span we later replace never includes surrounding text.
+    if (!span) {
+      const pos = el?.selectionStart ?? value.length;
+      const before = value.slice(0, pos);
+      const after = value.slice(pos);
+      const pre = before.length > 0 && !/[\s]$/.test(before) ? ' ' : '';
+      const post = after.length > 0 && !/^[\s]/.test(after) ? ' ' : '';
+      const start = pos + pre.length;
+      handleChange(before + pre + text + post + after);
+      dictationSpanRef.current = isDraft ? { start, length: text.length } : null;
+      const caret = start + text.length;
+      requestAnimationFrame(() => { el?.setSelectionRange(caret, caret); el?.focus(); });
+      return;
+    }
+    // Subsequent draft (or the final result): swap the remembered span.
+    const head = value.slice(0, span.start);
+    const tail = value.slice(span.start + span.length);
+    handleChange(head + text + tail);
+    dictationSpanRef.current = isDraft ? { start: span.start, length: text.length } : null;
+    const caret = span.start + text.length;
+    requestAnimationFrame(() => { el?.setSelectionRange(caret, caret); el?.focus(); });
+  };
+
   const handlePaste = (e: ClipboardEvent) => {
     const items = e.clipboardData?.files;
     if (items && items.length > 0) {
@@ -1169,25 +1211,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         {controlsSlot}
         <span className="chat-input-controls-spacer" />
         <MicButton
-          onTranscribe={(text) => {
-            // Insert at cursor position (or append if no selection)
-            const el = textareaRef.current;
-            const pos = el?.selectionStart ?? value.length;
-            const before = value.slice(0, pos);
-            const after = value.slice(pos);
-            // Add space separator if inserting between existing text
-            const needSpaceBefore = before.length > 0 && !before.endsWith(' ') && !before.endsWith('\n');
-            const needSpaceAfter = after.length > 0 && !after.startsWith(' ') && !after.startsWith('\n');
-            const inserted = (needSpaceBefore ? ' ' : '') + text + (needSpaceAfter ? ' ' : '');
-            const newValue = before + inserted + after;
-            handleChange(newValue);
-            // Move cursor to end of inserted text
-            const newPos = pos + inserted.length;
-            requestAnimationFrame(() => {
-              el?.setSelectionRange(newPos, newPos);
-              el?.focus();
-            });
-          }}
+          onTranscribe={(text) => writeDictation(text, false)}
+          onDraft={(text) => writeDictation(text, true)}
           disabled={disabled}
         />
         <input

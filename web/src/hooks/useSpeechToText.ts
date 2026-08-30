@@ -13,6 +13,14 @@ import { log } from '@/utils/log';
 export interface UseSpeechToTextOptions {
   /** Called with transcribed text when transcription completes */
   onTranscribe: (text: string) => void;
+  /**
+   * Called with the running draft of what has been said so far, every couple of
+   * seconds while recording. Each call supersedes the previous one, so the
+   * consumer replaces the text it wrote last time rather than appending. When
+   * provided, the final onTranscribe call replaces that same region, so the
+   * words the user watched appear are the words they end up with.
+   */
+  onDraft?: (text: string) => void;
   /** ISO 639-1 language hint */
   language?: string;
 }
@@ -44,12 +52,8 @@ export interface UseSpeechToTextReturn {
    * mic. Auto-clears as soon as sound is detected. null = no warning.
    */
   silenceWarning: string | null;
-  /**
-   * Live draft transcription of what has been said SO FAR, updated every couple
-   * of seconds while recording. Preview only — the final transcription on stop
-   * is the authoritative one. null = no draft yet / not recording.
-   */
-  liveDraft: string | null;
+  /** True while a live draft is being streamed into the consumer's text. */
+  isDrafting: boolean;
 }
 
 // Mic-silence detection tunables.
@@ -81,7 +85,7 @@ const isMediaRecorderSupported =
   !!navigator.mediaDevices?.getUserMedia &&
   typeof MediaRecorder !== 'undefined';
 
-export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptions): UseSpeechToTextReturn {
+export function useSpeechToText({ onTranscribe, onDraft, language }: UseSpeechToTextOptions): UseSpeechToTextReturn {
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,7 +93,7 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
   const [hasLastRecording, setHasLastRecording] = useState(false);
   const [level, setLevel] = useState(0);
   const [silenceWarning, setSilenceWarning] = useState<string | null>(null);
-  const [liveDraft, setLiveDraft] = useState<string | null>(null);
+  const [isDrafting, setIsDrafting] = useState(false);
   // Live-draft machinery: interval timer + in-flight guard (drop ticks while a
   // draft request is still running instead of queuing behind it).
   const draftTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
@@ -116,6 +120,12 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
   // Refs mirror props to avoid stale closures in MediaRecorder.onstop async callback
   const onTranscribeRef = useRef(onTranscribe);
   onTranscribeRef.current = onTranscribe;
+  const onDraftRef = useRef(onDraft);
+  onDraftRef.current = onDraft;
+  // Last draft handed to the consumer this recording. If the final pass fails or
+  // comes back empty we deliver this instead, so the user keeps the words they
+  // watched appear (and the consumer's draft span gets released either way).
+  const lastDraftRef = useRef<string | null>(null);
   const languageRef = useRef(language);
   languageRef.current = language;
   const isMountedRef = useRef(true);
@@ -126,6 +136,22 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
   useEffect(() => {
     isMountedRef.current = true;
     return () => { isMountedRef.current = false; };
+  }, []);
+
+  /**
+   * Final pass failed or came back empty, but the user already watched a draft
+   * appear in their text box. Promote that draft to the final result rather than
+   * yanking it away: the words are good enough to send or edit, the audio is
+   * still in history for a Redo, and the consumer's draft span gets released.
+   * Returns true when a draft was promoted (so the caller skips the error).
+   */
+  const keepLastDraft = useCallback((): boolean => {
+    const draft = lastDraftRef.current;
+    if (!draft) return false;
+    lastDraftRef.current = null;
+    log.warn('stt', 'final transcription unusable — keeping the live draft text');
+    onTranscribeRef.current(draft);
+    return true;
   }, []);
 
   const stopStream = useCallback(() => {
@@ -145,6 +171,7 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
     mediaRecorderRef.current = null;
     setLevel(0);
     setSilenceWarning(null);
+    setIsDrafting(false);
   }, []);
 
   const toggleRecording = useCallback(async () => {
@@ -244,7 +271,6 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
         const deadStream = analyserAttachedRef.current && !sawAnyNonDeadRef.current;
         stopStream();
         setIsRecording(false);
-        setLiveDraft(null);
 
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
         chunksRef.current = [];
@@ -300,6 +326,7 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
           if (result.text) {
             setVoiceStatus({ transcribing: false, lastFailed: false });
             if (!isMountedRef.current) return;
+            lastDraftRef.current = null; // superseded by the authoritative pass
             onTranscribeRef.current(result.text);
             const preview = result.text.length > 50 ? result.text.slice(0, 50) + '...' : result.text;
             log.info('stt', `Transcribed: "${preview}" (${result.durationMs}ms)`);
@@ -310,7 +337,9 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
             log.warn('stt', `Transcription returned empty text (${result.durationMs}ms)`);
             setVoiceStatus({ transcribing: false, lastFailed: true });
             if (isMountedRef.current) {
-              setError('Transcription came back empty — the audio is kept, you can retry.');
+              if (!keepLastDraft()) {
+                setError('Transcription came back empty — the audio is kept, you can retry.');
+              }
             }
           }
         } catch (err) {
@@ -318,7 +347,7 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
           log.error('stt', `Transcription failed: ${msg} — audio kept for retry`);
           setVoiceStatus({ transcribing: false, lastFailed: true });
           if (!isMountedRef.current) return;
-          setError(msg);
+          if (!keepLastDraft()) setError(msg);
         } finally {
           if (isMountedRef.current) setIsTranscribing(false);
         }
@@ -336,11 +365,14 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
       // needs decodable audio-so-far (a from-the-start concat of webm chunks).
       recorder.start(1000);
       setIsRecording(true);
-      setLiveDraft(null);
+      setIsDrafting(false);
+      lastDraftRef.current = null;
+      if (!onDraftRef.current) return; // consumer takes final text only
 
       // Live draft: every couple of seconds transcribe what's been said so far
-      // and show it as a grey preview. Best-effort — any failure just means no
-      // preview this tick; the final transcription on stop is untouched by this.
+      // and hand it to the consumer, which writes it straight into its text box.
+      // Best-effort — any failure just means no update this tick; the final
+      // transcription on stop is untouched by this.
       const draftFormat = mimeType.includes('webm') ? 'webm' : mimeType.includes('mp4') ? 'mp4' : 'webm';
       draftBusyRef.current = false;
       draftTimerRef.current = setInterval(async () => {
@@ -366,7 +398,9 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
           // after stop must not flash over the final result). stopStream() nulls
           // mediaRecorderRef on stop, so this identity check is sufficient.
           if (isMountedRef.current && mediaRecorderRef.current === recorder && text) {
-            setLiveDraft(text);
+            setIsDrafting(true);
+            lastDraftRef.current = text;
+            onDraftRef.current?.(text);
           }
         } catch {
           // No preview this tick — silent by design.
@@ -429,6 +463,6 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
     hasLastRecording,
     level,
     silenceWarning,
-    liveDraft,
+    isDrafting,
   };
 }
