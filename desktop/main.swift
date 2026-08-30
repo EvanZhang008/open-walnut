@@ -76,6 +76,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var serverReadyAt: Date?
     var isRecoveringServer = false
     var isTerminating = false
+    // System-wide dictation hotkey. Lives in the app because only a signed bundle
+    // gets a microphone permission prompt (see GlobalDictation.swift).
+    var dictation: GlobalDictation?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DesktopLogger.shared.log("app_launched", fields: [
@@ -84,6 +87,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
 
         setupMainMenu()
+
+        // Register before the server is up: the hotkey reads the port lazily and
+        // tells the user to wait if it is not listening yet.
+        dictation = GlobalDictation(portProvider: { [weak self] in self?.serverPort })
+        dictation?.registerHotKey()
 
         let windowRect = NSRect(x: 0, y: 0, width: 1200, height: 800)
         window = NSWindow(
@@ -116,6 +124,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         isTerminating = true
         DesktopLogger.shared.log("app_terminating")
+        dictation?.unregisterHotKey()
         bootstrapProcess?.terminate()
         stopServer()
         DesktopLogger.shared.flush()
@@ -1436,6 +1445,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         webView.load(URLRequest(url: URL(string: "http://localhost:\(port)/settings")!))
     }
 
+    /// Same toggle the global hotkey drives: first call records, second transcribes
+    /// and copies. Exposed in the menu so the feature is discoverable and still
+    /// reachable when another app has claimed the key combination.
+    @objc func toggleDictation() {
+        dictation?.toggle()
+    }
+
     @objc func resetConfig() {
         // Destructive (forgets which installation this app points to) — always
         // confirm. This used to run bare off ⌘, and wiped the config silently.
@@ -1471,6 +1487,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Reset Setup, so a muscle-memory ⌘, silently wiped the app config.
         appMenu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ","))
         appMenu.addItem(NSMenuItem(title: "Reset Setup...", action: #selector(resetConfig), keyEquivalent: ""))
+        appMenu.addItem(NSMenuItem.separator())
+        // Discoverability for the global hotkey, and a way to dictate without it
+        // (another app may already own the key combination).
+        let dictateItem = NSMenuItem(title: "Dictate to Clipboard", action: #selector(toggleDictation), keyEquivalent: "d")
+        dictateItem.keyEquivalentModifierMask = [.control, .option, .command]
+        appMenu.addItem(dictateItem)
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(NSMenuItem(title: "Quit Walnut", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appMenuItem.submenu = appMenu

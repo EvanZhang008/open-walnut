@@ -23,13 +23,13 @@ mkdir -p "$MACOS" "$RESOURCES"
 # Compile for both architectures and create a universal binary
 echo "Compiling for arm64..."
 swiftc -O -o "$MACOS/${APP_NAME}_arm64" \
-    "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" \
-    -framework Cocoa -framework WebKit -target arm64-apple-macos12.0
+    "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" \
+    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -target arm64-apple-macos12.0
 
 echo "Compiling for x86_64..."
 swiftc -O -o "$MACOS/${APP_NAME}_x86_64" \
-    "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" \
-    -framework Cocoa -framework WebKit -target x86_64-apple-macos12.0
+    "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" \
+    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -target x86_64-apple-macos12.0
 
 echo "Creating universal binary..."
 lipo -create "$MACOS/${APP_NAME}_arm64" "$MACOS/${APP_NAME}_x86_64" \
