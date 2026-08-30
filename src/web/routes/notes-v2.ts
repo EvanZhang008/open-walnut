@@ -58,6 +58,7 @@ import {
   dbSizeBytes,
   getIndexMeta,
   NOTES_INDEX_SCHEMA_VERSION,
+  contentTokens,
   type LinkStatus,
 } from '../../core/notes-index.js'
 
@@ -890,33 +891,152 @@ function cleanSnippetText(s: string): string {
     .trim()
 }
 
-/** Wrap the first occurrence of the query in <mark>…</mark> for FE highlight. */
-function highlightSnippet(text: string, q: string): string {
-  if (!q) return text
-  const idx = text.toLowerCase().indexOf(q.toLowerCase())
-  if (idx < 0) return text
-  return (
-    text.slice(0, idx) +
-    '<mark>' +
-    text.slice(idx, idx + q.length) +
-    '</mark>' +
-    text.slice(idx + q.length)
-  )
+// ── Token-aware snippet + highlight ─────────────────────────────────────────
+//
+// A multi-word query ("canada non resident tax") almost never occurs in a note
+// as a contiguous phrase, so a whole-query indexOf produced NO window and NO
+// highlight for most real queries — rows fell back to the note's opening line
+// (often its own title, which the FE then hides as an echo). The unit of
+// matching is the TOKEN, same as the index legs: window on the densest token
+// cluster, mark every token occurrence.
+
+const SNIPPET_WINDOW = 240
+/** Pre-anchor context. The result row renders ONE line with ellipsis (~40-50
+ *  visible chars), so a long lead-in pushes the first <mark> out of view — the
+ *  row then looks unhighlighted even though the marks exist. Keep the lead
+ *  short enough that the match is always visible. */
+const SNIPPET_LEAD = 28
+const MAX_SNIPPET_MARKS = 12
+
+function hasCjkText(s: string): boolean {
+  return /[㐀-鿿豈-﫿぀-ヿ가-힯]/u.test(s)
 }
 
-/** Build a ±context snippet around the first match of q in body, cleaned + highlighted. */
-function makeSnippet(body: string, q: string): string {
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** Occurrence regex for one query token. Latin tokens must START at a word
+ *  boundary and the mark extends to the word's end ("resident" marks the whole
+ *  "Residents") — mid-word hits ("sin" in "Business") are noise, exactly the
+ *  rule the title bands learned. CJK has no word boundaries: substring IS the
+ *  match unit. Capture-group form, not lookbehind — this logic is mirrored
+ *  client-side where old WebKit throws on lookbehind at parse time. */
+function tokenOccurrenceRe(tok: string): RegExp {
+  return hasCjkText(tok)
+    ? new RegExp(`()(${escapeRe(tok)})`, 'giu')
+    : new RegExp(`(^|[^\\p{L}\\p{N}])(${escapeRe(tok)}[\\p{L}\\p{N}]*)`, 'giu')
+}
+
+/** Highlight tokens for a query: its content words plus the fuzzy-corrected
+ *  spelling's (the corrected form is what the note actually contains). Falls
+ *  back to every ≥2-char word when stopword-stripping leaves nothing ("how to
+ *  do it"). Longest-first so a longer token can't be shadowed by a shorter
+ *  prefix of itself. */
+export function snippetTokens(q: string, corrected?: string): string[] {
+  const toks = new Set<string>(contentTokens(q))
+  if (corrected) for (const t of contentTokens(corrected)) toks.add(t)
+  if (toks.size === 0) {
+    for (const t of q.toLowerCase().trim().split(/\s+/)) if (t.length >= 2) toks.add(t)
+  }
+  return [...toks].sort((a, b) => b.length - a.length)
+}
+
+/** Wrap the whole query phrase (when present) and every token occurrence in
+ *  <mark>…</mark>. Overlapping ranges collapse into the earlier/longer one. */
+export function highlightTokens(text: string, tokens: string[], fullQuery?: string): string {
+  if (!text) return text
+  const ranges: Array<[number, number]> = []
+  const overlaps = (s: number, e: number) => ranges.some(([rs, re]) => s < re && e > rs)
+  const phrase = fullQuery?.trim().toLowerCase()
+  if (phrase && phrase.length >= 2) {
+    const idx = text.toLowerCase().indexOf(phrase)
+    if (idx >= 0) ranges.push([idx, idx + phrase.length])
+  }
+  for (const tok of tokens) {
+    const re = tokenOccurrenceRe(tok)
+    let m: RegExpExecArray | null
+    while (ranges.length < MAX_SNIPPET_MARKS && (m = re.exec(text))) {
+      const s = m.index + m[1].length
+      const e = s + m[2].length
+      if (!overlaps(s, e)) ranges.push([s, e])
+      if (re.lastIndex === m.index) re.lastIndex++ // zero-width safety
+    }
+  }
+  if (ranges.length === 0) return text
+  ranges.sort((a, b) => a[0] - b[0])
+  let out = ''
+  let cursor = 0
+  for (const [s, e] of ranges) {
+    out += text.slice(cursor, s) + '<mark>' + text.slice(s, e) + '</mark>'
+    cursor = e
+  }
+  return out + text.slice(cursor)
+}
+
+/** First position of the window holding the most DISTINCT query tokens — the
+ *  words of a multi-word query cluster around the topical paragraph even when
+ *  the phrase never occurs verbatim. -1 when no token occurs at all. */
+function densestTokenWindow(lower: string, tokens: string[]): number {
+  const occs: Array<{ pos: number; tok: number }> = []
+  tokens.forEach((tok, ti) => {
+    const re = tokenOccurrenceRe(tok)
+    let m: RegExpExecArray | null
+    let n = 0
+    while (n < 20 && (m = re.exec(lower))) {
+      occs.push({ pos: m.index + m[1].length, tok: ti })
+      n++
+      if (re.lastIndex === m.index) re.lastIndex++
+    }
+  })
+  if (occs.length === 0) return -1
+  occs.sort((a, b) => a.pos - b.pos)
+  let best = occs[0].pos
+  let bestCount = 0
+  for (let i = 0; i < occs.length; i++) {
+    const seen = new Set<number>()
+    for (let j = i; j < occs.length && occs[j].pos <= occs[i].pos + SNIPPET_WINDOW; j++) {
+      seen.add(occs[j].tok)
+    }
+    if (seen.size > bestCount) {
+      bestCount = seen.size
+      best = occs[i].pos
+    }
+  }
+  return best
+}
+
+/** Build a ±context snippet around the best match region, cleaned + highlighted.
+ *  Window anchor priority: whole phrase > section heading (`anchor`) > densest
+ *  token cluster > note opening (title/folder matches with no body evidence). */
+export function makeSnippet(
+  body: string,
+  q: string,
+  opts: { anchor?: string; corrected?: string } = {},
+): string {
+  const tokens = snippetTokens(q, opts.corrected)
   const lower = body.toLowerCase()
-  const idx = lower.indexOf(q.toLowerCase())
-  if (idx < 0) {
-    return highlightSnippet(cleanSnippetText(body.slice(0, 240)).slice(0, 160), q)
+  const phrase = q.trim().toLowerCase()
+
+  let anchorIdx = phrase.length >= 2 ? lower.indexOf(phrase) : -1
+  if (anchorIdx < 0 && opts.anchor) anchorIdx = lower.indexOf(opts.anchor.toLowerCase())
+  if (anchorIdx < 0) anchorIdx = densestTokenWindow(lower, tokens)
+  if (anchorIdx < 0) {
+    // No literal occurrence in the body (title/folder/fuzzy-only match) —
+    // opening as context; token highlight may still catch a cleaned-form hit.
+    return highlightTokens(cleanSnippetText(body.slice(0, 240)).slice(0, 160), tokens, q)
   }
   // Widen the raw window before cleaning, since cleaning removes characters.
-  const start = Math.max(0, idx - 80)
-  const end = Math.min(body.length, idx + q.length + 160)
+  let start = Math.max(0, anchorIdx - SNIPPET_LEAD)
+  if (start > 0) {
+    // Snap to a word start so the lead-in doesn't open mid-word.
+    const sp = body.indexOf(' ', start)
+    if (sp >= 0 && sp < anchorIdx) start = sp + 1
+  }
+  const end = Math.min(body.length, anchorIdx + SNIPPET_WINDOW)
   const cleaned = cleanSnippetText(body.slice(start, end))
   const raw = (start > 0 ? '…' : '') + cleaned + (end < body.length ? '…' : '')
-  return highlightSnippet(raw, q)
+  return highlightTokens(raw, tokens, q)
 }
 
 /**
@@ -989,6 +1109,10 @@ const SEARCH_V2_NOTE_COS_FLOOR = 0.35
 export interface NotesSearchPayload {
   results: SearchResultRow[]
   folders?: FolderGroupRow[]
+  /** The content-bearing query words the index matched on — the client uses
+   *  them to highlight titles/folder names token-wise (the server only
+   *  highlights snippets). One tokenization truth, not a client re-derivation. */
+  queryTokens?: string[]
   degraded?: 'semantic-unavailable'
 }
 
@@ -1093,14 +1217,14 @@ async function performNotesSearchInner(opts: {
         // non-ASCII-cased folder name (Été/ vs été) can never leak through the
         // string leg while the semantic leg filters it — one view, one rule.
         if (isPathExcluded(h.path, excludeFolders)) continue
-        // A heading hit's best snippet is the heading's own section, not the
-        // first body occurrence (which may be an unrelated word elsewhere).
-        const snippetSource = h.headingMatch ?? q
         byId.set(h.id, {
           id: h.id,
           path: h.path,
           title: h.title,
-          snippet: makeSnippet(h.body, snippetSource),
+          // A heading hit anchors at the heading's own section (the first body
+          // occurrence may be an unrelated word elsewhere); a fuzzy hit
+          // highlights the CORRECTED spelling — that's what the body contains.
+          snippet: makeSnippet(h.body, q, { anchor: h.headingMatch, corrected: h.correctedQuery }),
           matchType: 'exact',
           score: 0,
           stringScore: h.stringScore, // real banded relevance (title > folder > heading > tag > body > LIKE)
@@ -1145,7 +1269,7 @@ async function performNotesSearchInner(opts: {
           existing.matchType = 'both'
           existing.semanticScore = toSemanticBand(sem)
           if (!existing.snippet.includes('<mark>') && h.snippet) {
-            existing.snippet = cleanSnippetText(h.snippet)
+            existing.snippet = highlightTokens(cleanSnippetText(h.snippet), snippetTokens(q), q)
           }
         } else if (sem >= (v2Active ? SEARCH_V2_NOTE_COS_FLOOR : SEMANTIC_RRF_FLOOR)) {
           // Semantic-only: keep only above the relevance floor (drops noise).
@@ -1153,7 +1277,9 @@ async function performNotesSearchInner(opts: {
             id,
             path: id.endsWith('.md') ? id : (getPathForId(id) ?? id),
             title: h.title || path.basename(id, '.md'),
-            snippet: cleanSnippetText(h.snippet || ''),
+            // Semantic hits usually share SOME query words even when the match
+            // is conceptual — mark them when present, plain context otherwise.
+            snippet: highlightTokens(cleanSnippetText(h.snippet || ''), snippetTokens(q), q),
             matchType: 'semantic',
             score: 0,
             semanticScore: toSemanticBand(sem),
@@ -1259,7 +1385,7 @@ async function performNotesSearchInner(opts: {
       if (capped.length >= limit) break
     }
 
-    const payload: NotesSearchPayload = { results: capped }
+    const payload: NotesSearchPayload = { results: capped, queryTokens: snippetTokens(q) }
     if (folders.length > 0) payload.folders = folders
     if (degraded) payload.degraded = degraded
     return payload

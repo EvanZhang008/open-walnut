@@ -662,6 +662,10 @@ export interface StringHit {
   folderMatch?: string
   /** Set when the hit matched a SECTION HEADING (`## SIN`) — shown in the UI row. */
   headingMatch?: string
+  /** Set when the hit came from the fuzzy-corrected retry: the spelling that
+   *  actually appears in the note ("marina" for typed "marnia"). The snippet
+   *  highlighter needs it — the TYPED tokens don't occur in this body. */
+  correctedQuery?: string
   /** Note's last-modified ISO timestamp — feeds the recency tiebreak. */
   modified?: string
   /** Set when the hit matched one of the note's tags. */
@@ -740,8 +744,11 @@ const QUERY_STOPWORDS = new Set([
 ])
 
 /** Content-bearing query tokens: lowercase, ≥3 chars (CJK: ≥2 — a Chinese
- *  word is typically two characters), minus function words. */
-function contentTokens(q: string): string[] {
+ *  word is typically two characters), minus function words. Exported as the
+ *  ONE query-tokenization truth — the search route's snippet highlighter and
+ *  the client's title highlighter must mark the same words this index
+ *  matched on, not re-derive their own token rules. */
+export function contentTokens(q: string): string[] {
   return q.toLowerCase().trim().split(/\s+/)
     .filter((t) => (t.length >= 3 || (t.length >= 2 && hasCjk(t))) && !QUERY_STOPWORDS.has(t))
 }
@@ -941,7 +948,11 @@ export function escapeFts(q: string): string {
 
 // ── Fuzzy correction: typo in the QUERY ("glucoma") or in the NOTE ("Bevar") ──
 
-interface VaultVocab { counts: Map<string, number>; list: string[]; builtAt: number }
+// Both caches are keyed by the DB INSTANCE as well as the TTL: a close/reopen
+// (index rebuild, schema bump, vault switch) makes a new instance, and serving
+// the previous vault's words for up to 60s corrected queries toward spellings
+// that no longer exist anywhere.
+interface VaultVocab { db: DatabaseType; counts: Map<string, number>; list: string[]; builtAt: number }
 let vocabCache: VaultVocab | null = null
 const VOCAB_TTL_MS = 60_000
 
@@ -950,7 +961,7 @@ const VOCAB_TTL_MS = 60_000
  *  the query TOWARD the vault finds notes whose author misspelled them, and
  *  counts let us prefer the majority spelling when both exist). ~15-25k words. */
 function getVaultVocab(d: DatabaseType): VaultVocab | null {
-  if (vocabCache && Date.now() - vocabCache.builtAt < VOCAB_TTL_MS) return vocabCache
+  if (vocabCache && vocabCache.db === d && Date.now() - vocabCache.builtAt < VOCAB_TTL_MS) return vocabCache
   try {
     const rows = d.prepare('SELECT title, path FROM notes').all() as Array<{ title: string; path: string }>
     const counts = new Map<string, number>()
@@ -961,7 +972,7 @@ function getVaultVocab(d: DatabaseType): VaultVocab | null {
         }
       }
     }
-    vocabCache = { counts, list: [...counts.keys()], builtAt: Date.now() }
+    vocabCache = { db: d, counts, list: [...counts.keys()], builtAt: Date.now() }
     return vocabCache
   } catch {
     return null
@@ -1072,14 +1083,14 @@ function correctQueryTokens(q: string, d: DatabaseType): string | null {
 
 // ── Direct folder-name search (folders with no notes are otherwise invisible) ──
 
-interface FolderList { list: string[]; builtAt: number }
+interface FolderList { db: DatabaseType; list: string[]; builtAt: number }
 let folderListCache: FolderList | null = null
 
 /** Every folder path that exists in the vault, derived from note AND
  *  attachment paths — a folder holding only PDFs has zero note rows, so the
  *  note-driven folder leg can never surface it. Cached briefly. */
 function getFolderList(d: DatabaseType): FolderList {
-  if (folderListCache && Date.now() - folderListCache.builtAt < VOCAB_TTL_MS) return folderListCache
+  if (folderListCache && folderListCache.db === d && Date.now() - folderListCache.builtAt < VOCAB_TTL_MS) return folderListCache
   const dirs = new Set<string>()
   for (const sql of ['SELECT path FROM notes', 'SELECT path FROM attachment_text']) {
     try {
@@ -1089,7 +1100,7 @@ function getFolderList(d: DatabaseType): FolderList {
       }
     } catch { /* attachment table may not exist on old indexes */ }
   }
-  folderListCache = { list: [...dirs], builtAt: Date.now() }
+  folderListCache = { db: d, list: [...dirs], builtAt: Date.now() }
   return folderListCache
 }
 
@@ -1162,11 +1173,13 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
         folderMatch: hit.folderMatch ?? prev.folderMatch,
         headingMatch: hit.headingMatch ?? prev.headingMatch,
         matchedTags: hit.matchedTags ?? prev.matchedTags,
+        correctedQuery: hit.correctedQuery ?? prev.correctedQuery,
       })
     } else {
       if (hit.folderMatch && !prev.folderMatch) prev.folderMatch = hit.folderMatch
       if (hit.headingMatch && !prev.headingMatch) prev.headingMatch = hit.headingMatch
       if (hit.matchedTags && !prev.matchedTags) prev.matchedTags = hit.matchedTags
+      if (hit.correctedQuery && !prev.correctedQuery) prev.correctedQuery = hit.correctedQuery
     }
   }
   const excl = exclusionSql('path', options.excludeFolders ?? [])
@@ -1597,7 +1610,7 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
           added++
           // addHit max-merges, so a note the literal query only reached weakly
           // (an unsupported partial) still gets its corrected-query band.
-          addHit({ ...h, stringScore: 0.6 + 0.2 * Math.min(1, h.stringScore) })
+          addHit({ ...h, stringScore: 0.6 + 0.2 * Math.min(1, h.stringScore), correctedQuery: corrected })
         }
       }
     }

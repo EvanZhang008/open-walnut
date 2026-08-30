@@ -211,6 +211,9 @@ export interface NotesSearchPayload {
   results: SearchResult[];
   /** Folders whose name matched — absent when none did. */
   folders?: SearchFolderGroup[];
+  /** Content-bearing query words (server-tokenized, stopwords removed) — used
+   *  for token-wise title/folder highlighting. Absent on older servers. */
+  queryTokens?: string[];
   degraded?: 'semantic-unavailable';
 }
 

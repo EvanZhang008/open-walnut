@@ -498,6 +498,72 @@ describe('search: CJK queries', () => {
   });
 });
 
+// ─── Token-wise snippets + highlights ────────────────────────────────────────
+//
+// A multi-word query almost never occurs verbatim, so the old whole-query
+// indexOf produced NO window and NO <mark> for most real queries — result rows
+// showed either nothing or the note's (unrelated) opening line.
+
+describe('search: token-wise snippet window + highlight', () => {
+  it('multi-word query anchors the snippet at the token cluster and marks each word', async () => {
+    const filler = 'Opening summary line about bookkeeping basics.\n'.repeat(8);
+    await writeNote(
+      'tax-knowledge.md',
+      `# Tax Knowledge\n\n${filler}\nAs a non resident of Canada you must file a tax return for rental income.\n`,
+    );
+    await syncIndex();
+
+    const app = createApp();
+    const res = await request(app).get('/api/notes-v2/search?q=canada+non+resident+tax&mode=string');
+
+    expect(res.status).toBe(200);
+    const row = res.body.results.find((r: any) => r.path === 'tax-knowledge.md');
+    expect(row).toBeDefined();
+    // Window sits on the dense region (leading '…' = not the note's opening;
+    // ±80 chars of lead-in context before the anchor is by design).
+    expect(row.snippet).toContain('rental income');
+    expect(row.snippet.startsWith('…')).toBe(true);
+    // Every content token is marked (case preserved from the body).
+    expect(row.snippet).toContain('<mark>Canada</mark>');
+    expect(row.snippet).toContain('<mark>resident</mark>');
+    expect(row.snippet).toContain('<mark>tax</mark>');
+    // The payload carries the server-side tokenization for client title marks.
+    expect(res.body.queryTokens).toEqual(expect.arrayContaining(['canada', 'resident', 'tax', 'non']));
+  });
+
+  it('Latin tokens mark at word boundaries only, extending to the word end', async () => {
+    const { highlightTokens } = await import('../../../src/web/routes/notes-v2.js');
+    // No mid-word hits: "sin" must not light up inside "Business".
+    expect(highlightTokens('Business using sin here', ['sin'])).toBe('Business using <mark>sin</mark> here');
+    // Word extension: "resident" marks the whole "Residents".
+    expect(highlightTokens('Residents info', ['resident'])).toBe('<mark>Residents</mark> info');
+    // Hyphen is a boundary: both words of "Non-Resident" get their own mark.
+    expect(highlightTokens('2025 Non-Resident tax', ['non', 'resident', 'tax'])).toBe(
+      '2025 <mark>Non</mark>-<mark>Resident</mark> <mark>tax</mark>',
+    );
+  });
+
+  it('CJK tokens mark as substrings (no word boundaries exist)', async () => {
+    const { highlightTokens } = await import('../../../src/web/routes/notes-v2.js');
+    expect(highlightTokens('系统可以自动重试三次', ['自动重试'])).toBe('系统可以<mark>自动重试</mark>三次');
+  });
+
+  it('a fuzzy-corrected hit highlights the CORRECTED spelling the note contains', async () => {
+    await writeNote('marina-notes.md', '# Marina Project\n\nThe marina berth fee doubled this year.');
+    await syncIndex();
+
+    const app = createApp();
+    // "marena" (typo, distance 1) → corrected to "marina" by the vault vocab.
+    const res = await request(app).get('/api/notes-v2/search?q=marena&mode=string');
+
+    expect(res.status).toBe(200);
+    const row = res.body.results.find((r: any) => r.path === 'marina-notes.md');
+    expect(row).toBeDefined();
+    // The typed token never occurs in the body — the corrected one is marked.
+    expect(row.snippet.toLowerCase()).toContain('<mark>marina</mark>');
+  });
+});
+
 // ─── Attachment text search (OCR/PDF sidecar rows) ────────────────────────────
 
 describe('search: extracted attachment text', () => {

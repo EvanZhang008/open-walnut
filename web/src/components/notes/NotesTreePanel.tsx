@@ -169,6 +169,8 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   // Folders whose NAME matched the query — rendered ABOVE the note rows so a
   // query like "dairy" answers with the Dairy/ folder, not 30 date-named notes.
   const [searchFolders, setSearchFolders] = useState<SearchFolderGroup[]>([]);
+  // Server-tokenized query words for token-wise title/folder highlighting.
+  const [searchTokens, setSearchTokens] = useState<string[]>([]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(readExpandedFolders);
   const [creatingIn, setCreatingIn] = useState<string | null>(null);
   const [newItemName, setNewItemName] = useState('');
@@ -326,6 +328,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       searchSeqRef.current++; // invalidate any in-flight search
       setSearchResults(null);
       setSearchFolders([]);
+      setSearchTokens([]);
       return;
     }
 
@@ -342,6 +345,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           if (!fresh()) return;
           setSearchResults(p.results);
           setSearchFolders(p.folders ?? []);
+          setSearchTokens(p.queryTokens ?? []);
         })
         .catch(() => { if (fresh()) setSearchResults([]); });
 
@@ -351,6 +355,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           if (!fresh()) return;
           setSearchResults(p.results);
           setSearchFolders(p.folders ?? []);
+          setSearchTokens(p.queryTokens ?? []);
         })
         .catch(() => { /* stage 1 already rendered — a semantic failure is not fatal */ });
     }, SEARCH_DEBOUNCE_MS);
@@ -850,7 +855,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                     >
                       <FolderIcon />
                       <span className="notes-tree-name">
-                        <HighlightedTitle text={g.folder} query={searchQuery} />
+                        <HighlightedTitle text={g.folder} query={searchQuery} tokens={searchTokens} />
                       </span>
                       {g.nameMatched && (
                         <span className="notes-search-folder-count">{g.nameMatched.noteCount}</span>
@@ -890,10 +895,11 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                       <FileIcon />
                       <div className="notes-search-result-content">
                         <span className="notes-tree-name">
-                          {/* Server highlights snippets only — titles get a client-side first-match mark. */}
+                          {/* Server highlights snippets only — titles get a client-side token-wise mark. */}
                           <HighlightedTitle
                             text={r.title || r.name || r.path.split('/').pop()?.replace(/\.md$/, '') || ''}
                             query={searchQuery}
+                            tokens={searchTokens}
                           />
                         </span>
                         {!snippetIsTitleEcho && (

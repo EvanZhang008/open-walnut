@@ -118,6 +118,8 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
   const [query, setQuery] = useState('');
   const [notes, setNotes] = useState<NoteListItem[]>([]);
   const [results, setResults] = useState<SearchResult[]>([]);
+  // Server-tokenized query words for token-wise title highlighting.
+  const [resultTokens, setResultTokens] = useState<string[]>([]);
   const [degraded, setDegraded] = useState(false);
   const [searching, setSearching] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(0);
@@ -179,6 +181,7 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
         .then((res) => {
           if (ctrl.signal.aborted) return;
           setResults(res.results);
+          setResultTokens(res.queryTokens ?? []);
           setDegraded(res.degraded === 'semantic-unavailable');
         })
         .catch((err) => {
@@ -369,8 +372,8 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
                         </span>
                       )}
                       <span className="notes-cmdk-item-title">
-                        {/* Server highlights snippets only — titles get a client-side first-match mark. */}
-                        <HighlightedTitle text={row.title} query={q} />
+                        {/* Server highlights snippets only — titles get a client-side token-wise mark. */}
+                        <HighlightedTitle text={row.title} query={q} tokens={resultTokens} />
                       </span>
                       {row.path && <span className="notes-cmdk-item-path">{row.path.replace(/\.md$/, '')}</span>}
                     </div>
