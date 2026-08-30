@@ -103,6 +103,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             defer: false
         )
         window.title = "Walnut"
+        applyWindowChrome()
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -121,6 +122,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return true
+    }
+
+    // MARK: - Window chrome
+
+    /// macOS 26 lays the window title out at the LEADING edge of a plain `.titled`
+    /// window and reserves no room for the traffic lights, so "Walnut — localhost:…"
+    /// rendered at x=0 truncated underneath the three buttons, on the old grey
+    /// gradient. A content-first app has no use for that strip of chrome: hide the
+    /// title, make the bar transparent, drop the hairline, and let the window
+    /// background (kept in step with the web app's `--bg`) run edge to edge so the
+    /// buttons float over the app's own header.
+    func applyWindowChrome() {
+        window.titleVisibility = .hidden          // title still shows in the Window menu
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        // Every native screen (setup / loading / error) paints this cream; the web
+        // view reports its real colour once it loads.
+        window.backgroundColor = NSColor(red: 0.98, green: 0.97, blue: 0.95, alpha: 1)
+    }
+
+    /// Applies a CSS colour reported by the web app (`--bg`) to the window
+    /// background, which is all that's visible in the transparent titlebar.
+    func setChromeBackground(css: String) {
+        guard let color = NSColor(cssHex: css) else { return }
+        window?.backgroundColor = color
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -1059,6 +1085,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // once the triggering user-gesture has expired (async capture-then-copy
         // flows). The web console prefers this handler when present.
         config.userContentController.add(self, name: "walnutClipboard")
+        // Titlebar colour bridge: the titlebar is transparent, so the window
+        // background is what shows behind the traffic lights. Report the web app's
+        // resolved `--bg` on load and whenever the theme flips (explicit
+        // data-theme or the OS switching under 'system') so the strip never
+        // disagrees with the page under it.
+        config.userContentController.add(self, name: "walnutChrome")
+        let reportChrome = """
+        (() => {
+          const send = () => {
+            try {
+              const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg');
+              if (bg) window.webkit.messageHandlers.walnutChrome.postMessage(bg.trim());
+            } catch {}
+          };
+          send();
+          requestAnimationFrame(send);   // after React applies the stored theme
+          new MutationObserver(send).observe(document.documentElement,
+            { attributes: true, attributeFilter: ['data-theme'] });
+          matchMedia('(prefers-color-scheme: dark)').addEventListener('change', send);
+        })();
+        """
+        config.userContentController.addUserScript(WKUserScript(
+            source: reportChrome, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         // Kill macOS autocorrect/spellcheck inside the app: the system's
         // black suggestion bubble ("Flash ×") pops over search fields and the
         // composer. Web content can't opt out globally, so tag every editable
@@ -1583,14 +1632,50 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+// MARK: - CSS colours
+
+extension NSColor {
+    /// Parses the handful of forms the web app's `--bg` can take: `#rgb`, `#rrggbb`,
+    /// `#rrggbbaa`, `rgb()`, `rgba()`. Returns nil on anything else so the caller
+    /// keeps its current colour rather than flashing black.
+    convenience init?(cssHex: String) {
+        let s = cssHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if s.hasPrefix("rgb") {
+            let nums = s.drop(while: { $0 != "(" }).dropFirst().prefix(while: { $0 != ")" })
+                .split(whereSeparator: { ",/ ".contains($0) })
+                .compactMap { Double($0) }
+            guard nums.count >= 3 else { return nil }
+            self.init(srgbRed: nums[0] / 255, green: nums[1] / 255, blue: nums[2] / 255,
+                      alpha: nums.count > 3 ? nums[3] : 1)
+            return
+        }
+        var hex = s.hasPrefix("#") ? String(s.dropFirst()) : s
+        if hex.count == 3 { hex = hex.map { "\($0)\($0)" }.joined() }
+        guard hex.count == 6 || hex.count == 8, let v = UInt32(hex, radix: 16) else { return nil }
+        let shift = hex.count == 8 ? 8 : 0
+        self.init(srgbRed: CGFloat((v >> (16 + shift)) & 0xFF) / 255,
+                  green: CGFloat((v >> (8 + shift)) & 0xFF) / 255,
+                  blue: CGFloat((v >> shift) & 0xFF) / 255,
+                  alpha: hex.count == 8 ? CGFloat(v & 0xFF) / 255 : 1)
+    }
+}
+
 // MARK: - Web ↔ native bridges
 
 extension AppDelegate: WKScriptMessageHandler {
     // window.webkit.messageHandlers.walnutClipboard.postMessage("text")
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == "walnutClipboard", let text = message.body as? String else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        switch message.name {
+        case "walnutClipboard":
+            guard let text = message.body as? String else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        case "walnutChrome":
+            guard let bg = message.body as? String else { return }
+            setChromeBackground(css: bg)
+        default:
+            return
+        }
     }
 }
 
