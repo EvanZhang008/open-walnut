@@ -253,7 +253,7 @@ export function DraftSessionPanel({
 
   // Walnut mode has no folder choice (the cwd pill unmounts) — a picker left
   // open across the tab switch would float with a detached anchor, and picking
-  // a folder there would override the server-owned 'Walnut' project.
+  // a folder there would override the server-owned 'Ask Walnut' project.
   useEffect(() => {
     if (isWalnut) setPickerOpen(false);
   }, [isWalnut]);
@@ -430,7 +430,7 @@ export function DraftSessionPanel({
             tabIndex={isWalnut ? 0 : -1}
             className={`draft-mode-tab draft-mode-tab-walnut${isWalnut ? ' is-active' : ''}`}
             onClick={() => { if (!isWalnut) { onWalnutToggle?.(draft.id, true); focusComposer(); } }}
-            title="Ask your Personal AI — tasks, plans, memory. Files as a normal task under Walnut / Focus."
+            title="Ask your Personal AI — tasks, plans, memory. Files as a normal task under Ask Walnut / Focus."
           >
             🥜 Ask Walnut
           </button>
@@ -523,20 +523,23 @@ export function DraftSessionPanel({
                 </button>
               )}
               {/* Enabled even with an empty composer: spawn-and-idle is legal —
-                  the CLI starts, initializes and waits on stdin. */}
-              <button
-                className={`draft-start-btn${isWalnut ? ' draft-start-btn-walnut' : ''}`}
-                onClick={handleStartClick}
-                title={isFork
-                  ? 'Fork the source session (an empty message just branches the conversation)'
-                  : isBound
-                    ? 'Start the session on this task (an empty message sends the task title)'
-                    : isWalnut
-                      ? 'Ask your Personal AI — files as a normal task under Walnut / Focus'
+                  the CLI starts, initializes and waits on stdin. Ask Walnut has
+                  NO extra button (user: 极简 — the composer's send arrow, amber
+                  in this mode, is the one send affordance; an empty ask is
+                  pointless anyway). */}
+              {!isWalnut && (
+                <button
+                  className="draft-start-btn"
+                  onClick={handleStartClick}
+                  title={isFork
+                    ? 'Fork the source session (an empty message just branches the conversation)'
+                    : isBound
+                      ? 'Start the session on this task (an empty message sends the task title)'
                       : 'Start the session (an empty message is fine — the agent spawns and waits)'}
-              >
-                {isFork ? 'Fork ↵' : isWalnut ? 'Ask ↵' : 'Start ↵'}
-              </button>
+                >
+                  {isFork ? 'Fork ↵' : 'Start ↵'}
+                </button>
+              )}
             </div>
           )}
         />

@@ -33,8 +33,9 @@ import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import {
-  applyDraftParse, clearAiFields, defaultDraftDir, draftComposerKey, withDirLaunchMemory,
-  launchDivergesFromDirMemory, projectForFolderPick, suggestDiff, type DraftColumn,
+  applyDraftParse, ASK_WALNUT_PROJECT, clearAiFields, defaultDraftDir, draftComposerKey,
+  withDirLaunchMemory, launchDivergesFromDirMemory, projectForFolderPick, suggestDiff,
+  type DraftColumn,
 } from '@/components/sessions/draft-column';
 import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
 import { SessionSearchPanel } from '@/components/sessions/SessionSearchPanel';
@@ -1376,7 +1377,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    * Start Task ⇄ Ask Walnut tab switch on a draft column.
    *
    * Entering walnut mode SEEDS the row with the facts the launch will carry
-   * (project 'Walnut', tier Focus) so every downstream reader — the pills, the
+   * (project ASK_WALNUT_PROJECT, tier Focus) so every downstream reader — the
    * "Create task for later" exit, the launch itself — sees one consistent row.
    * `projectSource: 'seed'` (not 'user'): switching back must be able to undo
    * it, and the AI backfill is disabled in walnut mode anyway. Leaving restores
@@ -1402,7 +1403,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           // start on its own default (Auto), not on a model borrowed from an
           // unrelated coding folder.
           walnutPrev: { project: d.project, projectSource: d.projectSource, model: d.meta.model, pinTier: d.meta.pinTier },
-          project: 'Walnut',
+          project: ASK_WALNUT_PROJECT,
           projectSource: 'seed' as const,
           meta: {
             ...d.meta,
@@ -1426,7 +1427,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       if (prev && meta.pinTier === 'focus') meta.pinTier = prev.pinTier;
       if (prev && meta.model === undefined) meta.model = prev.model;
       const back: DraftColumn = { ...d, walnut: false, walnutPrev: undefined, meta };
-      if (d.projectSource === 'seed' && d.project === 'Walnut') {
+      if (d.projectSource === 'seed' && d.project === ASK_WALNUT_PROJECT) {
         back.project = prev?.project;
         back.projectSource = prev?.projectSource;
       }
@@ -2369,7 +2370,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         draft.meta,
         text.trim(),
         images,
-        draft.project || 'Walnut',
+        draft.project || ASK_WALNUT_PROJECT,
         { columnId: draftId, walnutAgent: true },
       );
       return true;

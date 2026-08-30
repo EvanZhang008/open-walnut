@@ -78,7 +78,7 @@ export interface QuickStartParams {
    * Personal AI's own profile (persona + standing memory + skills index, via
    * personal-ai-lane's buildLaneProfile) instead of as a bare coding agent.
    * Everything else is an ORDINARY quick-start — a normal task, a visible
-   * session — the route just pre-fills project 'Walnut' and cwd WALNUT_HOME.
+   * session — the route just pre-fills project 'Ask Walnut' and cwd WALNUT_HOME.
    * Native (claude) engine only: the profile rides --system-prompt, which ACP
    * engines have no channel for (route enforces).
    */

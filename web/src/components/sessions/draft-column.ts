@@ -42,6 +42,13 @@ export type DraftAiField =
  *  undefined = nobody, i.e. Inbox. */
 export type DraftProjectSource = 'user' | 'seed' | 'ai' | 'folder';
 
+/** The project every Ask Walnut task files under. Its OWN project, deliberately
+ *  not 'Walnut': that name is where the user's app-dev tasks (and fix-walnut
+ *  repairs) live, and mixing Personal-AI asks into it confused whose task was
+ *  whose. One name, three writers: the toggle seed, the launch fallback, and
+ *  the server route's default (src/web/routes/sessions.ts). */
+export const ASK_WALNUT_PROJECT = 'Ask Walnut';
+
 export interface DraftColumn {
   /** `draft:<ts>-<seq>` — also the session-strip column id. */
   id: string;
@@ -107,8 +114,8 @@ export interface DraftColumn {
    *  the picker re-opens it. */
   openPickerNonce?: number;
   /** "Ask Walnut" tab: Start launches a session that runs the Personal AI
-   *  profile. Folder/project are server-owned facts ('Walnut' / WALNUT_HOME),
-   *  so the launch bar renders them read-only — same treatment as a fork. */
+   *  profile. Folder/project are server-owned facts (ASK_WALNUT_PROJECT /
+   *  WALNUT_HOME), so the launch bar renders no pills for them at all. */
   walnut?: boolean;
   /** What entering walnut mode overwrote (project pick, folder-remembered
    *  model, tier), restored when the user switches back to Start Task. Without

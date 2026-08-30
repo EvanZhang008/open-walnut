@@ -116,14 +116,28 @@
   background: color-mix(in srgb, var(--walnut-accent) 8%, transparent);
 }
 
-/* Ask ↵ — the Start button's warm twin (same shape/weight, walnut fill).
-   Doubled class: globals' .draft-start-btn{background:var(--accent)} can land
-   LATER in the bundle, so a single-class rule loses the tie. */
-.draft-start-btn.draft-start-btn-walnut {
+/* No dedicated Ask button — the composer's send arrow is the ONE send
+   affordance in walnut mode, tinted amber so the mode reads at the point of
+   action. Two-class descendant selector beats globals' single-class
+   .chat-send-btn-icon{background:var(--accent)} on specificity (bundle order
+   is not guaranteed). The stop variant keeps its own color. */
+.draft-session-panel-walnut .chat-send-btn-icon:not(.chat-stop-btn-icon) {
   background: var(--walnut-accent);
 }
-.draft-start-btn.draft-start-btn-walnut:hover {
-  background: var(--walnut-accent-strong);
+
+/* "⋯ More" — walnut mode folds the tier/priority/dates row behind this one
+   muted text button (same quiet grammar as .draft-later-btn). */
+.draft-meta-row .draft-walnut-more {
+  padding: 3px 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.draft-meta-row .draft-walnut-more:hover {
+  color: var(--walnut-accent);
 }
 
 /* ── Task lists: amber TITLE TEXT is the only marker of an Ask-Walnut task. ──

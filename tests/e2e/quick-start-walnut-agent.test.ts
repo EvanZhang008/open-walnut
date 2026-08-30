@@ -3,8 +3,9 @@
  *  The draft's second tab starts an ORDINARY task session that spawns with the
  *  Personal AI profile. Contract pinned here:
  *   - no cwd required; the server runs the session in WALNUT_HOME
- *   - the task is a normal task, pre-filled: project 'Walnut', tier Focus
- *     (an explicit client tier still wins)
+ *   - the task is a normal task, pre-filled: project 'Ask Walnut' (its own
+ *     project, NOT the user's 'Walnut' dev project), tier Focus (an explicit
+ *     client tier still wins)
  *   - the session record carries the Personal AI profile (persona + walnut MCP
  *     mount) so a cold --resume re-applies it
  *   - ACP engines are rejected (the profile rides --system-prompt), and so is a
@@ -70,13 +71,13 @@ afterAll(async () => {
 })
 
 describe('quick-start walnutAgent', () => {
-  it('starts without a cwd: normal task under Walnut/Focus, session in WALNUT_HOME with the Personal AI profile', async () => {
+  it('starts without a cwd: normal task under Ask Walnut/Focus, session in WALNUT_HOME with the Personal AI profile', async () => {
     const res = await quickStart({ walnutAgent: true, message: 'which task fixed the dedup bug?' })
     expect(res.status).toBe(200)
     expect(res.sessionId).toBeTruthy()
 
     // A completely normal task — just pre-filled fields.
-    expect(res.task?.project).toBe('Walnut')
+    expect(res.task?.project).toBe('Ask Walnut')
     expect(res.task?.pinned).toBe(true)
     expect(res.task?.focus_tier).toBe('focus')
     expect(res.task?.cwd).toBe(WALNUT_HOME)

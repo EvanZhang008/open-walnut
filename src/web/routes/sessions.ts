@@ -462,7 +462,11 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       ? { ...taskMeta, pinTier: 'focus' as const }
       : taskMeta
     const walnutExtras = isWalnutAgent
-      ? { project: project?.trim() || 'Walnut', projectFromFolder: false, walnutAgent: true }
+      // Its OWN project, deliberately NOT 'Walnut' — that's where the user's
+      // app-dev tasks and fix-walnut repairs live; Personal-AI asks mixing into
+      // it made "whose task is this" unreadable. Keep in sync with the client's
+      // ASK_WALNUT_PROJECT (web/src/components/sessions/draft-column.ts).
+      ? { project: project?.trim() || 'Ask Walnut', projectFromFolder: false, walnutAgent: true }
       : {}
 
     // Shared core (also used by the claude-code routine executor): task create/

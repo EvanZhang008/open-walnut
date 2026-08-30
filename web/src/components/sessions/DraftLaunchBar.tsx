@@ -91,6 +91,12 @@ export function DraftLaunchBar({
   // pill — "pops from where you clicked", not a centered modal.
   const cwdPillRef = useRef<HTMLButtonElement>(null);
   const [projectOpen, setProjectOpen] = useState(false);
+  // Ask Walnut folds the tier/priority/dates row behind ONE "⋯ More" — the
+  // mode's whole point is the defaults. Collapses again on leaving the tab.
+  const [walnutMetaOpen, setWalnutMetaOpen] = useState(false);
+  useEffect(() => {
+    if (!draft.walnut) setWalnutMetaOpen(false);
+  }, [draft.walnut]);
 
   // The project flyout is portalled to <body> and owns no closer (its usual host
   // is a kebab menu that provides one) — so this bar does, exempting the portal
@@ -198,8 +204,22 @@ export function DraftLaunchBar({
           confusing and a duplicated control on the page. Hidden on a FORK draft
           too: the fork API takes only message+model (no tier/priority/
           engine — the sibling task inherits from the source), so every control
-          in this row would be a lie. The model select lives in the composer. */}
-      {!pickerOpen && !isFork && (
+          in this row would be a lie. The model select lives in the composer.
+          Ask Walnut collapses the row to ONE muted "⋯ More" (user: 极简 — the
+          defaults are the point; the full controls are an explicit opt-in). */}
+      {!pickerOpen && !isFork && isWalnut && !walnutMetaOpen && (
+        <div className="draft-meta-row">
+          <button
+            type="button"
+            className="draft-walnut-more"
+            onClick={() => setWalnutMetaOpen(true)}
+            title="Tier, priority, dates — defaults: Ask Walnut project, Focus tier"
+          >
+            ⋯ More
+          </button>
+        </div>
+      )}
+      {!pickerOpen && !isFork && (!isWalnut || walnutMetaOpen) && (
         <div className="draft-meta-row">
           {/* ONE badge for the whole row rather than three inside MetaFooter: the
               tier/priority controls are SHARED with the picker's footer, and
@@ -229,14 +249,16 @@ export function DraftLaunchBar({
 
       {/* ROW 3 — FIXED last: directly above the composer, always.
           A FORK draft resumes the source conversation in place, so its folder
-          and project are facts, not choices — both pills render read-only. */}
-      <div className="draft-launch-pills draft-composer-bar">
-        {/* OPEN-only, never a toggle (matches the chat launcher pill): the
-            picker's own document-level mousedown closer has already fired by the
-            time this click runs, so a toggle would read the freshly-closed state
-            and re-open. Close via Esc / outside click / picking a path.
-            Hidden on Ask Walnut — its folder is a server fact, not a choice. */}
-        {!isWalnut && (
+          and project are facts, not choices — both pills render read-only.
+          Ask Walnut renders NO pills at all: folder and project are server
+          facts ('Ask Walnut' / WALNUT_HOME), and a read-only pill in the
+          folder pill's usual slot read as "runs in that folder" (user). */}
+      {!isWalnut && (
+        <div className="draft-launch-pills draft-composer-bar">
+          {/* OPEN-only, never a toggle (matches the chat launcher pill): the
+              picker's own document-level mousedown closer has already fired by the
+              time this click runs, so a toggle would read the freshly-closed state
+              and re-open. Close via Esc / outside click / picking a path. */}
           <button
             ref={cwdPillRef}
             className={`session-action-chip${pickerOpen ? ' session-action-chip-active' : ''}${isAi('cwd') ? ' session-action-chip-ai' : ''}`}
@@ -249,40 +271,35 @@ export function DraftLaunchBar({
             {pathLabel(draft)}
             <AiBadge on={isAi('cwd')} />
           </button>
-        )}
-        <button
-          ref={projectBtnRef}
-          className={`session-action-chip${projectOpen ? ' session-action-chip-active' : ''}${isAi('project') ? ' session-action-chip-ai' : ''}`}
-          onClick={isFork || isWalnut ? undefined : () => setProjectOpen(o => !o)}
-          disabled={isFork || isWalnut}
-          title={isFork
-            ? 'The forked task files as a sibling of the source task, in its project'
-            : isWalnut
-              ? 'Ask Walnut tasks file under the Walnut project'
+          <button
+            ref={projectBtnRef}
+            className={`session-action-chip${projectOpen ? ' session-action-chip-active' : ''}${isAi('project') ? ' session-action-chip-ai' : ''}`}
+            onClick={isFork ? undefined : () => setProjectOpen(o => !o)}
+            disabled={isFork}
+            title={isFork
+              ? 'The forked task files as a sibling of the source task, in its project'
               : projectIsNew
                 ? `Project "${draft.project}" doesn't exist yet — starting will create it`
                 : 'Project the new task files under'}
-        >
-          {isWalnut ? 'Walnut' : draft.project || 'Inbox'}
-          {projectIsNew && <span className="qtc-confirm-new">new</span>}
-          {/* Suppressed in walnut mode: the pill shows the hard-coded 'Walnut',
-              so a leftover ✦ from a pre-toggle AI fill would credit the AI with
-              a value it didn't pick. The badge set survives for the restore. */}
-          <AiBadge on={!isWalnut && isAi('project')} />
-        </button>
-        {projectOpen && (
-          <ProjectPickerFlyout
-            open
-            anchorRef={projectBtnRef}
-            current={draft.project ?? ''}
-            onPick={(project) => onProjectChange(draft.id, project)}
-            onClose={() => setProjectOpen(false)}
-            // UPWARD like the folder picker beside it: both pills live at the
-            // column's bottom, and one row opening two directions reads broken.
-            preferSide="up"
-          />
-        )}
-      </div>
+          >
+            {draft.project || 'Inbox'}
+            {projectIsNew && <span className="qtc-confirm-new">new</span>}
+            <AiBadge on={isAi('project')} />
+          </button>
+          {projectOpen && (
+            <ProjectPickerFlyout
+              open
+              anchorRef={projectBtnRef}
+              current={draft.project ?? ''}
+              onPick={(project) => onProjectChange(draft.id, project)}
+              onClose={() => setProjectOpen(false)}
+              // UPWARD like the folder picker beside it: both pills live at the
+              // column's bottom, and one row opening two directions reads broken.
+              preferSide="up"
+            />
+          )}
+        </div>
+      )}
 
       <SessionPathSelector
         open={pickerOpen}
