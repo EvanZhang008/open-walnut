@@ -85,6 +85,11 @@ struct LetterThreadEntry: Codable, Equatable, Identifiable {
     let bodyFile: String?
     let at: Double?
     let body: String?
+    /// Size of this turn's document on disk.
+    let bodyBytes: Int?
+    /// The document was too big to inline; stream it from `bodyUrl` instead.
+    let bodyDeferred: Bool?
+    let bodyUrl: String?
 
     /// Stable within one letter: the store appends turns and never reorders.
     var id: String { "\(from)|\(at ?? 0)|\(bodyFile ?? "")" }
@@ -114,10 +119,19 @@ struct Letter: Codable, Identifiable, Equatable {
     let answered: LetterAnswer?
     let thread: [LetterThreadEntry]?
     let taskRefs: [String]?
-    /// Detail only: the body content read off disk.
+    /// Detail only: the body content read off disk. ABSENT for a big document —
+    /// see `bodyDeferred`.
     let body: String?
     /// Detail only: the body file is gone, `body` holds the server's note.
     let bodyMissing: Bool?
+    /// Detail only: size of the document on disk, inlined or not.
+    let bodyBytes: Int?
+    /// Detail only: the document was over the server's inline threshold, so it
+    /// is NOT in this response. Stream it from `bodyUrl`, which is exactly how a
+    /// 100MB audio digest reaches the phone without any hop having to frame it.
+    let bodyDeferred: Bool?
+    /// Relative path of the streaming route (`/api/v1/human-inbox/:id/body`).
+    let bodyUrl: String?
 
     var kind: LetterKind { LetterKind(type) }
     var isRead: Bool { read ?? false }
@@ -216,6 +230,17 @@ struct Letter: Codable, Identifiable, Equatable {
     }
 
     var bodyWasClipped: Bool { !isHTMLBody && (body ?? "").count > Self.phoneBodyCap }
+
+    /// True when the server kept the document out of this response on purpose.
+    /// NOT a missing body and NOT a clipped one: the whole document is available,
+    /// it just arrives over its own streamed request.
+    var isBodyDeferred: Bool { bodyDeferred == true && !(bodyUrl ?? "").isEmpty }
+
+    /// Absolute URL of the streaming body route. Callers attach the Bearer header.
+    var bodyStreamURL: URL? {
+        guard let relative = bodyUrl, !relative.isEmpty, let base = AppConfig.serverURL else { return nil }
+        return URL(string: base.absoluteString + relative)
+    }
 }
 
 /// GET /api/v1/human-inbox[?archived=1] → { letters, unreadCount }.

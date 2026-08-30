@@ -27,6 +27,12 @@ struct LetterReaderView: View {
     @State private var sendingReply = false
     /// Last delivery outcome, shown non-blocking under the thread.
     @State private var deliveryNote: String?
+    /// A DEFERRED document (over the server's inline threshold) is streamed to a
+    /// local file and rendered from there — never held as a String, so a 100MB
+    /// audio digest costs the app nothing beyond one copy chunk.
+    @State private var deferredBodyFile: URL?
+    @State private var deferredBodyLoading = false
+    @State private var deferredBodyError: String?
 
     var body: some View {
         ScrollView {
@@ -62,6 +68,7 @@ struct LetterReaderView: View {
         .safeAreaInset(edge: .bottom) { composer }
         .freezeScreen("inbox-letter")
         .task { await load() }
+        .onDisappear { LetterBodyDownload.clearCache() }
     }
 
     // MARK: - Header
@@ -172,6 +179,8 @@ struct LetterReaderView: View {
             Text(letter.displayBody.isEmpty ? "This letter's body is no longer on disk." : letter.displayBody)
                 .font(.callout)
                 .foregroundStyle(.secondary)
+        } else if letter.isBodyDeferred {
+            deferredBody(letter)
         } else if letter.body == nil && loading {
             ProgressView().controlSize(.small).frame(maxWidth: .infinity)
         } else if letter.displayBody.isEmpty {
@@ -190,6 +199,58 @@ struct LetterReaderView: View {
             Text("Only the first \(Letter.phoneBodyCap / 1000)K characters are shown here — open this letter in the web console for the whole document.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
+        }
+    }
+
+    /// The big-document path. There is nothing to apologise for here: the WHOLE
+    /// letter arrives, it just comes over its own streamed request, so the only
+    /// state worth showing is progress and a retry.
+    @ViewBuilder
+    private func deferredBody(_ letter: Letter) -> some View {
+        if let file = deferredBodyFile {
+            // Always the HTML frame, and that is not a shortcut: a markdown body
+            // is capped at 200KB server-side, well under the inline threshold, so
+            // a deferred document is by construction html.
+            LetterHTMLBody(fileURL: file)
+        } else if let deferredBodyError {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(deferredBodyError).font(.callout).foregroundStyle(.secondary)
+                Button("Try Again") { Task { await loadDeferredBody(letter) } }
+                    .font(.callout)
+            }
+            .accessibilityIdentifier("inbox.letter.deferredBodyError")
+        } else {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(deferredBodySizeLabel(letter)).font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("inbox.letter.deferredBodyLoading")
+            .task(id: letter.id) { await loadDeferredBody(letter) }
+        }
+    }
+
+    private func deferredBodySizeLabel(_ letter: Letter) -> String {
+        guard let bytes = letter.bodyBytes, bytes > 0 else { return "Loading the document…" }
+        let mb = Double(bytes) / 1_048_576
+        return mb >= 1
+            ? String(format: "Loading the document (%.1f MB)…", mb)
+            : "Loading the document…"
+    }
+
+    private func loadDeferredBody(_ letter: Letter) async {
+        guard !deferredBodyLoading, deferredBodyFile == nil else { return }
+        guard let url = letter.bodyStreamURL else {
+            deferredBodyError = "This letter's body couldn't be located on the server."
+            return
+        }
+        deferredBodyLoading = true
+        deferredBodyError = nil
+        defer { deferredBodyLoading = false }
+        do {
+            deferredBodyFile = try await LetterBodyDownload.fetchDocument(from: url, isHTML: true)
+        } catch {
+            deferredBodyError = error.localizedDescription
         }
     }
 

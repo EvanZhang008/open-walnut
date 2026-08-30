@@ -29,14 +29,35 @@ import WebKit
 /// (no `allow-scripts`, no `allow-same-origin`, same CSP), so a letter looks and
 /// behaves the same on both surfaces.
 struct LetterHTMLBody: View {
-    let html: String
+    /// The document source. A small body arrives inline in the letter JSON; a big
+    /// one (over the server's inline threshold) is streamed to a local file first
+    /// — see LetterBodyDownload — because a 100MB digest must never be resident as
+    /// a Swift String on the way into the web view.
+    enum Source: Equatable {
+        case inline(String)
+        case file(URL)
+    }
+
+    let source: Source
 
     @State private var height: CGFloat = 60
 
+    init(html: String) { self.source = .inline(html) }
+    init(fileURL: URL) { self.source = .file(fileURL) }
+
     var body: some View {
-        LetterHTMLWebView(document: Self.document(wrapping: html), height: $height)
+        LetterHTMLWebView(source: webViewSource, height: $height)
             .frame(height: height)
             .accessibilityIdentifier("inbox.letter.htmlBody")
+    }
+
+    /// An inline body is wrapped here; a file was already assembled complete
+    /// (prelude + body + suffix) when it was downloaded, so it loads as-is.
+    private var webViewSource: LetterHTMLWebView.Source {
+        switch source {
+        case .inline(let html): return .document(Self.document(wrapping: html))
+        case .file(let url): return .file(url)
+        }
     }
 
     /// The letter body's security floor, in one place so a test can pin it:
@@ -63,7 +84,16 @@ struct LetterHTMLBody: View {
     /// dropped in verbatim — no rewriting, so nothing about the letter changes
     /// meaning on the way in.
     static func document(wrapping body: String) -> String {
-        """
+        let (prelude, suffix) = documentPieces()
+        return prelude + body + suffix
+    }
+
+    /// The same document, split so a streamed body can be written BETWEEN the two
+    /// halves instead of concatenated in memory (LetterBodyDownload). One source
+    /// for both paths: a second copy would let a big letter render under a weaker
+    /// CSP than a small one.
+    static func documentPieces() -> (prelude: String, suffix: String) {
+        let prelude = """
         <!DOCTYPE html><html><head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -99,16 +129,30 @@ struct LetterHTMLBody: View {
         }
         </style>
         </head><body>
-        \(body)
-        </body></html>
+
         """
+        return (prelude, "\n</body></html>\n")
     }
 }
 
 /// The web view itself: fixed to its content height (the enclosing SwiftUI
 /// ScrollView does the scrolling, so a nested scroller would fight it).
 private struct LetterHTMLWebView: UIViewRepresentable {
-    let document: String
+    enum Source: Equatable {
+        case document(String)
+        case file(URL)
+
+        /// Cheap identity for updateUIView's "did the content change" check —
+        /// comparing whole 100MB documents on every SwiftUI update would not be.
+        var key: String {
+            switch self {
+            case .document(let doc): return "d:\(doc.count):\(doc.prefix(64))"
+            case .file(let url): return "f:\(url.path)"
+            }
+        }
+    }
+
+    let source: Source
     @Binding var height: CGFloat
 
     func makeUIView(context: Context) -> WKWebView {
@@ -120,27 +164,40 @@ private struct LetterHTMLWebView: UIViewRepresentable {
         webView.scrollView.isScrollEnabled = false
         webView.scrollView.bounces = false
         context.coordinator.observe(webView)
-        // baseURL nil: relative references resolve to nothing at all.
-        webView.loadHTMLString(document, baseURL: nil)
+        load(source, into: webView)
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        guard context.coordinator.loadedDocument != document else { return }
-        context.coordinator.loadedDocument = document
-        webView.loadHTMLString(document, baseURL: nil)
+        guard context.coordinator.loadedKey != source.key else { return }
+        context.coordinator.loadedKey = source.key
+        load(source, into: webView)
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(self, document: document) }
+    private func load(_ source: Source, into webView: WKWebView) {
+        switch source {
+        case .document(let doc):
+            // baseURL nil: relative references resolve to nothing at all.
+            webView.loadHTMLString(doc, baseURL: nil)
+        case .file(let url):
+            // Read access is granted to the FILE only, not its directory, so the
+            // document cannot reach any other letter's cached body. The CSP in the
+            // document still forbids every subresource except data:/blob:, so a
+            // file:// origin buys the letter nothing.
+            webView.loadFileURL(url, allowingReadAccessTo: url)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self, key: source.key) }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         private let parent: LetterHTMLWebView
-        var loadedDocument: String
+        var loadedKey: String
         private var observation: NSKeyValueObservation?
 
-        init(_ parent: LetterHTMLWebView, document: String) {
+        init(_ parent: LetterHTMLWebView, key: String) {
             self.parent = parent
-            self.loadedDocument = document
+            self.loadedKey = key
         }
 
         /// Content height WITHOUT JavaScript: `scrollView.contentSize` is laid
@@ -178,8 +235,9 @@ private struct LetterHTMLWebView: UIViewRepresentable {
                 return
             }
             let url = navigationAction.request.url
-            // The in-memory document itself (loadHTMLString has no real URL).
-            if url == nil || url?.scheme == nil || url?.scheme == "about" {
+            // The in-memory document itself (loadHTMLString has no real URL),
+            // or the local file the streamed-body path assembled for us.
+            if url == nil || url?.scheme == nil || url?.scheme == "about" || url?.isFileURL == true {
                 decisionHandler(.allow)
                 return
             }
