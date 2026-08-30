@@ -12,7 +12,7 @@
 import type { Task } from './types.js';
 
 /** Bump to invalidate cached agent answers when the prompt contract changes. */
-export const AGENT_SEARCH_PROMPT_V = 'v3';
+export const AGENT_SEARCH_PROMPT_V = 'v4';
 
 export const AGENT_SEARCH_MAX_RESULTS = 5;
 const EVIDENCE_MAX_CHARS = 200;
@@ -40,20 +40,46 @@ Do NOT output titles, phases, or projects — those are attached from the databa
 
 /**
  * System prompt for the claude -p child (the default engine; slim shell,
- * Bash-only). The child's search surface is the `walnut` CLI ops registry.
+ * Bash-only). With `apiBase` (the running server's own 127.0.0.1 address)
+ * the child searches via curl against the local HTTP API — tens of ms per
+ * search vs spawning a whole `walnut` CLI process per query (~0.5s quiet,
+ * ~10s under machine load; a 70s hard query was mostly these spawns).
+ * Without apiBase (tests, pre-listen callers) it falls back to the walnut
+ * CLI, which rides PATH and needs no URL.
+ *
+ * slim=1 + tight limits are LOAD-BEARING, not politeness: the CLI persists
+ * any Bash output over ~10k chars to a file (`<persisted-output>`) instead
+ * of showing it, and verbose rows at limit=15 x 5 variants hit 25KB — the
+ * child then burned its whole 80s budget cat/grep/python-ing a file it
+ * could never inline (2026-08-29 transcripts). Slim rows (~350 chars) at 4
+ * variants x limit=5 stay ~7KB, safely inline.
  */
-export const SYSTEM_PROMPT = `${PROMPT_HEADER}
+export function buildCliSystemPrompt(apiBase?: string): string {
+  const single = apiBase
+    ? `curl -sGm15 "${apiBase}/api/search" --data-urlencode "q=<terms>" -d "types=task,session" -d "limit=8" -d "slim=1"`
+    : `walnut tools call search '{"q":"<terms>","types":"task,session","limit":15}'`;
+  const batched = apiBase
+    ? `for q in 'variant one' 'variant two' '变体三'; do curl -sGm15 "${apiBase}/api/search" --data-urlencode "q=$q" -d "types=task,session" -d "limit=5" -d "slim=1" & done; wait`
+    : `for q in 'variant one' 'variant two' '变体三'; do walnut tools call search "{\\"q\\":\\"$q\\",\\"types\\":\\"task,session\\",\\"limit\\":15}" & done; wait`;
+  const rowNote = apiBase
+    ? `\n   Rows are compact {type,id,title,summary}: a task row's id IS the task_id; a session row's id is ALREADY the owning task's id — copy id exactly.`
+    : '';
+  return `${PROMPT_HEADER}
 
-## Method — search via the walnut CLI (Bash). Every extra Bash call costs seconds; fewest calls wins.
-  walnut tools call search '{"q":"<terms>","types":"task,session","limit":15}'
+## Method — search via Bash. Every extra Bash call costs seconds; fewest calls wins.
+  ${single}${rowNote}
 0. The user message already contains SEED RESULTS: the raw query was searched for you. If they clearly identify the owning task, answer IMMEDIATELY — run nothing.
-1. Otherwise run ALL your query variants in ONE Bash command, concurrently:
-  for q in 'variant one' 'variant two' '变体三'; do walnut tools call search "{\\"q\\":\\"$q\\",\\"types\\":\\"task,session\\",\\"limit\\":15}" & done; wait
+1. Otherwise run your query variants in ONE Bash command, concurrently — AT MOST 4 variants (more overflows the tool output and you see NOTHING):
+  ${batched}
    Use DIFFERENT vocabulary — the literal strings a transcript would contain (package names, file extensions, commands, API names) plus an English <-> Chinese translation. The seed query counts as already used.
 2. At most ONE more such batched command if nothing was convincing.
 Stop as soon as you are confident. Never repeat a query.
 
 ${PROMPT_FOOTER}`;
+}
+
+/** apiBase-less fallback shape (what injected-engine tests pin). */
+export const SYSTEM_PROMPT = buildCliSystemPrompt();
 
 /**
  * System prompt for the in-process engine (WALNUT_AGENT_SEARCH_ENGINE=

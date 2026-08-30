@@ -79,6 +79,9 @@ describe('claude -p default engine wiring', () => {
     // session-import scan would list it. Bash stays on for the walnut CLI.
     expect(opts.slim).toBe(true);
     expect(opts.tools).toEqual(['Bash']);
+    // Thinking OFF: the child answers a fixed contract; thinking cost 3-6s
+    // per round in profiled transcripts (2026-08-29).
+    expect(opts.thinking).toBe(false);
   });
 
   it('translates the child stream into live progress events keyed by progressId', async () => {
@@ -109,6 +112,33 @@ describe('claude -p default engine wiring', () => {
       expect(seen.every((e) => e.id === 'pw-cli-1')).toBe(true);
       expect(seen[2]).toMatchObject({ kind: 'search', q: 'docx 预览' });
       expect(seen[3]).toMatchObject({ kind: 'search_done', q: 'docx 预览', count: 2 });
+    } finally {
+      bus.unsubscribe('web-ui');
+    }
+  });
+
+  it('extracts queries from the curl-against-local-API command shapes too', async () => {
+    const { bus } = await import('../../src/core/event-bus.js');
+    const seen: Array<Record<string, unknown>> = [];
+    bus.subscribe('web-ui', (event) => {
+      if (event.name === 'search-agent:progress') seen.push(event.data as Record<string, unknown>);
+    });
+    try {
+      inlineMock.mockImplementation(async (opts: { onBlock?: (b: unknown) => void }) => {
+        opts.onBlock?.({
+          type: 'tool_call', toolUseId: 'tu-c1', name: 'Bash', status: 'calling',
+          input: { command: `curl -sGm15 "http://127.0.0.1:3456/api/search" --data-urlencode "q=docx preview" -d "types=task,session" -d "limit=15"` },
+        });
+        opts.onBlock?.({
+          type: 'tool_call', toolUseId: 'tu-c2', name: 'Bash', status: 'calling',
+          input: { command: `for q in 'stt 快捷键' 'voice shortcut'; do curl -sGm15 "http://127.0.0.1:3456/api/search" --data-urlencode "q=$q" -d "types=task,session" -d "limit=15" & done; wait` },
+        });
+        return { success: true, result: '{"results":[]}', durationMs: 5, blocks: [] };
+      });
+      await runTaskSearchAgent('which task adds docx curl shapes', { progressId: 'pw-cli-2' });
+      await new Promise((r) => setTimeout(r, 50));
+      const searches = seen.filter((e) => e.kind === 'search').map((e) => e.q);
+      expect(searches).toEqual(['docx preview', 'stt 快捷键', 'voice shortcut']);
     } finally {
       bus.unsubscribe('web-ui');
     }

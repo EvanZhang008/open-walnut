@@ -38,6 +38,10 @@ export interface MicroClaudeOptions {
   /** CLI tool names to keep. Default NONE — each tool manual costs prefix
    *  tokens in every round. ['Bash'] covers most utility children. */
   tools?: string[];
+  /** Extended thinking for the child. Default FALSE — a utility child answers
+   *  a fixed contract, and thinking costs 3-6s per model round (profiled on
+   *  the search lane). Pass true only when the task genuinely needs it. */
+  thinking?: boolean;
   /** Live stream mirror (text / tool_call blocks) for progress UI. */
   onBlock?: (block: StreamingBlock) => void;
   /** For event correlation; defaults to a fresh micro-claude-<uuid>. */
@@ -62,6 +66,7 @@ export async function runMicroClaude(opts: MicroClaudeOptions): Promise<MicroCla
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     toolUseId: opts.toolUseId ?? `micro-claude-${randomUUID()}`,
     slim: true,
+    thinking: opts.thinking ?? false,
     ...(opts.tools && opts.tools.length > 0 ? { tools: opts.tools } : {}),
     ...(opts.onBlock ? { onBlock: opts.onBlock } : {}),
   });

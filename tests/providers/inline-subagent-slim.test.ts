@@ -95,6 +95,22 @@ describe('runInlineSubagent slim preset', () => {
     }
   });
 
+  it('thinking:false disables extended thinking via MAX_THINKING_TOKENS=0, beating settings env', async () => {
+    settingsJsonRef.value = JSON.stringify({ env: { MAX_THINKING_TOKENS: '31999' } });
+    try {
+      _resetUserSettingsEnvCacheForTesting();
+      const off = await run({ slim: true, thinking: false });
+      expect(off.spawnOpts.env?.MAX_THINKING_TOKENS).toBe('0');
+      // Unset = CLI default; the settings env block passes through untouched.
+      _resetUserSettingsEnvCacheForTesting();
+      const def = await run({ slim: true });
+      expect(def.spawnOpts.env?.MAX_THINKING_TOKENS).toBe('31999');
+    } finally {
+      settingsJsonRef.value = null;
+      _resetUserSettingsEnvCacheForTesting();
+    }
+  });
+
   it('a settings-less child gets ~/.claude/settings.json env re-applied (Bedrock auth lives there)', async () => {
     settingsJsonRef.value = JSON.stringify({ env: { WALNUT_TEST_BEDROCK_FLAG: '1', WALNUT_TEST_REGION: 'us-west-2', NOT_A_STRING: 42 } });
     try {

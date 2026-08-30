@@ -151,6 +151,9 @@ async function claudeCliEngine(
   const extractQueries = (cmd: string): string[] => {
     const loop = /for q in ((?:'[^']*'\s*)+)/.exec(cmd);
     if (loop) return [...loop[1].matchAll(/'([^']*)'/g)].map((x) => x[1]).filter(Boolean);
+    // Single curl against the local API: --data-urlencode "q=<terms>".
+    const enc = /--data-urlencode\s+["']q=([^"']*)["']/.exec(cmd);
+    if (enc && !enc[1].includes('$')) return enc[1] ? [enc[1]] : [];
     const m = /"q"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(cmd);
     if (!m || m[1].includes('$')) return [];
     try { return [JSON.parse(`"${m[1]}"`) as string]; } catch { return []; }
@@ -386,8 +389,19 @@ async function inner(
   let answer: { response: string; model?: string; costUsd?: number };
   try {
     const engine = opts.engine ?? (cliEngine ? claudeCliEngine : inProcessEngine);
+    // CLI child searches via curl on the RUNNING server's own address (tens
+    // of ms) instead of spawning a walnut CLI process per query; falls back
+    // to the walnut-CLI prompt when the address isn't known yet (tests).
+    let cliSystem = SYSTEM_PROMPT;
+    if (cliEngine) {
+      try {
+        const { getPluginApiBase } = await import('./plugins/server-api.js');
+        const { buildCliSystemPrompt } = await import('./task-search-agent-contract.js');
+        cliSystem = buildCliSystemPrompt(getPluginApiBase());
+      } catch { /* fallback prompt still works via PATH */ }
+    }
     answer = await engine(buildUserPrompt(trimmed), {
-      system: cliEngine ? SYSTEM_PROMPT : SYSTEM_PROMPT_TOOL_LOOP,
+      system: cliEngine ? cliSystem : SYSTEM_PROMPT_TOOL_LOOP,
       model: CLI_ENGINE_MODEL,
       timeoutMs: opts.timeoutMs ?? (cliEngine ? CLI_ENGINE_TIMEOUT_MS : IN_PROCESS_TIMEOUT_MS),
       query: trimmed,

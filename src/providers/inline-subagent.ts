@@ -74,6 +74,11 @@ export interface InlineSubagentOptions {
    *  the child emits it — lets the caller mirror the child's activity into
    *  its own progress channel. Exceptions are swallowed. */
   onBlock?: (block: StreamingBlock) => void;
+  /** false = disable extended thinking for the child (MAX_THINKING_TOKENS=0,
+   *  the CLI's own opt-out). Utility children answer a fixed contract — they
+   *  don't need to deliberate, and profiled 2026-08-29 a search child spent
+   *  3-6s (700-4000 chars) thinking EVERY round. undefined = CLI default. */
+  thinking?: boolean;
   /** One-flag preset for utility children: applies the full slim combo
    *  (systemPromptMode 'replace', tools [], settingSources '', bare, neutral
    *  tmpdir cwd) wherever the caller left the field unset — explicit fields
@@ -220,6 +225,9 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
   // Mark the transcript so the session-import scan never lists this child as
   // an importable session (we spawn MANY of these; they are not user work).
   cleanEnv.CLAUDE_CODE_ENTRYPOINT = WALNUT_UTILITY_ENTRYPOINT;
+  // After the settings-env assign on purpose: an explicit thinking:false must
+  // win even when the user's settings.json env sets MAX_THINKING_TOKENS.
+  if (opts.thinking === false) cleanEnv.MAX_THINKING_TOKENS = '0';
 
   log.agent.info('inline subagent spawning', {
     toolUseId,
