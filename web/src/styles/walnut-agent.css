@@ -34,34 +34,41 @@
 }
 
 /* ── Draft mode tabs (Start Task | Ask Walnut) ── */
-/* Same underline-tab grammar as the app's other tab strips (.todo-launcher-tab):
-   content-width, left-aligned, weight 500 at rest, colored text + 2px underline
-   when active — NOT a full-width segmented control. */
+/* The approved mockup's grammar (user round 7: "两个大的 button 在中间…visually
+   更清楚"): two FULL-WIDTH halves, centered labels, generous padding, on a
+   muted strip; the active half lifts to the panel background with a 2px
+   colored underline. Deliberately bigger than the app's content-width tab
+   strips — this is the entry fork, not a filter. */
 .draft-mode-tabs {
   display: flex;
-  gap: 2px;
-  padding: 0 8px;
+  background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 .draft-mode-tab {
-  padding: 6px 12px 7px;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 11px 10px;
   border: none;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;   /* tab underline sits ON the divider */
   background: none;
   font-family: inherit;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--fg-muted);
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
   white-space: nowrap;
 }
-.draft-mode-tab:hover { color: var(--fg-secondary); }
+.draft-mode-tab:hover { color: var(--fg); }
 .draft-mode-tab.is-active {
   color: var(--accent);
   border-bottom-color: var(--accent);
+  background: var(--bg);
   cursor: default;
 }
 .draft-mode-tab-walnut.is-active {
@@ -126,18 +133,26 @@
 }
 
 /* "⋯ More" — walnut mode folds the tier/priority/dates row behind this one
-   muted text button (same quiet grammar as .draft-later-btn). */
+   pill. Same outline grammar as the draft launch pills (globals
+   ".draft-launch-pills .session-action-chip"): bare text on its own row read
+   as orphaned, not as a control (user). Sits flush left like every other row
+   in the launch-bar stack. */
 .draft-meta-row .draft-walnut-more {
-  padding: 3px 0;
-  border: none;
+  align-self: flex-start;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
   background: none;
   font-family: inherit;
   font-size: 11px;
+  line-height: 1.4;
   color: var(--fg-muted);
   cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
 }
 .draft-meta-row .draft-walnut-more:hover {
   color: var(--walnut-accent);
+  border-color: var(--walnut-accent);
 }
 
 /* ── Task lists: amber TITLE TEXT is the only marker of an Ask-Walnut task. ──
