@@ -172,6 +172,18 @@ let installed = false;
  */
 export function installTimeTracker(deps: TrackerDeps): () => void {
   if (installed) return () => { /* another owner already installed it */ };
+  // An automation-driven browser (Playwright/CDP sets navigator.webdriver) is
+  // an agent verifying the UI, not the human — its clicks are real DOM events
+  // and would grant leases like anyone's. Overnight verification runs against
+  // the live console banked hours of fake "your day" (2026-08-30). A UI test
+  // that wants to exercise tracking opts back in via localStorage.
+  let automated = false;
+  try { automated = navigator.webdriver === true; } catch { /* no navigator — not a browser at all */ }
+  if (automated) {
+    let optIn = false;
+    try { optIn = localStorage.getItem('walnut.time.allowAutomation') === '1'; } catch { /* storage unavailable */ }
+    if (!optIn) return () => { /* automation: tracker deliberately not installed */ };
+  }
   installed = true;
 
   const clock = deps.now ?? (() => Date.now());

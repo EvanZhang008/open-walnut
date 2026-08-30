@@ -95,6 +95,59 @@ afterEach(() => {
   delete g.Element;
 });
 
+describe('an automation-driven browser', () => {
+  // Playwright/CDP browsers set navigator.webdriver; their clicks are real DOM
+  // events, so without this gate every UI-verification run against the live
+  // console banks hours of fake human time (the 2026-08-30 "8h42m overnight"
+  // incident). The gate lives at install time: nothing is wired at all.
+  // Node's own globalThis.navigator is getter-only; defineProperty shadows it.
+  const setNavigator = (value: unknown): void => {
+    Object.defineProperty(globalThis, 'navigator', { value, configurable: true, writable: true });
+  };
+  const realNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const restoreNavigator = (): void => {
+    if (realNavigator) Object.defineProperty(globalThis, 'navigator', realNavigator);
+  };
+
+  it('installs nothing: real signals and flush ticks bank zero samples', () => {
+    uninstall(); // replace the human-browser tracker from beforeEach
+    setNavigator({ webdriver: true });
+    try {
+      uninstall = installTimeTracker({
+        getPathname: () => '/',
+        now: () => clock,
+        send: (batch) => { sent.push(...batch); },
+      });
+      signal('alpha');
+      elapse(10 * 60_000);
+      dom.window.dispatchEvent(new dom.window.Event('pagehide'));
+      expect(sent).toEqual([]);
+    } finally {
+      restoreNavigator();
+    }
+  });
+
+  it('opts back in via localStorage for tests that exercise tracking itself', () => {
+    uninstall();
+    const g = globalThis as unknown as Record<string, unknown>;
+    setNavigator({ webdriver: true });
+    g.localStorage = { getItem: (k: string) => (k === 'walnut.time.allowAutomation' ? '1' : null) };
+    try {
+      uninstall = installTimeTracker({
+        getPathname: () => '/',
+        now: () => clock,
+        send: (batch) => { sent.push(...batch); },
+      });
+      signal('alpha');
+      elapse(3 * 60_000);
+      expect(totalMs(sent)).toBe(LEASE_MS);
+    } finally {
+      restoreNavigator();
+      delete g.localStorage;
+    }
+  });
+});
+
 describe('a parked cursor', () => {
   it('banks exactly one lease over three idle hours, never the idle time', () => {
     signal('alpha');

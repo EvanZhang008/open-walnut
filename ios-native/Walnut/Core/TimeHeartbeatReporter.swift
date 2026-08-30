@@ -77,7 +77,21 @@ enum AttentionWindowMachine {
 /// queue is an actor and the POST is a detached task.
 @MainActor
 final class TimeHeartbeatReporter: LifecycleSuspendable {
-    static let shared = TimeHeartbeatReporter()
+    static let shared = TimeHeartbeatReporter(suppressed: simulatorSuppressed)
+
+    /// A simulator's "foreground" is forever: it is an automation rig, not the
+    /// user's phone, and an overnight UI-test run against a paired console banked
+    /// hours of fake human time (2026-08-30). So the app-wired singleton reports
+    /// NOTHING from a simulator build unless the run opts in with a launch
+    /// argument; a device build compiles this to plain `false`. Tests construct
+    /// their own instances (default `suppressed: false`) and are unaffected.
+    static var simulatorSuppressed: Bool {
+        #if targetEnvironment(simulator)
+        return !ProcessInfo.processInfo.arguments.contains("--walnut-time-sim")
+        #else
+        return false
+        #endif
+    }
 
     /// How often an active app ships what it has earned.
     static let flushInterval: TimeInterval = 60
@@ -87,6 +101,10 @@ final class TimeHeartbeatReporter: LifecycleSuspendable {
 
     private let store: TimeSampleStore
     private let injectedSender: TimeSampleStore.Sender?
+    /// See `simulatorSuppressed`. Checked at the two entry points (`start`,
+    /// `setActive`) — with both inert, no window ever opens, no timer arms and
+    /// no POST fires, so every downstream path is off by construction.
+    private let suppressed: Bool
     private let clock: () -> Date
     private let api = WalnutAPI()
 
@@ -106,11 +124,13 @@ final class TimeHeartbeatReporter: LifecycleSuspendable {
     init(
         store: TimeSampleStore = TimeSampleStore(),
         sender: TimeSampleStore.Sender? = nil,
-        clock: @escaping () -> Date = { Date() }
+        clock: @escaping () -> Date = { Date() },
+        suppressed: Bool = false
     ) {
         self.store = store
         self.injectedSender = sender
         self.clock = clock
+        self.suppressed = suppressed
     }
 
     // MARK: - Wiring
@@ -120,6 +140,7 @@ final class TimeHeartbeatReporter: LifecycleSuspendable {
     /// Called from the root view's first activation, so a background/prewarm
     /// launch never starts a timer or a POST (the build-27 rule — see LaunchGate).
     func start() {
+        guard !suppressed else { return }
         guard !started else { return }
         started = true
         AttentionContext.shared.onChange = { [weak self] target in
@@ -141,6 +162,7 @@ final class TimeHeartbeatReporter: LifecycleSuspendable {
     ///
     /// Deliberately NOT driven by `LifecycleHub`: see `suspendForBackground`.
     func setActive(_ active: Bool) {
+        guard !suppressed else { return }
         guard active != isActive else { return }
         isActive = active
         if active {
