@@ -20,6 +20,7 @@ import crypto from 'node:crypto'
 import { createServer } from 'node:net'
 import { createAcpDaemon, type AcpStartParams } from '../../src/providers/acp-daemon.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
+import { resolveAgentCommand } from '../../src/providers/agent-command-map.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -225,6 +226,14 @@ export class MockDaemon {
       return // no reply — client's per-command timer fires
     }
 
+    this.dispatchCommand(ws, id, cmd)
+  }
+
+  /** The command switch, split out so the unified `agent.*` family can
+   *  re-dispatch onto a routed command exactly like daemon-standalone does
+   *  (history/fault injection stay in handleMessage: they belong to the frame
+   *  that actually arrived on the wire, not to the internal re-dispatch). */
+  private dispatchCommand(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {
     switch (cmd.cmd) {
       case 'start': return this.cmdStart(ws, id, cmd)
       case 'attach': return this.cmdAttach(ws, id, cmd)
@@ -274,6 +283,7 @@ export class MockDaemon {
         return
       }
       case 'acpSend': return this.cmdAcpOp(ws, id, cmd, 'prompt')
+      case 'acpSteer': return this.cmdAcpOp(ws, id, cmd, 'steer')
       case 'acpCancel': return this.cmdAcpOp(ws, id, cmd, 'cancel')
       case 'acpRespond': return this.cmdAcpOp(ws, id, cmd, 'permissionResponse')
       case 'acpState': return this.cmdAcpOp(ws, id, cmd, 'getState')
@@ -288,6 +298,21 @@ export class MockDaemon {
         if (ok) return this.sendOk(ws, id, { subscribed: true })
         ws.send(JSON.stringify({ id, ok: false, error: 'no live ACP worker for ' + cmd.sid, errorKind: 'no_worker' }))
         return
+      }
+      // ── Unified agent.* family (agent-commands-v1) ──
+      // Same routing table the real daemon uses (imported, not copied), so a
+      // fixture-backed test covers the engine dispatch rather than a mock of it.
+      case 'agent.start': case 'agent.send': case 'agent.steer': case 'agent.cancel':
+      case 'agent.respond': case 'agent.setOption': case 'agent.state':
+      case 'agent.newSession': case 'agent.stop': case 'agent.subscribe': {
+        const route = resolveAgentCommand(cmd.engine, String(cmd.cmd).slice('agent.'.length))
+        if (!route.ok) {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ id, ok: false, error: route.error, errorKind: route.errorKind }))
+          }
+          return
+        }
+        return this.dispatchCommand(ws, id, { ...cmd, cmd: route.cmd })
       }
       default: return this.sendError(ws, id, `unknown command: ${cmd.cmd}`)
     }

@@ -60,7 +60,18 @@ test('Homepage renders the persisted Codex session and blocks unsupported forks'
 
   // The disabled button is only cosmetic protection — the API itself must
   // refuse unsupported forks without creating any task or session.
-  const tasksBefore = await (await page.request.get('/api/tasks')).json() as { tasks: Array<{ id: string }> }
+  //
+  // This fixture server is shared with the other browser specs, which create
+  // their own tasks/sessions concurrently, so a global before/after list
+  // comparison is inherently flaky (a sibling spec's quick-start lands a task
+  // between the two snapshots). Assert the fork ADDED NO ATTRIBUTABLE artifact
+  // instead: a successful fork of this task would appear as a "Fork of <source>"
+  // task, and the ACP guard is proven (in session-controls.ts) to fire before
+  // any task/session write — so that task must be absent, and nothing that
+  // existed before the call may have been removed.
+  const tasksBefore = await (await page.request.get('/api/tasks')).json() as {
+    tasks: Array<{ id: string; title: string }>
+  }
   const sessionsBefore = await (await page.request.get('/api/sessions')).json() as {
     sessions: Array<{ claudeSessionId: string }>
   }
@@ -69,13 +80,25 @@ test('Homepage renders the persisted Codex session and blocks unsupported forks'
   })
   expect(forkResponse.status()).toBe(409)
   expect(await forkResponse.json()).toEqual(expect.objectContaining({ code: 'ACP_FORK_UNSUPPORTED' }))
-  const tasksAfter = await (await page.request.get('/api/tasks')).json() as { tasks: Array<{ id: string }> }
+  const tasksAfter = await (await page.request.get('/api/tasks')).json() as {
+    tasks: Array<{ id: string; title: string }>
+  }
   const sessionsAfter = await (await page.request.get('/api/sessions')).json() as {
     sessions: Array<{ claudeSessionId: string }>
   }
-  expect(tasksAfter.tasks.map((task) => task.id).sort()).toEqual(tasksBefore.tasks.map((task) => task.id).sort())
-  expect(sessionsAfter.sessions.map((session) => session.claudeSessionId).sort())
-    .toEqual(sessionsBefore.sessions.map((session) => session.claudeSessionId).sort())
+  const taskIdsAfter = new Set(tasksAfter.tasks.map((task) => task.id))
+  for (const task of tasksBefore.tasks) {
+    expect(taskIdsAfter.has(task.id), `task ${task.id} must survive a rejected fork`).toBe(true)
+  }
+  const sessionIdsAfter = new Set(sessionsAfter.sessions.map((session) => session.claudeSessionId))
+  for (const session of sessionsBefore.sessions) {
+    expect(
+      sessionIdsAfter.has(session.claudeSessionId),
+      `session ${session.claudeSessionId} must survive a rejected fork`,
+    ).toBe(true)
+  }
+  expect(tasksAfter.tasks.some((task) => new RegExp(`fork of ${TASK_TITLE}`, 'i').test(task.title)))
+    .toBe(false)
 
   await audit.assertClean({
     http: (response) =>

@@ -57,6 +57,7 @@ import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists, CwdMissingError } from './cwd-check.js'
 import { classifyDeliveryFailure, isDaemonCommandOutcomeUnknown } from './delivery-failure.js'
 import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp } from './acp-session.js'
+import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-registry.js'
 import { extractImageFilePathFromInput } from '../core/session-history.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind } from '../core/types.js'
 import {
@@ -444,8 +445,11 @@ export class AcpForkUnsupportedError extends Error {
   readonly code = 'ACP_FORK_UNSUPPORTED'
   readonly statusCode = 409
 
-  constructor(sessionId: string) {
-    super(`Fork is unavailable for Codex session ${sessionId}: the ACP provider does not advertise session.fork`)
+  constructor(sessionId: string, engine?: import('../core/types.js').SessionEngine) {
+    super(
+      `Fork is unavailable for ${engineCaps(engine ?? 'codex').displayName} session ${sessionId}: `
+        + 'the ACP provider does not advertise session.fork',
+    )
     this.name = 'AcpForkUnsupportedError'
   }
 }
@@ -453,8 +457,8 @@ export class AcpForkUnsupportedError extends Error {
 export function assertSessionForkSupported(
   source: Pick<SessionRecord, 'claudeSessionId' | 'engine'>,
 ): void {
-  if (source.engine === 'codex') {
-    throw new AcpForkUnsupportedError(source.claudeSessionId)
+  if (!engineCaps(source.engine).fork) {
+    throw new AcpForkUnsupportedError(source.claudeSessionId, resolveEngine(source.engine))
   }
 }
 
@@ -6926,7 +6930,7 @@ export class ClaudeCodeSession {
 
 export class SessionRunner {
   private sessions = new Map<string, ClaudeCodeSession>()
-  /** ACP-backed sessions (engine='codex'), keyed by trackingId (providerSessionId or runtimeId). */
+  /** ACP-backed sessions (any ACP engine), keyed by trackingId (providerSessionId or runtimeId). */
   private acpSessions = new Map<string, AcpSession>()
   /** One reattach constructor/consumer per durable session ID. */
   private acpAttachPromises = new Map<string, Promise<AcpSession | undefined>>()
@@ -7143,12 +7147,12 @@ export class SessionRunner {
       // Phase 1: reconnect to surviving sessions
       if (reconnectable?.length) {
         for (const record of reconnectable) {
-          // ACP (codex) sessions are NOT native CLI processes — attachToExisting
+          // ACP sessions are NOT native CLI processes — attachToExisting
           // here would register a native wrapper that shadows the ACP registry
           // for this sid (2026-08-10: title side_questions were dispatched into
-          // a codex session through such a wrapper and could only ever fail).
+          // an ACP session through such a wrapper and could only ever fail).
           // They re-attach lazily via maybeAttachAcpSession on first use.
-          if (record.engine === 'codex') continue
+          if (isAcpEngine(record.engine)) continue
           try {
             const session = await ClaudeCodeSession.attachToExisting(record, this.cliCommand, this._testDaemonUrl)
             const mapKey = record.taskId || `reconnected-${record.claudeSessionId}`
@@ -7213,7 +7217,7 @@ export class SessionRunner {
           const startData = eventData<'session:start'>(event)
           log.session.info('session start requested', { taskId: startData.taskId, host: startData.host, cwd: startData.cwd, mode: startData.mode, engine: startData.engine })
           await this.assertStartRouting(startData)
-          if (startData.engine === 'codex') {
+          if (isAcpEngine(startData.engine)) {
             log.session.info('session routing', { taskId: startData.taskId, type: 'acp' })
             await this.handleAcpStart(startData)
           } else if (this.sdkClient?.connected) {
@@ -7232,7 +7236,7 @@ export class SessionRunner {
           let acpSession = this.findAcpSession(sendData.sessionId)
           if (!acpSession && !this.sdkSessionMap.has(sendData.sessionId)) {
             // Server restarted since this ACP session was created? Re-attach from
-            // the record (engine='codex') — journal replay restores the stream.
+            // the record (its engine says ACP) — journal replay restores the stream.
             acpSession = await this.maybeAttachAcpSession(sendData.sessionId)
           }
           if (acpSession) {
@@ -7926,7 +7930,7 @@ export class SessionRunner {
     lane?: string
   }): Promise<{ claudeSessionId: string; title: string }> {
     await this.assertStartRouting(data)
-    if (data.engine === 'codex') {
+    if (isAcpEngine(data.engine)) {
       return this.handleAcpStart(data)
     }
 
@@ -7985,8 +7989,8 @@ export class SessionRunner {
     forkedFromSessionId?: string
   }): Promise<void> {
     if (!data.forkedFromSessionId) return
-    if (data.engine === 'codex') {
-      throw new AcpForkUnsupportedError(data.forkedFromSessionId)
+    if (isAcpEngine(data.engine)) {
+      throw new AcpForkUnsupportedError(data.forkedFromSessionId, resolveEngine(data.engine))
     }
     const { getSessionByClaudeId } = await import('../core/session-tracker.js')
     const source = await getSessionByClaudeId(data.forkedFromSessionId)
@@ -8009,7 +8013,7 @@ export class SessionRunner {
       getSessionByClaudeId,
     } = await import('../core/session-tracker.js')
     const initialRecord = await getSessionByClaudeId(sessionId)
-    if (!initialRecord || initialRecord.engine !== 'codex') return undefined
+    if (!initialRecord || !isAcpEngine(initialRecord.engine)) return undefined
     const replacementTarget = getAcpIdentityReplacementTarget(initialRecord)
     if (initialRecord.archived && !replacementTarget) return undefined
     const runtimeKey = initialRecord.acpRuntimeId
@@ -8044,7 +8048,12 @@ export class SessionRunner {
       getSessionByClaudeId,
     } = await import('../core/session-tracker.js')
     let record = initialRecord ?? await getSessionByClaudeId(sessionId)
-    if (!record || record.engine !== 'codex') return undefined
+    if (!record || !isAcpEngine(record.engine)) return undefined
+    // The engine this attachment belongs to. Every identity-migration check
+    // below compares against THIS value, not a vendor literal: a replacement
+    // row on a different engine is a different session, and a gemini row must
+    // match its own engine or the migration would look "inconsistent" forever.
+    const recordEngine = resolveEngine(record.engine)
     let migratedFrom: string | undefined
     if (record.archived) {
       const replacementId = getAcpIdentityReplacementTarget(record)
@@ -8052,7 +8061,7 @@ export class SessionRunner {
       const replacement = await getSessionByClaudeId(replacementId)
       if (!replacement
         || replacement.archived
-        || replacement.engine !== 'codex'
+        || resolveEngine(replacement.engine) !== recordEngine
         || replacement.acpRuntimeId !== record.acpRuntimeId
         || replacement.taskId !== record.taskId) {
         throw new Error(
@@ -8065,7 +8074,7 @@ export class SessionRunner {
       }
       await migrateSessionQueue(sessionId, replacementId)
       await deleteSessionRecords(new Set([sessionId]), 'acp-identity-migration-attach')
-      emitAcpIdentityBoundary(record.taskId, sessionId, replacementId)
+      emitAcpIdentityBoundary(record.taskId, sessionId, replacementId, recordEngine)
       migratedFrom = sessionId
       record = replacement
     }
@@ -8076,6 +8085,7 @@ export class SessionRunner {
         project: record.project ?? '',
         cwd: record.cwd || process.env.HOME || process.cwd(),
         mode: (record.mode as SessionMode | undefined) ?? 'default',
+        engine: recordEngine,
         providerSessionId: record.claudeSessionId,
         runtimeId: record.acpRuntimeId,
         acpConfig: record.acpConfig,
@@ -8097,7 +8107,7 @@ export class SessionRunner {
         || epoch !== this.acpLifecycleEpoch
         || !currentRecord
         || currentRecord.archived
-        || currentRecord.engine !== 'codex'
+        || resolveEngine(currentRecord.engine) !== session.engineId
         || currentRecord.acpRuntimeId !== session.runtimeId) {
         await this.retireAcpAttachment(session, establishedId, currentRecord?.taskId)
         return undefined
@@ -8116,7 +8126,7 @@ export class SessionRunner {
         || epoch !== this.acpLifecycleEpoch
         || !publishedRecord
         || publishedRecord.archived
-        || publishedRecord.engine !== 'codex'
+        || resolveEngine(publishedRecord.engine) !== session.engineId
         || publishedRecord.acpRuntimeId !== session.runtimeId) {
         await this.retireAcpAttachment(
           session,
@@ -8339,10 +8349,11 @@ export class SessionRunner {
   }
 
   /**
-   * Start an ACP-backed session (engine='codex'). Deliberately minimal next to
-   * handleStart: no FIFO/JSONL transport, no system-prompt assembly (ACP
-   * providers self-manage context) — the daemon acp* family + AcpSession own
-   * everything. Returns once the first prompt is accepted.
+   * Start an ACP-backed session (any engine whose runtimeKind is 'acp').
+   * Deliberately minimal next to handleStart: no FIFO/JSONL transport, no
+   * system-prompt assembly (ACP providers self-manage context) — the daemon
+   * acp* family + AcpSession own everything. Returns once the first prompt is
+   * accepted.
    */
   private async handleAcpStart(data: {
     taskId: string
@@ -8353,13 +8364,24 @@ export class SessionRunner {
     project?: string
     title?: string
     lane?: string
+    engine?: import('../core/types.js').SessionEngine
     forkedFromSessionId?: string
   }): Promise<{ claudeSessionId: string; title: string }> {
+    // Only ACP engines reach here (both call sites gate on isAcpEngine); the
+    // codex fallback keeps the prose honest if a caller ever slips through.
+    const requestedEngine = resolveEngine(data.engine)
+    const engine: import('../core/types.js').SessionEngine = isAcpEngine(requestedEngine)
+      ? requestedEngine
+      : 'codex'
     if (data.forkedFromSessionId) {
-      throw new AcpForkUnsupportedError(data.forkedFromSessionId)
+      throw new AcpForkUnsupportedError(data.forkedFromSessionId, engine)
     }
     if (data.host && data.host !== '__local__') {
-      throw new Error('Codex (ACP) sessions are local-only for now — remote host support is a later phase')
+      // Local-only for every ACP engine — the worker/adapter run beside walnut.
+      throw new Error(
+        `${engineCaps(engine).displayName} (ACP) sessions are local-only for now `
+          + '— remote host support is a later phase',
+      )
     }
     const cwd = data.cwd || process.env.HOME || process.cwd()
     const session = new AcpSession({
@@ -8367,6 +8389,7 @@ export class SessionRunner {
       project: data.project ?? '',
       cwd,
       mode: (data.mode as SessionMode | undefined) ?? 'default',
+      engine,
       ...(data.lane ? await buildAcpLaneConfig(data.lane) : {}),
       directWsUrl: this._testDaemonUrl,
       artifacts: this._testAcpArtifacts,

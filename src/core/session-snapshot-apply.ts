@@ -143,7 +143,9 @@ export function _resetSnapshotApplyForTests(): void {
 
 /** Hard exclusions per contract §5 step 4 — these session classes are C3+. */
 function isExcluded(record: SessionRecord): string | null {
-  if (!engineCaps(record.engine).snapshotPull) return 'engine-codex'
+  // Engine-shaped exclusion, not a vendor one: ACP engines project state from
+  // the journal, so there is no snapshot to pull.
+  if (!engineCaps(record.engine).snapshotPull) return 'engine-no-snapshot-pull'
   if (record.provider === 'embedded' || record.provider === 'sdk') return `provider-${record.provider}`
   if (record.status_reason === 'awaiting_spawn') return 'awaiting-spawn'
   return null

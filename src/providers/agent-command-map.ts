@@ -30,8 +30,17 @@ export type AgentCommandRoute =
   | { ok: true; cmd: string; acpOp?: string }
   | { ok: false; error: string; errorKind: 'agent_op_unsupported' | 'agent_op_unknown' }
 
-/** engine 'codex' → the ACP worker family. */
-const CODEX_ROUTES: Record<AgentOp, string> = {
+/**
+ * Engines whose runtime is the ACP worker family. MUST stay in sync with
+ * engine-registry runtimeKind==='acp' — this module is deliberately
+ * dependency-free (the bun daemon bundles it), so the set is duplicated here
+ * and pinned by tests/providers/agent-command-map.test.ts (which compares it
+ * against acpEngineIds() from the registry).
+ */
+export const ACP_ENGINES: ReadonlySet<string> = new Set(['codex', 'gemini', 'opencode', 'goose', 'custom'])
+
+/** Any ACP engine → the ACP worker family. */
+const ACP_ROUTES: Record<AgentOp, string> = {
   start: 'acpStart',
   send: 'acpSend',
   steer: 'acpSteer',
@@ -45,7 +54,7 @@ const CODEX_ROUTES: Record<AgentOp, string> = {
 }
 
 /**
- * Anything that is not 'codex' → the native (Claude CLI, stream-json over FIFO)
+ * Anything outside ACP_ENGINES → the native (Claude CLI, stream-json over FIFO)
  * family. Ops the native transport has no daemon command for are refused with a
  * reason rather than silently mapped onto a near-miss handler.
  */
@@ -82,8 +91,8 @@ export function resolveAgentCommand(engine: unknown, op: unknown): AgentCommandR
     return { ok: false, error: `unknown agent op: ${String(op)}`, errorKind: 'agent_op_unknown' }
   }
   const agentOp = op as AgentOp
-  if (engine === 'codex') {
-    const cmd = CODEX_ROUTES[agentOp]
+  if (typeof engine === 'string' && ACP_ENGINES.has(engine)) {
+    const cmd = ACP_ROUTES[agentOp]
     return { ok: true, cmd }
   }
   const cmd = NATIVE_ROUTES[agentOp]

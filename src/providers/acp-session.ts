@@ -1,5 +1,11 @@
 /**
- * AcpSession — Walnut session backed by an ACP worker (engine='codex').
+ * AcpSession — Walnut session backed by an ACP worker (every engine whose
+ * registry runtimeKind is 'acp': codex, gemini, opencode, goose, custom).
+ *
+ * The transport is engine-neutral: the daemon's acp* family and the worker only
+ * ever see `workerCmd` / `adapterCmd` / `env`. What differs per engine is how
+ * the adapter argv is obtained (registry `acpAdapter`) and the codex-specific
+ * adapter env contract, which stays gated on `engineId === 'codex'`.
  *
  * Parallel to ClaudeCodeSession but a fraction of its surface: the daemon's
  * acp* command family owns process lifecycle (acp-daemon.ts), the worker owns
@@ -23,7 +29,21 @@ import { fileURLToPath } from 'node:url'
 import { log } from '../logging/index.js'
 import { bus, EventNames } from '../core/event-bus.js'
 import { renderSelfKnowledgeContract } from '../core/self-knowledge-contract.js'
-import type { SessionMode } from '../core/types.js'
+import type { SessionEngine, SessionMode } from '../core/types.js'
+import {
+  engineCaps,
+  isAcpEngine,
+  normalizeEngine,
+  resolveEngine,
+} from '../core/agents/engine-registry.js'
+// ONE selection policy for "which executable may we launch", shared with the
+// engine catalog probe. Leaf-ish module (registry + claude-cli-detect + node
+// builtins); it never imports providers, so there is no cycle.
+import {
+  enginePathOverrideVar,
+  findEngineBinary,
+  inspectExecutable,
+} from '../core/agents/engine-probe.js'
 import { localDaemon } from './local-daemon.js'
 import { getDirectDaemonConnection, DaemonConnection, type DaemonEvent } from './daemon-connection.js'
 import { AcpJournalProjector } from './acp-journal-projector.js'
@@ -57,8 +77,30 @@ import {
   rollbackSessionQueueMigration,
 } from '../core/session-message-queue.js'
 
-/** Locate the worker bundle + adapter entry within this walnut install (MVP: local host). */
-export function resolveAcpArtifacts(): { workerCmd: string[]; adapterCmd: string[] } {
+/** node_modules adapter entry per 'bundled' engine (only codex ships one today). */
+const BUNDLED_ADAPTER_ENTRIES: Partial<Record<SessionEngine, string>> = {
+  codex: 'node_modules/@agentclientprotocol/codex-acp/dist/index.js',
+}
+
+export interface ResolveAcpArtifactsOptions {
+  /** argv for a `source: 'config'` engine (walnut config engines.<id>.adapter_cmd). */
+  configuredAdapterCmd?: readonly string[]
+  /** Executable-probe DI (tests); production reads process.env / process.cwd(). */
+  executable?: EngineExecutableProbeOptions
+}
+
+/**
+ * Locate the worker bundle + this engine's adapter command within this walnut
+ * install (MVP: local host). The worker bundle is engine-neutral; the adapter
+ * comes from the registry's `acpAdapter` descriptor:
+ *   bundled → node + a package under node_modules (codex)
+ *   cli     → the provider's own CLI speaks ACP (`gemini --experimental-acp`)
+ *   config  → argv the user supplied in walnut config (custom)
+ */
+export function resolveAcpArtifacts(
+  engine: SessionEngine = 'codex',
+  options: ResolveAcpArtifactsOptions = {},
+): { workerCmd: string[]; adapterCmd: string[] } {
   // This module's depth differs by build: src/providers/ in source (tests),
   // dist/ when bundled into cli.js. A fixed '../..' overshoots for the bundle,
   // so walk up to the first ancestor that actually contains the worker bundle
@@ -68,37 +110,68 @@ export function resolveAcpArtifacts(): { workerCmd: string[]; adapterCmd: string
     if (fsModule.existsSync(path.join(root, 'dist/daemon-binaries/acp-worker.js'))) break
     root = path.dirname(root)
   }
-  const workerJs = path.join(root, 'dist/daemon-binaries/acp-worker.js')
-  const adapterJs = path.join(root, 'node_modules/@agentclientprotocol/codex-acp/dist/index.js')
-  return {
-    workerCmd: [process.execPath, workerJs],
-    adapterCmd: [process.execPath, adapterJs],
+  const workerCmd = [process.execPath, path.join(root, 'dist/daemon-binaries/acp-worker.js')]
+  const caps = engineCaps(engine)
+  const adapter = caps.acpAdapter
+  if (!adapter) {
+    throw new Error(`Engine '${engine}' has no ACP adapter: it does not run on the ACP worker`)
   }
+  if (adapter.source === 'bundled') {
+    const entry = BUNDLED_ADAPTER_ENTRIES[caps.id]
+    if (!entry) throw new Error(`No bundled ACP adapter is packaged for ${caps.displayName}`)
+    return { workerCmd, adapterCmd: [process.execPath, path.join(root, entry)] }
+  }
+  if (adapter.source === 'cli') {
+    const executable = resolveEngineExecutable({
+      ...options.executable,
+      engine: caps.id,
+      binaryName: adapter.binary ?? caps.id,
+    })
+    return { workerCmd, adapterCmd: [executable, ...(adapter.args ?? [])] }
+  }
+  const configured = (options.configuredAdapterCmd ?? []).filter((arg) => typeof arg === 'string' && arg !== '')
+  if (configured.length === 0) {
+    throw new Error(
+      `${caps.displayName} has no adapter command: set engines.${caps.id}.adapter_cmd in the walnut `
+        + 'config to the argv that speaks ACP on stdio (for example ["/usr/local/bin/my-agent", "acp"]).',
+    )
+  }
+  return { workerCmd, adapterCmd: [...configured] }
 }
 
-export type SystemCodexPathErrorReason =
+export type EngineExecutableErrorReason =
   | 'override_missing'
   | 'override_not_file'
   | 'override_not_executable'
   | 'override_forbidden'
   | 'not_found'
 
-/** Fail-closed startup error for Codex executable selection. */
-export class SystemCodexPathError extends Error {
-  readonly code = 'SYSTEM_CODEX_UNAVAILABLE'
+/** Back-compat alias for the codex-era name (imported by tests + live specs). */
+export type SystemCodexPathErrorReason = EngineExecutableErrorReason
+
+/** Fail-closed startup error for an engine's system executable selection. */
+export class EngineExecutableError extends Error {
+  /** `SYSTEM_CODEX_UNAVAILABLE` for codex, same shape for every other engine. */
+  readonly code: string
   readonly kind = 'provider_missing'
 
   constructor(
-    readonly reason: SystemCodexPathErrorReason,
+    readonly engine: SessionEngine,
+    readonly reason: EngineExecutableErrorReason,
     message: string,
     readonly candidate?: string,
   ) {
     super(message)
-    this.name = 'SystemCodexPathError'
+    this.name = 'EngineExecutableError'
+    this.code = `SYSTEM_${engine.toUpperCase()}_UNAVAILABLE`
   }
 }
 
-export interface ResolveSystemCodexPathOptions {
+/** Back-compat alias: the codex-era class name existing imports still use. */
+export { EngineExecutableError as SystemCodexPathError }
+
+/** Probe inputs shared by every engine (dependency injection for tests). */
+export interface EngineExecutableProbeOptions {
   /** Dependency injection for deterministic tests; production uses process.env. */
   env?: NodeJS.ProcessEnv
   cwd?: string
@@ -106,71 +179,94 @@ export interface ResolveSystemCodexPathOptions {
   systemDirectories?: readonly string[]
 }
 
-interface CodexCandidateResult {
+export interface ResolveEngineExecutableOptions extends EngineExecutableProbeOptions {
+  /** Engine being resolved: drives the error code, prose label and default names. */
+  engine?: SessionEngine
+  /** Binary base name to look for; defaults to the registry's acpAdapter.binary. */
+  binaryName?: string
+  /** Override env var; defaults to `WALNUT_<ENGINE>_PATH`. */
+  overrideEnvVar?: string
+}
+
+/** Options shape kept identical to the codex-era resolver (tests inject these). */
+export type ResolveSystemCodexPathOptions = EngineExecutableProbeOptions
+
+interface ExecutableCandidateResult {
   executable?: string
-  failure?: Exclude<SystemCodexPathErrorReason, 'not_found'>
+  failure?: Exclude<EngineExecutableErrorReason, 'not_found'>
   canonicalPath?: string
 }
 
-const DEFAULT_CODEX_SYSTEM_DIRS = process.platform === 'win32'
-  ? []
-  : ['/opt/homebrew/bin', '/usr/local/bin']
-
 /**
- * Resolve the SYSTEM `codex` executable for the adapter's CODEX_PATH.
+ * Resolve the SYSTEM executable for an engine's CLI (codex's CODEX_PATH, the
+ * `gemini` / `opencode` / `goose` adapter binaries).
  *
- * codex-acp deliberately falls back to its @openai/codex dependency when
- * CODEX_PATH is absent. Walnut must never take that path: npm prepends
- * node_modules/.bin to PATH, and the bundled executable can use a different
- * auth chain from the user's system installation.
+ * Fail-closed: codex-acp falls back to its bundled @openai/codex dependency when
+ * CODEX_PATH is absent, and npm prepends node_modules/.bin to PATH, so walnut
+ * must pick the user's own installation explicitly. The node_modules ban is
+ * SCOPED (see engine-probe.inspectExecutable): an npm-injected PATH entry or a
+ * realpath inside THIS walnut install is refused, but a foreign node_modules
+ * realpath is fine — that is exactly what a homebrew / `npm i -g` node CLI
+ * looks like (/opt/homebrew/bin/gemini realpaths into a Cellar node_modules).
  */
-export function resolveSystemCodexPath(options: ResolveSystemCodexPathOptions = {}): string {
+export function resolveEngineExecutable(options: ResolveEngineExecutableOptions = {}): string {
+  const engine = resolveEngine(options.engine ?? 'codex')
+  const caps = engineCaps(engine)
+  const binaryName = options.binaryName ?? caps.acpAdapter?.binary ?? engine
+  const overrideEnvVar = options.overrideEnvVar ?? enginePathOverrideVar(engine)
+  const label = caps.displayName
   const env = options.env ?? process.env
   const cwd = options.cwd ?? process.cwd()
-  const override = env.WALNUT_CODEX_PATH
+  const override = env[overrideEnvVar]
 
   if (override !== undefined) {
-    const result = inspectCodexCandidate(override, cwd)
+    const result = inspectExecutableCandidate(override, cwd)
     if (result.executable) return result.executable
-    throw invalidOverrideError(override, result, cwd)
+    throw invalidOverrideError(engine, label, overrideEnvVar, override, result, cwd)
   }
 
-  const directories: string[] = []
-  directories.push(...(env.PATH ?? '').split(path.delimiter).filter(Boolean))
-  const home = env.HOME || env.USERPROFILE
-  if (home) {
-    directories.push(path.join(home, '.toolbox/bin'))
-    directories.push(path.join(home, '.local/bin'))
-  }
-  directories.push(...(options.systemDirectories ?? DEFAULT_CODEX_SYSTEM_DIRS))
+  // Discovery is the catalog probe's own search (PATH → per-user install dirs →
+  // fixed system dirs), so "the catalog says installed" and "the launcher can
+  // find it" can never disagree.
+  const discovered = findEngineBinary(binaryName, {
+    env,
+    cwd,
+    ...(options.systemDirectories ? { systemDirectories: options.systemDirectories } : {}),
+  })
+  if (discovered) return discovered
 
-  const executableNames = process.platform === 'win32'
-    ? ['codex.exe', 'codex.cmd', 'codex.bat', 'codex']
-    : ['codex']
-  const seen = new Set<string>()
-  for (const directory of directories) {
-    for (const executableName of executableNames) {
-      const candidate = path.resolve(cwd, directory, executableName)
-      if (seen.has(candidate)) continue
-      seen.add(candidate)
-      const result = inspectCodexCandidate(candidate, cwd)
-      if (result.executable) return result.executable
-    }
-  }
-
-  throw new SystemCodexPathError(
+  throw new EngineExecutableError(
+    engine,
     'not_found',
-    'No system Codex executable was found. Install Codex and make it executable on PATH, '
-      + 'or set WALNUT_CODEX_PATH to an executable outside node_modules. '
-      + 'Walnut will not use the bundled node_modules Codex.',
+    `No system ${label} executable was found. Install ${label} and make it executable on PATH, `
+      + `or set ${overrideEnvVar} to an executable outside node_modules. `
+      + `Walnut will not use a ${label} bundled inside its own node_modules.`,
   )
 }
 
-function inspectCodexCandidate(candidate: string, cwd: string): CodexCandidateResult {
+/** Codex-specific entry point, kept so existing imports and tests are unchanged. */
+export function resolveSystemCodexPath(options: ResolveSystemCodexPathOptions = {}): string {
+  return resolveEngineExecutable({
+    ...options,
+    engine: 'codex',
+    binaryName: 'codex',
+    overrideEnvVar: 'WALNUT_CODEX_PATH',
+  })
+}
+
+/**
+ * Selection policy lives in ONE place (engine-probe.inspectExecutable) so the
+ * catalog's "installed?" answer and this launch-time resolution can never
+ * disagree. This wrapper only turns a rejection into the granular reason the
+ * override error messages need.
+ */
+function inspectExecutableCandidate(candidate: string, cwd: string): ExecutableCandidateResult {
   const executable = path.resolve(cwd, candidate)
-  if (isNodeModulesPath(executable)) {
-    return { failure: 'override_forbidden' }
-  }
+  const verdict = inspectExecutable(executable)
+  if (verdict.executable) return { executable: verdict.executable }
+  // A PATH entry inside node_modules is the npm-injected-shim hazard: forbidden
+  // outright, no filesystem detail worth reporting.
+  if (verdict.rejection === 'npm_injected_path') return { failure: 'override_forbidden' }
 
   let canonicalPath: string
   try {
@@ -178,7 +274,7 @@ function inspectCodexCandidate(candidate: string, cwd: string): CodexCandidateRe
   } catch {
     return { failure: 'override_missing' }
   }
-  if (isNodeModulesPath(canonicalPath)) {
+  if (verdict.rejection === 'walnut_bundled') {
     return { failure: 'override_forbidden', canonicalPath }
   }
 
@@ -195,45 +291,47 @@ function inspectCodexCandidate(candidate: string, cwd: string): CodexCandidateRe
   return { executable, canonicalPath }
 }
 
-function isNodeModulesPath(candidate: string): boolean {
-  return path.resolve(candidate).split(path.sep)
-    .some((segment) => segment.toLowerCase() === 'node_modules')
-}
-
 function invalidOverrideError(
+  engine: SessionEngine,
+  label: string,
+  overrideEnvVar: string,
   override: string,
-  result: CodexCandidateResult,
+  result: ExecutableCandidateResult,
   cwd: string,
-): SystemCodexPathError {
+): EngineExecutableError {
   const absolute = path.resolve(cwd, override)
   switch (result.failure) {
     case 'override_forbidden': {
       const canonical = result.canonicalPath && result.canonicalPath !== absolute
         ? `; it resolves inside node_modules (${result.canonicalPath})`
         : ''
-      return new SystemCodexPathError(
+      return new EngineExecutableError(
+        engine,
         'override_forbidden',
-        `WALNUT_CODEX_PATH must point outside node_modules: ${absolute}${canonical}. `
-          + 'Choose a system Codex executable or unset the override to use discovery.',
+        `${overrideEnvVar} must point outside node_modules: ${absolute}${canonical}. `
+          + `Choose a system ${label} executable or unset the override to use discovery.`,
         absolute,
       )
     }
     case 'override_not_file':
-      return new SystemCodexPathError(
+      return new EngineExecutableError(
+        engine,
         'override_not_file',
-        `WALNUT_CODEX_PATH is not a file: ${absolute}. Set it to the Codex executable.`,
+        `${overrideEnvVar} is not a file: ${absolute}. Set it to the ${label} executable.`,
         absolute,
       )
     case 'override_not_executable':
-      return new SystemCodexPathError(
+      return new EngineExecutableError(
+        engine,
         'override_not_executable',
-        `WALNUT_CODEX_PATH is not executable: ${absolute}. Fix its permissions or choose another system Codex executable.`,
+        `${overrideEnvVar} is not executable: ${absolute}. Fix its permissions or choose another system ${label} executable.`,
         absolute,
       )
     default:
-      return new SystemCodexPathError(
+      return new EngineExecutableError(
+        engine,
         'override_missing',
-        `WALNUT_CODEX_PATH does not exist: ${absolute}. Fix it or unset the override to use system discovery.`,
+        `${overrideEnvVar} does not exist: ${absolute}. Fix it or unset the override to use system discovery.`,
         absolute,
       )
   }
@@ -269,12 +367,14 @@ export function emitAcpIdentityBoundary(
   taskId: string,
   previousSessionId: string,
   newSessionId: string,
+  engine?: SessionEngine,
 ): void {
   bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
     sessionId: previousSessionId,
     taskId,
     variant: 'error',
-    message: 'Could not resume the previous Codex thread. A fresh provider thread was started; earlier history remains visible in this transcript.',
+    message: `Could not resume the previous ${engineCaps(engine ?? 'codex').displayName} thread. `
+      + 'A fresh provider thread was started; earlier history remains visible in this transcript.',
     previousSessionId,
     newSessionId,
   } as never, ['main-ai'])
@@ -395,6 +495,8 @@ export interface AcpSessionConfig {
   project: string
   cwd: string
   mode: SessionMode
+  /** Which ACP engine backs this session. Defaults to codex (back-compat). */
+  engine?: SessionEngine
   /** Lane binding (Personal AI chat conversation) — persisted on the record at
    * establish so getSessionByLane finds the codex session (capacity/list
    * exemptions ride the same field). */
@@ -440,6 +542,19 @@ export interface AcpSessionConfig {
  */
 const ACP_COLD_RESUME_TIMEOUT_MS = 5 * 60_000
 
+/**
+ * Split an ACP catalog model id into its base id and reasoning effort.
+ * The catalog advertises effort-qualified ids ("base[effort]") while the
+ * adapter's `model` config option only accepts the BASE id, so both halves are
+ * needed — and the persisted `acpModel` may be either shape (setModel sends the
+ * base but persists the qualified id). ONE parser so the record write and the
+ * config write can never disagree about where the split is.
+ */
+export function splitAcpModelId(modelId: string): { base: string; effort?: string } {
+  const match = /^(.*?)\[([^\]]+)\]$/.exec(modelId)
+  return match ? { base: match[1], effort: match[2] } : { base: modelId }
+}
+
 interface PendingSelfReport {
   commandId: string
   chunks: string[]
@@ -461,6 +576,10 @@ export class AcpSession {
   readonly runtimeId: string
   readonly taskId: string
   readonly project: string
+  /** Effective engine. Always an ACP engine: an AcpSession IS the ACP runtime,
+   *  so a missing/native/unknown request degrades to codex rather than to the
+   *  default engine (which would make every capability lookup answer 'native'). */
+  readonly engineId: SessionEngine
   private cfg: AcpSessionConfig
   private conn: DaemonConnection | null = null
   private offEvent: (() => void) | null = null
@@ -498,6 +617,8 @@ export class AcpSession {
     this.cfg = cfg
     this.taskId = cfg.taskId
     this.project = cfg.project
+    const requestedEngine = resolveEngine(cfg.engine ?? 'codex')
+    this.engineId = isAcpEngine(requestedEngine) ? requestedEngine : 'codex'
     this.runtimeId = cfg.runtimeId ?? `acp-${crypto.randomBytes(8).toString('hex')}`
     this._providerSessionId = cfg.providerSessionId ?? null
     this._mode = cfg.mode
@@ -511,6 +632,12 @@ export class AcpSession {
 
   // ── Contract getters (subset of ClaudeCodeSession's surface) ──
   get sessionId(): string | null { return this._providerSessionId }
+  get engine(): SessionEngine { return this.engineId }
+  /** Storage shape for the record's `engine` field: ACP records ALWAYS carry an
+   *  explicit engine (only the default engine persists as undefined). */
+  private get persistedEngine(): SessionEngine {
+    return normalizeEngine(this.engineId) ?? 'codex'
+  }
   get active(): boolean { return this._active }
   get mode(): SessionMode { return this._mode }
   get cwd(): string { return this.cfg.cwd }
@@ -531,6 +658,26 @@ export class AcpSession {
       ...control,
       options: control.options.map((option) => ({ ...option })),
     }))
+  }
+
+  /**
+   * Record patch carrying the provider-advertised display name for `modelId`.
+   *
+   * Qualified id first, then the base id: setModel applies the base to the
+   * adapter but persists the qualified id, so either shape can be the current
+   * model. Empty patch when the catalog isn't loaded yet — a blind write there
+   * would erase a good name an earlier turn persisted.
+   */
+  private acpModelNamePatch(modelId: string): { acpModelName?: string } {
+    if (this._models.availableModels.length === 0) return {}
+    const { base } = splitAcpModelId(modelId)
+    const hit = this._models.availableModels.find((m) => m.modelId === modelId)
+      ?? this._models.availableModels.find((m) => m.modelId === base)
+    // KEEP the `name !== modelId` guard: snapshotAcpModels defaults a missing
+    // `name` to the modelId, so equality means "the adapter advertised no name".
+    // Storing it would let the raw qualified id beat the client-side prettifier.
+    // undefined is a deliberate CLEAR of a stale name from the previous model.
+    return { acpModelName: hit && hit.name !== hit.modelId ? hit.name : undefined }
   }
 
   /** Get pending permission requests in the provider-neutral API/UI shape. */
@@ -734,7 +881,10 @@ export class AcpSession {
         await updateSessionRecordConditionally(
           sessionId,
           { pendingPermission: durable },
-          (record) => record.engine === 'codex'
+          // Compare against THIS session's engine, not a vendor literal: a
+          // gemini record would never satisfy `=== 'codex'` and every pending
+          // permission write would be silently dropped.
+          (record) => resolveEngine(record.engine) === this.engineId
             && record.process_status !== 'stopped'
             && record.process_status !== 'error',
         )
@@ -808,21 +958,45 @@ export class AcpSession {
     }
   }
 
-  private async establishProviderSession(): Promise<string> {
-    await this.seedReplayCursor()
-    const { workerCmd, adapterCmd } = this.cfg.artifacts ?? resolveAcpArtifacts()
+  /**
+   * argv for engines whose adapter comes from walnut config (source 'config').
+   * Resolved HERE, where config is already loaded on this path, so
+   * resolveAcpArtifacts stays synchronous for every other engine.
+   */
+  private async resolveConfiguredAdapterCmd(): Promise<string[] | undefined> {
+    if (engineCaps(this.engineId).acpAdapter?.source !== 'config') return undefined
+    try {
+      const { getConfig } = await import('../core/config-manager.js')
+      const config = await getConfig()
+      // Read structurally: engines.* is an optional additive config section.
+      const raw = (config as { engines?: Record<string, { adapter_cmd?: unknown } | undefined> })
+        .engines?.[this.engineId]?.adapter_cmd
+      if (!Array.isArray(raw)) return undefined
+      return raw.filter((arg): arg is string => typeof arg === 'string' && arg !== '')
+    } catch {
+      // Unreadable config reads as "not configured" — resolveAcpArtifacts then
+      // throws the actionable error naming the config key.
+      return undefined
+    }
+  }
 
-    // Production always passes a validated system Codex path. Omitting
-    // CODEX_PATH would make codex-acp silently use its bundled dependency.
-    // Tests that inject a mock adapter do not need a Codex executable.
-    const systemCodex = this.cfg.artifacts ? undefined : resolveSystemCodexPath()
-    // Concurrent with ensureConn: the mount list is a small config read and must
-    // not add serial latency to the cold-resume path, which is already the
-    // slowest thing walnut does (worker spawn + provider initialize + load).
-    const [mcpServers, conn] = await Promise.all([
-      this.resolveMcpServers(),
-      this.ensureConn(),
-    ])
+  /**
+   * Environment for the adapter process.
+   *
+   * Everything except WALNUT_SESSION_ID is CODEX-SPECIFIC by contract:
+   * CODEX_PATH / CODEX_CONFIG / INITIAL_AGENT_MODE are codex-acp's own variable
+   * names, and CODEX_CONFIG is how walnut delivers developer instructions and
+   * the startup approval preset to THAT adapter. Handing them to another
+   * adapter would at best be ignored and at worst leak codex config JSON into
+   * a gemini session, so they stay gated on the engine id (transport layer,
+   * adapter-specific env contract — the allowed zone for a vendor check).
+   * Other ACP engines get only walnut's managed-session identity; per-engine
+   * env contracts get their own gate here when they are actually needed.
+   */
+  private async buildAdapterEnv(systemCodex: string | undefined): Promise<Record<string, string> | undefined> {
+    if (this.engineId !== 'codex') {
+      return buildAcpAdapterEnv(undefined, { sessionId: this.runtimeId })
+    }
     const parsedBaseConfig = parseCodexBaseConfig(process.env.CODEX_CONFIG)
     // Startup approval preset: the session's OWN persisted choice wins (it is
     // replayed post-establish by replayPersistedConfig); only a session with
@@ -855,20 +1029,65 @@ export class AcpSession {
         defaultInstructions = (await buildSessionContext(this.taskId, this.cfg.cwd)).systemPrompt || undefined
       } catch { /* context is additive — never block establish */ }
     }
-    const adapterEnv = buildAcpAdapterEnv(systemCodex, {
+    return buildAcpAdapterEnv(systemCodex, {
       disableProjectInstructions: this.cfg.disableProjectInstructions,
       developerInstructions: this.cfg.developerInstructions ?? defaultInstructions,
       baseConfig: parsedBaseConfig,
       sessionId: this.runtimeId,
       initialAgentMode,
     })
+  }
+
+  private async resolveArtifacts(): Promise<{ workerCmd: string[]; adapterCmd: string[] }> {
+    if (this.cfg.artifacts) return this.cfg.artifacts
+    return resolveAcpArtifacts(this.engineId, {
+      configuredAdapterCmd: await this.resolveConfiguredAdapterCmd(),
+    })
+  }
+
+  private async establishProviderSession(): Promise<string> {
+    await this.seedReplayCursor()
+    const { workerCmd, adapterCmd } = await this.resolveArtifacts()
+    // Fail closed BEFORE touching the daemon: a missing provider executable is
+    // a configuration error, not a transport one. 'cli' engines already got
+    // this check inside resolveArtifacts; codex needs its own because the path
+    // travels as adapter env (CODEX_PATH), not as argv.
+    // Production always passes a validated system Codex path — omitting
+    // CODEX_PATH would make codex-acp silently use its bundled dependency.
+    // Tests that inject a mock adapter do not need a Codex executable.
+    const systemCodex = this.engineId === 'codex' && !this.cfg.artifacts
+      ? resolveSystemCodexPath()
+      : undefined
+
+    // Concurrent with ensureConn: the mount list is a small config read and must
+    // not add serial latency to the cold-resume path, which is already the
+    // slowest thing walnut does (worker spawn + provider initialize + load).
+    const [mcpServers, conn] = await Promise.all([
+      this.resolveMcpServers(),
+      this.ensureConn(),
+    ])
+    const adapterEnv = await this.buildAdapterEnv(systemCodex)
+    // Adapters that answer `loadSession: false` (gemini) can NEVER resume a
+    // provider thread: acpStart would run session/load, get load_failed, and
+    // fall back to a fresh session on EVERY worker respawn. Pre-empt that round
+    // trip and take the fresh-session path directly, announcing the identity
+    // boundary exactly like the load_failed handler below does. A warm worker
+    // ignores providerSessionId entirely, so this is a no-op when nothing died.
+    const preemptFreshSession = Boolean(this._providerSessionId)
+      && this._capabilities?.loadSession === false
+    const boundaryFrom = preemptFreshSession ? this.trackingId() : undefined
+    if (preemptFreshSession) {
+      log.session.info('acp: adapter cannot load sessions — starting a fresh provider thread', {
+        sessionId: boundaryFrom, runtimeId: this.runtimeId, engine: this.engineId,
+      })
+    }
     const startResp = await conn.send('acpStart', {
       sid: this.runtimeId,
       cwd: this.cfg.cwd,
       workerCmd,
       adapterCmd,
       env: adapterEnv,
-      providerSessionId: this._providerSessionId ?? undefined,
+      providerSessionId: preemptFreshSession ? undefined : (this._providerSessionId ?? undefined),
       fromOffset: this._seenV,
       mcpServers,
     }, ACP_COLD_RESUME_TIMEOUT_MS)
@@ -889,7 +1108,7 @@ export class AcpSession {
           if (!fresh.ok) throw new Error('acp newSession fallback failed: ' + fresh.error)
           await this.publishSessionResponse((fresh as { result?: unknown }).result)
           const newSessionId = this.trackingId()
-          emitAcpIdentityBoundary(this.taskId, previousSessionId, newSessionId)
+          emitAcpIdentityBoundary(this.taskId, previousSessionId, newSessionId, this.engineId)
         } else {
           throw new Error('acpStart failed: ' + startResp.error)
         }
@@ -905,6 +1124,12 @@ export class AcpSession {
         if (state?.capabilities) this._capabilities = state.capabilities
         if (result.session) await this.publishSessionResponse(result.session)
         if (state) await this.adoptStateSnapshot(state)
+        // Pre-empted resume: the worker minted a new provider thread, so tell
+        // the transcript once (same message the load_failed fallback emits). A
+        // warm attach keeps the same id and stays silent.
+        if (boundaryFrom && this.trackingId() !== boundaryFrom) {
+          emitAcpIdentityBoundary(this.taskId, boundaryFrom, this.trackingId(), this.engineId)
+        }
       }
     } catch (error) {
       await this.discardUnpublishedWorker()
@@ -1071,7 +1296,7 @@ export class AcpSession {
           mode: this._mode,
           initialProcessStatus: 'idle',
           messageCount: 0,
-          engine: 'codex',
+          engine: this.persistedEngine,
           ...(this.cfg.lane ? { lane: this.cfg.lane } : {}),
           acpRuntimeId: this.runtimeId,
           acpJournalPath: this._journalPath,
@@ -1190,6 +1415,7 @@ export class AcpSession {
     if (this._providerSessionId && this._models.currentModelId) {
       await updateSessionRecord(this._providerSessionId, {
         acpModel: this._models.currentModelId,
+        ...this.acpModelNamePatch(this._models.currentModelId),
       }).catch(() => {})
     }
   }
@@ -1199,7 +1425,11 @@ export class AcpSession {
     taskId?: string
     acpRuntimeId?: string
   }): boolean {
-    return record.engine === 'codex'
+    // Engine EQUALITY against this session's own engine (ACP records always
+    // persist an explicit engine, so resolveEngine is just defensive here).
+    // A literal 'codex' would make every non-codex record fail to match its
+    // OWN session and turn every identity migration into a thrown error.
+    return resolveEngine(record.engine) === this.engineId
       && record.acpRuntimeId === this.runtimeId
       && (record.taskId ?? '') === this.taskId
   }
@@ -1262,7 +1492,12 @@ export class AcpSession {
       await updateSessionRecord(this._providerSessionId, {
         acpJournalPath: this._journalPath,
         acpCapabilities: state.capabilities,
-        ...(this._models.currentModelId ? { acpModel: this._models.currentModelId } : {}),
+        ...(this._models.currentModelId
+          ? {
+            acpModel: this._models.currentModelId,
+            ...this.acpModelNamePatch(this._models.currentModelId),
+          }
+          : {}),
       }).catch(() => {})
     }
   }
@@ -1284,7 +1519,9 @@ export class AcpSession {
     if (configId === 'model') this._models = { ...this._models, currentModelId: value }
     const record = await getSessionByClaudeId(this.trackingId())
     await updateSessionRecord(this.trackingId(), {
-      ...(configId === 'model' ? { acpModel: value } : {}),
+      ...(configId === 'model'
+        ? { acpModel: value, ...this.acpModelNamePatch(value) }
+        : {}),
       acpConfig: { ...(record?.acpConfig ?? this.cfg.acpConfig ?? {}), [configId]: value },
     })
     // Codex applies approvalPolicy per-turn (adapter passes it to runTurn), so
@@ -1309,9 +1546,7 @@ export class AcpSession {
    *  availableModels by base id and throws invalidParams otherwise) — split
    *  and apply model + reasoning_effort as two config ops. */
   async setModel(modelId: string): Promise<boolean> {
-    const match = /^(.*?)\[([^\]]+)\]$/.exec(modelId)
-    const base = match ? match[1] : modelId
-    const effort = match ? match[2] : undefined
+    const { base, effort } = splitAcpModelId(modelId)
     if (!await this.setConfigOption('model', base)) return false
     if (effort && !await this.setConfigOption('reasoning_effort', effort)) {
       log.session.warn('acp: model applied but reasoning_effort rejected', {
@@ -1320,7 +1555,10 @@ export class AcpSession {
     }
     // Persist the requested (qualified) id so the pill shows what was chosen.
     this._models = { ...this._models, currentModelId: modelId }
-    await updateSessionRecord(this.trackingId(), { acpModel: modelId }).catch(() => {})
+    await updateSessionRecord(this.trackingId(), {
+      acpModel: modelId,
+      ...this.acpModelNamePatch(modelId),
+    }).catch(() => {})
     return true
   }
 
@@ -1531,14 +1769,19 @@ export class AcpSession {
     this._cursorSeeded = true
     if (!this._providerSessionId) return
     const record = await getSessionByClaudeId(this._providerSessionId).catch(() => null)
-    if (!record || !validOffset(record.consumedOffset)) return
-    this._committedV = record.consumedOffset
-    this._seenV = Math.max(this._seenV, record.consumedOffset)
+    if (!record) return
+    // Adapter facts come back FIRST: they are independent of the turn cursor,
+    // and gating them on consumedOffset hid the capability snapshot from any
+    // record whose cursor was never committed — including from the check that
+    // decides whether this thread can be resumed at all (loadSession).
     if (!this._journalPath) this._journalPath = record.acpJournalPath
     if (!this._capabilities && record.acpCapabilities) {
       // Records persisted before the steering feature lack the flag → false.
       this._capabilities = { steering: false, ...record.acpCapabilities }
     }
+    if (!validOffset(record.consumedOffset)) return
+    this._committedV = record.consumedOffset
+    this._seenV = Math.max(this._seenV, record.consumedOffset)
   }
 
   private commitTerminal(

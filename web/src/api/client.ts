@@ -110,7 +110,7 @@ export function getFetchQueueStats(): { inFlight: number; queued: number } {
  *  can deadlock the pool if several requests hit the cache race at once). */
 const RETRY_WITH_CACHE_BYPASS = Symbol('retry-with-cache-bypass');
 
-async function request<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean }): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean; quietStatuses?: number[] }): Promise<T> {
   await acquireFetchSlot(method !== 'GET', extra?.signal);
   let retryWithBypass = false;
   try {
@@ -126,7 +126,7 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
   return request<T>(method, path, body, { ...extra, cacheBypass: true });
 }
 
-async function attemptRequest<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean }): Promise<T> {
+async function attemptRequest<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean; quietStatuses?: number[] }): Promise<T> {
   const timeoutMs = extra?.timeoutMs ?? 15_000;
   // Created AFTER slot acquisition — the timer measures the network round
   // trip only, never time spent waiting for a connection.
@@ -180,7 +180,10 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
     } catch {
       // use statusText
     }
-    console.error(`[api] ${method} ${path} → ${res.status} in ${elapsed}ms: ${message}`);
+    // quietStatuses: statuses the caller EXPECTS in some environments (e.g. a
+    // 503 "feature disabled") — warn keeps them out of the error-log audit.
+    const quiet = extra?.quietStatuses?.includes(res.status) ?? false;
+    (quiet ? console.warn : console.error)(`[api] ${method} ${path} → ${res.status} in ${elapsed}ms: ${message}`);
     throw new ApiError(res.status, message, errBody);
   }
   if (res.status === 204) return undefined as T;
@@ -250,7 +253,7 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
   return data;
 }
 
-export function apiGet<T>(path: string, params?: Record<string, string>, opts?: { signal?: AbortSignal; timeoutMs?: number }): Promise<T> {
+export function apiGet<T>(path: string, params?: Record<string, string>, opts?: { signal?: AbortSignal; timeoutMs?: number; quietStatuses?: number[] }): Promise<T> {
   const url = params ? `${path}?${new URLSearchParams(params)}` : path;
   return request<T>('GET', url, undefined, opts);
 }

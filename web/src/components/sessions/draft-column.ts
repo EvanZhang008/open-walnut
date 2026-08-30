@@ -14,6 +14,7 @@
  */
 
 import { peekWorkingDirs, type WorkingDirEntry } from '@/api/sessions';
+import type { LaunchMemory } from '@/utils/engines';
 import type { QuickStartTaskMeta } from './SessionPathSelector';
 
 /** Prefix of every draft composer's localStorage key — MainPage sweeps stale
@@ -115,13 +116,13 @@ export interface DraftColumn {
 
 /** Merge a directory's remembered launch config into `meta`.
  *
- *  `undefined` CLEARS model/engine back to Auto/Claude rather than leaving the
- *  previous directory's values behind — the same rule as SessionPathSelector's
- *  `withLaunchMemory`, and the reason a folder with no memory can't inherit the
- *  model of whatever folder was selected before it. */
+ *  `undefined` CLEARS model/engine back to Auto + the default engine rather than
+ *  leaving the previous directory's values behind — the same rule as
+ *  SessionPathSelector's `withLaunchMemory`, and the reason a folder with no
+ *  memory can't inherit the model of whatever folder was selected before it. */
 export function applyLaunchMemory(
   meta: QuickStartTaskMeta,
-  launch: { model?: string; engine?: 'codex' } | undefined,
+  launch: LaunchMemory | undefined,
 ): QuickStartTaskMeta {
   if (meta.model === launch?.model && meta.engine === launch?.engine) return meta;
   return { ...meta, model: launch?.model, engine: launch?.engine };
@@ -129,7 +130,7 @@ export function applyLaunchMemory(
 
 /** A directory's remembered launch config from the working-dirs cache.
  *  `undefined` = cold cache, or that directory has no memory. */
-function dirLaunchMemory(cwd: string, host: string | null): { model?: string; engine?: 'codex' } | undefined {
+function dirLaunchMemory(cwd: string, host: string | null): LaunchMemory | undefined {
   if (!cwd) return undefined;
   return peekWorkingDirs()?.dirs
     .find(d => d.cwd === cwd && (d.host ?? null) === (host ?? null))?.lastLaunch;

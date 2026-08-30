@@ -18,6 +18,7 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { fetchWorkingDirs, prewarmWorkingDirs, type WorkingDirEntry, type ConfiguredHost } from '@/api/sessions';
 import type { TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
+import type { LaunchEngine, LaunchMemory } from '@/utils/engines';
 import { classifyInput, resolveSpaceAmbiguity, deleteLastSegment, ghostSuffix, segmentCompletion, pathValidity, type InputState } from './path-selector/input-model';
 import { rankCandidates, buildSections, type Candidate, type RankedItem } from './path-selector/ranking';
 import { useLiveDirs, type HostLiveState } from './path-selector/useLiveDirs';
@@ -47,8 +48,10 @@ export interface QuickStartTaskMeta {
   pinTier: FocusTier | undefined;
   /** Session model alias (SESSION_MODELS id). undefined = Auto — let the CLI/config default decide. */
   model: string | undefined;
-  /** Coding-agent engine. undefined = 'claude' (native path). 'codex' → ACP-backed, local-only. */
-  engine: 'codex' | undefined;
+  /** Coding-agent engine. undefined = the default engine (native Claude path);
+   *  any other value is an explicitly picked engine (every non-default engine is
+   *  ACP-backed and local-only today). */
+  engine: LaunchEngine | undefined;
   /** Task dates (ISO strings), same trio as the Quick Task form — a launch IS a
    *  task create, so it carries the same fields. Optional (unlike the controls
    *  above): they render as DatePicker pills, not controlled inputs. */
@@ -455,7 +458,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
   // or the picker was seeded with a prior confirmed meta (re-edit flow).
   // No memory on the picked dir → reset to Auto/Claude so a preview from a
   // previously highlighted row can't leak onto an unrelated directory.
-  const withLaunchMemory = useCallback((launch: { model?: string; engine?: 'codex' } | undefined): QuickStartTaskMeta => {
+  const withLaunchMemory = useCallback((launch: LaunchMemory | undefined): QuickStartTaskMeta => {
     if (launchTouchedRef.current || initialMetaRef.current) return meta;
     return { ...meta, model: launch?.model, engine: launch?.engine };
   }, [meta]);
@@ -470,7 +473,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
   //    handleConfirm: the explicit tab is host authority, All infers.
   useEffect(() => {
     if (!open || launchTouchedRef.current || initialMetaRef.current) return;
-    let launch: { model?: string; engine?: 'codex' } | undefined;
+    let launch: LaunchMemory | undefined;
     if (editMode) {
       const trimmed = editingPath.replace(/\/+$/, '') || '/';
       const match = hostFilter === 'all'

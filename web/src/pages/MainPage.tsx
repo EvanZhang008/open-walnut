@@ -1,8 +1,10 @@
 import { useState, useCallback, useEffect, useMemo, useRef, Fragment } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
-import type { Task } from '@open-walnut/core';
+import type { SessionEngine, Task } from '@open-walnut/core';
 import { SESSION_MODELS } from '@open-walnut/core';
 import { getHostCatalog } from '@/hooks/useModelCatalog';
+import { getEngineCatalog, useEngineCatalog } from '@/hooks/useEngineCatalog';
+import { engineDisplayName, launchEngineForHost } from '@/utils/engines';
 import { useChat, mergeAdjacentErrors, type TaskContext, type ImageAttachment } from '@/hooks/useChat';
 import { useAgentConsole } from '@/hooks/useAgentConsole';
 import { useConversations, ACTIVE_CONV_KEY } from '@/hooks/useConversations';
@@ -337,6 +339,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const laneSend = useSessionSend(laneActive ? lane.sessionId : null);
   const [laneStreaming, setLaneStreaming] = useState(false);
   const { health, loading: healthLoading } = useSystemHealth();
+  // Which engines exist + are installed. Subscribed here (not read imperatively)
+  // so the quick-start bar's engine chip relabels when the catalog hydrates; the
+  // launch payload still reads it imperatively, inside its callback.
+  const engineCatalog = useEngineCatalog();
   const { connectionState } = useWebSocket();
   const { notify } = useNotifications();
   const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, toggleComplete, setPhase, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, folderMeta, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden, createFolder, deleteFolder } = useTasksContext();
@@ -1681,7 +1687,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // other way around (memory must not clobber an explicit user edit).
       if (quickStartMetaRef.current !== seeded) return;
       const launch = dirs.find(d => d.cwd === dir && (d.host ?? null) === null)?.lastLaunch;
-      if (!launch || launch.engine === 'codex') return; // repair briefing is written for the native CLI — don't inherit a Codex memory (or its model)
+      // The repair briefing is written for the native CLI, so a memory carrying
+      // ANY explicitly-picked engine (they are all ACP-backed) is not inherited,
+      // model included — a set `engine` is by definition non-default.
+      if (!launch || launch.engine) return;
       quickStartMetaRef.current = { ...seeded, model: launch.model };
       setQuickStartModel(launch.model);
     }).catch(() => { /* no memory → keep Auto/Claude, same as the launcher */ });
@@ -2174,10 +2183,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // Model is a session arg, not task metadata. undefined = Auto (let the
       // CLI/config default decide) — only forwarded when the user picks one.
       const model = metaSnapshot?.model;
-      // Codex is local-only: if the user flipped to Codex and then confirmed a
-      // remote-host path (toggle disables but meta keeps the stale value), fall
-      // back to Claude instead of letting the server reject the quick-start.
-      const engine = qsp.host && qsp.host !== '__local__' ? undefined : metaSnapshot?.engine;
+      // ACP engines are local-only: if the user picked one and then confirmed a
+      // remote-host path (the toggle disables but meta keeps the stale value),
+      // fall back to the default engine instead of letting the server reject the
+      // quick-start. ONE rule, shared with the toggle and the draft model pill.
+      const engine = launchEngineForHost(metaSnapshot?.engine, qsp.host, getEngineCatalog());
 
       const settled = quickStartSession({
         cwd: qsp.cwd,
@@ -2204,8 +2214,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // Native starts return the session id up front (server pre-assigns it and
         // passes it to the CLI as --session-id). Swap the placeholder for the real
         // panel NOW rather than waiting on task:updated / the 2s poll — that wait
-        // was the multi-second "starting session…" spinner. Codex omits sessionId,
-        // so those keep the event/poll path below.
+        // was the multi-second "starting session…" spinner. An engine whose
+        // provider issues its own id (every ACP engine) omits sessionId, so those
+        // keep the event/poll path below.
         if (result.sessionId) {
           promoteToRealSession(pendingColId, result.sessionId, result.taskId);
         }
@@ -2529,14 +2540,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       });
   }, [agentConsole.activeAgentId, conversations, notify]);
 
-  // Provider switch (claude ⇄ codex) — legal only while the conversation is
-  // EMPTY (no messages yet): the server archives the just-minted lane session
-  // and re-mints one on the requested engine. The pill's picker only offers
-  // this while `laneConversationEmpty` below, so the 409 path is a race guard.
+  // Provider switch (any engine → any engine) — legal only while the
+  // conversation is EMPTY (no messages yet): the server archives the just-minted
+  // lane session and re-mints one on the requested engine. The pill's picker only
+  // offers this while `laneConversationEmpty` below, so the 409 path is a race guard.
   const laneConversationEmpty = (conversations.conversations.find(
     (c) => c.id === conversations.activeConversationId,
   )?.messageCount ?? 0) === 0;
-  const handleLaneProviderSwitch = useCallback((provider: 'claude' | 'codex') => {
+  const handleLaneProviderSwitch = useCallback((provider: SessionEngine) => {
     lane.swapEngine(provider).catch((err) => {
       notify({
         kind: 'operation-error', severity: 'error', title: 'Provider switch failed',
@@ -2970,11 +2981,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   onClick={() => { setPathSelectorOpen(true); setQuickTaskOpen(false); }}
                   title="Edit launch settings (engine, model, pin, priority)"
                 >
-                  {/* Chip label: codex engine → "Codex" (its models are discovered at
-                      session start, no pre-start pick); legacy alias → static label;
-                      catalog value (full provider ID) → the catalog row's displayName. */}
-                  {quickStartMetaRef.current?.engine === 'codex'
-                    ? 'Codex'
+                  {/* Chip label: an explicitly picked engine → its display name (ACP
+                      models are discovered at session start, no pre-start pick);
+                      legacy alias → static label; catalog value (full provider ID) →
+                      the catalog row's displayName. */}
+                  {quickStartMetaRef.current?.engine
+                    ? engineDisplayName(engineCatalog, quickStartMetaRef.current.engine)
                     : SESSION_MODELS.find(sm => sm.id === quickStartModel)?.label
                       ?? getHostCatalog(quickStartPath.host)?.models.find(m => m.value === quickStartModel)?.displayName
                       ?? (quickStartModel || 'Auto')}

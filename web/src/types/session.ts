@@ -5,7 +5,14 @@ export type { TaskPhase } from '@open-walnut/core';
 /** Mirrors SessionMode in src/core/types.ts — all six Claude permission modes. */
 export type SessionMode = 'bypass' | 'accept' | 'default' | 'plan' | 'auto' | 'dontAsk';
 export type SessionProvider = 'cli' | 'sdk' | 'embedded';
-export type SessionEngine = 'claude' | 'codex';
+/** Every registered coding-agent engine — re-exported from core for the same
+ *  reason as TaskPhase above: the hand-copied union here drifted from the
+ *  server's the moment a third engine landed. SESSION_ENGINE_IDS is the runtime
+ *  membership list (validators, catalog defaults). Imported rather than
+ *  `export ... from` because SessionRecord below refers to it. */
+import type { SessionEngine } from '@open-walnut/core';
+export type { SessionEngine };
+export { SESSION_ENGINE_IDS } from '@open-walnut/core';
 
 /** One pinned message. Mirrors SessionPinnedMessage in src/core/types.ts. */
 export interface SessionPinnedMessage {
@@ -41,8 +48,12 @@ export interface SessionRecord {
   provider?: SessionProvider;
   /** Coding-agent CLI backing this session. Undefined = 'claude'. */
   engine?: SessionEngine;
-  /** Current ACP base model for Codex sessions. */
+  /** Current ACP base model, for sessions on an ACP engine. */
   acpModel?: string;
+  /** Provider-advertised display name for `acpModel`. Absent when the record
+   *  predates the field or the adapter advertised no real name — then the id is
+   *  prettified client-side (shortAcpModelName). */
+  acpModelName?: string;
   human_note?: string;
   /** Messages the human pinned — the timeline's table of contents. */
   pinnedMessages?: SessionPinnedMessage[];

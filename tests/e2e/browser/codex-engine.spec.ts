@@ -218,23 +218,26 @@ test('Codex session controls cycle on Homepage', async ({ page }) => {
   // opens a menu holding the approval options AND the plan-mode toggle. The
   // old standalone "Default" collaboration pill no longer exists; plan mode
   // surfaces as its own amber pill only while ON.
-  const modePill = panel.locator('.mode-toggle-pill').filter({ hasText: 'Agent' })
+  // The pill/menu use the ChatGPT-parity wording overlaid on codex's mode ids
+  // (SessionControlPills CHATGPT_MODE_WORDING): agent → "Approve for me",
+  // agent-full-access → "Full access", read-only → "Ask for approval".
+  const modePill = panel.locator('.mode-toggle-pill').filter({ hasText: 'Approve for me' })
   await expect(modePill).toBeVisible({ timeout: 15_000 })
 
   const clickModeResponse = page.waitForResponse((candidate) =>
     candidate.request().method() === 'POST'
       && new URL(candidate.url()).pathname === `/api/sessions/${sessionId}/controls`)
   await modePill.click()
-  await panel.locator('.session-control-option', { hasText: 'Agent full access' }).click()
+  await panel.locator('.session-control-option', { hasText: 'Full access' }).click()
   expect((await clickModeResponse).status()).toBe(200)
-  await expect(panel.locator('.mode-toggle-pill').filter({ hasText: 'Agent full access' })).toBeVisible()
+  await expect(panel.locator('.mode-toggle-pill').filter({ hasText: 'Full access' })).toBeVisible()
 
   const shortcutResponse = page.waitForResponse((candidate) =>
     candidate.request().method() === 'POST'
       && new URL(candidate.url()).pathname === `/api/sessions/${sessionId}/controls`)
   await panel.locator('.chat-input-textarea').press('Shift+Tab')
   expect((await shortcutResponse).status()).toBe(200)
-  await expect(panel.locator('.mode-toggle-pill').filter({ hasText: 'Read only' })).toBeVisible()
+  await expect(panel.locator('.mode-toggle-pill').filter({ hasText: 'Ask for approval' })).toBeVisible()
 
   const collaborationResponse = page.waitForResponse((candidate) =>
     candidate.request().method() === 'POST'

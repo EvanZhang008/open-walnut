@@ -21,6 +21,8 @@ import { WorkflowProgress } from './WorkflowProgress';
 import { LoadingSpinner } from '../common/LoadingSpinner';
 import { Lightbox } from '../common/Lightbox';
 import type { SessionEngine, SessionHistoryMessage } from '@/types/session';
+import { useEngineCatalog } from '@/hooks/useEngineCatalog';
+import { engineCaps } from '@/utils/engine-capabilities';
 import type { ImageAttachment } from '@/api/chat';
 import { respondToPermission } from '@/api/sessions';
 import { parseAskUserQuestionInput, buildAskUserAnswers, allAskUserQuestionsAnswered, toggleAskUserSelection, type AskQuestion } from './ask-user-question';
@@ -875,7 +877,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   });
   const [historyVersion, setHistoryVersion] = useState(0);
-  const assistantLabel = engine === 'codex' ? 'Codex' : 'Claude Code';
+  // Who the assistant bubbles are attributed to — the engine's own label from
+  // the catalog, so a newly registered engine names itself in the transcript.
+  const engineCatalog = useEngineCatalog();
+  const assistantLabel = engineCaps(engine, engineCatalog).displayName;
   // Turn watermark: history length when the CURRENT turn started streaming.
   // Content matching (id-less blocks + bubble text fallback) only trusts
   // messages[watermark..] — identical short texts recur across turns, and the

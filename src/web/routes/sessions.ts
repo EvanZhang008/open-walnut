@@ -55,7 +55,8 @@ import {
 } from '../../core/sessions/session-extras.js'
 import { filterSessionsByQuery } from '../../core/session-search.js'
 import { QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
-import { engineCaps, isAcpEngine, normalizeEngine } from '../../core/agents/engine-registry.js'
+import { engineCaps, isAcpEngine, isKnownEngine, normalizeEngine } from '../../core/agents/engine-registry.js'
+import { SESSION_ENGINE_IDS } from '../../core/types.js'
 
 /** Client-supplied session ids must be well-formed UUIDs (they become CLI --session-id args and file names). */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -284,7 +285,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       intent?: string
       /** User opted into "create & start": mkdir the cwd (recursive) before starting. */
       createCwd?: boolean
-      /** Coding-agent engine ('claude' default | 'codex' via ACP). */
+      /** Coding-agent engine: 'claude' (default) or any registered ACP engine. */
       engine?: string
     }
 
@@ -341,6 +342,16 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         res.status(400).json({ error: `Invalid mode: ${mode}. Must be one of: ${CLAUDE_SESSION_MODES.join(', ')}` })
         return
       }
+    }
+
+    // Reject an unknown engine explicitly — the sibling enums above all 400 on
+    // garbage, and conversations.ts does the same. Without this, a misspelled
+    // engine ('gemni') silently coerces to claude (isAcpEngine→false,
+    // normalizeEngine→undefined) and launches the wrong provider, masking the
+    // client bug. Undefined stays valid (the default).
+    if (engine !== undefined && !isKnownEngine(engine)) {
+      res.status(400).json({ error: `engine must be one of: ${SESSION_ENGINE_IDS.join(', ')}` })
+      return
     }
 
     // Whitelist enum values from taskMeta — these flow into updateTask/setFocusTier
@@ -440,8 +451,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       // Mint the session id HERE so it can ride the response: the UI then mounts
       // the real session panel in the same frame as the click instead of parking
       // on a placeholder until the CLI's first init line (3–6s later). The CLI
-      // adopts this id via --session-id. Codex/ACP is excluded (its adapter owns
-      // id assignment), so those clients keep the poll-for-id path.
+      // adopts this id via --session-id. ACP engines are excluded (the adapter
+      // owns id assignment), so those clients keep the poll-for-id path.
       //
       // A client-supplied `sessionId` wins over minting: it makes the launch
       // reconcilable when the HTTP response never reaches the browser (client
@@ -477,13 +488,13 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         const rawPickerModel = typeof rawModel === 'string' && rawModel && rawModel !== 'default' ? rawModel : undefined
         recordLaunchPrefs(cwd, host ?? null, {
           model: rawPickerModel,
-          // LaunchPrefs stores the persisted shape ('codex' or absent), which is
-          // exactly normalizeEngine's contract.
-          engine: normalizeEngine(engine) as 'codex' | undefined,
+          // LaunchPrefs stores the persisted shape (explicit non-default engine
+          // or absent), which is exactly normalizeEngine's contract.
+          engine: normalizeEngine(engine),
         }).catch(() => {})
       }
       // sessionId is present for native starts (see preassignedSessionId above).
-      // Clients MUST treat it as optional — a Codex start omits it.
+      // Clients MUST treat it as optional — an ACP start omits it.
       res.json({
         taskId: updatedTask.id,
         task: updatedTask,
@@ -533,13 +544,14 @@ function markUnsettled(messages: readonly SessionHistoryMessage[]): SessionHisto
 }
 
 function unavailableHistoryReason(record: SessionRecord): string {
-  if (engineCaps(record.engine).historySource === 'acp-journal') {
+  const caps = engineCaps(record.engine)
+  if (caps.historySource === 'acp-journal') {
     if (!record.acpRuntimeId) {
-      return 'Codex session has no ACP runtime ID, so its history journal cannot be located'
+      return `${caps.displayName} session has no ACP runtime ID, so its history journal cannot be located`
     }
     return record.host
-      ? `Codex session history journal is unavailable on remote host "${record.host}"`
-      : 'Codex session history journal not found'
+      ? `${caps.displayName} session history journal is unavailable on remote host "${record.host}"`
+      : `${caps.displayName} session history journal not found`
   }
   return record.host
     ? `Remote host "${record.host}" is unreachable — session history is stored on that machine`
@@ -1230,14 +1242,14 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     // message. A client can therefore mint cursor N after the first chunk, then
     // observe the same total N after later chunks complete that message. A
     // count-only delta would return [] and strand the partial text forever.
-    // Codex cursor requests consequently fall through to a full replacement.
+    // ACP cursor requests consequently fall through to a full replacement.
     //
     // Contract:
     //   native + resolvable split point
     //     → { messages: slice(start), cursor, delta: true }
     //     · slice is empty when nothing new yet (archive hasn't flushed the turn) —
     //       client treats empty delta as "not caught up", keeps streaming blocks, retries.
-    //   Codex, anchor missing/ambiguous, client ahead, or a windowed read with no
+    //   ACP, anchor missing/ambiguous, client ahead, or a windowed read with no
     //   anchor → full payload + delta:false so the client rebuilds. Never silently drop.
     const sinceRaw = req.query.since as string | undefined
     if (sinceRaw !== undefined) {
@@ -1648,7 +1660,7 @@ sessionsRouter.post('/:sessionId/model', async (req: Request, res: Response, nex
   }
 })
 
-// GET /api/sessions/:sessionId/model-catalog — live ACP-discovered Codex models.
+// GET /api/sessions/:sessionId/model-catalog — live ACP-discovered provider models.
 sessionsRouter.get('/:sessionId/model-catalog', async (req: Request, res: Response, next: NextFunction) => {
   const sessionId = req.params.sessionId as string
   try {
@@ -1657,13 +1669,14 @@ sessionsRouter.get('/:sessionId/model-catalog', async (req: Request, res: Respon
       res.status(404).json({ error: 'session not found' })
       return
     }
-    if (engineCaps(record.engine).modelCatalog !== 'provider-advertised') {
-      res.status(409).json({ error: 'model catalog is only available for Codex ACP sessions' })
+    const caps = engineCaps(record.engine)
+    if (caps.modelCatalog !== 'provider-advertised') {
+      res.status(409).json({ error: 'model catalog is only available for ACP sessions' })
       return
     }
     const session = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined)
     if (!session) {
-      res.status(409).json({ error: 'Codex ACP session is not available' })
+      res.status(409).json({ error: `${caps.displayName} ACP session is not available` })
       return
     }
     const catalog = session.modelCatalog

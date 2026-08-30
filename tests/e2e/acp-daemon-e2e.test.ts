@@ -6,7 +6,9 @@
  *
  * Covers: acpStart (new session) → acpSend → jsonl push frames → acpState →
  * acpRespond (permission) → daemon kill → restart → startup repair → lazy
- * resume via acpStart(providerSessionId).
+ * resume via acpStart(providerSessionId), plus the unified `agent.*` family
+ * (one namespace + an engine, routed onto those same handlers) for every ACP
+ * engine in the registry.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -16,6 +18,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { acpEngineIds } from '../../src/core/agents/engine-registry.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '../..')
@@ -288,4 +291,66 @@ describe.runIf(HAVE_BIN)('ACP daemon E2E (real binary)', () => {
       return ends.length >= 1
     })
   }, 40_000)
+
+  // ── Unified agent.* family (agent-commands-v1) ──
+  // The wire test for the ONE namespace: `agent.<op>` + an `engine` field,
+  // engine-routed INSIDE the daemon onto the legacy acp*/native handlers. The
+  // pure-logic table test (tests/providers/agent-command-map.test.ts) proves the
+  // mapping; this proves the daemon actually dispatches through it.
+  //
+  // Declared last on purpose: these tests create sessions of their own, and the
+  // suites above count journal frames across every sid.
+  describe('unified agent.* family over the wire', () => {
+    /** Journal records for ONE sid (the shared helper spans every session). */
+    function recordsForSid(sid: string): Array<{ kind: string; event?: { type?: string; text?: string } }> {
+      return pushed
+        .filter((f) => f.ev === 'jsonl' && f.sid === sid && typeof f.line === 'string')
+        .map((f) => JSON.parse(f.line as string))
+    }
+
+    it.each(acpEngineIds())('agent.start routes engine=%s onto the ACP family', async (engine) => {
+      const sid = `e2e-agent-${engine}`
+      try {
+        const start = await rpc('agent.start', { engine, ...startParams(sid) })
+        expect(start.ok).toBe(true)
+        // Same result shape acpStart answers with: the adapter's own session id.
+        const providerSid = (start as { session?: { sessionId?: string } }).session?.sessionId
+        expect(providerSid).toMatch(/^mock-session-/)
+
+        const state = await rpc('agent.state', { engine, sid })
+        expect(state.ok).toBe(true)
+        expect((state as { result?: { providerSessionId?: string; turnActive?: boolean } }).result)
+          .toMatchObject({ providerSessionId: providerSid, turnActive: false })
+      } finally {
+        await rpc('agent.stop', { engine, sid }).catch(() => { /* best effort */ })
+      }
+    }, 30_000)
+
+    it('agent.send drives a full turn on the routed worker', async () => {
+      const engine = acpEngineIds()[0]
+      const sid = 'e2e-agent-send'
+      try {
+        expect((await rpc('agent.start', { engine, ...startParams(sid) })).ok).toBe(true)
+        const send = await rpc('agent.send', {
+          engine, sid, commandId: 'agent-c1', walnutMessageId: 'qm-agent-1', text: 'hello agent family',
+        })
+        expect(send.ok).toBe(true)
+        await waitFor(() => recordsForSid(sid).some((r) => r.event?.type === 'turn-ended'))
+        expect(recordsForSid(sid).some((r) => r.kind === 'acp')).toBe(true)
+        expect(recordsForSid(sid).some((r) =>
+          r.event?.type === 'prompt-accepted' && r.event?.text === 'hello agent family')).toBe(true)
+      } finally {
+        await rpc('agent.stop', { engine, sid }).catch(() => { /* best effort */ })
+      }
+    }, 30_000)
+
+    it('refuses a native-engine op the transport has no command for', async () => {
+      const resp = await rpc('agent.respond', {
+        engine: 'claude', sid: 'e2e-1', providerRequestId: 'never-issued', optionId: 'allow-once',
+      })
+      expect(resp.ok).toBe(false)
+      expect(resp.errorKind).toBe('agent_op_unsupported')
+      expect(String(resp.error)).toContain('agent.respond')
+    })
+  })
 })

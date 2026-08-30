@@ -46,7 +46,9 @@ export async function fetchAgentSearch(
   const payload = await apiGet<AgentSearchPayload>(
     '/api/search/agent',
     { q: q.trim(), ...(opts.sid ? { sid: opts.sid } : {}) },
-    { signal: opts.signal, timeoutMs: CLIENT_TIMEOUT_MS },
+    // 503 = ai_disabled: expected degrade where AI search is off (test
+    // fixtures, replicas without credentials) — warn, not an audited error.
+    { signal: opts.signal, timeoutMs: CLIENT_TIMEOUT_MS, quietStatuses: [503] },
   );
   // Memoize BEFORE any abort bail upstream — a late landing still warms the
   // cache for when the user retypes the same query.

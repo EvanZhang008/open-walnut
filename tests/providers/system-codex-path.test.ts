@@ -4,8 +4,11 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   buildAcpAdapterEnv,
+  EngineExecutableError,
   parseCodexBaseConfig,
+  resolveAcpArtifacts,
   resolveCodexInitialMode,
+  resolveEngineExecutable,
   resolveSystemCodexPath,
   SystemCodexPathError,
 } from '../../src/providers/acp-session.js'
@@ -196,11 +199,30 @@ describe('resolveSystemCodexPath', () => {
     expect(error.message).toContain('node_modules')
   })
 
-  it('rejects a symlink whose canonical target is inside node_modules', () => {
+  it('accepts a symlink whose canonical target is a FOREIGN node_modules install', () => {
+    // Deliberate, verified loosening (2026-08-30): every homebrew / `npm i -g`
+    // node CLI realpaths into some node_modules dir, so a blanket realpath ban
+    // reported real installations as missing. Only walnut's OWN bundle is banned.
     const bundled = executable('node_modules/@openai/codex/bin/codex')
     const override = path.join(tmpDir, 'system-bin', 'codex')
     fs.mkdirSync(path.dirname(override), { recursive: true })
     fs.symlinkSync(bundled, override)
+
+    expect(resolveWith({
+      WALNUT_CODEX_PATH: override,
+      PATH: '',
+      HOME: path.join(tmpDir, 'home'),
+    })).toBe(override)
+  })
+
+  it('rejects a symlink whose canonical target is inside WALNUT own node_modules', () => {
+    // The real hazard: a binary shipped with this walnut install can carry a
+    // different auth chain than the user's own installation.
+    const walnutBundled = path.resolve(__dirname, '../../node_modules/.bin/vitest')
+    expect(fs.existsSync(walnutBundled)).toBe(true)
+    const override = path.join(tmpDir, 'system-bin', 'codex')
+    fs.mkdirSync(path.dirname(override), { recursive: true })
+    fs.symlinkSync(walnutBundled, override)
 
     const error = resolutionError(() => resolveWith({
       WALNUT_CODEX_PATH: override,
@@ -230,17 +252,29 @@ describe('resolveSystemCodexPath', () => {
     })).toBe(toolboxCandidate)
   })
 
-  it('skips PATH candidates that resolve inside node_modules', () => {
+  it('skips a PATH ENTRY that is itself inside node_modules (npm-injected shim)', () => {
+    // npm prepends node_modules/.bin to PATH for every script it runs — that
+    // shim must never win over the user's system install.
+    const injected = executable('node_modules/.bin/codex')
+    const safe = executable('safe-bin/codex')
+
+    expect(resolveWith({
+      PATH: [path.dirname(injected), path.dirname(safe)].join(path.delimiter),
+      HOME: path.join(tmpDir, 'home'),
+    })).toBe(safe)
+  })
+
+  it('accepts a PATH candidate that realpaths into a foreign node_modules', () => {
     const bundled = executable('node_modules/@openai/codex/bin/codex')
     const pathLink = path.join(tmpDir, 'path-bin', 'codex')
     fs.mkdirSync(path.dirname(pathLink), { recursive: true })
     fs.symlinkSync(bundled, pathLink)
-    const safe = executable('safe-bin/codex')
 
+    // Returns the REQUESTED path, not the realpath: dispatch wrappers read argv[0].
     expect(resolveWith({
-      PATH: [path.dirname(pathLink), path.dirname(safe)].join(path.delimiter),
+      PATH: path.dirname(pathLink),
       HOME: path.join(tmpDir, 'home'),
-    })).toBe(safe)
+    })).toBe(pathLink)
   })
 
   it('throws a typed actionable error when no candidate exists', () => {
@@ -255,5 +289,117 @@ describe('resolveSystemCodexPath', () => {
     expect(error.message).toContain('Install Codex')
     expect(error.message).toContain('WALNUT_CODEX_PATH')
     expect(error.message).toContain('outside node_modules')
+  })
+})
+
+describe('resolveEngineExecutable (generalized resolver)', () => {
+  it('keeps the codex entry point as an alias of the generic resolver', () => {
+    const codex = executable('generic/codex')
+    const env = { PATH: path.dirname(codex), HOME: path.join(tmpDir, 'home') }
+    expect(resolveEngineExecutable({ engine: 'codex', env, systemDirectories: [] })).toBe(codex)
+    expect(resolveSystemCodexPath({ env, systemDirectories: [] })).toBe(codex)
+  })
+
+  it('probes the engine own binary name and its own override variable', () => {
+    const gemini = executable('gemini-bin/gemini')
+    const override = executable('gemini-override/gemini')
+    const env = { PATH: path.dirname(gemini), HOME: path.join(tmpDir, 'home') }
+    expect(resolveEngineExecutable({ engine: 'gemini', env, systemDirectories: [] })).toBe(gemini)
+    expect(resolveEngineExecutable({
+      engine: 'gemini',
+      env: { ...env, WALNUT_GEMINI_PATH: override },
+      systemDirectories: [],
+    })).toBe(override)
+    // A codex binary on PATH must NOT satisfy a gemini lookup.
+    executable('codex-only/codex')
+    expect(() => resolveEngineExecutable({
+      engine: 'gemini',
+      env: { PATH: path.join(tmpDir, 'codex-only'), HOME: path.join(tmpDir, 'home') },
+      systemDirectories: [],
+    })).toThrow(/No system Gemini executable/)
+  })
+
+  it('fails closed per engine with an engine-scoped code and actionable prose', () => {
+    let error: EngineExecutableError | undefined
+    try {
+      resolveEngineExecutable({
+        engine: 'goose',
+        env: { PATH: path.join(tmpDir, 'nothing'), HOME: path.join(tmpDir, 'empty') },
+        systemDirectories: [],
+      })
+    } catch (thrown) {
+      error = thrown as EngineExecutableError
+    }
+    expect(error).toBeInstanceOf(EngineExecutableError)
+    expect(error!.engine).toBe('goose')
+    expect(error!.reason).toBe('not_found')
+    expect(error!.code).toBe('SYSTEM_GOOSE_UNAVAILABLE')
+    expect(error!.message).toContain('Install Goose')
+    expect(error!.message).toContain('WALNUT_GOOSE_PATH')
+  })
+
+  it('keeps the node_modules ban for every engine', () => {
+    const bundled = executable('node_modules/.bin/opencode')
+    let error: EngineExecutableError | undefined
+    try {
+      resolveEngineExecutable({
+        engine: 'opencode',
+        env: { WALNUT_OPENCODE_PATH: bundled, PATH: '', HOME: path.join(tmpDir, 'home') },
+        systemDirectories: [],
+      })
+    } catch (thrown) {
+      error = thrown as EngineExecutableError
+    }
+    expect(error?.reason).toBe('override_forbidden')
+    expect(error?.message).toContain('node_modules')
+  })
+})
+
+describe('resolveAcpArtifacts', () => {
+  function probe(...dirs: string[]): { executable: { env: NodeJS.ProcessEnv; systemDirectories: string[] } } {
+    return {
+      executable: {
+        env: { PATH: dirs.join(path.delimiter), HOME: path.join(tmpDir, 'home') },
+        systemDirectories: [],
+      },
+    }
+  }
+
+  it('serves the engine-neutral worker bundle to every engine', () => {
+    const { workerCmd } = resolveAcpArtifacts('codex')
+    expect(workerCmd[0]).toBe(process.execPath)
+    expect(workerCmd[1].replace(/\\/g, '/')).toContain('dist/daemon-binaries/acp-worker.js')
+  })
+
+  it('runs the bundled adapter package for codex', () => {
+    const { adapterCmd } = resolveAcpArtifacts('codex')
+    expect(adapterCmd[0]).toBe(process.execPath)
+    expect(adapterCmd[1].replace(/\\/g, '/')).toContain('@agentclientprotocol/codex-acp/dist/index.js')
+    // Default argument keeps the pre-multi-engine call shape working.
+    expect(resolveAcpArtifacts().adapterCmd).toEqual(adapterCmd)
+  })
+
+  it.each([
+    ['gemini', 'gemini', ['--experimental-acp']],
+    ['opencode', 'opencode', ['acp']],
+    ['goose', 'goose', ['acp']],
+  ] as const)('runs the provider CLI itself for %s', (engine, binary, args) => {
+    const bin = executable(`${engine}-cli/${binary}`)
+    const { adapterCmd } = resolveAcpArtifacts(engine, probe(path.dirname(bin)))
+    expect(adapterCmd).toEqual([bin, ...args])
+  })
+
+  it('takes the custom engine argv from config and names the key when unset', () => {
+    expect(resolveAcpArtifacts('custom', {
+      configuredAdapterCmd: ['/usr/local/bin/my-agent', 'acp'],
+    }).adapterCmd).toEqual(['/usr/local/bin/my-agent', 'acp'])
+    // Blank entries are not a configuration.
+    expect(() => resolveAcpArtifacts('custom', { configuredAdapterCmd: ['', ''] }))
+      .toThrow(/engines\.custom\.adapter_cmd/)
+    expect(() => resolveAcpArtifacts('custom')).toThrow(/engines\.custom\.adapter_cmd/)
+  })
+
+  it('refuses a native engine instead of inventing an adapter', () => {
+    expect(() => resolveAcpArtifacts('claude')).toThrow(/no ACP adapter/)
   })
 })

@@ -11,11 +11,30 @@ WALNUT_LIVE_CODEX=1 npx vitest run --config vitest.live.config.ts tests/live/pro
 # Claude Code (needs claude CLI on PATH)
 WALNUT_LIVE_CLAUDE=1 npx vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
 
-# Both in one run
+# The other ACP CLIs (each needs its own binary on PATH + built dist/daemon-binaries)
+WALNUT_LIVE_GEMINI=1   npx vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
+WALNUT_LIVE_OPENCODE=1 npx vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
+WALNUT_LIVE_GOOSE=1    npx vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
+
+# Any combination in one run
 WALNUT_LIVE_CODEX=1 WALNUT_LIVE_CLAUDE=1 npx vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
 ```
 
 Ungated or unavailable providers skip loudly (reason printed), never silently.
+
+## Registered providers
+
+| Provider | `engine` | Gate env | Availability probe | Scenarios it runs |
+|---|---|---|---|---|
+| Codex (ACP) | `codex` | `WALNUT_LIVE_CODEX` | system codex binary + acp-worker bundle + codex-acp adapter | M1-M13 |
+| Claude Code (native) | `claude` | `WALNUT_LIVE_CLAUDE` | `claude --version` | M1-M6, M11, M12 |
+| Gemini (ACP) | `gemini` | `WALNUT_LIVE_GEMINI` | `gemini --version` (or `WALNUT_GEMINI_PATH`) + acp-worker bundle | M1-M5, M12 |
+| OpenCode (ACP) | `opencode` | `WALNUT_LIVE_OPENCODE` | `opencode --version` (or `WALNUT_OPENCODE_PATH`) + acp-worker bundle | M1-M5, M12 |
+| Goose (ACP) | `goose` | `WALNUT_LIVE_GOOSE` | `goose --version` (or `WALNUT_GOOSE_PATH`) + acp-worker bundle | M1-M5, M12 |
+
+The three newest ACP CLIs start deliberately narrow: their permission asks are not mapped onto Walnut's provider-neutral `pendingPermissions` shape yet and their model/mode controls are unverified, so the specs declare only what is proven and the matrix skips the rest. Widen a spec (add `permissions.canTriggerAsk`, `models.switchable`, `raceControl`, `crashRecovery`, `steering`) as each axis is confirmed against the real binary. `custom` has no spec: its adapter argv comes from user config, so there is no binary a CI machine could probe.
+
+First run of a new gate, what to watch: M3, M4 and M5 drive a long shell command (`sleep 20 && echo …`). An engine that asks for approval before running it, and whose asks Walnut does not yet surface as `pendingPermissions`, will sit on that turn until the scenario's budget expires. If that happens, configure the CLI's own auto-approve/yolo default in its config file before blaming the matrix, and record the working control in the spec's `permissions.autoApprove` so the M9 scenario turns on too.
 
 ## Scenarios
 

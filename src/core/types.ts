@@ -1504,8 +1504,13 @@ export type ProcessStatus = 'running' | 'idle' | 'stopped' | 'error';
  */
 export type SessionMode = 'bypass' | 'accept' | 'default' | 'plan' | 'auto' | 'dontAsk';
 export type SessionProvider = 'cli' | 'sdk' | 'embedded';
+/**
+ * All registered coding-agent engines. Order = presentation preference.
+ * Capabilities per engine live in src/core/agents/engine-registry.ts.
+ */
+export const SESSION_ENGINE_IDS = ['claude', 'codex', 'gemini', 'opencode', 'goose', 'custom'] as const;
 /** Which coding-agent CLI binary backs a 'cli' session (claude-code vs codex vs future engines). */
-export type SessionEngine = 'claude' | 'codex';
+export type SessionEngine = (typeof SESSION_ENGINE_IDS)[number];
 export type SessionType = 'interactive' | 'triage' | 'hook' | 'cron' | 'subagent';
 
 /**
@@ -1708,6 +1713,10 @@ export interface SessionRecord {
   acpCapabilities?: AcpSessionCapabilities;
   /** ACP sessions only: current base model selected through session/set_config_option. */
   acpModel?: string;
+  /** Provider-advertised display name for `acpModel`. Absent on records written
+   *  before this field existed, and on any model the adapter advertised no real
+   *  name for — readers fall back to prettifying the id. */
+  acpModelName?: string;
   /** ACP sessions only: last values successfully applied through session/set_config_option. */
   acpConfig?: Record<string, string>;
   /** Idempotency key of the most recently committed ACP prompt acceptance. */

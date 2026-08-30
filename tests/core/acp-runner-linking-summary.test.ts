@@ -854,3 +854,114 @@ VERIFIED: ran-and-saw-pass`;
       .toBe('Queue integration complete; focused tests pass.');
   });
 });
+
+describe('ACP engine identity (non-codex engines)', () => {
+  const RUNTIME = 'acp-gemini-runtime';
+
+  /** Session wired to a stub daemon connection; returns the recorded RPCs. */
+  function wire(session: AcpSession, respond: (command: string, params?: Record<string, unknown>) => unknown) {
+    const send = vi.fn(async (command: string, params?: Record<string, unknown>) => respond(command, params));
+    Object.assign(session as object, { conn: { connected: true, send } });
+    return send;
+  }
+
+  function makeSession(engine: 'gemini' | 'codex', providerSessionId: string): AcpSession {
+    return new AcpSession({
+      taskId: '',
+      project: '',
+      cwd: '/tmp',
+      mode: 'default',
+      engine,
+      providerSessionId,
+      runtimeId: RUNTIME,
+      artifacts: { workerCmd: ['worker'], adapterCmd: ['adapter'] },
+    });
+  }
+
+  it('stamps its own engine on the record it creates', async () => {
+    const session = makeSession('gemini', '');
+    const send = wire(session, () => ({ ok: true }));
+    await (session as unknown as {
+      publishSessionResponse(response: unknown): Promise<void>;
+    }).publishSessionResponse({ sessionId: 'gemini-fresh-1' });
+    expect(await getSessionByClaudeId('gemini-fresh-1')).toMatchObject({
+      engine: 'gemini',
+      acpRuntimeId: RUNTIME,
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('pre-empts resume when the adapter cannot load sessions, and stays silent on a warm attach', async () => {
+    const sid = 'gemini-warm-1';
+    await createSessionRecord(sid, '', '', '/tmp', {
+      initialProcessStatus: 'idle',
+      engine: 'gemini',
+      acpRuntimeId: RUNTIME,
+      // The real gemini answer: session/load is not supported at all.
+      acpCapabilities: { loadSession: false, steering: false } as never,
+    });
+    const session = makeSession('gemini', sid);
+    const send = wire(session, (command) => (command === 'acpStart'
+      ? { ok: true, state: { providerSessionId: sid, turnActive: false, pendingPermissions: [] } }
+      : { ok: true }));
+    // The boundary event is addressed to 'main-ai'; borrow that name for the test.
+    const boundaries: unknown[] = [];
+    bus.subscribe('main-ai', (event) => {
+      if (event.name === 'session:system-event') boundaries.push(event.data);
+    });
+    try {
+      await session.establish();
+    } finally {
+      bus.unsubscribe('main-ai');
+    }
+    expect(send).toHaveBeenCalledWith('acpStart', expect.objectContaining({
+      sid: RUNTIME,
+      providerSessionId: undefined,
+    }), expect.any(Number));
+    // The worker handed back the same provider thread, so nothing was lost and
+    // the transcript must NOT show an identity-boundary warning.
+    expect(boundaries).toEqual([]);
+  });
+
+  it('keeps resuming a codex thread (loadSession advertised)', async () => {
+    const sid = 'codex-warm-1';
+    await createSessionRecord(sid, '', '', '/tmp', {
+      initialProcessStatus: 'idle',
+      engine: 'codex',
+      acpRuntimeId: RUNTIME,
+      acpCapabilities: { loadSession: true, steering: false } as never,
+    });
+    const session = makeSession('codex', sid);
+    const send = wire(session, (command) => (command === 'acpStart'
+      ? { ok: true, state: { providerSessionId: sid, turnActive: false, pendingPermissions: [] } }
+      : { ok: true }));
+    await session.establish();
+    expect(send).toHaveBeenCalledWith('acpStart', expect.objectContaining({
+      sid: RUNTIME,
+      providerSessionId: sid,
+    }), expect.any(Number));
+  });
+
+  it('migrates a gemini identity onto its own engine record', async () => {
+    const oldId = 'gemini-migrate-old';
+    const newId = 'gemini-migrate-new';
+    await createSessionRecord(oldId, '', '', '/tmp', {
+      initialProcessStatus: 'idle',
+      engine: 'gemini',
+      acpRuntimeId: RUNTIME,
+    });
+    const session = makeSession('gemini', oldId);
+    wire(session, () => ({ ok: true }));
+    // isSameDurableIdentity compares the record engine with the SESSION engine;
+    // a hardcoded 'codex' here made every non-codex migration throw.
+    await (session as unknown as {
+      publishSessionResponse(response: unknown): Promise<void>;
+    }).publishSessionResponse({ sessionId: newId });
+    expect(session.sessionId).toBe(newId);
+    expect(await getSessionByClaudeId(newId)).toMatchObject({
+      engine: 'gemini',
+      acpRuntimeId: RUNTIME,
+    });
+    expect(await getSessionByClaudeId(oldId)).toBeNull();
+  });
+});

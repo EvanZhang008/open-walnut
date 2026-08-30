@@ -12,6 +12,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { FREQUENT_DIRS_FILE } from '../constants.js'
+import type { SessionEngine } from './types.js'
 import { log } from '../logging/index.js'
 
 // ── Types ──
@@ -34,7 +35,9 @@ export interface FrequentDirEntry {
 
 export interface LaunchPrefs {
   model?: string
-  engine?: 'codex'
+  /** Persisted STORAGE shape: the default engine is absent, never spelled out
+   *  (same contract as SessionRecord.engine / normalizeEngine). */
+  engine?: Exclude<SessionEngine, 'claude'>
 }
 
 interface FrequentDirsStore {

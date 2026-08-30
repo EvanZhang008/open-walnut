@@ -38,6 +38,8 @@ import type { SshTarget } from './session-io.js'
 import { localDaemon } from './local-daemon.js'
 // Leaf module (zero runtime imports) — safe to import statically from a provider.
 import { isRecoverableSessionError, isRescuableStoppedRecord } from '../core/session-error-kind.js'
+// Also a leaf (types.js only) — capability lookup, no session-layer cycle.
+import { isAcpEngine } from '../core/agents/engine-registry.js'
 import type { SessionRecord } from '../core/types.js'
 
 const execFileAsync = promisify(execFileCb)
@@ -2968,10 +2970,10 @@ export class DaemonConnection {
         // cheaply refute — inc-1787511363340: a spawn whose `start` command
         // timed out was marked stopped, the command executed 15s later anyway,
         // and the live CLI ran 1.6h behind a record every loop here skipped.
-        // Codex/ACP records stay skipped: their liveness probe is acpState on
+        // ACP records stay skipped: their liveness probe is acpState on
         // acpRuntimeId, and the branch below would relabel a dead one 'idle'.
         const rescuableStopped = s.process_status === 'stopped'
-          && s.engine !== 'codex'
+          && !isAcpEngine(s.engine)
           && isRescuableStoppedRecord(s)
         const isTerminal = s.process_status === 'stopped' && !rescuableStopped
         const isNonRecoverableError = s.process_status === 'error'
@@ -3006,7 +3008,7 @@ export class DaemonConnection {
           })
         }
 
-        if (s.engine === 'codex') {
+        if (isAcpEngine(s.engine)) {
           if (!s.acpRuntimeId) {
             log.session.warn('DaemonConnection: cannot recover ACP session without runtime ID', {
               sessionId: s.claudeSessionId,

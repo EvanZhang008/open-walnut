@@ -13,6 +13,14 @@ import type { QuickStartTaskMeta } from '../SessionPathSelector';
 import { DatePicker } from '@/components/common/DatePicker';
 import { PinTierPicker } from '@/components/common/PinTierPicker';
 import { useHostModelCatalog } from '@/hooks/useModelCatalog';
+import { useEngineCatalog } from '@/hooks/useEngineCatalog';
+import {
+  engineEntry,
+  engineLockReason,
+  engineTitle,
+  normalizeEngine,
+  resolveEngineForHost,
+} from '@/utils/engines';
 import { formatModelName } from '@/hooks/useSessionUsage';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { sortByModelStrength } from '@/utils/model-strength-order';
@@ -72,19 +80,21 @@ export function useModelOptions(host?: string | null): {
  * row) without re-deriving the option list — `useModelOptions` is the single
  * source of truth for what a launch can pick.
  *
- * Renders NOTHING for a Codex launch: Codex models come from ACP capability
- * discovery at session start, so there is no pre-start catalog to offer.
+ * Renders NOTHING when the picked engine discovers its models at session start
+ * (every ACP engine): there is no pre-start catalog to offer.
  */
 export function MetaModelSelect({ meta, onChange, host, className }: Pick<Props, 'meta' | 'onChange' | 'host'> & { className?: string }) {
   const { options: modelOptions, autoResolved } = useModelOptions(host);
+  const catalog = useEngineCatalog();
   // A previously-picked model that isn't in the current host's rows (host tab
   // switched, catalog updated) still renders — selected, clearly marked — so
   // the <select> never silently shows Auto while meta.model is set.
   const orphanModel = meta.model && !modelOptions.some((o) => o.value === meta.model)
     ? meta.model : null;
-  // Remote tabs run Claude regardless (codex is local-only), so show the select.
-  const isCodex = meta.engine === 'codex' && !(host && host !== '__local__');
-  if (isCodex) return null;
+  // The EFFECTIVE engine, not the stored one: a remote tab launches the default
+  // engine regardless (ACP engines are local-only), so the select must show.
+  const launching = engineEntry(catalog, resolveEngineForHost(meta.engine, host, catalog));
+  if (launching.capabilities.modelCatalog !== 'static') return null;
   return (
     <select
       className={`sps-meta-model-select${className ? ` ${className}` : ''}`}
@@ -102,42 +112,45 @@ export function MetaModelSelect({ meta, onChange, host, className }: Pick<Props,
   );
 }
 
-/** Segmented Claude | Codex engine toggle.
+/** Segmented engine toggle — one button per engine in the catalog.
  *
  *  Renders ONLY on a surface that also owns the model control (`hideModel` false
  *  — the folder picker's footer, whose model control is a plain `<select>` with no
  *  provider rail). Where the model lives elsewhere the provider goes with it: the
  *  draft column's composer pill opens the shared two-pane provider|models picker,
- *  which already answers "Claude or Codex", so a second segmented control in the
+ *  which already answers "which engine", so a second segmented control in the
  *  meta row was the same question asked twice, two rows apart.
  *
- *  Codex is ACP-backed and local-only for now, so the toggle is disabled (pinned
- *  to Claude) on remote host tabs. */
+ *  Buttons the launch can't use are disabled with the reason as their tooltip: an
+ *  engine whose CLI isn't installed, and every ACP engine on a remote host tab
+ *  (the ACP worker is local-only for now). */
 function EngineToggle({ meta, onChange, host }: Pick<Props, 'meta' | 'onChange' | 'host'>) {
-  const remoteHost = !!host && host !== '__local__';
-  // On a remote host tab the session WILL launch as Claude (quick-start drops a
-  // stale codex flag), so the highlight must say Claude even if meta.engine is
-  // still 'codex' from a local tab — active state mirrors effective behavior.
-  const effectiveCodex = meta.engine === 'codex' && !remoteHost;
+  const catalog = useEngineCatalog();
+  // The engine that will ACTUALLY launch (quick-start drops a local-only flag on
+  // a remote tab), so the highlight mirrors effective behavior rather than the
+  // stored value — see resolveEngineForHost.
+  const active = resolveEngineForHost(meta.engine, host, catalog);
   return (
     <div className="sps-engine-toggle" role="group" aria-label="Coding agent engine">
-      <button
-        type="button"
-        className={`sps-engine-btn${!effectiveCodex ? ' active' : ''}`}
-        onClick={() => onChange(m => ({ ...m, engine: undefined }))}
-        title="Claude Code (native)"
-      >
-        Claude
-      </button>
-      <button
-        type="button"
-        className={`sps-engine-btn${effectiveCodex ? ' active' : ''}`}
-        disabled={remoteHost}
-        onClick={() => onChange(m => ({ ...m, engine: 'codex', model: undefined }))}
-        title={remoteHost ? 'Codex sessions are local-only for now' : 'Codex (via ACP)'}
-      >
-        Codex
-      </button>
+      {catalog.map((entry) => {
+        const lock = engineLockReason(entry, host);
+        return (
+          <button
+            key={entry.id}
+            type="button"
+            className={`sps-engine-btn${entry.id === active ? ' active' : ''}`}
+            disabled={!!lock}
+            // Picking the default engine CLEARS the field (storage contract);
+            // any other engine also clears the model, whose catalog it can't use.
+            onClick={() => onChange(m => (entry.isDefault
+              ? { ...m, engine: undefined }
+              : { ...m, engine: normalizeEngine(entry.id), model: undefined }))}
+            title={lock ?? engineTitle(entry)}
+          >
+            {entry.displayName}
+          </button>
+        );
+      })}
     </div>
   );
 }

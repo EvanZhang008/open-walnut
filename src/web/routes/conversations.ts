@@ -29,6 +29,7 @@ import { broadcastEvent } from '../ws/handler.js'
 import { EventNames } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
 import { isKnownEngine } from '../../core/agents/engine-registry.js'
+import { SESSION_ENGINE_IDS } from '../../core/types.js'
 
 export function createConversationsRouter(): Router {
   const router = Router()
@@ -146,7 +147,7 @@ export function createConversationsRouter(): Router {
       const cid = validateConversationId(req.params.cid as string)
       const engine = (req.body as { engine?: string } | undefined)?.engine
       if (!isKnownEngine(engine)) {
-        res.status(400).json({ error: "engine must be 'claude' or 'codex'" })
+        res.status(400).json({ error: `engine must be one of: ${SESSION_ENGINE_IDS.join(', ')}` })
         return
       }
       const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')

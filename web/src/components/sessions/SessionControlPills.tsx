@@ -4,6 +4,10 @@ import type { SessionControl } from '@/api/sessions';
 interface SessionControlPillsProps {
   controls: SessionControl[];
   setControl: (id: string, value: string) => Promise<void>;
+  /** Engine label for the menu heading ("How should <name> actions be approved?").
+   *  Required, not defaulted: a missing prop must be a compile error, never a
+   *  silent "Codex" heading on a gemini/opencode/goose/custom session. */
+  engineName: string;
   showModeShortcut?: boolean;
 }
 
@@ -58,7 +62,8 @@ function PlanIcon() {
  * ChatGPT's EXACT wording overlaid on codex's three presets (user request:
  * same labels as the ChatGPT desktop app, minus Custom). Values stay the
  * provider's own ids — only the display strings change, so setControl and
- * config replay are untouched. Unknown values fall back to provider text.
+ * config replay are untouched. Unknown values fall back to provider text, so
+ * another ACP engine's option ids render with the names IT advertises.
  */
 const CHATGPT_MODE_WORDING: Record<string, { name: string; description: string }> = {
   'read-only': {
@@ -85,6 +90,7 @@ const CHATGPT_MODE_WORDING: Record<string, { name: string; description: string }
 export function SessionControlPills({
   controls,
   setControl,
+  engineName,
   showModeShortcut = false,
 }: SessionControlPillsProps) {
   const rootRef = useRef<HTMLSpanElement>(null);
@@ -142,7 +148,7 @@ export function SessionControlPills({
         {open && (
           <span className="session-control-menu" role="listbox" aria-label={mode.name}>
             <span className="session-control-menu-title">
-              How should Codex actions be approved?
+              How should {engineName} actions be approved?
             </span>
             {mode.options.map((option) => {
               const active = option.value === mode.currentValue;

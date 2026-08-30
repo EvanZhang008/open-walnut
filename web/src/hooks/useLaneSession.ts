@@ -1,6 +1,7 @@
 /**
- * useLaneSession — resolve the Claude Code session backing a main-AI
- * conversation (the "lane"), for the thin-layer chat surface.
+ * useLaneSession — resolve the coding-agent session backing a main-AI
+ * conversation (the "lane"), for the thin-layer chat surface. Any registered
+ * engine can back a lane; the server reports which one on every resolve.
  *
  * When `config.agent.provider === 'claude-code'` the chat panel doesn't run the
  * in-process loop at all: it mounts the SAME session timeline every coding
@@ -18,6 +19,8 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { SESSION_ENGINE_IDS } from '@open-walnut/core';
+import type { SessionEngine } from '@/types/session';
 import { apiPost } from '@/api/client';
 import { log } from '@/utils/log';
 
@@ -25,19 +28,29 @@ export interface UseLaneSessionReturn {
   sessionId: string | null;
   cwd?: string;
   /** Coding-agent engine backing the lane ('claude' until resolved). */
-  engine: 'claude' | 'codex';
+  engine: SessionEngine;
   error: string | null;
   ensure: () => Promise<string>;
   /**
-   * Switch the provider backing this conversation (claude ⇄ codex). Only legal
-   * while the conversation is EMPTY — the server archives the lane session and
-   * mints a fresh one on the requested engine (409 once messages exist).
+   * Switch the provider backing this conversation. Only legal while the
+   * conversation is EMPTY — the server archives the lane session and mints a
+   * fresh one on the requested engine (409 once messages exist).
    * Resolves to the new sessionId; rejects with the server's reason otherwise.
    */
-  swapEngine: (engine: 'claude' | 'codex') => Promise<string>;
+  swapEngine: (engine: SessionEngine) => Promise<string>;
 }
 
-interface Resolved { sessionId: string; cwd?: string; engine: 'claude' | 'codex' }
+interface Resolved { sessionId: string; cwd?: string; engine: SessionEngine }
+
+const DEFAULT_ENGINE = 'claude' as SessionEngine;
+
+/** Any engine this build knows survives the round-trip; anything else (a newer
+ *  server's engine, a malformed body) reads as the default engine. */
+function coerceEngine(value: unknown): SessionEngine {
+  return typeof value === 'string' && (SESSION_ENGINE_IDS as readonly string[]).includes(value)
+    ? value as SessionEngine
+    : DEFAULT_ENGINE;
+}
 
 /**
  * Resolved lanes, keyed `${agentId}:${conversationId}:${resetNonce}` — a lane
@@ -55,7 +68,7 @@ export function useLaneSession(
   conversationId: string | null,
   resetNonce: number,
 ): UseLaneSessionReturn {
-  const [state, setState] = useState<{ sessionId: string | null; cwd?: string; engine?: 'claude' | 'codex'; error: string | null }>(
+  const [state, setState] = useState<{ sessionId: string | null; cwd?: string; engine?: SessionEngine; error: string | null }>(
     { sessionId: null, error: null },
   );
 
@@ -82,11 +95,11 @@ export function useLaneSession(
     const k = keyRef.current;
     if (inFlightRef.current?.key === k) return inFlightRef.current.promise;
     const epoch = swapEpochRef.current;
-    const promise = apiPost<{ sessionId: string; cwd?: string; created?: boolean; engine?: 'claude' | 'codex' }>(
+    const promise = apiPost<{ sessionId: string; cwd?: string; created?: boolean; engine?: string }>(
       `/api/agents/${aid}/conversations/${cid}/lane-session`,
       {},
     ).then((r) => {
-      const engine = r.engine === 'codex' ? 'codex' as const : 'claude' as const;
+      const engine = coerceEngine(r.engine);
       // A swap happened while this resolve was in flight: its session was just
       // archived server-side — the swap's binding wins, drop this one.
       if (swapEpochRef.current !== epoch) return { sessionId: r.sessionId, cwd: r.cwd, engine };
@@ -121,15 +134,15 @@ export function useLaneSession(
 
   const ensure = useCallback((): Promise<string> => resolve().then((r) => r.sessionId), [resolve]);
 
-  const swapEngine = useCallback(async (engine: 'claude' | 'codex'): Promise<string> => {
+  const swapEngine = useCallback(async (engine: SessionEngine): Promise<string> => {
     const { agentId: aid, conversationId: cid } = paramsRef.current;
     if (!enabledRef.current || !cid) throw new Error('lane engine not active');
     const k = keyRef.current;
-    const r = await apiPost<{ sessionId: string; cwd?: string; engine?: 'claude' | 'codex' }>(
+    const r = await apiPost<{ sessionId: string; cwd?: string; engine?: string }>(
       `/api/agents/${aid}/conversations/${cid}/lane-engine`,
       { engine },
     );
-    const resolvedEngine = r.engine === 'codex' ? 'codex' as const : 'claude' as const;
+    const resolvedEngine = coerceEngine(r.engine);
     // Invalidate any in-flight resolve — its (pre-swap) session was just
     // archived server-side and must not overwrite the swapped binding.
     swapEpochRef.current++;
@@ -142,5 +155,5 @@ export function useLaneSession(
     return r.sessionId;
   }, []);
 
-  return { sessionId: state.sessionId, cwd: state.cwd, engine: state.engine ?? 'claude', error: state.error, ensure, swapEngine };
+  return { sessionId: state.sessionId, cwd: state.cwd, engine: state.engine ?? DEFAULT_ENGINE, error: state.error, ensure, swapEngine };
 }

@@ -42,6 +42,13 @@ import { quickParseTask, type QuickTaskParse } from '@/api/tasks';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { DraftLaunchBar } from './DraftLaunchBar';
 import { useModelOptions } from './path-selector/MetaFooter';
+import { useEngineCatalog } from '@/hooks/useEngineCatalog';
+import {
+  engineEntry,
+  engineLockReason,
+  normalizeEngine,
+  resolveEngineForHost,
+} from '@/utils/engines';
 import { ModelPicker } from './ModelPicker';
 import { draftComposerKey, type DraftColumn } from './draft-column';
 import type { QuickStartPath, QuickStartTaskMeta } from './SessionPathSelector';
@@ -72,9 +79,9 @@ const PARSE_MAX_CHARS = 500;
 /**
  * DraftModelPill — the draft composer's model control: a pill (same classes as
  * a real session's model pill) opening the SHARED two-pane picker
- * (provider rail | models). One pattern everywhere; on a draft BOTH providers
- * are clickable (the engine is still a choice here), picking Codex clears the
- * model (ACP discovers models at session start).
+ * (provider rail | models). One pattern everywhere; on a draft EVERY available
+ * provider is clickable (the engine is still a choice here), and picking an ACP
+ * engine clears the model (ACP discovers models at session start).
  */
 function DraftModelPill({ meta, onMetaChange, host }: {
   meta: QuickStartTaskMeta;
@@ -85,10 +92,15 @@ function DraftModelPill({ meta, onMetaChange, host }: {
   // The clicked pill — anchor for the popout picker (portalled, clip-proof).
   const pillRef = useRef<HTMLElement | null>(null);
   const { options, autoResolved } = useModelOptions(host);
-  const remoteHost = !!host && host !== '__local__';
-  // Remote tabs always launch Claude (codex is local-only; quick-start drops a
-  // stale codex flag) — mirror effective behavior, same rule as EngineToggle.
-  const isCodex = meta.engine === 'codex' && !remoteHost;
+  const catalog = useEngineCatalog();
+  // The engine that will actually launch — a remote tab launches the default
+  // engine (ACP engines are local-only; quick-start drops a stale flag). Same
+  // rule as EngineToggle and MainPage's launch payload: resolveEngineForHost.
+  const engine = resolveEngineForHost(meta.engine, host, catalog);
+  const entry = engineEntry(catalog, engine);
+  // ACP engines advertise their models at session start, so the pill shows the
+  // ENGINE instead of a model nobody has picked yet.
+  const acpModels = entry.capabilities.modelCatalog === 'provider-advertised';
   const selectedLabel = meta.model
     ? options.find((o) => o.value === meta.model)?.label ?? meta.model
     : autoResolved ? `Auto (${autoResolved})` : 'Auto';
@@ -97,31 +109,30 @@ function DraftModelPill({ meta, onMetaChange, host }: {
       <button
         type="button"
         className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill draft-model-select"
-        title={isCodex
-          ? 'Codex (via ACP) — models are discovered at session start. Click to change provider.'
+        title={acpModels
+          ? `${entry.displayName} (via ACP) — models are discovered at session start. Click to change provider.`
           : `Session model: ${selectedLabel} — click to switch model / provider`}
         data-model={meta.model ?? ''}
         onClick={(e) => { pillRef.current = e.currentTarget; setOpen((v) => !v); }}
       >
-        {isCodex ? 'Codex' : selectedLabel}
+        {acpModels ? entry.displayName : selectedLabel}
       </button>
       {open && (
         <ModelPicker
           currentModel={meta.model}
           host={host ?? undefined}
-          engine={isCodex ? 'codex' : 'claude'}
+          engine={engine}
           onSwitch={(model) => {
             setOpen(false);
             onMetaChange((m) => ({ ...m, model: model || undefined }));
           }}
           onClose={() => setOpen(false)}
-          // A draft can still change provider — flipping clears the model:
-          // the two catalogs don't overlap, and Codex has no pre-start rows.
+          // A draft can still change provider — flipping clears the model: the
+          // catalogs don't overlap, and an ACP engine has no pre-start rows.
           onProviderSwitch={(provider) => {
-            onMetaChange((m) => ({ ...m, engine: provider === 'codex' ? 'codex' : undefined, model: undefined }));
+            onMetaChange((m) => ({ ...m, engine: normalizeEngine(provider), model: undefined }));
           }}
-          providerLockReason={(provider) =>
-            provider === 'codex' && remoteHost ? 'Codex sessions are local-only for now' : null}
+          providerLockReason={(provider) => engineLockReason(engineEntry(catalog, provider), host)}
           autoRow={{ resolvedLabel: autoResolved, active: !meta.model }}
           anchorRef={pillRef}
         />

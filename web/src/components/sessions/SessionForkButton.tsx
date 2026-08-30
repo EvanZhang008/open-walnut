@@ -1,5 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import type { SessionRecord } from '@/types/session';
+import { useEngineCatalog } from '@/hooks/useEngineCatalog';
+import { engineCaps } from '@/utils/engine-capabilities';
 
 /**
  * SessionForkButton — the standalone "Fork" action that stays OUTSIDE the
@@ -34,6 +36,8 @@ interface SessionForkButtonProps {
 export function SessionForkButton({ sessionId, session, sourceTitle, onOpenForkDraft }: SessionForkButtonProps) {
   const [cliCopied, setCliCopied] = useState(false);
   const cliCopyTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const engineCatalog = useEngineCatalog();
+  const engineUi = engineCaps(session?.engine, engineCatalog);
 
   const handleForkClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -65,9 +69,14 @@ export function SessionForkButton({ sessionId, session, sourceTitle, onOpenForkD
   // No onOpenForkDraft = a host with no draft-column surface (NotesPage's CC
   // tabs): hide rather than render a dead button.
   if (!sessionId || !session?.taskId || !onOpenForkDraft) return null;
-  const unsupportedReason = session.engine === 'codex'
-    ? 'Fork is unavailable because this Codex adapter does not support session forking'
-    : null;
+  // Forking resumes the source conversation in a second process, which the
+  // engine itself has to support (claude --fork-session); ACP adapters have no
+  // session/fork yet, so the button reports why instead of failing on click.
+  // Wording is pinned by tests/e2e/browser/codex-parity-discovery.spec.ts —
+  // only the engine name interpolates.
+  const unsupportedReason = engineUi.fork
+    ? null
+    : `Fork is unavailable because this ${engineUi.displayName} adapter does not support session forking`;
 
   return (
     <button

@@ -49,7 +49,7 @@ import { timeAgo } from '@/utils/time';
 import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
 import { SessionKebabSection } from './SessionKebabSection';
-import { ModelPicker, shortCodexModelName } from './ModelPicker';
+import { ModelPicker, shortAcpModelName } from './ModelPicker';
 import { modelSupportsEffort, SESSION_EFFORTS, SESSION_MODE_LABELS } from '@open-walnut/core';
 import { TaskQuickActions } from './TaskQuickActions';
 import { useFullscreen } from '@/hooks/useFullscreen';
@@ -67,6 +67,8 @@ import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 import { useResolvedSessionRecord } from '@/hooks/useSessionStatus';
 import { useSessionControls } from '@/hooks/useSessionControls';
+import { useEngineCatalog } from '@/hooks/useEngineCatalog';
+import { engineCaps } from '@/utils/engine-capabilities';
 import { nextSessionControlValue, SessionControlPills } from './SessionControlPills';
 import { useNotifications } from '@/contexts/notifications';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -175,6 +177,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   const enabledModes = useEnabledModes();
   const [sessionRecord, setSession] = useState<SessionRecord | null>(null);
   const session = useResolvedSessionRecord(sessionRecord);
+  // Every engine-shaped decision in this panel (rewind, mode surface, model
+  // pane, model backfill) reads this capability view — never the engine id.
+  const engineCatalog = useEngineCatalog();
+  const engineUi = engineCaps(session?.engine, engineCatalog);
   const { controls: sessionControls, setControl: setSessionControl } = useSessionControls(
     sessionId,
     session?.engine,
@@ -252,32 +258,37 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     });
   }, [sessionId, session?.model]);
 
-  // Codex (ACP) model switch — optimistic, revert + notify on failure. Same
-  // contract the retired standalone CodexModelPicker had, now driven from the
-  // shared two-pane picker's codex pane.
-  const handleCodexModelSwitch = useCallback((modelId: string) => {
+  // ACP model switch — optimistic, revert + notify on failure. Same contract
+  // the retired standalone Codex picker had, now driven from the shared
+  // two-pane picker's ACP pane for every ACP engine.
+  const handleAcpModelSwitch = useCallback((modelId: string) => {
     setModelPickerOpen(false);
     const previous = session?.acpModel;
+    const previousName = session?.acpModelName;
     if (modelId === previous) return;
-    setSession(prev => prev ? { ...prev, acpModel: modelId } : prev);
+    // Drop the advertised name with the id: it belongs to the OLD model, and the
+    // pill prefers it, so keeping it would label the new model with the old name
+    // until the server record comes back.
+    setSession(prev => prev ? { ...prev, acpModel: modelId, acpModelName: undefined } : prev);
     setCodexSessionModel(sessionId, modelId).catch((error) => {
-      setSession(prev => prev ? { ...prev, acpModel: previous } : prev);
-      log.error('session-panel', 'codex model switch failed', {
+      setSession(prev => prev ? { ...prev, acpModel: previous, acpModelName: previousName } : prev);
+      log.error('session-panel', 'acp model switch failed', {
         sessionId,
         modelId,
+        engine: engineUi.id,
         error: error instanceof Error ? error.message : String(error),
       });
       notify({
         kind: 'operation-error',
         severity: 'error',
-        title: 'Codex model switch failed',
+        title: `${engineUi.displayName} model switch failed`,
         body: error instanceof Error ? error.message : String(error),
         persistent: false,
-        dedupKey: `codex-model-switch:${sessionId}:${Date.now()}`,
+        dedupKey: `acp-model-switch:${sessionId}:${Date.now()}`,
         sessionId,
       });
     });
-  }, [sessionId, session?.acpModel, notify]);
+  }, [sessionId, session?.acpModel, notify, engineUi.id, engineUi.displayName]);
 
   const handleEffortSwitch = useCallback((effort: import('@open-walnut/core').SessionEffort) => {
     setModelPickerOpen(false);
@@ -497,7 +508,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
       // refetch the record's model stays invisible until the first real turn.
       // status-changed fires right after the init-model write; refetch while the
       // record is still model-less (self-limiting: stops once model is present).
-      if (session && !session.model && session.engine !== 'codex') {
+      // ACP engines report their model as acpModel (the record's `model` field
+      // stays empty by design), so the backfill is a native-engine repair.
+      if (session && !session.model && !engineUi.isAcp) {
         fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
       }
     }
@@ -620,11 +633,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   const pinsApi = useSessionPins(sessionId, session?.pinnedMessages);
   const [rewindTarget, setRewindTarget] = useState<{ msgId: string; label?: string } | null>(null);
   const rewindApi = useMemo<SessionRewindApi>(() => ({
-    // Codex/ACP has no equivalent of --resume-session-at or rewind_files, so the
-    // button hides there instead of failing on click.
-    available: !!sessionId && session?.engine !== 'codex',
+    // Rewind needs the engine's own checkpointing (--resume-session-at +
+    // rewind_files); engines without it hide the button instead of failing on
+    // click. Capability, not a vendor check.
+    available: !!sessionId && engineUi.rewind,
     request: (msgId, label) => setRewindTarget({ msgId, ...(label ? { label } : {}) }),
-  }), [sessionId, session?.engine]);
+  }), [sessionId, engineUi.rewind]);
   const [messagesOpen, setMessagesOpen] = useState(false);
   // Changed / Files / Terminal all share ONE full-screen split: [ left panel | chat ].
   // null = none open. Opening any view promotes the panel to fullscreen.
@@ -1109,16 +1123,18 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
 
   // Model info pill — moved from the header meta row into the composer's
   // controls row (rendered inside both ChatInput controlsSlot mode bars).
-  // BOTH engines open the SAME two-pane picker (provider rail | models) —
-  // a Codex session just opens it on the codex pane, with Claude greyed.
-  const modelInfoPill = session?.engine === 'codex' ? (
+  // EVERY engine opens the SAME two-pane picker (provider rail | models) — an
+  // ACP session just opens it on the ACP pane, with the others greyed.
+  const modelInfoPill = engineUi.isAcp ? (
     <button
       type="button"
       className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill"
-      title="Switch Codex model"
+      title={`Switch ${engineUi.displayName} model`}
       onClick={(e) => { modelPillRef.current = e.currentTarget; setModelPickerOpen((v) => !v); }}
     >
-      {session.acpModel ? shortCodexModelName(session.acpModel) : 'Codex'}
+      {/* 3 tiers: the provider's own name, else prettify the id, else the engine. */}
+      {session?.acpModelName
+        ?? (session?.acpModel ? shortAcpModelName(session.acpModel) : engineUi.displayName)}
       {contextPercent != null && (
         <span className="session-detail-context-pct"> {contextPercent}%</span>
       )}
@@ -1350,10 +1366,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               const label = MODE_LABELS[currentMode] ?? currentMode;
               return (
                 <div className="session-mode-bar">
-                  {session.engine === 'codex' ? (
+                  {engineUi.configModes ? (
                     <SessionControlPills
                       controls={sessionControls}
                       setControl={setSessionControl}
+                      engineName={engineUi.displayName}
                       showModeShortcut
                     />
                   ) : (
@@ -1385,7 +1402,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                           placeholder="Send a message while viewing plan..."
                           showCommands={false}
                           onToggleMode={session ? () => {
-                            if (session.engine === 'codex') {
+                            if (engineUi.configModes) {
                               const control = sessionControls.find((candidate) => candidate.id === 'mode');
                               const next = nextSessionControlValue(control);
                               if (control && next) void setSessionControl(control.id, next);
@@ -1888,10 +1905,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               const label = MODE_LABELS[currentMode] ?? currentMode;
               return (
                 <div className="session-mode-bar">
-                  {session.engine === 'codex' ? (
+                  {engineUi.configModes ? (
                     <SessionControlPills
                       controls={sessionControls}
                       setControl={setSessionControl}
+                      engineName={engineUi.displayName}
                       showModeShortcut
                     />
                   ) : (
@@ -1934,7 +1952,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             prefillText={prefillText}
             prefillNonce={prefillNonce}
             onToggleMode={session ? () => {
-              if (session.engine === 'codex') {
+              if (engineUi.configModes) {
                 const control = sessionControls.find((candidate) => candidate.id === 'mode');
                 const next = nextSessionControlValue(control);
                 if (control && next) void setSessionControl(control.id, next);
@@ -1958,12 +1976,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               onSwitch={handleModelSwitch}
               onEffortSwitch={handleEffortSwitch}
               onClose={() => setModelPickerOpen(false)}
-              // Live session: engine is a spawn-time fact. The rail shows both
-              // providers but the other one renders greyed + locked (no
+              // Live session: engine is a spawn-time fact. The rail shows every
+              // registered provider but the others render greyed + locked (no
               // onProviderSwitch) — start a new session to change engines.
-              engine={session?.engine === 'codex' ? 'codex' : 'claude'}
-              codexCurrentModelId={session?.acpModel}
-              onCodexSwitch={session?.engine === 'codex' ? handleCodexModelSwitch : undefined}
+              engine={engineUi.id}
+              acpCurrentModelId={session?.acpModel}
+              onAcpSwitch={engineUi.isAcp ? handleAcpModelSwitch : undefined}
               anchorRef={modelPillRef}
             />
           )}

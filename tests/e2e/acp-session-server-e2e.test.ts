@@ -10,6 +10,11 @@
  * permission route, interrupt-and-replace, re-attach after the runner loses
  * its in-memory session (web-server-restart equivalent), and worker-kill +
  * lazy resume on next message.
+ *
+ * The deep suite stays codex-only. A second, deliberately small suite runs the
+ * conformance core once per registry ACP engine (engine stamp, reply text,
+ * permission approve, model-catalog route), plus the custom engine's
+ * unconfigured-adapter error path.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs'
@@ -44,17 +49,28 @@ import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { getDirectDaemonConnection } from '../../src/providers/daemon-connection.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { getSessionsForTask } from '../../src/core/session-tracker.js'
-import { getTask, listTasks } from '../../src/core/task-manager.js'
+import { addTask, getTask, listTasks } from '../../src/core/task-manager.js'
 import { getQueue, sendMessageToSession } from '../../src/core/session-message-queue.js'
+import { acpEngineIds } from '../../src/core/agents/engine-registry.js'
+import type { SessionEngine } from '../../src/core/types.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '../..')
 const DAEMON_BIN = path.join(REPO_ROOT, 'dist/daemon-binaries/daemon-darwin-arm64')
 const WORKER_BUNDLE = path.join(REPO_ROOT, 'dist/daemon-binaries/acp-worker.js')
 const MOCK_AGENT = path.join(REPO_ROOT, 'tests/providers/mock-acp-agent.mjs')
+const MOCK_CLI = path.join(REPO_ROOT, 'tests/providers/mock-claude.mjs')
 
 const HAVE_BIN = fs.existsSync(DAEMON_BIN) && fs.existsSync(WORKER_BUNDLE)
   && process.platform === 'darwin' && process.arch === 'arm64'
+
+/** Injected worker+adapter vectors. Engine-neutral by design: injecting
+ *  artifacts also suppresses the engine's executable resolution, which is what
+ *  lets every ACP engine run against the same mock adapter here. */
+const TEST_ARTIFACTS = {
+  workerCmd: [process.execPath, WORKER_BUNDLE],
+  adapterCmd: [process.execPath, MOCK_AGENT],
+}
 
 let server: HttpServer
 let port: number
@@ -108,11 +124,11 @@ async function waitForAsync<T>(
 
 function apiUrl(p: string): string { return `http://localhost:${port}${p}` }
 
-async function quickStartCodex(message: string): Promise<{ taskId: string }> {
+async function quickStart(message: string, engine: SessionEngine): Promise<{ taskId: string }> {
   const res = await fetch(apiUrl('/api/sessions/quick-start'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ cwd: os.tmpdir(), message, engine: 'codex' }),
+    body: JSON.stringify({ cwd: os.tmpdir(), message, engine }),
   })
   expect(res.status).toBe(200)
   return await res.json() as { taskId: string }
@@ -140,14 +156,16 @@ function promptFacts(runtimeId: string): PromptAcceptedFact[] {
       && (record.event as { type?: string } | undefined)?.type === 'prompt-accepted')
 }
 
-/** Poll the session record the AcpSession creates once session/new answers. */
-async function sessionIdForTask(taskId: string): Promise<string> {
+/** Poll the session record the AcpSession creates once session/new answers.
+ *  ACP records always carry an EXPLICIT engine, so the plain equality holds for
+ *  every ACP engine (only claude persists as undefined). */
+async function sessionIdForTask(taskId: string, engine: SessionEngine): Promise<string> {
   const deadline = Date.now() + 20_000
   for (;;) {
     const records = await getSessionsForTask(taskId)
-    const rec = records.find((r) => r.engine === 'codex')
+    const rec = records.find((r) => r.engine === engine)
     if (rec) return rec.claudeSessionId
-    if (Date.now() > deadline) throw new Error(`timeout waiting for codex session record for task ${taskId}`)
+    if (Date.now() > deadline) throw new Error(`timeout waiting for ${engine} session record for task ${taskId}`)
     await new Promise((r) => setTimeout(r, 50))
   }
 }
@@ -184,10 +202,12 @@ beforeAll(async () => {
 
   daemonWsUrl = `ws://127.0.0.1:${daemonPort}`
   sessionRunner.setTestDaemonUrl(daemonWsUrl)
-  sessionRunner.setTestAcpArtifacts({
-    workerCmd: [process.execPath, WORKER_BUNDLE],
-    adapterCmd: [process.execPath, MOCK_AGENT],
-  })
+  sessionRunner.setTestAcpArtifacts(TEST_ARTIFACTS)
+  // Native lane points at mock-claude (same wiring as the Playwright fixture).
+  // No test here starts a native session — this is a containment guard: if an
+  // engine ever mis-routes to the native lane, it spawns the mock, never a real
+  // `claude` process against real credentials.
+  sessionRunner.setCliCommand(MOCK_CLI)
 
   bus.subscribe('test-capture-acp', (event) => {
     captured.push({
@@ -235,11 +255,11 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
   let sessionId: string
 
   it('quick-start engine=codex creates a codex session record and streams the reply', async () => {
-    const resp = await quickStartCodex('hello codex e2e')
+    const resp = await quickStart('hello codex e2e', 'codex')
     taskId = resp.taskId
     expect(taskId).toBeTruthy()
 
-    sessionId = await sessionIdForTask(taskId)
+    sessionId = await sessionIdForTask(taskId, 'codex')
     expect(sessionId).toMatch(/^mock-session-/)
 
     await waitFor(() => eventsFor(sessionId, EventNames.SESSION_RESULT).length > 0, 15_000, 'first turn result')
@@ -307,9 +327,13 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
 
     const sessionResponse = await fetch(apiUrl(`/api/sessions/${sessionId}`))
     expect(sessionResponse.status).toBe(200)
-    expect((await sessionResponse.json() as {
-      session: { acpModel?: string }
-    }).session.acpModel).toBe('mock-gpt-fast')
+    const switched = (await sessionResponse.json() as {
+      session: { acpModel?: string; acpModelName?: string }
+    }).session
+    expect(switched.acpModel).toBe('mock-gpt-fast')
+    // The adapter advertised a real display name, so the record carries it and
+    // the pill shows it verbatim instead of prettifying the id.
+    expect(switched.acpModelName).toBe('Mock GPT Fast')
   }, 30_000)
 
   it('discovers and changes generic ACP controls through compatibility routes', async () => {
@@ -833,4 +857,106 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
     expect(files.length).toBe(1)
     return files[0].replace('.acp.jsonl', '')
   }
+})
+
+// ── Per-engine conformance slice ──
+// The deep suite above stays codex-only; this is the SAME core scenario run once
+// per ACP engine, so a new engine descriptor cannot ship without server-level
+// coverage: the engine stamp on the record, the reply text, the permission
+// approve path, and the provider-advertised model catalog route.
+//
+// Declared AFTER the codex suite on purpose: it creates one journal per engine,
+// and that suite's findRuntimeId() asserts a single journal file in streamsDir.
+describe.runIf(HAVE_BIN)('ACP engine conformance through the real server', () => {
+  it('covers every ACP engine in the registry', () => {
+    expect(acpEngineIds()).toEqual(['codex', 'gemini', 'opencode', 'goose', 'custom'])
+  })
+
+  describe.each(acpEngineIds())('engine=%s', (engine) => {
+    let taskId: string
+    let sessionId: string
+
+    beforeAll(async () => {
+      const resp = await quickStart(`hello ${engine} conformance`, engine)
+      taskId = resp.taskId
+      sessionId = await sessionIdForTask(taskId, engine)
+      await waitFor(() => eventsFor(sessionId, EventNames.SESSION_RESULT).length > 0,
+        20_000, `${engine} first turn result`)
+    }, 40_000)
+
+    it('stamps the engine on the record and streams the reply', async () => {
+      expect(sessionId).toMatch(/^mock-session-/)
+      const record = (await getSessionsForTask(taskId))
+        .find((candidate) => candidate.claudeSessionId === sessionId)!
+      expect(record.engine).toBe(engine)
+      expect(record.acpRuntimeId).toMatch(/^acp-/)
+      expect(record.host ?? '__local__').toBe('__local__')
+      expect(record.process_status).toBe('idle')
+      expect(textFor(sessionId)).toContain(`you said: hello ${engine} conformance`)
+    })
+
+    it('serves the provider-advertised model catalog', async () => {
+      const response = await fetch(apiUrl(`/api/sessions/${sessionId}/model-catalog`))
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({
+        source: 'acp',
+        currentModelId: 'mock-gpt-best',
+        models: expect.arrayContaining([
+          expect.objectContaining({ modelId: 'mock-gpt-best', name: 'Mock GPT Best' }),
+        ]),
+      })
+    })
+
+    it('approves a permission request through the HTTP route', async () => {
+      const before = eventsFor(sessionId, EventNames.SESSION_PERMISSION_REQUEST).length
+      await sendMessageToSession(sessionId, 'permission-test', { source: 'ui', taskId })
+      const permissionEvent = await waitFor(
+        () => eventsFor(sessionId, EventNames.SESSION_PERMISSION_REQUEST)[before],
+        20_000, `${engine} permission request`)
+      const requestId = (permissionEvent.data as { requestId?: string }).requestId!
+      expect(requestId).toBeTruthy()
+
+      const response = await fetch(apiUrl(`/api/sessions/${sessionId}/permission`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestId, allow: true }),
+      })
+      expect(response.status).toBe(200)
+      await waitFor(() => eventsFor(sessionId, EventNames.SESSION_PERMISSION_RESOLVED)
+        .some((event) => (event.data as { requestId?: string }).requestId === requestId),
+      20_000, `${engine} permission resolved`)
+      await waitFor(() => textFor(sessionId).includes('permission granted: allow-once'),
+        20_000, `${engine} granted text`)
+    }, 40_000)
+  })
+})
+
+// The 'custom' engine takes its adapter argv from walnut config
+// (engines.custom.adapter_cmd) instead of a PATH binary, so an unconfigured
+// start must fail NAMING that key — not half-start and not time out.
+describe.runIf(HAVE_BIN)('custom engine with no adapter_cmd configured', () => {
+  it('fails the start with an error naming engines.custom.adapter_cmd', async () => {
+    const { task } = await addTask({
+      title: 'custom adapter probe',
+      project: '',
+      source: 'local',
+      cwd: os.tmpdir(),
+    })
+    // Test artifacts are what normally suppress adapter resolution — drop them
+    // so the real 'config' source runs. The cwd is deliberately nonexistent: the
+    // adapter error must arrive BEFORE anything is spawned, so a routing
+    // regression that sent this to the native lane fails on cwd instead of
+    // spawning a real CLI on the machine.
+    sessionRunner.setTestAcpArtifacts(undefined)
+    try {
+      await expect(sessionRunner.startSession({
+        taskId: task.id,
+        message: 'should never reach an adapter',
+        cwd: path.join(os.tmpdir(), 'walnut-no-such-dir-for-custom-engine'),
+        engine: 'custom',
+      })).rejects.toThrow(/engines\.custom\.adapter_cmd/)
+    } finally {
+      sessionRunner.setTestAcpArtifacts(TEST_ARTIFACTS)
+    }
+  }, 40_000)
 })

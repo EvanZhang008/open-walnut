@@ -30,6 +30,13 @@ process.env.WALNUT_DISABLE_SEARCH = '1'
 process.env.WALNUT_DISABLE_BACKGROUND_AI = '1'
 process.env.MOCK_ACP_LOAD_DELAY_MS = '10000'
 process.env.MOCK_ACP_LOAD_DELAY_SESSION_ID = 'pw-codex-cold-detail-session'
+// Every engine reports installed in GET /api/engines, so the engine toggle is the
+// same on any machine: sessions here run the mock ACP adapter, never a real
+// gemini/opencode/goose/codex CLI, so probing the host for those binaries would
+// make the toggle's enabled buttons depend on what the developer happens to have
+// installed. The unavailable case is covered by stubbing the endpoint
+// (tests/e2e/browser/engine-matrix.spec.ts).
+process.env.WALNUT_ENGINE_PROBE_ALL = '1'
 // Keep host discovery, Claude history, credentials, and child processes inside
 // the fixture. Inheriting the developer's HOME makes browser tests probe real
 // SSH aliases and can even project unrelated ~/.claude journals.

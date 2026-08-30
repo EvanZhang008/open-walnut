@@ -89,6 +89,41 @@ function isFixtureRemoteListDirs400(text: string, resourceUrl: string): boolean 
     && remoteListDirs(resourceUrl)
 }
 
+/**
+ * The homepage search box drives the AI task-search lane (`GET
+ * /api/search/agent`), which answers 503 `ai_disabled` in every fixture that
+ * has no AI credentials (all of them). The api-client logs that expected 503 as
+ * a warn (quietStatuses), but Chromium still emits its own generic "Failed to
+ * load resource … 503" console.error, matched here via the resource URL — the
+ * same shape as the remote-list-dirs allowance above. Scoped to that exact
+ * endpoint + status, so a real 503 elsewhere still fails the audit.
+ */
+function isFixtureAiSearchDisabled503(text: string, resourceUrl: string): boolean {
+  const aiSearch = (u: string) => u.includes('/api/search/agent')
+  if (/^\[api\] GET \/api\/search\/agent\?\S* → 503 /.test(text)) return true
+  return /^Failed to load resource: the server responded with a status of 503/.test(text)
+    && aiSearch(resourceUrl)
+}
+
+/**
+ * Any session that renders the mode pill probes GET /api/sessions/:id/plan for
+ * existing plan content; a session that never entered plan mode answers 404
+ * "No plan content found for this session". That is the normal cold state, not
+ * a product bug. It matters here because the persisted-log check reads the ONE
+ * shared daemon log by byte offset, so a sibling spec's session (every browser
+ * spec forwards into the same file) can drop this benign line inside another
+ * spec's audit window — which is why it surfaces racily. Scoped to that exact
+ * endpoint + status + message so a real /plan failure still fails the audit.
+ */
+function isBenignPlanProbe404(text: string, resourceUrl: string): boolean {
+  const planProbe = (u: string) => /\/api\/sessions\/[^/]+\/plan(?:\?|$)/.test(u)
+  if (/^\[api\] GET \/api\/sessions\/[^ ]+\/plan → 404 .*: No plan content found for this session$/.test(text)) {
+    return true
+  }
+  return /^Failed to load resource: the server responded with a status of 404/.test(text)
+    && planProbe(resourceUrl)
+}
+
 export async function discoverBrowserFixture(testPort: number): Promise<BrowserFixturePaths> {
   const response = await fetch(`http://localhost:${testPort}/api/sessions/working-dirs`)
   expect(response.status).toBe(200)
@@ -115,6 +150,8 @@ export async function installBrowserAudit(page: Page, walnutHome: string): Promi
     // location().url identifies the RESOURCE for Chromium's generic network
     // console errors — needed to attribute "Failed to load resource" lines.
     if (isFixtureRemoteListDirs400(message.text(), message.location().url ?? '')) return
+    if (isFixtureAiSearchDisabled503(message.text(), message.location().url ?? '')) return
+    if (isBenignPlanProbe404(message.text(), message.location().url ?? '')) return
     consoleErrors.push(message.text())
   })
   page.on('pageerror', (error) => pageErrors.push(error.message))
@@ -132,6 +169,12 @@ export async function installBrowserAudit(page: Page, walnutHome: string): Promi
     if (response.status() === 400
       && response.url().includes('/api/sessions/list-dirs')
       && response.url().includes('host=')) return
+    // Expected fixture 503: the AI task-search lane with no AI credentials.
+    if (response.status() === 503 && response.url().includes('/api/search/agent')) return
+    // Expected 404: the mode pill's plan-content probe on a session with no plan.
+    if (response.status() === 404
+      && response.request().method() === 'GET'
+      && /\/api\/sessions\/[^/]+\/plan(?:\?|$)/.test(response.url())) return
     httpErrors.push({
       status: response.status(),
       method: response.request().method(),
@@ -172,6 +215,11 @@ export async function installBrowserAudit(page: Page, walnutHome: string): Promi
             // server log too — same fixture allowance (no resource URL here;
             // the `[api]`-line regex carries the host= discriminator itself).
             && !isFixtureRemoteListDirs400(message, '')
+            // Same for the AI-search 503 `[api]` line forwarded to the server log.
+            && !isFixtureAiSearchDisabled503(message, '')
+            // The mode pill's cold-session plan probe 404 (a sibling spec's
+            // session can land it inside this window — shared daemon log).
+            && !isBenignPlanProbe404(message, '')
             && !allowances.consoleError?.(message)),
         'persisted browser error logs',
       ).toEqual([])

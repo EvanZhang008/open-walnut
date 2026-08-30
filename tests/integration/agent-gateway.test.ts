@@ -28,6 +28,8 @@ import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
+import { pullArgsFile } from '../../src/core/peers/gateway-args-file.js'
+import { HUMAN_INBOX_CHUNK_BYTES } from '../../src/core/human-inbox/types.js'
 
 // Short hub timeout so the ② timeout scenario doesn't wait the real 20s.
 const TEST_HUB_TIMEOUT_MS = 2000
@@ -198,27 +200,27 @@ describe('agent gateway — real daemon + unix socket + fake Mac hub client', ()
   })
 
   // ─── ① full round-trip: socket → gateway-request frame → gateway-result → socket ───
-  it('① relays peers.list to the trusted client and returns its result to the socket', async () => {
+  it('① relays tools.list to the trusted client and returns its result to the socket', async () => {
     const ws = await connectWs(daemon!.port)
     const sid = `gw-roundtrip-${Date.now()}`
     await startTrackedSession(ws, sid)
 
     const frameP = waitForEvent(ws, (m) => m.ev === 'gateway-request')
-    const respP = gatewayRequest(daemon!.sockPath, { v: 1, op: 'peers.list', sid, args: {} })
+    const respP = gatewayRequest(daemon!.sockPath, { v: 1, op: 'tools.list', sid, args: {} })
 
     const frame = await frameP
     expect(typeof frame.relayId).toBe('number')
-    expect(frame.capability).toBe('peers.list')
+    expect(frame.capability).toBe('tools.list')
     expect(frame.callerSid).toBe(sid)
 
     // Answer as the Mac hub would (capability router output).
-    const peers = [{ id: 'p1', shortId: 'p1', title: 'peer one', host: 'local', status: 'idle', self: false }]
-    const ack = await sendCmd(ws, { cmd: 'gateway-result', relayId: frame.relayId, result: { peers } })
+    const ops = [{ name: 'session_send', title: 'Send a message to a session', readonly: false, remote: 'allow' }]
+    const ack = await sendCmd(ws, { cmd: 'gateway-result', relayId: frame.relayId, result: { ops } })
     expect(ack.ok).toBe(true)
 
     const resp = await respP
     expect(resp.ok).toBe(true)
-    if (resp.ok) expect(resp.result.peers).toEqual(peers)
+    if (resp.ok) expect(resp.result.ops).toEqual(ops)
     ws.close()
   })
 
@@ -229,11 +231,14 @@ describe('agent gateway — real daemon + unix socket + fake Mac hub client', ()
 
     const frameP = waitForEvent(ws, (m) => m.ev === 'gateway-request')
     const respP = gatewayRequest(daemon!.sockPath, {
-      v: 1, op: 'peers.send', sid, args: { target: 'nope', text: 'hello' },
+      v: 1, op: 'tools.call', sid, args: { name: 'session_send', args: { to: 'nope', text: 'hello' } },
     })
     const frame = await frameP
-    expect(frame.capability).toBe('peers.send')
-    expect((frame.payload as Record<string, unknown>).target).toBe('nope')
+    expect(frame.capability).toBe('tools.call')
+    // The whole payload rides through the relay untouched — the daemon is a pipe,
+    // never a parser of op arguments.
+    expect((frame.payload as Record<string, unknown>).name).toBe('session_send')
+    expect((frame.payload as { args?: Record<string, unknown> }).args).toEqual({ to: 'nope', text: 'hello' })
 
     await sendCmd(ws, {
       cmd: 'gateway-result', relayId: frame.relayId,
@@ -260,7 +265,7 @@ describe('agent gateway — real daemon + unix socket + fake Mac hub client', ()
     const t0 = Date.now()
     const respP = gatewayRequest(
       daemon!.sockPath,
-      { v: 1, op: 'peers.list', sid, args: {} },
+      { v: 1, op: 'tools.list', sid, args: {} },
       TEST_HUB_TIMEOUT_MS + 5000,
     )
     await frameP // the daemon DID relay — we just never answer
@@ -301,7 +306,7 @@ describe('agent gateway — real daemon + unix socket + fake Mac hub client', ()
     ws.close()
     await new Promise((r) => setTimeout(r, 300))
 
-    const resp = await gatewayRequest(daemon!.sockPath, { v: 1, op: 'peers.list', sid, args: {} })
+    const resp = await gatewayRequest(daemon!.sockPath, { v: 1, op: 'tools.list', sid, args: {} })
     expect(resp.ok).toBe(false)
     if (!resp.ok) expect(resp.error.code).toBe('hub_unreachable')
 
@@ -315,7 +320,7 @@ describe('agent gateway — real daemon + unix socket + fake Mac hub client', ()
   // ─── ④ stale relayId → ack {stale:true}, dropped ───
   it('④ acks a stale gateway-result instead of crashing or resolving anything', async () => {
     const ws = await connectWs(daemon!.port)
-    const ack = await sendCmd(ws, { cmd: 'gateway-result', relayId: 999_999, result: { peers: [] } })
+    const ack = await sendCmd(ws, { cmd: 'gateway-result', relayId: 999_999, result: { ops: [] } })
     expect(ack.ok).toBe(true)
     expect(ack.stale).toBe(true)
     ws.close()
@@ -333,7 +338,7 @@ describe('agent gateway — real daemon + unix socket + fake Mac hub client', ()
     })
 
     const resp = await gatewayRequest(daemon!.sockPath, {
-      v: 1, op: 'peers.list', sid: 'never-spawned-sid', args: {},
+      v: 1, op: 'tools.list', sid: 'never-spawned-sid', args: {},
     })
     expect(resp.ok).toBe(false)
     if (!resp.ok) expect(resp.error.code).toBe('unknown_caller')
@@ -354,11 +359,11 @@ describe('agent gateway — real daemon + unix socket + fake Mac hub client', ()
     expect(renamed.ok).toBe(true)
 
     const frameP = waitForEvent(ws, (m) => m.ev === 'gateway-request')
-    const respP = gatewayRequest(daemon!.sockPath, { v: 1, op: 'peers.list', sid: oldSid, args: {} })
+    const respP = gatewayRequest(daemon!.sockPath, { v: 1, op: 'tools.list', sid: oldSid, args: {} })
     const frame = await frameP
     expect(frame.callerSid).toBe(newSid) // daemon-authoritative attribution
 
-    await sendCmd(ws, { cmd: 'gateway-result', relayId: frame.relayId, result: { peers: [] } })
+    await sendCmd(ws, { cmd: 'gateway-result', relayId: frame.relayId, result: { ops: [] } })
     const resp = await respP
     expect(resp.ok).toBe(true)
     ws.close()
@@ -366,7 +371,7 @@ describe('agent gateway — real daemon + unix socket + fake Mac hub client', ()
 
   // ─── protocol edge cases straight off the socket ───
   it('rejects bad protocol input with typed errors', async () => {
-    const badVersion = await gatewayRequest(daemon!.sockPath, { v: 9, op: 'peers.list', sid: 'x', args: {} })
+    const badVersion = await gatewayRequest(daemon!.sockPath, { v: 9, op: 'tools.list', sid: 'x', args: {} })
     expect(badVersion.ok).toBe(false)
     if (!badVersion.ok) expect(badVersion.error.code).toBe('unsupported_version')
 
@@ -375,8 +380,120 @@ describe('agent gateway — real daemon + unix socket + fake Mac hub client', ()
     if (!badOp.ok) expect(badOp.error.code).toBe('bad_request')
   })
 
+  // peers.list / peers.send are tombstones: the HUB answers them with a pointer
+  // to session_list / session_send, which only works if the daemon still lets
+  // them onto the wire and relays them. A daemon that rejected them locally
+  // would turn a stale `walnut peers send` into an unexplained protocol error.
+  it('still relays the retired peers capabilities so the hub can answer with a pointer', async () => {
+    const ws = await connectWs(daemon!.port)
+    const sid = `gw-tombstone-${Date.now()}`
+    await startTrackedSession(ws, sid)
+
+    for (const op of ['peers.list', 'peers.send']) {
+      const frameP = waitForEvent(ws, (m) => m.ev === 'gateway-request')
+      const respP = gatewayRequest(daemon!.sockPath, { v: 1, op, sid, args: { target: 'x', text: 'hi' } })
+      const frame = await frameP
+      expect(frame.capability).toBe(op)
+      // Answer as the real router does: bad_request naming the replacement.
+      await sendCmd(ws, {
+        cmd: 'gateway-result', relayId: frame.relayId,
+        error: `${op} was replaced`, errorCode: 'bad_request',
+      })
+      const resp = await respP
+      expect(resp.ok).toBe(false)
+      if (!resp.ok) {
+        expect(resp.error.code).toBe('bad_request')
+        expect(resp.error.message).toContain('was replaced')
+      }
+    }
+    ws.close()
+  })
+
   it('the gateway socket is owner-only (0600)', async () => {
     const mode = fs.statSync(daemon!.sockPath).mode & 0o777
     expect(mode).toBe(0o600)
+  })
+
+  // ─── ⑦ big payloads: the request carries a PATH, the hub pulls it in batches ───
+  /**
+   * The joint the unit layer cannot reach. Three pieces each have their own test
+   * (the CLI emits `argsFile`, `pullArgsFile` reassembles bounded slices, the twin
+   * matches the binary), but the thing that actually had to work is the SEAM: the
+   * real CLI writes a path, the real daemon relays it untouched, and the hub reads
+   * the bytes back through that same daemon's `fs.readRange`.
+   *
+   * Everything here is real except the capability router: the real `pullArgsFile`
+   * runs with deps that issue `fs.readRange` over the same WS the frame arrived on,
+   * which is exactly what DaemonFileReader does in production.
+   */
+  it('⑦ a multi-MB @file arrives as a path and the hub reassembles it byte-exactly', async () => {
+    const ws = await connectWs(daemon!.port)
+    const sid = `gw-argsfile-${Date.now()}`
+    await startTrackedSession(ws, sid)
+
+    // Multi-byte characters throughout, so 2MB slice boundaries land mid-character:
+    // decoding per slice would corrupt the JSON and the parse below would throw.
+    // Repeat count derived from the slice size, so the payload cannot quietly
+    // shrink under "needs several slices" when the fragment is reworded.
+    const FRAGMENT = '<p>é 中 🎧 overnight</p>'
+    const REPEATS = Math.ceil((4 * HUMAN_INBOX_CHUNK_BYTES) / Buffer.byteLength(FRAGMENT))
+    const html = `<h1>Digest</h1>${FRAGMENT.repeat(REPEATS)}<p>TAIL-a71c</p>`
+    const payloadFile = path.join(daemonDir, 'payload.json')
+    const payloadJson = JSON.stringify({ subject: 'Overnight digest', type: 'info', html })
+    await fsp.writeFile(payloadFile, payloadJson, 'utf-8')
+    const fileBytes = Buffer.byteLength(payloadJson)
+    expect(fileBytes).toBeGreaterThan(3 * HUMAN_INBOX_CHUNK_BYTES)
+
+    // The REAL wn CLI shipped inside the twin, pointed at the REAL gateway socket.
+    const frameP = waitForEvent(ws, (m) => m.ev === 'gateway-request', 20_000)
+    const cli = spawn(process.execPath, [scriptPath, 'wn', 'tools', 'call', 'human_inbox_send', `@${payloadFile}`], {
+      env: {
+        ...process.env,
+        WALNUT_DAEMON_DIR: daemonDir,
+        WALNUT_AGENT_SOCKET: daemon!.sockPath,
+        WALNUT_SESSION_ID: sid,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let cliOut = ''
+    cli.stdout?.on('data', (b) => { cliOut += b.toString() })
+    cli.stderr?.on('data', (b) => { cliOut += b.toString() })
+
+    const frame = await frameP
+    const payload = frame.payload as { name?: string; argsFile?: string; args?: unknown }
+    expect(frame.capability).toBe('tools.call')
+    expect(payload.name).toBe('human_inbox_send')
+    // The path, not the payload — and NOT both (a stale duplicate would be a
+    // second 4MB copy on a wire whose whole problem was size).
+    expect(payload.argsFile).toBe(payloadFile)
+    expect(payload.args).toBeUndefined()
+    // The frame itself stays tiny. This is the claim the feature rests on.
+    expect(JSON.stringify(frame).length).toBeLessThan(4096)
+
+    // Now be the hub: pull the file back through the daemon that just relayed it.
+    const reads: Array<{ start: number; length: number }> = []
+    const args = await pullArgsFile('test-host', payload.argsFile!, {
+      async readRange(_host, p, start, length) {
+        reads.push({ start, length })
+        const res = await sendCmd(ws, { cmd: 'fs.readRange', path: p, start, length }, 20_000)
+        // The daemon spreads its payload onto the reply envelope (sendOk), so the
+        // fields sit at the top level — there is no `result` wrapper on fs.*.
+        if (res.ok !== true) return null
+        const r = res as unknown as { data: string; fileSize: number; eof: boolean }
+        return { buf: Buffer.from(r.data, 'base64'), fileSize: r.fileSize, eof: r.eof }
+      },
+    })
+
+    // Byte-exact after reassembly, across real slice boundaries in real base64.
+    expect(args.html).toBe(html)
+    expect(args.subject).toBe('Overnight digest')
+    expect(reads.length).toBeGreaterThan(3)
+    for (const r of reads) expect(r.length).toBeLessThanOrEqual(HUMAN_INBOX_CHUNK_BYTES)
+
+    // Answer as the router would, so the CLI completes rather than timing out.
+    await sendCmd(ws, { cmd: 'gateway-result', relayId: frame.relayId, result: { id: 'lt-test-1' } })
+    const code = await new Promise<number | null>((resolve) => cli.once('exit', resolve))
+    expect(code, `wn CLI output: ${cliOut}`).toBe(0)
+    ws.close()
   })
 })

@@ -1872,7 +1872,9 @@ function handleCommand(ws, msg) {
 // resolveAgentCommand. Keep in sync with src/providers/agent-command-map.ts.
 // This template runs on a plain remote Node with no imports, so the routing
 // table is inlined here verbatim instead of being required.
-var AGENT_CODEX_ROUTES = {
+// Engines on the ACP worker family — mirrors engine-registry runtimeKind==='acp'.
+var AGENT_ACP_ENGINES = { codex: 1, gemini: 1, opencode: 1, goose: 1, custom: 1 };
+var AGENT_ACP_ROUTES = {
   start: 'acpStart', send: 'acpSend', steer: 'acpSteer', cancel: 'acpCancel',
   respond: 'acpRespond', setOption: 'acpSetConfigOption', state: 'acpState',
   newSession: 'acpNewSession', stop: 'acpStop', subscribe: 'acpSubscribe',
@@ -1894,7 +1896,9 @@ function resolveAgentCommand(engine, op) {
   if (typeof op !== 'string' || !Object.prototype.hasOwnProperty.call(AGENT_NATIVE_ROUTES, op)) {
     return { ok: false, error: 'unknown agent op: ' + String(op), errorKind: 'agent_op_unknown' };
   }
-  if (engine === 'codex') return { ok: true, cmd: AGENT_CODEX_ROUTES[op] };
+  if (typeof engine === 'string' && Object.prototype.hasOwnProperty.call(AGENT_ACP_ENGINES, engine)) {
+    return { ok: true, cmd: AGENT_ACP_ROUTES[op] };
+  }
   var nativeCmd = AGENT_NATIVE_ROUTES[op];
   if (!nativeCmd) {
     return {
@@ -3364,8 +3368,9 @@ function cmdHooksConfigure(ws, id, cmd) {
 // skills.sync: distribute the walnut skill into this host's engine stores.
 // ONE real copy in ~/.open-walnut/distributed-skills/walnut/SKILL.md
 // (deliberately NOT the user's skill store ~/.open-walnut/skills/, where a
-// flat SKILL.md shadows category sub-skills); ~/.claude/skills and
-// ~/.agents/skills (codex's user-level dir) get walnut symlinks at it.
+// flat SKILL.md shadows category sub-skills); ~/.claude/skills,
+// ~/.agents/skills (codex + goose) and ~/.gemini/skills get walnut symlinks
+// at it, each gated on that engine's home existing.
 // Marker-guarded, production-dir only; migrates the v1 layout (real claude
 // file + fenced codex AGENTS.md section) and the short-lived v2.0 canonical.
 // Keep in sync with daemon-standalone.ts cmdSkillsSync.
@@ -3432,6 +3437,14 @@ function cmdSkillsSync(ws, id, cmd) {
   }
   ensureLink(path.join(HOME_DIR, '.claude', 'skills'));
   if (fs.existsSync(path.join(HOME_DIR, '.codex'))) ensureLink(path.join(HOME_DIR, '.agents', 'skills'));
+  // goose reads ~/.agents/skills natively too, so a goose-only host gets the
+  // same link. Separate guarded call, not one OR: ensureLink is idempotent.
+  // opencode needs nothing (it scans ~/.claude/skills + ~/.agents/skills).
+  if (fs.existsSync(path.join(HOME_DIR, '.config', 'goose')) || fs.existsSync(path.join(HOME_DIR, '.local', 'share', 'goose'))) {
+    ensureLink(path.join(HOME_DIR, '.agents', 'skills'));
+  }
+  // gemini discovers ONLY ~/.gemini/skills (never ~/.agents or ~/.claude).
+  if (fs.existsSync(path.join(HOME_DIR, '.gemini'))) ensureLink(path.join(HOME_DIR, '.gemini', 'skills'));
   // 2b. v2.0 migration: remove the marker'd SKILL.md that briefly lived in
   // the user's skill store; the dir and every other entry stay. Drop the dir
   // only when we owned the sole file in it.

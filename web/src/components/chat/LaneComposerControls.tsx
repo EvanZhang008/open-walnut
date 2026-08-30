@@ -15,21 +15,23 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { SessionRecord } from '@/types/session';
+import type { SessionEngine, SessionRecord } from '@/types/session';
 import type { SessionEffort } from '@open-walnut/core';
 import { modelSupportsEffort, SESSION_EFFORTS, SESSION_MODE_LABELS } from '@open-walnut/core';
 import { fetchSession, updateSession, setSessionModel, setSessionEffort, setCodexSessionModel } from '@/api/sessions';
 import { useSessionUsage, formatModelName, getContextWindowSize, contextBadgeTitle } from '@/hooks/useSessionUsage';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
-import { ModelPicker, shortCodexModelName, type ProviderId } from '@/components/sessions/ModelPicker';
+import { useEngineCatalog } from '@/hooks/useEngineCatalog';
+import { engineCaps } from '@/utils/engine-capabilities';
+import { ModelPicker, shortAcpModelName, type ProviderId } from '@/components/sessions/ModelPicker';
 
 interface LaneComposerControlsProps {
   sessionId: string | null;
   /** Engine backing the lane (from useLaneSession). Default 'claude'. */
-  engine?: 'claude' | 'codex';
-  /** Provided ONLY while the conversation is empty: picking the other provider
+  engine?: SessionEngine;
+  /** Provided ONLY while the conversation is empty: picking another provider
    *  re-mints the lane session on that engine (useLaneSession.swapEngine).
-   *  Absent → the other provider renders greyed + locked, like a live session. */
+   *  Absent → the other providers render greyed + locked, like a live session. */
   onProviderSwitch?: (provider: ProviderId) => void;
 }
 
@@ -40,6 +42,8 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
   const pillRef = useRef<HTMLElement | null>(null);
   const enabledModes = useEnabledModes();
   const liveUsage = useSessionUsage(sessionId);
+  const engineCatalog = useEngineCatalog();
+  const engineUi = engineCaps(engine, engineCatalog);
 
   // Pull the lane record for mode/model/effort. Refresh on session change.
   useEffect(() => {
@@ -88,23 +92,30 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
     });
   }, [sessionId, session?.effort, session?.effectiveEffort]);
 
-  const handleCodexModelSwitch = useCallback((modelId: string) => {
+  const handleAcpModelSwitch = useCallback((modelId: string) => {
     setPickerOpen(false);
     if (!sessionId) return;
     const prev = session?.acpModel;
+    const prevName = session?.acpModelName;
     if (modelId === prev) return;
-    setSession((s) => s ? { ...s, acpModel: modelId } : s);
+    // The advertised name describes the OLD model and the pill prefers it —
+    // clear it so the new id is prettified until the record comes back.
+    setSession((s) => s ? { ...s, acpModel: modelId, acpModelName: undefined } : s);
     setCodexSessionModel(sessionId, modelId).catch(() => {
-      setSession((s) => s ? { ...s, acpModel: prev } : s);
+      setSession((s) => s ? { ...s, acpModel: prev, acpModelName: prevName } : s);
     });
-  }, [sessionId, session?.acpModel]);
+  }, [sessionId, session?.acpModel, session?.acpModelName]);
 
   if (!sessionId) return null;
 
-  const isCodex = engine === 'codex';
+  // Model source and mode surface are capability answers, not engine ids: an
+  // ACP lane shows its provider-advertised model and hides the Claude-mode pill.
+  const isAcp = engineUi.isAcp;
   const rawModel = liveUsage.model || session?.model;
-  const displayModel = isCodex
-    ? (session?.acpModel ? shortCodexModelName(session.acpModel) : 'Codex')
+  const displayModel = isAcp
+    // 3 tiers: the provider's own name, else prettify the id, else the engine.
+    ? (session?.acpModelName
+      ?? (session?.acpModel ? shortAcpModelName(session.acpModel) : engineUi.displayName))
     : formatModelName(rawModel);
   let contextPercent = liveUsage.contextPercent;
   let badgeUsage = liveUsage;
@@ -131,8 +142,9 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
   return (
     <div className="session-mode-bar">
       {/* Permission-mode cycling is a claude-CLI channel (updateSession mode);
-          codex modes ride ACP session controls — hidden here for now. */}
-      {!isCodex && (
+          engines whose modes are provider config options ride ACP session
+          controls instead — hidden here for now. */}
+      {!engineUi.configModes && (
         <button
           className="mode-toggle-pill"
           onClick={cycleMode}
@@ -145,11 +157,11 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
       <button
         type="button"
         className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill"
-        title={`${(isCodex ? session?.acpModel : rawModel) || 'Model not reported yet (Auto)'} — click to switch model / effort${onProviderSwitch ? ' / provider' : ''}`}
+        title={`${(isAcp ? session?.acpModel : rawModel) || 'Model not reported yet (Auto)'} — click to switch model / effort${onProviderSwitch ? ' / provider' : ''}`}
         onClick={(e) => { pillRef.current = e.currentTarget; setPickerOpen((v) => !v); }}
       >
         {displayModel || 'Auto'}
-        {!isCodex && contextPercent != null && (
+        {!isAcp && contextPercent != null && (
           <span
             className="session-detail-context-pct"
             style={{
@@ -162,7 +174,7 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
             {' '}{contextPercent}%
           </span>
         )}
-        {!isCodex && modelSupportsEffort(rawModel) && effortLabel && (
+        {!isAcp && modelSupportsEffort(rawModel) && effortLabel && (
           <span className="session-detail-effort-badge" title={`Reasoning effort: ${shownEffort}`}>
             {' · '}{effortLabel}
           </span>
@@ -177,9 +189,9 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
           onSwitch={handleModelSwitch}
           onEffortSwitch={handleEffortSwitch}
           onClose={() => setPickerOpen(false)}
-          engine={isCodex ? 'codex' : 'claude'}
-          codexCurrentModelId={session?.acpModel}
-          onCodexSwitch={isCodex ? handleCodexModelSwitch : undefined}
+          engine={engineUi.id}
+          acpCurrentModelId={session?.acpModel}
+          onAcpSwitch={isAcp ? handleAcpModelSwitch : undefined}
           // Empty conversation: the provider rail is LIVE — picking the other
           // engine re-mints the lane session on it. Locked once messages exist.
           onProviderSwitch={onProviderSwitch

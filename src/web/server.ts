@@ -1392,6 +1392,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // router; the agents router only matches single-segment ids (/:id), so the
   // deeper /:agentId/conversations paths fall through here without collision.
   app.use('/api/agents', createConversationsRouter())
+  app.use('/api/engines', (await import('./routes/engines.js')).enginesRouter)
   app.use('/api/commands', createCommandsRouter())
   app.use('/api/skills', createSkillsRouter())
   app.use('/api/slash-commands', createSlashCommandsRouter())

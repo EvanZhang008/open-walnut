@@ -31,7 +31,7 @@ import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
 import type { Task } from '../types.js';
 import type { ExternalSessionCandidate } from '../../providers/external-session-scan-core.js';
-import { engineCaps, normalizeEngine } from '../agents/engine-registry.js';
+import { ENGINE_REGISTRY, engineCaps, normalizeEngine } from '../agents/engine-registry.js';
 
 /** Daemon capability gating the scan RPC. */
 const SCAN_CAPABILITY = 'external-scan-v1';
@@ -52,7 +52,13 @@ const HOLDER_TAG = 'walnut:external-sessions';
  *  the daemon re-offers it, and it's re-imported the moment a scan finally
  *  produces a real title (claude writes its ai-title AFTER the session starts,
  *  so "untitled at first sight" often resolves a tick later). */
-const FALLBACK_TITLE_RE = /^(Claude|Codex) session [0-9a-f]{8}$/;
+const FALLBACK_TITLE_RE = new RegExp(
+  `^(${[...ENGINE_REGISTRY.values()]
+    // Same source as the minted title below (engineCaps().displayName), escaped
+    // because a display name may carry regex metacharacters ("Custom (ACP)").
+    .map((caps) => caps.displayName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|')}) session [0-9a-f]{8}$`,
+);
 /** v1-only per-host tag — its presence is what identifies a legacy bucket. */
 const LEGACY_HOST_TAG_PREFIX = 'walnut:host:';
 /** v1 project the buckets were filed under; removed once its buckets are gone. */

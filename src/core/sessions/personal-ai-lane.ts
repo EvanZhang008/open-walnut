@@ -30,7 +30,7 @@ import { getSessionByLane, createSessionRecord } from '../session-tracker.js';
 import { personalAiProfile, consoleAgentProfile } from './profiles.js';
 import { buildSessionSkillsPrompt } from '../skill-loader.js';
 import type { SessionEngine } from '../types.js';
-import { isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
+import { engineCaps, isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 import { log } from '../../logging/index.js';
 
 /** The lane key a Personal AI conversation's session is bound to. */
@@ -219,7 +219,7 @@ export function getOrCreateLaneSession(
 }
 
 /**
- * Switch the ENGINE backing a conversation's lane (claude ⇄ codex).
+ * Switch the ENGINE backing a conversation's lane (claude ⇄ any ACP engine).
  *
  * An engine is a spawn-time fact, so this is a REPLACE, not a live switch:
  * archive the current lane session, mint a fresh one on the requested engine.
@@ -430,18 +430,18 @@ async function buildLaneProfile(
 }
 
 /**
- * Wait for the record an ACP (codex) spawn creates for this lane. ACP mints its
+ * Wait for the record an ACP spawn creates for this lane. ACP mints its
  * own session id at provider `session/new` — there is no preassigned id to seed
  * a record with, so the lane binding rides the SESSION_START event and the
  * record appears when the worker establishes (see AcpSession.adoptSessionResponse).
  */
-async function waitForLaneRecord(lane: string, timeoutMs: number): Promise<string> {
+async function waitForLaneRecord(lane: string, timeoutMs: number, engineLabel: string): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const record = await getSessionByLane(lane);
     if (record) return record.claudeSessionId;
     if (Date.now() >= deadline) {
-      throw new Error('Codex session did not start in time — check that the Codex CLI is installed and try again');
+      throw new Error(`${engineLabel} session did not start in time — check that the ${engineLabel} CLI is installed and try again`);
     }
     await new Promise((r) => setTimeout(r, 300));
   }
@@ -492,22 +492,25 @@ async function resolveLane(
   const title = agentId === 'general' ? 'Main AI chat' : `Main AI chat (${agentId})`;
 
   if (isAcpEngine(engine)) {
-    // Codex lane: the ACP worker mints the session id itself, so there is no
-    // record to seed up front — emit the start (the runner routes engine:'codex'
-    // to handleAcpStart, which creates the lane-bound record on establish) and
-    // wait for that record. Known limitation: no persona/profile — ACP has no
-    // system-prompt channel, so a codex lane is a bare Codex chat.
+    // ACP lane: the worker mints the session id itself, so there is no record to
+    // seed up front — emit the start (the runner routes any ACP engine to
+    // handleAcpStart, which creates the lane-bound record on establish) and wait
+    // for that record. Known limitation: no persona/profile — ACP has no
+    // system-prompt channel, so an ACP lane is a bare provider chat.
+    const acpEngine = resolveEngine(engine);
     bus.emit(EventNames.SESSION_START, {
       taskId: '',
       message: firstMessage,
       cwd: WALNUT_HOME,
       title,
       lane,
-      engine: 'codex',
+      engine: acpEngine,
     }, ['session-runner'], { source: 'personal-ai-lane' });
-    const sessionId = await waitForLaneRecord(lane, 90_000);
-    log.session.info('Personal AI lane: codex session created', { lane, sessionId, agentId, conversationId });
-    return { sessionId, created: true, engine: 'codex' };
+    const sessionId = await waitForLaneRecord(lane, 90_000, engineCaps(acpEngine).displayName);
+    log.session.info('Personal AI lane: ACP session created', {
+      lane, sessionId, agentId, conversationId, engine: acpEngine,
+    });
+    return { sessionId, created: true, engine: acpEngine };
   }
 
   const { profile, effort } = await buildLaneProfile(config, agentId);

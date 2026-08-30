@@ -1,5 +1,5 @@
 import { apiGet, apiPatch, apiPost, ApiError } from './client';
-import type { SessionSummary, SessionRecord, SessionEffort, SessionModelCatalogEntry } from '@open-walnut/core';
+import type { SessionSummary, SessionRecord, SessionEffort, SessionModelCatalogEntry, SessionEngine } from '@open-walnut/core';
 import type { ImageAttachment } from './chat';
 import type { SessionHistoryMessage } from '@/types/session';
 import { log } from '@/utils/log';
@@ -11,6 +11,8 @@ import {
   sessionStatusStore,
 } from '@/stores/session-status-store';
 import { registerSessionTitle } from '@/stores/entity-label-store';
+import { getEngineCatalog } from '@/hooks/useEngineCatalog';
+import { engineEntry, type LaunchEngine, type LaunchMemory } from '@/utils/engines';
 
 /** Opportunistic <session-ref/> pill-title seeding: there is no client-side
  *  all-sessions store, so any fetched record's title is registered here and
@@ -426,12 +428,15 @@ export async function setSessionModel(
   return apiPost(`/api/sessions/${sessionId}/model`, { model });
 }
 
+/** A model row an ACP provider advertised at session start. */
 export interface CodexModelInfo {
   modelId: string;
   name: string;
   description?: string;
 }
 
+/** The per-session ACP model catalog. Engine-generic on the server (it asks
+ *  whichever ACP provider backs the session), so every ACP engine reads it. */
 export async function fetchCodexModelCatalog(
   sessionId: string,
 ): Promise<{ models: CodexModelInfo[]; currentModelId?: string; source: 'acp' }> {
@@ -462,7 +467,7 @@ export interface SessionControl {
 }
 
 export interface SessionControlsResponse {
-  engine: 'claude' | 'codex';
+  engine: SessionEngine;
   controls: SessionControl[];
 }
 
@@ -594,7 +599,7 @@ export interface WorkingDirEntry {
   lastUsed: string;
   /** Launch config remembered from the last Quick Start on this dir. `model`
    *  is the raw picker value (catalog ID or legacy alias). Absent = Auto/Claude. */
-  lastLaunch?: { model?: string; engine?: 'codex' };
+  lastLaunch?: LaunchMemory;
 }
 
 /** A host from config.hosts — shown as a launcher tab even with zero session history. */
@@ -750,9 +755,11 @@ export async function quickStartSession(opts: {
   intent?: 'fix-walnut';
   /** User opted into "create & start": server mkdirs the cwd before starting. */
   createCwd?: boolean;
-  /** Coding-agent engine. undefined = 'claude'; 'codex' → ACP-backed session (local-only). */
-  engine?: 'codex';
-  /** `sessionId` is present for native (claude) starts; a Codex start omits it. */
+  /** Coding-agent engine. undefined = the default engine; any other value is an
+   *  explicitly picked engine (all ACP-backed and local-only today). */
+  engine?: LaunchEngine;
+  /** `sessionId` is present when the engine takes a preassigned id; an engine
+   *  whose provider issues its own id (every ACP engine) omits it. */
 }): Promise<{ taskId: string; task: unknown; sessionId?: string }> {
   // Convert ImageAttachment[] to the backend ImagePayload format (data + mediaType only)
   const payload: Record<string, unknown> = { ...opts };
@@ -761,13 +768,16 @@ export async function quickStartSession(opts: {
   } else {
     delete payload.images;
   }
-  // CLIENT-OWNED session id (native engine only — Codex's ACP adapter assigns its
-  // own). The server honors it as the preassigned id, which makes the launch
-  // reconcilable even if this HTTP response never arrives: the caller can poll
-  // GET /api/sessions/<id> instead of being stuck on a placeholder. This is the
-  // root fix for the false-"Failed"-then-duplicate-on-Retry incident (2026-08-03:
-  // server 200 in 2.7s, browser AbortSignal fired at 15s under main-thread jam).
-  const clientSessionId = opts.engine !== 'codex' && typeof crypto?.randomUUID === 'function'
+  // CLIENT-OWNED session id — only for an engine whose id walnut may preassign
+  // (the catalog's idProvisioning; an ACP provider issues its own). The server
+  // honors it as the preassigned id, which makes the launch reconcilable even if
+  // this HTTP response never arrives: the caller can poll GET /api/sessions/<id>
+  // instead of being stuck on a placeholder. This is the root fix for the
+  // false-"Failed"-then-duplicate-on-Retry incident (2026-08-03: server 200 in
+  // 2.7s, browser AbortSignal fired at 15s under main-thread jam).
+  const preassignsId = engineEntry(getEngineCatalog(), opts.engine)
+    .capabilities.idProvisioning === 'preassigned';
+  const clientSessionId = preassignsId && typeof crypto?.randomUUID === 'function'
     ? crypto.randomUUID() : undefined;
   if (clientSessionId) payload.sessionId = clientSessionId;
   // 60s, not the 15s default: quick-start spawns a real CLI process (slow under

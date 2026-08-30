@@ -19,13 +19,17 @@
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
+import { SESSION_ENGINE_IDS } from '../../src/core/types.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 
 // Vendor comparisons on an `engine`-holding value, either operand order.
 // Covers ==/===/!=/!==, single or double quotes, and camelCase holders
-// (currentEngine, existingEngine, record.engine, ...).
-const PATTERN = String.raw`([A-Za-z_.]*[Ee]ngine\s*[!=]=+\s*['"](codex|claude)['"])|(['"](codex|claude)['"]\s*[!=]=+\s*[A-Za-z_.]*[Ee]ngine\b)`;
+// (currentEngine, existingEngine, record.engine, ...). The vendor alternation
+// is derived from SESSION_ENGINE_IDS so a newly registered engine is ratcheted
+// from the moment it exists — no second list to remember.
+const VENDORS = SESSION_ENGINE_IDS.join('|');
+const PATTERN = String.raw`([A-Za-z_.]*[Ee]ngine\s*[!=]=+\s*['"](${VENDORS})['"])|(['"](${VENDORS})['"]\s*[!=]=+\s*[A-Za-z_.]*[Ee]ngine\b)`;
 
 const ALLOWED_PREFIXES = [
   'src/core/agents/', // the registry itself

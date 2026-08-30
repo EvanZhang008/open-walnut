@@ -47,24 +47,27 @@ function claudeModeControls(currentValue: string): unknown[] {
   }];
 }
 
-/** Provider-neutral selectable session controls (mode for Claude, native set for Codex). */
+/** Provider-neutral selectable session controls (mode for Claude, the adapter's own set for ACP). */
 export async function getSessionControls(sessionId: string): Promise<SessionControlsPayload> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('session not found', 404);
-  if (engineCaps(record.engine).modeControl === 'config-options') {
+  const caps = engineCaps(record.engine);
+  if (caps.modeControl === 'config-options') {
     const { sessionRunner } = await import('../../providers/claude-code-session.js');
     const session = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined);
-    if (!session) throw new SessionControlError('Codex ACP session is not available', 409);
+    if (!session) throw new SessionControlError(`${caps.displayName} ACP session is not available`, 409);
     return {
-      engine: 'codex',
+      // The record's OWN engine, not a literal: the field tells the client which
+      // control vocabulary it is looking at.
+      engine: caps.id,
       controls: session.sessionControls.filter((control) => control.id !== 'model'),
     };
   }
-  return { engine: 'claude', controls: claudeModeControls(record.mode || 'default') };
+  return { engine: caps.id, controls: claudeModeControls(record.mode || 'default') };
 }
 
-/** Apply one provider-advertised control (mode for Claude; any Codex control). */
+/** Apply one provider-advertised control (mode for Claude; any ACP-advertised control). */
 export async function applySessionControl(
   sessionId: string,
   id: unknown,
@@ -77,27 +80,29 @@ export async function applySessionControl(
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('session not found', 404);
 
-  if (engineCaps(record.engine).modeControl === 'config-options') {
+  const caps = engineCaps(record.engine);
+  if (caps.modeControl === 'config-options') {
     const { sessionRunner } = await import('../../providers/claude-code-session.js');
     const session = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined);
-    if (!session) throw new SessionControlError('Codex ACP session is not available', 409);
+    if (!session) throw new SessionControlError(`${caps.displayName} ACP session is not available`, 409);
     const control = session.sessionControls.find((candidate) => candidate.id === id);
     if (!control || !control.options.some((option) => option.value === value)) {
       throw new SessionControlError('unknown control or value', 400);
     }
     if (!await session.setConfigOption(id, value)) {
-      throw new SessionControlError('Codex ACP control change failed', 409);
+      throw new SessionControlError(`${caps.displayName} ACP control change failed`, 409);
     }
     if (id === 'collaboration_mode') {
       // Mirror Codex's plan/exec split onto the record's mode field so the
-      // rest of the app (badges, resume args) stays coherent.
+      // rest of the app (badges, resume args) stays coherent. Harmless for
+      // adapters that never advertise collaboration_mode.
       const mirroredMode: SessionMode = value === 'plan'
         ? 'plan'
         : record.mode === 'plan' ? 'default' : record.mode;
       await persistSessionModeChange(record, sessionId, mirroredMode);
     }
     return {
-      engine: 'codex',
+      engine: caps.id,
       controls: session.sessionControls.filter((candidate) => candidate.id !== 'model'),
     };
   }
@@ -114,7 +119,7 @@ export async function applySessionControl(
     // matching the web route's historical 409-on-error behavior.
     throw new SessionControlError(err instanceof Error ? err.message : String(err), 409);
   }
-  return { engine: 'claude', controls: claudeModeControls(updated.mode) };
+  return { engine: caps.id, controls: claudeModeControls(updated.mode) };
 }
 
 // ── Settings snapshot ────────────────────────────────────────────────────────

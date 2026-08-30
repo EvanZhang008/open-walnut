@@ -2667,8 +2667,9 @@ function cmdHooksConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
 // ~/.agents/skills — codex's documented user-level dir; both engines follow
 // symlinked skill folders) each get a walnut symlink at it. Guards, same
 // spirit as the user-PATH shims: production daemon only, and never clobber a
-// path we do not own (the marker string is the ownership proof). ~/.agents is
-// only linked when ~/.codex exists. Also migrates earlier layouts: the v1
+// path we do not own (the marker string is the ownership proof). Each engine
+// dir is linked only when that engine's home exists: ~/.agents for codex or
+// goose, ~/.gemini/skills for gemini. Also migrates earlier layouts: the v1
 // real file in ~/.claude/skills, the v1 fenced ~/.codex/AGENTS.md section,
 // and the short-lived v2.0 canonical inside ~/.open-walnut/skills/. Keep in
 // sync with daemon-source.ts cmdSkillsSync.
@@ -2737,6 +2738,18 @@ function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   }
   ensureLink(path.join(HOME_DIR, '.claude', 'skills'))
   if (fs.existsSync(path.join(HOME_DIR, '.codex'))) ensureLink(path.join(HOME_DIR, '.agents', 'skills'))
+  // goose reads ~/.agents/skills natively too (verified in the 1.31 binary), so
+  // the same link is created for a goose-only host. Separate guarded call rather
+  // than one OR condition: ensureLink is idempotent (an existing link already
+  // resolving to the canonical dir returns immediately), and the per-engine
+  // marker stays readable. opencode needs nothing — it scans ~/.claude/skills
+  // and ~/.agents/skills itself.
+  if (fs.existsSync(path.join(HOME_DIR, '.config', 'goose')) || fs.existsSync(path.join(HOME_DIR, '.local', 'share', 'goose'))) {
+    ensureLink(path.join(HOME_DIR, '.agents', 'skills'))
+  }
+  // gemini is the only engine with its own dir: it discovers ONLY
+  // ~/.gemini/skills and <project>/.gemini/skills, never ~/.agents or ~/.claude.
+  if (fs.existsSync(path.join(HOME_DIR, '.gemini'))) ensureLink(path.join(HOME_DIR, '.gemini', 'skills'))
   // 2b. v2.0 migration: remove the marker'd SKILL.md that briefly lived in
   // the user's skill store (it shadowed the category sub-skills there); the
   // dir itself and every other entry stay. Drop the dir only when we owned

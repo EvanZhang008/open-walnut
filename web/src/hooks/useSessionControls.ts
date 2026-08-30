@@ -4,15 +4,25 @@ import {
   postSessionControl,
   type SessionControl,
 } from '@/api/sessions';
+import { useEngineCatalog } from '@/hooks/useEngineCatalog';
+import { engineCaps } from '@/utils/engine-capabilities';
 import { log } from '@/utils/log';
 
+/**
+ * Provider-advertised session controls (approval mode, plan mode, …). Only
+ * engines whose permission surface IS a set of provider config options have
+ * them; the native Claude mode set is a different channel (updateSession mode),
+ * so for those engines this hook stays an empty no-op.
+ */
 export function useSessionControls(sessionId: string | undefined, engine: string | undefined) {
   const [controls, setControls] = useState<SessionControl[]>([]);
   const requestVersion = useRef(0);
+  const engineCatalog = useEngineCatalog();
+  const hasControls = engineCaps(engine, engineCatalog).configModes;
 
   useEffect(() => {
     const version = ++requestVersion.current;
-    if (!sessionId || engine !== 'codex') {
+    if (!sessionId || !hasControls) {
       setControls([]);
       return;
     }
@@ -28,10 +38,10 @@ export function useSessionControls(sessionId: string | undefined, engine: string
           error: String(error),
         });
       });
-  }, [engine, sessionId]);
+  }, [hasControls, sessionId]);
 
   const setControl = useCallback(async (id: string, value: string) => {
-    if (!sessionId || engine !== 'codex') return;
+    if (!sessionId || !hasControls) return;
     const version = requestVersion.current;
     let previous: SessionControl[] = [];
     setControls((current) => {
@@ -51,7 +61,7 @@ export function useSessionControls(sessionId: string | undefined, engine: string
         error: String(error),
       });
     }
-  }, [engine, sessionId]);
+  }, [hasControls, sessionId]);
 
   return { controls, setControl };
 }
