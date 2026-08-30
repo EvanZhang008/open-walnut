@@ -25,7 +25,7 @@ import {
   type ReadSessionResult,
 } from './session-file-reader.js';
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from './workflow-progress.js';
-import { sessionModeFromCli } from './types.js';
+import { sessionModeFromCli, type InPlaceRewindCut, type JsonlLineCheck } from './types.js';
 import type { SessionBackgroundTasksPayload, WorkflowPhaseInfo, WorkflowAgentInfo } from './event-types.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -121,11 +121,104 @@ const TAIL_SEGMENT_ROLL_BYTES = 4 * 1024 * 1024;
 /** After a roll, keep this much as the new tail (fresh lookbehind window). */
 const TAIL_SEGMENT_KEEP_BYTES = 1 * 1024 * 1024;
 
-function historyLineCheckOf(line: string): { len: number; head: string; tail: string } {
+export function historyLineCheckOf(line: string): JsonlLineCheck {
   return { len: line.length, head: line.slice(0, 64), tail: line.slice(-64) };
 }
-function historyLineMatches(line: string, check: { len: number; head: string; tail: string }): boolean {
+function historyLineMatches(line: string, check: JsonlLineCheck): boolean {
   return line.length === check.len && line.slice(0, 64) === check.head && line.slice(-64) === check.tail;
+}
+
+// ── In-place rewind cuts ──
+//
+// An in-place rewind (`--resume <sid> --resume-session-at <uuid>`, NO
+// --fork-session) keeps BOTH branches in one transcript: the CLI resets its
+// file pointer and appends the new branch under the same session id, hanging
+// it off the rewind point via parentUuid. The CLI's own loader walks that
+// parentUuid chain, so it never sees the abandoned turns — but this parser
+// reads the file linearly and would serve them straight back. The cuts
+// recorded on the session record at rewind-commit time say exactly which line
+// range the abandoned branch occupies, so the fix is a position-based slice,
+// not a graph walk: nothing changes for sessions that never rewound.
+
+/** The one line-splitting rule shared by the cut RECORDER (session-rewind) and
+ *  the cut APPLIER below. Line indices in InPlaceRewindCut are only meaningful
+ *  under this exact split. */
+export function splitTranscriptLines(content: string): string[] {
+  return content.split('\n').filter(Boolean);
+}
+
+/**
+ * Drop the abandoned-branch line ranges from a raw transcript.
+ *
+ * Each cut removes lines strictly between `targetLine` (the rewind point, kept)
+ * and `afterLine` (the line count at commit time; everything from there on is
+ * the post-rewind branch, kept). Overlapping cuts (a second rewind to an
+ * earlier message swallows the first cut's range plus its branch) compose on a
+ * keep-mask. Sidechain and queue-op lines inside a dropped range go with it —
+ * position decides, no uuid graph needed.
+ *
+ * All-or-nothing on verification: if ANY cut's fingerprints no longer match
+ * (a /compact rewrote the file, shifting every index), filtering is abandoned
+ * and the caller serves the file unfiltered — cutting WRONG lines would be far
+ * worse than showing the rewound turns again.
+ */
+export function applyInPlaceRewindCuts(
+  lines: string[],
+  cuts: InPlaceRewindCut[],
+): { lines: string[]; dropped: number; stale: boolean } {
+  for (const cut of cuts) {
+    const target = lines[cut.targetLine];
+    const last = lines[cut.afterLine - 1];
+    if (
+      cut.afterLine > lines.length
+      || cut.targetLine >= cut.afterLine
+      || target === undefined || !historyLineMatches(target, cut.targetCheck)
+      || last === undefined || !historyLineMatches(last, cut.lastCheck)
+    ) {
+      return { lines, dropped: 0, stale: true };
+    }
+  }
+  const drop = new Uint8Array(lines.length);
+  for (const cut of cuts) {
+    for (let i = cut.targetLine + 1; i < cut.afterLine; i++) drop[i] = 1;
+  }
+  const kept: string[] = [];
+  let dropped = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (drop[i]) dropped++;
+    else kept.push(lines[i]);
+  }
+  return { lines: kept, dropped, stale: false };
+}
+
+/** The session's committed in-place rewind cuts, or undefined when it has none
+ *  (the overwhelmingly common case — this is the ONLY record read the history
+ *  path does, and it's a primary-key SELECT). Dynamic import breaks the
+ *  session-tracker ↔ session-history cycle. */
+async function getInPlaceRewindCuts(sessionId: string): Promise<InPlaceRewindCut[] | undefined> {
+  try {
+    const { getSessionByClaudeId } = await import('./session-tracker.js');
+    const record = await getSessionByClaudeId(sessionId);
+    const cuts = record?.inPlaceRewinds;
+    return cuts && cuts.length > 0 ? cuts : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Drop every cached parse for a session — in-memory entry (with its
+ * incremental state), and the disk cache. Called at in-place rewind commit:
+ * the FILE hasn't changed (same mtime), but what the file MEANS has, so every
+ * mtime-validated cache would happily keep serving the abandoned turns.
+ */
+export async function invalidateSessionHistoryCaches(sessionId: string, host?: string): Promise<void> {
+  cacheDelete(cacheKey(sessionId));
+  if (host) cacheDelete(cacheKey(sessionId, host));
+  try {
+    const { deleteHistoryCache } = await import('./history-disk-cache.js');
+    await deleteHistoryCache(sessionId);
+  } catch { /* best-effort — a stale disk entry only survives until the next write */ }
 }
 
 const MAX_HISTORY_CACHE = 30;
@@ -1576,7 +1669,11 @@ export async function readSessionHistoryTail(
         // Serve from the shared cache when fresh — same data, zero I/O.
         const cached = cacheGet(sessionId, host);
         if (cached && cached.mtimeMs === st.mtimeMs) return cached.messages;
-        return await readSessionHistoryTailWindow(sessionId, cwd, host, maxTailBytes);
+        // A rewound session's cuts are whole-file positions — no tail window
+        // can apply them. Fall through to the full (filtering) read.
+        if (!(await getInPlaceRewindCuts(sessionId))) {
+          return await readSessionHistoryTailWindow(sessionId, cwd, host, maxTailBytes);
+        }
       }
     } catch (err) {
       log.session.debug('tail history stat/read failed — falling back to full read', {
@@ -1740,7 +1837,15 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   // byte-ceiling degradation). The windowed cache entry is quarantined: only
   // same-mtime tail-bounded requests hit it, so the next turn append or a
   // full-read caller does the normal full read and re-seeds everything.
-  if (options?.maxColdReadBytes && statPath && statSize !== undefined
+  // In-place rewind cuts are position-based over the WHOLE file, so no
+  // windowed read can apply them (a 4 MB tail window may start inside the
+  // abandoned branch with no way to tell). A rewound session skips the bounded
+  // cold read and takes the full read below. Fetched lazily HERE — after every
+  // cache fast-path has had its chance to return — so the common case (no
+  // rewinds) pays this one PK SELECT only when a real read is happening anyway.
+  const rewindCuts = await getInPlaceRewindCuts(sessionId);
+
+  if (options?.maxColdReadBytes && !rewindCuts && statPath && statSize !== undefined
       && statSize > options.maxColdReadBytes) {
     const win = await readSessionHistoryTailWindow(sessionId, cwd, host, options.maxColdReadBytes);
     if (win) {
@@ -1793,6 +1898,14 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     });
     // A byte-ceiling rejection is itself proof the file exists (and is huge).
     sourceFound = true;
+    if (rewindCuts) {
+      // A rewound transcript too big to materialize can't be filtered — the
+      // bounded tail may include abandoned-branch lines. Serving them beats a
+      // blank panel; say so in the log.
+      log.session.warn('rewound transcript over the byte ceiling — bounded tail is served UNFILTERED', {
+        sessionId, host: host ?? '__local__', cuts: rewindCuts.length,
+      });
+    }
     const tail = await readSessionHistoryTailWindow(sessionId, cwd, host);
     if (tail) return handOff(tail);
     // Tail unavailable too — last resort is the previous parse, else empty.
@@ -1811,7 +1924,21 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
       setResolvedRemotePath(sessionId, host ?? '__local__', result.resolvedRemotePath);
     }
     try {
-      messages = parseSessionMessages(result.content);
+      let contentForParse = result.content;
+      if (rewindCuts) {
+        const cutRes = applyInPlaceRewindCuts(splitTranscriptLines(result.content), rewindCuts);
+        if (cutRes.stale) {
+          log.session.warn('in-place rewind cuts no longer match the transcript (rewritten?) — serving unfiltered', {
+            sessionId, host: host ?? '__local__', cuts: rewindCuts.length,
+          });
+        } else {
+          contentForParse = cutRes.lines.join('\n');
+          log.session.info('in-place rewind cuts applied', {
+            sessionId, cuts: rewindCuts.length, droppedLines: cutRes.dropped,
+          });
+        }
+      }
+      messages = parseSessionMessages(contentForParse);
 
       // Echo-claim binding (Phase 1, ACP dialect): stamp walnutMessageId onto
       // the canonical user-echo lines of recently delivered batches, so the

@@ -37,7 +37,7 @@ import { planDeltaMerge } from '@/hooks/history-merge';
 import { recordFlight, trimStreamEvent } from '@/stream/flight-recorder';
 import { tracePhase } from '@/utils/main-thread-tracer';
 import { runWhenVisible } from '@/utils/page-visibility';
-import { idbSetHistory } from './history-idb';
+import { idbSetHistory, idbDeleteHistory } from './history-idb';
 import { log } from '@/utils/log';
 
 const MAX_CACHED = 20;
@@ -80,6 +80,19 @@ export function getHistoryCache(sid: string): CachedHistory | undefined {
 
 export function setHistoryCache(sid: string, data: CachedHistory): void {
   historyCacheSet(sid, data);
+}
+
+/**
+ * Drop ONE session's client-side caches — history (memory + IndexedDB) and the
+ * streaming block state. Called after an in-place rewind: the transcript was
+ * truncated under the same session id, so every cached copy is now stale and
+ * would otherwise shadow the shorter history (or re-render absorbed streaming
+ * blocks whose evidence was cut away) on the next mount.
+ */
+export function clearSessionCaches(sid: string): void {
+  historyCache.delete(sid);
+  streamStates.delete(sid);
+  void idbDeleteHistory(sid);
 }
 
 // ── Streaming state cache ────────────────────────────────────────────────────

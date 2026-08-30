@@ -157,6 +157,28 @@ async function pruneLru(db: IDBDatabase): Promise<void> {
   }
 }
 
+/** Drop ONE session's persisted history. Used after an in-place rewind, whose
+ *  truncated transcript must not be shadowed by the pre-rewind cache on the
+ *  next mount. A pending debounced write for the same sid is cancelled first,
+ *  or it would re-persist the stale entry after the delete. */
+export async function idbDeleteHistory(sid: string): Promise<void> {
+  const pending = pendingWrites.get(sid);
+  if (pending) { clearTimeout(pending); pendingWrites.delete(sid); }
+  const db = await openDb();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).delete(sid);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
 /** Test/reset hook: drop every persisted entry. */
 export async function idbClearHistory(): Promise<void> {
   const db = await openDb();

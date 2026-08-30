@@ -39,6 +39,7 @@ import { parseSessionDirective } from '@/components/chat/session-mention';
 import { buildImageRefsPayload } from '@/api/image-upload';
 import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
+import { clearSessionCaches } from '@/cache/session-cache';
 import { runWhenVisible } from '@/utils/page-visibility';
 import { buildInvestigationClip } from '@/utils/investigation-clipboard';
 import { fetchTask } from '@/api/tasks';
@@ -632,6 +633,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // the memoized transcript rows through context, never props.
   const pinsApi = useSessionPins(sessionId, session?.pinnedMessages);
   const [rewindTarget, setRewindTarget] = useState<{ msgId: string; label?: string } | null>(null);
+  // Bumped after an IN-PLACE rewind: the transcript was truncated under the
+  // same session id, so the timeline (SessionChatHistory) is remounted via its
+  // key to rebuild history + streaming state from scratch. Client caches are
+  // cleared first (see onRewound) so the remount's initial load can't adopt the
+  // pre-rewind copy.
+  const [rewindEpoch, setRewindEpoch] = useState(0);
   const rewindApi = useMemo<SessionRewindApi>(() => ({
     // Rewind needs the engine's own checkpointing (--resume-session-at +
     // rewind_files); engines without it hide the button instead of failing on
@@ -1233,10 +1240,21 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
           onClose={() => setRewindTarget(null)}
           onRewound={(result) => {
             setRewindTarget(null);
-            // No toast: the column itself swapping onto the rewound session (with a
-            // shorter transcript, and the code restored underneath) is the receipt.
-            // The rewound session continues the SAME task, so this replaces the
-            // panel rather than opening a second one for the same work.
+            // In-place (default): same session id, truncated transcript. Drop
+            // the client caches (memory + IDB history, streaming blocks) so the
+            // remounted timeline rebuilds from the shorter server history with
+            // no stale flash, then bump the key to remount.
+            if (result.mode !== 'fork' && result.sessionId === sessionId) {
+              log.info('session-panel', 'session rewound in place — remounting timeline', {
+                sessionId, filesRestored: !!result.files?.canRewind,
+              });
+              clearSessionCaches(sessionId);
+              setRewindEpoch((e) => e + 1);
+              return;
+            }
+            // Fork: the rewound session is a NEW id continuing the same task, so
+            // the column swaps onto it (no second panel for the same work). The
+            // shorter transcript + restored code is the receipt; no toast.
             log.info('session-panel', 'rewound session replaces this column', {
               sessionId, rewoundId: result.sessionId, filesRestored: !!result.files?.canRewind,
             });
@@ -1814,7 +1832,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             )}
         <div className="session-panel-body" ref={bodyRef}>
           <SessionChatHistory
-            key={sessionId}
+            key={`${sessionId}:${rewindEpoch}`}
             sessionId={sessionId}
             engine={session?.engine}
             phase={taskPhase}

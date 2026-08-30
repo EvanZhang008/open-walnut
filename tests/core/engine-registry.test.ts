@@ -45,7 +45,7 @@ describe('engine registry', () => {
     expect(claude.historySource).toBe('provider-jsonl');
     expect(claude.idProvisioning).toBe('preassigned');
     expect(claude.fork).toBe(true);
-    expect(claude.rewind).toBe('fork-based');
+    expect(claude.rewind).toBe('native');
     expect(claude.sidLivenessProbe).toBe(true);
     expect(claude.snapshotPull).toBe(true);
     expect(claude.permissionAnswers).toBe(true);

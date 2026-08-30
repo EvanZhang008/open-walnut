@@ -474,9 +474,16 @@ export function assertSessionForkSupported(
 function resumeProfileOpts(
   profile: import('../core/types.js').SessionProfile | undefined,
   lane: string | undefined,
-): { profile?: import('../core/types.js').SessionProfile; lane?: string } | undefined {
-  if (!profile && !lane) return undefined
-  return { ...(profile ? { profile } : {}), ...(lane ? { lane } : {}) }
+  resumeSessionAt?: string,
+): { profile?: import('../core/types.js').SessionProfile; lane?: string; resumeSessionAt?: string } | undefined {
+  if (!profile && !lane && !resumeSessionAt) return undefined
+  return {
+    ...(profile ? { profile } : {}),
+    ...(lane ? { lane } : {}),
+    // In-place rewind pending window: record.pendingResumeSessionAt rides every
+    // cold resume until the first completed turn clears it (see types.ts).
+    ...(resumeSessionAt ? { resumeSessionAt } : {}),
+  }
 }
 
 // ── ClaudeCodeSession ──
@@ -1615,13 +1622,18 @@ export class ClaudeCodeSession {
        *  capacity counting and the default session lists skip it. */
       lane?: string
       /**
-       * REWIND: resume the parent transcript only up to (and including) this
-       * message uuid — the CLI's hidden `--resume-session-at`. Requires a resume,
-       * and Walnut always pairs it with `--fork-session`, because the CLI APPENDS
-       * to whichever transcript it resumes: rewinding in place would leave the
-       * discarded turns in the same JSONL for the history parser to re-serve.
-       * One-shot (spawn-time only) — the fork's own transcript is already
-       * truncated, so later cold resumes must NOT re-send it.
+       * REWIND: resume the transcript only up to (and including) this message
+       * uuid — the CLI's hidden `--resume-session-at`. Requires a resume.
+       * Two shapes:
+       *  - WITH forkSession: the truncated conversation lands in a fresh
+       *    transcript under a new id (fork rewind). One-shot — the fork's own
+       *    transcript is already truncated, later cold resumes must not re-send.
+       *  - WITHOUT forkSession: IN-PLACE rewind — the CLI keeps the session id
+       *    and appends the new branch to the SAME transcript (the history
+       *    parser skips the abandoned range via record.inPlaceRewinds). Sent on
+       *    every cold resume while record.pendingResumeSessionAt is set (see
+       *    resolveResumeArgs), which clears on the first completed turn:
+       *    re-sending it AFTER new turns exist would cut those turns off too.
        */
       resumeSessionAt?: string
     },
@@ -1705,10 +1717,10 @@ export class ClaudeCodeSession {
     if (resumeSessionId) {
       args.push('--resume', resumeSessionId)
       // Rewind: cut the resumed transcript at a message. Only meaningful with a
-      // resume (the CLI errors out otherwise) and only ever emitted alongside
-      // --fork-session, so the truncated conversation lands in a FRESH transcript
-      // instead of appending under the discarded turns.
-      if (opts?.resumeSessionAt && forkSession) {
+      // resume (the CLI errors out otherwise). With --fork-session the cut
+      // conversation lands in a fresh transcript; WITHOUT it this is an
+      // in-place rewind — same id, same file, new branch (see the opts doc).
+      if (opts?.resumeSessionAt) {
         args.push('--resume-session-at', opts.resumeSessionAt)
       }
       if (forkSession) {
@@ -7454,6 +7466,15 @@ export class SessionRunner {
             || (eventData<'session:result'>(event) as { isError?: boolean }).isError === true
           this.clearActiveProcessing(resolvedSessionId, { kind: 'result', isError: resultIsError })
 
+          // In-place rewind pending window closes on a REAL turn result: the
+          // turn's lines are in the transcript now, so a plain --resume lands on
+          // the new branch. SESSION_ERROR (process death / spawn failure) must
+          // NOT clear it — no new lines were written, and dropping the flag
+          // there would make the next resume pick up the abandoned branch.
+          if (event.name === EventNames.SESSION_RESULT) {
+            this.clearPendingResumeSessionAt(resolvedSessionId)
+          }
+
           // NO un-scoped removeProcessed here. Every delivery point already removes
           // its own batch eagerly (FIFO write / mid-turn inject / settleResumeSuccess),
           // so by turn-end there is nothing legitimately left in 'processing'. The only
@@ -9548,11 +9569,13 @@ export class SessionRunner {
     effort?: import('../core/types.js').SessionEffort
     profile?: import('../core/types.js').SessionProfile
     lane?: string
+    resumeSessionAt?: string
   }> {
     let resolvedModel: string | undefined
     let resolvedEffort: import('../core/types.js').SessionEffort | undefined
     let resolvedProfile: import('../core/types.js').SessionProfile | undefined
     let resolvedLane: string | undefined
+    let resolvedResumeSessionAt: string | undefined
     try {
       const { getSessionByClaudeId: getSession } = await import('../core/session-tracker.js')
       const record = await getSession(sessionId)
@@ -9561,6 +9584,11 @@ export class SessionRunner {
       }
       if (record?.profile) resolvedProfile = record.profile
       if (record?.lane) resolvedLane = record.lane
+      // In-place rewind pending window: until the first turn completes after a
+      // rewind, every cold --resume must carry --resume-session-at, or a CLI
+      // death in that window makes the next resume pick up the ABANDONED
+      // branch tip. Cleared on turn result (clearPendingResumeSessionAt).
+      if (record?.pendingResumeSessionAt) resolvedResumeSessionAt = record.pendingResumeSessionAt
       // Fall back to stored CLI model for --resume so the [1m] context window
       // marker is preserved.  record.cliModel stores the original --model arg
       // (e.g. "opus[1m]").  record.model stores the *reported* model from init
@@ -9590,7 +9618,34 @@ export class SessionRunner {
     } catch (err) {
       log.session.warn('resolveResumeArgs: failed to read record', { sessionId, error: err instanceof Error ? err.message : String(err) })
     }
-    return { model: resolvedModel, effort: resolvedEffort, profile: resolvedProfile, lane: resolvedLane }
+    return {
+      model: resolvedModel, effort: resolvedEffort, profile: resolvedProfile,
+      lane: resolvedLane, resumeSessionAt: resolvedResumeSessionAt,
+    }
+  }
+
+  /**
+   * End the in-place rewind pending window: the first completed turn after a
+   * rewind proves the new branch exists in the transcript, so a plain --resume
+   * now lands correctly — and re-sending --resume-session-at would CUT the new
+   * turns off. Cheap no-op for the 99% case (field absent).
+   */
+  private clearPendingResumeSessionAt(sessionId: string): void {
+    void (async () => {
+      try {
+        const { getSessionByClaudeId, updateSessionRecord } = await import('../core/session-tracker.js')
+        const record = await getSessionByClaudeId(sessionId)
+        if (!record?.pendingResumeSessionAt) return
+        await updateSessionRecord(sessionId, { pendingResumeSessionAt: undefined })
+        log.session.info('in-place rewind pending window closed (turn completed)', {
+          sessionId, rewindPoint: record.pendingResumeSessionAt,
+        })
+      } catch (err) {
+        log.session.warn('failed to clear pendingResumeSessionAt', {
+          sessionId, error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    })()
   }
 
   /**
@@ -9703,7 +9758,7 @@ export class SessionRunner {
     // Model/effort routes persist BEFORE applying their process-local control
     // requests. Re-read after the old process is stopped so changes made during
     // the restart window are applied to the replacement CLI.
-    const { model, effort, profile, lane } = await this.resolveResumeArgs(sessionId)
+    const { model, effort, profile, lane, resumeSessionAt } = await this.resolveResumeArgs(sessionId)
     const refreshedRecord = await getSessionByClaudeId(sessionId)
     const resumeMode = modeOverride ?? refreshedRecord?.mode ?? record.mode
     log.session.info('reinitialize: respawning fresh CLI (no turn)', { sessionId, taskId: record.taskId, host: record.host, model, mode: resumeMode })
@@ -9723,7 +9778,7 @@ export class SessionRunner {
         },
         // Re-emit the profile's spawn-time flags on the replacement CLI —
         // "Restart" must not silently strip a session's identity.
-        resumeProfileOpts(profile, lane))
+        resumeProfileOpts(profile, lane, resumeSessionAt))
     })
   }
 
@@ -9840,6 +9895,7 @@ export class SessionRunner {
         effort: resolvedEffort,
         profile: resolvedProfile,
         lane: resolvedLane,
+        resumeSessionAt: resolvedResumeAt,
       } = await this.resolveResumeArgs(sessionId)
 
       // Rehydrate: if this.sessions lost the entry (e.g. reconciler didn't flag the
@@ -10036,7 +10092,7 @@ export class SessionRunner {
               else this.settleResumeFailure(sessionId, msgs, err ?? new Error('resume spawn failed'))
             },
             // Cold resume: re-emit the record's profile flags (spawn-time only).
-            resumeProfileOpts(resolvedProfile, resolvedLane))
+            resumeProfileOpts(resolvedProfile, resolvedLane, resolvedResumeAt))
 
           bus.emit(EventNames.SESSION_STARTED, {
             taskId: record.taskId,
@@ -10084,7 +10140,7 @@ export class SessionRunner {
           else this.settleResumeFailure(sessionId, msgs, err ?? new Error('resume spawn failed'))
         },
         // Cold resume: re-emit the record's profile flags (spawn-time only).
-        resumeProfileOpts(resolvedProfile, resolvedLane))
+        resumeProfileOpts(resolvedProfile, resolvedLane, resolvedResumeAt))
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
       // Clean up activeProcessing + batchCounts on any error (send() EMFILE, lookup failure, etc.)

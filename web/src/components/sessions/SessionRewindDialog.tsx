@@ -14,7 +14,10 @@ import { log } from '@/utils/log';
  * session UI.
  *
  * The two halves are independent, and the copy says so:
- *  - the CONVERSATION always rewinds (that is the point of the button);
+ *  - the CONVERSATION always rewinds (that is the point of the button). By
+ *    default it rewinds IN PLACE — this same session drops the later turns;
+ *    the "into a copy" toggle instead continues the rewound conversation as a
+ *    new session and leaves this one untouched.
  *  - the FILES only rewind if the user asks AND the CLI has a checkpoint for that
  *    message. When it doesn't (session not live, or spawned before file
  *    checkpointing was enabled), the checkbox is disabled with the reason instead
@@ -35,6 +38,10 @@ export function SessionRewindDialog({ sessionId, msgId, label, onClose, onRewoun
   const [preview, setPreview] = useState<RewindPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [restoreFiles, setRestoreFiles] = useState(false);
+  // Default: rewind THIS conversation in place. The secondary "into a copy"
+  // toggle keeps the current conversation untouched and continues the rewound
+  // one as a new (forked) session.
+  const [intoCopy, setIntoCopy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useModalOverlay(onClose);
@@ -59,10 +66,10 @@ export function SessionRewindDialog({ sessionId, msgId, label, onClose, onRewoun
   const confirm = useCallback(() => {
     setBusy(true);
     setError(null);
-    rewindSession(sessionId, msgId, { restoreFiles })
+    rewindSession(sessionId, msgId, { mode: intoCopy ? 'fork' : 'in-place', restoreFiles })
       .then((result) => {
         log.info('session', 'rewind committed', {
-          sessionId, msgId, rewoundId: result.sessionId, restoreFiles,
+          sessionId, msgId, mode: result.mode, rewoundId: result.sessionId, restoreFiles,
         });
         onRewound(result);
       })
@@ -70,7 +77,7 @@ export function SessionRewindDialog({ sessionId, msgId, label, onClose, onRewoun
         setBusy(false);
         setError(err instanceof Error ? err.message : String(err));
       });
-  }, [sessionId, msgId, restoreFiles, onRewound]);
+  }, [sessionId, msgId, intoCopy, restoreFiles, onRewound]);
 
   const filesReason = preview?.filesUnavailableReason === 'session_not_live'
     ? 'The CLI for this session is not running, so its file checkpoints can\'t be read.'
@@ -95,8 +102,10 @@ export function SessionRewindDialog({ sessionId, msgId, label, onClose, onRewoun
           <>
             <div className="rewind-dialog-line">
               <strong>{preview.droppedMessages}</strong>{' '}
-              {preview.droppedMessages === 1 ? 'message' : 'messages'} after this point will be left behind.
-              The conversation continues in a new session; this one is archived, not deleted.
+              {preview.droppedMessages === 1 ? 'message' : 'messages'} after this point will be dropped.
+              {intoCopy
+                ? ' The rewound conversation continues as a new session; this one stays exactly as it is.'
+                : ' This conversation continues from here; the dropped messages are gone from it (recoverable only if you kept a copy).'}
             </div>
             <label className={`rewind-dialog-check${preview.canRewind ? '' : ' is-disabled'}`}>
               <input
@@ -137,6 +146,15 @@ export function SessionRewindDialog({ sessionId, msgId, label, onClose, onRewoun
                 )}
               </div>
             )}
+            <label className="rewind-dialog-check">
+              <input
+                type="checkbox"
+                checked={intoCopy}
+                disabled={busy}
+                onChange={(e) => setIntoCopy(e.target.checked)}
+              />
+              <span>Rewind into a copy instead (keep this conversation untouched)</span>
+            </label>
           </>
         )}
 
@@ -145,7 +163,9 @@ export function SessionRewindDialog({ sessionId, msgId, label, onClose, onRewoun
         <div className="rewind-dialog-actions">
           <button type="button" className="btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>
           <button type="button" className="btn-primary" onClick={confirm} disabled={busy || !preview}>
-            {busy ? 'Rewinding…' : restoreFiles ? 'Rewind code + chat' : 'Rewind chat'}
+            {busy
+              ? 'Rewinding…'
+              : `${restoreFiles ? 'Rewind code + chat' : 'Rewind chat'}${intoCopy ? ' (copy)' : ''}`}
           </button>
         </div>
       </div>

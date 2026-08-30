@@ -72,8 +72,9 @@ export interface EngineCapabilities {
   readonly permissionAnswers: boolean;
   /** Mid-session model switch path: live flag push vs ACP config option. */
   readonly modelSwitch: 'live-flag' | 'config-option';
-  /** Turn rewind support (fork-based checkpointing) — claude only today. */
-  readonly rewind: 'fork-based' | 'unsupported';
+  /** Turn rewind support — claude only today. 'native' = the CLI understands
+   *  --resume-session-at, so both in-place and fork-based rewinds work. */
+  readonly rewind: 'native' | 'unsupported';
   /** Session fork support (claude --fork-session; no ACP session.fork yet). */
   readonly fork: boolean;
   /**
@@ -110,7 +111,7 @@ const CLAUDE: EngineCapabilities = {
   modeControl: 'claude-modes',
   permissionAnswers: true,
   modelSwitch: 'live-flag',
-  rewind: 'fork-based',
+  rewind: 'native',
   fork: true,
   snapshotPull: true,
   sidLivenessProbe: true,

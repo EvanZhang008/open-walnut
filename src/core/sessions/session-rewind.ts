@@ -20,29 +20,43 @@
  *
  *  2. **Conversation** — the hidden `--resume-session-at <message uuid>` flag,
  *     which loads a resumed transcript only up to and including that message.
- *     We always pair it with `--fork-session`: the CLI APPENDS to the transcript
- *     it resumes, so an in-place rewind would leave the discarded turns sitting in
- *     the same JSONL, and Walnut's history parser (which reads the raw file) would
- *     hand them straight back. A fork gets its own empty transcript, so the rewind
- *     is honest on disk, and the abandoned branch stays readable as its own
- *     session instead of being deleted.
+ *     Two modes, both CLI-native:
  *
- * ## What a rewind does, in order
+ *     **in-place** (the default): `--resume <sid> --resume-session-at <uuid>`
+ *     WITHOUT `--fork-session`. The CLI keeps the SAME session id and appends
+ *     the new branch to the SAME transcript, hanging it off the rewind point
+ *     via parentUuid — its own loader walks that chain and never re-reads the
+ *     abandoned turns. Walnut's linear history parser is the only thing that
+ *     would, so the commit records an `InPlaceRewindCut` (which line range the
+ *     abandoned branch occupies) on the session record, and the parser skips
+ *     that range. The conversation visibly rewinds inside its own panel.
+ *
+ *     **fork**: pair the flag with `--fork-session` — the truncated
+ *     conversation lands in a fresh session, the source is archived (never
+ *     deleted) and stays readable as the abandoned branch.
+ *
+ * ## What an IN-PLACE rewind does, in order
  *
  *   preview (optional)  → dry-run `rewind_files`, so the human sees the blast radius
- *   restore files       → `rewind_files` on the LIVE source session (skipped, with a
- *                         reason, when the session has no live CLI to ask)
- *   terminate source    → the branch being abandoned must stop working
- *   spawn the rewound   → new session id, `--resume <source> --resume-session-at <uuid>
- *                         --fork-session`, empty first message (it warms up and waits
- *                         for the human's next instruction — draft semantics, same as
- *                         a lane fork)
- *   archive source      → best-effort; the transcript is preserved, the board is not
- *                         doubled. `keepSource` skips it.
+ *   restore files       → `rewind_files` on the LIVE CLI (skipped, with a reason,
+ *                         when the session has no live CLI to ask)
+ *   stop the CLI        → the transcript must be quiet before positions are read
+ *   record the cut      → read the raw JSONL once: the rewind point's line index +
+ *                         the current line count + two line fingerprints (rewrite
+ *                         detection) → append to record.inPlaceRewinds, set
+ *                         pendingResumeSessionAt, drop every history cache (the
+ *                         FILE didn't change, its MEANING did — mtime caches would
+ *                         serve the abandoned turns forever)
+ *   respawn in place    → same session id, `--resume <sid> --resume-session-at
+ *                         <uuid>`, empty first message (warm draft semantics —
+ *                         waits for the human's next instruction)
  *
- * Ordering rule: the spawn is emitted BEFORE the archive, so a failure to archive
- * (a stubborn process, a terminal-state guard) can never leave the task with no
- * session at all.
+ * ## What a FORK rewind does, in order
+ *
+ *   restore files → terminate source → spawn `--resume <source>
+ *   --resume-session-at <uuid> --fork-session` under a new id → archive source
+ *   (best-effort, AFTER the spawn so a failed archive can never leave the task
+ *   with no session at all; `keepSource` skips it).
  */
 
 import { randomUUID } from 'node:crypto';
@@ -76,15 +90,18 @@ export interface RewindPreview extends RewindFilesReport {
 
 export interface RewindResult {
   status: 'rewound';
+  /** 'in-place' rewinds THIS session; 'fork' continues under a new id. */
+  mode: 'in-place' | 'fork';
   sourceSessionId: string;
-  /** The new session that continues from the rewind point. */
+  /** The session that continues from the rewind point — SAME id as
+   *  sourceSessionId for an in-place rewind, a fresh id for a fork. */
   sessionId: string;
   taskId?: string;
   title: string;
   host?: string;
   /** What actually happened to the files (absent when the caller didn't ask). */
   files?: RewindFilesReport & { skippedReason?: 'session_not_live' | 'engine_unsupported' };
-  /** True when the source session was archived (false with keepSource). */
+  /** True when the source session was archived (fork mode only). */
   sourceArchived: boolean;
 }
 
@@ -169,7 +186,7 @@ async function resolveRewindTarget(sessionId: string, messageUuid: string): Prom
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('Session not found', 404);
-  if (engineCaps(record.engine).rewind !== 'fork-based') {
+  if (engineCaps(record.engine).rewind === 'unsupported') {
     throw new SessionControlError('Rewind is unavailable for this Codex session', 409, {
       code: 'REWIND_ENGINE_UNSUPPORTED',
     });
@@ -237,17 +254,23 @@ export async function previewSessionRewind(sessionId: string, messageUuid: strin
 
 export interface RewindInput {
   messageUuid: string;
+  /** 'in-place' (default) rewinds THIS conversation; 'fork' continues under a
+   *  new session id and archives the source (the original behavior). */
+  mode?: 'in-place' | 'fork';
   /** Also restore the files to their state at that message. */
   restoreFiles?: boolean;
-  /** Keep the abandoned branch on the board (skip archiving the source). */
+  /** Fork mode only: keep the abandoned branch on the board (skip archiving). */
   keepSource?: boolean;
-  /** Optional first message for the rewound session. Empty = warm up and wait. */
+  /** Fork mode only: optional first message for the rewound session. Empty =
+   *  warm up and wait. (In-place always respawns warm — the human is already
+   *  looking at the panel they rewound.) */
   message?: string;
 }
 
 /**
- * Rewind a session: restore files (optional), stop the abandoned branch, and spawn
- * a session that continues from `messageUuid` with the later turns gone.
+ * Rewind a session: restore files (optional), stop the abandoned branch, and
+ * continue from `messageUuid` with the later turns gone — inside the same
+ * session (in-place, default) or as a fresh fork.
  */
 export async function rewindSessionToMessage(
   sessionId: string,
@@ -281,6 +304,11 @@ export async function rewindSessionToMessage(
     }
   }
 
+  if ((input.mode ?? 'in-place') === 'in-place') {
+    return rewindInPlace(sessionId, input, record, target, droppedMessages, files);
+  }
+
+  // ── FORK MODE ──
   // ── 2. Stop the branch being abandoned ──
   try {
     const { terminateSession } = await import('./session-lifecycle.js');
@@ -364,6 +392,7 @@ export async function rewindSessionToMessage(
 
   return {
     status: 'rewound',
+    mode: 'fork',
     sourceSessionId: sessionId,
     sessionId: rewoundId,
     ...(record.taskId ? { taskId: record.taskId } : {}),
@@ -371,5 +400,114 @@ export async function rewindSessionToMessage(
     ...(record.host ? { host: record.host } : {}),
     ...(files ? { files } : {}),
     sourceArchived,
+  };
+}
+
+/**
+ * In-place rewind: same session id, same transcript. The CLI is stopped, the
+ * abandoned branch's line range is recorded on the session record (that is
+ * what the history parser cuts by), every history cache is dropped (the file's
+ * mtime didn't change but its meaning did), and the CLI is respawned warm with
+ * `--resume <sid> --resume-session-at <uuid>` — no fork, so it keeps the id
+ * and appends the new branch to the same file.
+ */
+async function rewindInPlace(
+  sessionId: string,
+  input: RewindInput,
+  record: import('../types.js').SessionRecord,
+  target: SessionHistoryMessage,
+  droppedMessages: number,
+  files: RewindResult['files'],
+): Promise<RewindResult> {
+  // ── 2. Quiet the transcript ── The CLI appends while a turn runs; the line
+  // positions recorded below are only meaningful on a quiet file. gracefulStop
+  // flushes + SIGINTs first (same stop reinitialize() itself uses), and a
+  // session with no live CLI is already quiet.
+  const session = await liveSession(sessionId);
+  if (session) {
+    try {
+      await session.gracefulStop(true);
+    } catch (err) {
+      log.session.info('rewind: gracefulStop was a no-op', {
+        sessionId, error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // ── 3. Record the cut ── One raw read of the quiet transcript: where the
+  // rewind point sits and how many lines exist right now. Everything between
+  // those two positions is the branch being abandoned; everything the CLI
+  // appends after the respawn is the new branch.
+  const { readSessionJsonlContent } = await import('../session-file-reader.js');
+  const raw = await readSessionJsonlContent(sessionId, record.cwd, record.host ?? undefined);
+  if (!raw?.content) {
+    throw new SessionControlError('Could not read the session transcript to record the rewind', 500);
+  }
+  const { splitTranscriptLines, historyLineCheckOf, invalidateSessionHistoryCaches } =
+    await import('../session-history.js');
+  const lines = splitTranscriptLines(raw.content);
+  let targetLine = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].includes(input.messageUuid)) continue;
+    try {
+      const parsed = JSON.parse(lines[i]) as { uuid?: string };
+      if (parsed?.uuid === input.messageUuid) { targetLine = i; break; }
+    } catch { /* partial/corrupt line — keep scanning */ }
+  }
+  if (targetLine < 0) {
+    // resolveRewindTarget saw the uuid in the PARSED history, so a miss on the
+    // raw file means the transcript was rewritten between the two reads.
+    throw new SessionControlError('The rewind point is no longer in the transcript file — try again', 409);
+  }
+  const afterLine = lines.length;
+  const cut: import('../types.js').InPlaceRewindCut = {
+    uuid: input.messageUuid,
+    targetLine,
+    afterLine,
+    targetCheck: historyLineCheckOf(lines[targetLine]),
+    lastCheck: historyLineCheckOf(lines[afterLine - 1]),
+    at: new Date().toISOString(),
+  };
+  const { updateSessionRecord } = await import('../session-tracker.js');
+  await updateSessionRecord(sessionId, {
+    inPlaceRewinds: [...(record.inPlaceRewinds ?? []), cut],
+    // Every cold --resume until the first completed turn must re-send
+    // --resume-session-at, or a CLI death in that window would resume the
+    // ABANDONED branch tip (see the field's doc in types.ts).
+    pendingResumeSessionAt: input.messageUuid,
+  });
+  await invalidateSessionHistoryCaches(sessionId, record.host ?? undefined);
+
+  // ── 4. Respawn in place (warm, no turn) ── reinitialize() resolves resume
+  // args from the record, so the spawn picks up pendingResumeSessionAt and the
+  // CLI comes back holding the truncated conversation. A failed respawn does
+  // NOT undo the rewind: the cut + pending flag are committed, so the history
+  // already reads truncated and the next send()'s cold resume carries the flag.
+  try {
+    const { sessionRunner } = await import('../../providers/claude-code-session.js');
+    await sessionRunner.reinitialize(sessionId);
+  } catch (err) {
+    log.session.warn('rewind: in-place respawn failed — next send will cold-resume at the rewind point', {
+      sessionId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  log.session.info('session rewound in place', {
+    sessionId, taskId: record.taskId, messageUuid: input.messageUuid,
+    targetLine, afterLine, droppedMessages,
+    restoredFiles: files?.canRewind ?? null,
+    targetLabel: labelOf(target)?.slice(0, 60),
+  });
+
+  return {
+    status: 'rewound',
+    mode: 'in-place',
+    sourceSessionId: sessionId,
+    sessionId,
+    ...(record.taskId ? { taskId: record.taskId } : {}),
+    title: record.title ?? sessionId.slice(0, 16),
+    ...(record.host ? { host: record.host } : {}),
+    ...(files ? { files } : {}),
+    sourceArchived: false,
   };
 }

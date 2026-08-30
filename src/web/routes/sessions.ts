@@ -2199,17 +2199,19 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
 })
 
 // POST /api/sessions/:sessionId/rewind — take the conversation back to a message.
-//   { message_uuid, dry_run?, restore_files?, keep_source?, message? }
-// dry_run answers with the blast radius (files changed, +/- lines, dropped
-// messages) and writes NOTHING, so the confirm dialog can show it. Core logic +
-// the reasoning about which CLI channel does what lives in
-// core/sessions/session-rewind.ts.
+//   { message_uuid, dry_run?, mode?, restore_files?, keep_source?, message? }
+// mode: 'in-place' (default) rewinds THIS conversation; 'fork' continues under
+// a new session id and archives the source. dry_run answers with the blast
+// radius (files changed, +/- lines, dropped messages) and writes NOTHING, so
+// the confirm dialog can show it. Core logic + the reasoning about which CLI
+// channel does what lives in core/sessions/session-rewind.ts.
 sessionsRouter.post('/:sessionId/rewind', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sessionId = String(req.params.sessionId)
-    const { message_uuid, dry_run, restore_files, keep_source, message } = (req.body ?? {}) as {
+    const { message_uuid, dry_run, mode, restore_files, keep_source, message } = (req.body ?? {}) as {
       message_uuid?: string
       dry_run?: boolean
+      mode?: string
       restore_files?: boolean
       keep_source?: boolean
       message?: string
@@ -2223,12 +2225,15 @@ sessionsRouter.post('/:sessionId/rewind', async (req: Request, res: Response, ne
       }
       const result = await rewindSessionToMessage(sessionId, {
         messageUuid: String(message_uuid ?? ''),
+        // Unknown mode strings fall back to the in-place default rather than 400:
+        // the field is additive and older clients never send it.
+        ...(mode === 'fork' ? { mode: 'fork' as const } : {}),
         ...(restore_files !== undefined ? { restoreFiles: !!restore_files } : {}),
         ...(keep_source !== undefined ? { keepSource: !!keep_source } : {}),
         ...(message !== undefined ? { message: String(message) } : {}),
       }, 'web-api')
       log.web.info('session rewound via REST', {
-        sessionId, rewoundId: result.sessionId, restoreFiles: !!restore_files,
+        sessionId, rewoundId: result.sessionId, mode: result.mode, restoreFiles: !!restore_files,
       })
       // Web and mobile now share the SAME core result shape (including the
       // additive `title` field); clients ignore fields they don't know.

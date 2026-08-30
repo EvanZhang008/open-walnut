@@ -68,6 +68,17 @@ export function writeHistoryCache(
 }
 
 /**
+ * Delete a session's disk cache entry. Used when the cached parse became WRONG
+ * without the source file changing (in-place rewind: same bytes + mtime, new
+ * meaning) — the mtime fast-path would otherwise serve it forever.
+ */
+export async function deleteHistoryCache(sessionId: string): Promise<void> {
+  try {
+    await fsp.unlink(cachePath(sessionId));
+  } catch { /* missing file = already gone */ }
+}
+
+/**
  * Read cached history from disk. Returns null if no cache or on error.
  */
 export async function readHistoryCache(sessionId: string): Promise<{ messages: SessionHistoryMessage[]; cachedAt: string; mtimeMs?: number; finishedAgentIds?: string[] } | null> {

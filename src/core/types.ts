@@ -1630,6 +1630,36 @@ export interface SessionStatusSnapshot {
  * in browser storage: a pin is user content, and it must survive a new browser,
  * another device, and the phone.
  */
+/** Fingerprint of one JSONL line (length + first/last 64 chars) — cheap
+ *  identity check that survives huge lines without hashing them. Mirrors
+ *  session-history's incremental-read line check. */
+export interface JsonlLineCheck {
+  len: number;
+  head: string;
+  tail: string;
+}
+
+/**
+ * One committed IN-PLACE rewind, recorded at commit time while the CLI is dead
+ * and the transcript is quiet. Position-based on purpose: Walnut initiated the
+ * rewind, so it knows exactly which lines the abandoned branch occupies —
+ * `(targetLine, afterLine)` exclusive — without needing a parentUuid graph.
+ */
+export interface InPlaceRewindCut {
+  /** Transcript uuid of the user message rewound to. */
+  uuid: string;
+  /** 0-based line index of that uuid's line at commit time. */
+  targetLine: number;
+  /** Total line count at commit time; lines >= afterLine are the new branch. */
+  afterLine: number;
+  /** Fingerprint of the line at targetLine (rewrite detection). */
+  targetCheck: JsonlLineCheck;
+  /** Fingerprint of the last line (index afterLine-1) at commit time. */
+  lastCheck: JsonlLineCheck;
+  /** ISO timestamp of the rewind commit. */
+  at: string;
+}
+
 export interface SessionPinnedMessage {
   /** Stable message id = SessionHistoryMessage.msgId (the API `message.id` for
    *  assistant rows, the JSONL line uuid for user rows). Identity, not position:
@@ -1750,6 +1780,29 @@ export interface SessionRecord {
    *  - the UI, which labels the boundary as a rewind rather than a plain fork.
    */
   rewoundAtMessageUuid?: string;
+  /**
+   * IN-PLACE rewinds this session has committed, in commit order. The CLI keeps
+   * both branches in ONE transcript (`--resume-session-at` without
+   * `--fork-session` appends under the same session id, hanging new lines off
+   * the rewind point via parentUuid), so the history parser uses these cuts to
+   * skip the abandoned segment: lines strictly between `targetLine` (the rewind
+   * point) and `afterLine` (the file's line count when the rewind committed)
+   * belong to the branch the human rewound away. The two line checks detect a
+   * transcript REWRITE (/compact) that invalidates the recorded positions — on
+   * mismatch the parser serves the file unfiltered rather than cutting wrong lines.
+   */
+  inPlaceRewinds?: InPlaceRewindCut[];
+  /**
+   * Set between an in-place rewind's commit and the FIRST completed turn after
+   * it: the rewind point uuid that every cold `--resume` spawn must re-send as
+   * `--resume-session-at`. Without it, a CLI death in that window (idle reap,
+   * crash before the human's next message) would make the next plain --resume
+   * pick up the ABANDONED branch tip — the model would see the turns the human
+   * rewound away while the UI shows them gone. Cleared on the first turn
+   * result (once new-branch lines exist, a plain resume lands correctly, and
+   * re-sending the flag would cut those new turns off).
+   */
+  pendingResumeSessionAt?: string;
   /** Messages the human pinned, in pin order. Drives the timeline's TOC. */
   pinnedMessages?: SessionPinnedMessage[];
   /**

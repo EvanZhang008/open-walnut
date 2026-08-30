@@ -894,6 +894,9 @@ export interface RewindPreview {
 
 export interface RewindResult {
   status: 'rewound';
+  /** 'in-place' rewound THIS session (sessionId === sourceSessionId); 'fork'
+   *  continued under a new id. Absent on servers older than the field. */
+  mode?: 'in-place' | 'fork';
   sourceSessionId: string;
   sessionId: string;
   taskId?: string;
@@ -915,10 +918,11 @@ export async function previewRewind(sessionId: string, messageUuid: string): Pro
 export async function rewindSession(
   sessionId: string,
   messageUuid: string,
-  opts?: { restoreFiles?: boolean; keepSource?: boolean; message?: string },
+  opts?: { mode?: 'in-place' | 'fork'; restoreFiles?: boolean; keepSource?: boolean; message?: string },
 ): Promise<RewindResult> {
   return apiPost(`/api/sessions/${sessionId}/rewind`, {
     message_uuid: messageUuid,
+    ...(opts?.mode ? { mode: opts.mode } : {}),
     ...(opts?.restoreFiles !== undefined ? { restore_files: opts.restoreFiles } : {}),
     ...(opts?.keepSource !== undefined ? { keep_source: opts.keepSource } : {}),
     ...(opts?.message !== undefined ? { message: opts.message } : {}),
