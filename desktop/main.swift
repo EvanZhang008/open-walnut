@@ -92,6 +92,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // tells the user to wait if it is not listening yet.
         dictation = GlobalDictation(portProvider: { [weak self] in self?.serverPort })
         dictation?.registerHotKey()
+        // Only listens if the user opted in and Input Monitoring is granted.
+        dictation?.startFnMonitorIfEnabled()
 
         let windowRect = NSRect(x: 0, y: 0, width: 1200, height: 800)
         window = NSWindow(
@@ -1448,6 +1450,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Same toggle the global hotkey drives: first call records, second transcribes
     /// and copies. Exposed in the menu so the feature is discoverable and still
     /// reachable when another app has claimed the key combination.
+    /// The checkmark follows what is actually listening, not just the stored
+    /// preference, so a missing Input Monitoring grant is visible rather than
+    /// looking enabled and silently doing nothing.
+    @objc func toggleDoubleTapFn(_ sender: NSMenuItem) {
+        let wanted = sender.state != .on
+        let active = dictation?.setDoubleTapFn(wanted) ?? false
+        sender.state = active ? .on : .off
+    }
+
     @objc func toggleDictation() {
         dictation?.toggle()
     }
@@ -1493,6 +1504,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let dictateItem = NSMenuItem(title: "Dictate to Clipboard", action: #selector(toggleDictation), keyEquivalent: "d")
         dictateItem.keyEquivalentModifierMask = [.control, .option, .command]
         appMenu.addItem(dictateItem)
+        // Off by default: it needs an Input Monitoring grant, and the app should
+        // not ask for one nobody requested.
+        let fnItem = NSMenuItem(title: "Double-tap Fn to Dictate", action: #selector(toggleDoubleTapFn), keyEquivalent: "")
+        fnItem.state = GlobalDictation.doubleTapFnEnabled ? .on : .off
+        appMenu.addItem(fnItem)
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(NSMenuItem(title: "Quit Walnut", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appMenuItem.submenu = appMenu

@@ -13,6 +13,13 @@
  * hotkey API that needs no Accessibility permission, unlike an NSEvent global
  * monitor, so the feature works the first time with nothing to approve.
  *
+ * Double-tapping Fn is offered as a second trigger because it is the gesture
+ * dictation users already know. It cannot go through the Carbon path: that API's
+ * modifier mask has bits for Command, Shift, Option and Control only, with no Fn
+ * bit, and a bare modifier is not a hotkey anyway. So it needs a global event
+ * monitor, which needs Input Monitoring approval. That is why it is opt-in and
+ * why ⌃⌥⌘D keeps working with nothing granted.
+ *
  * Transcription reuses the normal server route (POST /api/stt/transcribe), so
  * dictation gets the same engine, the same vocabulary bias, and the same
  * recoverable history as the mic button in the web UI.
@@ -38,7 +45,21 @@ final class GlobalDictation: NSObject {
     private var autoStopWork: DispatchWorkItem?
     private let maxRecordingSeconds: TimeInterval = 300
 
+    /// Double-tap Fn support.
+    private var fnMonitor: Any?
+    private var lastFnPressAt: TimeInterval = 0
+    /// Long enough to be comfortable, short enough that two unrelated Fn presses
+    /// (Fn+arrow, brightness keys) do not read as one gesture.
+    private let doubleTapWindow: TimeInterval = 0.45
+    private static let doubleTapFnKey = "dictationDoubleTapFn"
+
     var isRecording: Bool { recorder?.isRecording ?? false }
+
+    /// Opt-in because enabling it needs an Input Monitoring grant.
+    static var doubleTapFnEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: doubleTapFnKey) }
+        set { UserDefaults.standard.set(newValue, forKey: doubleTapFnKey) }
+    }
 
     init(portProvider: @escaping () -> Int?) {
         self.portProvider = portProvider
@@ -82,7 +103,70 @@ final class GlobalDictation: NSObject {
     func unregisterHotKey() {
         if let ref = hotKeyRef { UnregisterEventHotKey(ref); hotKeyRef = nil }
         if let handler = eventHandler { RemoveEventHandler(handler); eventHandler = nil }
+        stopFnMonitor()
         activeDictation = nil
+    }
+
+    // MARK: - Double-tap Fn
+
+    /// Starts watching for a double Fn tap if the user turned it on and macOS has
+    /// granted Input Monitoring. Silent no-op otherwise, so ⌃⌥⌘D is unaffected.
+    func startFnMonitorIfEnabled() {
+        guard Self.doubleTapFnEnabled, fnMonitor == nil else { return }
+        guard CGPreflightListenEventAccess() else {
+            DesktopLogger.shared.log("dictation_fn_monitor_unauthorized", fields: [:])
+            return
+        }
+        fnMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged]) { [weak self] event in
+            self?.handleFlagsChanged(event)
+        }
+        DesktopLogger.shared.log("dictation_fn_monitor_started", fields: [:])
+    }
+
+    func stopFnMonitor() {
+        if let monitor = fnMonitor { NSEvent.removeMonitor(monitor); fnMonitor = nil }
+        lastFnPressAt = 0
+    }
+
+    /// Turns the gesture on or off, asking macOS for Input Monitoring the first
+    /// time. Returns whether it is now actually listening.
+    @discardableResult
+    func setDoubleTapFn(_ enabled: Bool) -> Bool {
+        Self.doubleTapFnEnabled = enabled
+        guard enabled else {
+            stopFnMonitor()
+            return false
+        }
+        guard CGPreflightListenEventAccess() else {
+            // Opens System Settings on the right pane. macOS only prompts once per
+            // app version, so tell the user where to look either way.
+            CGRequestListenEventAccess()
+            showHUD("Allow Walnut under System Settings, Privacy and Security, Input Monitoring, then reopen Walnut",
+                    style: .error, autoHide: 8)
+            return false
+        }
+        startFnMonitorIfEnabled()
+        return fnMonitor != nil
+    }
+
+    private func handleFlagsChanged(_ event: NSEvent) {
+        // keyCode 63 is the physical Fn key. Filtering on it matters: arrow keys
+        // and the F-row also carry .function in their modifier flags, so testing
+        // the flag alone would fire on Fn+Left and friends.
+        guard event.keyCode == 63 else { return }
+        let flags = event.modifierFlags
+        // Press, not release.
+        guard flags.contains(.function) else { return }
+        // A chord like Fn+Shift is someone reaching for a different shortcut.
+        guard flags.intersection([.command, .option, .control, .shift]).isEmpty else { return }
+
+        let now = event.timestamp
+        if now - lastFnPressAt <= doubleTapWindow {
+            lastFnPressAt = 0
+            DispatchQueue.main.async { [weak self] in self?.toggle() }
+            return
+        }
+        lastFnPressAt = now
     }
 
     // MARK: - Recording
