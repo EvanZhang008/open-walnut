@@ -218,9 +218,10 @@ export const BASE_CSS = `
 .wt-stat-sub {
   font-size: 12.5px;
   font-weight: 600;
-  color: var(--wt-agent);
   font-variant-numeric: tabular-nums;
 }
+.wt-stat-sub-agent { color: var(--wt-agent); }
+.wt-stat-sub-human { color: var(--wt-human); }
 
 /* The parallel-agents caption. Never a headline number. */
 .wt-agent-note {

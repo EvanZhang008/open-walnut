@@ -203,11 +203,15 @@ export function Bar({ row, peak, tone }: { row: Row; peak: number; tone: 'human'
   )
 }
 
-export function Stat({ label, value, sub, hint, tone, text, testId }: {
+export function Stat({ label, value, sub, subTone = 'agent', hint, tone, text, testId }: {
   label: string
   value: string
-  /** A second lane's number. Agent-toned, and never added to `value`. */
+  /** A second lane's number, never added to `value`. */
   sub?: string
+  /** The sub's hue names its ACTOR: 'agent' for the agents' number, 'human' for a
+   *  device split of the user's own time. A human number in the agent color would
+   *  invert the two-clocks rule the hues exist to keep. */
+  subTone?: 'human' | 'agent'
   hint?: string
   tone?: 'human' | 'agent'
   text?: boolean
@@ -218,7 +222,7 @@ export function Stat({ label, value, sub, hint, tone, text, testId }: {
       <span className={`wt-stat-value${text ? ' is-text' : ''}`} title={text ? value : undefined}>
         {value}
       </span>
-      {sub && <span className="wt-stat-sub">{sub}</span>}
+      {sub && <span className={`wt-stat-sub wt-stat-sub-${subTone}`}>{sub}</span>}
       <span className="wt-stat-label">{label}</span>
       {hint && <span className="wt-stat-hint">{hint}</span>}
     </div>

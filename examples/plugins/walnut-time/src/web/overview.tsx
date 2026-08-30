@@ -22,13 +22,15 @@ import { formatDuration } from './time-timeline'
 const AGENT_TOP_ROWS = 5
 
 export function OverviewReport({
-  humanRows, agentRows, trendDays, scope, today, loading, keep, kind, onPickDay, onOpenAgents,
+  humanRows, agentRows, trendDays, scope, iosMs, today, loading, keep, kind, onPickDay, onOpenAgents,
 }: {
   humanRows: Row[]
   agentRows: Row[]
   /** The trailing TREND_DAYS of the fetched window, regardless of scope. */
   trendDays: DayTime[]
   scope: Scope
+  /** iPhone slice of the scope's human time; 0 when filtered or absent. */
+  iosMs: number
   today: string
   loading: boolean
   keep: (taskId: string) => boolean
@@ -59,7 +61,15 @@ export function OverviewReport({
   return (
     <div data-testid="time-app-view-mine">
       <div className="wt-stat-row">
-        <Stat label="Your time" value={formatDuration(humanMs)} hint={hint} tone="human" testId="time-app-stat-human" />
+        <Stat
+          label="Your time"
+          value={formatDuration(humanMs)}
+          sub={iosMs > 0 ? `iPhone ${formatDuration(iosMs)}` : undefined}
+          subTone="human"
+          hint={hint}
+          tone="human"
+          testId="time-app-stat-human"
+        />
         <Stat
           label="Agent time"
           value={formatDuration(agentMs)}

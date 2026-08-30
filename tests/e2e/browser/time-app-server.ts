@@ -178,6 +178,26 @@ records.push({
   taskId: taskIds[0],
   sessionId: 'sess-time-app-fixture',
 })
+// Phone time on the anchor day: two iOS-sourced windows on an existing task, so the
+// Overview's "iPhone" subline has a number to show (and only on the unfiltered view).
+records.push(
+  {
+    date: anchor.date,
+    ts: new Date(anchor.startMs + 100 * 60_000).toISOString(),
+    durationMs: 4 * 60_000,
+    kind: 'session',
+    taskId: taskIds[1],
+    sessionId: 'sess-time-app-fixture-ios',
+    source: 'ios',
+  },
+  {
+    date: anchor.date,
+    ts: new Date(anchor.startMs + 110 * 60_000).toISOString(),
+    durationMs: 2 * 60_000,
+    kind: 'chat',
+    source: 'ios',
+  },
+)
 // A previous day, so the 7-day trend has more than one bar.
 const previous = localDate(anchor.startMs - 24 * 60 * 60_000)
 for (let i = 0; i < 4; i += 1) {

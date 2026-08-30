@@ -388,6 +388,16 @@ test('the Overview answers both clocks at once and switches days like the timeli
   await expect(average.locator('.wt-stat-sub')).toContainText('Agents')
   expect(toMinutes(await statValue(page, 'time-app-stat-average'))).toBeGreaterThan(0)
   await expect(page.getByTestId('time-app-stat-focus')).toBeVisible()
+  // The iPhone slice rides the Your-time card as a HUMAN-toned subline (the agent hue
+  // would invert the two-clocks rule on the one card labelled "Your time"), and only
+  // on the unfiltered view: it is day-level data that cannot follow the task filters.
+  const humanSub = page.getByTestId('time-app-stat-human').locator('.wt-stat-sub')
+  await expect(humanSub).toContainText('iPhone 6m')
+  await expect(humanSub).toHaveClass(/wt-stat-sub-human/)
+  await page.getByTestId('time-app-kind-session').click()
+  await expect(humanSub).toHaveCount(0)
+  await page.getByTestId('time-app-kind-all').click()
+  await expect(humanSub).toContainText('iPhone')
   // Above the fold is the claim being made: all four numbers on one screen.
   await shoot(page, 'overview-day', OVERVIEW_SHOT_DIR)
 

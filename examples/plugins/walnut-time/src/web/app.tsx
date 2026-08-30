@@ -147,6 +147,14 @@ export function TimeApp({ api, log, basePath, subpath, navigate }: TimeAppProps)
     [days, keep, meta],
   )
 
+  // iPhone slice of the scope. Day-level only (a task's number never splits by
+  // device), so it can't follow the project/kind filters — shown unfiltered only,
+  // or the subline would exceed the filtered card it sits under.
+  const iosMs = useMemo(() => {
+    if (project !== '' || kind !== 'all') return 0
+    return days.reduce((sum, d) => sum + (d.iosMs ?? 0), 0)
+  }, [days, project, kind])
+
   const scopeText = scopeHint(scope, today)
 
   const openTab = (next: TabId) => {
@@ -230,6 +238,7 @@ export function TimeApp({ api, log, basePath, subpath, navigate }: TimeAppProps)
             agentRows={agentRows}
             trendDays={trendDays}
             scope={scope}
+            iosMs={iosMs}
             today={today}
             loading={loading && !summary}
             keep={keep}

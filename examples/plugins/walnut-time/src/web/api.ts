@@ -33,6 +33,9 @@ export interface DayTime {
   date: string
   humanMs: number
   agentMs: number
+  /** The slice of humanMs banked from the iOS app. Day-level only: a task's
+   *  number never splits by device. Present only when > 0. */
+  iosMs?: number
   tasks: TaskDayTime[]
 }
 
@@ -43,6 +46,8 @@ export interface TimeSummary {
   focusShare: number
   totalHumanMs: number
   totalAgentMs: number
+  /** Window-wide iOS slice of totalHumanMs. Present only when > 0. */
+  totalIosMs?: number
   degraded?: boolean
 }
 
