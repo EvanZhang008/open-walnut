@@ -38,6 +38,13 @@ import {
 } from '../core/task-manager.js';
 import { PHASE_ORDER } from '../core/phase.js';
 import {
+  BULK_GET_FIELDS,
+  BulkGetError,
+  DEFAULT_BULK_GET_FIELDS,
+  MAX_BULK_GET_IDS,
+  bulkGetFromTasks,
+} from '../core/task-bulk-get.js';
+import {
   LEGACY_STATUS_TO_COMPLETION,
   MAX_QUERY_LIMIT,
   TaskQueryError,
@@ -700,18 +707,52 @@ export const tools: ToolDefinition[] = [
 
   {
     name: 'task_get',
-    description: 'Get full details of a task or project.',
+    description: 'Get full details of a task or project. For SEVERAL tasks, pass ids (up to '
+      + `${MAX_BULK_GET_IDS}) with fields — one call, only the fields you name, rows in the order asked.`,
     input_schema: {
       type: 'object',
       properties: {
         type: { type: 'string', enum: ['task', 'project'], description: 'Entity type. Default: "task".' },
-        id: { type: 'string', description: 'Task ID or prefix. Required when type=task.' },
+        id: { type: 'string', description: 'Task ID or prefix. Required when type=task (unless ids is given).' },
+        ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: `Read MANY tasks at once (max ${MAX_BULK_GET_IDS}), exact ids or unique prefixes. `
+            + 'Returns one projected row per id IN ORDER; an unresolvable id becomes an { id, error } row '
+            + 'instead of failing the call. Use this for a board or project review, not a call per task.',
+        },
+        fields: {
+          type: 'array',
+          items: { type: 'string' },
+          description: `Fields to project when ids is used: ${BULK_GET_FIELDS.join(' | ')} | dates. `
+            + `Default: ${DEFAULT_BULK_GET_FIELDS.join(', ')}. "progress" is DERIVED — only the note's `
+            + 'Progress bullets ({ status, text }, status = DONE|WIP|WAIT|TODO|BLOCKED) plus '
+            + 'progress_counts, so you get the state of the work without the multi-KB Work Log.',
+        },
         project: { type: 'string', description: 'Project name. Required when type=project.' },
       },
     },
     async execute(params) {
       const type = (params.type as string) || 'task';
       try {
+        // Bulk projection branch: many tasks, named fields, ONE store read.
+        if (type === 'task' && Array.isArray(params.ids) && params.ids.length > 0) {
+          const ids = (params.ids as unknown[]).map(String);
+          const fields = Array.isArray(params.fields) ? (params.fields as unknown[]).map(String) : undefined;
+          const allTasks = (await listTasks({})).filter((t) => !t.title.startsWith('.metadata'));
+          try {
+            const result = bulkGetFromTasks(ids, allTasks, fields);
+            return json({
+              count: result.items.length,
+              errors: result.errors,
+              fields: result.fields,
+              tasks: result.items,
+            });
+          } catch (err) {
+            if (err instanceof BulkGetError) return `Error: ${err.message}`;
+            throw err;
+          }
+        }
         if (type === 'project') {
           const project = (params.project as string | undefined)?.trim();
           if (!project) return 'Error: project is required for type=project.';

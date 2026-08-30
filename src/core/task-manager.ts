@@ -12,6 +12,7 @@ import {
   COMPLETION_TO_PHASES,
   compareTasksForQuery,
   computeBlockedIds,
+  focusTierMatches,
   matchesTaskQuery,
   normalizeTaskQuery,
   type NormalizedTaskQuery,
@@ -5178,6 +5179,64 @@ function splitTiers(store: TaskStore): TierResult {
  *  of the four-bucket split (satellite excludes REGISTERED custom ids only). */
 export async function getTierSplit(): Promise<TierResult> {
   return splitTiers(await readStore());
+}
+
+/** Per-tier row counts of the pinned board. */
+export interface BoardTierCount {
+  /** 'focus' | 'satellite' | 'backlog' | 'wait' | a custom `ct_*` id. */
+  tier: string;
+  label: string;
+  total: number;
+  /** Rows whose phase is not COMPLETE. */
+  active: number;
+  completed: number;
+}
+
+export interface BoardCounts {
+  pinned_total: number;
+  pinned_active: number;
+  pinned_completed: number;
+  /** Board order: the built-in tiers, then the registered custom tiers. */
+  tiers: BoardTierCount[];
+}
+
+/**
+ * AUTHORITATIVE per-tier counts of the pinned board, computed on the server from
+ * the whole store. A caller that buckets a task list itself can compare against
+ * these and SEE a mismatch — the board review that reported 13 satellite tasks
+ * out of 36 had no way to notice its own list was short.
+ *
+ * Satellite folds the same strays splitTiers folds (no stored tier, the retired
+ * 'next', a stale id of a deleted custom tier), so the counts add up to
+ * `pinned_total` exactly.
+ */
+export async function getBoardCounts(): Promise<BoardCounts> {
+  const store = await readStore();
+  const pinned = store.tasks.filter((t) => t.pinned && !isRetiredSentinelTitle(t.title));
+  const customTiers = store.custom_tiers ?? [];
+  const customTierIds = new Set(customTiers.map((t) => t.id));
+  const entries: { tier: string; label: string }[] = [
+    ...PIN_TIER_POLICY.map((entry) => ({ tier: entry.tier as string, label: entry.label })),
+    ...customTiers.map((t) => ({ tier: t.id, label: t.label })),
+  ];
+
+  const isComplete = (task: Task): boolean => task.phase === 'COMPLETE';
+  const tiers: BoardTierCount[] = entries.map(({ tier, label }) => {
+    // focusTierMatches is the SHARED tier predicate (task-query.ts) — the same one
+    // the ?focus_tier= filter uses, so a count can never disagree with the list it
+    // is meant to validate.
+    const rows = pinned.filter((t) => focusTierMatches(t.focus_tier, [tier], customTierIds));
+    const completed = rows.filter(isComplete).length;
+    return { tier, label, total: rows.length, active: rows.length - completed, completed };
+  });
+
+  const pinnedCompleted = pinned.filter(isComplete).length;
+  return {
+    pinned_total: pinned.length,
+    pinned_active: pinned.length - pinnedCompleted,
+    pinned_completed: pinnedCompleted,
+    tiers,
+  };
 }
 
 // ── Custom tier registry ──

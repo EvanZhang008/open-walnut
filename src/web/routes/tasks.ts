@@ -41,10 +41,16 @@ import {
   deleteFolder,
   setFolderParent,
   getCustomTiers,
+  getBoardCounts,
   setPluginTaskField,
   newTaskPinDefault,
   type SlimTask,
 } from '../../core/task-manager.js'
+import {
+  bulkGetFromTasks,
+  BulkGetError,
+  type BulkGetResult,
+} from '../../core/task-bulk-get.js'
 import { listSessions } from '../../core/session-tracker.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import {
@@ -497,7 +503,13 @@ tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
     }))
     // `total` / `truncated` are additive: `tasks` keeps its exact old shape, and
     // a caller that passed no limit always sees truncated=false.
-    res.json({ tasks: tasksWithBlocked, total, truncated })
+    //
+    // A board read also gets the AUTHORITATIVE per-tier counts, so a caller that
+    // buckets the rows itself can compare and notice a short list instead of
+    // reporting it as the board. Only computed for working_set — it is a second
+    // store read no other query needs.
+    const board = query.workingSet === true ? await getBoardCounts() : undefined
+    res.json({ tasks: tasksWithBlocked, total, truncated, ...(board ? { board } : {}) })
     const tDone = Date.now()
     const elapsed = tDone - t0
     if (elapsed > 200) {
@@ -682,6 +694,54 @@ tasksRouter.get('/suggest-accuracy', async (req: Request, res: Response, next: N
     const raw = req.query.limit
     const limit = typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : 20
     res.json(await summarizeSuggestAccuracy(limit))
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/tasks/bulk?ids=a,b,c&fields=title,phase,progress — many tasks, few
+// fields, ONE call. Declared BEFORE '/:id' or Express would read 'bulk' as an id.
+//
+// `fields` is a projection, not a hint: only the named fields come back, so a
+// triage pass can ask for `progress` (the note's status bullets) without dragging
+// the multi-KB Work Log along. An unresolvable id is a per-item error entry.
+tasksRouter.get('/bulk', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    let ids: string[]
+    let fields: string[] | undefined
+    try {
+      const rawIds = queryString(req.query.ids, 'ids')
+      if (rawIds === undefined || csv(rawIds).filter(Boolean).length === 0) {
+        throw new QueryParamError('ids is required — a comma list of task ids')
+      }
+      ids = csv(rawIds).filter(Boolean)
+      const rawFields = queryString(req.query.fields, 'fields')
+      fields = rawFields === undefined ? undefined : csv(rawFields).filter(Boolean)
+    } catch (err) {
+      if (err instanceof QueryParamError) { res.status(400).json({ error: err.message }); return }
+      throw err
+    }
+
+    // ONE store read for the whole batch — that is the point of the route. Prefix
+    // resolution needs every task anyway (an id may be a unique prefix).
+    const allTasks = await listTasks({})
+    let result: BulkGetResult
+    try {
+      result = bulkGetFromTasks(ids, allTasks, fields)
+    } catch (err) {
+      if (err instanceof BulkGetError) { res.status(400).json({ error: err.message }); return }
+      throw err
+    }
+    res.json({ count: result.items.length, errors: result.errors, fields: result.fields, tasks: result.items })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/tasks/board-counts — authoritative per-tier counts of the pinned board
+tasksRouter.get('/board-counts', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json(await getBoardCounts())
   } catch (err) {
     next(err)
   }

@@ -201,6 +201,14 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       process.exitCode = 1
       return
     }
+    // A 200 with an EMPTY body leaves result undefined, and JSON.stringify would
+    // print the literal string "undefined" with exit 0 — indistinguishable from a
+    // real answer to a caller that only checks the status. Say it and fail.
+    if (r.result === undefined) {
+      console.error(`${name} returned an empty response body (no JSON) — the server answered 200 with nothing`)
+      process.exitCode = 1
+      return
+    }
     console.log(JSON.stringify(r.result, null, 2))
     return
   }

@@ -380,6 +380,43 @@ describe('GET /api/tasks — canonical query params', () => {
     expect(slim.body.truncated).toBe(true);
   });
 
+  it('working_set carries the server-computed board counts', async () => {
+    const { task: focus } = await addTask({ title: 'Focus pin', pinned: true });
+    const { task: satellite } = await addTask({ title: 'Satellite pin', pinned: true });
+    const { task: done } = await addTask({ title: 'Finished pin', pinned: true });
+    await addTask({ title: 'Never pinned' });
+    const { setFocusTier, updateTask } = await import('../../../src/core/task-manager.js');
+    await setFocusTier(focus.id, 'focus');
+    await updateTask(done.id, { phase: 'COMPLETE' });
+
+    const res = await request(createApp()).get('/api/tasks?working_set=true');
+    expect(res.status).toBe(200);
+    const board = res.body.board as {
+      pinned_total: number; pinned_active: number; pinned_completed: number;
+      tiers: { tier: string; total: number; active: number; completed: number }[];
+    };
+    expect(board.pinned_total).toBe(3);
+    expect(board.pinned_active).toBe(2);
+    expect(board.pinned_completed).toBe(1);
+    const byTier = Object.fromEntries(board.tiers.map((t) => [t.tier, t]));
+    expect(byTier.focus).toMatchObject({ total: 1, active: 1, completed: 0 });
+    // The finished pin keeps its default tier, so Satellite holds two rows, one done.
+    expect(byTier.satellite).toMatchObject({ total: 2, active: 1, completed: 1 });
+    expect(byTier.backlog.total).toBe(0);
+    // The counts add up to the board, which is what makes them a cross-check.
+    expect(board.tiers.reduce((sum, t) => sum + t.total, 0)).toBe(board.pinned_total);
+    expect(satellite.id).toBeTruthy();
+
+    // Not a board read → no counts, no second store read.
+    const plain = await request(createApp()).get('/api/tasks');
+    expect(plain.body.board).toBeUndefined();
+
+    // Same numbers from the dedicated route.
+    const direct = await request(createApp()).get('/api/tasks/board-counts');
+    expect(direct.status).toBe(200);
+    expect(direct.body).toEqual(board);
+  });
+
   it('rejects invalid enums, limits and time windows with 400', async () => {
     expect(await expect400('?completion=finished')).toMatch(/completion/i);
     expect(await expect400('?phases=SHIPPED')).toMatch(/phase/i);
@@ -450,6 +487,71 @@ describe('GET /api/tasks/:id', () => {
     const res = await request(app).get('/api/tasks/nonexistent-id');
     expect(res.status).toBe(404);
     expect(res.body.error).toBeDefined();
+  });
+});
+
+describe('GET /api/tasks/bulk', () => {
+  const NOTE = '## Progress\n- [DONE] shipped it\n- [BLOCKED] waiting on review\n\n'
+    + '## Work Log\n- long log prose a triage pass must not have to download\n';
+
+  it('projects the named fields for many ids in ONE call, in input order', async () => {
+    const { task: one } = await addTask({ title: 'One', project: 'Acme' });
+    const { task: two } = await addTask({ title: 'Two', project: 'Acme' });
+    const { updateNote } = await import('../../../src/core/task-manager.js');
+    await updateNote(one.id, NOTE);
+
+    const res = await request(createApp())
+      .get(`/api/tasks/bulk?ids=${two.id},${one.id}&fields=title,phase,progress`);
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(2);
+    expect(res.body.errors).toBe(0);
+    expect(res.body.fields).toEqual(['title', 'phase', 'progress']);
+    expect((res.body.tasks as { id: string }[]).map((t) => t.id)).toEqual([two.id, one.id]);
+    expect(res.body.tasks[1]).toMatchObject({
+      title: 'One',
+      phase: 'TODO',
+      progress: [
+        { status: 'DONE', text: 'shipped it' },
+        { status: 'BLOCKED', text: 'waiting on review' },
+      ],
+    });
+    // The Work Log never rides along.
+    expect(JSON.stringify(res.body)).not.toContain('long log prose');
+  });
+
+  it('answers a missing id per item instead of failing the call', async () => {
+    const { task } = await addTask({ title: 'Real' });
+    const res = await request(createApp()).get(`/api/tasks/bulk?ids=${task.id},nope&fields=title`);
+    expect(res.status).toBe(200);
+    expect(res.body.errors).toBe(1);
+    expect(res.body.tasks[0].title).toBe('Real');
+    expect(res.body.tasks[1]).toEqual({ id: 'nope', error: 'not found' });
+  });
+
+  it('defaults the field set and rejects a bad request with 400', async () => {
+    const { task } = await addTask({ title: 'Defaults', project: 'Acme' });
+    const defaulted = await request(createApp()).get(`/api/tasks/bulk?ids=${task.id}`);
+    expect(defaulted.status).toBe(200);
+    expect(defaulted.body.tasks[0]).toMatchObject({ title: 'Defaults', project: 'Acme', phase: 'TODO' });
+    expect(defaulted.body.tasks[0]).not.toHaveProperty('note');
+
+    expect((await request(createApp()).get('/api/tasks/bulk')).status).toBe(400);
+    expect((await request(createApp()).get('/api/tasks/bulk?ids=')).status).toBe(400);
+    const badField = await request(createApp()).get(`/api/tasks/bulk?ids=${task.id}&fields=nope`);
+    expect(badField.status).toBe(400);
+    expect(badField.body.error).toMatch(/Unknown field/);
+
+    const tooMany = await request(createApp())
+      .get(`/api/tasks/bulk?ids=${Array.from({ length: 51 }, (_, i) => `id${i}`).join(',')}`);
+    expect(tooMany.status).toBe(400);
+    expect(tooMany.body.error).toMatch(/at most 50/);
+  });
+
+  it('is not shadowed by the /:id route', async () => {
+    // Declared before '/:id', so 'bulk' is the route, never a task id.
+    const res = await request(createApp()).get('/api/tasks/bulk?ids=whatever');
+    expect(res.status).toBe(200);
+    expect(res.body.tasks[0].error).toBe('not found');
   });
 });
 

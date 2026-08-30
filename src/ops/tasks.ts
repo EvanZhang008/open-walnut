@@ -9,6 +9,12 @@ import { defineOp, type HttpBinding } from './registry.js'
 import { materializeBinding } from './executor.js'
 import { taskRefTag } from '../utils/entity-refs.js'
 import { PHASE_ORDER } from '../core/phase.js'
+import {
+  BULK_GET_FIELDS,
+  BULK_GET_FIELD_GROUPS,
+  DEFAULT_BULK_GET_FIELDS,
+  MAX_BULK_GET_IDS,
+} from '../core/task-bulk-get.js'
 
 const PRIORITY = z.enum(['immediate', 'important', 'backlog', 'none'])
 const STATUS = z.enum(['todo', 'in_progress', 'done'])
@@ -60,7 +66,10 @@ defineOp({
     'finished work. Returns { count, total, truncated, tasks } with slim rows: count = rows returned, ' +
     'total = rows that matched before the limit, truncated = true when total > count (there ARE more ' +
     'rows — never read a truncated result as the full picture; narrow the filters or raise limit). ' +
-    'Use task_get for full detail on one task.',
+    'working_set also returns `board`: the server\'s own pinned counts (pinned_total/active/completed ' +
+    'plus per-tier total/active/completed) — check your own per-tier bucketing against it before ' +
+    'reporting a board. Use task_get for full detail on one task, or task_get_bulk for many tasks with ' +
+    'chosen fields.',
   input: {
     status: STATUS.optional().describe('Legacy 3-state: todo | in_progress | done'),
     completion: z.string().optional().describe('Comma list of todo | in_progress | complete (in_progress includes AGENT_COMPLETE)'),
@@ -108,7 +117,8 @@ defineOp({
       effective.limit = DEFAULT_TASK_LIST_LIMIT
     }
     const { path } = materializeBinding(TASK_LIST_BINDING, effective)
-    const body = await call('GET', path) as { tasks?: unknown[]; total?: unknown } | undefined
+    const body = await call('GET', path) as
+      { tasks?: unknown[]; total?: unknown; board?: unknown } | undefined
     const tasks = body?.tasks
     // An unexpected 200 body (a proxy's HTML page, a shape change) must not
     // read as "you have 0 tasks" — pass it through so the caller sees it.
@@ -121,6 +131,9 @@ defineOp({
       count: tasks.length,
       total,
       truncated,
+      // Board reads carry the server's own per-tier counts — check your bucketing
+      // against them before reporting a board.
+      ...(body?.board ? { board: body.board } : {}),
       ...(truncated
         ? {
           hint: `Showing ${tasks.length} of ${total} matching tasks — this result is CUT. `
@@ -143,6 +156,33 @@ defineOp({
     id: z.string().min(1).describe('Task id or a unique id prefix'),
   },
   bind: { method: 'GET', path: '/tasks/:id' },
+  tags: { readonly: true, remote: 'allow' },
+})
+
+defineOp({
+  name: 'task_get_bulk',
+  title: 'Get many Walnut tasks with chosen fields',
+  description:
+    'Read up to 50 tasks in ONE call, returning only the fields you name — the triage counterpart to '
+    + 'task_get (which answers one task in full). Use this for a board or project review instead of a '
+    + 'task_get per row. `fields` is a projection: '
+    + `${BULK_GET_FIELDS.join(', ')}, plus the group alias "dates" (`
+    + `${BULK_GET_FIELD_GROUPS.dates.join(', ')}). Omitted fields default to `
+    + `${DEFAULT_BULK_GET_FIELDS.join(', ')}. `
+    + '"progress" is DERIVED: just the note\'s Progress bullets as { status, text } rows (status is '
+    + 'DONE | WIP | WAIT | TODO | BLOCKED) plus progress_counts — the state of the work WITHOUT the '
+    + 'multi-KB Work Log, so ask for progress rather than note. Rows come back in the order the ids '
+    + 'were given, and an id that matches nothing (or several tasks) becomes an { id, error } entry '
+    + 'instead of failing the whole call — check `errors` in the result.',
+  input: {
+    ids: z.array(z.string().min(1)).min(1).max(MAX_BULK_GET_IDS)
+      .describe(`Task ids (exact, or a unique id prefix) — 1 to ${MAX_BULK_GET_IDS} per call`),
+    fields: z.array(z.string().min(1)).optional()
+      .describe(`Fields to return: ${BULK_GET_FIELDS.join(' | ')} | dates. Omit for the triage default (${DEFAULT_BULK_GET_FIELDS.join(', ')})`),
+  },
+  // Same server-root-absolute family as task_list: /api/tasks is the canonical
+  // task query surface. Arrays materialize as comma lists in the query string.
+  bind: { method: 'GET', path: '/api/tasks/bulk' },
   tags: { readonly: true, remote: 'allow' },
 })
 
