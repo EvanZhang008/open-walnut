@@ -925,7 +925,7 @@ const SortableTaskItem = memo(function SortableTaskItem({ task, isFocused, isDet
           </button>
           <span
             ref={titleRef}
-            className={`todo-item-title${isEditing ? ' editing' : ''}`}
+            className={`todo-item-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
             contentEditable={isEditing}
             suppressContentEditableWarning
             onClick={isEditing ? (e) => e.stopPropagation() : handleTitleClick}
@@ -1017,7 +1017,7 @@ function TaskItemOverlay({ task }: { task: Task }) {
   return (
     <div className="todo-panel-item drag-overlay-item">
       <div className="todo-item-content">
-        <span className="todo-item-title">{task.title}</span>
+        <span className={`todo-item-title${task.walnut_agent ? ' walnut-task-title' : ''}`}>{task.title}</span>
       </div>
       <span className={`badge badge-${task.priority}`}>{task.priority === 'immediate' ? '!!' : task.priority === 'important' ? '!' : task.priority === 'backlog' ? '~' : '--'}</span>
     </div>
@@ -2178,7 +2178,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
       {/* Editable title */}
       <span
         ref={titleRef}
-        className={`todo-pinned-title${isEditing ? ' editing' : ''}`}
+        className={`todo-pinned-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
         contentEditable={isEditing}
         suppressContentEditableWarning
         title={task.title}
@@ -6919,7 +6919,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           <DragOverlay dropAnimation={null} style={{ pointerEvents: 'none' }}>
             {activeDragPinnedTask && (
               <div className="todo-pinned-card todo-pinned-card-dragging">
-                <span className="todo-pinned-title" title={activeDragPinnedTask.title}>{activeDragPinnedTask.title}</span>
+                <span className={`todo-pinned-title${activeDragPinnedTask.walnut_agent ? ' walnut-task-title' : ''}`} title={activeDragPinnedTask.title}>{activeDragPinnedTask.title}</span>
               </div>
             )}
             {/* Whole-group drag: a stacked preview naming the group + its members so

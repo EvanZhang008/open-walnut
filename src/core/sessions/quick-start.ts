@@ -73,6 +73,16 @@ export interface QuickStartParams {
    * only: the ACP path derives its own ids from the adapter.
    */
   preassignedSessionId?: string;
+  /**
+   * "Ask Walnut" launch (the draft's second tab): the session spawns with the
+   * Personal AI's own profile (persona + standing memory + skills index, via
+   * personal-ai-lane's buildLaneProfile) instead of as a bare coding agent.
+   * Everything else is an ORDINARY quick-start — a normal task, a visible
+   * session — the route just pre-fills project 'Walnut' and cwd WALNUT_HOME.
+   * Native (claude) engine only: the profile rides --system-prompt, which ACP
+   * engines have no channel for (route enforces).
+   */
+  walnutAgent?: boolean;
 }
 
 export class QuickStartError extends Error {
@@ -100,8 +110,20 @@ export function defaultSessionTaskTitle(cwd: string): string {
 export async function quickStartSession(params: QuickStartParams): Promise<Task> {
   const {
     message, messagePrefix, cwd, host, model, mode, existingTaskId, taskMeta,
-    source, requestTs = Date.now(), engine, preassignedSessionId,
+    source, requestTs = Date.now(), engine, preassignedSessionId, walnutAgent,
   } = params;
+
+  // "Ask Walnut": resolve the Personal AI's profile up front — the same bundle
+  // (persona + standing memory + skills index + walnut MCP mount) and the same
+  // chat-tuned effort a main-chat lane spawns with. Resolved BEFORE any task
+  // write so a failure here fails the launch cleanly instead of leaving a task
+  // whose session never got its persona.
+  let walnutProfile: { profile: import('../types.js').SessionProfile; effort: import('../types.js').SessionEffort } | undefined;
+  if (walnutAgent) {
+    const { getConfig } = await import('../config-manager.js');
+    const { buildLaneProfile } = await import('./personal-ai-lane.js');
+    walnutProfile = await buildLaneProfile(await getConfig(), 'general');
+  }
   const project = params.project?.trim() ?? '';
   // Captured at creation: "the caller did not file this task anywhere" is the
   // gate for the auto-organize pass at the end. Reading task.project later
@@ -162,8 +184,11 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       }
     }
   } else {
-    // Normal mode: create new task
-    const title = params.taskTitle?.trim() || defaultSessionTaskTitle(cwd);
+    // Normal mode: create new task. Ask Walnut gets its own placeholder — the
+    // generic one is "Session: <basename(cwd)>", which for WALNUT_HOME reads
+    // "Session: .open-walnut" (the data dir's name means nothing to the user).
+    const placeholderTitle = walnutAgent ? 'Ask Walnut' : defaultSessionTaskTitle(cwd);
+    const title = params.taskTitle?.trim() || placeholderTitle;
     // Folder → default project: when THIS launch creates the registry row (the
     // draft's folder-derived default, typically the folder's basename), the
     // launch folder becomes the new project's default_cwd/default_host, so the
@@ -229,6 +254,10 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
         ...(taskMeta?.end_date ? { end_date: taskMeta.end_date } : {}),
         ...(pinNewTask ? { pinned: true } : {}),
         ...(bornTier ? { focus_tier: bornTier } : {}),
+        // The per-task Personal-AI marker — task lists key the amber title on
+        // THIS, never on the project name (an ordinary task filed under the
+        // same project must not light up).
+        ...(walnutAgent ? { walnut_agent: true } : {}),
       }));
     } catch (err) {
       // Client-supplied project seed the registry rejects — a caller error, not
@@ -297,6 +326,9 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
         title: updatedTask.title,
         mode: mode as import('../types.js').SessionMode | undefined,
         host,
+        // Ask Walnut: the persona lives on the RECORD so a cold --resume
+        // rebuilds it (same contract as a chat lane's record).
+        ...(walnutProfile ? { profile: walnutProfile.profile, effort: walnutProfile.effort } : {}),
         // No turn has begun (the CLI isn't up yet) — 'running' would show a
         // phantom "working…" badge on a session that hasn't started.
         initialProcessStatus: 'idle',
@@ -326,6 +358,8 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     largePromptFile,
     requestTs,
     engine,
+    // Ask Walnut: the spawn takes the Personal AI profile + chat-tuned effort.
+    ...(walnutProfile ? { profile: walnutProfile.profile, effort: walnutProfile.effort } : {}),
     // ACP (codex) mints its own ids inside the adapter — only forward for native.
     ...(preassignedSessionId && !isAcpEngine(engine) ? { preassignedSessionId } : {}),
   }, ['session-runner'], { source });
@@ -338,7 +372,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   // placeholder check here skips callers with a real title (fix-walnut,
   // routines, retries of an already-titled task) without the helper's poll.
   if (preassignedSessionId && !isAcpEngine(engine) && message.trim()
-      && updatedTask.title === defaultSessionTaskTitle(cwd)) {
+      && updatedTask.title === (walnutAgent ? 'Ask Walnut' : defaultSessionTaskTitle(cwd))) {
     import('../session-hooks/builtins.js')
       .then(({ autoTitleFromLaunch }) => autoTitleFromLaunch(preassignedSessionId, updatedTask.id, message, cwd))
       .catch((err) => log.web.warn(`${source}: launch auto-title failed`, {

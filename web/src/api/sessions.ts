@@ -753,6 +753,10 @@ export async function quickStartSession(opts: {
   projectFromFolder?: boolean;
   /** Launch intent — 'fix-walnut' makes the server wrap the message in a repair briefing. */
   intent?: 'fix-walnut';
+  /** "Ask Walnut" launch: the session spawns with the Personal AI profile; the
+   *  server owns the cwd (send ''), files the task under project 'Walnut' and
+   *  defaults the tier to Focus. Native (claude) engine only. */
+  walnutAgent?: boolean;
   /** User opted into "create & start": server mkdirs the cwd before starting. */
   createCwd?: boolean;
   /** Coding-agent engine. undefined = the default engine; any other value is an

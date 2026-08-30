@@ -1,0 +1,141 @@
+/**
+ * Ask Walnut — the draft column's second tab + how its tasks read in lists.
+ *
+ * Design contract (user-specified, 2026-08-30):
+ *  - The draft opens with Start Task PRE-SELECTED; Ask Walnut is one explicit
+ *    tab click. Both tabs always visible on a plain draft.
+ *  - An Ask Walnut task is a COMPLETELY NORMAL task (folder 'Walnut', tier
+ *    Focus, both pre-filled). In lists its ONLY visual difference is the amber
+ *    title text — no icon, no badge, and NEVER a row highlight: row background
+ *    already means selected/complete.
+ *  - Panel-side the walnut mode gets one subtle cue (a 2px warm hairline at the
+ *    top) so you can tell which tab you're on. Nothing louder.
+ *
+ * CSS-order caveat: the bundler does NOT guarantee this file lands after
+ * globals.css, so any rule overriding a globals rule must WIN ON SPECIFICITY
+ * (stack a second class), never on source order.
+ */
+
+:root {
+  /* Amber that reads on white without shouting. */
+  --walnut-accent: #b45309;
+  --walnut-accent-strong: #92400e;
+}
+:root[data-theme="dark"] {
+  /* Lifted for dark surfaces — #b45309 fails contrast on #1C1C1E. */
+  --walnut-accent: #e0a35a;
+  --walnut-accent-strong: #eab676;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --walnut-accent: #e0a35a;
+    --walnut-accent-strong: #eab676;
+  }
+}
+
+/* ── Draft mode tabs (Start Task | Ask Walnut) ── */
+/* Same underline-tab grammar as the app's other tab strips (.todo-launcher-tab):
+   content-width, left-aligned, weight 500 at rest, colored text + 2px underline
+   when active — NOT a full-width segmented control. */
+.draft-mode-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.draft-mode-tab {
+  padding: 6px 12px 7px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;   /* tab underline sits ON the divider */
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.draft-mode-tab:hover { color: var(--fg-secondary); }
+.draft-mode-tab.is-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  cursor: default;
+}
+.draft-mode-tab-walnut.is-active {
+  color: var(--walnut-accent);
+  border-bottom-color: var(--walnut-accent);
+}
+.draft-mode-tab:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: -2px;
+}
+.draft-mode-tab-walnut:focus-visible {
+  outline-color: color-mix(in srgb, var(--walnut-accent) 60%, transparent);
+}
+
+/* ── Walnut-mode panel cue: ONE warm hairline at the top. ── */
+.draft-session-panel-walnut {
+  position: relative;
+}
+.draft-session-panel-walnut::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--walnut-accent);
+  opacity: 0.75;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* Composer seeds in the walnut tab's empty body. Bare .session-action-chip is
+   borderless (built for a composer row where neighbours make it read as a
+   control); floating alone in the body it looked like grey captions, so these
+   get the SAME outline upgrade the draft launch pills got (globals.css
+   ".draft-launch-pills .session-action-chip") — and an amber hover, since blue
+   would clash inside the amber-accented mode. */
+.draft-walnut-suggests {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+.draft-walnut-suggests .session-action-chip {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 11px;
+  color: var(--fg);
+}
+.draft-walnut-suggests .session-action-chip:hover {
+  border-color: var(--walnut-accent);
+  color: var(--walnut-accent);
+  background: color-mix(in srgb, var(--walnut-accent) 8%, transparent);
+}
+
+/* Ask ↵ — the Start button's warm twin (same shape/weight, walnut fill).
+   Doubled class: globals' .draft-start-btn{background:var(--accent)} can land
+   LATER in the bundle, so a single-class rule loses the tie. */
+.draft-start-btn.draft-start-btn-walnut {
+  background: var(--walnut-accent);
+}
+.draft-start-btn.draft-start-btn-walnut:hover {
+  background: var(--walnut-accent-strong);
+}
+
+/* ── Task lists: amber TITLE TEXT is the only marker of an Ask-Walnut task. ──
+   Keyed on the per-task flag (task.walnut_agent), NEVER on the project name —
+   ordinary dev tasks filed under the same project must not light up.
+   Scoped :not(done) so completed styling (muted + strikethrough) still wins
+   regardless of where the bundler places this file. */
+.todo-panel-item:not(.todo-panel-item-done) .todo-item-title.walnut-task-title,
+.todo-focus-card:not(.todo-pinned-card-done) .todo-pinned-title.walnut-task-title,
+.todo-pinned-card:not(.todo-pinned-card-done) .todo-pinned-title.walnut-task-title,
+.tp-row:not(.done) .tp-row-title.walnut-task-title,
+.dock-task-card .dock-task-title.walnut-task-title,
+.task-card:not(.task-card-done) .task-card-title.walnut-task-title {
+  color: var(--walnut-accent);
+}

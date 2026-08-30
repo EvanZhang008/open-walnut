@@ -129,14 +129,18 @@ export function DraftLaunchBar({
   }, [draft.id, draft.meta, draft.metaTouched, onPathChange, onAfterQuickPick]);
 
   const isFork = !!draft.forkOf;
+  // Ask Walnut: folder and project are server-owned facts (WALNUT_HOME /
+  // 'Walnut'), so the pills render read-only — the same treatment as a fork.
+  const isWalnut = !!draft.walnut;
   // The pill's project doesn't exist yet — launching will create it (the
   // folder-derived default, or a name the AI invented). Same badge + meaning as
   // the Quick Task confirm panel's. Never on a fork: its project is the source
   // task's, already real.
-  const projectIsNew = !isFork && !!draft.project && !isKnownProject(draft.project);
+  const projectIsNew = !isFork && !isWalnut && !!draft.project && !isKnownProject(draft.project);
   // No quick chips on a fork draft: the folder is immutable, so a row of other
   // folders would be five inert buttons (or worse, five ways to break the fork).
-  const chips = isFork ? [] : quickDirsFor();
+  // Same for Ask Walnut.
+  const chips = isFork || isWalnut ? [] : quickDirsFor();
   const currentKey = chipKey({ cwd: draft.cwd, host: draft.host ?? null });
   const isAi = (field: DraftAiField) => !!draft.aiFields?.has(field);
   // The meta row carries ONE badge for its AI-fillable fields (tier / priority /
@@ -230,33 +234,41 @@ export function DraftLaunchBar({
         {/* OPEN-only, never a toggle (matches the chat launcher pill): the
             picker's own document-level mousedown closer has already fired by the
             time this click runs, so a toggle would read the freshly-closed state
-            and re-open. Close via Esc / outside click / picking a path. */}
-        <button
-          ref={cwdPillRef}
-          className={`session-action-chip${pickerOpen ? ' session-action-chip-active' : ''}${isAi('cwd') ? ' session-action-chip-ai' : ''}`}
-          onClick={isFork ? undefined : onOpenPicker}
-          disabled={isFork}
-          title={isFork
-            ? `A fork continues the source session, so it runs in its folder: ${draft.cwd}`
-            : draft.cwd ? `Working folder: ${draft.cwd}` : 'Pick the folder this session runs in'}
-        >
-          {pathLabel(draft)}
-          <AiBadge on={isAi('cwd')} />
-        </button>
+            and re-open. Close via Esc / outside click / picking a path.
+            Hidden on Ask Walnut — its folder is a server fact, not a choice. */}
+        {!isWalnut && (
+          <button
+            ref={cwdPillRef}
+            className={`session-action-chip${pickerOpen ? ' session-action-chip-active' : ''}${isAi('cwd') ? ' session-action-chip-ai' : ''}`}
+            onClick={isFork ? undefined : onOpenPicker}
+            disabled={isFork}
+            title={isFork
+              ? `A fork continues the source session, so it runs in its folder: ${draft.cwd}`
+              : draft.cwd ? `Working folder: ${draft.cwd}` : 'Pick the folder this session runs in'}
+          >
+            {pathLabel(draft)}
+            <AiBadge on={isAi('cwd')} />
+          </button>
+        )}
         <button
           ref={projectBtnRef}
           className={`session-action-chip${projectOpen ? ' session-action-chip-active' : ''}${isAi('project') ? ' session-action-chip-ai' : ''}`}
-          onClick={isFork ? undefined : () => setProjectOpen(o => !o)}
-          disabled={isFork}
+          onClick={isFork || isWalnut ? undefined : () => setProjectOpen(o => !o)}
+          disabled={isFork || isWalnut}
           title={isFork
             ? 'The forked task files as a sibling of the source task, in its project'
-            : projectIsNew
-              ? `Project "${draft.project}" doesn't exist yet — starting will create it`
-              : 'Project the new task files under'}
+            : isWalnut
+              ? 'Ask Walnut tasks file under the Walnut project'
+              : projectIsNew
+                ? `Project "${draft.project}" doesn't exist yet — starting will create it`
+                : 'Project the new task files under'}
         >
-          {draft.project || 'Inbox'}
+          {isWalnut ? 'Walnut' : draft.project || 'Inbox'}
           {projectIsNew && <span className="qtc-confirm-new">new</span>}
-          <AiBadge on={isAi('project')} />
+          {/* Suppressed in walnut mode: the pill shows the hard-coded 'Walnut',
+              so a leftover ✦ from a pre-toggle AI fill would credit the AI with
+              a value it didn't pick. The badge set survives for the restore. */}
+          <AiBadge on={!isWalnut && isAi('project')} />
         </button>
         {projectOpen && (
           <ProjectPickerFlyout

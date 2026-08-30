@@ -394,8 +394,11 @@ export async function cleanupLaneClaudeMd(homeDir: string = WALNUT_HOME): Promis
   }
 }
 
-/** The persona/skills/memory bundle + effort a claude-engine lane spawns with. */
-async function buildLaneProfile(
+/** The persona/skills/memory bundle + effort a claude-engine lane spawns with.
+ *  Exported for quick-start's `walnutAgent` launches ("Ask Walnut" draft tab):
+ *  those are ordinary task sessions that spawn with this same profile, so the
+ *  persona/memory/skills bundle has exactly one builder. */
+export async function buildLaneProfile(
   config: Awaited<ReturnType<typeof getConfig>>,
   agentId: string,
 ): Promise<{ profile: import('../types.js').SessionProfile; effort: import('../types.js').SessionEffort }> {

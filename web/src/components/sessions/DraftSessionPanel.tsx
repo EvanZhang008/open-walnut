@@ -52,12 +52,25 @@ import {
 import { ModelPicker } from './ModelPicker';
 import { draftComposerKey, type DraftColumn } from './draft-column';
 import type { QuickStartPath, QuickStartTaskMeta } from './SessionPathSelector';
+import '@/styles/walnut-agent.css';
 
 const PLACEHOLDER = 'What should this session do?';
 const HINT = 'Nothing runs yet — send to start, or keep it as a task for later.';
 const BOUND_HINT = 'Start a session on this task — type the first instruction, or press Start to send its title.';
 const FORK_HINT = 'Forks the source conversation into a sibling session — type where it should go next (or Start to just branch).';
 const FORK_PLACEHOLDER = 'Message for the forked session (optional)';
+const WALNUT_PLACEHOLDER = 'Ask Walnut anything…';
+
+/** The Ask Walnut tab's one-tap composer seeds — prefill only, never auto-send:
+ *  the user finishes the sentence (or edits it) and presses Ask themselves.
+ *  The inserted text must MATCH the label (minus the ellipsis) — a chip that
+ *  inserts less than it promises reads as a bug. The first is a deliberate
+ *  stem (trailing space, ellipsis label); the other two are complete asks. */
+const WALNUT_SUGGESTS: readonly { label: string; text: string }[] = [
+  { label: '🔍 Which task is…', text: 'Which task is ' },
+  { label: '🗓 Schedule my day', text: 'Schedule my day' },
+  { label: '🧠 What ran today', text: 'What ran today?' },
+];
 
 /** Trailing debounce after the user pauses. Shorter than QuickTaskComposer's
  *  500ms because the draft also parses DURING typing (see PARSE_THROTTLE_MS) —
@@ -83,10 +96,13 @@ const PARSE_MAX_CHARS = 500;
  * provider is clickable (the engine is still a choice here), and picking an ACP
  * engine clears the model (ACP discovers models at session start).
  */
-function DraftModelPill({ meta, onMetaChange, host }: {
+function DraftModelPill({ meta, onMetaChange, host, walnut }: {
   meta: QuickStartTaskMeta;
   onMetaChange: (updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
   host?: string | null;
+  /** Ask Walnut: the profile rides --system-prompt, so only the claude engine
+   *  can carry it — other providers render locked with that reason. */
+  walnut?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   // The clicked pill — anchor for the popout picker (portalled, clip-proof).
@@ -96,7 +112,9 @@ function DraftModelPill({ meta, onMetaChange, host }: {
   // The engine that will actually launch — a remote tab launches the default
   // engine (ACP engines are local-only; quick-start drops a stale flag). Same
   // rule as EngineToggle and MainPage's launch payload: resolveEngineForHost.
-  const engine = resolveEngineForHost(meta.engine, host, catalog);
+  // Walnut mode pins claude outright: the launch payload drops meta.engine, so
+  // showing a remembered ACP engine here would be the pill lying about launch.
+  const engine = walnut ? 'claude' : resolveEngineForHost(meta.engine, host, catalog);
   const entry = engineEntry(catalog, engine);
   // ACP engines advertise their models at session start, so the pill shows the
   // ENGINE instead of a model nobody has picked yet.
@@ -132,7 +150,9 @@ function DraftModelPill({ meta, onMetaChange, host }: {
           onProviderSwitch={(provider) => {
             onMetaChange((m) => ({ ...m, engine: normalizeEngine(provider), model: undefined }));
           }}
-          providerLockReason={(provider) => engineLockReason(engineEntry(catalog, provider), host)}
+          providerLockReason={(provider) => (walnut && provider !== 'claude'
+            ? 'Ask Walnut runs on the claude engine (the Personal AI profile rides its system prompt)'
+            : engineLockReason(engineEntry(catalog, provider), host))}
           autoRow={{ resolvedLabel: autoResolved, active: !meta.model }}
           anchorRef={pillRef}
         />
@@ -167,14 +187,20 @@ interface Props {
    *  allowed to write (see draft-column's applyDraftParse) — the panel only
    *  delivers it. Omit to disable the backfill entirely. */
   onAiParse?: (draftId: string, parse: QuickTaskParse) => void;
+  /** The Start Task / Ask Walnut tab switch. The owner rewrites the row
+   *  (project/tier seed on enter, restore on leave) — the panel only reports. */
+  onWalnutToggle?: (draftId: string, walnut: boolean) => void;
 }
 
 export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose,
-  onPathChange, onProjectChange, onMetaChange, isKnownProject, onAiParse,
+  onPathChange, onProjectChange, onMetaChange, isKnownProject, onAiParse, onWalnutToggle,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // One-tap composer seeds for the Ask Walnut tab — ChatInput's prefill contract
+  // (replace + focus + caret-to-end, re-appliable via the nonce; never sends).
+  const [prefill, setPrefill] = useState<{ text: string; nonce: number }>({ text: '', nonce: 0 });
   // A Start was refused because no folder is chosen (only reachable on a cold
   // working-dirs cache, where the draft can't be given a default). Drives the
   // one-line notice above the launch bar — see startWith.
@@ -199,6 +225,11 @@ export function DraftSessionPanel({
   // (the fork route creates the sibling task itself), and no AI backfill —
   // project/folder are immutable facts, so there is nothing for it to fill.
   const isFork = !!draft.forkOf;
+  // Ask Walnut tab: project/folder are server-owned facts, so like a fork there
+  // is nothing for the AI backfill to fill. Tabs render only on a PLAIN draft —
+  // bound and fork drafts are already committed to a shape.
+  const isWalnut = !!draft.walnut;
+  const showTabs = !isBound && !isFork && !!onWalnutToggle;
 
   const focusComposer = useCallback(() => {
     rootRef.current?.querySelector<HTMLTextAreaElement>('.chat-input-textarea')?.focus();
@@ -219,6 +250,13 @@ export function DraftSessionPanel({
   useEffect(() => {
     if (draft.openPickerNonce) setPickerOpen(true);
   }, [draft.openPickerNonce]);
+
+  // Walnut mode has no folder choice (the cwd pill unmounts) — a picker left
+  // open across the tab switch would float with a detached anchor, and picking
+  // a folder there would override the server-owned 'Walnut' project.
+  useEffect(() => {
+    if (isWalnut) setPickerOpen(false);
+  }, [isWalnut]);
 
   // The notice describes a condition, so it retires the moment the condition
   // does — a folder picked by any route (picker, quick chip, project default)
@@ -251,7 +289,7 @@ export function DraftSessionPanel({
   // When the last EAGER (mid-typing) parse fired, for the throttle window.
   const lastEagerParseRef = useRef(0);
   useEffect(() => {
-    if (!onAiParseRef.current || isFork) return;
+    if (!onAiParseRef.current || isFork || isWalnut) return;
     const requested = text.trim();
     // Empty composer → invalidate everything in flight and stop.
     if (!requested) { parseAppliedSeqRef.current = ++parseSeqRef.current; return; }
@@ -287,13 +325,14 @@ export function DraftSessionPanel({
     // the eager path skipped).
     const timer = setTimeout(() => fire(false), PARSE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [draft.id, text, isFork]);
+  }, [draft.id, text, isFork, isWalnut]);
 
   // `async` on purpose: every exit path resolves a Promise<boolean>, so the
   // no-cwd case (open the picker, keep the text) can never degrade into the
   // sync-false branch of dispatchSend that wipes the draft. See Props.onStart.
   const startWith = useCallback(async (body: string, images?: ImageAttachment[]): Promise<boolean> => {
-    if (!draft.cwd) {
+    // Ask Walnut needs no folder — the server owns the cwd (WALNUT_HOME).
+    if (!draft.cwd && !draft.walnut) {
       // Opening the picker is the RECOVERY, not the explanation. On its own this
       // read as a dead Start button: the click produced a file browser, no
       // request, and nothing that said why — which is how "it can't start" got
@@ -305,7 +344,7 @@ export function DraftSessionPanel({
       return false;
     }
     return onStart(draft.id, body, images);
-  }, [draft.cwd, draft.id, onStart]);
+  }, [draft.cwd, draft.walnut, draft.id, onStart]);
 
   // "Start ↵" is Enter by another name: when anything is composed, click
   // ChatInput's own send button (scoped to THIS column via rootRef) so attached
@@ -323,11 +362,11 @@ export function DraftSessionPanel({
   }, [startWith, text]);
 
   return (
-    <div className="session-panel draft-session-panel" ref={rootRef} data-draft-id={draft.id}>
+    <div className={`session-panel draft-session-panel${isWalnut ? ' draft-session-panel-walnut' : ''}`} ref={rootRef} data-draft-id={draft.id}>
       <div className="session-panel-header">
         <div className="session-panel-header-top">
           <div className="session-panel-title-area">
-            <span className="session-panel-title">{isFork ? 'Fork Session' : 'New Session'}</span>
+            <span className="session-panel-title">{isFork ? 'Fork Session' : isWalnut ? 'Ask Walnut' : 'New Session'}</span>
             <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Draft</span>
             {isBound && (
               <span className="draft-bound-task" title={`This session will attach to the existing task "${draft.boundTaskTitle}" — no second task is created`}>
@@ -351,10 +390,78 @@ export function DraftSessionPanel({
         </div>
       </div>
 
+      {/* The entry fork, made BEFORE the first keystroke: Start Task is
+          pre-selected (the common case costs zero clicks); Ask Walnut opts into
+          the Personal-AI session. Only on a plain draft — bound/fork drafts are
+          already committed to a shape. */}
+      {showTabs && (
+        <div
+          className="draft-mode-tabs"
+          role="tablist"
+          aria-label="Draft mode"
+          // WAI-ARIA tablist keyboard contract: arrows move selection. Two tabs,
+          // so any horizontal arrow just switches to the other one.
+          onKeyDown={(e) => {
+            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+            e.preventDefault();
+            onWalnutToggle?.(draft.id, !isWalnut);
+            const next = (e.currentTarget as HTMLElement)
+              .querySelector<HTMLButtonElement>(`.draft-mode-tab[aria-selected="false"]`);
+            next?.focus();
+          }}
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!isWalnut}
+            aria-controls={`draft-mode-panel-${draft.id}`}
+            tabIndex={!isWalnut ? 0 : -1}
+            className={`draft-mode-tab${!isWalnut ? ' is-active' : ''}`}
+            onClick={() => { if (isWalnut) { onWalnutToggle?.(draft.id, false); focusComposer(); } }}
+            title="Start a coding session in a folder (or keep the text as a task)"
+          >
+            Start Task
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={isWalnut}
+            aria-controls={`draft-mode-panel-${draft.id}`}
+            tabIndex={isWalnut ? 0 : -1}
+            className={`draft-mode-tab draft-mode-tab-walnut${isWalnut ? ' is-active' : ''}`}
+            onClick={() => { if (!isWalnut) { onWalnutToggle?.(draft.id, true); focusComposer(); } }}
+            title="Ask your Personal AI — tasks, plans, memory. Files as a normal task under Walnut / Focus."
+          >
+            🥜 Ask Walnut
+          </button>
+        </div>
+      )}
+
       {/* Empty body = ONE muted line of "what happens next". Everything
-          actionable lives in the bottom stack, within reach of the composer. */}
-      <div className="draft-session-body">
-        <div className="draft-quick-hint">{isFork ? FORK_HINT : isBound ? BOUND_HINT : HINT}</div>
+          actionable lives in the bottom stack, within reach of the composer.
+          The walnut tab shows composer seeds instead — prefill, never send. */}
+      <div className="draft-session-body" id={`draft-mode-panel-${draft.id}`} role={showTabs ? 'tabpanel' : undefined}>
+        {isWalnut ? (
+          // Seeds only while the composer is EMPTY: prefill is replace-only
+          // (ChatInput contract), so a visible chip next to typed text is an
+          // invitation to silently destroy it.
+          !text.trim() && (
+            <div className="draft-walnut-suggests" role="group" aria-label="Ask Walnut suggestions">
+              {WALNUT_SUGGESTS.map((s) => (
+                <button
+                  key={s.label}
+                  type="button"
+                  className="session-action-chip"
+                  onClick={() => setPrefill((p) => ({ text: s.text, nonce: p.nonce + 1 }))}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          )
+        ) : (
+          <div className="draft-quick-hint">{isFork ? FORK_HINT : isBound ? BOUND_HINT : HINT}</div>
+        )}
       </div>
 
       <div className="session-panel-input">
@@ -380,7 +487,9 @@ export function DraftSessionPanel({
           onSend={(body, images) => startWith(body, images)}
           onValueChange={setText}
           draftKey={draftComposerKey(draft.id)}
-          placeholder={isFork ? FORK_PLACEHOLDER : PLACEHOLDER}
+          placeholder={isFork ? FORK_PLACEHOLDER : isWalnut ? WALNUT_PLACEHOLDER : PLACEHOLDER}
+          prefillText={prefill.text}
+          prefillNonce={prefill.nonce}
           showCommands={false}
           sessionCommands={slashCommands}
           searchSessionCommands={searchSlashCommands}
@@ -397,11 +506,13 @@ export function DraftSessionPanel({
                 meta={draft.meta}
                 onMetaChange={(updater) => onMetaChange(draft.id, updater)}
                 host={draft.host}
+                walnut={isWalnut}
               />
               {/* A bound draft is already a task, and a fork's sibling task is
                   the fork route's job — offering "create task" on either would
-                  make a duplicate. */}
-              {!isBound && !isFork && (
+                  make a duplicate. Walnut mode hides it too: it would file the
+                  QUESTION as a Walnut/Focus task with no session to answer it. */}
+              {!isBound && !isFork && !isWalnut && (
                 <button
                   className="draft-later-btn"
                   disabled={!text.trim()}
@@ -414,15 +525,17 @@ export function DraftSessionPanel({
               {/* Enabled even with an empty composer: spawn-and-idle is legal —
                   the CLI starts, initializes and waits on stdin. */}
               <button
-                className="draft-start-btn"
+                className={`draft-start-btn${isWalnut ? ' draft-start-btn-walnut' : ''}`}
                 onClick={handleStartClick}
                 title={isFork
                   ? 'Fork the source session (an empty message just branches the conversation)'
                   : isBound
                     ? 'Start the session on this task (an empty message sends the task title)'
-                    : 'Start the session (an empty message is fine — the agent spawns and waits)'}
+                    : isWalnut
+                      ? 'Ask your Personal AI — files as a normal task under Walnut / Focus'
+                      : 'Start the session (an empty message is fine — the agent spawns and waits)'}
               >
-                {isFork ? 'Fork ↵' : 'Start ↵'}
+                {isFork ? 'Fork ↵' : isWalnut ? 'Ask ↵' : 'Start ↵'}
               </button>
             </div>
           )}

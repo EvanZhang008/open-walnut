@@ -184,7 +184,7 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
       )}
 
       <div className="task-card-body">
-        <span className="task-card-title">
+        <span className={`task-card-title${task.walnut_agent ? ' walnut-task-title' : ''}`}>
           {task.title}
           <SyncIndicator task={task} />
         </span>

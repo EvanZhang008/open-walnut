@@ -14,6 +14,7 @@ import { ProjectKebabMenu, ProjectPlusMenu } from './ProjectHeaderMenus';
 import { openSessionOnHome, openDraftSessionOnHome } from '@/utils/open-session';
 import { sortTasks, groupTasksByProject, type TpSort, type TpSortKey } from './tasks-page-sort';
 import * as ICONS from '../common/Icons';
+import '@/styles/walnut-agent.css';
 
 interface TasksPageTableProps {
   tasks: Task[];
@@ -369,7 +370,7 @@ export function TasksPageTable({
           </button>
           <button
             type="button"
-            className="tp-row-title"
+            className={`tp-row-title${t.walnut_agent ? ' walnut-task-title' : ''}`}
             onClick={() => openTask(t.id)}
           >
             {t.title}

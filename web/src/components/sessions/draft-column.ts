@@ -106,6 +106,15 @@ export interface DraftColumn {
    *  A nonce rather than a boolean so a second attempt after the user dismissed
    *  the picker re-opens it. */
   openPickerNonce?: number;
+  /** "Ask Walnut" tab: Start launches a session that runs the Personal AI
+   *  profile. Folder/project are server-owned facts ('Walnut' / WALNUT_HOME),
+   *  so the launch bar renders them read-only — same treatment as a fork. */
+  walnut?: boolean;
+  /** What entering walnut mode overwrote (project pick, folder-remembered
+   *  model, tier), restored when the user switches back to Start Task. Without
+   *  it a tab round-trip silently converted a human project pick into an AI
+   *  guess and downgraded a Focus-seeded tier to Satellite. */
+  walnutPrev?: { project?: string; projectSource?: DraftColumn['projectSource']; model?: string; pinTier?: QuickStartTaskMeta['pinTier'] };
   /** This draft FORKS an existing session: Start calls the fork API (continuing
    *  that conversation in a new sibling session) instead of quick-start. Folder,
    *  host and project are the SOURCE session's and can't be changed — a fork

@@ -11,7 +11,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { FREQUENT_DIRS_FILE } from '../constants.js'
+import { FREQUENT_DIRS_FILE, WALNUT_HOME } from '../constants.js'
 import type { SessionEngine } from './types.js'
 import { log } from '../logging/index.js'
 
@@ -118,6 +118,11 @@ export function scoreFrequentDir(
  * Increments count, updates lastUsed, adds a project vote.
  */
 export async function recordDirectory(cwd: string, host: string | null, project?: string): Promise<void> {
+  // The Walnut data dir is where Personal-AI sessions run (main chat lanes,
+  // Ask Walnut) — it is never a coding folder. Recording it made it the
+  // highest-frequency entry, so fresh drafts opened POINTING AT the config/db
+  // directory and quick chips offered it as a workspace.
+  if (!host && path.resolve(cwd) === path.resolve(WALNUT_HOME)) return
   return withWriteLock(async () => {
     let store = readStore()
     if (!store) {

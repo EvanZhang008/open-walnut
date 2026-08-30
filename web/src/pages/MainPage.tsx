@@ -39,7 +39,7 @@ import {
 import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
 import { SessionSearchPanel } from '@/components/sessions/SessionSearchPanel';
 import {
-  LEGACY_LAUNCHER_PIN_TIER_KEY, freshLauncherMeta, readLastLaunchPath, rememberLaunchPath,
+  DEFAULT_META, LEGACY_LAUNCHER_PIN_TIER_KEY, freshLauncherMeta, readLastLaunchPath, rememberLaunchPath,
 } from '@/components/sessions/task-meta-constants';
 import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
 import { PromoteTaskPopover, type PromoteToTaskInput } from '@/components/chat/PromoteToTaskMenu';
@@ -1129,6 +1129,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           setDraftColumns(prev => prev.map(d => {
             if (d.id !== leftmostDraft.id) return d;
             const next = { ...d };
+            // A seeded rebind commits the draft to a task/fork/project shape —
+            // walnut mode can't coexist with any of those (a half-walnut bound
+            // draft loses its tabs AND double-creates the task on Start).
+            // Normally unreachable: the toggle marks the draft userTouched, so
+            // a seed opens a fresh column instead. Belt-and-braces.
+            if (next.walnut) { delete next.walnut; delete next.walnutPrev; }
             if (seed.project !== undefined) {
               next.project = seed.project;
               // A "+" seed outranks a previous AI guess but NOT the user's own
@@ -1366,6 +1372,68 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       : d)));
   }, []);
 
+  /**
+   * Start Task ⇄ Ask Walnut tab switch on a draft column.
+   *
+   * Entering walnut mode SEEDS the row with the facts the launch will carry
+   * (project 'Walnut', tier Focus) so every downstream reader — the pills, the
+   * "Create task for later" exit, the launch itself — sees one consistent row.
+   * `projectSource: 'seed'` (not 'user'): switching back must be able to undo
+   * it, and the AI backfill is disabled in walnut mode anyway. Leaving restores
+   * only what the seed wrote and the user hasn't since touched.
+   */
+  const handleDraftWalnutToggle = useCallback((draftId: string, walnut: boolean) => {
+    setDraftColumns(prev => prev.map(d => {
+      if (d.id !== draftId) return d;
+      if (walnut) {
+        if (d.walnut) return d; // re-click on the active tab — never re-stash
+        return {
+          ...d,
+          walnut: true,
+          // A deliberate mode choice: a seeded open (task ▶, fork, project "+")
+          // must open its OWN column rather than silently rebinding this draft
+          // into a half-walnut bound/fork hybrid.
+          userTouched: true,
+          // Stash what the seed is about to overwrite so leaving can RESTORE it
+          // — without this, a tab round-trip destroyed an explicit project pick
+          // (cleared to Inbox, then the AI backfill rewrote it) and downgraded a
+          // Focus-seeded tier to Satellite. The model is stashed too: it came
+          // from the previous folder's launch memory, and the Personal AI should
+          // start on its own default (Auto), not on a model borrowed from an
+          // unrelated coding folder.
+          walnutPrev: { project: d.project, projectSource: d.projectSource, model: d.meta.model, pinTier: d.meta.pinTier },
+          project: 'Walnut',
+          projectSource: 'seed' as const,
+          meta: {
+            ...d.meta,
+            // Focus is the walnut default. Only an EXPLICIT non-default tier the
+            // user picked beforehand survives — gating the seed on metaTouched
+            // alone was too coarse (touching the model blocked it, silently
+            // landing the Ask on Satellite).
+            pinTier: d.metaTouched && d.meta.pinTier && d.meta.pinTier !== DEFAULT_META.pinTier
+              ? d.meta.pinTier
+              : 'focus',
+            model: undefined,
+          },
+        };
+      }
+      if (!d.walnut) return d;
+      const prev = d.walnutPrev;
+      const meta = { ...d.meta };
+      // Undo only what the seed wrote: 'focus' reverts to the stashed tier (a
+      // non-focus tier picked INSIDE walnut mode is an explicit choice, kept);
+      // same rule for the model reset.
+      if (prev && meta.pinTier === 'focus') meta.pinTier = prev.pinTier;
+      if (prev && meta.model === undefined) meta.model = prev.model;
+      const back: DraftColumn = { ...d, walnut: false, walnutPrev: undefined, meta };
+      if (d.projectSource === 'seed' && d.project === 'Walnut') {
+        back.project = prev?.project;
+        back.projectSource = prev?.projectSource;
+      }
+      return back;
+    }));
+  }, []);
+
   // One-time sweep of orphaned composer drafts. Draft ids are timestamped, so a
   // key from a previous page load can never be reached again — without this the
   // user's unsent text would accumulate in localStorage forever.
@@ -1541,6 +1609,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       host: meta.host,
       message: meta.message,
       taskId: meta.realTaskId, // reuse existing task if we have one
+      ...(meta.walnutAgent ? { walnutAgent: true } : {}),
     }).then((result) => {
       // Update refs with (possibly new) taskId
       if (pendingQuickStartRef.current) {
@@ -1575,7 +1644,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Quick-start: track pending taskId, auto-open session panel when it starts
   const pendingQuickStartRef = useRef<string | null>(null);
   // Metadata for the pending session panel (cwd, host, etc.)
-  const pendingQuickStartMetaRef = useRef<{ id: string; cwd: string; host?: string; hostLabel?: string; realTaskId?: string; message?: string; httpError?: string } | null>(null);
+  const pendingQuickStartMetaRef = useRef<{ id: string; cwd: string; host?: string; hostLabel?: string; realTaskId?: string; message?: string; httpError?: string; walnutAgent?: boolean } | null>(null);
 
   // Fork: pending panel metadata (same pattern as quick-start)
   const pendingForkMetaRef = useRef<{ id: string; cwd: string; host?: string; realTaskId?: string; httpError?: string } | null>(null);
@@ -2132,6 +2201,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
        *  tells the server to stamp a newly created project row with this folder
        *  as its default_cwd. Only the folder-derived path may claim that. */
       projectFromFolder?: boolean;
+      /** "Ask Walnut": the server owns the cwd and spawns with the Personal AI
+       *  profile — engine forced native, no launch-path memory written. */
+      walnutAgent?: boolean;
     },
   ) => {
       // Set pending ref BEFORE the async call so WS events that arrive
@@ -2165,6 +2237,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         hostLabel: qsp.hostLabel ?? undefined,
         message: text,
         ...(opts?.taskId ? { realTaskId: opts.taskId } : {}),
+        // Retry must replay the walnut flag: an Ask Walnut launch has cwd '',
+        // which the server 400s ("cwd is required") without it — a dead end.
+        ...(opts?.walnutAgent ? { walnutAgent: true } : {}),
       };
 
       // `pinTier: null` — NOT undefined — is how an explicit "don't pin this"
@@ -2187,7 +2262,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // remote-host path (the toggle disables but meta keeps the stale value),
       // fall back to the default engine instead of letting the server reject the
       // quick-start. ONE rule, shared with the toggle and the draft model pill.
-      const engine = launchEngineForHost(metaSnapshot?.engine, qsp.host, getEngineCatalog());
+      // Ask Walnut forces the native engine outright — the Personal AI profile
+      // rides --system-prompt, which ACP engines have no channel for.
+      const engine = opts?.walnutAgent
+        ? undefined
+        : launchEngineForHost(metaSnapshot?.engine, qsp.host, getEngineCatalog());
 
       const settled = quickStartSession({
         cwd: qsp.cwd,
@@ -2202,6 +2281,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         intent: qsp.intent,
         createCwd: qsp.createCwd,
         taskId: opts?.taskId,
+        ...(opts?.walnutAgent ? { walnutAgent: true } : {}),
       }).then((result) => {
         // Update ref with real taskId (WS events use this to match)
         if (pendingQuickStartRef.current === tempTaskId) {
@@ -2251,7 +2331,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // (the only remaining reader; a plain "+" draft is deliberately
       // path-neutral). Written on dispatch (not on success): the intent is what
       // matters, and a failed launch still tells us where they were aiming.
-      rememberLaunchPath({ cwd: qsp.cwd, host: qsp.host ?? null, ...(qsp.hostLabel ? { hostLabel: qsp.hostLabel } : {}) });
+      // Ask Walnut writes nothing — its empty cwd is a server fact, not an aim.
+      if (!opts?.walnutAgent) {
+        rememberLaunchPath({ cwd: qsp.cwd, host: qsp.host ?? null, ...(qsp.hostLabel ? { hostLabel: qsp.hostLabel } : {}) });
+      }
 
       // For ▶ Start's in-flight latch: the launch is only "settled" once the HTTP
       // round-trip lands (both branches above already handled their own effects —
@@ -2271,6 +2354,26 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // Gone (double-send, closed mid-flight): report success so ChatInput doesn't
     // resurrect text into a composer that no longer exists.
     if (!draft) return true;
+    // ASK WALNUT draft: no folder to require — the server owns the cwd
+    // (WALNUT_HOME) and spawns with the Personal AI profile. Same one-commit
+    // morph (draft: → pending:) as a normal launch; project/tier were seeded on
+    // the row when the tab was switched (handleDraftWalnutToggle).
+    // Guarded on !forkOf/!taskId: a walnut draft can't become bound or fork
+    // (the toggle marks it userTouched, and openDraftColumn's rebind clears the
+    // walnut fields) — but if state ever diverges, the binding must win, or a
+    // bound Start would mint a DUPLICATE task and a fork would silently not fork.
+    if (draft.walnut && !draft.forkOf && !draft.taskId) {
+      forgetDraft(draftId);
+      launchQuickStart(
+        { cwd: '', host: null },
+        draft.meta,
+        text.trim(),
+        images,
+        draft.project || 'Walnut',
+        { columnId: draftId, walnutAgent: true },
+      );
+      return true;
+    }
     if (!draft.cwd) {
       // No folder yet → ask for one and keep the text. The panel self-guards this
       // case before ever calling us; this is the belt-and-braces path (state
@@ -3168,6 +3271,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     isKnownProject={isKnownProjectLoaded}
                     // Back-fills the launch pills from what the user types (R9).
                     onAiParse={handleDraftAiParse}
+                    // Start Task ⇄ Ask Walnut tab switch.
+                    onWalnutToggle={handleDraftWalnutToggle}
                   />
                 ) : null
               ) : isPending && pendingMeta ? (

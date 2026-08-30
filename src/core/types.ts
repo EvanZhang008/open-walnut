@@ -614,6 +614,12 @@ export interface Task {
    *  with "what the session did". Local-only, never pushed to sync backends;
    *  rides the SQLite `payload` blob (no dedicated column). */
   ledger_desc?: string;
+  /** Born from an "Ask Walnut" launch: the linked session runs the Personal AI
+   *  profile. THE marker task lists key the amber title on — deliberately
+   *  per-task, never derived from project/cwd (an ordinary dev task filed under
+   *  the same project is NOT a Personal-AI task). Local-only; rides the SQLite
+   *  payload blob (no dedicated column), never pushed to sync backends. */
+  walnut_agent?: boolean;
   /** Task-level working directory override. Takes precedence over project default_cwd in session resolution. */
   cwd?: string;
   /** Set by the cwd rename detector / turn-end check when task.cwd no longer exists on disk.

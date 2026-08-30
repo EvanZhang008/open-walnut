@@ -335,7 +335,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       {/* Editable title */}
       <span
         ref={titleRef}
-        className={`todo-pinned-title${isEditing ? ' editing' : ''}`}
+        className={`todo-pinned-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
         contentEditable={isEditing}
         suppressContentEditableWarning
         title={task.title}

@@ -54,7 +54,7 @@ import {
   getSubagentHistoryPayload, executeCompactSession,
 } from '../../core/sessions/session-extras.js'
 import { filterSessionsByQuery } from '../../core/session-search.js'
-import { QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
+import { QUICK_START_MESSAGE_HARD_LIMIT, WALNUT_HOME } from '../../constants.js'
 import { engineCaps, isAcpEngine, isKnownEngine, normalizeEngine } from '../../core/agents/engine-registry.js'
 import { SESSION_ENGINE_IDS } from '../../core/types.js'
 
@@ -253,7 +253,7 @@ function buildFixWalnutMessage(userReport: string): string {
 sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: NextFunction) => {
   const requestTs = Date.now()
   try {
-    const { cwd: rawCwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, project, projectFromFolder, intent, createCwd, engine } = req.body as {
+    const { cwd: rawCwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, project, projectFromFolder, intent, createCwd, engine, walnutAgent } = req.body as {
       cwd: string
       host?: string
       message: string
@@ -287,9 +287,26 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       createCwd?: boolean
       /** Coding-agent engine: 'claude' (default) or any registered ACP engine. */
       engine?: string
+      /** "Ask Walnut" launch: spawn with the Personal AI profile. The server
+       *  owns cwd (WALNUT_HOME) — the client sends none. Native engine only. */
+      walnutAgent?: boolean
     }
 
-    if (!rawCwd || typeof rawCwd !== 'string') {
+    const isWalnutAgent = walnutAgent === true
+    if (isWalnutAgent) {
+      // The profile rides --system-prompt; ACP engines have no channel for it,
+      // so an ACP Ask-Walnut would silently launch a bare provider chat.
+      if (engine !== undefined && isAcpEngine(normalizeEngine(engine))) {
+        res.status(400).json({ error: 'walnutAgent requires the claude engine' })
+        return
+      }
+      // Remote is meaningless here: the Personal AI runs where the server runs.
+      if (host) {
+        res.status(400).json({ error: 'walnutAgent sessions run on the server host' })
+        return
+      }
+    }
+    if (!isWalnutAgent && (!rawCwd || typeof rawCwd !== 'string')) {
       res.status(400).json({ error: 'cwd is required' })
       return
     }
@@ -298,9 +315,13 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     // hosts keep the literal ~ untouched — the server must not paste ITS
     // homedir into a path on another machine. (The daemon's mkdir expands ~,
     // but its spawn does not; remote callers should send absolute paths.)
-    const cwd = !host && (rawCwd === '~' || rawCwd.startsWith('~/'))
-      ? path.join(os.homedir(), rawCwd.slice(1))
-      : rawCwd
+    // Ask Walnut ignores any client cwd: the Personal AI's home is a server fact
+    // (same directory a main-chat lane spawns in), not a client choice.
+    const cwd = isWalnutAgent
+      ? WALNUT_HOME
+      : !host && (rawCwd === '~' || rawCwd.startsWith('~/'))
+        ? path.join(os.homedir(), rawCwd.slice(1))
+        : rawCwd
     // An EMPTY message is allowed: spawn + init the CLI (SessionStart hook,
     // MCP/skills load) with no first turn — it idles on stdin until the user
     // sends. Same daemon contract as restart's empty-queue respawn.
@@ -434,6 +455,16 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       ? { taskTitle: `Fix Walnut: ${reportSnippet}`, project: 'Walnut' }
       : {}
 
+    // Ask Walnut defaults, same shape as the fix-walnut block above: the task
+    // files under the real 'Walnut' project and lands in Focus unless the
+    // client picked a tier explicitly (`null` still opts out of pinning).
+    const walnutTaskMeta = isWalnutAgent && taskMeta?.pinTier === undefined
+      ? { ...taskMeta, pinTier: 'focus' as const }
+      : taskMeta
+    const walnutExtras = isWalnutAgent
+      ? { project: project?.trim() || 'Walnut', projectFromFolder: false, walnutAgent: true }
+      : {}
+
     // Shared core (also used by the claude-code routine executor): task create/
     // reuse + TASK_CREATED + SESSION_START emit + remote failure-cache clear.
     try {
@@ -467,16 +498,18 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       const preassignedSessionId = isNativeEngine ? (clientSessionId ?? randomUUID()) : undefined
       const updatedTask = await quickStartSession({
         message: sessionMessage, messagePrefix, cwd, host, model, mode,
-        existingTaskId, taskMeta: fixWalnutTaskMeta, source: 'quick-start', requestTs,
+        existingTaskId, taskMeta: isWalnutAgent ? walnutTaskMeta : fixWalnutTaskMeta,
+        source: 'quick-start', requestTs,
         engine: normalizeEngine(engine),
         preassignedSessionId,
         // Client project seed (project-header "+ → Add session"). fixWalnutExtras
         // spreads AFTER so a repair launch always files under 'Walnut' — and a
         // repair also drops the folder-derived flag with it (its project wasn't
-        // derived from the folder anymore).
+        // derived from the folder anymore). walnutExtras same idea for Ask Walnut.
         ...(project?.trim() ? { project: project.trim(), projectFromFolder: projectFromFolder === true } : {}),
         ...(isFixWalnut ? { projectFromFolder: false } : {}),
         ...fixWalnutExtras,
+        ...walnutExtras,
       })
       // Remember this folder's launch config for next time (fire-and-forget).
       // Stores the RAW picker value (not the CLI-normalized `model`) so the
@@ -484,7 +517,9 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       // memory (existingTaskId set → the user didn't re-pick anything), and
       // fix-walnut launches don't count — that's a repair intent with no
       // model pick, not a preference for the Walnut checkout dir.
-      if (!existingTaskId && !isFixWalnut) {
+      // Ask Walnut doesn't count either: WALNUT_HOME is a server fact, not a
+      // folder preference the user picked.
+      if (!existingTaskId && !isFixWalnut && !isWalnutAgent) {
         const rawPickerModel = typeof rawModel === 'string' && rawModel && rawModel !== 'default' ? rawModel : undefined
         recordLaunchPrefs(cwd, host ?? null, {
           model: rawPickerModel,
