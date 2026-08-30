@@ -9,6 +9,7 @@ import {
   parseBucketKey, recentDateKeys, sanitizeSample, sanitizeSamples, shiftDateKey, summarize,
   MAX_SAMPLE_MS, MAX_SAMPLES_PER_REQUEST,
 } from '../../../src/core/time-tracking/rollup.js';
+import { TIME_KINDS, TIME_SOURCES } from '../../../src/core/time-tracking/types.js';
 import type { RollupIndex, TimeRecord } from '../../../src/core/time-tracking/types.js';
 
 const NOW = new Date('2026-08-22T15:00:00.000Z');
@@ -45,6 +46,36 @@ describe('bucket keys', () => {
   it('gives a too-short key no kind at all rather than guessing one', () => {
     expect(parseBucketKey('2026-08-22').kind).toBe('');
     expect(parseBucketKey(`2026-08-22${SEP}t_alpha`).kind).toBe('');
+  });
+
+  it('round-trips a non-web source as a trailing field, and omits web entirely', () => {
+    const ios = bucketKey('2026-08-22', 't_alpha', 'session', 'ios');
+    expect(parseBucketKey(ios)).toEqual({
+      date: '2026-08-22', taskId: 't_alpha', kind: 'session', source: 'ios',
+    });
+    // 'web' and absent are the SAME key — that is what keeps history intact.
+    expect(bucketKey('2026-08-22', 't_alpha', 'session', 'web'))
+      .toBe(bucketKey('2026-08-22', 't_alpha', 'session'));
+    expect(parseBucketKey(bucketKey('2026-08-22', 't_alpha', 'session'))).not.toHaveProperty('source');
+    expect(ios).not.toBe(bucketKey('2026-08-22', 't_alpha', 'session'));
+  });
+
+  it('RATCHET: no kind is ever also a source', () => {
+    // parseBucketKey decides "does this key carry a source" by testing whether its
+    // LAST field is a source name. That is only sound while the two vocabularies
+    // are disjoint: the day a kind called 'ios' (or a source called 'chat') is
+    // added, every source-less key of that kind would be misparsed and its time
+    // would move lanes. This assertion is the guard, not the prose above it.
+    const overlap = TIME_KINDS.filter((k) => (TIME_SOURCES as readonly string[]).includes(k));
+    expect(overlap).toEqual([]);
+  });
+
+  it('keeps an id that smuggled a separator plus a source name in its own lane', () => {
+    // Sources and kinds are disjoint vocabularies, so a source-less key always
+    // ends in its kind — this must NOT be read as a source-bearing key.
+    expect(parseBucketKey(`2026-08-22${SEP}t_real${SEP}ios${SEP}session`)).toEqual({
+      date: '2026-08-22', taskId: `t_real${SEP}ios`, kind: 'session',
+    });
   });
 });
 
@@ -132,6 +163,19 @@ describe('sanitizeSample', () => {
     }
   });
 
+  it('keeps a valid source, normalizes web to absent, and drops junk without the record', () => {
+    const base = { ts: NOW.toISOString(), durationMs: 1000, kind: 'session' as const };
+    expect(sanitizeSample({ ...base, source: 'ios' }, NOW)!.source).toBe('ios');
+    // Absent means web, so an explicit 'web' must not become a second encoding.
+    expect(sanitizeSample({ ...base, source: 'web' }, NOW)).not.toHaveProperty('source');
+    // Junk costs the FIELD, never the sample: the minute still counts, as web.
+    for (const source of ['android', '', 7, null, { x: 1 }]) {
+      const out = sanitizeSample({ ...base, source }, NOW);
+      expect(out).toMatchObject({ durationMs: 1000, kind: 'session' });
+      expect(out).not.toHaveProperty('source');
+    }
+  });
+
   it('caps a batch and skips unusable entries', () => {
     const good = { ts: NOW.toISOString(), durationMs: 1000, kind: 'chat' };
     const batch = [...Array(MAX_SAMPLES_PER_REQUEST + 50)].map(() => good);
@@ -203,6 +247,42 @@ describe('summarize', () => {
     const out = summarize(new Map(), { days, today: '2026-08-22' });
     expect(out.days.map((d) => d.date)).toEqual(days);
     expect(out.days.every((d) => d.humanMs === 0 && d.agentMs === 0 && d.tasks.length === 0)).toBe(true);
+  });
+
+  it('reports iOS time per day and in total, WITHOUT splitting any task row', () => {
+    const index = foldRecords([
+      rec({ taskId: 't_alpha', kind: 'session', durationMs: 60_000 }),
+      rec({ taskId: 't_alpha', kind: 'session', durationMs: 30_000, source: 'ios' }),
+      rec({ taskId: 't_alpha', kind: 'chat', durationMs: 10_000, source: 'ios' }),
+      rec({ date: '2026-08-21', taskId: 't_beta', durationMs: 5_000, source: 'ios' }),
+    ]);
+    const out = summarize(index, { days, today: '2026-08-22' });
+    const day = out.days.at(-1)!;
+    expect(day.humanMs).toBe(100_000);
+    expect(day.iosMs).toBe(40_000);
+    expect(out.days[1]!.iosMs).toBe(5_000);
+    expect(out.totalHumanMs).toBe(105_000);
+    expect(out.totalIosMs).toBe(45_000);
+    // ONE row for the task, summing both sources — the number a user reads as
+    // "time on this task" must not depend on which screen they held.
+    expect(day.tasks).toEqual([
+      { taskId: 't_alpha', humanMs: 100_000, byKind: { session: 90_000, triage: 0, chat: 10_000 }, agentMs: 0, focus: false },
+    ]);
+  });
+
+  it('omits iosMs / totalIosMs entirely when no phone time was banked', () => {
+    const out = summarize(foldRecords([rec({ taskId: 't_alpha', durationMs: 1000 })]), { days, today: '2026-08-22' });
+    expect(out).not.toHaveProperty('totalIosMs');
+    for (const day of out.days) expect(day).not.toHaveProperty('iosMs');
+  });
+
+  it('counts iOS time in the focus share exactly like browser time', () => {
+    const index = foldRecords([
+      rec({ taskId: 't_focus', durationMs: 30_000, source: 'ios' }),
+      rec({ taskId: 't_other', durationMs: 30_000 }),
+    ]);
+    const out = summarize(index, { days, today: '2026-08-22', focusTaskIds: ['t_focus'] });
+    expect(out.focusShare).toBeCloseTo(0.5, 6);
   });
 
   it('ignores buckets outside the requested window', () => {

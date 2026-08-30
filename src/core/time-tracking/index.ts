@@ -20,6 +20,12 @@ export type { OutsideApp, OutsideDayFold, OutsideSite } from './outside-view.js'
 export { getIndex, hydrate, readDayRecords, recordTime, resetTimeStore } from './store.js';
 export { dayBoundsMs, foldDayBlocks, foldDaySlices } from './blocks.js';
 export { localDateKey, recentDateKeys, sanitizeSamples, summarize } from './rollup.js';
-export { TIME_KINDS } from './types.js';
-export type { TimeKind, TimeRecord, RollupIndex, TimeSummary } from './types.js';
+// Ingest: the phone/relay path (bank + dedupe + durability) and the one piece the
+// browser's fire-and-forget route shares. See the header of ingest.ts for the split.
+export {
+  attachTaskIdsBounded, bankHeartbeatSamples, narrowRelaySamples, resetHeartbeatDedupe,
+} from './ingest.js';
+export type { BankOutcome } from './ingest.js';
+export { TIME_KINDS, TIME_SOURCES } from './types.js';
+export type { TimeKind, TimeRecord, TimeSource, RollupIndex, TimeSummary } from './types.js';
 export type { DayBlocks } from './blocks.js';

@@ -9,11 +9,13 @@
 import {
   HUMAN_KINDS,
   TIME_KINDS,
+  TIME_SOURCES,
   type HeartbeatSample,
   type HumanKind,
   type RollupIndex,
   type TimeKind,
   type TimeRecord,
+  type TimeSource,
   type TimeSummary,
   type DayTime,
   type TaskDayTime,
@@ -32,8 +34,16 @@ const MAX_ID_LEN = 128;
 // NUL cannot appear in a task id, a date, or a kind, so the composite key never collides.
 const SEP = '\u0000';
 
-export function bucketKey(date: string, taskId: string, kind: TimeKind): string {
-  return `${date}${SEP}${taskId}${SEP}${kind}`;
+/**
+ * `date SEP taskId SEP kind`, plus a trailing `SEP source` for a NON-web source.
+ *
+ * Omitting 'web' is what keeps every existing bucket key byte-identical: browser
+ * time and pre-source history land in exactly the bucket they always did, so
+ * there is no migration and no chance of one day's total splitting in two.
+ */
+export function bucketKey(date: string, taskId: string, kind: TimeKind, source?: TimeSource): string {
+  const base = `${date}${SEP}${taskId}${SEP}${kind}`;
+  return source && source !== 'web' ? `${base}${SEP}${source}` : base;
 }
 
 /**
@@ -43,14 +53,23 @@ export function bucketKey(date: string, taskId: string, kind: TimeKind): string 
  * as the kind is what let `t_real\u0000agent` land in the AGENT lane. A key with
  * fewer than three fields is malformed and gets an empty kind, which summarize
  * then skips rather than folding into a lane it guessed.
+ *
+ * A source rides as ONE trailing field, and the two vocabularies are DISJOINT
+ * (no kind is 'web'/'ios'), so "the last field is a source" proves the key
+ * carries one — a source-less key always ends in its kind. That is what keeps an
+ * id which smuggled a separator plus 'ios' past an older build in its own lane.
  */
-export function parseBucketKey(key: string): { date: string; taskId: string; kind: TimeKind } {
+export function parseBucketKey(key: string): { date: string; taskId: string; kind: TimeKind; source?: TimeSource } {
   const parts = key.split(SEP);
-  if (parts.length < 3) return { date: parts[0] ?? '', taskId: parts[1] ?? '', kind: '' as TimeKind };
+  const last = parts[parts.length - 1];
+  const source = parts.length >= 4 && isTimeSource(last) ? last : undefined;
+  const fields = source ? parts.slice(0, -1) : parts;
+  if (fields.length < 3) return { date: fields[0] ?? '', taskId: fields[1] ?? '', kind: '' as TimeKind };
   return {
-    date: parts[0]!,
-    taskId: parts.slice(1, -1).join(SEP),
-    kind: parts[parts.length - 1] as TimeKind,
+    date: fields[0]!,
+    taskId: fields.slice(1, -1).join(SEP),
+    kind: fields[fields.length - 1] as TimeKind,
+    ...(source ? { source } : {}),
   };
 }
 
@@ -104,6 +123,20 @@ function isTimeKind(raw: unknown): raw is TimeKind {
   return typeof raw === 'string' && (TIME_KINDS as readonly string[]).includes(raw);
 }
 
+function isTimeSource(raw: unknown): raw is TimeSource {
+  return typeof raw === 'string' && (TIME_SOURCES as readonly string[]).includes(raw);
+}
+
+/**
+ * Normalize a client-supplied source: an unknown value is DROPPED (the record
+ * still counts, as web), and 'web' collapses to absent so browser time has one
+ * encoding. Junk must never cost the sample — a mistyped field is a client bug,
+ * not a reason to lose a minute of the user's day.
+ */
+export function normalizeSource(raw: unknown): TimeSource | undefined {
+  return isTimeSource(raw) && raw !== 'web' ? raw : undefined;
+}
+
 /**
  * Validate ONE untrusted heartbeat sample into a day-keyed record.
  * Returns null when the sample cannot be trusted (bad kind, absurd duration,
@@ -136,6 +169,8 @@ export function sanitizeSample(raw: unknown, now: Date): TimeRecord | null {
   if (taskId) rec.taskId = taskId;
   const sessionId = cleanId(s.sessionId);
   if (sessionId) rec.sessionId = sessionId;
+  const source = normalizeSource(s.source);
+  if (source) rec.source = source;
   return rec;
 }
 
@@ -152,7 +187,7 @@ export function sanitizeSamples(raw: unknown, now: Date): TimeRecord[] {
 
 /** Add one record into an index (mutates and returns it). */
 export function addRecord(index: RollupIndex, rec: TimeRecord): RollupIndex {
-  const key = bucketKey(rec.date, rec.taskId ?? '', rec.kind);
+  const key = bucketKey(rec.date, rec.taskId ?? '', rec.kind, rec.source);
   index.set(key, (index.get(key) ?? 0) + rec.durationMs);
   return index;
 }
@@ -187,6 +222,11 @@ function emptyByKind(): Record<HumanKind, number> {
 /**
  * Join the human and agent lanes into the per-day / per-task shape the panel
  * renders. `days` fixes the window (zeros included so the trend has no gaps).
+ *
+ * SOURCE is folded at the DAY level only (`iosMs`). Per-task rows sum across
+ * sources on purpose: "how long was I on this task" is one number, and splitting
+ * it by which screen the user held would make every existing per-task total
+ * change meaning the day the phone started banking.
  */
 export function summarize(
   index: RollupIndex,
@@ -197,10 +237,12 @@ export function summarize(
   // date → taskId → bucket
   const perDay = new Map<string, Map<string, TaskDayTime>>();
   for (const date of opts.days) perDay.set(date, new Map());
+  /** date → human ms banked by the phone. Day-level only (see the note above). */
+  const iosByDay = new Map<string, number>();
 
   for (const [key, ms] of index) {
     if (ms <= 0) continue;
-    const { date, taskId, kind } = parseBucketKey(key);
+    const { date, taskId, kind, source } = parseBucketKey(key);
     if (!wanted.has(date)) continue;
     // A kind that is not one of the four lanes means the key is malformed (a
     // hand-edited JSONL line, an id that smuggled a separator past an older
@@ -217,11 +259,13 @@ export function summarize(
     } else {
       bucket.humanMs += ms;
       bucket.byKind[kind] += ms;
+      if (source === 'ios') iosByDay.set(date, (iosByDay.get(date) ?? 0) + ms);
     }
   }
 
   let totalHumanMs = 0;
   let totalAgentMs = 0;
+  let totalIosMs = 0;
   let focusHumanMs = 0;
   const days: DayTime[] = opts.days.map((date) => {
     const tasks = [...(perDay.get(date) ?? new Map<string, TaskDayTime>()).values()]
@@ -239,7 +283,9 @@ export function summarize(
     }
     totalHumanMs += humanMs;
     totalAgentMs += agentMs;
-    return { date, humanMs, agentMs, tasks };
+    const iosMs = iosByDay.get(date) ?? 0;
+    totalIosMs += iosMs;
+    return { date, humanMs, agentMs, ...(iosMs > 0 ? { iosMs } : {}), tasks };
   });
 
   return {
@@ -249,6 +295,7 @@ export function summarize(
     focusShare: totalHumanMs > 0 ? focusHumanMs / totalHumanMs : 0,
     totalHumanMs,
     totalAgentMs,
+    ...(totalIosMs > 0 ? { totalIosMs } : {}),
     ...(opts.degraded ? { degraded: true } : {}),
   };
 }

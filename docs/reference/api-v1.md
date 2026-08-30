@@ -44,6 +44,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `not_supported_cloud` | 501 | The endpoint cannot run on a cloud REPLICA at all (e.g. global search needs the primary's semantic index) |
 | `cron_owner` | 409 | `POST /sessions/:id/terminate` refused: the session owns armed recurring crons — delete them first or pass `force: true` |
 | `too_large` | 413 | Note content exceeds 2 MB (or an attachment upload exceeds its cap) |
+| `primary_unreachable` | 503 | `POST /time/heartbeats` did not persist the batch: the primary could not be reached, or it was reached and its day-file write did not land. Keep the batch queued and retry; sample `id`s make the retry a no-op for anything that did land |
 | `internal` | 500 | Unhandled server error |
 
 ## Endpoints
@@ -227,6 +228,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | GET | `/api/v1/projects/:name/metadata` | Project detail-pane payload |
 | PUT | `/api/v1/projects/:name/metadata` | Merge project settings (501 on REPLICA) |
 | POST | `/api/v1/projects/:name/summary/regenerate` | Rebuild the AI project summary (501 on REPLICA) |
+| POST | `/api/v1/time/heartbeats` | Bank human time-tracking samples (a REPLICA relays them to the primary) |
 
 ### GET /api/v1/status
 
@@ -1444,6 +1446,32 @@ Body: `{ "device": "Evan's iPhone", "appVersion": "1.0.0", "os": "iOS 26",
   quota (20 MB) exhausted.
 - Max 5000 lines per call; each line is stamped with `device`/`appVersion`/`os`.
 
+### POST /api/v1/time/heartbeats (additive, 2026-08) — bank human time
+
+The phone banks closed attention windows into the SAME time-tracking store the web console feeds, so one day's total covers both screens.
+
+Body: `{ "samples": [ { "id"?, "ts", "durationMs", "kind", "taskId"?, "sessionId"?, "source"? } ] }`
+
+- `ts`: ISO timestamp of the window's START. `durationMs`: its length (clamped at 10 min per sample; a non-positive or non-finite value drops that sample).
+- `kind`: `session` | `triage` | `chat`. The `agent` lane is derived server-side and is never accepted from a client.
+- `taskId` optional. `sessionId` optional: when a sample names a session but no task, the SERVER resolves the task from the session (the client is never the authority on that mapping).
+- `source` optional, `web` | `ios`. On this endpoint an absent (or unrecognized) value means `ios`, since v1 is the mobile contract; an explicit `web` is honored. Absent `source` in the STORE always means web, which is what keeps every day file written before this field intact.
+- `id` optional but STRONGLY recommended: a client-minted dedupe key, `<installId>-<seq>`, at most 64 chars of `[A-Za-z0-9._:-]` (must start alphanumeric). The server remembers accepted ids and skips a repeat, which is what makes retrying safe: every ack can be lost (a suspended background flush, a client-side timeout, a dropped connection), so a batch WILL arrive twice. A sample without an id is banked on every delivery, so a client that omits it double counts its own time on any retry. The id is never persisted: it does not appear in the stored record or in `/api/time/*` output. An id that fails the charset/length rule is ignored (the sample still banks, it just cannot be deduped).
+- At most **200** samples per call. Anything past the 200th is DISCARDED and the call still answers `204`, so a client must send batches of at most 200 and keep the rest queued; the iOS queue's `maxBatch` is pinned to this number by a cross-language ratchet test.
+
+Responses:
+
+| Status | Meaning |
+|---|---|
+| `204` | The samples reached the primary's day file. Also the answer for an empty batch or one with nothing usable in it: telemetry never errors for junk, and asking a client to retry a sample that can never be accepted just loops, so "banked" and "dropped as invalid" are deliberately indistinguishable. |
+| `503 { "error": { "code": "primary_unreachable", "message": "…" } }` | Nothing was persisted; keep the batch queued and retry. Emitted by BOTH boxes: on a REPLICA when the relay could not be served (bridge down, the primary's server down, or a primary that predates the action, which self-heals on its next deploy), and on the PRIMARY when the fold landed but the day-file write did not (a full or unwritable data dir, or a write still unfinished after 1s). One code for both, because they mean the same thing to a client. No failure here is ever a 4xx: that would make the client throw the samples away. |
+
+REPLICA behavior (Class B relay, and NOT `501` like the internal `/api/time` family): the phone mostly talks to the cloud companion, so the batch is relayed to the primary over the existing `session.control` bridge lane (`server.time.heartbeats`) with a 10s budget. The primary is also the only box allowed to VALIDATE a batch, because a record's day key is the local day of its `ts` on whichever box sanitizes it: the replica runs UTC, so a replica-side bank would file the user's evening under tomorrow. The replica only bounds what crosses the bridge (sample count, the known fields, id sizes), since one oversized frame closes the socket every in-flight request shares.
+
+**The day a sample lands on is the PRIMARY's local day**, computed from `ts` in the Mac's timezone. A phone in another timezone therefore files its time under the Mac's calendar day, which is the intended behavior (the panel answers "my Tuesday" for the box the user's data lives on). Near midnight the phone and the Mac can disagree about which day a window belongs to.
+
+Where it shows up: `GET /api/time/summary` (web console). A day carries `iosMs` and the window carries `totalIosMs` when phone time is present (both omitted at zero). Per-task rows aggregate ACROSS sources: "time on this task" is one number and must not depend on which screen the user held.
+
 ## Offline write matrix (REPLICA behavior contract, 2026-08)
 
 This section is the contract the iOS optimistic-mutation layer relies on. It answers, per mutation family: what happens on the cloud REPLICA, what happens while the Mac (primary) is unreachable, and how the two stores converge afterward. General model:
@@ -1485,6 +1513,7 @@ Per-family matrix:
 | Session PATCH (`mode`) | Class B synchronous only | `503 bridge_offline` | mode reconfigures the live CLI (permission mode swap); only the primary can truthfully accept it |
 | Session lifecycle: terminate / restart / retry / permission / execute-continue, model / effort / fork, session launch, messages into a session | Class B relays (messages ride their own durable `session.message` relay; see Session talk) | honest `503 bridge_offline` (messages: still accepted durably by the daemon lane when the daemon is reachable) | these act on a live process; fabricating acceptance would lie about the session's real state |
 | Notes vault writes (create/update/delete, global notes, tag rename, folder/attachment deletes) | Class A-like: the vault is git-synced data; writes land locally | accepted | git-sync merge on reconnect; optimistic-lock hashes (`expectedHash`) protect against cross-box conflicts |
+| Time heartbeats (`POST /time/heartbeats`) | Class B relay: `204` only once the primary persisted the batch | `503 primary_unreachable`, so the client keeps the batch queued and retries | the primary is the single writer AND the only box that may assign a sample's local day; nothing is ever banked on the replica. Retries are safe because the primary dedupes on each sample's `id` (exactly-once in the rollup; a known-failed day-file write is retried, so the disk is at-least-once) |
 
 Freshness signals a client can rely on:
 

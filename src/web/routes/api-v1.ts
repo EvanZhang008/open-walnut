@@ -2081,6 +2081,14 @@ import { actionsV1Router } from './actions-v1.js'
 
 apiV1Router.use(actionsV1Router)
 
+// ─── Time tracking (the phone banks human time into the shared store) ──────
+// Same reason as above, plus one of its own: it must sit behind the SAME device
+// auth as the rest of /api/v1, and mounting it here makes that structural.
+
+import { timeV1Router } from './time-v1.js'
+
+apiV1Router.use(timeV1Router)
+
 // ─── Router-level error handler: frozen error shape ────────────────────────
 
 apiV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

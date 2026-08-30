@@ -38,6 +38,41 @@ function localHm(iso: string): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+describe('two devices on one task at the same time', () => {
+  // A phone and a browser can both bank the same task now, so merged windows can
+  // OVERLAP and their durations can sum past the wall time they share.
+  it('never lets a block report more tracked time than it spans', () => {
+    const day = foldDayBlocks([
+      rec({ ts: at(9, 0), durationMs: 10 * 60_000 }),
+      rec({ ts: at(9, 0), durationMs: 10 * 60_000, source: 'ios' }),
+      rec({ ts: at(9, 5), durationMs: 10 * 60_000, source: 'ios' }),
+    ], { date: DATE });
+    expect(day.blocks).toHaveLength(1);
+    const block = day.blocks[0]!;
+    expect(localHm(block.startTs)).toBe('09:00');
+    expect(localHm(block.endTs)).toBe('09:15');
+    expect(block.ms).toBe(15 * 60_000);
+    // 30 minutes of attention happened inside a 15-minute window; the DRAWN block
+    // can only own 15 (the summary's humanMs still counts all 30).
+    expect(block.trackedMs).toBe(block.ms);
+    expect(block.trackedMs).toBeLessThanOrEqual(block.ms);
+    // The per-task ranking still reports the attention total, not the wall span.
+    expect(day.totals).toEqual([{ taskId: 't_alpha', ms: 30 * 60_000 }]);
+  });
+
+  it('caps the sub-floor bucket the same way', () => {
+    // Two overlapping 20s windows inside one 20s span: below MIN_BLOCK_MS, so it
+    // goes to shortMs — which must not claim 40s of a 20s window either.
+    const day = foldDayBlocks([
+      rec({ ts: at(9, 0), durationMs: 20_000 }),
+      rec({ ts: at(9, 0), durationMs: 20_000, source: 'ios' }),
+    ], { date: DATE });
+    expect(day.blocks).toHaveLength(0);
+    expect(day.shortMs).toBe(20_000);
+    expect(day.shortMs).toBeLessThan(MIN_BLOCK_MS);
+  });
+});
+
 describe('dayBoundsMs', () => {
   it('spans exactly one local calendar day', () => {
     const bounds = dayBoundsMs(DATE)!;

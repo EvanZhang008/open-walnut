@@ -723,7 +723,12 @@ export type SessionControlAction =
   // answer on claude-code, so the model pill showed a fact that was not true of
   // any turn. `ensure: true` mints the lane (the explicit half of the
   // read-only-GET / minting-POST pair in routes/personal-ai-v1.ts).
-  | 'server.chat.engine';
+  | 'server.chat.engine'
+  // Bank one batch of human time-tracking samples on the primary. The store,
+  // its rollup and its day files live there — and the day key is the LOCAL day
+  // of each sample on the box that validates it, so only the primary (in the
+  // user's own timezone) may turn a phone's samples into records.
+  | 'server.time.heartbeats';
 
 // ── Task op relay payload validation (server.tasks.apply) ───────────────────
 
@@ -1184,6 +1189,17 @@ export async function handleSessionControlRelay(
       case 'server.chat.engine': {
         const { handlePrimaryChatEngineRelay } = await import('../../web/routes/chat-turn-relay.js');
         result = await handlePrimaryChatEngineRelay(p);
+        break;
+      }
+      // ── Time tracking: bank a replica-forwarded heartbeat batch here ──
+      // It never throws: a batch of junk is `banked: 0, durable: true`, which the
+      // replica reports to the phone as 204 (telemetry must not ask a client to
+      // retry samples that can never be accepted). `durable: false` means the fold
+      // landed but the day file did not — the replica turns that into a 503 so the
+      // phone retries, and the ingest ledger dedupes the resend by sample id.
+      case 'server.time.heartbeats': {
+        const { bankHeartbeatSamples } = await import('../time-tracking/ingest.js');
+        result = await bankHeartbeatSamples(p.samples) as unknown as Record<string, unknown>;
         break;
       }
       // ── Human inbox family: one handler, same functions the routes call ──

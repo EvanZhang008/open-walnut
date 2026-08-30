@@ -267,7 +267,15 @@ export function foldDayBlocks(
         const last = merged[merged.length - 1];
         if (last && span.startMs - last.endMs <= MERGE_GAP_MS) {
           last.endMs = Math.max(last.endMs, span.endMs);
-          last.trackedMs += span.trackedMs;
+          // Two devices can now hold the SAME task at the same time (a phone and a
+          // browser), so the merged windows can overlap and their durations can sum
+          // past the wall time they share. Cap at the span: `trackedMs <= ms` is an
+          // invariant the timeline draws against, and a block claiming more tracked
+          // time than it spans would render as a bar longer than itself. The
+          // summary's humanMs still counts both windows — that is attention, not
+          // wall clock. Capping here (not only in toBlock) also keeps the
+          // sub-floor `shortMs` bucket honest.
+          last.trackedMs = Math.min(last.trackedMs + span.trackedMs, last.endMs - last.startMs);
         } else {
           merged.push({ ...span });
         }

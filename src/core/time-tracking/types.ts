@@ -23,13 +23,35 @@ export type HumanKind = (typeof HUMAN_KINDS)[number];
 export const TIME_KINDS = [...HUMAN_KINDS, 'agent'] as const;
 export type TimeKind = (typeof TIME_KINDS)[number];
 
-/** What the browser posts. `ts` is the START of the counted window. */
+/**
+ * WHICH CLIENT banked a human sample. ABSENT MEANS 'web' everywhere — that is
+ * what keeps every day file written before this field existed (and every sample
+ * the browser posts today) parsing and folding byte-identically. 'web' is
+ * therefore normalized back to absent on the way in, so there is exactly one
+ * on-disk encoding for browser time.
+ *
+ * Never applies to the `agent` lane: agent time is derived server-side.
+ */
+export const TIME_SOURCES = ['web', 'ios'] as const;
+export type TimeSource = (typeof TIME_SOURCES)[number];
+
+/** What a client posts. `ts` is the START of the counted window. */
 export interface HeartbeatSample {
+  /**
+   * Optional client-minted dedupe key (`<installId>-<seq>`, ≤64 chars). Every ack
+   * can be lost (a suspended background flush, a client timeout, a dropped
+   * connection), so the client retries and the server skips ids it has already
+   * accepted. INGEST-ONLY: it is never copied into TimeRecord and never written to
+   * a day file, which keeps the JSONL exactly the shape older builds wrote.
+   */
+  id?: string;
   ts: string;
   durationMs: number;
   kind: HumanKind;
   taskId?: string;
   sessionId?: string;
+  /** Absent = 'web' (the browser). */
+  source?: TimeSource;
 }
 
 /** A validated, day-keyed record — the JSONL line shape and the fold input. */
@@ -50,9 +72,11 @@ export interface TimeRecord {
   kind: TimeKind;
   taskId?: string;
   sessionId?: string;
+  /** Absent = 'web'. Only ever set on a human record (see TIME_SOURCES). */
+  source?: TimeSource;
 }
 
-/** Per (date, taskId, kind) accumulated milliseconds. Key via bucketKey(). */
+/** Per (date, taskId, kind[, source]) accumulated milliseconds. Key via bucketKey(). */
 export type RollupIndex = Map<string, number>;
 
 export interface TaskDayTime {
@@ -69,6 +93,14 @@ export interface DayTime {
   date: string;
   humanMs: number;
   agentMs: number;
+  /**
+   * The part of `humanMs` banked from the iOS app. Present only when > 0, so a
+   * day with no phone time serializes exactly as it did before this field.
+   * Deliberately day-level only: per-task rows aggregate ACROSS sources (see
+   * TaskDayTime) because "how long did I spend on this task" must not depend on
+   * which screen the user held.
+   */
+  iosMs?: number;
   tasks: TaskDayTime[];
 }
 
@@ -82,6 +114,8 @@ export interface TimeSummary {
   focusShare: number;
   totalHumanMs: number;
   totalAgentMs: number;
+  /** Sum of the days' `iosMs`. Present only when > 0 (same rule as DayTime). */
+  totalIosMs?: number;
   /** True when part of the answer could not be produced in time. */
   degraded?: boolean;
 }

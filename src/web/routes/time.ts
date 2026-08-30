@@ -22,9 +22,11 @@ import { Router, type Request, type Response } from 'express';
 import { CLOUD_MODE } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import {
+  attachTaskIdsBounded,
   dayBoundsMs, foldDayBlocks, foldDaySlices, foldOutsideApps, getIndex, hydrate, isOutsideCollectorRunning,
   localDateKey, outsideDayRows, readDayRecords, recentDateKeys,
-  outsideHelperReason, recordTime, resetOutsideStore, resetTimeStore, sanitizeSamples, startAgentTimeCollector,
+  outsideHelperReason, recordTime, resetHeartbeatDedupe, resetOutsideStore, resetTimeStore,
+  sanitizeSamples, startAgentTimeCollector,
   startOutsideCollector, stopAgentTimeCollector, stopOutsideCollector, summarize, walnutHostsFromConfig,
   withLedgerBackfill, TIME_KINDS,
   type DayBlocks, type HelperUnavailable, type OutsideApp, type RollupIndex, type TimeKind, type TimeRecord,
@@ -63,16 +65,15 @@ export function startTimeTracking(): void {
 export function stopTimeTracking(): void {
   stopAgentTimeCollector();
   resetTimeStore();
+  // The dedupe ledger describes what THIS rollup already holds, so it has to die
+  // with the rollup: a remembered id against a fresh (empty) store would skip a
+  // sample nobody has banked.
+  resetHeartbeatDedupe();
   // The helper child must die with the server: an orphan would keep sampling
   // into a store nobody reads (it also exits on its own once stdout closes).
   stopOutsideCollector();
   resetOutsideStore();
 }
-
-/** Session→task resolution is bounded: at most this many lookups per request. */
-const MAX_TASK_LOOKUPS = 20;
-/** The lookups are indexed sqlite reads, but never let them hold the response. */
-const LOOKUP_DEADLINE_MS = 500;
 
 // POST /api/time/heartbeats — { samples: [{ ts, durationMs, kind, taskId?, sessionId? }] }
 // 204 once the samples are folded into the live rollup; the JSONL append settles
@@ -90,13 +91,9 @@ timeRouter.post('/heartbeats', async (req: Request, res: Response) => {
     }
     // The client sends sessionId for a session panel and lets the server own the
     // session→task mapping (the panel DOM carries no task id, and the client
-    // must not be the authority on it).
-    const bail = deadline(LOOKUP_DEADLINE_MS);
-    try {
-      await Promise.race([attachTaskIds(records), bail.promise]);
-    } finally {
-      bail.cancel();
-    }
+    // must not be the authority on it). Shared with the v1 (phone) path so the
+    // two endpoints can never disagree about attribution.
+    await attachTaskIdsBounded(records);
     void recordTime(records); // folds synchronously, appends in the background
     res.status(204).end();
   } catch (err) {
@@ -111,25 +108,6 @@ function deadline(ms: number): { promise: Promise<void>; cancel: () => void } {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const promise = new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); });
   return { promise, cancel: () => { if (timer) clearTimeout(timer); } };
-}
-
-/** Fill in taskId for session samples from the sessions table. Best-effort. */
-async function attachTaskIds(records: TimeRecord[]): Promise<void> {
-  const needs = [...new Set(records.filter((r) => !r.taskId && r.sessionId).map((r) => r.sessionId!))];
-  if (needs.length === 0) return;
-  try {
-    const { getSessionByClaudeId } = await import('../../core/session-tracker.js');
-    const map = new Map<string, string>();
-    for (const sid of needs.slice(0, MAX_TASK_LOOKUPS)) {
-      const rec = await getSessionByClaudeId(sid).catch(() => null);
-      if (rec?.taskId) map.set(sid, rec.taskId);
-    }
-    for (const r of records) {
-      if (r.taskId || !r.sessionId) continue;
-      const taskId = map.get(r.sessionId);
-      if (taskId) r.taskId = taskId;
-    }
-  } catch { /* unattributed session time still counts, just under '' */ }
 }
 
 // GET /api/time/summary?days=N — the whole panel in one round trip.
@@ -417,6 +395,11 @@ timeRouter.post('/apps/toggle', async (req: Request, res: Response) => {
       }
     } else {
       stopOutsideCollector();
+      // Drop the in-memory rollup too, so a disable really forgets: the next read
+      // re-hydrates from disk. Without this, buckets banked by a misbehaving helper
+      // survive in memory until the server restarts, and no amount of repairing the
+      // JSONL changes what /apps answers (learned repairing a stale-frontmost day).
+      resetOutsideStore();
     }
     res.json({ enabled: next, running: isOutsideCollectorRunning() });
   } catch (err) {

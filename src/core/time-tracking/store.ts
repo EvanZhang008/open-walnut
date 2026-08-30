@@ -33,7 +33,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
-import { addRecord, localDateKey, parseBucketKey, recentDateKeys } from './rollup.js';
+import { addRecord, localDateKey, normalizeSource, parseBucketKey, recentDateKeys } from './rollup.js';
 import type { RollupIndex, TimeRecord } from './types.js';
 
 /** How many days back the lazy rehydrate reads. Bounds boot cost forever. */
@@ -87,6 +87,12 @@ interface StoreState {
    * file mid-rename.
    */
   tail: Promise<void>;
+  /**
+   * Whether every append of the CURRENT drain landed. One verdict for the whole
+   * drain, because parked records lose their batch boundaries; only the
+   * fire-and-forget browser path can observe it (see recordTime).
+   */
+  drainAppended: boolean;
 }
 
 let state: StoreState | null = null;
@@ -94,7 +100,10 @@ let state: StoreState | null = null;
 function current(): StoreState {
   const dir = storeDir();
   if (!state || state.dir !== dir) {
-    state = { dir, index: new Map(), hydrated: null, pending: null, tail: Promise.resolve() };
+    state = {
+      dir, index: new Map(), hydrated: null, pending: null,
+      tail: Promise.resolve(), drainAppended: true,
+    };
   }
   return state;
 }
@@ -121,6 +130,10 @@ function parseLine(line: string, fallbackDate: string): TimeRecord | null {
     const obj = JSON.parse(line) as Partial<TimeRecord>;
     if (typeof obj.durationMs !== 'number' || !Number.isFinite(obj.durationMs) || obj.durationMs <= 0) return null;
     if (typeof obj.kind !== 'string') return null;
+    // Absent source (every line written before the field existed) = web. An
+    // unknown value is dropped rather than trusted, so a hand-edited line cannot
+    // mint a lane; the record itself still counts.
+    const source = normalizeSource(obj.source);
     return {
       date: typeof obj.date === 'string' && obj.date ? obj.date : fallbackDate,
       ts: typeof obj.ts === 'string' ? obj.ts : '',
@@ -128,6 +141,7 @@ function parseLine(line: string, fallbackDate: string): TimeRecord | null {
       kind: obj.kind,
       ...(obj.taskId ? { taskId: obj.taskId } : {}),
       ...(obj.sessionId ? { sessionId: obj.sessionId } : {}),
+      ...(source ? { source } : {}),
     };
   } catch {
     return null; // a torn tail line is expected; skip it
@@ -261,11 +275,13 @@ export function hydrate(now = new Date()): Promise<void> {
  * nobody will drain.
  */
 async function drainPending(st: StoreState): Promise<void> {
+  st.drainAppended = true;
   for (;;) {
     const batch = st.pending;
     if (!batch || batch.length === 0) break;
     st.pending = [];
-    await foldAndAppend(st, batch).catch(() => undefined);
+    const ok = await foldAndAppend(st, batch).catch(() => false);
+    if (!ok) st.drainAppended = false;
   }
   st.pending = null;
 }
@@ -275,19 +291,28 @@ export function getIndex(): RollupIndex {
   return current().index;
 }
 
+/** What a write reports back. `appended` false = the rollup has it, the disk does not. */
+export interface RecordOutcome {
+  appended: boolean;
+}
+
 /**
  * Fold records into the live rollup and append them to disk. The in-memory
  * update is synchronous once hydration has settled, so the caller can answer a
  * read in the same request; the returned promise settles when the append is done
- * and never rejects (telemetry must never fail the operation it records).
+ * and never rejects (telemetry must never fail the operation it records) —
+ * `appended` carries whether the disk write actually landed, for the one caller
+ * that promises durability to a client (core/time-tracking/ingest.ts).
  *
  * While hydration is in flight the records are parked instead: they are folded
  * and appended together the moment the read finishes, and the promise settles
  * then. That deferral is the whole fix for the double count — see the
- * EXACTLY-ONCE note at the top of this file.
+ * EXACTLY-ONCE note at the top of this file. A parked batch can only report the
+ * WHOLE drain's verdict (its own boundaries are gone), which is why the
+ * durability-promising caller awaits hydrate() before it writes.
  */
-export function recordTime(records: readonly TimeRecord[]): Promise<void> {
-  if (records.length === 0) return Promise.resolve();
+export function recordTime(records: readonly TimeRecord[]): Promise<RecordOutcome> {
+  if (records.length === 0) return Promise.resolve({ appended: true });
   const st = current();
   // Hydration must precede this process's FIRST append, so start it here if
   // nobody has: an append that lands before the read is counted twice.
@@ -302,13 +327,50 @@ export function recordTime(records: readonly TimeRecord[]): Promise<void> {
         dropped, cap: MAX_PENDING_RECORDS,
       });
     }
-    return hydrated;
+    return hydrated.then(() => ({ appended: st.drainAppended }));
   }
-  return foldAndAppend(st, records);
+  return foldAndAppend(st, records).then((appended) => ({ appended }));
 }
 
-/** Fold into the live rollup now; queue the JSONL append behind the write chain. */
-function foldAndAppend(st: StoreState, records: readonly TimeRecord[]): Promise<void> {
+/**
+ * Append records that are ALREADY in the rollup — the retry lane for a write
+ * whose fold landed but whose disk append failed. Deliberately separate from
+ * recordTime rather than a flag on it: re-folding is the one thing this must
+ * never do, and a boolean parameter is exactly how that gets miscalled later.
+ *
+ * Caller contract: only for records this process already folded. It joins the
+ * write chain behind hydration for the same reason the fold path does — an
+ * append landing inside the hydration read would be counted a second time.
+ */
+export async function appendRecords(records: readonly TimeRecord[]): Promise<boolean> {
+  if (records.length === 0) return true;
+  const st = current();
+  await (st.hydrated ?? hydrate()).catch(() => undefined);
+  const byDate = new Map<string, string[]>();
+  for (const rec of records) {
+    const lines = byDate.get(rec.date) ?? [];
+    lines.push(JSON.stringify(rec));
+    byDate.set(rec.date, lines);
+  }
+  const done = st.tail.catch(() => undefined).then(() => appendDays(byDate));
+  st.tail = done.then(() => undefined, () => undefined);
+  return done.catch(() => false);
+}
+
+/**
+ * Fold into the live rollup now; queue the JSONL append behind the write chain.
+ *
+ * CONSTRAINT (do not split this loop): the fold and the JSON.stringify of every
+ * record happen in ONE synchronous tick, so the bucket a record lands in and the
+ * line written to disk can never disagree. The session→task join upstream runs
+ * under a deadline and its loser keeps running (ingest.ts attachTaskIdsBounded),
+ * so a `taskId` can still be assigned to one of these objects AFTER the caller
+ * moved on. That late mutation is harmless only because nothing here reads the
+ * record again on a later tick — the day's timeline and the rollup stay
+ * consistent; the sample just keeps the attribution it had at write time.
+ * Pinned by tests/core/time-tracking/store.test.ts ("a late taskId mutation").
+ */
+function foldAndAppend(st: StoreState, records: readonly TimeRecord[]): Promise<boolean> {
   const byDate = new Map<string, string[]>();
   for (const rec of records) {
     addRecord(st.index, rec);
@@ -318,29 +380,42 @@ function foldAndAppend(st: StoreState, records: readonly TimeRecord[]): Promise<
   }
   // Queued behind any write already in flight, so an append can never land
   // between a compaction's read and its rename.
-  st.tail = st.tail.then(() => appendDays(byDate)).catch(() => undefined);
-  return st.tail;
+  const done = st.tail.catch(() => undefined).then(() => appendDays(byDate));
+  st.tail = done.then(() => undefined, () => undefined);
+  return done.catch(() => false);
 }
 
-async function appendDays(byDate: Map<string, string[]>): Promise<void> {
+/** True only when EVERY day's append landed. */
+async function appendDays(byDate: Map<string, string[]>): Promise<boolean> {
   try {
     await fsp.mkdir(storeDir(), { recursive: true });
-    for (const [date, lines] of byDate) {
-      const file = dayFile(date);
-      await fsp.appendFile(file, lines.join('\n') + '\n', 'utf-8');
-      const stat = await fsp.stat(file).catch(() => null);
-      if (stat && stat.size > COMPACT_ABOVE_BYTES) await compactDay(date, stat.size);
-    }
   } catch (err) {
     log.web.warn('time-tracking append failed', {
       dates: [...byDate.keys()].join(','),
       error: err instanceof Error ? err.message : String(err),
     });
+    return false;
   }
+  let ok = true;
+  for (const [date, lines] of byDate) {
+    const file = dayFile(date);
+    try {
+      await fsp.appendFile(file, lines.join('\n') + '\n', 'utf-8');
+    } catch (err) {
+      ok = false;
+      log.web.warn('time-tracking append failed', {
+        dates: date, error: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
+    const stat = await fsp.stat(file).catch(() => null);
+    if (stat && stat.size > COMPACT_ABOVE_BYTES) await compactDay(date, stat.size).catch(() => undefined);
+  }
+  return ok;
 }
 
 /**
- * Fold a day file down to one line per (task, kind) bucket. Totals are preserved
+ * Fold a day file down to one line per (task, kind, source) bucket. Totals are preserved
  * exactly — only the per-record detail (each window's `ts` / `sessionId`) is lost,
  * which nothing reads: the panel only ever asks for sums.
  *
@@ -372,13 +447,17 @@ async function compactDay(date: string, sizeBefore: number): Promise<void> {
   const lines: string[] = [];
   for (const [key, durationMs] of folded) {
     if (durationMs <= 0) continue;
-    const { taskId, kind } = parseBucketKey(key);
+    // The source is part of the bucket, so it must be written back: a folded
+    // line that dropped it would silently re-attribute the phone's time to the
+    // browser, and compaction is irreversible.
+    const { taskId, kind, source } = parseBucketKey(key);
     const rec: TimeRecord = {
       date,
       ts: `${date}T00:00:00.000Z`,
       durationMs,
       kind,
       ...(taskId ? { taskId } : {}),
+      ...(source ? { source } : {}),
     };
     lines.push(JSON.stringify(rec));
   }
