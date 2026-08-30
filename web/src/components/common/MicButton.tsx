@@ -25,6 +25,18 @@ interface MicButtonProps {
    * appear in the caller's text box as the user speaks. Omit for final-only.
    */
   onDraft?: (text: string) => void;
+  /**
+   * When the user stops mid-sentence the draft is handed to onTranscribe straight
+   * away so it is usable, and this is called with the authoritative text a moment
+   * later. Apply it only if `provisional` is still sitting there untouched.
+   */
+  onRefine?: (finalText: string, provisional: string) => void;
+  /**
+   * Receives a stop-and-throw-away handle for the live recording. Call it when the
+   * user acts on the dictated text themselves (sends it), so a transcription
+   * landing afterwards cannot duplicate what they just sent.
+   */
+  controlRef?: React.MutableRefObject<{ discard: () => void } | null>;
   /** ISO 639-1 language hint */
   language?: string;
   /** Disable the button */
@@ -57,12 +69,19 @@ function MicWaveform({ level }: { level: number }) {
   );
 }
 
-export function MicButton({ onTranscribe, onDraft, language, disabled, size = 'md' }: MicButtonProps) {
-  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, silenceWarning } = useSpeechToText({
+export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, language, disabled, size = 'md' }: MicButtonProps) {
+  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, silenceWarning, discardRecording } = useSpeechToText({
     onTranscribe,
     onDraft,
+    onRefine,
     language,
   });
+  // Hand the parent a stable way to abandon a live recording.
+  useEffect(() => {
+    if (!controlRef) return;
+    controlRef.current = { discard: discardRecording };
+    return () => { controlRef.current = null; };
+  }, [controlRef, discardRecording]);
   const sttStatus = useSttStatus();
   const navigate = useNavigate();
 

@@ -136,6 +136,35 @@ export async function draftTranscribe(
   return res.json();
 }
 
+/**
+ * Ask the server to load the STT engine now, so it happens while the user is
+ * still talking rather than in front of the first draft. Fire-and-forget.
+ */
+export function warmupStt(): void {
+  void fetch('/api/stt/warmup', { method: 'POST' }).catch(() => {});
+}
+
+/**
+ * Persist a finished recording plus the text the client already assembled from
+ * committed segments — no server-side transcription. Keeps the recordings
+ * history/Redo working when the final text never went through /transcribe.
+ */
+export async function saveRecording(
+  audioBase64: string,
+  format: string,
+  text: string,
+  language?: string,
+): Promise<{ recordingId: string; debugAudioPath: string }> {
+  const res = await fetch('/api/stt/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ audio: audioBase64, format, text, language }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!res.ok) throw new Error(`save recording failed: ${res.status}`);
+  return res.json();
+}
+
 // ── Vocabulary ──
 
 export function fetchVocab(): Promise<{ words: string[]; path: string }> {

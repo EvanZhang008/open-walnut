@@ -7,7 +7,7 @@ import { unlink, stat, readFile, appendFile, rm, mkdir } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path';
 import { WALNUT_HOME, STT_VOCAB_FILE } from '../../constants.js';
 import { getConfig, updateConfig } from '../../core/config-manager.js';
-import { transcribeAudio, runShadowTranscription, createEngine, getOrCreateEngine, ensureSttVocabMigrated, type SttEngine, type SttResult } from '../../core/stt/index.js';
+import { transcribeAudio, runShadowTranscription, createEngine, getOrCreateEngine, ensureSttVocabMigrated, prewarmSttEngines, type SttEngine, type SttResult } from '../../core/stt/index.js';
 import { saveRecordingAudio, writeRecordingResult, listRecordings, readRecordingAudio } from '../../core/stt/recordings.js';
 import { createWhisperCppEngine } from '../../core/stt/engine-whisper-cpp.js';
 import { startMicRecording, stopMicRecording, isMicRecording } from '../../core/stt/mic-record.js';
@@ -154,6 +154,57 @@ sttRouter.post('/draft', express.json({ limit: '12mb' }), async (req: Request, r
     const config = await getConfig();
     const result = await transcribeAudio(config, { audio, format, language: language || config.stt?.language });
     res.json({ text: result.text, durationMs: result.durationMs });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/stt/warmup
+ * Fired by the browser the moment recording starts, so the engine loads while
+ * the user is still talking instead of in front of the first draft. Idempotent
+ * and fire-and-forget: a warm engine returns immediately.
+ */
+sttRouter.post('/warmup', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const config = await getConfig();
+    await prewarmSttEngines(config);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/stt/save
+ * Persist a recording WITHOUT transcribing it. Used by segment-committed
+ * dictation, where the browser already assembled the final text from committed
+ * segments plus the tail pass: transcribing the full clip again server-side
+ * would cost seconds purely to write history. This stores the audio and the
+ * client's text so the recordings list, Redo, and re-transcribe all still work.
+ * Body: { audio: string (base64), format: string, text: string, language?: string }
+ */
+sttRouter.post('/save', express.json({ limit: '35mb' }), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { audio, format, text, language } = req.body;
+    if (!audio || typeof audio !== 'string' || !format || !ALLOWED_FORMATS.has(format) || typeof text !== 'string') {
+      res.status(400).json({ error: 'Missing/invalid audio, format, or text' });
+      return;
+    }
+    if (audio.length > 25 * 1024 * 1024) {
+      res.status(413).json({ error: 'Audio too large (max 25MB base64)' });
+      return;
+    }
+    const config = await getConfig();
+    const saved = await saveRecordingAudio(audio, format);
+    await writeRecordingResult(saved.id, {
+      format,
+      language: language || config.stt?.language || 'auto',
+      audioSizeBytes: Math.round(audio.length * 3 / 4),
+      engine: getOrCreateEngine(config)?.name,
+      result: { text, durationMs: 0 },
+    });
+    res.json({ recordingId: saved.id, debugAudioPath: saved.audioPath });
   } catch (err) {
     next(err);
   }

@@ -6,8 +6,11 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { transcribeAudio, draftTranscribe } from '@/api/stt';
+import { transcribeAudio, draftTranscribe, saveRecording, warmupStt } from '@/api/stt';
 import { setVoiceStatus } from '@/utils/voice-status';
+import { decideStopAction } from '@/utils/stt-stop';
+import { joinSegments } from '@/utils/stt-segments';
+import { PcmCapture } from '@/utils/pcm-stream';
 import { log } from '@/utils/log';
 
 export interface UseSpeechToTextOptions {
@@ -21,6 +24,17 @@ export interface UseSpeechToTextOptions {
    * words the user watched appear are the words they end up with.
    */
   onDraft?: (text: string) => void;
+  /**
+   * Called when the authoritative pass finishes AFTER a draft was already handed
+   * over as the result, which happens when the user stops mid-sentence: the draft
+   * goes in straight away so it is usable, and this refines it a moment later.
+   *
+   * `provisional` is the exact text that was delivered, so the consumer can tell
+   * whether its text box still holds that untouched and skip the swap if the user
+   * has since edited, sent, or dictated over it. Without this the hook waits for
+   * the server before showing anything, which is the delay users notice most.
+   */
+  onRefine?: (finalText: string, provisional: string) => void;
   /** ISO 639-1 language hint */
   language?: string;
 }
@@ -54,6 +68,12 @@ export interface UseSpeechToTextReturn {
   silenceWarning: string | null;
   /** True while a live draft is being streamed into the consumer's text. */
   isDrafting: boolean;
+  /**
+   * Stop recording and throw the audio away without delivering any text. For when
+   * the user has already acted on what they see (sending the message), so a
+   * transcription landing afterwards would duplicate what they just sent.
+   */
+  discardRecording: () => void;
 }
 
 // Mic-silence detection tunables.
@@ -71,13 +91,30 @@ const DEAD_STREAM_RMS = 0.0008;      // RMS at/below this = dead-stream territor
 const SAMPLE_INTERVAL_MS = 100;      // how often we sample RMS
 const SILENCE_WARN_TICKS = 30;       // ~3s of actual sampling with no sound → show warning
 
-// Live-draft tunables. Each tick re-transcribes the WHOLE clip so far (webm
-// chunks are only decodable as a from-the-start concatenation), which is fine
-// while clips are short: the local engine runs ~15x realtime. Drop-if-busy
-// keeps at most one draft request in flight, and past the size cap we stop
-// drafting entirely and let the final pass handle it.
+// Live-draft tunables. The draft normally works on a raw-PCM side capture
+// (pcm-stream.ts) so each tick only transcribes the CURRENT segment: audio up
+// to the last committed pause is frozen as text and never re-processed, which
+// keeps ticks fast no matter how long the dictation runs. When PCM capture is
+// unavailable the fallback re-transcribes the whole webm clip every tick (webm
+// chunks only decode as a from-the-start concatenation). Drop-if-busy keeps at
+// most one draft request in flight either way.
 const DRAFT_INTERVAL_MS = 2000;
-const DRAFT_MAX_BYTES = 4 * 1024 * 1024; // ~4MB opus ≈ several minutes
+const DRAFT_MAX_BYTES = 4 * 1024 * 1024; // upload cap per draft request
+// A pause this long is a safe place to cut a segment: no word straddles it,
+// and it is comfortably longer than an intra-sentence breath.
+const COMMIT_SILENCE_MS = 800;
+// Don't bother committing scraps — a segment shorter than this is cheap to
+// keep re-drafting and committing it would just multiply requests.
+const COMMIT_MIN_SEGMENT_MS = 3000;
+// Timeslice handed to MediaRecorder.start(), so one chunk ≈ one second of audio.
+// Chunk counts are how we compare "audio the newest draft saw" against "audio the
+// user was still talking in" without decoding anything.
+const CHUNK_MS = 1000;
+// Speech-presence floor for that comparison. A mic's noise floor sits near 0.001
+// RMS and ordinary speech well above 0.05, so this reads a pause as a pause while
+// still counting a quiet talker as speech. Deliberately far above DEAD_STREAM_RMS,
+// which only has to separate a wedged capture from a live one.
+const VOICE_RMS = 0.012;
 
 const isMediaRecorderSupported =
   typeof window !== 'undefined' &&
@@ -85,7 +122,7 @@ const isMediaRecorderSupported =
   !!navigator.mediaDevices?.getUserMedia &&
   typeof MediaRecorder !== 'undefined';
 
-export function useSpeechToText({ onTranscribe, onDraft, language }: UseSpeechToTextOptions): UseSpeechToTextReturn {
+export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: UseSpeechToTextOptions): UseSpeechToTextReturn {
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -98,6 +135,19 @@ export function useSpeechToText({ onTranscribe, onDraft, language }: UseSpeechTo
   // draft request is still running instead of queuing behind it).
   const draftTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const draftBusyRef = useRef(false);
+  // Abort handle for the in-flight draft request. Stopping the recording aborts
+  // it so the final pass isn't queued behind a draft that no longer matters.
+  const draftAbortRef = useRef<AbortController | null>(null);
+  // Raw-PCM side capture (segment-commit drafting). Null when the audio graph
+  // could not be built — drafting then falls back to whole-clip webm.
+  const pcmRef = useRef<PcmCapture | null>(null);
+  // Text committed at silence gaps this recording — frozen, never re-transcribed.
+  const confirmedRef = useRef('');
+  // Absolute sample offset where the still-open draft window begins.
+  const windowStartRef = useRef(0);
+  // Absolute sample position covered by the newest delivered draft (PCM path's
+  // equivalent of draftCoveredChunksRef).
+  const draftCoveredSampleRef = useRef(0);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -122,6 +172,17 @@ export function useSpeechToText({ onTranscribe, onDraft, language }: UseSpeechTo
   onTranscribeRef.current = onTranscribe;
   const onDraftRef = useRef(onDraft);
   onDraftRef.current = onDraft;
+  const onRefineRef = useRef(onRefine);
+  onRefineRef.current = onRefine;
+  // How many 1s chunks of audio the newest delivered draft was built from, and the
+  // chunk during which speech was last heard. If the draft already covered every
+  // chunk that had speech in it, the user finished talking before it ran, so the
+  // authoritative pass has nothing left to add and is skipped entirely.
+  const draftCoveredChunksRef = useRef(0);
+  const lastVoiceChunkRef = useRef(0);
+  // Set when the user acts on the text themselves (sends the message) while a
+  // recording is live: stop, and deliver nothing.
+  const discardedRef = useRef(false);
   // Last draft handed to the consumer this recording. If the final pass fails or
   // comes back empty we deliver this instead, so the user keeps the words they
   // watched appear (and the consumer's draft span gets released either way).
@@ -164,6 +225,9 @@ export function useSpeechToText({ onTranscribe, onDraft, language }: UseSpeechTo
       sampleTimerRef.current = undefined;
     }
     analyserRef.current = null;
+    // Detach (stop capturing) but keep the object: onstop still reads its
+    // buffered samples for the tail pass. It is replaced on the next start.
+    pcmRef.current?.detach();
     audioCtxRef.current?.close().catch(() => {});
     audioCtxRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -177,14 +241,19 @@ export function useSpeechToText({ onTranscribe, onDraft, language }: UseSpeechTo
   const toggleRecording = useCallback(async () => {
     setError(null);
 
-    // Stop recording
+    // Stop recording. Abort the in-flight draft first: its result is about to
+    // be superseded, and on a busy engine it would otherwise delay the final
+    // tail pass by a whole request.
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      draftAbortRef.current?.abort();
       mediaRecorderRef.current.stop();
       return;
     }
 
     // Start recording
     try {
+      // Load the engine while the user talks, not in front of the first draft.
+      warmupStt();
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: { ideal: 1 }, sampleRate: { ideal: 16000 } },
       });
@@ -195,6 +264,10 @@ export function useSpeechToText({ onTranscribe, onDraft, language }: UseSpeechTo
       sawAnyNonDeadRef.current = false;
       analyserAttachedRef.current = false;
       setSilenceWarning(null);
+      pcmRef.current = null;
+      confirmedRef.current = '';
+      windowStartRef.current = 0;
+      draftCoveredSampleRef.current = 0;
       try {
         const AudioCtx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
         if (AudioCtx) {
@@ -210,6 +283,9 @@ export function useSpeechToText({ onTranscribe, onDraft, language }: UseSpeechTo
           source.connect(analyser);
           analyserRef.current = analyser;
           analyserAttachedRef.current = true;
+          // Raw-PCM side capture for segment-commit drafting (null on failure →
+          // the draft loop falls back to whole-clip webm).
+          pcmRef.current = PcmCapture.attach(ctx, stream);
 
           const buf = new Uint8Array(analyser.fftSize);
           let consecutiveDeadTicks = 0;  // ticks in a row below the dead floor (background-tab safe)
@@ -230,6 +306,14 @@ export function useSpeechToText({ onTranscribe, onDraft, language }: UseSpeechTo
             const rms = Math.sqrt(sumSq / buf.length);
             // Smooth + amplify a bit for a lively meter display
             setLevel((prev) => prev * 0.6 + Math.min(1, rms * 3) * 0.4);
+
+            // Speech (not just noise floor) → remember how far into the recording
+            // we are, in chunks. chunksRef grows one entry per CHUNK_MS, so its
+            // length is the current position; +1 because the chunk in progress has
+            // not been pushed yet.
+            if (rms > VOICE_RMS) {
+              lastVoiceChunkRef.current = chunksRef.current.length + 1;
+            }
 
             if (rms > DEAD_STREAM_RMS) {
               // Mic is alive (even just noise floor) → reset counter and clear any warning.
@@ -272,8 +356,18 @@ export function useSpeechToText({ onTranscribe, onDraft, language }: UseSpeechTo
         stopStream();
         setIsRecording(false);
 
+        const totalChunks = chunksRef.current.length;
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
         chunksRef.current = [];
+
+        // The user already sent what they were looking at. Anything we deliver now
+        // would be a duplicate of that message, so drop the audio silently.
+        if (discardedRef.current) {
+          discardedRef.current = false;
+          lastDraftRef.current = null;
+          log.info('stt', 'recording discarded — the text was already sent');
+          return;
+        }
 
         if (blob.size === 0) return;
 
@@ -289,55 +383,141 @@ export function useSpeechToText({ onTranscribe, onDraft, language }: UseSpeechTo
           return;
         }
 
+        // Determine format from mime type (Safari uses audio/mp4)
+        const mime = recorder.mimeType;
+        const format = mime.includes('webm') ? 'webm'
+          : mime.includes('mp4') ? 'mp4'
+          : mime.includes('ogg') ? 'ogg'
+          : 'webm'; // fallback
+
         // Convert blob to base64 using FileReader (avoids stack overflow on large audio)
+        const readBlobBase64 = () => new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const dataUrl = reader.result as string;
+            resolve(dataUrl.split(',')[1] ?? '');
+          };
+          reader.onerror = () => reject(new Error('Failed to read audio blob'));
+          reader.readAsDataURL(blob);
+        });
+
+        // Keep the full clip for Retry, then write it (plus the final text) to
+        // the recordings history. Fire-and-forget: the text is already in the
+        // user's hands by the time this runs, history must not delay it.
+        const keepForRetry = async (): Promise<string> => {
+          const base64 = await readBlobBase64();
+          lastAudioRef.current = { base64, format };
+          if (isMountedRef.current) setHasLastRecording(true);
+          return base64;
+        };
+        const persistHistory = (base64: string, finalText: string) => {
+          saveRecording(base64, format, finalText, languageRef.current)
+            .then((saved) => { if (isMountedRef.current) setLastDebugPath(saved.debugAudioPath); })
+            .catch((e) => log.warn('stt', `recording history write failed: ${e instanceof Error ? e.message : String(e)}`));
+        };
+        const persistRecording = async (finalText: string) => {
+          try {
+            persistHistory(await keepForRetry(), finalText);
+          } catch { /* retry/history are best-effort */ }
+        };
+
+        // How the stop is served depends on whether the user had finished talking.
+        //
+        // The newest draft covered some prefix of the audio, and we know where
+        // speech was last heard (PCM samples when the side capture ran, 1s webm
+        // chunks otherwise). If the draft already saw every moment that had
+        // speech in it, the user stopped during silence, having watched their
+        // words land: a final pass would re-transcribe just to arrive at the
+        // same words, so skip it and keep the draft. Otherwise they stopped
+        // mid-sentence: hand the draft over right away (usable immediately) and
+        // refine it when the tail pass returns.
+        //
+        // Both need level data: without it we cannot tell a pause from speech,
+        // so fall through to the plain wait-for-the-server behaviour.
+        const pcm = pcmRef.current;
+        const lastVoiceAt = pcm ? pcm.lastVoiceSample(VOICE_RMS) : lastVoiceChunkRef.current;
+        const draftCovered = pcm ? draftCoveredSampleRef.current : draftCoveredChunksRef.current;
+        const draft = lastDraftRef.current;
+        const action = decideStopAction({
+          hasDraft: !!draft,
+          knowsWhenSpeechEnded: (pcm ? true : analyserAttachedRef.current) && lastVoiceAt > 0,
+          draftCoveredChunks: draftCovered,
+          lastVoiceChunk: lastVoiceAt,
+        });
+        let provisional: string | null = null;
+        if (draft && action !== 'wait-for-server') {
+          lastDraftRef.current = null;
+          log.info('stt', `stop → ${action} (draft covered ${draftCovered}, last speech at ${lastVoiceAt}, ${totalChunks} chunks)`);
+          if (isMountedRef.current) onTranscribeRef.current(draft);
+          if (action === 'draft-is-final') {
+            setVoiceStatus({ transcribing: false, lastFailed: false });
+            void persistRecording(draft);
+            return;
+          }
+          provisional = draft;
+        }
+
         if (!isMountedRef.current) return;
         setIsTranscribing(true);
         setVoiceStatus({ transcribing: true });
         try {
-          const base64 = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              const dataUrl = reader.result as string;
-              resolve(dataUrl.split(',')[1] ?? '');
-            };
-            reader.onerror = () => reject(new Error('Failed to read audio blob'));
-            reader.readAsDataURL(blob);
-          });
+          let finalText: string;
+          let tookMs = 0;
 
-          // Determine format from mime type (Safari uses audio/mp4)
-          const mime = recorder.mimeType;
-          const format = mime.includes('webm') ? 'webm'
-            : mime.includes('mp4') ? 'mp4'
-            : mime.includes('ogg') ? 'ogg'
-            : 'webm'; // fallback
-
-          log.info('stt', `Sending ${(blob.size / 1024).toFixed(1)}KB ${format} for transcription`);
-
-          // Save for retry
-          lastAudioRef.current = { base64, format };
-          if (isMountedRef.current) setHasLastRecording(true);
-
-          const result = await transcribeAudio(base64, format, languageRef.current);
-
-          if (isMountedRef.current && result.debugAudioPath) {
-            setLastDebugPath(result.debugAudioPath);
+          if (pcm) {
+            // Keep the clip for Retry BEFORE the tail pass, so a failed pass
+            // still leaves the audio recoverable.
+            const retryBase64 = await keepForRetry().catch(() => null);
+            // Segment-committed recording: everything before windowStart is
+            // already frozen text, so the final pass only transcribes the open
+            // tail — this is what makes stopping fast regardless of clip length.
+            const slice = pcm.sliceWavBase64(windowStartRef.current);
+            if (slice) {
+              const t0 = Date.now();
+              const { text: tail } = await draftTranscribe(slice.base64, 'wav', languageRef.current);
+              tookMs = Date.now() - t0;
+              finalText = joinSegments(confirmedRef.current, tail);
+            } else {
+              finalText = confirmedRef.current;
+            }
+            if (retryBase64) persistHistory(retryBase64, finalText || provisional || '');
+          } else {
+            const base64 = await readBlobBase64();
+            log.info('stt', `Sending ${(blob.size / 1024).toFixed(1)}KB ${format} for transcription`);
+            lastAudioRef.current = { base64, format };
+            if (isMountedRef.current) setHasLastRecording(true);
+            const result = await transcribeAudio(base64, format, languageRef.current);
+            if (isMountedRef.current && result.debugAudioPath) setLastDebugPath(result.debugAudioPath);
+            finalText = result.text;
+            tookMs = result.durationMs;
           }
 
-          if (result.text) {
+          if (finalText) {
             setVoiceStatus({ transcribing: false, lastFailed: false });
             if (!isMountedRef.current) return;
             lastDraftRef.current = null; // superseded by the authoritative pass
-            onTranscribeRef.current(result.text);
-            const preview = result.text.length > 50 ? result.text.slice(0, 50) + '...' : result.text;
-            log.info('stt', `Transcribed: "${preview}" (${result.durationMs}ms)`);
+            if (provisional !== null) {
+              // The draft is already in the user's text box. Let the consumer swap
+              // it only if it is still sitting there untouched; identical text is a
+              // no-op it can skip. Falls back to a plain write when the consumer
+              // does not implement refining.
+              if (onRefineRef.current) onRefineRef.current(finalText, provisional);
+              else if (finalText !== provisional) onTranscribeRef.current(finalText);
+            } else {
+              onTranscribeRef.current(finalText);
+            }
+            const preview = finalText.length > 50 ? finalText.slice(0, 50) + '...' : finalText;
+            log.info('stt', `Transcribed: "${preview}" (${tookMs}ms${pcm ? ', tail-only' : ''})`);
           } else {
             // An empty transcription used to fail SILENTLY — spinner ends, nothing
             // appears, and the user thinks the recording was eaten. Surface it; the
             // audio is kept in lastAudioRef so Retry can still recover it.
-            log.warn('stt', `Transcription returned empty text (${result.durationMs}ms)`);
+            log.warn('stt', `Transcription returned empty text (${tookMs}ms)`);
             setVoiceStatus({ transcribing: false, lastFailed: true });
             if (isMountedRef.current) {
-              if (!keepLastDraft()) {
+              // `provisional` means the draft was already delivered, so there is
+              // nothing to recover and nothing to warn about — keep it.
+              if (provisional === null && !keepLastDraft()) {
                 setError('Transcription came back empty — the audio is kept, you can retry.');
               }
             }
@@ -347,7 +527,7 @@ export function useSpeechToText({ onTranscribe, onDraft, language }: UseSpeechTo
           log.error('stt', `Transcription failed: ${msg} — audio kept for retry`);
           setVoiceStatus({ transcribing: false, lastFailed: true });
           if (!isMountedRef.current) return;
-          if (!keepLastDraft()) setError(msg);
+          if (provisional === null && !keepLastDraft()) setError(msg);
         } finally {
           if (isMountedRef.current) setIsTranscribing(false);
         }
@@ -363,10 +543,13 @@ export function useSpeechToText({ onTranscribe, onDraft, language }: UseSpeechTo
 
       // Timeslice so chunks accumulate during recording — the live draft below
       // needs decodable audio-so-far (a from-the-start concat of webm chunks).
-      recorder.start(1000);
+      recorder.start(CHUNK_MS);
       setIsRecording(true);
       setIsDrafting(false);
       lastDraftRef.current = null;
+      draftCoveredChunksRef.current = 0;
+      lastVoiceChunkRef.current = 0;
+      discardedRef.current = false;
       if (!onDraftRef.current) return; // consumer takes final text only
 
       // Live draft: every couple of seconds transcribe what's been said so far
@@ -375,35 +558,104 @@ export function useSpeechToText({ onTranscribe, onDraft, language }: UseSpeechTo
       // transcription on stop is untouched by this.
       const draftFormat = mimeType.includes('webm') ? 'webm' : mimeType.includes('mp4') ? 'mp4' : 'webm';
       draftBusyRef.current = false;
-      draftTimerRef.current = setInterval(async () => {
-        if (draftBusyRef.current) return;                       // previous draft still in flight
-        if (mediaRecorderRef.current !== recorder || recorder.state === 'inactive') return;
+
+      // Segment-commit drafting on the raw-PCM capture. Each tick does ONE of
+      // two things: if a qualifying pause exists, finalize the segment before it
+      // (that text is frozen and its audio never touched again — this is what
+      // keeps ticks fast forever); otherwise refresh the live preview of the
+      // open segment. The visible text is always confirmed + current tail.
+      const pcmDraftTick = async (pcm: PcmCapture) => {
+        const abort = new AbortController();
+        draftAbortRef.current = abort;
+        try {
+          const commitAt = pcm.findCommitPoint(windowStartRef.current, {
+            voiceRms: VOICE_RMS,
+            minSilenceMs: COMMIT_SILENCE_MS,
+            minSegmentMs: COMMIT_MIN_SEGMENT_MS,
+          });
+          if (commitAt !== null) {
+            // A complete phrase with silence on both sides: this pass sees full
+            // context, so its text is better than any mid-sentence preview was.
+            const slice = pcm.sliceWavBase64(windowStartRef.current, commitAt);
+            if (!slice) { windowStartRef.current = commitAt; return; }
+            const { text } = await draftTranscribe(slice.base64, 'wav', languageRef.current, abort.signal);
+            // Stopped meanwhile → onstop owns everything from windowStart on;
+            // adopting this result now would double-commit the segment.
+            if (mediaRecorderRef.current !== recorder) return;
+            confirmedRef.current = joinSegments(confirmedRef.current, text);
+            windowStartRef.current = commitAt;
+            // Leave the visible draft alone: it still shows this segment's text
+            // from the pre-commit preview, and the next tick repaints it as
+            // confirmed + fresh tail. Repainting here would briefly drop words
+            // spoken after the pause.
+            return;
+          }
+          const slice = pcm.sliceWavBase64(windowStartRef.current);
+          // No qualifying pause in absurdly long unbroken speech — skip the
+          // tick (the upload would exceed the draft cap); the stop pass copes.
+          if (!slice || slice.base64.length > DRAFT_MAX_BYTES) return;
+          const { text } = await draftTranscribe(slice.base64, 'wav', languageRef.current, abort.signal);
+          // Only show while THIS recording is still live (a stale draft landing
+          // after stop must not flash over the final result).
+          if (isMountedRef.current && mediaRecorderRef.current === recorder) {
+            const display = joinSegments(confirmedRef.current, text);
+            if (display) {
+              setIsDrafting(true);
+              lastDraftRef.current = display;
+              draftCoveredSampleRef.current = slice.endSample;
+              onDraftRef.current?.(display);
+            }
+          }
+        } finally {
+          draftAbortRef.current = null;
+        }
+      };
+
+      // Fallback when the PCM capture failed: re-transcribe the whole webm clip
+      // every tick (webm chunks only decode from the start, so no slicing).
+      const webmDraftTick = async () => {
         const chunks = chunksRef.current;
         if (chunks.length === 0) return;
+        // Remember how much audio THIS draft is built from, before awaiting: the
+        // stop path compares it against where speech last was to decide whether
+        // the draft already says everything.
+        const coveredChunks = chunks.length;
         const blob = new Blob(chunks, { type: recorder.mimeType });
         if (blob.size > DRAFT_MAX_BYTES) {                      // very long clip — stop drafting
           if (draftTimerRef.current !== undefined) { clearInterval(draftTimerRef.current); draftTimerRef.current = undefined; }
           return;
         }
-        draftBusyRef.current = true;
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve((reader.result as string).split(',')[1] ?? '');
+          reader.onerror = () => reject(new Error('draft blob read failed'));
+          reader.readAsDataURL(blob);
+        });
+        const abort = new AbortController();
+        draftAbortRef.current = abort;
         try {
-          const base64 = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve((reader.result as string).split(',')[1] ?? '');
-            reader.onerror = () => reject(new Error('draft blob read failed'));
-            reader.readAsDataURL(blob);
-          });
-          const { text } = await draftTranscribe(base64, draftFormat, languageRef.current);
-          // Only show while THIS recording is still live (a stale draft landing
-          // after stop must not flash over the final result). stopStream() nulls
-          // mediaRecorderRef on stop, so this identity check is sufficient.
+          const { text } = await draftTranscribe(base64, draftFormat, languageRef.current, abort.signal);
           if (isMountedRef.current && mediaRecorderRef.current === recorder && text) {
             setIsDrafting(true);
             lastDraftRef.current = text;
+            draftCoveredChunksRef.current = coveredChunks;
             onDraftRef.current?.(text);
           }
+        } finally {
+          draftAbortRef.current = null;
+        }
+      };
+
+      draftTimerRef.current = setInterval(async () => {
+        if (draftBusyRef.current) return;                       // previous request still in flight
+        if (mediaRecorderRef.current !== recorder || recorder.state === 'inactive') return;
+        draftBusyRef.current = true;
+        try {
+          const pcm = pcmRef.current;
+          if (pcm) await pcmDraftTick(pcm);
+          else await webmDraftTick();
         } catch {
-          // No preview this tick — silent by design.
+          // No preview this tick — silent by design (including aborts on stop).
         } finally {
           draftBusyRef.current = false;
         }
@@ -451,6 +703,16 @@ export function useSpeechToText({ onTranscribe, onDraft, language }: UseSpeechTo
 
   const retryLast = useCallback(() => retryWithModel(undefined), [retryWithModel]);
 
+  const discardRecording = useCallback(() => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === 'inactive') return;
+    // The flag is read in onstop, which stop() triggers asynchronously.
+    discardedRef.current = true;
+    draftAbortRef.current?.abort();
+    setVoiceStatus({ transcribing: false });
+    recorder.stop();
+  }, []);
+
   return {
     isSupported: isMediaRecorderSupported,
     isRecording,
@@ -464,5 +726,6 @@ export function useSpeechToText({ onTranscribe, onDraft, language }: UseSpeechTo
     level,
     silenceWarning,
     isDrafting,
+    discardRecording,
   };
 }

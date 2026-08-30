@@ -131,6 +131,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // live draft replaces the previous one instead of stacking. null = no active
   // dictation (the final result releases it).
   const dictationSpanRef = useRef<{ start: number; length: number } | null>(null);
+  // The last dictation result written into the box, kept after the span is
+  // released so a late refinement can find it and verify it is still untouched.
+  const lastDictationRef = useRef<{ start: number; text: string } | null>(null);
+  // Set by MicButton: abandons a live recording without delivering text.
+  const micControlRef = useRef<{ discard: () => void } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // "+" attach menu + send split-button dropdown (Claude-style). Both close on
@@ -511,6 +516,13 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const text = value.trim();
     if ((!text && images.length === 0) || disabled || queueFull) return;
 
+    // Sending is the user saying they are done talking. Stop the mic and drop the
+    // audio: the words are already in the message, so a transcription arriving
+    // afterwards would paste the whole thing back into the empty box.
+    micControlRef.current?.discard();
+    dictationSpanRef.current = null;
+    lastDictationRef.current = null;
+
     // Control commands: intercepted by UI, not sent as text to Claude
     if (isSessionMode && text === '/model' && onControlCommand) {
       onControlCommand('model');
@@ -881,6 +893,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       const start = pos + pre.length;
       handleChange(before + pre + text + post + after);
       dictationSpanRef.current = isDraft ? { start, length: text.length } : null;
+      if (!isDraft) lastDictationRef.current = { start, text };
       const caret = start + text.length;
       requestAnimationFrame(() => { el?.setSelectionRange(caret, caret); el?.focus(); });
       return;
@@ -890,8 +903,33 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const tail = value.slice(span.start + span.length);
     handleChange(head + text + tail);
     dictationSpanRef.current = isDraft ? { start: span.start, length: text.length } : null;
+    if (!isDraft) lastDictationRef.current = { start: span.start, text };
     const caret = span.start + text.length;
     requestAnimationFrame(() => { el?.setSelectionRange(caret, caret); el?.focus(); });
+  };
+
+  /**
+   * A draft was delivered as the result so the user could act on it immediately,
+   * and the authoritative transcription has now arrived. Swap it in ONLY if that
+   * exact text is still where we put it: if the user has typed over it, sent it,
+   * or started dictating again, the newer text wins and this is dropped. Silently
+   * replacing text someone is already editing is worse than a slightly rougher
+   * transcript.
+   */
+  const refineDictation = (finalText: string, provisional: string) => {
+    if (finalText === provisional) return;
+    const at = lastDictationRef.current;
+    if (!at || at.text !== provisional) return;
+    if (value.slice(at.start, at.start + provisional.length) !== provisional) return;
+    // A dictation started since then owns the box now.
+    if (dictationSpanRef.current) return;
+    const el = textareaRef.current;
+    const caretWasAtEnd = el?.selectionStart === at.start + provisional.length;
+    handleChange(value.slice(0, at.start) + finalText + value.slice(at.start + provisional.length));
+    lastDictationRef.current = { start: at.start, text: finalText };
+    if (!caretWasAtEnd) return;
+    const caret = at.start + finalText.length;
+    requestAnimationFrame(() => { el?.setSelectionRange(caret, caret); });
   };
 
   const handlePaste = (e: ClipboardEvent) => {
@@ -1213,6 +1251,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         <MicButton
           onTranscribe={(text) => writeDictation(text, false)}
           onDraft={(text) => writeDictation(text, true)}
+          onRefine={refineDictation}
+          controlRef={micControlRef}
           disabled={disabled}
         />
         <input
