@@ -349,6 +349,37 @@ describe('GET /api/tasks — canonical query params', () => {
     expect(await idsFor('?sort=created_desc')).toEqual([second.id, first.id]);
   });
 
+  it('reports total and truncated so a capped answer is detectable', async () => {
+    await addTask({ title: 'Alpha' });
+    await addTask({ title: 'Beta' });
+    await addTask({ title: 'Gamma' });
+
+    const app = createApp();
+    // No limit — the whole match set, and nothing claims to be cut.
+    const all = await request(app).get('/api/tasks');
+    expect(all.body.tasks).toHaveLength(3);
+    expect(all.body.total).toBe(3);
+    expect(all.body.truncated).toBe(false);
+
+    // Capped: total stays the PRE-limit match count, which is the only way a
+    // caller can tell 1 row of 3 apart from "you have 1 task".
+    const capped = await request(app).get('/api/tasks?limit=1');
+    expect(capped.body.tasks).toHaveLength(1);
+    expect(capped.body.total).toBe(3);
+    expect(capped.body.truncated).toBe(true);
+
+    // total counts rows matching the FILTER, not the store.
+    const filtered = await request(app).get('/api/tasks?q=alpha&limit=1');
+    expect(filtered.body.total).toBe(1);
+    expect(filtered.body.truncated).toBe(false);
+
+    // Same contract on the slim/minimal projections the UI rides.
+    const slim = await request(app).get('/api/tasks?fields=list&limit=2');
+    expect(slim.body.tasks).toHaveLength(2);
+    expect(slim.body.total).toBe(3);
+    expect(slim.body.truncated).toBe(true);
+  });
+
   it('rejects invalid enums, limits and time windows with 400', async () => {
     expect(await expect400('?completion=finished')).toMatch(/completion/i);
     expect(await expect400('?phases=SHIPPED')).toMatch(/phase/i);

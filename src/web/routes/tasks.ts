@@ -8,8 +8,8 @@ import { VALID_PHASES } from '../../core/phase.js'
 import {
   addTask,
   listTasks,
-  queryTasks,
-  queryTasksSlim,
+  queryTasksPage,
+  queryTasksSlimPage,
   getTask,
   completeTask,
   toggleComplete,
@@ -292,6 +292,11 @@ const VALID_PHASES_ARRAY = [...VALID_PHASES]
 // Legacy singulars (status/project/source/tags/sprint) fold into the canonical
 // arrays. Canonical `completion` supersedes `status`; there is NO implicit
 // hiding of COMPLETE on REST (that default lives only in the agent-tool adapter).
+//
+// There is also NO route-local default `limit`: no limit param means every
+// matching row, which is what the web list and the whole pinned board need. A
+// page-size default belongs to the adapter that wants one (the `task_list` op),
+// and the response carries `total` / `truncated` so a capped answer is visible.
 
 /** A rejected query param. Carries the message the route returns as 400. */
 class QueryParamError extends Error {}
@@ -463,10 +468,17 @@ tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
     }
 
     let queried: Task[] | SlimTask[]
+    // Rows matched BEFORE `limit`, echoed back so a capped answer is detectable
+    // (see the `total` / `truncated` fields on the response below).
+    let total: number
+    let truncated: boolean
     try {
-      queried = isSlim
-        ? await queryTasksSlim(query, { minimal: isMinimal })
-        : await queryTasks(query)
+      const page = isSlim
+        ? await queryTasksSlimPage(query, { minimal: isMinimal })
+        : await queryTasksPage(query)
+      queried = page.tasks
+      total = page.total
+      truncated = page.truncated
     } catch (err) {
       if (err instanceof TaskQueryError) { res.status(400).json({ error: err.message }); return }
       throw err
@@ -483,12 +495,14 @@ tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
       ...t,
       ...(t.depends_on?.length ? { is_blocked: isTaskBlocked(t, enriched) } : {}),
     }))
-    res.json({ tasks: tasksWithBlocked })
+    // `total` / `truncated` are additive: `tasks` keeps its exact old shape, and
+    // a caller that passed no limit always sees truncated=false.
+    res.json({ tasks: tasksWithBlocked, total, truncated })
     const tDone = Date.now()
-    const total = tDone - t0
-    if (total > 200) {
+    const elapsed = tDone - t0
+    if (elapsed > 200) {
       log.web.warn('GET /api/tasks slow', {
-        total, queryMs: tList - t0, enrichMs: tEnrich - tList,
+        totalMs: elapsed, queryMs: tList - t0, enrichMs: tEnrich - tList,
         serializeMs: tDone - tEnrich, taskCount: queried.length, slim: isSlim,
       })
     }

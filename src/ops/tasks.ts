@@ -5,7 +5,8 @@
  */
 
 import { z } from 'zod'
-import { defineOp } from './registry.js'
+import { defineOp, type HttpBinding } from './registry.js'
+import { materializeBinding } from './executor.js'
 import { taskRefTag } from '../utils/entity-refs.js'
 import { PHASE_ORDER } from '../core/phase.js'
 
@@ -30,6 +31,18 @@ function withRef(task: unknown, extra: Record<string, unknown> = {}): unknown {
 const SORT = z.enum(['updated_desc', 'created_desc', 'completed_desc', 'priority', 'title_asc', 'pin_order'])
 const TIME_BASIS = z.enum(['created', 'updated', 'created_or_updated', 'due', 'completed'])
 
+/**
+ * Page size task_list applies when the caller named no limit. NOT a zod
+ * `.default()`: a schema default is injected before the handler can see whether
+ * this is a board read, which is exactly how working_set=true silently came back
+ * capped at 50 rows of a 120-row board (2026-08-30 regression).
+ */
+const DEFAULT_TASK_LIST_LIMIT = 50
+
+// Server-root-absolute: /api/tasks is the canonical composable-query route (the
+// same engine the web UI filters ride), not the frozen /api/v1 mobile projection.
+const TASK_LIST_BINDING: HttpBinding = { method: 'GET', path: '/api/tasks' }
+
 defineOp({
   name: 'task_list',
   title: 'List / query Walnut tasks',
@@ -37,13 +50,17 @@ defineOp({
     'Query the user\'s tasks with any combination of filters (fields AND together; comma lists OR ' +
     'within a field). No status default (completed tasks included), but limit defaults to 50 — narrow ' +
     'with filters or raise limit (max 200) instead of paging by hand. ' +
-    'Working set (the pinned board): pass working_set=true to get pinned tasks in board order, each ' +
-    'row carrying focus_tier + pin_order — an absent focus_tier on a pinned row means the Satellite ' +
-    '(default) tier. focus_tier filters match pinned rows only: "satellite" matches pinned rows with no ' +
+    'Working set (the pinned board): pass working_set=true to get the WHOLE board (no default limit, ' +
+    'however many pins there are) in board order, each row carrying focus_tier + pin_order — an absent ' +
+    'focus_tier on a pinned row means the Satellite (default) tier. focus_tier filters match pinned rows ' +
+    'only: "satellite" matches pinned rows with no ' +
     'stored tier; focus/backlog/wait/ct_* match exactly. Time windows: time_basis + a window. last_hours/' +
     'last_days look BACKWARD from now — for upcoming deadlines use time_basis=due with time_from/' +
     'time_until (bare YYYY-MM-DD accepted; until is exclusive). basis "completed" finds recently ' +
-    'finished work. Returns { count, tasks } with slim rows; use task_get for full detail on one task.',
+    'finished work. Returns { count, total, truncated, tasks } with slim rows: count = rows returned, ' +
+    'total = rows that matched before the limit, truncated = true when total > count (there ARE more ' +
+    'rows — never read a truncated result as the full picture; narrow the filters or raise limit). ' +
+    'Use task_get for full detail on one task.',
   input: {
     status: STATUS.optional().describe('Legacy 3-state: todo | in_progress | done'),
     completion: z.string().optional().describe('Comma list of todo | in_progress | complete (in_progress includes AGENT_COMPLETE)'),
@@ -58,7 +75,7 @@ defineOp({
     tags_all: z.string().optional().describe('Comma list — match tasks carrying ALL of these tags'),
     pinned: z.boolean().optional().describe('Filter pinned/unpinned tasks'),
     focus_tier: z.string().optional().describe('Comma list of pin tiers: focus | satellite | backlog | wait | a custom ct_* id. Only pinned tasks match; satellite = pinned with no stored tier'),
-    working_set: z.boolean().optional().describe('Shortcut: the whole pinned board (all tiers, completed pins included) sorted by pin_order'),
+    working_set: z.boolean().optional().describe('Shortcut: the WHOLE pinned board (all tiers, completed pins included) sorted by pin_order — no default limit, so the board is never silently cut'),
     unread: z.boolean().optional().describe('Tasks with agent output the human has not opened yet'),
     blocked: z.boolean().optional().describe('Tasks blocked/unblocked by incomplete dependencies'),
     parent_task_id: z.string().optional().describe('Children of this parent task (exact id)'),
@@ -71,22 +88,47 @@ defineOp({
     time_from: z.string().optional().describe('Absolute window start (inclusive), ISO-8601 or YYYY-MM-DD'),
     time_until: z.string().optional().describe('Absolute window end (exclusive), ISO-8601 or YYYY-MM-DD'),
     sort: SORT.optional().describe('Result order (default updated_desc; working_set defaults to pin_order)'),
-    // Defaulted, not optional: the full store is thousands of rows and several
-    // MB — an unbounded reply is useless to a model and blocks the server's
-    // event loop. Every other list op defaults its page size too.
-    limit: z.number().int().min(1).max(200).default(50).describe('Max rows (1-200, default 50), applied after sort'),
+    // Optional in the SCHEMA, defaulted in the handler: the full store is
+    // thousands of rows and several MB, so an unfiltered reply still gets a
+    // page size — but working_set means "the whole board", and a zod default
+    // would cap it before the handler could tell the two apart.
+    limit: z.number().int().min(1).max(200).optional().describe(`Max rows (1-200), applied after sort. Default ${DEFAULT_TASK_LIST_LIMIT}, EXCEPT working_set=true which returns the whole board unless you pass a limit`),
     fields: z.enum(['list', 'full']).default('list').describe('list = slim rows (default); full = every field including note (heavy — combine with ids or a small limit)'),
   },
-  // Server-root-absolute bind: /api/tasks is the canonical composable-query
-  // route (the same engine the web UI filters ride), not the frozen /api/v1
-  // mobile projection.
-  bind: { method: 'GET', path: '/api/tasks' },
-  mapResult: ({ body }) => {
-    const tasks = (body as { tasks?: unknown[] } | undefined)?.tasks
+  // Declared so the route-parity test and the generated docs keep pointing at
+  // the real route; the handler below is what actually executes (it needs to
+  // decide the limit from the args first).
+  bind: TASK_LIST_BINDING,
+  handler: async (args, call) => {
+    // The board shortcut is exempt from the page-size default BY CONTRACT: a
+    // partial board reads as "these are all your pinned tasks", which is a wrong
+    // answer, not a small one. An explicit limit is still honored.
+    const effective: Record<string, unknown> = { ...args }
+    if (effective.limit === undefined && args.working_set !== true) {
+      effective.limit = DEFAULT_TASK_LIST_LIMIT
+    }
+    const { path } = materializeBinding(TASK_LIST_BINDING, effective)
+    const body = await call('GET', path) as { tasks?: unknown[]; total?: unknown } | undefined
+    const tasks = body?.tasks
     // An unexpected 200 body (a proxy's HTML page, a shape change) must not
     // read as "you have 0 tasks" — pass it through so the caller sees it.
     if (!Array.isArray(tasks)) return body
-    return { count: tasks.length, tasks }
+    // total comes from the server (rows matched before the limit). A server too
+    // old to send it can only be reported as "no more than what you got".
+    const total = typeof body?.total === 'number' ? body.total : tasks.length
+    const truncated = total > tasks.length
+    return {
+      count: tasks.length,
+      total,
+      truncated,
+      ...(truncated
+        ? {
+          hint: `Showing ${tasks.length} of ${total} matching tasks — this result is CUT. `
+            + 'Narrow the filters or raise limit (max 200) before drawing any conclusion from it.',
+        }
+        : {}),
+      tasks,
+    }
   },
   tags: { readonly: true, remote: 'allow' },
 })
@@ -109,7 +151,7 @@ defineOp({
   title: 'Create a Walnut task',
   description:
     'Record a task without starting any work or session. Use this only when the user wants tracking ' +
-    'without execution; use `delegate` when work should start now. An omitted/empty project means ' +
+    'without execution; follow with `session_start` when work should start now. An omitted/empty project means ' +
     'Inbox, and an unknown project name auto-creates its registry row. A new task lands on the pinned ' +
     'board in the Satellite tier; pass focus_tier to put it straight into another tier, or pinned=false ' +
     'to keep it off the board. The result carries a `ref` tag.',

@@ -2329,6 +2329,18 @@ function rowToSlimTask(row: Record<string, any>, minimal = false): SlimTask {
 //
 // So an imperfectly-pushable dimension costs a bigger scan, never a wrong answer.
 
+/**
+ * One page of query results. `total` is how many rows matched BEFORE `limit`,
+ * so a capped answer is detectable instead of reading as "that is all there is".
+ */
+export interface TaskQueryPage<T> {
+  tasks: T[];
+  /** Rows matching the query before `limit` was applied. */
+  total: number;
+  /** True when `limit` cut rows off the end (`tasks.length < total`). */
+  truncated: boolean;
+}
+
 /** Timestamp columns a time window can be pushed down onto. */
 type TimestampColumn = 'created_at' | 'updated_at' | 'due_date' | 'completed_at';
 
@@ -2545,7 +2557,7 @@ export function taskQueryCandidateSql(
 async function runTaskQuery(
   query: TaskQuery,
   projection: 'full' | 'slim' | 'minimal',
-): Promise<Task[] | SlimTask[]> {
+): Promise<TaskQueryPage<Task> | TaskQueryPage<SlimTask>> {
   await ensureInit();
   // ONE captured clock for the whole evaluation — a relative window must not
   // straddle a second boundary between normalization and matching.
@@ -2589,9 +2601,16 @@ async function runTaskQuery(
   const matched = candidates.filter((t) =>
     !isRetiredSentinelTitle(t.title) && matchesTaskQuery(t, normalized, ctx));
   matched.sort((a, b) => compareTasksForQuery(a, b, sort));
-  // The ONE truncation point: after the derived filter + stable sort.
+  // The ONE truncation point: after the derived filter + stable sort. `total` is
+  // captured BEFORE the slice so every caller can tell a complete answer from a
+  // capped one — a silent cap once made a board review report 13 satellite
+  // tasks out of 36 and conclude the rest had vanished.
+  const total = matched.length;
   const limited = normalized.limit !== undefined ? matched.slice(0, normalized.limit) : matched;
-  return projection === 'full' ? limited : (limited as unknown as SlimTask[]);
+  const page = { tasks: limited, total, truncated: limited.length < total };
+  return projection === 'full'
+    ? page as TaskQueryPage<Task>
+    : page as unknown as TaskQueryPage<SlimTask>;
 }
 
 /**
@@ -2599,7 +2618,16 @@ async function runTaskQuery(
  * filtering. Throws `TaskQueryError` on an invalid query (callers map it to 400).
  */
 export async function queryTasks(query: TaskQuery): Promise<Task[]> {
-  return await runTaskQuery(query, 'full') as Task[];
+  return (await runTaskQuery(query, 'full') as TaskQueryPage<Task>).tasks;
+}
+
+/**
+ * queryTasks plus the matched-row count BEFORE `limit` — for surfaces that must
+ * tell the caller their answer was capped (the REST list route and the
+ * `task_list` op both report `total` / `truncated` from this).
+ */
+export async function queryTasksPage(query: TaskQuery): Promise<TaskQueryPage<Task>> {
+  return await runTaskQuery(query, 'full') as TaskQueryPage<Task>;
 }
 
 /**
@@ -2611,7 +2639,15 @@ export async function queryTasksSlim(
   query: TaskQuery,
   opts: { minimal?: boolean } = {},
 ): Promise<SlimTask[]> {
-  return await runTaskQuery(query, opts.minimal ? 'minimal' : 'slim') as SlimTask[];
+  return (await runTaskQuery(query, opts.minimal ? 'minimal' : 'slim') as TaskQueryPage<SlimTask>).tasks;
+}
+
+/** queryTasksSlim plus the pre-limit `total` / `truncated` pair. */
+export async function queryTasksSlimPage(
+  query: TaskQuery,
+  opts: { minimal?: boolean } = {},
+): Promise<TaskQueryPage<SlimTask>> {
+  return await runTaskQuery(query, opts.minimal ? 'minimal' : 'slim') as TaskQueryPage<SlimTask>;
 }
 
 // ── Dependency helpers (used inside withWriteLock) ──
