@@ -33,7 +33,17 @@ import Foundation
 // inner exits when it is orphaned, and EVERY Apple Event error is throttled (not
 // just "not authorized"). Before v2, stopping the helper killed the wrapper and
 // left the inner sampling forever — one orphan per off→on toggle.
-let HELPER_VERSION = "v2"
+//
+// v3: the inter-tick wait SERVICES THE RUN LOOP. NSWorkspace's frontmost app is a
+// cache that AppKit refreshes when it processes workspace notifications, so a
+// process that only slept between ticks reported whatever was frontmost at its
+// first tick for the rest of its life: a helper spawned 8 hours earlier banked
+// "loginwindow" all evening while the user typed in Walnut. Measured on this Mac,
+// one long-running process, forced app switches: with Thread.sleep the value never
+// moved off the app seen at startup (10/10 ticks); with run-loop servicing it
+// tracked iTerm2 → Finder → iTerm2. NSWorkspace.runningApplications
+// .first(isActive) is the SAME cache and was equally frozen — not a fallback.
+let HELPER_VERSION = "v3"
 /// One line per this many seconds. The server clamps banked duration itself, so
 /// a slow tick can never inflate a day.
 let SAMPLE_INTERVAL: TimeInterval = 5
@@ -264,9 +274,26 @@ func sampleOnce() {
     emit(out)
 }
 
+/// The wait between samples. Servicing the run loop is the whole point: it is
+/// what lets AppKit deliver the workspace notifications that refresh
+/// NSWorkspace.frontmostApplication (see the v3 note at the top of this file).
+///
+/// RunLoop.run(until:) returns IMMEDIATELY when the loop has no sources attached,
+/// so a keep-alive timer is registered first and any early return still pays a
+/// short sleep — otherwise the "wait" could become a busy spin.
+func waitServicingRunLoop(until deadline: Date) {
+    while deadline.timeIntervalSinceNow > 0 {
+        RunLoop.current.run(until: deadline)
+        let left = deadline.timeIntervalSinceNow
+        if left > 0 { Thread.sleep(forTimeInterval: min(left, 0.2)) }
+    }
+}
+
 func streamForever() -> Never {
     // A dead reader must end the helper, not kill it mid-write with a signal.
     signal(SIGPIPE, SIG_IGN)
+    // Keeps the run loop from returning instantly when nothing else is attached.
+    RunLoop.current.add(Timer(timeInterval: 3600, repeats: true) { _ in }, forMode: .default)
     var next = Date()
     while true {
         // Orphaned: our parent (the wrapper, or the walnut server when the
@@ -276,10 +303,9 @@ func streamForever() -> Never {
         if getppid() == 1 { exit(0) }
         sampleOnce()
         next = next.addingTimeInterval(SAMPLE_INTERVAL)
-        let delay = next.timeIntervalSinceNow
         // Behind schedule (machine slept, helper starved): resync instead of
         // firing a burst of catch-up samples.
-        if delay > 0 { Thread.sleep(forTimeInterval: delay) } else { next = Date() }
+        if next.timeIntervalSinceNow > 0 { waitServicingRunLoop(until: next) } else { next = Date() }
     }
 }
 

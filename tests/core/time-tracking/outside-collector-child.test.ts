@@ -18,12 +18,14 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-outside-c
 
 import { CONFIG_FILE, WALNUT_HOME } from '../../../src/constants.js';
 import {
-  isOutsideCollectorRunning, resetOutsideCollectorForTest, startOutsideCollector, stopOutsideCollector,
+  HELPER_VERSION, isOutsideCollectorRunning, resetOutsideCollectorForTest, startOutsideCollector,
+  stopOutsideCollector,
 } from '../../../src/core/time-tracking/outside-collector.js';
 import { getOutsideIndex, resetOutsideStore } from '../../../src/core/time-tracking/outside-store.js';
 
-/** Must match HELPER_VERSION in outside-collector.ts. */
-const HELPER_BIN = () => path.join(WALNUT_HOME, 'cache', 'walnut-activity-v2');
+/** The cached path the collector looks for — versioned, so a bump can't leave
+ *  this test silently spawning nothing. */
+const HELPER_BIN = () => path.join(WALNUT_HOME, 'cache', `walnut-activity-${HELPER_VERSION}`);
 const PIDS_FILE = () => path.join(WALNUT_HOME, 'fake-helper-pids.json');
 
 /**

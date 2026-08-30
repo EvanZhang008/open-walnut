@@ -10,9 +10,13 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-outside-collector'));
 
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
-  MAX_BANK_MS, MAX_IDLE_SECS, TICK_MS, decideSample, isOutsideCollectorRunning, parseSampleLine,
-  sampleToRecord, stopOutsideCollector, type ActivitySample,
+  AWAY_BUNDLE_IDS, HELPER_VERSION, MAX_BANK_MS, MAX_IDLE_SECS, TICK_MS, decideSample,
+  isOutsideCollectorRunning, parseSampleLine, sampleToRecord, stopOutsideCollector,
+  type ActivitySample,
 } from '../../../src/core/time-tracking/outside-collector.js';
 import { localDateKey } from '../../../src/core/time-tracking/rollup.js';
 
@@ -92,6 +96,37 @@ describe('decideSample', () => {
   it('accepts a sample with no idle field at all (an older helper)', () => {
     const bare: ActivitySample = { ts: '2026-08-29T14:11:21', app: 'Slack' };
     expect(decideSample(bare, null, NOW).durationMs).toBe(TICK_MS);
+  });
+
+  it('discards the lock screen and the screen saver even when locked says false', () => {
+    // The field bug: a stale frontmost read banked 20 minutes of `loginwindow` as
+    // work, with locked:false alongside it (the lock flag was live and the screen
+    // really was unlocked — the APP name was the frozen value).
+    for (const bundleId of AWAY_BUNDLE_IDS) {
+      expect(decideSample(sample({ app: 'loginwindow', bundleId, locked: false }), NOW - 5000, NOW))
+        .toEqual({ durationMs: 0, nextPrev: null });
+    }
+    expect(AWAY_BUNDLE_IDS).toContain('com.apple.loginwindow');
+  });
+
+  it('still counts an app whose name merely resembles one of those', () => {
+    expect(decideSample(sample({ app: 'Login Items', bundleId: 'com.example.loginwindow-tool' }), NOW - 5000, NOW).durationMs)
+      .toBe(5000);
+  });
+});
+
+describe('helper version (ratchet)', () => {
+  it('matches the version baked into the swift source', async () => {
+    // The collector names the compiled binary after this version and reuses any
+    // file already at that path, so a swift change without a bump would keep
+    // running the OLD binary forever — which is exactly how a fixed staleness bug
+    // would appear unfixed on an upgraded machine.
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+    const source = await fs.readFile(path.join(repoRoot, 'src/data/walnut-activity.swift'), 'utf-8');
+    expect(source).toContain(`let HELPER_VERSION = "${HELPER_VERSION}"`);
+    // And the tick wait must keep servicing the run loop: a plain sleep is what
+    // froze the frontmost app for the life of the process.
+    expect(source).toContain('waitServicingRunLoop(until: next)');
   });
 });
 

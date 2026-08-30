@@ -22,15 +22,18 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js';
+import { CLOUD_MODE, IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import { localDateKey } from './rollup.js';
 import { recordOutside, type OutsideRecord } from './outside-store.js';
 
 /** Bumping this recompiles the helper, which changes its cdhash — so macOS asks
  *  for the Automation grant once more. Expected on upgrade, not a regression.
- *  v2: signal forwarding + orphan self-reap in the helper (see the swift file). */
-const HELPER_VERSION = 'v2';
+ *  v2: signal forwarding + orphan self-reap in the helper (see the swift file).
+ *  v3: the helper services its run loop, so a long-lived process sees app
+ *  switches instead of reporting the app that was frontmost when it started.
+ *  MUST equal HELPER_VERSION in src/data/walnut-activity.swift (ratchet test). */
+export const HELPER_VERSION = 'v3';
 /** The helper's own cadence (src/data/walnut-activity.swift SAMPLE_INTERVAL). */
 export const TICK_MS = 5_000;
 /** Above this, the user is away from the keyboard: the sample is not attention. */
@@ -38,6 +41,19 @@ export const MAX_IDLE_SECS = 120;
 /** Ceiling on one banked window, so a stalled helper or a slept machine cannot
  *  turn one late sample into hours. */
 export const MAX_BANK_MS = 15_000;
+/**
+ * Bundle ids that are the ABSENCE of the user, not an app they are using: the
+ * lock/login screen and the screen saver. They are discarded here as well as in
+ * the helper because they are how "away" time got attributed to an app — a stale
+ * frontmost read banked 20 minutes of `com.apple.loginwindow` as if it were work.
+ * `locked` should already cover it; this is the belt to that braces (fast user
+ * switching shows the login window without the screen being locked).
+ */
+export const AWAY_BUNDLE_IDS: readonly string[] = [
+  'com.apple.loginwindow',
+  'com.apple.ScreenSaver.Engine',
+  'com.apple.ScreenSaverEngine',
+];
 /** Restart backoff for a helper that dies. */
 const BACKOFF_START_MS = 5_000;
 const BACKOFF_MAX_MS = 5 * 60_000;
@@ -121,6 +137,11 @@ export function decideSample(
   nowMs: number,
 ): { durationMs: number; nextPrev: number | null } {
   if (sample.locked === true) return { durationMs: 0, nextPrev: null };
+  // The lock/login screen and the screen saver are away time, whatever the
+  // `locked` flag says (see AWAY_BUNDLE_IDS).
+  if (sample.bundleId && AWAY_BUNDLE_IDS.includes(sample.bundleId)) {
+    return { durationMs: 0, nextPrev: null };
+  }
   if (typeof sample.idleSecs === 'number' && sample.idleSecs > MAX_IDLE_SECS) {
     return { durationMs: 0, nextPrev: null };
   }
@@ -291,6 +312,11 @@ async function outsideEnabled(): Promise<boolean> {
  */
 export async function startOutsideCollector(): Promise<void> {
   if (process.platform !== 'darwin' || CLOUD_MODE) return;
+  // An ephemeral server (tests, `dev:ephemeral`, demos) seeds the real config into
+  // a throwaway data dir, so it would inherit `enabled: true` and spawn its own
+  // sampler — N dev servers meant N helper pairs on the machine, each firing Apple
+  // Events at the user's browsers to fill a store that is deleted on exit.
+  if (IS_EPHEMERAL) return;
   if (!(await outsideEnabled())) return;
   // An enable is the user asking again, so a previously failed availability check
   // (no Xcode CLT at boot) gets one more chance instead of being cached for the
