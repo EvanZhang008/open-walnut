@@ -21,11 +21,15 @@ const ICON_PIN_FILLED = (
   </svg>
 );
 
-/** Counter-clockwise arrow — "take this back". */
+/** Tape-deck rewind: a bar the tape winds back TO, plus two left triangles.
+ *  Deliberately NOT the circular counter-clockwise arrow that was here first —
+ *  that glyph is the universal "restart / reload" and read as "run this again",
+ *  which is the opposite of what the button does. */
 const ICON_REWIND = (
-  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M2.5 4.5v3.2h3.2" />
-    <path d="M3.1 7.4A5.2 5.2 0 118 13.2" />
+  <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true">
+    <rect x="2" y="3.4" width="1.5" height="9.2" rx="0.6" />
+    <path d="M9 3.9v8.2L4.6 8.3a.4.4 0 010-.6z" />
+    <path d="M14.2 3.9v8.2L9.8 8.3a.4.4 0 010-.6z" />
   </svg>
 );
 
