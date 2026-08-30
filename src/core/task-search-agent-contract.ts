@@ -29,12 +29,12 @@ const PROMPT_FOOTER = `## Owner rule
 - The same task reached via both lanes is ONE result. Never list a session as a result.
 - Prefer recently-active tasks over old loosely-related ones.
 
-## Output — print ONLY this JSON object as your final answer. No prose, no code fence.
-{"summary":"<at most 1 sentence, plain text, or omit>",
+## Output — your ENTIRE final reply is this JSON object. No prose before it, no quoted rows, no code fence. Every extra output token is user-visible latency: keep it SHORT.
+{"summary":"<at most 8 words, or omit>",
  "results":[{"task_id":"<EXACT id copied from tool output>",
-             "evidence":"<max 200 chars quoted or tightly paraphrased from a snippet you actually saw>",
+             "evidence":"<ONE short phrase (max 12 words) from a snippet you actually saw>",
              "confidence":"high"|"medium"|"low"}]}
-At most 3 results, best first. Zero matches -> {"results":[]} — that is a correct answer.
+Usually ONE result; at most 3 when genuinely ambiguous, best first. Zero matches -> {"results":[]} — that is a correct answer.
 NEVER invent or reconstruct a task_id; an id not present in a tool result is discarded and counts as a wrong answer.
 Do NOT output titles, phases, or projects — those are attached from the database.`;
 
@@ -73,7 +73,7 @@ export function buildCliSystemPrompt(apiBase?: string): string {
   ${batched}
    Use DIFFERENT vocabulary — the literal strings a transcript would contain (package names, file extensions, commands, API names) plus an English <-> Chinese translation. The seed query counts as already used.
 2. At most ONE more such batched command if nothing was convincing.
-Stop as soon as you are confident. Never repeat a query.
+Stop as soon as you are confident. Never repeat a query. Do not narrate between commands — run them silently.
 
 ${PROMPT_FOOTER}`;
 }
@@ -130,23 +130,32 @@ export interface AgentSearchResult {
 }
 
 /**
- * Tolerant extraction: the child is told "JSON only" but cheap models wrap
- * answers in fences or prose. Take the outermost {...} slice and require a
- * `results` array (pattern: parseTriageAnswer in diff-summary.ts).
+ * Tolerant extraction: the child is told "JSON only" but models wrap answers
+ * in fences or prose — and sometimes QUOTE tool-output rows (their own `{...}`
+ * JSON) in the prose before the real answer, so the naive first-{ to last-}
+ * slice is prose-contaminated garbage (shipped 502 unparseable, 2026-08-30).
+ * Walk the `{` candidates left to right against the final `}` until one
+ * parses AND carries a `results` array; a quoted row mid-prose fails the
+ * parse (trailing prose) and is skipped.
  */
 export function parseAgentAnswer(answer: string): RawAgentAnswer {
-  const start = answer.indexOf('{');
   const end = answer.lastIndexOf('}');
-  if (start === -1 || end <= start) throw new Error('no JSON object in agent answer');
-  const parsed: unknown = JSON.parse(answer.slice(start, end + 1));
-  if (typeof parsed !== 'object' || parsed === null || !Array.isArray((parsed as { results?: unknown }).results)) {
-    throw new Error('agent answer has no results array');
+  if (end === -1) throw new Error('no JSON object in agent answer');
+  const MAX_CANDIDATES = 50; // answers are ~2KB; this is a runaway bound
+  let start = answer.indexOf('{');
+  for (let i = 0; start !== -1 && start < end && i < MAX_CANDIDATES; i++, start = answer.indexOf('{', start + 1)) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(answer.slice(start, end + 1)); } catch { continue; }
+    if (typeof parsed !== 'object' || parsed === null || !Array.isArray((parsed as { results?: unknown }).results)) {
+      continue;
+    }
+    const obj = parsed as { summary?: unknown; results: unknown[] };
+    return {
+      summary: obj.summary,
+      results: obj.results.filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null),
+    };
   }
-  const obj = parsed as { summary?: unknown; results: unknown[] };
-  return {
-    summary: obj.summary,
-    results: obj.results.filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null),
-  };
+  throw new Error('no parseable results object in agent answer');
 }
 
 function cleanText(value: unknown, maxChars: number): string {

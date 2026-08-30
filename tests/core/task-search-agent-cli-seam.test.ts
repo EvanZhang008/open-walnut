@@ -1,16 +1,19 @@
 /**
  * Gotcha ratchet on the claude -p DEFAULT engine: the exact arguments the
- * one-shot child is spawned with. If any of these drift (model, timeout,
- * system prompt, prompt shape, slim flags), the lane silently degrades — pin
- * them. The child runs by default (user decision 2026-08-28: ride Claude
- * Code); WALNUT_AGENT_SEARCH_ENGINE=inprocess is the opt-out.
+ * one-shot child runs with. If any of these drift (model, timeout, system
+ * prompt, prompt shape, tool budget), the lane silently degrades — pin them.
+ * The child runs by default (user decision 2026-08-28: ride Claude Code);
+ * WALNUT_AGENT_SEARCH_ENGINE=inprocess is the opt-out. The engine rides the
+ * WARM pool (micro-claude-warm.ts) — the slim/thinking-off spawn shape is
+ * pinned in tests/providers/micro-claude-warm.test.ts.
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
-const { aiDisabledRef, inlineMock, cliResolveMock, searchMock } = vi.hoisted(() => ({
+const { aiDisabledRef, warmMock, prewarmMock, cliResolveMock, searchMock } = vi.hoisted(() => ({
   aiDisabledRef: { value: false },
-  inlineMock: vi.fn(),
+  warmMock: vi.fn(),
+  prewarmMock: vi.fn(),
   cliResolveMock: vi.fn(() => '/usr/local/bin/claude'),
   searchMock: vi.fn(),
 }));
@@ -23,8 +26,10 @@ vi.mock('../../src/core/cheap-model.js', async (importOriginal) => ({
 vi.mock('../../src/core/claude-cli-detect.js', () => ({
   resolveClaudeCliExecutable: cliResolveMock,
 }));
-vi.mock('../../src/providers/inline-subagent.js', () => ({
-  runInlineSubagent: inlineMock,
+vi.mock('../../src/providers/micro-claude-warm.js', () => ({
+  runWarmMicroClaude: warmMock,
+  prewarmMicroClaude: prewarmMock,
+  _resetWarmPoolForTesting: vi.fn(),
 }));
 vi.mock('../../src/core/search.js', () => ({ search: searchMock }));
 
@@ -46,7 +51,8 @@ afterAll(() => {
 
 beforeEach(async () => {
   aiDisabledRef.value = false;
-  inlineMock.mockReset();
+  warmMock.mockReset();
+  prewarmMock.mockReset();
   cliResolveMock.mockClear();
   cliResolveMock.mockReturnValue('/usr/local/bin/claude');
   searchMock.mockReset();
@@ -57,31 +63,26 @@ beforeEach(async () => {
 });
 
 describe('claude -p default engine wiring', () => {
-  it('spawns the one-shot child with the pinned contract', async () => {
-    inlineMock.mockResolvedValue({ success: true, result: '{"results":[]}', costUsd: 0.01, durationMs: 5, blocks: [] });
+  it('runs the warm child with the pinned contract', async () => {
+    warmMock.mockResolvedValue({ response: '{"results":[]}', costUsd: 0.01, durationMs: 5, warm: true });
     await runTaskSearchAgent('which task adds docx');
-    expect(inlineMock).toHaveBeenCalledTimes(1);
-    const opts = inlineMock.mock.calls[0][0];
+    expect(warmMock).toHaveBeenCalledTimes(1);
+    const opts = warmMock.mock.calls[0][0];
     expect(opts.model).toBe('sonnet'); // the quality floor the user set
     expect(opts.timeoutMs).toBe(80_000);
-    expect(opts.systemPrompt).toContain('walnut tools call search');
-    expect(opts.systemPrompt).toContain('type:"session"');
+    expect(opts.system).toContain('walnut tools call search');
+    expect(opts.system).toContain('type:"session"');
     expect(opts.prompt).toContain('which task adds docx');
     // The raw query is pre-searched server-side and injected as seed results,
     // so the child's common case answers in ONE model round.
     expect(opts.prompt).toContain('SEED RESULTS');
     expect(searchMock).toHaveBeenCalledWith('which task adds docx', { types: ['task', 'session'], limit: 8 });
     expect(typeof opts.toolUseId).toBe('string');
-    // Slim preset — without it the child inhales ~32.5k tokens of CLI
-    // system prompt + tool manuals + the repo's CLAUDE.md chain (vs 3.6k),
-    // runs in the server's repo cwd (cron-adoption hazard), and its
-    // transcript lands in the repo's ~/.claude/projects dir where the
-    // session-import scan would list it. Bash stays on for the walnut CLI.
-    expect(opts.slim).toBe(true);
     expect(opts.tools).toEqual(['Bash']);
-    // Thinking OFF: the child answers a fixed contract; thinking cost 3-6s
-    // per round in profiled transcripts (2026-08-29).
-    expect(opts.thinking).toBe(false);
+    // Tool budget: prompts alone don't bound rounds (a sonnet child ran 7
+    // batches against an "at most 2" contract) — the warm runner injects a
+    // budget-exhausted message after the 2nd tool call.
+    expect(opts.maxToolCalls).toBe(2);
   });
 
   it('translates the child stream into live progress events keyed by progressId', async () => {
@@ -92,7 +93,7 @@ describe('claude -p default engine wiring', () => {
     });
     try {
       searchMock.mockResolvedValue([{ type: 'task', title: 'T', snippet: 's', taskId: 't1', score: 1, matchField: 'task' }]);
-      inlineMock.mockImplementation(async (opts: { onBlock?: (b: unknown) => void }) => {
+      warmMock.mockImplementation(async (opts: { onBlock?: (b: unknown) => void }) => {
         // Replay the shapes claude-stream-parser emits for a searching child.
         opts.onBlock?.({ type: 'text', content: 'Let me widen the search.' });
         opts.onBlock?.({
@@ -104,7 +105,7 @@ describe('claude -p default engine wiring', () => {
           result: '{"results":[{"taskId":"t1"},{"taskId":"t2"}]}',
         });
         opts.onBlock?.({ type: 'text', content: '{"results":[]}' });
-        return { success: true, result: '{"results":[]}', durationMs: 5, blocks: [] };
+        return { response: '{"results":[]}', durationMs: 5, warm: true };
       });
       await runTaskSearchAgent('which task adds docx progress', { progressId: 'pw-cli-1' });
       await new Promise((r) => setTimeout(r, 50));
@@ -124,16 +125,16 @@ describe('claude -p default engine wiring', () => {
       if (event.name === 'search-agent:progress') seen.push(event.data as Record<string, unknown>);
     });
     try {
-      inlineMock.mockImplementation(async (opts: { onBlock?: (b: unknown) => void }) => {
+      warmMock.mockImplementation(async (opts: { onBlock?: (b: unknown) => void }) => {
         opts.onBlock?.({
           type: 'tool_call', toolUseId: 'tu-c1', name: 'Bash', status: 'calling',
-          input: { command: `curl -sGm15 "http://127.0.0.1:3456/api/search" --data-urlencode "q=docx preview" -d "types=task,session" -d "limit=15"` },
+          input: { command: `curl -sGm15 "http://127.0.0.1:3456/api/search" --data-urlencode "q=docx preview" -d "types=task,session" -d "limit=8" -d "slim=1"` },
         });
         opts.onBlock?.({
           type: 'tool_call', toolUseId: 'tu-c2', name: 'Bash', status: 'calling',
-          input: { command: `for q in 'stt 快捷键' 'voice shortcut'; do curl -sGm15 "http://127.0.0.1:3456/api/search" --data-urlencode "q=$q" -d "types=task,session" -d "limit=15" & done; wait` },
+          input: { command: `for q in 'stt 快捷键' 'voice shortcut'; do curl -sGm15 "http://127.0.0.1:3456/api/search" --data-urlencode "q=$q" -d "types=task,session" -d "limit=5" -d "slim=1" & done; wait` },
         });
-        return { success: true, result: '{"results":[]}', durationMs: 5, blocks: [] };
+        return { response: '{"results":[]}', durationMs: 5, warm: true };
       });
       await runTaskSearchAgent('which task adds docx curl shapes', { progressId: 'pw-cli-2' });
       await new Promise((r) => setTimeout(r, 50));
@@ -145,7 +146,7 @@ describe('claude -p default engine wiring', () => {
   });
 
   it('maps a failed child to 502 agent_failed', async () => {
-    inlineMock.mockResolvedValue({ success: false, result: '', error: 'exit code 1', durationMs: 5, blocks: [] });
+    warmMock.mockRejectedValue(new Error('exit code 1'));
     await expect(runTaskSearchAgent('which task adds docx'))
       .rejects.toMatchObject({ statusCode: 502, extra: { code: 'agent_failed' } });
   });
@@ -154,6 +155,6 @@ describe('claude -p default engine wiring', () => {
     cliResolveMock.mockReturnValue(null);
     await expect(runTaskSearchAgent('which task adds docx'))
       .rejects.toMatchObject({ statusCode: 503, extra: { code: 'ai_disabled' } });
-    expect(inlineMock).not.toHaveBeenCalled();
+    expect(warmMock).not.toHaveBeenCalled();
   });
 });

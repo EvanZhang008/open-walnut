@@ -26,6 +26,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { runInlineSubagent } from './inline-subagent.js';
+import { runWarmMicroClaude } from './micro-claude-warm.js';
 import type { StreamingBlock } from './claude-stream-parser.js';
 
 export interface MicroClaudeOptions {
@@ -40,8 +41,16 @@ export interface MicroClaudeOptions {
   tools?: string[];
   /** Extended thinking for the child. Default FALSE — a utility child answers
    *  a fixed contract, and thinking costs 3-6s per model round (profiled on
-   *  the search lane). Pass true only when the task genuinely needs it. */
+   *  the search lane). Pass true only when the task genuinely needs it.
+   *  Ignored on the warm path (warm children are always thinking-off). */
   thinking?: boolean;
+  /** Ride the pre-booted child pool (micro-claude-warm.ts): saves the ~2-2.5s
+   *  CLI boot when a pooled child is available (POC: 4.6s → 2.0s send→result)
+   *  and unlocks maxToolCalls enforcement via mid-run injection. */
+  warm?: boolean;
+  /** Warm path only: after this many tool_use blocks, inject a
+   *  budget-exhausted message that forces the final answer. */
+  maxToolCalls?: number;
   /** Live stream mirror (text / tool_call blocks) for progress UI. */
   onBlock?: (block: StreamingBlock) => void;
   /** For event correlation; defaults to a fresh micro-claude-<uuid>. */
@@ -59,6 +68,19 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 
 /** Run one slim claude -p turn. Throws on a failed/killed child. */
 export async function runMicroClaude(opts: MicroClaudeOptions): Promise<MicroClaudeResult> {
+  if (opts.warm) {
+    const run = await runWarmMicroClaude({
+      system: opts.system,
+      model: opts.model ?? DEFAULT_MODEL,
+      tools: opts.tools ?? [],
+      prompt: opts.prompt,
+      timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      toolUseId: opts.toolUseId ?? `micro-claude-${randomUUID()}`,
+      ...(opts.maxToolCalls !== undefined ? { maxToolCalls: opts.maxToolCalls } : {}),
+      ...(opts.onBlock ? { onBlock: opts.onBlock } : {}),
+    });
+    return { response: run.response, costUsd: run.costUsd, durationMs: run.durationMs };
+  }
   const run = await runInlineSubagent({
     prompt: opts.prompt,
     systemPrompt: opts.system,

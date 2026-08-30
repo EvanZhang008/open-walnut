@@ -5,6 +5,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import { search, type SearchResult } from '../../core/search.js'
+import { prewarmAgentSearchChild } from '../../core/task-search-agent.js'
 import { listTasksByIds } from '../../core/task-manager.js'
 import { sessionRefTag, taskRefTag } from '../../utils/entity-refs.js'
 
@@ -112,6 +113,11 @@ searchRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
     }
     const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined
     const slim = req.query.slim === '1'
+
+    // A verbose search = the human search box (agents/CLI use slim=1); it
+    // fires ~500ms before the AI lane's debounce, so pre-boot that lane's
+    // CLI child now — by the time the agent query lands, boot is done.
+    if (!slim) prewarmAgentSearchChild()
 
     const results = await search(q, { types, limit })
     res.json({ results: slim ? await toSlimResults(results) : results })

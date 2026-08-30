@@ -193,7 +193,10 @@ async function claudeCliEngine(
   };
 
   // Minimum-Claude pattern (micro-claude.ts): slim shell, Bash only for the
-  // walnut CLI. 32.5k → 3.6k prefix tokens measured.
+  // curl searches. warm rides the pre-booted child pool (~2.5s off when a
+  // pooled child is ready); maxToolCalls 2 enforces the prompt's own budget
+  // (seed + at most two batched commands) via mid-run injection — a sonnet
+  // child measurably ran 7 batches on prose alone.
   const run = await runMicroClaude({
     system: options.system,
     prompt,
@@ -201,6 +204,8 @@ async function claudeCliEngine(
     timeoutMs: options.timeoutMs,
     tools: ['Bash'],
     toolUseId: `task-search-${randomUUID()}`,
+    warm: true,
+    maxToolCalls: 2,
     onBlock,
   });
   return { response: run.response, model: options.model, costUsd: run.costUsd };
@@ -458,6 +463,32 @@ async function inner(
   count('search.agent.result', 1, { outcome: results.length > 0 ? 'hit' : 'empty' });
   if (droppedIds > 0) count('search.agent.invented_ids', droppedIds);
   return out;
+}
+
+/**
+ * Pre-boot the CLI child while the human is still typing: a verbose (human
+ * UI) /api/search fires ~500ms before the agent lane's 1000ms debounce, so
+ * by the time the agent query arrives the ~2-2.5s CLI boot is already done.
+ * Fire-and-forget, idempotent, and a no-op when the lane is disabled.
+ */
+export function prewarmAgentSearchChild(): void {
+  if (!useCliEngine() || backgroundAiDisabled()) return;
+  cliAvailable ??= resolveClaudeCliExecutable() !== null;
+  if (!cliAvailable) return;
+  void (async () => {
+    try {
+      const { getPluginApiBase } = await import('./plugins/server-api.js');
+      const { buildCliSystemPrompt } = await import('./task-search-agent-contract.js');
+      const { prewarmMicroClaude } = await import('../providers/micro-claude-warm.js');
+      // Must build the EXACT system prompt inner() will use — the pool is
+      // keyed on (model, tools, system) and a mismatch wastes the child.
+      prewarmMicroClaude({
+        system: buildCliSystemPrompt(getPluginApiBase()),
+        model: CLI_ENGINE_MODEL,
+        tools: ['Bash'],
+      });
+    } catch { /* prewarming is an optimization, never an error */ }
+  })();
 }
 
 /** Test hook: clears cache, in-flight map, and the CLI-availability latch. */

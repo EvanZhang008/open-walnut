@@ -137,7 +137,7 @@ function releaseSemaphore(): void {
  *  re-apply just the env block, exactly the CLI's own semantics (settings
  *  env is assigned OVER process env). */
 let userSettingsEnvCache: Record<string, string> | null = null;
-function readUserSettingsEnv(): Record<string, string> {
+export function readUserSettingsEnv(): Record<string, string> {
   if (userSettingsEnvCache) return userSettingsEnvCache;
   try {
     const raw = readFileSync(path.join(homedir(), '.claude', 'settings.json'), 'utf8');
