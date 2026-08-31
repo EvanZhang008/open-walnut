@@ -5,6 +5,8 @@
  */
 import { apiGet, apiPost } from './client';
 
+/** One id per GRANT, never per feature: Full Disk Access is a single row
+ *  covering every feature that reads through the shared helper. */
 export type PermissionId = 'calendar' | 'full-disk-access';
 
 export type PermissionState = 'granted' | 'denied' | 'not-determined' | 'not-applicable' | 'unknown';
@@ -20,8 +22,15 @@ export interface PermissionStatus {
    *  most important line in the dialog; users granting to the wrong identity
    *  ("node") is how the calendar broke invisibly. */
   grantTarget: string;
+  /** The grant belongs to a self-responsible helper, so it does NOT depend on
+   *  the launcher — the UI must not name the launcher for these rows. */
+  launcherIndependent?: boolean;
   settingsUrl: string;
   steps: string[];
+  /** The grant is IN System Settings with its toggle on, but keyed to an older
+   *  build of the helper, so it no longer applies. Only a remove-and-re-add
+   *  fixes it; toggling does nothing. The UI must say "re-add", not "add". */
+  staleGrant?: boolean;
 }
 
 export interface PermissionsReport {

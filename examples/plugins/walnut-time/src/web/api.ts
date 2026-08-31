@@ -344,7 +344,9 @@ export function createTimeApi(walnut: WalnutWebApi): TimeApi {
     openScreenTimeSettings() {
       // The console's own Permission Doctor endpoint, reused rather than reimplemented:
       // it owns the deep link and the pbcopy, so the plugin cannot drift from it.
-      return postJson<{ ok: boolean; copiedPath?: string }>('/api/permissions/screen-time/open-settings', {})
+      // 'full-disk-access' is the ONE row that covers this: Screen Time is a
+      // consumer of the shared helper's grant, not a permission of its own.
+      return postJson<{ ok: boolean; copiedPath?: string }>('/api/permissions/full-disk-access/open-settings', {})
     },
 
     refreshScreenTime() {

@@ -57,6 +57,16 @@ describe('GET /api/permissions', () => {
       const ids = report.permissions.map((p: { id: string }) => p.id);
       expect(ids).toContain('calendar');
       expect(ids).toContain('full-disk-access');
+      // ONE row per macOS permission. Screen Time used to get its own row even
+      // though it is the same Full Disk Access grant, which read as Walnut
+      // asking for the same thing twice and sent people to grant a path that
+      // could not fix what they were looking at. A new feature that needs FDA
+      // joins FDA_CONSUMERS; it must not add a row.
+      expect(new Set(ids).size).toBe(ids.length);
+      const fdaRows = report.permissions.filter(
+        (p: { settingsUrl: string }) => /Privacy_AllFiles/.test(p.settingsUrl),
+      );
+      expect(fdaRows.length).toBe(1);
       for (const p of report.permissions) {
         expect(['granted', 'denied', 'not-determined', 'not-applicable', 'unknown']).toContain(p.state);
         expect(['prompt', 'settings-only']).toContain(p.fixKind);

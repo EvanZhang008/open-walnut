@@ -9,7 +9,11 @@
  */
 
 /** Stable ids — new checks register in darwin.ts and reuse this union. */
-export type PermissionId = 'calendar' | 'full-disk-access' | 'screen-time';
+/** One id per GRANT, never per feature. Full Disk Access is a single row for
+ *  every feature that reads through the shared helper: two rows for the same
+ *  macOS permission read as Walnut asking twice, and the user only has to do it
+ *  once. See probeFullDiskAccess in ./darwin.ts. */
+export type PermissionId = 'calendar' | 'full-disk-access';
 
 export type PermissionState =
   /** Grant confirmed by a real probe (not by assuming). */

@@ -122,9 +122,21 @@ export function PermissionFixDialog({ permission, launcherName, onClose, onGrant
         ) : (
           <div className="app-modal-message">
             <p>{permission.why}</p>
+            {/* Naming the launcher is only true for grants that FOLLOW the
+                launcher. A self-responsible helper's grant is its own, and
+                mentioning the launcher there makes a correct instruction read
+                like a mismatch the user should not follow. */}
             <p className="permission-grant-target">
-              Walnut is currently launched by <strong>{launcherName}</strong>, so macOS checks the grant
-              for: <code>{permission.grantTarget}</code>
+              {permission.launcherIndependent ? (
+                <>
+                  macOS checks this grant for Walnut's own helper: <code>{permission.grantTarget}</code>
+                </>
+              ) : (
+                <>
+                  Walnut is currently launched by <strong>{launcherName}</strong>, so macOS checks the grant
+                  for: <code>{permission.grantTarget}</code>
+                </>
+              )}
             </p>
             {!showPromptButton && (
               <ol className="permission-steps">

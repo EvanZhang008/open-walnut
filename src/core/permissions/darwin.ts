@@ -18,10 +18,10 @@
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import os from 'node:os';
 import { CLOUD_MODE } from '../../constants.js';
 import { calendarAuthStatus } from '../calendar/sources/eventkit.js';
 import { log } from '../../logging/index.js';
+import type { Config } from '../types.js';
 import type { LauncherInfo, PermissionsReport, PermissionStatus } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -111,81 +111,95 @@ export function warmLauncherDetection(): void {
 // ── individual probes ────────────────────────────────────────────────────────
 
 /**
- * Full Disk Access probe. Apple ships no API for this, so we use the standard
- * community technique: try to read a file that only FDA unlocks. The user-level
- * TCC.db is ideal — it exists on every account and nothing else grants access.
+ * Full Disk Access — ONE row, ONE grant, for every feature that needs it.
  *
- * The read runs in a CHILD process (`/bin/cat`) rather than fs.readFile for
- * two reasons: a denied read is instant and clean in a child (no risk of a
- * TCC prompt attaching to our pid), and the child inherits our responsible
- * process, so the probe measures exactly the grant our sessions will use.
- * `cat` exits 1 with "Operation not permitted" when FDA is missing — that is
- * a definitive 'denied', not an error.
+ * It is deliberately measured against the shared `walnut-reader` helper rather
+ * than against this server process, and that choice is the whole design:
  *
- * FDA has no prompt (macOS never asks for it) → state is only ever
- * granted/denied/unknown, and the fix is always settings-only.
+ *   - The helper re-execs with parent responsibility disclaimed, so it is its
+ *     OWN TCC subject. The grant therefore belongs to the helper and survives a
+ *     different launcher, a redeploy, and (because it is certificate-signed) a
+ *     rebuild. Grant it once, ever.
+ *   - Probing the server process instead produced a row nobody could act on.
+ *     TCC judges whoever is actually reading, and on a scripted install that is
+ *     `/opt/homebrew/bin/node` running out of a staged temp directory with
+ *     ppid 1, while the row told the user to add `/Applications/Walnut.app` —
+ *     a different program with a different identity. The row stayed red no
+ *     matter how many times they granted, and reading next to the helper's row
+ *     it looked like Walnut was asking for the same permission twice.
+ *
+ * What that older row was for is not free, so state it plainly: giving the node
+ * process FDA is what stops the repeated "node would like to access data from
+ * other apps" popups in agent sessions. A helper cannot do that job, because
+ * there it is node itself doing the reading. Handing a whole Node runtime
+ * full-disk access is a much bigger hammer than one read-only helper, so it is
+ * not something to ask for by default. If it comes back, it belongs behind an
+ * explicit opt-in and must name the REAL launcher, never a hardcoded app path.
+ *
+ * Only probed when some feature actually needs it. With none enabled the row
+ * reports not-applicable and the UI hides it: nobody should be asked for the
+ * most powerful permission macOS has for a feature they never turned on, and
+ * probing would also pay a first-run swiftc compile for nothing.
  */
-async function probeFullDiskAccess(): Promise<'granted' | 'denied' | 'unknown'> {
-  const tccDb = `${os.homedir()}/Library/Application Support/com.apple.TCC/TCC.db`;
-  try {
-    // head -c1: we need "can we open it", not the contents.
-    await execFileAsync('/usr/bin/head', ['-c', '1', tccDb], { timeout: PROBE_TIMEOUT_MS });
-    return 'granted';
-  } catch (err) {
-    const msg = String((err as { stderr?: string }).stderr ?? err);
-    if (/Operation not permitted|Permission denied/i.test(msg)) return 'denied';
-    // ENOENT / timeout / anything else: we learned nothing about the grant.
-    log.web.warn('fda probe inconclusive', { error: msg.slice(0, 200) });
-    return 'unknown';
-  }
+interface FdaConsumer {
+  /** Shown in the row's `why` so the user knows what the grant buys. */
+  readonly reason: string;
+  readonly enabled: (config: Config) => boolean;
 }
 
-/**
- * Screen Time probe — the SECOND, separate Full Disk Access grant.
- *
- * Two rows in the FDA panel, on purpose. The row above is the launcher (so agent
- * sessions can read other apps' files); this one is the walnut-reader helper,
- * which disclaims parent responsibility and is therefore its own TCC subject. A
- * user who granted one has not granted the other, and merging the two rows into
- * one would tell them to grant a path that cannot fix the failure they see.
- *
- * Only probed when the feature is switched ON. Otherwise it reports
- * not-applicable and the UI hides the row: nobody should be asked for the most
- * powerful permission macOS has for a feature they never enabled, and probing
- * would also pay a first-run swiftc compile for nothing.
- */
-async function probeScreenTime(): Promise<{
+/** Every feature that reads through the shared helper. Adding one is a line
+ *  here; it must NOT grow a second permission row. */
+const FDA_CONSUMERS: readonly FdaConsumer[] = [
+  {
+    reason:
+      'read Apple Screen Time, including the numbers your iPhone syncs to this Mac, and keep '
+      + 'them permanently (Apple deletes its own copy after a few weeks)',
+    enabled: (config) => config.time?.screentime?.enabled === true,
+  },
+];
+
+async function probeFullDiskAccess(): Promise<{
   state: 'granted' | 'denied' | 'not-applicable' | 'unknown';
   target: string;
   stale: boolean;
+  reasons: string[];
 }> {
-  const unknown = { state: 'unknown' as const, target: 'walnut-reader', stale: false };
-  let enabled = false;
+  const unknown = { state: 'unknown' as const, target: 'walnut-reader', stale: false, reasons: [] };
+  let reasons: string[];
   try {
     const { getConfig } = await import('../config-manager.js');
     const config = await getConfig();
-    enabled = config.time?.screentime?.enabled === true;
+    reasons = FDA_CONSUMERS.filter((c) => c.enabled(config)).map((c) => c.reason);
   } catch {
     return unknown; // an unreadable config tells us nothing about the grant
   }
-  if (!enabled) return { state: 'not-applicable', target: 'walnut-reader', stale: false };
+  if (reasons.length === 0) {
+    return { state: 'not-applicable', target: 'walnut-reader', stale: false, reasons };
+  }
   try {
     const { probeScreenTimeAccess } = await import('../time-tracking/screentime-reader.js');
     const result = await probeScreenTimeAccess();
-    if (!('kind' in result)) return { state: 'granted', target: result.helperPath, stale: false };
+    if (!('kind' in result)) return { state: 'granted', target: result.helperPath, stale: false, reasons };
     if (result.kind === 'denied') {
-      return { state: 'denied', target: result.helperPath, stale: result.denied === 'stale_grant' };
+      return {
+        state: 'denied',
+        target: result.helperPath,
+        stale: result.denied === 'stale_grant',
+        reasons,
+      };
     }
     // no_store means Screen Time itself has never written a database here, and
     // unavailable means the helper cannot exist on this box. Neither is a grant
     // problem, so neither may send the user to System Settings.
-    if (result.kind === 'no_store') return { state: 'granted', target: result.helperPath, stale: false };
-    return unknown;
+    if (result.kind === 'no_store') {
+      return { state: 'granted', target: result.helperPath, stale: false, reasons };
+    }
+    return { ...unknown, reasons };
   } catch (err) {
-    log.web.warn('screen time permission probe inconclusive', {
+    log.web.warn('full disk access probe inconclusive', {
       error: err instanceof Error ? err.message : String(err),
     });
-    return unknown;
+    return { ...unknown, reasons };
   }
 }
 
@@ -213,26 +227,11 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
     return reportCache.report;
   }
 
-  const [launcher, calState, fdaState, screenTime] = await Promise.all([
+  const [launcher, calState, fda] = await Promise.all([
     detectLauncher(),
     calendarAuthStatus(),
     probeFullDiskAccess(),
-    probeScreenTime(),
   ]);
-
-  // Advice must name the real responsible app. When we're launched by a
-  // terminal, granting FDA to Walnut.app does nothing — TCC checks the
-  // terminal — so the grant target follows the launcher. When the launcher
-  // is unknowable (deploy-script parent already exited, daemon spawn), we
-  // can't name the responsible process at all; the honest, actionable advice
-  // is "restart from the stable identity, then grant that" — never a fake
-  // target like "launchd", which no user can add to the FDA panel.
-  const fdaTarget =
-    launcher.kind === 'mac-app'
-      ? '/Applications/Walnut.app'
-      : launcher.kind === 'terminal'
-        ? launcher.name
-        : '/Applications/Walnut.app (restart Walnut from the app first)';
 
   const permissions: PermissionStatus[] = [
     {
@@ -251,7 +250,16 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
       settingsUrl: SETTINGS_URL.calendars,
       steps:
         calState === 'not-determined'
-          ? ['Click "Request access" below.', 'Click Allow Full Access in the macOS dialog.']
+          ? [
+              // "Not asked yet" for a permission someone remembers granting is
+              // the single most confusing thing this panel can say, and it is
+              // usually true: macOS keys a grant to a CODE IDENTITY, so a helper
+              // that got rebuilt or re-signed is a different program with no
+              // history. Naming that up front stops it reading as data loss.
+              'If you have granted this before, macOS is asking again because Walnut re-signed the helper, and a re-signed program is a new one to macOS. It is now signed with a certificate, so this is the last time.',
+              'Click "Request access" below.',
+              'Click Allow Full Access in the macOS dialog.',
+            ]
           : [
               'Open System Settings → Privacy & Security → Calendars.',
               'Find the walnut-calendar entry and enable Full Access.',
@@ -261,36 +269,25 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
     {
       id: 'full-disk-access',
       label: 'Full Disk Access',
-      state: fdaState,
+      state: fda.state,
       fixKind: 'settings-only',
+      // Built from the features actually switched on, so the row can never ask
+      // for this permission "in general" — it always says what it is for. The
+      // empty case is reachable (state is then not-applicable and the UI hides
+      // the row), and an empty join would leave "Lets Walnut ." in the API.
       why:
-        'Lets agent sessions read files that belong to other apps without a popup per app. ' +
-        'Without it, macOS shows "node would like to access data from other apps" repeatedly.',
-      grantTarget: fdaTarget,
-      settingsUrl: SETTINGS_URL.fullDisk,
-      steps: [
-        'Open System Settings → Privacy & Security → Full Disk Access.',
-        'Click + (authenticate if asked).',
-        `Press Cmd+Shift+G and paste: ${fdaTarget}`,
-        'Select it and make sure its toggle is ON.',
-      ],
-    },
-    {
-      id: 'screen-time',
-      label: 'Screen Time (iPhone + Mac)',
-      state: screenTime.state,
-      fixKind: 'settings-only',
-      why:
-        'Lets Walnut read Apple Screen Time, including the numbers your iPhone syncs to this Mac, ' +
-        'and keep them permanently. Apple deletes its own copy after a few weeks. ' +
-        'Only the walnut-reader helper gets this access, and all it can do is read one file.',
-      grantTarget: screenTime.target,
+        (fda.reasons.length > 0
+          ? `Lets Walnut ${fda.reasons.join('; and ')}. `
+          : 'Needed only by features that are currently switched off. ')
+        + 'Only the walnut-reader helper gets this access, it is read-only, and you grant it once: '
+        + 'the helper is its own signed identity, so redeploys and updates keep working.',
+      grantTarget: fda.target,
       // walnut-reader re-execs with responsibility disclaimed, so this grant is
       // the helper's own and survives a different launcher.
       launcherIndependent: true,
       settingsUrl: SETTINGS_URL.fullDisk,
-      ...(screenTime.stale ? { staleGrant: true } : {}),
-      steps: screenTime.stale
+      ...(fda.stale ? { staleGrant: true } : {}),
+      steps: fda.stale
         ? [
             // The row is already there with its toggle on, so "add it" would read
             // as nonsense and toggling it does nothing: tccd has to re-read the
@@ -298,15 +295,17 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
             'The helper is already listed, but macOS no longer recognizes it (Walnut rebuilt it).',
             'Open System Settings → Privacy & Security → Full Disk Access.',
             'Select the walnut-reader row and click the − button to remove it.',
-            `Click +, press Cmd+Shift+G, then Cmd+V to paste the same path back (already copied): ${screenTime.target}`,
+            `Click +, press Cmd+Shift+G, then Cmd+V to paste the same path back (already copied): ${fda.target}`,
             'Turning the toggle off and on does NOT work — it has to be removed and re-added.',
           ]
         : [
             'Open System Settings → Privacy & Security → Full Disk Access.',
             'Click + (authenticate if asked).',
-            `Press Cmd+Shift+G, then Cmd+V (the path is already copied): ${screenTime.target}`,
+            `Press Cmd+Shift+G, then Cmd+V (the path is already copied): ${fda.target}`,
             'Select it and make sure its toggle is ON.',
-            'On your iPhone: Settings → Screen Time → Share Across Devices, so its numbers reach this Mac.',
+            // Not a permission step, but it is the other half of "why is it still
+            // empty", and this list is the only place the user is looking.
+            'For your iPhone: Settings → Screen Time → Share Across Devices, so its numbers reach this Mac.',
           ],
     },
   ];
