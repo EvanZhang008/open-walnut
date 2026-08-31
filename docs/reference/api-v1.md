@@ -51,6 +51,8 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `throttled` \| `queue_full` | 429 | Peer send rate budget (`retryAfterMs`) or the target's queue cap; do not retry in a loop |
 | `unknown_request` \| `not_request_target` \| `origin_session_gone` | 404 / 403 / 410 | `in_reply_to` names no request, names one addressed to another session, or the asking session is gone |
 | `too_large` | 413 | Note content exceeds 2 MB (or an attachment upload exceeds its cap) |
+| `bad_audio` | 422 | `POST /stt/transcribe`: this recording is undecodable (an m4a cut off before it was finalized), so re-uploading the same bytes cannot help. Additive: an older server answers `503 stt_unavailable` for the same case, and a client that treats 4xx as a verdict about the audio simply retires the recording sooner |
+| `stt_unavailable` | 503 | `POST /stt/transcribe`: the service cannot answer right now (no engine configured, engine down, the companion could not reach the primary box and has no key of its own). The recording is worth keeping and retrying |
 | `primary_unreachable` | 503 | `POST /time/heartbeats` did not persist the batch: the primary could not be reached, or it was reached and its day-file write did not land. Keep the batch queued and retry; sample `id`s make the retry a no-op for anything that did land |
 | `internal` | 500 | Unhandled server error |
 
@@ -219,6 +221,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | POST | `/api/v1/notes/tags/rename` | Rename a tag across carrying notes |
 | GET | `/api/v1/memory/telemetry` | Memory-entry write-path evidence |
 | POST | `/api/v1/memory/daily-log/compact` | Manual extractive daily-log compaction |
+| POST | `/api/v1/stt/transcribe` | Transcribe base64 audio (primary engine, or cloud relay/OpenAI fallback) |
 | GET/POST | `/api/v1/stt/vocab` | Read / add custom STT vocabulary words |
 | POST | `/api/v1/files/record-dir` | Record an "@"-picker folder |
 | GET | `/api/v1/files/recent-dirs` | Union of session + "@"-picker recents |
@@ -1451,6 +1454,7 @@ Class A (the REPLICA runs its own Personal AI). `agentId` as usual (absent →
   `POST /api/v1/memory/daily-log/compact` body `{ "date"?, "threshold"?,
   "summarizer": "extract" }` → compaction result; no log for the date →
   `404`; missing/unknown summarizer above threshold → `400`. Class A.
+- `POST /api/v1/stt/transcribe` body `{ "audio" (base64), "format", "language"? }` → `{ "text", "durationMs", "via": "primary" | "bridge" | "openai" }`. `format` is one of `webm`/`wav`/`mp3`/`ogg`/`mp4`/`m4a`/`flac`. Body cap 35 MB, audio string cap 25 MB base64 (both answer `413 too_large` in the frozen shape). On the cloud companion the audio is relayed to the primary box over the daemon bridge, falling back to the companion's own OpenAI key; audio too big for one bridge frame skips the relay entirely. Failures are `422 bad_audio` (the recording itself is undecodable) or `503 stt_unavailable` (try later). `error.message` is safe to show a user verbatim: an engine string is passed through only when it is provably plain prose (bounded length, ordinary sentence characters, no paths, URLs, JSON, hex, host:port, errno or pid tokens), and anything else is replaced by a generic sentence. Treat it as human copy, not as a diagnostic: the full engine text stays in the server log.
 - `GET /api/v1/stt/vocab` → `{ "words" }` (the internal route's absolute
   `path` field is deliberately dropped); `POST /api/v1/stt/vocab` body
   `{ "word" }` → `{ "added", "word", "reason"? }` (case-insensitive dedup).

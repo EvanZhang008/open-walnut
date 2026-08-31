@@ -47,6 +47,11 @@ final class VoiceRecorder: NSObject {
 
     static let micRouteKey = "walnut.voice.micRoute"
 
+    /// Minimum gap between AUTOMATIC drains (`drainPending`). Long enough to
+    /// swallow a connectivity flap, short enough that a real reconnect after a
+    /// failed attempt is retried within seconds. Manual Retry ignores it.
+    static let autoDrainCooldown: TimeInterval = 15
+
     static var micRoute: MicRoute {
         MicRoute(rawValue: UserDefaults.standard.string(forKey: micRouteKey) ?? "") ?? .automatic
     }
@@ -54,9 +59,21 @@ final class VoiceRecorder: NSObject {
     private(set) var state: State = .idle
     private(set) var elapsed: TimeInterval = 0
     var errorMessage: String?
-    /// Recordings preserved on disk awaiting transcription (failed upload,
-    /// interruption, crash) — the composer shows a retry affordance when > 0.
+    /// Recordings preserved on disk that still have honest retries left (failed
+    /// upload, interruption, crash) — the composer shows a retry affordance when
+    /// > 0, and the auto-drain works exactly this set.
     private(set) var pendingCount = 0
+    /// Recordings the engine has answered on and cannot transcribe
+    /// (`VoiceRetryPlan.isTerminal`). Counted SEPARATELY from `pendingCount`
+    /// because they need different words and a different button: calling them
+    /// "pending" is the permanent banner (2026-08-30), and offering Retry is
+    /// offering a button that provably cannot change the answer. The audio is
+    /// still on disk — only the user deletes it.
+    private(set) var failedCount = 0
+    /// Of those, how many were retired by the ATTEMPT CEILING rather than by a
+    /// verdict on the audio. Nothing ever judged these, so the retired row keeps
+    /// a secondary Retry for them — see `VoiceRetryPlan.retryStillPlausible`.
+    private(set) var recoverableFailedCount = 0
 
     private var capture: (any AudioCapture)?
     private var tickTask: Task<Void, Never>?
@@ -78,6 +95,26 @@ final class VoiceRecorder: NSObject {
     /// Test seam — replaces the network upload so the persistence/retry state
     /// machine runs without a server. nil in production.
     @ObservationIgnored var uploadOverride: ((Data) async throws -> String)?
+    /// WHICH COMPOSER owns this recorder (`ComposerSurfaceID.raw`, or the draft
+    /// key when the composer declares no surface). Set by the composer on appear.
+    ///
+    /// Every take this recorder starts is stamped with it, and an AUTOMATIC drain
+    /// only ever touches takes carrying this same stamp. Without that, the global
+    /// store plus one recorder per composer meant a session composer (whose
+    /// `disabled` flips at every turn boundary) would transcribe a take spoken
+    /// into the Personal AI chat and drop the text into the session's draft, with
+    /// no user action at all.
+    @ObservationIgnored var surface: String = ""
+
+    /// Does this recorder adopt takes with NO origin stamp? Exactly one composer
+    /// may say yes: the one that serves the Home-screen voice quick action (the
+    /// chat composer). Unstamped takes come from builds before the stamp existed,
+    /// and the quick action's own surface is where they were most likely spoken.
+    @ObservationIgnored var ownsOrphanTakes = false
+
+    /// Stable per-instance identity for the store's drain gate, so a claim can be
+    /// released by its owner and only by its owner.
+    @ObservationIgnored private let drainOwnerID = UUID().uuidString
     /// Notification tokens (interruption / media-services reset). Written on
     /// the MainActor in start(), read in deinit — hence nonisolated(unsafe).
     @ObservationIgnored nonisolated(unsafe) private var noteTokens: [NSObjectProtocol] = []
@@ -166,8 +203,10 @@ final class VoiceRecorder: NSObject {
             elapsed = 0
             state = .recording
             // Sidecar from second 0: a crash mid-take still leaves a
-            // discoverable recording for next-launch recovery.
-            store.preserve(id: id, reason: "recording")
+            // discoverable recording for next-launch recovery. The ORIGIN is
+            // stamped here and nowhere else that matters — this is the only
+            // moment at which which-composer-is-speaking is known for certain.
+            store.preserve(id: id, reason: "recording", surface: originStamp)
             startTicker()
             // Housekeeping off the main actor: age-out stale preserved takes.
             let storeRef = store
@@ -342,7 +381,7 @@ final class VoiceRecorder: NSObject {
         guard state == .recording else { return }
         stopCapture()
         if let id = recordingID {
-            store.preserve(id: id, reason: reason)
+            store.preserve(id: id, reason: reason, surface: originStamp)
             AppLog.info("voice", "recording preserved", ["reason": reason, "id": id, "elapsed": String(Int(elapsed))])
         }
         fileURL = nil
@@ -353,44 +392,222 @@ final class VoiceRecorder: NSObject {
 
     // MARK: - Preserved recordings (retry surface)
 
-    /// Recount preserved takes (excluding the live one). Synchronous: the
-    /// store directory is capped at `VoiceRecordingStore.maxCount` entries,
-    /// so this is one tiny directory listing.
-    func refreshPending() {
-        let live = recordingID
-        pendingCount = store.pending().filter { $0.id != live }.count
+    /// What this recorder stamps onto takes it starts. nil only when the composer
+    /// never told us who it is, which would make the take unattributable — better
+    /// to leave it unstamped (and therefore adoptable only by the quick-action
+    /// composer) than to invent an owner.
+    private var originStamp: String? {
+        surface.isEmpty ? nil : surface
     }
 
-    /// Transcribe every preserved take, oldest first (the order they were
-    /// spoken). Successes are deleted and their text concatenated; the first
-    /// hard failure stops the loop and leaves the remainder preserved.
-    func retryPending() async -> String? {
+    /// May an AUTOMATIC drain (foreground, reconnect, appear) touch this take?
+    ///
+    /// The rule is ownership, and it is deliberately strict: a drain runs with no
+    /// human in the loop, so the transcript must land in the composer the words
+    /// were spoken into and nowhere else. A MANUAL Retry is not filtered this way
+    /// on purpose — that is a person tapping a button on a row they can see, and
+    /// the text landing in the draft in front of them is what they asked for.
+    /// That distinction is the whole fix: cross-surface recovery keeps working,
+    /// but only with the human back in the loop.
+    func ownsForAutomaticDrain(_ recording: VoiceRecordingStore.Recording) -> Bool {
+        guard let takeSurface = recording.surface else { return ownsOrphanTakes }
+        return !surface.isEmpty && takeSurface == surface
+    }
+
+    /// Recount preserved takes (excluding the live one), split into the two
+    /// buckets the UI must not conflate. Synchronous: the store directory is
+    /// capped at `VoiceRecordingStore.maxCount` entries, so this is one tiny
+    /// directory listing.
+    func refreshPending() {
+        let live = recordingID
+        let recs = store.pending().filter { $0.id != live }
+        pendingCount = recs.filter { !$0.isTerminal }.count
+        failedCount = recs.count - pendingCount
+        recoverableFailedCount = recs.filter { $0.isTerminal && $0.retryStillPlausible }.count
+    }
+
+    /// Transcribe every preserved take that still has retries left, oldest
+    /// first (the order they were spoken). Successes are deleted and their text
+    /// concatenated.
+    ///
+    /// A failure NO LONGER STOPS THE DRAIN. The old loop `break`ed at the first
+    /// one, so a single take the engine could not read held every good recording
+    /// behind it hostage for the full 7-day retention: the user saw "3
+    /// recordings saved — transcription pending" and every Retry tap reproduced
+    /// the same head-of-line failure. Each take is now attempted independently
+    /// and its verdict recorded on its own sidecar, and takes that have used up
+    /// their retries are skipped rather than re-uploaded to fail again.
+    ///
+    /// `userInitiated` distinguishes the Retry TAP from the automatic drain
+    /// (foreground, reconnect) in three concrete ways, and the docstring used to
+    /// claim only the first one while the code did none of them:
+    ///  1. VOLUME. A tap must never look like nothing happened, so it always ends
+    ///     with something in `errorMessage` if it recovered nothing. An automatic
+    ///     drain sets `errorMessage` NOWHERE — not here, and not in `note()`
+    ///     either, which is where the leak actually was (it assigned the notice
+    ///     for every failure regardless of trigger, so foregrounding the app while
+    ///     the Mac slept popped a mic-slash notice nobody asked for). Row COUNTS
+    ///     still move, and a terminal retirement still changes which row is shown:
+    ///     that is state the user needs, not an interruption.
+    ///  2. OWNERSHIP. Only a tap may work another surface's takes (see
+    ///     `ownsForAutomaticDrain`).
+    ///  3. RATE. Only the automatic path is subject to the store's cooldown.
+    ///
+    /// `includeRetired` is the retired row's secondary Retry: it re-admits takes
+    /// that were retired by the ATTEMPT CEILING (nothing ever judged the audio,
+    /// so a woken Mac can still transcribe them) while still refusing the ones a
+    /// verdict retired. The automatic drain never sets it.
+    @discardableResult
+    func retryPending(
+        userInitiated: Bool = true, includeRetired: Bool = false, now: Date = Date()
+    ) async -> String? {
         guard state == .idle else { return nil }
-        errorMessage = nil
-        let recs = store.pending()
+        let live = recordingID
+        var recs = store.pending().filter { $0.id != live }
+        // An automatic drain only works takes THIS composer owns; a manual retry
+        // works whatever the visible row is offering (see `ownsForAutomaticDrain`).
+        if !userInitiated { recs = recs.filter { ownsForAutomaticDrain($0) } }
         guard !recs.isEmpty else {
             refreshPending()
             return nil
         }
+        // The claim is store-level and covers BOTH triggers, because the hazard is
+        // trigger-independent: two composers uploading the same file, the winner
+        // deleting it under the loser. It also carries the automatic cooldown, so
+        // a connectivity flap cannot be re-armed by a sibling composer that never
+        // saw the previous attempt.
+        let claim = VoiceRecordingStore.claimDrain(
+            owner: drainOwnerID, automatic: !userInitiated,
+            cooldown: Self.autoDrainCooldown, now: now
+        )
+        guard claim == .granted else {
+            AppLog.info("voice", "drain not claimed", [
+                "trigger": userInitiated ? "user" : "auto",
+                "reason": String(describing: claim),
+                "surface": surface.isEmpty ? "none" : surface,
+            ])
+            // A TAP must never look like nothing happened, and losing the claim is
+            // the one refusal that reaches a tap: another composer (or a drain that
+            // started a moment ago on this one) is mid-upload. Say so, honestly and
+            // briefly, instead of returning nil into silence.
+            if userInitiated {
+                errorMessage = "Another upload is in progress — try again in a moment"
+            }
+            return nil
+        }
+        // A TAP clears the old notice up front: the user is watching this attempt
+        // and a stale sentence from the last one is noise. An automatic drain must
+        // not, because clearing is itself a visible change — it would wipe a notice
+        // the user has not read yet, on a foreground they did not ask anything of.
+        // It clears only when it actually recovers something (below).
+        if userInitiated { errorMessage = nil }
         state = .transcribing
         defer {
+            VoiceRecordingStore.releaseDrain(owner: drainOwnerID)
             state = .idle
             refreshPending()
         }
         var parts: [String] = []
-        loop: for rec in recs {
-            switch await transcribeOne(url: rec.audioURL, id: rec.id) {
+        var attempted = 0
+        var failed = 0
+        var retired = 0
+        for rec in recs {
+            let admissible = !rec.isTerminal || (includeRetired && rec.retryStillPlausible)
+            guard admissible else {
+                retired += 1
+                continue
+            }
+            attempted += 1
+            switch await transcribeOne(
+                url: rec.audioURL, id: rec.id,
+                trigger: userInitiated ? .userRetry : .autoDrain
+            ) {
             case .text(let text): parts.append(text)
             case .discarded: continue // too-short/no-speech: nothing to keep
-            case .failed, .cancelled: break loop
+            // The bug fix in one word: keep going. The remaining takes are
+            // independent uploads and one bad take is not evidence about them.
+            case .failed, .cancelled: failed += 1
+            }
+        }
+        AppLog.info("voice", "retry drain finished", [
+            "trigger": userInitiated ? "user" : "auto",
+            "queued": String(recs.count), "attempted": String(attempted),
+            "recovered": String(parts.count), "failed": String(failed),
+            "skippedTerminal": String(retired),
+        ])
+        // Recovery is the one outcome that retracts a notice on any trigger: the
+        // words are in the draft now, so "Voice unavailable" has become false.
+        if !parts.isEmpty { errorMessage = nil }
+        // A Retry tap must always answer. `transcribeOne` speaks for every
+        // failure it makes, so the only silent outcomes left are "everything
+        // here is already retired" (nothing was attempted) and a drain whose
+        // failures were all quiet background cancellations.
+        if userInitiated, parts.isEmpty, errorMessage == nil {
+            if attempted == 0, retired > 0 {
+                errorMessage = retired == 1
+                    ? "That recording couldn't be transcribed — Discard to clear it"
+                    : "\(retired) recordings couldn't be transcribed — Discard to clear them"
+            } else if failed > 0 {
+                errorMessage = "Transcription didn't go through — recordings kept"
             }
         }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
-    /// Delete every preserved take — the user's explicit "discard saved".
+    /// Automatic drain — app foregrounded, or the connection came back. Fires
+    /// and forgets; the recovered text is handed to `onDrainedText`.
+    ///
+    /// This is the leg that was missing entirely (`resumeForForeground()` was an
+    /// empty body): a take saved during an outage waited for a human to notice a
+    /// banner and tap Retry, forever. Results ALWAYS land in the draft — an
+    /// unattended send of words the user spoke minutes ago and never saw is
+    /// worse than a draft they can read (the same rule the quick action's
+    /// `clear(reason:)` discipline encodes in the composer).
+    /// Ownership is enforced HERE as well as inside `retryPending`, so a composer
+    /// that owns nothing drainable never even schedules a Task. The cooldown and
+    /// the single-flight claim live in the store (see `claimDrain`) because an
+    /// instance-local version of either is invisible to the sibling composers that
+    /// share the one recording directory.
+    func drainPending(trigger: String, now: Date = Date()) {
+        guard state == .idle else { return }
+        let live = recordingID
+        let mine = store.pending().filter {
+            $0.id != live && !$0.isTerminal && ownsForAutomaticDrain($0)
+        }
+        guard !mine.isEmpty else { return }
+        AppLog.info("voice", "auto-drain starting", [
+            "trigger": trigger, "count": String(mine.count),
+            "surface": surface.isEmpty ? "none" : surface,
+            "ownsOrphans": ownsOrphanTakes ? "true" : "false",
+        ])
+        Task { [weak self] in
+            guard let self else { return }
+            if let text = await self.retryPending(userInitiated: false, now: now) {
+                self.onDrainedText?(text)
+            }
+        }
+    }
+
+    /// Delete every preserved take that is still retryable — the user's
+    /// explicit "discard saved" on the pending row. Deliberately does NOT touch
+    /// retired takes: they have their own row and their own Discard, so one
+    /// button can never sweep away recordings the other row is talking about.
     func discardPending() {
-        for rec in store.pending() where rec.id != recordingID {
+        for rec in store.pending() where rec.id != recordingID && !rec.isTerminal {
+            store.discard(id: rec.id)
+        }
+        refreshPending()
+    }
+
+    /// Delete the takes that couldn't be transcribed — the primary action on
+    /// the retired row, and the ONLY way those files leave before the 7-day
+    /// age-out.
+    func discardFailed() {
+        for rec in store.pending() where rec.id != recordingID && rec.isTerminal {
+            AppLog.info("voice", "retired recording discarded", [
+                "id": rec.id, "attempts": String(rec.attempts),
+                "lastErrorKind": rec.lastErrorKind?.rawValue ?? "none",
+            ])
             store.discard(id: rec.id)
         }
         refreshPending()
@@ -402,13 +619,42 @@ final class VoiceRecorder: NSObject {
         case text(String)   // success — audio deleted
         case discarded      // nothing worth keeping (sub-second tap)
         case failed         // audio preserved, errorMessage set
-        case cancelled      // lifecycle cancel — audio preserved, no error UI
+        case cancelled      // torn down mid-upload — audio preserved
+    }
+
+    /// WHO asked for this attempt. Only affects how an outcome is reported, and
+    /// exactly one outcome cares: a cancellation.
+    ///
+    /// A cancelled upload during a live take or a background drain is lifecycle
+    /// noise the user did not ask about, and shouting at them about it was
+    /// deliberately avoided. But the same silence on a Retry TAP made the button
+    /// a total no-op: the row stayed, no message appeared, nothing moved. A tap
+    /// always gets an answer.
+    private enum AttemptTrigger: String {
+        case liveTake, userRetry, autoDrain
+
+        var isUserRetry: Bool { self == .userRetry }
+
+        /// Nobody asked for this attempt, so nobody is owed a notice.
+        ///
+        /// `liveTake` and `userRetry` are both a person acting and watching: they
+        /// get the sentence. An `autoDrain` fires on a foreground or a reconnect,
+        /// and popping the mic-slash notice for a Mac that is still asleep is
+        /// nagging someone about work they never requested (and, before the
+        /// ownership rule, could nag on a session composer about a chat
+        /// recording). It logs instead. A terminal RETIREMENT still updates the
+        /// row state, because that is a change to what the UI must claim, not a
+        /// complaint.
+        var isSilent: Bool { self == .autoDrain }
     }
 
     /// Upload one take. Deletes the audio ONLY on success; every failure
-    /// preserves it with a reason on the sidecar and structured logging
-    /// (domain/code ride the flight recorder for field diagnosis).
-    private func transcribeOne(url: URL, id: String) async -> TranscribeOutcome {
+    /// preserves it, records the attempt on its sidecar (count + classified
+    /// kind, which is what decides whether a Retry is still honest), and logs
+    /// structured diagnostics for the flight recorder.
+    private func transcribeOne(
+        url: URL, id: String, trigger: AttemptTrigger = .liveTake
+    ) async -> TranscribeOutcome {
         do {
             // Read the recording OFF the MainActor — a long m4a is a real file
             // read, and this method runs on the actor that draws the UI.
@@ -416,8 +662,10 @@ final class VoiceRecorder: NSObject {
                 try Data(contentsOf: url)
             }.value
             guard data.count > 1_000 else {
-                // Sub-second accidental tap — there is no speech to lose.
-                errorMessage = "Recording too short"
+                // Sub-second accidental tap — there is no speech to lose. Silent
+                // for an automatic drain for the same reason every other outcome
+                // is: nobody asked, and the row count moving is the whole story.
+                if !trigger.isSilent { errorMessage = "Recording too short" }
                 store.discard(id: id)
                 return .discarded
             }
@@ -439,11 +687,15 @@ final class VoiceRecorder: NSObject {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
                 // The server answered but heard nothing. Keep the audio — an
-                // engine mishearing real speech must not destroy the take.
-                errorMessage = "No speech recognized — recording kept"
-                store.preserve(id: id, reason: "transcribe-failed")
-                AppLog.warn("voice", "empty transcription — preserved", ["id": id, "bytes": "\(data.count)"])
-                return .failed
+                // engine mishearing real speech must not destroy the take — but
+                // COUNT the verdict: the same bytes through the same engine will
+                // answer the same way, and pretending otherwise is what left the
+                // banner up forever.
+                return note(
+                    .empty, id: id, message: "No speech recognized",
+                    userNotice: "No speech recognized — recording kept",
+                    trigger: trigger, extra: ["bytes": "\(data.count)"]
+                )
             }
             AppLog.info("voice", "transcribed", ["chars": "\(trimmed.count)", "bytes": "\(data.count)", "id": id])
             // Freeze-report breadcrumb: a field freeze fired ~5s after a
@@ -454,29 +706,86 @@ final class VoiceRecorder: NSObject {
             store.markTranscribed(id: id)
             return .text(trimmed)
         } catch let error as APIError {
-            if error.isCancelled {
-                // Lifecycle (task torn down mid-flight) — not a user-visible
-                // error; the preserved take resurfaces via the retry row.
-                store.preserve(id: id, reason: "background")
-                AppLog.info("voice", "upload cancelled — preserved", ["id": id])
-                return .cancelled
-            }
-            errorMessage = "\(error.voiceNotice) — recording saved"
-            store.preserve(id: id, reason: "transcribe-failed")
-            AppLog.error("voice", "transcribe failed — preserved", ["id": id, "error": error.localizedDescription])
-            return .failed
+            if error.isCancelled { return noteCancelled(id: id, trigger: trigger) }
+            return note(
+                VoiceRetryPlan.classify(error), id: id,
+                message: error.localizedDescription,
+                userNotice: "\(error.voiceNotice) — recording saved",
+                trigger: trigger
+            )
         } catch is CancellationError {
-            store.preserve(id: id, reason: "background")
-            AppLog.info("voice", "upload cancelled — preserved", ["id": id])
-            return .cancelled
+            return noteCancelled(id: id, trigger: trigger)
         } catch {
-            errorMessage = "\(Self.diagnosticMessage(prefix: "Transcription failed", error)) — recording saved"
-            store.preserve(id: id, reason: "transcribe-failed")
-            var meta = Self.diagnosticMeta(error)
-            meta["id"] = id
-            AppLog.error("voice", "transcribe failed — preserved", meta)
-            return .failed
+            return note(
+                VoiceRetryPlan.classify(error), id: id,
+                message: (error as NSError).localizedDescription,
+                userNotice: "\(Self.diagnosticMessage(prefix: "Transcription failed", error)) — recording saved",
+                trigger: trigger, extra: Self.diagnosticMeta(error)
+            )
         }
+    }
+
+    /// One place where a failed attempt is written down, so no path can preserve
+    /// audio without also recording WHY — an unattributed preserve is a take
+    /// that can never be retired and therefore a banner that never clears.
+    private func note(
+        _ kind: VoiceRetryPlan.FailureKind, id: String, message: String,
+        userNotice: String?, trigger: AttemptTrigger, extra: [String: String] = [:]
+    ) -> TranscribeOutcome {
+        store.noteAttempt(id: id, reason: "transcribe-failed", kind: kind, message: message)
+        // Re-read rather than recompute: the sidecar on disk is the only thing
+        // the next drain will consult, so the message the user sees now and the
+        // decision the drain makes later cannot disagree.
+        let after = store.pending().first { $0.id == id }
+        let attempts = after?.attempts ?? 0
+        let retired = after?.isTerminal ?? false
+        // An automatic drain says nothing out loud; the row state it produces
+        // (`refreshPending` moving the take into the retired bucket) is the only
+        // thing the user sees, and that is a fact, not a notice.
+        if !trigger.isSilent {
+            if retired {
+                // Say the true thing. "Pending" was the lie the user reported.
+                // A DAMAGED file gets the stronger sentence: "keep it for later"
+                // would be advice we know is worthless, since no later attempt can
+                // decode a truncated container.
+                errorMessage = kind == .damaged
+                    ? "That recording is damaged and can't be transcribed — Discard it"
+                    : "Couldn't transcribe that recording — Discard it or keep it for later"
+            } else if let userNotice {
+                errorMessage = userNotice
+            }
+        }
+        var meta = extra
+        meta["id"] = id
+        meta["kind"] = kind.rawValue
+        meta["attempts"] = String(attempts)
+        meta["verdicts"] = String(after?.verdicts ?? 0)
+        meta["retired"] = retired ? "true" : "false"
+        meta["trigger"] = trigger.rawValue
+        meta["reason"] = message
+        if retired {
+            AppLog.error("voice", "recording retired — cannot transcribe", meta)
+        } else {
+            AppLog.warn("voice", "transcribe attempt failed — preserved", meta)
+        }
+        return .failed
+    }
+
+    /// A torn-down upload. The audio is preserved either way; the difference is
+    /// whether anyone is owed an answer (see `AttemptTrigger`).
+    private func noteCancelled(id: String, trigger: AttemptTrigger) -> TranscribeOutcome {
+        store.noteAttempt(
+            id: id, reason: "background", kind: .cancelled,
+            message: "upload cancelled"
+        )
+        if trigger.isUserRetry {
+            errorMessage = "Retry interrupted — recording kept"
+        }
+        AppLog.info("voice", "upload cancelled — preserved", [
+            "id": id, "trigger": trigger.rawValue,
+            "notified": trigger.isUserRetry ? "true" : "false",
+        ])
+        return .cancelled
     }
 
     private func stopCapture() {
@@ -505,6 +814,13 @@ final class VoiceRecorder: NSObject {
     /// composer registers a handler to receive text from the auto-attempted
     /// transcription of the preserved partial take.
     var onAutoStopText: ((String) -> Void)?
+
+    /// Text recovered by the AUTOMATIC drain (foreground, reconnect). A separate
+    /// channel from `onAutoStopText` on purpose: that one feeds the composer's
+    /// `deliver`, which may auto-send a quick-action take, and a drain result
+    /// must NEVER be able to reach that path. Words spoken minutes ago that the
+    /// user has not seen go into the draft, where they can read them first.
+    var onDrainedText: ((String) -> Void)?
 
     /// System interruptions & media-server resets end the take for us. Stop
     /// gracefully, PRESERVE the partial audio, then immediately try to
@@ -556,7 +872,7 @@ final class VoiceRecorder: NSObject {
         recordingID = id
         elapsed = 0
         state = .recording
-        store.preserve(id: id, reason: "recording")
+        store.preserve(id: id, reason: "recording", surface: originStamp)
     }
 
     /// Test hook: drive the interruption path directly (no way to synthesize
@@ -619,7 +935,16 @@ extension VoiceRecorder: LifecycleSuspendable {
         }
     }
 
-    func resumeForForeground() {}
+    /// Coming back to the foreground is the best moment to clear the backlog:
+    /// the app has the network again (usually), the user is looking at it, and
+    /// nothing is recording. This used to be an EMPTY BODY — a take saved during
+    /// an outage sat there until a human noticed the banner and tapped Retry,
+    /// which is why "1 recording saved — transcription pending" could look
+    /// permanent even when the server had been reachable for hours.
+    func resumeForForeground() {
+        refreshPending()
+        drainPending(trigger: "foreground")
+    }
 }
 
 extension VoiceRecorder: AVAudioRecorderDelegate {

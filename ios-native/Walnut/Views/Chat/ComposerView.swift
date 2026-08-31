@@ -87,6 +87,16 @@ struct ComposerBar: View {
     /// Read-only "where is this served from" for the `+` menu. Absent = the row
     /// is omitted (nothing honest to say).
     var hostProvenance: ComposerHostProvenance? = nil
+    /// Returns **"are these words safe with you"**, which is deliberately NOT "did
+    /// the send succeed". Stores here own no-loss: a dead round trip becomes a
+    /// retryable failed bubble that still holds the full text, and that counts as
+    /// safe. Only a store that refused BEFORE keeping anything answers false.
+    ///
+    /// The distinction exists because voice is the one caller holding the only copy
+    /// of the text (the audio is deleted the moment transcription succeeds), so it
+    /// acts on this Bool. Answering it as "did it succeed" put the same sentence in
+    /// the timeline AND the draft. See `voiceRescueReason` and
+    /// `ComposerView.sendKeepingWords`.
     let onSend: (String, [SelectedImage]) async -> Bool
 
     /// Optional so roots that never inject a dock still build (RootView's DEBUG
@@ -168,8 +178,16 @@ struct ComposerBar: View {
             // Preserved voice takes (failed upload / interruption / crash /
             // view dismissal) — non-modal retry affordance. Audio is never
             // deleted until it transcribes or the user explicitly discards.
+            //
+            // TWO rows, because they are two different situations and one row
+            // saying "pending" for both is the defect: a take waiting for the
+            // network gets a Retry, a take the engine has already answered on
+            // gets the truth and a Discard.
             if voice.state == .idle, voice.pendingCount > 0 {
                 pendingVoiceRow
+            }
+            if voice.state == .idle, voice.failedCount > 0 {
+                failedVoiceRow
             }
             if voice.state == .recording {
                 recordingRow
@@ -310,15 +328,55 @@ struct ComposerBar: View {
             // For a quick-action take that text is still owed to the agent —
             // route it the same way a normal stop would.
             voice.onAutoStopText = { text in deliver(text) }
+            // Automatic drain results go STRAIGHT to the draft, never through
+            // `deliver` — a take recovered in the background must not be able to
+            // reach the auto-send path (see `VoiceRecorder.onDrainedText`).
+            voice.onDrainedText = { text in appendToDraft(text) }
+            // WHO this recorder speaks for. The store is process-global while every
+            // composer owns its own `@State` recorder, so without an identity the
+            // automatic drain had no way to tell "my backlog" from "someone else's":
+            // a take dictated into the Chat tab was silently transcribed by a session
+            // composer and appended to THAT session's draft, with no tap in between
+            // (verifier finding F5). The surface FAMILY is the right grain — the chat
+            // tab keeps one identity across conversations (`draftKey` changes per
+            // conversation, the surface does not), and a session composer answers only
+            // for its own session.
+            voice.surface = surface.raw.isEmpty ? draftKey : surface.raw
+            // Takes with no recorded origin (preserved by a build that predates the
+            // stamp) need exactly one adopter, or they are either drained by everybody
+            // or by nobody. The quick-action composer is that adopter: it is the
+            // surface the Home-screen shortcut talks to, so it is where an
+            // unattributable recording most likely came from.
+            voice.ownsOrphanTakes = acceptsVoiceQuickAction
             // Crash/relaunch recovery: takes preserved by an earlier run (or
             // by another composer instance) surface here as the retry row.
             voice.refreshPending()
+            // …and are actually retried, not just counted. A fresh launch never
+            // crosses a scene-phase edge, so `resumeForForeground` does not fire
+            // and this is the only drain trigger a relaunch gets.
+            if !disabled { voice.drainPending(trigger: "composer-appear") }
             consumeVoiceQuickActionIfPending()
         }
         // Warm launch: the shortcut arrives while this view is already mounted,
         // so onAppear never runs again — the mailbox change is the trigger.
         .onChange(of: quickAction.pending) { _, request in
             if request != nil { consumeVoiceQuickActionIfPending() }
+        }
+        // The two retriggers a deferred request needs, and the reason the field
+        // report was "the shortcut does nothing": `consumeVoiceQuickActionIfPending`
+        // can decline, and until now NOTHING re-asked. A long-press while the app
+        // was offline, or while a transcription upload was still in flight (which
+        // can run for minutes on a big take), was a silent no-op until the 120s
+        // TTL quietly binned the request.
+        .onChange(of: disabled) { _, isDisabled in
+            // Reconnected: drain the backlog too. Same trigger, same moment —
+            // the network coming back is exactly when preserved audio becomes
+            // transcribable.
+            if !isDisabled { voice.drainPending(trigger: "reconnected") }
+            consumeVoiceQuickActionIfPending()
+        }
+        .onChange(of: voice.state) { _, _ in
+            consumeVoiceQuickActionIfPending()
         }
         .onDisappear {
             onScreen = false
@@ -540,9 +598,15 @@ struct ComposerBar: View {
         }
     }
 
-    /// Saved-but-untranscribed recordings: retry / discard, styled like the
-    /// notice rows (non-modal, dismiss-optional — matches the failed-send
-    /// bubble's Retry pattern).
+    /// Saved-but-untranscribed recordings that STILL HAVE A REAL CHANCE: retry /
+    /// discard, styled like the notice rows (non-modal, dismiss-optional —
+    /// matches the failed-send bubble's Retry pattern).
+    ///
+    /// "Pending" is now a claim this row has to earn. It appears only for takes
+    /// whose failures were transport-shaped (offline, sleeping Mac, dropped
+    /// upload), which really are pending — the auto-drain will pick them up on
+    /// the next foreground or reconnect without the user doing anything, and
+    /// Retry is the manual version of the same thing.
     private var pendingVoiceRow: some View {
         HStack(spacing: 6) {
             Image(systemName: "waveform.badge.exclamationmark")
@@ -573,7 +637,59 @@ struct ComposerBar: View {
                 Image(systemName: "trash")
                     .font(.caption2)
             }
+            .accessibilityLabel("Discard saved recordings")
             .accessibilityIdentifier("chat.voiceDiscardPending")
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+    }
+
+    /// Takes the engine has answered on and cannot transcribe.
+    ///
+    /// The row this one replaces said "transcription pending" about audio that
+    /// was never going to be transcribed, offered Retry as the primary action,
+    /// and reproduced the same empty answer on every tap — a banner with no exit
+    /// (the 2026-08-30 report). So: the copy states the outcome, DISCARD is the
+    /// primary action, and there is no Retry, because retrying identical bytes
+    /// through the same engine is precisely the loop that never ended.
+    ///
+    /// Discard is the only button, not an automatic deletion: the audio is still
+    /// the user's, and "we couldn't read it, so we threw it away" is the one
+    /// thing this store must never do.
+    private var failedVoiceRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "waveform.slash")
+                .font(.caption2)
+            Text(voice.failedCount == 1
+                 ? "1 recording couldn't be transcribed"
+                 : "\(voice.failedCount) recordings couldn't be transcribed")
+                .font(.caption)
+                .lineLimit(2)
+                .accessibilityIdentifier("chat.voiceFailedRow")
+            Spacer(minLength: 0)
+            // Secondary, and only for takes the ATTEMPT CEILING retired: nothing
+            // ever judged that audio, so a woken Mac can still transcribe it and
+            // refusing the attempt would turn a noisy banner into lost words. A
+            // verdict-retired take gets no Retry at all — a third identical
+            // answer is the loop this row exists to end.
+            if voice.recoverableFailedCount > 0 {
+                Button("Try again") {
+                    Task {
+                        if let text = await voice.retryPending(includeRetired: true) {
+                            appendToDraft(text)
+                        }
+                    }
+                }
+                .font(.caption)
+                .accessibilityIdentifier("chat.voiceRetryFailed")
+            }
+            Button("Discard") {
+                voice.discardFailed()
+            }
+            .font(.caption.weight(.semibold))
+            .accessibilityLabel("Discard recordings that couldn't be transcribed")
+            .accessibilityIdentifier("chat.voiceDiscardFailed")
         }
         .foregroundStyle(.secondary)
         .padding(.horizontal, 16)
@@ -600,9 +716,16 @@ struct ComposerBar: View {
             }
             .accessibilityIdentifier("chat.voiceCancel")
 
+            // The caption states what STOPPING will do, so it has to track the
+            // connection too: an armed take that is currently offline will land
+            // in the draft (see `deliver`), and promising "stop to send" then
+            // would be the same silent-failure story from the other end.
             RecordingIndicator(
                 elapsed: voice.elapsed,
-                caption: quickAction.autoSendArmed ? "Recording — stop to send" : "Recording…"
+                caption: quickAction.autoSendArmed && !disabled
+                    ? "Recording — stop to send"
+                    : "Recording…",
+                deliverySource: quickAction.lastConsumedSource
             )
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -777,44 +900,153 @@ struct ComposerBar: View {
 
     // MARK: - Voice Quick Action
 
-    /// Where a finished transcription goes. Normal mic taps compose into the
-    /// draft (the user reviews and hits send); a quick-action take sends
-    /// straight through, because "one action, then talk" is the whole point.
+    /// Can this transcript be auto-sent right now, or must it be parked in the
+    /// draft, and why?
     ///
-    /// Auto-send arming is consumed here, once. Everything downstream is the
-    /// store's ordinary send path — including its no-loss guarantee: a failed
-    /// send stays in the timeline as a retryable failed bubble holding the full
-    /// transcript, so the words survive even when the network doesn't.
+    /// A static pure function because getting it wrong LOSES THE USER'S WORDS, so
+    /// it must be assertable without a hosted view or a store. The audio is
+    /// already deleted by the time this runs (transcription succeeded, which is
+    /// the one path that deletes), so this string is the only remaining copy: any
+    /// route that neither sends nor drafts is data loss.
+    ///
+    /// `busy` is the case the first cut missed. `ChatStore.send` opens with
+    /// `guard isActive, !sending, !streaming else { return false }` and returns
+    /// false BEFORE appending anything, so an auto-send attempted while a turn is
+    /// streaming is refused with no bubble and no draft: the transcript simply
+    /// ceased to exist. Offline was guarded, its sibling was not.
+    static func voiceDeliveryRoute(
+        autoSendArmed: Bool, offline: Bool, busy: Bool, transcript: String
+    ) -> VoiceDeliveryRoute {
+        guard autoSendArmed else { return .draft(reason: "not-armed") }
+        guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .draft(reason: "empty")
+        }
+        if offline { return .draft(reason: "offline") }
+        // A turn is in flight, so the store would refuse this send and keep
+        // nothing. The draft is where words wait for a free turn.
+        if busy { return .draft(reason: "busy") }
+        return .send
+    }
+
+    enum VoiceDeliveryRoute: Equatable {
+        case send
+        case draft(reason: String)
+    }
+
+    /// Where a finished transcription goes. Normal mic taps compose into the
+    /// draft (the user reviews and hits send); a quick-action take sends straight
+    /// through, because "one action, then talk" is the whole point.
+    ///
+    /// Auto-send arming is consumed here, once.
+    ///
+    /// NO-LOSS, and EXACTLY ONCE. The audio is already gone (transcription
+    /// succeeded), so this string is the only copy of what the user said, and it
+    /// must land in exactly one of three places: the timeline (sent, or a retryable
+    /// failed bubble that keeps the full text), the draft (any route
+    /// `voiceDeliveryRoute` declines), or the draft because the store refused
+    /// without keeping anything. "One of" is as load-bearing as "no loss" —
+    /// see `voiceRescueReason` for the duplicate-send hazard on the other side.
     private func deliver(_ text: String) {
-        guard quickAction.takeAutoSend() else {
+        // `takeAutoSend()` must be consulted exactly once and it SPENDS the
+        // arming, so the route is computed from its answer rather than from the
+        // flag (a second read would always say "not armed").
+        let route = Self.voiceDeliveryRoute(
+            autoSendArmed: quickAction.takeAutoSend(),
+            offline: disabled, busy: busy, transcript: text
+        )
+        if case .draft(let reason) = route {
+            if reason != "not-armed" {
+                AppLog.info("voice", "quick action transcript held in draft", [
+                    "reason": reason, "chars": "\(text.count)",
+                ])
+            }
             appendToDraft(text)
             return
         }
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Nothing to send: fall back to the draft so the user still sees
-        // whatever came back rather than losing it to a silent no-op.
-        guard !trimmedText.isEmpty else {
-            appendToDraft(text)
-            return
-        }
         AppLog.info("voice", "quick action transcript auto-sent", ["chars": "\(trimmedText.count)"])
         FreezeContext.shared.note("voice-quick-send", trimmedText.utf8.count)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        Task { _ = await onSend(trimmedText, []) }
+        Task { @MainActor in
+            // Not merged into `voiceDeliveryRoute`'s `busy` check: they catch
+            // different moments. The route reads `busy` when the take STOPS, this
+            // reads the store's answer when the send is actually attempted, and a
+            // turn can start in the gap (transcription takes seconds).
+            let reason = Self.voiceRescueReason(
+                storeKeptTheWords: await onSend(trimmedText, [])
+            )
+            if let reason {
+                AppLog.info("voice", "quick action transcript held in draft", [
+                    "reason": reason, "chars": "\(trimmedText.count)",
+                ])
+                appendToDraft(trimmedText)
+            }
+        }
+    }
+
+    /// Does the composer still owe this transcript a home after asking the store to
+    /// send it?
+    ///
+    /// THE TRAP, twice over. The first cut discarded `onSend`'s Bool entirely, so a
+    /// refused send deleted the user's sentence (the audio is already gone by then).
+    /// The second cut rescued on ANY false, which is worse in the common case: a
+    /// real send failure (500, timeout, disconnect mid-send) has already kept the
+    /// text as a retryable red bubble, so the same sentence then existed in the
+    /// timeline AND the draft and could be sent twice. The manual `send()` path 100
+    /// lines above says exactly this: "Failure keeps the text AND images as a failed
+    /// bubble in the timeline (store's contract) — nothing restored here".
+    ///
+    /// So the question is not "did it succeed" but "did anything keep it", which is
+    /// what `onSend` now answers (`ComposerView.sendKeepingWords`).
+    static func voiceRescueReason(storeKeptTheWords: Bool) -> String? {
+        storeKeptTheWords ? nil : "send-refused"
+    }
+
+    /// Why a pending quick action cannot open the mic right now, or nil for "go".
+    ///
+    /// A static pure function so the rule is testable without a hosted view, and
+    /// so the answer is a REASON rather than a bare bool: each of these used to be
+    /// an early `return` that logged nothing, which is what made "the shortcut did
+    /// nothing" impossible to tell apart from "the shortcut was never delivered".
+    ///
+    ///  - `accepts`: session composers must not steal it (not a deferral — this
+    ///    composer is simply not the consumer).
+    ///  - `onScreen`: a retained off-screen tab must never open the mic.
+    ///  - `recorderIdle`: a take is already running; do not restart it. This one
+    ///    is a genuine WAIT, and `onChange(of: voice.state)` is what comes back.
+    ///
+    /// OFFLINE IS DELIBERATELY NOT A BLOCKER ANY MORE (the D1 fix). It was, on
+    /// the reasoning that a quick action promises delivery to the agent and a
+    /// draft is not that. The cost was the whole feature going silent whenever
+    /// the phone was offline: the mic never opened, nothing was logged, and the
+    /// words were never captured at all. Recording works offline, and the words
+    /// are the irreplaceable part; whether they can be SENT is decided later, in
+    /// `deliver`, when that answer is actually known.
+    static func voiceQuickActionBlocker(
+        accepts: Bool, onScreen: Bool, recorderIdle: Bool
+    ) -> String? {
+        if !accepts { return "not-a-consumer" }
+        if !onScreen { return "off-screen" }
+        if !recorderIdle { return "recorder-busy" }
+        return nil
     }
 
     /// Open the mic for a pending Home-screen quick action.
-    ///
-    /// Every guard here is load-bearing:
-    ///  - `acceptsVoiceQuickAction`: session composers must not steal it.
-    ///  - `onScreen`: a retained off-screen tab must never open the mic.
-    ///  - `disabled` (offline): recording would be fine, but the SEND wouldn't,
-    ///    and a quick action whose entire promise is "it reaches the agent"
-    ///    should not silently become a draft. Leave the request for the next
-    ///    appear (inside its TTL) instead of burning it.
-    ///  - `voice.state == .idle`: a take is already running; do not restart it.
     private func consumeVoiceQuickActionIfPending() {
-        guard acceptsVoiceQuickAction, onScreen, !disabled, voice.state == .idle else { return }
+        if let blocker = Self.voiceQuickActionBlocker(
+            accepts: acceptsVoiceQuickAction, onScreen: onScreen,
+            recorderIdle: voice.state == .idle
+        ) {
+            // Only when a request is actually waiting: this runs on every state
+            // change, and logging the no-request case would drown the signal.
+            if quickAction.pending != nil {
+                AppLog.info("voice", "quick action deferred", [
+                    "reason": blocker, "surface": draftKey,
+                    "offline": disabled ? "true" : "false",
+                ])
+            }
+            return
+        }
         guard quickAction.consume() != nil else { return }
         // Point the composer at the MAIN agent before the mic opens, so a user
         // who last browsed a subagent still gets their sentence delivered to the
@@ -872,6 +1104,16 @@ struct ComposerBar: View {
 private struct RecordingIndicator: View {
     let elapsed: TimeInterval
     var caption: String = "Recording…"
+    /// Which UIKit callback delivered the quick action that opened this mic
+    /// (`launch`, `scene-connect`, `scene-perform`, `app-perform`, `debug-arg`),
+    /// or nil for an ordinary mic tap.
+    ///
+    /// Published as the caption's accessibility VALUE, which makes it the one
+    /// thing an XCUITest can assert about the delivery layer. Without it a UI
+    /// test can only prove "a mic opened" — and a mic opening via a launch
+    /// argument proves nothing about whether the real Home-screen path works,
+    /// which is exactly the gap that let a warm-delivery regression ship.
+    var deliverySource: String? = nil
     @Environment(\.scenePhase) private var scenePhase
     @State private var phase = false
 
@@ -891,6 +1133,7 @@ private struct RecordingIndicator: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("chat.voiceRecordingCaption")
+                .accessibilityValue(deliverySource ?? "mic-button")
         }
         .onAppear { phase = scenePhase == .active }
         .onChange(of: scenePhase) { _, phaseState in
@@ -953,8 +1196,38 @@ struct ComposerView: View {
             // still reachable from it.
             hostProvenance: .chat(status: connection.status, online: connection.online)
         ) { text, images in
-            await chat.send(text, images: images)
+            await Self.sendKeepingWords(chat, text, images)
         }
+    }
+
+    /// `onSend`'s Bool, answered honestly: "are these words safe with the store?"
+    /// NOT "did the send succeed" — see `ComposerBar.voiceRescueReason` for why
+    /// conflating the two duplicated a voice transcript into the draft AND the
+    /// timeline.
+    ///
+    /// Two legs keep nothing and therefore answer false:
+    ///  - `ChatStore.acceptsNewTurn` is false (a turn is already streaming): the
+    ///    store returns before appending any bubble.
+    ///  - an ANSWER to a blocked structured question is not DELIVERED: the answer
+    ///    endpoint has no optimistic bubble at all, so anything short of delivery
+    ///    leaves the text nowhere. Note that this is stricter than "did it throw" —
+    ///    a 409 (someone resolved the question elsewhere first) is a SUCCESS for the
+    ///    question and a total loss for these words, and reading
+    ///    `answerQuestion`'s Bool here dropped them silently.
+    ///
+    /// Everything else is safe by the store's own contract: past that guard every
+    /// `return false` in `performSend` runs `markSendFailed` first, keeping the
+    /// full text and its images as a retryable red bubble.
+    @MainActor
+    static func sendKeepingWords(
+        _ chat: ChatStore, _ text: String, _ images: [SelectedImage]
+    ) async -> Bool {
+        if chat.pendingQuestion, !text.isEmpty {
+            return await chat.answerQuestionReportingOutcome(text) == .delivered
+        }
+        guard chat.acceptsNewTurn else { return false }
+        _ = await chat.send(text, images: images)
+        return true
     }
 }
 

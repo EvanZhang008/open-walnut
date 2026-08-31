@@ -420,6 +420,17 @@ final class ChatStore {
     /// store task — an untracked send kept a network round-trip alive across
     /// suspension and then wrote UI state into a store that had already been
     /// torn down.
+    /// Would `send` take a new turn right now, or refuse it having kept NOTHING?
+    ///
+    /// Exposed because the difference is invisible in `send`'s Bool and the caller
+    /// sometimes has to know: a refusal here appends no bubble at all, while every
+    /// failure PAST this point runs `markSendFailed` first, so the text survives as
+    /// a retryable red bubble. A caller holding the only copy of some text (the
+    /// voice transcript — its audio is already deleted) must rescue it on the first
+    /// and must not on the second, or the same sentence exists twice and can be
+    /// sent twice. See `ComposerBar.voiceRescueReason`.
+    var acceptsNewTurn: Bool { isActive && !sending && !streaming }
+
     @discardableResult
     func send(_ text: String, images: [SelectedImage] = []) async -> Bool {
         // Agent blocked on a structured question: route the composer text to
@@ -428,7 +439,7 @@ final class ChatStore {
         if pendingQuestion, !text.isEmpty {
             return await answerQuestion(text)
         }
-        guard isActive, !sending, !streaming else { return false }
+        guard acceptsNewTurn else { return false }
         let id = UUID()
         let task = Task { @MainActor [weak self] in
             guard let self else { return false }
@@ -971,7 +982,32 @@ final class ChatStore {
     /// resolves to "(no answer)" but still unblocks the turn (the agent can
     /// re-ask), which beats a deadlocked composer.
     func answerQuestion(_ text: String) async -> Bool {
-        guard let id = activeID, pendingQuestion else { return false }
+        // Preserved exactly: "did this unblock the question", which is what every
+        // existing caller asks. Only `.failedKeepingNothing` is a no.
+        await answerQuestionReportingOutcome(text) != .failedKeepingNothing
+    }
+
+    /// What happened to THE ANSWER TEXT, which is not the same question as what
+    /// happened to the QUESTION — and conflating them silently dropped words.
+    ///
+    /// A 409 means somebody resolved the question elsewhere first. For the question
+    /// that is success (it is gone, the turn is unblocked, and the composer must
+    /// stop offering to answer it), so `answerQuestion` rightly says true. But OUR
+    /// text was never delivered and nothing anywhere kept it: no bubble, no draft.
+    /// For typed text that is survivable (it is still on screen); for DICTATED text
+    /// the audio was deleted the moment transcription succeeded, so this string was
+    /// the only copy and "true" was how it got thrown away.
+    enum AnswerOutcome: Equatable {
+        /// Delivered and persisted server-side; history reloads to show it.
+        case delivered
+        /// Resolved elsewhere first (409). The turn moved on without these words.
+        case supersededKeepingNothing
+        /// No question to answer, or the POST failed. Nothing was appended.
+        case failedKeepingNothing
+    }
+
+    func answerQuestionReportingOutcome(_ text: String) async -> AnswerOutcome {
+        guard let id = activeID, pendingQuestion else { return .failedKeepingNothing }
         do {
             try await api.answerConversationQuestion(
                 id: id, agentID: activeAgentID, answers: ["Answer": text, "Q1": text]
@@ -981,14 +1017,14 @@ final class ChatStore {
             // The answer is persisted server-side as a user entry; reload so
             // it appears in history right away.
             trackTask { [weak self] in await self?.loadMessages(id) }
-            return true
+            return .delivered
         } catch let error as APIError where error.isConflict {
             // Question already answered/cancelled elsewhere.
             pendingQuestion = false
-            return true
+            return .supersededKeepingNothing
         } catch {
             errorMessage = error.localizedDescription
-            return false
+            return .failedKeepingNothing
         }
     }
 

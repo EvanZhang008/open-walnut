@@ -49,6 +49,29 @@ final class QuickActionDelegate: NSObject, UIApplicationDelegate {
     /// ("-voice-quick-action").
     static let debugLaunchArgument = "voice-quick-action"
 
+    /// One grep for the whole delivery chain: `voice: quick action delivery`.
+    ///
+    /// This is the D1 instrumentation, and it exists because the layer with the
+    /// field report ("the Home-screen shortcut does nothing") was the ONLY layer
+    /// that logged nothing at all. A normal launch, a shortcut UIKit dropped, and
+    /// a scene delegate that was never installed produced byte-identical logs, so
+    /// there was no way to tell a delivery failure from a consumption failure
+    /// without a debugger attached to the user's phone.
+    ///
+    /// Every hook reports, whether or not a shortcut was attached, so the log
+    /// says which callbacks the OS actually ran. A cold launch legitimately shows
+    /// TWO lines (`did-finish-launching` then `scene-connect`) — collapsing them
+    /// would hide the exact difference this is here to expose, since a missing
+    /// `scene-connect` line is how "our scene delegate was never installed"
+    /// looks.
+    static func logDelivery(hook: String, shortcutType: String?, extra: [String: String] = [:]) {
+        var meta = extra
+        meta["hook"] = hook
+        meta["shortcut"] = shortcutType == nil ? "absent" : "present"
+        if let shortcutType { meta["type"] = shortcutType }
+        AppLog.info("voice", "quick action delivery", meta)
+    }
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
@@ -59,11 +82,13 @@ final class QuickActionDelegate: NSObject, UIApplicationDelegate {
         LetterDeepLink.installNotificationRouting()
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains(where: { $0.contains(Self.debugLaunchArgument) }) {
+            Self.logDelivery(hook: "debug-arg", shortcutType: VoiceQuickAction.shortcutType)
             VoiceQuickAction.shared.handle(shortcutType: VoiceQuickAction.shortcutType, source: "debug-arg")
             return true
         }
         #endif
         let item = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem
+        Self.logDelivery(hook: "did-finish-launching", shortcutType: item?.type)
         let handled = VoiceQuickAction.shared.handle(shortcutType: item?.type, source: "launch")
         // false = "we already dealt with it, don't call performActionFor".
         return !handled
@@ -74,6 +99,7 @@ final class QuickActionDelegate: NSObject, UIApplicationDelegate {
         performActionFor shortcutItem: UIApplicationShortcutItem,
         completionHandler: @escaping (Bool) -> Void
     ) {
+        Self.logDelivery(hook: "app-perform", shortcutType: shortcutItem.type)
         let handled = VoiceQuickAction.shared.handle(shortcutType: shortcutItem.type, source: "app-perform")
         completionHandler(handled)
     }
@@ -102,6 +128,16 @@ final class QuickActionDelegate: NSObject, UIApplicationDelegate {
     static func sceneConfiguration(role: UISceneSession.Role) -> UISceneConfiguration {
         let config = UISceneConfiguration(name: nil, sessionRole: role)
         config.delegateClass = QuickActionSceneDelegate.self
+        // Log the class we ACTUALLY installed, read back off the config rather
+        // than restated from the line above. If this hook is never called (the
+        // app delegate not being adopted at all, which is a whole-feature outage
+        // and has happened), the absence of this line is the first symptom — and
+        // a `delegateClass` that is not ours means SwiftUI is swallowing warm
+        // deliveries again, which is unprovable from behavior alone.
+        logDelivery(hook: "scene-configuration", shortcutType: nil, extra: [
+            "delegateClass": config.delegateClass.map { NSStringFromClass($0) } ?? "none",
+            "role": role.rawValue,
+        ])
         return config
     }
 }
@@ -124,6 +160,12 @@ final class QuickActionSceneDelegate: NSObject, UIWindowSceneDelegate {
         willConnectTo session: UISceneSession,
         options connectionOptions: UIScene.ConnectionOptions
     ) {
+        // Unconditional: this line appearing at all is the proof that OUR scene
+        // delegate is the one UIKit is messaging, which is the single fact the
+        // warm path depends on and the one no behavioral test could establish.
+        QuickActionDelegate.logDelivery(
+            hook: "scene-connect", shortcutType: connectionOptions.shortcutItem?.type
+        )
         VoiceQuickAction.shared.handle(
             shortcutType: connectionOptions.shortcutItem?.type, source: "scene-connect"
         )
@@ -135,6 +177,7 @@ final class QuickActionSceneDelegate: NSObject, UIWindowSceneDelegate {
         performActionFor shortcutItem: UIApplicationShortcutItem,
         completionHandler: @escaping (Bool) -> Void
     ) {
+        QuickActionDelegate.logDelivery(hook: "scene-perform", shortcutType: shortcutItem.type)
         let handled = VoiceQuickAction.shared.handle(
             shortcutType: shortcutItem.type, source: "scene-perform"
         )

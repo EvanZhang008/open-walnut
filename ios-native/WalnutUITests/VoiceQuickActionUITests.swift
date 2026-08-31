@@ -17,6 +17,14 @@ import XCTest
 /// springboard app object is a first-class element query, so the long-press is
 /// aimed at the real icon rather than at a screen coordinate (a blind coordinate
 /// click on a shared desktop has landed in another app's window here before).
+///
+/// STILL MANUAL, and worth being honest about: this all runs on the SIMULATOR.
+/// Which UIKit callback a REAL DEVICE picks for a warm shortcut has never been
+/// verified on hardware. One long-press on a real phone settles it, and the
+/// instrumentation added alongside these tests is what makes that one gesture
+/// conclusive rather than anecdotal: the uploaded log carries a
+/// `voice: quick action delivery {hook: …}` line for every hook the OS ran, so
+/// `grep 'quick action delivery'` answers it after the fact.
 final class VoiceQuickActionUITests: XCTestCase {
 
     /// Exactly the Info.plist title. Duplicated as a literal on purpose: this
@@ -118,9 +126,42 @@ final class VoiceQuickActionUITests: XCTestCase {
             caption.waitForExistence(timeout: 30),
             "a warm shortcut didn't open the microphone — the app came forward with no recording row (tab switch or composer consume is broken)"
         )
-        XCTAssertEqual(
-            caption.label, "Recording — stop to send",
-            "the mic opened but auto-send is NOT armed: this transcript would land in the draft instead of reaching the agent"
+        // The caption is a PROMISE about where the transcript goes, and it depends
+        // on something this test does not control: whether the simulator is paired
+        // to a reachable server. Offline is now a legitimate outcome (recording
+        // offline is the D1 fix), and it deliberately reads as the plain caption
+        // because promising a send the app cannot make is the lie that fix removed.
+        // So the assertion is "one of the two honest captions" — pinning only the
+        // armed one made this test fail on a WORKING app whose server was simply
+        // down, which is the false alarm that gets shipped features "fixed".
+        //
+        // The claim that actually matters (a real Home-screen delivery reached the
+        // composer) is asserted below, from the accessibility value, and it holds
+        // in both states.
+        XCTAssertTrue(
+            ["Recording — stop to send", "Recording…"].contains(caption.label),
+            "the recording caption read '\(caption.label)' — neither of the two captions the composer can honestly show, so the arming/offline logic has drifted"
+        )
+        // WHICH callback delivered it — the assertion this file was missing.
+        //
+        // "The mic opened" is not the claim worth making: it is equally true of
+        // the DEBUG launch argument, which enters below the delivery layer by
+        // design and therefore proves nothing about the Home screen. The caption
+        // publishes the consumed request's `source` as its accessibility VALUE
+        // (`VoiceQuickAction.lastConsumedSource`), so the delivery path is
+        // assertable from out here for the first time.
+        //
+        // A SET, not one value, and the set is the point: `scene-perform` means
+        // our own scene delegate won the race against SwiftUI's, `app-perform`
+        // means we fell back to the application-level callback (correct on an OS
+        // whose SwiftUI lacks the scene hook). Either is a genuine warm delivery.
+        // `launch` would mean this test silently became a COLD test (the process
+        // was killed somewhere), and `debug-arg`/`mic-button` would mean it is
+        // not exercising the shortcut at all — each a false pass worth failing on.
+        let source = caption.value as? String ?? ""
+        XCTAssertTrue(
+            ["scene-perform", "app-perform"].contains(source),
+            "warm delivery reported source '\(source)' — expected scene-perform (our scene delegate) or app-perform (the fallback). 'launch' means this ran cold, 'mic-button' means no quick action reached the composer at all."
         )
         // Leave no hot mic behind for the next test / the next human.
         app.descendants(matching: .any)

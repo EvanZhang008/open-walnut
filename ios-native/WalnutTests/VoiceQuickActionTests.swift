@@ -194,6 +194,243 @@ final class VoiceQuickActionTests: XCTestCase {
         )
     }
 
+    // MARK: - Consumption guards (the "it does nothing" half of the report)
+
+    /// The rule that decides whether a pending request may open the mic.
+    ///
+    /// OFFLINE IS NOT IN THIS FUNCTION, and that is the D1 fix: it used to be a
+    /// hard block, so a long-press while the phone was offline opened nothing,
+    /// logged nothing, and expired 120 seconds later. Recording works offline —
+    /// only SENDING does not, and that decision belongs at delivery time.
+    func testOnlyRealObstaclesBlockTheMicrophone() {
+        XCTAssertNil(
+            ComposerBar.voiceQuickActionBlocker(accepts: true, onScreen: true, recorderIdle: true),
+            "the ordinary case must go"
+        )
+        XCTAssertEqual(
+            ComposerBar.voiceQuickActionBlocker(accepts: false, onScreen: true, recorderIdle: true),
+            "not-a-consumer",
+            "a session composer must never steal the shortcut"
+        )
+        XCTAssertEqual(
+            ComposerBar.voiceQuickActionBlocker(accepts: true, onScreen: false, recorderIdle: true),
+            "off-screen",
+            "a retained off-screen tab must never open a hot mic"
+        )
+        XCTAssertEqual(
+            ComposerBar.voiceQuickActionBlocker(accepts: true, onScreen: true, recorderIdle: false),
+            "recorder-busy",
+            "a take is already running — do not restart it"
+        )
+    }
+
+    /// The blocked cases must be RECOVERABLE, not terminal: each blocker names a
+    /// condition that ends (the tab comes forward, the upload finishes), and the
+    /// composer re-asks on `onChange(of: disabled)` / `onChange(of: voice.state)`.
+    /// A request survives being declined — nothing consumes the mailbox on a
+    /// deferral, which is what makes the retrigger able to succeed.
+    func testADeferredRequestStaysInTheMailbox() {
+        XCTAssertTrue(VoiceQuickAction.shared.handle(shortcutType: VoiceQuickAction.shortcutType, source: "scene-perform"))
+        XCTAssertNotNil(VoiceQuickAction.shared.pending)
+        // The composer's blocked path never calls consume(), so the request is
+        // still there for the retrigger.
+        XCTAssertNotNil(
+            ComposerBar.voiceQuickActionBlocker(accepts: true, onScreen: true, recorderIdle: false)
+        )
+        XCTAssertNotNil(VoiceQuickAction.shared.pending, "a declined request must not be burned")
+        XCTAssertNotNil(VoiceQuickAction.shared.consume(), "…and the retrigger gets it")
+        XCTAssertNil(VoiceQuickAction.shared.pending)
+    }
+
+    /// Which UIKit callback delivered the take must remain observable AFTER the
+    /// mailbox is emptied — it is what the composer publishes as the recording
+    /// caption's accessibility value, and therefore the only delivery-layer fact
+    /// a UI test can assert. Cold, warm and debug-arg launches are otherwise
+    /// indistinguishable from the outside, which is how a warm-path regression
+    /// shipped.
+    func testConsumedSourceSurvivesConsumptionForTheUI() {
+        XCTAssertNil(VoiceQuickAction.shared.lastConsumedSource)
+        VoiceQuickAction.shared.handle(shortcutType: VoiceQuickAction.shortcutType, source: "scene-perform")
+        _ = VoiceQuickAction.shared.consume()
+        XCTAssertEqual(VoiceQuickAction.shared.lastConsumedSource, "scene-perform")
+    }
+
+    /// An EXPIRED request must not leave a source behind: the UI would then label
+    /// a subsequent ordinary mic tap as if the Home screen had delivered it.
+    func testExpiredRequestPublishesNoSource() {
+        let armed = Date()
+        VoiceQuickAction.shared.handle(
+            shortcutType: VoiceQuickAction.shortcutType, source: "launch", now: armed
+        )
+        XCTAssertNil(VoiceQuickAction.shared.consume(
+            now: armed.addingTimeInterval(VoiceQuickAction.requestTTL + 1)
+        ))
+        XCTAssertNil(VoiceQuickAction.shared.lastConsumedSource)
+    }
+
+    // MARK: - Delivery routing (the words must land SOMEWHERE)
+
+    /// By the time a transcript exists the AUDIO IS GONE (success is the one path
+    /// that deletes it), so this function decides the fate of the only remaining
+    /// copy of what the user said. Every route must be `send` or `draft`; there is
+    /// no third answer, and the bug this pins is exactly a third answer.
+    func testDeliveryRouteAlwaysHasSomewhereToPutTheWords() {
+        XCTAssertEqual(
+            ComposerBar.voiceDeliveryRoute(
+                autoSendArmed: true, offline: false, busy: false, transcript: "ship it"),
+            .send,
+            "an armed quick action on a free, online composer is the whole feature"
+        )
+        XCTAssertEqual(
+            ComposerBar.voiceDeliveryRoute(
+                autoSendArmed: false, offline: false, busy: false, transcript: "ship it"),
+            .draft(reason: "not-armed"),
+            "an ordinary mic tap composes into the draft"
+        )
+        XCTAssertEqual(
+            ComposerBar.voiceDeliveryRoute(
+                autoSendArmed: true, offline: true, busy: false, transcript: "ship it"),
+            .draft(reason: "offline"),
+            "recording offline is allowed, so the transcript has to wait in the draft"
+        )
+        XCTAssertEqual(
+            ComposerBar.voiceDeliveryRoute(
+                autoSendArmed: true, offline: false, busy: false, transcript: "   \n "),
+            .draft(reason: "empty"),
+            "a silent take must not fire an empty turn at the agent"
+        )
+    }
+
+    /// THE LOSS PATH (verifier finding F1). Online, armed, and a turn already
+    /// streaming: `ChatStore.send` opens with `guard isActive, !sending, !streaming`
+    /// and returns false BEFORE appending any bubble, so a send attempted here
+    /// keeps nothing at all. The offline sibling was guarded; this one was not, and
+    /// the docstring claimed otherwise.
+    func testBusyComposerRoutesToTheDraftInsteadOfLosingTheTranscript() {
+        XCTAssertEqual(
+            ComposerBar.voiceDeliveryRoute(
+                autoSendArmed: true, offline: false, busy: true, transcript: "the words"),
+            .draft(reason: "busy"),
+            "a turn in flight is not a licence to delete what the user just said"
+        )
+        // And it stays a draft even when everything else is perfect, i.e. `busy`
+        // is not shadowed by an earlier guard returning `.send`.
+        for offline in [true, false] {
+            if case .send = ComposerBar.voiceDeliveryRoute(
+                autoSendArmed: true, offline: offline, busy: true, transcript: "x") {
+                XCTFail("busy must never resolve to .send (offline=\(offline))")
+            }
+        }
+    }
+
+    // MARK: - The rescue must fire ONCE, and only when the words are homeless
+
+    /// F7, and it is the OPPOSITE mistake to F1. The first cut discarded the send's
+    /// answer, so a refused send deleted the sentence. The second cut rescued on any
+    /// `false`, which duplicates: a real failure (500, timeout, disconnect mid-send)
+    /// has already kept the text as a retryable red bubble, so putting it in the
+    /// draft as well lets the user send the same words twice. `ChatStore`'s own
+    /// contract is that every `return false` inside `performSend` runs
+    /// `markSendFailed` first — only the refusal BEFORE the append keeps nothing.
+    func testOnlyARefusalThatKeptNothingIsRescuedToTheDraft() {
+        XCTAssertNil(
+            ComposerBar.voiceRescueReason(storeKeptTheWords: true),
+            "the store kept it — a second copy in the draft is a duplicate-send hazard"
+        )
+        XCTAssertEqual(
+            ComposerBar.voiceRescueReason(storeKeptTheWords: false),
+            "send-refused",
+            "nothing kept it, so the draft is the only place left"
+        )
+    }
+
+    /// …and the Bool that feeds it must actually mean "kept", which is where the
+    /// distinction lives. A streaming turn makes `ChatStore.send` refuse BEFORE
+    /// appending anything, and this asserts both halves of that: the answer is
+    /// false, and the timeline really is untouched (which is WHY it is false).
+    func testAStreamingStoreRefusesTheTurnWithoutKeepingAnything() async {
+        let chat = ChatStore()
+        chat.streaming = true
+        XCTAssertFalse(chat.acceptsNewTurn)
+
+        let kept = await ComposerView.sendKeepingWords(chat, "the only copy", [])
+
+        XCTAssertFalse(kept, "a refusal keeps nothing, so the composer must rescue the text")
+        XCTAssertTrue(chat.messages.isEmpty, "…and this is the reason: no bubble was appended")
+        XCTAssertEqual(
+            ComposerBar.voiceRescueReason(storeKeptTheWords: kept), "send-refused",
+            "the two halves must agree end to end"
+        )
+    }
+
+    /// R1. The last leg that reported "safe" while keeping nothing, and the subtlest
+    /// of the three because the store was not wrong — it was answering a different
+    /// question. A 409 on the answer endpoint means somebody resolved the structured
+    /// question elsewhere first, which for THE QUESTION is success (it is gone, the
+    /// turn is unblocked), so `answerQuestion` says true. For THE WORDS it is a total
+    /// loss: the answer endpoint appends no optimistic bubble, so a dictated answer
+    /// simply ceased to exist while the docstring claimed "NO-LOSS, and EXACTLY
+    /// ONCE".
+    ///
+    /// Deliberately SILENT beyond the rescue itself: the words reappearing in the
+    /// composer (appended and focused) IS the visible outcome, the same as every
+    /// other `voiceDeliveryRoute` draft leg (offline, busy). A notice on top would be
+    /// a second announcement of one event — and the question the user was answering
+    /// is already gone from the screen, which is the explanation.
+    func testAnAnswerSupersededByAnotherClientIsNotReportedAsSafe() {
+        // The store keeps its own contract for its own callers…
+        XCTAssertNotEqual(ChatStore.AnswerOutcome.supersededKeepingNothing, .delivered)
+        XCTAssertNotEqual(ChatStore.AnswerOutcome.supersededKeepingNothing, .failedKeepingNothing,
+            "a 409 is neither delivery nor failure — it is the third state that had nowhere to live")
+        // …and the voice rescue reads DELIVERY, so only `.delivered` counts as safe.
+        for outcome in [ChatStore.AnswerOutcome.supersededKeepingNothing, .failedKeepingNothing] {
+            XCTAssertEqual(
+                ComposerBar.voiceRescueReason(storeKeptTheWords: outcome == .delivered),
+                "send-refused",
+                "\(outcome) kept nothing, so the transcript must land in the draft"
+            )
+        }
+        XCTAssertNil(ComposerBar.voiceRescueReason(
+            storeKeptTheWords: ChatStore.AnswerOutcome.delivered == .delivered))
+    }
+
+    /// The Bool wrapper must keep answering the OTHER question unchanged, or fixing
+    /// the voice leg quietly changes what every existing caller of `answerQuestion`
+    /// believes. Only an outright failure is a no.
+    func testAnswerQuestionBoolStillMeansTheQuestionIsResolved() {
+        XCTAssertTrue(ChatStore.AnswerOutcome.delivered != .failedKeepingNothing)
+        XCTAssertTrue(ChatStore.AnswerOutcome.supersededKeepingNothing != .failedKeepingNothing,
+            "a 409 still resolves the question, so the wrapper still says true")
+    }
+
+    /// A store with no pending question cannot answer one, and the answer path keeps
+    /// nothing when it declines — so the words come back to the draft.
+    func testAnAnswerWithNoPendingQuestionKeepsNothing() async {
+        let chat = ChatStore()
+        chat.pendingQuestion = true
+        // No activeID: `answerQuestionReportingOutcome`'s own guard declines before
+        // any network call.
+        let outcome = await chat.answerQuestionReportingOutcome("dictated answer")
+        XCTAssertEqual(outcome, .failedKeepingNothing)
+        XCTAssertTrue(chat.messages.isEmpty, "the answer endpoint never appends a bubble")
+        let kept = await ComposerView.sendKeepingWords(chat, "dictated answer", [])
+        XCTAssertFalse(kept)
+        XCTAssertEqual(ComposerBar.voiceRescueReason(storeKeptTheWords: kept), "send-refused")
+    }
+
+    /// The same refusal for the other reason a turn is in flight. Pinned separately
+    /// because `sending` and `streaming` are set at different moments (POST in
+    /// flight vs SSE deltas arriving) and a guard that lost either one would leave a
+    /// real window where the transcript vanishes.
+    func testASendingStoreAlsoRefusesWithoutKeepingAnything() async {
+        let chat = ChatStore()
+        chat.sending = true
+        XCTAssertFalse(chat.acceptsNewTurn)
+        let kept = await ComposerView.sendKeepingWords(chat, "the only copy", [])
+        XCTAssertFalse(kept)
+        XCTAssertTrue(chat.messages.isEmpty)
+    }
+
     // MARK: - Main-agent contract
 
     /// The shortcut promises the MAIN agent (Claude Code engine), whatever

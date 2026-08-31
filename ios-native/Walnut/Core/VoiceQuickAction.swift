@@ -52,6 +52,22 @@ final class VoiceQuickAction {
     /// Non-nil while a quick action waits for the chat composer to pick it up.
     private(set) var pending: Request?
 
+    /// The delivery path of the take currently being served: set when a request
+    /// is consumed, cleared when the arming is spent or dropped.
+    ///
+    /// This exists to make the delivery layer observable from OUTSIDE the app.
+    /// The `source` on a live request lives only as long as the request does, so
+    /// a UI test could assert that a mic opened but never WHICH callback opened
+    /// it — and "a mic opened" is equally true of the DEBUG launch argument,
+    /// which is the one path that proves nothing about the real Home-screen
+    /// shortcut. The composer publishes this as the recording caption's
+    /// accessibility value.
+    ///
+    /// Cleared with the arming rather than left as a historical record on
+    /// purpose: a stale value would label an ordinary mic tap as if the Home
+    /// screen had delivered it, which is worse than knowing nothing.
+    private(set) var lastConsumedSource: String?
+
     /// True while the LIVE take was started by a quick action, i.e. its
     /// transcript goes straight to the agent instead of into the draft. Owned
     /// here (not by the composer view) so a keyboard-driven identity churn
@@ -85,7 +101,18 @@ final class VoiceQuickAction {
     func handle(shortcutType type: String?, source: String, now: Date = Date()) -> Bool {
         guard Self.isVoiceShortcut(type) else {
             if let type {
-                AppLog.info("voice", "ignored unknown quick action", ["type": type, "source": source])
+                AppLog.info("voice", "ignored unknown quick action", [
+                    "type": type, "source": source, "reason": "foreign-type",
+                ])
+            } else {
+                // The silence that made D1 undiagnosable. An ordinary launch, a
+                // shortcut UIKit dropped, and a scene delegate that was never
+                // installed all arrived here as `type == nil` and logged NOTHING,
+                // so all three looked identical in a field log. Every delivery
+                // hook now says what it saw, including "no shortcut".
+                AppLog.info("voice", "quick action absent", [
+                    "source": source, "reason": "no-shortcut-item",
+                ])
             }
             return false
         }
@@ -108,6 +135,8 @@ final class VoiceQuickAction {
             ])
             return nil
         }
+        lastConsumedSource = request.source
+        AppLog.info("voice", "quick action consumed", ["source": request.source])
         return request
     }
 
@@ -122,6 +151,7 @@ final class VoiceQuickAction {
         }
         pending = nil
         autoSendArmed = false
+        lastConsumedSource = nil
     }
 
     /// Check-and-clear used at the delivery point: one transcript can only ever
@@ -130,6 +160,9 @@ final class VoiceQuickAction {
     func takeAutoSend() -> Bool {
         guard autoSendArmed else { return false }
         autoSendArmed = false
+        // The take is over: stop publishing its delivery path so the next
+        // ordinary mic tap isn't labelled with it.
+        lastConsumedSource = nil
         return true
     }
 }
