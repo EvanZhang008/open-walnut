@@ -18,6 +18,7 @@ import {
   GATEWAY_OPS,
 } from '../../../src/providers/gateway-core.js';
 import { LETTER_HTML_MAX_BYTES } from '../../../src/core/human-inbox/types.js';
+import { GATEWAY_INLINE_ARGS_MAX_BYTES } from '../../../src/providers/tool-args-source.js';
 
 function expectError(line: string, code: string): void {
   const res = parseGatewayLine(line);
@@ -57,13 +58,18 @@ describe('parseGatewayLine', () => {
 
   /**
    * RATCHET. One `walnut tools call human_inbox_send` is ONE line, so this cap
-   * IS the ceiling on a letter body: it was 256KB, which is why the letter cap
-   * was 200KB. A digest letter embeds its podcast as base64 audio (2-5MB), so
-   * lowering the line cap back under the html letter cap silently breaks audio
-   * letters on every host — the failure lands in the daemon, far from here.
+   * WAS the ceiling on a letter body: it started at 256KB, which is why the letter
+   * cap was 200KB. It now bounds the INLINE lane only — a payload over
+   * GATEWAY_INLINE_ARGS_MAX_BYTES travels as a path the hub range-reads in batches,
+   * which is what let the letter cap grow to 100MB. So the invariant is against the
+   * inline threshold, with envelope headroom: lowering the line under it silently
+   * breaks ordinary calls on every host, and the failure lands in the daemon, far
+   * from here.
    */
-  it('leaves room for the biggest letter body a session may send', () => {
-    expect(GATEWAY_MAX_LINE_BYTES).toBeGreaterThan(LETTER_HTML_MAX_BYTES);
+  it('leaves room for the biggest payload that still rides one line', () => {
+    expect(GATEWAY_MAX_LINE_BYTES).toBeGreaterThan(GATEWAY_INLINE_ARGS_MAX_BYTES);
+    // The batched lane exists precisely because the letter cap outgrew this line.
+    expect(LETTER_HTML_MAX_BYTES).toBeGreaterThan(GATEWAY_MAX_LINE_BYTES);
   });
 
   it('accepts a line just under the cap', () => {

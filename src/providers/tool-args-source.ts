@@ -47,6 +47,21 @@ export function classifyArgsSource(raw: string | undefined, stdinIsTty: boolean)
   return { kind: 'inline', json: raw }
 }
 
+/**
+ * Above this, the payload does not travel INSIDE the gateway request.
+ *
+ * A gateway call is one NDJSON line on a unix socket and then one WebSocket
+ * frame to the hub, so inlining a 100MB letter body would make the biggest thing
+ * an agent can send a property of the framing. Over this size the CLI sends only
+ * the file's PATH (`argsFile`), and the hub pulls it back from this host's daemon
+ * in bounded byte ranges (core/peers/gateway-args-file.ts). A payload on stdin is
+ * spilled to a temp file first so it can take the same lane.
+ *
+ * 1MB keeps every ordinary call on the single-round-trip path — the pull only
+ * kicks in for the media-carrying payloads that need it.
+ */
+export const GATEWAY_INLINE_ARGS_MAX_BYTES = 1024 * 1024
+
 export type ParsedToolArgs =
   | { ok: true; args: Record<string, unknown> }
   | { ok: false; message: string }

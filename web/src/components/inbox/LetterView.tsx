@@ -167,8 +167,13 @@ export function LetterView({
       // Keep the document already on screen when the write response carries no
       // body (an older primary, or a relay that stripped it): the reader would
       // otherwise blank the letter the instant the human answered it.
-      setLetter(prev => (prev && !next.body
-        ? { ...next, body: prev.body, bodyFormat: prev.bodyFormat }
+      setLetter(prev => (prev && !next.body && !next.bodyDeferred
+        ? {
+          ...next,
+          body: prev.body,
+          bodyFormat: prev.bodyFormat,
+          ...(prev.bodyDeferred ? { bodyDeferred: true, bodyUrl: prev.bodyUrl } : {}),
+        }
         : next));
       onLetterUpdated({ ...next, read: true });
     }
@@ -327,6 +332,7 @@ export function LetterView({
                 format={letter.bodyFormat}
                 subject={letter.subject}
                 onClick={onBodyClick}
+                {...(letter.bodyDeferred && letter.bodyUrl ? { bodyUrl: letter.bodyUrl } : {})}
               />
             )}
             {(letter.taskRefs?.length ?? 0) > 0 && (

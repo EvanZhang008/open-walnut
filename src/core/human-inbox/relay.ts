@@ -16,11 +16,13 @@ import {
   agentReply,
   getLetter,
   listLetters,
+  readLetterBodyRange,
   setArchived,
   setPinned,
   setRead,
   LetterError,
 } from './store.js';
+import { HUMAN_INBOX_CHUNK_BYTES } from './types.js';
 import {
   answerLetterAndDeliver,
   humanReplyAndDeliver,
@@ -55,6 +57,30 @@ export async function handleHumanInboxRelayAction(
       const letter = await getLetter(requireId(p));
       if (!letter) throw new LetterError(`Letter not found: ${str(p.id)}`, 'not_found', 404);
       return { letter };
+    }
+    // One BOUNDED slice of a body document. This is the whole reason a letter's
+    // html cap can be 100MB: a replica serving a phone's body request loops this
+    // action, so the biggest thing that ever rides one bridge frame is a chunk —
+    // not the document. `data` is base64 because a slice can split a UTF-8 char
+    // (the caller reassembles bytes, then decodes), same contract as fs.readRange.
+    case 'body': {
+      const id = requireId(p);
+      const turn = typeof p.turn === 'number' && Number.isInteger(p.turn) && p.turn >= 0 ? p.turn : undefined;
+      const start = typeof p.start === 'number' && p.start >= 0 ? Math.trunc(p.start) : 0;
+      const requested = typeof p.length === 'number' && p.length > 0 ? Math.trunc(p.length) : HUMAN_INBOX_CHUNK_BYTES;
+      const slice = await readLetterBodyRange(id, {
+        ...(turn !== undefined ? { turn } : {}),
+        start,
+        length: Math.min(requested, HUMAN_INBOX_CHUNK_BYTES),
+      });
+      if (!slice) throw new LetterError(`Letter body not found: ${id}`, 'not_found', 404);
+      return {
+        data: slice.data.toString('base64'),
+        bytesRead: slice.bytesRead,
+        fileSize: slice.fileSize,
+        eof: slice.eof,
+        format: slice.format,
+      };
     }
     case 'send': {
       const { callerSid, ...input } = p;

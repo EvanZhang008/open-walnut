@@ -12,6 +12,9 @@ export default defineConfig({
       // shared pure query model — browser-safe, no db/config/logging imports —
       // reused verbatim by REST, the agent tool and both task surfaces.
       '@open-walnut/task-query': path.resolve(__dirname, '../src/core/task-query.ts'),
+      // Same reason: the letter reader's frame + CSP floor is ONE module, because
+      // the server streams big letter bodies pre-wrapped in that exact frame.
+      '@open-walnut/letter-frame': path.resolve(__dirname, '../src/core/human-inbox/letter-frame.ts'),
     },
   },
   server: {

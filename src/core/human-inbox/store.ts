@@ -33,7 +33,9 @@ import {
   str,
   type LetterStoreFile,
 } from './normalize.js';
+import { statStagedBody, takeStagedBody } from './staged-body.js';
 import {
+  LETTER_INLINE_BODY_MAX_BYTES,
   LETTER_TYPES,
   letterFieldMaxBytes,
   type AgentReplyInput,
@@ -149,8 +151,7 @@ function bodyExt(format: 'html' | 'markdown'): 'html' | 'md' {
   return format === 'html' ? 'html' : 'md';
 }
 
-function assertBodySize(body: string, field: string): void {
-  const bytes = Buffer.byteLength(body, 'utf-8');
+function assertBodyBytes(bytes: number, field: string): void {
   const max = letterFieldMaxBytes(field);
   if (bytes > max) {
     throw invalid(
@@ -160,9 +161,153 @@ function assertBodySize(body: string, field: string): void {
   }
 }
 
+function assertBodySize(body: string, field: string): void {
+  assertBodyBytes(Buffer.byteLength(body, 'utf-8'), field);
+}
+
 async function writeBodyFile(fileName: string, content: string): Promise<void> {
   await fsp.mkdir(BODIES_DIR, { recursive: true });
   await fsp.writeFile(path.join(BODIES_DIR, fileName), content, 'utf-8');
+}
+
+/**
+ * A body to store, from either lane: a string the caller inlined, or a ref to
+ * bytes already streamed to staging. `bytes` is known for both, so the cap is
+ * checked the same way whichever lane produced it.
+ */
+type BodySource =
+  | { kind: 'inline'; text: string; bytes: number }
+  | { kind: 'staged'; ref: string; bytes: number };
+
+/** Resolve + size-check one body field pair (`html` or `htmlRef`, `markdown`). */
+async function resolveBodySource(
+  value: string | undefined,
+  ref: string | undefined,
+  field: string,
+): Promise<BodySource> {
+  if (typeof ref === 'string' && ref.length > 0) {
+    // Staging failures are LETTER failures from every caller's point of view, so
+    // they get translated rather than escaping as a 500: an expired ref is a 404
+    // that says "upload it again", a path-shaped ref is a 400.
+    let bytes: number;
+    try {
+      ({ bytes } = await statStagedBody(ref));
+    } catch (err) {
+      const e = err as { name?: string; code?: string; status?: number; message?: string };
+      if (e?.name === 'StagedBodyError') {
+        throw new LetterError(
+          String(e.message),
+          e.code === 'not_found' ? 'not_found' : 'invalid',
+          typeof e.status === 'number' ? e.status : 400,
+        );
+      }
+      throw err;
+    }
+    assertBodyBytes(bytes, field);
+    return { kind: 'staged', ref, bytes };
+  }
+  const text = value as string;
+  const bytes = Buffer.byteLength(text, 'utf-8');
+  assertBodyBytes(bytes, field);
+  return { kind: 'inline', text, bytes };
+}
+
+/** Enough of a staged body for derivePreview, which stops at 8000 chars anyway. */
+const PREVIEW_PEEK_BYTES = 64 * 1024;
+
+async function peekStagedBody(ref: string): Promise<string> {
+  const { path: p } = await statStagedBody(ref);
+  const fh = await fsp.open(p, 'r');
+  try {
+    const buf = Buffer.alloc(PREVIEW_PEEK_BYTES);
+    const { bytesRead } = await fh.read(buf, 0, PREVIEW_PEEK_BYTES, 0);
+    return buf.subarray(0, bytesRead).toString('utf-8');
+  } finally {
+    await fh.close().catch(() => {});
+  }
+}
+
+/** Put a resolved body at its final name. Staged bodies MOVE (never copied up). */
+async function commitBodySource(fileName: string, source: BodySource): Promise<void> {
+  if (source.kind === 'inline') {
+    await writeBodyFile(fileName, source.text);
+    return;
+  }
+  await fsp.mkdir(BODIES_DIR, { recursive: true });
+  await takeStagedBody(source.ref, path.join(BODIES_DIR, fileName));
+}
+
+/**
+ * Stat a letter's body document without reading it — what the streaming route
+ * needs to answer a Range, and what getLetter needs to decide whether to inline.
+ * `turn` selects a thread entry's rich body instead of the letter's own.
+ */
+export async function statLetterBody(
+  id: string,
+  turn?: number,
+): Promise<{ path: string; bytes: number; mtimeMs: number; format: 'html' | 'markdown' } | null> {
+  if (typeof id !== 'string' || !LETTER_ID_RE.test(id)) return null;
+  const { letters } = await readStore();
+  const record = letters.find(l => l.id === id);
+  if (!record) return null;
+
+  let fileName: string;
+  let format: 'html' | 'markdown';
+  if (turn === undefined) {
+    format = record.bodyFormat;
+    fileName = `${record.id}.${bodyExt(format)}`;
+  } else {
+    const entry = record.thread[turn];
+    if (!entry?.bodyFile || !entry.bodyFormat) return null;
+    format = entry.bodyFormat;
+    fileName = entry.bodyFile;
+  }
+  // Same traversal guard as readBodyFile: the name came off a JSON index another
+  // process wrote, so it is untrusted input even though we produced it.
+  if (!BODY_FILE_RE.test(fileName)) {
+    log.notif.warn('human-inbox: refusing suspicious body file name', { fileName });
+    return null;
+  }
+  const full = path.join(BODIES_DIR, fileName);
+  try {
+    const st = await fsp.stat(full);
+    if (!st.isFile()) return null;
+    return { path: full, bytes: st.size, mtimeMs: st.mtimeMs, format };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read one slice of a body document. The bounded primitive both chunked lanes
+ * sit on (the replica's bridge relay, and any future incremental reader), so
+ * nothing anywhere has to hold a 100MB body to serve part of it.
+ */
+export async function readLetterBodyRange(
+  id: string,
+  opts: { turn?: number; start?: number; length: number },
+): Promise<{ data: Buffer; bytesRead: number; fileSize: number; eof: boolean; format: 'html' | 'markdown' } | null> {
+  const stat = await statLetterBody(id, opts.turn);
+  if (!stat) return null;
+  const start = Math.max(0, Math.trunc(opts.start ?? 0));
+  if (start >= stat.bytes) {
+    return { data: Buffer.alloc(0), bytesRead: 0, fileSize: stat.bytes, eof: true, format: stat.format };
+  }
+  const toRead = Math.min(Math.max(1, Math.trunc(opts.length)), stat.bytes - start);
+  const fh = await fsp.open(stat.path, 'r');
+  try {
+    const buf = Buffer.alloc(toRead);
+    const { bytesRead } = await fh.read(buf, 0, toRead, start);
+    return {
+      data: buf.subarray(0, bytesRead),
+      bytesRead,
+      fileSize: stat.bytes,
+      eof: start + bytesRead >= stat.bytes,
+      format: stat.format,
+    };
+  } finally {
+    await fh.close().catch(() => {});
+  }
 }
 
 /**
@@ -232,10 +377,13 @@ export async function sendLetter(input: NewLetter): Promise<LetterRecord> {
   if (!LETTER_TYPES.includes(input.type)) {
     throw invalid(`type must be one of ${LETTER_TYPES.join(', ')}`);
   }
+  const htmlRef = str(input.htmlRef ?? input.html_ref ?? '');
   const hasHtml = typeof input.html === 'string' && input.html.length > 0;
+  const hasHtmlRef = htmlRef.length > 0;
   const hasMarkdown = typeof input.markdown === 'string' && input.markdown.length > 0;
-  if (hasHtml === hasMarkdown) {
-    throw invalid('exactly one of html | markdown is required');
+  const bodyLanes = [hasHtml, hasHtmlRef, hasMarkdown].filter(Boolean).length;
+  if (bodyLanes !== 1) {
+    throw invalid('exactly one of html | html_ref | markdown is required');
   }
   const actions = input.actions;
   if (actions !== undefined) {
@@ -266,9 +414,17 @@ export async function sendLetter(input: NewLetter): Promise<LetterRecord> {
     if (ids.size !== actions.length) throw invalid('action ids must be unique');
   }
 
-  const bodyFormat = hasHtml ? 'html' : 'markdown';
-  const body = (hasHtml ? input.html : input.markdown) as string;
-  assertBodySize(body, bodyFormat);
+  const bodyFormat = hasMarkdown ? 'markdown' : 'html';
+  const bodySource = await resolveBodySource(
+    hasMarkdown ? input.markdown : input.html,
+    hasHtmlRef ? htmlRef : undefined,
+    bodyFormat,
+  );
+  // The preview only ever reads the first few thousand chars (derivePreview), so
+  // a staged body is peeked at rather than loaded — the whole point of the lane.
+  const previewSource = bodySource.kind === 'inline'
+    ? bodySource.text
+    : await peekStagedBody(bodySource.ref);
 
   const id = generateId();
   const record: LetterRecord = {
@@ -276,7 +432,10 @@ export async function sendLetter(input: NewLetter): Promise<LetterRecord> {
     subject: truncatePreview(subject, 200),
     type: input.type,
     bodyFormat,
-    textPreview: derivePreview({ text: input.text, html: input.html, markdown: input.markdown }),
+    textPreview: derivePreview({
+      text: input.text,
+      ...(bodyFormat === 'html' ? { html: previewSource } : { markdown: previewSource }),
+    }),
     sender: normalizeSender(input.sender),
     createdAt: Date.now(),
     read: false,
@@ -296,7 +455,7 @@ export async function sendLetter(input: NewLetter): Promise<LetterRecord> {
 
   // Body first: an index entry pointing at a file that was never written would
   // read as a corrupt letter. A body file with no index entry is invisible junk.
-  await writeBodyFile(`${id}.${bodyExt(bodyFormat)}`, body);
+  await commitBodySource(`${id}.${bodyExt(bodyFormat)}`, bodySource);
   try {
     await withWriteLock(() => withStore((store) => { store.letters.push(record); }));
   } catch (err) {
@@ -337,27 +496,73 @@ export async function listLetters(opts: { archived?: boolean } = {}): Promise<Le
 }
 
 /** The record plus every body read off disk. Unknown id → null (route 404s). */
-export async function getLetter(id: string): Promise<LetterDetail | null> {
+/**
+ * One letter, with its documents.
+ *
+ * A body over `inlineMaxBytes` is DEFERRED rather than embedded: the reply
+ * carries `bodyBytes` + `bodyUrl` and the reader streams the document from
+ * `GET /api/v1/human-inbox/:id/body`. That is what lets the html cap be 100MB —
+ * the size of a letter's media stops deciding the size of this JSON, so no hop
+ * on the way to the phone ever has to frame the whole thing.
+ *
+ * Pass `inlineMaxBytes: Infinity` for a caller that genuinely wants the bytes in
+ * process (the store's own tests, an export).
+ */
+export async function getLetter(
+  id: string,
+  opts: { inlineMaxBytes?: number } = {},
+): Promise<LetterDetail | null> {
   if (typeof id !== 'string' || !LETTER_ID_RE.test(id)) return null;
   const { letters } = await readStore();
   const record = letters.find(l => l.id === id);
   if (!record) return null;
+  const inlineMax = opts.inlineMaxBytes ?? LETTER_INLINE_BODY_MAX_BYTES;
 
-  const body = await readBodyFile(`${record.id}.${bodyExt(record.bodyFormat)}`);
+  const ownStat = await statLetterBody(id);
+  const deferOwn = ownStat !== null && ownStat.bytes > inlineMax;
+  const body = deferOwn ? null : await readBodyFile(`${record.id}.${bodyExt(record.bodyFormat)}`);
+
   const thread: LetterThreadEntry[] = [];
-  for (const entry of record.thread) {
+  for (const [turn, entry] of record.thread.entries()) {
     if (!entry.bodyFile) { thread.push({ ...entry }); continue; }
+    const turnStat = await statLetterBody(id, turn);
+    if (turnStat !== null && turnStat.bytes > inlineMax) {
+      thread.push({
+        ...entry,
+        bodyBytes: turnStat.bytes,
+        bodyDeferred: true,
+        bodyUrl: letterBodyUrl(id, turn),
+      });
+      continue;
+    }
     const turnBody = await readBodyFile(entry.bodyFile);
     thread.push(turnBody === null
       ? { ...entry, bodyMissing: true }
-      : { ...entry, body: turnBody });
+      : { ...entry, body: turnBody, bodyBytes: turnStat?.bytes });
+  }
+
+  if (deferOwn) {
+    return {
+      ...record,
+      thread,
+      bodyBytes: ownStat.bytes,
+      bodyDeferred: true,
+      bodyUrl: letterBodyUrl(id),
+    };
   }
   return {
     ...record,
     thread,
     body: body ?? missingBodyNote(record.bodyFormat),
+    ...(ownStat ? { bodyBytes: ownStat.bytes } : {}),
     ...(body === null ? { bodyMissing: true } : {}),
   };
+}
+
+/** The streaming route for one document. Relative — the caller's own origin. */
+export function letterBodyUrl(id: string, turn?: number): string {
+  const base = `/api/v1/human-inbox/${encodeURIComponent(id)}/body`;
+  return turn === undefined ? base : `${base}?turn=${turn}`;
 }
 
 /** Find-or-throw helper for the mutators, all of which run under the lock. */
@@ -378,19 +583,28 @@ export async function agentReply(id: string, input: AgentReplyInput): Promise<Le
   const text = str(input?.text).trim();
   if (!text) throw invalid('text is required');
   assertBodySize(text, 'text');
+  const htmlRef = str(input.htmlRef ?? input.html_ref ?? '');
   const hasHtml = typeof input.html === 'string' && input.html.length > 0;
+  const hasHtmlRef = htmlRef.length > 0;
   const hasMarkdown = typeof input.markdown === 'string' && input.markdown.length > 0;
-  if (hasHtml && hasMarkdown) throw invalid('pass at most one of html | markdown');
-  const richBody = hasHtml ? input.html! : hasMarkdown ? input.markdown! : null;
-  const richFormat = hasHtml ? 'html' : 'markdown';
-  if (richBody !== null) assertBodySize(richBody, richFormat);
+  if ([hasHtml, hasHtmlRef, hasMarkdown].filter(Boolean).length > 1) {
+    throw invalid('pass at most one of html | html_ref | markdown');
+  }
+  const richFormat = hasMarkdown ? 'markdown' : 'html';
+  const richSource = (hasHtml || hasHtmlRef || hasMarkdown)
+    ? await resolveBodySource(
+      hasMarkdown ? input.markdown : input.html,
+      hasHtmlRef ? htmlRef : undefined,
+      richFormat,
+    )
+    : null;
 
   // The turn index names the body file, so it has to be assigned under the lock.
   let bodyFileToWrite: string | null = null;
   const record = await withWriteLock(() => withStore((store) => {
     const letter = find(store, id);
     const entry: ThreadEntry = { from: 'agent', text: boundThreadText(text), at: Date.now() };
-    if (richBody !== null) {
+    if (richSource !== null) {
       bodyFileToWrite = `${letter.id}.r${letter.thread.length}.${bodyExt(richFormat)}`;
       entry.bodyFormat = richFormat;
       entry.bodyFile = bodyFileToWrite;
@@ -400,7 +614,7 @@ export async function agentReply(id: string, input: AgentReplyInput): Promise<Le
     letter.archived = false;
     return { ...letter };
   }));
-  if (bodyFileToWrite && richBody !== null) await writeBodyFile(bodyFileToWrite, richBody);
+  if (bodyFileToWrite && richSource !== null) await commitBodySource(bodyFileToWrite, richSource);
 
   log.notif.info('human-inbox: agent replied', { letterId: id, turns: record.thread.length });
   emitLetterEvent(record, 'reply', truncatePreview(text));

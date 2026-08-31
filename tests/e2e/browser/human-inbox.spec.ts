@@ -130,6 +130,30 @@ const envelope = (panel: Locator, subject: string): Locator =>
 const rowButton = (row: Locator, name: string): Locator =>
   row.getByRole('button', { name, exact: true })
 
+/**
+ * The document the reader's iframe is actually showing, from EITHER lane.
+ *
+ * A small body arrives inline and the console feeds it to the iframe as `srcdoc`.
+ * A body over the inline threshold (a real digest with audio or a clip) is NOT in
+ * the letter JSON at all — the iframe points at `/api/v1/human-inbox/:id/body?frame=1`
+ * and the server streams it wrapped in the identical frame. Both cases have to be
+ * verifiable the same way, or the media checks below would silently stop covering
+ * the size that matters.
+ */
+async function readerDocument(
+  request: APIRequestContext,
+  frame: Locator,
+): Promise<{ document: string; lane: 'inline' | 'streamed' }> {
+  const srcdoc = await frame.getAttribute('srcdoc')
+  if (srcdoc) return { document: srcdoc, lane: 'inline' }
+  const src = await frame.getAttribute('src')
+  expect(src, 'the reader iframe has neither srcdoc nor src').toBeTruthy()
+  expect(src, 'a deferred body must be fetched with the reader frame applied').toContain('frame=1')
+  const res = await request.get(src!)
+  expect(res.status(), `GET ${src}`).toBe(200)
+  return { document: await res.text(), lane: 'streamed' }
+}
+
 async function shot(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: `${SCREENSHOT_DIR}/${name}.png` })
 }
@@ -436,8 +460,11 @@ test('a multi-MB letter with embedded base64 audio arrives whole and plays', asy
 
   // The security floor is unchanged, and media is allowed from data:/blob: ONLY.
   await expect(frame).toHaveAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox')
-  const srcdoc = await frame.getAttribute('srcdoc') ?? ''
-  const policy = srcdoc.match(/content="(default-src[^"]*)"/)?.[1] ?? ''
+  const { document: readerDoc, lane } = await readerDocument(request, frame)
+  // A body this size MUST take the streamed lane: if it came back inline, the
+  // deferral regressed and the letter JSON is carrying megabytes again.
+  expect(lane).toBe('streamed')
+  const policy = readerDoc.match(/content="(default-src[^"]*)"/)?.[1] ?? ''
   expect(policy).toContain("default-src 'none'")
   expect(policy).toContain('media-src data: blob:')
   expect(policy).not.toMatch(/https?:/)
@@ -448,7 +475,7 @@ test('a multi-MB letter with embedded base64 audio arrives whole and plays', asy
   probe.on('console', (m) => {
     if (/Content Security Policy|Refused to load/i.test(m.text())) blocked.push(m.text())
   })
-  await probe.setContent(srcdoc, { waitUntil: 'load' })
+  await probe.setContent(readerDoc, { waitUntil: 'load' })
   const media = await probe.evaluate(async () => {
     const el = document.querySelector('audio') as HTMLAudioElement | null
     if (!el) return { duration: 0, error: 'no audio element' }
@@ -520,8 +547,9 @@ test('a >10MB letter with embedded base64 video arrives whole and plays', async 
   await expect(inner.locator('body')).toContainText(VIDEO_TAIL_MARKER, { timeout: 30_000 })
   await shot(page, 'e2e-10-video-letter-reader')
 
-  const srcdoc = await frame.getAttribute('srcdoc') ?? ''
-  const policy = srcdoc.match(/content="(default-src[^"]*)"/)?.[1] ?? ''
+  const { document: readerDoc, lane } = await readerDocument(request, frame)
+  expect(lane).toBe('streamed')
+  const policy = readerDoc.match(/content="(default-src[^"]*)"/)?.[1] ?? ''
   expect(policy).toContain('media-src data: blob:')
   expect(policy).not.toMatch(/https?:/)
 
@@ -532,7 +560,7 @@ test('a >10MB letter with embedded base64 video arrives whole and plays', async 
   probe.on('console', (m) => {
     if (/Content Security Policy|Refused to load/i.test(m.text())) blocked.push(m.text())
   })
-  await probe.setContent(srcdoc, { waitUntil: 'load' })
+  await probe.setContent(readerDoc, { waitUntil: 'load' })
   const clip = await probe.evaluate(async () => {
     const el = document.querySelector('video') as HTMLVideoElement | null
     if (!el) return { duration: 0, width: 0, error: 'no video element' }
@@ -549,5 +577,124 @@ test('a >10MB letter with embedded base64 video arrives whole and plays', async 
   expect(clip.error).toBeNull()
   expect(clip.duration).toBeGreaterThan(0)
   // videoWidth only becomes non-zero once a real frame was decoded.
+  expect(clip.width).toBeGreaterThan(0)
+})
+
+/**
+ * A 30MB letter — bigger than every frame and parser on its path — read in the
+ * real UI. This is the test that says the size limit is gone.
+ *
+ * The distinction it draws is the whole design. 30MB cannot be INLINED at all:
+ * the inbox routes' express parser stops at 24mb, because a cloud replica relays
+ * an inline letter JSON to the primary in one WebSocket frame and `ws` answers an
+ * oversized frame by closing the socket with 1009. So the body is STAGED first
+ * (raw bytes streamed to a file, no JSON parser involved) and the letter carries
+ * only `html_ref`; the reader then streams the document back from
+ * `/:id/body?frame=1`. Both halves are asserted here, plus the negative control
+ * that the inline lane really would have refused it.
+ */
+test('a 30MB letter (past every inline limit) is staged, read, and plays', async ({ page, request, browser }) => {
+  test.setTimeout(300_000)
+
+  const subject = `Overnight digest, unabridged (${NONCE})`
+  const tail = `STAGED-TAIL-${NONCE}`
+  // Derive the repeat count from the target so the body cannot quietly drift back
+  // under 30MB when the sentence is reworded (it did once, by 130KB).
+  const SENTENCE = 'The overnight run finished and nothing was cut this time. '
+  const filler = `<p>${SENTENCE.repeat(Math.ceil((31 * 1024 * 1024) / SENTENCE.length))}</p>`
+  const html = `<h2>Unabridged digest</h2>`
+    + `<audio controls preload="metadata" src="data:audio/mpeg;base64,${TINY_MP3_BASE64}"></audio>`
+    + `<video controls preload="metadata" src="data:video/mp4;base64,${TINY_MP4_BASE64}"></video>`
+    + `${filler}<p>${tail}</p>`
+  const bytes = Buffer.byteLength(html)
+  expect(bytes).toBeGreaterThan(30 * 1024 * 1024)
+  expect(bytes).toBeLessThan(LETTER_HTML_MAX_BYTES)
+
+  // Negative control FIRST: inline really is refused at this size, and the 413
+  // names the way through rather than reading as a product limit.
+  const refused = await request.post('/api/v1/human-inbox', {
+    data: { subject: `${subject} (inline attempt)`, type: 'info', html },
+  })
+  expect(refused.status()).toBe(413)
+  const refusedBody = await refused.json() as { error: { code: string; message: string } }
+  expect(refusedBody.error.code).toBe('too_large')
+  expect(refusedBody.error.message).toMatch(/human-inbox\/body/)
+
+  // The lane that works: raw bytes up, then a letter carrying the ref.
+  const staged = await request.post('/api/v1/human-inbox/body', {
+    headers: { 'Content-Type': 'application/octet-stream' },
+    data: Buffer.from(html, 'utf-8'),
+  })
+  expect(staged.status(), await staged.text()).toBe(201)
+  const { ref, bytes: stagedBytes } = await staged.json() as { ref: string; bytes: number }
+  expect(stagedBytes).toBe(bytes)
+
+  const sent = await request.post('/api/v1/human-inbox', {
+    data: { subject, type: 'info', html_ref: ref, text: `Unabridged digest (${NONCE}).` },
+  })
+  expect(sent.status(), await sent.text()).toBe(201)
+
+  await loadHome(page)
+  const panel = await openCenter(page)
+  await openInbox(panel)
+
+  const row = envelope(panel, subject)
+  await expect(row).toBeVisible({ timeout: 20_000 })
+  // 30MB of body must not reach the envelope the list (and the phone push) reads.
+  expect(await row.textContent() ?? '').not.toContain(TINY_MP4_BASE64.slice(0, 40))
+
+  await row.click()
+  const frame = page.locator('.hib-reader .hib-html-frame')
+  await expect(frame).toBeVisible({ timeout: 60_000 })
+
+  const inner = page.frameLocator('.hib-html-frame')
+  await expect(inner.locator('video')).toHaveCount(1, { timeout: 60_000 })
+  expect(await inner.locator('video').getAttribute('src')).toBe(`data:video/mp4;base64,${TINY_MP4_BASE64}`)
+  expect(await inner.locator('audio').getAttribute('src')).toBe(`data:audio/mpeg;base64,${TINY_MP3_BASE64}`)
+  // The marker sits after 30MB of prose: it can only render if nothing anywhere
+  // in the chain truncated the document.
+  await expect(inner.locator('body')).toContainText(tail, { timeout: 60_000 })
+  await shot(page, 'e2e-11-staged-30mb-letter')
+
+  const { document: readerDoc, lane } = await readerDocument(request, frame)
+  expect(lane).toBe('streamed')
+  expect(Buffer.byteLength(readerDoc)).toBeGreaterThan(bytes)
+  const policy = readerDoc.match(/content="(default-src[^"]*)"/)?.[1] ?? ''
+  expect(policy).toContain("default-src 'none'")
+  expect(policy).toContain('media-src data: blob:')
+  expect(policy).not.toMatch(/https?:/)
+
+  // Range works on the raw document, which is what makes a resumable or seeking
+  // reader possible at this size rather than an all-or-nothing download.
+  const detail = await request.get(`/api/v1/human-inbox`)
+  const letters = (await detail.json() as { letters: Array<{ id: string; subject: string }> }).letters
+  const id = letters.find(l => l.subject === subject)?.id
+  expect(id).toBeTruthy()
+  const ranged = await request.get(`/api/v1/human-inbox/${id}/body`, { headers: { Range: 'bytes=0-63' } })
+  expect(ranged.status()).toBe(206)
+  expect(ranged.headers()['content-range']).toBe(`bytes 0-63/${bytes}`)
+
+  // And it decodes: same document, same CSP, in a page that can be asked.
+  const probe = await browser.newPage()
+  const blocked: string[] = []
+  probe.on('console', (m) => {
+    if (/Content Security Policy|Refused to load/i.test(m.text())) blocked.push(m.text())
+  })
+  await probe.setContent(readerDoc, { waitUntil: 'load' })
+  const clip = await probe.evaluate(async () => {
+    const el = document.querySelector('video') as HTMLVideoElement | null
+    if (!el) return { duration: 0, width: 0, error: 'no video element' }
+    await new Promise<void>((resolve) => {
+      if (el.readyState >= 1) return resolve()
+      el.addEventListener('loadedmetadata', () => resolve(), { once: true })
+      el.addEventListener('error', () => resolve(), { once: true })
+      setTimeout(() => resolve(), 30_000)
+    })
+    return { duration: el.duration, width: el.videoWidth, error: el.error ? `code ${el.error.code}` : null }
+  })
+  await probe.close()
+  expect(blocked, `CSP blocked the staged letter's video: ${blocked.join(' | ')}`).toHaveLength(0)
+  expect(clip.error).toBeNull()
+  expect(clip.duration).toBeGreaterThan(0)
   expect(clip.width).toBeGreaterThan(0)
 })

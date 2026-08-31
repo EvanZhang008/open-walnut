@@ -78,9 +78,17 @@ export interface LetterRecord {
 export interface NewLetter {
   subject: string;
   type: LetterType;
-  /** Exactly one of html | markdown — see letterFieldMaxBytes for the caps. */
+  /** Exactly one of html | markdown | htmlRef — see letterFieldMaxBytes. */
   html?: string;
   markdown?: string;
+  /**
+   * A staged body already on the hub's disk, from `POST /api/v1/human-inbox/body`
+   * or from the gateway's chunked `argsFile` pull. Stands in for `html` so a
+   * 100MB document never has to be a string in a JSON request. Accepts either
+   * spelling — the op/route body uses `html_ref`, same as `task_refs`.
+   */
+  htmlRef?: string;
+  html_ref?: string;
   /** Short plain-text preview; derived from the body when absent. */
   text?: string;
   /** action_required only. */
@@ -97,21 +105,43 @@ export interface NewLetter {
 export interface AgentReplyInput {
   html?: string;
   markdown?: string;
+  /** Staged body ref — same lane as NewLetter.htmlRef, either spelling. */
+  htmlRef?: string;
+  html_ref?: string;
   text: string;
 }
 
 /** A letter plus the body content read off disk (what the reader needs). */
 export interface LetterThreadEntry extends ThreadEntry {
-  /** Body content for a rich turn; absent when the turn was plain text. */
+  /** Body content for a rich turn; absent when plain text OR when deferred. */
   body?: string;
   /** True when `bodyFile` was recorded but is gone from disk. */
   bodyMissing?: boolean;
+  /** Size of this turn's body document on disk. */
+  bodyBytes?: number;
+  /** Too big to inline — stream it from `bodyUrl` instead. */
+  bodyDeferred?: boolean;
+  bodyUrl?: string;
 }
 
 export interface LetterDetail extends LetterRecord {
-  body: string;
+  /**
+   * The document, inline — present whenever it fits under
+   * LETTER_INLINE_BODY_MAX_BYTES (so: essentially every prose letter). ABSENT
+   * for a big media body; `bodyUrl` then says where to stream it from.
+   */
+  body?: string;
   /** True when the body file is gone — `body` then holds an inline note. */
   bodyMissing?: boolean;
+  /** Size of the body document on disk, always present. */
+  bodyBytes?: number;
+  /**
+   * Set (with `body` omitted) when the document was too big to inline. Fetch it
+   * from `bodyUrl`, which streams and honours Range.
+   */
+  bodyDeferred?: boolean;
+  /** Streaming route for the document — relative, same origin as this reply. */
+  bodyUrl?: string;
   thread: LetterThreadEntry[];
 }
 
@@ -143,26 +173,56 @@ export const LETTER_BODY_MAX_BYTES = 200 * 1024;
  * fields that live in index.json, and the preview work every letter pays, as
  * small as they were.
  *
- * WHY A CAP EXISTS AT ALL, since the obvious question is "why not unlimited":
- * this body is carried INLINE inside the letter JSON, and on the phone that JSON
- * crosses the cloud replica's bridge as ONE WebSocket frame. `ws` enforces its
- * maxPayload (32MB, see attachWss) by CLOSING the socket with 1009 before any
- * handler runs, which would take out every other in-flight phone request with
- * it. So the inline ceiling is a property of the transport, not a policy, and
- * the number below is that ceiling minus headroom for the JSON wrapper.
+ * 100MB, and the number is a DISK sanity bound, not a transport ceiling. An
+ * earlier version of this comment claimed the ceiling belonged to the transport
+ * (one 32MB WebSocket frame on the phone's bridge hop). That was true only
+ * because the body used to ride INLINE inside the letter JSON, which is a
+ * design choice, not a law: a body over LETTER_INLINE_BODY_MAX_BYTES now leaves
+ * the envelope entirely and moves in bounded batches at both edges.
  *
- * 24MB covers any realistic audio digest (speech at 64kbps is ~480KB/min, ~640KB
- * a minute once base64'd, so this is roughly a 35-minute podcast) and a short
- * inline video. Media bigger than that should not be inlined at all: it wants a
- * served URL with Range support so the reader streams and seeks instead of
- * decoding the whole thing into memory. See docs/plan/human-inbox.md.
+ *   in   — a big payload rides a FILE on the sender's host, and the hub pulls it
+ *          back in HUMAN_INBOX_CHUNK_BYTES slices (gateway `argsFile`, or the
+ *          two-step `POST /api/v1/human-inbox/body` ref for HTTP senders)
+ *   out  — GET /api/v1/human-inbox/:id/body streams the file with Range; on a
+ *          cloud replica each Range is served by looping the same bounded
+ *          `server.human-inbox.body` pull, so no single frame ever holds it all
  *
- * Ordering invariant, pinned by tests/core/human-inbox-caps.test.ts:
- *   LETTER_HTML_MAX_BYTES < GATEWAY_MAX_LINE_BYTES < WS frame maxPayload
- * Raise one without the others and the cap becomes a lie: the request dies a
- * layer earlier with an error that says nothing about size.
+ * So neither direction has a whole-body frame to blow up any more, and 100MB is
+ * just "one letter must not quietly eat the disk". 100MB of base64 audio is
+ * roughly two and a half hours of speech.
+ *
+ * Ordering invariant, pinned by tests/core/human-inbox-caps.test.ts: the only
+ * layers that must still exceed a size are the ones a body can cross WHOLE —
+ * the inline lane. HUMAN_INBOX_CHUNK_BYTES < WS frame maxPayload keeps the
+ * batched lane safe at any total size.
  */
-export const LETTER_HTML_MAX_BYTES = 24 * 1024 * 1024;
+export const LETTER_HTML_MAX_BYTES = 100 * 1024 * 1024;
+
+/**
+ * How much body the letter-detail JSON still carries inline. Under this, `body`
+ * is embedded exactly as before (one round trip for the overwhelming majority
+ * of letters, which are prose). Over it, the detail answers with `bodyBytes` +
+ * `bodyUrl` and no `body`, and the reader fetches the document from the
+ * streaming route.
+ *
+ * 1MB is chosen to be far under every frame and parser limit on the path, so
+ * the envelope response size stops being a function of the media a letter
+ * happens to embed.
+ */
+export const LETTER_INLINE_BODY_MAX_BYTES = 1024 * 1024;
+
+/**
+ * One batch, for every hop that moves a body without holding it whole: the
+ * hub's chunked pull of a sender-side `argsFile`, and the replica's chunked
+ * relay of a body Range over the bridge.
+ *
+ * 2MB matches MAX_BRIDGE_FILE_BYTES (routes/file-content-bridge.ts) and the
+ * daemon twins' fs.readRange budget — deliberately the same number, because
+ * this is the same lesson: a frame that big survives the corporate SSH proxies
+ * that kill larger ones, and sits far under the 32MB maxPayload that `ws`
+ * enforces by closing the socket with 1009 before any handler runs.
+ */
+export const HUMAN_INBOX_CHUNK_BYTES = 2 * 1024 * 1024;
 
 /** Which cap one field is held to. Unknown names get the plain cap. */
 export function letterFieldMaxBytes(field: string): number {

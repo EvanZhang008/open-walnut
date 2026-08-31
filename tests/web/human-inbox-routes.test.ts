@@ -240,7 +240,14 @@ describe('POST /api/v1/human-inbox — send + sender stamping', () => {
 
     const { letter } = await getLetter(id)
     expect(letter.bodyFormat).toBe('html')
-    expect(letter.body).toBe(html)
+    // A body this size is DEFERRED out of the detail JSON on purpose (over
+    // LETTER_INLINE_BODY_MAX_BYTES), so the assertion is that the document is
+    // intact on the stream route — not that it rode the envelope.
+    expect(letter.body).toBeUndefined()
+    expect((letter as unknown as { bodyDeferred: boolean }).bodyDeferred).toBe(true)
+    const streamed = await fetch(url(`/api/v1/human-inbox/${id}/body`))
+    expect(streamed.status).toBe(200)
+    expect(await streamed.text()).toBe(html)
     // The envelope stays a phone-sized envelope: no base64 in the preview.
     expect(letter.textPreview).toBe('Four minutes of audio.')
 
@@ -251,10 +258,14 @@ describe('POST /api/v1/human-inbox — send + sender stamping', () => {
   })
 
   /**
-   * The write path end to end at a size the ORIGINAL 10MB cap refused, over real
-   * HTTP: this is what proves the express body limit was raised alongside the
-   * store cap. Without its own parser mount the request dies in the body parser
-   * at 15mb, and the caller gets Express's bare HTML 413 with no `error.code`.
+   * The INLINE lane at a size the original 10MB cap refused, over real HTTP: this
+   * is what proves the human-inbox routes still mount their own express parser
+   * above the 15mb default. Without it the request dies in the body parser and
+   * the caller gets Express's bare HTML 413 with no `error.code`.
+   *
+   * 12MB is deliberately INSIDE the inline lane's own limit (the 24mb parser,
+   * itself bounded by the one WebSocket frame a replica's relay crosses). Bigger
+   * than that is the staged lane's job — see the big-body describe below.
    */
   it('accepts a 12MB inline-video html body over HTTP and serves it back byte-identical', async () => {
     const clip = 'V'.repeat(12 * 1024 * 1024)
@@ -263,8 +274,11 @@ describe('POST /api/v1/human-inbox — send + sender stamping', () => {
       subject: 'Clip', type: 'info', html, text: 'Digest with a clip.',
     }, SENDER_SID)
 
-    const { letter } = await getLetter(id)
-    expect(letter.body).toBe(html)
+    // Accepted inline, then served from the stream route byte-identical — the
+    // detail JSON defers a document this big rather than embedding it.
+    const streamed = await fetch(url(`/api/v1/human-inbox/${id}/body`))
+    expect(streamed.status).toBe(200)
+    expect(await streamed.text()).toBe(html)
 
     // The envelope the list (and the phone push) reads stays tiny.
     const listed = (await listLetters()).letters.find(l => l.id === id)
@@ -272,6 +286,9 @@ describe('POST /api/v1/human-inbox — send + sender stamping', () => {
   }, 120_000)
 
   it('still refuses an html body over the media cap, with a contract-shaped error', async () => {
+    // Over LETTER_HTML_MAX_BYTES no lane accepts it. The parser's 24mb inline
+    // limit trips first, which is why the handler that turns entity.too.large
+    // into a contract-shaped 413 has to be mounted next to the parser.
     const res = await post('/api/v1/human-inbox', {
       subject: 'Whale', type: 'review', html: 'x'.repeat(LETTER_HTML_MAX_BYTES + 1),
     }, SENDER_SID)
@@ -461,4 +478,174 @@ describe('ops registry parity — executeOp reaches the real routes', () => {
     expect(bad.ok).toBe(false)
     if (!bad.ok) expect(bad.message).toContain('Invalid arguments')
   })
+})
+
+/**
+ * The big-body lane over real HTTP: bytes up as a raw stream, document down as a
+ * Range-capable stream, and the letter JSON staying small in between.
+ *
+ * This is the part the user actually feels. Before it, a letter's media size was
+ * a property of the transport (one JSON response, one WebSocket frame on the way
+ * to the phone), and the honest answer to "just make it bigger" was "the frame
+ * won't allow it". Now the document leaves the envelope, so the only real limit
+ * is the disk sanity bound.
+ */
+describe('big letter bodies: staged in, streamed out', () => {
+  /** Over LETTER_INLINE_BODY_MAX_BYTES, with a tail marker to prove nothing was lost. */
+  function bigDocument(): string {
+    return `<h1>Digest</h1>${'<p>é 中 🎧 filler</p>'.repeat(80_000)}<p id="tail">TAIL-9f3c</p>`
+  }
+
+  async function stage(document: string): Promise<{ ref: string; bytes: number }> {
+    const res = await fetch(url('/api/v1/human-inbox/body'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: document,
+    })
+    expect(res.status, await res.clone().text()).toBe(201)
+    return res.json() as Promise<{ ref: string; bytes: number }>
+  }
+
+  it('stages raw bytes, then a letter carrying only the ref', async () => {
+    const document = bigDocument()
+    const expected = Buffer.byteLength(document, 'utf-8')
+    const { ref, bytes } = await stage(document)
+    expect(ref).toMatch(/^sb-/)
+    expect(bytes).toBe(expected)
+
+    const id = await sendLetter({
+      subject: 'Daily digest', type: 'info', html_ref: ref, text: 'Your digest',
+    }, SENDER_SID)
+
+    // The detail JSON is now SMALL — that is the whole mechanism. A response
+    // carrying the document would be back to being framed whole on the way to
+    // the phone.
+    const detailRes = await fetch(url(`/api/v1/human-inbox/${id}`))
+    expect(detailRes.status).toBe(200)
+    const detailText = await detailRes.text()
+    expect(detailText.length).toBeLessThan(64 * 1024)
+    const { letter } = JSON.parse(detailText) as {
+      letter: { body?: string; bodyBytes: number; bodyDeferred: boolean; bodyUrl: string }
+    }
+    expect(letter.body).toBeUndefined()
+    expect(letter.bodyDeferred).toBe(true)
+    expect(letter.bodyBytes).toBe(expected)
+    expect(letter.bodyUrl).toBe(`/api/v1/human-inbox/${id}/body`)
+
+    // …and the document itself comes back byte-identical from the stream.
+    const bodyRes = await fetch(url(letter.bodyUrl))
+    expect(bodyRes.status).toBe(200)
+    expect(bodyRes.headers.get('content-type')).toMatch(/text\/html/)
+    expect(bodyRes.headers.get('accept-ranges')).toBe('bytes')
+    // Not Content-Length: compression() re-encodes a text/html 200 and replaces
+    // it with chunked transfer. X-Walnut-Body-Bytes is the size that survives,
+    // which is also what a client wants for a progress indicator.
+    expect(bodyRes.headers.get('x-walnut-body-bytes')).toBe(String(expected))
+    // The security floor rides as a header, since the document is served alone.
+    const csp = bodyRes.headers.get('content-security-policy') ?? ''
+    expect(csp).toContain("default-src 'none'")
+    expect(csp).toContain('media-src data: blob:')
+    expect(csp).not.toMatch(/https?:/)
+    expect(await bodyRes.text()).toBe(document)
+  }, 60_000)
+
+  it('serves a byte Range, so a reader can resume or seek', async () => {
+    const document = bigDocument()
+    const { ref } = await stage(document)
+    const id = await sendLetter({ subject: 'Range', type: 'info', html_ref: ref }, SENDER_SID)
+    const total = Buffer.byteLength(document, 'utf-8')
+
+    const res = await fetch(url(`/api/v1/human-inbox/${id}/body`), {
+      headers: { Range: 'bytes=0-99' },
+    })
+    expect(res.status).toBe(206)
+    expect(res.headers.get('content-range')).toBe(`bytes 0-99/${total}`)
+    const head = Buffer.from(await res.arrayBuffer())
+    expect(head.length).toBe(100)
+    expect(head.equals(Buffer.from(document, 'utf-8').subarray(0, 100))).toBe(true)
+
+    // The suffix form is what a media element uses to find a container's index.
+    const tail = await fetch(url(`/api/v1/human-inbox/${id}/body`), {
+      headers: { Range: 'bytes=-32' },
+    })
+    expect(tail.status).toBe(206)
+    expect(await tail.text()).toContain('TAIL-9f3c')
+
+    // A range past the end must be a 416, never a silent 200: a player that
+    // asks beyond EOF and receives the whole document corrupts its buffer.
+    const past = await fetch(url(`/api/v1/human-inbox/${id}/body`), {
+      headers: { Range: `bytes=${total + 10}-` },
+    })
+    expect(past.status).toBe(416)
+    expect(past.headers.get('content-range')).toBe(`bytes */${total}`)
+  }, 60_000)
+
+  it('?frame=1 wraps the streamed document in the reader frame', async () => {
+    const { ref } = await stage(bigDocument())
+    const id = await sendLetter({ subject: 'Framed', type: 'info', html_ref: ref }, SENDER_SID)
+    const res = await fetch(url(`/api/v1/human-inbox/${id}/body?frame=1`))
+    expect(res.status).toBe(200)
+    const text = await res.text()
+    // The frame the console builds for an INLINE body, byte for byte — same
+    // module, so a big letter can't render under a weaker policy than a small one.
+    expect(text).toContain('<base target="_blank">')
+    expect(text).toContain("default-src 'none'")
+    expect(text).toContain('media-src data: blob:')
+    expect(text).toContain('<h1>Digest</h1>')
+    expect(text).toContain('TAIL-9f3c')
+    expect(text.endsWith('</body></html>')).toBe(true)
+  }, 60_000)
+
+  it('a small letter still inlines its body, unchanged', async () => {
+    const id = await sendLetter({ subject: 'Small', type: 'info', html: '<p>hi</p>' }, SENDER_SID)
+    const { letter } = await getLetter(id) as unknown as {
+      letter: { body: string; bodyDeferred?: boolean; bodyBytes: number }
+    }
+    expect(letter.body).toBe('<p>hi</p>')
+    expect(letter.bodyDeferred).toBeUndefined()
+    expect(letter.bodyBytes).toBe(9)
+    // The route serves it too, for a client that prefers one lane for everything.
+    const res = await fetch(url(`/api/v1/human-inbox/${id}/body`))
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('<p>hi</p>')
+  })
+
+  it('an unknown ref is a clean 404, not a broken letter', async () => {
+    const res = await post('/api/v1/human-inbox',
+      { subject: 'Missing', type: 'info', html_ref: 'sb-abcdef-0123456789ab' }, SENDER_SID)
+    expect(res.status).toBe(404)
+    const { error } = await res.json() as { error: { code: string; message: string } }
+    expect(error.code).toBe('not_found')
+    expect(error.message).toMatch(/upload it again/)
+  })
+
+  it('a ref shaped like a path is refused before any file is touched', async () => {
+    const res = await post('/api/v1/human-inbox',
+      { subject: 'Traversal', type: 'info', html_ref: '../../../etc/passwd' }, SENDER_SID)
+    expect(res.status).toBe(400)
+    const { error } = await res.json() as { error: { code: string; message: string } }
+    expect(error.message).toMatch(/not a staged body ref/)
+  })
+
+  it('a missing body file is a 404 on the stream route', async () => {
+    const id = await sendLetter({ subject: 'Gone', type: 'info', html: '<p>x</p>' }, SENDER_SID)
+    await fs.rm(`${WALNUT_HOME}/human-inbox/bodies`, { recursive: true, force: true })
+    const res = await fetch(url(`/api/v1/human-inbox/${id}/body`))
+    expect(res.status).toBe(404)
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('not_found')
+  })
+
+  it('an over-cap INLINE body points at the staging lane instead of just refusing', async () => {
+    // The old message said "too large" and stopped there, which read as a product
+    // limit. It has to name the way through.
+    const res = await post('/api/v1/human-inbox', {
+      subject: 'Way too big inline', type: 'info',
+      html: 'x'.repeat(LETTER_HTML_MAX_BYTES + 1),
+    }, SENDER_SID)
+    expect(res.status).toBe(413)
+    const { error } = await res.json() as { error: { code: string; message: string } }
+    expect(error.code).toBe('too_large')
+    expect(error.message).toMatch(/human-inbox\/body/)
+    expect(error.message).toMatch(/html_ref/)
+  }, 60_000)
 })

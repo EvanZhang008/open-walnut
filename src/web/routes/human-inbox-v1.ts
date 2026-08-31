@@ -5,8 +5,10 @@
  * the phone, and every `walnut tools call human_inbox_*` share one implementation.
  *
  *   POST   /human-inbox                  send a letter  → { id }            (201)
+ *   POST   /human-inbox/body             stage a big body (raw stream) → { ref, bytes }
  *   GET    /human-inbox[?archived=1]     envelopes      → { letters, unreadCount }
- *   GET    /human-inbox/:id              full letter    → { letter }  (bodies inlined)
+ *   GET    /human-inbox/:id              full letter    → { letter }  (small bodies inlined)
+ *   GET    /human-inbox/:id/body[?turn=] the document, streamed, Range-capable
  *   POST   /human-inbox/:id/reply        agent thread reply  → { letter }
  *   POST   /human-inbox/:id/read         { read }       → { letter }
  *   POST   /human-inbox/:id/pin          { pinned }     → { letter }
@@ -17,6 +19,12 @@
  * The sender is stamped from the `x-walnut-caller-sid` header (set by the ops
  * executor) — never from the body, so a letter can't misattribute itself. The
  * header is provenance only: nothing here authorizes on it.
+ *
+ * BIG BODIES DO NOT RIDE THE JSON. A document over LETTER_INLINE_BODY_MAX_BYTES
+ * is staged first (`POST /human-inbox/body`, raw stream) and the letter carries
+ * `html_ref`; on the way out, the detail answers `bodyUrl` and the reader streams
+ * from `/human-inbox/:id/body`. That is why the html cap can be 100MB — no hop
+ * ever has to frame the whole document. See core/human-inbox/types.ts.
  *
  * Replica: letters live on the primary (delivery to the origin session needs
  * its daemons), so a cloud replica relays every route over the `server.human-
@@ -125,8 +133,9 @@ export function inboxPayloadTooLargeHandler(
 ): void {
   if ((err as { type?: string }).type === 'entity.too.large') {
     sendError(res, 413, 'too_large',
-      `letter body too large for one request (max ${LETTER_HTML_MAX_BYTES} bytes of html) — `
-      + 'link or attach a file instead of inlining it')
+      'letter body too large to INLINE in one JSON request — stage it instead: '
+      + `POST /api/v1/human-inbox/body (raw bytes) then send the letter with html_ref. `
+      + `A staged body may be up to ${LETTER_HTML_MAX_BYTES} bytes.`)
     return
   }
   next(err)
@@ -173,6 +182,43 @@ humanInboxV1Router.post('/human-inbox', async (req: Request, res: Response, next
   })
 })
 
+/**
+ * POST /api/v1/human-inbox/body — stage a document, raw bytes, no JSON.
+ *
+ * The upload lane for anything over LETTER_INLINE_BODY_MAX_BYTES. The request
+ * body is piped straight to a file (`Content-Type: application/octet-stream` or
+ * `text/html`, so no JSON parser touches it) and the reply is a single-use ref
+ * the following `POST /human-inbox` passes as `html_ref`.
+ *
+ * Deliberately NOT under the route deadline: this is a bulk transfer whose
+ * duration is a function of the sender's link, and killing a 90MB upload at 12s
+ * would make the lane useless. It cannot pin a browser connection pool the way
+ * a stalled JSON route can, because it makes no other call — it only writes.
+ */
+humanInboxV1Router.post('/human-inbox/body', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (CLOUD_MODE) {
+      // Letters live on the primary, and a ref names a file on THIS box's disk.
+      // Rather than invent a replica→primary push for a case no surface has (a
+      // phone does not author 100MB letters), say so precisely.
+      sendError(res, 501, 'not_supported_cloud',
+        'staged letter bodies must be uploaded to the primary box — send the letter from the host that has the file')
+      return
+    }
+    const { stageBodyFromStream } = await import('../../core/human-inbox/staged-body.js')
+    const { ref, bytes } = await stageBodyFromStream(req, LETTER_HTML_MAX_BYTES)
+    log.notif.info('human-inbox: body staged', { ref, bytes, callerSid: callerSid(req) })
+    res.status(201).json({ ref, bytes })
+  } catch (err) {
+    const e = err as { name?: string; code?: string; status?: number; message?: string }
+    if (e?.name === 'StagedBodyError' && typeof e.status === 'number') {
+      sendError(res, e.status, e.code === 'too_large' ? 'too_large' : 'bad_request', String(e.message))
+      return
+    }
+    next(err)
+  }
+})
+
 // ─── Read side ───────────────────────────────────────────────────────────────
 
 // GET /api/v1/human-inbox?archived=1 — envelopes only (no body content).
@@ -204,6 +250,24 @@ humanInboxV1Router.get('/human-inbox/:id', async (req: Request, res: Response, n
     }
     res.json({ letter })
   })
+})
+
+/**
+ * GET /api/v1/human-inbox/:id/body[?turn=N] — the document itself, streamed.
+ *
+ * Outside `guard()` on purpose: a 100MB body legitimately takes longer than the
+ * route deadline, and this handler holds no lock and makes no fan-out call, so
+ * it can't be the thing that starves the connection pool. Deadlines live per
+ * CHUNK on the replica path instead (see human-inbox-body.ts).
+ */
+humanInboxV1Router.get('/human-inbox/:id/body', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { serveLetterBody } = await import('./human-inbox-body.js')
+    await serveLetterBody(req, res, letterId(req))
+  } catch (err) {
+    if (res.headersSent) { res.end(); return }
+    next(err)
+  }
 })
 
 // ─── Agent thread reply ──────────────────────────────────────────────────────

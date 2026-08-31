@@ -48,6 +48,11 @@ export interface LetterThreadEntry {
   at: number;
   /** Rich body content, present only on GET /:id (the list omits all bodies). */
   body?: string;
+  /** Size of this turn's document on disk. */
+  bodyBytes?: number;
+  /** Too big to inline — stream the document from `bodyUrl` instead. */
+  bodyDeferred?: boolean;
+  bodyUrl?: string;
 }
 
 /** Index record — what the envelope rows render. No body content. */
@@ -71,10 +76,21 @@ export interface LetterEnvelope {
 
 /** GET /:id — the envelope plus the resolved body + thread body contents. */
 export interface LetterDetail extends LetterEnvelope {
+  /**
+   * The document, inline. EMPTY when the server deferred it because it was over
+   * LETTER_INLINE_BODY_MAX_BYTES — a 100MB digest never rides this JSON. Check
+   * `bodyDeferred` and render from `bodyUrl` in that case.
+   */
   body: string;
   thread: LetterThreadEntry[];
   /** The body file is gone; `body` then holds the server's inline note. */
   bodyMissing?: boolean;
+  /** Size of the document on disk, whether inlined or deferred. */
+  bodyBytes?: number;
+  /** The document was too big to inline — stream it from `bodyUrl`. */
+  bodyDeferred?: boolean;
+  /** Streaming route for the document (`…/:id/body`), same origin. */
+  bodyUrl?: string;
 }
 
 /**
@@ -139,9 +155,19 @@ function normalizeDetail(raw: unknown): LetterDetail {
         ? { bodyFormat: entry.bodyFormat as LetterBodyFormat } : {}),
       ...(str(entry.bodyFile) ? { bodyFile: str(entry.bodyFile) } : {}),
       ...(body ? { body } : {}),
+      ...(typeof entry.bodyBytes === 'number' ? { bodyBytes: entry.bodyBytes } : {}),
+      ...(entry.bodyDeferred === true ? { bodyDeferred: true } : {}),
+      ...(str(entry.bodyUrl) ? { bodyUrl: str(entry.bodyUrl) } : {}),
     };
   });
-  return { ...(record as unknown as LetterEnvelope), body: pickBody(record), thread };
+  return {
+    ...(record as unknown as LetterEnvelope),
+    body: pickBody(record),
+    thread,
+    ...(typeof record.bodyBytes === 'number' ? { bodyBytes: record.bodyBytes } : {}),
+    ...(record.bodyDeferred === true ? { bodyDeferred: true } : {}),
+    ...(str(record.bodyUrl) ? { bodyUrl: str(record.bodyUrl) } : {}),
+  };
 }
 
 const DELIVERY_STATUSES = new Set(['delivered', 'queued', 'deferred', 'skipped', 'failed']);

@@ -139,19 +139,29 @@ agent (any provider, any host)
 - **Storage split on purpose**: the notification store is a bounded most-recent-200 feed that drops its tail; letters are durable documents. So the letter body and thread live in their own store (an index JSON plus one HTML file per letter under WALNUT_HOME/human-inbox/), and the notification record is only the envelope pointing at the letter id. Pin/read/archive state lives with the letter, not the notification.
 - **Condition-system fit**: every notification declares how it ends; a letter ends only by human action (archive). No recoveryKey, no expiry, and letter unread state is exempt from panel-open mark-all-read.
 - **Body safety, both formats**: an HTML body renders in a fully sandboxed iframe (no scripts, no top navigation), same posture as an email client; on iOS, a WKWebView with JavaScript disabled. Both carry a CSP that allows no remote subresource, because a tracker pixel in a letter would otherwise report the exact moment (and IP) the human read it. The MARKDOWN body gets the same floor by construction: the reader renders it through the app's own markdown pipeline with remote image references replaced by a visible "not loaded" note, so the two formats can never have different security floors (local paths still resolve through Walnut's own authenticated media endpoint). Agents are told to write self-contained HTML with inline styles and data-URI images.
-- **Size**: markdown bodies, thread text and answer notes are capped at 200KB (prose for one phone screen). An HTML body gets 24MB, because it is the one field that legitimately carries inline media: a daily digest embeds its podcast as a base64 `<audio>`, or a clip as a base64 `<video>`. 24MB is roughly a 35-minute podcast at 64kbps once base64 has taken its third. Big artifacts that are not media still belong on disk with a path link in the letter.
-- **Why the html cap cannot simply be removed**, since that is the first thing anyone asks: the body rides INLINE inside the letter JSON, and four layers each have to carry it. Two of them fail in ways that are not a clean error. The caps therefore form one ordered chain, pinned by `tests/core/human-inbox-caps.test.ts`:
+- **Size**: markdown bodies, thread text and answer notes are capped at 200KB (prose for one phone screen). An HTML body gets **100MB**, because it is the one field that legitimately carries inline media: a daily digest embeds its podcast as a base64 `<audio>`, or a clip as a base64 `<video>`. 100MB is a couple of hours of speech once base64 has taken its third. Big artifacts that are not media still belong on disk with a path link in the letter.
+- **The 100MB is a DISK bound, not a transport one, and that took a redesign.** An earlier version of this document argued the ceiling belonged to the transport, because the body rode INLINE inside the letter JSON and four layers each had to carry it, two of them failing in ways that were not a clean error. That was true of the design, not of the problem: a big body now leaves the envelope at both edges and moves in bounded batches, so no hop ever has to frame the whole thing.
 
-  | Layer | Limit | What happens when the body is over it |
+  | Direction | How a big body travels | Bounded by |
+  |---|---|---|
+  | in, from an agent | `walnut tools call human_inbox_send @/tmp/payload.json` sends only the PATH once the file is over 1MB; the hub range-reads it off that host's daemon (`fs.readRange`) and stages it | one 2MB chunk |
+  | in, over HTTP | `POST /api/v1/human-inbox/body` streams raw bytes to a staging file → `{ ref }`, then the letter carries `html_ref` | nothing: the request body is piped to disk, never parsed |
+  | out, to a reader | the letter detail answers `bodyBytes` + `bodyUrl` instead of `body`; `GET /api/v1/human-inbox/:id/body` streams the document and honours `Range` | one file stream |
+  | out, to the phone via a replica | the same Range, served by LOOPING the bounded `server.human-inbox.body` control action over the bridge | one 2MB chunk |
+
+  What is left of the old chain applies to the INLINE lane only, and is pinned by `tests/core/human-inbox-caps.test.ts`:
+
+  | Layer | Limit | What happens when the payload is over it |
   |---|---|---|
   | plain fields (markdown, thread text, answer note) | 200KB | clean 413; these live in `index.json` and every list pays for them |
-  | `LETTER_HTML_MAX_BYTES` | 24MB | clean 413 `too_large` |
-  | express body parser on the inbox routes | 32MB | contract-shaped 413 via `inboxPayloadTooLargeHandler` (without that handler, Express's bare HTML 413 with no `error.code`) |
-  | `GATEWAY_MAX_LINE_BYTES` (one `human_inbox_send` is one NDJSON line) | 28MB | daemon refuses the line; the error says nothing about letters, which is why this used to look like a mystery |
-  | `ws` frame `maxPayload` (`attachWss`), crossed by the phone's letter JSON via the cloud replica's bridge | 32MB | **socket CLOSED with 1009 before any handler runs**, taking every other in-flight phone request with it |
+  | inline body threshold (`LETTER_INLINE_BODY_MAX_BYTES`) | 1MB | nothing breaks: the detail defers the document to `bodyUrl` |
+  | inline gateway payload (`GATEWAY_INLINE_ARGS_MAX_BYTES`) | 1MB | nothing breaks: the CLI switches to `argsFile` |
+  | `GATEWAY_MAX_LINE_BYTES` (one inline `human_inbox_send` is one NDJSON line) | 28MB | daemon refuses the line |
+  | express body parser on the inbox routes | 24MB | contract-shaped 413 naming the staging lane, via `inboxPayloadTooLargeHandler` |
+  | `ws` frame `maxPayload` (`attachWss`) | 32MB | **socket CLOSED with 1009 before any handler runs**, taking every other in-flight phone request with it |
 
-  So the ceiling belongs to the transport, and the html cap is that ceiling minus headroom for the JSON wrapper. Raising one number alone always breaks: raise the store cap and the request dies at the gateway line, raise them past the frame and a clean 413 becomes a dropped socket.
-- **Unlimited media is a different lane, not a bigger number.** Inline base64 costs a third in size, cannot stream, cannot seek, and is decoded whole into memory by the reader, so it stops being pleasant long before it stops being possible. Media past the cap wants a served URL with `Range` support, which the readers' CSP would allow via `media-src 'self'` instead of `data:`. Not built yet; the inline path covers audio digests and short clips.
+  The 1009 close is why the inline lane keeps a real ceiling: a replica relays a whole inline letter JSON to the primary in one frame, so 24MB (frame minus envelope headroom) is the honest limit for that path. The batched lane has no such number because a chunk is 2MB whatever the total is.
+- **Inline base64 is still not the nicest way to ship an hour of audio.** It costs a third in size, cannot seek within the media, and the reader decodes it whole. A served media URL with `Range` (CSP `media-src 'self'` instead of `data:`) would be better still, and the streaming body route is the half of that which now exists. Not built; the current path covers digests and clips at any size the disk bound allows.
 - **Replica/phone path**: new `/api/v1/human-inbox` endpoints are additive to the frozen v1 contract and relay from a cloud replica to the primary exactly like the existing notification routes.
 
 ## The reach story (idea 1: `wn` everywhere)

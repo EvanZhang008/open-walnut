@@ -16,7 +16,8 @@
     "paths": {
       "@/*": ["src/*"],
       "@open-walnut/core": ["../src/core/types"],
-      "@open-walnut/task-query": ["../src/core/task-query"]
+      "@open-walnut/task-query": ["../src/core/task-query"],
+      "@open-walnut/letter-frame": ["../src/core/human-inbox/letter-frame"]
     }
   },
   "include": ["src", "../src/types/**/*.d.ts"]

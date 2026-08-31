@@ -173,9 +173,9 @@ describe('human inbox store — validation', () => {
     );
   });
 
-  it('requires exactly one of html | markdown', async () => {
-    await expectInvalid(letterInput({ markdown: undefined }), /exactly one of html \| markdown/);
-    await expectInvalid(letterInput({ html: '<p>hi</p>' }), /exactly one of html \| markdown/);
+  it('requires exactly one of html | html_ref | markdown', async () => {
+    await expectInvalid(letterInput({ markdown: undefined }), /exactly one of html \| html_ref \| markdown/);
+    await expectInvalid(letterInput({ html: '<p>hi</p>' }), /exactly one of html \| html_ref \| markdown/);
   });
 
   it('allows actions only on action_required, and each needs id + label', async () => {
@@ -226,9 +226,14 @@ describe('human inbox store — validation', () => {
     // The envelope stays tiny — the base64 never leaks into the preview.
     expect(record.textPreview).toBe('Your Thursday digest, 4 minutes.');
 
-    const detail = await getLetter(record.id);
+    // A body this size is DEFERRED out of the detail JSON on purpose (over
+    // LETTER_INLINE_BODY_MAX_BYTES); ask for it explicitly to assert the bytes.
+    const deferred = await getLetter(record.id);
+    expect(deferred?.bodyDeferred).toBe(true);
+    expect(deferred?.body).toBeUndefined();
+    const detail = await getLetter(record.id, { inlineMaxBytes: Infinity });
     expect(detail?.body).toBe(html);
-    expect(Buffer.byteLength(detail!.body, 'utf-8')).toBeGreaterThan(3 * 1024 * 1024);
+    expect(Buffer.byteLength(detail!.body!, 'utf-8')).toBeGreaterThan(3 * 1024 * 1024);
   });
 
   /**
@@ -244,10 +249,10 @@ describe('human inbox store — validation', () => {
     const record = await sendLetter(letterInput({
       markdown: undefined, html, text: 'Digest with a clip.',
     }));
-    const detail = await getLetter(record.id);
+    const detail = await getLetter(record.id, { inlineMaxBytes: Infinity });
     expect(detail?.body).toBe(html);
     // Byte-identical: a body clipped mid-base64 is a player that never plays.
-    expect(Buffer.byteLength(detail!.body, 'utf-8')).toBe(Buffer.byteLength(html, 'utf-8'));
+    expect(Buffer.byteLength(detail!.body!, 'utf-8')).toBe(Buffer.byteLength(html, 'utf-8'));
     expect(record.textPreview).toBe('Digest with a clip.');
   }, 60_000);
 

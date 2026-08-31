@@ -33,17 +33,20 @@ export function LetterThread({ entries, subject, onBodyClick }: {
           {entry.text && (
             <div className="hib-turn-text"><LinkifiedText text={entry.text} /></div>
           )}
-          {entry.body && entry.bodyFormat && (
+          {/* A deferred turn body has no `body` string — it streams from bodyUrl,
+              same lane as the letter's own document. */}
+          {(entry.body || (entry.bodyDeferred && entry.bodyUrl)) && entry.bodyFormat && (
             <div className="hib-turn-body">
               <LetterBody
-                body={entry.body}
+                body={entry.body ?? ''}
                 format={entry.bodyFormat}
                 subject={subject}
                 onClick={onBodyClick}
+                {...(entry.bodyDeferred && entry.bodyUrl ? { bodyUrl: entry.bodyUrl } : {})}
               />
             </div>
           )}
-          {!entry.body && entry.bodyFile && (
+          {!entry.body && !entry.bodyDeferred && entry.bodyFile && (
             <div className="hib-note">The rich body of this reply is no longer on disk.</div>
           )}
         </div>
