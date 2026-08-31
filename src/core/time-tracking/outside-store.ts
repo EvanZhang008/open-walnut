@@ -6,7 +6,8 @@
  *
  * Layout: WALNUT_HOME/time-tracking/outside/<local-date>.jsonl, one JSON record
  * per banked sample window. A day past COMPACT_ABOVE_BYTES is folded in place to
- * one line per bucket, so a 12-hour day at one sample per 5s stays bounded.
+ * per-bucket INTERVALS (see compactRecords), so a 12-hour day at one sample per
+ * 5s stays bounded while keeping its time-of-day shape.
  *
  * ALL fs is async — the web server shares one event loop and a sync read here
  * would freeze every route. Writes are fire-and-forget (telemetry must never
@@ -125,6 +126,16 @@ interface StoreState {
   pending: OutsideRecord[] | null;
   /** Every disk write for this store runs in order (append vs compaction vs read). */
   tail: Promise<void>;
+  /**
+   * Per-date byte threshold the NEXT compaction waits for. Without it, a day
+   * whose compaction cannot shrink (many buckets rotating faster than the merge
+   * gap) sits just above COMPACT_ABOVE_BYTES and is rewritten wholesale on EVERY
+   * append — ~2MB of disk churn plus a full-day parse per 5s sample.
+   */
+  nextCompactAt: Map<string, number>;
+  /** Last parsed day file, keyed by its stat, so a timeline that polls one day
+   *  re-parses only when the file actually changed. Callers must not mutate it. */
+  recordsCache: { date: string; mtimeMs: number; size: number; records: OutsideRecord[] } | null;
 }
 
 let state: StoreState | null = null;
@@ -134,7 +145,7 @@ function current(): StoreState {
   if (!state || state.dir !== dir) {
     state = {
       dir, index: new Map(), from: '9999-12-31', day: '', hydrated: null, pending: null,
-      tail: Promise.resolve(),
+      tail: Promise.resolve(), nextCompactAt: new Map(), recordsCache: null,
     };
   }
   return state;
@@ -349,12 +360,14 @@ function foldAndAppend(st: StoreState, records: readonly OutsideRecord[]): Promi
 
 async function appendDays(byDate: Map<string, string[]>): Promise<void> {
   try {
+    const st = current();
     await fsp.mkdir(storeDir(), { recursive: true });
     for (const [date, lines] of byDate) {
       const file = dayFile(date);
       await fsp.appendFile(file, lines.join('\n') + '\n', 'utf-8');
       const stat = await fsp.stat(file).catch(() => null);
-      if (stat && stat.size > COMPACT_ABOVE_BYTES) await compactDay(date, stat.size);
+      const threshold = st.nextCompactAt.get(date) ?? COMPACT_ABOVE_BYTES;
+      if (stat && stat.size > threshold) await compactDay(st, date, stat.size);
     }
   } catch (err) {
     log.web.warn('outside-activity append failed', {
@@ -365,13 +378,93 @@ async function appendDays(byDate: Map<string, string[]>): Promise<void> {
 }
 
 /**
- * Fold a day file down to one line per bucket. Totals are preserved exactly —
- * only each window's own `ts` is lost, which no reader uses (the panel asks for
- * sums). Reads the FILE rather than the in-memory rollup on purpose: the rollup
- * holds only what this process hydrated plus what it wrote, so rewriting from it
- * could delete a day this process never read.
+ * Adjacent samples of the SAME bucket merge into one interval when the next one
+ * starts within this gap of the previous one's end. 15s comfortably swallows the
+ * 5s sampling cadence plus scheduling jitter without gluing real absences shut.
  */
-async function compactDay(date: string, sizeBefore: number): Promise<void> {
+export const COMPACT_MERGE_GAP_MS = 15_000;
+
+/**
+ * Fold a day's records into per-bucket INTERVALS: consecutive samples of one
+ * bucket become one record whose `ts` is the run's start and whose `durationMs`
+ * is the run's tracked sum. Totals are preserved exactly, and — unlike the old
+ * one-line-per-bucket fold — the day keeps its time-of-day shape, which the
+ * timeline view draws. Idempotent: merged intervals re-merge to themselves.
+ *
+ * A record with no parseable `ts` cannot be placed, so those fold to one TS-LESS
+ * line per bucket (`ts: ''`), which readers treat as "counted but not placeable".
+ * Never a synthesized timestamp: a fake midnight-UTC `ts` draws as a real bar at
+ * the wrong local hour, which is exactly the lie this store exists to avoid.
+ */
+export function compactRecords(records: readonly OutsideRecord[], date: string): OutsideRecord[] {
+  interface Open { startMs: number; endMs: number; ms: number; app: string; labelMs: number }
+  const placed: Array<{ rec: OutsideRecord; startMs: number }> = [];
+  const unplaced: OutsideIndex = new Map();
+  for (const rec of records) {
+    if (rec.durationMs <= 0) continue;
+    const startMs = Date.parse(rec.ts);
+    if (Number.isFinite(startMs)) placed.push({ rec, startMs });
+    else addOutsideRecord(unplaced, rec);
+  }
+  placed.sort((a, b) => a.startMs - b.startMs);
+
+  const open = new Map<string, Open>();
+  const out: OutsideRecord[] = [];
+  const close = (key: string, o: Open): void => {
+    // The bucket's OWN date, not the file's: a record that claimed another date
+    // keeps its claim through compaction instead of being silently reassigned.
+    const { date: recDate, bundleId, host } = parseOutsideBucketKey(key);
+    out.push({
+      date: recDate || date,
+      ts: new Date(o.startMs).toISOString(),
+      durationMs: Math.min(o.ms, MAX_RECORD_MS),
+      app: o.app,
+      ...(bundleId ? { bundleId } : {}),
+      ...(host ? { host } : {}),
+    });
+  };
+  for (const { rec, startMs } of placed) {
+    const key = outsideBucketKey(rec.date, rec.bundleId ?? '', rec.host ?? '');
+    const o = open.get(key);
+    if (o && startMs <= o.endMs + COMPACT_MERGE_GAP_MS) {
+      o.endMs = Math.max(o.endMs, startMs + rec.durationMs);
+      o.ms += rec.durationMs;
+      if (rec.durationMs > o.labelMs) { o.app = rec.app; o.labelMs = rec.durationMs; }
+      continue;
+    }
+    if (o) close(key, o);
+    open.set(key, {
+      startMs, endMs: startMs + rec.durationMs, ms: rec.durationMs, app: rec.app, labelMs: rec.durationMs,
+    });
+  }
+  for (const [key, o] of open) close(key, o);
+
+  for (const [key, bucket] of unplaced) {
+    if (bucket.ms <= 0) continue;
+    const { date: recDate, bundleId, host } = parseOutsideBucketKey(key);
+    out.push({
+      date: recDate || date,
+      // Stays ts-less: the samples' time of day was never known, and inventing
+      // one would draw the whole bucket as a solid bar at a fictional hour.
+      ts: '',
+      durationMs: Math.min(bucket.ms, MAX_RECORD_MS),
+      app: bucket.app,
+      ...(bundleId ? { bundleId } : {}),
+      ...(host ? { host } : {}),
+    });
+  }
+  // Chronological on disk (ts-less lines first), matching how samples arrive, so
+  // the over-cap tail read keeps the day's newest intervals.
+  return out.sort((a, b) => a.ts.localeCompare(b.ts));
+}
+
+/**
+ * Rewrite a day file as merged intervals (see compactRecords). Reads the FILE
+ * rather than the in-memory rollup on purpose: the rollup holds only what this
+ * process hydrated plus what it wrote, so rewriting from it could delete a day
+ * this process never read.
+ */
+async function compactDay(st: StoreState, date: string, sizeBefore: number): Promise<void> {
   const file = dayFile(date);
   if (sizeBefore > MAX_COMPACT_READ_BYTES) {
     warnOnce(`toobig:${file}`, 'outside-activity day file too large to compact', { file, size: sizeBefore });
@@ -383,31 +476,23 @@ async function compactDay(date: string, sizeBefore: number): Promise<void> {
   } catch {
     return;
   }
-  const folded: OutsideIndex = new Map();
+  const records: OutsideRecord[] = [];
   for (const line of text.split('\n')) {
     const rec = parseOutsideLine(line, date);
-    if (rec) addOutsideRecord(folded, rec);
+    if (rec) records.push(rec);
   }
-  const lines: string[] = [];
-  for (const [key, bucket] of folded) {
-    if (bucket.ms <= 0) continue;
-    const { bundleId, host } = parseOutsideBucketKey(key);
-    const rec: OutsideRecord = {
-      date,
-      // Midnight, because a folded bucket no longer knows when its samples were.
-      ts: `${date}T00:00:00.000Z`,
-      durationMs: Math.min(bucket.ms, MAX_RECORD_MS),
-      app: bucket.app,
-      ...(bundleId ? { bundleId } : {}),
-      ...(host ? { host } : {}),
-    };
-    lines.push(JSON.stringify(rec));
-  }
+  const lines = compactRecords(records, date).map((rec) => JSON.stringify(rec));
+  const body = lines.length > 0 ? `${lines.join('\n')}\n` : '';
   // Same directory, so the rename is atomic and never crosses a device (EXDEV).
   const tmp = `${file}.compact-${process.pid}.tmp`;
   try {
-    await fsp.writeFile(tmp, lines.length > 0 ? `${lines.join('\n')}\n` : '', 'utf-8');
+    await fsp.writeFile(tmp, body, 'utf-8');
     await fsp.rename(tmp, file);
+    // The next compaction waits for another COMPACT_ABOVE_BYTES of growth past
+    // what THIS one produced. Rearming at the fixed threshold instead turns a
+    // day that cannot shrink (buckets rotating faster than the merge gap) into
+    // a full-file rewrite on every append.
+    st.nextCompactAt.set(date, Buffer.byteLength(body, 'utf-8') + COMPACT_ABOVE_BYTES);
     log.web.info('outside-activity day file compacted', { date, sizeBefore, lines: lines.length });
   } catch (err) {
     await fsp.rm(tmp, { force: true }).catch(() => {});
@@ -415,6 +500,11 @@ async function compactDay(date: string, sizeBefore: number): Promise<void> {
       file, error: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+/** The byte size the next compaction of `date` waits for (tests). */
+export function peekNextCompactAt(date: string): number | undefined {
+  return state?.nextCompactAt.get(date);
 }
 
 /**
@@ -434,6 +524,34 @@ export async function outsideDayRows(date: string, now = new Date()): Promise<Ou
     const day: OutsideIndex = new Map();
     await readDay(date, day);
     return rowsFromIndex(day, date);
+  });
+  // Later writes queue behind this read, but must never inherit its value.
+  st.tail = read.then(() => undefined, () => undefined);
+  return read;
+}
+
+/**
+ * Every RECORD of one local day, `ts` and all — the timeline's read. Always a
+ * file read (the in-memory rollup keeps only bucket sums), joined onto the write
+ * chain so it can never race a compaction rename mid-read. Bounded by the same
+ * read cap as every other day read.
+ */
+export async function outsideDayRecords(date: string): Promise<OutsideRecord[]> {
+  const st = current();
+  const read = st.tail.catch(() => undefined).then(async () => {
+    const stat = await fsp.stat(dayFile(date)).catch(() => null);
+    if (!stat || !stat.isFile()) return [];
+    // A timeline polls the SAME day repeatedly; re-parse only a changed file.
+    const c = st.recordsCache;
+    if (c && c.date === date && c.mtimeMs === stat.mtimeMs && c.size === stat.size) return c.records;
+    const text = await readDayText(date);
+    const out: OutsideRecord[] = [];
+    for (const line of text.split('\n')) {
+      const rec = parseOutsideLine(line, date);
+      if (rec && rec.date === date) out.push(rec);
+    }
+    st.recordsCache = { date, mtimeMs: stat.mtimeMs, size: stat.size, records: out };
+    return out;
   });
   // Later writes queue behind this read, but must never inherit its value.
   st.tail = read.then(() => undefined, () => undefined);

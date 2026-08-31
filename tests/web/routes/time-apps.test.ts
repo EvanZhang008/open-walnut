@@ -193,3 +193,60 @@ describe('POST /api/time/apps/toggle', () => {
     expect(text).toMatch(/enabled: true/);
   });
 });
+
+describe('GET /api/time/apps/blocks', () => {
+  /** LOCAL clock time on TODAY → ISO ts, so the seeds sit inside the day's
+   *  bounds in ANY runner timezone (a bare `${date}T..` parses as local). */
+  const localTs = (hms: string) => new Date(`${TODAY}T${hms}`).toISOString();
+
+  it('answers per-app intervals with Walnut excluded', async () => {
+    await writeConfig('time:\n  outside:\n    enabled: true\n');
+    await fs.mkdir(OUTSIDE_DIR(), { recursive: true });
+    const lines = [
+      { date: TODAY, ts: localTs('15:00:00'), durationMs: 5000, app: 'Slack', bundleId: 'com.tinyspeck.slackmacgap' },
+      { date: TODAY, ts: localTs('15:00:05'), durationMs: 5000, app: 'Slack', bundleId: 'com.tinyspeck.slackmacgap' },
+      { date: TODAY, ts: localTs('16:00:00'), durationMs: 5000, app: 'Slack', bundleId: 'com.tinyspeck.slackmacgap' },
+      { date: TODAY, ts: localTs('15:00:00'), durationMs: 9000, app: 'Walnut', bundleId: 'com.local.walnut-desktop' },
+    ].map((r) => JSON.stringify(r));
+    await fs.writeFile(path.join(OUTSIDE_DIR(), `${TODAY}.jsonl`), lines.join('\n') + '\n', 'utf-8');
+    resetOutsideStore();
+    helper.running = true;
+
+    const res = await request(app()).get(`/api/time/apps/blocks?date=${TODAY}`).expect(200);
+    expect(res.body.enabled).toBe(true);
+    expect(res.body.running).toBe(true);
+    expect(res.body.totalMs).toBe(15_000);
+    expect(res.body.unplacedMs).toBe(0);
+    expect(res.body.droppedApps).toBe(0);
+    expect(res.body.droppedMs).toBe(0);
+    expect(res.body.apps).toHaveLength(1);
+    const [slack] = res.body.apps;
+    expect(slack.app).toBe('Slack');
+    // 15:00:00 + 15:00:05 merge; 16:00 is its own interval.
+    expect(slack.blocks).toHaveLength(2);
+    expect(slack.blocks[0].ms).toBe(10_000);
+  });
+
+  it('counts a ts outside the local day as unplaced instead of drawing it', async () => {
+    await fs.mkdir(OUTSIDE_DIR(), { recursive: true });
+    const outside = new Date(new Date(`${TODAY}T00:00:00`).getTime() - 3600_000).toISOString();
+    const lines = [
+      { date: TODAY, ts: outside, durationMs: 3600_000, app: 'Slack', bundleId: 'com.tinyspeck.slackmacgap' },
+      { date: TODAY, ts: localTs('10:00:00'), durationMs: 5000, app: 'Slack', bundleId: 'com.tinyspeck.slackmacgap' },
+    ].map((r) => JSON.stringify(r));
+    await fs.writeFile(path.join(OUTSIDE_DIR(), `${TODAY}.jsonl`), lines.join('\n') + '\n', 'utf-8');
+    resetOutsideStore();
+
+    const res = await request(app()).get(`/api/time/apps/blocks?date=${TODAY}`).expect(200);
+    expect(res.body.totalMs).toBe(3_605_000);
+    expect(res.body.unplacedMs).toBe(3600_000);
+    expect(res.body.apps[0].blocks).toHaveLength(1);
+  });
+
+  it('rejects a bad date and answers an empty day quietly', async () => {
+    await request(app()).get('/api/time/apps/blocks?date=nope').expect(400);
+    const res = await request(app()).get(`/api/time/apps/blocks?date=${TODAY}`).expect(200);
+    expect(res.body.apps).toEqual([]);
+    expect(res.body.totalMs).toBe(0);
+  });
+});

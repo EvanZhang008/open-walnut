@@ -13,10 +13,12 @@ export {
   isOutsideCollectorRunning, outsideHelperReason, startOutsideCollector, stopOutsideCollector,
 } from './outside-collector.js';
 export type { HelperUnavailable } from './outside-collector.js';
-export { hydrateOutside, outsideDayRows, recordOutside, resetOutsideStore } from './outside-store.js';
-export { foldOutsideApps, walnutHostsFromConfig } from './outside-view.js';
+export { hydrateOutside, outsideDayRecords, outsideDayRows, recordOutside, resetOutsideStore } from './outside-store.js';
+export { foldOutsideApps, foldOutsideTimeline, walnutHostsFromConfig } from './outside-view.js';
 export type { OutsideRecord, OutsideRow } from './outside-store.js';
-export type { OutsideApp, OutsideDayFold, OutsideSite } from './outside-view.js';
+export type {
+  OutsideApp, OutsideAppTimeline, OutsideBlock, OutsideDayFold, OutsideSite, OutsideTimelineFold,
+} from './outside-view.js';
 export { getIndex, hydrate, readDayRecords, recordTime, resetTimeStore } from './store.js';
 export { dayBoundsMs, foldDayBlocks, foldDaySlices } from './blocks.js';
 export { localDateKey, recentDateKeys, sanitizeSamples, summarize } from './rollup.js';

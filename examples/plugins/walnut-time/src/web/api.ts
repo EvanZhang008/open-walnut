@@ -125,6 +125,41 @@ export interface AppsToggle {
   running: boolean
 }
 
+/** One interval of one outside app being in front. `ms` is tracked time inside
+ *  the interval (≤ its wall span when short gaps were merged server-side). */
+export interface OutsideTimelineBlock {
+  startTs: string
+  endTs: string
+  ms: number
+}
+
+export interface OutsideTimelineApp {
+  app: string
+  bundleId?: string
+  /** This app's NON-Walnut time that day. A browser that also visited Walnut
+   *  pages shows less here than on the Apps tab — by design, not drift. */
+  ms: number
+  blocks: OutsideTimelineBlock[]
+  truncated?: true
+}
+
+/** WHEN each outside app was used, for the timeline. Walnut's own time is
+ *  excluded server-side: the attention lanes already draw it. */
+export interface DayAppsBlocks {
+  date: string
+  enabled: boolean
+  /** A helper process is attached and streaming right now. */
+  running: boolean
+  totalMs: number
+  /** Counted but not placeable on the axis (older folded records). */
+  unplacedMs: number
+  apps: OutsideTimelineApp[]
+  /** Apps beyond the server's row cap: in totalMs, but without a row. */
+  droppedApps: number
+  droppedMs: number
+  degraded?: boolean
+}
+
 /** Only the three fields the reports need out of the console's task list. */
 export interface TaskRef {
   id: string
@@ -137,6 +172,8 @@ export interface TimeApi {
   blocks(date: string, opts?: { kinds?: readonly TimeKind[]; raw?: boolean }): Promise<DayBlocks>
   /** ONE day of outside activity. */
   appsDay(date: string): Promise<DayApps>
+  /** ONE day of outside activity as per-app intervals, for the timeline. */
+  appsBlocks(date: string): Promise<DayAppsBlocks>
   /** Turn outside sampling on or off. Always explicit, never a blind flip: the UI
    *  knows the current state, and a double-click must not toggle twice. */
   setAppsEnabled(enabled: boolean): Promise<AppsToggle>
@@ -178,6 +215,10 @@ export function createTimeApi(walnut: WalnutWebApi): TimeApi {
 
     appsDay(date) {
       return getJson<DayApps>(`/api/time/apps?date=${encodeURIComponent(date)}`)
+    },
+
+    appsBlocks(date) {
+      return getJson<DayAppsBlocks>(`/api/time/apps/blocks?date=${encodeURIComponent(date)}`)
     },
 
     setAppsEnabled(enabled) {

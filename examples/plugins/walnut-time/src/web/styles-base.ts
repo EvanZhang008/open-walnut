@@ -22,6 +22,10 @@ export const BASE_CSS = `
   --wt-idle: color-mix(in srgb, var(--fg-muted) 14%, transparent);
   /* Aggregated remainder (a bar or a dot). Has to hold its own next to a task colour. */
   --wt-rest: color-mix(in srgb, var(--fg-muted) 45%, transparent);
+  /* Screen time (apps outside Walnut). A muted slate MIXED from theme tokens, so
+     it follows light/dark like every other colour here: visibly a lane, never a
+     task colour and never the agent purple — context, not the day's work. */
+  --wt-screen: color-mix(in srgb, var(--fg-muted) 78%, var(--accent) 22%);
 
   box-sizing: border-box;
   max-width: 1240px;

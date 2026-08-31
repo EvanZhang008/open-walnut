@@ -23,13 +23,15 @@ import { CLOUD_MODE } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import {
   attachTaskIdsBounded,
-  dayBoundsMs, foldDayBlocks, foldDaySlices, foldOutsideApps, getIndex, hydrate, isOutsideCollectorRunning,
-  localDateKey, outsideDayRows, readDayRecords, recentDateKeys,
+  dayBoundsMs, foldDayBlocks, foldDaySlices, foldOutsideApps, foldOutsideTimeline, getIndex, hydrate,
+  isOutsideCollectorRunning,
+  localDateKey, outsideDayRecords, outsideDayRows, readDayRecords, recentDateKeys,
   outsideHelperReason, recordTime, resetHeartbeatDedupe, resetOutsideStore, resetTimeStore,
   sanitizeSamples, startAgentTimeCollector,
   startOutsideCollector, stopAgentTimeCollector, stopOutsideCollector, summarize, walnutHostsFromConfig,
   withLedgerBackfill, TIME_KINDS,
-  type DayBlocks, type HelperUnavailable, type OutsideApp, type RollupIndex, type TimeKind, type TimeRecord,
+  type DayBlocks, type HelperUnavailable, type OutsideApp, type OutsideAppTimeline, type RollupIndex,
+  type TimeKind, type TimeRecord,
   type TimeSummary,
 } from '../../core/time-tracking/index.js';
 
@@ -357,6 +359,81 @@ async function buildApps(date: string): Promise<DayAppsResponse> {
     walnutMs: fold.walnutMs,
     browserHostsSeen: fold.browserHostsSeen,
     apps: fold.apps,
+    ...(reason ? { reason } : {}),
+  };
+}
+
+export interface DayAppsBlocksResponse {
+  date: string;
+  enabled: boolean;
+  /** A helper process is attached and streaming right now. */
+  running: boolean;
+  totalMs: number;
+  /** Time that counts but cannot be placed on the axis: ts-less records from an
+   *  old fold, or timestamps outside the day's local bounds. */
+  unplacedMs: number;
+  apps: OutsideAppTimeline[];
+  /** Apps beyond the row cap: counted in totalMs, but without a row of their own. */
+  droppedApps: number;
+  droppedMs: number;
+  /** Why sampling cannot run here, when it cannot (mirrors /apps). */
+  reason?: HelperUnavailable;
+  degraded?: boolean;
+}
+
+// GET /api/time/apps/blocks — WHEN each outside app was in front, as per-app
+// intervals for the timeline. Walnut's own time is excluded (the attention lanes
+// already draw it); a browser is one row, its sites stay the Apps tab's detail.
+timeRouter.get('/apps/blocks', async (req: Request, res: Response) => {
+  if (CLOUD_MODE) {
+    res.status(501).json({ error: 'not_supported_cloud', message: 'outside activity is sampled on the primary box only' });
+    return;
+  }
+  const raw = typeof req.query.date === 'string' && req.query.date ? req.query.date : localDateKey(new Date());
+  if (!dayBoundsMs(raw)) {
+    res.status(400).json({ error: 'invalid_date', message: 'date must be a real YYYY-MM-DD' });
+    return;
+  }
+  const date = raw;
+  const reason = helperReason();
+  const empty = (): DayAppsBlocksResponse => ({
+    date, enabled: lastKnownOutsideEnabled, running: isOutsideCollectorRunning(),
+    totalMs: 0, unplacedMs: 0, apps: [], droppedApps: 0, droppedMs: 0,
+    ...(reason ? { reason } : {}), degraded: true,
+  });
+  const bail = deadline(APPS_DEADLINE_MS);
+  const build = buildAppsBlocks(date).catch((err: unknown) => {
+    log.web.warn('time apps blocks failed', { date, error: err instanceof Error ? err.message : String(err) });
+    return empty();
+  });
+  try {
+    res.json(await Promise.race([build, bail.promise.then(empty)]));
+  } finally {
+    bail.cancel();
+  }
+});
+
+async function buildAppsBlocks(date: string): Promise<DayAppsBlocksResponse> {
+  const { getConfig } = await import('../../core/config-manager.js');
+  const config = await getConfig().catch(() => undefined);
+  if (config) lastKnownOutsideEnabled = config.time?.outside?.enabled === true;
+  const records = await outsideDayRecords(date);
+  const fold = foldOutsideTimeline(records, {
+    walnutHosts: walnutHostsFromConfig(config),
+    // The day's LOCAL bounds: a ts outside them (old midnight-UTC folds) must
+    // count without being drawn at a fictional hour.
+    bounds: dayBoundsMs(date),
+  });
+  const reason = helperReason();
+  return {
+    date,
+    enabled: lastKnownOutsideEnabled,
+    running: isOutsideCollectorRunning(),
+    totalMs: fold.totalMs,
+    unplacedMs: fold.unplacedMs,
+    apps: fold.apps,
+    droppedApps: fold.droppedApps,
+    droppedMs: fold.droppedMs,
     ...(reason ? { reason } : {}),
   };
 }

@@ -264,6 +264,12 @@ const OUTSIDE_BUCKETS: Array<{ app: string; bundleId: string; host?: string; min
   // A browser bucket with no host: one row, no sites, and it must NOT trigger the
   // Automation hint, because another browser DID report hosts today.
   { app: 'Safari', bundleId: 'com.apple.Safari', minutes: 6 },
+  // Enough NON-Walnut apps (8) that the swimlanes' screen rows overflow their own
+  // six-row cap: the timeline's "其他 N 个 app" fold needs a tail to fold.
+  { app: 'Xcode', bundleId: 'com.apple.dt.Xcode', minutes: 9 },
+  { app: 'Preview', bundleId: 'com.apple.Preview', minutes: 4 },
+  { app: 'Notes', bundleId: 'com.apple.Notes', minutes: 2 },
+  { app: 'Music', bundleId: 'com.apple.Music', minutes: 1 },
 ]
 
 /** Two days back: a browser was used and nothing came back — the missing grant. */
@@ -278,7 +284,10 @@ await fs.mkdir(outsideDir, { recursive: true })
 function outsideLine(date: string, index: number, bucket: { app: string; bundleId: string; host?: string; minutes: number }): string {
   return JSON.stringify({
     date,
-    ts: `${date}T09:${String(index % 60).padStart(2, '0')}:00.000Z`,
+    // LOCAL morning (a bare `${date}T..` parses as local time): the timeline fold
+    // treats a ts outside the local day as unplaced, so a UTC-stamped seed would
+    // draw no lane bars at all in a timezone east of UTC.
+    ts: new Date(new Date(`${date}T00:00:00`).getTime() + (9 * 60 + (index % 60) * 3) * 60_000).toISOString(),
     durationMs: Math.round(bucket.minutes * 60_000),
     app: bucket.app,
     bundleId: bucket.bundleId,

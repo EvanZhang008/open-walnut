@@ -668,6 +668,38 @@ test('all three timeline views hold up on the dense day', async ({ page }) => {
   await expect(page.getByTestId('time-app-agent-total')).not.toContainText('0s')
   await shoot(page, 'views-app-lanes')
 
+  // ══ VIEW C: the merged "其他" row EXPANDS — the cap is a default, not a wall. ══
+  await page.getByTestId('time-app-lanes-expand-others').click()
+  // Nineteen seeded tasks plus the taskless iOS chat bucket: six named rows
+  // plus fourteen unfolded children.
+  await expect(page.getByTestId('time-app-lanes-row-task')).toHaveCount(20)
+  await expect(page.getByTestId('time-app-lanes-expand-others')).toContainText('收起')
+  await shoot(page, 'views-app-lanes-others-expanded')
+  await page.getByTestId('time-app-lanes-expand-others').click()
+  await expect(page.getByTestId('time-app-lanes-row-task')).toHaveCount(6)
+
+  // ══ VIEW C: screen time (outside apps) rides the same chart, toggle-only. ══
+  await expect(page.getByTestId('time-app-lanes-row-outside')).toHaveCount(0)
+  const screenToggle = page.getByTestId('time-app-screen-toggle')
+  await expect(screenToggle).toBeVisible()
+  await screenToggle.check()
+  // Eight seeded non-Walnut apps (Walnut + the localhost tab are excluded
+  // server-side): six get their own slate row, the tail folds into one.
+  await expect(page.getByTestId('time-app-lanes-row-outside')).toHaveCount(6, { timeout: 30_000 })
+  await expect(page.getByTestId('time-app-lanes-row-outside-others')).toHaveCount(1)
+  await expect(page.getByTestId('time-app-screen-total')).toContainText('Walnut 外')
+  await shoot(page, 'views-app-lanes-screen')
+
+  // …and that merged app row expands the same way the task one does.
+  await page.getByTestId('time-app-lanes-expand-outside-others').click()
+  await expect(page.getByTestId('time-app-lanes-row-outside')).toHaveCount(8)
+  await shoot(page, 'views-app-lanes-screen-expanded')
+  await page.getByTestId('time-app-lanes-expand-outside-others').click()
+  await expect(page.getByTestId('time-app-lanes-row-outside')).toHaveCount(6)
+  // Leave the pref off for the tests that follow (it is remembered in localStorage).
+  await screenToggle.uncheck()
+  await expect(page.getByTestId('time-app-lanes-row-outside')).toHaveCount(0)
+
   // The view choice is remembered across a reload (localStorage, the plugin's own
   // keys). The DAY is not remembered and resets to today, so walk back to the seeded
   // one first: on an empty day every view draws its empty state and this assertion

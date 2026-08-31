@@ -13,8 +13,9 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-outside-s
 
 import { WALNUT_HOME } from '../../../src/constants.js';
 import {
-  COMPACT_ABOVE_BYTES, getOutsideIndex, hydrateOutside, outsideBucketKey, outsideDayRows,
-  recordOutside, resetOutsideStore, type OutsideRecord,
+  COMPACT_ABOVE_BYTES, COMPACT_MERGE_GAP_MS, compactRecords, getOutsideIndex, hydrateOutside, outsideBucketKey,
+  outsideDayRecords, outsideDayRows,
+  peekNextCompactAt, recordOutside, resetOutsideStore, type OutsideRecord,
 } from '../../../src/core/time-tracking/outside-store.js';
 import { localDateKey, shiftDateKey } from '../../../src/core/time-tracking/rollup.js';
 
@@ -191,6 +192,38 @@ describe('compaction', () => {
     await hydrateOutside(new Date());
     expect(getOutsideIndex().get(key)?.ms).toBe(folded + 5000);
   });
+
+  it('does not re-compact an incompressible day on every append (watermark)', async () => {
+    // Five buckets rotating slower than the merge gap: NOTHING can merge, so a
+    // compaction cannot shrink the file. Without the watermark this day sits just
+    // above the threshold and is rewritten wholesale on EVERY subsequent append.
+    const spin: OutsideRecord[] = [];
+    const stepMs = COMPACT_MERGE_GAP_MS + 5000;
+    const base = new Date(`${TODAY}T00:10:00`).getTime();
+    for (let i = 0, bytes = 0; bytes <= COMPACT_ABOVE_BYTES; i++) {
+      const one = rec({
+        ts: new Date(base + i * stepMs).toISOString(),
+        app: `App${i % 5}`,
+        bundleId: `com.example.app${i % 5}`,
+      });
+      spin.push(one);
+      bytes += JSON.stringify(one).length + 1;
+    }
+    await recordOutside(spin);
+
+    const file = path.join(DIR(), `${TODAY}.jsonl`);
+    const compacted = await fs.readFile(file, 'utf-8');
+    // The compaction really could not shrink it…
+    expect(compacted.length).toBeGreaterThan(COMPACT_ABOVE_BYTES * 0.9);
+    // …so the next compaction must wait for ANOTHER threshold of growth.
+    expect(peekNextCompactAt(TODAY)).toBeGreaterThan(COMPACT_ABOVE_BYTES);
+
+    // A later small append lands as a raw line: no rewrite, no re-fold.
+    await recordOutside([rec({ ts: `${TODAY}T23:59:00.000Z`, app: 'Straggler', bundleId: 'com.example.late' })]);
+    const after = await fs.readFile(file, 'utf-8');
+    expect(after.startsWith(compacted)).toBe(true);
+    expect(after.trim().split('\n')).toHaveLength(compacted.trim().split('\n').length + 1);
+  });
 });
 
 describe('outsideDayRows', () => {
@@ -240,5 +273,73 @@ describe('outsideDayRows', () => {
     const rows = await outsideDayRows(TODAY, later);
     expect(getOutsideIndex().size).toBe(0);
     expect(rows).toEqual([{ app: 'Slack', bundleId: 'com.tinyspeck.slackmacgap', host: '', ms: 5000 }]);
+  });
+});
+
+describe('compactRecords', () => {
+  const at = (sec: number, over: Partial<OutsideRecord> = {}): OutsideRecord =>
+    rec({ ts: `${TODAY}T15:00:${String(sec).padStart(2, '0')}.000Z`, ...over });
+
+  it('merges adjacent samples of one bucket into one interval, preserving the total', () => {
+    const out = compactRecords([at(0), at(5), at(10)], TODAY);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.ts).toBe(`${TODAY}T15:00:00.000Z`);
+    expect(out[0]!.durationMs).toBe(15_000);
+  });
+
+  it('splits at a gap wider than COMPACT_MERGE_GAP_MS and never merges across buckets', () => {
+    const out = compactRecords([
+      at(0), at(5),
+      at(7, { app: 'Google Chrome', bundleId: 'com.google.Chrome', host: 'github.com' }),
+      at(40), // 30s after the second Slack sample ended → its own interval
+    ], TODAY);
+    const slack = out.filter((r) => r.bundleId === 'com.tinyspeck.slackmacgap');
+    expect(slack).toHaveLength(2);
+    expect(out.filter((r) => r.bundleId === 'com.google.Chrome')).toHaveLength(1);
+    expect(out.reduce((sum, r) => sum + r.durationMs, 0)).toBe(20_000);
+  });
+
+  it('is idempotent: compacting the compaction changes nothing', () => {
+    const once = compactRecords([at(0), at(5), at(40), at(50)], TODAY);
+    expect(compactRecords(once, TODAY)).toEqual(once);
+  });
+
+  it('folds ts-less records to one TS-LESS line per bucket, never a fake midnight', () => {
+    const out = compactRecords([rec({ ts: '' }), rec({ ts: '' })], TODAY);
+    // A synthesized timestamp would later draw as a real bar at a fictional hour.
+    expect(out).toEqual([expect.objectContaining({ ts: '', durationMs: 10_000, app: 'Slack' })]);
+  });
+
+  it('emits chronological output, ts-less lines first', () => {
+    const out = compactRecords([at(40), rec({ ts: '' }), at(0)], TODAY);
+    expect(out.map((r) => r.ts)).toEqual(['', `${TODAY}T15:00:00.000Z`, `${TODAY}T15:00:40.000Z`]);
+  });
+});
+
+describe('outsideDayRecords', () => {
+  it('returns the raw records of one day, ts and all', async () => {
+    await recordOutside([
+      rec({ durationMs: 5000 }),
+      rec({ ts: `${TODAY}T15:10:00.000Z`, durationMs: 4000 }),
+      rec({ date: shiftDateKey(TODAY, -1), durationMs: 3000 }),
+    ]);
+    const records = await outsideDayRecords(TODAY);
+    expect(records).toHaveLength(2);
+    expect(records.map((r) => r.durationMs)).toEqual([5000, 4000]);
+    expect(records[0]!.ts).toBe(`${TODAY}T15:00:00.000Z`);
+  });
+
+  it('answers an empty day with an empty list, not an error', async () => {
+    expect(await outsideDayRecords(shiftDateKey(TODAY, -3))).toEqual([]);
+  });
+
+  it('re-serves an unchanged file without re-parsing, and sees a later append', async () => {
+    await recordOutside([rec({ durationMs: 5000 })]);
+    const first = await outsideDayRecords(TODAY);
+    // Unchanged stat → the SAME parsed array back (the memo, not a lookalike).
+    expect(await outsideDayRecords(TODAY)).toBe(first);
+    await recordOutside([rec({ ts: `${TODAY}T16:00:00.000Z`, durationMs: 4000 })]);
+    const second = await outsideDayRecords(TODAY);
+    expect(second).toHaveLength(2);
   });
 });

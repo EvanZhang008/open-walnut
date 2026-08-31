@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import type { PluginLogger } from '@open-walnut/plugin-api/web'
-import type { DayBlocks, TimeApi, TimeKind } from './api'
+import type { DayAppsBlocks, DayBlocks, TimeApi, TimeKind } from './api'
 import { DayNav, type DayNavTestIds } from './day-nav'
 import {
   HOUR_MIN, NOTE_FLOOR_MS,
@@ -45,6 +45,7 @@ import { TimeLanes } from './lanes'
  */
 const LS_VIEW_KEY = 'open-walnut-time-app-view'
 const LS_AGENTS_KEY = 'open-walnut-time-app-agents'
+const LS_SCREEN_KEY = 'open-walnut-time-app-screen'
 /**
  * The retired console section's pair. Read once, as a fallback, so someone who had
  * settled on Lanes with agents shown does not silently land back on a bare Tape the
@@ -83,6 +84,14 @@ function readView(): ViewKey {
 function readAgentsPref(): boolean {
   try {
     return (localStorage.getItem(LS_AGENTS_KEY) ?? localStorage.getItem(LEGACY_AGENTS_KEY)) === '1'
+  } catch {
+    return false
+  }
+}
+
+function readScreenPref(): boolean {
+  try {
+    return localStorage.getItem(LS_SCREEN_KEY) === '1'
   } catch {
     return false
   }
@@ -128,9 +137,12 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
   const [date, setDate] = useState(today)
   const [view, setView] = useState<ViewKey>(readView)
   const [showAgents, setShowAgents] = useState(readAgentsPref)
+  const [showScreen, setShowScreen] = useState(readScreenPref)
   /** The serial ribbon (views A + B) and the per-task blocks (view C). */
   const [ribbon, setRibbon] = useState<DayBlocks | null>(null)
   const [merged, setMerged] = useState<DayBlocks | null>(null)
+  /** Outside-app intervals (view C, screen-time toggle). Fetched lazily. */
+  const [screen, setScreen] = useState<DayAppsBlocks | null>(null)
   const [error, setError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const landedFor = useRef<string>('')
@@ -143,18 +155,35 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
     if (dates.length > 0 && (date < oldest || date > newest)) setDate(today)
   }, [dates.length, date, oldest, newest, today])
 
-  // BOTH shapes in one pass, in parallel: switching view is then instant, and the
-  // two are different answers to different questions rather than two formats of one.
+  // ALL shapes in one pass, in parallel: switching view is then instant, and the
+  // screen answer lands WITH the attention answers, so the shared axis is computed
+  // once instead of visibly re-stretching when a late screen fetch widens it.
+  // Screen data rides along only when the toggle is on; a failed screen fetch
+  // degrades to "no screen rows", never to a failed day.
   useEffect(() => {
     let live = true
     Promise.all([
       api.blocks(date, { raw: true, kinds: HUMAN_KINDS }),
       api.blocks(date),
+      showScreen
+        ? api.appsBlocks(date).catch((err: unknown) => {
+          log.warn('apps blocks fetch failed', { date, error: err instanceof Error ? err.message : String(err) })
+          return null
+        })
+        : Promise.resolve(null),
     ])
-      .then(([raw, all]) => {
+      .then(([raw, all, apps]) => {
         if (!live) return
         setRibbon(raw)
         setMerged(all)
+        // A degraded answer must not erase a good one already shown for this day:
+        // the apps/blocks read races a server deadline, and its empty fallback
+        // would blank rows the user is looking at.
+        setScreen((prev) => {
+          if (!apps) return prev
+          if (apps.degraded && prev && prev.date === apps.date && !prev.degraded) return prev
+          return apps
+        })
         setError(null)
       })
       .catch((err: unknown) => {
@@ -163,7 +192,7 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
         if (live) setError(message)
       })
     return () => { live = false }
-  }, [api, log, date])
+  }, [api, log, date, showScreen])
 
   const pickView = useCallback((next: ViewKey) => {
     setView(next)
@@ -174,6 +203,14 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
     setShowAgents((prev) => {
       const next = !prev
       try { localStorage.setItem(LS_AGENTS_KEY, next ? '1' : '0') } catch { /* private mode */ }
+      return next
+    })
+  }, [])
+
+  const toggleScreen = useCallback(() => {
+    setShowScreen((prev) => {
+      const next = !prev
+      try { localStorage.setItem(LS_SCREEN_KEY, next ? '1' : '0') } catch { /* private mode */ }
       return next
     })
   }, [])
@@ -213,6 +250,11 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
   const humanMs = (day?.totals ?? []).reduce((sum, t) => sum + t.ms, 0)
   const agentMs = dayMerged?.agentTotalMs ?? 0
 
+  /** Same date-match rule as the attention data: never draw another day's apps.
+   *  View-gated too: only the swimlanes draw screen rows, so the tape's axis must
+   *  not stretch to hold apps it will never show. */
+  const dayScreen = view === 'lanes' && showScreen && screen && screen.date === date ? screen : null
+
   /** One axis for all three views, so switching never moves the day. */
   const axis = useMemo(() => {
     const spans = slices.map((b) => ({ startMin: minuteOf(b.startTs), endMin: minuteOf(b.endTs) }))
@@ -221,8 +263,12 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
         if (b.kind === 'agent') spans.push({ startMin: minuteOf(b.startTs), endMin: minuteOf(b.endTs) })
       }
     }
+    // Screen time often starts before Walnut was touched — the axis must hold it.
+    for (const app of dayScreen?.apps ?? []) {
+      for (const b of app.blocks) spans.push({ startMin: minuteOf(b.startTs), endMin: minuteOf(b.endTs) })
+    }
     return axisRange(spans, { lengthMin, ...(nowMin !== null ? { nowMin } : {}) })
-  }, [slices, dayMerged, showAgents, lengthMin, nowMin, minuteOf])
+  }, [slices, dayMerged, showAgents, dayScreen, lengthMin, nowMin, minuteOf])
 
   const rankRows = useMemo<LegendRow[]>(
     () => (day?.totals ?? []).map((t) => ({ taskId: t.taskId, title: labelFor(t.taskId), ms: t.ms })),
@@ -259,7 +305,9 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
     if (e.key === 'ArrowRight' && date < newest) { e.preventDefault(); setDate(shiftDate(date, 1)) }
   }, [date, oldest, newest])
 
+  // A screen-only day (Walnut untouched, Mac used) still has something to draw.
   const nothing = !pending && slices.length === 0 && (dayMerged?.blocks.length ?? 0) === 0
+    && !(dayScreen && dayScreen.totalMs > 0)
   const drawn = !pending && !nothing
 
   return (
@@ -295,17 +343,28 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
           ))}
         </div>
 
-        {/* Shown only where it does something: agents exist in the swimlanes only. */}
+        {/* Shown only where they do something: both exist in the swimlanes only. */}
         {view === 'lanes' && (
-          <label className="wt-tt-agents-toggle">
-            <input
-              type="checkbox"
-              data-testid="time-app-agents-toggle"
-              checked={showAgents}
-              onChange={toggleAgents}
-            />
-            <span>Include agents</span>
-          </label>
+          <>
+            <label className="wt-tt-agents-toggle">
+              <input
+                type="checkbox"
+                data-testid="time-app-agents-toggle"
+                checked={showAgents}
+                onChange={toggleAgents}
+              />
+              <span>Include agents</span>
+            </label>
+            <label className="wt-tt-agents-toggle" title="Rows for the Mac apps you used outside Walnut (needs outside tracking, see the Apps tab)">
+              <input
+                type="checkbox"
+                data-testid="time-app-screen-toggle"
+                checked={showScreen}
+                onChange={toggleScreen}
+              />
+              <span>Screen time</span>
+            </label>
+          </>
         )}
       </DayNav>
 
@@ -325,12 +384,29 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
               <i className="wt-tt-swatch wt-tt-swatch-agent" /> Agents {formatDuration(agentMs)}
             </span>
           )}
+          {dayScreen && dayScreen.totalMs > 0 && (
+            <span className="wt-tt-total wt-tt-total-screen" data-testid="time-app-screen-total">
+              <i className="wt-tt-swatch wt-tt-swatch-screen" /> 屏幕(Walnut 外) {formatDuration(dayScreen.totalMs)}
+            </span>
+          )}
+          {dayScreen && dayScreen.unplacedMs > 0 && (
+            <span className="wt-tt-total-side" data-testid="time-app-screen-unplaced">
+              另有 {formatDuration(dayScreen.unplacedMs)} 屏幕时间无法定位到时刻
+            </span>
+          )}
+          {/* Silent when degraded: "没有采样" would read as a fact about the day,
+              when all we know is that the read gave up. */}
+          {dayScreen && dayScreen.totalMs === 0 && !dayScreen.degraded && (
+            <span className="wt-tt-total-side" data-testid="time-app-screen-none">
+              {dayScreen.enabled ? '这天没有屏幕采样' : '屏幕采集未开启(Apps 页可开)'}
+            </span>
+          )}
           <NotDrawnNote day={day} />
         </div>
       )}
 
       {error && <div className="wt-degraded">Error: {error}</div>}
-      {(day?.degraded || dayMerged?.degraded) && (
+      {(day?.degraded || dayMerged?.degraded || dayScreen?.degraded) && (
         <div className="wt-degraded">Showing a partial day: the read gave up before it finished.</div>
       )}
 
@@ -346,10 +422,15 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
 
       {drawn && day && dayMerged && view === 'lanes' && (
         <TimeLanes
+          key={date}   /* expand state is a reading of ONE day, never carried over */
           blocks={dayMerged.blocks}
           totals={day.totals}
           agentMs={agentMs}
           showAgents={showAgents}
+          outside={dayScreen?.apps ?? null}
+          outsideDropped={dayScreen && dayScreen.droppedApps > 0
+            ? { apps: dayScreen.droppedApps, ms: dayScreen.droppedMs }
+            : null}
           axis={axis}
           minuteOf={minuteOf}
           nowMin={nowMin}

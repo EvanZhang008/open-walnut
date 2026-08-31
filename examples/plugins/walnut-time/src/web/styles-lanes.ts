@@ -116,6 +116,41 @@ export const LANES_CSS = `
   );
 }
 
+/* Screen time (outside apps): slate, deliberately quieter than any task colour —
+   it is context around the day, not the day's work. */
+.wt-tl-row.is-outside .wt-tl-dot,
+.wt-tl-row.is-outside-others .wt-tl-dot { background: var(--wt-screen); }
+.wt-tl-row.is-outside .wt-tl-bar,
+.wt-tl-row.is-outside-others .wt-tl-bar {
+  background: color-mix(in srgb, var(--wt-screen) 55%, transparent);
+}
+.wt-tl-row.is-outside-others { background: var(--wt-idle); }
+
+/* Expanded children of a merged row: indented so the fold has visible structure. */
+.wt-tl-row.is-child .wt-tl-name { padding-left: 34px; }
+
+/* The merged rows' titles are buttons; keep them looking like the other titles. */
+.wt-tl-expand {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.wt-tl-expand:hover { color: var(--fg); text-decoration: underline; }
+.wt-tl-expand:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.wt-tl-chev { display: inline-block; width: 14px; color: var(--fg-muted); }
+
 .wt-tl-now {
   position: absolute;
   top: 0;

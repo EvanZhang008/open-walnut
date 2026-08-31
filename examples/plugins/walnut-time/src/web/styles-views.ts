@@ -123,6 +123,9 @@ export const VIEWS_CSS = `
   );
 }
 
+.wt-tt-swatch-screen { background: var(--wt-screen); }
+.wt-tt-total-screen { color: var(--wt-screen); }
+
 .wt-tt-unplaced { color: var(--fg-muted); font-size: 12px; margin-left: auto; }
 
 /* A full page, not a 740px panel: the plot gets the viewport's height, with a floor
