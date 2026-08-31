@@ -960,9 +960,14 @@ await fs.writeFile(
   await fs.writeFile(
     path.join(jsonlDir, 'pw-pins-session.jsonl'),
     [
+      // parentUuid threads every line into ONE chain (root -> leaf), matching a
+      // real transcript: the in-place-rewind gate resolves the rewind point
+      // against computeCliLoadedChain, so a chain-less fixture would leave every
+      // message off the loaded chain and the dry-run would refuse.
       JSON.stringify({
         type: 'user',
         uuid: '0199aa01-1111-4aaa-8bbb-000000000001',
+        parentUuid: null,
         sessionId: 'pw-pins-session',
         timestamp: new Date(sessionFixtureNow - 60_000).toISOString(),
         message: { role: 'user', content: 'Set up the release checklist' },
@@ -970,6 +975,7 @@ await fs.writeFile(
       JSON.stringify({
         type: 'assistant',
         uuid: '0199aa01-2222-4aaa-8bbb-000000000002',
+        parentUuid: '0199aa01-1111-4aaa-8bbb-000000000001',
         sessionId: 'pw-pins-session',
         timestamp: new Date(sessionFixtureNow - 58_000).toISOString(),
         message: { role: 'assistant', content: [{ type: 'text', text: 'Checklist drafted with four steps.' }] },
@@ -977,6 +983,7 @@ await fs.writeFile(
       JSON.stringify({
         type: 'user',
         uuid: '0199aa01-3333-4aaa-8bbb-000000000003',
+        parentUuid: '0199aa01-2222-4aaa-8bbb-000000000002',
         sessionId: 'pw-pins-session',
         timestamp: new Date(sessionFixtureNow - 40_000).toISOString(),
         message: { role: 'user', content: 'Now bump the version' },
@@ -984,16 +991,23 @@ await fs.writeFile(
       JSON.stringify({
         type: 'assistant',
         uuid: '0199aa01-4444-4aaa-8bbb-000000000004',
+        parentUuid: '0199aa01-3333-4aaa-8bbb-000000000003',
         sessionId: 'pw-pins-session',
         timestamp: new Date(sessionFixtureNow - 38_000).toISOString(),
         message: { role: 'assistant', content: [{ type: 'text', text: 'Version bumped to 9.9.9.' }] },
       }),
       // Filler so the outline jump has somewhere to scroll FROM (a timeline that
-      // fits in the viewport can't prove the jump moved anything).
+      // fits in the viewport can't prove the jump moved anything). Each pair
+      // continues the single chain: user parent = the previous line, assistant
+      // parent = its own user line.
       ...Array.from({ length: 24 }, (_, i) => [
         JSON.stringify({
           type: 'user',
           uuid: `0199aa02-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+          parentUuid:
+            i === 0
+              ? '0199aa01-4444-4aaa-8bbb-000000000004'
+              : `0199aa03-0000-4aaa-8bbb-${String(i - 1).padStart(12, '0')}`,
           sessionId: 'pw-pins-session',
           timestamp: new Date(sessionFixtureNow - 30_000 + i * 400).toISOString(),
           message: { role: 'user', content: `outline filler ask ${i + 1}` },
@@ -1001,6 +1015,7 @@ await fs.writeFile(
         JSON.stringify({
           type: 'assistant',
           uuid: `0199aa03-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+          parentUuid: `0199aa02-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
           sessionId: 'pw-pins-session',
           timestamp: new Date(sessionFixtureNow - 29_800 + i * 400).toISOString(),
           message: { role: 'assistant', content: [{ type: 'text', text: `outline filler reply ${i + 1}` }] },

@@ -1696,24 +1696,29 @@ export interface JsonlLineCheck {
 }
 
 /**
- * One committed IN-PLACE rewind, recorded at commit time while the CLI is dead
- * and the transcript is quiet. Position-based on purpose: Walnut initiated the
- * rewind, so it knows exactly which lines the abandoned branch occupies —
- * `(targetLine, afterLine)` exclusive — without needing a parentUuid graph.
+ * One committed IN-PLACE rewind, recorded while the CLI is stopped and the
+ * transcript is quiet. Minimal on purpose: both anchors are transcript line
+ * uuids, resolved to line indices FRESH at every read (transcript-chain.ts
+ * computeRewindDeadSet), so a file rewrite (tombstone, preserved-segment
+ * compact) can never desync them — a missing anchor degrades to serving that
+ * region unfiltered. The record is the persisted form of the CLI's own runtime
+ * disambiguation (`--resume-session-at` argv): the file alone cannot tell a
+ * rewind branch from an innocent fork.
  */
 export interface InPlaceRewindCut {
-  /** Transcript uuid of the user message rewound to. */
+  /** Rewind point: uuid of the transcript line the session resumed at. */
   uuid: string;
-  /** 0-based line index of that uuid's line at commit time. */
-  targetLine: number;
-  /** Total line count at commit time; lines >= afterLine are the new branch. */
-  afterLine: number;
-  /** Fingerprint of the line at targetLine (rewrite detection). */
-  targetCheck: JsonlLineCheck;
-  /** Fingerprint of the last line (index afterLine-1) at commit time. */
-  lastCheck: JsonlLineCheck;
-  /** ISO timestamp of the rewind commit. */
+  /** Uuid of the LAST tree line in the file at commit time — the inclusive end
+   *  of the abandoned region. Lines appended after the commit sit past it. */
+  lastUuidAtCommit: string;
+  /** ISO commit time — for humans/logs only, never for filtering. */
   at: string;
+  /** Identity keys (`queueEnqueueKey`) of queue-operation enqueue lines sitting
+   *  AFTER `lastUuidAtCommit` at commit time. Queue lines carry no uuid, so a
+   *  pending enqueue trailing the last tree line falls outside the uuid-anchored
+   *  region — captured here at commit and unioned into the read-time dead keys,
+   *  or the rewound-away message re-renders as a phantom Pattern-B row. */
+  trailingQueueKeys?: string[];
 }
 
 export interface SessionPinnedMessage {
@@ -1839,13 +1844,11 @@ export interface SessionRecord {
   /**
    * IN-PLACE rewinds this session has committed, in commit order. The CLI keeps
    * both branches in ONE transcript (`--resume-session-at` without
-   * `--fork-session` appends under the same session id, hanging new lines off
-   * the rewind point via parentUuid), so the history parser uses these cuts to
-   * skip the abandoned segment: lines strictly between `targetLine` (the rewind
-   * point) and `afterLine` (the file's line count when the rewind committed)
-   * belong to the branch the human rewound away. The two line checks detect a
-   * transcript REWRITE (/compact) that invalidates the recorded positions — on
-   * mismatch the parser serves the file unfiltered rather than cutting wrong lines.
+   * `--fork-session` appends under the same session id), so the history parser
+   * replays these cuts against the file at every read to hide the abandoned
+   * region — the lines after `uuid` up to and including `lastUuidAtCommit`.
+   * See transcript-chain.ts computeRewindDeadSet. Sessions without this field
+   * are served unfiltered, always.
    */
   inPlaceRewinds?: InPlaceRewindCut[];
   /**
@@ -1854,9 +1857,10 @@ export interface SessionRecord {
    * `--resume-session-at`. Without it, a CLI death in that window (idle reap,
    * crash before the human's next message) would make the next plain --resume
    * pick up the ABANDONED branch tip — the model would see the turns the human
-   * rewound away while the UI shows them gone. Cleared on the first turn
-   * result (once new-branch lines exist, a plain resume lands correctly, and
-   * re-sending the flag would cut those new turns off).
+   * rewound away while the UI shows them gone. Pure spawn plumbing: display
+   * filtering rides `inPlaceRewinds`, never this flag. Cleared on the first
+   * turn result (once new-branch lines exist, a plain resume lands correctly,
+   * and re-sending the flag would cut those new turns off).
    */
   pendingResumeSessionAt?: string;
   /** Messages the human pinned, in pin order. Drives the timeline's TOC. */
@@ -1879,12 +1883,14 @@ export interface SessionRecord {
   mcpMountStatus?: Record<string, string>;
   human_note?: string;
   /** Reply-style preference the human picked in the composer. Undefined = follow
-   *  `config.session.output_mode` (Settings), then DEFAULT_SESSION_OUTPUT_MODE.
-   *  Resolve with resolveEffectiveOutputMode(), never by reading this alone. */
+   *  `config.session.output_mode` (and that unset = DEFAULT_SESSION_OUTPUT_MODE),
+   *  which is why an untouched session tracks a config change LIVE. */
   output_mode?: SessionOutputMode;
   /** The last output mode we actually TOLD the CLI about. Server-authoritative
-   *  edge state: the instruction is only prefixed when this differs from
-   *  `output_mode`, so a reload or a second device can't double-inject it. */
+   *  edge state: the full instruction is only prefixed when this differs from the
+   *  EFFECTIVE mode, so a reload or a second device can't double-inject it.
+   *  Undefined = nothing said yet, which is NOT the same as 'markdown' being
+   *  chosen: a default-rich session must still receive the instruction once. */
   output_mode_injected?: SessionOutputMode;
   /** Claude model used by this session (e.g. "claude-opus-4-6"). Display only. */
   model?: string;

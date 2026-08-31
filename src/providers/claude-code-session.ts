@@ -1630,7 +1630,8 @@ export class ClaudeCodeSession {
        *    transcript is already truncated, later cold resumes must not re-send.
        *  - WITHOUT forkSession: IN-PLACE rewind — the CLI keeps the session id
        *    and appends the new branch to the SAME transcript (the history
-       *    parser skips the abandoned range via record.inPlaceRewinds). Sent on
+       *    parser hides the abandoned region via the recorded cut,
+       *    record.inPlaceRewinds; see src/core/transcript-chain.ts). Sent on
        *    every cold resume while record.pendingResumeSessionAt is set (see
        *    resolveResumeArgs), which clears on the first completed turn:
        *    re-sending it AFTER new turns exist would cut those turns off too.
@@ -9681,6 +9682,104 @@ export class SessionRunner {
   }
 
   /**
+   * Record the cut a death-window cold resume creates. Every cold `--resume`
+   * while pendingResumeSessionAt is set re-sends `--resume-session-at`, so the
+   * CLI truncates AGAIN — whatever the first post-rewind attempt appended (the
+   * human's message + a partial reply before the CLI died) becomes a SECOND
+   * abandoned branch. That branch sits past the original cut's anchor, so
+   * computeRewindDeadSet can't touch it: without a new cut record it stays in
+   * the panel forever while the model has forgotten it.
+   *
+   * Called at each spawn site that actually carries the flag (NOT inside
+   * resolveResumeArgs — a warm stdin delivery resolves the args too but never
+   * truncates, and cutting there would kill live post-rewind turns).
+   *
+   * ORDERING INVARIANT (the round-4 race fix): callers MUST await this BEFORE
+   * the message reaches the CLI (session.send / the respawn). The anchor is
+   * "the last tree line in the transcript right now" — run concurrently with
+   * the respawn, the read can land AFTER the new CLI appended the human's live
+   * user line, and that line becomes the anchor: the persisted cut would then
+   * hide the message the human just sent, forever (cuts never self-heal).
+   * Awaited first, the anchor is pinned to the pre-spawn transcript, where
+   * everything past the rewind point is by definition abandoned.
+   *
+   * Bounded + display-only + never throws: the transcript read races a short
+   * deadline. On timeout, read failure, or byte-ceiling throw, recording is
+   * SKIPPED (warn) and the spawn proceeds — an unrecorded second truncation
+   * only leaves an extra visible branch (the safe direction), never hides a
+   * live row. Recording is also skipped when nothing was appended since the
+   * last recorded cut for this rewind point (the last tree line still IS that
+   * cut's anchor — e.g. the respawn right after the rewind commit itself), so
+   * the record gains a row only when there is a real second branch to hide.
+   */
+  private async recordDeathWindowResumeCut(sessionId: string, resumeSessionAt: string): Promise<void> {
+    // Consistent with the file's short control-plane deadlines (getSettingsSnapshot 5s).
+    const ANCHOR_READ_TIMEOUT_MS = 5_000
+    let readTimer: NodeJS.Timeout | undefined
+    try {
+      const { getSessionByClaudeId, updateSessionRecord } = await import('../core/session-tracker.js')
+      const record = await getSessionByClaudeId(sessionId)
+      // Re-read the flag: it may have been cleared between resolve and here.
+      if (!record || record.pendingResumeSessionAt !== resumeSessionAt) return
+      const { readSessionJsonlContent } = await import('../core/session-file-reader.js')
+      // Bounded anchor read: the spawn is blocked on this record-or-skip, and a
+      // whale transcript on a remote host crosses the tunnel — never hold the
+      // resume hostage to it.
+      const raw = await Promise.race([
+        readSessionJsonlContent(sessionId, record.cwd, record.host ?? undefined),
+        new Promise<'timeout'>((resolve) => {
+          readTimer = setTimeout(() => resolve('timeout'), ANCHOR_READ_TIMEOUT_MS)
+        }),
+      ])
+      if (raw === 'timeout') {
+        log.session.warn('death-window resume cut skipped: anchor read timed out (spawn proceeds unrecorded)', {
+          sessionId, rewindPoint: resumeSessionAt, timeoutMs: ANCHOR_READ_TIMEOUT_MS,
+        })
+        return
+      }
+      if (!raw?.content) return
+      const { TRANSCRIPT_TREE_TYPES } = await import('../core/transcript-chain.js')
+      // Last TREE line uuid in the transcript right now.
+      let lastTreeUuid: string | undefined
+      const lines = raw.content.split('\n')
+      for (let i = lines.length - 1; i >= 0 && lastTreeUuid === undefined; i--) {
+        const line = lines[i]
+        if (!line) continue
+        try {
+          const parsed = JSON.parse(line) as { uuid?: string; type?: string }
+          if (parsed && typeof parsed.uuid === 'string' && typeof parsed.type === 'string'
+            && TRANSCRIPT_TREE_TYPES.has(parsed.type)) {
+            lastTreeUuid = parsed.uuid
+          }
+        } catch { /* partial/corrupt line */ }
+      }
+      // Nothing after the rewind point at all → an empty region, no cut.
+      if (!lastTreeUuid || lastTreeUuid === resumeSessionAt) return
+      // Nothing appended since an already-recorded cut for this rewind point
+      // → the region is already covered; a duplicate row would be noise.
+      const cuts = record.inPlaceRewinds ?? []
+      if (cuts.some((c) => c.uuid === resumeSessionAt && c.lastUuidAtCommit === lastTreeUuid)) return
+      await updateSessionRecord(sessionId, {
+        inPlaceRewinds: [
+          ...cuts,
+          { uuid: resumeSessionAt, lastUuidAtCommit: lastTreeUuid, at: new Date().toISOString() },
+        ],
+      })
+      const { invalidateSessionHistoryCaches } = await import('../core/session-history.js')
+      await invalidateSessionHistoryCaches(sessionId, record.host ?? undefined)
+      log.session.info('death-window cold resume recorded a rewind cut', {
+        sessionId, rewindPoint: resumeSessionAt, lastUuidAtCommit: lastTreeUuid,
+      })
+    } catch (err) {
+      log.session.warn('failed to record death-window resume cut (display-only; the spawn is unaffected)', {
+        sessionId, error: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      if (readTimer) clearTimeout(readTimer)
+    }
+  }
+
+  /**
    * Settle an in-flight turn's batch bookkeeping (if any) so the UI stops showing
    * a streaming spinner / "Running" state. Used when a turn is killed out-of-band
    * (Restart respawn, Terminate) rather than completing naturally. Mirrors the
@@ -9794,6 +9893,10 @@ export class SessionRunner {
     const refreshedRecord = await getSessionByClaudeId(sessionId)
     const resumeMode = modeOverride ?? refreshedRecord?.mode ?? record.mode
     log.session.info('reinitialize: respawning fresh CLI (no turn)', { sessionId, taskId: record.taskId, host: record.host, model, mode: resumeMode })
+    // This spawn carries --resume-session-at → the CLI truncates again. Record
+    // the cut that creates, AWAITED (bounded) so the anchor is read before the
+    // respawn can append anything (see recordDeathWindowResumeCut).
+    if (resumeSessionAt) await this.recordDeathWindowResumeCut(sessionId, resumeSessionAt)
 
     // Empty message ⇒ daemon spawns idle: init event + SessionStart hook fire,
     // no user turn runs. onSpawnSettled reports spawn success/failure only.
@@ -10114,6 +10217,11 @@ export class SessionRunner {
           // mode silently reverting to 'default' on --resume (send() treats undefined as default).
           const resumeMode = mode ?? record.mode
           log.session.info('resuming session via CLI', { sessionId, taskId: record.taskId, messageLength: combined.length, model: resolvedModel, mode: resumeMode })
+          // Cold resume in the rewind death window: this spawn carries
+          // --resume-session-at → the CLI truncates again. Record the cut that
+          // creates, AWAITED (bounded) BEFORE the message reaches the CLI —
+          // see recordDeathWindowResumeCut's ordering invariant.
+          if (resolvedResumeAt) await this.recordDeathWindowResumeCut(sessionId, resolvedResumeAt)
           // Settle the queue from send()'s spawn callback — NOT synchronously after
           // send() returns. send() is fire-and-forget; the SSH/daemon deploy that can
           // fail (publickey denied) happens asynchronously. Removing the message before
@@ -10163,6 +10271,9 @@ export class SessionRunner {
       // Fall back to targetSession._mode to prevent mode silently reverting to 'default'.
       const existingResumeMode = mode ?? targetSession.mode
       log.session.info('resuming session via CLI (existing target)', { sessionId, taskId: targetSession.taskId, messageLength: combined.length, host: resumeHost, model: resolvedModel, mode: existingResumeMode })
+      // Same death-window bookkeeping as the no-target cold resume above,
+      // awaited for the same ordering invariant.
+      if (resolvedResumeAt) await this.recordDeathWindowResumeCut(sessionId, resolvedResumeAt)
       // Settle the queue from send()'s spawn callback, not synchronously — the remote
       // SSH/daemon deploy can fail AFTER send() returns. See onSpawnSettled doc on send().
       const settleTarget = targetSession

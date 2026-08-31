@@ -25,8 +25,9 @@ import {
   type ReadSessionResult,
 } from './session-file-reader.js';
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from './workflow-progress.js';
-import { stripOutputModeWrappers } from './sessions/output-mode.js';
 import { sessionModeFromCli, type InPlaceRewindCut, type JsonlLineCheck } from './types.js';
+import { stripOutputModeWrappers } from './sessions/output-mode.js';
+import { computeRewindDeadSet, queueEnqueueKey } from './transcript-chain.js';
 import type { SessionBackgroundTasksPayload, WorkflowPhaseInfo, WorkflowAgentInfo } from './event-types.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -106,7 +107,7 @@ interface HistoryIncrementalState {
   /** Start byte of the last parsed line (re-read for rewrite verification). */
   lastLineStart: number;
   /** Cheap identity check of the last parsed line. */
-  lastLineCheck: { len: number; head: string; tail: string } | null;
+  lastLineCheck: JsonlLineCheck | null;
   /** Raw text of the current tail segment [tailStartByte, parsedBytes). */
   tailText: string;
   /** tool_use ids in the FROZEN PREFIX that still lack a result (long-running
@@ -115,6 +116,16 @@ interface HistoryIncrementalState {
    *  stopped), the segmented parse can't attach it across the boundary —
    *  incremental bails to a full read for that (rare) event. */
   pendingToolIds: string[];
+  /** Rewind-cut dead set at seed time (null = nothing dropped). The tail
+   *  re-parse applies THIS exact set so its rows stay consistent with the
+   *  frozen prefix. Safe to freeze: the set is deterministic given (cuts,
+   *  file), appended lines sit after every cut's anchor and can never join
+   *  it, and a new rewind commit invalidates this whole cache entry. */
+  deadUuids: Set<string> | null;
+  /** Queue dead keys paired with `deadUuids` (same computeRewindDeadSet call)
+   *  — the tail re-parse suppresses Pattern-B enqueues whose identity key
+   *  (queueEnqueueKey) is in the set. */
+  queueDeadKeys: Set<string>;
 }
 
 /** Tail segment re-parsed on every delta; rolled into the prefix past this. */
@@ -134,69 +145,44 @@ function historyLineMatches(line: string, check: JsonlLineCheck): boolean {
 // An in-place rewind (`--resume <sid> --resume-session-at <uuid>`, NO
 // --fork-session) keeps BOTH branches in one transcript: the CLI resets its
 // file pointer and appends the new branch under the same session id, hanging
-// it off the rewind point via parentUuid. The CLI's own loader walks that
-// parentUuid chain, so it never sees the abandoned turns — but this parser
-// reads the file linearly and would serve them straight back. The cuts
-// recorded on the session record at rewind-commit time say exactly which line
-// range the abandoned branch occupies, so the fix is a position-based slice,
-// not a graph walk: nothing changes for sessions that never rewound.
+// it off the rewind point via parentUuid (live-verified: the first post-rewind
+// user line's parentUuid IS the rewind-point uuid). The file ALONE cannot say
+// which branch was rewound away: innocent forks (an api_error line at EOF
+// re-parenting the next user message, a mid-turn slash-command branch off
+// pre-turn state) are topologically identical to rewind branches, and an
+// always-on chain walk measurably deleted 8.4% of rendered rows from real
+// never-rewound sessions. The CLI itself disambiguates via RUNTIME state (the
+// --resume-session-at argv); Walnut persists that state as
+// record.inPlaceRewinds ({uuid, lastUuidAtCommit, at}) at rewind commit and
+// replays it against the file FRESH at every read — computeRewindDeadSet
+// (src/core/transcript-chain.ts) resolves both uuids to line indices and kills
+// exactly the region between the rewind point and the commit-time last tree
+// line. Lines appended after the commit sit past the anchor by construction,
+// so no seam guard is needed on the incremental path, and a session with no
+// recorded rewind is provably served unfiltered. An out-of-band rewind done in
+// a terminal (no Walnut commit) simply shows both branches — the pre-port
+// status quo.
 
-/** The one line-splitting rule shared by the cut RECORDER (session-rewind) and
- *  the cut APPLIER below. Line indices in InPlaceRewindCut are only meaningful
- *  under this exact split. */
-export function splitTranscriptLines(content: string): string[] {
-  return content.split('\n').filter(Boolean);
+/** Rewind-filter facts attached to a parse result (WeakMap on the ARRAY, same
+ *  pattern as windowedParses below): what the 'auto' cut replay computed, so
+ *  seedIncrementalState can reuse the EXACT set + windows for its segment
+ *  parses and the full-read path can log without recomputing. */
+export interface ChainFilterMark {
+  deadUuids: Set<string> | null;
+  queueDeadKeys: Set<string>;
+  droppedCount: number;
+}
+const chainFilterMarks = new WeakMap<object, ChainFilterMark>();
+/** The rewind-filter facts for a parse produced with `chainFilter: 'auto'`. */
+export function getChainFilterMark(messages: object): ChainFilterMark | undefined {
+  return chainFilterMarks.get(messages);
 }
 
-/**
- * Drop the abandoned-branch line ranges from a raw transcript.
- *
- * Each cut removes lines strictly between `targetLine` (the rewind point, kept)
- * and `afterLine` (the line count at commit time; everything from there on is
- * the post-rewind branch, kept). Overlapping cuts (a second rewind to an
- * earlier message swallows the first cut's range plus its branch) compose on a
- * keep-mask. Sidechain and queue-op lines inside a dropped range go with it —
- * position decides, no uuid graph needed.
- *
- * All-or-nothing on verification: if ANY cut's fingerprints no longer match
- * (a /compact rewrote the file, shifting every index), filtering is abandoned
- * and the caller serves the file unfiltered — cutting WRONG lines would be far
- * worse than showing the rewound turns again.
- */
-export function applyInPlaceRewindCuts(
-  lines: string[],
-  cuts: InPlaceRewindCut[],
-): { lines: string[]; dropped: number; stale: boolean } {
-  for (const cut of cuts) {
-    const target = lines[cut.targetLine];
-    const last = lines[cut.afterLine - 1];
-    if (
-      cut.afterLine > lines.length
-      || cut.targetLine >= cut.afterLine
-      || target === undefined || !historyLineMatches(target, cut.targetCheck)
-      || last === undefined || !historyLineMatches(last, cut.lastCheck)
-    ) {
-      return { lines, dropped: 0, stale: true };
-    }
-  }
-  const drop = new Uint8Array(lines.length);
-  for (const cut of cuts) {
-    for (let i = cut.targetLine + 1; i < cut.afterLine; i++) drop[i] = 1;
-  }
-  const kept: string[] = [];
-  let dropped = 0;
-  for (let i = 0; i < lines.length; i++) {
-    if (drop[i]) dropped++;
-    else kept.push(lines[i]);
-  }
-  return { lines: kept, dropped, stale: false };
-}
-
-/** The session's committed in-place rewind cuts, or undefined when it has none
- *  (the overwhelmingly common case — this is the ONLY record read the history
- *  path does, and it's a primary-key SELECT). Dynamic import breaks the
- *  session-tracker ↔ session-history cycle. */
-async function getInPlaceRewindCuts(sessionId: string): Promise<InPlaceRewindCut[] | undefined> {
+/** The session's recorded in-place rewind cuts (record.inPlaceRewinds), or
+ *  undefined when it has none (the overwhelmingly common case — this is the
+ *  ONLY record read the history path does, and it's a primary-key SELECT).
+ *  Dynamic import breaks the session-tracker ↔ session-history cycle. */
+async function getInPlaceRewinds(sessionId: string): Promise<InPlaceRewindCut[] | undefined> {
   try {
     const { getSessionByClaudeId } = await import('./session-tracker.js');
     const record = await getSessionByClaudeId(sessionId);
@@ -497,6 +483,12 @@ interface RawJsonlLine {
   subtype?: string;
   uuid?: string;
   timestamp?: string;
+  /** parentUuid chain edge (tree lines only). Not consumed here — the rewind
+   *  filter is uuid-anchored (transcript-chain.ts computeRewindDeadSet); the
+   *  chain walk itself only runs at rewind-commit validation time. */
+  parentUuid?: string | null;
+  /** Legacy inline-subagent flag (leaf selection in computeCliLoadedChain). */
+  isSidechain?: boolean;
   parent_tool_use_id?: string | null;
   /** Walnut-generated message ID on synthetic user events (subtype='walnut-injected'). */
   walnutMessageId?: string;
@@ -650,15 +642,43 @@ function groupInlineChildren(
   return result.filter((_, i) => !consumed.has(i));
 }
 
+export interface ParseSessionMessagesOptions {
+  /** In-place rewind filter (see transcript-chain.ts computeRewindDeadSet),
+   *  three modes:
+   *  - `'auto'`: replay `rewindCuts` against THIS content (the full-read path).
+   *    The result array gets a ChainFilterMark so seedIncrementalState can
+   *    reuse the exact set + keys.
+   *  - `{ deadUuids, queueDeadKeys }`: apply a precomputed set (the
+   *    incremental tail parse and the seed's two segment parses). MUST be the
+   *    exact pair the full parse computed, or the seed's equality gate fails
+   *    and incremental state never seeds.
+   *  - absent: no filtering (subagent files own their own transcripts; a tail
+   *    window can't resolve the cut anchors and is unfilterable by design). */
+  chainFilter?: 'auto' | {
+    deadUuids: Set<string> | null;
+    queueDeadKeys?: Set<string>;
+  };
+  /** The session's recorded in-place rewind cuts (record.inPlaceRewinds),
+   *  looked up by the CALLER — this function does no I/O. Only meaningful with
+   *  'auto'; absent/empty = identity (never-rewound sessions pay nothing). */
+  rewindCuts?: readonly InPlaceRewindCut[];
+}
+
+/** Shared empty set — the no-filter path never allocates per parse. */
+const NO_QUEUE_DEAD_KEYS: Set<string> = new Set();
+
 /**
  * Core parsing logic: parse raw JSONL content string into SessionHistoryMessage[].
- * Deduplicates by message.id, handles queue-operations.
+ * Deduplicates by message.id, handles queue-operations. Optionally applies the
+ * in-place rewind filter INSIDE the single per-line JSON.parse (fused — no
+ * second parse pass, no rewrite of the content string: ReadSessionResult.
+ * canonicalChars slicing in seedIncrementalState depends on the original).
  */
-export function parseSessionMessages(content: string): SessionHistoryMessage[] {
+export function parseSessionMessages(content: string, opts?: ParseSessionMessagesOptions): SessionHistoryMessage[] {
   const lines = content.split('\n').filter(Boolean);
 
   // Parse all lines
-  const rawMessages: RawJsonlLine[] = [];
+  let rawMessages: RawJsonlLine[] = [];
   for (const line of lines) {
     try {
       rawMessages.push(JSON.parse(line));
@@ -667,6 +687,32 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  // ── In-place rewind filter (see transcript-chain.ts computeRewindDeadSet) ──
+  let deadUuids: Set<string> | null = null;
+  let queueDeadKeys: Set<string> = NO_QUEUE_DEAD_KEYS;
+  let chainMark: ChainFilterMark | undefined;
+  if (opts?.chainFilter === 'auto') {
+    const deadSet = computeRewindDeadSet(rawMessages, opts.rewindCuts ?? []);
+    deadUuids = deadSet.deadUuids;
+    queueDeadKeys = deadSet.queueDeadKeys;
+    chainMark = { deadUuids, queueDeadKeys, droppedCount: deadSet.droppedCount };
+  } else if (opts?.chainFilter) {
+    deadUuids = opts.chainFilter.deadUuids;
+    queueDeadKeys = opts.chainFilter.queueDeadKeys ?? NO_QUEUE_DEAD_KEYS;
+  }
+  // Drop dead TREE lines before any fold pass consumes them. Non-tree lines
+  // (no uuid — 16.4% of real lines) always pass through: they are never in the
+  // dead set. A queue-operation enqueue echo of a rewound-away message is
+  // suppressed by its IDENTITY KEY being in queueDeadKeys (below) — never by
+  // text matching (deleted live rows on repeated short texts like "continue",
+  // missed batched twins) and never by a time window (file order is not time
+  // order, so a [min,max] window over the region reached back past the rewind
+  // point and deleted live pre-cut rows).
+  if (deadUuids && deadUuids.size > 0) {
+    const dead = deadUuids;
+    rawMessages = rawMessages.filter((raw) => !(raw.uuid && dead.has(raw.uuid)));
   }
 
   // Filter to user/assistant message types and deduplicate by message.id
@@ -896,7 +942,16 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
       // Only parse Pattern B enqueues (no matching later user STRING — the message was
       // consumed mid-stream and never re-logged as a real user line). Pattern A enqueues
       // are in skipEnqueueIndices (their identical user STRING twin is emitted below).
-      if (raw.operation === 'enqueue' && raw.content && !skipEnqueueIndices.has(i)) {
+      // Rewind leak fix: an enqueue written inside a dead region is the queue
+      // echo of a rewound-away message — its real twin was filtered out above,
+      // so it would re-render as a Pattern-B queue row. Suppress by IDENTITY
+      // (the region enqueue's own timestamp+content key, collected by
+      // computeRewindDeadSet): a live enqueue with identical text outside the
+      // region survives unless it also shares the exact millisecond, and the
+      // synthetic `queue-<timestamp>` id below collapses that pair into one
+      // row anyway.
+      if (raw.operation === 'enqueue' && raw.content && !skipEnqueueIndices.has(i)
+        && !(queueDeadKeys.size > 0 && queueDeadKeys.has(queueEnqueueKey(raw)))) {
         const syntheticId = `queue-${raw.timestamp ?? i}`;
         messageMap.set(syntheticId, {
           role: 'user',
@@ -1208,6 +1263,9 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
     }
     if (orphans.size > 0) orphanFinishedParses.set(grouped, orphans);
   }
+  // 'auto' chain walks mark their result so the full-read path can log/degrade
+  // and seedIncrementalState can reuse the exact set for its segment parses.
+  if (chainMark) chainFilterMarks.set(grouped, chainMark);
   return grouped;
 }
 
@@ -1411,10 +1469,20 @@ async function tryIncrementalHistoryRead(
       }
     }
 
-    // Parse tail segment (+ any partial line + synthetic user events) fresh.
+    // No seam guard on appended lines: the dead set is deterministic given
+    // (cuts, file), appended lines sit after every cut's commit-time anchor and
+    // can never join it, and a new rewind commit invalidates this whole cache
+    // entry. An out-of-band rewind done in a terminal (no Walnut commit) simply
+    // shows both branches — the pre-port status quo.
+    //
+    // Parse tail segment (+ any partial line + synthetic user events) fresh,
+    // applying the SAME dead set + keys the seed's full parse computed —
+    // the tail's rows must stay consistent with the frozen prefix.
     const tailWithPartial = partialTail ? newTailText + partialTail : newTailText;
     const merged = await mergeSyntheticUserEvents(sessionId, tailWithPartial);
-    const tailMessages = parseSessionMessages(merged);
+    const tailMessages = parseSessionMessages(merged, {
+      chainFilter: { deadUuids: inc.deadUuids, queueDeadKeys: inc.queueDeadKeys },
+    });
     const messages = [...inc.prefixMessages, ...tailMessages];
 
     // Orphan finished-agent ids: the tail parse only marked tailMessages (a
@@ -1426,6 +1494,15 @@ async function tryIncrementalHistoryRead(
     const orphanUnion = new Set<string>(cached.orphanFinishedIds ?? []);
     for (const id of getOrphanFinishedAgentIds(tailMessages) ?? []) orphanUnion.add(id);
     markOrphanFinishedAgentIds(messages, orphanUnion);
+
+    // Rewind-filter facts must be answerable on EVERY handed-out array, not
+    // just full reads (same pattern as markOrphanFinishedAgentIds above): the
+    // merged array is new each round, so re-mark it with the state's set.
+    chainFilterMarks.set(messages, {
+      deadUuids: inc.deadUuids,
+      queueDeadKeys: inc.queueDeadKeys,
+      droppedCount: inc.deadUuids?.size ?? 0,
+    });
 
     try {
       const { bindEchoClaims } = await import('./echo-claims.js');
@@ -1452,8 +1529,9 @@ async function tryIncrementalHistoryRead(
     // inc.parsedBytes already spans the WHOLE parsed prefix including the rolling
     // tail segment (it was advanced by completePart just above, and tailText is a
     // window inside it), so it must not be added to newTailText.length — that
-    // would double-count the tail. It is the single authoritative figure here.
-    const approxChars = inc.parsedBytes;
+    // would double-count the tail. The retained dead set rides the entry too:
+    // ~40 chars per uuid (36-char uuid + Set overhead).
+    const approxChars = inc.parsedBytes + (inc.deadUuids?.size ?? 0) * 40;
     cacheSet(sessionId, {
       mtimeMs: newMtimeMs, messages, approxChars, inc,
       ...(orphanUnion.size > 0 ? { orphanFinishedIds: [...orphanUnion] } : {}),
@@ -1512,33 +1590,55 @@ function seedIncrementalState(
   // Self-validation: prefix-parse ++ tail-parse must equal the full parse.
   // fullMessages includes synthetic events parsed from the merged content; the
   // segmented model reproduces that by re-merging synthetics into the tail.
+  // The rewind filter's dead set + queue keys are read off the full parse's
+  // mark and applied IDENTICALLY to both segments — anything else fails the
+  // equality gate below on every filtered session and incremental seeding
+  // silently dies (the full-read-per-mtime-change regime). Both inputs are
+  // position-free (uuid set + line-identity keys), so segment parses reproduce
+  // the full parse exactly.
+  const mark = getChainFilterMark(fullMessages);
+  const deadUuids = mark?.deadUuids ?? null;
+  const queueDeadKeys = mark?.queueDeadKeys ?? NO_QUEUE_DEAD_KEYS;
+  const segFilter: ParseSessionMessagesOptions = { chainFilter: { deadUuids, queueDeadKeys } };
+  // The never-seed regime is a silent perf cliff — make a gate failure under an
+  // active rewind filter observable (one debug line per seed attempt).
+  const gateFailed = (): undefined => {
+    if (deadUuids && deadUuids.size > 0) {
+      log.session.debug('incremental seed equality gate failed under rewind filter — session stays on full reads', {
+        sessionId, deadUuids: deadUuids.size,
+      });
+    }
+    return undefined;
+  };
   let prefixMessages: SessionHistoryMessage[];
   let tailMessages: SessionHistoryMessage[];
   try {
-    prefixMessages = boundaryChar > 0 ? parseSessionMessages(prefixText) : [];
+    prefixMessages = boundaryChar > 0
+      ? parseSessionMessages(prefixText, segFilter)
+      : [];
     const syntheticSuffix = result.canonicalChars !== undefined
       ? result.content.slice(result.canonicalChars)
       : '';
-    tailMessages = parseSessionMessages(tailText + syntheticSuffix);
+    tailMessages = parseSessionMessages(tailText + syntheticSuffix, segFilter);
   } catch {
     return undefined;
   }
-  if (prefixMessages.length + tailMessages.length !== fullMessages.length) return undefined;
+  if (prefixMessages.length + tailMessages.length !== fullMessages.length) return gateFailed();
   for (let i = 0; i < fullMessages.length; i++) {
     const seg = i < prefixMessages.length ? prefixMessages[i] : tailMessages[i - prefixMessages.length];
     const full = fullMessages[i];
-    if (seg.msgId !== full.msgId || seg.role !== full.role || seg.text !== full.text) return undefined;
+    if (seg.msgId !== full.msgId || seg.role !== full.role || seg.text !== full.text) return gateFailed();
     // Tools must match too — a tool_use in the prefix whose tool_result line
     // sits in the tail would silently lose its result in the segmented parse
     // (same text, different tool state). Compare name/result/error pairwise.
     const segTools = seg.tools ?? [];
     const fullTools = full.tools ?? [];
-    if (segTools.length !== fullTools.length) return undefined;
+    if (segTools.length !== fullTools.length) return gateFailed();
     for (let j = 0; j < fullTools.length; j++) {
       if (segTools[j].name !== fullTools[j].name
         || segTools[j].result !== fullTools[j].result
         || segTools[j].isError !== fullTools[j].isError
-        || segTools[j].bgTaskFinished !== fullTools[j].bgTaskFinished) return undefined;
+        || segTools[j].bgTaskFinished !== fullTools[j].bgTaskFinished) return gateFailed();
     }
   }
 
@@ -1565,6 +1665,8 @@ function seedIncrementalState(
     lastLineCheck: canonical.length > 0 ? historyLineCheckOf(lastLine) : null,
     tailText,
     pendingToolIds,
+    deadUuids,
+    queueDeadKeys,
   };
 }
 
@@ -1679,9 +1781,12 @@ export async function readSessionHistoryTail(
         // Serve from the shared cache when fresh — same data, zero I/O.
         const cached = cacheGet(sessionId, host);
         if (cached && cached.mtimeMs === st.mtimeMs) return cached.messages;
-        // A rewound session's cuts are whole-file positions — no tail window
-        // can apply them. Fall through to the full (filtering) read.
-        if (!(await getInPlaceRewindCuts(sessionId))) {
+        // A session with recorded in-place rewinds can't use the window: the
+        // cut anchors resolve against the FULL file, and the cut/anchor lines
+        // may precede the window's start — an unfilterable window would serve
+        // the rewound-away branch as live. Fall through to the full
+        // (cut-filtering) read instead.
+        if (!(await getInPlaceRewinds(sessionId))) {
           return await readSessionHistoryTailWindow(sessionId, cwd, host, maxTailBytes);
         }
       }
@@ -1847,13 +1952,13 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   // byte-ceiling degradation). The windowed cache entry is quarantined: only
   // same-mtime tail-bounded requests hit it, so the next turn append or a
   // full-read caller does the normal full read and re-seeds everything.
-  // In-place rewind cuts are position-based over the WHOLE file, so no
-  // windowed read can apply them (a 4 MB tail window may start inside the
-  // abandoned branch with no way to tell). A rewound session skips the bounded
-  // cold read and takes the full read below. Fetched lazily HERE — after every
-  // cache fast-path has had its chance to return — so the common case (no
-  // rewinds) pays this one PK SELECT only when a real read is happening anyway.
-  const rewindCuts = await getInPlaceRewindCuts(sessionId);
+  // A session with recorded in-place rewinds skips the window: the cut anchors
+  // resolve against the FULL file, and a window that can't resolve them would
+  // serve the rewound-away branch as live — take the full read below instead.
+  // Fetched lazily HERE — after every cache fast-path has had its chance to
+  // return — so the common case (no recorded rewind) pays this one PK SELECT
+  // only when a real read is happening anyway.
+  const rewindCuts = await getInPlaceRewinds(sessionId);
 
   if (options?.maxColdReadBytes && !rewindCuts && statPath && statSize !== undefined
       && statSize > options.maxColdReadBytes) {
@@ -1909,9 +2014,9 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     // A byte-ceiling rejection is itself proof the file exists (and is huge).
     sourceFound = true;
     if (rewindCuts) {
-      // A rewound transcript too big to materialize can't be filtered — the
-      // bounded tail may include abandoned-branch lines. Serving them beats a
-      // blank panel; say so in the log.
+      // An over-ceiling transcript can't resolve the cut anchors without the
+      // full file — the bounded tail may include abandoned-branch lines.
+      // Serving them beats a blank panel; say so in the log.
       log.session.warn('rewound transcript over the byte ceiling — bounded tail is served UNFILTERED', {
         sessionId, host: host ?? '__local__', cuts: rewindCuts.length,
       });
@@ -1934,21 +2039,21 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
       setResolvedRemotePath(sessionId, host ?? '__local__', result.resolvedRemotePath);
     }
     try {
-      let contentForParse = result.content;
-      if (rewindCuts) {
-        const cutRes = applyInPlaceRewindCuts(splitTranscriptLines(result.content), rewindCuts);
-        if (cutRes.stale) {
-          log.session.warn('in-place rewind cuts no longer match the transcript (rewritten?) — serving unfiltered', {
-            sessionId, host: host ?? '__local__', cuts: rewindCuts.length,
-          });
-        } else {
-          contentForParse = cutRes.lines.join('\n');
-          log.session.info('in-place rewind cuts applied', {
-            sessionId, cuts: rewindCuts.length, droppedLines: cutRes.dropped,
-          });
-        }
+      // Rewind-cut filter, fused into the parse (single per-line JSON.parse).
+      // The content STRING is never rewritten — ReadSessionResult.canonicalChars
+      // slicing in seedIncrementalState depends on the original string.
+      // (A cut whose anchors are missing from the file is skipped with a warn
+      // inside computeRewindDeadSet — named degrade, serve-all.)
+      messages = parseSessionMessages(result.content, {
+        chainFilter: 'auto',
+        ...(rewindCuts ? { rewindCuts } : {}),
+      });
+      const chainMark = getChainFilterMark(messages);
+      if (chainMark && chainMark.droppedCount > 0) {
+        log.session.info('history rewind filter', {
+          sessionId, droppedLines: chainMark.droppedCount, cuts: rewindCuts?.length ?? 0,
+        });
       }
-      messages = parseSessionMessages(contentForParse);
 
       // Echo-claim binding (Phase 1, ACP dialect): stamp walnutMessageId onto
       // the canonical user-echo lines of recently delivered batches, so the
@@ -2059,8 +2164,11 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     // WeakMap; persist the set on the entry so future INCREMENTAL reads (whose
     // tail parse can't see prefix notifications) union it back in.
     const orphanIds = getOrphanFinishedAgentIds(messages);
+    // The rewind dead set is retained with the entry (via inc and the parse
+    // mark) — charge it to the byte budget: ~40 chars per uuid.
+    const deadSetChars = (getChainFilterMark(messages)?.deadUuids?.size ?? 0) * 40;
     cacheSet(sessionId, {
-      mtimeMs, messages, approxChars: sourceChars,
+      mtimeMs, messages, approxChars: sourceChars + deadSetChars,
       ...(inc ? { inc } : {}),
       ...(orphanIds && orphanIds.size > 0 ? { orphanFinishedIds: [...orphanIds] } : {}),
     }, host);

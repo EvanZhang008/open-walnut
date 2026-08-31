@@ -25,11 +25,15 @@
  *     **in-place** (the default): `--resume <sid> --resume-session-at <uuid>`
  *     WITHOUT `--fork-session`. The CLI keeps the SAME session id and appends
  *     the new branch to the SAME transcript, hanging it off the rewind point
- *     via parentUuid — its own loader walks that chain and never re-reads the
- *     abandoned turns. Walnut's linear history parser is the only thing that
- *     would, so the commit records an `InPlaceRewindCut` (which line range the
- *     abandoned branch occupies) on the session record, and the parser skips
- *     that range. The conversation visibly rewinds inside its own panel.
+ *     via parentUuid. The file alone cannot say which branch was rewound away
+ *     (innocent forks — api_error re-parents, mid-turn slash-command branches
+ *     — are topologically identical), so the commit records the cut on the
+ *     session record (`inPlaceRewinds: {uuid, lastUuidAtCommit, at}`) and the
+ *     history parser replays it against the file at every read
+ *     (computeRewindDeadSet, src/core/transcript-chain.ts), hiding exactly
+ *     the region between the rewind point and the commit-time last tree line.
+ *     `pendingResumeSessionAt` is also set — pure cold-resume spawn plumbing,
+ *     no display role. The conversation visibly rewinds inside its own panel.
  *
  *     **fork**: pair the flag with `--fork-session` — the truncated
  *     conversation lands in a fresh session, the source is archived (never
@@ -37,19 +41,30 @@
  *
  * ## What an IN-PLACE rewind does, in order
  *
+ *   verify              → resolveRewindTarget: the rewind uuid must be ON the
+ *                         chain the CLI would load (computeCliLoadedChain — the
+ *                         CLI exits 1 at respawn on a uuid it can't resume to,
+ *                         e.g. one behind the last compact boundary or on an
+ *                         abandoned branch). Runs BEFORE anything mutates, and
+ *                         previewSessionRewind shares it, so the dialog's dry
+ *                         run already refuses with the reason.
  *   preview (optional)  → dry-run `rewind_files`, so the human sees the blast radius
  *   restore files       → `rewind_files` on the LIVE CLI (skipped, with a reason,
  *                         when the session has no live CLI to ask)
- *   stop the CLI        → the transcript must be quiet before positions are read
- *   record the cut      → read the raw JSONL once: the rewind point's line index +
- *                         the current line count + two line fingerprints (rewrite
- *                         detection) → append to record.inPlaceRewinds, set
+ *   stop the CLI        → the transcript must be quiet before committing
+ *   commit              → read the raw JSONL once for the cut's end anchor (the
+ *                         last tree line) + any trailing enqueue keys, append
+ *                         the cut to record.inPlaceRewinds + set
  *                         pendingResumeSessionAt, drop every history cache (the
- *                         FILE didn't change, its MEANING did — mtime caches would
- *                         serve the abandoned turns forever)
+ *                         FILE didn't change, its MEANING did — mtime caches
+ *                         would serve the abandoned turns forever). Any failure
+ *                         after the stop respawns the session best-effort
+ *                         before rethrowing — a refusal never leaves it dead.
  *   respawn in place    → same session id, `--resume <sid> --resume-session-at
  *                         <uuid>`, empty first message (warm draft semantics —
- *                         waits for the human's next instruction)
+ *                         waits for the human's next instruction), then a second
+ *                         cache invalidation (barrier against a pre-commit
+ *                         in-flight read re-caching the unfiltered parse)
  *
  * ## What a FORK rewind does, in order
  *
@@ -165,12 +180,35 @@ interface ResolvedTarget {
   target: SessionHistoryMessage;
 }
 
+/** Parse a raw JSONL string into the line objects the chain machinery reads.
+ *  Partial/corrupt lines are skipped — they are not transcript lines. */
+function parseTranscriptLines(content: string): import('../transcript-chain.js').TranscriptChainLine[] {
+  const parsedLines: import('../transcript-chain.js').TranscriptChainLine[] = [];
+  for (const line of content.split('\n')) {
+    if (!line) continue;
+    try {
+      parsedLines.push(JSON.parse(line));
+    } catch { /* partial/corrupt line — not a transcript line */ }
+  }
+  return parsedLines;
+}
+
 /**
  * Shared validation for both entry points: the session exists, runs an engine
  * whose CLI understands rewind, and the requested uuid really is one of ITS user
  * messages. Rewinding to an assistant message is refused on purpose — file
  * checkpoints are only taken at user messages, so it would silently restore
  * nothing.
+ *
+ * Also the CHAIN gate: the uuid must be ON the chain the CLI itself would load
+ * (computeCliLoadedChain — the getLastSessionLog port). `--resume-session-at`
+ * resolves against exactly that chain, so a uuid that merely EXISTS on disk but
+ * sits off it (behind the last compact boundary, or on an abandoned branch)
+ * makes the CLI exit 1 at respawn. Running the gate HERE — shared by
+ * previewSessionRewind and the commit — means the dialog's dry run already
+ * refuses with the reason (the affordance grays out and explains), and the
+ * commit re-checks BEFORE gracefulStop and BEFORE rewind_files, so a refusal
+ * can never leave a stopped CLI or a rolled-back working tree behind a 409.
  */
 async function resolveRewindTarget(sessionId: string, messageUuid: string): Promise<ResolvedTarget> {
   if (!messageUuid || typeof messageUuid !== 'string') {
@@ -207,6 +245,23 @@ async function resolveRewindTarget(sessionId: string, messageUuid: string): Prom
       400,
     );
   }
+
+  // ── Chain gate (see the doc above) ── one raw read, validated against the
+  // chain `--resume <sid>` would load.
+  const { readSessionJsonlContent } = await import('../session-file-reader.js');
+  const raw = await readSessionJsonlContent(sessionId, record.cwd, record.host ?? undefined);
+  if (!raw?.content) {
+    throw new SessionControlError('Could not read the session transcript to validate the rewind point', 500);
+  }
+  const { computeCliLoadedChain } = await import('../transcript-chain.js');
+  const loaded = computeCliLoadedChain(parseTranscriptLines(raw.content));
+  if (!loaded.chainUuids.has(messageUuid)) {
+    throw new SessionControlError(
+      'That message is not on the conversation the CLI can resume (behind the last context compaction, or on an abandoned branch)',
+      409,
+    );
+  }
+
   return { record, messages, index, target };
 }
 
@@ -405,11 +460,16 @@ export async function rewindSessionToMessage(
 
 /**
  * In-place rewind: same session id, same transcript. The CLI is stopped, the
- * abandoned branch's line range is recorded on the session record (that is
- * what the history parser cuts by), every history cache is dropped (the file's
- * mtime didn't change but its meaning did), and the CLI is respawned warm with
+ * rewind point is verified to be ON the chain the CLI would load
+ * (computeCliLoadedChain), the record gets the cut appended to
+ * `inPlaceRewinds` (the history parser's filter input, replayed against the
+ * file at every read) plus `pendingResumeSessionAt` (re-sent as
+ * `--resume-session-at` on every cold resume until the first completed turn —
+ * spawn plumbing only), every history cache is dropped (the file's mtime
+ * didn't change but its meaning did), and the CLI is respawned warm with
  * `--resume <sid> --resume-session-at <uuid>` — no fork, so it keeps the id
- * and appends the new branch to the same file.
+ * and appends the new branch to the same file, hung off the rewind point via
+ * parentUuid.
  */
 async function rewindInPlace(
   sessionId: string,
@@ -419,10 +479,10 @@ async function rewindInPlace(
   droppedMessages: number,
   files: RewindResult['files'],
 ): Promise<RewindResult> {
-  // ── 2. Quiet the transcript ── The CLI appends while a turn runs; the line
-  // positions recorded below are only meaningful on a quiet file. gracefulStop
-  // flushes + SIGINTs first (same stop reinitialize() itself uses), and a
-  // session with no live CLI is already quiet.
+  // ── 2. Quiet the transcript ── The CLI appends while a turn runs; the
+  // commit below should happen on a quiet file. gracefulStop flushes + SIGINTs
+  // first (same stop reinitialize() itself uses), and a session with no live
+  // CLI is already quiet.
   const session = await liveSession(sessionId);
   if (session) {
     try {
@@ -434,49 +494,80 @@ async function rewindInPlace(
     }
   }
 
-  // ── 3. Record the cut ── One raw read of the quiet transcript: where the
-  // rewind point sits and how many lines exist right now. Everything between
-  // those two positions is the branch being abandoned; everything the CLI
-  // appends after the respawn is the new branch.
-  const { readSessionJsonlContent } = await import('../session-file-reader.js');
-  const raw = await readSessionJsonlContent(sessionId, record.cwd, record.host ?? undefined);
-  if (!raw?.content) {
-    throw new SessionControlError('Could not read the session transcript to record the rewind', 500);
-  }
-  const { splitTranscriptLines, historyLineCheckOf, invalidateSessionHistoryCaches } =
-    await import('../session-history.js');
-  const lines = splitTranscriptLines(raw.content);
-  let targetLine = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (!lines[i].includes(input.messageUuid)) continue;
+  // ── 3. Commit ── One raw read of the quiet transcript for the cut's end
+  // anchor. The chain gate already ran in resolveRewindTarget, BEFORE the stop
+  // and before any file restore — so a refusal never reaches this point with a
+  // stopped CLI behind it. Everything after the stop is wrapped: on ANY throw,
+  // best-effort respawn the session and rethrow, because "rewind refused, and
+  // your session is now dead" must never be an outcome.
+  const { invalidateSessionHistoryCaches } = await import('../session-history.js');
+  let lastUuidAtCommit = input.messageUuid; // fallback = empty cut (no-op)
+  try {
+    const { readSessionJsonlContent } = await import('../session-file-reader.js');
+    const raw = await readSessionJsonlContent(sessionId, record.cwd, record.host ?? undefined);
+    if (!raw?.content) {
+      throw new SessionControlError('Could not read the session transcript to record the rewind', 500);
+    }
+    const { TRANSCRIPT_TREE_TYPES, queueEnqueueKey } = await import('../transcript-chain.js');
+    const parsedLines = parseTranscriptLines(raw.content);
+    // The cut's end anchor: the LAST tree line in the file right now —
+    // everything between the rewind point and it is the branch being abandoned;
+    // everything the CLI appends later sits past it and can never be swept into
+    // the cut.
+    let lastTreeIdx = -1;
+    for (let i = parsedLines.length - 1; i >= 0; i--) {
+      const l = parsedLines[i];
+      if (l && typeof l.uuid === 'string' && typeof l.type === 'string' && TRANSCRIPT_TREE_TYPES.has(l.type)) {
+        lastUuidAtCommit = l.uuid;
+        lastTreeIdx = i;
+        break;
+      }
+    }
+    // Enqueue lines sitting PAST the anchor (a message the human queued mid-turn
+    // and then rewound before the CLI drained it): uuid-less, so outside the
+    // uuid-anchored region — capture their identity keys on the cut, or the
+    // rewound-away message re-renders as a phantom Pattern-B row forever.
+    const trailingQueueKeys: string[] = [];
+    if (lastTreeIdx >= 0) {
+      for (let i = lastTreeIdx + 1; i < parsedLines.length; i++) {
+        const l = parsedLines[i];
+        if (l && l.type === 'queue-operation' && l.operation === 'enqueue') {
+          trailingQueueKeys.push(queueEnqueueKey(l));
+        }
+      }
+    }
+    const cutAt = new Date().toISOString();
+    const { updateSessionRecord } = await import('../session-tracker.js');
+    await updateSessionRecord(sessionId, {
+      // The display filter's input: replayed against the file at every read
+      // (computeRewindDeadSet). Appended, never replaced — a rewind of a rewind
+      // unions its region with the earlier ones.
+      inPlaceRewinds: [
+        ...(record.inPlaceRewinds ?? []),
+        {
+          uuid: input.messageUuid, lastUuidAtCommit, at: cutAt,
+          ...(trailingQueueKeys.length > 0 ? { trailingQueueKeys } : {}),
+        },
+      ],
+      // Spawn plumbing: every cold --resume until the first completed turn must
+      // re-send --resume-session-at, or a CLI death in that window would resume
+      // the ABANDONED branch tip (see the field's doc in types.ts).
+      pendingResumeSessionAt: input.messageUuid,
+    });
+    await invalidateSessionHistoryCaches(sessionId, record.host ?? undefined);
+  } catch (err) {
+    // Never leave a stopped session behind an error: respawn best-effort, then
+    // let the caller see the original failure.
     try {
-      const parsed = JSON.parse(lines[i]) as { uuid?: string };
-      if (parsed?.uuid === input.messageUuid) { targetLine = i; break; }
-    } catch { /* partial/corrupt line — keep scanning */ }
+      const { sessionRunner } = await import('../../providers/claude-code-session.js');
+      await sessionRunner.reinitialize(sessionId);
+    } catch (respawnErr) {
+      log.session.warn('rewind: recovery respawn after a failed commit also failed', {
+        sessionId, error: respawnErr instanceof Error ? respawnErr.message : String(respawnErr),
+      });
+    }
+    throw err;
   }
-  if (targetLine < 0) {
-    // resolveRewindTarget saw the uuid in the PARSED history, so a miss on the
-    // raw file means the transcript was rewritten between the two reads.
-    throw new SessionControlError('The rewind point is no longer in the transcript file — try again', 409);
-  }
-  const afterLine = lines.length;
-  const cut: import('../types.js').InPlaceRewindCut = {
-    uuid: input.messageUuid,
-    targetLine,
-    afterLine,
-    targetCheck: historyLineCheckOf(lines[targetLine]),
-    lastCheck: historyLineCheckOf(lines[afterLine - 1]),
-    at: new Date().toISOString(),
-  };
-  const { updateSessionRecord } = await import('../session-tracker.js');
-  await updateSessionRecord(sessionId, {
-    inPlaceRewinds: [...(record.inPlaceRewinds ?? []), cut],
-    // Every cold --resume until the first completed turn must re-send
-    // --resume-session-at, or a CLI death in that window would resume the
-    // ABANDONED branch tip (see the field's doc in types.ts).
-    pendingResumeSessionAt: input.messageUuid,
-  });
-  await invalidateSessionHistoryCaches(sessionId, record.host ?? undefined);
 
   // ── 4. Respawn in place (warm, no turn) ── reinitialize() resolves resume
   // args from the record, so the spawn picks up pendingResumeSessionAt and the
@@ -491,10 +582,17 @@ async function rewindInPlace(
       sessionId, error: err instanceof Error ? err.message : String(err),
     });
   }
+  // Second invalidation, AFTER the respawn settles: a readSessionHistory that
+  // entered before the commit resolved `rewindCuts = undefined` and, when it
+  // finishes, re-caches the UNFILTERED parse right over the first invalidation
+  // (the file's mtime never changed, so the poisoned entry would then serve
+  // every same-mtime read). The respawn is a natural barrier that outlasts any
+  // such in-flight read — invalidating again here evicts whatever it cached.
+  await invalidateSessionHistoryCaches(sessionId, record.host ?? undefined);
 
   log.session.info('session rewound in place', {
     sessionId, taskId: record.taskId, messageUuid: input.messageUuid,
-    targetLine, afterLine, droppedMessages,
+    lastUuidAtCommit, droppedMessages,
     restoredFiles: files?.canRewind ?? null,
     targetLabel: labelOf(target)?.slice(0, 60),
   });

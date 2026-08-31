@@ -4,21 +4,26 @@
  * Deliberately NOT covered here (they need a live CLI / spawn): the
  * `rewind_files` control round-trip and the `--resume-session-at` fork spawn.
  * What IS covered is every rule that decides whether a rewind is even offered,
- * and the ancestor-history cut — the piece whose failure mode is silent
- * ("the messages I rewound away came back").
+ * plus the acceptance behaviour of a committed rewind cut — the piece whose
+ * failure mode is silent ("the messages I rewound away came back").
+ *
+ * The last describe replaces the deleted `applyInPlaceRewindCuts` offset-slicer
+ * block, re-expressed against the recorded-cut filter
+ * (computeRewindDeadSet, src/core/transcript-chain.ts). The fine-grained region
+ * rules (index math, duplicate uuids, per-cut degrade, queue dead keys) and the
+ * CLI-chain machinery (leaf rule, walk termination, parallel-tool DAG) live in
+ * tests/core/transcript-chain.test.ts; the end-to-end read is
+ * tests/core/session-history-chain-walk.test.ts.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   isRewindableMessageId,
   cutAncestorHistoryAtRewindPoint,
 } from '../../src/core/sessions/session-rewind.js';
 import { normalizePinnedMessages } from '../../src/core/sessions/session-lifecycle.js';
-import {
-  applyInPlaceRewindCuts,
-  splitTranscriptLines,
-  historyLineCheckOf,
-} from '../../src/core/session-history.js';
-import type { InPlaceRewindCut } from '../../src/core/types.js';
+import { computeRewindDeadSet } from '../../src/core/transcript-chain.js';
+import { log } from '../../src/logging/index.js';
+import { transcript, survivingUuids, cutHere } from '../helpers/transcript-fixtures.js';
 
 describe('isRewindableMessageId', () => {
   it('accepts a CLI transcript uuid', () => {
@@ -137,130 +142,103 @@ describe('normalizePinnedMessages', () => {
   });
 });
 
-describe('applyInPlaceRewindCuts', () => {
-  // A realistic transcript: user/assistant JSONL lines carrying a uuid, plus a
-  // sidechain line the abandoned branch would drag along.
-  const line = (uuid: string, role: string, text: string, extra: Record<string, unknown> = {}) =>
-    JSON.stringify({ type: role, uuid, message: { role, content: text }, ...extra });
+afterEach(() => { vi.restoreAllMocks(); });
 
-  // Build a cut for the rewind point at `targetLine`, capturing the file's
-  // current line count and fingerprints exactly like session-rewind does.
-  const cutFor = (lines: string[], targetLine: number, uuid: string): InPlaceRewindCut => ({
-    uuid,
-    targetLine,
-    afterLine: lines.length,
-    targetCheck: historyLineCheckOf(lines[targetLine]),
-    lastCheck: historyLineCheckOf(lines[lines.length - 1]),
-    at: '2026-08-30T00:00:00.000Z',
+describe('in-place rewind cut (recorded, replayed against the file)', () => {
+  /** Uuids the recorded cuts keep, in file order. */
+  const live = (t: ReturnType<typeof transcript>, cuts: Parameters<typeof computeRewindDeadSet>[1] = []) => {
+    const res = computeRewindDeadSet(t.lines, cuts);
+    return { res, uuids: survivingUuids(t.lines, res.deadUuids) };
+  };
+
+  it('drops nothing while the rewind point is still the file tip (nothing appended yet)', () => {
+    // The death window: the human pressed rewind, the CLI was respawned with
+    // --resume-session-at, and nobody has spoken since. lastUuidAtCommit IS the
+    // rewind point, so the region is empty and the file is served whole.
+    const t = transcript().user('u1', 'first').assistant('a1', 'reply one').user('u2', 'second');
+    const { res, uuids } = live(t, [cutHere(t, 'u2')]);
+    expect(res.deadUuids).toBeNull();       // identity fast path — no filtering at all
+    expect(res.droppedCount).toBe(0);
+    expect(uuids).toEqual(['u1', 'a1', 'u2']);
   });
 
-  it('drops nothing when the rewind point is still the last line (no new turn yet)', () => {
-    // Rewound to U2, and nobody has spoken since — targetLine === afterLine-1,
-    // so the abandoned range (targetLine, afterLine) is empty.
-    const lines = [
-      line('u1', 'user', 'first'),
-      line('a1', 'assistant', 'reply one'),
-      line('u2', 'user', 'second'),
-    ];
-    const cut = cutFor(lines, 2, 'u2');
-    const res = applyInPlaceRewindCuts(lines, [cut]);
-    expect(res.stale).toBe(false);
-    expect(res.dropped).toBe(0);
-    expect(res.lines).toEqual(lines);
+  it('excises the abandoned branch once the new turn is appended after the rewind', () => {
+    // U1 A1 U2 A2 U3 A3, rewound to U2; the CLI then appended U2' A2' hung off U2
+    // (live-verified: the first post-rewind line's parentUuid IS the rewind point).
+    // The commit-time anchor is A3, so the new branch sits past it and is safe.
+    const t = transcript()
+      .user('u1', 'first').assistant('a1', 'reply one').user('u2', 'second')
+      .assistant('a2', 'ABANDONED reply two').user('u3', 'ABANDONED third')
+      .assistant('a3', 'ABANDONED reply three');
+    const cut = cutHere(t, 'u2');
+    t.from('u2').user('u2b', 'second take').assistant('a2b', 'new reply two');
+
+    const { res, uuids } = live(t, [cut]);
+    expect(uuids).toEqual(['u1', 'a1', 'u2', 'u2b', 'a2b']);
+    expect(res.droppedCount).toBe(3);       // a2 u3 a3
+    expect([...res.deadUuids!]).toEqual(['a2', 'u3', 'a3']);
   });
 
-  it('excises the abandoned branch when new turns were appended after the rewind', () => {
-    // Original conversation U1 A1 U2 A2 U3 A3; rewound to U2 (targetLine 2,
-    // afterLine 6). Then a NEW branch U2' A2' was appended at lines 6-7.
-    const original = [
-      line('u1', 'user', 'first'),
-      line('a1', 'assistant', 'reply one'),
-      line('u2', 'user', 'second'),
-      line('a2', 'assistant', 'reply two'),
-      line('u3', 'user', 'third'),
-      line('a3', 'assistant', 'reply three'),
-    ];
-    const cut = cutFor(original, 2, 'u2');
-    const withNewBranch = [
-      ...original,
-      line('u2b', 'user', 'second take'),
-      line('a2b', 'assistant', 'new reply two'),
-    ];
-    const res = applyInPlaceRewindCuts(withNewBranch, [cut]);
-    expect(res.stale).toBe(false);
-    // Kept: U1 A1 U2 (up to & including the rewind point) + the new branch.
-    expect(res.dropped).toBe(3); // A2 U3 A3
-    expect(res.lines.map((l) => JSON.parse(l).uuid)).toEqual(['u1', 'a1', 'u2', 'u2b', 'a2b']);
+  it('takes a sidechain branch that sits INSIDE the region, and leaves one outside alone', () => {
+    // Region membership is positional, so a legacy inline sidechain written as
+    // part of the abandoned turn dies with it. The deliberate difference from the
+    // reverted chain walk: a sidechain hanging off a LIVE uuid is off the
+    // conversation chain but was never rewound away, so it stays.
+    const t = transcript()
+      .user('u1', 'first').assistant('a1', 'reply one').user('u2', 'second')
+      .assistant('a2', 'ABANDONED reply two')
+      .user('s1', 'sidechain of the abandoned turn', { isSidechain: true });
+    const cut = cutHere(t, 'u2');
+    t.from('u2').user('sl1', 'sidechain off a live uuid', { isSidechain: true })
+      .from('u2').user('u2b', 'second take');
+
+    const { res, uuids } = live(t, [cut]);
+    expect([...res.deadUuids!].sort()).toEqual(['a2', 's1']);
+    expect(uuids).toEqual(['u1', 'a1', 'u2', 'sl1', 'u2b']);
   });
 
-  it('takes sidechain/queue-op lines inside the range with it (position, not uuid)', () => {
-    const lines = [
-      line('u1', 'user', 'first'),
-      line('a1', 'assistant', 'reply one'),
-      line('u2', 'user', 'second'),
-      line('a2', 'assistant', 'reply two'),
-      // a sidechain line that belongs to the abandoned branch
-      line('s1', 'user', 'sidechain', { isSidechain: true }),
-      line('u3', 'user', 'third'),
-    ];
-    const cut = cutFor(lines, 2, 'u2');
-    const withNew = [...lines, line('u2b', 'user', 'second take')];
-    const res = applyInPlaceRewindCuts(withNew, [cut]);
-    expect(res.stale).toBe(false);
-    expect(res.lines.map((l) => JSON.parse(l).uuid)).toEqual(['u1', 'a1', 'u2', 'u2b']);
+  it('composes two rewinds — the newest branch survives, neither abandoned one leaks back', () => {
+    // Rewind to u2, the CLI writes a branch, then rewind again to u1. The second
+    // cut's region swallows the first cut's region AND its replacement.
+    const t = transcript()
+      .user('u1', 'first').assistant('a1', 'reply one').user('u2', 'second')
+      .assistant('a2', 'reply two').user('u3', 'third');
+    const cut1 = cutHere(t, 'u2');
+    t.from('u2').user('u2b', 'second take').assistant('a2b', 'new two');
+    const cut2 = cutHere(t, 'u1');
+    t.from('u1').user('u1c', 'first again');
+
+    expect(live(t, [cut1, cut2]).uuids).toEqual(['u1', 'u1c']);
   });
 
-  it('composes two rewinds — the earlier cut swallows the first branch and its cut', () => {
-    // U1 A1 U2 A2 U3 → rewind#1 to U2 (afterLine 5) → append U2b A2b (lines 5-6)
-    // → rewind#2 to U1 (afterLine 7) → append U1c (line 7).
-    const base = [
-      line('u1', 'user', 'first'),
-      line('a1', 'assistant', 'reply one'),
-      line('u2', 'user', 'second'),
-      line('a2', 'assistant', 'reply two'),
-      line('u3', 'user', 'third'),
-    ];
-    const cut1 = cutFor(base, 2, 'u2');
-    const afterR1 = [...base, line('u2b', 'user', 'second take'), line('a2b', 'assistant', 'new two')];
-    const cut2 = cutFor(afterR1, 0, 'u1');
-    const afterR2 = [...afterR1, line('u1c', 'user', 'first again')];
-    const res = applyInPlaceRewindCuts(afterR2, [cut1, cut2]);
-    expect(res.stale).toBe(false);
-    // Only U1 (the second rewind point) and the final branch U1c survive.
-    expect(res.lines.map((l) => JSON.parse(l).uuid)).toEqual(['u1', 'u1c']);
+  it('serves the file UNFILTERED when a cut can no longer be located', () => {
+    // The named failure mode that replaces the fingerprint check: the file was
+    // rewritten between commit and read, so the cut refuses to guess and the whole
+    // transcript is served (the caller logs the degrade rather than 404ing a
+    // history route, which is what the CLI does at print.ts:5110-5116).
+    const t = transcript()
+      .user('u1', 'first').assistant('a1', 'reply one').user('u2', 'second')
+      .assistant('a2', 'reply two')
+      .from('u2').user('u2b', 'second take');
+    vi.spyOn(log.session, 'warn').mockImplementation(() => {});
+    const { res, uuids } = live(t, [{ uuid: 'not-in-this-file', lastUuidAtCommit: 'a2', at: '2026-08-30T00:00:00.000Z' }]);
+    expect(res.deadUuids).toBeNull();
+    expect(res.droppedCount).toBe(0);
+    expect(uuids).toEqual(['u1', 'a1', 'u2', 'a2', 'u2b']);  // a2 kept, unfiltered
   });
 
-  it('serves the file UNFILTERED when a fingerprint no longer matches (rewrite/compact)', () => {
-    const lines = [
-      line('u1', 'user', 'first'),
-      line('a1', 'assistant', 'reply one'),
-      line('u2', 'user', 'second'),
-      line('a2', 'assistant', 'reply two'),
-    ];
-    const cut = cutFor(lines, 2, 'u2');
-    // /compact rewrote the file: same length, different content at targetLine.
-    const rewritten = [...lines];
-    rewritten[2] = line('u2', 'user', 'second (edited by compact summary)');
-    const res = applyInPlaceRewindCuts(rewritten, [cut]);
-    expect(res.stale).toBe(true);
-    expect(res.dropped).toBe(0);
-    expect(res.lines).toEqual(rewritten);
-  });
-
-  it('is stale (not a crash) when afterLine runs past a shrunken file', () => {
-    const lines = [line('u1', 'user', 'first'), line('u2', 'user', 'second')];
-    const cut: InPlaceRewindCut = {
-      uuid: 'u1', targetLine: 0, afterLine: 99,
-      targetCheck: historyLineCheckOf(lines[0]),
-      lastCheck: { len: 1, head: 'x', tail: 'x' },
-      at: '2026-08-30T00:00:00.000Z',
-    };
-    const res = applyInPlaceRewindCuts(lines, [cut]);
-    expect(res.stale).toBe(true);
-    expect(res.lines).toEqual(lines);
-  });
-
-  it('splitTranscriptLines drops blank lines so indices match the recorder', () => {
-    expect(splitTranscriptLines('a\n\nb\n')).toEqual(['a', 'b']);
+  it('never throws on an empty, malformed or cut-less transcript', () => {
+    // The offset slicer needed a bounds check (afterLine past a shrunken file).
+    // The uuid-anchored replay has no index math to get wrong, but it must still
+    // survive junk: blank input, non-objects, tree lines with no uuid at all.
+    expect(computeRewindDeadSet([], []).deadUuids).toBeNull();
+    expect(computeRewindDeadSet([], [{ uuid: 'x', lastUuidAtCommit: 'y', at: 'z' }]).deadUuids).toBeNull();
+    expect(computeRewindDeadSet([
+      null as never, 42 as never, { foo: 'bar' } as never,
+      { type: 'user', message: { content: 'no uuid' } },
+    ], []).deadUuids).toBeNull();
+    // A never-rewound session is byte-identical service, whatever the topology.
+    const flat = transcript().user('x1', 'a', { parent: null }).assistant('x2', 'b', { parent: null });
+    expect(computeRewindDeadSet(flat.lines, []).deadUuids).toBeNull();
   });
 });
