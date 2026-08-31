@@ -10226,7 +10226,7 @@ body.walnut-dragging {
 /* Folder members: the grip shares the member dot's inside-the-rail slot. */
 .todo-pinned-card.task-grouped > .todo-pinned-drag-handle,
 .todo-focus-card.task-grouped > .todo-pinned-drag-handle {
-  left: -11px;
+  left: -9px;
 }
 .todo-pinned-card:hover .todo-pinned-drag-handle,
 .todo-focus-card:hover .todo-pinned-drag-handle {
@@ -10815,7 +10815,7 @@ body.walnut-dragging {
   gap: 5px;
   padding: 4px 8px 3px;
   margin-top: 4px;
-  margin-left: 8px;
+  margin-left: 0;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary, #6b7280);
@@ -10888,7 +10888,7 @@ body.walnut-dragging {
    keeps pointer-events so a press on it bubbles to the chip's activator. */
 .task-group-chip-grip {
   position: absolute;
-  left: -9px;
+  left: 0;
   top: 50%;
   transform: translateY(-50%);
   font-size: 9px;
@@ -11017,14 +11017,14 @@ body.walnut-dragging {
   position: relative;
   margin-left: 30px;
 }
-/* Tier member cards: 32px indent = the rail at x≈15 PLUS a full 14px gutter of
-   their own INSIDE it, so the unread dot / hover grip (left:-11 → x≈21) sit
-   between the rail and the card — a member's dot belongs inside its folder's
-   line, not out in the panel's far-left column. */
+/* Tier member cards: 26px indent = the rail at x≈13 (under the folder icon)
+   plus a tight dot gutter INSIDE it, so the unread dot / hover grip (left:-9 →
+   x≈17) sit between the rail and the card — a member's dot belongs inside its
+   folder's line, not out in the panel's far-left column. */
 .todo-focus-card.task-grouped,
 .todo-pinned-card.task-grouped {
   position: relative;
-  margin-left: 32px;
+  margin-left: 26px;
 }
 /* Panel rows can't use margin for the member indent: content-visibility clips
    descendant painting at the row's padding box, so the dot must stay INSIDE
@@ -11049,11 +11049,11 @@ body.walnut-dragging {
   background: var(--group-outline);
   pointer-events: none;
 }
-/* Tier member cards sit at margin 32 — pull the rail back to x≈15 (under the
+/* Tier member cards sit at margin 26 — pull the rail back to x≈13 (under the
    folder head's icon), leaving the dot/grip gutter between rail and card. */
 .todo-focus-card.task-grouped::before,
 .todo-pinned-card.task-grouped::before {
-  left: -17px;
+  left: -13px;
 }
 /* Panel rows indent via padding (see above), so their rail sits at a positive
    offset INSIDE the row box (x=21, between the folder head edge and the member
@@ -11281,11 +11281,11 @@ body.walnut-dragging {
   transform: translateY(-50%);
   margin: 0;
 }
-/* Folder members keep the wider -11 pull: their 14px gutter sits INSIDE the
-   rail (card at 32, rail at 15), so -11 centers the dot between the two. */
+/* Folder members keep a wider -9 pull: their gutter sits INSIDE the rail
+   (card at 26, rail at 13), so -9 centers the dot between the two. */
 .todo-pinned-card.task-grouped > .task-unread-dot,
 .todo-focus-card.task-grouped > .task-unread-dot {
-  left: -11px;
+  left: -9px;
 }
 
 /* List-row form — floated into the A1 gutter left of the row's highlight.
