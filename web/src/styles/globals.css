@@ -10080,12 +10080,12 @@ body.walnut-dragging {
   background: var(--hover-bg, rgba(0,0,0,0.04));
 }
 
+/* Focused tier card: NO background repaint (2026-08-31, user call). Clicking a
+   card used to flash accent-blue and then settle into the session-open ring —
+   the transient repaint read as a glitch, and selection must never override the
+   card's own state color. The ring + chevron are the "current" affordance. */
 .todo-pinned-card-active {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
-
-.todo-pinned-card-active:hover {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  background: transparent;
 }
 
 /* Transient pulse after a "locate" jump (session panel → task) so the target
@@ -10188,7 +10188,6 @@ body.walnut-dragging {
   border-right: 2px solid var(--accent);
   border-radius: 0.5px;
   transform: translate(0, -50%) rotate(45deg);
-  animation: session-open-nudge 1.6s ease-in-out infinite;
   pointer-events: none;
 }
 
@@ -10197,14 +10196,6 @@ body.walnut-dragging {
   opacity: 0;
 }
 
-@keyframes session-open-nudge {
-  0%, 100% { transform: translate(0, -50%) rotate(45deg); }
-  50% { transform: translate(3px, -50%) rotate(45deg); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .todo-pinned-card-session-open::after { animation: none; }
-}
 
 .todo-pinned-unpin {
   background: none;
@@ -10451,13 +10442,6 @@ body.walnut-dragging {
   background: var(--hover-bg, rgba(0,0,0,0.04));
 }
 
-.todo-focus-card.todo-pinned-card-active {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
-
-.todo-focus-card.todo-pinned-card-active:hover {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-}
 
 .todo-focus-card.todo-pinned-card-needs-action {
   background: rgba(255, 59, 48, 0.08);
