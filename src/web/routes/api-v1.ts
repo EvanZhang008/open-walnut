@@ -482,6 +482,17 @@ export function closeApiV1Streams(): void {
   closeAllSseChannels()
 }
 
+// ── No recovery emitter lives here, deliberately ──
+// A turn recovered from disk (core/sessions/lane-orphan-recovery.ts) must NEVER
+// be announced with this channel's terminal frames. `emitSse` passes every frame
+// to mirrorRelayedChatFrame, which re-stamps it with whichever turnId is armed
+// for the conversation right now — so a `message-end` carrying an OLD answer
+// settles the LIVE relayed turn on the replica and the real terminal frame is
+// then dropped. iOS's `message-end` handler ignores turnId altogether and
+// finalizes whatever is streaming. The recovery path emits an advisory bus event
+// instead (RECOVERED_TURN_EVENT); clients read the adopted message from the
+// store like any other history. Do not add an SSE emit back here.
+
 // GET /api/v1/conversations/:id/stream?agentId=
 apiV1Router.get('/conversations/:id/stream', async (req: Request, res: Response, next: NextFunction) => {
   try {

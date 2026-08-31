@@ -140,6 +140,7 @@ import { registerAuthRpc } from './routes/auth-rpc.js'
 import { initPushNotifications } from '../core/push-notification.js'
 import { initLetterPush } from '../core/push/letter-push.js'
 import { enqueueMainAgentTurn, getQueueStatus, recordLastTurnTokens, getLastTurnTokens } from './agent-turn-queue.js'
+import { activeRelayedTurnCount } from './routes/chat-turn-relay.js'
 import { effectiveTotalTokens, ESTIMATE_CORRECTION } from '../core/token-truth.js'
 import { triggerBackgroundCompaction } from './background-compaction.js'
 import {
@@ -1572,6 +1573,30 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     res.json(health)
   })
 
+  // In-flight Personal AI turns — the deploy drain's probe (scripts/dev-prod.sh).
+  //
+  // A SIGTERM landing mid lane turn strands the answer: the CLI survives and
+  // writes it, but the process holding the turn's promise dies, so nothing
+  // persists it into the conversation. The deploy waits on this count before
+  // killing. Two sources, deliberately: the per-agent turn queue covers every
+  // transport (WS chat, REST, cron/heartbeat/triage), and the relay map covers
+  // the window where a phone turn is accepted but not yet enqueued.
+  //
+  // Read-only, purely in-memory (two map walks, no I/O, no await) so it stays
+  // answerable even while the machine is busy — a probe that can hang is a
+  // probe the deploy has to ignore.
+  app.get('/api/deploy/active-turns', (_req, res) => {
+    const queue = getQueueStatus()
+    const relayed = activeRelayedTurnCount()
+    res.json({
+      activeTurns: queue.active + queue.queued + relayed,
+      queueActive: queue.active,
+      queueQueued: queue.queued,
+      relayedTurns: relayed,
+      ts: new Date().toISOString(),
+    })
+  })
+
   // -- Static files (production only) --
   if (!dev) {
     // Resolve static dir by walking up from the current file.
@@ -2570,6 +2595,46 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         }))
     }, 60_000)
     sweep.unref?.()
+  }
+
+  // -- Lane orphan recovery (answers stranded by a mid-turn server death) --
+  // A deploy/crash that kills the server mid Personal AI lane turn leaves the
+  // CLI alive: it finishes the answer and writes it to its stream file, but the
+  // code that persists it into the conversation died with the process, and
+  // re-attach skips replay by design. Nothing else ever re-checks, so the
+  // conversation is left reading user→user (2 of 14 relayed phone turns over two
+  // days). This pass pairs each orphaned user message with the result that sits
+  // in ITS turn slot in the stream and adopts it.
+  //
+  // Spaced passes, not one: the surviving CLI usually writes its result a few
+  // SECONDS AFTER the replacement server is already up, so a single boot-time
+  // pass would find nothing. Adoption is idempotent, so re-running is free.
+  // Fully detached + individually caught — a healer must never affect startup.
+  if (!CLOUD_MODE) {
+    const laneOrphanPassesMs = [8_000, 60_000, 300_000]
+    for (const delayMs of laneOrphanPassesMs) {
+      const timer = setTimeout(() => {
+        void (async () => {
+          try {
+            // No client-notify hook on purpose: a recovered turn ended long ago,
+            // and every terminal frame this server can send would settle the
+            // turn that is live NOW (see the emit note in lane-orphan-recovery).
+            // The reconciler emits its own advisory bus event; clients pick the
+            // adopted message up on their next history read.
+            const { reconcileLaneOrphanTurns } = await import('../core/sessions/lane-orphan-recovery.js')
+            const report = await reconcileLaneOrphanTurns()
+            if (report.adopted > 0 || report.orphansFound > 0) {
+              log.web.info('lane orphan recovery pass', { delayMs, ...report })
+            }
+          } catch (err) {
+            log.web.warn('lane orphan recovery pass failed', {
+              delayMs, error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        })()
+      }, delayMs)
+      timer.unref?.()
+    }
   }
 
   // -- Init SubagentRunner + SessionRunner --

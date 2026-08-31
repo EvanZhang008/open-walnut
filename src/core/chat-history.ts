@@ -810,6 +810,226 @@ export async function recoverOrphanedUserMessage(agentId?: string, conversationI
   }, agentId, conversationId);
 }
 
+// ── Lane-turn orphan adoption (mid-turn server death) ──────────────────────
+
+/**
+ * A user message whose answer never reached the store.
+ *
+ * The shape a mid-turn server death leaves behind on the lane engine: the CLI
+ * finishes the turn and durably writes the answer (its stream JSONL + its own
+ * transcript), but the turn's promise and subscription lived in the process that
+ * was killed, so nothing ever called `addAIMessages`. The conversation then
+ * reads user→user with the answer stranded on disk. The healer that pairs the
+ * two back up is `core/sessions/lane-orphan-recovery.ts`.
+ */
+export interface OrphanTurnTail {
+  /** The eagerly-persisted user entry's turn id — the adoption key. */
+  turnId: string;
+  /** Plain text of the user message (what the lane session was sent). */
+  text: string;
+  /** The user entry's own timestamp — the correlation anchor against the stream. */
+  timestamp: string;
+}
+
+/**
+ * One turn-starting user message, orphaned or not.
+ *
+ * The healer needs the WHOLE ordered sequence, not just the orphans: it pairs
+ * same-text store turns with same-text stream turns BY ORDER, so a turn that
+ * already has its answer still occupies its ordinal. Dropping the answered ones
+ * would shift every ordinal after them and silently re-point an orphan at a
+ * neighbour's answer.
+ */
+export interface StoreTurnRef {
+  /** Absent for a turn a background producer persisted without one. */
+  turnId?: string;
+  text: string;
+  timestamp: string;
+  /** No assistant entry between this turn and the next turn-starting user one. */
+  orphan: boolean;
+}
+
+/** Plain text of an entry, or '' when it carries none (image-only, tool blocks). */
+function entryPlainText(entry: ChatEntry): string {
+  const c = entry.content;
+  if (typeof c === 'string') return c;
+  if (!Array.isArray(c)) return '';
+  return (c as Array<{ type?: string; text?: string }>)
+    .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text as string)
+    .join('');
+}
+
+/** True for an `ai` user entry that STARTS a turn (not a tool_result echo). */
+function isTurnStartingUserEntry(entry: ChatEntry): boolean {
+  return entry.tag === 'ai' && entry.role === 'user' && isTurnStart(entry);
+}
+
+/**
+ * ChatEntry plus the recovery marker. Declared locally on purpose: unknown JSON
+ * fields round-trip untouched through the store, and the marker is forensic —
+ * no reader keys behavior off it, so it does not belong in the shared type.
+ */
+type RecoveredChatEntry = ChatEntry & { recovered: true; recoveredFrom: string };
+
+/** Turns kept by `listStoreTurns` — enough to cover any stream tail window, and
+ *  bounded so a 5000-entry conversation is never walked whole into memory. */
+const MAX_STORE_TURNS = 200;
+
+/**
+ * The conversation's turn-starting user messages, oldest-first, each flagged
+ * with whether it is orphaned.
+ *
+ * This is the SEQUENCE the healer aligns against the stream. It deliberately
+ * includes answered turns and turns with no turnId: both consumed a delivery
+ * slot in the stream, so both hold an ordinal.
+ */
+export async function listStoreTurns(
+  agentId: string,
+  conversationId: string,
+): Promise<StoreTurnRef[]> {
+  const store = await readStore(agentId, conversationId);
+  const entries = store.entries ?? [];
+
+  const starts: number[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    if (isTurnStartingUserEntry(entries[i])) starts.push(i);
+  }
+
+  const turns: StoreTurnRef[] = [];
+  for (let k = 0; k < starts.length; k++) {
+    const idx = starts[k];
+    const entry = entries[idx];
+    const end = k + 1 < starts.length ? starts[k + 1] : entries.length;
+    let answered = false;
+    for (let j = idx + 1; j < end; j++) {
+      if (entries[j].tag === 'ai' && entries[j].role === 'assistant') { answered = true; break; }
+    }
+    const text = entryPlainText(entry).trim() || (entry.displayText ?? '').trim();
+    turns.push({
+      ...(entry.turnId ? { turnId: entry.turnId } : {}),
+      text,
+      timestamp: entry.timestamp,
+      orphan: !answered,
+    });
+  }
+  return turns.slice(-MAX_STORE_TURNS);
+}
+
+/**
+ * Orphan-tail scan: turn-starting user messages in the recent tail that have no
+ * assistant entry before the next user message.
+ *
+ * Finds BOTH shapes a killed turn leaves: a store that simply ends with a user
+ * message, and a mid-list gap (two consecutive user messages, e.g. the user
+ * retyped the question after the answer never came).
+ *
+ * Bounded by `maxScan` turns counted from the END (default 20): a healer must
+ * not walk a 2000-entry conversation, and an older orphan is unadoptable anyway
+ * because its stream tail has long since scrolled out of the read window.
+ *
+ * ANY assistant entry counts as answered, INCLUDING a persisted `[Error: …]`
+ * one. A turn that already recorded a verdict is a different defect, and
+ * adopting on top of it would show two answers to one question.
+ *
+ * A turn with no turnId is never returned: there is no key to adopt against.
+ * It still appears in `listStoreTurns` — it holds its ordinal there.
+ */
+export async function listOrphanTurnTails(
+  agentId: string,
+  conversationId: string,
+  opts?: { maxScan?: number },
+): Promise<OrphanTurnTail[]> {
+  const maxScan = Math.max(1, opts?.maxScan ?? 20);
+  const turns = await listStoreTurns(agentId, conversationId);
+  return turns
+    .slice(-maxScan)
+    .filter((t): t is StoreTurnRef & { turnId: string } => t.orphan && !!t.turnId && !!t.text)
+    .map((t) => ({ turnId: t.turnId, text: t.text, timestamp: t.timestamp }));
+}
+
+export type AdoptRecoveredOutcome = 'adopted' | 'turn-missing' | 'no-orphan' | 'already-present';
+
+/**
+ * Insert a recovered assistant answer immediately after the user message it
+ * answers, marked as recovered.
+ *
+ * INSERT, not append: an orphan is often mid-list (the user retyped and later
+ * turns landed after it), and appending would put the answer at the bottom of
+ * the conversation — wrong for the reader and wrong for model context.
+ *
+ * Every check runs INSIDE the write lock, immediately before the write, because
+ * the whole point is that this races the ordinary persist path:
+ *   - `turn-missing`     — the user entry is gone (history cleared/compacted).
+ *   - `no-orphan`        — an assistant entry appeared for that turn meanwhile.
+ *   - `already-present`  — this exact answer text is on disk somewhere already,
+ *     which is what makes a second pass a no-op. A lane result carries no id, so
+ *     exact text equality is the only idempotency key available; a false match
+ *     costs us one un-adopted answer, while a false miss would duplicate one.
+ *
+ * The adopted entry carries the ORIGINAL turnId. That is what keeps a client
+ * safe: a phone still holding a provisional bubble for that turn finalizes it
+ * (its reconcile is keyed on the turn) instead of rendering a second copy.
+ */
+export async function adoptRecoveredAssistantMessage(opts: {
+  agentId: string;
+  conversationId: string;
+  /** turnId of the orphaned USER entry this answer belongs to. */
+  turnId: string;
+  text: string;
+  /** Honest completion time (stream marker + turn duration); defaults to now. */
+  timestamp?: string;
+  /** Provenance stamped on the entry. */
+  recoveredFrom?: string;
+}): Promise<AdoptRecoveredOutcome> {
+  const { agentId, conversationId, turnId, text } = opts;
+  if (!text.trim()) return 'no-orphan';
+  return withWriteLock(async () => {
+    const store = await readStore(agentId, conversationId);
+    const entries = store.entries ?? [];
+    const idx = entries.findIndex(
+      (e) => e.turnId === turnId && e.tag === 'ai' && e.role === 'user',
+    );
+    if (idx < 0) return 'turn-missing';
+
+    let end = entries.length;
+    for (let j = idx + 1; j < entries.length; j++) {
+      if (isTurnStartingUserEntry(entries[j])) { end = j; break; }
+    }
+    for (let j = idx + 1; j < end; j++) {
+      if (entries[j].tag === 'ai' && entries[j].role === 'assistant') return 'no-orphan';
+    }
+
+    const needle = text.trim();
+    for (const e of entries) {
+      if (e.tag === 'ai' && e.role === 'assistant' && entryPlainText(e).trim() === needle) {
+        return 'already-present';
+      }
+    }
+
+    const entry: RecoveredChatEntry = {
+      tag: 'ai',
+      role: 'assistant',
+      content: [{ type: 'text', text }],
+      timestamp: opts.timestamp || new Date().toISOString(),
+      turnId,
+      recovered: true,
+      recoveredFrom: opts.recoveredFrom ?? 'lane-stream',
+    };
+    entries.splice(idx + 1, 0, entry);
+    store.entries = entries;
+    await writeStore(store, agentId, conversationId);
+    await touchConversationBestEffort(store, agentId, conversationId);
+    // Mirror into the conversation FTS index — best-effort, and position-free
+    // (rows are appended with their own timestamp), so a mid-list insert is fine.
+    indexChatEntries([entry], agentId, conversationId);
+    log.agent.warn('adopted a stranded lane answer into the conversation', {
+      agentId, conversationId, turnId, textLength: text.length, insertedAt: idx + 1,
+    });
+    return 'adopted';
+  }, agentId, conversationId);
+}
+
 /**
  * Push a UI-only entry (notification: cron, session result, error, compaction divider).
  */

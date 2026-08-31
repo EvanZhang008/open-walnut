@@ -185,7 +185,11 @@ function isPostTurnBookkeeping(parsed: Record<string, unknown>, type: string | u
   return false
 }
 
-function isRealUserLine(parsed: Record<string, unknown>): boolean {
+/** A stream `user` line that STARTS a turn (not a tool_result echo, not subagent
+ *  traffic). Exported so the lane-orphan healer
+ *  (core/sessions/lane-orphan-recovery.ts) splits a stream into turns on exactly
+ *  the same boundary this fold anchors on — one definition, no drift. */
+export function isRealUserLine(parsed: Record<string, unknown>): boolean {
   if (parsed.type !== 'user') return false
   if (parsed.subtype === 'walnut-injected') return true
   if (parsed.parent_tool_use_id) return false

@@ -21,7 +21,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 
 const SCRIPT = path.join(import.meta.dirname, '..', '..', 'scripts', 'dev-prod.sh')
 const script = fs.readFileSync(SCRIPT, 'utf-8')
@@ -34,6 +34,17 @@ function listenerPidsSnippet(): string {
   expect(start).toBeGreaterThan(-1)
   expect(fnEnd).toBeGreaterThan(fnStart)
   return script.slice(start, fnEnd + 3)
+}
+
+/** Async twin of runBash, for cases whose fixture (an HTTP stub) lives in THIS
+ *  process and therefore cannot be served while a sync child blocks the loop. */
+function runBashAsync(body: string): Promise<{ status: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    execFile('bash', ['-c', body], { encoding: 'utf-8' }, (err, stdout, stderr) => {
+      const status = err ? ((err as { code?: number }).code ?? 1) : 0
+      resolve({ status, stdout: stdout ?? '', stderr: stderr ?? '' })
+    })
+  })
 }
 
 function runBash(body: string): { status: number; stdout: string; stderr: string } {
@@ -129,6 +140,14 @@ describe.skipIf(shellNice > 0 || !hasProbe)('dev-prod.sh dry run (whole script, 
     expect(r.stdout).not.toMatch(/web:build|Server ready|Reaping stray/)
   })
 
+  it('exercises the deploy drain (probe + parse) without waiting', async () => {
+    const r = await dryRun()
+    expect(r.status).toBe(0)
+    // The dry-run port has no server, so the probe takes the "cannot tell →
+    // proceed" arm. A zero budget means the dry run never sleeps.
+    expect(r.stdout).toMatch(/Drain: .* did not answer the active-turn probe — proceeding/)
+  })
+
   it('still fails fast on an unwritable log', async () => {
     const r = await dryRun({ WALNUT_SERVER_LOG: `/definitely-not-a-dir-${process.pid}/server.log` })
     expect(r.status).toBe(1)
@@ -148,6 +167,137 @@ describe.skipIf(shellNice > 0 || !hasProbe)('dev-prod.sh dry run (whole script, 
     // production data dir, so it is read inside the dry-run branch only.
     const decl = script.slice(0, script.indexOf('LOCK_DIR='))
     expect(decl).toMatch(/if \[\[ "\$DRY_RUN" == "1" \]\]; then\n\s*PORT="\$\{WALNUT_DEVPROD_PORT:-\$PORT\}"/)
+  })
+})
+
+// ── Deploy drain ────────────────────────────────────────────────────────────
+// A kill landing inside a Personal AI lane turn strands the answer: the CLI is
+// daemon-owned so it survives and writes the reply, but the process that
+// persists it into the conversation is the one being killed. The drain waits for
+// quiet first — and, just as importantly, NEVER hangs a deploy: an unreachable
+// or wedged server must proceed exactly as before.
+describe('dev-prod.sh deploy drain', () => {
+  /** The DRAIN_SECS default + both drain helpers, standalone. */
+  function drainSnippet(): string {
+    const start = script.indexOf('DRAIN_SECS="${WALNUT_DEVPROD_DRAIN_SECS')
+    const fnStart = script.indexOf('drain_active_turns() {', start)
+    const fnEnd = script.indexOf('\n}\n', fnStart)
+    expect(start).toBeGreaterThan(-1)
+    expect(fnEnd).toBeGreaterThan(fnStart)
+    return script.slice(start, fnEnd + 3)
+  }
+
+  /** Runs the drain against a real one-shot HTTP server returning `body`. */
+  async function drainAgainst(
+    body: string | null,
+    env: Record<string, string> = {},
+  ): Promise<{ status: number; stdout: string; stderr: string }> {
+    let port: number
+    let server: import('node:http').Server | undefined
+    if (body === null) {
+      // Nothing listening: bind, learn the port, release it.
+      const probe = net.createServer()
+      port = await new Promise<number>((resolve, reject) => {
+        probe.once('error', reject)
+        probe.listen(0, '127.0.0.1', () => resolve((probe.address() as net.AddressInfo).port))
+      })
+      await new Promise<void>((r) => probe.close(() => r()))
+    } else {
+      const http = await import('node:http')
+      server = http.createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(body)
+      })
+      // No bind host: the script probes `localhost`, which resolves to ::1 first
+      // on this machine — a stub pinned to 127.0.0.1 would look unreachable and
+      // silently test the wrong branch.
+      port = await new Promise<number>((resolve, reject) => {
+        server!.once('error', reject)
+        server!.listen(0, () => resolve((server!.address() as net.AddressInfo).port))
+      })
+    }
+    try {
+      const assignments = Object.entries(env)
+        .map(([k, v]) => `${k}=${JSON.stringify(v)}`).join('\n')
+      // ASYNC exec, not the file's execFileSync helper: the stub server lives in
+      // THIS process, so a synchronous child would block the event loop and the
+      // probe could never be answered — every case would silently degrade to the
+      // "unreachable" arm and the test would prove nothing.
+      return await runBashAsync([
+        'set -euo pipefail',
+        `PORT=${port}`,
+        assignments,
+        drainSnippet(),
+        'drain_active_turns',
+        'echo REACHED_KILL',
+      ].join('\n'))
+    } finally {
+      if (server) await new Promise<void>((r) => server!.close(() => r()))
+    }
+  }
+
+  it('waits before the kill, not after it', () => {
+    const drainCall = script.indexOf('\ndrain_active_turns\n')
+    const launchdRemove = script.indexOf('launchctl remove "$LAUNCH_LABEL"')
+    const killExisting = script.indexOf('kill -15 $existing_pids')
+    expect(drainCall).toBeGreaterThan(-1)
+    for (const destructive of [launchdRemove, killExisting]) {
+      expect(destructive).toBeGreaterThan(-1)
+      expect(drainCall).toBeLessThan(destructive)
+    }
+  })
+
+  it('proceeds immediately when nothing answers the probe', async () => {
+    const r = await drainAgainst(null)
+    expect(r.status).toBe(0)
+    expect(r.stdout).toMatch(/did not answer the active-turn probe — proceeding/)
+    expect(r.stdout).toMatch(/REACHED_KILL/)
+  })
+
+  it('proceeds immediately when the server reports a quiet box', async () => {
+    const r = await drainAgainst('{"activeTurns":0,"queueActive":0,"queueQueued":0,"relayedTurns":0}')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toMatch(/no Personal AI turn in flight/)
+    expect(r.stdout).toMatch(/REACHED_KILL/)
+  })
+
+  it('waits when a turn is in flight, then proceeds on a bounded timeout', async () => {
+    const r = await drainAgainst('{"activeTurns":2,"queueActive":1,"queueQueued":0,"relayedTurns":1}', {
+      WALNUT_DEVPROD_DRAIN_SECS: '1',
+    })
+    expect(r.status).toBe(0)
+    expect(r.stdout).toMatch(/2 Personal AI turn\(s\) in flight/)
+    expect(r.stderr).toMatch(/Drain TIMEOUT: 2 turn\(s\) still in flight after 1s/)
+    // Bounded means bounded — the deploy still gets to the kill.
+    expect(r.stdout).toMatch(/REACHED_KILL/)
+  })
+
+  it('honours WALNUT_DEVPROD_SKIP_DRAIN=1 without probing at all', async () => {
+    const r = await drainAgainst('{"activeTurns":9}', {
+      WALNUT_DEVPROD_SKIP_DRAIN: '1', WALNUT_DEVPROD_DRAIN_SECS: '600',
+    })
+    expect(r.status).toBe(0)
+    expect(r.stdout).toMatch(/Drain skipped/)
+    expect(r.stdout).toMatch(/REACHED_KILL/)
+  })
+
+  it('falls back to the default budget on a non-numeric knob instead of dying', async () => {
+    // `$(( DRAIN_SECS * 2 ))` treats an identifier-shaped value as an UNSET
+    // variable, so under `set -u` a typo'd knob used to abort the deploy — after
+    // the full build and smoke boot, with a message that never named the knob.
+    for (const junk of ['abc', 'off', 'none', 'true']) {
+      const r = await drainAgainst('{"activeTurns":0}', { WALNUT_DEVPROD_DRAIN_SECS: junk })
+      expect(r.status, `${junk} must not abort the deploy`).toBe(0)
+      expect(r.stderr).toMatch(/is not a whole number of seconds; using 90/)
+      expect(r.stdout).toMatch(/REACHED_KILL/)
+    }
+  })
+
+  it('treats a junk body as "cannot tell" and proceeds', async () => {
+    const r = await drainAgainst('<html>not json</html>', { WALNUT_DEVPROD_DRAIN_SECS: '600' })
+    expect(r.status).toBe(0)
+    expect(r.stdout).toMatch(/did not answer the active-turn probe — proceeding/)
+    expect(r.stdout).toMatch(/REACHED_KILL/)
   })
 })
 

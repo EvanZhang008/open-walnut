@@ -450,6 +450,19 @@ function rememberTurnId(turnId: string): void {
   }
 }
 
+/**
+ * Relayed turns accepted here and not yet settled.
+ *
+ * Read by the deploy-drain probe (`GET /api/deploy/active-turns`) IN ADDITION to
+ * the agent turn queue: this map is set the moment a relay is accepted, while the
+ * queue only counts the turn once the detached runner has awaited its dynamic
+ * import — a window in which a committed phone turn is invisible to the queue,
+ * and killing the server inside it strands exactly the answer we are protecting.
+ */
+export function activeRelayedTurnCount(): number {
+  return primaryTurns.size
+}
+
 /** conversationId → turnId for turns whose SSE frames must be mirrored down. */
 const mirroring = new Map<string, string>()
 

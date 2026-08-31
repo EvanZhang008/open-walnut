@@ -208,7 +208,83 @@ if [[ -f "$SERVER_LOG" ]]; then
   fi
 fi
 
+# ── Deploy drain: never SIGTERM the server mid Personal-AI turn ─────────────
+# A kill landing inside a lane turn strands the answer. The `claude` CLI is owned
+# by the daemon, so it survives the deploy, finishes and durably writes the reply
+# — but the code that persists it into the conversation lived in the process we
+# just killed, and re-attach skips replay by design. Measured cost: 2 of 14
+# relayed phone turns over two days, every one matching a mid-turn SIGTERM.
+#
+# So ask the running server how many turns are in flight and WAIT for quiet,
+# bounded. On timeout, or when the server can't answer, proceed exactly as
+# before: a deploy must never hang, and the boot-time reconciler
+# (core/sessions/lane-orphan-recovery.ts) is the backstop for whatever we do cut.
+DRAIN_SECS="${WALNUT_DEVPROD_DRAIN_SECS:-90}"
+# Non-numeric budget → default, loudly. `$(( DRAIN_SECS * 2 ))` treats an
+# identifier-shaped value ("abc", "off", "none", "true") as an UNSET variable, so
+# under `set -u` a typo'd knob aborted the deploy — after the full build and
+# smoke boot, with an error message that never named the knob.
+if [[ ! "$DRAIN_SECS" =~ ^[0-9]+$ ]]; then
+  echo "WALNUT_DEVPROD_DRAIN_SECS='$DRAIN_SECS' is not a whole number of seconds; using 90." >&2
+  DRAIN_SECS=90
+fi
+
+# Echoes the in-flight turn count, or NOTHING when the server does not answer.
+# No jq: a deploy must not depend on it, and the endpoint answers one flat
+# object. Always exits 0 — a non-zero status inside `n="$(active_turn_count)"`
+# would abort the deploy under `set -e`.
+active_turn_count() {
+  local body
+  body="$(curl --connect-timeout 1 --max-time 3 -sf \
+    "http://localhost:$PORT/api/deploy/active-turns" 2>/dev/null || true)"
+  [[ -n "$body" ]] || return 0
+  printf '%s' "$body" \
+    | sed -n 's/.*"activeTurns"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
+    | head -n 1
+  return 0
+}
+
+drain_active_turns() {
+  if [[ "${WALNUT_DEVPROD_SKIP_DRAIN:-0}" == "1" ]]; then
+    echo "Drain skipped (WALNUT_DEVPROD_SKIP_DRAIN=1) — a mid-turn kill can strand an answer."
+    return 0
+  fi
+  local n halves=0 max_halves=$(( DRAIN_SECS * 2 ))
+  n="$(active_turn_count)"
+  if [[ -z "$n" ]]; then
+    echo "Drain: :$PORT did not answer the active-turn probe — proceeding (old behavior)."
+    return 0
+  fi
+  if [[ "$n" == "0" ]]; then
+    echo "Drain: no Personal AI turn in flight on :$PORT."
+    return 0
+  fi
+  echo "Drain: $n Personal AI turn(s) in flight on :$PORT — waiting up to ${DRAIN_SECS}s before the kill."
+  while (( halves < max_halves )); do
+    sleep 0.5
+    halves=$(( halves + 1 ))
+    n="$(active_turn_count)"
+    if [[ -z "$n" ]]; then
+      echo "Drain: probe stopped answering after $(( halves / 2 ))s — proceeding."
+      return 0
+    fi
+    if [[ "$n" == "0" ]]; then
+      echo "Drain: turns finished after $(( halves / 2 ))s — safe to kill."
+      return 0
+    fi
+  done
+  echo "Drain TIMEOUT: $n turn(s) still in flight after ${DRAIN_SECS}s — killing anyway." >&2
+  echo "Any answer cut off here is adopted by the boot-time lane reconciler." >&2
+  return 0
+}
+
 if [[ "$DRY_RUN" == "1" ]]; then
+  # Exercise the drain end to end without ever waiting: a dry run deploys
+  # nothing, so a zero budget still proves the probe + parse + both proceed
+  # branches run on this OS. WALNUT_DEVPROD_PORT normally points at a free port,
+  # so this takes the "did not answer → proceed" arm.
+  DRAIN_SECS=0
+  drain_active_turns
   echo "[dry-run] every guard passed on $(uname -s) (probe: $PORT_PROBE, log: $SERVER_LOG)."
   echo "[dry-run] stopping before build, server kill and launch — nothing was deployed."
   exit 0
@@ -376,6 +452,11 @@ if [[ "${WALNUT_DEVPROD_SKIP_SMOKE:-0}" != "1" ]]; then
     echo "Smoke boot OK: fresh dist binds and serves."
   fi
 fi
+
+# LAST thing before the outgoing server is stopped. Deliberately after the build
+# and the smoke boot (those take minutes — draining first would just let new turns
+# start), and before `launchctl remove`, which is itself a kill.
+drain_active_turns
 
 use_launchd=0
 if [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1; then
