@@ -351,20 +351,47 @@ test.describe('Rich HTML streaming', () => {
     await expect(page.frameLocator('iframe.rich-island').locator('#app')).toHaveText('island ready');
   });
 
-  test('4. the output-mode pill PATCHes output_mode and shows the new mode', async ({ page }) => {
+  test('4. the output-mode pill shows the EFFECTIVE mode and PATCHes an explicit override', async ({ page }) => {
     const patches: Record<string, unknown>[] = [];
     await mockFrozenHistory(page);
     await mockSessionDetail(page, { onPatch: (body) => patches.push(body) });
+    // Serve the real config minus `session.output_mode`, so "unset ⇒ rich" is what
+    // is under test here. Test 9 writes that same key on the shared fixture server
+    // and these two run in parallel, which would otherwise make this flake.
+    // (`/api/config` answers an ENVELOPE — `{ config, processNice, … }` — so the
+    // key lives at `config.session.output_mode`, not at the top level.)
+    const envelope = await page.request.get('/api/config').then((r) => r.json());
+    expect(envelope.config, '/api/config no longer returns a { config } envelope').toBeTruthy();
+    await page.route('**/api/config', async (route, request) => {
+      if (request.method() !== 'GET') return route.fallback();
+      const body = { ...envelope, config: { ...envelope.config, session: { ...(envelope.config.session ?? {}) } } };
+      delete body.config.session.output_mode;
+      await route.fulfill({ json: body });
+    });
     await openSession(page);
 
     const pill = page.locator('.session-mode-bar button[title^="Output mode"]').first();
     await expect(pill).toBeVisible();
-    await expect(pill).toHaveText('MD');
+    // This record has NO output_mode, so the pill shows the configured default —
+    // and the shipped default is rich (config.session.output_mode unset ⇒
+    // DEFAULT_SESSION_OUTPUT_MODE). It used to read 'MD' because the pill treated
+    // "unset" as markdown, which hid the default from the user entirely.
+    await expect(pill).toHaveText('Rich');
+    await expect(pill).toHaveAttribute('title', /default from Settings/);
 
     await pill.click();
 
-    await expect(pill).toHaveText('Rich');
+    await expect(pill).toHaveText('MD');
     await expect.poll(() => patches.length, { timeout: 5000 }).toBeGreaterThan(0);
+    expect(patches.at(-1)).toMatchObject({ output_mode: 'markdown' });
+
+    // …and back: the record's OWN value must now win over the config default, so
+    // the label follows the explicit override rather than snapping back.
+    await pill.click();
+
+    await expect(pill).toHaveText('Rich');
+    await expect(pill).not.toHaveAttribute('title', /default from Settings/);
+    await expect.poll(() => patches.length, { timeout: 5000 }).toBeGreaterThan(1);
     expect(patches.at(-1)).toMatchObject({ output_mode: 'rich' });
   });
 
@@ -527,5 +554,112 @@ test.describe('Rich HTML streaming', () => {
 
     mkdirSync(SHOT_DIR, { recursive: true });
     await page.screenshot({ path: `${SHOT_DIR}/anim-demo-styled.png` });
+  });
+
+  /**
+   * The rich path is for MODEL output. A person's own text goes through plain
+   * markdown, and this is not a style preference — the reported bug was a live
+   * "⚙︎ building interactive block…" placeholder sitting inside the user's own
+   * bubble, because they had quoted an ```html-app fence back at the model. Two
+   * ways that is wrong: the user's bubble mounts a widget they never asked for,
+   * and anything they paste off a web page renders as DOM instead of as the text
+   * they can see they pasted.
+   *
+   * The assistant half is the control. Without it a renderer that had simply
+   * stopped mounting islands at all would pass.
+   */
+  test('8. a user message is never a rich block — the same markup in a reply is', async ({ page }) => {
+    const QUOTED = [
+      'why did this render? I pasted:',
+      '',
+      '```html-app',
+      '<div id="q">quoted</div>',
+      '<script>document.getElementById("q").textContent = "ran";</script>',
+      '```',
+      '',
+      '<div class="pasted-card">and a raw div</div>',
+    ].join('\n');
+
+    await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
+      const since = new URL(route.request().url()).searchParams.get('since');
+      const messages = [
+        { role: 'user', text: QUOTED, timestamp: '2026-01-01T00:00:00.000Z' },
+        { role: 'assistant', text: QUOTED, timestamp: '2026-01-01T00:00:01.000Z' },
+      ];
+      if (since !== null) return route.fulfill({ json: { messages: [], cursor: messages.length, delta: true } });
+      return route.fulfill({ json: { messages, cursor: messages.length, delta: false } });
+    });
+    await mockSessionDetail(page);
+    await openSession(page);
+
+    const userMsg = page.locator('.session-msg-user').first();
+    const assistantMsg = page.locator('.session-msg-assistant').first();
+    await expect(userMsg).toContainText('why did this render?');
+
+    // The reply mounts the island — so the renderer is working.
+    await expect(assistantMsg.locator('iframe.rich-island')).toHaveCount(1);
+    await expect(assistantMsg.locator('.rich-blocks')).toHaveCount(1);
+
+    // The user's own bubble: no island, no placeholder, no rich wrapper at all.
+    expect(await userMsg.locator('iframe.rich-island').count()).toBe(0);
+    expect(await userMsg.locator('.rich-app-building').count()).toBe(0);
+    expect(await userMsg.locator('.rich-blocks').count()).toBe(0);
+
+    // The fence is READABLE instead — the text they can see they pasted.
+    await expect(userMsg).toContainText('<div id="q">quoted</div>');
+
+    // Deliberately NOT asserted: that a bare `<div>` in a user message stays
+    // escaped. Plain markdown passes raw HTML through, which is how user messages
+    // have always rendered here, and it is contained (no `allowStyle`, so no
+    // `<style>`; DOMPurify still drops `<script>`). The gate is about the rich
+    // MACHINERY — islands, placeholders, scoped CSS, freezing — not about
+    // re-escaping markdown for one role.
+  });
+
+  /**
+   * Rich is the shipped default, so the only way a user can get plain markdown
+   * for every new session is this control. It writes `config.session.output_mode`,
+   * which is also the value the pill falls back to (test 4), so a select that
+   * looked right but saved nothing would silently pin everyone to rich.
+   *
+   * Real config, real save, real reload — the point is that it PERSISTS.
+   */
+  test('9. Settings carries the default output mode, and saving it sticks', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+
+    const settingsLink = page.locator('.sidebar a[href="/settings"]').first();
+    await expect(settingsLink).toBeVisible({ timeout: 30_000 });
+    await settingsLink.click();
+    const nav = page.locator('.settings-nav-item', { hasText: 'Tasks & Sessions' }).first();
+    await expect(nav).toBeVisible({ timeout: 15_000 });
+    await nav.click();
+
+    const select = page.locator('#session-output-mode');
+    await expect(select).toBeVisible({ timeout: 15_000 });
+    await expect(select).toHaveValue('rich');
+
+    await select.selectOption('markdown');
+    await expect.poll(
+      async () => (await page.request.get('/api/config').then((r) => r.json()))?.config?.session?.output_mode,
+      { timeout: 15_000 },
+    ).toBe('markdown');
+
+    // Leave and come back through the real UI: the section re-mounts and re-reads
+    // the persisted config. Its live state and its auto-save baseline default
+    // identically, so a section that re-defaulted on mount would read 'rich' here
+    // (and would then write the config back on every visit).
+    await page.locator('.sidebar a[href="/"]').first().click();
+    await expect(page.locator('#session-output-mode')).toHaveCount(0);
+    await settingsLink.click();
+    await nav.click();
+    await expect(page.locator('#session-output-mode')).toHaveValue('markdown', { timeout: 15_000 });
+
+    // Leave the fixture as shipped for any later test in this file.
+    await page.locator('#session-output-mode').selectOption('rich');
+    await expect.poll(
+      async () => (await page.request.get('/api/config').then((r) => r.json()))?.config?.session?.output_mode,
+      { timeout: 15_000 },
+    ).toBe('rich');
   });
 });

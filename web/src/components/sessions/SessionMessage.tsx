@@ -1111,6 +1111,15 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
         {thinking && <SessionThinking text={thinking} />}
         {text && (useSegments ? (
           <SuggestSegments segments={segments} cwd={sessionCwd} scope={message.msgId} />
+        ) : isUser ? (
+          // The rich path is for MODEL output only. A person's own text goes
+          // through plain markdown: pasting a reply back (or quoting an
+          // ```html-app fence) must not mount a live widget in their own
+          // bubble — that showed up as a stray "building interactive block…"
+          // placeholder inside a user message, and it would also make anything
+          // they copied off a web page render as DOM rather than as the text
+          // they can see they pasted.
+          <div className="markdown-body" dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(text, sessionCwd) }} />
         ) : (
           <RichMarkdown text={text} cwd={sessionCwd} scope={message.msgId} />
         ))}

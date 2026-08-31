@@ -40,6 +40,8 @@
  *    window while optimistic bubbles are still rendered, so this is fine.
  */
 
+import { stripOutputModeWrappers } from './sessions/output-mode.js';
+
 const CLAIM_TTL_MS = 2 * 60 * 60 * 1000; // claims older than 2h are stale
 const MAX_CLAIMS_PER_SESSION = 100;
 const MAX_BINDINGS_PER_SESSION = 500;
@@ -73,11 +75,20 @@ interface EchoClaim {
 function candidateTexts(text: string): string[] {
   const primary = text.trim();
   const out = [primary];
+  const add = (candidate: string) => {
+    const t = candidate.trim();
+    if (t && !out.includes(t)) out.push(t);
+  };
   if (primary.includes('\n\n')) {
     // Re-join the '\n\n'-separated segments with a single '\n' — the CLI form.
-    const alt = primary.split('\n\n').join('\n').trim();
-    if (alt && alt !== primary) out.push(alt);
+    add(primary.split('\n\n').join('\n'));
   }
+  // History PROJECTS a user line with the output-mode wrapper removed (the
+  // instruction / standing reminder the send path wraps around the user's text —
+  // src/core/sessions/output-mode.ts), while a claim holds what the CLI actually
+  // RECEIVED. Same logical send, two spellings, so both must bind: without this
+  // every rich-mode send loses its id evidence and falls back to text matching.
+  for (const form of [...out]) add(stripOutputModeWrappers(form));
   return out;
 }
 

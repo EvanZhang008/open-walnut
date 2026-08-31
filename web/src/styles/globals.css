@@ -31403,9 +31403,13 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   align-items: center;
   gap: 6px;
   padding: 10px 12px;
-  border: 1px dashed var(--border);
+  border: 1px dashed var(--border-strong);
   border-radius: 8px;
-  color: var(--fg-muted);
+  /* Carries its own surface: muted-on-inherited was unreadable the one time this
+     landed on a coloured bubble, and a placeholder nobody can read is worse than
+     no placeholder. */
+  background: var(--bg-secondary);
+  color: var(--fg-secondary);
   font-size: 12px;
 }
 

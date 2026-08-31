@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { SESSION_MODES } from '@open-walnut/core';
-import type { Config, SessionMode } from '@open-walnut/core';
+import { SESSION_MODES, DEFAULT_SESSION_OUTPUT_MODE } from '@open-walnut/core';
+import type { Config, SessionMode, SessionOutputMode } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { NumberInput } from '../inputs/NumberInput';
 import { KeyValueEditor } from '../inputs/KeyValueEditor';
@@ -28,6 +28,9 @@ export function SessionsSection({ config, onSave }: Props) {
   const ALL_MODES = SESSION_MODES;
   const DEFAULT_MODES: SessionMode[] = ['plan', 'auto', 'bypass'];
   const [enabledModes, setEnabledModes] = useState<SessionMode[]>(config.session?.enabled_modes ?? DEFAULT_MODES);
+  // Reply style every session starts on. A session's own pill overrides it; one
+  // that never did follows this value live (core/sessions/output-mode.ts).
+  const [outputMode, setOutputMode] = useState<SessionOutputMode>(config.session?.output_mode ?? DEFAULT_SESSION_OUTPUT_MODE);
   const [sdkEnabled, setSdkEnabled] = useState(config.session_server?.enabled ?? false);
   const [sdkPort, setSdkPort] = useState<number | undefined>(config.session_server?.port ?? 7890);
   // Triage throttling (config.agent.triage)
@@ -42,6 +45,7 @@ export function SessionsSection({ config, onSave }: Props) {
     setPermissionPrompt(config.session?.permission_prompt ?? true);
     setAutoApproveBypass(config.session?.auto_approve_bypass !== false);
     setEnabledModes(config.session?.enabled_modes ?? DEFAULT_MODES);
+    setOutputMode(config.session?.output_mode ?? DEFAULT_SESSION_OUTPUT_MODE);
     setSdkEnabled(config.session_server?.enabled ?? false);
     setSdkPort(config.session_server?.port ?? 7890);
     setTriageNotifyMode(config.agent?.triage?.notify_mode ?? 'off');
@@ -77,6 +81,7 @@ export function SessionsSection({ config, onSave }: Props) {
         permission_prompt: permissionPrompt,
         auto_approve_bypass: autoApproveBypass,
         enabled_modes: enabledModes,
+        output_mode: outputMode,
       },
       session_limits: normalizeLimits(sessionLimits),
       session_server: {
@@ -91,7 +96,7 @@ export function SessionsSection({ config, onSave }: Props) {
     current: JSON.stringify({
       idleTimeout, maxIdle,
       sessionLimits: normalizeLimits(sessionLimits),
-      permissionPrompt, autoApproveBypass, enabledModes, sdkEnabled, sdkPort,
+      permissionPrompt, autoApproveBypass, enabledModes, outputMode, sdkEnabled, sdkPort,
       triageNotifyMode, triageDebounce: triageDebounce ?? 3,
     }),
     baseline: JSON.stringify({
@@ -104,6 +109,9 @@ export function SessionsSection({ config, onSave }: Props) {
       // auto-save baseline differs from the rendered value and every visit to
       // this section writes the config back unchanged.
       enabledModes: config.session?.enabled_modes ?? DEFAULT_MODES,
+      // Same defaulting as the live state above (DEFAULT_SESSION_OUTPUT_MODE), or
+      // merely opening this section would write the config back.
+      outputMode: config.session?.output_mode ?? DEFAULT_SESSION_OUTPUT_MODE,
       sdkEnabled: config.session_server?.enabled ?? false,
       sdkPort: config.session_server?.port ?? 7890,
       triageNotifyMode: config.agent?.triage?.notify_mode ?? 'off',
@@ -217,6 +225,24 @@ export function SessionsSection({ config, onSave }: Props) {
             );
           })}
         </div>
+      </div>
+
+      <div className="form-group">
+        <label htmlFor="session-output-mode">Output Mode</label>
+        <select
+          id="session-output-mode"
+          value={outputMode}
+          onChange={(e) => setOutputMode(e.target.value as SessionOutputMode)}
+          style={{ maxWidth: 220 }}
+        >
+          <option value="rich">Rich HTML</option>
+          <option value="markdown">Plain markdown</option>
+        </select>
+        <p className="text-sm text-muted" style={{ marginTop: 2 }}>
+          <strong>Rich HTML</strong>: the model may reply in HTML that the console renders
+          (diagrams, steppers, colored layout). <strong>Plain markdown</strong>: markdown only.
+          The output-mode pill in a session&rsquo;s composer overrides this for that session.
+        </p>
       </div>
 
       <div className="settings-divider" />

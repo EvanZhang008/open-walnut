@@ -25,6 +25,7 @@ import {
   type ReadSessionResult,
 } from './session-file-reader.js';
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from './workflow-progress.js';
+import { stripOutputModeWrappers } from './sessions/output-mode.js';
 import { sessionModeFromCli, type InPlaceRewindCut, type JsonlLineCheck } from './types.js';
 import type { SessionBackgroundTasksPayload, WorkflowPhaseInfo, WorkflowAgentInfo } from './event-types.js';
 import os from 'node:os';
@@ -1149,6 +1150,15 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
       if (transformed === null) continue;
       if (transformed !== undefined) text = transformed;
     }
+
+    // Output-mode wrapper (display only). The send path prefixes a one-time
+    // "[Rich output mode: ON] …" instruction and, while rich holds, appends a
+    // one-line reminder — the CLI echoes both into its JSONL, so without this
+    // every user bubble renders the machine text as if the human had typed it.
+    // Stripping HERE (not in each surface) fixes web, phone, notification
+    // previews and search snippets at once. Echo-claim binding compares against
+    // the same stripped form (echo-claims.ts candidateTexts).
+    if (msg.role === 'user') text = stripOutputModeWrappers(text);
 
     // Skip assistant messages with no visible text and no tools.
     // These are typically abandoned API calls where Claude thought but never

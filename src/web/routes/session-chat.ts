@@ -14,7 +14,8 @@ import { normalizeEngine } from '../../core/agents/engine-registry.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQueued, unparkMessage } from '../../core/session-message-queue.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
-import { resolveOutputModeEdge, applyOutputModeInstruction } from '../../core/sessions/output-mode.js'
+import { resolveOutputModeDirective, applyOutputModeDirective, stripOutputModeWrappers } from '../../core/sessions/output-mode.js'
+import { getConfig } from '../../core/config-manager.js'
 import { saveImageToDisk, resolveImageRefs } from './images.js'
 import { log } from '../../logging/index.js'
 import { sessionRunner } from '../../providers/claude-code-session.js'
@@ -214,15 +215,18 @@ export function registerSessionChatRpc(): void {
       })
     }
 
-    // Output-mode EDGE: the reply-style preference has no control channel, so
-    // the model only learns about it from the conversation. Prefix the
-    // instruction exactly once per change (record-authoritative — see
-    // core/sessions/output-mode.ts), outside any image preamble so the
-    // attachment block stays adjacent to the user's own words.
-    const outputModeEdge = resolveOutputModeEdge(record)
-    if (outputModeEdge) {
-      augmentedMessage = applyOutputModeInstruction(outputModeEdge.instruction, augmentedMessage)
-    }
+    // Output mode: the reply-style preference has no control channel, so the
+    // model only learns about it from the conversation. Full instruction on the
+    // CHANGE edge (record-authoritative), then a one-line reminder as a SUFFIX on
+    // every later send while rich holds — a one-shot instruction decays after a
+    // turn or two. Same shape as plan mode in routes/chat.ts. The mode itself
+    // resolves record → config → built-in default, so a session that never
+    // touched the pill follows Settings live (core/sessions/output-mode.ts).
+    // getConfig() can't throw (it falls back to defaults internally); the catch
+    // only keeps a storage hiccup from failing the send.
+    const outputModeConfig = await getConfig().catch(() => null)
+    const outputMode = resolveOutputModeDirective(record, outputModeConfig)
+    augmentedMessage = applyOutputModeDirective(outputMode, augmentedMessage)
 
     // Enqueue and notify in one call. augmentedMessage may include image refs;
     // original data.message is used for bus events (UI display).
@@ -241,10 +245,10 @@ export function registerSessionChatRpc(): void {
     // leave the session still "owing" the instruction, or the mode change would
     // be silently lost. A failure to persist here is logged, not surfaced — the
     // worst case is the instruction repeating on the next send.
-    if (outputModeEdge) {
-      await updateSessionRecord(data.sessionId, { output_mode_injected: outputModeEdge.mode })
+    if (outputMode.prefix) {
+      await updateSessionRecord(data.sessionId, { output_mode_injected: outputMode.mode })
         .catch((err) => log.web.warn('session:send output-mode edge persist failed', {
-          sessionId: data.sessionId, outputMode: outputModeEdge.mode,
+          sessionId: data.sessionId, outputMode: outputMode.mode,
           error: err instanceof Error ? err.message : String(err),
         }))
     }
@@ -290,19 +294,22 @@ export function registerSessionChatRpc(): void {
       })()
     }
 
-    // Return the AUGMENTED text alongside the id. The optimistic bubble holds the
-    // user's ORIGINAL text (what they typed), but the CLI — and therefore the
-    // canonical JSONL echo that history parses — sees `augmentedMessage` (image
-    // refs and/or the output-mode instruction prepended above). Any server-side
-    // rewrite must therefore ride this field. Text-based optimistic dedup compares bubble.text
-    // against persisted history text, so for any message with attachments the two
-    // are STRUCTURALLY unequal and the bubble can never be absorbed: it stays
-    // pinned at the bottom of the timeline below newer content until a refresh
-    // (inc-1785091339102). Handing the augmented text back lets the frontend keep
-    // showing the original while deduping against what actually got persisted.
+    // `dedupText` = the text HISTORY WILL SHOW for this message, which is the
+    // matching basis optimistic-dedup uses (dedupKeyOf: dedupText ?? text).
+    // Text-based dedup compares the bubble against persisted history text, so a
+    // rewrite the frontend doesn't know about makes the two STRUCTURALLY unequal
+    // and the bubble can never be absorbed: it stays pinned at the bottom of the
+    // timeline below newer content until a refresh (inc-1785091339102).
+    //
+    // Not simply `augmentedMessage`: the CLI echoes the augmented text into its
+    // JSONL, but the history projection STRIPS the output-mode wrapper back out
+    // for display (core/session-history.ts), so the basis is the augmented text
+    // minus that wrapper — i.e. the image preamble, if any, plus the user's own
+    // words. Emitter and matcher must agree on one basis; this is it.
+    const displayedByHistory = stripOutputModeWrappers(augmentedMessage)
     return {
       messageId: msg.id,
-      ...(augmentedMessage !== data.message ? { dedupText: augmentedMessage } : {}),
+      ...(displayedByHistory !== data.message ? { dedupText: displayedByHistory } : {}),
     }
   })
 

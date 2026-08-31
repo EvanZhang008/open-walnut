@@ -217,8 +217,11 @@ export type SessionOutputMode = 'markdown' | 'rich';
 /** Runtime allowlist for route/patch validation. */
 export const SESSION_OUTPUT_MODE_IDS: readonly SessionOutputMode[] = ['markdown', 'rich'] as const;
 
-/** What a record with no stored preference means (i.e. every older session). */
-export const DEFAULT_SESSION_OUTPUT_MODE: SessionOutputMode = 'markdown';
+/** Last-resort default: what a session means when NEITHER the record nor
+ *  `config.session.output_mode` states a preference. Rich, because the console
+ *  renders HTML natively and a plain-markdown answer is never WORSE for it —
+ *  resolve through resolveEffectiveOutputMode(), never by reading this alone. */
+export const DEFAULT_SESSION_OUTPUT_MODE: SessionOutputMode = 'rich';
 
 /**
  * Reasoning-effort capability of a model: whether it accepts an effort level at
@@ -1049,6 +1052,15 @@ export interface Config {
      *    directory, delivered as if the user had typed it. Enable this if you
      *    run multiple sessions in shared project directories. */
     cron_policy?: 'unrestricted' | 'session-only';
+
+    /** Reply STYLE every session starts on: 'rich' lets the model answer in HTML
+     *  the console renders natively, 'markdown' keeps replies plain. A session's
+     *  own `output_mode` (the composer pill) overrides this; a session that never
+     *  overrode it follows this value LIVE, so flipping it here moves them all.
+     *  Unset ⇒ DEFAULT_SESSION_OUTPUT_MODE. Resolution:
+     *  resolveEffectiveOutputMode() in core/sessions/output-mode.ts. */
+    output_mode?: SessionOutputMode;
+
     /** Auto-retry a turn that died to a TRANSIENT upstream failure (API timeout,
      *  stalled stream, mid-response 5xx). Enforced by the SESSION DAEMON, so it
      *  keeps retrying while this Mac is asleep or the SSH tunnel is down — the
@@ -1848,8 +1860,9 @@ export interface SessionRecord {
    */
   mcpMountStatus?: Record<string, string>;
   human_note?: string;
-  /** Reply-style preference the human picked in the composer. Undefined =
-   *  DEFAULT_SESSION_OUTPUT_MODE ('markdown'). */
+  /** Reply-style preference the human picked in the composer. Undefined = follow
+   *  `config.session.output_mode` (Settings), then DEFAULT_SESSION_OUTPUT_MODE.
+   *  Resolve with resolveEffectiveOutputMode(), never by reading this alone. */
   output_mode?: SessionOutputMode;
   /** The last output mode we actually TOLD the CLI about. Server-authoritative
    *  edge state: the instruction is only prefixed when this differs from
