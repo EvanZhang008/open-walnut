@@ -147,6 +147,11 @@
    in the launch-bar stack. */
 .draft-meta-row .draft-walnut-more {
   align-self: flex-start;
+  /* Indented to the composer's inner text column: the pill's box edge is
+     mathematically flush with the composer box, but the box's 20px corner
+     radius pulls its VISUAL edge inward, so a flush pill read as sticking out
+     (user screenshot). Align with the content, not the border. */
+  margin-left: 14px;
   padding: 3px 10px;
   border: 1px solid var(--border);
   border-radius: 10px;
