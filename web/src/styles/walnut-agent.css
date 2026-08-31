@@ -177,6 +177,23 @@
 .todo-pinned-card:not(.todo-pinned-card-done) .todo-pinned-title.walnut-task-title,
 .tp-row:not(.done) .tp-row-title.walnut-task-title,
 .dock-task-card .dock-task-title.walnut-task-title,
-.task-card:not(.task-card-done) .task-card-title.walnut-task-title {
+.task-card:not(.task-card-done) .task-card-title.walnut-task-title,
+.session-panel-title.walnut-task-title {
   color: var(--walnut-accent);
+}
+
+/* ── Session header needs-action tint ──
+   Same red + same rule (taskNeedsAction: AGENT_COMPLETE, not done) as the pin
+   area's .todo-pinned-card-needs-action, so "the agent handed this back" reads
+   identically on both surfaces. Orthogonal to the walnut amber title: the
+   BACKGROUND is the state highlight, the TEXT COLOR is the origin marker.
+   (Lives here, not globals.css, only to avoid entangling a peer's in-flight
+   globals edit — move it next to the pin-card rules on the next globals pass.)
+   The second selector exists because the glass header rule
+   ".session-panel:not(.pending-session-panel):not(.draft-session-panel)>.session-panel-header"
+   sets background:transparent at specificity (0,4,0) — a bare two-class rule
+   loses to it silently. The tint composites over the ::before glass layer. */
+.session-panel-header.session-panel-header-needs-action,
+.session-panel:not(.pending-session-panel):not(.draft-session-panel) > .session-panel-header.session-panel-header-needs-action {
+  background: rgba(255, 59, 48, 0.08);
 }

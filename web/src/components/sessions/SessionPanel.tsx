@@ -71,6 +71,7 @@ import { useResolvedSessionRecord } from '@/hooks/useSessionStatus';
 import { useSessionControls } from '@/hooks/useSessionControls';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { engineCaps } from '@/utils/engine-capabilities';
+import { taskNeedsAction } from '@/utils/session-status';
 import { nextSessionControlValue, SessionControlPills } from './SessionControlPills';
 import { useNotifications } from '@/contexts/notifications';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -1272,7 +1273,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
         data-session-id={sessionId}
         ref={panelRef}
       >
-        <div className="session-panel-header" ref={glassHeaderRef}>
+        {/* needs-action: same red tint + same rule (taskNeedsAction) as the pin
+            area's cards, so "the agent handed this back" reads identically on
+            both surfaces. Independent of the walnut amber TITLE — background is
+            the state highlight, text color is the origin marker. */}
+        <div
+          className={`session-panel-header${sessionTask && taskNeedsAction(sessionTask) ? ' session-panel-header-needs-action' : ''}`}
+          ref={glassHeaderRef}
+        >
           {/* Two-row header, and the split is deliberate (2026-07-27):
               ROW 1 = tool chips (Plan / Fork / Changed / Files / Terminal) + time
                       + EVERY icon button (locate / lock / popout / expand / close).
@@ -1576,7 +1584,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                     sessionId={sessionId}
                     taskId={session?.taskId}
                     title={headerTitle}
-                    className="session-panel-title"
+                    // Same amber as the task lists — one marker, every surface.
+                    className={`session-panel-title${sessionTask?.walnut_agent ? ' walnut-task-title' : ''}`}
                   />
                 : <span className="session-panel-title text-muted">Untitled session</span>
               }
