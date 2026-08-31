@@ -19,6 +19,7 @@ import type {
   TaskHookContext,
 } from './types.js';
 import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
+import { stripOutputModeWrappers } from '../sessions/output-mode.js';
 
 // ── Triage dedup state ──
 // Prevents burst triage dispatches when daemon replays old JSONL events after
@@ -1363,11 +1364,16 @@ export async function autoTitleFromObservedMessage(
   sessionId: string, taskId: string, rawMessage: string,
   opts: { maxAttempts?: number; noColdAttach?: boolean; preferBackend?: boolean } = {},
 ): Promise<boolean> {
-  // Strip the "[Images attached …]\n- <path>…" prefix the send routes prepend —
-  // file paths carry no titling signal. An image-only message leaves nothing.
-  const message = rawMessage
-    .replace(/^\[Images attached[^\]]*\]\n(?:- \S[^\n]*\n)*\n?/, '')
-    .trim();
+  // Strip what the SEND ROUTE wrapped around the user's own words, since none of
+  // it carries titling signal: the "[Images attached …]\n- <path>…" prefix (file
+  // paths), and the output-mode instruction / standing reminder (machine text
+  // that, while rich mode holds, rides EVERY send and would otherwise dominate
+  // the titling prompt — see core/sessions/output-mode.ts). This sees the RAW
+  // observed message, so it cannot rely on the history projection's strip.
+  // An image-only message leaves nothing.
+  const message = stripOutputModeWrappers(
+    rawMessage.replace(/^\[Images attached[^\]]*\]\n(?:- \S[^\n]*\n)*\n?/, ''),
+  ).trim();
   if (!message) return false;
   if (/^\/[a-z][\w-]*(\s|$)/i.test(message)) return false; // slash command
 

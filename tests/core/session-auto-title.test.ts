@@ -273,6 +273,33 @@ describe('sessionAutoTitleHook', () => {
       expect((await getTask(task.id)).title).toBe('Medical bill review');
     });
 
+    /**
+     * This trigger reads the RAW observed message, i.e. exactly what the send
+     * route handed the CLI. In rich output mode that carries the full instruction
+     * on the change edge and a one-line reminder on every send after it, so
+     * without stripping, the very first message of a rich session would be titled
+     * off Walnut's own machine text instead of what the human asked for.
+     */
+    it('strips the output-mode instruction and reminder before titling', async () => {
+      const sid = nextSid();
+      const task = await makeTaskAndSession(sid);
+      const fake = registerFakeSession(sid, async () => null, async (question) => {
+        expect(question).not.toMatch(/Rich output mode/);
+        expect(question).not.toMatch(/reply in HTML/);
+        expect(question).toContain('explain how certificate pinning works');
+        return 'Certificate pinning explainer';
+      });
+
+      const { RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER } =
+        await import('../../src/core/sessions/output-mode.js');
+
+      await autoTitleFromObservedMessage(sid, task.id,
+        `${RICH_OUTPUT_MODE_ON_INSTRUCTION.trim()}\n\nexplain how certificate pinning works\n${RICH_OUTPUT_MODE_REMINDER.trim()}`);
+
+      expect(fake.askSideQuestion).toHaveBeenCalledTimes(1);
+      expect((await getTask(task.id)).title).toBe('Certificate pinning explainer');
+    });
+
     it('is a no-op once the task is titled (idempotent with other triggers)', async () => {
       const sid = nextSid();
       const task = await makeTaskAndSession(sid, 'Already titled');
