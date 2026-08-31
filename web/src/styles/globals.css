@@ -10204,20 +10204,41 @@ body.walnut-dragging {
   color: var(--error);
 }
 
+/* A+B drag affordance (Linear style, user-picked 2026-08-30): the whole card is
+   the drag activator (5px pointer distance keeps click-to-open working); this
+   grip is a hover-reveal HINT floated in the 14px left gutter, swapping places
+   with the unread dot on hover. It keeps pointer-events so a press ON it still
+   bubbles to the card's activator (the e2e drag helpers press here). */
 .todo-pinned-drag-handle {
+  position: absolute;
+  left: -11px;
+  top: 50%;
+  transform: translateY(-50%);
   cursor: grab;
   color: var(--fg-muted);
   opacity: 0;
   font-size: 10px;
   line-height: 1;
-  flex-shrink: 0;
-  padding: 2px 0;
   user-select: none;
   touch-action: none;
+  transition: opacity 0.12s;
+}
+/* Folder member cards: grip rides the shared far-left column (clear of the rail),
+   same offset as their unread dot. */
+.todo-pinned-card.task-grouped > .todo-pinned-drag-handle,
+.todo-focus-card.task-grouped > .todo-pinned-drag-handle {
+  left: -27px;
 }
 
-.todo-pinned-card:hover .todo-pinned-drag-handle {
+.todo-pinned-card:hover .todo-pinned-drag-handle,
+.todo-focus-card:hover .todo-pinned-drag-handle {
   opacity: 0.5;
+}
+/* Grip and dot share the gutter slot: on hover the dot yields to the grip
+   (mouse leaves → dot returns). Cards without a grip keep their dot. */
+.todo-pinned-card:hover:has(> .todo-pinned-drag-handle) > .task-unread-dot,
+.todo-focus-card:hover:has(> .todo-pinned-drag-handle) > .task-unread-dot {
+  opacity: 0;
 }
 
 .todo-pinned-drag-handle:hover {
@@ -10864,16 +10885,19 @@ body.walnut-dragging {
   color: var(--fg-muted, #8a8f98);
   margin-left: 2px;
 }
-/* Whole-group drag grip — grab here to move the entire cluster. Kept subtle until
-   the chip is hovered so it doesn't compete with the label. */
+/* Whole-group drag hint — the CHIP itself is the drag activator (A+B, same as
+   the tier cards); the grip floats in the left gutter and appears on hover. It
+   keeps pointer-events so a press on it bubbles to the chip's activator. */
 .task-group-chip-grip {
-  display: inline-flex;
-  align-items: center;
+  position: absolute;
+  left: -12px;
+  top: 50%;
+  transform: translateY(-50%);
   font-size: 9px;
   line-height: 1;
   letter-spacing: -1px;
   color: var(--accent);
-  opacity: 0.4;
+  opacity: 0;
   cursor: grab;
   touch-action: none;
   transition: opacity 0.12s;
@@ -11238,6 +11262,7 @@ body.walnut-dragging {
   height: 7px;
   border-radius: 50%;
   background: var(--error);
+  transition: opacity 0.12s; /* yields to the hover drag-grip in the gutter */
 }
 
 /* Pinned / Focus / Satellite cards (A1 gutter): the dot floats absolutely in the

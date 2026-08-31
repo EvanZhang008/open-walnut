@@ -2162,13 +2162,16 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
         if ((e.target as HTMLElement).closest('.pinned-phase-picker')) return;
         onClick?.(task);
       }}
+      // A+B drag: whole card activates (5px distance keeps click-to-open);
+      // gutter grip is a hover hint. Spread FIRST so role/Enter below win.
+      {...(isStatic || isEditing ? {} : { ...attributes, ...listeners })}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter' && !isEditing) { e.preventDefault(); onClick?.(task); } }}
     >
       {/* Static cards (done / already pinned): no drag grip. Pinned ones show
           their tier dot instead \u2014 "already placed" at a glance. */}
-      {!isStatic && <span className="todo-pinned-drag-handle" {...attributes} {...listeners}>{'\u2261'}</span>}
+      {!isStatic && <span className="todo-pinned-drag-handle" aria-hidden="true" title="Drag to reorder">{'\u28ff'}</span>}
       {isPinned && pinnedTier && (
         <span
           className={`todo-recent-tier-dot todo-tier-icon-${isBuiltinTier(pinnedTier) ? pinnedTier : 'custom'}`}

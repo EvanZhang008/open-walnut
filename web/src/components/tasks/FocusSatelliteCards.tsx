@@ -65,11 +65,13 @@ export function GroupChip({ groupId, tier, label, onRename, onDissolve, onHide }
       style={style}
       data-group-id={groupId}
       className={`task-group-chip${isDragging ? ' task-group-chip-dragging' : ''}`}
-      title="Folder — drag the grip to move the whole folder"
+      title="Folder — press and drag to move the whole folder"
+      // A+B drag: the whole chip is the activator (5px distance keeps the label's
+      // click-to-rename and the ⊘/✕ buttons working); the gutter grip is a hint.
+      {...attributes}
+      {...listeners}
     >
-      {/* Grip = the whole-folder drag handle. Kept distinct from the label (rename) and
-          the ⊘/✕ buttons so those gestures never conflict with the drag. */}
-      <span className="task-group-chip-grip" {...attributes} {...listeners} title="Drag to move the whole folder" aria-label="Drag folder">⣿</span>
+      <span className="task-group-chip-grip" aria-hidden="true" title="Drag to move the whole folder">⣿</span>
       <span className="task-group-chip-icon" aria-hidden="true">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z" /></svg>
       </span>
@@ -294,6 +296,12 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         if ((e.target as HTMLElement).closest('.pinned-phase-picker')) return;
         onClick?.(task);
       }}
+      // A+B drag (Linear style): the WHOLE card is the drag activator — press
+      // anywhere and move past the 5px sensor distance to drag; a plain click
+      // still opens (no movement → no activation). The gutter grip below is a
+      // hover-reveal HINT, not the handle. Spread FIRST so the card's own
+      // role/tabIndex/Enter-to-open handlers below win over dnd-kit's.
+      {...(selectMode || isEditing ? {} : { ...attributes, ...listeners })}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter' && !isEditing) { e.preventDefault(); selectMode ? onSelectToggle?.(task.id) : onClick?.(task); } }}
@@ -311,8 +319,8 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
           {isSelected ? '✓' : ''}
         </button>
       ) : (
-        <span className="todo-pinned-drag-handle" {...attributes} {...listeners} title="Drag to reorder">
-          &#x2630;
+        <span className="todo-pinned-drag-handle" aria-hidden="true" title="Drag to reorder">
+          &#x28FF;
         </span>
       )}
       {/* Unread dot — same affordance as the main list row, so the Focus and
