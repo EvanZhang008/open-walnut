@@ -9,6 +9,12 @@
  *   GET  /api/time/apps?date= — ONE day of OUTSIDE activity: per Mac app, and per
  *        site for a browser, plus how much of it was inside Walnut.
  *   POST /api/time/apps/toggle — turn outside sampling on/off (opt-in, persisted).
+ *   GET  /api/time/screentime?date= — ONE day of APPLE Screen Time, per device
+ *        (the iPhone, and this Mac when the user asks for it), from Walnut's own
+ *        permanent copy. Never reads Apple's store on the request path.
+ *   POST /api/time/screentime/toggle — the master switch and the "show this Mac"
+ *        switch (both opt-in, persisted).
+ *   POST /api/time/screentime/refresh — snapshot Apple's store now.
  *
  * All of them answer fast or answer DEGRADED, never hang: the reads race a
  * deadline and return whatever is already in hand (flagged `degraded: true`)
@@ -30,7 +36,10 @@ import {
   sanitizeSamples, startAgentTimeCollector,
   startOutsideCollector, stopAgentTimeCollector, stopOutsideCollector, summarize, walnutHostsFromConfig,
   withLedgerBackfill, TIME_KINDS,
+  SCREEN_TIME_BLOCK_GRANULARITY,
+  startScreenTimeSnapshots, stopScreenTimeSnapshots,
   type DayBlocks, type HelperUnavailable, type OutsideApp, type OutsideAppTimeline, type RollupIndex,
+  type ScreenTimeDeviceFold,
   type TimeKind, type TimeRecord,
   type TimeSummary,
 } from '../../core/time-tracking/index.js';
@@ -55,6 +64,10 @@ export function startTimeTracking(): void {
   // Opt-in and self-gating: returns immediately unless config enables it, and a
   // first run's swiftc compile happens off the boot path.
   void startOutsideCollector().catch(() => undefined);
+  // Same shape: the hourly Screen Time snapshot checks the config on each tick, so
+  // arming it costs nothing when the feature is off, and enabling it later does not
+  // need a restart. Apple purges its own history, so a missed window is lost data.
+  startScreenTimeSnapshots();
 }
 
 /**
@@ -75,6 +88,10 @@ export function stopTimeTracking(): void {
   // into a store nobody reads (it also exits on its own once stdout closes).
   stopOutsideCollector();
   resetOutsideStore();
+  // The snapshot timer must not outlive the server: a tick against a torn-down
+  // store would spawn a helper for nobody.
+  stopScreenTimeSnapshots();
+  resetScreenTimeAccessCache();
 }
 
 // POST /api/time/heartbeats — { samples: [{ ts, durationMs, kind, taskId?, sessionId? }] }
@@ -484,3 +501,287 @@ timeRouter.post('/apps/toggle', async (req: Request, res: Response) => {
     res.status(500).json({ error: 'toggle_failed', message: 'could not persist the outside-activity setting' });
   }
 });
+
+// ── GET /api/time/screentime?date=YYYY-MM-DD ──
+// ONE day of Apple Screen Time, per device, out of Walnut's own permanent copy.
+//
+// The request path NEVER touches Apple's store: that read costs three file copies
+// through an FDA helper plus five SQL queries, which is a background job's work,
+// not a route's. Snapshots run hourly (screentime-snapshot.ts) and this endpoint
+// serves what they banked. `?refresh=1` is available for the "I just granted the
+// permission" moment, and even then only kicks the snapshot off and answers with
+// whatever is stored.
+
+/** Budget for one day of Screen Time (one config read + one day file + a probe). */
+const SCREENTIME_DEADLINE_MS = 2_000;
+/** How long a permission probe answer is reused. A probe is a helper spawn, and
+ *  the tab polls; the grant does not change second to second. */
+const ACCESS_TTL_MS = 15_000;
+
+/** What is standing between the user and their numbers, if anything. */
+export type ScreenTimeAccess =
+  /** Reading works (or there is simply no Screen Time database on this Mac). */
+  | 'ok'
+  /** The helper needs Full Disk Access and has never had it. */
+  | 'needs_grant'
+  /** The helper is in the FDA list but the entry is stale (remove and re-add). */
+  | 'stale_grant'
+  /** Screen Time has never written a store here. */
+  | 'no_store'
+  /** No macOS, or the helper cannot be built on this box. */
+  | 'unavailable'
+  /** Not asked, because the feature is switched off. */
+  | 'off'
+  /** The probe itself failed; do NOT send the user to System Settings for it. */
+  | 'unknown';
+
+export interface ScreenTimeResponse {
+  date: string;
+  /** config.time.screentime.enabled — off by default; this reads a whole other
+   *  app's data, so it never starts without being asked for. */
+  enabled: boolean;
+  /** config.time.screentime.include_this_mac — Apple's row for THIS Mac is stored
+   *  either way, but hidden unless asked for (Walnut measures this Mac itself at
+   *  five-second resolution, so two numbers for it would just be confusing). */
+  includeThisMac: boolean;
+  access: ScreenTimeAccess;
+  /** The exact path the user must add in System Settings, when that is the fix. */
+  helperPath?: string;
+  devices: ScreenTimeDeviceFold[];
+  /** This Mac's own Apple rows: always sent when includeThisMac, else omitted. */
+  localDevices?: ScreenTimeDeviceFold[];
+  totalMs: number;
+  pickups: number;
+  notifications: number;
+  /** Apple's number for this Mac, whether or not it is being shown. */
+  localTotalMs: number;
+  /** These blocks are HOUR-resolution, unlike the Mac's own 5-second samples. A
+   *  client must label them differently or it is implying a precision we lack. */
+  blockGranularity: typeof SCREEN_TIME_BLOCK_GRANULARITY;
+  /** Ms-since-epoch of the last snapshot attempt, and whether it worked. */
+  lastSnapshotAt?: number;
+  lastSnapshotOk?: boolean;
+  /** Dates the permanent store holds, newest first. Lets the UI offer only days
+   *  that exist instead of an empty view for a day never captured. */
+  storedDates?: string[];
+  degraded?: boolean;
+}
+
+/** Cached probe: { at, access, helperPath }. Absent until the first probe. */
+let accessCache: { at: number; access: ScreenTimeAccess; helperPath?: string } | null = null;
+
+/**
+ * Forget the cached permission answer. Called from stopTimeTracking(), because a
+ * remembered 'ok' describes a grant on the machine the LAST server saw: it must not
+ * outlive that server and answer for the next one, whose WALNUT_HOME (and therefore
+ * whose helper binary, and therefore whose TCC identity) may be a different one
+ * entirely.
+ */
+export function resetScreenTimeAccessCache(): void {
+  accessCache = null;
+  lastKnownScreenTime = { enabled: false, includeThisMac: false };
+}
+
+/** Last read config values, so a degraded answer reports what we last knew rather
+ *  than asserting 'off' — which reads as "you turned it off". */
+let lastKnownScreenTime = { enabled: false, includeThisMac: false };
+
+async function screenTimeAccess(enabled: boolean): Promise<{ access: ScreenTimeAccess; helperPath?: string }> {
+  if (!enabled) return { access: 'off' };
+  if (accessCache && Date.now() - accessCache.at < ACCESS_TTL_MS) {
+    return { access: accessCache.access, ...(accessCache.helperPath ? { helperPath: accessCache.helperPath } : {}) };
+  }
+  const { probeScreenTimeAccess } = await import('../../core/time-tracking/screentime-reader.js');
+  const result = await probeScreenTimeAccess();
+  const mapped: { access: ScreenTimeAccess; helperPath?: string } = !('kind' in result)
+    ? { access: 'ok', helperPath: result.helperPath }
+    : result.kind === 'denied'
+      ? { access: result.denied, helperPath: result.helperPath }
+      : result.kind === 'no_store'
+        ? { access: 'no_store', helperPath: result.helperPath }
+        : result.kind === 'unavailable'
+          ? { access: 'unavailable' }
+          : { access: 'unknown' };
+  accessCache = { at: Date.now(), ...mapped };
+  return mapped;
+}
+
+timeRouter.get('/screentime', async (req: Request, res: Response) => {
+  if (CLOUD_MODE) {
+    res.status(501).json({ error: 'not_supported_cloud', message: 'Screen Time is read on the primary box only' });
+    return;
+  }
+  const raw = typeof req.query.date === 'string' && req.query.date ? req.query.date : localDateKey(new Date());
+  if (!dayBoundsMs(raw)) {
+    res.status(400).json({ error: 'invalid_date', message: 'date must be a real YYYY-MM-DD' });
+    return;
+  }
+  const date = raw;
+  const empty = (): ScreenTimeResponse => ({
+    date,
+    enabled: lastKnownScreenTime.enabled,
+    includeThisMac: lastKnownScreenTime.includeThisMac,
+    access: 'unknown',
+    devices: [],
+    totalMs: 0,
+    pickups: 0,
+    notifications: 0,
+    localTotalMs: 0,
+    blockGranularity: SCREEN_TIME_BLOCK_GRANULARITY,
+    degraded: true,
+  });
+  const bail = deadline(SCREENTIME_DEADLINE_MS);
+  const build = buildScreenTime(date, isTruthy(req.query.refresh)).catch((err: unknown) => {
+    log.web.warn('screen time day failed', { date, error: err instanceof Error ? err.message : String(err) });
+    return empty();
+  });
+  try {
+    res.json(await Promise.race([build, bail.promise.then(empty)]));
+  } finally {
+    bail.cancel();
+  }
+});
+
+async function buildScreenTime(date: string, refresh: boolean): Promise<ScreenTimeResponse> {
+  const { getConfig } = await import('../../core/config-manager.js');
+  const config = await getConfig().catch(() => undefined);
+  if (config) {
+    lastKnownScreenTime = {
+      enabled: config.time?.screentime?.enabled === true,
+      includeThisMac: config.time?.screentime?.include_this_mac === true,
+    };
+  }
+  const { enabled, includeThisMac } = lastKnownScreenTime;
+
+  const [{ readScreenTimeDay, listScreenTimeDates }, { foldScreenTimeDay }, snapshot] = await Promise.all([
+    import('../../core/time-tracking/screentime-store.js'),
+    import('../../core/time-tracking/screentime-view.js'),
+    import('../../core/time-tracking/screentime-snapshot.js'),
+  ]);
+
+  // Fire-and-forget: a refresh must not make the user wait for three file copies
+  // and five queries. The next poll picks up whatever it banked.
+  if (refresh && enabled) void snapshot.snapshotScreenTime().catch(() => undefined);
+
+  const [file, storedDates, access] = await Promise.all([
+    readScreenTimeDay(date),
+    listScreenTimeDates().catch(() => [] as string[]),
+    screenTimeAccess(enabled),
+  ]);
+
+  // Which device was this Mac is recorded per row at capture time, so a day
+  // captured before a machine swap keeps the labelling it was stored with.
+  const localDeviceIds = file.records
+    .filter((rec) => rec.kind === 'device' && rec.local === true)
+    .map((rec) => rec.deviceId);
+  const fold = foldScreenTimeDay(file.records, { date, localDeviceIds });
+  const last = snapshot.lastSnapshotOutcome();
+
+  return {
+    date,
+    enabled,
+    includeThisMac,
+    access: access.access,
+    ...(access.helperPath ? { helperPath: access.helperPath } : {}),
+    devices: fold.devices,
+    ...(includeThisMac ? { localDevices: fold.localDevices } : {}),
+    totalMs: fold.totalMs,
+    pickups: fold.pickups,
+    notifications: fold.notifications,
+    localTotalMs: fold.localTotalMs,
+    blockGranularity: SCREEN_TIME_BLOCK_GRANULARITY,
+    ...(last ? { lastSnapshotAt: last.at, lastSnapshotOk: last.ok } : {}),
+    storedDates: storedDates.slice(-90).reverse(),
+  };
+}
+
+// POST /api/time/screentime/toggle — { enabled?, includeThisMac? }
+// Either switch, or both. An explicit boolean wins so a double-fired UI cannot
+// flip twice; omitting both flips `enabled`, which is what a plain switch sends.
+timeRouter.post('/screentime/toggle', async (req: Request, res: Response) => {
+  if (CLOUD_MODE) {
+    res.status(501).json({ error: 'not_supported_cloud', message: 'Screen Time is read on the primary box only' });
+    return;
+  }
+  // Persisting `enabled: true` where nothing can ever read the store would show a
+  // switch that is on while nothing happens. Refuse rather than lie.
+  if (process.platform !== 'darwin') {
+    res.status(501).json({ error: 'not_supported_platform', message: 'Apple Screen Time needs macOS' });
+    return;
+  }
+  try {
+    const { getConfig, updateConfig } = await import('../../core/config-manager.js');
+    const config = await getConfig();
+    const current = {
+      enabled: config.time?.screentime?.enabled === true,
+      includeThisMac: config.time?.screentime?.include_this_mac === true,
+    };
+    const body = (req.body ?? {}) as { enabled?: unknown; includeThisMac?: unknown };
+    const next = {
+      enabled: typeof body.enabled === 'boolean' ? body.enabled : (
+        typeof body.includeThisMac === 'boolean' ? current.enabled : !current.enabled
+      ),
+      includeThisMac: typeof body.includeThisMac === 'boolean' ? body.includeThisMac : current.includeThisMac,
+    };
+    if (next.enabled !== current.enabled || next.includeThisMac !== current.includeThisMac) {
+      // updateConfig replaces the whole `time` key, so its siblings ride along.
+      await updateConfig({
+        time: {
+          ...config.time,
+          screentime: {
+            ...config.time?.screentime,
+            enabled: next.enabled,
+            include_this_mac: next.includeThisMac,
+          },
+        },
+      });
+    }
+    lastKnownScreenTime = next;
+    // A fresh probe next read: enabling is exactly when the cached 'off' is wrong.
+    accessCache = null;
+    const snapshot = await import('../../core/time-tracking/screentime-snapshot.js');
+    if (next.enabled) {
+      snapshot.startScreenTimeSnapshots();
+      // Do not wait: a first enable pays a swiftc compile plus the copies, and the
+      // switch has to answer now. The UI's next poll reports what happened.
+      void snapshot.snapshotScreenTime().catch(() => undefined);
+    } else {
+      // Stop reading Apple's store. Everything already snapshotted stays: turning
+      // this off is "stop collecting", never "delete my history".
+      snapshot.stopScreenTimeSnapshots();
+    }
+    const access = await screenTimeAccess(next.enabled);
+    res.json({ ...next, access: access.access, ...(access.helperPath ? { helperPath: access.helperPath } : {}) });
+  } catch (err) {
+    log.web.warn('screen time toggle failed', { error: err instanceof Error ? err.message : String(err) });
+    res.status(500).json({ error: 'toggle_failed', message: 'could not persist the Screen Time setting' });
+  }
+});
+
+// POST /api/time/screentime/refresh — snapshot Apple's store now, and WAIT for it.
+// The one place waiting is right: the user just granted the permission and wants
+// to see whether it worked. Bounded, and it answers with the outcome either way.
+timeRouter.post('/screentime/refresh', async (_req: Request, res: Response) => {
+  if (CLOUD_MODE) {
+    res.status(501).json({ error: 'not_supported_cloud', message: 'Screen Time is read on the primary box only' });
+    return;
+  }
+  const snapshot = await import('../../core/time-tracking/screentime-snapshot.js');
+  accessCache = null; // the point of a manual refresh is that something changed
+  const bail = deadline(REFRESH_DEADLINE_MS);
+  try {
+    const outcome = await Promise.race([
+      snapshot.snapshotScreenTime(),
+      bail.promise.then(() => null),
+    ]);
+    // A null outcome means it is STILL RUNNING, not that it failed. Saying
+    // "failed" here would send the user to fix a permission that is fine.
+    res.json(outcome ? { ...outcome, running: false } : { ok: true, running: true, days: 0, devices: 0 });
+  } finally {
+    bail.cancel();
+  }
+});
+
+/** A snapshot is three file copies plus five aggregate queries. Long for a route,
+ *  but this one is a button press whose whole purpose is the answer. */
+const REFRESH_DEADLINE_MS = 20_000;

@@ -1139,6 +1139,24 @@ export interface Config {
       /** Master switch for outside-activity sampling. Default: false. */
       enabled?: boolean;
     };
+    /**
+     * Apple Screen Time for your OTHER devices (the iPhone's per-app numbers that
+     * macOS already holds once "Share Across Devices" is on). Opt-in and DISABLED
+     * by default, because reading it needs Full Disk Access, which cannot be
+     * requested programmatically and has to be granted by hand exactly once.
+     * See src/core/time-tracking/screentime-reader.ts.
+     */
+    screentime?: {
+      /** Master switch for reading Apple's Screen Time store. Default: false. */
+      enabled?: boolean;
+      /**
+       * Also keep and show THIS Mac's rows from Apple's store. Default: false.
+       * Walnut samples the Mac itself at 5-second resolution, so Apple's
+       * hour-resolution Mac row is a second, coarser answer to the same question:
+       * useful for cross-checking, confusing as a default.
+       */
+      include_this_mac?: boolean;
+    };
   };
   tools?: {
     exec?: {

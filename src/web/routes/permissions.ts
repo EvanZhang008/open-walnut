@@ -46,10 +46,27 @@ permissionsRouter.post('/:id/open-settings', async (req, res) => {
   execFile('/usr/bin/open', [perm.settingsUrl], { timeout: 5_000 }, (err) => {
     if (err) log.web.warn('open settings failed', { id: perm.id, error: String(err).slice(0, 200) });
   });
+  // When the grant target is a PATH, put it on the Mac's clipboard in the same
+  // click. The FDA panel's file picker has no way to reach a hidden dotted
+  // directory except Cmd+Shift+G and a pasted path, and hand-typing
+  // ~/.open-walnut/cache/walnut-reader-v1 is exactly where this flow was losing
+  // people. Server-side rather than navigator.clipboard on purpose: the panel is
+  // on the Mac, so the path has to land on the MAC's clipboard even when the UI
+  // driving this is the phone.
+  const copied = perm.grantTarget.startsWith('/');
+  if (copied) copyToMacClipboard(perm.grantTarget);
   // Fire-and-forget by design: `open` returns before Settings finishes
   // launching, and the UI's verify poll is what confirms the outcome anyway.
-  res.json({ ok: true, opened: perm.settingsUrl });
+  res.json({ ok: true, opened: perm.settingsUrl, copiedPath: copied ? perm.grantTarget : undefined });
 });
+
+/** pbcopy via stdin, so the value is never interpolated into a shell command. */
+function copyToMacClipboard(value: string): void {
+  const child = execFile('/usr/bin/pbcopy', { timeout: 5_000 }, (err) => {
+    if (err) log.web.warn('clipboard copy failed', { error: String(err).slice(0, 200) });
+  });
+  child.stdin?.end(value);
+}
 
 permissionsRouter.post('/:id/request', async (req, res) => {
   if (req.params.id !== 'calendar') {

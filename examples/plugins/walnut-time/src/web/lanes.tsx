@@ -1,5 +1,5 @@
 import { useMemo, useState, type CSSProperties } from 'react'
-import type { OutsideTimelineApp, TimeBlock } from './api'
+import type { OutsideTimelineApp, ScreenTimeDevice, TimeBlock } from './api'
 import {
   TICK_BELOW_MS, clockLabel, formatDuration, hourLabel, planDrawMerge, taskColor,
   type AxisRange,
@@ -34,6 +34,32 @@ import { LANE_BAR_MIN_PX, LANE_ROWS, LANE_TRACK_PX, laneBar } from './time-views
  *  app rows are context, not the subject of the chart. */
 const OUTSIDE_LANE_ROWS = 6
 
+/**
+ * How long a bar for one Apple Screen Time bucket is drawn.
+ *
+ * Apple reports a bucket's START and how much of it was used, not WHEN inside it. A
+ * bar drawn `usedMs` long from the bucket's start would place a 12-minute stretch at
+ * 14:00 sharp, which is a claim Apple never made. So the bar spans the whole bucket
+ * and the tooltip and the row total cite the real used time, which is exactly the
+ * existing `endTs` vs `trackedMs` split (a bar's LENGTH is its wall span; totals cite
+ * tracked time). The hatched fill says the same thing visually.
+ *
+ * Inferred from the data rather than hard-coded: Apple's bucket has been an hour on
+ * every store we have read, but a build that switches to fifteen minutes must not
+ * silently draw every bar four times too wide.
+ */
+function bucketSpanMs(blocks: ReadonlyArray<{ startTs: string; ms: number }>): number {
+  const HOUR = 3_600_000
+  let smallest = HOUR
+  for (let i = 1; i < blocks.length; i++) {
+    const gap = Date.parse(blocks[i]!.startTs) - Date.parse(blocks[i - 1]!.startTs)
+    // Only a positive, plausible gap counts. A day with one bucket, or with a gap
+    // across an idle evening, tells us nothing about the bucket size.
+    if (gap > 0 && gap < smallest) smallest = gap
+  }
+  return smallest
+}
+
 /** What a lane bar needs — tasks and outside apps both flatten into this.
  *  `kind` exists because planDrawMerge groups by (kind, taskId). */
 interface LaneSpan {
@@ -50,7 +76,7 @@ interface LaneRow {
   title: string
   ms: number
   blocks: LaneSpan[]
-  kind: 'task' | 'others' | 'agent' | 'outside' | 'outside-others'
+  kind: 'task' | 'others' | 'agent' | 'outside' | 'outside-others' | 'device'
   /** Merged rows only: expand/collapse state + how many rows are folded in. */
   expandable?: { expanded: boolean; count: number; toggle: () => void }
   /** Expanded children render slightly indented. */
@@ -64,7 +90,7 @@ const spanOf = (b: TimeBlock): LaneSpan => ({
   taskId: b.taskId, kind: b.kind, startTs: b.startTs, endTs: b.endTs, trackedMs: b.trackedMs,
 })
 
-export function TimeLanes({ blocks, totals, agentMs, showAgents, outside, outsideDropped, axis, minuteOf, nowMin, labelFor }: {
+export function TimeLanes({ blocks, totals, agentMs, showAgents, outside, outsideDropped, devices, axis, minuteOf, nowMin, labelFor }: {
   /** Per-task MERGED blocks (not the serial ribbon): rows want runs of work. */
   blocks: TimeBlock[]
   /** Ranked per-task human totals for the day, descending. */
@@ -75,6 +101,10 @@ export function TimeLanes({ blocks, totals, agentMs, showAgents, outside, outsid
   outside: OutsideTimelineApp[] | null
   /** Apps past the SERVER's cap: counted, but no intervals arrived for them. */
   outsideDropped: { apps: number; ms: number } | null
+  /** Apple Screen Time devices (the iPhone), or null when it is off / not granted.
+   *  One row per DEVICE, not per app: Apple's buckets are device-level, and inventing
+   *  a per-app timeline out of a device-level bucket would be made-up data. */
+  devices: ScreenTimeDevice[] | null
   axis: AxisRange
   minuteOf: (iso: string) => number
   nowMin: number | null
@@ -165,6 +195,31 @@ export function TimeLanes({ blocks, totals, agentMs, showAgents, outside, outsid
       }
     }
 
+    // Other devices, above the agent row: still the human's own attention, just
+    // measured somewhere Walnut cannot reach. A device with no buckets that day is
+    // skipped rather than drawn as an empty row promising data it does not have.
+    for (const device of devices ?? []) {
+      if (device.blocks.length === 0) continue
+      const spanMs = bucketSpanMs(device.blocks)
+      out.push({
+        key: `d-${device.deviceId}`,
+        taskId: null,
+        title: `📱 ${device.deviceName}`,
+        ms: device.totalMs,
+        blocks: device.blocks.map((b) => ({
+          taskId: device.deviceId,
+          kind: 'device',
+          startTs: b.startTs,
+          endTs: new Date(Date.parse(b.startTs) + spanMs).toISOString(),
+          trackedMs: b.ms,
+        })),
+        kind: 'device',
+        // Every bar in the row is the same device, so name it plus the caveat that
+        // makes the bar's width honest.
+        barLabel: () => `${device.deviceName}(Apple 按小时记录,时段内某处)`,
+      })
+    }
+
     if (showAgents) {
       out.push({
         key: 'agent',
@@ -176,7 +231,7 @@ export function TimeLanes({ blocks, totals, agentMs, showAgents, outside, outsid
       })
     }
     return out
-  }, [blocks, totals, agentMs, showAgents, outside, outsideDropped, tasksOpen, appsOpen, labelFor])
+  }, [blocks, totals, agentMs, showAgents, outside, outsideDropped, devices, tasksOpen, appsOpen, labelFor])
 
   const showNow = nowMin !== null && nowMin >= axis.startMin && nowMin <= axis.endMin
   // Only the FRACTION crosses into CSS. The offset past the name column is done in

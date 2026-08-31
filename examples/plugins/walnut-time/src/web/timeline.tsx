@@ -12,6 +12,7 @@ import { TAPE_PX_PER_MIN } from './time-views'
 import { TimeTape } from './tape'
 import { TimeChapters } from './chapters'
 import { TimeLanes } from './lanes'
+import { useScreenTime } from './screentime'
 
 /**
  * Timeline — "how did my day actually go?", in three switchable readings of the
@@ -215,6 +216,12 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
     })
   }, [])
 
+  // Apple Screen Time rides the SAME toggle as the outside-app rows: both answer
+  // "what else was on a screen", and two checkboxes for one question is a menu, not a
+  // choice. Its own fetch though, so a phone that has never synced cannot delay or
+  // fail the Mac's rows.
+  const phone = useScreenTime(api, log, showScreen ? date : '')
+
   const startMs = useMemo(() => dayStartMs(date), [date])
   const lengthMin = useMemo(() => dayLengthMin(date), [date])
   const minuteOf = useCallback(
@@ -254,6 +261,13 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
    *  View-gated too: only the swimlanes draw screen rows, so the tape's axis must
    *  not stretch to hold apps it will never show. */
   const dayScreen = view === 'lanes' && showScreen && screen && screen.date === date ? screen : null
+  // Apple's devices for the SHOWN day. `localDevices` is present only when the user
+  // asked to see this Mac's Apple numbers, so simply concatenating respects that
+  // choice without a second flag to keep in sync.
+  const phoneDevices = useMemo(
+    () => [...(phone.day?.devices ?? []), ...(phone.day?.localDevices ?? [])],
+    [phone.day],
+  )
 
   /** One axis for all three views, so switching never moves the day. */
   const axis = useMemo(() => {
@@ -355,7 +369,7 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
               />
               <span>Include agents</span>
             </label>
-            <label className="wt-tt-agents-toggle" title="Rows for the Mac apps you used outside Walnut (needs outside tracking, see the Apps tab)">
+            <label className="wt-tt-agents-toggle" title="Rows for the Mac apps you used outside Walnut, plus a row per device Apple Screen Time syncs here (both are enabled on the Apps tab)">
               <input
                 type="checkbox"
                 data-testid="time-app-screen-toggle"
@@ -431,6 +445,7 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
           outsideDropped={dayScreen && dayScreen.droppedApps > 0
             ? { apps: dayScreen.droppedApps, ms: dayScreen.droppedMs }
             : null}
+          devices={showScreen ? phoneDevices : null}
           axis={axis}
           minuteOf={minuteOf}
           nowMin={nowMin}

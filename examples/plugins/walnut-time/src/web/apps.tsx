@@ -3,11 +3,20 @@ import type { PluginLogger } from '@open-walnut/plugin-api/web'
 import type { DayApps, OutsideApp, OutsideSite, TimeApi } from './api'
 import { DayNav, type DayNavTestIds } from './day-nav'
 import { Stat } from './reports'
+import { ScreenTimeSection, useScreenTime } from './screentime'
 import { dayLabel, formatDuration } from './time-timeline'
 
 /**
  * Apps — where the REST of the screen time went: which Mac app, and for a browser,
- * which site.
+ * which site. Since 2026-08 it also carries a DEVICE dimension: this Mac (measured
+ * by Walnut, five-second resolution) and any device Apple Screen Time syncs here,
+ * which in practice means the iPhone (measured by Apple, hour resolution).
+ *
+ * The device is a SWITCH, never a merge. Adding a phone's minutes to a Mac's would
+ * produce a number for "screen time" that describes neither device and cannot be
+ * checked against anything the user can see elsewhere, and the two measurements do
+ * not even share a resolution. So each device answers for itself, and each says who
+ * counted it.
  *
  * The other three tabs only ever see Walnut's own surfaces, so a day spent in a
  * terminal and a browser reads there as a day off. This tab is the counterweight, and
@@ -96,6 +105,26 @@ export function TimeApps({ api, log, dates, today }: {
   const enabled = day?.enabled === true
   const disabled = day !== null && !day.enabled
 
+  // Apple's side of the tab. Its own read, because it answers for other devices and
+  // must not be able to fail the Mac's own numbers (or wait on them).
+  const screen = useScreenTime(api, log, date)
+  // 'mac' is Walnut's own sampling; anything else is a deviceId Apple synced here.
+  const [device, setDevice] = useState('mac')
+  const screenDevices = useMemo(
+    () => [...(screen.day?.devices ?? []), ...(screen.day?.localDevices ?? [])],
+    [screen.day],
+  )
+  // A device that stops appearing (day switch, or it simply had no usage) must not
+  // leave the tab showing an empty panel for something that is not there.
+  useEffect(() => {
+    if (device !== 'mac' && !screenDevices.some((d) => d.deviceId === device)) setDevice('mac')
+  }, [device, screenDevices])
+  /** The user turned this on and something is still in their way. */
+  const screenNeedsAttention = screen.day !== null
+    && screen.day.enabled
+    && screen.day.access !== 'ok'
+    && screen.day.access !== 'off'
+
   return (
     <div className="wt-ap" data-testid="time-app-apps">
       {enabled && (
@@ -109,18 +138,94 @@ export function TimeApps({ api, log, dates, today }: {
         />
       )}
 
-      {error && <div className="wt-degraded" data-testid="time-app-apps-error">Error: {error}</div>}
-      {shown?.degraded && (
-        <div className="wt-degraded">Showing a partial answer: the day was still being read.</div>
+      {/* Only shown once there IS another device: a lone "This Mac" chip is a
+          control with nothing to choose. */}
+      {screenDevices.length > 0 && (
+        <div className="wt-ap-devices" role="tablist" data-testid="time-app-apps-devices">
+          <DeviceChip id="mac" label="This Mac" active={device === 'mac'} onPick={setDevice} />
+          {screenDevices.map((d) => (
+            <DeviceChip
+              key={d.deviceId}
+              id={d.deviceId}
+              label={d.deviceName}
+              active={device === d.deviceId}
+              onPick={setDevice}
+            />
+          ))}
+        </div>
       )}
 
-      {!shown && !error && !disabled && <p className="wt-empty">Loading…</p>}
-      {disabled && <AppsInvite busy={busy} onEnable={() => setTracking(true)} />}
-      {shown?.enabled && (
-        <AppsDay day={shown} date={date} busy={busy} onPause={() => setTracking(false)} />
+      {device === 'mac' ? (
+        <>
+          {/* A permission the user is WAITING ON goes above the day, not under it.
+              First cut put the whole section at the bottom, below the Pause link, and
+              on a laptop window the "one permission left" card was off screen entirely
+              for a feature the user had just switched on. An INVITE stays at the
+              bottom, though: an offer is not a problem, and hoisting it would push the
+              day's actual numbers down to sell something. */}
+          {screenNeedsAttention && (
+            <ScreenTimeSection api={api} log={log} date={date} day={screen.day} onChanged={screen.reload} />
+          )}
+          {error && <div className="wt-degraded" data-testid="time-app-apps-error">Error: {error}</div>}
+          {shown?.degraded && (
+            <div className="wt-degraded">Showing a partial answer: the day was still being read.</div>
+          )}
+
+          {!shown && !error && !disabled && <p className="wt-empty">Loading…</p>}
+          {disabled && <AppsInvite busy={busy} onEnable={() => setTracking(true)} />}
+          {shown?.enabled && (
+            <AppsDay day={shown} date={date} busy={busy} onPause={() => setTracking(false)} />
+          )}
+          {/* The offer to add a phone, under the Mac's own day. Once a device IS
+              present, that device's chip is where its numbers live, so this whole
+              block goes away rather than duplicating them. */}
+          {screenDevices.length === 0 && !screenNeedsAttention && (
+            <ScreenTimeSection api={api} log={log} date={date} day={screen.day} onChanged={screen.reload} />
+          )}
+        </>
+      ) : (
+        <ScreenTimeSection
+          api={api}
+          log={log}
+          date={date}
+          day={onlyDevice(screen.day, device)}
+          onChanged={screen.reload}
+        />
       )}
     </div>
   )
+}
+
+function DeviceChip({ id, label, active, onPick }: {
+  id: string
+  label: string
+  active: boolean
+  onPick: (id: string) => void
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      className={`wt-ap-device${active ? ' is-active' : ''}`}
+      data-testid="time-app-apps-device"
+      data-device={id}
+      onClick={() => onPick(id)}
+    >
+      {label}
+    </button>
+  )
+}
+
+/** Narrow the day to ONE device, keeping every other field (access state, the
+ *  snapshot receipt) so the section can still explain itself. */
+function onlyDevice(day: ReturnType<typeof useScreenTime>['day'], deviceId: string) {
+  if (!day) return null
+  return {
+    ...day,
+    devices: day.devices.filter((d) => d.deviceId === deviceId),
+    localDevices: (day.localDevices ?? []).filter((d) => d.deviceId === deviceId),
+  }
 }
 
 /**

@@ -19,6 +19,30 @@ export type { OutsideRecord, OutsideRow } from './outside-store.js';
 export type {
   OutsideApp, OutsideAppTimeline, OutsideBlock, OutsideDayFold, OutsideSite, OutsideTimelineFold,
 } from './outside-view.js';
+// Apple Screen Time: the reader (Apple's store, via the FDA helper), our permanent
+// copy of it, the fold the UI renders, and the hourly snapshot that fills the copy.
+export {
+  probeScreenTimeAccess, readScreenTime, resetScreenTimeStoreDir,
+  screenTimeHelperPath, screenTimeStoreDir, screenTimeStorePath,
+} from './screentime-reader.js';
+export type {
+  ScreenTimeApp, ScreenTimeBlock, ScreenTimeDay, ScreenTimeDenied, ScreenTimeFailure,
+  ScreenTimeSnapshot,
+} from './screentime-reader.js';
+export {
+  listScreenTimeDates, readScreenTimeDay, recordScreenTimeDay, recordScreenTimeSnapshot,
+  resetScreenTimeStore,
+} from './screentime-store.js';
+export type { ScreenTimeDayFile, ScreenTimeRecord, ScreenTimeWriteResult } from './screentime-store.js';
+export { foldScreenTimeDay, SCREEN_TIME_BLOCK_GRANULARITY } from './screentime-view.js';
+export type {
+  ScreenTimeAppRow, ScreenTimeDayFold, ScreenTimeDeviceFold, ScreenTimeSiteRow,
+  ScreenTimeTimelineBlock,
+} from './screentime-view.js';
+export {
+  lastSnapshotOutcome, resetScreenTimeSnapshotState, snapshotScreenTime,
+  startScreenTimeSnapshots, stopScreenTimeSnapshots,
+} from './screentime-snapshot.js';
 export { getIndex, hydrate, readDayRecords, recordTime, resetTimeStore } from './store.js';
 export { dayBoundsMs, foldDayBlocks, foldDaySlices } from './blocks.js';
 export { localDateKey, recentDateKeys, sanitizeSamples, summarize } from './rollup.js';

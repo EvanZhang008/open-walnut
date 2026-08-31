@@ -140,6 +140,55 @@ async function probeFullDiskAccess(): Promise<'granted' | 'denied' | 'unknown'> 
   }
 }
 
+/**
+ * Screen Time probe — the SECOND, separate Full Disk Access grant.
+ *
+ * Two rows in the FDA panel, on purpose. The row above is the launcher (so agent
+ * sessions can read other apps' files); this one is the walnut-reader helper,
+ * which disclaims parent responsibility and is therefore its own TCC subject. A
+ * user who granted one has not granted the other, and merging the two rows into
+ * one would tell them to grant a path that cannot fix the failure they see.
+ *
+ * Only probed when the feature is switched ON. Otherwise it reports
+ * not-applicable and the UI hides the row: nobody should be asked for the most
+ * powerful permission macOS has for a feature they never enabled, and probing
+ * would also pay a first-run swiftc compile for nothing.
+ */
+async function probeScreenTime(): Promise<{
+  state: 'granted' | 'denied' | 'not-applicable' | 'unknown';
+  target: string;
+  stale: boolean;
+}> {
+  const unknown = { state: 'unknown' as const, target: 'walnut-reader', stale: false };
+  let enabled = false;
+  try {
+    const { getConfig } = await import('../config-manager.js');
+    const config = await getConfig();
+    enabled = config.time?.screentime?.enabled === true;
+  } catch {
+    return unknown; // an unreadable config tells us nothing about the grant
+  }
+  if (!enabled) return { state: 'not-applicable', target: 'walnut-reader', stale: false };
+  try {
+    const { probeScreenTimeAccess } = await import('../time-tracking/screentime-reader.js');
+    const result = await probeScreenTimeAccess();
+    if (!('kind' in result)) return { state: 'granted', target: result.helperPath, stale: false };
+    if (result.kind === 'denied') {
+      return { state: 'denied', target: result.helperPath, stale: result.denied === 'stale_grant' };
+    }
+    // no_store means Screen Time itself has never written a database here, and
+    // unavailable means the helper cannot exist on this box. Neither is a grant
+    // problem, so neither may send the user to System Settings.
+    if (result.kind === 'no_store') return { state: 'granted', target: result.helperPath, stale: false };
+    return unknown;
+  } catch (err) {
+    log.web.warn('screen time permission probe inconclusive', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return unknown;
+  }
+}
+
 // ── report assembly ──────────────────────────────────────────────────────────
 
 const NOT_APPLICABLE: PermissionsReport = {
@@ -164,10 +213,11 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
     return reportCache.report;
   }
 
-  const [launcher, calState, fdaState] = await Promise.all([
+  const [launcher, calState, fdaState, screenTime] = await Promise.all([
     detectLauncher(),
     calendarAuthStatus(),
     probeFullDiskAccess(),
+    probeScreenTime(),
   ]);
 
   // Advice must name the real responsible app. When we're launched by a
@@ -197,6 +247,7 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
       // The v2+ helper disclaims parent responsibility, so the grant target
       // is the helper itself — launcher-independent by design.
       grantTarget: 'walnut-calendar (asks by itself — one Allow click)',
+      launcherIndependent: true,
       settingsUrl: SETTINGS_URL.calendars,
       steps:
         calState === 'not-determined'
@@ -223,6 +274,40 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
         `Press Cmd+Shift+G and paste: ${fdaTarget}`,
         'Select it and make sure its toggle is ON.',
       ],
+    },
+    {
+      id: 'screen-time',
+      label: 'Screen Time (iPhone + Mac)',
+      state: screenTime.state,
+      fixKind: 'settings-only',
+      why:
+        'Lets Walnut read Apple Screen Time, including the numbers your iPhone syncs to this Mac, ' +
+        'and keep them permanently. Apple deletes its own copy after a few weeks. ' +
+        'Only the walnut-reader helper gets this access, and all it can do is read one file.',
+      grantTarget: screenTime.target,
+      // walnut-reader re-execs with responsibility disclaimed, so this grant is
+      // the helper's own and survives a different launcher.
+      launcherIndependent: true,
+      settingsUrl: SETTINGS_URL.fullDisk,
+      ...(screenTime.stale ? { staleGrant: true } : {}),
+      steps: screenTime.stale
+        ? [
+            // The row is already there with its toggle on, so "add it" would read
+            // as nonsense and toggling it does nothing: tccd has to re-read the
+            // helper, which only happens on a fresh add.
+            'The helper is already listed, but macOS no longer recognizes it (Walnut rebuilt it).',
+            'Open System Settings → Privacy & Security → Full Disk Access.',
+            'Select the walnut-reader row and click the − button to remove it.',
+            `Click +, press Cmd+Shift+G, then Cmd+V to paste the same path back (already copied): ${screenTime.target}`,
+            'Turning the toggle off and on does NOT work — it has to be removed and re-added.',
+          ]
+        : [
+            'Open System Settings → Privacy & Security → Full Disk Access.',
+            'Click + (authenticate if asked).',
+            `Press Cmd+Shift+G, then Cmd+V (the path is already copied): ${screenTime.target}`,
+            'Select it and make sure its toggle is ON.',
+            'On your iPhone: Settings → Screen Time → Share Across Devices, so its numbers reach this Mac.',
+          ],
     },
   ];
 

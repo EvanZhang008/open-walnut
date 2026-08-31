@@ -126,6 +126,19 @@ export const LANES_CSS = `
 }
 .wt-tl-row.is-outside-others { background: var(--wt-idle); }
 
+/* Another device's day, as Apple counted it. Hatched for the same reason the agent
+   row is, but for a different claim: Apple reports which HOUR a stretch fell in, not
+   when inside it, so a solid bar would assert a start time nobody measured. The
+   hatching is the visual form of "somewhere in here". */
+.wt-tl-row.is-device .wt-tl-dot { background: var(--wt-screen); }
+.wt-tl-row.is-device .wt-tl-bar {
+  background: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--wt-screen) 60%, transparent) 0 3px,
+    color-mix(in srgb, var(--wt-screen) 22%, transparent) 3px 7px
+  );
+}
+
 /* Expanded children of a merged row: indented so the fold has visible structure. */
 .wt-tl-row.is-child .wt-tl-name { padding-left: 34px; }
 

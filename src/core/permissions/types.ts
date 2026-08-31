@@ -9,7 +9,7 @@
  */
 
 /** Stable ids — new checks register in darwin.ts and reuse this union. */
-export type PermissionId = 'calendar' | 'full-disk-access';
+export type PermissionId = 'calendar' | 'full-disk-access' | 'screen-time';
 
 export type PermissionState =
   /** Grant confirmed by a real probe (not by assuming). */
@@ -48,10 +48,30 @@ export interface PermissionStatus {
    *  what they add in the panel (e.g. /Applications/Walnut.app); surfacing it
    *  is the whole point — users kept granting to "node" and it never worked. */
   grantTarget: string;
+  /**
+   * True when the grant belongs to a helper that disclaims parent
+   * responsibility, so it does NOT depend on how Walnut was started. The UI must
+   * then STOP naming the launcher: saying "launched by iTerm2, so macOS checks
+   * the grant for walnut-reader" is a non sequitur that makes a correct
+   * instruction look wrong, and the launcher sentence exists precisely to be
+   * believed.
+   */
+  launcherIndependent?: boolean;
   /** x-apple.systempreferences deep link opened by the fix endpoint. */
   settingsUrl: string;
   /** Short numbered steps rendered inside the fix dialog. */
   steps: string[];
+  /**
+   * Set when the grant EXISTS in System Settings but no longer applies, which
+   * happens to an ad-hoc signed helper whenever it is rebuilt: TCC keyed the
+   * grant to the old content hash, yet the panel still shows the row with its
+   * toggle on. It is the one denial the user cannot fix by following the
+   * ordinary "add it" steps, and toggling off/on does not work either — the row
+   * has to be removed with MINUS and added again with PLUS. The UI needs the
+   * flag to lead with "re-add" instead of "add", because a user staring at an
+   * enabled toggle will otherwise assume our probe is broken.
+   */
+  staleGrant?: boolean;
 }
 
 export interface LauncherInfo {

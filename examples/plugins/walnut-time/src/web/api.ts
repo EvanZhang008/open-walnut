@@ -160,6 +160,100 @@ export interface DayAppsBlocks {
   degraded?: boolean
 }
 
+// ── Apple Screen Time (the iPhone, and this Mac when asked for) ──
+// A whole separate measurement from everything above: Apple counted it, at HOUR
+// resolution, on devices Walnut cannot sample. Kept in its own types so nothing
+// can accidentally add a phone's minutes to a Mac sample's minutes.
+
+export type ScreenTimeAccess =
+  | 'ok' | 'needs_grant' | 'stale_grant' | 'no_store' | 'unavailable' | 'off' | 'unknown'
+
+export interface ScreenTimeAppRow {
+  bundleId: string
+  ms: number
+  pickups?: number
+  notifications?: number
+  category?: string
+}
+
+/** A website row. A DIFFERENT type from an app row on purpose: Apple counts a
+ *  browser's app time and the domains inside it separately, so they never sum. */
+export interface ScreenTimeSiteRow {
+  domain: string
+  ms: number
+  category?: string
+}
+
+export interface ScreenTimeTimelineBlock {
+  startTs: string
+  ms: number
+}
+
+export interface ScreenTimeDropped {
+  apps: number
+  appMs: number
+  sites: number
+  siteMs: number
+  blocks: number
+  blockMs: number
+}
+
+export interface ScreenTimeDevice {
+  deviceId: string
+  deviceName: string
+  platform: number
+  /** APPLE's total for the device's day. Never a sum of the rows below. */
+  totalMs: number
+  appMs: number
+  siteMs: number
+  pickups: number
+  notifications: number
+  apps: ScreenTimeAppRow[]
+  sites: ScreenTimeSiteRow[]
+  blocks: ScreenTimeTimelineBlock[]
+  blockGranularity: 'hour'
+  dropped: ScreenTimeDropped
+  headerMissing?: true
+  local?: true
+}
+
+export interface DayScreenTime {
+  date: string
+  enabled: boolean
+  includeThisMac: boolean
+  access: ScreenTimeAccess
+  /** The exact path to add in System Settings, when a grant is the fix. */
+  helperPath?: string
+  devices: ScreenTimeDevice[]
+  /** This Mac's Apple rows. Sent only when includeThisMac. */
+  localDevices?: ScreenTimeDevice[]
+  totalMs: number
+  pickups: number
+  notifications: number
+  localTotalMs: number
+  blockGranularity: 'hour'
+  lastSnapshotAt?: number
+  lastSnapshotOk?: boolean
+  /** Days our permanent copy holds, newest first. */
+  storedDates?: string[]
+  degraded?: boolean
+}
+
+export interface ScreenTimeToggle {
+  enabled: boolean
+  includeThisMac: boolean
+  access: ScreenTimeAccess
+  helperPath?: string
+}
+
+export interface ScreenTimeRefresh {
+  ok: boolean
+  /** True when the snapshot is still running: NOT a failure. */
+  running: boolean
+  days: number
+  devices: number
+}
+
 /** Only the three fields the reports need out of the console's task list. */
 export interface TaskRef {
   id: string
@@ -177,6 +271,18 @@ export interface TimeApi {
   /** Turn outside sampling on or off. Always explicit, never a blind flip: the UI
    *  knows the current state, and a double-click must not toggle twice. */
   setAppsEnabled(enabled: boolean): Promise<AppsToggle>
+  /** ONE day of Apple Screen Time, per device, from Walnut's permanent copy. */
+  screenTime(date: string, opts?: { refresh?: boolean }): Promise<DayScreenTime>
+  /** Either switch; both are opt-in and off by default. */
+  setScreenTime(next: { enabled?: boolean; includeThisMac?: boolean }): Promise<ScreenTimeToggle>
+  /** Re-read Apple's store now. For the "I just granted the permission" moment. */
+  refreshScreenTime(): Promise<ScreenTimeRefresh>
+  /**
+   * Open the Full Disk Access pane ON THE MAC and put the helper's path on the Mac's
+   * clipboard, in one click. Server-side on purpose: the pane and the clipboard that
+   * matter are the Mac's, even when this UI is a phone.
+   */
+  openScreenTimeSettings(): Promise<{ ok: boolean; copiedPath?: string }>
   /** The task list, for titles and the project filter. */
   tasks(): Promise<TaskRef[]>
 }
@@ -190,12 +296,12 @@ export function createTimeApi(walnut: WalnutWebApi): TimeApi {
     return response.json<T>()
   }
 
-  async function postJson<T>(path: string, body: unknown): Promise<T> {
+  async function postJson<T>(path: string, body: unknown, timeoutMs = TIMEOUT_MS): Promise<T> {
     const response = await walnut.http.fetch(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      timeoutMs: TIMEOUT_MS,
+      timeoutMs,
     })
     if (!response.ok) throw new Error(`HTTP ${response.status} from ${path}`)
     return response.json<T>()
@@ -223,6 +329,28 @@ export function createTimeApi(walnut: WalnutWebApi): TimeApi {
 
     setAppsEnabled(enabled) {
       return postJson<AppsToggle>('/api/time/apps/toggle', { enabled })
+    },
+
+    screenTime(date, opts = {}) {
+      const params = new URLSearchParams({ date })
+      if (opts.refresh) params.set('refresh', '1')
+      return getJson<DayScreenTime>(`/api/time/screentime?${params.toString()}`)
+    },
+
+    setScreenTime(next) {
+      return postJson<ScreenTimeToggle>('/api/time/screentime/toggle', next)
+    },
+
+    openScreenTimeSettings() {
+      // The console's own Permission Doctor endpoint, reused rather than reimplemented:
+      // it owns the deep link and the pbcopy, so the plugin cannot drift from it.
+      return postJson<{ ok: boolean; copiedPath?: string }>('/api/permissions/screen-time/open-settings', {})
+    },
+
+    refreshScreenTime() {
+      // A real snapshot: three file copies plus a handful of queries, so it needs
+      // more than the shared 10s budget before the server itself gives up.
+      return postJson<ScreenTimeRefresh>('/api/time/screentime/refresh', {}, 25_000)
     },
 
     async tasks() {

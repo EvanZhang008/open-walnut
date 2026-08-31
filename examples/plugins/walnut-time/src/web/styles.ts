@@ -10,9 +10,9 @@
  * added here goes BEFORE it.
  */
 
-import { APPS_CSS } from './styles-apps'
+import { APPS_CSS, SCREENTIME_CSS } from './styles-apps'
 import { BASE_CSS } from './styles-base'
 import { LANES_CSS } from './styles-lanes'
 import { VIEWS_CSS } from './styles-views'
 
-export const TIME_CSS = [BASE_CSS, LANES_CSS, APPS_CSS, VIEWS_CSS].join('\n')
+export const TIME_CSS = [BASE_CSS, LANES_CSS, APPS_CSS, SCREENTIME_CSS, VIEWS_CSS].join('\n')
