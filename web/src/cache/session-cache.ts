@@ -24,6 +24,7 @@ import {
   appendPermissionBlock,
   resolvePermissionBlock,
   flushMainTextBuffer,
+  flushMainTextForInterrupt,
   lastMainLaneText,
   lastMainLaneIndex,
   type StreamingBlock,
@@ -225,6 +226,17 @@ function flushText(state: StreamState): void {
   state.blocks = flushMainTextBuffer(state.blocks, state.textBuffer, state.completedLen);
 }
 
+/** Flush because a CARD is about to interrupt the text (tool / system /
+ *  permission). Unlike flushText this keeps an unfinished markup construct in the
+ *  accumulator so it renders whole in the block after the card — see
+ *  flushMainTextForInterrupt. Turn-end paths keep using flushText. */
+function interruptText(state: StreamState): void {
+  const msgId = lastMainLaneText(state.blocks, state.completedLen)?.msgId;
+  const { blocks, carry } = flushMainTextForInterrupt(state.blocks, state.textBuffer, msgId, state.completedLen);
+  state.blocks = blocks;
+  state.textBuffer = carry;
+}
+
 function ensureState(sid: string): StreamState {
   let s = streamStates.get(sid);
   if (!s) {
@@ -296,8 +308,7 @@ function registerGlobalListeners(): void {
     // Main-lane tool call interrupts main text flow; a subagent tool call
     // (parentToolUseId set) lives in its own lane and must not cut main text.
     if (!parentToolUseId) {
-      flushText(state);
-      state.textBuffer = '';
+      interruptText(state);
     }
     state.blocks = appendToolCall(state.blocks, {
       toolUseId, toolName, input, planContent, parentToolUseId, subagentType, taskDescription,
@@ -326,8 +337,7 @@ function registerGlobalListeners(): void {
     };
     if (!sid || !trackedSessions.has(sid)) return;
     const state = ensureState(sid);
-    flushText(state);
-    state.textBuffer = '';
+    interruptText(state);
     state.blocks = appendSystemBlock(state.blocks, { variant, message, detail });
   });
 
@@ -343,8 +353,7 @@ function registerGlobalListeners(): void {
     };
     if (!sid || !requestId || !toolName || !trackedSessions.has(sid)) return;
     const state = ensureState(sid);
-    flushText(state);
-    state.textBuffer = '';
+    interruptText(state);
     state.blocks = appendPermissionBlock(state.blocks, {
       requestId, toolName, input, reason, acpOptions,
     });

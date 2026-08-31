@@ -662,4 +662,53 @@ test.describe('Rich HTML streaming', () => {
       { timeout: 15_000 },
     ).toBe('rich');
   });
+
+  /**
+   * The reported artifact, reproduced through the real pipeline
+   * (inc-1788209680147): a system card landed while the model was one character
+   * into an attribute, and the interrupt flush cut the element in half. What the
+   * user saw was an empty coloured pill, then `px">…` as visible prose, and the
+   * sentence never came back.
+   *
+   * Two guards, and BOTH are needed. The card is silenced at the provider now, so
+   * `commands_changed` should never reach the browser at all — but any card that
+   * legitimately interrupts (a tool call, a permission prompt) lands at exactly the
+   * same place, so the carry has to hold on its own. This drives the carry directly
+   * by injecting the event the browser would have received.
+   */
+  test('10. a card landing mid-tag does not cut the element in half', async ({ page }) => {
+    await mockFrozenHistory(page);
+    await mockSessionDetail(page);
+    await openSession(page);
+    const history = page.locator('.session-history');
+
+    // Stream up to one character into the padding value — where the real one hit.
+    await streamDeltas(page, 'Rewriting the plan now:\n\n<div class="carry-card" style="border-left:3px solid #dc2626;padding:8');
+
+    // The card interrupts.
+    await injectEvent(page, 'session:system-event', {
+      sessionId: SESSION_ID, taskId: TASK_ID, variant: 'info', message: 'commands_changed',
+    });
+    await expect(history.locator('.session-system-line').first()).toBeVisible({ timeout: 10_000 });
+
+    // …and the model resumes with the rest of the same tag.
+    await streamDeltas(page, 'px">every step is now explicit</div>\n\nCARRY-TAIL-OK');
+    await expect(history).toContainText('CARRY-TAIL-OK');
+
+    // The element arrived WHOLE: one node, styled, with its text inside it.
+    const card = history.locator('.carry-card');
+    await expect(card).toHaveCount(1);
+    await expect(card).toContainText('every step is now explicit');
+    expect(await card.evaluate((el) => getComputedStyle(el).borderLeftWidth)).toBe('3px');
+
+    // And the two halves of the old artifact are both gone: no leaked attribute
+    // text anywhere in the message, and no empty pill above the card.
+    await expect(history).not.toContainText('px">');
+    expect(await history.locator('.carry-card:empty').count()).toBe(0);
+    await expect(history).toContainText('Rewriting the plan now:');
+
+    mkdirSync(SHOT_DIR, { recursive: true });
+    await page.screenshot({ path: `${SHOT_DIR}/carry-across-card.png` });
+    await expect(page.locator('body')).not.toContainText('Something went wrong rendering the page.');
+  });
 });

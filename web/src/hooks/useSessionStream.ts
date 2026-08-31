@@ -13,6 +13,7 @@ import {
 import { shouldAdoptSnapshot } from '@/cache/snapshot-adoption';
 import {
   writeMainText,
+  flushMainTextForInterrupt,
   appendMainThinking,
   appendLaneText,
   appendLaneThinking,
@@ -26,6 +27,7 @@ import {
   type StreamingBlock,
   type StreamingPermissionBlock,
 } from '@/stream/stream-reducer';
+import { splitPendingMarkup } from '@open-walnut/pending-markup';
 import { useSessionStatus } from './useSessionStatus';
 import { seedSessionStatus } from '@/stores/session-status-store';
 
@@ -381,6 +383,30 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     }
   }, []);
 
+  /** Flush for a CARD that interrupts the text (tool / system / permission), and
+   *  set the accumulator to what must be carried into the block after the card:
+   *  an unfinished tag belongs to the text that finishes it, never to the text
+   *  before the card (inc-1788209680147 — see flushMainTextForInterrupt).
+   *  Replaces the old `flushPendingTextRaf(); streamBuffer.current = ''` pair at
+   *  those call sites; turn-end paths keep clearing outright. */
+  const interruptPendingText = useCallback(() => {
+    if (textDeltaRaf.current !== null) {
+      clearTimeout(textDeltaRaf.current);
+      textDeltaRaf.current = null;
+    }
+    const accumulated = streamBuffer.current;
+    if (!accumulated) return;
+    const msgId = currentTextMsgId.current;
+    // The split is a pure function of the buffer, so computing it here (for the
+    // accumulator) and again inside the updater (for the blocks) cannot disagree.
+    streamBuffer.current = splitPendingMarkup(accumulated).pending;
+    if (!sawFirstTextFlush.current && accumulated !== streamBuffer.current) {
+      sawFirstTextFlush.current = true;
+      log.info('stream', 'first text flush to blocks (interrupt)', { sessionId: activeSessionId.current });
+    }
+    setBlocks((prev) => flushMainTextForInterrupt(prev, accumulated, msgId, completedLen.current).blocks);
+  }, []);
+
   // Status events are reduced before React listeners run. This effect consumes
   // the accepted store value, so stale REST and equal-revision conflicts cannot
   // stop a live stream.
@@ -506,8 +532,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     // accumulator. A subagent tool call (parentToolUseId set) lives in its own
     // lane and must NOT cut the main turn's text mid-token.
     if (!parentToolUseId) {
-      flushPendingTextRaf();
-      streamBuffer.current = '';
+      interruptPendingText();
     }
 
     setBlocks((prev) => {
@@ -598,8 +623,8 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     if (!sessionId || sid !== sessionId) return;
 
     // Don't set isStreaming — system events are notifications, not active text streaming.
-    flushPendingTextRaf();
-    streamBuffer.current = '';  // system event breaks text accumulation
+    // The card breaks text accumulation, but an unfinished tag rides across it.
+    interruptPendingText();
 
     setBlocks((prev) => appendSystemBlock(prev, { variant, message, detail }));
   });
@@ -620,14 +645,13 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     // id — the card never came back and the session sat on "working…" until a
     // new message auto-denied it (reported 2026-08-16, 2145s stuck).
     // Presence-in-blocks makes the periodic re-emit the self-heal path.
-    // flushPendingTextRaf nests its own setBlocks, so flush OUTSIDE the updater;
+    // interruptPendingText nests its own setBlocks, so flush OUTSIDE the updater;
     // the extra flush on a duplicate re-emit is harmless (it's a no-op between
     // text deltas of a blocked turn).
-    flushPendingTextRaf();
+    interruptPendingText();
     setBlocks(prev => appendPermissionBlock(prev, {
       requestId, toolName, input, reason, acpOptions,
     }));
-    streamBuffer.current = '';
   });
 
   // Handle permission resolved events (update block status from pending → allowed/denied)

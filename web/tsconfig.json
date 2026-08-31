@@ -17,7 +17,8 @@
       "@/*": ["src/*"],
       "@open-walnut/core": ["../src/core/types"],
       "@open-walnut/task-query": ["../src/core/task-query"],
-      "@open-walnut/letter-frame": ["../src/core/human-inbox/letter-frame"]
+      "@open-walnut/letter-frame": ["../src/core/human-inbox/letter-frame"],
+      "@open-walnut/pending-markup": ["../src/core/stream/pending-markup"]
     }
   },
   "include": ["src", "../src/types/**/*.d.ts"]

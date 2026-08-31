@@ -15,6 +15,7 @@ import {
   writeMainText,
   applyMainTextDelta,
   flushMainTextBuffer,
+  flushMainTextForInterrupt,
   appendMainThinking,
   appendLaneText,
   appendLaneThinking,
@@ -398,5 +399,74 @@ describe('appendSystemBlock', () => {
   it('appends a system notice', () => {
     const blocks = appendSystemBlock([], { variant: 'compact', message: 'Compacted', detail: 'ctx' });
     expect(blocks[0]).toEqual({ type: 'system', variant: 'compact', message: 'Compacted', detail: 'ctx' });
+  });
+});
+
+/**
+ * A card (tool / system / permission) cuts the model's text where it lands. When
+ * that is mid-tag, the fragment belongs to the text that FINISHES it — otherwise
+ * the block above the card renders an empty coloured pill (the sanitizer closes
+ * the tag it was handed) and the block below opens with the rest of the attribute
+ * as prose. That is inc-1788209680147, reported as "commands_changed interrupted
+ * the output".
+ */
+describe('flushMainTextForInterrupt', () => {
+  const INTERRUPTED = 'Skill 更新完，现在按新标准重排：\n\n<div style="border-left:3px solid #dc2626;padding:8';
+
+  it('leaves the unfinished tag in the carry, not in the flushed block', () => {
+    const { blocks, carry } = flushMainTextForInterrupt([], INTERRUPTED, 'msg_1', 0);
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as { content: string }).content).toBe('Skill 更新完，现在按新标准重排：\n\n');
+    expect(carry).toBe('<div style="border-left:3px solid #dc2626;padding:8');
+    // Lossless: what was flushed plus what is carried is what the model sent.
+    expect((blocks[0] as { content: string }).content + carry).toBe(INTERRUPTED);
+  });
+
+  it('the resumed text then renders ONE whole tag (the reported artifact is gone)', () => {
+    // Turn: text → card → text, with the card landing mid-attribute.
+    let blocks: StreamingBlock[] = [];
+    const first = flushMainTextForInterrupt(blocks, INTERRUPTED, 'msg_1', 0);
+    blocks = appendSystemBlock(first.blocks, { variant: 'info', message: 'commands_changed' });
+    // The accumulator restarts at the carry, exactly as the mirrors do.
+    const resumed = first.carry + 'px">全部降级为基线</div>';
+    blocks = writeMainText(blocks, resumed, 'msg_1', 0);
+
+    expect(blocks.map(b => b.type)).toEqual(['text', 'system', 'text']);
+    const texts = blocks.filter(b => b.type === 'text').map(b => (b as { content: string }).content);
+    expect(texts[0]).not.toContain('<div');            // no half tag above the card
+    expect(texts[1]).toMatch(/^<div style="[^"]+">/);  // whole tag below it
+    expect(texts[1]).not.toMatch(/^px">/);             // no leaked attribute text
+  });
+
+  it('drops a block that held NOTHING but the fragment', () => {
+    // An earlier coalesced flush already wrote the fragment into a live block; it
+    // must go away rather than linger as an empty row above the card.
+    const buffer = '<div style="padding:8';
+    const blocks = writeMainText([], buffer, 'msg_1', 0);
+    expect(blocks).toHaveLength(1);
+
+    const out = flushMainTextForInterrupt(blocks, buffer, 'msg_1', 0);
+    expect(out.blocks).toHaveLength(0);
+    expect(out.carry).toBe(buffer);
+  });
+
+  it('does not touch a FINISHED turn (liveness rule still applies)', () => {
+    const done = writeMainText([], 'finished answer', 'msg_0', 0);
+    const out = flushMainTextForInterrupt(done, '<span class="x', 'msg_1', done.length);
+    expect(out.carry).toBe('<span class="x');
+    expect((out.blocks[0] as { content: string }).content).toBe('finished answer');
+  });
+
+  it('ordinary text is flushed whole — the common case pays nothing', () => {
+    const out = flushMainTextForInterrupt([], 'Let me check the file.', 'msg_1', 0);
+    expect(out.carry).toBe('');
+    expect((out.blocks[0] as { content: string }).content).toBe('Let me check the file.');
+  });
+
+  it('an empty buffer is a no-op on the same reference', () => {
+    const blocks: StreamingBlock[] = [];
+    const out = flushMainTextForInterrupt(blocks, '', undefined, 0);
+    expect(out.blocks).toBe(blocks);
+    expect(out.carry).toBe('');
   });
 });

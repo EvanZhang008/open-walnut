@@ -148,7 +148,7 @@ export interface SessionTailFold {
  *  withholds the no-result watermark verdict. Deliberately conservative: a
  *  line we can't classify counts as activity (the failure mode is "converge
  *  later via another path", never "converge a live turn"). */
-function isPostTurnBookkeeping(parsed: Record<string, unknown>, type: string | undefined): boolean {
+export function isPostTurnBookkeeping(parsed: Record<string, unknown>, type: string | undefined): boolean {
   if (type === 'system') {
     const subtype = parsed.subtype as string | undefined
     if (subtype === 'session_state_changed') {

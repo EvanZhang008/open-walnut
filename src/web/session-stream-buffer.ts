@@ -9,6 +9,7 @@
  */
 
 import { log } from '../logging/index.js'
+import { splitPendingMarkup } from '../core/stream/pending-markup.js'
 
 // ── Types (mirror the frontend StreamingBlock types) ──
 
@@ -112,6 +113,13 @@ interface BufferEntry {
    *  client stamped them completedLen=0 ("live"), evidence-promotion never
    *  touched them, and they duplicated persisted history until a reload. */
   turnEnded?: boolean
+  /** An unfinished markup construct (`<div style="…` with no `>` yet) that a
+   *  CARD interrupted, held back from the block above the card and prepended to
+   *  the text block the model's message resumes in. Without this a reload
+   *  mid-turn re-renders the exact artifact the client-side carry removes: an
+   *  empty coloured pill, then the rest of the attribute as prose
+   *  (inc-1788209680147). Same rule, same module — see carryPendingMarkup. */
+  pendingMarkup?: string
   /** Monotonic mutation counter — see StreamSnapshot.seq. */
   seq: number
 }
@@ -147,7 +155,38 @@ class SessionStreamBuffer {
     entry.blocks = []
     entry.textAccumulator = ''
     entry.thinkingAccumulator = ''
+    entry.pendingMarkup = undefined  // a fragment of the OLD turn can't open the new one
     entry.turnEnded = false
+  }
+
+  /** Turn over: nothing is coming to finish the held fragment, so render it as it
+   *  is rather than dropping it — the same choice the client's turn-end flush
+   *  makes, and the same thing persisted history will show. */
+  private releasePendingMarkup(entry: BufferEntry): void {
+    const pending = entry.pendingMarkup
+    if (!pending) return
+    entry.pendingMarkup = undefined
+    const anchor = this.lastMainLaneBlock(entry.blocks)
+    if (anchor?.type === 'text') anchor.content += pending
+    else entry.blocks.push({ type: 'text', content: pending })
+  }
+
+  /**
+   * A card is about to interrupt the model's text: trim an unfinished markup
+   * construct off the live text block and hold it for the block the text resumes
+   * in. Mirrors flushMainTextForInterrupt on the client (both call
+   * splitPendingMarkup, the single copy of the rule), including dropping a block
+   * that held NOTHING but the fragment.
+   */
+  private carryPendingMarkup(entry: BufferEntry): void {
+    entry.textAccumulator = ''
+    const anchor = this.lastMainLaneBlock(entry.blocks)
+    if (!anchor || anchor.type !== 'text') return
+    const { safe, pending } = splitPendingMarkup(anchor.content)
+    if (!pending) return
+    entry.pendingMarkup = pending
+    if (safe) anchor.content = safe
+    else entry.blocks.splice(entry.blocks.lastIndexOf(anchor), 1)
   }
 
   /** Last non-subagent block, or undefined. The CLI interleaves inline-subagent
@@ -217,8 +256,12 @@ class SessionStreamBuffer {
       anchor.content = entry.textAccumulator
       if (msgId && !anchor.msgId) anchor.msgId = msgId
     } else {
-      entry.textAccumulator = delta
-      entry.blocks.push({ type: 'text', content: delta, ...(msgId ? { msgId } : {}) })
+      // A card interrupted mid-tag: the fragment it held back opens this block, so
+      // the tag arrives whole instead of being split across the card.
+      const carried = entry.pendingMarkup ?? ''
+      entry.pendingMarkup = undefined
+      entry.textAccumulator = carried + delta
+      entry.blocks.push({ type: 'text', content: entry.textAccumulator, ...(msgId ? { msgId } : {}) })
     }
   }
 
@@ -231,7 +274,7 @@ class SessionStreamBuffer {
     // start a new turn — see the subagent-lane note in appendTextDelta.
     if (!parentToolUseId) {
       this.resetIfTurnEnded(entry, sessionId)
-      entry.textAccumulator = ''
+      this.carryPendingMarkup(entry)
     }
     this.touch(entry)
     // DUP-DEBUG: detect if the same toolUseId is appended twice — that means
@@ -275,7 +318,7 @@ class SessionStreamBuffer {
     const existing = entry.blocks.find(b => b.type === 'permission' && b.requestId === requestId) as StreamingPermissionBlock | undefined
     if (existing) return
     this.resetIfTurnEnded(entry, sessionId)
-    entry.textAccumulator = ''  // permission event breaks text flow
+    this.carryPendingMarkup(entry)  // card breaks text flow; an unfinished tag rides across
     this.touch(entry)
     entry.blocks.push({ type: 'permission', requestId, toolName, input, reason, status: 'pending', ...(acpOptions?.length ? { acpOptions } : {}) })
   }
@@ -296,7 +339,7 @@ class SessionStreamBuffer {
   appendSystem(sessionId: string, variant: 'compact' | 'error' | 'info', message: string, detail?: string): void {
     const entry = this.getOrCreate(sessionId)
     this.resetIfTurnEnded(entry, sessionId)
-    entry.textAccumulator = ''  // system event breaks text flow
+    this.carryPendingMarkup(entry)  // card breaks text flow; an unfinished tag rides across
     entry.thinkingAccumulator = ''
     this.touch(entry)
     entry.blocks.push({ type: 'system', variant, message, ...(detail ? { detail } : {}) } as StreamingSystemBlock)
@@ -379,6 +422,7 @@ class SessionStreamBuffer {
     // next turn's first data append drops them, and getSnapshot never serves
     // them as a live turn (see BufferEntry.turnEnded).
     if (entry) {
+      this.releasePendingMarkup(entry)
       entry.turnEnded = true
       entry.seq++
     }

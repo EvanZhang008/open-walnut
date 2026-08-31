@@ -491,6 +491,26 @@ function resumeProfileOpts(
 const MAX_FULL_TEXT = 100 * 1024 // 100KB cap on accumulated text
 const LIVENESS_INTERVAL_MS = 3000
 
+/**
+ * `system` subtypes that are BOOKKEEPING, not content: nothing a reader could act
+ * on. They are logged at debug and never become a UI block.
+ *
+ * The cost of showing one is not a wasted row. A card interrupts the model's text
+ * where it lands, so a `commands_changed` line arriving mid-tag split one sentence
+ * into an empty coloured pill plus a leaked attribute (inc-1788209680147). The
+ * carry in session-stream-buffer / stream-reducer makes that survivable; not
+ * emitting a card nobody wants is the actual fix.
+ *
+ * Kept deliberately SHORT: a subtype nobody recognises still gets a card, because
+ * that catch-all is how a new CLI event type gets noticed at all. Every entry here
+ * must also read as bookkeeping to the reconciler (isPostTurnBookkeeping in
+ * core/session-reconcile.ts) — pinned by tests/providers/silent-system-subtypes.test.ts.
+ */
+export const SILENT_SYSTEM_SUBTYPES: ReadonlySet<string> = new Set([
+  'commands_changed',          // slash-command list reloaded (fires on any .claude/commands edit)
+  'control_request_progress',  // progress ticks for control reads Walnut itself issued
+])
+
 // DUP-DEBUG: per-process counter so each ClaudeCodeSession has a stable id
 // in logs. If logs show two ccsId values for the same claudeSessionId
 // processing the same JSONL line, multiple session instances are alive
@@ -4275,19 +4295,36 @@ export class ClaudeCodeSession {
                 title: sys.title,
               })
             }
-            // Catch-all: unknown future subtypes — forward full payload so we
-            // don't lose diagnostic info to a bare subtype name.
-            const payloadForDisplay = Object.fromEntries(
-              Object.entries(sys).filter(([k]) => k !== 'session_id' && k !== 'uuid' && k !== 'type' && k !== 'subtype')
-            )
-            const detail = Object.keys(payloadForDisplay).length > 0
-              ? JSON.stringify(payloadForDisplay).slice(0, 500)
-              : undefined
-            bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
-              sessionId: sid, taskId: this.taskId,
-              variant: 'info' as const, message: String(sys.subtype),
-              detail,
-            }, ['main-ai'], { source: 'session-runner' })
+            // Bookkeeping the CLI reports to every client but which means nothing
+            // to a reader: the slash-command list was reloaded (fires whenever the
+            // model edits .claude/commands/** or a skill), and progress ticks for
+            // control reads WALNUT itself initiated. Showing them costs more than
+            // a wasted row: a card interrupts the model's text, so one landing
+            // mid-tag split a sentence into an empty pill plus a leaked attribute
+            // (inc-1788209680147). Logged, never rendered. The same subtypes are
+            // already classified as between-turns chatter by the reconciler
+            // (core/session-reconcile.ts isPostTurnBookkeeping) — keep the two
+            // lists agreeing. The catch-all below still surfaces genuinely
+            // unknown subtypes, which is where its diagnostic value is.
+            if (SILENT_SYSTEM_SUBTYPES.has(String(sys.subtype))) {
+              log.session.debug('stream-json bookkeeping subtype (not rendered)', {
+                sessionId: sid, taskId: this.taskId, subtype: String(sys.subtype),
+              })
+            } else {
+              // Catch-all: unknown future subtypes — forward full payload so we
+              // don't lose diagnostic info to a bare subtype name.
+              const payloadForDisplay = Object.fromEntries(
+                Object.entries(sys).filter(([k]) => k !== 'session_id' && k !== 'uuid' && k !== 'type' && k !== 'subtype')
+              )
+              const detail = Object.keys(payloadForDisplay).length > 0
+                ? JSON.stringify(payloadForDisplay).slice(0, 500)
+                : undefined
+              bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
+                sessionId: sid, taskId: this.taskId,
+                variant: 'info' as const, message: String(sys.subtype),
+                detail,
+              }, ['main-ai'], { source: 'session-runner' })
+            }
           }
         }
 

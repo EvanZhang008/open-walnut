@@ -15,6 +15,10 @@ export default defineConfig({
       // Same reason: the letter reader's frame + CSP floor is ONE module, because
       // the server streams big letter bodies pre-wrapped in that exact frame.
       '@open-walnut/letter-frame': path.resolve(__dirname, '../src/core/human-inbox/letter-frame.ts'),
+      // Same reason again: "does this stream end mid-tag" must have ONE answer,
+      // because the browser reducer and the server-side stream buffer are twins
+      // and a rule only one of them applies reappears as an artifact on reload.
+      '@open-walnut/pending-markup': path.resolve(__dirname, '../src/core/stream/pending-markup.ts'),
     },
   },
   server: {

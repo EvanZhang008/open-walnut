@@ -28,6 +28,8 @@ const config = mergeConfig(
         '@': path.resolve(import.meta.dirname, 'web/src'),
         '@open-walnut/core': path.resolve(import.meta.dirname, 'src/core/types.ts'),
         '@open-walnut/task-query': path.resolve(import.meta.dirname, 'src/core/task-query.ts'),
+        '@open-walnut/letter-frame': path.resolve(import.meta.dirname, 'src/core/human-inbox/letter-frame.ts'),
+        '@open-walnut/pending-markup': path.resolve(import.meta.dirname, 'src/core/stream/pending-markup.ts'),
       },
     },
     test: {

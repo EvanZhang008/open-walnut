@@ -644,6 +644,22 @@ export function isAppComplete(chunk: RichChunk): boolean {
 }
 
 /**
+ * Does this text end INSIDE a construct that is still arriving (a tag with no
+ * `>`, an unterminated comment, an unclosed rawtext body)?
+ *
+ * The streaming accumulator asks the same question through
+ * `splitPendingMarkup` (src/core/stream/pending-markup.ts), which is a separate
+ * implementation because the server-side buffer twin needs it too. The two MUST
+ * agree: if the reducer carries a fragment this scanner would happily render (or
+ * the reverse), a card interrupting the model's text splits it in half again —
+ * exactly inc-1788209680147. tests/core/pending-markup.test.ts pins the pair.
+ */
+export function endsMidConstruct(text: string): boolean {
+  if (!text.includes('<')) return false;
+  return scanHtmlState(text, lineSpans(text), makeSkip(text)).truncated;
+}
+
+/**
  * Cheap precheck: could this text hold raw HTML at all?
  *
  * False keeps the caller on the single-div markdown render it has always used, so

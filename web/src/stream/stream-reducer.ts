@@ -28,6 +28,7 @@
  * array when something changed, or the SAME reference when nothing did (so
  * React setState callers skip no-op re-renders).
  */
+import { splitPendingMarkup } from '@open-walnut/pending-markup';
 
 // ── Block types (moved here from useSessionStream so the reducer, the hook,
 //    the cache, and components all share one source; the hook re-exports them
@@ -214,6 +215,44 @@ export function flushMainTextBuffer(
     return updated;
   }
   return [...blocks, { type: 'text', content: textBuffer }];
+}
+
+/**
+ * Flush for an INTERRUPTION — a tool card, a system card or a permission card is
+ * about to be inserted, so the model's text is being cut here and whatever
+ * follows will open a new block after the card.
+ *
+ * Returns the blocks plus what must STAY in the accumulator: an unfinished markup
+ * construct belongs to the text that continues it, not to the text before the
+ * card. Leaving it behind is how one sentence became an empty coloured pill above
+ * the card plus `px">全部降级为基线…` below it (inc-1788209680147) — the flushed
+ * block ended one character into an attribute, and the sanitizer closed the tag it
+ * was handed.
+ *
+ * `safe + carry` is always the original buffer, so nothing is dropped: the carried
+ * fragment renders as soon as its `>` arrives. Turn-end flushes deliberately do
+ * NOT use this (nothing is coming, so the text must be shown exactly as it is,
+ * which is also what history will render).
+ */
+export function flushMainTextForInterrupt(
+  blocks: readonly StreamingBlock[],
+  textBuffer: string,
+  msgId: string | undefined,
+  completedLen: number,
+): { blocks: StreamingBlock[]; carry: string } {
+  if (!textBuffer) return { blocks: blocks as StreamingBlock[], carry: '' };
+  const { safe, pending } = splitPendingMarkup(textBuffer);
+  if (safe) return { blocks: writeMainText(blocks, safe, msgId, completedLen), carry: pending };
+
+  // The buffer was ENTIRELY an unfinished construct (`<div style="` and then the
+  // card). An earlier coalesced flush may already have written it into a live
+  // block; that block must GO, not linger as an empty row above the card.
+  const idx = mainTextMergeTarget(blocks, msgId, completedLen);
+  if (idx >= 0 && (blocks[idx] as StreamingTextBlock).content === textBuffer) {
+    // Always a LIVE block (idx >= completedLen), so no completedLen adjustment.
+    return { blocks: [...blocks.slice(0, idx), ...blocks.slice(idx + 1)], carry: pending };
+  }
+  return { blocks: blocks as StreamingBlock[], carry: pending };
 }
 
 // ── Main-lane thinking ──────────────────────────────────────────────────────
