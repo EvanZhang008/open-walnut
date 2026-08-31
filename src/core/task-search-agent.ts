@@ -194,9 +194,9 @@ async function claudeCliEngine(
 
   // Minimum-Claude pattern (micro-claude.ts): slim shell, Bash only for the
   // curl searches. warm rides the pre-booted child pool (~2.5s off when a
-  // pooled child is ready); maxToolCalls 2 enforces the prompt's own budget
-  // (seed + at most two batched commands) via mid-run injection — a sonnet
-  // child measurably ran 7 batches on prose alone.
+  // pooled child is ready). The tool budget lives in the PROMPT (hard
+  // two-batch wording) — a watchdog injection was tried and reverted as
+  // over-engineering (user call, 2026-08-30); timeoutMs stays the backstop.
   const run = await runMicroClaude({
     system: options.system,
     prompt,
@@ -205,7 +205,6 @@ async function claudeCliEngine(
     tools: ['Bash'],
     toolUseId: `task-search-${randomUUID()}`,
     warm: true,
-    maxToolCalls: 2,
     onBlock,
   });
   return { response: run.response, model: options.model, costUsd: run.costUsd };

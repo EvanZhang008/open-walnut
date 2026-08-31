@@ -72,7 +72,7 @@ export function buildCliSystemPrompt(apiBase?: string): string {
 1. Otherwise run your query variants in ONE Bash command, concurrently — AT MOST 4 variants (more overflows the tool output and you see NOTHING):
   ${batched}
    Use DIFFERENT vocabulary — the literal strings a transcript would contain (package names, file extensions, commands, API names) plus an English <-> Chinese translation. The seed query counts as already used.
-2. At most ONE more such batched command if nothing was convincing.
+2. At most ONE more such batched command if nothing was convincing. Two batches is the HARD budget: after the second, print the JSON answer from what you have seen — lower confidence or {"results":[]} both beat a third command.
 Stop as soon as you are confident. Never repeat a query. Do not narrate between commands — run them silently.
 
 ${PROMPT_FOOTER}`;

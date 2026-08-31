@@ -1,9 +1,10 @@
 /**
  * Warm micro-Claude pool ratchet — the pre-booted stream-json child that
  * saves the ~2-2.5s CLI boot (POC 2026-08-30: cold 4.6s vs warm 2.0s
- * send→result) and the mid-run tool-budget injection. Pin: the spawn shape
- * (stream-json in/out + full slim combo + thinking off), pool reuse by spec
- * key, replacement prewarming, and the budget-exhausted injection.
+ * send→result). Pin: the spawn shape (stream-json in/out + full slim combo
+ * + thinking off), pool reuse by spec key, and replacement prewarming.
+ * Tool budgets are prompt-only by design (watchdog injection reverted as
+ * over-engineering — user call, 2026-08-30).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
@@ -120,29 +121,25 @@ describe('warm micro-claude pool', () => {
     expect((await done).warm).toBe(false);
   });
 
-  it('injects the budget-exhausted message once maxToolCalls is reached', async () => {
+  it('streams tool_call blocks to onBlock and writes ONLY the prompt on stdin (no injections)', async () => {
     const procs: FakeProc[] = [];
     spawnMock.mockImplementation(() => { const p = fakeProc(); procs.push(p); return p; });
     const blocks: string[] = [];
     const done = runWarmMicroClaude({
-      ...SPEC, prompt: 'q', timeoutMs: 5_000, toolUseId: 'tu-w4', maxToolCalls: 2,
+      ...SPEC, prompt: 'q', timeoutMs: 5_000, toolUseId: 'tu-w4',
       onBlock: (b) => blocks.push(b.type),
     });
     await new Promise((r) => setTimeout(r, 10));
     feedToolUse(procs[0], 'b1');
-    await new Promise((r) => setTimeout(r, 10));
-    expect(procs[0].stdin.write).toHaveBeenCalledTimes(1); // just the prompt
     feedToolUse(procs[0], 'b2');
+    feedToolUse(procs[0], 'b3');
     await new Promise((r) => setTimeout(r, 10));
-    expect(procs[0].stdin.write).toHaveBeenCalledTimes(2);
-    const injected = JSON.parse(procs[0].stdin.write.mock.calls[1][0] as string);
-    expect(injected.message.content).toContain('Search budget exhausted');
-    feedToolUse(procs[0], 'b3'); // no double-injection
-    await new Promise((r) => setTimeout(r, 10));
-    expect(procs[0].stdin.write).toHaveBeenCalledTimes(2);
+    // Tool budgets are prompt-only (user call): stdin carries the ONE prompt
+    // message and nothing else, however many tools the child runs.
+    expect(procs[0].stdin.write).toHaveBeenCalledTimes(1);
     feedResult(procs[0]);
     await done;
-    expect(blocks).toContain('tool_call');
+    expect(blocks.filter((b) => b === 'tool_call')).toHaveLength(3);
   });
 
   it('rejects when the child dies before answering', async () => {

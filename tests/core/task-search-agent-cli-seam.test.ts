@@ -79,10 +79,10 @@ describe('claude -p default engine wiring', () => {
     expect(searchMock).toHaveBeenCalledWith('which task adds docx', { types: ['task', 'session'], limit: 8 });
     expect(typeof opts.toolUseId).toBe('string');
     expect(opts.tools).toEqual(['Bash']);
-    // Tool budget: prompts alone don't bound rounds (a sonnet child ran 7
-    // batches against an "at most 2" contract) — the warm runner injects a
-    // budget-exhausted message after the 2nd tool call.
-    expect(opts.maxToolCalls).toBe(2);
+    // Tool budget is PROMPT-only (user call 2026-08-30: no watchdog): the
+    // hard two-batch wording must stay in the system prompt.
+    expect(opts.system).toContain('Two batches is the HARD budget');
+    expect(opts.maxToolCalls).toBeUndefined();
   });
 
   it('translates the child stream into live progress events keyed by progressId', async () => {
