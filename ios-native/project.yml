@@ -30,7 +30,7 @@ targets:
       properties:
         CFBundleDisplayName: Walnut
         CFBundleShortVersionString: "1.0.0"
-        CFBundleVersion: "60"
+        CFBundleVersion: "61"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
