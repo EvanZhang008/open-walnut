@@ -20,6 +20,12 @@ struct InboxView: View {
         NavigationStack(path: $path) {
             content
                 .navigationTitle(showArchived ? "Archived" : "Inbox")
+                // GHOST PILE-UP, the same one the board had: with no toolbar background
+                // the bar keeps its transparent scroll-edge appearance, and letter
+                // titles, body lines and their chips read straight through the "Inbox"
+                // title while scrolling. Same one-line fix `ChatView` and
+                // `SessionConversationView` already carry.
+                .toolbarBackground(.visible, for: .navigationBar)
                 .navigationDestination(for: String.self) { id in
                     LetterReaderView(letterId: id)
                 }

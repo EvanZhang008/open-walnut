@@ -329,8 +329,8 @@ final class CreateWithTierTests: XCTestCase {
     /// band a `createSeed`, because under `.project` grouping a band id is
     /// `proj:<name>` and is no longer a wire tier id at all: a view that kept
     /// deriving the destination from the id would have had to learn a second
-    /// mapping, and the tail band (the COMPLEMENT of the others) has no
-    /// destination to derive. So the assertion now drives the band's OWN seed,
+    /// mapping, and the (now retired) tail band, being the COMPLEMENT of the
+    /// others, had no destination to derive. So the assertion drives the band's OWN seed,
     /// which is the thing the view actually files into. Same guarantee, one
     /// indirection fewer, and it can no longer pass while the view disagrees.
     func testEveryRenderedBandSeedsItsOwnTier() {
@@ -395,5 +395,84 @@ final class CreateWithTierTests: XCTestCase {
 
         gate.open()
         _ = try await work.value
+    }
+
+    // MARK: - The board's own quick add (R30)
+
+    /// The board grew the reference screen's top-level "add a task" row, and on THIS surface
+    /// an unpinned task is an invisible one: the board shows pinned work only, so a row
+    /// created with `.unspecified` would be filed correctly and then vanish from the screen
+    /// that created it. That is the "I made it and can't find it" defect the board has already
+    /// shipped once, which is why the seed is computed rather than empty.
+    func testTheBoardQuickAddAlwaysPinsSomething() {
+        let seed = TasksView.boardQuickAddSeed(bands: [], selected: nil)
+        XCTAssertEqual(seed.pin, .tier(BoardModel.defaultTierId),
+            "a board create with no band selected still has to land in a visible band")
+        XCTAssertEqual(seed.project, "", "no band selected means no project to inherit")
+        XCTAssertTrue(seed.pin.namesTier)
+        XCTAssertEqual(seed.pin.wireFocusTier, BoardModel.defaultTierId)
+    }
+
+    /// With a tier band selected the row files into THAT band, so the task appears where the
+    /// user was looking. This is the band's own `createSeed`, the same value its heading `+`
+    /// uses: one destination per band, named once.
+    func testTheBoardQuickAddFollowsTheSelectedTierBand() {
+        let tasks = ["t1", "t2"].map(makePinnedTask)
+        let bands = BoardModel.bands(
+            tasks: tasks,
+            sessions: [makeSession(id: "s1", taskId: "t1", tier: "focus")],
+            tierOf: ["t1": "focus", "t2": "backlog"],
+            tierOrder: ["focus": ["t1"], "backlog": ["t2"]],
+            customTiers: []
+        )
+        for band in bands {
+            let seed = TasksView.boardQuickAddSeed(bands: bands, selected: band.bandId)
+            XCTAssertEqual(seed.pin, .tier(band.bandId), "selected \(band.bandId)")
+            XCTAssertEqual(seed, band.createSeed,
+                "the top row and the band's own + must file into the same place")
+        }
+    }
+
+    /// A PROJECT band names a project and not a tier, and both halves of its seed matter: the
+    /// project is inherited (it is the context the user is looking at) and the pin still has to
+    /// be a tier, because `NewTaskSeed.project` alone leaves the task unpinned and therefore
+    /// off this board. The old shape of this bug was the opposite mistake, sending
+    /// `focus_tier: "proj:<name>"` — so the assertion checks the wire value too.
+    func testAProjectBandLendsItsProjectAndStillPins() {
+        let band = BoardBand(
+            bandId: "proj:Marina", label: "Marina", rows: [], hiddenDone: 0,
+            createSeed: NewTaskSeed.project("Marina")
+        )
+        let seed = TasksView.boardQuickAddSeed(bands: [band], selected: "proj:Marina")
+        XCTAssertEqual(seed.project, "Marina", "the visible context is the project")
+        XCTAssertEqual(seed.pin, .tier(BoardModel.defaultTierId),
+            "a project seed alone is unpinned, and unpinned is invisible here")
+        XCTAssertEqual(seed.pin.wireFocusTier, BoardModel.defaultTierId,
+            "the band id must never reach the wire as a tier")
+    }
+
+    /// A folder band has no create affordance at all (`createSeed == nil`), and a selection
+    /// naming a band that isn't there any more is the same case: neither may produce an
+    /// unpinned seed.
+    func testAFolderBandAndAStaleSelectionBothFallBackToTheDefaultTier() {
+        let folder = BoardBand(
+            bandId: "folder:Home", label: "Home", rows: [], hiddenDone: 0, createSeed: nil
+        )
+        for selected in ["folder:Home", "proj:Deleted", "focus"] {
+            let seed = TasksView.boardQuickAddSeed(bands: [folder], selected: selected)
+            XCTAssertEqual(seed.pin, .tier(BoardModel.defaultTierId), "selected \(selected)")
+            XCTAssertEqual(seed.project, "", "selected \(selected)")
+        }
+    }
+
+    /// Whatever the seed says, the create endpoint has to accept it — the fallback tier is a
+    /// wire tier and not a label.
+    func testTheBoardQuickAddSeedIsAlwaysResolvable() {
+        let builtins = TasksStore.builtinTiers.map(\.id)
+        let seed = TasksView.boardQuickAddSeed(bands: [], selected: nil)
+        XCTAssertTrue(
+            seed.pin.isResolvable(builtinIds: builtins, customTierIds: []),
+            "\(seed.pin) would 400 on every board quick add"
+        )
     }
 }

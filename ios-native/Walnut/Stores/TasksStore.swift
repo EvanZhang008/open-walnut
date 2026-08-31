@@ -114,6 +114,44 @@ final class TasksStore {
     var sessionsSyncedAt: Date?
     var sessionsNotSyncedYet = false
 
+    // MARK: - Which sessions a task HAS (taskId → session_ids)
+    //
+    // The slim list projection carries no `session_ids`, so "this task has sessions"
+    // is only answerable from a task's DETAIL (`GET /v1/tasks/:id`). This is where
+    // every detail read deposits that answer, so the board can act on it without
+    // re-asking: a row whose session is missing from `sessions` (retention, or the
+    // projection cap that shipped as a bug) is still a row that can OPEN its session
+    // by id instead of falling through to a New Session draft.
+    //
+    // A MISSING KEY IS NOT AN EMPTY ARRAY, and the distinction is the whole value of
+    // this table: missing = "nobody has asked", `[]` = "asked, and this task has never
+    // had a session". The first is worth one request on tap; the second is not.
+    // See `BoardRow.knownSessionIds` for what each value routes to.
+    //
+    // In memory only, deliberately: it is a cache of a server answer that changes
+    // whenever a session is created, and a stale copy restored from disk would be a
+    // row claiming history a deleted task never had.
+
+    /// taskId → the ids that task's detail reported, newest LAST (link order).
+    var sessionIdsByTask: [String: [String]] = [:] {
+        didSet { detailsGen &+= 1 }
+    }
+
+    /// Record what a task detail said. Cheap and idempotent — every detail read calls
+    /// it, and an unchanged answer must not publish (the board's memo is keyed on a
+    /// generation counter this setter bumps).
+    func noteSessionIds(taskId: String, ids: [String]) {
+        guard !taskId.isEmpty else { return }
+        let cleaned = ids
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard sessionIdsByTask[taskId] != cleaned else { return }
+        sessionIdsByTask[taskId] = cleaned
+    }
+
+    /// What the phone knows about this task's sessions: nil = never asked.
+    func knownSessionIds(for taskId: String) -> [String]? { sessionIdsByTask[taskId] }
+
     // MARK: - Focus tier state (GET /focus/tasks + /focus/tiers)
     //
     // The slim task projection carries `pinned` but NOT `focus_tier`, so the
@@ -122,14 +160,40 @@ final class TasksStore {
 
     /// taskId → tier id ("focus" | "satellite" | "backlog" | "wait" | "ct_*")
     /// for every currently pinned task.
-    var taskTiers: [String: String] = [:]
+    var taskTiers: [String: String] = [:] {
+        didSet { tiersGen &+= 1 }
+    }
     /// tier id → task ids IN PIN ORDER, straight from the split. Kept alongside
     /// the map (not derived from it) because a dictionary has no order and the
     /// board's "a new task lands at the foot of its band" promise is exactly
     /// that order — see TasksStore.tierOrder.
-    var taskTierOrder: [String: [String]] = [:]
+    var taskTierOrder: [String: [String]] = [:] {
+        didSet { tiersGen &+= 1 }
+    }
     /// Custom tier registry (ct_* id → label), refreshed with the split.
-    var customTiers: [FocusTierInfo] = []
+    var customTiers: [FocusTierInfo] = [] {
+        didSet { tiersGen &+= 1 }
+    }
+
+    // MARK: - The project→folder hierarchy (GET /tasks/groups)
+    //
+    // The board's `By project` grouping nests folders inside their project, the same
+    // way the desktop console does. The slim task projection carries no `group_id`, so
+    // task→folder is answered by inverting `member_ids` ONCE per adoption here, never
+    // per row and never per body pass — see `BoardFolderIndex`.
+    //
+    // Best-effort by contract: an old server, a failed request or an empty answer all
+    // mean "no hierarchy", and the board degrades to the flat project bands it drew
+    // before. There is no error state for this — a blank board would be a far worse
+    // answer to "the folder list didn't load" than one without folder headings.
+
+    /// Every folder the server knows, empty folders included.
+    var taskFolders: [TaskFolder] = [] {
+        didSet {
+            foldersGen &+= 1
+            folderIndexCache = BoardFolderIndex.build(taskFolders)
+        }
+    }
     /// Debounce handle for scheduleTierRefresh (extension file).
     @ObservationIgnored var tierRefreshTask: Task<Void, Never>?
     /// Transient failure line for fire-and-forget mutations — TasksView shows
@@ -241,7 +305,11 @@ final class TasksStore {
                 guard let self, self.isActive, !Task.isCancelled else { return }
                 async let t: Void = self.loadTasks()
                 async let s: Void = self.loadSessions()
-                _ = await (t, s)
+                // Folders ride the same poll as the lists (one small request, and it
+                // no-ops on an unchanged tree) so a folder created on the console shows
+                // up on the phone without waiting for a foreground cycle.
+                async let g: Void = self.loadTaskFolders()
+                _ = await (t, s, g)
             }
         }
     }
@@ -365,13 +433,47 @@ final class TasksStore {
            isActive, sessions.isEmpty {
             sessions = cachedSessions
         }
+        // The folder hierarchy is cached for the same reason the lists are: the board
+        // renders from cache before any request finishes, and adopting the tasks
+        // without their folders would draw a FLAT board that re-nests a second later.
+        if let cachedFolders = await DiskCache.loadAsync([TaskFolder].self, key: "task-folders"),
+           isActive, taskFolders.isEmpty {
+            taskFolders = cachedFolders
+        }
         // Live feed + one REST refresh in parallel: the feed's snapshot frame
         // usually lands first, and the REST answers are then no-ops.
         connectFeed()
         async let t: Void = loadTasks()
         async let s: Void = loadSessions()
         async let f: Void = loadFocusTiers()
-        _ = await (t, s, f)
+        async let g: Void = loadTaskFolders()
+        _ = await (t, s, f, g)
+    }
+
+    /// Fetch the folder hierarchy. Best-effort, exactly like `loadFocusTiers`: an old
+    /// server (404), a replica hiccup or an offline phone leaves the last known tree in
+    /// place and the board keeps drawing. Never sets `errorMessage` — a missing
+    /// hierarchy is a quieter board, not a failure the user can act on.
+    ///
+    /// Called ONCE per board load / refresh (initialize, foreground, the REST poll,
+    /// pull-to-refresh) and never from a body pass: the tree changes when someone edits
+    /// folders on the console, which is orders of magnitude rarer than a re-render.
+    func loadTaskFolders() async {
+        guard isActive else { return }
+        do {
+            let folders = try await transport.taskFolders()
+            guard isActive else { return }
+            // Same-value guard: the poll re-fetches an unchanged tree every 30-120s, and
+            // adopting it anyway would bump `boardInputsGen` and throw away the band memo
+            // for nothing.
+            guard folders != taskFolders else { return }
+            taskFolders = folders
+            DiskCache.save(folders, key: "task-folders")
+        } catch {
+            AppLog.debug("tasks", "task folder load failed", [
+                "error": error.localizedDescription,
+            ])
+        }
     }
 
     func loadTasks() async {
@@ -836,6 +938,49 @@ final class TasksStore {
 
     @ObservationIgnored private var tasksGen: UInt64 = 0
     @ObservationIgnored private var sessionsGen: UInt64 = 0
+    /// Bumped by the three tier-split properties (`taskTiers`, `taskTierOrder`,
+    /// `customTiers`), which the board's bands read alongside the two lists.
+    @ObservationIgnored private var tiersGen: UInt64 = 0
+    /// Bumped by `taskFolders`, which the board's project grouping nests by.
+    @ObservationIgnored private var foldersGen: UInt64 = 0
+    /// Bumped by `sessionIdsByTask`: the board reads it per row, so a detail that
+    /// lands while the board is on screen has to invalidate the band memo — otherwise
+    /// the row keeps saying "no session yet" about a task we now know has one.
+    @ObservationIgnored private var detailsGen: UInt64 = 0
+
+    /// taskId → folder, rebuilt ONCE per `taskFolders` adoption.
+    ///
+    /// `@ObservationIgnored` and rebuilt in the setter rather than derived in a getter:
+    /// the board asks for this on every rebuild, and inverting ~60 folders' membership
+    /// there would be a walk per rebuild for an answer that changes a few times a day.
+    @ObservationIgnored private var folderIndexCache = BoardFolderIndex.empty
+
+    /// The board's folder index. Reads the OBSERVED array first so a SwiftUI body that
+    /// only consults the index still re-renders when folders land (the same order every
+    /// memoized slice getter below uses, for the same reason).
+    var boardFolderIndex: BoardFolderIndex {
+        _ = taskFolders.count
+        return folderIndexCache
+    }
+
+    /// ONE number that changes whenever anything the board's bands are built from
+    /// changes: the task list, the session list, or either half of the tier split.
+    ///
+    /// It exists so `TasksView` can memoize `BoardModel.bands` on a comparison of a few
+    /// Ints instead of ~3,000 rows (see `BoardBandsKey`). Monotonic because each part
+    /// only ever increases, so the sum cannot return to a value a stale cache holds.
+    ///
+    /// NOT observable, on purpose: a reader that took a cache hit on this number and
+    /// never touched the arrays would register no SwiftUI dependency and would stop
+    /// updating. Every caller reads the observed collections it is about to derive from
+    /// FIRST, exactly as the slice getters below do.
+    ///
+    /// The FOLDER list is one of those parts: it decides which bands the project
+    /// grouping emits, so a hierarchy that lands after the first board render has to
+    /// invalidate the memo or the board would stay flat until something else changed.
+    var boardInputsGen: UInt64 {
+        tasksGen &+ sessionsGen &+ tiersGen &+ foldersGen &+ detailsGen
+    }
     @ObservationIgnored private var taskSliceCache:
         (gen: UInt64, day: Date, byFilter: [TaskFilter: [WalnutTask]]) = (0, .distantPast, [:])
     @ObservationIgnored private var sessionSliceCache:
@@ -988,8 +1133,135 @@ extension TasksStore: LifecycleSuspendable {
             async let t: Void = self.loadTasks()
             async let s: Void = self.loadSessions()
             async let f: Void = self.loadFocusTiers()
-            _ = await (t, s, f)
+            async let g: Void = self.loadTaskFolders()
+            _ = await (t, s, f, g)
         }
+    }
+}
+
+// MARK: - Opening a session the session LIST does not carry
+//
+// The board's rows join `sessions` (the slim list) by task id, so a session missing
+// from that list leaves a row with `session == nil`. Two ways that happens, and both
+// end here rather than in a New Session draft: a server-side projection cap (fixed on
+// the server, and this is the second line of defence) and RETENTION — a session old
+// enough to leave the list legitimately is still a real session, still openable by id.
+//
+// Both lookups are bounded. A tap is a gesture, not a background job: the row shows a
+// spinner while one is in flight, so the wait is visible, and it must END — the
+// URLSession default here is 30s, which as a spinner on a row is indistinguishable
+// from a hang.
+
+extension TasksStore {
+    /// How long a board tap may spend asking the server where it should go.
+    ///
+    /// Long enough for a cloud round trip on a phone network, short enough that the
+    /// answer still belongs to the tap that asked for it. On expiry the caller opens
+    /// the draft (attached to the task) rather than leaving the row spinning: a wrong
+    /// destination the user can back out of beats no destination at all.
+    static let boardLookupDeadline: Double = 6
+
+    /// Ask the task's own detail which sessions it has, and remember the answer.
+    ///
+    /// Returns nil ONLY when the request failed (offline, timeout, 404) — an empty
+    /// array is a real answer ("this task has never had a session") and is cached as
+    /// one, which is what keeps the next tap on that row instant.
+    func fetchSessionIds(for taskId: String) async -> [String]? {
+        guard !taskId.isEmpty else { return nil }
+        let work = Task { try await self.transport.taskDetail(id: taskId) }
+        let deadline = Task {
+            try? await Task.sleep(for: .seconds(Self.boardLookupDeadline))
+            work.cancel()
+        }
+        defer { deadline.cancel() }
+        do {
+            let detail = try await work.value
+            noteSessionIds(taskId: taskId, ids: detail.sessionIds ?? [])
+            return knownSessionIds(for: taskId)
+        } catch {
+            AppLog.debug("board", "session id lookup failed", [
+                "taskId": taskId, "error": error.localizedDescription,
+            ])
+            return nil
+        }
+    }
+
+    /// Fetch ONE session by id and shape it like a list row, so the existing
+    /// conversation destination can take it unchanged.
+    ///
+    /// `task` is the board row's own task when there is one: it supplies the owning
+    /// task id / title / project that the DEGRADED cloud reply omits, so the pushed
+    /// page still links back to the task it belongs to.
+    ///
+    /// The result is deliberately NOT inserted into `sessions`. That array is a server
+    /// projection, and a synthesized row would disappear on the next snapshot — the row
+    /// would flip between "hydrated" and "earlier session" for no reason the user can
+    /// see. The ledger (`sessionIdsByTask`) is the durable half.
+    func resolveSession(id: String, task: WalnutTask?) async -> WalnutSession? {
+        guard !id.isEmpty else { return nil }
+        let work = Task { try await self.api.sessionDetail(id: id) }
+        let deadline = Task {
+            try? await Task.sleep(for: .seconds(Self.boardLookupDeadline))
+            work.cancel()
+        }
+        defer { deadline.cancel() }
+        do {
+            let detail = try await work.value
+            return WalnutSession.fromDetail(detail, requestedId: id, task: task)
+        } catch {
+            AppLog.info("board", "session by id failed", [
+                "sessionId": id, "error": error.localizedDescription,
+            ])
+            return nil
+        }
+    }
+}
+
+extension WalnutSession {
+    /// A LIST-shaped session row built from the by-id DETAIL reply.
+    ///
+    /// Pure, and separate from the fetch, because the mapping is where this can go
+    /// quietly wrong: the detail record's shape is the server's INTERNAL one and its
+    /// degraded variant carries four fields, so every absence needs an answer that is
+    /// true rather than convenient.
+    ///
+    ///  - `id` prefers the id we ASKED for. The record echoes it, but a row keyed by
+    ///    anything other than the id the caller resolved would send the conversation
+    ///    page to a different session than the tap.
+    ///  - `host` falls back to `""` (the primary box) because that is what the wire
+    ///    means by an absent host — and it is display-only here: every send goes to
+    ///    `POST /v1/sessions/:id/messages`, which resolves the host server-side.
+    ///  - `lastActiveAt` falls back to EMPTY, never to "now". The row's age token
+    ///    parses this, and a synthetic "now" would print "0s" on a session that last
+    ///    ran in June; an unparseable stamp drops the token instead (`meta`).
+    ///  - `pinned` is nil, not `true`: the pin lives on the TASK, and claiming a pin
+    ///    here would put a session-only row on the board that nothing pinned.
+    static func fromDetail(
+        _ detail: SessionDetail, requestedId: String, task: WalnutTask?
+    ) -> WalnutSession {
+        let record = detail.session
+        let taskId = [record.taskId, task?.id]
+            .compactMap { $0 }.first { !$0.isEmpty }
+        return WalnutSession(
+            id: requestedId.isEmpty ? record.claudeSessionId : requestedId,
+            title: record.title,
+            taskId: taskId,
+            taskTitle: task?.title,
+            project: record.project ?? task?.project,
+            host: record.host ?? "",
+            // "unknown" reads as `.unknown` → the row says "session ended", which is
+            // the honest answer for a session whose liveness the reply didn't state.
+            processStatus: record.processStatus ?? "unknown",
+            model: record.model,
+            mode: record.mode,
+            startedAt: record.startedAt ?? "",
+            lastActiveAt: record.lastActiveAt ?? "",
+            messageCount: record.messageCount ?? 0,
+            cwd: record.cwd,
+            pinned: nil,
+            focusTier: nil,
+            description: record.description
+        )
     }
 }
 

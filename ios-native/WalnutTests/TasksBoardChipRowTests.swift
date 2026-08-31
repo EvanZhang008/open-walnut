@@ -79,7 +79,13 @@ final class TasksBoardChipRowTests: XCTestCase {
             .init(bandId: "focus", label: "Focus", count: 12),
             .init(bandId: "satellite", label: "Satellite", count: 8),
             .init(bandId: "backlog", label: "Backlog", count: 23),
-            .init(bandId: "rest", label: "Everything else", count: 49),
+            // A CUSTOM tier, which is the widest band label the board can really
+            // produce now that the "Everything else" tail band is gone. Deliberately the
+            // same 15 characters that label was, so every width this file pins is
+            // unchanged: the estimate reads `label.count`, and re-baselining a geometry
+            // suite because a fixture's wording changed is how a gate stops meaning
+            // anything.
+            .init(bandId: "ct_deepwork", label: "Deep Work Later", count: 49),
         ]
     }
 
@@ -590,13 +596,28 @@ final class TasksBoardChipRowTests: XCTestCase {
         backgroundGray * (1 - alpha)
     }
 
-    /// The measured `.quaternary` capsule fill on an unselected chip, light mode.
-    private let capsuleGray: Double = 202
+    /// The capsule an unselected chip's label actually sits on, in light mode, taken from the
+    /// app's own colour rather than typed once.
+    ///
+    /// R30 replaced `.quaternary` here with an explicit opaque fill, because a material is a
+    /// function of its backdrop and the two copies of this bar therefore drew the same chip
+    /// with different pixels (209 inline against 222 pinned). The WCAG math below has to
+    /// follow that fill: derived, a taste change to the capsule RE-RUNS the contrast check;
+    /// hard-coded, it would quietly go on checking a colour the app no longer draws.
+    private var capsuleGray: Double {
+        resolvedGray(BoardBandBar.unselectedChipFillColor, dark: false)
+    }
+
+    /// The `.quaternary` capsule as it MEASURED when the unreadable label was reported (202
+    /// in light mode). This one stays a literal on purpose: it is the historical backdrop the
+    /// report reproduces against, and it no longer exists in the app to be read from.
+    private let reportedQuaternaryGray: Double = 202
 
     /// The defect: `Color.secondary` on that capsule measured (112,114,110) — a 3.0:1
     /// ratio for a label whose whole job is to be read at a glance, with the count taking
     /// a further 0.7 opacity on top of it.
     func testTheShippedUnselectedChipInkReallyWasBelowTheFloor() {
+        let capsuleGray = reportedQuaternaryGray
         let shippedAlpha = 1 - (113.0 / capsuleGray)     // the measured composite
         let ratio = contrast(ink(alpha: shippedAlpha, over: capsuleGray), capsuleGray)
         XCTAssertEqual(ratio, 3.0, accuracy: 0.25, "the fixture no longer reproduces the report")
@@ -640,43 +661,54 @@ final class TasksBoardChipRowTests: XCTestCase {
         return Double(r + g + b) / 3 * 255
     }
 
-    /// Light mode gets a card that READS as a surface; dark mode is deliberately untouched.
+    /// The card reads as a surface against the board's page in BOTH schemes now (R29).
     ///
-    /// Measured: the bare `.bar` material came out at 247.6 against the board's 253.0 page,
-    /// a 5.4 delta — the card barely registered as a card. Dark mode measured 26.1 and
-    /// already reads, and lifting its base would flatten the same distinction from the
-    /// other side, so `cardBaseColor(dark: true)` is the page colour itself.
-    func testTheCardBaseReadsAsASurfaceInLightModeAndLeavesDarkModeAlone() {
-        let page = UIColor.systemBackground
-        let lightDelta = resolvedGray(page, dark: false)
-            - resolvedGray(BoardBandBar.cardBaseColor(dark: false), dark: false)
-        XCTAssertGreaterThan(
-            lightDelta, 5.4,
-            "the card is \(lightDelta) grey away from the page — the measured bare-material delta was 5.4 and read as nothing"
-        )
-        XCTAssertLessThan(lightDelta, 40, "a card this dark stops being chrome and becomes a banner")
-        XCTAssertEqual(
-            resolvedGray(BoardBandBar.cardBaseColor(dark: true), dark: true),
-            resolvedGray(page, dark: true), accuracy: 0.01,
-            "dark mode already reads at 26.1 lum — this fix has no business changing it"
-        )
+    /// This test used to be one-sided — light mode got a card that stepped DOWN from the
+    /// white board sheet (measured: bare material 247.6 against a 253.0 page, a 5.4 delta
+    /// that read as nothing, fixed by dropping to 242) and dark mode was deliberately left
+    /// at the page colour itself, because a material over black already read at 26.1.
+    ///
+    /// R29 moved the OTHER half of the pair: the board's page is `systemGroupedBackground`,
+    /// so the old light base (242) became the page's own colour and the old dark base
+    /// (black) already was. Keeping either would have re-created the 2026-08-30 defect from
+    /// the opposite direction. The bar takes the band cards' colour instead, which steps UP
+    /// from the page in both schemes — so the assertion is symmetric, and the DIRECTION is
+    /// pinned too: a card darker than its page reads as a hole.
+    func testTheCardBaseReadsAsASurfaceAgainstTheGroupedPageInBothSchemes() {
+        for dark in [false, true] {
+            let page = resolvedGray(BoardBandCard.pageColor, dark: dark)
+            let card = resolvedGray(BoardBandBar.cardBaseColor, dark: dark)
+            XCTAssertGreaterThan(
+                card - page, 5.4,
+                "dark=\(dark): the card is \(card - page) grey from the page — the measured delta that read as nothing was 5.4"
+            )
+            XCTAssertLessThan(
+                card - page, 60,
+                "dark=\(dark): a card this far from the page stops being chrome and becomes a banner"
+            )
+        }
+        // And it is the BAND cards' colour, not a second one that happens to pass the delta
+        // above: the bar sits in that stack, so a private value would drift out of it.
+        XCTAssertEqual(BoardBandBar.cardBaseColor, BoardBandCard.surfaceColor)
     }
 
-    /// The FILTERS control's own base, which is the other half of "opaque": `.thickMaterial`
-    /// is not opaque in light mode and chips ghosted through the button that is supposed to
-    /// be detached from them. It also has to differ from the card in light mode, or the
-    /// control stops reading as its own object sitting ON the card.
+    /// The FILTERS control's own base, which is the other half of "opaque": the
+    /// `.thickMaterial` it used to wear is not opaque in light mode and chips ghosted
+    /// through the button that is supposed to be detached from them. It also has to differ
+    /// from the card in EVERY scheme, or the control stops reading as its own object
+    /// sitting ON the card — which is why this is a loop now: R29 made the card white in
+    /// light mode, and the control's old `systemBackground` was white too.
     func testTheFiltersControlHasAnOpaqueBaseThatStillReadsAgainstTheCard() {
         for dark in [false, true] {
             // `resolvedGray` asserts opacity; this is the call that makes it about the
             // control rather than the card.
-            _ = resolvedGray(BoardBandBar.filtersControlBaseColor, dark: dark)
+            let control = resolvedGray(BoardBandBar.filtersControlBaseColor, dark: dark)
+            let card = resolvedGray(BoardBandBar.cardBaseColor, dark: dark)
+            XCTAssertGreaterThan(
+                abs(control - card), 5.4,
+                "dark=\(dark): the control is \(abs(control - card)) grey from the card it sits on — the same flat surface"
+            )
         }
-        XCTAssertNotEqual(
-            resolvedGray(BoardBandBar.filtersControlBaseColor, dark: false),
-            resolvedGray(BoardBandBar.cardBaseColor(dark: false), dark: false),
-            "in light mode the control and the card would be the same flat surface"
-        )
     }
 
     // MARK: - Reaching both filters at every type size (R27)

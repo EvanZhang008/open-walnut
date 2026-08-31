@@ -16,7 +16,7 @@ import XCTest
 /// This class used to carry `testGroupedCountStaysOnOneLineWithinTheCard`, which
 /// derived that `minimumScaleFactor(0.6)` gave a four-digit count enough headroom
 /// inside a 130pt smart-list card. It is deleted rather than rewritten because
-/// there is no card and no fixed width any more: the header is three intrinsically
+/// there is no card and no fixed width any more: the header is a row of intrinsically
 /// sized chips (`TasksNavRow`) and the counts that survived live on
 /// `TasksCompactBar` and `BoardBandBar`, also intrinsically sized, so a count can
 /// never be wider than its own capsule.
@@ -115,14 +115,18 @@ final class TasksChromeCollapseTests: XCTestCase {
     /// screen above the first section and simply missing from this arithmetic, which is
     /// what made the board's pin threshold fire early. Counting it moves each filter's
     /// chrome up by the same 10.66pt, so the comparisons between filters are untouched.
-    func testTheBoardCarriesTheLeanestChrome() {
+    /// R30 REVERSED the direction of this test, and the reversal is the product change: the
+    /// board carries the reference screen's top-level quick add now (see `TasksView`), so it
+    /// renders the nav row, the chip row AND that row. It is therefore the TALLEST chrome, by
+    /// exactly the chip row plus its gap.
+    ///
+    /// The important half is that the number is counted at all: `chromeHeight` feeds the
+    /// compact bar's collapse threshold, so a board chrome understated by ~54pt would collapse
+    /// the header while it is still on screen. The pin threshold is NOT affected, because it
+    /// is what rides ABOVE row 2 and the quick add is below it — `TasksBoardChipRowPinTests`
+    /// asserts that separately.
+    func testTheBoardCountsBothOfItsHeaderRows() {
         let board = TasksChromeMetrics.chromeHeight(filter: .sessions, offline: false)
-        for other in TaskFilter.allCases where other != .sessions {
-            XCTAssertLessThan(
-                board, TasksChromeMetrics.chromeHeight(filter: other, offline: false),
-                "\(other) should not carry LESS chrome than the board"
-            )
-        }
         // The arithmetic, so a regression names the number. `listHeaderPadding` is part of
         // it: the List puts that much above its first section, and leaving it out of the
         // chrome arithmetic is what made the board's pin threshold fire 10.66pt early
@@ -131,17 +135,19 @@ final class TasksChromeCollapseTests: XCTestCase {
             board,
             TasksChromeMetrics.listHeaderPadding
                 + TasksChromeMetrics.navRow + TasksChromeMetrics.sectionGap
-                + TasksChromeMetrics.bandBar + TasksChromeMetrics.sectionGap,
+                + TasksChromeMetrics.bandBar + TasksChromeMetrics.sectionGap
+                + TasksChromeMetrics.quickAdd + TasksChromeMetrics.sectionGap,
             accuracy: 0.01,
-            "the board renders the nav row then the chip row, nothing else"
+            "the board renders the nav row, the chip row and the quick add"
         )
-        let otherFilter = TasksChromeMetrics.chromeHeight(filter: .allOpen, offline: false)
-        XCTAssertEqual(
-            otherFilter - board,
-            TasksChromeMetrics.quickAdd - TasksChromeMetrics.bandBar,
-            accuracy: 0.01,
-            "the board trades the quick-add row for the chip row"
-        )
+        for other in TaskFilter.allCases where other != .sessions {
+            XCTAssertEqual(
+                board - TasksChromeMetrics.chromeHeight(filter: other, offline: false),
+                TasksChromeMetrics.bandBar + TasksChromeMetrics.sectionGap,
+                accuracy: 0.01,
+                "\(other): the board's extra chrome is its chip row and nothing else"
+            )
+        }
     }
 
     /// The inline chip row and its pinned copy are the SAME constant (`bandBar`) on
@@ -152,6 +158,12 @@ final class TasksChromeCollapseTests: XCTestCase {
     /// `bandBar` under 44 would make the PINNED copy shorter than the row it stands in
     /// for, and the hand-off would jump — the two are only invisible to each other
     /// while the heights agree.
+    ///
+    /// The value is 52 now, and it is the CORNER that raised it (R30): the card's shared
+    /// radius is 26 and a rounded rectangle cannot round deeper than half its height, so at
+    /// 44 the platform clamped the bar's corner while the OS cards around it kept theirs.
+    /// `BoardChromeR30Tests.testTheBarIsTallEnoughToDrawTheSharedCornerRadius` owns that
+    /// direction; this one keeps the List-row floor underneath it.
     func testTheChipRowCanBeExpressedAsAListRow() {
         let listRowMinimumHeight: CGFloat = 44
         XCTAssertGreaterThanOrEqual(
@@ -481,6 +493,190 @@ final class TasksChromeCollapseTests: XCTestCase {
 // `ScrollView` always reports its unclipped frame), against static forwarders that had
 // no call site in the app target. The pin cases live in the new file; the rail's real
 // geometry, stated in pixels and taps, is `WalnutTests/TasksBoardChipRowTests.swift`.
+
+/// What "scrolled" IS: `TasksChromeMetrics.travel`, and the search drawer that used to
+/// fake it.
+///
+/// # The defect, in one sample
+///
+/// The observer emitted `contentOffset.y + contentInsets.top`. That sum is 0 at rest and
+/// grows as the content moves up, which is the right measure — but the `.searchable`
+/// drawer (`displayMode: .automatic`) RETRACTS as soon as a drag begins, and the whole
+/// drawer height leaves `contentInsets.top` in one sample. Both of this screen's
+/// hysteresis machines cross inside the first ~57pt of travel (`chipsPinThreshold` is
+/// 56.66), so one inset step was enough to force the chrome collapse AND the chip pin
+/// together, at the top of the gesture, alongside the flip's own re-layout. Captured:
+/// `frames/m1.png` — the field present at t=19.00s and gone at 19.20s, everything above
+/// the chips shifted up in a single frame.
+///
+/// # What these cases pin
+///
+/// A sample whose INSET moved reports the previous travel — the origin moved, not the
+/// content — and the measure is the honest `offset + insetTop` everywhere else, so rest
+/// always reads 0. The two properties fight each other if you pick the other design (a
+/// frozen origin for the duration of a gesture reads 52pt of travel at the new rest,
+/// forever), which is why both are asserted here rather than only the interesting one.
+@MainActor
+final class BoardScrollTravelTests: XCTestCase {
+
+    /// A ~52pt drawer over a 44pt bar: the shape the board really sees.
+    private let barInset: CGFloat = 44
+    private let drawerInset: CGFloat = 96
+
+    func testTravelIsZeroAtRestWhateverTheInsetIs() {
+        for inset in [barInset, drawerInset, 0] {
+            let tracker = BoardScrollTravelTracker()
+            XCTAssertEqual(
+                tracker.travel(BoardScrollSample(offset: -inset, insetTop: inset)), 0,
+                accuracy: 0.001,
+                "inset=\(inset): rest must read 0, or the chrome collapses on a list nobody scrolled"
+            )
+        }
+    }
+
+    /// THE case: the drawer retracts while the content has not moved. That sample must
+    /// contribute nothing, so no threshold can flip on the frame the header is re-laying
+    /// itself out on.
+    func testARetractingSearchDrawerContributesNoTravel() {
+        let tracker = BoardScrollTravelTracker()
+        XCTAssertEqual(tracker.travel(
+            BoardScrollSample(offset: -drawerInset, insetTop: drawerInset)), 0, accuracy: 0.001)
+        let dragged = tracker.travel(
+            BoardScrollSample(offset: -drawerInset + 30, insetTop: drawerInset))
+        XCTAssertEqual(dragged, 30, accuracy: 0.001)
+
+        // The drawer leaves. Content unchanged, origin 52pt higher.
+        let duringRetract = tracker.travel(
+            BoardScrollSample(offset: -drawerInset + 30, insetTop: barInset))
+        XCTAssertEqual(
+            duringRetract, dragged, accuracy: 0.001,
+            "the drawer moved `scrolled` by \(duringRetract - dragged)pt on its own — the step that used to cross both thresholds inside the drawer's own re-layout frame"
+        )
+        // What the OLD measure said on that same sample, and why it mattered: it flipped
+        // sign, i.e. it claimed the list was back above rest in the middle of a drag —
+        // a crossing, then another one as the drag continued, each one a publish.
+        let oldMeasure = (-drawerInset + 30) + barInset
+        XCTAssertLessThan(oldMeasure, 0, "the fixture no longer reproduces the report")
+        XCTAssertGreaterThan(
+            abs(oldMeasure - dragged), TasksChromeMetrics.chipsPinBand,
+            "the step (\(abs(oldMeasure - dragged))pt) has to dwarf the \(TasksChromeMetrics.chipsPinBand)pt dead band, or it could never have forced a crossing"
+        )
+    }
+
+    /// A drawer that takes SEVERAL frames to go (it animates) is absorbed for all of
+    /// them, and the honest measure resumes the moment the inset settles. That is what
+    /// bounds the fix: it can defer a crossing by a few frames, never lose one.
+    func testTheWholeDrawerAnimationIsAbsorbedAndThenTheMeasureIsHonestAgain() {
+        let tracker = BoardScrollTravelTracker()
+        _ = tracker.travel(BoardScrollSample(offset: -drawerInset, insetTop: drawerInset))
+        let dragged = tracker.travel(
+            BoardScrollSample(offset: -drawerInset + 40, insetTop: drawerInset))
+        XCTAssertEqual(dragged, 40, accuracy: 0.001)
+        // Four frames of the drawer shrinking, with the finger still moving.
+        for (i, inset) in [83, 70, 57, barInset].enumerated() {
+            let held = tracker.travel(
+                BoardScrollSample(offset: -drawerInset + 40 + CGFloat(i) * 6, insetTop: CGFloat(inset)))
+            XCTAssertEqual(held, dragged, accuracy: 0.001, "frame \(i): the animation leaked into travel")
+        }
+        // Settled: honest again, including "at the top means 0".
+        XCTAssertEqual(
+            tracker.travel(BoardScrollSample(offset: -barInset + 120, insetTop: barInset)),
+            120, accuracy: 0.001,
+            "the measure did not resume once the inset stopped moving"
+        )
+        XCTAssertEqual(
+            tracker.travel(BoardScrollSample(offset: -barInset, insetTop: barInset)), 0,
+            accuracy: 0.001,
+            "rest reads non-zero after a drawer change — the chrome would never come back"
+        )
+    }
+
+    /// The same rule in the other direction: a drawer coming BACK must not push travel up
+    /// either, which would pin the chips while the nav pills are on screen under them.
+    func testAReturningSearchDrawerContributesNoTravelEither() {
+        let tracker = BoardScrollTravelTracker()
+        _ = tracker.travel(BoardScrollSample(offset: -barInset, insetTop: barInset))
+        let dragged = tracker.travel(BoardScrollSample(offset: -barInset + 40, insetTop: barInset))
+        XCTAssertEqual(dragged, 40, accuracy: 0.001)
+        XCTAssertEqual(
+            tracker.travel(BoardScrollSample(offset: -barInset + 40, insetTop: drawerInset)),
+            40, accuracy: 0.001,
+            "the drawer coming back read as travel"
+        )
+    }
+
+    /// Sub-point inset wobble is arithmetic noise, not a header changing shape. Treating
+    /// it as a drawer would hold travel on every sample of a noisy stream, which is a
+    /// scroll observer that stops observing.
+    func testSubPointInsetNoiseIsNotADrawer() {
+        let tracker = BoardScrollTravelTracker()
+        _ = tracker.travel(BoardScrollSample(offset: -barInset, insetTop: barInset))
+        let wobbled = tracker.travel(
+            BoardScrollSample(offset: -barInset + 60, insetTop: barInset + 0.33))
+        XCTAssertEqual(
+            wobbled, 60.33, accuracy: 0.01,
+            "a third of a point of inset noise suppressed a real 60pt of travel"
+        )
+        XCTAssertLessThan(0.33, TasksChromeMetrics.insetStepEpsilon)
+    }
+
+    /// Rubber-banding past the top stays NEGATIVE, which both hysteresis machines rely on
+    /// (their sticky states unwind only at the very top).
+    func testBouncingPastTheTopStaysNegative() {
+        let tracker = BoardScrollTravelTracker()
+        _ = tracker.travel(BoardScrollSample(offset: -barInset, insetTop: barInset))
+        XCTAssertLessThan(
+            tracker.travel(BoardScrollSample(offset: -barInset - 30, insetTop: barInset)), 0)
+    }
+
+    /// A filter switch forgets the previous sample: the next list has its own chrome and
+    /// its own drawer, so "the inset changed" would be true for a reason that has nothing
+    /// to do with one.
+    func testResetForgetsThePreviousSample() {
+        let tracker = BoardScrollTravelTracker()
+        _ = tracker.travel(BoardScrollSample(offset: -drawerInset, insetTop: drawerInset))
+        _ = tracker.travel(BoardScrollSample(offset: -drawerInset + 120, insetTop: drawerInset))
+        tracker.reset()
+        XCTAssertEqual(
+            tracker.travel(BoardScrollSample(offset: -barInset, insetTop: barInset)), 0,
+            accuracy: 0.001,
+            "the new filter's first sample was compared against the old filter's inset"
+        )
+    }
+
+    /// The pure rule is the whole rule; the tracker is only its memory. Pinned because
+    /// that split is what makes this testable at all — inside the view it was observable
+    /// only as a dropped frame.
+    func testThePureRuleNeedsNoState() {
+        // No previous sample: the honest measure, always.
+        XCTAssertEqual(
+            TasksChromeMetrics.travel(
+                sample: BoardScrollSample(offset: -drawerInset + 12, insetTop: drawerInset),
+                previous: nil, lastTravel: 999
+            ),
+            12, accuracy: 0.001,
+            "the first sample must not inherit a travel value it cannot know about"
+        )
+        // Inset unchanged: the honest measure, whatever was reported before.
+        XCTAssertEqual(
+            TasksChromeMetrics.travel(
+                sample: BoardScrollSample(offset: -barInset + 70, insetTop: barInset),
+                previous: BoardScrollSample(offset: -barInset + 10, insetTop: barInset),
+                lastTravel: 10
+            ),
+            70, accuracy: 0.001
+        )
+        // Inset changed: the previous answer, unchanged.
+        XCTAssertEqual(
+            TasksChromeMetrics.travel(
+                sample: BoardScrollSample(offset: -barInset + 70, insetTop: barInset),
+                previous: BoardScrollSample(offset: -barInset + 10, insetTop: drawerInset),
+                lastTravel: 10
+            ),
+            10, accuracy: 0.001
+        )
+    }
+}
 
 /// `ChromeCollapseTracker` — the gate between the geometry stream and the one
 /// `@State` write a crossing needs. Its whole reason to exist is that publishing

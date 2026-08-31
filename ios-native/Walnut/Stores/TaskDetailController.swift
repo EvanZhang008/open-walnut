@@ -37,7 +37,14 @@ final class TaskDetailController {
         loading = true
         defer { loading = false }
         do {
-            detail = try await api.taskDetail(id: taskId)
+            let loaded = try await api.taskDetail(id: taskId)
+            detail = loaded
+            // The detail is the ONLY place `session_ids` reaches the phone (the slim
+            // list projection has no such field), so every read deposits it in the
+            // store's ledger. That is what lets a BOARD row whose session is missing
+            // from the session list still open that session instead of falling through
+            // to a New Session draft — see TasksStore.sessionIdsByTask.
+            TasksStore.shared?.noteSessionIds(taskId: taskId, ids: loaded.sessionIds ?? [])
         } catch let error as APIError where error.isCancelled {
             return
         } catch {

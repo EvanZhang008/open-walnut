@@ -22,8 +22,13 @@ enum TasksChromeMetrics {
     // the real store: the quick-add row spans ~48pt and the offline banner ~44pt.
     // Section gaps are the `listSectionSpacing(2)` the chrome sections carry.
 
-    /// The three-entry nav row (Pin | All Tasks | Calendar) — **row 1** of the
-    /// header, and the FIRST thing in the scrollable content on every filter.
+    /// The nav row (Pin | Calendar) — **row 1** of the header, and the FIRST thing in
+    /// the scrollable content on every filter.
+    ///
+    /// The HEIGHT is unchanged by dropping the "All Tasks" pill, and that is why the
+    /// collapse arithmetic below did not move: the row is as tall as one chip, not as
+    /// wide as its chips, and it scrolls horizontally rather than wrapping
+    /// (`TasksNavRow`). One fewer destination is a shorter row, never a shorter header.
     ///
     /// It replaced a 104pt strip of six summary cards (T84). The chip is a
     /// subheadline with 7pt of vertical padding (~32pt) inside a row with 4/8pt
@@ -55,9 +60,27 @@ enum TasksChromeMetrics {
     /// card), same screen Y at the crossing (R27 — `chipsPinThreshold` is derived from
     /// `rowTwoContentTop`, not from the rows alone), and the same CARD STYLE (R27 — one
     /// corner radius and one opaque surface, both fields the flip tests compare).
-    static let bandBar: CGFloat = 44
+    ///
+    /// # 52, and the 8pt is a CORNER measurement (R30)
+    ///
+    /// It was 44 (a List row's own minimum). The board's cards all round to
+    /// `BoardBandCard.cornerRadius` = 26 on iOS 26, and a rounded rectangle cannot round a
+    /// corner deeper than half its height: at 44 the platform clamped the bar's 26 to 22, so
+    /// the one hand-drawn card in the stack measured a 12.5pt inset 2pt below its top edge
+    /// where the OS-drawn cards measured 15.9pt — a visibly tighter corner, which is the Z8
+    /// finding. At 52 the radius fits (26 + 26 = 52) and the two profiles agree to 0.1pt.
+    ///
+    /// 52 is not a free number either: it is what the reference screen's own short card (the
+    /// quick-add capsule, `quickAdd`) measures, and that card now sits directly BELOW this
+    /// bar on the board. Two adjacent short cards of the same height with the same radius
+    /// are the same object; two that differ by 8pt are two guesses at one idea.
+    static let bandBar: CGFloat = 52
 
-    static let quickAdd: CGFloat = 48
+    /// The quick-add row's height — MEASURED (2026-08-30: the card runs y 336..388 on the
+    /// board at scroll-top), not the 48 this used to estimate. It feeds the collapse
+    /// arithmetic, and the board now renders this row too, so an estimate 4pt short would
+    /// put the compact bar's threshold 4pt early on every filter that has one.
+    static let quickAdd: CGFloat = 52
     static let offlineBanner: CGFloat = 44
     static let sectionGap: CGFloat = 2
 
@@ -197,26 +220,53 @@ enum TasksChromeMetrics {
         return scrolled > chipsPinThreshold(offline: offline)
     }
 
-    /// The one question the board asks: draw the pinned chip row, or leave the
-    /// inline one to do the job. Only the board has chips at all.
+    /// Does this filter have a chip row that CAN pin? Only the board does.
+    ///
+    /// Filter-only, and that is deliberate: it is the question `TasksView` asks to
+    /// decide whether the pinned copy EXISTS, and existence must not depend on the pin
+    /// state. It used to (`showsPinnedChips`), which made the overlay a conditional
+    /// insertion — so every crossing destroyed one `BoardBandBar` and built another,
+    /// and a rail `ScrollView` that came up measured at zero width stayed chipless for
+    /// the life of that instance. Both copies are permanent now and
+    /// `BoardBandBar.drawsChips` decides which one draws.
+    static func hasPinnedChips(_ filter: TaskFilter) -> Bool {
+        filter == .sessions
+    }
+
+    /// Whether the pinned copy is the one showing right now — the composed rule, kept
+    /// because it states the whole answer in one place (and the flip tests pin it).
+    ///
+    /// DERIVED from `hasPinnedChips` rather than repeating `filter == .sessions`: two
+    /// copies of "which filter has chips" is exactly the kind of pair that drifts, and
+    /// this one is now read by a view (existence) and by tests (visibility).
     static func showsPinnedChips(filter: TaskFilter, pinned: Bool) -> Bool {
-        filter == .sessions && pinned
+        hasPinnedChips(filter) && pinned
     }
 
     /// Total scrollable header height for a filter.
     ///
-    /// The BOARD (the `.sessions` filter) is still the LEANEST. It drops the top
-    /// quick add (every band ends in its own create ring) and pays for its chip row
-    /// instead, which is 4pt cheaper — so its chrome leaves soonest, which is the
-    /// point on the screen whose whole job is showing rows.
+    /// The BOARD is no longer the leanest, and that is a product decision rather than
+    /// drift: R30 gave it the reference screen's top-level quick add (see `TasksView`), so
+    /// it carries the chip row AND that row where every other filter carries only the quick
+    /// add. It has to be counted here or the chrome is understated by ~54pt and everything
+    /// derived from this number (the compact bar's collapse threshold and its hysteresis)
+    /// fires while the header is still on screen.
+    ///
+    /// What did NOT change is the PIN threshold: it is `rowTwoContentTop`, i.e. what rides
+    /// ABOVE row 2, and the quick add is below it. A row added under the chips cannot move
+    /// the point where the chips reach the top edge.
     ///
     /// Everything above row 2 comes from `rowTwoContentTop` rather than being re-added
     /// here: the pin threshold reads the same function, and two copies of "what rides
     /// above the chips" is how the two answers drifted by `listHeaderPadding` in the
     /// first place.
     static func chromeHeight(filter: TaskFilter, offline: Bool) -> CGFloat {
-        let rowTwo = filter == .sessions ? bandBar : quickAdd
-        return rowTwoContentTop(offline: offline) + rowTwo + sectionGap
+        // The board: chips in row 2, then the quick add. Every other filter: the quick add
+        // IS row 2.
+        let rowsBelowTheTop = filter == .sessions
+            ? bandBar + sectionGap + quickAdd
+            : quickAdd
+        return rowTwoContentTop(offline: offline) + rowsBelowTheTop + sectionGap
     }
 
     /// Scroll distance past which the chrome is gone and the bar takes over.
@@ -291,6 +341,109 @@ enum TasksChromeMetrics {
         }
         return scrolled > collapseThreshold(filter: filter, offline: offline)
     }
+
+    // MARK: - What "scrolled" is, and why the search drawer must not fake it
+
+    /// How far the content has travelled from rest, given ONE geometry sample.
+    ///
+    /// # The defect this replaces
+    ///
+    /// `scrolled` used to be `geo.contentOffset.y + geo.contentInsets.top`, read straight
+    /// out of the sample. That sum is 0 at rest and grows as the content moves up, which
+    /// is the right measure — but `contentInsets.top` is not a constant on this screen:
+    /// the `.searchable` drawer (`displayMode: .automatic`) RETRACTS as soon as a drag
+    /// starts, and the whole drawer height leaves the inset in a single sample. Both of
+    /// this screen's hysteresis machines have their crossing inside the first ~57pt of
+    /// travel (`chipsPinThreshold` is 56.66) and their dead bands are 4pt and 96pt, so a
+    /// ~52pt step in ONE sample crosses whatever it is nearest — and then crosses back as
+    /// the drag continues. Two spurious flips per machine, each one a publish, all of them
+    /// inside the frame the drawer is re-laying the header out on. Frames:
+    /// `frames/m1.png` — the field present at t=19.00s, gone at 19.20s, everything above
+    /// the chips shifted up in one frame.
+    ///
+    /// # The rule: a sample whose INSET moved reports no travel of its own
+    ///
+    /// `offset + insetTop` stays the measure, because it is the honest one — at rest it is
+    /// 0 whatever the inset is, and that is a property nothing here may trade away (a
+    /// measure that could read non-zero at the top would leave the chrome collapsed on a
+    /// list nobody scrolled, which is worse than the frames this is protecting).
+    ///
+    /// What changes is the samples in which the INSET itself moved: those report the
+    /// PREVIOUS travel, i.e. they contribute nothing. The origin moved, not the content,
+    /// and the whole drawer animation (it takes several frames, not one) is absorbed that
+    /// way — so no threshold can flip on the frame the drawer is re-laying the header out
+    /// on, which is the coincidence that made the top of the gesture expensive. As soon as
+    /// the inset settles the measure is honest again, so this can defer a crossing by a
+    /// few frames and can never lose one.
+    ///
+    /// Deliberately NOT a frozen inset baseline. That was the first attempt and it is
+    /// wrong in a way worth recording: freezing the origin for the duration of a gesture
+    /// makes `offset + frozenInset` non-zero at the new rest once the drawer really is
+    /// gone (52pt of "travel" that never goes away), which is exactly the stuck state the
+    /// paragraph above rules out.
+    ///
+    /// Pure, taking the previous sample and the previous answer, so the whole rule is
+    /// testable as a sequence (`BoardScrollTravelTests`) instead of only being observable
+    /// as a dropped frame.
+    static func travel(
+        sample: BoardScrollSample, previous: BoardScrollSample?, lastTravel: CGFloat
+    ) -> CGFloat {
+        let measured = sample.offset + sample.insetTop
+        guard let previous else { return measured }
+        // Sub-point inset wobble (a rounding difference between passes) is not a drawer;
+        // treating it as one would hold travel forever on a noisy stream.
+        if abs(sample.insetTop - previous.insetTop) > insetStepEpsilon { return lastTravel }
+        return measured
+    }
+
+    /// Smallest inset change that counts as the header changing shape rather than
+    /// arithmetic noise. Half a point: the drawer is ~52pt and the collapsing bar tens of
+    /// points, so nothing real lives below this.
+    static let insetStepEpsilon: CGFloat = 0.5
+}
+
+/// One scroll-geometry sample, as the two numbers the decision needs.
+///
+/// A struct rather than the pre-added `CGFloat` the observer used to emit, and that is
+/// the point: `onScrollGeometryChange` compares its value to decide whether to call the
+/// action, so a sum hides WHICH half moved — an inset that shrank by the drawer's height
+/// looked exactly like the content travelling that far. See `TasksChromeMetrics.travel`.
+struct BoardScrollSample: Equatable {
+    /// `contentOffset.y` — negative at rest by the size of the top inset.
+    let offset: CGFloat
+    /// `contentInsets.top` — the collapsing nav bar plus the search drawer when it is
+    /// out, so it CHANGES mid-gesture.
+    let insetTop: CGFloat
+}
+
+/// The tiny bit of state `TasksChromeMetrics.travel` needs between samples.
+///
+/// Same shape and the same reason as `ChromeCollapseTracker`: geometry callbacks run
+/// inside the scroll view's layout pass, so this state lives in a reference box OFF the
+/// view graph and is deliberately not `@Observable` — nothing observes it, and a publish
+/// from here would re-invalidate the subtree being measured.
+@MainActor
+final class BoardScrollTravelTracker {
+    private var previous: BoardScrollSample?
+    private var last: CGFloat = 0
+
+    /// Travel for this sample. The memory is the previous sample and the previous
+    /// answer — see `TasksChromeMetrics.travel` for what they are for.
+    func travel(_ sample: BoardScrollSample) -> CGFloat {
+        let travelled = TasksChromeMetrics.travel(
+            sample: sample, previous: previous, lastTravel: last)
+        previous = sample
+        last = travelled
+        return travelled
+    }
+
+    /// Forget the previous sample — for a filter switch, where the next list has its own
+    /// chrome and its own inset, so "the inset changed" would be true for a reason that
+    /// has nothing to do with a drawer.
+    func reset() {
+        previous = nil
+        last = 0
+    }
 }
 
 /// Coalescing gate between the scroll-geometry stream and the ONE `@State` write
@@ -342,20 +495,63 @@ final class ChromeCollapseTracker {
     }
 }
 
+/// Where the board's "row 2 has reached the top edge" flag LIVES, and the reason it
+/// is a reference object instead of a `@State Bool` on `TasksView`.
+///
+/// # The defect: one publish, a whole List body
+///
+/// The coalescing gate above already guarantees at most ONE publish per threshold
+/// crossing, and that was measured and correct. What it could not bound was the COST
+/// of that one publish: `boardChipsPinned` was `@State` on `TasksView`, both copies
+/// of the bar read it from `TasksView.body`, so a crossing invalidated the entire
+/// body — the board derive, `BoardModel.chips`, `BoardModel.filtered`, and a `List`
+/// diff — to swap a 44pt strip. Both thresholds on this screen land inside the first
+/// ~57pt of travel, and the search drawer retracts in the same window, so those
+/// passes stacked at the top of the gesture: measured 460-515ms of dropped frames on
+/// a board scroll, against 170ms worst-case on a 762-row Notes list under the same
+/// machine load.
+///
+/// # Why this shape fixes it
+///
+/// `TasksView` WRITES `isPinned` and never reads it; the two `BoardBandBar` copies
+/// read it and nothing else does. Under Observation a dependency is registered by the
+/// body that performs the read, so a crossing now invalidates the two bars and leaves
+/// `TasksView.body` (and therefore the board derive and the List) alone.
+///
+/// That is a contract, not an implementation detail: **nothing in `TasksView.body`
+/// may read `isPinned`.** A single `if latch.isPinned` there puts the whole List back
+/// on the scroll path and the hitch comes back with it, silently, because the
+/// coalescing gate will still report one publish per crossing.
+@Observable
+@MainActor
+final class BoardChipsPinLatch {
+    /// True once the board's chip row (header row 2) has reached the top edge, so the
+    /// pinned copy stands in for it.
+    ///
+    /// Starts false and is reset to false on a filter switch: unpinned is always safe
+    /// to be wrong about (the inline row simply draws the chips where its own content
+    /// position puts them, and the next geometry sample re-pins), while a stale true
+    /// would draw the floating copy over the nav pills.
+    var isPinned = false
+}
+
 /// The compact header that replaces the scrolled-away chrome: every HEADER ENTRY
 /// as a one-tap chip with its count, plus a one-tap add. Floats over the top of
 /// the list on `.bar` material, the way iOS floating headers do.
 ///
 /// It iterates `TasksNavEntry`, not `TaskFilter.allCases`, and that is load-bearing
-/// rather than tidy: the header now offers three destinations, so a bar offering
-/// six would be the one place a user could reach a filter the header cannot show —
-/// they would land on Today with no chip selected and no way back except the
-/// fallback. The bar and the nav row read from the same entry set, so the two can
-/// never disagree about what exists.
+/// rather than tidy: the header now offers TWO destinations, so a bar offering six
+/// would be the one place a user could reach a filter the header cannot show — they
+/// would land on Today (or, since this round, on All Tasks) with no chip selected and
+/// no way back except the fallback. The bar and the nav row read from the same entry
+/// set, so the two can never disagree about what exists, and dropping an entry drops
+/// it from both at once.
 ///
 /// The chip identifiers stay keyed by `TaskFilter.identifierKey`
-/// (`tasks.compactChip.sessions` / `.all` / `.calendarview`) because shipped flows
-/// tap them.
+/// (`tasks.compactChip.sessions` / `.calendarview`) because shipped flows tap them.
+/// `tasks.compactChip.all` goes away with its entry, exactly as `tasks.nav.all` does:
+/// an id that still resolves but drives a different destination is worse than one that
+/// resolves to nothing.
 struct TasksCompactBar: View {
     @Binding var activeFilter: TaskFilter
     /// Bring the real header back (chip taps scroll to the top, which is also how

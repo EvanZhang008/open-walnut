@@ -222,6 +222,18 @@ enum AskUserQuestion {
 
 /// GET /v1/sessions/:id → { session, pendingPermissions }. The record is the
 /// full server-side SessionRecord; only the fields the phone renders decode.
+///
+/// This is also the app's ONLY way to reach a session the session LIST does not carry
+/// (one that aged out of the projection), which is why the block below grew past the
+/// four fields the permission card needs: those extra fields are what let the phone
+/// build a list-shaped row for a by-id lookup and push the conversation page
+/// (`WalnutSession.fromDetail`). They match `SessionRecord`'s own spelling on the wire
+/// — camelCase everywhere except `process_status`.
+///
+/// EVERY added field is optional, and that is not defensive habit: the cloud
+/// companion answers this route from a DEGRADED path when its bridge to the primary is
+/// down, and that reply carries only `claudeSessionId` / `process_status` / `title` /
+/// `mode`. A required field would turn "the Mac is asleep" into a decode failure.
 struct SessionDetail: Codable {
     struct Record: Codable {
         let claudeSessionId: String
@@ -229,10 +241,24 @@ struct SessionDetail: Codable {
         let title: String?
         let mode: String?
         let archived: Bool?
+        // Additive (2026-08) — `var … = nil` keeps the memberwise initializer
+        // source-compatible with the call sites that build a Record from a PATCH reply.
+        var taskId: String? = nil
+        var project: String? = nil
+        /// "" = the primary box; otherwise a host alias (same meaning as WalnutSession).
+        var host: String? = nil
+        var cwd: String? = nil
+        var startedAt: String? = nil
+        var lastActiveAt: String? = nil
+        var messageCount: Int? = nil
+        var model: String? = nil
+        var description: String? = nil
 
         private enum CodingKeys: String, CodingKey {
             case claudeSessionId, title, mode, archived
             case processStatus = "process_status"
+            case taskId, project, host, cwd, startedAt, lastActiveAt, messageCount
+            case model, description
         }
     }
 

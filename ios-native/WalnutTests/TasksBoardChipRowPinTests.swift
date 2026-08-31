@@ -4,7 +4,7 @@ import SwiftUI
 
 /// HEADER ORDER, the board's pinned chip row, and the hand-off between its two copies.
 ///
-/// The user's spec: row 1 is the `tasks.nav.pin` / `.all` / `.calendar` pills, at the
+/// The user's spec: row 1 is the `tasks.nav.pin` / `tasks.nav.calendar` pills, at the
 /// top, scrolling away with the content; row 2 is the tier chips, and the chips are the
 /// ONLY floating row. The shipping build had it upside down at scroll-top — the chips
 /// measured y 236..264 and the pills y 290..322 — because the board's content opened
@@ -51,7 +51,9 @@ final class TasksBoardChipRowPinTests: XCTestCase {
         .init(bandId: "focus", label: "Focus", count: 12),
         .init(bandId: "satellite", label: "Satellite", count: 8),
         .init(bandId: "backlog", label: "Backlog", count: 23),
-        .init(bandId: "rest", label: "Everything else", count: 49),
+        // A custom tier, not the retired "Everything else" tail band. Same 15-character
+        // label so the layout arithmetic this file compares is byte-identical.
+        .init(bandId: "ct_deepwork", label: "Deep Work Later", count: 49),
     ]
 
     /// Content offset of the top of the nav row, i.e. how much rides above it.
@@ -111,14 +113,19 @@ final class TasksBoardChipRowPinTests: XCTestCase {
                 pin, TasksChromeMetrics.navRow,
                 "offline=\(offline): the chips would pin while the nav pills are still on screen"
             )
-            // And the chips are INSIDE the chrome, not after it: their row's bottom edge
-            // is the end of the header.
+            // And the chips are INSIDE the chrome, not after it: their row sits between the
+            // pin point and the end of the header. What follows it below the pin point is the
+            // chip row itself and (since R30) the board's own top-level quick add — a row
+            // ADDED UNDER the chips cannot move the point where the chips reach the top edge,
+            // which is the property this pairing exists to state.
             let chrome = TasksChromeMetrics.chromeHeight(filter: .sessions, offline: offline)
             XCTAssertLessThan(pin, chrome, "offline=\(offline): the chip row is part of the chrome")
             XCTAssertEqual(
-                pin + TasksChromeMetrics.bandBar + TasksChromeMetrics.sectionGap, chrome,
+                pin + TasksChromeMetrics.bandBar + TasksChromeMetrics.sectionGap
+                    + TasksChromeMetrics.quickAdd + TasksChromeMetrics.sectionGap,
+                chrome,
                 accuracy: 0.01,
-                "offline=\(offline): nothing but the chip row and its gap sits below the pin point"
+                "offline=\(offline): only the chip row and the quick add sit below the pin point"
             )
         }
     }
@@ -234,11 +241,14 @@ final class TasksBoardChipRowPinTests: XCTestCase {
                 accuracy: 0.01, "offline=\(offline)"
             )
             // `chromeHeight` reads the same "what rides above row 2" answer, which is what
-            // stops the two from drifting apart again.
+            // stops the two from drifting apart again. What it adds BELOW row 2 (the chip
+            // row's own height, and since R30 the board's quick add) is exactly what the pin
+            // threshold must NOT include.
             XCTAssertEqual(
                 TasksChromeMetrics.chromeHeight(filter: .sessions, offline: offline),
                 TasksChromeMetrics.rowTwoContentTop(offline: offline)
-                    + TasksChromeMetrics.bandBar + TasksChromeMetrics.sectionGap,
+                    + TasksChromeMetrics.bandBar + TasksChromeMetrics.sectionGap
+                    + TasksChromeMetrics.quickAdd + TasksChromeMetrics.sectionGap,
                 accuracy: 0.01, "offline=\(offline)"
             )
         }
@@ -400,5 +410,317 @@ final class TasksBoardChipRowPinTests: XCTestCase {
             XCTAssertEqual(matched.filters, asPinned.filters, "container=\(container)")
             XCTAssertEqual(matched.hairline, asPinned.hairline, "container=\(container)")
         }
+    }
+
+    // MARK: - THE EMPTY PINNED BAR (the reported defect, and the shape that caused it)
+    //
+    // Mid-scroll the floating bar drew its card and its filters button over a
+    // mathematically flat 316pt rail: not a clipped capsule, not a partial one, no
+    // fade — bare card material (measured on the user's screenshot: rail region mean
+    // 250.0, std 0.84). The chips existed and the rail was the right size, so the
+    // horizontal `ScrollView` inside it had rendered nothing.
+    //
+    // Mechanism: the pinned copy was a CONDITIONALLY INSERTED overlay, so every pin
+    // crossing constructed a brand-new `ScrollViewReader`/`ScrollView`, and a
+    // `GeometryReader` can report 0 on its first pass. `railWidth(cardWidth: 0)` is 0,
+    // so that fresh scroll view was laid out into a zero-width viewport — and nothing
+    // re-established it afterwards (`reveal()` was wired to selection, grouping and
+    // appear, never to a width). The card and the button recovered on the next pass
+    // because they are plain frames recomputed from `layout` every time.
+    //
+    // The old coverage could not reach any of this: it drove `BoardBandRailGeometry
+    // .layout` as a pure value at 320/370/402/430 and never a degenerate width. These
+    // cases pin the three layers of the fix.
+
+    /// Layer 1: a degenerate measurement is UNRENDERABLE rather than unrecoverable.
+    /// Below `minimumUsableContainer` no scroll view is constructed at all, so there is
+    /// no instance that can get stuck.
+    ///
+    /// The floor is PER-PLACEMENT, because the card inset is: `layout` derives the card
+    /// as `container - 2 * cardInset(placement:)`, so at one and the same container the
+    /// inline copy (inset 0) has 32pt more card than the pinned one (inset 16 a side).
+    /// A single placement-agnostic floor is therefore either a lie about one copy or a
+    /// needless blackout of the other — measured: with the pinned number (86) as the
+    /// shared floor, the inline copy at 85.5pt was refused a rail it had 31.5pt of.
+    func testADegenerateContainerBuildsNoRailAtAll() {
+        for placement in BoardBandBarPlacement.allCases {
+            let floor = BoardBandBar.minimumUsableContainer(placement)
+            XCTAssertGreaterThan(floor, 0, "\(placement)")
+            for container in [CGFloat(0), 1, 20, floor - 0.5] {
+                XCTAssertLessThan(
+                    container, floor,
+                    "container=\(container)/\(placement) must be below the floor for this case to mean anything"
+                )
+                // What the arithmetic says about such a width, which is why the view must
+                // not hand it to a `UIScrollView`: there is no rail.
+                let layout = geometry.layout(
+                    container: container, placement: placement, chips: tierChips)
+                XCTAssertLessThanOrEqual(
+                    layout.rail.width, 0,
+                    "container=\(container)/\(placement): a scroll view here is born into a viewport it cannot use"
+                )
+            }
+            // The floor is exactly the width below which THIS copy's rail has nothing
+            // left, so it is derived and not a taste number.
+            XCTAssertEqual(
+                floor,
+                2 * geometry.cardInset(placement: placement)
+                    + geometry.filtersColumnWidth + geometry.railSpacing,
+                accuracy: 0.01
+            )
+            // One point above its own floor, that copy has a rail again — which is what
+            // makes the guard a floor rather than a blackout.
+            XCTAssertGreaterThan(
+                geometry.layout(
+                    container: floor + 1, placement: placement, chips: tierChips
+                ).rail.width,
+                0, "\(placement)"
+            )
+        }
+        // The pinned copy pays the wider inset, so its floor is the conservative one and
+        // the two are 2 * the inset apart.
+        XCTAssertEqual(
+            BoardBandBar.minimumUsableContainer(.pinnedOverlay)
+                - BoardBandBar.minimumUsableContainer(.inlineRow),
+            2 * geometry.cardHorizontalInset, accuracy: 0.01
+        )
+        // …and the real containers are comfortably above both, so the guard never fires
+        // in the shape that ships.
+        for container in [inlineContainer, pinnedContainer] {
+            for placement in BoardBandBarPlacement.allCases {
+                XCTAssertGreaterThan(
+                    container, BoardBandBar.minimumUsableContainer(placement),
+                    "container=\(container)/\(placement)"
+                )
+            }
+        }
+    }
+
+    /// Layer 2: BOTH copies exist at all times and `drawsChips` decides which one is
+    /// visible, so a pin crossing cannot destroy and re-create either.
+    ///
+    /// Exactly ONE copy draws in every pin state — the property that used to be
+    /// guaranteed by conditional insertion, restated so the fix does not trade a stuck
+    /// rail for two live copies of every `board.chip.*` id.
+    func testExactlyOneCopyDrawsItsChipsInEveryPinState() {
+        for pinned in [false, true] {
+            let drawing = BoardBandBarPlacement.allCases.filter {
+                BoardBandBar.drawsChips(
+                    placement: $0, pinned: pinned, chipCount: tierChips.count)
+            }
+            XCTAssertEqual(
+                drawing.count, 1,
+                "pinned=\(pinned): \(drawing.count) copies draw — two would make every chip ambiguous to automation, zero is the bare card the user screenshotted"
+            )
+        }
+        XCTAssertTrue(BoardBandBar.drawsChips(
+            placement: .inlineRow, pinned: false, chipCount: tierChips.count))
+        XCTAssertTrue(BoardBandBar.drawsChips(
+            placement: .pinnedOverlay, pinned: true, chipCount: tierChips.count))
+    }
+
+    /// A bar with NO chips draws nothing at all, in either copy. That is the reported
+    /// symptom stated as a rule: a card plus a filters button over a bare rail claims
+    /// "this board has no bands" while five bands are drawn below it, so an empty rail
+    /// must be no card rather than an empty one.
+    ///
+    /// On the board this branch is unreachable — `BoardModel.chips` always emits the
+    /// leading `All` chip — which is exactly why it is written down instead of assumed.
+    func testNoChipsMeansNoCardRatherThanAnEmptyRail() {
+        XCTAssertEqual(BoardModel.chips([]).count, 1,
+            "the All chip is always there, so the board never reaches the branch below")
+        for placement in BoardBandBarPlacement.allCases {
+            for pinned in [false, true] {
+                XCTAssertFalse(
+                    BoardBandBar.drawsChips(placement: placement, pinned: pinned, chipCount: 0),
+                    "\(placement)/pinned=\(pinned): a chipless bar must not draw its card"
+                )
+            }
+        }
+    }
+
+    /// Layer 3: a width that ARRIVES LATE still produces a usable rail. The view wires
+    /// `reveal` to `layout.rail.width` for this; the arithmetic half is that the SAME
+    /// geometry, re-evaluated once the real container lands, resolves to the full rail
+    /// rather than staying at whatever the first pass measured.
+    func testARailWidthThatArrivesLateResolvesToTheRealRail() {
+        for placement in BoardBandBarPlacement.allCases {
+            let container = placement == .inlineRow ? inlineContainer : pinnedContainer
+            let degenerate = geometry.layout(
+                container: 0, placement: placement, chips: tierChips)
+            let arrived = geometry.layout(
+                container: container, placement: placement, chips: tierChips)
+            XCTAssertEqual(degenerate.rail.width, 0, "\(placement)")
+            XCTAssertGreaterThan(
+                arrived.rail.width, 0,
+                "\(placement): the rail must come back once the container is real"
+            )
+            XCTAssertNotEqual(
+                degenerate.rail.width, arrived.rail.width,
+                "\(placement): the width CHANGES, which is the signal `reveal` is wired to"
+            )
+            // And the filters control moves with it, which is what proves the card was
+            // framed correctly all along while only the rail stayed dead: the user's
+            // screenshot had the button at its correct trailing x.
+            XCTAssertGreaterThan(arrived.filters.minX, degenerate.filters.minX, "\(placement)")
+        }
+    }
+
+    /// The board's pinned copy EXISTS for as long as the board does, and that is a
+    /// filter-only question — `hasPinnedChips`. It used to be
+    /// `showsPinnedChips(filter:pinned:)`, i.e. existence depended on the pin state,
+    /// which is what made the overlay a conditional insertion.
+    ///
+    /// `showsPinnedChips` is now derived from it, so the two can never disagree about
+    /// which filter has chips.
+    func testExistenceOfThePinnedCopyIsAFilterQuestionNotAPinQuestion() {
+        XCTAssertTrue(TasksChromeMetrics.hasPinnedChips(.sessions))
+        for filter in TaskFilter.allCases where filter != .sessions {
+            XCTAssertFalse(TasksChromeMetrics.hasPinnedChips(filter), "\(filter) has no chip row")
+        }
+        for filter in TaskFilter.allCases {
+            for pinned in [false, true] {
+                XCTAssertEqual(
+                    TasksChromeMetrics.showsPinnedChips(filter: filter, pinned: pinned),
+                    TasksChromeMetrics.hasPinnedChips(filter) && pinned,
+                    "\(filter)/pinned=\(pinned): the composed rule drifted from the filter-only one"
+                )
+            }
+        }
+    }
+
+    // MARK: - The VIEW, not just its arithmetic (the coverage gap that let this ship)
+
+    @MainActor
+    private func bar(
+        latch: BoardChipsPinLatch, placement: BoardBandBarPlacement
+    ) -> BoardBandBar {
+        BoardBandBar(
+            chips: tierChips, selected: nil,
+            grouping: .constant(.tier), dateFilter: .constant(.all),
+            onSelect: { _ in }, placement: placement, pinLatch: latch
+        )
+    }
+
+    /// Every `UIScrollView` in a hosted hierarchy. The chip rail is the only scroll view
+    /// the bar builds, so this is "did the rail get made, and does it hold anything".
+    @MainActor
+    private func rails(in view: UIView) -> [UIScrollView] {
+        var found: [UIScrollView] = []
+        if let scroll = view as? UIScrollView { found.append(scroll) }
+        for sub in view.subviews { found.append(contentsOf: rails(in: sub)) }
+        return found
+    }
+
+    /// Lay out, then let the next few frames settle — a `UIScrollView`'s `contentSize`
+    /// is established by its content's own layout, which SwiftUI may finish on a later
+    /// pass (the same reason `FirstPaintFreezeTests` spins the runloop after mounting).
+    @MainActor
+    private func settle(_ view: UIView) {
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        view.layoutIfNeeded()
+    }
+
+    /// THE regression test for the empty pinned bar, and the first one in this file that
+    /// renders the real `BoardBandBar` instead of driving `BoardBandRailGeometry` as a
+    /// value.
+    ///
+    /// Why the old coverage could not reach the defect: the arithmetic was RIGHT
+    /// (`railWidth(cardWidth: 0)` really is 0), and the bug was that a `UIScrollView`
+    /// laid out into that viewport was never re-established — `reveal()` was wired to
+    /// selection, grouping and appear, and to no width. So the card and the filters
+    /// button recovered on the next pass (plain frames) while the rail stayed dead for
+    /// the life of that instance: 316pt of flat card material, measured on the user's
+    /// screenshot at mean 250.0 / std 0.84.
+    ///
+    /// The assertion is a UIKit fact rather than an accessibility query: below the usable
+    /// width NO scroll view may be built at all, and once the real width arrives there
+    /// must be exactly one, holding content. A chipless rail is precisely a scroll view
+    /// whose `contentSize.width` is 0.
+    @MainActor
+    func testTheBarBuildsARealRailAfterAZeroWidthFirstMeasurement() {
+        let latch = BoardChipsPinLatch()   // unpinned, so the inline copy is the live one
+        let host = UIHostingController(rootView: bar(latch: latch, placement: .inlineRow))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: pinnedContainer, height: 240))
+        window.isHidden = false
+        // A SUBVIEW rather than the root: the window would re-impose its own bounds on a
+        // root view, and the width is the whole variable here.
+        window.addSubview(host.view)
+
+        // Pass 1: a measurement the arithmetic cannot use.
+        host.view.frame = CGRect(x: 0, y: 0, width: 0, height: TasksChromeMetrics.bandBar)
+        settle(host.view)
+        XCTAssertTrue(
+            rails(in: host.view).isEmpty,
+            "a rail was laid out into a zero-width viewport — the stuck state the user screenshotted is reachable again"
+        )
+
+        // Pass 2: the real container arrives (402pt, the pinned copy's; the inline copy's
+        // 370 is inside it either way).
+        host.view.frame = CGRect(
+            x: 0, y: 0, width: pinnedContainer, height: TasksChromeMetrics.bandBar)
+        settle(host.view)
+        let built = rails(in: host.view)
+        XCTAssertEqual(
+            built.count, 1,
+            "\(built.count) rails: zero is the bare card, two would put every board.chip.* id on screen twice"
+        )
+        let content = built.first?.contentSize.width ?? 0
+        XCTAssertGreaterThan(
+            content, 0,
+            "the rail holds \(content)pt of content — the bar is drawing its card and its filters button over a dead scroll view"
+        )
+        // And the chips it holds are wider than one chip, i.e. it really is the rail and
+        // not an empty container that happens to exist.
+        XCTAssertGreaterThan(content, geometry.minimumChipWidth, "content \(content)pt")
+
+        host.view.removeFromSuperview()
+        window.isHidden = true
+    }
+
+    /// The same view, in the PINNED copy, at the container it is really handed — and with
+    /// the latch flipped, because that is the copy whose chips the user found missing.
+    ///
+    /// It also pins the fix's other half: the two copies are constructed unconditionally
+    /// now, so a crossing cannot destroy and re-create either. Flipping the latch on a
+    /// LIVE instance and finding the same single rail is what that looks like from
+    /// outside.
+    @MainActor
+    func testThePinnedCopyKeepsItsRailAcrossAPinCrossing() {
+        let latch = BoardChipsPinLatch()
+        let host = UIHostingController(rootView: bar(latch: latch, placement: .pinnedOverlay))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: pinnedContainer, height: 240))
+        window.isHidden = false
+        window.addSubview(host.view)
+        host.view.frame = CGRect(
+            x: 0, y: 0, width: pinnedContainer, height: TasksChromeMetrics.bandBar)
+
+        settle(host.view)
+        let before = rails(in: host.view)
+        XCTAssertEqual(before.count, 1, "the pinned copy exists while unpinned, just hidden")
+        let widthWhileHidden = before.first?.contentSize.width ?? 0
+
+        // The crossing.
+        latch.isPinned = true
+        settle(host.view)
+        let after = rails(in: host.view)
+        XCTAssertEqual(after.count, 1, "the crossing built a second rail — the copies are conditional again")
+        XCTAssertTrue(
+            after.first === before.first,
+            "the crossing replaced the rail's scroll view; a fresh one is what could come up zero-width and stay empty"
+        )
+        XCTAssertGreaterThan(
+            after.first?.contentSize.width ?? 0, 0,
+            "the pinned copy is showing a rail with no content — this IS the reported defect"
+        )
+        XCTAssertEqual(
+            after.first?.contentSize.width ?? 0, widthWhileHidden, accuracy: 0.5,
+            "the rail's content changed size at the crossing, which is a bar that lays out differently in the two states"
+        )
+
+        host.view.removeFromSuperview()
+        window.isHidden = true
     }
 }

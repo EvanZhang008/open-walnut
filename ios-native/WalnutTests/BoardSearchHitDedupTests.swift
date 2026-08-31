@@ -261,7 +261,9 @@ final class BoardSearchHitDedupTests: XCTestCase {
         )
         let visible = BoardModel.searchDedupIds(bands)
 
-        // The board really is showing that work (as a session-only row in the tail).
+        // The board really is showing that work: the SESSION reports pinned, which on a
+        // pinned-only board is the only evidence available that the missing task belongs
+        // here, so it keeps a session-only row.
         XCTAssertTrue(visible.contains(ownedTaskId))
         XCTAssertTrue(visible.contains(uuid), "the session id is an id that row answers to")
 

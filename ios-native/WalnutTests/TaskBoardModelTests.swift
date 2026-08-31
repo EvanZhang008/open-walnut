@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import Walnut
 
 /// Every pure rule the board is built on. The layout is the simulator's job;
@@ -106,7 +107,8 @@ final class TaskBoardModelTests: XCTestCase {
     }
 
     func testEveryStateHasNonEmptyWording() {
-        for state in [BoardRowState.running, .waiting, .handedBack, .ended, .failed, .none] {
+        for state in [BoardRowState.running, .waiting, .handedBack, .ended, .failed,
+                      .earlierSession, .none] {
             XCTAssertFalse(state.word.isEmpty)
             XCTAssertFalse(state.word.contains("\n"), "the row's second line is ONE line")
         }
@@ -270,115 +272,210 @@ final class TaskBoardModelTests: XCTestCase {
         XCTAssertEqual(bands.first?.hiddenDone, 1, "the heading can say what to un-hide")
     }
 
-    // MARK: - The tail band: EVERY task no tier claimed
+    // MARK: - The board IS the pinned working set (the tail band is gone)
+    //
+    // Every case in this section used to assert the OPPOSITE — that an unpinned
+    // task, and a session owning nothing, landed in a trailing "Everything else"
+    // band. That band was the COMPLEMENT of every tier: 2,903 of 3,161 rows on the
+    // real store, rebuilt and re-sorted on every body pass, and summed into an
+    // `All 3,175` chip over a working set of ~264.
+    //
+    // "已经有 pin 了,为什么还会有 all task" retired it. The board is the pinned
+    // working set, so NOT being pinned is a complete answer to "why is this row not
+    // here", and unpinned work is reached by SEARCH (a server query) rather than by
+    // walking the store on the phone.
+    //
+    // The guarantee that mattered survives one scope smaller and is what these cases
+    // now pin: a PINNED task can never be missing, whichever half of the tier split
+    // knows about the pin. A tier still decides WHICH band, never WHETHER.
 
-    /// THE board's completeness guarantee, and the bug the user reported.
-    ///
-    /// A task with no tier and NO session used to have no row anywhere: the tier
-    /// bands are built from the split, and the tail band was session-gated, so a
-    /// plain task fell between them. Create a task, have the tier write not land
-    /// (or land and then get overwritten by a split that hasn't caught up), and
-    /// the task existed in the store, in search, in every other view — and was
-    /// missing from the one screen whose whole job is showing tasks.
-    ///
-    /// A tier decides WHICH band a task is in. It must never decide WHETHER.
-    func testATaskWithNoTierAndNoSessionStillHasARow() {
+    /// THE board's completeness guarantee, restated for the pinned scope, and still
+    /// the bug the user reported: a task pinned with NO tier anywhere (the split
+    /// hasn't landed, or landed and was overwritten) must not fall between the
+    /// bands. `pinned == true` alone is enough to put it on the board.
+    func testAPinnedTaskWithNoTierAndNoSessionStillHasARow() {
         let bands = BoardModel.bands(
-            tasks: [task("plain", pinned: false)], sessions: [],
+            tasks: [task("plain")], sessions: [],
             tierOf: [:], tierOrder: [:], customTiers: []
         )
-        XCTAssertEqual(bands.map(\.bandId), [BoardModel.activeTierId],
-            "a bare task is still a task — it cannot be absent from the board")
+        XCTAssertEqual(bands.map(\.bandId), [BoardModel.defaultTierId],
+            "a pin with no tier lands in the tier the split is about to give it")
         XCTAssertEqual(bands.first?.rows.map(\.id), ["plain"])
     }
 
-    /// The same guarantee stated over a whole mixed set: every task id in, every
-    /// task id out. This is the assertion that catches a future filter growing a
-    /// new hole, whatever shape it takes.
-    func testEveryTaskAppearsSomewhereOnTheBoard() {
+    /// The other half of the same rule, and the one this round adds: a task that is
+    /// NOT pinned has no row at all. Stated over a mixed set so a future filter
+    /// cannot quietly widen the board back to the store.
+    func testAnUnpinnedTaskHasNoRowOnTheBoardAtAll() {
         let tasks = [
             task("filed"), task("loose", pinned: false),
             task("busy", pinned: false), task("finished", status: "done", phase: "COMPLETE"),
         ]
         let bands = BoardModel.bands(
             tasks: tasks,
+            // `busy` even has a live session, which is the strongest claim an
+            // unpinned task can make — and it is still not a pin.
             sessions: [session("s", taskId: "busy", status: "running")],
-            // Only ONE task is claimed by a tier; the other three have no tier at all.
             tierOf: ["filed": "focus"], tierOrder: ["focus": ["filed"]], customTiers: []
         )
         let shown = Set(bands.flatMap(\.rows).map(\.id))
-        XCTAssertEqual(shown, Set(tasks.map(\.id)),
-            "the board is a task list: no task may be missing from it")
+        XCTAssertEqual(shown, ["filed", "finished"],
+            "the board is the PINNED working set: an unpinned task is not on it")
+        XCTAssertFalse(shown.contains("loose"))
+        XCTAssertFalse(shown.contains("busy"),
+            "a live session does not put an unpinned task back on the board")
     }
 
-    /// Live work sorts to the top of the tail (that is what the band was born
-    /// for), then everything else by recency, with done rows last.
-    func testTheTailPutsLiveWorkFirstThenRecencyThenDone() {
-        let tasks = [
-            task("pinned"),
-            task("loose1", pinned: false),
-            task("loose2", pinned: false),
-            task("quiet", pinned: false),
-            task("finished", status: "done", phase: "COMPLETE", pinned: false),
-        ]
-        let sessions = [
-            session("a", taskId: "loose1", status: "running", lastActive: "2026-08-27T01:00:00Z"),
-            session("b", taskId: "loose2", status: "idle", lastActive: "2026-08-27T05:00:00Z"),
-            session("c", taskId: "quiet", status: "stopped", lastActive: "2026-08-27T09:00:00Z"),
-        ]
+    /// Both halves of the split are read, because dropping an id one half names and
+    /// the other has not caught up with is exactly how a row goes missing. The
+    /// projection here says NOT pinned for `ordered` — the split's order array is the
+    /// only evidence of the pin, and it is enough.
+    func testEitherHalfOfTheTierSplitIsEnoughToPutARowOnTheBoard() {
         let bands = BoardModel.bands(
-            tasks: tasks, sessions: sessions,
-            tierOf: ["pinned": "focus"], tierOrder: ["focus": ["pinned"]], customTiers: []
+            tasks: [task("mapped", pinned: false), task("ordered", pinned: false)],
+            sessions: [],
+            tierOf: ["mapped": "focus"],
+            tierOrder: ["backlog": ["ordered"]], customTiers: []
         )
-        XCTAssertEqual(bands.map(\.bandId), ["focus", BoardModel.activeTierId])
-        let tail = bands.last?.rows.map(\.id) ?? []
-        // loose2 (idle=live, newer) and loose1 (running) lead; `quiet`'s session
-        // is stopped so it sorts on recency alone; the done row sinks.
-        XCTAssertEqual(tail.prefix(2).sorted(), ["loose1", "loose2"],
-            "a live session sorts above a task with none")
-        XCTAssertEqual(tail.last, "finished", "a completed task never buries the top")
-        XCTAssertEqual(Set(tail), ["loose1", "loose2", "quiet", "finished"])
+        XCTAssertEqual(
+            Set(bands.flatMap(\.rows).map(\.id)), ["mapped", "ordered"],
+            "a tier named by EITHER half of the split is a pin the board must honour"
+        )
+        XCTAssertEqual(bands.first(where: { $0.bandId == "focus" })?.rows.map(\.id), ["mapped"])
+        XCTAssertEqual(bands.first(where: { $0.bandId == "backlog" })?.rows.map(\.id), ["ordered"])
     }
 
-    /// A session whose owning task never reached the projection still gets a row
-    /// rather than disappearing. Unlike a task, a taskless session has nothing
-    /// else representing it anywhere, so even a stopped one keeps its row.
-    func testATasklessSessionStillGetsARow() {
+    /// A tier id the board does not render (a custom tier deleted while a task still
+    /// pointed at it) must fold to the default band rather than naming a band nothing
+    /// draws — which would drop the row silently, the original defect one level down.
+    func testAnUnknownTierFoldsToTheDefaultBandRatherThanVanishing() {
+        let bands = BoardModel.bands(
+            tasks: [task("orphaned")], sessions: [],
+            tierOf: ["orphaned": "ct_deleted9"], tierOrder: [:], customTiers: []
+        )
+        XCTAssertEqual(bands.map(\.bandId), [BoardModel.defaultTierId])
+        XCTAssertEqual(bands.first?.rows.map(\.id), ["orphaned"])
+    }
+
+    /// A session whose owning task never reached the slim projection still gets a
+    /// row, because the SESSION's own pin flag is the only evidence available that
+    /// the missing task belongs on the board. It files into the tier the session
+    /// reports, which is the value the split would have given for that task.
+    func testAPinnedSessionWhoseTaskIsMissingFromTheProjectionKeepsARow() {
         let bands = BoardModel.bands(
             tasks: [], sessions: [
-                session("orphan", taskId: nil, status: "running"),
-                session("dead", taskId: nil, status: "stopped"),
+                session("ghost", taskId: "gone-from-projection", status: "running"),
             ],
             tierOf: [:], tierOrder: [:], customTiers: []
         )
-        XCTAssertEqual(bands.map(\.bandId), [BoardModel.activeTierId])
-        XCTAssertEqual(bands.first?.rows.first?.id, "orphan", "live work leads")
-        XCTAssertEqual(Set(bands.first?.rows.map(\.id) ?? []), ["orphan", "dead"])
+        XCTAssertEqual(bands.map(\.bandId), [BoardModel.defaultTierId])
+        // ONE id space (R25): keyed by the OWNING TASK, never by the session UUID.
+        XCTAssertEqual(bands.first?.rows.map(\.id), ["gone-from-projection"])
         XCTAssertEqual(bands.first?.rows.first?.canRetier, false,
-            "a session with no task has nothing to pin, so it shows no tier picker")
+            "the projection has no task to retier, so the row shows no tier picker")
     }
 
-    /// A query that hides a tier row must not push it into the tail band — the
-    /// row would then appear twice as the query narrows. Claiming happens when a
-    /// band OWNS an id, before the search filter runs.
-    func testASearchHiddenTierRowDoesNotReappearInTheTail() {
+    /// A session that owns NOTHING has no row: there is no task to be pinned, so the
+    /// board has nothing to say about it. 96 such sessions were a measured part of
+    /// the `All 3,175` this round removes.
+    func testASessionThatOwnsNoTaskHasNoRow() {
         let bands = BoardModel.bands(
-            tasks: [task("filed", title: "Alpha"), task("other", title: "Beta", pinned: false)],
+            tasks: [], sessions: [
+                session("orphan", taskId: nil, status: "running"),
+                session("dead", taskId: "", status: "stopped"),
+            ],
+            tierOf: [:], tierOrder: [:], customTiers: []
+        )
+        XCTAssertTrue(bands.isEmpty, "a session with no owning task is not a board row")
+    }
+
+    /// The task's OWN flag outranks a session's memory of a pin: when the projection
+    /// HAS the task and says it is not pinned, a session still reporting `pinned`
+    /// must not resurrect it. Otherwise unpinning a task with a session would leave
+    /// the row behind.
+    func testAnUnpinnedTaskIsNotResurrectedByItsSessionsPinFlag() {
+        let bands = BoardModel.bands(
+            tasks: [task("unpinned-now", pinned: false)],
+            sessions: [session("s", taskId: "unpinned-now", status: "running")],
+            tierOf: [:], tierOrder: [:], customTiers: []
+        )
+        XCTAssertTrue(bands.isEmpty,
+            "the projection's own pin flag is authoritative over a session's memory")
+    }
+
+    /// A query narrows what a band SHOWS and nothing else. It used to be able to push
+    /// a search-hidden tier row into the tail (where it would appear twice as the
+    /// query narrowed); with no tail there is nowhere for it to reappear, and this
+    /// pins that the filtered row simply stays filtered out.
+    func testASearchHiddenRowStaysHiddenAndNeverDrawsTwice() {
+        let bands = BoardModel.bands(
+            tasks: [task("filed", title: "Alpha"), task("other", title: "Beta")],
             sessions: [],
-            tierOf: ["filed": "focus"], tierOrder: ["focus": ["filed"]],
+            tierOf: ["filed": "focus", "other": "backlog"],
+            tierOrder: ["focus": ["filed"], "backlog": ["other"]],
             customTiers: [], query: "Beta"
         )
         let shown = bands.flatMap(\.rows).map(\.id)
-        XCTAssertEqual(shown, ["other"], "the filtered-out tier row stays filtered out")
+        XCTAssertEqual(shown, ["other"], "the filtered-out row stays filtered out")
         XCTAssertEqual(shown.count, Set(shown).count, "no id may render twice")
     }
 
-    func testAPinnedTaskIsNeverAlsoInTheUnpinnedTail() {
+    /// One row, one band. `tierById` is the single answer to "which band owns this
+    /// row", so a split bucket that still names a task some other tier now claims
+    /// cannot draw it a second time.
+    func testAPinnedTaskAppearsInExactlyOneBand() {
         let bands = BoardModel.bands(
             tasks: [task("t")], sessions: [session("s", taskId: "t", status: "running")],
-            tierOf: ["t": "focus"], tierOrder: ["focus": ["t"]], customTiers: []
+            tierOf: ["t": "focus"],
+            // A stale bucket still naming `t` under backlog: the map wins, and
+            // backlog must not render a duplicate.
+            tierOrder: ["focus": ["t"], "backlog": ["t"]], customTiers: []
         )
         XCTAssertEqual(bands.map(\.bandId), ["focus"], "one row, one band — never two")
+        XCTAssertEqual(bands.flatMap(\.rows).map(\.id), ["t"])
+    }
+
+    /// The cost invariant, asserted as SHAPE rather than as a stopwatch: the number
+    /// of rows the board builds is the size of the PINNED set, not of the store. This
+    /// is the assertion that fails if a future change re-introduces a band defined as
+    /// the complement of the others.
+    func testTheBoardBuildsNoRowForTheStoreOnlyForThePinnedSet() {
+        // 400 tasks, 20 of them pinned, plus 40 sessions of which half own nothing.
+        var tasks: [WalnutTask] = []
+        var tierOf: [String: String] = [:]
+        var tierOrder: [String: [String]] = [:]
+        let tiers = ["focus", "satellite", "backlog", "wait"]
+        for i in 0..<400 {
+            let isPinned = i % 20 == 0
+            tasks.append(task("t-\(i)", title: "task \(i)", pinned: isPinned))
+            if isPinned {
+                let tier = tiers[i % tiers.count]
+                tierOf["t-\(i)"] = tier
+                tierOrder[tier, default: []].append("t-\(i)")
+            }
+        }
+        let sessions = (0..<40).map { i in
+            session("s-\(i)", taskId: i % 2 == 0 ? "t-\(i)" : nil, status: "running")
+        }
+        for grouping in BoardGrouping.allCases {
+            let bands = BoardModel.bands(
+                tasks: tasks, sessions: sessions, tierOf: tierOf, tierOrder: tierOrder,
+                customTiers: [], grouping: grouping, now: Self.now
+            )
+            let rows = bands.flatMap(\.rows)
+            XCTAssertEqual(
+                rows.count, 20,
+                "\(grouping): the board built \(rows.count) rows for 20 pinned tasks out of 400 — a full-store lane is back"
+            )
+            XCTAssertEqual(
+                Set(rows.map(\.id)), Set(tierOf.keys),
+                "\(grouping): the rows ARE the pinned set, by id"
+            )
+            // And the chip row cannot advertise the store either: `All` is the sum of
+            // the bands' own visible counts, which is the board's row count.
+            XCTAssertEqual(BoardModel.chips(bands).first?.count, 20,
+                "\(grouping): the All chip counted something other than the board")
+        }
     }
 
     // MARK: - Search
@@ -496,11 +593,17 @@ final class TaskBoardModelTests: XCTestCase {
 
     // MARK: - Project grouping (the desktop's "By project")
 
-    /// Inbox ("") leads, then projects A→Z, and every task lands in EXACTLY one
-    /// band. "Exactly one" is the assertion that matters: a project band is
-    /// defined over all tasks, so a bug that double-counted would show the same
-    /// task under two headings on one screen.
-    func testProjectGroupingPutsEveryTaskInExactlyOneBand() {
+    /// Inbox ("") leads, then projects A→Z, and every PINNED task lands in EXACTLY
+    /// one band. "Exactly one" is the assertion that matters: a bug that
+    /// double-counted would show the same task under two headings on one screen.
+    ///
+    /// It is also where the grouping control's own guarantee gets its teeth: project
+    /// bands are handed the SAME rows the tier grouping assembled, so switching
+    /// grouping cannot widen the population. `i2` is unpinned and appears under
+    /// neither heading, which is exactly what used to go wrong — `projectBands` walked
+    /// every task itself, and that second definition of membership is how switching
+    /// grouping could put the whole store back on screen.
+    func testProjectGroupingPutsEveryPinnedTaskInExactlyOneBand() {
         let tasks = [
             task("m1", project: "marina"), task("a1", project: "acme"),
             task("i1", project: ""), task("m2", project: "marina"),
@@ -517,15 +620,18 @@ final class TaskBoardModelTests: XCTestCase {
             "the empty project reads as Inbox, never as a blank heading")
 
         let ids = bands.flatMap(\.rows).map(\.id)
-        XCTAssertEqual(Set(ids), Set(tasks.map(\.id)), "every task appears")
+        XCTAssertEqual(Set(ids), ["m1", "a1", "i1", "m2"], "every PINNED task appears")
+        XCTAssertFalse(ids.contains("i2"),
+            "project grouping must not be a second definition of what is on the board")
         XCTAssertEqual(ids.count, Set(ids).count, "and none appears twice")
         XCTAssertEqual(bands.first(where: { $0.bandId == "proj:marina" })?.count, 2)
     }
 
-    /// A session whose owning task never reached the projection is real work
-    /// someone started, and project grouping must not be where it falls through:
-    /// it files under the project the SESSION reports, Inbox when it reports none.
-    func testProjectGroupingKeepsASessionWithNoOwningTask() {
+    /// A PINNED session whose owning task never reached the projection is real work
+    /// someone started, and project grouping must not be where it falls through: it
+    /// files under the project the SESSION reports, Inbox when it reports none. A
+    /// session that owns nothing has no task to be pinned and therefore no row.
+    func testProjectGroupingKeepsAPinnedSessionWhoseTaskIsMissing() {
         let bands = BoardModel.bands(
             tasks: [], sessions: [
                 session("orphan", taskId: nil, status: "running"),
@@ -537,12 +643,11 @@ final class TaskBoardModelTests: XCTestCase {
         // ONE id space (R25): the row for a session whose task is missing from the
         // projection is keyed by the OWNING TASK it names, not by the session UUID —
         // that mismatch is what made the search dedup miss it and draw the task twice.
-        // A session that owns nothing keeps its own id, because it has nothing else.
-        XCTAssertEqual(Set(bands.flatMap(\.rows).map(\.id)), ["orphan", "gone-from-projection"],
-            "a taskless session has nothing else representing it anywhere, so it keeps its row")
+        XCTAssertEqual(Set(bands.flatMap(\.rows).map(\.id)), ["gone-from-projection"],
+            "the session names its owner, so the row is about that task")
         XCTAssertEqual(
-            Set(bands.flatMap(\.rows).compactMap(\.session?.id)), ["orphan", "ghost"],
-            "the session behind each row is untouched — only the row's KEY changed"
+            Set(bands.flatMap(\.rows).compactMap(\.session?.id)), ["ghost"],
+            "the session behind the row is untouched — only the row's KEY changed"
         )
         XCTAssertEqual(bands.map(\.bandId), ["proj:"],
             "a session with no project reports Inbox, same rule as BoardRow.project")
@@ -569,85 +674,80 @@ final class TaskBoardModelTests: XCTestCase {
             "the Inbox heading files into the empty project, not into one called \"Inbox\"")
     }
 
-    /// The tail band has NO create affordance, and that is now a property of the
-    /// band rather than a `bandId != activeTierId` check in the view. It is the
-    /// COMPLEMENT of the others, so "create here" has no destination to mean.
-    func testTheTailBandOffersNoCreateAffordance() {
-        let bands = BoardModel.bands(
-            tasks: [task("filed"), task("loose", pinned: false)], sessions: [],
-            tierOf: ["filed": "focus"], tierOrder: ["focus": ["filed"]], customTiers: [],
-            now: Self.now
-        )
-        let tail = bands.first { $0.bandId == BoardModel.activeTierId }
-        XCTAssertNotNil(tail, "the tail band renders")
-        XCTAssertNil(tail?.createSeed, "the complement of every tier has no create destination")
-        // Every OTHER band has one, so the view never has to ask why.
-        for band in bands where band.bandId != BoardModel.activeTierId {
-            XCTAssertNotNil(band.createSeed, "\(band.bandId) must offer a create ring")
+    /// EVERY band the board renders can now be created into, and that is a
+    /// consequence of the tail band going away rather than a new rule.
+    ///
+    /// `createSeed` is optional because the tail band was the one band that could not
+    /// name a destination (it was the COMPLEMENT of every tier, so "create here" had no
+    /// meaning), and saying so in DATA is what stopped the view from inferring the
+    /// answer from the band's ID — the assumption that shipped
+    /// `focus_tier: "proj:marina"`. With no complement band left, the optional is a
+    /// guard rather than a branch, and this case pins that nothing on screen is missing
+    /// its ring.
+    func testEveryRenderedBandOffersACreateAffordance() {
+        for grouping in BoardGrouping.allCases {
+            let bands = BoardModel.bands(
+                tasks: [
+                    task("filed", project: "marina"),
+                    task("other", project: ""),
+                    task("done", status: "done", phase: "COMPLETE"),
+                ],
+                sessions: [],
+                tierOf: ["filed": "focus", "done": "backlog"],
+                tierOrder: ["focus": ["filed"], "backlog": ["done"]], customTiers: [],
+                grouping: grouping, now: Self.now
+            )
+            XCTAssertFalse(bands.isEmpty, "\(grouping): nothing to assert about")
+            for band in bands {
+                XCTAssertNotNil(band.createSeed,
+                    "\(grouping)/\(band.bandId) must offer a create ring")
+            }
         }
     }
 
-    /// The tail band folds its done rows like every other band (2026-08-29).
-    ///
-    /// It could not until then, because `unfiledRows` never read the hide-done set, and
-    /// the heading hid the toggle to avoid shipping a control that does nothing. That
-    /// asymmetry landed on the worst possible band: the tail is the COMPLEMENT of every
-    /// tier, which on the real board is 2,903 of 3,161 rows, so the one place a
-    /// completed backlog actually buries live work was the one place it could not be
-    /// folded away.
-    func testTheTailBandHidesItsDoneRowsLikeEveryOtherBand() {
+    /// `hide done` folds a band's completions and the heading says how many, in EVERY
+    /// band. This used to be the tail band's asymmetry: `unfiledRows` never read the
+    /// hide-done set, so the one band that actually buried live work under a completed
+    /// backlog (2,903 of 3,161 rows) was the one band that could not be folded. That
+    /// band is gone; the uniform rule is what is pinned now.
+    func testEveryBandFoldsItsDoneRowsAndSaysHowMany() {
         let tasks = [
-            task("filed"),
-            task("loose1", pinned: false),
-            task("loose2", status: "done", phase: "COMPLETE", pinned: false),
-            task("loose3", status: "done", phase: "COMPLETE", pinned: false),
+            task("live"),
+            task("done1", status: "done", phase: "COMPLETE"),
+            task("done2", status: "done", phase: "COMPLETE"),
         ]
+        let tierOf = ["live": "satellite", "done1": "satellite", "done2": "satellite"]
+        let tierOrder = ["satellite": ["live", "done1", "done2"]]
+
         let visible = BoardModel.bands(
-            tasks: tasks, sessions: [],
-            tierOf: ["filed": "focus"], tierOrder: ["focus": ["filed"]], customTiers: [],
-            now: Self.now
+            tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: tierOrder,
+            customTiers: [], now: Self.now
         )
-        let shown = visible.first { $0.bandId == BoardModel.activeTierId }
-        XCTAssertEqual(shown?.rows.map(\.id), ["loose1", "loose2", "loose3"],
+        XCTAssertEqual(visible.first?.rows.map(\.id), ["live", "done1", "done2"],
             "with the toggle off a completed task stays exactly where it was")
-        XCTAssertEqual(shown?.hiddenDone, 0)
+        XCTAssertEqual(visible.first?.hiddenDone, 0)
 
         let folded = BoardModel.bands(
-            tasks: tasks, sessions: [],
-            tierOf: ["filed": "focus"], tierOrder: ["focus": ["filed"]], customTiers: [],
-            hiddenDoneTiers: [BoardModel.activeTierId], now: Self.now
+            tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: tierOrder,
+            customTiers: [], hiddenDoneTiers: ["satellite"], now: Self.now
         )
-        let tail = folded.first { $0.bandId == BoardModel.activeTierId }
-        XCTAssertEqual(tail?.rows.map(\.id), ["loose1"])
-        XCTAssertEqual(tail?.hiddenDone, 2, "the heading says what to un-hide")
-        // The tier band above is untouched: the set is per band, as always.
-        XCTAssertEqual(folded.first(where: { $0.bandId == "focus" })?.rows.map(\.id), ["filed"])
+        XCTAssertEqual(folded.first?.rows.map(\.id), ["live"])
+        XCTAssertEqual(folded.first?.hiddenDone, 2, "the heading says what to un-hide")
     }
 
-    /// Folding every row in the tail still leaves the band, so the `show done (N)`
-    /// toggle that brings them back is still on screen. Same rule the tier bands got.
-    func testATailBandHidingEveryRowKeepsItsHeading() {
+    /// Folding every row in a band still leaves the band, so the `show done (N)`
+    /// toggle that brings them back is still on screen.
+    func testABandHidingEveryRowKeepsItsHeadingAndItsRing() {
         let bands = BoardModel.bands(
-            tasks: [task("d", status: "done", phase: "COMPLETE", pinned: false)], sessions: [],
-            tierOf: [:], tierOrder: [:], customTiers: [],
-            hiddenDoneTiers: [BoardModel.activeTierId], now: Self.now
+            tasks: [task("d", status: "done", phase: "COMPLETE")], sessions: [],
+            tierOf: ["d": "backlog"], tierOrder: ["backlog": ["d"]], customTiers: [],
+            hiddenDoneTiers: ["backlog"], now: Self.now
         )
-        XCTAssertEqual(bands.map(\.bandId), [BoardModel.activeTierId])
+        XCTAssertEqual(bands.map(\.bandId), ["backlog"])
         XCTAssertEqual(bands.first?.rows.count, 0)
         XCTAssertEqual(bands.first?.hiddenDone, 1)
-    }
-
-    /// Folding done rows does NOT give the tail a create destination. The two are
-    /// different questions: `hide done` is about the rows you are looking at, creating
-    /// is about where a new row would go, and the complement of every tier still has
-    /// nowhere to mean.
-    func testFoldingTheTailStillOffersNoCreateAffordance() {
-        let bands = BoardModel.bands(
-            tasks: [task("loose", status: "done", phase: "COMPLETE", pinned: false)],
-            sessions: [], tierOf: [:], tierOrder: [:], customTiers: [],
-            hiddenDoneTiers: [BoardModel.activeTierId], now: Self.now
-        )
-        XCTAssertNil(bands.first(where: { $0.bandId == BoardModel.activeTierId })?.createSeed)
+        XCTAssertNotNil(bands.first?.createSeed,
+            "hiding the rows must not also hide where a new one would go")
     }
 
     /// A tier band still seeds its own tier, verbatim: the same guarantee
@@ -671,14 +771,18 @@ final class TaskBoardModelTests: XCTestCase {
     }
 
     /// THE strongest guarantee on this screen: the grouping control changes the
-    /// HEADINGS, never the population. Set equality of row ids across both
-    /// groupings over the same inputs, including the awkward cases (a task no tier
-    /// claims, a done task, a taskless session, a project called like a tier).
+    /// HEADINGS, never the population. Set equality of row ids across both groupings
+    /// over the same inputs, including the awkward cases (a pin with no tier, a done
+    /// task, an unpinned task with a LIVE session, a session owning nothing, a project
+    /// called like a tier).
     ///
-    /// It has to be stated explicitly because the two builders are separate code
-    /// paths: tier bands are the split's buckets plus a complement band, project
-    /// bands are one pass over everything. Either one could grow a hole on its own.
-    func testSwitchingGroupingNeverLosesARow() {
+    /// It used to have to be stated because the two builders were separate walks over
+    /// the store and either could grow its own hole. It is now true by CONSTRUCTION —
+    /// `projectBands` is handed the rows `bands` already assembled — and the case stays
+    /// because that is precisely the property a future "let project grouping just query
+    /// the store" would break, and it would break it by putting 2,800 unpinned rows
+    /// back on the board.
+    func testSwitchingGroupingNeverChangesThePopulation() {
         let tasks = [
             task("filed", project: "marina"),
             task("loose", project: "acme", pinned: false),
@@ -714,10 +818,13 @@ final class TaskBoardModelTests: XCTestCase {
                 )
             }
         }
-        // And the population is the whole set, so "identical" isn't two empties.
+        // And the population is the PINNED set, so "identical" is neither two empties
+        // nor two copies of the store: `inbox` rides its own pin flag, `filed` and
+        // `done` their tiers, while `loose` (live session, unpinned), `tricky`
+        // (unpinned) and `orphan` (owns nothing) have no row in either grouping.
         XCTAssertEqual(
             rowIds(.tier, dateFilter: .all, query: ""),
-            Set(tasks.map(\.id) + ["orphan"])
+            ["filed", "inbox", "done"]
         )
     }
 
@@ -764,6 +871,349 @@ final class TaskBoardModelTests: XCTestCase {
         )
         XCTAssertEqual(hidden.first?.rows.map(\.id), ["t1"])
         XCTAssertEqual(hidden.first?.hiddenDone, 1, "and the heading says what to un-hide")
+    }
+
+    // MARK: - Folders nested inside their project (the desktop console's tree)
+    //
+    // The hierarchy is PROJECT → FOLDER → task, in that direction, on every surface:
+    // `task_groups.project` makes a folder belong to exactly one project (moving a task
+    // to another project clears its folder), the console draws the project header on the
+    // outside with folder headers indented inside it, and the phone now mirrors that.
+    // Folders on the OUTSIDE would shatter one project across as many sections as it has
+    // folders, i.e. "By project" would stop grouping by project.
+    //
+    // The phone learns the tree from ONE request (`GET /v1/tasks/groups`) because the
+    // slim task projection carries no `group_id` — task→folder is an INVERSION of
+    // `member_ids`, which is why `BoardFolderIndex` exists and why it is built once per
+    // adoption rather than per band rebuild.
+
+    /// The folders behind every case below: two folders in `marina`, one in `acme`
+    /// (which has no loose pinned rows at all), one in Inbox, and one EMPTY folder the
+    /// server lists but the board has no rows for.
+    private var folderFixture: [TaskFolder] {
+        [
+            TaskFolder(groupId: "g_beta", label: "Beta", memberIds: ["m2"], project: "marina"),
+            TaskFolder(groupId: "g_alpha", label: "Alpha", memberIds: ["m3"], project: "marina"),
+            TaskFolder(groupId: "g_cats", label: "Cats", memberIds: ["a1"], project: "acme"),
+            TaskFolder(groupId: "g_taxes", label: "Taxes", memberIds: ["i2"], project: ""),
+            TaskFolder(groupId: "g_empty", label: "Empty", memberIds: [], project: "marina"),
+        ]
+    }
+
+    /// The rows those folders file: one loose + one foldered row in Inbox, one loose +
+    /// two foldered in `marina`, and `acme`'s single row foldered (so its project band
+    /// has nothing to render).
+    private var folderFixtureTasks: [WalnutTask] {
+        [
+            task("i1", project: ""), task("i2", project: ""),
+            task("m1", project: "marina"), task("m2", project: "marina"),
+            task("m3", project: "marina"), task("a1", project: "acme"),
+        ]
+    }
+
+    private func folderBands(
+        tasks rows: [WalnutTask]? = nil,
+        folders: [TaskFolder]? = nil,
+        query: String = "",
+        hiddenDoneTiers: Set<String> = [],
+        grouping: BoardGrouping = .project
+    ) -> [BoardBand] {
+        BoardModel.bands(
+            tasks: rows ?? folderFixtureTasks, sessions: [],
+            tierOf: [:], tierOrder: [:], customTiers: [],
+            query: query, grouping: grouping, hiddenDoneTiers: hiddenDoneTiers,
+            folders: BoardFolderIndex.build(folders ?? folderFixture), now: Self.now
+        )
+    }
+
+    /// The tree, stated as the ONE thing the board renders: a flat band array whose
+    /// ORDER is the hierarchy. Inbox first, then projects A→Z; inside a project its
+    /// loose rows first (under the project's own heading), then its folders A→Z.
+    func testByProjectNestsEachProjectsFoldersUnderThatProject() {
+        let bands = folderBands()
+        XCTAssertEqual(bands.map(\.bandId), [
+            "proj:", "folder:g_taxes",           // Inbox: loose, then its folder
+            "folder:g_cats",                     // acme: no loose rows, so the folder leads
+            "proj:marina", "folder:g_alpha", "folder:g_beta",
+        ], "projects outside, folders inside, both in their own order")
+
+        XCTAssertEqual(bands.map(\.label), [
+            "Inbox", "Taxes", "Cats", "marina", "Alpha", "Beta",
+        ], "a folder band is titled by the FOLDER, a project band by the project")
+
+        // Every row is under the heading its folder puts it under.
+        XCTAssertEqual(bands.map { $0.rows.map(\.id) }, [
+            ["i1"], ["i2"], ["a1"], ["m1"], ["m3"], ["m2"],
+        ])
+
+        // The folder bands know which project they are drawn inside, and exactly one
+        // band per project draws that project's heading.
+        XCTAssertEqual(bands.compactMap { $0.nest?.projectLabel },
+                       ["Inbox", "acme", "marina", "marina"])
+        XCTAssertEqual(
+            bands.filter { $0.nest?.leadsProject == true }.map(\.bandId), ["folder:g_cats"],
+            "only the project with no loose band needs its heading drawn by a folder"
+        )
+        XCTAssertNil(bands.first?.nest, "a project band is not nested in anything")
+    }
+
+    /// THE guarantee the whole feature has to keep: nesting is a HEADING change, so the
+    /// union of the project bands' rows is exactly the tier bands' rows — nothing lost
+    /// in a folder, nothing drawn twice because two headings both claimed it.
+    ///
+    /// It is checked across the filter combinations the bar can produce, because each
+    /// one is a separate path through the band builder (the query and the date filter
+    /// are applied BEFORE the folder split, and a row dropped there must be dropped in
+    /// both groupings).
+    func testNoRowIsLostOrDuplicatedWhenFoldersNestTheProjectBands() {
+        let rows = folderFixtureTasks + [
+            task("done", project: "marina", status: "done", phase: "COMPLETE"),
+            task("unpinned", project: "acme", pinned: false),
+        ]
+        let folders = folderFixture + [
+            // A done row inside a folder, and a folder naming a task that is NOT on the
+            // pinned board at all — the folder must not drag it back on.
+            TaskFolder(groupId: "g_done", label: "Shipped", memberIds: ["done", "unpinned"], project: "marina"),
+        ]
+        for dateFilter in BoardDateFilter.allCases {
+            for query in ["", "marina", "m", "nothing-matches-this"] {
+                func ids(_ grouping: BoardGrouping) -> [String] {
+                    BoardModel.bands(
+                        tasks: rows, sessions: [], tierOf: [:], tierOrder: [:],
+                        customTiers: [], query: query, grouping: grouping,
+                        dateFilter: dateFilter,
+                        folders: BoardFolderIndex.build(folders), now: Self.now
+                    ).flatMap { $0.rows.map(\.id) }
+                }
+                let nested = ids(.project)
+                XCTAssertEqual(Set(nested), Set(ids(.tier)),
+                    "date=\(dateFilter) query=\"\(query)\": the folder tree changed WHICH rows exist")
+                XCTAssertEqual(nested.count, Set(nested).count,
+                    "date=\(dateFilter) query=\"\(query)\": a row is drawn under two headings")
+            }
+        }
+        // …and "identical" is not two empties: the pinned set is what both show.
+        XCTAssertEqual(
+            Set(folderBands(tasks: rows, folders: folders).flatMap { $0.rows.map(\.id) }),
+            ["i1", "i2", "m1", "m2", "m3", "a1", "done"]
+        )
+    }
+
+    /// Folders belong to `By project` only. The tier grouping is byte-identical with and
+    /// without a hierarchy, so a folder can never reshape the board's native view.
+    func testTheTierGroupingIsUnchangedByTheFolderHierarchy() {
+        XCTAssertEqual(
+            folderBands(grouping: .tier),
+            folderBands(folders: [], grouping: .tier)
+        )
+    }
+
+    /// The endpoint failing (or a server that predates it) must leave the board it drew
+    /// before — the SAME band ids, labels and create seeds, so every shipped
+    /// accessibility id and every stored `hide done` preference still means what it did.
+    func testAnAbsentHierarchyLeavesExactlyTheFlatProjectBoard() {
+        let flat = folderBands(folders: [])
+        XCTAssertEqual(flat.map(\.bandId), ["proj:", "proj:acme", "proj:marina"])
+        XCTAssertEqual(flat.compactMap { $0.nest }.count, 0, "no folder band, so no nesting")
+        for band in flat {
+            XCTAssertNotNil(band.createSeed, "\(band.bandId) lost its create ring")
+        }
+        XCTAssertEqual(Set(flat.flatMap { $0.rows.map(\.id) }),
+                       Set(folderBands().flatMap { $0.rows.map(\.id) }),
+                       "and the same rows are on screen either way")
+    }
+
+    /// A project every one of whose pinned rows is filed in a folder still says which
+    /// project those folders are in. Without this the board would open on a folder
+    /// heading with nothing above it — a name with no context, which is exactly what
+    /// "which project is this?" looks like.
+    func testAProjectWithNoLooseRowsStillDrawsItsHeadingOnTheFirstFolder() {
+        let bands = folderBands(
+            tasks: [task("a1", project: "acme")],
+            folders: [TaskFolder(groupId: "g_cats", label: "Cats", memberIds: ["a1"], project: "acme")]
+        )
+        XCTAssertEqual(bands.map(\.bandId), ["folder:g_cats"], "the empty loose band is not rendered")
+        XCTAssertEqual(bands.first?.nest?.leadsProject, true)
+        XCTAssertEqual(bands.first?.nest?.projectLabel, "acme")
+        XCTAssertEqual(bands.first?.nest?.projectBandId, "proj:acme",
+            "the project heading keeps the id it has always had, so its automation id is unchanged")
+    }
+
+    /// Selecting a FOLDER chip leaves that one band on screen — and it must still be
+    /// told which project it belongs to, because the project band that would have drawn
+    /// that heading is exactly what the chip filtered away.
+    func testSelectingAFolderChipKeepsTheProjectHeadingAboveIt() {
+        let bands = folderBands()
+        XCTAssertEqual(bands.first(where: { $0.bandId == "folder:g_beta" })?.nest?.leadsProject, false,
+            "on the whole board `proj:marina` draws that heading")
+
+        let only = BoardModel.filtered(bands, selected: "folder:g_beta")
+        XCTAssertEqual(only.map(\.bandId), ["folder:g_beta"])
+        XCTAssertEqual(only.first?.nest?.leadsProject, true,
+            "with the project band gone, the surviving folder draws the heading")
+
+        // The chips themselves are still one per rendered band, folders included, with
+        // the band's own visible count — the rule that stops the bar and the board from
+        // ever disagreeing.
+        let chips = BoardModel.chips(bands)
+        XCTAssertEqual(chips.count, bands.count + 1)
+        XCTAssertNil(chips.first?.bandId, "the leading chip is All")
+        XCTAssertEqual(chips.dropFirst().compactMap(\.bandId), bands.map(\.bandId))
+        XCTAssertEqual(chips.first?.count, bands.reduce(0) { $0 + $1.count })
+        XCTAssertEqual(chips.first(where: { $0.bandId == "folder:g_alpha" })?.label, "Alpha")
+    }
+
+    /// The create ring: a PROJECT band still files into that project (unchanged), and a
+    /// FOLDER band has none at all. That absence is deliberate and it is the honest
+    /// answer: v1 exposes no folder write (and folder writes are 501 on a replica), so a
+    /// ring on a folder heading could only file the task into the surrounding project —
+    /// landing it outside the folder the user tapped.
+    func testAFolderBandHasNoCreateRingWhileItsProjectBandKeepsOne() {
+        let bands = folderBands()
+        let marina = bands.first { $0.bandId == "proj:marina" }
+        XCTAssertEqual(marina?.createSeed, NewTaskSeed(project: "marina", pin: .unspecified))
+        let inbox = bands.first { $0.bandId == "proj:" }
+        XCTAssertEqual(inbox?.createSeed, NewTaskSeed(project: "", pin: .unspecified))
+        for band in bands where band.nest != nil {
+            XCTAssertNil(band.createSeed,
+                "\(band.bandId) must not offer a destination it cannot file into")
+        }
+    }
+
+    /// An EMPTY folder is valid server-side (create the folder, fill it later) and the
+    /// listing includes it. The PINNED board draws no band for one: it has no rows and
+    /// no ring, so the band would be a heading that does nothing.
+    func testAnEmptyFolderDrawsNoBandOnThePinnedBoard() {
+        XCTAssertFalse(folderBands().contains { $0.bandId == "folder:g_empty" })
+        // Nor does a folder whose members are all UNPINNED — the board is the pinned
+        // working set, and a folder cannot put a row back on it.
+        let bands = folderBands(
+            tasks: [task("u", project: "marina", pinned: false)],
+            folders: [TaskFolder(groupId: "g_u", label: "Unpinned", memberIds: ["u"], project: "marina")]
+        )
+        XCTAssertTrue(bands.isEmpty)
+    }
+
+    /// `hide done` is per BAND, and a folder band is a band: folding one must not touch
+    /// its project's loose rows or its sibling folders.
+    func testHideDoneFoldsOneFolderBandOnly() {
+        let rows = [
+            task("m1", project: "marina"),
+            task("mdone", project: "marina", status: "done", phase: "COMPLETE"),
+            task("f1", project: "marina"),
+            task("fdone", project: "marina", status: "done", phase: "COMPLETE"),
+        ]
+        let folders = [TaskFolder(
+            groupId: "g_alpha", label: "Alpha", memberIds: ["f1", "fdone"], project: "marina"
+        )]
+        let bands = folderBands(
+            tasks: rows, folders: folders, hiddenDoneTiers: ["folder:g_alpha"]
+        )
+        XCTAssertEqual(bands.map(\.bandId), ["proj:marina", "folder:g_alpha"])
+        XCTAssertEqual(bands[0].rows.map(\.id), ["m1", "mdone"], "the project band is untouched")
+        XCTAssertEqual(bands[0].hiddenDone, 0)
+        XCTAssertEqual(bands[1].rows.map(\.id), ["f1"])
+        XCTAssertEqual(bands[1].hiddenDone, 1, "and the folder heading says what to un-hide")
+    }
+
+    /// A folder band id can never collide with a project band id, even when the folder's
+    /// own group id reads exactly like a project name — the two prefixes are the whole
+    /// reason the ids are namespaced, one level deeper than `proj:` already was.
+    func testFolderBandIdsCannotCollideWithProjectBandIds() {
+        let bands = folderBands(
+            tasks: [task("t1", project: "marina"), task("t2", project: "marina")],
+            folders: [TaskFolder(groupId: "marina", label: "marina", memberIds: ["t2"], project: "marina")]
+        )
+        XCTAssertEqual(bands.map(\.bandId), ["proj:marina", "folder:marina"])
+        XCTAssertEqual(Set(bands.map(\.bandId)).count, 2)
+        // And their automation ids stay distinct too, which is the property a shared
+        // slug would quietly break (automation taps the FIRST match).
+        XCTAssertNotEqual(
+            TaskBoardList.slug(bands[0].bandId), TaskBoardList.slug(bands[1].bandId)
+        )
+    }
+
+    /// The folder heading's accessibility id is built from the folder's own id, and it
+    /// must stay inside [A-Za-z0-9_] whatever the server called the folder — automation
+    /// matches ids as REGEXES, and the app's ASCII fold is the one guard against a
+    /// non-ASCII id that looks folded (`AutomationIdentifiers`).
+    func testFolderAutomationIdsAreAsciiAndStable() {
+        // A real server id, and two that are not.
+        for folderId in ["g_ab12cd34-9f0e", "工作", "café|(x)"] {
+            let slug = TaskBoardList.slug(folderId)
+            XCTAssertFalse(slug.isEmpty)
+            XCTAssertTrue(
+                slug.allSatisfy { $0.isASCIILetterOrDigit || $0 == "_" },
+                "board.folder.\(slug) is not automation-safe"
+            )
+            XCTAssertEqual(slug, TaskBoardList.slug(folderId), "and it is stable")
+        }
+        XCTAssertEqual(TaskBoardList.slug("g_ab12cd34-9f0e"), "g_ab12cd34_9f0e")
+        // Two folder names that differ only outside ASCII still get distinct ids (the
+        // CJK collision the hash suffix exists for).
+        XCTAssertNotEqual(TaskBoardList.slug("工作"), TaskBoardList.slug("生活"))
+    }
+
+    /// The inversion, including the two shapes that would otherwise put one row under
+    /// two headings: a folder listing the same task twice, and two folders both claiming
+    /// it. `folderOf` is a dictionary, so exactly one folder can win — which is what
+    /// keeps the union invariant true no matter what the server sends.
+    func testTheFolderIndexInvertsMembershipToOneFolderPerTask() {
+        let index = BoardFolderIndex.build([
+            TaskFolder(groupId: "g1", label: "One", memberIds: ["t1", "t2", "t2"], project: "p"),
+            TaskFolder(groupId: "g2", label: "Two", memberIds: ["t2"], project: "p"),
+            TaskFolder(groupId: "g3", label: "", memberIds: [], project: "p"),
+            TaskFolder(groupId: "", label: "no id", memberIds: ["t9"], project: "p"),
+        ])
+        XCTAssertEqual(index.folderOf["t1"], "g1")
+        XCTAssertEqual(index.folderOf.count, 2, "t2 is claimed once, and the id-less folder claims nothing")
+        XCTAssertNil(index.folderOf["t9"])
+        XCTAssertEqual(index.labelOf["g3"], "g3",
+            "a folder with no label falls back to its id — a blank heading reads as a bug")
+        XCTAssertNil(index.labelOf[""])
+        XCTAssertTrue(BoardFolderIndex.empty.isEmpty)
+        XCTAssertFalse(index.isEmpty)
+    }
+
+    /// The wire shape, decoded from the bytes the server actually sends — and the
+    /// defensive half: a server that omits a field costs the phone that ONE fact, never
+    /// the whole hierarchy (a thrown decode blanks every folder and silently flattens
+    /// the board).
+    func testTaskFolderDecodesTheWireShapeAndToleratesMissingFields() throws {
+        let json = """
+        { "groups": [
+          { "group_id": "g_a", "label": "Alpha", "hidden": false,
+            "member_ids": ["t1", "t2"], "project": "marina" },
+          { "group_id": "g_b", "label": "Nested", "hidden": true,
+            "member_ids": [], "project": "", "parent_id": "g_a" },
+          { "group_id": "g_c", "label": "Sparse" }
+        ] }
+        """
+        struct Wrapper: Decodable { let groups: [TaskFolder] }
+        let groups = try JSONDecoder().decode(Wrapper.self, from: Data(json.utf8)).groups
+        XCTAssertEqual(groups.map(\.groupId), ["g_a", "g_b", "g_c"])
+        XCTAssertEqual(groups[0].memberIds, ["t1", "t2"])
+        XCTAssertEqual(groups[0].project, "marina")
+        XCTAssertNil(groups[0].parentId)
+        XCTAssertEqual(groups[1].parentId, "g_a", "nesting is decoded even though one level is drawn")
+        XCTAssertTrue(groups[1].hidden)
+        XCTAssertEqual(groups[2].memberIds, [], "a missing member list is no members, not a failure")
+        XCTAssertFalse(groups[2].hidden)
+        XCTAssertEqual(groups[2].project, "", "and a missing project reads as Inbox")
+    }
+
+    /// A HIDDEN folder still shows its rows. The flag is the desktop list's collapse
+    /// affordance; honouring it here would drop pinned rows off the only board that
+    /// promises to carry them, in the one place nobody would think to look.
+    func testAHiddenFolderStillDrawsItsRows() {
+        let bands = folderBands(
+            tasks: [task("t1", project: "marina")],
+            folders: [TaskFolder(
+                groupId: "g_h", label: "Hidden", hidden: true,
+                memberIds: ["t1"], project: "marina"
+            )]
+        )
+        XCTAssertEqual(bands.flatMap { $0.rows.map(\.id) }, ["t1"])
     }
 
     // MARK: - The filter bar's own vocabulary and persistence
@@ -836,19 +1286,17 @@ final class TaskBoardModelTests: XCTestCase {
 
     // MARK: - One task, one row (the search-on-the-board dedup)
 
-    /// A search on the board shows the matching bands AND (historically) the
-    /// matching open tasks below them. The exclusion is what keeps a task that
-    /// belongs to both sets from rendering TWICE on one screen — the exact
-    /// confusion ("task and session feel too separate") this redesign removes.
+    /// A search on the board shows the matching bands AND the matching open tasks
+    /// below them, and the exclusion is what keeps a task belonging to both sets from
+    /// rendering TWICE on one screen — the exact confusion ("task and session feel too
+    /// separate") this redesign removes.
     ///
-    /// Note what changed when the tail band stopped being session-gated: the
-    /// board now contains EVERY open task, so `rowIds` covers both rows and the
-    /// supplementary hit list comes back empty. That is the point — the appended
-    /// hits existed to patch a hole in the board (dogfood R17: a task the user
-    /// knew existed showed "No local matches"), and the hole is gone. The
-    /// mechanism stays because it is what makes "no row twice" true by
-    /// construction rather than by the tail happening to be narrow.
-    func testASearchOnTheBoardNeverShowsOneTaskTwice() {
+    /// This is also where SEARCH takes over the job the tail band used to do, which is
+    /// the whole reason removing that band is not a loss of reach: the pinned match is
+    /// a board row, the UNPINNED match is a hit row below the bands, and neither is
+    /// both. Dogfood R17's complaint (a task the user knew existed answered "No local
+    /// matches") is answered by the hit list, not by putting the store on the board.
+    func testASearchOnTheBoardShowsPinnedRowsAndUnpinnedHitsExactlyOnce() {
         let pinned = task("pinned", title: "alpha work", project: "marina")
         let loose = task("loose", title: "alpha elsewhere", project: "marina", pinned: false)
         let bands = BoardModel.bands(
@@ -856,27 +1304,27 @@ final class TaskBoardModelTests: XCTestCase {
             tierOf: ["pinned": "focus"], tierOrder: ["focus": ["pinned"]],
             customTiers: [], query: "alpha"
         )
-        XCTAssertEqual(bands.first?.rows.map(\.id), ["pinned"])
-        XCTAssertEqual(bands.last?.rows.map(\.id), ["loose"],
-            "the unpinned match is on the board itself now, not only in the hit list")
+        XCTAssertEqual(bands.flatMap(\.rows).map(\.id), ["pinned"],
+            "the board shows the PINNED match and nothing else")
 
         let alreadyShown = BoardModel.rowIds(bands)
-        XCTAssertEqual(alreadyShown, ["loose", "pinned"])
+        XCTAssertEqual(alreadyShown, ["pinned"])
 
         let hits = TasksView.sections(
             from: [pinned, loose], query: "alpha", excluding: alreadyShown
         )
-        XCTAssertEqual(hits.flatMap(\.tasks).map(\.id), [],
-            "both rows are already on screen — appending either would be a duplicate")
+        XCTAssertEqual(hits.flatMap(\.tasks).map(\.id), ["loose"],
+            "the unpinned match is reachable BELOW the bands — the board row is not repeated there")
     }
 
-    func testRowIdsCoversEveryBandIncludingTheUnpinnedTail() {
+    func testRowIdsCoversEveryBandOnTheBoard() {
         let bands = BoardModel.bands(
-            tasks: [task("p"), task("u", pinned: false)],
-            sessions: [session("s", taskId: "u", status: "running")],
+            tasks: [task("p"), task("q")],
+            sessions: [session("s", taskId: "q", status: "running")],
             tierOf: ["p": "focus"], tierOrder: ["focus": ["p"]], customTiers: []
         )
-        XCTAssertEqual(BoardModel.rowIds(bands), ["p", "u"])
+        XCTAssertEqual(BoardModel.rowIds(bands), ["p", "q"],
+            "`q` rides its own pin flag into the default band, and rowIds must see both bands")
     }
 
     func testRowIdsOfNoBandsIsEmpty() {
@@ -917,9 +1365,9 @@ final class TaskBoardModelTests: XCTestCase {
         XCTAssertEqual(row.id, "t1")
     }
 
-    /// A whole board's worth: the tail band's session-only row lands in the same id space
-    /// as every task row, so `rowIds` (and therefore the local-section exclusion) can see
-    /// it at all.
+    /// A whole board's worth: the session-only row (a PINNED session whose task never
+    /// reached the projection) lands in the same id space as every task row, so
+    /// `rowIds` — and therefore the local-section exclusion — can see it at all.
     func testTheBoardsRowIdsAreOneSpace() {
         let uuid = "a1d81a24-58cc-4372-a567-0e02b2c3d479"
         let bands = BoardModel.bands(
@@ -984,7 +1432,12 @@ final class TaskBoardModelTests: XCTestCase {
     /// than against a hand-written list, because the failure this rules out is the
     /// two drifting apart — a chip row built from its own query is how the board
     /// would get a second opinion about what a band contains.
-    func testChipsMirrorTheBandsPlusAnAllChip() {
+    ///
+    /// `All` means the whole PINNED BOARD, and the unpinned `loose` in the fixture is
+    /// what says so: it used to ride the tail band and be counted, which is how the
+    /// chip came to read "All 3,175" over a working set of ~264. The arithmetic did not
+    /// change; no band is the store any more.
+    func testChipsMirrorTheBandsPlusAnAllChipCountingOnlyTheBoard() {
         let bands = BoardModel.bands(
             tasks: [task("a"), task("b"), task("c"), task("loose", pinned: false)],
             sessions: [],
@@ -998,7 +1451,9 @@ final class TaskBoardModelTests: XCTestCase {
         // as.
         XCTAssertNil(all.bandId, "All leads, and it selects no band")
         XCTAssertEqual(all.label, "All")
-        XCTAssertEqual(all.count, 4, "All carries the whole board's rows")
+        XCTAssertEqual(all.count, 3, "All carries the board's own rows — 3 pinned, not 4 tasks")
+        XCTAssertEqual(all.count, bands.flatMap(\.rows).count,
+            "the All chip's count IS the board's row count, stated against the rows themselves")
 
         let bandChips = Array(chips.dropFirst())
         XCTAssertEqual(bandChips.count, bands.count, "one chip per band, no more")
@@ -1031,6 +1486,72 @@ final class TaskBoardModelTests: XCTestCase {
         guard let all = chips.first else { return XCTFail("the All chip must always exist") }
         XCTAssertNil(all.bandId)
         XCTAssertEqual(all.count, 0)
+    }
+
+    /// THE reported number, as an invariant: **the `All` chip's count is the number of
+    /// rows this screen is showing.** Never the store's.
+    ///
+    /// The chip read "All 3,175" over a board of ~264 pinned rows, because the tail
+    /// band was the whole projection plus the sessions that owned no task, and `All` is
+    /// the sum of the bands. This case walks every state the bar can be in — both
+    /// groupings, both date filters, hide-done on and off, a live query, a chip
+    /// selection — and asserts the sum against the ROWS rather than against a constant,
+    /// so it cannot be satisfied by a fixture that happens to agree.
+    func testTheAllChipCountsTheBoardsOwnRowsInEveryState() {
+        let tasks = [
+            task("f1", project: "marina"),
+            task("f2", project: "marina", status: "done", phase: "COMPLETE"),
+            task("s1", project: "acme"),
+            task("b1", project: "", start: "2026-09-01T00:00:00Z"),
+            // Three ways of NOT being on the board, all of which the chip used to count.
+            task("loose", project: "acme", pinned: false),
+            task("loose-done", project: "", status: "done", phase: "COMPLETE", pinned: false),
+        ]
+        let sessions = [
+            session("live", taskId: "loose", status: "running"),
+            session("owns-nothing", taskId: nil, status: "running"),
+        ]
+        let tierOf = ["f1": "focus", "f2": "focus", "s1": "satellite", "b1": "backlog"]
+        let tierOrder = ["focus": ["f1", "f2"], "satellite": ["s1"], "backlog": ["b1"]]
+
+        for grouping in BoardGrouping.allCases {
+            for dateFilter in BoardDateFilter.allCases {
+                for hidden in [Set<String>(), ["focus"], [BoardModel.projectBandPrefix + "marina"]] {
+                    for query in ["", "1", "marina"] {
+                        let bands = BoardModel.bands(
+                            tasks: tasks, sessions: sessions, tierOf: tierOf,
+                            tierOrder: tierOrder, customTiers: [], query: query,
+                            grouping: grouping, dateFilter: dateFilter,
+                            hiddenDoneTiers: hidden, now: Self.now
+                        )
+                        let state = "grouping=\(grouping) date=\(dateFilter) hidden=\(hidden.sorted()) query=\"\(query)\""
+                        let rows = bands.flatMap(\.rows).count
+                        XCTAssertEqual(
+                            BoardModel.chips(bands).first?.count, rows,
+                            "\(state): the All chip said something other than the board's \(rows) rows"
+                        )
+                        // And the board it counts is a subset of the PINNED set, never
+                        // of the store: no unpinned id, and no session-only row for a
+                        // session that owns nothing.
+                        let ids = Set(bands.flatMap(\.rows).map(\.id))
+                        XCTAssertTrue(
+                            ids.isSubset(of: Set(tierOf.keys)),
+                            "\(state): rows outside the pinned set reached the board: \(ids.subtracting(Set(tierOf.keys)).sorted())"
+                        )
+                        // A chip selection narrows what is DRAWN and never what the
+                        // counts say, which is what keeps the bar readable while
+                        // narrowed (`chips` is computed from the UNFILTERED bands).
+                        for chip in BoardModel.chips(bands) {
+                            let narrowed = BoardModel.filtered(bands, selected: chip.bandId)
+                            XCTAssertLessThanOrEqual(
+                                narrowed.flatMap(\.rows).count, rows,
+                                "\(state): selecting \(chip.id) grew the board"
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Tapping a chip narrows the board to that band, and it does so by FILTERING
@@ -1105,8 +1626,7 @@ final class TaskBoardModelTests: XCTestCase {
         XCTAssertEqual(TaskBoardList.chipId(nil), "board.chip.all")
         XCTAssertEqual(TaskBoardList.chipId("focus"), "board.chip.focus")
 
-        let bandIds = ["focus", "satellite", "backlog", "wait", "ct_abc12345",
-                       BoardModel.activeTierId]
+        let bandIds = ["focus", "satellite", "backlog", "wait", "ct_abc12345"]
             + ["", "marina", "工作", "生活", "a|b", "café"]
                 .map { BoardModel.projectBandPrefix + $0 }
         let ids = bandIds.map { TaskBoardList.chipId($0) } + [TaskBoardList.chipId(nil)]
@@ -1230,7 +1750,7 @@ final class TaskBoardModelTests: XCTestCase {
     /// they carry whatever the user called their project, which is exactly the
     /// hazard that once made an element unaddressable in this app.
     func testBandIdentifierSlugsAreRegexSafe() {
-        let ids = ["focus", "ct_abc12345", BoardModel.activeTierId]
+        let ids = ["focus", "ct_abc12345", BoardModel.defaultTierId]
             + ["", "marina", "a|b", "walnut (v2)", "docs.and+more", "工作"]
                 .map { BoardModel.projectBandPrefix + $0 }
         for bandId in ids {
@@ -1396,6 +1916,9 @@ final class TaskBoardModelTests: XCTestCase {
             "satellite": "satellite",
             "backlog": "backlog",
             "wait": "wait",
+            // The retired tail band's id. Kept in this table on purpose: a stored
+            // `hiddenDoneBands` entry or an old automation flow can still name it, and
+            // the fold must keep answering the same string it always did.
             "unpinned": "unpinned",
             "ct_abc12345": "ct_abc12345",
             "proj:": "proj_",
@@ -1410,8 +1933,8 @@ final class TaskBoardModelTests: XCTestCase {
             XCTAssertFalse(TaskBoardList.slug(bandId).contains(TaskBoardList.shortHash(bandId)),
                 "\(bandId) grew a hash suffix it does not need")
         }
-        XCTAssertEqual(BoardModel.activeTierId, "unpinned",
-            "the tail band's id is one of the ASCII ids pinned above")
+        XCTAssertEqual(TaskBoardList.slug(BoardModel.defaultTierId), "satellite",
+            "the default band's id is one of the ASCII ids pinned above")
     }
 
     /// The residual cost, kept on purpose and stated so nobody 'fixes' it by
@@ -1427,19 +1950,41 @@ final class TaskBoardModelTests: XCTestCase {
     }
 }
 
-/// The Tasks tab's THREE header entries, and the fallback for a filter that no
-/// longer has one.
+/// The Tasks tab's TWO header entries, and the fallback for a filter that no longer
+/// has one.
 ///
-/// The header was six smart-list cards over `TaskFilter.allCases`; it is now Pin |
-/// All Tasks | Calendar. The enum cases all stayed (stored preferences,
-/// `identifierKey` suffixes in shipped ids, the store's own slices), so the entry
-/// set and the filter set are deliberately different sizes and this is where that
-/// difference is pinned.
+/// The header was six smart-list cards over `TaskFilter.allCases`, then three chips
+/// (Pin | All Tasks | Calendar), and it is now Pin | Calendar. The enum cases all
+/// stayed (stored preferences, `identifierKey` suffixes in shipped ids, the store's
+/// own slices), so the entry set and the filter set are deliberately different sizes
+/// and this is where that difference is pinned.
+///
+/// # CONTRACT CHANGE this round: "All Tasks" is not a destination any more
+///
+/// "已经有 pin 了,为什么还会有 all task". A flat list of every open task was a SECOND
+/// answer to "what am I working on", and the two disagreed by three thousand rows.
+/// `.allOpen` therefore loses its entry (and with it `tasks.nav.all`, the one shipped
+/// identifier this round retires) and joins Today / In Progress / Done as reachable
+/// STATE with no chip: `resolve` now catches it, so a phone that persisted the old
+/// pill lands on the board instead of on a chipless header.
 final class TasksNavEntryTests: XCTestCase {
 
-    func testThereAreExactlyThreeEntriesInReadingOrder() {
-        XCTAssertEqual(TasksNavEntry.allCases.map(\.title), ["Pin", "All Tasks", "Calendar"])
-        XCTAssertEqual(TasksNavEntry.allCases.map(\.filter), [.sessions, .allOpen, .calendar])
+    func testThereAreExactlyTwoEntriesInReadingOrder() {
+        XCTAssertEqual(TasksNavEntry.allCases.map(\.title), ["Pin", "Calendar"])
+        XCTAssertEqual(TasksNavEntry.allCases.map(\.filter), [.sessions, .calendar])
+    }
+
+    /// The retired pill, asserted as an ABSENCE rather than left to the count above:
+    /// this is the case that fails if someone adds the destination back without
+    /// re-deciding the question the user asked.
+    func testAllTasksIsNoLongerAHeaderDestination() {
+        XCTAssertFalse(TasksNavEntry.allCases.map(\.filter).contains(.allOpen))
+        XCTAssertNil(TasksNavEntry.entry(for: .allOpen),
+            "the board IS the working set — a flat all-tasks list is a second answer to it")
+        XCTAssertEqual(TasksNavEntry.resolve(.allOpen), TasksNavEntry.pin.filter,
+            "a persisted `allOpen` must land on the board, not on a chipless header")
+        XCTAssertFalse(TasksNavEntry.allCases.map(\.identifier).contains("tasks.nav.all"),
+            "tasks.nav.all is retired, not repointed: an id that resolves to a different destination keeps flows passing while doing something else")
     }
 
     /// `Pin` IS the board, and the board is `TaskFilter.sessions` — the case keeps
@@ -1459,9 +2004,10 @@ final class TasksNavEntryTests: XCTestCase {
 
     /// The fallback. A persisted filter the header can no longer show would leave
     /// the nav row with nothing selected over a list the user cannot switch away
-    /// from — a soft dead end. Today / In Progress / Done are exactly those.
+    /// from — a soft dead end. Today / In Progress / Done have always been those, and
+    /// `.allOpen` joins them this round.
     func testAFilterWithNoEntryFallsBackToPin() {
-        for orphan in [TaskFilter.today, .inProgress, .done] {
+        for orphan in [TaskFilter.today, .inProgress, .done, .allOpen] {
             XCTAssertNil(TasksNavEntry.entry(for: orphan), "\(orphan) should have no chip")
             XCTAssertEqual(TasksNavEntry.resolve(orphan), TasksNavEntry.pin.filter,
                 "\(orphan) must fall back to Pin, not to an unselected header")
@@ -1482,7 +2028,6 @@ final class TasksNavEntryTests: XCTestCase {
     /// flow matches them as literal regexes.
     func testNavEntryIdentifiers() {
         XCTAssertEqual(TasksNavEntry.pin.identifier, "tasks.nav.pin")
-        XCTAssertEqual(TasksNavEntry.all.identifier, "tasks.nav.all")
         XCTAssertEqual(TasksNavEntry.calendar.identifier, "tasks.nav.calendar")
         let safe = try! NSRegularExpression(pattern: "^[A-Za-z0-9._-]+$")
         for entry in TasksNavEntry.allCases {
@@ -1494,11 +2039,14 @@ final class TasksNavEntryTests: XCTestCase {
     }
 
     /// The compact bar keys its chips off `TaskFilter.identifierKey`, so those ids
-    /// have to survive the header rebuild verbatim.
-    func testCompactChipIdentifiersAreUnchangedForTheThreeEntries() {
+    /// have to survive the header rebuild verbatim. The `.allOpen` KEY is untouched
+    /// (`TaskFilter` keeps all six cases — they are the store's own slices); what went
+    /// away is the entry that put a chip on screen for it.
+    func testCompactChipIdentifiersAreUnchangedForTheRemainingEntries() {
         XCTAssertEqual(TasksNavEntry.pin.filter.identifierKey, "sessions")
-        XCTAssertEqual(TasksNavEntry.all.filter.identifierKey, "all")
         XCTAssertEqual(TasksNavEntry.calendar.filter.identifierKey, "calendarview")
+        XCTAssertEqual(TaskFilter.allOpen.identifierKey, "all",
+            "the filter's own key is a data concern and must not move with the pill")
     }
 }
 
@@ -1678,5 +2226,1101 @@ final class TaskBoardCountTests: XCTestCase {
     func testAnEmptyStoreCountsZeroWithoutCrashing() {
         let store = TasksStore(transport: MockTaskTransport())
         XCTAssertEqual(store.count(for: .sessions), 0)
+    }
+}
+
+/// The board row's SURFACE: "this task wants a human", said by painting the WHOLE row
+/// red.
+///
+/// # What this replaced, twice
+///
+/// Attempt one was a whole-row wash at `rgba(255,59,48,0.08)`, ported from the
+/// desktop's `.todo-panel-item-needs-action`. At that strength it read as a pink smudge
+/// on 8 of 11 visible rows: loud enough to make the LIST look broken, too weak to read
+/// as a statement about one row. Attempt two was a saturated 3pt capsule at the row's
+/// leading edge, which collided with the done ring — the ring carried
+/// `padding(.leading, -6)` to sit flush at x≈0.5 and the capsule drew at x 0..3, so the
+/// two overlapped by 2.5pt on every marked row ("怎么能重叠呢").
+///
+/// The answer to that was not a wider gutter: "那个红色…不要变成一个竖道了,把它变成一整个
+/// 底都变成红色的吧". The mark IS the paper now, at a strength that reads (0.16 light /
+/// 0.30 dark), so there is no column left to collide with the ring.
+///
+/// # Why arithmetic and not a screenshot
+///
+/// The tint is a dynamic `UIColor`, so both schemes resolve here and the composite is
+/// exact. That matters because both earlier attempts failed on a value nobody
+/// re-measured in the mode it was wrong in, and because the claim being made is about
+/// EVERY Dynamic Type size — a background has no metrics, and this file is where that
+/// stops being a promise: the surface takes no type size, and the loop below is what
+/// makes anyone who adds one say so out loud.
+@MainActor
+final class BoardRowNeedsActionSurfaceTests: XCTestCase {
+
+    // MARK: - Colour helpers (WCAG, on real resolved colours)
+
+    private func rgba(_ color: UIColor, dark: Bool) -> (r: Double, g: Double, b: Double, a: Double) {
+        let resolved = color.resolvedColor(
+            with: UITraitCollection(userInterfaceStyle: dark ? .dark : .light))
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        XCTAssertTrue(resolved.getRed(&r, green: &g, blue: &b, alpha: &a),
+            "dark=\(dark): the tint must be a plain RGBA colour")
+        return (Double(r), Double(g), Double(b), Double(a))
+    }
+
+    // The local `composite(tint:over:dark:)` helper is GONE (R29). It blended the tint
+    // onto a base this file chose, which is exactly the re-derivation that can agree with
+    // a bug: the app flattens the tint onto the band card itself now, so `surface` below
+    // reads `BoardRowSurface.opaqueSurface` and every assertion here is about the colour
+    // the screen paints. The independent blend still exists, once, where it earns its keep
+    // — `BoardBandCardSurfaceTests` proves the app is compositing over the CARD.
+
+    private func luminance(_ rgb: (r: Double, g: Double, b: Double)) -> Double {
+        func channel(_ value: Double) -> Double {
+            let v = value / 255
+            return v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b)
+    }
+
+    private func contrast(
+        _ a: (r: Double, g: Double, b: Double), _ b: (r: Double, g: Double, b: Double)
+    ) -> Double {
+        let x = luminance(a) + 0.05, y = luminance(b) + 0.05
+        return max(x, y) / min(x, y)
+    }
+
+    /// The row surface as the view paints it, for one scheme.
+    ///
+    /// R29: the base is the BAND CARD, not the window background. The board's rows are
+    /// inset-grouped card cells now, so a tint that used to be measured over
+    /// `systemBackground` (black, in dark mode) is really landing on
+    /// `secondarySystemGroupedBackground` (28,28,30) — measuring the old base would keep
+    /// asserting a colour nothing paints.
+    ///
+    /// And it reads the APP's own composite (`BoardRowSurface.opaqueSurface`) rather than
+    /// re-blending here, because the app is what flattens the tint onto the card now: a
+    /// local re-derivation could agree with a bug in the shipped blend.
+    private func surface(needsAction: Bool, isNew: Bool = false, dark: Bool)
+        -> (r: Double, g: Double, b: Double) {
+        let painted = BoardRowSurface.opaqueSurface(
+            needsAction: needsAction, isNew: isNew,
+            traits: UITraitCollection(userInterfaceStyle: dark ? .dark : .light)
+        )
+        let rgb = rgba(painted, dark: dark)
+        return (rgb.r * 255, rgb.g * 255, rgb.b * 255)
+    }
+
+    private func task(_ id: String, phase: String, status: String = "todo") -> WalnutTask {
+        WalnutTask(
+            id: id, title: "a task", status: status, phase: phase, priority: "none",
+            project: "", dueDate: nil,
+            createdAt: "2026-08-27T00:00:00Z", updatedAt: "2026-08-27T00:00:00Z",
+            completedAt: status == "done" ? "2026-08-27T01:00:00Z" : nil,
+            starred: nil, pinned: true, tags: nil, summary: nil
+        )
+    }
+
+    /// WHEN the row is red: the desktop's rule, ported (`taskNeedsAction` — phase
+    /// AGENT_COMPLETE and not done). Every other row paints NOTHING, which is what keeps
+    /// the board one continuous sheet.
+    func testOnlyAHandedBackTaskPaintsItsRowRed() {
+        XCTAssertTrue(BoardModel.needsHuman(task("back", phase: "AGENT_COMPLETE")))
+        XCTAssertFalse(BoardModel.needsHuman(task("todo", phase: "TODO")))
+        XCTAssertFalse(BoardModel.needsHuman(task("running", phase: "IN_PROGRESS")))
+        XCTAssertFalse(
+            BoardModel.needsHuman(task("shipped", phase: "COMPLETE")),
+            "COMPLETE is the human's own answer — it is not still asking"
+        )
+        XCTAssertFalse(
+            BoardModel.needsHuman(task("closed", phase: "AGENT_COMPLETE", status: "done")),
+            "done outranks the phase: a finished task is not waiting on anyone"
+        )
+        XCTAssertFalse(
+            BoardModel.needsHuman(nil),
+            "a session-only row has no phase to read, and inventing one would paint a row red on no evidence"
+        )
+        // …and NOTHING is painted for an ordinary row.
+        XCTAssertNil(BoardRowSurface.tint(needsAction: false, isNew: false, dark: false))
+        XCTAssertNil(BoardRowSurface.tint(needsAction: false, isNew: false, dark: true))
+        // `nil`, not `.clear`, and R29 made that difference load-bearing: `.clear` used to
+        // mean "let the board's one sheet through", and inside a card it would mean "cut a
+        // hole in the card and show the page". `nil` hands the cell back to the
+        // inset-grouped section, which paints its own card.
+        XCTAssertNil(
+            BoardRowSurface.color(needsAction: false, isNew: false),
+            "an ordinary row must take the section's own card, untouched"
+        )
+    }
+
+    /// The composition the LIST executes, driven end to end over rows the real band
+    /// assembly built: `TaskBoardList.rowSurface` is the app-target call site, so this is
+    /// the case that fails if the join is wired to the wrong row, the wrong id or the
+    /// wrong field while both halves still pass their own tests.
+    func testTheListPaintsRedForExactlyTheRowsThatWantAHuman() {
+        let bands = BoardModel.bands(
+            tasks: [
+                task("wants-a-human", phase: "AGENT_COMPLETE"),
+                task("ordinary", phase: "TODO"),
+                task("finished", phase: "AGENT_COMPLETE", status: "done"),
+            ],
+            sessions: [], tierOf: [:], tierOrder: [:], customTiers: []
+        )
+        let rows = bands.flatMap(\.rows)
+        XCTAssertEqual(rows.count, 3, "all three are pinned, so all three are on the board")
+        for row in rows {
+            let red = row.id == "wants-a-human"
+            XCTAssertEqual(BoardModel.needsHuman(row.task), red, "row \(row.id)")
+            let painted = TaskBoardList.rowSurface(row, newRowId: nil)
+            if red {
+                XCTAssertNotNil(painted, "row \(row.id) should be red paper")
+            } else {
+                XCTAssertNil(painted, "row \(row.id) must take the card untouched")
+            }
+        }
+        // The green just-created flash rides the same surface, and RED WINS when a row is
+        // both: two tints on one row would be two claims about the same pixels.
+        let redRow = rows.first { $0.id == "wants-a-human" }!
+        let flashed = surface(needsAction: true, isNew: true, dark: false)
+        let plainRed = surface(needsAction: true, isNew: false, dark: false)
+        XCTAssertEqual(flashed.r, plainRed.r, accuracy: 0.001, "red beats green on a row that is both")
+        XCTAssertEqual(flashed.g, plainRed.g, accuracy: 0.001)
+        XCTAssertEqual(flashed.b, plainRed.b, accuracy: 0.001)
+        XCTAssertNotNil(
+            TaskBoardList.rowSurface(redRow, newRowId: redRow.id),
+            "the newly created red row is still painted"
+        )
+        let ordinary = rows.first { $0.id == "ordinary" }!
+        XCTAssertNotNil(
+            TaskBoardList.rowSurface(ordinary, newRowId: ordinary.id),
+            "a just-created ordinary row takes the green flash — that is how 'where did it land?' is answered"
+        )
+    }
+
+    /// It has to read as RED at a glance, in BOTH schemes — the failure mode of the
+    /// first attempt (0.08 over white) was a tint that was present in the data and
+    /// invisible on the screen.
+    ///
+    /// Stated as channel separation on the composite rather than as an alpha, because
+    /// alpha is not what the eye judges: the same 0.16 over black lands at a near-black
+    /// brown, which is why the dark value is its own number.
+    func testTheRedRowReallyReadsRedInBothSchemes() {
+        for dark in [false, true] {
+            let paper = surface(needsAction: false, dark: dark)
+            let red = surface(needsAction: true, dark: dark)
+            let separation = red.r - max(red.g, red.b)
+            XCTAssertGreaterThan(
+                separation, 20,
+                "dark=\(dark): the red channel leads by only \(separation)/255 — this is the 0.08 pink smudge again"
+            )
+            XCTAssertGreaterThan(
+                abs(luminance(red) - luminance(paper)), 0.005,
+                "dark=\(dark): the marked row is the same brightness as the sheet, so it reads as an unexplained smudge rather than a mark"
+            )
+            // The tint's own alpha, so a UIKit surprise (a dynamic colour that drops the
+            // alpha on resolve) is diagnosed here rather than surfacing as a mystery.
+            let tint = BoardRowSurface.tint(needsAction: true, isNew: false, dark: dark)
+            XCTAssertNotNil(tint)
+            let alpha = rgba(tint!, dark: dark).a
+            let declared = dark
+                ? BoardRowSurface.needsActionAlpha.dark
+                : BoardRowSurface.needsActionAlpha.light
+            XCTAssertEqual(alpha, Double(declared), accuracy: 0.001, "dark=\(dark)")
+            XCTAssertGreaterThan(alpha, 0.10, "dark=\(dark): weaker than this reads as a smudge")
+            XCTAssertLessThan(alpha, 0.45, "dark=\(dark): stronger than this and the ink is fighting it")
+        }
+        XCTAssertGreaterThan(
+            BoardRowSurface.needsActionAlpha.dark, BoardRowSurface.needsActionAlpha.light,
+            "over black the same alpha reads as nearly nothing — dark needs the stronger tint"
+        )
+        // The flash is the quieter of the two in both schemes: it answers "where did it
+        // land?" and then goes away, so it must not out-shout a row that is asking for
+        // something.
+        XCTAssertLessThan(
+            BoardRowSurface.justCreatedAlpha.light, BoardRowSurface.needsActionAlpha.light)
+        XCTAssertLessThan(
+            BoardRowSurface.justCreatedAlpha.dark, BoardRowSurface.needsActionAlpha.dark)
+        for dark in [false, true] {
+            let green = surface(needsAction: false, isNew: true, dark: dark)
+            // A lower bar than the red's 20, deliberately: `systemGreen` is a much lighter
+            // hue than `systemRed`, so over white paper the same alpha buys less channel
+            // separation (measured ~15 light, ~31 dark). The flash only has to be
+            // recognisably green for the second it exists, and it is the quieter of the
+            // two treatments by design.
+            XCTAssertGreaterThan(
+                green.g - max(green.r, green.b), 10,
+                "dark=\(dark): the just-created flash has to read as green, not as grey"
+            )
+        }
+    }
+
+    /// The TITLE stays legible on the red paper, which is the other half of the request:
+    /// the ring and the title keep their normal colours, so the tint has to be something
+    /// full-strength label ink still clears WCAG 4.5:1 against.
+    ///
+    /// Both schemes, because the tint is per-scheme and the label flips with it.
+    func testTheTitleClearsFourAndAHalfToOneOnTheRedRow() {
+        for dark in [false, true] {
+            let red = surface(needsAction: true, dark: dark)
+            let label = rgba(.label, dark: dark)
+            let ratio = contrast(
+                (r: label.r * 255, g: label.g * 255, b: label.b * 255), red)
+            XCTAssertGreaterThanOrEqual(
+                ratio, 4.5,
+                "dark=\(dark): the title reads at \(ratio):1 on the marked row"
+            )
+            // The second line is `.secondary` on the same paper — a lower bar (it is
+            // supporting text), but it must not disappear into the tint either.
+            let secondary = rgba(.secondaryLabel, dark: dark)
+            let secondaryInk = (
+                r: (secondary.r * secondary.a) * 255 + red.r * (1 - secondary.a),
+                g: (secondary.g * secondary.a) * 255 + red.g * (1 - secondary.a),
+                b: (secondary.b * secondary.a) * 255 + red.b * (1 - secondary.a)
+            )
+            XCTAssertGreaterThanOrEqual(
+                contrast(secondaryInk, red), 3.0,
+                "dark=\(dark): the state word and project line sink into the tint"
+            )
+        }
+    }
+
+    /// Type-INDEPENDENCE, which is how "holds at default type AND at accessibility-XXXL"
+    /// is established without re-measuring at each size: the surface takes no type size
+    /// at all, so there is nothing for a size to change. The loop is what makes the day
+    /// someone adds a size parameter an argument rather than a silent regression.
+    func testTheSurfaceIsIdenticalAtEveryDynamicTypeSizeIncludingAXXXXL() {
+        XCTAssertTrue(DynamicTypeSize.allCases.contains(.accessibility5),
+            "AX-XXXL is the size the reported claim is about")
+        for dark in [false, true] {
+            let baseline = surface(needsAction: true, dark: dark)
+            for size in DynamicTypeSize.allCases {
+                let again = surface(needsAction: true, dark: dark)
+                XCTAssertEqual(again.r, baseline.r, accuracy: 0.001, "\(size) dark=\(dark)")
+                XCTAssertEqual(again.g, baseline.g, accuracy: 0.001, "\(size) dark=\(dark)")
+                XCTAssertEqual(again.b, baseline.b, accuracy: 0.001, "\(size) dark=\(dark)")
+                let label = rgba(.label, dark: dark)
+                XCTAssertGreaterThanOrEqual(
+                    contrast((r: label.r * 255, g: label.g * 255, b: label.b * 255), again), 4.5,
+                    "\(size) dark=\(dark): the title's contrast on the marked row moved with the type size"
+                )
+            }
+        }
+    }
+
+    /// The hairline still starts at the TITLE, not at the row's edge, so the ring's
+    /// gutter stays clear (mockup: `left: 48px`). It is the one number the retired gutter
+    /// column moved, and it is back where the shipped row had it: 34pt of ring frame with
+    /// `-6` leading padding is 28pt of layout, plus 11pt of HStack spacing.
+    ///
+    /// It survives R29 unchanged, and that is not luck: the guide is measured in the row's
+    /// OWN content space, so moving the row inside a card (which changed the cell's insets
+    /// from full bleed to the platform's) cannot move it.
+    func testTheRowSeparatorStartsAtTheTitleColumn() {
+        XCTAssertEqual(TaskBoardRow.separatorLeadingInset, 39, accuracy: 0.001,
+            "the hairline moved off the title — 34 - 6 + 11 is the arithmetic behind it")
+        XCTAssertGreaterThan(
+            TaskBoardRow.separatorLeadingInset, 28,
+            "the hairline must start after the ring's tap target, or the line points at the ring"
+        )
+        // 320pt is the narrowest iPhone width the app ships to. Inside a card the row's
+        // content is what is left after the section margin AND the cell's own inset on
+        // both sides (~20pt each), i.e. ~240pt — a narrower budget than V1's full-bleed
+        // 288pt, so this is the assertion that got STRICTER when the cards came back.
+        XCTAssertLessThan(
+            TaskBoardRow.separatorLeadingInset, 240 * 0.25,
+            "the leading column eats more than a quarter of the narrowest row — a title at AX sizes has nowhere to wrap"
+        )
+    }
+}
+
+/// The R29 CARD/PAGE PAIRING: two colours that only mean anything relative to each other.
+///
+/// A card is not a colour, it is a STEP away from the page behind it, and this app has now
+/// shipped that going wrong from both directions: the chips bar's card once measured 5.4
+/// grey from a white page and read as nothing, and the same base kept against R29's grouped
+/// page would have measured ~0 (light 242 on 242, dark 0 on 0) — the identical defect,
+/// arrived at by changing the OTHER half. So the pair is asserted as a pair.
+///
+/// The second half of this class is the "no dead arithmetic" half, and it is the reason
+/// these are not just two constants compared to each other: every value here is reached
+/// through a call the APP makes. `BoardRowSurface.opaqueSurface` is what the shipped row
+/// paint (`TaskBoardList.rowSurface` → `listRowBackground`) resolves to, and
+/// `BoardBandBar.cardBaseColor` is what the chips bar fills its card with. A pairing that
+/// was only ever read by a test would keep passing while the screen went flat.
+@MainActor
+final class BoardBandCardSurfaceTests: XCTestCase {
+
+    /// RGBA (0-1) of a RESOLVED colour. Fails the test rather than returning an optional:
+    /// a surface that isn't a plain RGB colour is the defect, not a case to handle.
+    private func channels(_ color: UIColor) -> (r: Double, g: Double, b: Double, a: Double) {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        XCTAssertTrue(color.getRed(&r, green: &g, blue: &b, alpha: &a),
+            "a card/page surface must be a plain RGB colour")
+        return (Double(r), Double(g), Double(b), Double(a))
+    }
+
+    /// 0-255 grey of a dynamic colour resolved for one scheme, asserting opacity on the
+    /// way past — a card or a page that is translucent takes its colour from whatever is
+    /// behind it, which is the one thing neither is allowed to do.
+    private func grey(_ color: UIColor, dark: Bool) -> Double {
+        let rgba = channels(color.resolvedColor(
+            with: UITraitCollection(userInterfaceStyle: dark ? .dark : .light)))
+        XCTAssertEqual(rgba.a, 1, accuracy: 0.001,
+            "dark=\(dark): a translucent surface reads whatever is behind it")
+        return (rgba.r + rgba.g + rgba.b) / 3 * 255
+    }
+
+    /// The card has to step CLEAR of the page in both schemes, in the same direction.
+    ///
+    /// Same direction matters as much as the size: the grouped family lifts the card above
+    /// the page in light AND dark, and a pairing that inverted in one scheme would make the
+    /// cards read as holes there.
+    func testTheCardStepsClearOfThePageInBothSchemes() {
+        for dark in [false, true] {
+            let page = grey(BoardBandCard.pageColor, dark: dark)
+            let card = grey(BoardBandCard.surfaceColor, dark: dark)
+            XCTAssertGreaterThan(
+                card - page, 5.4,
+                "dark=\(dark): the card is \(card - page) grey from the page — 5.4 is the measured delta that read as nothing"
+            )
+            XCTAssertLessThan(
+                card - page, 60,
+                "dark=\(dark): a card this far from the page stops being a card and becomes a banner"
+            )
+        }
+    }
+
+    /// The SwiftUI values the views take and the `UIColor`s this test measures are the same
+    /// colour. Without this the whole file could be measuring a pairing nothing paints.
+    func testTheMeasuredColoursAreTheOnesTheViewsApply() {
+        XCTAssertEqual(BoardBandCard.surface, Color(BoardBandCard.surfaceColor))
+        XCTAssertEqual(BoardBandCard.page, Color(BoardBandCard.pageColor))
+    }
+
+    /// APP CALL SITE 1: the marked row's paper. `TaskBoardList.rowSurface` →
+    /// `BoardRowSurface.color` → `opaqueSurface`, which is what the row's
+    /// `listRowBackground` actually gets — and it has to be the tint flattened onto the
+    /// CARD, not onto the window background and not onto the page.
+    ///
+    /// Blended independently here, because this is the one place a re-derivation is worth
+    /// its keep: it proves the app's own blend is compositing over the card rather than
+    /// over something that merely looks similar in light mode (white `systemBackground` is
+    /// the trap — it is identical to the card in light and 28 grey away in dark).
+    func testTheMarkedRowsPaperIsTheTintFlattenedOntoTheBandCard() {
+        for dark in [false, true] {
+            let traits = UITraitCollection(userInterfaceStyle: dark ? .dark : .light)
+            let painted = channels(BoardRowSurface.opaqueSurface(
+                needsAction: true, isNew: false, traits: traits))
+            let ink = channels(
+                BoardRowSurface.tint(needsAction: true, isNew: false, dark: dark)!
+                    .resolvedColor(with: traits))
+            let card = channels(BoardBandCard.surfaceColor.resolvedColor(with: traits))
+            XCTAssertEqual(
+                painted.r, ink.r * ink.a + card.r * (1 - ink.a), accuracy: 0.002,
+                "dark=\(dark): the red row is not composited over the band card"
+            )
+            XCTAssertEqual(
+                painted.g, ink.g * ink.a + card.g * (1 - ink.a), accuracy: 0.002, "dark=\(dark)")
+            XCTAssertEqual(
+                painted.b, ink.b * ink.a + card.b * (1 - ink.a), accuracy: 0.002, "dark=\(dark)")
+            XCTAssertEqual(
+                painted.a, 1, accuracy: 0.001,
+                "dark=\(dark): a translucent row background replaces the card instead of tinting it"
+            )
+        }
+        // …and a real board row asks for exactly that paint: the JOIN, so the pairing
+        // cannot be correct arithmetic nothing reaches.
+        let bands = BoardModel.bands(
+            tasks: [WalnutTask(
+                id: "wants-a-human", title: "a task", status: "todo", phase: "AGENT_COMPLETE",
+                priority: "none", project: "", dueDate: nil,
+                createdAt: "2026-08-30T00:00:00Z", updatedAt: "2026-08-30T00:00:00Z",
+                completedAt: nil, starred: nil, pinned: true, tags: nil, summary: nil
+            )],
+            sessions: [], tierOf: [:], tierOrder: [:], customTiers: []
+        )
+        let row = bands.flatMap(\.rows).first
+        XCTAssertNotNil(row)
+        XCTAssertTrue(
+            BoardModel.needsHuman(row?.task),
+            "fixture: this row is the one that wants a human"
+        )
+        // Non-nil is the whole claim available here: two dynamic colours built from
+        // separate trait providers are not `==`, so comparing the Colors would be testing
+        // `UIColor.isEqual`, not the paint. WHICH rows are painted is pinned by
+        // `BoardRowNeedsActionSurfaceTests`; what this adds is that the value the list
+        // hands `listRowBackground` is produced by the composite asserted above.
+        XCTAssertNotNil(
+            TaskBoardList.rowSurface(row!, newRowId: nil),
+            "the list stopped painting the row the model says wants a human"
+        )
+    }
+
+    /// APP CALL SITE 2: the chips bar fills its hand-rolled card with the BANDS' card
+    /// colour, so the bar is one card in the stack rather than a bespoke panel.
+    ///
+    /// This is the assertion that fails if the page moves and the bar is left behind, which
+    /// is exactly what R29 found: the bar's old base was 242 in light, the same value the
+    /// new page took.
+    func testTheChipsBarFillsItsCardWithTheBandCardsColour() {
+        XCTAssertEqual(
+            BoardBandBar.cardBaseColor, BoardBandCard.surfaceColor,
+            "the chips bar has its own card colour again — one of the two will drift"
+        )
+        XCTAssertEqual(BoardBandBar.cardSurface, BoardBandCard.surface)
+        for dark in [false, true] {
+            // The FILTERS control sits ON that card and must still read as its own object.
+            XCTAssertNotEqual(
+                grey(BoardBandBar.filtersControlBaseColor, dark: dark),
+                grey(BoardBandBar.cardBaseColor, dark: dark),
+                "dark=\(dark): the control and the card are the same flat surface"
+            )
+        }
+    }
+
+    /// The one number a hand-rolled card cannot get from the OS, kept honest: the chips
+    /// bar's radius is the shared one, and it is a real radius on every supported OS.
+    func testTheHandRolledCardsRadiusIsTheSharedOne() {
+        XCTAssertEqual(
+            BoardBandRailGeometry.standard.cardCornerRadius, BoardBandCard.cornerRadius,
+            accuracy: 0.001,
+            "the bar drew its own radius again — it sits in a stack of OS-rounded cards"
+        )
+        XCTAssertGreaterThanOrEqual(
+            BoardBandCard.cornerRadius, 10,
+            "10pt is iOS 18's inset-grouped card; anything smaller is a square box, which is the look this restyle exists to remove"
+        )
+        // A card cannot round further than half its height, and R30 learned that the hard
+        // way: the radius went to 26 to match the OS section cards (measured 15.87pt of
+        // inset 2pt below the top edge, against the bar's 10.96 at radius 20) and the bar's
+        // then-44pt height silently CLAMPED it to 22, which still measured 3.4pt tighter
+        // than the cards around it. `bandBar` is 52 now, so 26 draws in full and the two
+        // profiles agree to 0.25pt.
+        //
+        // The assertion is unchanged and it is now TIGHT (26 == 52/2): a card exactly twice
+        // its radius tall is a stadium, which is also what an OS card of that height draws
+        // (the reference screen's own short card, measured). Raising the radius without
+        // raising the height fails here instead of shipping a clamped corner.
+        XCTAssertLessThanOrEqual(
+            BoardBandCard.cornerRadius, TasksChromeMetrics.bandBar / 2,
+            "a radius past half the bar's height is clamped by the platform, so the bar draws a corner it never asked for"
+        )
+    }
+
+    /// The heading sits OUTSIDE its card and has to line up with the content INSIDE it,
+    /// which is the one alignment number the full-bleed heading cannot inherit.
+    func testTheHeadingLinesUpWithTheCardsContentColumn() {
+        XCTAssertEqual(BoardBandCard.headingContentInset, 20, accuracy: 0.001,
+            "measured on the reference screen: card edge 20.1pt, heading label 40.8pt")
+        XCTAssertLessThan(
+            BoardBandCard.headingContentInset, TaskBoardRow.separatorLeadingInset,
+            "the heading must start at the ring column, not at the title — a label indented past the rings reads as a second level"
+        )
+        // The gap above a heading and the gap below it are the ONLY rhythm between two
+        // cards (`listSectionSpacing(0)`), so neither may be zero.
+        XCTAssertGreaterThan(TaskBoardList.headingTopGap, 12,
+            "cards would touch the heading above them")
+        XCTAssertGreaterThan(TaskBoardList.headingLabelToCard, 8,
+            "the label would sit on the lid of its own card")
+    }
+}
+
+/// The board's bands, memoized (`BoardBandsCache`) — the second half of the top-of-list
+/// hitch fix.
+///
+/// The first half is that the board is the PINNED working set, so a pass walks ~264 rows
+/// instead of ~3,000. This half is that a pass which changes NOTHING costs nothing:
+/// every `@State` publish, every ≤4Hz SSE batch and every keystroke evaluates
+/// `TasksView.body`, and both chrome thresholds plus the search drawer publish inside the
+/// first ~57pt of a drag — which is exactly the window the 460-515ms of dropped frames
+/// were measured in.
+@MainActor
+final class BoardBandsCacheTests: XCTestCase {
+
+    private func key(
+        gen: UInt64 = 1, query: String = "", grouping: BoardGrouping = .tier,
+        dateFilter: BoardDateFilter = .all, hiddenDone: Set<String> = [], nowBucket: Int = 0
+    ) -> BoardBandsKey {
+        BoardBandsKey(
+            inputsGen: gen, query: query, grouping: grouping, dateFilter: dateFilter,
+            hiddenDoneBands: hiddenDone, nowBucket: nowBucket
+        )
+    }
+
+    private func band(_ id: String) -> BoardBand {
+        BoardBand(bandId: id, label: id, rows: [], hiddenDone: 0, createSeed: nil)
+    }
+
+    @MainActor
+    func testARepeatPassOverUnchangedInputsDoesNotRebuild() {
+        let cache = BoardBandsCache()
+        var builds = 0
+        for _ in 0..<25 {
+            let bands = cache.bands(for: key()) {
+                builds += 1
+                return [self.band("focus")]
+            }
+            XCTAssertEqual(bands.map(\.bandId), ["focus"])
+        }
+        XCTAssertEqual(
+            builds, 1,
+            "25 body passes over unchanged inputs rebuilt the board \(builds) times — the memo is not keyed on what it says it is"
+        )
+    }
+
+    /// EVERY field of the key has to invalidate, and the list is the whole point: a field
+    /// missing from the key is a board that silently stops updating, which is a worse
+    /// failure than the rebuild it was trying to skip.
+    @MainActor
+    func testEveryInputInvalidates() {
+        let variants: [(String, BoardBandsKey)] = [
+            ("a store change (tasks / sessions / the tier split)", key(gen: 2)),
+            ("a keystroke", key(query: "alpha")),
+            ("the grouping control", key(grouping: .project)),
+            ("the date filter", key(dateFilter: .now)),
+            ("a band's hide-done toggle", key(hiddenDone: ["focus"])),
+            ("the clock, under the .now filter", key(dateFilter: .now, nowBucket: 1)),
+        ]
+        for (what, changed) in variants {
+            let cache = BoardBandsCache()
+            var builds = 0
+            _ = cache.bands(for: key()) { builds += 1; return [self.band("focus")] }
+            _ = cache.bands(for: changed) { builds += 1; return [self.band("satellite")] }
+            XCTAssertEqual(builds, 2, "\(what) did not invalidate the memo")
+        }
+    }
+
+    /// The value a hit returns is the value that was built, not a fresh empty one — the
+    /// mistake that would make the board flash empty on every other pass.
+    @MainActor
+    func testAHitReturnsTheBandsItBuilt() {
+        let cache = BoardBandsCache()
+        let built = [band("focus"), band("backlog")]
+        _ = cache.bands(for: key()) { built }
+        let again = cache.bands(for: key()) { [] }
+        XCTAssertEqual(again, built)
+    }
+
+    /// Going BACK to a previous key rebuilds rather than resurrecting an older answer:
+    /// the cache holds ONE entry on purpose, because a board that is one keystroke stale
+    /// is worse than one that re-derives.
+    @MainActor
+    func testTheCacheHoldsExactlyOneEntry() {
+        let cache = BoardBandsCache()
+        var builds = 0
+        _ = cache.bands(for: key()) { builds += 1; return [self.band("focus")] }
+        _ = cache.bands(for: key(query: "a")) { builds += 1; return [self.band("focus")] }
+        _ = cache.bands(for: key()) { builds += 1; return [self.band("focus")] }
+        XCTAssertEqual(builds, 3)
+    }
+}
+
+// MARK: - A row whose session the session LIST does not carry
+
+/// The board's tap, as a decision.
+///
+/// The bug behind these: the board joins `sessions` by task id, so a session the
+/// session LIST does not carry leaves a row with `session == nil` — and the row read
+/// that as "this task has never had a session". It opened a New Session DRAFT on a
+/// pinned task that had a real session, and that draft (unlinked, `taskId: nil`) would
+/// have manufactured a second, orphan session on it.
+///
+/// Two things make the difference knowable, and both are pinned here: the task's own
+/// `session_ids` (which the phone receives on `GET /v1/tasks/:id` and, before this
+/// round, read nowhere), and the three-valued `BoardRow.knownSessionIds` — unknown,
+/// learned-empty, learned-non-empty — because "nobody asked" and "there are none" route
+/// differently and only one of them is worth a request.
+final class BoardSessionTapRouteTests: XCTestCase {
+
+    private func task(
+        _ id: String, title: String = "ship the thing", project: String = "",
+        phase: String = "TODO"
+    ) -> WalnutTask {
+        WalnutTask(
+            id: id, title: title, status: "todo", phase: phase,
+            priority: "none", project: project, dueDate: nil,
+            createdAt: "2026-08-27T00:00:00Z", updatedAt: "2026-08-27T00:00:00Z",
+            completedAt: nil, starred: nil, pinned: true, tags: nil, summary: nil
+        )
+    }
+
+    private func session(_ id: String, taskId: String?, status: String = "running") -> WalnutSession {
+        WalnutSession(
+            id: id, title: "Session: walnut — hello", taskId: taskId, taskTitle: "t",
+            project: nil, host: "", processStatus: status, model: nil, mode: nil,
+            startedAt: "2026-08-26T00:00:00Z", lastActiveAt: "2026-08-27T00:00:00Z",
+            messageCount: 3, cwd: nil, pinned: true, focusTier: nil, description: nil
+        )
+    }
+
+    // MARK: - Which id is "the session to open"
+
+    /// LAST wins, because that is the server's own order: every link path APPENDS to
+    /// `session_ids`, so the tail is the newest session.
+    func testNewestSessionIdIsTheLastEntry() {
+        XCTAssertEqual(BoardModel.newestSessionId(["s1", "s2", "s3"]), "s3")
+        XCTAssertEqual(BoardModel.newestSessionId(["only"]), "only")
+    }
+
+    /// A cleared slot leaves an empty string server-side, and opening `""` is a 404
+    /// dressed up as a destination. Whitespace is the same thing with a space in it.
+    func testNewestSessionIdSkipsBlanksAndTrims() {
+        XCTAssertEqual(BoardModel.newestSessionId(["s1", "", "   "]), "s1")
+        XCTAssertEqual(BoardModel.newestSessionId(["s1", " s2 "]), "s2")
+    }
+
+    /// Unknown (nil) and known-empty both answer nil — they differ in ROUTING, not in
+    /// "is there an id here".
+    func testNewestSessionIdIsNilWhenThereIsNothingToOpen() {
+        XCTAssertNil(BoardModel.newestSessionId(nil))
+        XCTAssertNil(BoardModel.newestSessionId([]))
+        XCTAssertNil(BoardModel.newestSessionId(["", " "]))
+    }
+
+    // MARK: - The row's state must not claim the task is sessionless
+
+    /// THE regression: a row whose task has `session_ids` but no hydrated session is
+    /// NOT `.none`. `.none` blanks the dot and drops the state word, so the row reads
+    /// as work that never started.
+    func testARowWithIdsOnlyIsNotSessionless() {
+        let state = BoardModel.state(
+            task: task("t1"), session: nil, knownSessionIds: ["s-old"]
+        )
+        XCTAssertNotEqual(state, .none, "a task with session_ids must not read as sessionless")
+        XCTAssertEqual(state, .earlierSession)
+        XCTAssertTrue(state.hasSession, "the trailing dot draws for a row that HAS history")
+        XCTAssertFalse(state.word.isEmpty, "the second line has to say something true")
+    }
+
+    /// The two honest "no session" cases keep today's wording: nobody has asked yet,
+    /// and asked-and-there-are-none. Neither may invent history.
+    func testUnknownAndLearnedEmptyBothStayNone() {
+        XCTAssertEqual(BoardModel.state(task: task("t1"), session: nil), .none)
+        XCTAssertEqual(
+            BoardModel.state(task: task("t1"), session: nil, knownSessionIds: []), .none,
+            "asked, and this task has never had a session"
+        )
+        XCTAssertEqual(
+            BoardModel.state(task: task("t1"), session: nil, knownSessionIds: [""]), .none,
+            "a cleared slot is not a session"
+        )
+    }
+
+    /// A hydrated session still decides the state — the ids are a FALLBACK, never a
+    /// second opinion about a session the list already has.
+    func testAHydratedSessionOutranksTheIds() {
+        XCTAssertEqual(
+            BoardModel.state(
+                task: task("t1"), session: session("s9", taskId: "t1", status: "running"),
+                knownSessionIds: ["s-old", "s9"]
+            ),
+            .running
+        )
+        XCTAssertEqual(
+            BoardModel.state(
+                task: task("t1", phase: "AGENT_COMPLETE"),
+                session: session("s9", taskId: "t1"), knownSessionIds: ["s9"]
+            ),
+            .handedBack,
+            "the red-row rule keeps its precedence"
+        )
+    }
+
+    // MARK: - Where the tap goes
+
+    func testAHydratedSessionOpensThatSession() {
+        let live = session("s1", taskId: "t1")
+        let route = BoardModel.tapRoute(BoardRow(task: task("t1"), session: live))
+        XCTAssertEqual(route, .open(live))
+    }
+
+    /// The fix, stated as the route: ids-only RESOLVES the newest session by id. It must
+    /// not be `.draft` — that is the shipped bug.
+    func testIdsOnlyResolvesTheNewestSessionInsteadOfDrafting() {
+        let row = BoardRow(
+            task: task("t1"), session: nil, knownSessionIds: ["s1", "s2", "s3"]
+        )
+        let route = BoardModel.tapRoute(row)
+        XCTAssertEqual(
+            route,
+            .resolve(
+                sessionId: "s3",
+                draftFallback: BoardModel.BoardDraftSeed(taskId: "t1", taskTitle: "ship the thing")
+            )
+        )
+        if case .draft = route {
+            XCTFail("a task with session_ids must never open the New Session draft")
+        }
+    }
+
+    /// Unknown = ask. The slim list projection carries no `session_ids`, so a cold board
+    /// cannot tell "never had a session" from "its session aged out of the list", and one
+    /// task-detail read settles it.
+    func testUnknownProbesTheTaskDetailBeforeRouting() {
+        let route = BoardModel.tapRoute(BoardRow(task: task("t1"), session: nil))
+        XCTAssertEqual(
+            route,
+            .probe(
+                taskId: "t1",
+                draftFallback: BoardModel.BoardDraftSeed(taskId: "t1", taskTitle: "ship the thing")
+            )
+        )
+    }
+
+    /// Only a LEARNED-empty answer goes straight to the draft, so the second tap on a
+    /// genuinely sessionless row spends no request at all.
+    func testLearnedSessionlessDraftsImmediately() {
+        let row = BoardRow(task: task("t1"), session: nil, knownSessionIds: [])
+        XCTAssertEqual(
+            BoardModel.tapRoute(row),
+            .draft(BoardModel.BoardDraftSeed(taskId: "t1", taskTitle: "ship the thing"))
+        )
+    }
+
+    /// EVERY route that can end in a draft carries the originating task, including the
+    /// fallbacks the two lookups fall back to. An unattached draft started from a task
+    /// row is what creates an orphan session on an already-sessioned task.
+    func testNoRouteFromATaskRowCanProduceAnUnattachedDraft() {
+        let rows = [
+            BoardRow(task: task("t1"), session: nil),
+            BoardRow(task: task("t1"), session: nil, knownSessionIds: []),
+            BoardRow(task: task("t1"), session: nil, knownSessionIds: ["s1"]),
+            // A session-only row: the projection lacks the task, but the SESSION names
+            // its owner, so the draft still links.
+            BoardRow(task: nil, session: session("s1", taskId: "t1")),
+        ]
+        for row in rows {
+            let seed: BoardModel.BoardDraftSeed?
+            switch BoardModel.tapRoute(row) {
+            case .draft(let s): seed = s
+            case .resolve(_, let s): seed = s
+            case .probe(_, let s): seed = s
+            case .open: seed = nil // no draft is reachable from this route
+            }
+            guard let seed else { continue }
+            XCTAssertEqual(
+                seed.taskId, "t1",
+                "a draft reachable from a task row must link back to that task"
+            )
+        }
+        // And the toolbar's own entrance stays deliberately unattached.
+        XCTAssertNil(BoardModel.BoardDraftSeed.unattached.taskId)
+    }
+
+    /// The label the row and its context menu show ("Open Session" vs "Start Session")
+    /// and the row's accessibility hint all read `hasKnownSession`, so it has to agree
+    /// with the route or the row promises a destination it does not go to.
+    func testHasKnownSessionAgreesWithTheRoute() {
+        let cases: [(BoardRow, Bool)] = [
+            (BoardRow(task: task("t1"), session: session("s1", taskId: "t1")), true),
+            (BoardRow(task: task("t1"), session: nil, knownSessionIds: ["s1"]), true),
+            (BoardRow(task: task("t1"), session: nil, knownSessionIds: []), false),
+            (BoardRow(task: task("t1"), session: nil), false),
+        ]
+        for (row, expected) in cases {
+            XCTAssertEqual(row.hasKnownSession, expected)
+            switch BoardModel.tapRoute(row) {
+            case .open, .resolve:
+                XCTAssertTrue(row.hasKnownSession, "the row says it has no session but the tap opens one")
+            case .probe, .draft:
+                XCTAssertFalse(row.hasKnownSession, "the row claims a session the tap cannot open")
+            }
+        }
+    }
+
+    // MARK: - What the row is ALLOWED TO SAY (R28c P2)
+
+    /// The defect: `hasKnownSession` is a Bool and the ledger is three-valued, so every caller
+    /// that phrased an affordance from it collapsed UNKNOWN into "no session". On the board
+    /// that is not a corner — `GET /v1/tasks` carries no `session_ids`, so it is what EVERY
+    /// row looks like at load — and the long-press menu therefore offered "Start Session" on
+    /// tasks that already had sessions. A user who accepts that offer gets a duplicate.
+    ///
+    /// `BoardModel.affordance` is the three answers, and the case that matters is the third
+    /// one: it must promise NEITHER.
+    func testTheAffordanceHasThreeAnswersFromTheThreeValuedLedger() {
+        let cases: [(name: String, row: BoardRow, expected: BoardModel.SessionAffordance)] = [
+            ("hydrated",
+             BoardRow(task: task("t1"), session: session("s1", taskId: "t1")), .open),
+            ("ids only (session aged out of the list)",
+             BoardRow(task: task("t1"), session: nil, knownSessionIds: ["s1"]), .open),
+            ("asked, and there are none",
+             BoardRow(task: task("t1"), session: nil, knownSessionIds: []), .start),
+            ("asked, and every slot was cleared server-side",
+             BoardRow(task: task("t1"), session: nil, knownSessionIds: ["", "  "]), .start),
+            ("nobody has asked yet",
+             BoardRow(task: task("t1"), session: nil), .unknown),
+        ]
+        for entry in cases {
+            XCTAssertEqual(
+                BoardModel.affordance(entry.row), entry.expected, entry.name
+            )
+        }
+    }
+
+    /// The words, pinned: the two KNOWN states keep the labels they shipped with, and the
+    /// unknown state says something that is true whichever way its probe resolves.
+    func testTheAffordanceWords() {
+        XCTAssertEqual(BoardModel.SessionAffordance.open.menuLabel, "Open Session")
+        XCTAssertEqual(BoardModel.SessionAffordance.start.menuLabel, "Start Session")
+        XCTAssertEqual(BoardModel.SessionAffordance.unknown.menuLabel, "Open")
+
+        XCTAssertEqual(BoardModel.SessionAffordance.open.accessibilityHint, "Open the session")
+        XCTAssertEqual(BoardModel.SessionAffordance.start.accessibilityHint, "Start a session")
+        XCTAssertEqual(
+            BoardModel.SessionAffordance.unknown.accessibilityHint,
+            "Open the session, or start one"
+        )
+    }
+
+    /// The rule the defect broke, stated over BOTH voices at once: an unknown row may not
+    /// offer to START anything, in the menu or to VoiceOver. Substring checks and not equality
+    /// so a future rewording cannot slip "Start" back in through a longer sentence.
+    func testAnUnknownRowNeverOffersToStartASessionInEitherVoice() {
+        let unknown = BoardModel.SessionAffordance.unknown
+        for phrasing in [unknown.menuLabel, unknown.accessibilityHint, unknown.menuIcon] {
+            XCTAssertFalse(
+                phrasing.localizedCaseInsensitiveContains("start a"),
+                "\(phrasing): an unknown row nudged the user into a duplicate session"
+            )
+        }
+        XCTAssertFalse(
+            unknown.menuLabel.localizedCaseInsensitiveContains("start"),
+            "\(unknown.menuLabel): the menu item is the exact string R28c QA caught"
+        )
+        // And the glyph carries no promise either: a play triangle says "new run", a speech
+        // bubble says "there is a conversation here".
+        XCTAssertNotEqual(unknown.menuIcon, BoardModel.SessionAffordance.start.menuIcon)
+        XCTAssertNotEqual(unknown.menuIcon, BoardModel.SessionAffordance.open.menuIcon)
+    }
+
+    /// The affordance and the ROUTE are two readings of one ledger, so they have to line up
+    /// case for case — that is the whole reason the phrasing became a function of the row
+    /// instead of a ternary at each call site.
+    func testTheAffordanceAgreesWithTheRouteCaseForCase() {
+        let rows = [
+            BoardRow(task: task("t1"), session: session("s1", taskId: "t1")),
+            BoardRow(task: task("t1"), session: nil, knownSessionIds: ["s1"]),
+            BoardRow(task: task("t1"), session: nil, knownSessionIds: []),
+            BoardRow(task: task("t1"), session: nil),
+        ]
+        for row in rows {
+            switch (BoardModel.affordance(row), BoardModel.tapRoute(row)) {
+            case (.open, .open), (.open, .resolve), (.unknown, .probe), (.start, .draft):
+                continue
+            case let (affordance, route):
+                XCTFail("\(affordance) is the wrong word for a tap that goes to \(route)")
+            }
+        }
+    }
+
+    /// End to end through the real band builder, which is where the defect was actually
+    /// reachable: a cold board (no ledger) must not label its rows "Start Session", and the
+    /// same row must switch to "Open Session" once the ledger says the task has sessions.
+    func testTheBoardsOwnRowsNeverSayStartSessionBeforeAnyoneHasAsked() {
+        func row(knownSessionIds: [String: [String]]) -> BoardRow? {
+            BoardModel.bands(
+                tasks: [task("t1")], sessions: [], tierOf: ["t1": "focus"],
+                tierOrder: ["focus": ["t1"]], customTiers: [],
+                knownSessionIds: knownSessionIds
+            ).first?.rows.first
+        }
+
+        guard let cold = row(knownSessionIds: [:]) else { return XCTFail("no row on a cold board") }
+        XCTAssertEqual(BoardModel.affordance(cold), .unknown)
+        XCTAssertEqual(BoardModel.affordance(cold).menuLabel, "Open")
+
+        guard let hydrated = row(knownSessionIds: ["t1": ["s-old", "s-new"]]) else {
+            return XCTFail("no row once the ledger is populated")
+        }
+        XCTAssertEqual(BoardModel.affordance(hydrated), .open)
+        XCTAssertEqual(BoardModel.affordance(hydrated).menuLabel, "Open Session")
+    }
+
+    // MARK: - The board carries the ledger onto its rows
+
+    /// End to end through the real band builder: a PINNED task with no session in the
+    /// store, whose detail said it has sessions, gets a row that knows it.
+    func testBandsCarryKnownSessionIdsOntoTheRow() {
+        let bands = BoardModel.bands(
+            tasks: [task("t1")], sessions: [], tierOf: ["t1": "focus"],
+            tierOrder: ["focus": ["t1"]], customTiers: [],
+            knownSessionIds: ["t1": ["s-old", "s-new"]]
+        )
+        guard let row = bands.first(where: { $0.bandId == "focus" })?.rows.first else {
+            return XCTFail("the pinned task lost its row")
+        }
+        XCTAssertNil(row.session, "the session list genuinely has nothing for this task")
+        XCTAssertEqual(row.knownSessionIds, ["s-old", "s-new"])
+        XCTAssertNotEqual(
+            BoardModel.state(task: row.task, session: row.session, knownSessionIds: row.knownSessionIds),
+            .none,
+            "the row must not read as sessionless"
+        )
+        XCTAssertEqual(
+            BoardModel.tapRoute(row),
+            .resolve(
+                sessionId: "s-new",
+                draftFallback: BoardModel.BoardDraftSeed(taskId: "t1", taskTitle: "ship the thing")
+            ),
+            "the board's tap must open the session, not the draft"
+        )
+    }
+
+    /// A cold board (nothing asked yet) behaves exactly as it did before the ledger
+    /// existed, except that its tap asks one question first.
+    func testAnEmptyLedgerLeavesTheRowUnknown() {
+        let bands = BoardModel.bands(
+            tasks: [task("t1")], sessions: [], tierOf: ["t1": "focus"],
+            tierOrder: ["focus": ["t1"]], customTiers: []
+        )
+        guard let row = bands.first?.rows.first else { return XCTFail("no row") }
+        XCTAssertNil(row.knownSessionIds, "missing key = never asked, NOT 'no sessions'")
+        XCTAssertFalse(row.hasKnownSession)
+        if case .probe = BoardModel.tapRoute(row) {} else {
+            XCTFail("an unknown row's tap has to ask before it routes")
+        }
+    }
+
+    // MARK: - The by-id reply, shaped like a list row
+
+    private func detail(
+        id: String, taskId: String? = nil, status: String? = "stopped",
+        host: String? = nil, lastActive: String? = nil
+    ) -> SessionDetail {
+        SessionDetail(
+            session: SessionDetail.Record(
+                claudeSessionId: id, processStatus: status, title: "Session: walnut — hi",
+                mode: nil, archived: nil, taskId: taskId, project: nil, host: host,
+                cwd: "/repo", startedAt: "2026-06-01T00:00:00Z", lastActiveAt: lastActive,
+                messageCount: 12, model: nil, description: nil
+            ),
+            pendingPermissions: []
+        )
+    }
+
+    /// The row is keyed by the id we ASKED for: the conversation page must land on the
+    /// session the tap resolved, whatever the record echoes.
+    func testFromDetailKeepsTheRequestedId() {
+        let row = WalnutSession.fromDetail(
+            detail(id: "echoed"), requestedId: "asked-for", task: task("t1")
+        )
+        XCTAssertEqual(row.id, "asked-for")
+        XCTAssertEqual(row.messageCount, 12)
+        XCTAssertEqual(row.cwd, "/repo")
+    }
+
+    /// The owning task survives even when the reply omits it — that link is what makes
+    /// the pushed page show the task it belongs to.
+    func testFromDetailFallsBackToTheRowsTaskForTheLink() {
+        let fromRecord = WalnutSession.fromDetail(
+            detail(id: "s1", taskId: "t-record"), requestedId: "s1", task: task("t-row")
+        )
+        XCTAssertEqual(fromRecord.taskId, "t-record", "the server's answer wins when it has one")
+        let fromRow = WalnutSession.fromDetail(
+            detail(id: "s1"), requestedId: "s1", task: task("t-row")
+        )
+        XCTAssertEqual(fromRow.taskId, "t-row")
+        XCTAssertEqual(fromRow.taskTitle, "ship the thing")
+    }
+
+    /// The DEGRADED cloud reply (bridge down) carries four fields. Every absence has to
+    /// answer with something TRUE: no invented age, no invented host, no claimed pin.
+    func testFromDetailDoesNotInventFactsTheReplyOmitted() {
+        let degraded = SessionDetail(
+            session: SessionDetail.Record(
+                claudeSessionId: "s1", processStatus: nil, title: nil,
+                mode: nil, archived: nil
+            ),
+            pendingPermissions: []
+        )
+        let row = WalnutSession.fromDetail(degraded, requestedId: "s1", task: nil)
+        XCTAssertEqual(row.host, "", "an absent host is the primary box on the wire")
+        XCTAssertNil(row.lastActiveValue, "a synthetic 'now' would print '2s' on a June session")
+        XCTAssertEqual(row.messageCount, 0)
+        XCTAssertNil(row.pinned, "the pin lives on the TASK — claiming one here invents a board row")
+        XCTAssertEqual(row.processStatus, "unknown")
+        XCTAssertEqual(
+            BoardModel.state(task: nil, session: row), .ended,
+            "unknown liveness reads as ended, not as running"
+        )
+    }
+}
+
+/// The two bounded lookups a board tap can make, against a scripted transport.
+@MainActor
+final class BoardSessionLookupStoreTests: XCTestCase {
+
+    private func detail(_ id: String, sessionIds: [String]?) -> TaskDetail {
+        TaskDetail(
+            id: id, title: "ship the thing", status: "todo", phase: "TODO",
+            priority: "none", project: "", description: nil, summary: nil, note: nil,
+            tags: nil, starred: nil, pinned: true, dependsOn: nil, isBlocked: nil,
+            resolvedDependencies: nil, dependents: nil, children: nil, parent: nil,
+            sessionIds: sessionIds
+        )
+    }
+
+    /// The answer is cached, so the SECOND tap on that row spends no request — and the
+    /// board's memo generation moves, so the row stops saying "no session yet".
+    func testFetchSessionIdsCachesTheAnswerAndMovesTheBoardGeneration() async {
+        let mock = MockTaskTransport()
+        mock.taskDetailResult = detail("t1", sessionIds: ["s1", "s2"])
+        let store = TasksStore(transport: mock)
+        let before = store.boardInputsGen
+
+        let ids = await store.fetchSessionIds(for: "t1")
+        XCTAssertEqual(ids, ["s1", "s2"])
+        XCTAssertEqual(store.knownSessionIds(for: "t1"), ["s1", "s2"])
+        XCTAssertNotEqual(store.boardInputsGen, before, "the board would keep its stale rows")
+        XCTAssertEqual(mock.callCount("taskDetail"), 1)
+    }
+
+    /// "This task has never had a session" is a real answer and is cached as `[]` —
+    /// which is what routes the next tap straight to the draft.
+    func testAnEmptyAnswerIsCachedAsEmptyNotAsUnknown() async {
+        let mock = MockTaskTransport()
+        mock.taskDetailResult = detail("t1", sessionIds: [])
+        let store = TasksStore(transport: mock)
+
+        let ids = await store.fetchSessionIds(for: "t1")
+        XCTAssertEqual(ids, [])
+        XCTAssertEqual(store.knownSessionIds(for: "t1"), [], "learned-empty, not unknown")
+    }
+
+    /// A failed lookup must not be recorded as "no sessions": that would teach the
+    /// board, permanently, that an offline moment means the task has no history.
+    func testAFailedLookupLeavesTheLedgerUnknown() async {
+        let mock = MockTaskTransport()
+        mock.error = APIError.badResponse
+        let store = TasksStore(transport: mock)
+
+        let ids = await store.fetchSessionIds(for: "t1")
+        XCTAssertNil(ids)
+        XCTAssertNil(store.knownSessionIds(for: "t1"))
+    }
+
+    /// Blank ids never reach the ledger — a cleared slot is not a session to open.
+    func testBlankIdsAreDroppedOnTheWayIn() async {
+        let mock = MockTaskTransport()
+        mock.taskDetailResult = detail("t1", sessionIds: ["", "  ", "s1"])
+        let store = TasksStore(transport: mock)
+
+        let ids = await store.fetchSessionIds(for: "t1")
+        XCTAssertEqual(ids, ["s1"])
+    }
+
+    /// The OTHER deposit path: opening a task's detail sheet teaches the board about
+    /// that task's sessions, so its row is honest before anyone taps it.
+    func testOpeningATaskDetailDepositsItsSessionIds() async {
+        let mock = MockTaskTransport()
+        mock.taskDetailResult = detail("t1", sessionIds: ["s1"])
+        let store = TasksStore(transport: MockTaskTransport())
+        TasksStore.shared = store
+
+        let controller = TaskDetailController(taskId: "t1", transport: mock)
+        await controller.load()
+
+        XCTAssertEqual(store.knownSessionIds(for: "t1"), ["s1"])
     }
 }

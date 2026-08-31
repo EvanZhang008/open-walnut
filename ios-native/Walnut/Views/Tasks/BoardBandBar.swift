@@ -73,13 +73,19 @@ struct BoardBandRailGeometry: Hashable {
 
     /// Corner radius of the card, in BOTH copies.
     ///
-    /// Measured, not chosen: the INLINE row is clipped by its inset-grouped section to a
-    /// 10pt rounded rect whether it asks to be or not, so a pinned copy that draws a
-    /// square card pops its corners at the flip (measured 2026-08-30: 10pt rounded →
-    /// square). The card clips itself to this radius now, which makes the two agree by
-    /// construction and makes the radius a field of `BoardBandBarLayout` — so a future
-    /// "the pinned one should be square" fails the flip tests instead of shipping.
-    var cardCornerRadius: CGFloat = 10
+    /// Measured, not chosen: the INLINE row is clipped by its inset-grouped section
+    /// whether it asks to be or not, so a pinned copy that draws a square card pops its
+    /// corners at the flip (measured 2026-08-30: rounded → square). The card clips itself
+    /// to this radius, which makes the two agree by construction and makes the radius a
+    /// field of `BoardBandBarLayout` — so a future "the pinned one should be square" fails
+    /// the flip tests instead of shipping.
+    ///
+    /// The VALUE comes from `BoardBandCard` now (R29), because it is no longer only about
+    /// these two copies agreeing with each other: the bar sits in a stack of band cards
+    /// that the OS rounds, and 10pt among 20pt cards is the "not one system" look this
+    /// restyle exists to remove. Still a `var`, so a test can square it off and prove the
+    /// flip assertions would catch that.
+    var cardCornerRadius: CGFloat = BoardBandCard.cornerRadius
 
     // MARK: - The trailing column the filters control owns
 
@@ -380,9 +386,19 @@ struct BoardBandBarLayout: Equatable {
 /// # It is row TWO, drawn in two places, and the two are now ONE CARD
 ///
 /// The header order is: nav pills (row 1, scrolls away), then this bar (row 2, the
-/// only row that pins). `TasksView` renders this view TWICE, mutually exclusively: as
-/// an ordinary content row, and as a pinned overlay that stands in for that row once
-/// it reaches the top edge (`TasksChromeMetrics.chipsPinThreshold`).
+/// only row that pins). `TasksView` renders this view TWICE — as an ordinary content
+/// row, and as a pinned overlay that stands in for that row once it reaches the top
+/// edge (`TasksChromeMetrics.chipsPinThreshold`).
+///
+/// The two are still mutually EXCLUSIVE on screen, and that is now decided inside this
+/// view (`drawsChips`) rather than by which copy `TasksView` chose to construct. Both
+/// exist at all times; one is hidden. Two reasons, and the first is a shipped defect:
+/// a conditionally inserted copy is a NEW view identity on every pin crossing, so each
+/// crossing built a fresh `ScrollView` for the rail — and one that came up measured at
+/// zero width stayed empty for the life of that instance, which is the "card and filter
+/// button, no chips" bar the user screenshotted. The second is the hitch: the decision
+/// reads `BoardChipsPinLatch` HERE, so a crossing re-renders 44pt of chrome instead of
+/// invalidating `TasksView.body` and re-deriving the whole board.
 ///
 /// The copies differ ONLY in the container they are handed, and that difference is the
 /// whole R26 fix: the inline row gets the inset-grouped card's 370pt, the overlay gets
@@ -397,9 +413,9 @@ struct BoardBandBarLayout: Equatable {
 ///  - same Y at the crossing (R27): `TasksChromeMetrics.chipsPinThreshold` is derived
 ///    from where this row actually sits in the content, so the hand-off happens on the
 ///    one frame where the two cards occupy the same screen rect.
-///  - same STYLE (R27): one `cardCornerRadius`, one opaque `cardSurface` under the
-///    material, one hairline, and NO shadow on the pinned one (a shadow would be the one
-///    property that still popped at the crossing).
+///  - same STYLE (R27): one `cardCornerRadius`, one opaque `cardSurface`, one hairline,
+///    and NO shadow on the pinned one (a shadow would be the one property that still
+///    popped at the crossing).
 ///
 /// The pinned copy stays an OVERLAY, never a `safeAreaInset`: this app has shipped the
 /// scroll-jump bug, where something appearing in the layout flow changes the List's
@@ -408,10 +424,11 @@ struct BoardBandBarLayout: Equatable {
 /// It used to draw bare `.bar` material "so a row sliding under it stays legible", and
 /// that legibility was the defect: the material took its colour from whatever happened to
 /// be behind it, so the capsule-vs-background contrast measured 43.5 lum inline and 17.1
-/// pinned — the chips visibly changed weight at the flip. The card owns an OPAQUE base
-/// under the material now (`cardSurface`), so a row does not read through the bar and the
-/// chips read the same in both copies. A pinned header that a row shows through was never
-/// worth a chip that changes contrast when you scroll.
+/// pinned — the chips visibly changed weight at the flip. R27 put an opaque base under the
+/// material; R29 dropped the material entirely and left the base (`cardSurface`, which is
+/// the BAND CARDS' own colour), so the bar is one card among cards, a row cannot read
+/// through it, and the chips read the same in both copies. A pinned header that a row
+/// shows through was never worth a chip that changes contrast when you scroll.
 ///
 /// # Merge point: the two filters live at the trailing edge, one tap deeper
 ///
@@ -438,8 +455,13 @@ struct BoardBandBar: View {
     @Binding var dateFilter: BoardDateFilter
     /// Band id to filter to, or nil for the whole board.
     let onSelect: (String?) -> Void
-    /// Which copy this is. Read ONLY by `cardInset`.
+    /// Which copy this is. Read by `cardInset` and by `drawsChips`, and nothing else.
     let placement: BoardBandBarPlacement
+    /// Whether row 2 has reached the top edge.
+    ///
+    /// READ HERE rather than in `TasksView.body`, on purpose: a pin crossing then
+    /// invalidates the two bars instead of the whole List. See `BoardChipsPinLatch`.
+    let pinLatch: BoardChipsPinLatch
 
     /// The ambient type size, read so the content-width estimate (and therefore the
     /// scroll affordance) tracks it. Clamped to `chipTypeCap`, which is what the chips
@@ -459,6 +481,59 @@ struct BoardBandBar: View {
     /// The bar's whole geometry. Deliberately not a parameter: a copy that could be
     /// configured differently is a copy that will be.
     static let rail = BoardBandRailGeometry.standard
+
+    // MARK: - Which copy is showing (and the two ways of being empty)
+
+    /// Does THIS copy show its chips right now?
+    ///
+    /// The two copies are mutually exclusive because they draw the same
+    /// `board.chip.*` identifiers and two live copies make every chip ambiguous to
+    /// automation. What changed is HOW: `TasksView` used to construct one copy or the
+    /// other per pin state, and both are now always constructed while this decides
+    /// which one is VISIBLE. That is the empty-pinned-bar fix — see `body`.
+    ///
+    /// `chipCount == 0` is the second half, and it is the reported symptom stated as
+    /// a rule: a card with a filter button and a bare 316pt rail is worse than no
+    /// card, because it says "this board has no bands" while the board below it has
+    /// five. `BoardModel.chips` always emits the leading `All` chip, so on the board
+    /// this branch is unreachable — which is exactly why it is written down instead of
+    /// assumed (`TasksBoardChipRowTests` pins both halves).
+    static func drawsChips(
+        placement: BoardBandBarPlacement, pinned: Bool, chipCount: Int
+    ) -> Bool {
+        guard chipCount > 0 else { return false }
+        switch placement {
+        case .inlineRow: return !pinned
+        case .pinnedOverlay: return pinned
+        }
+    }
+
+    /// The narrowest container this bar will lay a scroll view into.
+    ///
+    /// A `GeometryReader` can report 0 on its first pass, and the rail's arithmetic is
+    /// honest about that: `railWidth(cardWidth: 0)` is 0. The card and the filters
+    /// control recover on the next pass because they are plain frames recomputed from
+    /// `layout` every time; a `UIScrollView` born into a zero-width viewport does NOT
+    /// — nothing in the old file re-established the rail's content afterwards, so the
+    /// bar drew its card and its button with a mathematically flat, chipless rail
+    /// (measured on the user's screenshot: rail region mean 250.0, std 0.84, i.e. bare
+    /// card material) for the whole life of that instance.
+    ///
+    /// So a degenerate measurement is made UNRENDERABLE rather than unrecoverable: no
+    /// scroll view is constructed until the width can hold one. The floor is the
+    /// filters column plus the rail's spacing plus whatever the CARD's own side insets
+    /// eat first, which is the width below which there is no rail to speak of anyway.
+    ///
+    /// It is per-placement because the card inset is: `layout` derives its card as
+    /// `container - 2 * cardInset(placement:)`, so the inline copy (inset 0, the List
+    /// already paid it) still has a real rail at a width where the pinned copy (inset
+    /// 16 a side) has none. Writing one placement-agnostic floor made the two disagree
+    /// with the arithmetic — the pinned number said "no rail below 86pt" while the
+    /// inline copy at 85.5pt had 31.5pt of perfectly usable rail.
+    static func minimumUsableContainer(_ placement: BoardBandBarPlacement) -> CGFloat {
+        2 * rail.cardInset(placement: placement)
+            + rail.filtersColumnWidth + rail.railSpacing
+    }
 
     // MARK: - How the two filters are presented
 
@@ -505,7 +580,8 @@ struct BoardBandBar: View {
 
     // MARK: - Chip ink (contrast)
 
-    /// Alpha of an unselected chip's label over the capsule's `.quaternary` fill.
+    /// Alpha of an unselected chip's label over the capsule's own fill
+    /// (`unselectedChipFillColor`).
     ///
     /// `Color.secondary` measured (112,114,110) on (202,203,202) — 3.0:1, below the
     /// 4.5:1 a body-size label owes anyone reading it in daylight, and the count then
@@ -519,6 +595,46 @@ struct BoardBandBar: View {
     static var unselectedChipLabel: Color { Color(.label).opacity(chipLabelOpacity) }
     static var unselectedChipCount: Color { Color(.label).opacity(chipCountOpacity) }
 
+    /// Ink strength of an UNSELECTED chip's capsule over the card, per scheme — the two
+    /// numbers behind `unselectedChipFillColor`.
+    ///
+    /// Light is `label` (near-black) over the card's white, dark is `label` (near-white)
+    /// over the card's near-black, so the same alpha does not mean the same step: 0.18 over
+    /// white lands at 209 grey, while 0.18 over 28 lands at 69 — a far bigger PERCEIVED
+    /// jump on a dark card. Dark takes 0.14 so both schemes read as "a quiet capsule on the
+    /// card" rather than as one quiet and one bright.
+    static let chipFillAlpha: (light: CGFloat, dark: CGFloat) = (0.18, 0.14)
+
+    /// The unselected chip capsule's fill: ONE opaque colour, and the third fix of this
+    /// exact defect class on this exact bar.
+    ///
+    /// It was `.quaternary`, a MATERIAL, and a material's rendered value depends on what is
+    /// behind it — so the same chip measured (209,209,209) in the inline copy and
+    /// (222,222,222) in the pinned overlay, i.e. the capsules visibly changed weight at the
+    /// pin flip. That is the same defect the card's `.bar` material had (R27: 43.5 vs 17.1
+    /// lum of capsule contrast) and the same one the row tint had inside a card (R29), which
+    /// is why this one is not fixed with a different material: `.quaternary` →
+    /// `.tertiary` → `.fill` are all values that resolve against a backdrop, so any of them
+    /// would ship the same bug with a different number.
+    ///
+    /// An OPAQUE colour cannot: `label` at `chipFillAlpha` flattened onto the card
+    /// (`BoardBandCard.flatten`) is one RGB value per scheme, identical in both copies by
+    /// construction, and `TasksBoardChipRowTests` resolves it and asserts exactly that.
+    /// It is composited off the CARD's colour rather than hand-picked, so when the card
+    /// moves (it did, R29) the capsule follows instead of drifting.
+    static let unselectedChipFillColor = UIColor { traits in
+        BoardBandCard.flatten(
+            UIColor.label.withAlphaComponent(
+                traits.userInterfaceStyle == .dark ? chipFillAlpha.dark : chipFillAlpha.light
+            ),
+            over: cardBaseColor,
+            traits: traits
+        )
+    }
+
+    /// `unselectedChipFillColor` as the colour the capsule fills with.
+    static let unselectedChipFill = Color(unselectedChipFillColor)
+
     // MARK: - The card's surface
 
     /// The OPAQUE base the card paints under its material, per colour scheme.
@@ -529,61 +645,150 @@ struct BoardBandBar: View {
     /// bare material measured 247.6 against the board's 253.0 page, a 5.4 delta: the card
     /// barely read as a surface at all.
     ///
-    /// So: light mode gets `secondarySystemBackground` (a real step down from the white
-    /// page), and DARK MODE IS LEFT ALONE at `systemBackground` — the material over black
-    /// measured 26.1 and already reads, and lightening the base there would flatten the
-    /// same distinction from the other side. A `UIColor` with a trait provider rather than
-    /// two SwiftUI colours, so this stays ONE value both copies paint and a test can
-    /// resolve it per scheme.
-    static func cardBaseColor(dark: Bool) -> UIColor {
-        dark ? .systemBackground : .secondarySystemBackground
-    }
+    /// R29 REVERSES THE DIRECTION OF THE STEP, and it had to. The fix above stepped DOWN
+    /// from a white page (`secondarySystemBackground`, 242) because the board's page was
+    /// white. The board's page is `systemGroupedBackground` now — which in light mode is
+    /// that very same 242 — so keeping the old base would have made the bar's card
+    /// invisible, the exact defect it was written to fix, arrived at from the other side.
+    /// Dark mode is the same story: the old base was `systemBackground` (black) and the
+    /// page is black too.
+    ///
+    /// So the bar takes the BAND CARDS' own surface, and the delta comes for free in both
+    /// schemes (+11.3 light, +28.7 dark, measured): one card colour on the board means the
+    /// chips bar reads as another card in the same stack instead of as a bespoke panel.
+    ///
+    /// It also loses its `dark:` parameter in the move, and that is not tidying: a
+    /// per-scheme FUNCTION was how the light/dark asymmetry above was expressed, and
+    /// keeping one that ignored its argument would leave a knob that looks like it decides
+    /// something. One dynamic colour answers both schemes; a test resolves it per scheme.
+    static let cardBaseColor: UIColor = BoardBandCard.surfaceColor
 
     /// `cardBaseColor` as the dynamic colour the card actually fills with.
-    static let cardSurface = Color(UIColor { traits in
-        cardBaseColor(dark: traits.userInterfaceStyle == .dark)
-    })
+    static let cardSurface = Color(cardBaseColor)
 
-    /// The opaque base under the FILTERS control's own circle.
+    /// The FILTERS control's own circle, and the whole of it (the `.thickMaterial` that
+    /// used to ride over this base went with the card's material, R29).
     ///
-    /// `.thickMaterial` is not opaque in light mode — chips ghosted through the button
-    /// that is supposed to be detached from them. It also has to differ from
-    /// `cardBaseColor` in light mode, or the control stops reading as its own object: the
-    /// card steps DOWN from the page there, and this steps back up.
-    static let filtersControlBaseColor: UIColor = .systemBackground
+    /// Opaque, because the material was not in light mode and chips ghosted through the
+    /// button that is supposed to be detached from them. And it has to differ from
+    /// `cardBaseColor`, or the control stops reading as its own object sitting ON the card.
+    ///
+    /// R29 flips which way it differs. It was `systemBackground` (white) because the card
+    /// stepped DOWN from a white page; the card IS white in light mode now, so white would
+    /// dissolve the control into it. `tertiarySystemGroupedBackground` is the platform's
+    /// next step in the grouped family: 242 on a 255 card in light, 44 on a 28 card in
+    /// dark — a visible step in both, and in the same direction as every other recessed
+    /// control the OS draws inside a grouped card.
+    static let filtersControlBaseColor: UIColor = .tertiarySystemGroupedBackground
 
     /// `filtersControlBaseColor` as the colour the circle fills with.
     static let filtersControlSurface = Color(filtersControlBaseColor)
 
     var body: some View {
+        // The pin state is read HERE, in the bar's own body, and NOT inside the
+        // `GeometryReader` below. Two reasons, and the second one is a bug that would
+        // have been invisible:
+        //
+        //  - It is what registers the Observation dependency in THIS view rather than in
+        //    `TasksView.body`, which is the whole point of the latch (a crossing costs
+        //    44pt of chrome, not a board derive plus a List diff).
+        //  - A `GeometryReader`'s content closure is evaluated during LAYOUT, in its own
+        //    subgraph. Reading an observable there is betting that the dependency is
+        //    registered for a body that has already returned — and if that bet is wrong
+        //    the bar simply never swaps, which looks exactly like the empty-bar defect
+        //    this round is fixing. Reading it up here needs no bet.
+        let pinned = pinLatch.isPinned
         // The bar measures its CONTAINER once and hands the width to the arithmetic. A
         // `GeometryReader` is safe here precisely because the height is fixed: it fills
         // the proposal and never asks its content how tall to be, so there is no layout
         // feedback to converge.
-        GeometryReader { geo in
-            let layout = Self.rail.layout(
-                container: geo.size.width, placement: placement,
-                chips: chips, typeScale: Self.chipTypeScale(typeSize)
-            )
-            card(layout)
-                // The card's own inset — 0 inline (the List already did it), 16 pinned.
-                // Real layout, not `.offset`: an offset moves pixels while the reported
-                // frame lags behind them.
-                .padding(.leading, layout.card.minX)
-                .frame(width: geo.size.width, alignment: .leading)
+        return GeometryReader { geo in
+            // The EMPTY PINNED BAR fix, in two halves.
+            //
+            // (1) A degenerate width builds no scroll view at all
+            //     (`minimumUsableContainer`).
+            //
+            // (2) Once built, this instance is never thrown away by a pin crossing.
+            //     `TasksView` constructs BOTH copies unconditionally now and this
+            //     decides which is visible, so each copy holds exactly ONE
+            //     `UIScrollView` whose content is established once. The old shape
+            //     inserted the pinned copy conditionally, so every crossing
+            //     constructed a brand-new `ScrollViewReader`/`ScrollView` — and
+            //     `reveal()`, the only thing that touches the rail's content
+            //     position, was wired to selection/grouping/appear and nothing else,
+            //     so a scroll view that came up wrong stayed wrong until the overlay
+            //     was destroyed again.
+            //
+            // Hidden rather than absent: `.opacity(0)` keeps the frame (this row's
+            // height is fixed on purpose — a row that changed height mid-scroll moves
+            // every row under it) and `allowsHitTesting(false)` keeps the invisible copy
+            // from eating taps meant for the rows beneath the overlay.
+            //
+            // Keeping it out of the ACCESSIBILITY TREE takes both halves, and R29 shipped
+            // only one of them: `.accessibilityHidden(!drawing)` on the outside of a
+            // subtree whose own root says `.accessibilityElement(children: .contain)` does
+            // NOT remove the contained descendants — the hierarchy dump had two
+            // `board.bandBar`s and two `board.filters` at rest, the hidden copy sitting at
+            // [16,0]. A container that CONTAINS re-publishes its children whatever the
+            // wrapper says. So the fold is decided inside `card`, by the same `drawing`
+            // flag: `.contain` while it is the live copy, `.ignore` while it is not, which
+            // collapses the whole subtree into one element that `accessibilityHidden` can
+            // then actually remove.
+            //
+            // Note what is NOT done here: the copy is not removed from the hierarchy.
+            // `if drawing { bar }` would destroy and rebuild a `ScrollView` on every pin
+            // crossing, which is the empty-pinned-bar defect this shape exists to prevent.
+            // Both branches run the same modifier chain with different VALUES, so the
+            // view's identity never changes.
+            let floor = Self.minimumUsableContainer(placement)
+            let drawing = geo.size.width >= floor
+                && Self.drawsChips(
+                    placement: placement, pinned: pinned, chipCount: chips.count
+                )
+            if geo.size.width >= floor {
+                let layout = Self.rail.layout(
+                    container: geo.size.width, placement: placement,
+                    chips: chips, typeScale: Self.chipTypeScale(typeSize)
+                )
+                card(layout, drawing: drawing)
+                    // The card's own inset — 0 inline (the List already did it), 16
+                    // pinned. Real layout, not `.offset`: an offset moves pixels while
+                    // the reported frame lags behind them.
+                    .padding(.leading, layout.card.minX)
+                    .frame(width: geo.size.width, alignment: .leading)
+                    // The PINNED copy carries the board's own paper behind it, full
+                    // width, for the 44pt strip it occupies. The card is opaque already;
+                    // what this covers is the card's 16pt side margins, where rows used
+                    // to be visible level with the floating bar — the last place board
+                    // content could appear inside the chrome band once the navigation bar
+                    // itself went opaque (`TasksView`'s `toolbarBackground`).
+                    //
+                    // It is the SAME colour that sits behind the inline copy at rest
+                    // (`BoardBandCard.page`, the board's grouped backdrop — it was the
+                    // board's white sheet before R29), which is what keeps "the two copies
+                    // land on the same pixels" true through the hand-off instead of
+                    // trading a ghost for a visible seam. Inline gets nothing: it IS in
+                    // the content flow, and painting there would draw the page over the
+                    // page.
+                    .background(placement == .pinnedOverlay
+                        ? BoardBandCard.page : Color.clear)
+                    .opacity(drawing ? 1 : 0)
+                    .allowsHitTesting(drawing)
+                    .accessibilityHidden(!drawing)
+            }
         }
         .dynamicTypeSize(...Self.chipTypeCap)
         .frame(height: TasksChromeMetrics.bandBar)
     }
 
-    /// The card: an opaque surface under `.bar` material, rounded to `cardCornerRadius`,
-    /// holding the rail, the detached filters control and the hairline.
+    /// The card: one opaque surface, rounded to `cardCornerRadius`, holding the rail, the
+    /// detached filters control and the hairline.
     ///
     /// Identical in both copies, by construction — nothing here reads `placement`, which is
     /// what makes "same style at the flip" a property of the code rather than a promise in
     /// a comment (it was the latter until R27, and the audit found the corners and the
     /// contrast both popping).
-    private func card(_ layout: BoardBandBarLayout) -> some View {
+    private func card(_ layout: BoardBandBarLayout, drawing: Bool) -> some View {
         // A ZStack whose children are PLACED from the arithmetic, not an HStack whose
         // flexible child negotiates for what is left. The negotiated version is what
         // shipped, and it is why the rail's content ran under the button.
@@ -591,22 +796,24 @@ struct BoardBandBar: View {
             chipRail(layout)
                 .frame(width: layout.rail.width, height: layout.rail.height)
                 .padding(.leading, layout.rail.minX)
-            filtersControl
+            filtersControl(drawing: drawing)
                 .frame(width: layout.filters.width, height: layout.filters.height)
                 .padding(.leading, layout.filters.minX)
         }
         .frame(width: layout.card.width, height: layout.card.height, alignment: .topLeading)
-        // An OPAQUE base, then the material over it. Both halves are load-bearing: the
-        // base is what stops the pinned copy's contrast depending on the rows behind it
-        // (43.5 → 17.1 lum of capsule contrast at the flip) and what makes the card read
-        // as a surface in light mode at all (247.6 against a 253.0 page); the material
-        // over it is what keeps the bar looking like iOS chrome rather than a flat panel.
-        .background {
-            ZStack {
-                Self.cardSurface
-                Rectangle().fill(.bar)
-            }
-        }
+        // The card's paper, OPAQUE and nothing else — the `.bar` material that used to sit
+        // over this base is gone (R29).
+        //
+        // The base was introduced to stop the pinned copy's contrast depending on the rows
+        // behind it (43.5 → 17.1 lum of capsule contrast at the flip) and to make the card
+        // read as a surface in light mode at all; the material was what made a FLOATING
+        // panel look like iOS chrome. The bar is not a floating panel any more, it is one
+        // card in a stack of band cards, and an inset-grouped card is opaque colour. Left
+        // in, the material would also darken this card off the band cards' white by ~8
+        // grey — a visible mismatch between two things that are supposed to be the same
+        // object — and it is the last thing in the bar whose result depended on what was
+        // behind it, which is the defect class this whole surface exists to close.
+        .background(Self.cardSurface)
         // INSIDE the card's own bounds, which is the R26 hairline fix: as a List row
         // sibling it was subject to the row's content insets and stopped 11.7pt short
         // of the card on each side.
@@ -636,12 +843,31 @@ struct BoardBandBar: View {
         // (`contentShape` + `chipActivationX`). Anything reasoning about this bar from an
         // a11y frame is reasoning from the wrong number.
         .clipShape(RoundedRectangle(cornerRadius: layout.cardCornerRadius, style: .continuous))
-        // `children: .contain` BEFORE the container identifier. A container id REPLACES
-        // every descendant's, which is how the deleted letter rail shipped three
-        // elements all called `board.rail`. Every chip and filter value here is
-        // something automation taps by id.
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("board.bandBar")
+        // `children:` BEFORE the container identifier. A container id REPLACES every
+        // descendant's, which is how the deleted letter rail shipped three elements all
+        // called `board.rail`. Every chip and filter value here is something automation
+        // taps by id, so the LIVE copy must CONTAIN them.
+        //
+        // THREE modifiers say "and the other copy is not here", because one was not enough
+        // and the audit proved it twice:
+        //
+        //  - `.ignore` folds the non-drawing subtree into this single element, so the
+        //    chips and `board.filters` stop being published as their own elements.
+        //  - `.accessibilityHidden(!drawing)` (here AND on the outside, in `body`) asks for
+        //    the element itself to go.
+        //  - the IDENTIFIER is dropped, which is the one that always works. R29 shipped
+        //    hidden-only and the hierarchy still listed two `board.bandBar`s and two
+        //    `board.filters` at rest (the hidden copy at [0,0][402,280]); an element that
+        //    survives `hidden` but carries no id can no longer be matched by automation or
+        //    named by VoiceOver, so the DUPLICATE — which is the actual defect — is gone
+        //    whether the platform honours `hidden` or not.
+        //
+        // Not `if drawing { … }`: a structural branch would destroy and rebuild the rail's
+        // `ScrollView` on every pin crossing, which is the empty-pinned-bar defect. Same
+        // chain, different values.
+        .accessibilityElement(children: drawing ? .contain : .ignore)
+        .accessibilityHidden(!drawing)
+        .accessibilityIdentifier(drawing ? "board.bandBar" : "")
     }
 
     // MARK: - The chip rail
@@ -677,10 +903,11 @@ struct BoardBandBar: View {
             .contentShape(Rectangle())
             // The scroll affordance, and the reason a clipped chip no longer looks like
             // a bug: the trailing edge fades instead of slicing a capsule flat mid-word.
-            // A mask, not an overlay, because the background is `.bar` MATERIAL — no
-            // colour gradient can imitate it, but fading the chips reveals the real
-            // material underneath. Masks don't change hit testing, so a half-faded chip
-            // stays tappable.
+            // A mask, not an overlay: fading the chips reveals the real card surface
+            // underneath, where an overlaid gradient would be a second guess at that
+            // colour and would have to be re-guessed every time the card's own colour
+            // moves (it just did, R29). Masks don't change hit testing, so a half-faded
+            // chip stays tappable.
             //
             // It is honest in both directions now: `fadeWidth` is ZERO when the chips
             // fit (the old always-on mask dimmed the tail of a row that had nothing
@@ -716,6 +943,14 @@ struct BoardBandBar: View {
             // Selection moved (a tap here, or `TasksView` clearing it because the band
             // went away): follow it.
             .onChange(of: selected) { _, _ in reveal(in: reader, animated: true) }
+            // A rail width that ARRIVES LATE, which is the third layer of the
+            // empty-pinned-bar fix and the only one that can still save an instance
+            // whose scroll view was laid out into a viewport it cannot use. The other
+            // two prevent that from happening (`minimumUsableContainer` and one
+            // instance per copy); this one makes it recoverable if it does, because
+            // `reveal` is the ONLY thing in this file that touches the rail's content
+            // position and it was wired exclusively to selection, grouping and appear.
+            .onChange(of: layout.rail.width) { _, _ in reveal(in: reader, animated: false) }
             // A grouping switch replaces every chip at once (`focus` → `proj:marina`)
             // and resets the selection to nil. When the selection was ALREADY nil,
             // `onChange(of: selected)` never fires, so without this the row would stay
@@ -780,8 +1015,10 @@ struct BoardBandBar: View {
             // readable peek (`minimumReadablePeek`).
             .frame(maxWidth: maxWidth, alignment: .leading)
             .foregroundStyle(isSelected ? Theme.onTint : Self.unselectedChipLabel)
+            // Both fills are CONCRETE colours: the lit chip's tint, and one opaque grey
+            // for the rest (`unselectedChipFillColor` — never a material, see its header).
             .background(
-                isSelected ? AnyShapeStyle(Theme.tint) : AnyShapeStyle(.quaternary),
+                isSelected ? AnyShapeStyle(Theme.tint) : AnyShapeStyle(Self.unselectedChipFill),
                 in: Capsule()
             )
             .contentShape(Capsule())
@@ -812,7 +1049,12 @@ struct BoardBandBar: View {
     /// sizes, because a menu cannot scroll — see `filtersPresentation`. The control itself
     /// is one view either way (`filtersLabel`), so nothing about the bar changes with the
     /// type size except what opening it presents.
-    private var filtersControl: some View {
+    ///
+    /// It takes `drawing` for one reason only: its identifier. A `Menu` is UIKit-backed, and
+    /// the copy that is not drawing published `board.filters` from inside a subtree the
+    /// outer `accessibilityHidden` had already been asked to remove. Dropping the id is what
+    /// makes the duplicate unmatchable (see `card`).
+    private func filtersControl(drawing: Bool) -> some View {
         Group {
             switch Self.filtersPresentation(typeSize) {
             case .sheet:
@@ -831,11 +1073,15 @@ struct BoardBandBar: View {
                 }
             }
         }
-        .accessibilityIdentifier("board.filters")
+        .accessibilityIdentifier(drawing ? "board.filters" : "")
+        .accessibilityHidden(!drawing)
         // A real name for the glyph, and the current values as its VALUE, so VoiceOver
-        // says what the filters are set to without opening the menu.
-        .accessibilityLabel("Filters")
-        .accessibilityValue("\(grouping.label), \(dateFilter.label)")
+        // says what the filters are set to without opening the menu — and NOTHING in the
+        // copy that is not drawing, for the same reason its identifier is empty: a
+        // hierarchy dump proved the platform keeps publishing this UIKit-backed subtree,
+        // so a flow (or VoiceOver) matching the WORD "Filters" would otherwise find two.
+        .accessibilityLabel(drawing ? "Filters" : "")
+        .accessibilityValue(drawing ? "\(grouping.label), \(dateFilter.label)" : "")
         .sheet(isPresented: $showFiltersSheet) { filtersSheet }
     }
 
@@ -848,16 +1094,12 @@ struct BoardBandBar: View {
                 width: Self.rail.filtersControlWidth,
                 height: Self.rail.filtersControlHeight
             )
-            // OPAQUE base, then the material — the same order the card uses, for the same
-            // reason. `.thickMaterial` alone is NOT opaque in light mode (measured: chips
-            // ghosted through the control that is supposed to be detached from them), and
-            // "thick" is easy to misread as "solid".
-            .background {
-                ZStack {
-                    Circle().fill(Self.filtersControlSurface)
-                    Circle().fill(.thickMaterial)
-                }
-            }
+            // ONE opaque fill. `.thickMaterial` used to ride over this base and is gone
+            // with the card's (R29): the material is not opaque in light mode (measured:
+            // chips ghosted through the control that is supposed to be detached from them)
+            // and "thick" is easy to misread as "solid", so all it added was a colour that
+            // depended on what was behind it — inside a card, that is the chips.
+            .background { Circle().fill(Self.filtersControlSurface) }
             .overlay(Circle().strokeBorder(Color(.separator), lineWidth: 0.5))
             // The circle is 34pt; the TOUCH is the bar's full height.
             .frame(width: Self.rail.filtersControlWidth, height: TasksChromeMetrics.bandBar)

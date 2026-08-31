@@ -26,6 +26,19 @@ import SwiftUI
 /// `SessionLaunchContext` (the same handoff the sheet uses) and the conversation
 /// page paints it immediately while the CLI comes up.
 struct NewSessionChatView: View {
+    /// The task this draft is FOR, when it was opened from one (nil = the toolbar's
+    /// task-less New Session).
+    ///
+    /// It rides the create call, and that is a correctness fix rather than a
+    /// convenience: this page used to send `taskId: nil` unconditionally, so a draft
+    /// reached from a TASK ROW created a session no task points at. On a task that
+    /// already had a session — which is exactly what a mis-routed board tap produced
+    /// when the server's session list dropped older rows — that is a silent second,
+    /// orphan session.
+    var taskId: String? = nil
+    /// Its title, for the one line that states the link. Display only.
+    var taskTitle: String? = nil
+
     /// Called with the pre-seeded session once the launch is accepted; the
     /// presenter swaps this page for the session's conversation page.
     let onCreated: (WalnutSession) -> Void
@@ -124,6 +137,20 @@ struct NewSessionChatView: View {
                         ProgressView().controlSize(.small)
                         Text("Starting the session…").font(.subheadline).foregroundStyle(.secondary)
                     }
+                }
+                // States the LINK when this draft came from a task. It is not
+                // decoration: the same fact is what stops the launch creating an
+                // orphan session, so showing it is how the user can see that the
+                // draft is about the row they tapped and not a stray new task.
+                if let taskId, !taskId.isEmpty {
+                    Label(
+                        taskTitle.map { "This session will be linked to “\($0)”" }
+                            ?? "This session will be linked to the task you started from",
+                        systemImage: "link"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("newSessionChat.linkedTask")
                 }
                 if !cwd.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
@@ -346,7 +373,10 @@ struct NewSessionChatView: View {
                 cwd: cwd,
                 host: host,
                 message: text,
-                taskId: nil,
+                // The originating task, when this draft came from one. `nil` (the
+                // toolbar entrance) keeps the server's own behaviour: it creates the
+                // task that owns the new session.
+                taskId: taskId,
                 // bypass is the server default; send nil so an older server
                 // behaves identically.
                 mode: mode == .bypass ? nil : mode.rawValue,
@@ -359,13 +389,18 @@ struct NewSessionChatView: View {
             AppLog.info("session", "created session from chat draft", [
                 "sessionId": created.sessionId, "host": host, "mode": mode.rawValue,
                 "model": model ?? "default",
+                // Logged because "which task owns this session" is the thing that used
+                // to be silently nothing on every draft.
+                "taskId": created.taskId, "linkedTaskId": taskId ?? "-",
             ])
             let now = ISO8601DateFormatter().string(from: Date())
             let session = WalnutSession(
                 id: created.sessionId,
                 title: created.title,
                 taskId: created.taskId,
-                taskTitle: created.title,
+                // The task's real title when this draft was about one; the server's
+                // echo (which for a task-less draft IS the new task's title) otherwise.
+                taskTitle: taskTitle ?? created.title,
                 project: nil,
                 host: host,
                 // 'idle' matches the server's pre-seeded record: 'running' would

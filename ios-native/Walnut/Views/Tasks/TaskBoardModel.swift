@@ -2,10 +2,15 @@ import Foundation
 
 // MARK: - The board's data model, as pure values
 //
-// The board is ONE list of tasks grouped by pin tier. A task that HAS a session
+// The board is the PINNED WORKING SET: one list of pinned tasks grouped by pin
+// tier (or by project, when the bar's filter says so). A task that HAS a session
 // shows that session's state on the same row and expands into it — there is no
 // second "session" object on this screen, and no card. That is the whole point:
 // a session is a task that has a session, so one row type carries both.
+//
+// "Pinned working set" is a HARD boundary, not a default: nothing here may walk
+// the task store to decide what a band contains. See the section above
+// `boardTier` for what that replaced and why.
 //
 // Every rule that decides what a band contains, in what order, what a row says,
 // and what a tapped tier token does is a static function over plain values here,
@@ -17,6 +22,39 @@ import Foundation
 struct BoardRow: Identifiable, Equatable {
     var task: WalnutTask?
     var session: WalnutSession?
+
+    /// The session ids the OWNING TASK reports (`GET /v1/tasks/:id` → `session_ids`),
+    /// or nil when the phone has never read this task's detail.
+    ///
+    /// THREE-VALUED, and each value is a different answer rather than a shade of the
+    /// same one:
+    ///
+    ///  - `nil` — unknown. The slim list projection (`GET /v1/tasks`) carries no
+    ///    `session_ids` at all, so this is the state every row starts in.
+    ///  - `[]` — asked and learned: this task has never had a session.
+    ///  - non-empty — asked and learned: it HAS sessions, and `session` above is nil
+    ///    only because the session LIST does not carry them (a session old enough to
+    ///    have left the list, which is exactly the case that shipped as a bug).
+    ///
+    /// The distinction is what lets a tap on a row with no hydrated session open the
+    /// session it actually has instead of a New Session draft (`BoardModel.tapRoute`),
+    /// and what lets the row say it has history instead of "no session yet"
+    /// (`BoardModel.state`). Collapsing unknown into "none" is the defect: the phone
+    /// then states, on no evidence, that a task with 30 sessions has never had one.
+    var knownSessionIds: [String]? = nil
+
+    /// True when this row is known to have a session — hydrated, or known by id.
+    ///
+    /// A BOOL over a three-valued field, so it answers only the first question ("is there a
+    /// session to open") and deliberately cannot answer the second ("do we know there isn't
+    /// one"). Nothing may phrase a user-facing affordance from it directly: the menu label and
+    /// the row's accessibility hint go through `BoardModel.affordance`, which keeps unknown
+    /// separate — reading `!hasKnownSession` as "no session" is what offered "Start Session"
+    /// on tasks that already had sessions.
+    var hasKnownSession: Bool {
+        if session != nil { return true }
+        return BoardModel.newestSessionId(knownSessionIds) != nil
+    }
 
     /// The task this row is ABOUT, whether or not the projection carries that task.
     ///
@@ -45,9 +83,14 @@ struct BoardRow: Identifiable, Equatable {
     /// ONE id space: the owning task id whenever it is resolvable (from the task, or
     /// from the session's own `task_id` when the projection lacks the task), and the
     /// session id only for a session that owns nothing. Uniqueness survives because
-    /// the band assembly emits a task-driven row and a session-only row for the same
-    /// task id by construction never both happen — `unfiledRows` and `projectBands`
-    /// each skip a session whose task the projection already rendered.
+    /// the population walk in `bands` keys everything by row id in ONE dictionary, so
+    /// a task-driven row and a session-only row for the same task id cannot both
+    /// exist: the session pass skips any id the task pass already placed.
+    ///
+    /// On the pinned-only board a session that owns NOTHING has no row at all (there
+    /// is no task to be pinned), so the session-id fallback survives only for the
+    /// row shapes tests construct directly. It stays because the id space must not
+    /// depend on which caller built the row.
     var id: String { owningTaskId ?? session?.id ?? "" }
 
     var title: String {
@@ -80,7 +123,17 @@ enum BoardRowState: Equatable {
     case ended
     /// The CLI died badly.
     case failed
-    /// No session has ever run for this task.
+    /// The task HAS a session, known by id only: the session list the phone holds does
+    /// not carry it, so there is no `process_status` to report — just history.
+    ///
+    /// It is a state of its own because the two honest facts here differ from every
+    /// other case: we know work happened, and we do NOT know how it ended. Folding it
+    /// into `.ended` would invent an ending; folding it into `.none` (what shipped)
+    /// makes the dot and the word vanish, so a task with sessions reads as sessionless
+    /// and its row's tap looks like it should start one.
+    case earlierSession
+    /// No session has ever run for this task — or nothing has told the phone otherwise
+    /// yet (see `BoardRow.knownSessionIds`).
     case none
 
     /// Leading word shown on the row and in the expanded strip.
@@ -91,9 +144,14 @@ enum BoardRowState: Equatable {
         case .handedBack: return "handed back"
         case .ended: return "session ended"
         case .failed: return "session failed"
+        case .earlierSession: return "earlier session"
         case .none: return "no session yet"
         }
     }
+
+    /// True when the row is about work that exists (as opposed to work never started).
+    /// The trailing dot draws for exactly these.
+    var hasSession: Bool { self != .none }
 }
 
 /// How the board groups its rows — the phone's half of the desktop's grouping
@@ -145,9 +203,22 @@ struct BoardBand: Identifiable, Equatable {
     /// on the heading so hiding is never a silent disappearance.
     let hiddenDone: Int
     /// What the foot's `+` creates, or nil for a band with no create affordance.
-    /// The tail band has none on purpose: it is the COMPLEMENT of the others, so
-    /// "create here" has no destination to mean.
+    ///
+    /// Every band the board renders has one now: a tier band files into its tier, a
+    /// project band into its project. The optional survives because it is what let
+    /// the retired tail band (the COMPLEMENT of the others, so "create here" had no
+    /// destination to mean) say so in DATA rather than have the view infer it from
+    /// the band's id — the mistake that shipped `focus_tier: "proj:marina"`.
     let createSeed: NewTaskSeed?
+    /// Set only on a FOLDER band: which project heading this band nests under, and
+    /// whether this band is the one that draws that heading. nil on every other band,
+    /// which is what makes "the board nests" a property of the DATA rather than
+    /// something the layout infers from a band id (see `BoardBandNest`).
+    ///
+    /// A `var` with a default so the memberwise initializer keeps its existing shape:
+    /// every band the tier grouping builds, and every project band the flat fallback
+    /// builds, is constructed exactly as before.
+    var nest: BoardBandNest? = nil
 
     var id: String { bandId }
     /// The heading's number is what you can actually SEE in the band — toggling
@@ -156,24 +227,129 @@ struct BoardBand: Identifiable, Equatable {
     var count: Int { rows.count }
 }
 
+/// Where a FOLDER band sits in the project → folder tree.
+///
+/// The board is a flat `[BoardBand]` and stays one, deliberately: the chips, the chip
+/// filter, the scroll anchors, the `hide done` set and the search dedup are all defined
+/// over that one array, and a second container would give every one of them a second
+/// shape to handle. So the nesting is carried as metadata ON the band, and the only thing
+/// the layout does with it is draw the heading differently (indented, under a rail) and —
+/// on the band that leads its project — draw the project's own heading above it.
+struct BoardBandNest: Equatable {
+    /// The folder's `group_id`. Carried explicitly so the folder heading's accessibility
+    /// identifier (`board.folder.<slug>`) comes from the FOLDER, not from parsing the
+    /// band id apart — the mistake that shipped `focus_tier: "proj:marina"`.
+    let folderId: String
+    /// The project band this folder belongs under (`proj:<name>`), which is also the id
+    /// the project heading is addressed by.
+    let projectBandId: String
+    /// The project's display label ("Inbox" for the empty project).
+    let projectLabel: String
+    /// This band draws the PROJECT heading above its own.
+    ///
+    /// True only when no earlier band in the rendered array already drew it, which is
+    /// how a project whose loose band is empty (every pinned row filed in a folder)
+    /// still gets a project heading, and how a chip that selects a single folder band
+    /// keeps its context. Computed in ONE place (`BoardModel.relead`) so the builder and
+    /// the chip filter cannot disagree.
+    var leadsProject: Bool
+}
+
+/// task → folder, and folder → label, inverted ONCE from `GET /tasks/groups`.
+///
+/// It exists because the wire has no other answer: `ProjectedTask` (what `GET /v1/tasks`
+/// serves) carries no `group_id`, so the only way to know which folder a row is in is to
+/// invert every folder's `member_ids`. Doing that per band rebuild would be a walk over
+/// the whole membership on every keystroke, so the store builds this on adoption and the
+/// board is handed the finished dictionaries.
+///
+/// `folderOf` being a DICTIONARY is load-bearing, not incidental: it makes "which folder
+/// claims this row" single-valued, so a task that (through server-side drift) appears in
+/// two folders' `member_ids` still gets exactly ONE band. That is what keeps the union of
+/// the project bands equal to the tier bands' row set — the invariant a duplicated row
+/// would break in the most confusing possible way (the same task, twice, on one screen).
+struct BoardFolderIndex: Equatable {
+    /// taskId → folder id.
+    let folderOf: [String: String]
+    /// folder id → display label.
+    let labelOf: [String: String]
+
+    static let empty = BoardFolderIndex(folderOf: [:], labelOf: [:])
+
+    /// True when there is no hierarchy to draw — the flat by-project board.
+    var isEmpty: Bool { folderOf.isEmpty && labelOf.isEmpty }
+
+    static func build(_ folders: [TaskFolder]) -> BoardFolderIndex {
+        var folderOf: [String: String] = [:]
+        var labelOf: [String: String] = [:]
+        labelOf.reserveCapacity(folders.count)
+        for folder in folders {
+            guard !folder.groupId.isEmpty else { continue }
+            // A folder with no label still needs one — its id is ugly but addressable,
+            // and a blank heading would read as a rendering bug.
+            labelOf[folder.groupId] = folder.label.isEmpty ? folder.groupId : folder.label
+            for taskId in folder.memberIds where !taskId.isEmpty {
+                folderOf[taskId] = folder.groupId
+            }
+        }
+        return BoardFolderIndex(folderOf: folderOf, labelOf: labelOf)
+    }
+}
+
 enum BoardModel {
 
-    /// Trailing band for every task NO tier claims.
+    /// The band a PINNED row falls into when nothing more specific claims it.
     ///
-    /// This band is the board's completeness guarantee, and it was originally
-    /// much narrower ("live work that is not pinned", session-gated). That
-    /// version had a hole big enough to lose a task in: the bands above are
-    /// built from the tier split, so a task with no tier had a row ONLY if it
-    /// also had a live session. Create a task, have the tier write not land (or
-    /// land and then get overwritten by a split that hasn't caught up), and the
-    /// task existed in the store, in search, in every other view — and was
-    /// absent from the one screen whose whole job is showing tasks. The user hit
-    /// exactly that: "I created a task in Pinned and it just disappeared."
+    /// The server's own default, ported verbatim from `TasksStore.tierMap` ("any
+    /// pinned id missing from every bucket is satellite by definition"), so a pin
+    /// whose split has not landed yet lands in the band the split is about to put
+    /// it in — the row does not visibly hop when the authoritative split arrives.
+    static let defaultTierId = "satellite"
+
+    // MARK: - What is ON this board (the PINNED working set, and nothing else)
+    //
+    // The board used to end in a trailing "Everything else" band holding the
+    // COMPLEMENT of every tier, which on the real store was 2,903 of 3,161 rows —
+    // it fetched, joined, filtered, sorted and COUNTED the whole task store on
+    // every body pass, and the chip row advertised the result as "All 3,175".
+    //
+    // The user's question retired it: "已经有 pin 了,为什么还会有 all task" — the
+    // board IS the pinned working set, so a task that is not pinned has no row
+    // here. `All` now means the whole PINNED board, and its count is the board's
+    // own row count. Everything else is reachable through search, which is a
+    // server query over the store rather than a client-side walk of it.
+    //
+    // The completeness guarantee that mattered SURVIVES, one scope smaller, and
+    // this is the line to keep reading before touching `boardTier`: a PINNED task
+    // can never be missing from this board. That was the original bug ("I created
+    // a task in Pinned and it just disappeared"), and every way a pin can be known
+    // — the tier map, the tier ORDER arrays, the projection's own `pinned` flag —
+    // puts the task in a band. A tier decides WHICH band, never WHETHER.
+
+    /// Which band a row belongs to on the pinned board, or nil when the row does
+    /// not belong on the board at all.
     ///
-    /// The rule now is the one a task list can actually promise: a task is on
-    /// this board, full stop. A tier decides WHICH band, never WHETHER.
-    static let activeTierId = "unpinned"
-    static let activeLabel = "Everything else"
+    /// - Parameters:
+    ///   - pinned: the slim projection's own pin flag.
+    ///   - splitTier: the tier the tier split names for this row, from EITHER half
+    ///     of the split (the `taskId → tier` map, or the per-tier order arrays).
+    ///     Both are consulted because dropping an id one half names and the other
+    ///     has not caught up with is exactly how a row goes missing.
+    ///   - knownTiers: the tier ids the board actually renders (built-ins plus the
+    ///     registered custom tiers). A tier id outside that set — a custom tier
+    ///     deleted while a task still pointed at it — folds to the default rather
+    ///     than naming a band nothing draws, which would drop the row silently.
+    static func boardTier(
+        pinned: Bool?, splitTier: String?, knownTiers: Set<String>
+    ) -> String? {
+        if let splitTier, !splitTier.isEmpty {
+            return knownTiers.contains(splitTier) ? splitTier : defaultTierId
+        }
+        // No tier anywhere: the pin flag is the only thing left that can say the
+        // task is on the board, and it is enough.
+        guard pinned == true else { return nil }
+        return defaultTierId
+    }
 
     // MARK: - Session join ("a session IS a task that has a session")
 
@@ -189,9 +365,34 @@ enum BoardModel {
         return latest
     }
 
+    /// The NEWEST session id in a task's `session_ids`, or nil when there is none.
+    ///
+    /// LAST wins, and that is the server's own order rather than a guess: every link
+    /// path appends (`task.session_ids.push(sessionId)`), so the array is in link
+    /// order and its tail is the most recent session. Blank entries are skipped — a
+    /// slot that was cleared server-side leaves an empty string, and opening `""`
+    /// would be a 404 dressed up as a destination.
+    static func newestSessionId(_ ids: [String]?) -> String? {
+        guard let ids else { return nil }
+        for id in ids.reversed() {
+            let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return nil
+    }
+
     /// Row state from the projection's own fields (see BoardRowState).
-    static func state(task: WalnutTask?, session: WalnutSession?) -> BoardRowState {
-        guard let session else { return .none }
+    ///
+    /// `knownSessionIds` is the task's own `session_ids` when the phone has read them
+    /// (nil = never asked). It only matters when there is no hydrated session: a task
+    /// that HAS sessions the session list does not carry is `.earlierSession`, not
+    /// `.none`, because "no session yet" would be a statement the data contradicts.
+    static func state(
+        task: WalnutTask?, session: WalnutSession?, knownSessionIds: [String]? = nil
+    ) -> BoardRowState {
+        guard let session else {
+            return newestSessionId(knownSessionIds) != nil ? .earlierSession : .none
+        }
         // AGENT_COMPLETE outranks the process state on purpose: a CLI can sit
         // idle for hours after handing back, and "waiting" would bury the one
         // row that needs a human.
@@ -202,6 +403,190 @@ enum BoardModel {
         case .error: return .failed
         case .stopped, .unknown: return .ended
         }
+    }
+
+    // MARK: - Where a row's TAP goes
+    //
+    // The row has ONE tap and it is a destination, not a menu (see TaskBoardRow). So
+    // this is the whole routing decision for the board, as a pure function over the
+    // row — the view performs it and decides nothing.
+    //
+    // It exists because the version it replaces was `if let session = row.session {
+    // push } else { showNewSession }`, i.e. "the session list does not carry a session
+    // for this task" read as "this task has never had one". Those are different facts,
+    // and a server projection that dropped older sessions turned the difference into a
+    // shipped bug: a tap on a pinned task with a real session opened a NEW SESSION
+    // DRAFT, which (with `taskId: nil`) would have manufactured a second, orphan
+    // session on an already-sessioned task.
+    //
+    // The server no longer drops those rows. This is the second line of defence, and
+    // it earns its place for a case that is not a bug at all: a session old enough to
+    // have left the list legitimately (retention) still leaves a task whose
+    // `session_ids` name it, and that session is still openable BY ID.
+
+    /// What a New Session draft must carry so it can never orphan a session.
+    ///
+    /// A draft reached from a TASK ROW is always about that task, so the task rides
+    /// along and `POST /v1/sessions` links the new session to it. The bug this closes
+    /// is quiet: an unlinked draft creates a second session that no task points at, on
+    /// a task that already had one.
+    ///
+    /// `Identifiable` so it can BE the sheet's item (`.sheet(item:)`) rather than a
+    /// second `@State` beside a Bool — two values that must agree about one sheet is
+    /// how a sheet opens with the previous row's task attached.
+    struct BoardDraftSeed: Equatable, Identifiable {
+        /// The task the draft links to, or nil for the toolbar's task-less New Session.
+        let taskId: String?
+        /// Its title, for the draft's own "this will be linked to …" line.
+        let taskTitle: String?
+
+        /// The toolbar's draft: no task, nothing to link.
+        static let unattached = BoardDraftSeed(taskId: nil, taskTitle: nil)
+
+        var id: String { taskId ?? "__unattached__" }
+    }
+
+    /// Where a tapped row goes.
+    ///
+    /// Each case carries everything the view needs to perform it, including the DRAFT
+    /// FALLBACK for the two cases that can fail — so a failed lookup lands in a draft
+    /// that is still attached to the task, and the view cannot invent a different one.
+    enum BoardTapRoute: Equatable {
+        /// The session list has the session: push it.
+        case open(WalnutSession)
+        /// The task names sessions the list does not carry: fetch this one BY ID and
+        /// push it (`GET /v1/sessions/:id`).
+        case resolve(sessionId: String, draftFallback: BoardDraftSeed)
+        /// Nothing knows yet whether this task has sessions (the slim list projection
+        /// carries no `session_ids`): ask the task's own detail, THEN route.
+        case probe(taskId: String, draftFallback: BoardDraftSeed)
+        /// Known sessionless: start a draft, attached to the task.
+        case draft(BoardDraftSeed)
+    }
+
+    /// The draft a row would start — used for the `.draft` route and as the fallback
+    /// carried by the two routes that can fail.
+    static func draftSeed(_ row: BoardRow) -> BoardDraftSeed {
+        BoardDraftSeed(
+            taskId: row.owningTaskId,
+            // The row's own title, which for a session-only row is the session's —
+            // still the honest name of the work the draft is about.
+            taskTitle: row.title.isEmpty ? nil : row.title
+        )
+    }
+
+    static func tapRoute(_ row: BoardRow) -> BoardTapRoute {
+        let fallback = draftSeed(row)
+        if let session = row.session { return .open(session) }
+        if let sessionId = newestSessionId(row.knownSessionIds) {
+            return .resolve(sessionId: sessionId, draftFallback: fallback)
+        }
+        // Unknown (never asked) vs learned-empty. Only the FIRST is worth a request:
+        // once a task's detail has said it has no sessions, tapping it opens the draft
+        // with no round trip at all.
+        if row.knownSessionIds == nil, let taskId = row.owningTaskId, !taskId.isEmpty {
+            return .probe(taskId: taskId, draftFallback: fallback)
+        }
+        return .draft(fallback)
+    }
+
+    // MARK: - What a row is ALLOWED TO SAY about its session
+    //
+    // The route above is three-valued and the WORDS on the screen were two-valued, which is
+    // the whole defect: `row.hasKnownSession ? "Open Session" : "Start Session"` reads the
+    // ledger's `nil` (nobody has asked yet) as `[]` (asked, and there are none), so a task
+    // that HAS sessions was offered "Start Session" on a long press — and a user who takes
+    // that offer gets a SECOND session on an already-sessioned task, which is the duplicate
+    // this board's tap routing exists to prevent.
+    //
+    // The board loads in the unknown state for every row: `GET /v1/tasks` carries no
+    // `session_ids`, and only a task's own detail or the tap probe fills the ledger in. So
+    // unknown is not an edge case at all — it is what the first screen looks like — and the
+    // honest thing to say there is NEITHER promise.
+
+    /// What a row may claim about the session behind it, from the three-valued ledger.
+    ///
+    /// The three cases are the three answers, in the same shape `BoardTapRoute` has: a row
+    /// that KNOWS it has a session (hydrated, or by id) offers to open it, a row that has
+    /// LEARNED it has none offers to start one, and a row that has not asked yet offers a
+    /// neutral "Open" — which is exactly what its tap does (probe, then open the session it
+    /// finds, or a draft attached to the task).
+    enum SessionAffordance: Equatable {
+        /// Known to have a session — hydrated, or named by id.
+        case open
+        /// Asked and learned: this task has never had a session.
+        case start
+        /// Nobody has asked yet. Says nothing it cannot back up.
+        case unknown
+
+        /// The long-press menu's first item.
+        ///
+        /// Sentence-free Title Case, matching the rest of this board's menu ("Mark as Done",
+        /// "Move to Tier"). The unknown case drops the NOUN rather than inventing a new verb:
+        /// "Open" claims a destination exists without claiming what kind, and it is the one
+        /// word a menu can say before the answer is known.
+        var menuLabel: String {
+            switch self {
+            case .open: return "Open Session"
+            case .start: return "Start Session"
+            case .unknown: return "Open"
+            }
+        }
+
+        /// The menu item's glyph. Neutral for `unknown` for the same reason the word is: a
+        /// speech bubble promises a conversation that may not exist, and a play triangle
+        /// promises a fresh start that may be a duplicate.
+        var menuIcon: String {
+            switch self {
+            case .open: return "bubble.left.and.text.bubble.right"
+            case .start: return "play.circle"
+            case .unknown: return "arrow.up.forward.app"
+            }
+        }
+
+        /// The row's VoiceOver hint. Same three answers, because a hint that promised what
+        /// the menu refused to promise would just move the defect to the screen reader.
+        var accessibilityHint: String {
+            switch self {
+            case .open: return "Open the session"
+            case .start: return "Start a session"
+            case .unknown: return "Open the session, or start one"
+            }
+        }
+    }
+
+    /// The affordance a row has earned.
+    ///
+    /// `nil` vs `[]` is the whole function, and it is deliberately NOT expressible through
+    /// `BoardRow.hasKnownSession` alone: that property is a Bool, so every caller that
+    /// branched on it collapsed unknown into "no session" by construction.
+    static func affordance(_ row: BoardRow) -> SessionAffordance {
+        if row.hasKnownSession { return .open }
+        return row.knownSessionIds == nil ? .unknown : .start
+    }
+
+    // MARK: - "This row wants a human" (the red row)
+
+    /// The desktop's rule, verbatim (`web/src/utils/session-status.ts`
+    /// `taskNeedsAction`): phase AGENT_COMPLETE and not done. Both surfaces have to
+    /// agree about what red means, so this is a port and not a reinterpretation.
+    ///
+    /// It covers more than "the agent finished": a session error drives the phase to
+    /// AGENT_COMPLETE, and so does a permission prompt or a question waiting for an
+    /// answer. All three are the same thing to the person scrolling — work stopped and
+    /// it is your turn.
+    ///
+    /// It lives HERE, next to `state`, rather than inside the row view, for the reason
+    /// every other rule on this screen does: it now decides a row's whole SURFACE
+    /// (`BoardRowSurface`, applied by `TaskBoardList`) as well as the row's own ink, and
+    /// two readers of one rule is exactly the shape that drifts into two rules. It takes
+    /// the optional task the row carries, so a session-only row (no task in the
+    /// projection) answers `false` rather than crashing or guessing — there is no phase
+    /// to read, and inventing one would paint a row red on no evidence.
+    static func needsHuman(_ task: WalnutTask?) -> Bool {
+        guard let task else { return false }
+        if task.isDone || task.phase == "COMPLETE" { return false }
+        return task.phase == "AGENT_COMPLETE"
     }
 
     /// Compact age ("2m", "1h", "3d") for the row's second line. A row shows
@@ -286,14 +671,28 @@ enum BoardModel {
         return out
     }
 
-    /// The whole board.
+    /// The whole board: every PINNED row, in bands.
+    ///
+    /// `tasks` is the full projection because that is where the rows' CONTENT lives,
+    /// not because every task gets one — the walk below reads each task once to ask
+    /// `boardTier` whether it is on the board, and builds nothing for the ones that
+    /// are not. If you are adding work here, that is the invariant to preserve: the
+    /// cost of an idle pass scales with the PINNED set, not with the store.
     ///
     /// - Parameters:
     ///   - tierOf: taskId → tier id (TasksStore.taskTiers).
     ///   - tierOrder: tier id → ordered task ids (the split's own arrays).
     ///   - grouping: tier bands (the board's own shape) or project bands (the
     ///     desktop's). Same rows either way — only the headings change.
+    ///   - folders: the project→folder hierarchy, used ONLY by project grouping. Empty
+    ///     (the default, and what a failed `/tasks/groups` leaves behind) produces the
+    ///     flat project bands this board drew before folders existed.
     ///   - dateFilter: "Now" hides work whose start date hasn't arrived.
+    ///   - knownSessionIds: taskId → the task's own `session_ids`, for the tasks whose
+    ///     detail the phone has read (`TasksStore.sessionIdsByTask`). A MISSING key is
+    ///     "never asked", which is not the same as "no sessions" — see
+    ///     `BoardRow.knownSessionIds`. Empty (the default) is the state a cold board
+    ///     starts in and every row behaves exactly as it did before this existed.
     ///   - hiddenDoneTiers: bands whose `hide done` is on. Done rows are dropped
     ///     from those bands only — everywhere else a completed task stays EXACTLY
     ///     where it was, struck through, because the position is the memory of
@@ -309,77 +708,155 @@ enum BoardModel {
         grouping: BoardGrouping = .tier,
         dateFilter: BoardDateFilter = .all,
         hiddenDoneTiers: Set<String> = [],
+        folders: BoardFolderIndex = .empty,
+        knownSessionIds: [String: [String]] = [:],
         now: Date = Date()
     ) -> [BoardBand] {
-        if grouping == .project {
-            return projectBands(
-                tasks: tasks, sessions: sessions, query: query,
-                dateFilter: dateFilter, hiddenDoneTiers: hiddenDoneTiers, now: now
-            )
-        }
         let sessionOf = latestSessionByTask(sessions)
-
-        // The lookup table holds only the tasks a band CAN contain — the ones some
-        // tier claims, from either source. Building it over the whole projection
-        // was a 2,000-entry dictionary per body pass to serve ~220 lookups, and at
-        // field scale the projection grows while the pinned board does not, so the
-        // wasted share only gets worse.
-        //
-        // Both sources are unioned rather than just the map, because dropping an
-        // id that the ORDER names but the map has not caught up with would silently
-        // hide a row. They agree today (one `adoptSplit`), and this keeps that an
-        // optimization rather than a dependency.
-        var wanted = Set(tierOf.keys)
-        for ids in tierOrder.values { wanted.formUnion(ids) }
-
-        // `extrasByTier` rides the same walk: it is the FALLBACK ordering for ids
-        // the split hasn't caught up with, kept in the tasks list's own (already
-        // sorted) order so it is stable.
-        var taskById: [String: WalnutTask] = [:]
-        var extrasByTier: [String: [String]] = [:]
-        taskById.reserveCapacity(wanted.count)
-        for task in tasks where wanted.contains(task.id) {
-            taskById[task.id] = task
-            if let tier = tierOf[task.id] {
-                extrasByTier[tier, default: []].append(task.id)
-            }
-        }
-
-        let ordered: [(id: String, label: String)] =
+        let tiers: [(id: String, label: String)] =
             TasksStore.builtinTiers.map { ($0.id, $0.label) }
             + customTiers.map { ($0.id, $0.label) }
+        let knownTiers = Set(tiers.map(\.id))
+
+        // What the SPLIT says, from both of its halves at once. The order arrays
+        // carry their tier as the dictionary key, so they can answer the question
+        // the map answers whenever the map has not caught up — and the map wins on
+        // (impossible) disagreement, because it is the half a local pin writes
+        // first. Dropping an id one half names and the other does not is how a row
+        // goes missing, which is the whole reason both are read.
+        var splitTierOf = tierOf
+        for (tier, ids) in tierOrder {
+            for id in ids where splitTierOf[id] == nil { splitTierOf[id] = tier }
+        }
+
+        // ONE walk over the projection, and it builds NOTHING for a task that is
+        // not on the board.
+        //
+        // That is the fix, stated as cost: the retired tail band constructed a
+        // `BoardRow` (a whole `WalnutTask` plus an optional `WalnutSession`) for
+        // every task no tier claimed, computed a sort key for each — which parses
+        // an ISO date — and then decorate-sorted ~2,800 of them, on EVERY body
+        // pass, so that a heading could print a number. Membership is now a
+        // dictionary lookup per task and the rows that get built are the ones that
+        // get drawn.
+        var rowById: [String: BoardRow] = [:]
+        var tierById: [String: String] = [:]
+        // Fallback order: the projection's own (already sorted) order, then the
+        // session-only rows. Ids the split has named come FIRST inside each band
+        // (that array is `pin_order`), so this only decides where the rest land.
+        var order: [String] = []
+        // Every id the projection carries, so a session can tell "the phone does
+        // not have this task" from "the phone has it and it is not pinned".
+        //
+        // Built EAGERLY, unlike the version this replaces. That one deferred it
+        // because the common shape never reached the check; with the board pinned
+        // only, most sessions belong to a task that is present and unpinned, so the
+        // deferral bought nothing and cost a branch nobody could reason about.
+        var projectionIds = Set<String>()
+        let capacity = splitTierOf.count + 8
+        rowById.reserveCapacity(capacity)
+        tierById.reserveCapacity(capacity)
+        order.reserveCapacity(capacity)
+        projectionIds.reserveCapacity(tasks.count)
+        for task in tasks {
+            projectionIds.insert(task.id)
+            guard let tier = boardTier(
+                pinned: task.pinned, splitTier: splitTierOf[task.id], knownTiers: knownTiers
+            ) else { continue }
+            // `knownSessionIds[task.id]` stays nil for a task nobody has asked about,
+            // which is the row's "unknown" state and NOT "no sessions" (see BoardRow).
+            rowById[task.id] = BoardRow(
+                task: task, session: sessionOf[task.id],
+                knownSessionIds: knownSessionIds[task.id]
+            )
+            tierById[task.id] = tier
+            order.append(task.id)
+        }
+
+        // A session whose owning task never reached the slim projection is still
+        // real work someone started, and it keeps a row — but only when the SESSION
+        // itself reports pinned, because on a pinned-only board that flag is the
+        // only evidence available that the missing task belongs here. It files into
+        // the tier the session reports (`focus_tier`), which is the same value the
+        // split would have given for that task.
+        //
+        // A session that owns no task at all has nothing to pin and therefore no
+        // band; it used to ride the tail, and 96 of them are a measured part of the
+        // "All 3,175" this change removes.
+        for session in sessions {
+            guard session.isPinned else { continue }
+            guard let taskId = session.taskId, !taskId.isEmpty else { continue }
+            // One row per task: only the LATEST session speaks for its owner.
+            guard sessionOf[taskId]?.id == session.id else { continue }
+            guard rowById[taskId] == nil else { continue }
+            // The projection HAS the task and the walk above declined it, so the
+            // task is known-unpinned. Its own flag outranks a session's memory.
+            guard !projectionIds.contains(taskId) else { continue }
+            let tier = boardTier(
+                pinned: true, splitTier: splitTierOf[taskId] ?? session.focusTier,
+                knownTiers: knownTiers
+            ) ?? defaultTierId
+            rowById[taskId] = BoardRow(
+                task: nil, session: session, knownSessionIds: knownSessionIds[taskId]
+            )
+            tierById[taskId] = tier
+            order.append(taskId)
+        }
+
+        if grouping == .project {
+            return projectBands(
+                rows: order.compactMap { rowById[$0] }, query: query,
+                dateFilter: dateFilter, hiddenDoneTiers: hiddenDoneTiers,
+                folders: folders, now: now
+            )
+        }
+        return tierBands(
+            rowById: rowById, tierById: tierById, order: order,
+            tiers: tiers, tierOrder: tierOrder, query: query,
+            dateFilter: dateFilter, hiddenDoneTiers: hiddenDoneTiers, now: now
+        )
+    }
+
+    /// The board grouped by pin tier — its native shape.
+    ///
+    /// `tierById` is the ONE answer to "which band owns this row", so a row can
+    /// never be drawn twice: a split bucket that still names a task some other tier
+    /// now claims is filtered out of that bucket, and the task appears in its own
+    /// band's fallback order instead. Membership and rendering read the same map,
+    /// which is what the retired tail band's `claimed` set existed to reconcile.
+    static func tierBands(
+        rowById: [String: BoardRow],
+        tierById: [String: String],
+        order: [String],
+        tiers: [(id: String, label: String)],
+        tierOrder: [String: [String]],
+        query: String,
+        dateFilter: BoardDateFilter,
+        hiddenDoneTiers: Set<String>,
+        now: Date
+    ) -> [BoardBand] {
+        var extrasByTier: [String: [String]] = [:]
+        for id in order {
+            guard let tier = tierById[id] else { continue }
+            extrasByTier[tier, default: []].append(id)
+        }
 
         var bands: [BoardBand] = []
-        // Ids a tier band actually RENDERED. The tail band takes its complement,
-        // so "claimed by a tier" and "shown in a tier" can never disagree — an id
-        // the map claims but no band could render (task gone from the projection,
-        // or filtered out) still gets its chance below instead of vanishing.
-        var claimed = Set<String>()
-
-        for tier in ordered {
-            let ids = orderedIds(
-                splitOrder: tierOrder[tier.id] ?? [],
-                extras: extrasByTier[tier.id] ?? []
-            )
+        for tier in tiers {
+            // The split's own order for this band, minus ids this band no longer
+            // owns (moved tier, or gone from the projection entirely).
+            let splitOrder = (tierOrder[tier.id] ?? []).filter { tierById[$0] == tier.id }
+            let ids = orderedIds(splitOrder: splitOrder, extras: extrasByTier[tier.id] ?? [])
             // ONE pass that builds, search-filters and counts. Three chained
             // `filter`/`count` calls over the same array is three walks and two
             // throwaway arrays per band per body pass; a band is rebuilt on every
             // keystroke, so the pass count is what the budget notices.
-            //
-            // A tier's bucket can name a task this projection no longer has
-            // (deleted elsewhere) — that id is skipped rather than rendered as
-            // an empty row.
             let hidingDone = hiddenDoneTiers.contains(tier.id)
             var rows: [BoardRow] = []
             rows.reserveCapacity(ids.count)
             var doneCount = 0
             for id in ids {
-                guard let task = taskById[id] else { continue }
-                let row = BoardRow(task: task, session: sessionOf[id])
-                // Claimed the moment a band OWNS the id, before the search
-                // filter: a query that hides the row must not push it into the
-                // tail band, which would render it twice as the query narrows.
-                claimed.insert(id)
+                guard let row = rowById[id] else { continue }
                 guard admits(row, query: query, dateFilter: dateFilter, now: now) else { continue }
                 if row.isDone {
                     doneCount += 1
@@ -395,28 +872,6 @@ enum BoardModel {
                 createSeed: NewTaskSeed.tier(tier.id)
             ))
         }
-
-        // The tail band honours `hide done` like every other band. It did not until
-        // 2026-08-29, and the asymmetry was the biggest one on the screen: this band
-        // holds the complement of every tier, which on the real board is 2,903 of 3,161
-        // rows, so the one band where a completed backlog actually buries the live work
-        // was the one band that could not fold it away.
-        let unfiled = unfiledRows(
-            tasks: tasks, sessions: sessions, sessionOf: sessionOf,
-            claimed: claimed, query: query, dateFilter: dateFilter,
-            hideDone: hiddenDoneTiers.contains(activeTierId), now: now
-        )
-        if !unfiled.rows.isEmpty || unfiled.hiddenDone > 0 {
-            bands.append(BoardBand(
-                bandId: activeTierId, label: activeLabel,
-                rows: unfiled.rows, hiddenDone: unfiled.hiddenDone,
-                // Still NO create affordance, and that stays deliberate: the band is
-                // the COMPLEMENT of the others, so "create here" has no destination to
-                // mean. Hiding done rows is a question about the rows you are looking
-                // at; creating is a question about where a new row would go.
-                createSeed: nil
-            ))
-        }
         return bands
     }
 
@@ -427,59 +882,64 @@ enum BoardModel {
     /// literally called "focus" would otherwise collide with the Focus tier.
     static let projectBandPrefix = "proj:"
 
-    /// The board grouped by project instead of by tier.
+    /// Band id prefix for a FOLDER band. Same reasoning as `projectBandPrefix`, one
+    /// level down: a folder's id shares the `hide done` set, the chip space and the
+    /// scroll-anchor space with every tier and project on the board.
+    static let folderBandPrefix = "folder:"
+
+    /// The heading the rows of a project that are in NO folder are drawn under.
     ///
-    /// Every row the tier grouping would show is here too — the tail band exists
-    /// there because tiers claim only a subset, while a project band is defined
-    /// over ALL tasks, so completeness comes for free and there is nothing left
-    /// over. A session with no owning task still needs somewhere to live, and it
-    /// files under the project the SESSION reports (Inbox when it reports none),
-    /// which is the same rule `BoardRow.project` already uses for its label.
+    /// It is the PROJECT's own heading, deliberately, and not a separate "No folder"
+    /// row: that is what the desktop console does (loose tasks sit directly under the
+    /// project header, folder clusters follow), and inventing an extra heading would
+    /// add a level to the tree that the data does not have.
     ///
-    /// Order inside a band: live work first, then recency, done last — the same
-    /// comparator the tail band uses, because with tier order gone (`pin_order`
-    /// is a tier concept) recency is the only ordering the data still carries.
+    /// # The one place this board's shape is worth arguing about
+    ///
+    /// The hierarchy is PROJECT → FOLDER → task, in that direction, and every layer of
+    /// the product agrees: `task_groups.project` makes a folder belong to exactly one
+    /// project (moving a task to another project CLEARS its folder server-side), the
+    /// console renders `todo-group-project-header` (solid icon, "project" tag) as the
+    /// outer row with folder headers indented inside it, and the field data is 60
+    /// folders across ~14 projects with no folder owning more than one project. Drawing
+    /// folders on the OUTSIDE would therefore shatter each project into as many
+    /// sections as it has folders — "By project" would stop grouping by project — so
+    /// the phone mirrors the console instead: projects outside, folders inside.
     static func projectBands(
-        tasks: [WalnutTask],
-        sessions: [WalnutSession],
+        rows source: [BoardRow],
         query: String,
         dateFilter: BoardDateFilter,
         hiddenDoneTiers: Set<String>,
+        folders: BoardFolderIndex = .empty,
         now: Date
     ) -> [BoardBand] {
-        let sessionOf = latestSessionByTask(sessions)
-        // Same decorate-sort-undecorate shape as `unfiledRows`, for the same
-        // reason: this grouping is defined over ALL tasks, so a bucket can be
-        // thousands of rows, and a `BoardRow` payload makes every swap copy two
-        // whole structs. Buckets hold indices into one flat `rows` array; the
-        // per-project sort moves Ints and Dates, and each row is copied exactly
-        // once, when its band is built.
+        // Decorate-sort-undecorate: a `BoardRow` payload makes every swap copy two
+        // whole structs (a `WalnutTask` plus an optional `WalnutSession`), so the
+        // buckets hold INDICES into one flat `rows` array — the per-project sort
+        // moves Ints and Dates, and each row is copied exactly once, when its band
+        // is built. Same shape `WalnutTask.openSorted` uses for the task list.
         var rows: [BoardRow] = []
-        rows.reserveCapacity(tasks.count)
-        var buckets: [String: [(index: Int, live: Bool, done: Bool, at: Date)]] = [:]
+        rows.reserveCapacity(source.count)
+        // project name → folder id ("" = the project's loose rows) → slots.
+        //
+        // TWO levels of dictionary and not a composite key, because the ORDER is
+        // computed per level: projects sort one way (Inbox, then A→Z), the folders
+        // inside a project another (loose first, then label A→Z), and a flat map keyed
+        // by a joined string would have to take the composite apart again to sort it.
+        var buckets: [String: [String: [(index: Int, live: Bool, done: Bool, at: Date)]]] = [:]
 
-        func add(_ row: BoardRow, at: Date, live: Bool) {
-            guard admits(row, query: query, dateFilter: dateFilter, now: now) else { return }
-            buckets[row.project, default: []].append((rows.count, live, row.isDone, at))
+        for row in source {
+            guard admits(row, query: query, dateFilter: dateFilter, now: now) else { continue }
+            let at = row.session?.lastActiveValue ?? row.task?.updatedAtValue ?? .distantPast
+            // `row.id` is the OWNING TASK id whenever one is resolvable (see
+            // `BoardRow.owningTaskId`), which is exactly the key the server's
+            // `member_ids` are expressed in — so a session-only row whose task is
+            // missing from the projection still lands in its folder.
+            let folderId = folders.folderOf[row.id] ?? ""
+            buckets[row.project, default: [:]][folderId, default: []].append((
+                rows.count, row.session?.statusKind.isAlive == true, row.isDone, at
+            ))
             rows.append(row)
-        }
-
-        for task in tasks {
-            let session = sessionOf[task.id]
-            add(BoardRow(task: task, session: session),
-                at: session?.lastActiveValue ?? task.updatedAtValue ?? .distantPast,
-                live: session?.statusKind.isAlive == true)
-        }
-        let taskIds = Set(tasks.map(\.id))
-        for session in sessions {
-            // Only the LATEST session speaks for its task, and a task in the
-            // projection already emitted its row above.
-            if let taskId = session.taskId, !taskId.isEmpty {
-                guard sessionOf[taskId]?.id == session.id, !taskIds.contains(taskId) else { continue }
-            }
-            add(BoardRow(task: nil, session: session),
-                at: session.lastActiveValue ?? .distantPast,
-                live: session.statusKind.isAlive)
         }
 
         // Inbox ("") leads, then projects A→Z — the same order the project
@@ -489,185 +949,120 @@ enum BoardModel {
             if a.isEmpty != b.isEmpty { return a.isEmpty }
             return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
         }
-        return names.compactMap { name in
-            let bandId = projectBandPrefix + name
-            let label = name.isEmpty ? NewTaskSeed.inboxHeader : name
-            let hidingDone = hiddenDoneTiers.contains(bandId)
-            let sorted = buckets[name, default: []].sorted { a, b in
-                if a.done != b.done { return !a.done }
-                if a.live != b.live { return a.live }
-                return a.at > b.at
+
+        var bands: [BoardBand] = []
+        for name in names {
+            let projectBandId = projectBandPrefix + name
+            let projectLabel = name.isEmpty ? NewTaskSeed.inboxHeader : name
+            let inProject = buckets[name] ?? [:]
+            // The project's LOOSE rows first (id `proj:<name>`, the shipped band id and
+            // the shipped accessibility ids), then its folders by label A→Z with the
+            // folder id as the tie-break so two folders sharing a name still order
+            // deterministically — an unstable order would make rows jump between two
+            // identical-looking headings on every rebuild.
+            let folderIds = inProject.keys.filter { !$0.isEmpty }.sorted { a, b in
+                let left = folders.labelOf[a] ?? a
+                let right = folders.labelOf[b] ?? b
+                if left != right { return left.localizedCaseInsensitiveCompare(right) == .orderedAscending }
+                return a < b
             }
-            let doneCount = sorted.count { $0.done }
-            let bandRows = (hidingDone ? sorted.filter { !$0.done } : sorted).map { rows[$0.index] }
-            guard !bandRows.isEmpty || doneCount > 0 else { return nil }
-            return BoardBand(
-                bandId: bandId, label: label,
-                rows: bandRows,
-                hiddenDone: hidingDone ? doneCount : 0,
-                // A project heading's `+` files into THAT project and leaves the
-                // pin unspecified — the same call `NewTaskSeed.project` already
-                // makes for the project sections on the other filters.
-                createSeed: NewTaskSeed.project(label)
-            )
+            for folderId in [""] + folderIds {
+                let isFolder = !folderId.isEmpty
+                let bandId = isFolder ? folderBandPrefix + folderId : projectBandId
+                let label = isFolder ? (folders.labelOf[folderId] ?? folderId) : projectLabel
+                let hidingDone = hiddenDoneTiers.contains(bandId)
+                let sorted = (inProject[folderId] ?? []).sorted { a, b in
+                    if a.done != b.done { return !a.done }
+                    if a.live != b.live { return a.live }
+                    return a.at > b.at
+                }
+                let doneCount = sorted.count { $0.done }
+                let bandRows = (hidingDone ? sorted.filter { !$0.done } : sorted).map { rows[$0.index] }
+                // Same rule as everywhere else on this board: a band with nothing to
+                // show is not rendered. That covers the project with no loose rows (its
+                // heading then rides the first folder band, see `relead`) and the empty
+                // folder the server lists but the pinned board has no rows for.
+                //
+                // One consequence, stated because it is a deliberate trade: a project
+                // whose every pinned row is filed in a folder has no loose band and
+                // therefore no create ring. That is the board's existing rule and not a
+                // new hole — an empty TIER has no heading and no ring either — and the
+                // ring comes back the moment the project has one loose pinned row.
+                guard !bandRows.isEmpty || doneCount > 0 else { continue }
+                bands.append(BoardBand(
+                    bandId: bandId, label: label,
+                    rows: bandRows,
+                    hiddenDone: hidingDone ? doneCount : 0,
+                    // A project heading's `+` files into THAT project and leaves the
+                    // pin unspecified — the same call `NewTaskSeed.project` already
+                    // makes for the project sections on the other filters.
+                    //
+                    // A FOLDER band has NO create affordance, and that is the honest
+                    // answer rather than a missing feature: v1 exposes no folder write
+                    // (and every folder write is 501 on a replica), so a ring here
+                    // could only file the task into the project — landing it OUTSIDE
+                    // the folder whose heading was tapped. A control that quietly does
+                    // something else is the `focus_tier: "proj:marina"` mistake again.
+                    createSeed: isFolder ? nil : NewTaskSeed.project(label),
+                    nest: isFolder ? BoardBandNest(
+                        folderId: folderId,
+                        projectBandId: projectBandId,
+                        projectLabel: projectLabel,
+                        // Filled in by `relead` below, in one place.
+                        leadsProject: false
+                    ) : nil
+                ))
+            }
+        }
+        return relead(bands)
+    }
+
+    /// Decide which band draws each project's heading.
+    ///
+    /// A folder band leads its project when nothing earlier in the array has already
+    /// drawn that heading — i.e. when the project's loose band was dropped for being
+    /// empty, or when a chip selection left only folder bands on screen. Run over the
+    /// BUILT array (and again after `filtered`) so the rule has exactly one definition:
+    /// the alternative is the builder deciding it and the chip filter silently
+    /// invalidating that decision, which shows up as a folder heading floating with no
+    /// project above it.
+    static func relead(_ bands: [BoardBand]) -> [BoardBand] {
+        var drawn = Set<String>()
+        return bands.map { band in
+            var band = band
+            guard var nest = band.nest else {
+                // A project (or tier) band IS its own heading.
+                drawn.insert(band.bandId)
+                return band
+            }
+            nest.leadsProject = !drawn.contains(nest.projectBandId)
+            drawn.insert(nest.projectBandId)
+            band.nest = nest
+            return band
         }
     }
 
-    /// Every task no tier band claimed, plus sessions with no owning task at all
-    /// (older rows). Live work first, then the rest by recency.
-    ///
-    /// `claimed` is the set of ids the tier bands ALREADY rendered, passed in
-    /// rather than recomputed from `tierOf`: that map is the optimistic local
-    /// one, and the bands above skip an id whose task the projection no longer
-    /// has. Deriving membership from the map instead of from what was actually
-    /// rendered is how a row goes missing from BOTH halves — it is the exact
-    /// shape of the disappearing-task bug, one level up.
-    ///
-    /// Ordering, and why it is not just "most recent":
-    ///  - a live session sorts above everything (this band is also the tail
-    ///    where unpinned running work shows up, which is what it was born for),
-    ///  - then by last activity, session or task, newest first,
-    ///  - done rows sink, so a long completed history never buries the top.
-    ///
-    /// Cost note (the perf fixture is 2,000 tasks / 500 sessions): this walks the
-    /// TASK list now, which the session-gated version deliberately avoided. That
-    /// was the right trade when the band could only hold session-bearing rows —
-    /// walking 2,000 tasks to find ~10 was 4x the work for the same answer. It is
-    /// not the right trade for a band that must be able to hold any task: the
-    /// only way to know a task is unclaimed is to look at it. The search filter
-    /// still runs BEFORE the sort key is computed (measured 3.79ms/pass vs
-    /// 0.98ms filter-during-collection), and the cheapest rejection stays first
-    /// because `lastActiveValue` is the expensive part (2.09ms per 500 calls).
-    ///
-    /// Walking the task list is the only linear cost this function is allowed to
-    /// add. The session loop below must stay O(sessions) with dictionary/set
-    /// lookups: a `tasks.contains(where:)` in there made the whole pass ~33ms at
-    /// fixture scale, and it read as innocuous right next to the walk this note
-    /// already justifies. "We accepted ONE walk over the tasks" is not a licence
-    /// for a second one per session.
-    /// The tail band's rows plus how many done rows it is suppressing.
-    ///
-    /// Two values because the heading needs both: the rows to draw, and the count for
-    /// `show done (N)` so hiding is never a silent disappearance. Returning them
-    /// together rather than letting the caller re-count is what keeps this band's
-    /// arithmetic to ONE pass over the tasks — at the tail's real scale (2,903 rows) a
-    /// second walk to count completions is the kind of "obviously cheap" line the perf
-    /// gate exists to catch.
-    struct Tail: Equatable {
-        let rows: [BoardRow]
-        let hiddenDone: Int
-    }
+    // The trailing "Everything else" band is GONE (this round), and with it
+    // `unfiledRows`, `Tail`, `activeTierId` and `activeLabel`.
+    //
+    // What it was: the COMPLEMENT of every tier, i.e. every task no tier claimed
+    // plus every session with no owning task. On the real store that was 2,903 of
+    // 3,161 rows, and building it meant a `BoardRow` per unpinned task, an ISO date
+    // parse per row for the sort key, and a decorate-sort over ~2,800 entries — on
+    // every body pass, including the ones a scroll publishes. The `All` chip counted
+    // that sum, which is where "All 3,175" came from.
+    //
+    // Why it is not replaced by a PAGED version: the user's question was not "page
+    // it", it was "已经有 pin 了,为什么还会有 all task" — the board IS the pinned
+    // working set, so the complement is not a band with a paging problem, it is a
+    // band with no reason to exist. Unpinned work is reachable by SEARCH: a server
+    // query over the whole store (`GlobalSearchSection`) plus the local open-task
+    // sections `TasksView` appends while a query is live, neither of which walks the
+    // store on an idle body pass.
+    //
+    // The one thing that had to survive is in `boardTier`: a PINNED task cannot be
+    // missing from this board, whichever half of the split knows about the pin.
 
-    static func unfiledRows(
-        tasks: [WalnutTask],
-        sessions: [WalnutSession],
-        sessionOf: [String: WalnutSession],
-        claimed: Set<String>,
-        query: String,
-        dateFilter: BoardDateFilter = .all,
-        /// `hide done` is on for the tail band — done rows are dropped here and
-        /// counted, exactly as a tier band does it.
-        hideDone: Bool = false,
-        now: Date = Date()
-    ) -> Tail {
-        // The sort payload is an INDEX, not a `BoardRow`. `BoardRow` holds two
-        // whole structs (a WalnutTask and a WalnutSession, ~15 stored properties
-        // between them, most of them String/Optional), so every swap the sort
-        // performs copies all of that, and this band went from "the handful of
-        // live rows" to "every task no tier claimed" — at the perf fixture's
-        // scale that is ~1,780 rows instead of ~10, and n log n swaps of a fat
-        // payload is where the remaining ~20ms of the board pass lived. Sorting
-        // Int32-sized keys and paying exactly ONE row copy per row at the end is
-        // the same decorate-sort-undecorate shape `WalnutTask.openSorted` /
-        // `doneSorted` already use for the task list, and it is why that pass
-        // measures 1.3ms on the identical fixture.
-        var keys: [(index: Int, live: Bool, done: Bool, at: Date)] = []
-        var rows: [BoardRow] = []
-        // Both arrays are sized up front. `BoardRow` is two large structs, so an
-        // append that has to grow the buffer re-copies every row already in it,
-        // and geometric growth over ~1,780 rows pays that several times. The
-        // bound is generous (not every task reaches a row) and it is exact enough
-        // for the only thing it buys: zero reallocations.
-        keys.reserveCapacity(tasks.count)
-        rows.reserveCapacity(tasks.count)
-
-        // Built on first use only (see the call site below for why that is
-        // almost never), then reused for every remaining session.
-        var memoizedTaskIds: Set<String>?
-        func taskIdSet() -> Set<String> {
-            if let memoizedTaskIds { return memoizedTaskIds }
-            let ids = Set(tasks.map(\.id))
-            memoizedTaskIds = ids
-            return ids
-        }
-
-        // Counted during the same pass that builds the rows, like the tier bands do.
-        var doneCount = 0
-
-        for task in tasks where !claimed.contains(task.id) {
-            let session = sessionOf[task.id]
-            let row = BoardRow(task: task, session: session)
-            guard admits(row, query: query, dateFilter: dateFilter, now: now) else { continue }
-            if row.isDone {
-                doneCount += 1
-                if hideDone { continue }
-            }
-            keys.append((
-                rows.count,
-                session?.statusKind.isAlive == true,
-                row.isDone,
-                session?.lastActiveValue ?? task.updatedAtValue ?? .distantPast
-            ))
-            rows.append(row)
-        }
-
-        // A session whose owning task never reached the projection is still real
-        // work someone started; it has always had a row here and keeps one.
-        for session in sessions {
-            guard let taskId = session.taskId, !taskId.isEmpty else {
-                let row = BoardRow(task: nil, session: session)
-                guard admits(row, query: query, dateFilter: dateFilter, now: now) else { continue }
-                keys.append((rows.count, session.statusKind.isAlive, false,
-                             session.lastActiveValue ?? .distantPast))
-                rows.append(row)
-                continue
-            }
-            // Only the LATEST session represents its task (one row per task),
-            // and the task-driven pass above already emitted it if the task is
-            // in the projection.
-            guard sessionOf[taskId]?.id == session.id else { continue }
-            guard !claimed.contains(taskId) else { continue }
-            // Membership by SET, not by `tasks.contains(where:)`. That linear
-            // scan was O(sessions x tasks) and it did not look expensive next to
-            // everything else in this function: at the perf fixture's 2,000 tasks
-            // / 500 sessions it alone took one board pass from ~1ms to ~33ms, and
-            // `TasksDerivedPerfTests` (idle < 5ms, keystroke < 8ms, live query <
-            // 4ms) failed on all three budgets at once. The rule this restates:
-            // a per-item membership test inside a loop over the other collection
-            // is a quadratic walk wearing a one-line disguise, and a body pass
-            // that runs on every keystroke is where that gets felt.
-            //
-            // The set is built lazily because the common shape reaches this line
-            // zero times: a session whose task is in the projection is already
-            // rejected by `claimed` or by the `sessionOf` latest-session check
-            // just above, so an ordinary board never pays for the set at all.
-            guard !taskIdSet().contains(taskId) else { continue }
-            let row = BoardRow(task: nil, session: session)
-            guard admits(row, query: query, dateFilter: dateFilter, now: now) else { continue }
-            keys.append((rows.count, session.statusKind.isAlive, false,
-                         session.lastActiveValue ?? .distantPast))
-            rows.append(row)
-        }
-
-        // Comparator unchanged (done sinks, then live first, then recency): only
-        // what it moves changed, from whole rows to indices.
-        let ordered = keys.sorted { a, b in
-            if a.done != b.done { return !a.done }
-            if a.live != b.live { return a.live }
-            return a.at > b.at
-        }.map { rows[$0.index] }
-        return Tail(rows: ordered, hiddenDone: hideDone ? doneCount : 0)
-    }
 
     // MARK: - Band chips (the floating bar) — a VIEW over the bands, never a query
     //
@@ -676,7 +1071,7 @@ enum BoardModel {
     // section exists to state: chip selection must not open a second way to
     // decide what a band contains.
     //
-    // The disappearing-task bug (see `activeTierId`) came from two code paths
+    // The disappearing-task bug (see `boardTier`) came from two code paths
     // disagreeing about membership, and a chip row is exactly the shape that
     // invites a third one ("just re-query the tier for this chip"). So a chip
     // carries a band ID and a count it read OFF the band, and filtering is a
@@ -698,6 +1093,12 @@ enum BoardModel {
     }
 
     /// Label on the chip that clears the band filter.
+    ///
+    /// `All` means the whole PINNED BOARD, and its count is the sum of the bands'
+    /// own visible counts — i.e. the number of rows this screen is showing. It used
+    /// to include the tail band, so it read "All 3,175" over a working set of ~264:
+    /// the chip was reporting the size of the task STORE. Nothing about the
+    /// arithmetic here changed; what changed is that no band is the store any more.
     static let allChipLabel = "All"
 
     static func chips(_ bands: [BoardBand]) -> [BandChip] {
@@ -721,9 +1122,13 @@ enum BoardModel {
     /// failure mode again, one level up. Falling back to All means the worst case
     /// is "you are looking at more than you asked for", which the chip row itself
     /// makes obvious.
+    ///
+    /// The survivors are re-led (`relead`): selecting a single FOLDER band leaves a
+    /// folder heading whose project band is no longer on screen, and a folder with no
+    /// project above it is a heading that does not say where the work lives.
     static func filtered(_ bands: [BoardBand], selected: String?) -> [BoardBand] {
         guard let selected, bands.contains(where: { $0.bandId == selected }) else { return bands }
-        return bands.filter { $0.bandId == selected }
+        return relead(bands.filter { $0.bandId == selected })
     }
 
     /// Which chip should read as selected, given a (possibly stale) selection.
@@ -805,5 +1210,64 @@ enum BoardModel {
         if token.isUnpin { return current == nil ? .noop : .unpin }
         if token.tierId == current { return .noop }
         return .setTier(token.tierId)
+    }
+}
+
+// MARK: - The bands, memoized on their inputs
+//
+// `BoardModel.bands` is a pure function of a handful of values, and `TasksView.body`
+// calls it once per pass — but a pass happens on every `@State` publish, every ≤4Hz
+// SSE batch and every keystroke, and most of those passes change NOTHING the bands
+// are built from. This makes a repeat pass over unchanged inputs a dictionary-style
+// hit instead of a rebuild, which is the same discipline `TasksStore`'s slice cache
+// already applies to `tasks(for:)`.
+//
+// It is a plain reference box and NOT `@Observable`, deliberately: the view writes to
+// it during its own body evaluation, and an observable write there would invalidate
+// the body that just performed it (the non-converging feedback `ChromeCollapseTracker`
+// exists to avoid, one layer down).
+//
+// It is not a substitute for the pinned-only board — that is what made an idle pass
+// cheap in the first place. It is what makes a pass that changes nothing cost nothing,
+// which is the other half of the top-of-list hitch: the two chrome thresholds and the
+// search drawer all publish inside the first ~57pt of travel.
+
+/// Everything `BoardModel.bands` reads, as one comparable value.
+///
+/// `inputsGen` stands in for the three collections (tasks, sessions, the tier split):
+/// `TasksStore.boardInputsGen` is a monotonic counter that changes whenever any of them
+/// does, so the key compares three Ints instead of ~3,000 rows. Comparing the arrays
+/// themselves would spend more than the rebuild it is trying to skip.
+///
+/// `nowBucket` is how the clock gets into a memo without freezing it: `bands` defaults
+/// `now` to call time, and the `.now` date filter is the only input that depends on it,
+/// so the bucket is a coarse (per-minute) clock ONLY under that filter and a constant
+/// under `.all`. A start date that passes then shows up within the minute instead of
+/// never, and an `.all` board never re-derives for the clock at all.
+struct BoardBandsKey: Equatable {
+    let inputsGen: UInt64
+    let query: String
+    let grouping: BoardGrouping
+    let dateFilter: BoardDateFilter
+    let hiddenDoneBands: Set<String>
+    let nowBucket: Int
+}
+
+@MainActor
+final class BoardBandsCache {
+    private var key: BoardBandsKey?
+    private var value: [BoardBand] = []
+
+    /// The memo. `build` runs only when the key moved.
+    ///
+    /// The caller must still read the OBSERVED store properties before calling this
+    /// (`TasksView.boardBands` does), or a cache hit would skip the reads SwiftUI needs
+    /// to register a dependency on and the board would stop updating.
+    func bands(for key: BoardBandsKey, build: () -> [BoardBand]) -> [BoardBand] {
+        if let current = self.key, current == key { return value }
+        let built = build()
+        self.key = key
+        self.value = built
+        return built
     }
 }

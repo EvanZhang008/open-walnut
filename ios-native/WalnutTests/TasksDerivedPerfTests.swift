@@ -36,6 +36,17 @@ final class TasksDerivedPerfTests: XCTestCase {
         String(format: "2026-%02d-%02dT%02d:%02d:%02dZ", (i % 12) + 1, (i % 28) + 1, i % 24, i % 60, (i * 7) % 60)
     }
 
+    /// Share of the task list that is PINNED, i.e. that becomes a board row.
+    ///
+    /// 1-in-12, and it is chosen to match the shape of the real store rather than to be
+    /// a round number: 3,064 tasks with 264 pinned is 1-in-11.6. It used to be
+    /// `i % 9 == 0`, which was a fine ratio for a board that rendered the whole store
+    /// (the tail band made the ratio irrelevant) and is the load-bearing number now that
+    /// the board renders only the pins — a fixture with too many pins would understate
+    /// how much of a pass is the WALK over unpinned rows, which is the cost that has to
+    /// stay linear.
+    static let pinnedEvery = 12
+
     private func makeTasks(_ n: Int) -> [WalnutTask] {
         (0..<n).map { i in
             WalnutTask(
@@ -47,7 +58,7 @@ final class TasksDerivedPerfTests: XCTestCase {
                 dueDate: i % 4 == 0 ? Self.iso(i) : nil,
                 createdAt: Self.iso(i), updatedAt: Self.iso(i + 1),
                 completedAt: i % 3 == 2 ? Self.iso(i + 2) : nil,
-                starred: nil, pinned: i % 9 == 0, tags: nil, summary: nil
+                starred: nil, pinned: i % Self.pinnedEvery == 0, tags: nil, summary: nil
             )
         }
     }
@@ -153,7 +164,7 @@ final class TasksDerivedPerfTests: XCTestCase {
         WalnutTask.isoFormatterParses.withLock { $0 = 0 }
         _ = fullDerivedPass(store, query: "")
         _ = fullDerivedPass(store, query: "task 17")
-        // The board sorts its unpinned-live tail by `lastActiveValue`, which is a
+        // The board's project grouping sorts its bands by `lastActiveValue`, which is a
         // parseISO call per row — so it belongs in this gate, not outside it.
         _ = boardDerivedPass(store, query: "")
         _ = boardDerivedPass(store, query: "task 17")
@@ -207,24 +218,25 @@ final class TasksDerivedPerfTests: XCTestCase {
     /// until a query exists, and then only asks it for the ids the bands don't
     /// already show.
     ///
-    /// Budget re-baselined 2026-08-29 (idle 5→12ms, keystroke 8→18ms) and the
-    /// reason matters, because "the number went up so I raised the number" is how
-    /// a perf gate stops being one:
+    /// # Budget history, which is the point of writing it down
     ///
-    /// The original 5/8ms was measured when the tail band was SESSION-GATED, so a
-    /// board pass built ~10 tail rows out of 2,000 tasks. The disappearing-task
-    /// fix deliberately made that band the COMPLEMENT of the tier bands ("a tier
-    /// decides WHICH band, never WHETHER"), so the same pass now builds ~1,780
-    /// rows. That is not a regression, it is the feature: the old number was the
-    /// cost of a board that could lose a task. Honest floor for the new shape is
-    /// ~7.3ms idle / ~11.3ms per keystroke, measured stable across runs on a
-    /// loaded machine (7.25/7.24/7.40 idle), and these gates sit ~1.5x above it.
+    /// It was 5/8ms while the tail band was SESSION-GATED (a board pass built ~10 tail
+    /// rows out of 2,000 tasks). The disappearing-task fix made that band the COMPLEMENT
+    /// of the tier bands, so the same pass built ~1,780 rows and the gate was
+    /// re-baselined to 12/18ms — with the reasoning that this was "not a regression, it
+    /// is the feature".
     ///
-    /// What keeps this from being a rubber stamp is
-    /// `testTheBoardPassScalesLinearlyWithTheTaskList` below: an absolute budget
-    /// on a machine this contended can only be loose, so the SHAPE assertion is
-    /// the real gate, and it is the one that catches the class of bug this
-    /// re-baseline was paired with (see that test).
+    /// That reasoning was wrong, and the user's question is what showed it: "已经有 pin
+    /// 了,为什么还会有 all task". The board IS the pinned working set, so the complement
+    /// band was never a feature to pay for — it was the whole task store rendered as a
+    /// tail, and 12ms was the price of an idle body pass that a scroll publishes. The
+    /// band is gone; the gates stay at 12/18ms rather than being tightened back to 5/8,
+    /// for one honest reason: this machine is contended enough that a tight absolute
+    /// number turns red for load, and a gate people learn to raise is not a gate.
+    ///
+    /// So the SHAPE assertions below are the real gates — `…ScalesLinearlyWithTheTaskList`
+    /// (the axis that actually grew) and `…WithTheSessionList` — and the number printed
+    /// here is what a regression report quotes.
     func testBoardSearchKeystrokeBudget() {
         let store = seededStore(tasks: 2_000, sessions: 500)
         _ = boardDerivedPass(store, query: "")
@@ -306,26 +318,82 @@ final class TasksDerivedPerfTests: XCTestCase {
             "doubling the session list cost \(ratio)x (expected ~1.1x, and the known quadratic reads 2.0x): a per-session scan over the TASK list is back in the board pass")
     }
 
+    /// The axis that ACTUALLY grew, and the gate the diagnosis found missing: doubling
+    /// the TASK LIST must roughly double one board pass, not square it.
+    ///
+    /// # Why this test did not exist, and why its absence mattered
+    ///
+    /// The only scaling gate here was the session one, chosen because it was the axis
+    /// that reproduced ONE quadratic (see above). Meanwhile the board's real cost was
+    /// growing on the other axis: the trailing "Everything else" band was defined as the
+    /// complement of every tier, so a body pass built a `BoardRow` per UNPINNED task,
+    /// parsed an ISO date per row for the sort key, and decorate-sorted ~1,780 of them at
+    /// this fixture (~2,800 on the real store). That is linear, so no ratio gate would
+    /// have failed — but nothing here printed the number either, and `idle 7.55ms` sat in
+    /// the log of a passing suite while the user felt 460ms of dropped frames.
+    ///
+    /// So this gate is not only about super-linearity. It also pins the SHARE: with the
+    /// board as the pinned working set, a pass's cost is the walk over the store plus the
+    /// rows it actually builds, and `pinnedEvery` is what keeps the fixture's pinned share
+    /// (1-in-12) close to production's (264 of 3,064). A change that starts building rows
+    /// for unpinned tasks again shows up as a ratio that stays ~2x but a BASE that jumps,
+    /// which is why both numbers are printed.
+    ///
+    /// Threshold: linear is 2.0x (both the walk and the pinned set double). A per-task
+    /// scan over the pinned set, or a sort of the whole store, reads 4x. 2.8x sits in the
+    /// gap with room on both sides, and being a ratio of two measurements taken
+    /// microseconds apart it cannot be dismissed as machine load — the rule the session
+    /// gate above established.
+    func testTheBoardPassScalesLinearlyWithTheTaskList() {
+        let small = seededStore(tasks: 2_000, sessions: 500)
+        let large = seededStore(tasks: 4_000, sessions: 500)
+        // Warm both: the date cache is process-wide, so an unwarmed second store would
+        // charge the formatter to the size difference.
+        _ = boardDerivedPass(small, query: "")
+        _ = boardDerivedPass(large, query: "")
+
+        // Best-of on both sides, for the reason the session gate states: a hiccup can
+        // only inflate a sample, so the minimum is the closest thing to the code's cost.
+        var bestSmall = Double.greatestFiniteMagnitude
+        var bestLarge = Double.greatestFiniteMagnitude
+        for _ in 0..<5 {
+            bestSmall = min(bestSmall, ms { _ = boardDerivedPass(small, query: "") })
+            bestLarge = min(bestLarge, ms { _ = boardDerivedPass(large, query: "") })
+        }
+        let ratio = bestLarge / bestSmall
+        print(String(format: "[board-scaling] 2,000 tasks %.2fms | 4,000 tasks %.2fms | ratio %.2fx (gate 2.8x)",
+                     bestSmall, bestLarge, ratio))
+        XCTAssertLessThan(ratio, 2.8,
+            "doubling the task list cost \(ratio)x (linear is ~2.0x, a per-row scan or a full-store sort reads ~4x): the board is doing work per UNPINNED task again")
+        // And the pinned set is what a band holds — stated here so the fixture cannot
+        // drift into "almost everything is pinned", which would make the ratio above
+        // meaningless (it would be measuring a full-store board either way).
+        let pinned = small.tasks.filter { $0.pinned == true }.count
+        XCTAssertLessThan(
+            Double(pinned) / Double(small.tasks.count), 0.15,
+            "the fixture pins \(pinned) of \(small.tasks.count) — production is 264 of 3,064, and a pin-heavy fixture hides the cost of the walk over the rest"
+        )
+    }
+
     // MARK: - Gate 2b: the board's search cost must not grow with rows a query discards
 
-    /// The board's unpinned-live tail sorts by activity. Filtering AFTER that
-    /// sort means sorting rows the query is about to throw away, and it measured
-    /// 3.79ms per pass at fixture scale versus 0.98ms filtering during collection
-    /// (the same "bound the candidate set" rule the path resolver encodes).
+    /// A band's rows are sorted after they are collected. Filtering AFTER the sort means
+    /// sorting rows the query is about to throw away, and it measured 3.79ms per pass at
+    /// fixture scale versus 0.98ms filtering during collection (the same "bound the
+    /// candidate set" rule the path resolver encodes).
     ///
     /// This gate is shaped to catch that specific regression rather than to
     /// restate the overall budget: a live query must not cost MUCH more than the
     /// same pass with no query. If someone reorders the phases, this fails long
     /// before the total budget does.
     ///
-    /// The ratio assertion is the load-independent half and is unchanged. The
-    /// absolute ceiling moved 4→12ms for the reason spelled out on
-    /// `testBoardSearchKeystrokeBudget`: the tail band is now the complement of
-    /// the tier bands (~1,780 rows at this fixture, not ~10), which is the
-    /// disappearing-task fix and not a regression. Note the ratio is now BELOW 1
-    /// in practice (a live query is CHEAPER than none, because filtering during
-    /// collection means fewer rows to sort), which is the direction this test
-    /// wants and the clearest sign the phases are still in the right order.
+    /// The ratio assertion is the load-independent half and is unchanged. The absolute
+    /// ceiling is 12ms for the reason spelled out on `testBoardSearchKeystrokeBudget` (a
+    /// contended machine cannot hold a tight absolute number), and with the tail band gone
+    /// the pass it bounds is the walk over the store plus the PINNED rows. The ratio is
+    /// below 1 in practice — a live query is CHEAPER than none, because filtering during
+    /// collection means fewer rows to sort — which is the direction this test wants and
+    /// the clearest sign the phases are still in the right order.
     func testABoardSearchDoesNotPayToSortRowsItDiscards() {
         let store = seededStore(tasks: 2_000, sessions: 500)
         let board = { (query: String) in
