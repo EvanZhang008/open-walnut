@@ -70,6 +70,9 @@ export interface CalendarSourceStatus {
   reason?: CalendarSourceReason;
   /** Human-actionable detail (e.g. the TCC grant instructions). */
   message?: string;
+  /** Working, but not the way it should be: reads are coming from an older helper
+   *  generation that still holds the macOS grant. Says what the user should fix. */
+  degraded?: string;
   lastRefresh?: string;
   eventCount?: number;
 }
@@ -93,6 +96,8 @@ export interface CalendarSource {
   id: 'eventkit';
   /** Cheap static availability check (platform / cloud-mode gates). */
   available(): { ok: boolean; reason?: CalendarSourceReason; message?: string };
+  /** Optional: reads work but through a degraded path, described for the user. */
+  degraded?(): string | undefined;
   listCalendars(): Promise<CalendarInfo[]>;
   /** `refresh` asks the platform to pull from remote accounts first. macOS does
    *  that pull asynchronously, so it freshens the NEXT fetch, not this one —

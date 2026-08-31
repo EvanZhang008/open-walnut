@@ -155,10 +155,15 @@ export class CalendarService {
     }
     let count = 0;
     for (const entry of this.cache.values()) count += entry.events.length;
+    // Available but degraded is its own state: reads work, yet something the user
+    // has to fix is silently propping them up. Reporting only available:true would
+    // hide it forever (nothing else ever mentions it again).
+    const degraded = this.source.degraded?.();
     return {
       id: this.source.id,
       available: true,
       enabled: true,
+      ...(degraded ? { degraded } : {}),
       lastRefresh: this.lastRefresh,
       eventCount: count,
     };

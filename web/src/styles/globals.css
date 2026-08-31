@@ -28431,6 +28431,36 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 
+/* --- permission banner ----------------------------------------------------- */
+/* An empty day is indistinguishable from a day with no meetings, so a lost macOS
+   Calendars grant has to say so out loud. Click retries the read. */
+.cal-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--warn-border, rgba(214, 149, 33, 0.45));
+  border-radius: 8px;
+  background: var(--warn-bg, rgba(214, 149, 33, 0.12));
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cal-alert:hover {
+  border-color: var(--warn-border-strong, rgba(214, 149, 33, 0.7));
+}
+
+.cal-alert-hint {
+  margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
 /* --- layout ---------------------------------------------------------------- */
 .cal-body {
   display: flex;

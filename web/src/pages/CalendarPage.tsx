@@ -283,6 +283,18 @@ export function CalendarPage() {
     ? calendar.loading
     : calendar.sources.some((s) => s.available && s.enabled);
 
+  // A calendar problem MUST be said out loud: an empty grid looks exactly like a
+  // free day, so a lost macOS grant used to read as "nothing scheduled". Two
+  // states are worth a banner — access gone (no events at all) and access gone but
+  // served from an older helper (events are real, the grant still needs fixing).
+  const calendarAlert = ((): string | null => {
+    const denied = calendar.sources.find((s) => s.enabled && s.reason === 'permission-denied');
+    if (denied) {
+      return 'Calendar access lost. Re-grant Walnut under System Settings → Privacy & Security → Calendars, then click here to retry.';
+    }
+    return calendar.sources.find((s) => s.degraded)?.degraded ?? null;
+  })();
+
   const openContextMenu = useCallback(
     (point: { x: number; y: number }, target: { item?: CalendarItem; seed?: CreateSeed }) =>
       setCtxTarget({ point, ...target }),
@@ -358,6 +370,13 @@ export function CalendarPage() {
           onToggleRail={toggleRail}
           onOpenCalendars={setCalsAnchor}
         />
+        {calendarAlert && (
+          <button type="button" className="cal-alert" onClick={calendar.refetch} title={calendarAlert}>
+            <span aria-hidden="true">⚠</span>
+            <span>{calendarAlert}</span>
+            <span className="cal-alert-hint">Retry</span>
+          </button>
+        )}
         <div className="cal-body">
           {railOpen && <CalendarTaskList tasks={tasks} />}
           <div className="cal-view">

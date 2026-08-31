@@ -13,7 +13,8 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CLOUD_MODE } from '../../../constants.js';
-import { ensureHelper, type HelperSpec } from '../../helper-build.js';
+import { log } from '../../../logging/index.js';
+import { ensureHelper, olderHelperGenerations, type HelperSpec } from '../../helper-build.js';
 import type {
   CalendarEvent,
   CalendarEventCreate,
@@ -93,9 +94,80 @@ const HELPER_SPEC: HelperSpec = {
   infoPlist: HELPER_INFO_PLIST,
 };
 
-/** Run a helper subcommand; helper always emits JSON (error shape on exit 1). */
-async function runHelper<T>(args: string[]): Promise<T> {
-  const bin = await ensureHelper(HELPER_SPEC, 'walnut-calendar.swift');
+/**
+ * A PREVIOUS helper generation that still holds the Calendars grant.
+ *
+ * Why this exists, measured on this machine: bumping HELPER_VERSION writes a new
+ * binary next to the old one, and an ad-hoc TCC grant is keyed to the binary's
+ * content hash, so the new generation starts with NO permission while the old one
+ * keeps full access. Nothing is broken in macOS's eyes, so nothing prompts and
+ * nothing is logged — the calendar simply reads back empty. Preferring a proven
+ * older generation over an empty day means a version bump degrades (we may lose
+ * fields a newer protocol added) instead of going dark, and the warning below is
+ * what tells the user to re-grant.
+ */
+let fallbackBin: string | null = null;
+/** Cooldown so a hopeless probe (nothing older, or nothing granted) does not
+ *  respawn N helpers on every read, while still allowing a later retry. */
+let lastFallbackProbe = 0;
+const FALLBACK_PROBE_COOLDOWN_MS = 60_000;
+
+/** The older generation currently standing in, for status/UI. Null when the
+ *  current helper is the one being used. */
+export function calendarHelperFallback(): { path: string; version: string } | null {
+  if (!fallbackBin) return null;
+  const version = /-([^-]+)$/.exec(fallbackBin)?.[1] ?? 'older';
+  return { path: fallbackBin, version };
+}
+
+/** Tests, and a manual "I re-granted, use the new one again" retry. */
+export function resetCalendarHelperFallback(): void {
+  fallbackBin = null;
+  lastFallbackProbe = 0;
+}
+
+async function execHelper<T>(bin: string, args: string[]): Promise<T> {
+  const { stdout } = await execFileAsync(bin, args, {
+    timeout: HELPER_TIMEOUT_MS,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  return JSON.parse(stdout) as T;
+}
+
+/**
+ * First older generation that both HOLDS the grant and speaks the protocol we
+ * need. `status` answers the permission question without side effects; `calendars`
+ * proves the binary actually understands the subcommands (a generation older than
+ * the JSON shapes used here would parse but not match, and an array of calendars
+ * is the cheapest thing that fails loudly if it does not).
+ */
+async function findGrantedOlderHelper(): Promise<string | null> {
+  for (const bin of olderHelperGenerations(HELPER_SPEC)) {
+    try {
+      const { state } = await execHelper<{ state?: string }>(bin, ['status']);
+      if (state !== 'granted') continue;
+      const cals = await execHelper<unknown>(bin, ['calendars']);
+      if (!Array.isArray(cals)) continue;
+      return bin;
+    } catch {
+      continue; // an older generation that cannot run is simply not a candidate
+    }
+  }
+  return null;
+}
+
+/**
+ * Run a helper subcommand; helper always emits JSON (error shape on exit 1).
+ *
+ * `currentOnly` pins the call to the CURRENT generation, fallback or not. The
+ * Permission Doctor needs that: its whole job is to report and fix the grant on
+ * the helper Walnut is supposed to be using, and answering "granted" because a
+ * previous generation is standing in would send the user away with the problem
+ * still there.
+ */
+async function runHelper<T>(args: string[], opts?: { currentOnly?: boolean }): Promise<T> {
+  const current = await ensureHelper(HELPER_SPEC, 'walnut-calendar.swift');
+  const bin = opts?.currentOnly ? current : (fallbackBin ?? current);
   if (!bin) {
     throw new CalendarHelperError(
       'Calendar helper unavailable (needs macOS + Xcode Command Line Tools for one-time compile).',
@@ -103,27 +175,49 @@ async function runHelper<T>(args: string[]): Promise<T> {
     );
   }
   try {
-    const { stdout } = await execFileAsync(bin, args, {
-      timeout: HELPER_TIMEOUT_MS,
-      maxBuffer: 16 * 1024 * 1024,
-    });
-    return JSON.parse(stdout) as T;
+    return await execHelper<T>(bin, args);
   } catch (err) {
-    // Non-zero exit still prints a JSON error payload on stdout.
-    const stdout = (err as { stdout?: string }).stdout;
-    if (stdout) {
-      try {
-        const parsed = JSON.parse(stdout) as HelperError;
-        throw new CalendarHelperError(parsed.error, parsed.code);
-      } catch (parseErr) {
-        if (parseErr instanceof CalendarHelperError) throw parseErr;
+    const mapped = toHelperError(err);
+    // A denial on the CURRENT generation is the one failure a previous generation
+    // can still answer, so try that before reporting an empty calendar.
+    if (
+      mapped.code === 'permission-denied' &&
+      !opts?.currentOnly &&
+      bin === current &&
+      Date.now() - lastFallbackProbe > FALLBACK_PROBE_COOLDOWN_MS
+    ) {
+      lastFallbackProbe = Date.now();
+      const older = await findGrantedOlderHelper();
+      if (older) {
+        fallbackBin = older;
+        log.calendar.warn('calendar permission lost on the current helper, using an older one', {
+          current: bin,
+          fallback: older,
+          note: 'grant Calendars to the current helper again in System Settings → Privacy & Security → Calendars',
+        });
+        return await execHelper<T>(older, args);
       }
     }
-    throw new CalendarHelperError(
-      `calendar helper failed: ${(err as Error).message?.slice(0, 200)}`,
-      'fetch-error'
-    );
+    throw mapped;
   }
+}
+
+/** Map an execFile rejection onto our error shape. Non-zero exit still prints a
+ *  JSON error payload on stdout, so that is preferred over the spawn message. */
+function toHelperError(err: unknown): CalendarHelperError {
+  const stdout = (err as { stdout?: string }).stdout;
+  if (stdout) {
+    try {
+      const parsed = JSON.parse(stdout) as HelperError;
+      if (parsed?.error && parsed?.code) return new CalendarHelperError(parsed.error, parsed.code);
+    } catch {
+      // not JSON — fall through to the generic message
+    }
+  }
+  return new CalendarHelperError(
+    `calendar helper failed: ${(err as Error).message?.slice(0, 200)}`,
+    'fetch-error'
+  );
 }
 
 /**
@@ -134,7 +228,7 @@ async function runHelper<T>(args: string[]): Promise<T> {
  */
 export async function calendarAuthStatus(): Promise<'granted' | 'denied' | 'not-determined' | 'unknown'> {
   try {
-    const { state } = await runHelper<{ state: string }>(['status']);
+    const { state } = await runHelper<{ state: string }>(['status'], { currentOnly: true });
     return state === 'granted' || state === 'denied' || state === 'not-determined' ? state : 'unknown';
   } catch {
     return 'unknown';
@@ -150,7 +244,9 @@ export async function calendarAuthStatus(): Promise<'granted' | 'denied' | 'not-
  */
 export async function requestCalendarAccess(): Promise<'granted' | 'denied' | 'unknown'> {
   try {
-    await runHelper<unknown>(['calendars']);
+    await runHelper<unknown>(['calendars'], { currentOnly: true });
+    // The current helper answered, so whatever stand-in was in place is obsolete.
+    resetCalendarHelperFallback();
     return 'granted';
   } catch (err) {
     if (err instanceof CalendarHelperError && err.code === 'permission-denied') return 'denied';
@@ -243,6 +339,12 @@ export function createEventKitSource(): CalendarSource {
         return { ok: false, reason: 'not-configured', message: 'EventKit calendars require macOS.' };
       }
       return { ok: true };
+    },
+
+    degraded(): string | undefined {
+      const fallback = calendarHelperFallback();
+      if (!fallback) return undefined;
+      return `Calendar access was lost after the helper was rebuilt, so events are coming from the previous helper (${fallback.version}). Grant Calendars to Walnut again in System Settings → Privacy & Security → Calendars.`;
     },
 
     async listCalendars(): Promise<CalendarInfo[]> {

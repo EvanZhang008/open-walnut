@@ -76,6 +76,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -153,6 +154,112 @@ function cachedBinPath(spec: HelperSpec): string {
   return path.join(WALNUT_HOME, 'cache', `${spec.name}-${spec.version}`);
 }
 
+/** Sidecar recording WHAT the cached binary was built from, so a rebuild can be
+ *  skipped with proof rather than by hoping the version was bumped. */
+function fingerprintPath(spec: HelperSpec): string {
+  return `${cachedBinPath(spec)}.srchash`;
+}
+
+/**
+ * Identity of the inputs that decide the binary's bytes: the Swift source, the
+ * signing identifier, and the embedded plist. NOT the version, which is already
+ * in the file name.
+ */
+function sourceFingerprint(spec: HelperSpec, srcPath: string): string | null {
+  let source: Buffer;
+  try {
+    source = fs.readFileSync(srcPath);
+  } catch {
+    return null;
+  }
+  return createHash('sha256')
+    .update(source)
+    .update('\n--\n')
+    .update(spec.identifier)
+    .update('\n--\n')
+    .update(spec.infoPlist ?? '')
+    .digest('hex');
+}
+
+function readFingerprint(spec: HelperSpec): string | null {
+  try {
+    return fs.readFileSync(fingerprintPath(spec), 'utf8').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the cached binary may be served as-is.
+ *
+ *   reuse    the fingerprints agree, the file stands
+ *   adopt    a pre-fingerprint (or fingerprint-less) binary; record and keep it
+ *   rebuild  the .swift moved while `version` did not, so the cache is a lie
+ *   compile  nothing cached yet
+ *
+ * Split out because "may I overwrite this file?" is the ENTIRE bug this guards
+ * against and it must be assertable without a swiftc on the box: overwriting an
+ * unchanged ad-hoc helper silently throws away the macOS permission the user
+ * granted it, and nothing anywhere reports that it happened.
+ */
+export type HelperCacheDecision = 'reuse' | 'adopt' | 'rebuild' | 'compile';
+
+export function helperCacheDecision(spec: HelperSpec, srcPath: string): HelperCacheDecision {
+  if (!fs.existsSync(cachedBinPath(spec))) return 'compile';
+  const fingerprint = sourceFingerprint(spec, srcPath);
+  // No readable source means no evidence of a change, and a working binary beats
+  // a theory. (buildHelper reports the missing source separately.)
+  if (fingerprint === null) return 'reuse';
+  const stored = readFingerprint(spec);
+  if (stored === null) return 'adopt';
+  return stored === fingerprint ? 'reuse' : 'rebuild';
+}
+
+/**
+ * Older cached generations of the same helper, newest first.
+ *
+ * Why this exists: an ad-hoc helper's TCC grant is keyed to its content hash, so
+ * the grant does NOT move to a new generation — but it also does not disappear.
+ * `walnut-calendar-v4` kept full Calendars access after `-v5` appeared next to it
+ * with no grant at all. A caller that hits `permission-denied` on the current
+ * generation can therefore keep working from a previous one while the user
+ * re-grants, instead of reporting an empty calendar (see
+ * src/core/calendar/sources/eventkit.ts). Only `v<N>` versions take part, and the
+ * caller still has to prove the older protocol does what it needs.
+ */
+export function olderHelperGenerations(spec: HelperSpec): string[] {
+  const current = /^v(\d+)$/.exec(spec.version);
+  if (!current) return [];
+  const currentN = Number(current[1]);
+  const dir = path.join(WALNUT_HOME, 'cache');
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const found: { n: number; bin: string }[] = [];
+  for (const entry of entries) {
+    const m = new RegExp(`^${escapeRegExp(spec.name)}-v(\\d+)$`).exec(entry);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (n >= currentN) continue;
+    const bin = path.join(dir, entry);
+    try {
+      if (!fs.statSync(bin).isFile()) continue;
+      fs.accessSync(bin, fs.constants.X_OK);
+    } catch {
+      continue;
+    }
+    found.push({ n, bin });
+  }
+  return found.sort((a, b) => b.n - a.n).map((f) => f.bin);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * Compile (once per machine per version) and sign the helper; resolve its path,
  * or null when this box cannot have it at all.
@@ -175,9 +282,33 @@ export function ensureHelper(spec: HelperSpec, sourceFile: string): Promise<stri
 async function buildHelper(spec: HelperSpec, sourceFile: string): Promise<BuildOutcome> {
   if (process.platform !== 'darwin' || CLOUD_MODE) return { bin: null, reason: 'not_macos' };
   const bin = cachedBinPath(spec);
-  if (fs.existsSync(bin)) return { bin, reason: null };
-
   const src = helperSourcePath(sourceFile);
+  const fingerprint = sourceFingerprint(spec, src);
+
+  // An existing binary is REUSED, never rewritten, unless its inputs really moved.
+  // Rewriting it would be silently destructive: the binary's content hash is the
+  // TCC identity for an ad-hoc signature, so a pointless recompile hands the user
+  // an identical-looking helper that has lost the permission they granted.
+  const decision = helperCacheDecision(spec, src);
+  if (decision === 'reuse') return { bin, reason: null };
+  if (decision === 'adopt') {
+    // Built before fingerprints existed (or the sidecar was lost). The version in
+    // the file name is the only contract that generation ever had, so adopt it
+    // rather than throwing away a working grant on a guess.
+    if (fingerprint) await fsp.writeFile(fingerprintPath(spec), fingerprint).catch(() => {});
+    return { bin, reason: null };
+  }
+  if (decision === 'rebuild') {
+    // Same version, different source: somebody edited the .swift without bumping
+    // `version`. Serving the stale binary would be a silent lie, so rebuild — but
+    // say out loud that the permission is about to need a re-grant.
+    log.web.warn('helper source changed without a version bump, rebuilding', {
+      helper: spec.name,
+      version: spec.version,
+      note: 'an ad-hoc helper loses its macOS permission grant on rebuild; bump the version instead',
+    });
+  }
+
   if (!fs.existsSync(src)) {
     log.web.warn('helper source missing, feature disabled', { helper: spec.name, src });
     return { bin: null, reason: 'compile_failed' };
@@ -225,6 +356,9 @@ async function buildHelper(spec: HelperSpec, sourceFile: string): Promise<BuildO
     });
     return { bin: null, reason: 'compile_failed' };
   }
+  // Written only AFTER the binary is in place: a fingerprint without its binary
+  // would make the next boot skip a compile it still has to do.
+  if (fingerprint) await fsp.writeFile(fingerprintPath(spec), fingerprint).catch(() => {});
   return { bin, reason: null };
 }
 
