@@ -10167,19 +10167,43 @@ body.walnut-dragging {
   display: block;
 }
 
-/* Task whose session is currently open on the home page — left accent bar so it
-   reads as "live" without colliding with the active (bg) / attention (red) states. */
+/* Task whose session is currently open on the home page — Ring-A + right
+   chevron (user-picked R2, 2026-08-31). The ring circles the whole card and the
+   chevron points at the session column living to the right; the card's OWN state
+   background (red attention, done, hover) is deliberately untouched — the old
+   3px left bar crowded the gutter where the unread dot / rail already live. */
 .todo-pinned-card-session-open {
-  border-left: 3px solid var(--accent);
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+  padding-right: 22px; /* keep the title clear of the chevron */
 }
 
-.todo-pinned-card-session-open:hover {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+.todo-pinned-card-session-open::after {
+  content: '';
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-top: 2px solid var(--accent);
+  border-right: 2px solid var(--accent);
+  border-radius: 0.5px;
+  transform: translate(0, -50%) rotate(45deg);
+  animation: session-open-nudge 1.6s ease-in-out infinite;
+  pointer-events: none;
 }
 
-.todo-pinned-card-session-open.todo-pinned-card-active {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+/* The right edge belongs to the hover actions (▶ / kebab) — the chevron yields. */
+.todo-pinned-card-session-open:hover::after {
+  opacity: 0;
+}
+
+@keyframes session-open-nudge {
+  0%, 100% { transform: translate(0, -50%) rotate(45deg); }
+  50% { transform: translate(3px, -50%) rotate(45deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .todo-pinned-card-session-open::after { animation: none; }
 }
 
 .todo-pinned-unpin {
