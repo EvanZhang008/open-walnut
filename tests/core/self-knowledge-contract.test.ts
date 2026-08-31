@@ -11,7 +11,8 @@ describe('Walnut self-knowledge contract', () => {
 
     expect(prompt.length).toBeLessThanOrEqual(SELF_KNOWLEDGE_PROMPT_MAX_CHARS);
     expect(prompt).toContain('`task_create` records work only');
-    expect(prompt).toContain('Use `delegate`');
+    expect(prompt).toContain('`session_start` starts a session');
+    expect(prompt).toContain('`session_send` messages a live session');
     expect(prompt).toContain('explicit task ID');
     expect(prompt).toContain('Satellite is represented by no stored focus tier');
     expect(prompt).not.toContain('/api/');

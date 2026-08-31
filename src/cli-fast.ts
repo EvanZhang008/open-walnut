@@ -101,11 +101,11 @@ switch (sub) {
     // refusal semantics live daemon-side) — same code the remote shim runs.
     // --json must sit between the subcommand and the target (send treats
     // anything after the target as message text).
-    const { runWnCli } = await import('./providers/wn-cli.js');
+    const { runWalnutCli } = await import('./providers/wn-cli.js');
     const argv = args.length > 0 && json
       ? ['peers', args[0], '--json', ...args.slice(1)]
       : ['peers', ...args];
-    process.exit(await runWnCli(argv));
+    process.exit(await runWalnutCli(argv));
     break;
   }
   case 'add': {
@@ -157,8 +157,7 @@ switch (sub) {
     if (!taskId) usageError("missing required argument 'task_id'");
     const { runStart } = await import('./commands/start.js');
     await runStart(taskId, {
-      resume: hasFlag(args, '--resume'),
-      prompt: flagValue(args, '--prompt'),
+      message: flagValue(args, '--message'),
     }, globals);
     break;
   }

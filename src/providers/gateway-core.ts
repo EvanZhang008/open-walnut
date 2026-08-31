@@ -93,7 +93,7 @@ export function gatewayHubTimeoutMs(): number {
 export const GATEWAY_OPS = ['peers.list', 'peers.send', 'tools.list', 'tools.call'] as const;
 export type GatewayOp = (typeof GATEWAY_OPS)[number];
 
-/** Full error-code table (plan §2d) — shared by the wn CLI and the socket protocol. */
+/** Full error-code table (plan §2d) — shared by the walnut CLI and the socket protocol. */
 export type GatewayErrorCode =
   | 'unknown_peer'
   | 'ambiguous_peer'
@@ -119,7 +119,7 @@ export interface GatewayError {
   detail?: unknown;
 }
 
-/** One request line on the unix socket (wn CLI → daemon). */
+/** One request line on the unix socket (walnut CLI → daemon). */
 export interface GatewayRequest {
   v: 1;
   op: GatewayOp;
@@ -128,7 +128,7 @@ export interface GatewayRequest {
   args: Record<string, unknown>;
 }
 
-/** One response line on the unix socket (daemon → wn CLI). */
+/** One response line on the unix socket (daemon → walnut CLI). */
 export type GatewayResponse =
   | { ok: true; result: Record<string, unknown> }
   | { ok: false; error: GatewayError };
@@ -218,4 +218,75 @@ export function resolveGatewayCallerSid(
 ): string | null {
   if (isExternalCallerSid(sid)) return EXTERNAL_CALLER_SID;
   return resolveCallerSid(sid, sessions, aliases);
+}
+
+// ── On-PATH `walnut` shim (pure helpers; both twins use these rules) ──
+
+/**
+ * Canonical argv keyword that makes the daemon artifact run as the on-host
+ * walnut CLI instead of starting a daemon: `<artifact> walnut tools list`.
+ */
+export const DAEMON_CLI_KEYWORD = 'walnut';
+
+/**
+ * Deprecated keyword the dispatch must KEEP accepting. Every shim written by a
+ * daemon deployed before 2026-08-30 says `wn`, and those files live on hosts we
+ * do not redeploy synchronously (a shim is rewritten only when its daemon next
+ * boots). Dropping the alias would break `walnut` inside every already-running
+ * session on such a host until then.
+ */
+export const DAEMON_CLI_KEYWORD_LEGACY = 'wn';
+
+/** True for either dispatch keyword — canonical `walnut` or legacy `wn`. */
+export function isDaemonCliKeyword(action: string | undefined | null): boolean {
+  return action === DAEMON_CLI_KEYWORD || action === DAEMON_CLI_KEYWORD_LEGACY;
+}
+
+/** POSIX single-quoting for a path embedded in the /bin/sh shim. */
+export function shimQuote(s: string): string {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * The whole `/bin/sh` shim body. `argv` is the command that runs the daemon
+ * artifact (a compiled binary alone, or an interpreter + script), and the
+ * canonical keyword is appended so new shims never write the legacy `wn`.
+ */
+export function gatewayShimScript(argv: string[]): string {
+  return '#!/bin/sh\nexec ' + argv.map(shimQuote).join(' ') + ' ' + DAEMON_CLI_KEYWORD + ' "$@"\n';
+}
+
+/** Filename of the stable in-daemon-dir copy of the artifact the shim execs. */
+export const SHIM_CORE_BASENAME = 'walnut-core';
+
+/**
+ * Does the stable copy at `<daemon dir>/bin/walnut-core` need to be (re)written?
+ *
+ * Why a copy exists at all: on the hub the daemon binary is booted from a STAGE
+ * TEMP dir (dev-prod clones dist/ into /var/folders/... before launching), and
+ * the next deploy deletes that clone. A shim that exec'd `process.execPath`
+ * directly then pointed at a path that no longer exists, so every `walnut` call
+ * inside a live session died with exit 126 — the shim outlived its target.
+ *
+ * Why the check is this cheap: the artifact is ~60MB, the daemon boots often,
+ * and /tmp is not fast. Size + a version stamp written next to the copy is
+ * enough — the daemon version is a content hash of the daemon sources, so a
+ * changed artifact always changes either the stamp or the size.
+ */
+export function shimCoreNeedsCopy(input: {
+  /** Size of the running artifact, or null when it can't be stat'd. */
+  srcSize: number | null;
+  /** Size of the existing stable copy, or null when absent. */
+  dstSize: number | null;
+  /** Contents of the `<copy>.version` stamp, or null when absent. */
+  stampedVersion: string | null;
+  /** This daemon's version. */
+  version: string;
+}): boolean {
+  const { srcSize, dstSize, stampedVersion, version } = input;
+  if (srcSize === null || srcSize <= 0) return false; // nothing trustworthy to copy
+  if (dstSize === null) return true;                  // no copy yet
+  if (dstSize !== srcSize) return true;               // different artifact
+  if (!stampedVersion || stampedVersion !== version) return true;
+  return false;
 }

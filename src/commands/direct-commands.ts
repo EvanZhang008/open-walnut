@@ -144,8 +144,7 @@ export function installDirect(): void {
       try {
         const result = await startSessionForTask({
           taskIdPrefix,
-          ...(options.resume ? { resume: true } : {}),
-          ...(options.prompt !== undefined ? { prompt: options.prompt } : {}),
+          ...(options.message !== undefined ? { message: options.message } : {}),
           source: 'cli',
         });
         printStart(result, globals);

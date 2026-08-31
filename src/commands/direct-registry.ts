@@ -27,7 +27,7 @@ export interface DirectRunners {
   recall(query: string, globals: GlobalOptions): Promise<void>;
   projects(globals: GlobalOptions): Promise<void>;
   sessions(globals: GlobalOptions): Promise<void>;
-  start(taskIdPrefix: string, options: { resume?: boolean; prompt?: string }, globals: GlobalOptions): Promise<void>;
+  start(taskIdPrefix: string, options: { message?: string }, globals: GlobalOptions): Promise<void>;
 }
 
 let runners: DirectRunners | null = null;

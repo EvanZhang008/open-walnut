@@ -43,6 +43,13 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `bridge_offline` | 503 | Cloud companion has no live bridge to the needed host (or the primary's server is disconnected from its daemon) |
 | `not_supported_cloud` | 501 | The endpoint cannot run on a cloud REPLICA at all (e.g. global search needs the primary's semantic index) |
 | `cron_owner` | 409 | `POST /sessions/:id/terminate` refused: the session owns armed recurring crons — delete them first or pass `force: true` |
+| `session_exists` | 409 | `POST /tasks/:id/start` refused: the task already has a live session (`existing_session_id`); message it with `POST /messages` |
+| `task_has_no_session` | 409 | `POST /messages` named a task with nothing running; start one with `POST /tasks/:id/start` |
+| `ambiguous_target` | 400 | `POST /messages` handle matched several sessions/tasks (`candidates`); use a longer id |
+| `unknown_target` | 404 | `POST /messages` handle matched no session, task, or title |
+| `target_archived` \| `self_send` | 409 / 400 | `POST /messages` target is archived, or resolved to the calling session itself |
+| `throttled` \| `queue_full` | 429 | Peer send rate budget (`retryAfterMs`) or the target's queue cap; do not retry in a loop |
+| `unknown_request` \| `not_request_target` \| `origin_session_gone` | 404 / 403 / 410 | `in_reply_to` names no request, names one addressed to another session, or the asking session is gone |
 | `too_large` | 413 | Note content exceeds 2 MB (or an attachment upload exceeds its cap) |
 | `primary_unreachable` | 503 | `POST /time/heartbeats` did not persist the batch: the primary could not be reached, or it was reached and its day-file write did not land. Keep the batch queued and retry; sample `id`s make the retry a no-op for anything that did land |
 | `internal` | 500 | Unhandled server error |
@@ -74,7 +81,9 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | GET | `/api/v1/tasks/:id` | Full task detail (description/note readback + deps) |
 | DELETE | `/api/v1/tasks/:id?force=true` | Delete a task (409 on active sessions unless forced) |
 | POST | `/api/v1/tasks/:id/complete` | Complete a task (auto-unpins + awaits sync push; ≠ `PATCH status:done`) |
-| POST | `/api/v1/tasks/:id/start` | Start/resume a session for an existing task (cwd resolved server-side; 501 on REPLICA) |
+| POST | `/api/v1/tasks/:id/start` | Start a NEW session for an existing task (cwd resolved server-side; 409 when one is already live; 501 on REPLICA) |
+| POST | `/api/v1/messages` | Send a message to any session by session/task/title handle (501 on REPLICA) |
+| GET | `/api/v1/requests/:id` | Status of one `expect_reply` request (`rq-…`) |
 | POST | `/api/v1/tasks/:id/star` | Toggle star |
 | POST | `/api/v1/tasks/:id/notes` | Append a timestamped note entry |
 | PUT | `/api/v1/tasks/:id/note` | Replace the whole note |
@@ -528,20 +537,30 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   still has non-COMPLETE children. Added for the CLI's `open-walnut done`,
   which has always had these semantics.
 - `POST /api/v1/tasks/:id/start` (additive, 2026-08) body
-  `{ "resume"?: bool, "prompt"?: string }` →
-  `200 { "action": "start"|"resume", "taskId", "title", "sessionId"?,
-  "resume_missed"? }` — start (or resume) a session for an EXISTING task.
-  Distinct from `POST /api/v1/sessions`, whose body requires an absolute
-  `cwd`: this one names only a task and lets the session-runner resolve cwd
-  from the task/project chain (`task.cwd` → parent chain → project
-  `default_cwd` → project memory dir). `resume: true` sends `prompt` into an
-  already-live (`running`/`idle`) session for the task and returns
-  `action: "resume"` + its `sessionId`; with no live session it starts a new
-  one and sets `resume_missed: true`. `200` means ACCEPTED, not spawned (the
-  spawn is async in session-runner), same as `POST /sessions`.
-  Class C: `501 not_supported_cloud` on a REPLICA (no session-runner there) —
+  `{ "message"?, "cwd"?, "host"?, "model"?, "mode"?, "engine"?,
+  "expect_reply"?: bool, "reply_timeout"?: number }` →
+  `202 { "taskId", "title", "sessionId"?, "requestId"? }`: start a NEW
+  session for an EXISTING task and send it the first message (the
+  `session_start` op). Distinct from `POST /api/v1/sessions`, whose body
+  requires an absolute `cwd`: this one names only a task and lets the
+  session-runner resolve cwd from the task/project chain (`task.cwd` → parent
+  chain → project `default_cwd` → project memory dir). `sessionId` is
+  preassigned for the `claude` engine, so it comes back in this response;
+  `codex` sessions derive their own id from the ACP adapter and answer without
+  one. A task that already has a live (`running`/`idle`) session answers
+  `409 session_exists` with `existing_session_id` as a TOP-LEVEL sibling of
+  `error` (`{ "error": {...}, "existing_session_id": "..." }`): talk to it with
+  `POST /api/v1/messages` instead of opening a second one. `expect_reply: true`
+  registers a reply request against the caller session
+  (`x-walnut-caller-sid`) and returns its `requestId`. `202` means ACCEPTED,
+  not spawned (the spawn is async in session-runner), same as `POST /sessions`.
+  Class C: `501 not_supported_cloud` on a REPLICA (no session-runner there);
   use `POST /api/v1/sessions`, which relays over the bridge.
   Added for the CLI's `open-walnut start <task_id>`.
+  **Breaking, 2026-08**: the old `{ "resume", "prompt" }` body and the
+  `{ "action", "resume_missed" }` response fields are GONE. `resume` is not a
+  start mode any more: sending into a live session is `POST /api/v1/messages`
+  with the task id as `to`, which resolves the task's session itself.
 - `POST /api/v1/tasks/:id/star` → `200 { "task", "starred": false }` — RETIRED
   no-op. The starred system was removed in 2026-08; the route stays mounted for
   this frozen contract, still resolves the id (unknown id → `404`), and still
@@ -685,6 +704,60 @@ primary box the same endpoints serve directly — no bridge involved.
   `bridgeHosts: [ { hostAlias, since } ]` — hosts with a live daemon bridge.
   A session is talkable when its `ProjectedSession.host` (`""` maps to the
   primary's local daemon `__local__`) has an entry here.
+
+### Session messaging by handle (additive, 2026-08): `/messages` + `/requests/:id`
+
+The agent-facing send surface, backing the `session_send` and `request_get`
+operations. Distinct from `POST /api/v1/sessions/:id/messages` above, which is
+the phone's per-session composer and needs an exact session id: this one
+resolves a HANDLE, fences a session caller's words, and carries the reply
+ledger. Both end up in the same persistent message queue.
+
+- `POST /api/v1/messages` body
+  `{ "to"?, "text", "expect_reply"?: bool, "reply_timeout"?: number,
+  "in_reply_to"?, "messageId"? }` →
+  `202 { "delivery", "targetSessionId", "targetTitle", "targetTaskId"?,
+  "requestId"?, "repliedTo"?, "messageId"? }`.
+  - `to` resolves in this order: exact session id, then a task id or unique
+    task-id prefix (routing to that task's session), then a unique session-id
+    prefix of 4 characters or more, then a unique case-insensitive title
+    substring. A handle that matches both a task and a session at the same
+    stage is ambiguous on purpose.
+  - `delivery` is `queued` normally, or `deferred` when the target is parked on
+    a human permission prompt: the message is enqueued WITHOUT dispatch and
+    rides the next natural drain, so a send can never auto-answer someone's
+    pending prompt.
+  - The caller is stamped from the `x-walnut-caller-sid` header (provenance,
+    never authorization). A session caller's text is delivered inside a fenced,
+    labeled peer note and is rate limited per sender with a queue cap; the
+    human's own CLI (no caller sid) sends plain text with no throttle.
+  - `expect_reply: true` registers a reply request and returns its `requestId`
+    (`rq-…`), and the delivered message gets a Walnut trailer naming the exact
+    answer command. Session callers only: without a caller session there is
+    nowhere to route the answer (`400 bad_request`). `reply_timeout` is in
+    seconds, clamped to 60..86400, default 3600.
+  - `in_reply_to: "rq-…"` IS the answer: `to` may be omitted because the
+    request routes it back to the asker. Only the session the request was
+    addressed to may close it (`403 not_request_target`); an unknown id is
+    `404 unknown_request`. A reply that arrives after Walnut already notified
+    the asker is still delivered, marked late.
+  - `messageId` (`qm-…`) is the same idempotency id the per-session send takes.
+  - Errors: `400 bad_request` (empty `text`, missing `to`, `expect_reply`
+    without a session caller), `400 ambiguous_target` (with up to 5
+    `candidates`), `404 unknown_target`, `409 task_has_no_session` (start one
+    with `POST /tasks/:id/start`), `409 target_archived`, `400 self_send`,
+    `429 throttled` (with `retryAfterMs`) or `429 queue_full`,
+    `410 origin_session_gone` (the asking session is gone),
+    `501 not_supported_cloud` on a REPLICA (sends need the primary's
+    session-runner and daemons).
+- `GET /api/v1/requests/:id` → `200 { "request": { "id", "fromSessionId",
+  "toSessionId"?, "toTaskId"?, "preview", "status", "createdAt", "deadlineAt",
+  "settledAt"?, "outcome"? } }`. `status` is `pending` | `replied` |
+  `notified` | `expired`; `outcome` on a settled row is `completed` | `error` |
+  `awaiting_human` | `timeout`. Malformed id is `400 bad_request`, unknown id
+  `404 not_found`. This is a status read for `walnut wait rq-…`, not something
+  a client should poll: replies and the fallback notification are pushed into
+  the asking session on their own.
 
 ### Session launch (additive) — create a session from mobile
 
@@ -1512,6 +1585,7 @@ Per-family matrix:
 | Session PATCH (title / archived / human_note) | Class B+ fast-accept: synchronous relay first; bridge down → durable `cache/control-queue/` + `200 { session, queued: true }` | accepted and queued | drains on reconnect/60s sweep; primary validates at apply time (e.g. archive requires a stopped session); a rejection is dropped and the next projection push shows the truth |
 | Session PATCH (`mode`) | Class B synchronous only | `503 bridge_offline` | mode reconfigures the live CLI (permission mode swap); only the primary can truthfully accept it |
 | Session lifecycle: terminate / restart / retry / permission / execute-continue, model / effort / fork, session launch, messages into a session | Class B relays (messages ride their own durable `session.message` relay; see Session talk) | honest `503 bridge_offline` (messages: still accepted durably by the daemon lane when the daemon is reachable) | these act on a live process; fabricating acceptance would lie about the session's real state |
+| Start a session for a task (`POST /tasks/:id/start`), send by handle (`POST /messages`) | Class C: `501 not_supported_cloud` | n/a | both need the primary's session-runner, daemons, and request ledger; the phone's own lanes are `POST /sessions` and `POST /sessions/:id/messages`, which relay over the bridge |
 | Notes vault writes (create/update/delete, global notes, tag rename, folder/attachment deletes) | Class A-like: the vault is git-synced data; writes land locally | accepted | git-sync merge on reconnect; optimistic-lock hashes (`expectedHash`) protect against cross-box conflicts |
 | Time heartbeats (`POST /time/heartbeats`) | Class B relay: `204` only once the primary persisted the batch | `503 primary_unreachable`, so the client keeps the batch queued and retries | the primary is the single writer AND the only box that may assign a sample's local day; nothing is ever banked on the replica. Retries are safe because the primary dedupes on each sample's `id` (exactly-once in the rollup; a known-failed day-file write is retried, so the disk is at-least-once) |
 

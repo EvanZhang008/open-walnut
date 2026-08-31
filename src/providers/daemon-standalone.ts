@@ -82,9 +82,13 @@ import {
   GATEWAY_SOCKET_FILENAME,
   GATEWAY_MAX_LINE_BYTES,
   gatewayHubTimeoutMs,
+  gatewayShimScript,
+  isDaemonCliKeyword,
   isExternalCallerSid,
   parseGatewayLine,
   resolveGatewayCallerSid,
+  SHIM_CORE_BASENAME,
+  shimCoreNeedsCopy,
   type GatewayErrorCode,
   type GatewayResponse,
 } from './gateway-core.js'
@@ -96,9 +100,11 @@ process.umask(0o077)
 // Baked in at compile time via `bun build --define` (see scripts/build-daemon.sh).
 const DAEMON_VERSION = process.env.DAEMON_VERSION || 'dev'
 
-// `wn ...` argv is user text (peer messages) — it must never trigger the
-// version fast-path (e.g. `wn peers send abc "--version"`).
-if (process.argv.includes('--version') && process.argv[2] !== 'wn') {
+// CLI argv is user text (op call payloads) — it must never trigger the version
+// fast-path (e.g. `walnut tools call session_send '…"--version"…'`). Both
+// dispatch keywords are excluded, the legacy `wn` included: field shims still
+// pass it, and a payload containing `--version` must not print the version.
+if (process.argv.includes('--version') && !isDaemonCliKeyword(process.argv[2])) {
   console.log(DAEMON_VERSION)
   process.exit(0)
 }
@@ -2096,7 +2102,7 @@ function userWalnutShimText(): string {
   return '#!/bin/sh\n'
     + '# ' + USER_WALNUT_SHIM_MARKER + ' — installed by the Walnut session daemon. Safe to delete.\n'
     + '# A real walnut CLI anywhere else on PATH always wins; otherwise the\n'
-    + '# daemon gateway shim answers (guide / peers / tools work on any host).\n'
+    + '# daemon gateway shim answers (guide / wait / tools work on any host).\n'
     + 'self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
     + 'old_ifs=$IFS; IFS=:\n'
     + 'for d in $PATH; do\n'
@@ -2157,24 +2163,77 @@ function installUserWalnutShim() {
   if (installed.length > 0) logMsg('info', 'walnut on user PATH', { paths: installed })
 }
 
+/**
+ * Copy the running binary to GATEWAY_SHIM_DIR/walnut-core and return that path,
+ * or null when the copy could not be made.
+ *
+ * WHY: the shim must exec a path that OUTLIVES this process. On the hub the
+ * daemon binary is launched from a stage temp dir (dev-prod clones dist/ into
+ * /var/folders/…/open-walnut-stage.<ts>/ and boots from the clone), and the next
+ * deploy deletes that clone — a shim holding `process.execPath` then pointed at
+ * nothing and every `walnut` call in a live session exited 126. DAEMON_DIR is
+ * stable (/tmp/open-walnut), so the copy lives next to the shim it serves.
+ *
+ * Atomicity: write to a temp name in the SAME dir, then rename. Same-dir rename
+ * is atomic and can never be EXDEV, and a session mid-exec keeps the old inode.
+ */
+function ensureShimCoreCopy(): string | null {
+  const dst = path.join(GATEWAY_SHIM_DIR, SHIM_CORE_BASENAME)
+  const stampPath = dst + '.version'
+  const tmp = dst + '.tmp-' + process.pid
+  try {
+    const statSize = (p: string): number | null => {
+      try { return fs.statSync(p).size } catch { return null }
+    }
+    let stamped: string | null = null
+    try { stamped = fs.readFileSync(stampPath, 'utf-8').trim() } catch { /* absent */ }
+    const needsCopy = shimCoreNeedsCopy({
+      srcSize: statSize(process.execPath),
+      dstSize: statSize(dst),
+      stampedVersion: stamped,
+      version: DAEMON_VERSION,
+    })
+    if (!needsCopy) return fs.existsSync(dst) ? dst : null
+    fs.copyFileSync(process.execPath, tmp)
+    fs.chmodSync(tmp, 0o700)
+    fs.renameSync(tmp, dst)
+    fs.writeFileSync(stampPath, DAEMON_VERSION)
+    logMsg('info', 'walnut shim core copied', { path: dst, version: DAEMON_VERSION })
+    return dst
+  } catch (err) {
+    try { fs.unlinkSync(tmp) } catch { /* nothing to clean */ }
+    // A shim that works until the next deploy beats no shim at all, so the
+    // caller falls back to process.execPath instead of skipping the shim.
+    logMsg('warn', 'walnut shim core copy failed — shim will point at the running binary', {
+      error: (err as Error).message,
+      execPath: process.execPath,
+    })
+    return null
+  }
+}
+
 /** PATH shim so `walnut` inside spawned sessions reaches this daemon's dispatch. */
-function writeWnShim() {
+function writeWalnutShim() {
   try {
     fs.mkdirSync(GATEWAY_SHIM_DIR, { recursive: true, mode: 0o700 })
-    // Compiled binary: argv[1] is a bunfs VIRTUAL path (embedded, must never
-    // leak into the shim) → exec the binary itself, argv[2]='wn' (the internal
-    // dispatch keyword — not a user-facing name). Dev run
-    // (`bun daemon-standalone.ts`): argv[1] is the real script on disk → keep
-    // it so the shim reaches the same code.
+    // Dev run (`bun daemon-standalone.ts`): argv[1] is the real script on disk →
+    // exec runtime + script, unchanged. Compiled binary: argv[1] is a bunfs
+    // VIRTUAL path (embedded, must never leak into the shim) → exec the binary
+    // itself, but via the STABLE copy, because the running execPath can be
+    // deleted under us (see ensureShimCoreCopy).
     const entry = process.argv[1] || ''
     const isVirtualEntry = entry.includes('$bunfs') || entry.includes('~BUN')
-    const script = entry && !isVirtualEntry && entry !== process.execPath && fs.existsSync(entry)
-      ? ' ' + shellQuote(entry)
+    const devScript = entry && !isVirtualEntry && entry !== process.execPath && fs.existsSync(entry)
+      ? entry
       : ''
-    const shim = '#!/bin/sh\nexec ' + shellQuote(process.execPath) + script + ' wn "$@"\n'
-    // One name: `walnut`. GATEWAY_SHIM_DIR is APPENDED to session PATH, so on
-    // the hub the real npm walnut still wins; on remote hosts this shim IS
-    // the walnut command. The retired `wn` file is removed, not rewritten.
+    const argv = devScript
+      ? [process.execPath, devScript]
+      : [ensureShimCoreCopy() ?? process.execPath]
+    // One name: `walnut`, and the shim passes the canonical `walnut` dispatch
+    // keyword. GATEWAY_SHIM_DIR is APPENDED to session PATH, so on the hub the
+    // real npm walnut still wins; on remote hosts this shim IS the walnut
+    // command. The retired `wn` file is removed, not rewritten.
+    const shim = gatewayShimScript(argv)
     const p = path.join(GATEWAY_SHIM_DIR, 'walnut')
     fs.writeFileSync(p, shim, { mode: 0o755 })
     fs.chmodSync(p, 0o755)
@@ -5284,6 +5343,9 @@ function cleanup() {
     try { fs.unlinkSync(GATEWAY_SOCK_PATH) } catch {}
     try { fs.unlinkSync(GATEWAY_SHIM_PATH) } catch {}
     try { fs.unlinkSync(path.join(GATEWAY_SHIM_DIR, 'wn')) } catch {} // retired alias, older daemons wrote it
+    // walnut-core (the stable copy of this artifact) is deliberately KEPT: the
+    // size+version stamp makes the successor reuse it, which is what turns a
+    // restart into a stat instead of a ~60MB copy. One file, bounded size.
   }
   logMsg('info', 'daemon cleanup complete', { uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000) })
 }
@@ -5588,13 +5650,17 @@ function dialBridge(gen: number): void {
 // ── Main ──
 const action = process.argv[2]
 
-// `wn` mode: the same binary doubles as the peer-session CLI (zero extra
-// deploy artifacts — the on-PATH `wn` is a 2-line shim exec'ing this binary).
+// CLI mode: the same binary doubles as the on-host walnut CLI (zero extra
+// deploy artifacts — the on-PATH `walnut` is a 2-line shim exec'ing this
+// binary). BOTH keywords dispatch here: `walnut` is canonical, `wn` is a
+// deprecated compat alias that MUST stay because shims written by daemons
+// already deployed in the field pass `wn`, and a shim is only rewritten when
+// its own daemon next boots (see DAEMON_CLI_KEYWORD_LEGACY in gateway-core.ts).
 // Dynamic import keeps the daemon startup path free of CLI code; bun bundles
 // the literal specifier into the compiled binary.
-if (action === 'wn') {
-  const { runWnCli } = await import('./wn-cli.js')
-  process.exit(await runWnCli(process.argv.slice(3)))
+if (isDaemonCliKeyword(action)) {
+  const { runWalnutCli } = await import('./wn-cli.js')
+  process.exit(await runWalnutCli(process.argv.slice(3)))
 }
 
 if (action === '--stop') {
@@ -5715,10 +5781,10 @@ if (action === '--start') {
     },
   })
 
-  // Agent gateway: second (unix-socket) listener + on-PATH `wn` shim. Both
+  // Agent gateway: second (unix-socket) listener + on-PATH `walnut` shim. Both
   // additive — failures log a warning and never abort daemon startup.
   startGatewayListener()
-  writeWnShim()
+  writeWalnutShim()
 
   const port = server.port
   fs.writeFileSync(PORT_FILE, String(port))
@@ -5817,6 +5883,6 @@ if (action === '--start') {
     process.stdin.on('end', () => {}) // Don't exit on stdin close
   }
 } else {
-  console.error('Usage: bun daemon-standalone.ts --start | --stop | --status | --version | wn <args...>')
+  console.error('Usage: bun daemon-standalone.ts --start | --stop | --status | --version | walnut <args...>')
   process.exit(1)
 }

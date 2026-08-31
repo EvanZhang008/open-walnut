@@ -16,6 +16,7 @@ import type {
   OnTurnErrorPayload,
   OnMessageSendPayload,
   OnToolUsePayload,
+  TaskHookContext,
 } from './types.js';
 import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 
@@ -1647,6 +1648,51 @@ export const cwdRenameDetectorHook: SessionHookDefinition = {
   },
 };
 
+/**
+ * session-request-watch — the turn-end edge of the expect_reply loop.
+ *
+ * When a task lands AGENT_COMPLETE (turn end, error, or awaiting-human all
+ * project there) and a pending session-request targets that task/session, the
+ * target finished its turn WITHOUT replying — it never will on this turn, so
+ * tell the asker now instead of making it wait for the deadline sweeper.
+ * Exactly-once lives in the request row's atomic settle (notifyRequesterFallback);
+ * a reply racing this edge wins the settle and this hook stays silent.
+ */
+export const sessionRequestWatchHook: SessionHookDefinition = {
+  id: 'session-request-watch',
+  name: 'Session Request Watch',
+  description: 'Notifies the asking session when a session that owes a reply ends its turn without replying.',
+  hooks: ['onTaskPhaseChanged'],
+  priority: 60,
+  source: 'builtin',
+  enabled: true,
+  filter: { phases: ['AGENT_COMPLETE'] },
+  handler: async (payload) => {
+    const ctx = payload as unknown as TaskHookContext;
+    const sessionId = ctx.sessionId ?? ctx.task?.session_id;
+    const { pendingRequestsForTarget } = await import('../session-requests.js');
+    const pending = await pendingRequestsForTarget({ sessionId, taskId: ctx.taskId });
+    if (pending.length === 0) return;
+
+    // Outcome from the target session's live state — eventSource strings are
+    // caller tags, not triggers, so the record is the honest signal.
+    let outcome: 'completed' | 'error' | 'awaiting_human' = 'completed';
+    if (sessionId) {
+      try {
+        const { getSessionByClaudeId } = await import('../session-tracker.js');
+        const record = await getSessionByClaudeId(sessionId);
+        if (record?.pendingPermission) outcome = 'awaiting_human';
+        else if (record?.process_status === 'error') outcome = 'error';
+      } catch { /* completed stands */ }
+    }
+
+    const { notifyRequesterFallback } = await import('../sessions/session-request-notify.js');
+    for (const request of pending) {
+      await notifyRequesterFallback(request, outcome);
+    }
+  },
+};
+
 // NOTE: the former session-summary-gist hook (an LLM pass over the FULL transcript
 // on 'onSessionEnd') was removed. It was built before per-turn summaries existed and
 // was triggered by a misnamed event: session:ended fires after EVERY turn (it's a UI
@@ -1664,4 +1710,5 @@ export const builtinHooks: SessionHookDefinition[] = [
   sessionAutoTitleTurnCompleteHook,
   sessionErrorNotifyHook,
   cwdRenameDetectorHook,
+  sessionRequestWatchHook,
 ];

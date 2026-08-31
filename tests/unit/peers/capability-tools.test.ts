@@ -21,15 +21,9 @@ import { PeerThrottle, PEER_SEND_MAX_PER_WINDOW } from '../../../src/core/peers/
 
 const CALLER = 'a1b2c3d4-1111-2222-3333-444455556666';
 
+/** The router's whole dependency surface after the peers fold: budget + posture. */
 function deps(throttle = new PeerThrottle()): CapabilityRouterDeps {
-  return {
-    listSessions: async () => [],
-    isEnvironmentSession: () => false,
-    getQueue: async () => [],
-    sendMessageToSession: async () => ({}),
-    throttle,
-    cloudMode: false,
-  };
+  return { throttle, cloudMode: false };
 }
 
 describe('gateway tools.list', () => {
@@ -42,6 +36,15 @@ describe('gateway tools.list', () => {
     expect(names).toContain('task_list');
     expect(names).toContain('task_create');
     expect(names).toContain('api');
+    // The ops that replaced the peers capabilities must be in the catalog a
+    // remote session sees — otherwise the pointer in the retired branch is a
+    // dead end (tests/unit/peers/capability-router.test.ts).
+    expect(names).toContain('session_list');
+    expect(names).toContain('session_send');
+    expect(names).toContain('session_start');
+    expect(names).toContain('request_get');
+    expect(ops.find((o) => o.name === 'request_get')?.readonly).toBe(true);
+    expect(ops.find((o) => o.name === 'session_send')?.readonly).toBe(false);
     const del = ops.find((o) => o.name === 'task_delete');
     expect(del?.remote).toBe('deny');
   });
@@ -104,12 +107,22 @@ describe('gateway tools.call — policy gates', () => {
     let t = 2_000_000;
     const throttle = new PeerThrottle(() => t);
     for (let i = 0; i < PEER_SEND_MAX_PER_WINDOW; i++) { throttle.admitWrite(CALLER); t += 10; }
-    // task_list is readonly → the gate lets it through to execution; against a
-    // dead server that surfaces as `internal` (executor error), NOT `throttled`.
-    const r = await handleGatewayCapability(
-      'tools.call', CALLER, { name: 'walnut_status' }, 'devbox', deps(throttle),
-    );
-    if (!r.ok) expect(r.error.code).not.toBe('throttled');
+    // walnut_status is readonly → the gate lets it through to EXECUTION, which
+    // must surface as `internal` (executor transport error), never `throttled`.
+    // Point the executor at a closed local port so the call cannot reach the
+    // developer's real server on :3456 and cannot touch the network.
+    const prevBase = process.env.OPEN_WALNUT_API_URL;
+    process.env.OPEN_WALNUT_API_URL = 'http://127.0.0.1:1';
+    try {
+      const r = await handleGatewayCapability(
+        'tools.call', CALLER, { name: 'walnut_status' }, 'devbox', deps(throttle),
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.code).toBe('internal');
+    } finally {
+      if (prevBase === undefined) delete process.env.OPEN_WALNUT_API_URL;
+      else process.env.OPEN_WALNUT_API_URL = prevBase;
+    }
   });
 
   it('cloud replica refuses all gateway capabilities (tools included)', async () => {

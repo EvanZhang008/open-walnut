@@ -34,10 +34,11 @@ export function createWalnutMcpServer(options: McpOptions = {}): McpServer {
     { name: 'walnut', version: '1' },
     {
       instructions:
-        'Walnut is the user\'s personal task + session hub. Use delegate to start tracked work; ' +
-        'task_create only records it. Reuse tasks only by explicit id. Hand work back with ' +
-        'task_update phase=AGENT_COMPLETE when work is done and awaiting review, or WAIT when a ' +
-        'person has to act; COMPLETE means the whole task is finished. ' +
+        'Walnut is the user\'s personal task + session hub. task_create only records work; ' +
+        'session_start starts a session for a task; session_send messages a live session ' +
+        '(expect_reply to get its outcome back). Reuse tasks only by explicit id. Hand work back ' +
+        'with task_update phase=AGENT_COMPLETE when work is done and awaiting review; ' +
+        'COMPLETE means the whole task is finished. ' +
         'Never delete tasks unless the user explicitly asked.',
     },
   )

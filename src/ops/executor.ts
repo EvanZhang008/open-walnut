@@ -34,6 +34,13 @@ export type OpOutcome =
 /** Header every op request carries when the caller's session id is known. */
 export const CALLER_SID_HEADER = 'x-walnut-caller-sid'
 
+/** Host the calling CLI runs on (daemon hostKey) — provenance for anonymous
+ *  senders' fence labels. Same trust level as the sid header: never gated on. */
+export const CALLER_HOST_HEADER = 'x-walnut-caller-host'
+
+/** Who is calling, as far as the transport knows. Labels only — never gated on. */
+interface CallerProvenance { sid?: string; host?: string }
+
 /**
  * Who is calling, for ops whose server side stamps provenance (the human inbox
  * stamps a letter's sender from it). An explicit `callerSid` always wins — the
@@ -41,8 +48,16 @@ export const CALLER_SID_HEADER = 'x-walnut-caller-sid'
  * fallback covers the OTHER processes: `walnut tools call` and `walnut mcp`, which
  * run inside a managed session and inherit WALNUT_SESSION_ID.
  *
- * The header is provenance, never authorization: nothing gates on it, so a
- * forged value can only mislabel a letter's sender.
+ * The header is provenance within the user's OWN trust domain — the socket is
+ * owner-only 0600 and the localhost route is unauthenticated, so anyone who can
+ * set this header is already the user (or a process the user ran). It is NOT a
+ * cross-tenant credential. It does drive two same-user integrity choices, not
+ * just labels: which session may answer a reply-request (session-send-core
+ * performReply) and the "from session X" name on a peer fence. A local process
+ * that forges it can therefore impersonate one of the user's OTHER sessions to
+ * a third — but never escalate authorization: the fence still declares the
+ * message unauthorized. Do not rely on this header as a security boundary
+ * against a hostile local process (that boundary is the 0600 socket itself).
  */
 function resolveCallerSid(explicit?: string): string | undefined {
   const sid = (explicit ?? process.env.WALNUT_SESSION_ID ?? '').trim()
@@ -71,7 +86,7 @@ async function rawRequest(
   path: string,
   body: unknown,
   timeoutMs: number,
-  callerSid?: string,
+  prov?: CallerProvenance,
 ): Promise<OpOutcome> {
   const serverRoot = base.replace(/\/api\/v1$/, '')
   const url = path.startsWith('/api/') ? `${serverRoot}${path}` : `${base}${path}`
@@ -81,7 +96,8 @@ async function rawRequest(
       method,
       headers: {
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-        ...(callerSid ? { [CALLER_SID_HEADER]: callerSid } : {}),
+        ...(prov?.sid ? { [CALLER_SID_HEADER]: prov.sid } : {}),
+        ...(prov?.host ? { [CALLER_HOST_HEADER]: prov.host } : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
@@ -172,7 +188,7 @@ export function materializeBinding(
 export async function executeOp(
   name: string,
   rawArgs: Record<string, unknown>,
-  options: { apiBase?: string; callerSid?: string } = {},
+  options: { apiBase?: string; callerSid?: string; callerHost?: string } = {},
 ): Promise<OpOutcome> {
   const op = getOp(name)
   if (!op) return { ok: false, message: `Unknown op: ${name}. Run \`walnut tools list\` for the catalog.` }
@@ -185,20 +201,23 @@ export async function executeOp(
   const args = parsed.data as Record<string, unknown>
 
   const base = resolveApiBase(options.apiBase)
-  return runOp(op, args, base, resolveCallerSid(options.callerSid))
+  return runOp(op, args, base, {
+    sid: resolveCallerSid(options.callerSid),
+    host: options.callerHost?.trim() || undefined,
+  })
 }
 
 async function runOp(
   op: WalnutOp,
   args: Record<string, unknown>,
   base: string,
-  callerSid?: string,
+  prov?: CallerProvenance,
 ): Promise<OpOutcome> {
   const timeoutMs = op.timeoutMs ?? REQUEST_TIMEOUT_MS
   if (op.handler) {
     try {
       const call = async (method: HttpBinding['method'], path: string, body?: unknown): Promise<unknown> => {
-        const r = await rawRequest(base, method, path, body, timeoutMs, callerSid)
+        const r = await rawRequest(base, method, path, body, timeoutMs, prov)
         if (!r.ok) throw new Error(r.message)
         return r.result
       }
@@ -214,7 +233,7 @@ async function runOp(
   } catch (err) {
     return { ok: false, message: `Invalid arguments for ${op.name}: ${err instanceof Error ? err.message : String(err)}` }
   }
-  const r = await rawRequest(base, op.bind!.method, materialized.path, materialized.body, timeoutMs, callerSid)
+  const r = await rawRequest(base, op.bind!.method, materialized.path, materialized.body, timeoutMs, prov)
   if (!r.ok) return r
   const result = op.mapResult ? op.mapResult({ body: r.result, args }) : r.result
   return { ok: true, result }

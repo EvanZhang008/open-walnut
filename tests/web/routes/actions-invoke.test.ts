@@ -39,9 +39,8 @@ function createApp() {
   v1.put('/focus/tasks/:id/tier', record);
   v1.delete('/tasks/:id', record);
   v1.post('/tasks/:id/complete', record);
-  v1.post('/delegate', record);
-  v1.post('/tasks/:id/start', record);
-  v1.post('/sessions/:id/messages', record);
+  v1.post('/tasks/:id/start', record);   // session_start
+  v1.post('/messages', record);          // session_send
   v1.put('/memory/:doc', record);
   v1.post('/notes', record);
   v1.use(actionsV1Router);
@@ -168,12 +167,16 @@ describe('POST /api/v1/actions/invoke — destructive ops need confirmation', ()
 describe('POST /api/v1/actions/invoke — code and whole-document ops need confirmation', () => {
   // A card's `label` is free text the model chose, and the model's input carries
   // task titles, notes and transcripts it did not write — so "Fix typo" can sit
-  // over a `delegate` that spawns a CLI with an arbitrary prompt in bypass mode.
-  // These are not "undoable data loss", so the destructive tag never covered them.
+  // over a `session_start` that spawns a CLI with an arbitrary prompt in bypass
+  // mode. These are not "undoable data loss", so the destructive tag never
+  // covered them; POWERFUL_OPS in actions-v1.ts does.
+  //
+  // The list below IS that set. `delegate` and the old `task_start`/`session_send`
+  // shapes are gone: starting work is `session_start` (task handle + message) and
+  // talking to a live session is `session_send` (to + text).
   const oneClickForbidden: Array<[string, Record<string, unknown>]> = [
-    ['delegate', { message: 'echo hi', cwd: '/tmp/example', title: 'Fix typo', mode: 'bypass' }],
-    ['task_start', { id: 't_1', prompt: 'go' }],
-    ['session_send', { id: 's_1', text: 'go' }],
+    ['session_start', { task: 't_1', message: 'go', mode: 'bypass' }],
+    ['session_send', { to: 's_1', text: 'go' }],
     ['memory_write', { doc: 'global', content: 'replaced' }],
     ['note_write', { path: 'Projects/Example', content: 'replaced' }],
   ];
@@ -188,16 +191,41 @@ describe('POST /api/v1/actions/invoke — code and whole-document ops need confi
     });
   }
 
-  it('runs the confirmed call unchanged', async () => {
+  it('runs the confirmed session_start unchanged', async () => {
     const res = await invoke({
-      tool: 'delegate',
-      args: { message: 'echo hi', cwd: '/tmp/example', title: 'Fix typo' },
+      tool: 'session_start',
+      args: { task: 't_1', message: 'echo hi' },
       confirmed: true,
     });
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(seen.map((s) => `${s.method} ${s.path}`)).toEqual(['POST /delegate']);
+    // The task handle rides the path; everything else rides the body.
+    expect(seen).toEqual([
+      { method: 'POST', path: '/tasks/t_1/start', body: { message: 'echo hi' } },
+    ]);
+  });
+
+  it('runs the confirmed session_send against the unified send route', async () => {
+    const res = await invoke({
+      tool: 'session_send',
+      args: { to: 's_1', text: 'echo hi' },
+      confirmed: true,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(seen).toEqual([
+      { method: 'POST', path: '/messages', body: { to: 's_1', text: 'echo hi' } },
+    ]);
+  });
+
+  it('leaves the reply-status read on one click (request_get is readonly)', async () => {
+    // request_get is what `walnut wait rq-…` polls — gating it behind a
+    // confirmation would make the wait loop unusable from a card.
+    const { getOp } = await import('../../../src/ops/index.js');
+    const op = getOp('request_get');
+    expect(op?.tags.readonly).toBe(true);
   });
 
   it('leaves trivially reversible writes on one click', async () => {

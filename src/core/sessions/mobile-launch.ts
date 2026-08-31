@@ -22,7 +22,7 @@ import { getFrequentDirs, scoreFrequentDir } from '../frequent-dirs.js';
 import { quickStartSession, QuickStartError } from './quick-start.js';
 import { resolveModelSwitchValue, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
 import type { SessionEngine } from '../types.js';
-import { engineCaps, isKnownEngine, normalizeEngine } from '../agents/engine-registry.js';
+import { engineCaps, normalizeEngine } from '../agents/engine-registry.js';
 import { log } from '../../logging/index.js';
 
 /** Launch-time permission modes — the full registry set (core/types.ts). */
@@ -64,9 +64,9 @@ export function launchErrorCode(status: number): string {
  * Throws QuickStartError(message, 400) with the exact messages the frozen
  * /api/v1 contract already ships.
  */
-function validateLaunchBody(body: unknown, allowEngine: boolean): MobileLaunchInput {
+function validateLaunchBody(body: unknown): MobileLaunchInput {
   const {
-    cwd, host: rawHost, message, taskId, taskTitle, project, model: rawModel, mode, engine,
+    cwd, host: rawHost, message, taskId, taskTitle, project, model: rawModel, mode,
   } = (body ?? {}) as {
     cwd?: unknown;
     host?: unknown;
@@ -76,7 +76,6 @@ function validateLaunchBody(body: unknown, allowEngine: boolean): MobileLaunchIn
     project?: unknown;
     model?: unknown;
     mode?: unknown;
-    engine?: unknown;
   };
 
   if (typeof cwd !== 'string' || !cwd.trim()) {
@@ -108,9 +107,6 @@ function validateLaunchBody(body: unknown, allowEngine: boolean): MobileLaunchIn
   }
   if (project !== undefined && (typeof project !== 'string' || project.length > 256)) {
     throw new QuickStartError('project must be a string up to 256 characters', 400);
-  }
-  if (allowEngine && engine !== undefined && !isKnownEngine(engine)) {
-    throw new QuickStartError('engine must be claude or codex', 400);
   }
 
   // Host: '' / absent = the primary box. Non-string is a shape error here;
@@ -144,16 +140,11 @@ function validateLaunchBody(body: unknown, allowEngine: boolean): MobileLaunchIn
     project: typeof project === 'string' ? project.trim() : undefined,
     model,
     mode: typeof mode === 'string' ? mode : undefined,
-    engine: allowEngine ? engine as MobileLaunchInput['engine'] : undefined,
   };
 }
 
 export function validateMobileLaunchBody(body: unknown): MobileLaunchInput {
-  return validateLaunchBody(body, false);
-}
-
-export function validateDelegateLaunchBody(body: unknown): MobileLaunchInput {
-  return validateLaunchBody(body, true);
+  return validateLaunchBody(body);
 }
 
 /**

@@ -1,65 +1,71 @@
 import { z } from 'zod';
-import { SESSION_MODE_IDS } from '../core/types.js';
+import { SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js';
 import { defineOp } from './registry.js';
 
 const SESSION_MODE = z.enum(SESSION_MODE_IDS);
+const SESSION_ENGINE = z.enum(SESSION_ENGINE_IDS);
 
 defineOp({
-  name: 'delegate',
-  title: 'Delegate tracked work',
+  name: 'session_start',
+  title: 'Start a session for a task',
   description:
-    'Atomically start tracked work. With taskId, reuse that exact task and its live session or start a new session for it. ' +
-    'Without taskId, create a new task and session; cwd is then required. This operation never guesses a task from its title. ' +
-    'Use task_create instead when the user only wants to record work without starting it.',
+    'Start a NEW coding session for one existing task and send it the first message; returns the sessionId. ' +
+    'Create the task first with task_create. If the task already has a live session this returns 409 with ' +
+    'existing_session_id — talk to it with session_send instead. Pass expect_reply=true to have the new ' +
+    'session report back to YOUR session when it finishes (Walnut also notifies you if it ends without replying).',
   input: {
-    taskId: z.string().min(1).optional().describe('Exact task id or unique prefix to reuse; omit to create a new task'),
-    message: z.string().min(1).describe('Initial instruction sent to the coding session'),
-    cwd: z.string().min(1).optional().describe('Absolute working directory; required only when creating a new task'),
-    title: z.string().min(1).max(500).optional().describe('New task title; used only when taskId is omitted'),
-    project: z.string().max(256).optional().describe('New task project; omit or use "" for Inbox'),
+    task: z.string().min(1).describe('Task id or unique prefix'),
+    message: z.string().optional().describe('First instruction; defaults to a sentence naming the task'),
+    cwd: z.string().optional().describe('Absolute working directory; omit to resolve from the task/project'),
     host: z.string().optional().describe('Execution host alias; omit for the primary box'),
     model: z.string().optional().describe('Session model id or provider model value'),
     mode: SESSION_MODE.optional().describe('Session permission mode'),
-    engine: z.enum(['claude', 'codex']).optional().describe('Coding agent engine; default claude'),
-  },
-  bind: { method: 'POST', path: '/delegate' },
-  tags: { readonly: false, remote: 'allow', primaryOnly: true },
-});
-
-defineOp({
-  name: 'task_start',
-  title: 'Start or resume a task session',
-  description:
-    'Start tracked work for one existing task. With resume=true, send the prompt to its running or idle session; ' +
-    'if no live session exists, start a new one. Prefer delegate for the normal create-or-reuse workflow.',
-  input: {
-    id: z.string().min(1).describe('Task id or unique prefix'),
-    resume: z.boolean().optional().describe('Reuse a running or idle session when available; default false'),
-    prompt: z.string().optional().describe('Initial or follow-up instruction'),
+    engine: SESSION_ENGINE.optional().describe('Coding agent engine; default claude'),
+    expect_reply: z.boolean().optional().describe('Route the session\'s reply back to your session; enables the no-reply fallback notification'),
+    reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 3600)'),
   },
   handler: async (args, call) => {
-    const { id, ...body } = args;
-    return call('POST', `/tasks/${encodeURIComponent(String(id))}/start`, body);
+    const { task, ...body } = args;
+    return call('POST', `/tasks/${encodeURIComponent(String(task))}/start`, body);
   },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
 defineOp({
   name: 'session_send',
-  title: 'Send a session message',
+  title: 'Send a message to a session',
   description:
-    'Send a follow-up message to one existing session through Walnut\'s durable queue. ' +
-    'Use task_start or delegate when the task has no session yet.',
+    'THE way to talk to any session (yours never — no self-send). `to` accepts a session id, a unique id ' +
+    'prefix (>=4 chars), a task id (routes to that task\'s session), or a unique title substring. When ' +
+    'another session is the caller, the text is delivered as a fenced peer note that carries no user ' +
+    'authorization. expect_reply=true asks the receiver to reply and registers a Walnut fallback ' +
+    'notification if it finishes without replying. To ANSWER such a request, call this op with ' +
+    'in_reply_to=rq-… (omit `to` — the answer routes to the asker automatically). ' +
+    'A task with no session yet → 409: start one with session_start.',
   input: {
-    id: z.string().min(1).describe('Session id'),
+    to: z.string().min(1).optional().describe('Session id / unique prefix, task id, or unique title substring (omit only with in_reply_to)'),
     text: z.string().min(1).describe('Message text'),
+    expect_reply: z.boolean().optional().describe('Ask the receiver to reply; Walnut notifies you if it finishes without replying'),
+    reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 3600)'),
+    in_reply_to: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('Request id you are answering — routes to the asker'),
     messageId: z.string().regex(/^qm-[A-Za-z0-9-]{1,64}$/).optional().describe('Stable id for retry deduplication'),
   },
-  handler: async (args, call) => {
-    const { id, ...body } = args;
-    return call('POST', `/sessions/${encodeURIComponent(String(id))}/messages`, body);
+  bind: { method: 'POST', path: '/messages' },
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
+});
+
+defineOp({
+  name: 'request_get',
+  title: 'Read a reply-request status',
+  description:
+    'Status of one expect_reply request (rq-…): pending | replied | notified | expired. ' +
+    'Prefer NOT polling this — replies and fallback notifications arrive in your session automatically; ' +
+    '`walnut wait rq-…` does the waiting for you when you truly cannot continue without the answer.',
+  input: {
+    id: z.string().regex(/^rq-[a-f0-9]{6,}$/).describe('Request id from session_send/session_start expect_reply'),
   },
-  tags: { readonly: false, remote: 'allow' },
+  bind: { method: 'GET', path: '/requests/:id' },
+  tags: { readonly: true, remote: 'allow' },
 });
 
 defineOp({

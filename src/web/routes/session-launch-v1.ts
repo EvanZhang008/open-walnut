@@ -238,27 +238,6 @@ sessionLaunchV1Router.get('/sessions/launch-options', async (_req: Request, res:
 // through the bridge relay on cloud). Returns 201 with the pre-assigned
 // session id so the app can open the conversation view immediately (the
 // record is pre-seeded before the spawn).
-sessionLaunchV1Router.post('/delegate', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    if (CLOUD_MODE) {
-      sendError(res, 501, 'not_supported_cloud', 'Delegation runs on the primary box')
-      return
-    }
-    try {
-      const { delegateWork } = await import('../../core/delegate-work.js')
-      res.status(202).json(await delegateWork(req.body, 'delegate-op'))
-    } catch (err) {
-      if (err instanceof QuickStartError) {
-        sendError(res, err.statusCode, launchErrorCode(err.statusCode), err.message)
-        return
-      }
-      throw err
-    }
-  } catch (err) {
-    next(err)
-  }
-})
-
 sessionLaunchV1Router.post('/sessions', async (req: Request, res: Response, next: NextFunction) => {
   try {
     // Shape validation runs HERE on both boxes: on cloud it fast-fails junk

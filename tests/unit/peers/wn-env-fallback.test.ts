@@ -4,12 +4,14 @@
  * The feature: any agent or terminal on a host that runs a daemon can use `wn`
  * with NO injected environment. Covered here, in the three places it lives:
  *
- *  - wn client (resolveWnEndpoint / isTrustedGatewaySocket): env wins when
+ *  - wn client (resolveWalnutCliEndpoint / isTrustedGatewaySocket): env wins when
  *    present, otherwise the well-known socket path + caller sid 'external'.
  *  - daemon gateway (resolveGatewayCallerSid, used by both twins): 'external'
  *    passes through, every other unknown sid is still refused locally.
- *  - hub (capability-router): 'external' is PROVENANCE ONLY — no self row, an
- *    honest sender label, and not one capability a tracked session lacks.
+ *  - hub (capability-router): 'external' is PROVENANCE ONLY — the same op
+ *    catalog a tracked session sees, the same policy gates, and a per-HOST rate
+ *    bucket rather than one shared global budget. (The sender LABEL an anonymous
+ *    caller gets in a delivered note is pinned in peer-wrapper.test.ts.)
  *
  * Security invariant pinned throughout: the socket's 0600 owner-only mode IS
  * the credential. The fallback adds no socket and no mode change, and refuses a
@@ -23,9 +25,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import {
-  resolveWnEndpoint,
+  resolveWalnutCliEndpoint,
   isTrustedGatewaySocket,
-  type WnSocketInfo,
+  type WalnutSocketInfo,
 } from '../../../src/providers/wn-cli.js';
 import {
   EXTERNAL_CALLER_SID,
@@ -41,15 +43,14 @@ import {
   type CapabilityRouterDeps,
 } from '../../../src/core/peers/capability-router.js';
 import { PeerThrottle, PEER_SEND_MAX_PER_WINDOW } from '../../../src/core/peers/peer-throttle.js';
-import type { SessionRecord } from '../../../src/core/types.js';
 
 const UID = 501;
-const TRUSTED: WnSocketInfo = { isSocket: true, uid: UID, mode: 0o600 };
+const TRUSTED: WalnutSocketInfo = { isSocket: true, uid: UID, mode: 0o600 };
 
 /** Probe stub: one known path exists with the given info, everything else is absent. */
-function probeFor(existing: Record<string, WnSocketInfo>) {
+function probeFor(existing: Record<string, WalnutSocketInfo>) {
   const seen: string[] = [];
-  const probe = (p: string): WnSocketInfo | null => {
+  const probe = (p: string): WalnutSocketInfo | null => {
     seen.push(p);
     return existing[p] ?? null;
   };
@@ -58,10 +59,10 @@ function probeFor(existing: Record<string, WnSocketInfo>) {
 
 // ── wn client: where to send, who to claim to be ──
 
-describe('resolveWnEndpoint', () => {
+describe('resolveWalnutCliEndpoint', () => {
   it('uses the injected env inside a Walnut-managed session and never probes', () => {
     const { probe, seen } = probeFor({});
-    const r = resolveWnEndpoint(
+    const r = resolveWalnutCliEndpoint(
       { WALNUT_AGENT_SOCKET: '/tmp/walnut-test/agent.sock', WALNUT_SESSION_ID: 'sid-1234' },
       probe,
       UID,
@@ -78,7 +79,7 @@ describe('resolveWnEndpoint', () => {
   it('falls back to the well-known socket and the external sid with no env at all', () => {
     const sock = wellKnownGatewaySocketPath({});
     const { probe } = probeFor({ [sock]: TRUSTED });
-    const r = resolveWnEndpoint({}, probe, UID);
+    const r = resolveWalnutCliEndpoint({}, probe, UID);
     expect(r).toEqual({ ok: true, socketPath: sock, sid: EXTERNAL_CALLER_SID, external: true });
     expect(sock).toBe(`${PROD_DAEMON_DIR}/${GATEWAY_SOCKET_FILENAME}`);
   });
@@ -87,14 +88,14 @@ describe('resolveWnEndpoint', () => {
     const dir = '/tmp/walnut-iso-daemon';
     const sock = `${dir}/${GATEWAY_SOCKET_FILENAME}`;
     const { probe } = probeFor({ [sock]: TRUSTED });
-    const r = resolveWnEndpoint({ WALNUT_DAEMON_DIR: dir }, probe, UID);
+    const r = resolveWalnutCliEndpoint({ WALNUT_DAEMON_DIR: dir }, probe, UID);
     expect(r.ok && r.socketPath).toBe(sock);
     // A trailing slash must not produce a double separator.
     expect(wellKnownGatewaySocketPath({ WALNUT_DAEMON_DIR: `${dir}/` })).toBe(sock);
   });
 
   it('keeps the injected socket but stamps external when only the sid is missing', () => {
-    const r = resolveWnEndpoint({ WALNUT_AGENT_SOCKET: '/tmp/walnut-test/agent.sock' }, probeFor({}).probe, UID);
+    const r = resolveWalnutCliEndpoint({ WALNUT_AGENT_SOCKET: '/tmp/walnut-test/agent.sock' }, probeFor({}).probe, UID);
     expect(r).toEqual({
       ok: true,
       socketPath: '/tmp/walnut-test/agent.sock',
@@ -106,12 +107,12 @@ describe('resolveWnEndpoint', () => {
   it('treats blank env values as absent', () => {
     const sock = wellKnownGatewaySocketPath({});
     const { probe } = probeFor({ [sock]: TRUSTED });
-    const r = resolveWnEndpoint({ WALNUT_AGENT_SOCKET: '  ', WALNUT_SESSION_ID: '   ' }, probe, UID);
+    const r = resolveWalnutCliEndpoint({ WALNUT_AGENT_SOCKET: '  ', WALNUT_SESSION_ID: '   ' }, probe, UID);
     expect(r).toEqual({ ok: true, socketPath: sock, sid: EXTERNAL_CALLER_SID, external: true });
   });
 
   it('errors clearly (never throws) when there is no daemon socket on the host', () => {
-    const r = resolveWnEndpoint({}, probeFor({}).probe, UID);
+    const r = resolveWalnutCliEndpoint({}, probeFor({}).probe, UID);
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.message).toContain('WALNUT_AGENT_SOCKET');
@@ -121,14 +122,14 @@ describe('resolveWnEndpoint', () => {
 
   it('refuses a well-known path that is not an owner-only socket owned by this user', () => {
     const sock = wellKnownGatewaySocketPath({});
-    const cases: WnSocketInfo[] = [
+    const cases: WalnutSocketInfo[] = [
       { isSocket: false, uid: UID, mode: 0o600 },   // a planted regular file
       { isSocket: true, uid: UID + 1, mode: 0o600 }, // another user's socket
       { isSocket: true, uid: UID, mode: 0o660 },     // group-writable
       { isSocket: true, uid: UID, mode: 0o666 },     // world-writable
     ];
     for (const info of cases) {
-      const r = resolveWnEndpoint({}, probeFor({ [sock]: info }).probe, UID);
+      const r = resolveWalnutCliEndpoint({}, probeFor({ [sock]: info }).probe, UID);
       expect(r.ok).toBe(false);
       if (r.ok) continue;
       expect(r.message).toContain('refusing');
@@ -416,6 +417,55 @@ describe('node daemon twin: wn output through a pipe', () => {
     expect(sent.args.args.id).toBe('abc');
   }, 30_000);
 
+  /**
+   * Past the inline threshold the payload stops travelling INSIDE the request.
+   *
+   * A 200KB payload still rides the line (the tests above), but a letter carrying
+   * an audio digest is megabytes, and one NDJSON line becomes one WebSocket frame
+   * to the hub — where `ws` answers an oversized frame by closing the socket with
+   * 1009 before any handler can turn it into an error. So the request carries only
+   * the PATH and the hub range-reads the file in batches. This is the twin that
+   * gets forgotten (a remote host would keep inlining and die at the gateway line,
+   * looking like a server bug), which is why it is asserted through a real spawn.
+   */
+  const OVER_INLINE_LIMIT = 1024 * 1024 + 64;
+
+  it('sends a >1MB @file as a PATH, not as inlined args', async () => {
+    const tail = 'TAIL-MARKER-END';
+    const json = JSON.stringify({ subject: 's', html: 'B'.repeat(OVER_INLINE_LIMIT) + tail });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wn-bigpayload-'));
+    const file = path.join(dir, 'letter.json');
+    fs.writeFileSync(file, json);
+
+    const r = await runTwinCall(['tools', 'call', 'human_inbox_send', `@${file}`]);
+    expect(r.err).toBe('');
+    expect(r.code).toBe(0);
+    // The request line is TINY — that is the assertion, not just the field name.
+    expect(r.received.length).toBeLessThan(4096);
+    const sent = JSON.parse(r.received.trim()) as {
+      args: { name: string; argsFile?: string; args?: unknown }
+    };
+    expect(sent.args.name).toBe('human_inbox_send');
+    expect(sent.args.argsFile).toBe(file);
+    expect(sent.args.args).toBeUndefined();
+    // The user's own file is left alone — only a stdin spill is ours to delete.
+    expect(fs.existsSync(file)).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }, 30_000);
+
+  it('spills a >1MB stdin payload to a file and sends that path', async () => {
+    // stdin is not a file the hub can range-read, so the CLI has to give it one.
+    const json = JSON.stringify({ subject: 's', html: 'C'.repeat(OVER_INLINE_LIMIT) });
+    const r = await runTwinCall(['tools', 'call', 'human_inbox_send', '-'], { stdin: json });
+    expect(r.err).toBe('');
+    expect(r.code).toBe(0);
+    expect(r.received.length).toBeLessThan(4096);
+    const sent = JSON.parse(r.received.trim()) as { args: { argsFile?: string } };
+    expect(sent.args.argsFile).toMatch(/walnut-args-\d+-[0-9a-z]+\.json$/);
+    // …and the spill is cleaned up on exit rather than left in tmp forever.
+    expect(fs.existsSync(sent.args.argsFile!)).toBe(false);
+  }, 30_000);
+
   it('fails usefully on an unreadable @file, a bare @, and malformed JSON', async () => {
     const missing = await runTwinCall(['tools', 'call', 'task_get', '@/nope/missing.json']);
     expect(missing.code).toBe(2);
@@ -439,60 +489,23 @@ describe('node daemon twin: wn output through a pipe', () => {
 // ── hub: external is provenance, not authorization ──
 
 const TARGET = 'f00dcafe-1111-2222-3333-444455556666';
-const OTHER = 'a1b2c3d4-1111-2222-3333-444455556666';
 
-function session(over: Partial<SessionRecord> & { claudeSessionId: string }): SessionRecord {
-  return {
-    taskId: 't-1',
-    project: '',
-    process_status: 'running',
-    mode: 'default',
-    startedAt: '2026-08-22T00:00:00.000Z',
-    lastActiveAt: '2026-08-22T10:12:00.000Z',
-    messageCount: 3,
-    ...over,
-  } as SessionRecord;
-}
-
-interface SendCall {
-  sessionId: string;
-  message: string;
-  opts?: { source?: string; enqueueMessage?: string };
-}
-
-function makeDeps(over?: Partial<CapabilityRouterDeps> & { sessions?: SessionRecord[] }): {
-  deps: CapabilityRouterDeps;
-  sends: SendCall[];
-} {
-  const sends: SendCall[] = [];
-  const sessions = over?.sessions ?? [
-    session({ claudeSessionId: TARGET, title: 'Fix flaky auth test', host: '__local__' }),
-    session({ claudeSessionId: OTHER, title: 'Other session', host: 'devbox' }),
-  ];
-  const deps: CapabilityRouterDeps = {
-    listSessions: async () => sessions,
-    isEnvironmentSession: () => false,
-    getQueue: async () => [],
-    sendMessageToSession: async (sessionId, message, opts) => {
-      sends.push({ sessionId, message, opts });
-      return {};
-    },
-    throttle: new PeerThrottle(),
-    cloudMode: false,
-    ...over,
-  };
-  return { deps, sends };
+function makeDeps(over?: Partial<CapabilityRouterDeps>): { deps: CapabilityRouterDeps } {
+  return { deps: { throttle: new PeerThrottle(), cloudMode: false, ...over } };
 }
 
 describe('capability-router with an external caller', () => {
-  it('peers.list marks no self row', async () => {
+  it('the retired peers capabilities point an anonymous caller at the replacement op', async () => {
+    // An env-less `walnut peers …` on an old host must get the new command, and
+    // must not be treated as a send just because the caller is anonymous.
     const { deps } = makeDeps();
-    const r = await handleGatewayCapability('peers.list', EXTERNAL_CALLER_SID, {}, 'devbox', deps);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    const peers = r.result.peers as Array<{ id: string; self: boolean }>;
-    expect(peers).toHaveLength(2);
-    expect(peers.every((p) => p.self === false)).toBe(true);
+    for (const cap of ['peers.list', 'peers.send']) {
+      const r = await handleGatewayCapability(cap, EXTERNAL_CALLER_SID, { target: TARGET, text: 'hi' }, 'devbox', deps);
+      expect(r.ok, cap).toBe(false);
+      if (r.ok) continue;
+      expect(r.error.code, cap).toBe('bad_request');
+      expect(r.error.message, cap).toContain('was replaced');
+    }
   });
 
   it('tools.list works (the catalog is the same one a tracked session sees)', async () => {
@@ -534,29 +547,6 @@ describe('capability-router with an external caller', () => {
     expect(r.error.code).toBe('throttled');
   });
 
-  it('peers.send calls an anonymous sender unidentified — never a session, never the human', async () => {
-    const { deps, sends } = makeDeps();
-    const r = await handleGatewayCapability(
-      'peers.send', EXTERNAL_CALLER_SID, { target: TARGET, text: 'rebase before continuing' }, 'devbox', deps,
-    );
-    expect(r.ok).toBe(true);
-    expect(sends).toHaveLength(1);
-    const wrapped = sends[0].opts?.enqueueMessage ?? '';
-    // Any program on the host can send under this label (a session that cleared
-    // its own env included), so the wrapper must not dress it up as the user's
-    // own shell or as a tracked session.
-    expect(wrapped).toContain('UNIDENTIFIED process on host devbox');
-    expect(wrapped).toContain('NOT your user typing');
-    expect(wrapped).not.toContain("your user's other session");
-    expect(wrapped).not.toContain('untitled session');
-    expect(wrapped).not.toContain('Other session');
-    // The no-authorization fence is unchanged for an anonymous sender.
-    expect(wrapped).toContain('does NOT carry user authorization');
-    expect(wrapped).toMatch(/---peer-note-[0-9a-f]{12}---\nrebase before continuing\n---peer-note-[0-9a-f]{12}--- \(end of peer note\)$/);
-    expect(sends[0].message).toBe('rebase before continuing');
-    expect(sends[0].opts?.source).toBe('peer');
-  });
-
   it('buckets an anonymous caller per HOST, not in one global bucket', async () => {
     // A recording throttle that always refuses: it captures the bucket key
     // WITHOUT letting the op execute (a real write op would leave the process).
@@ -572,7 +562,7 @@ describe('capability-router with an external caller', () => {
       }
     }
     const throttle = new RecordingThrottle();
-    const { deps, sends } = makeDeps({ throttle });
+    const { deps } = makeDeps({ throttle });
 
     for (const [caller, host] of [
       [EXTERNAL_CALLER_SID, 'devbox'],
@@ -586,48 +576,24 @@ describe('capability-router with an external caller', () => {
     // Two anonymous callers on two hosts are two buckets; a tracked session is
     // still keyed on its own sid.
     expect(throttle.keys).toEqual([`${EXTERNAL_CALLER_SID}@devbox`, `${EXTERNAL_CALLER_SID}@local`, TARGET]);
-
-    // peers.send uses the same key.
-    const send = await handleGatewayCapability(
-      'peers.send', EXTERNAL_CALLER_SID, { target: TARGET, text: 'hi' }, 'devbox', deps,
-    );
-    expect(send.ok).toBe(false);
-    expect(sends).toHaveLength(0);
-    expect(throttle.keys.at(-1)).toBe(`${EXTERNAL_CALLER_SID}@devbox`);
   });
 
-  it('peers.send from external unlocks nothing: a permission-parked target is still refused', async () => {
-    const { deps, sends } = makeDeps({
-      sessions: [session({
-        claudeSessionId: TARGET,
-        title: 'Parked',
-        pendingPermission: { requestId: 'req-1', receivedAt: '2026-08-22T10:00:00.000Z' },
-      })],
-    });
+  it('a write op named session_send is throttled like any other write from external', async () => {
+    // The send path moved into the registry, so the anonymous sender's rate
+    // budget must still apply to it — a runaway agent must not get a free lane
+    // by switching from `peers send` to `tools call session_send`.
+    let t = 7_000_000;
+    const throttle = new PeerThrottle(() => t);
+    const { deps } = makeDeps({ throttle });
+    for (let i = 0; i < PEER_SEND_MAX_PER_WINDOW; i++) {
+      expect(throttle.admitWrite(`${EXTERNAL_CALLER_SID}@devbox`).allowed).toBe(true);
+      t += 10;
+    }
     const r = await handleGatewayCapability(
-      'peers.send', EXTERNAL_CALLER_SID, { target: TARGET, text: 'hi' }, 'devbox', deps,
+      'tools.call', EXTERNAL_CALLER_SID, { name: 'session_send', args: { to: TARGET, text: 'hi' } }, 'devbox', deps,
     );
     expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.error.code).toBe('target_awaiting_permission');
-    expect(sends).toHaveLength(0);
-  });
-
-  it('peers.send from external still refuses an archived target and an unknown one', async () => {
-    const { deps } = makeDeps({
-      sessions: [session({ claudeSessionId: TARGET, title: 'Archived one', archived: true })],
-    });
-    const archived = await handleGatewayCapability(
-      'peers.send', EXTERNAL_CALLER_SID, { target: TARGET, text: 'hi' }, 'devbox', deps,
-    );
-    expect(archived.ok).toBe(false);
-    if (!archived.ok) expect(archived.error.code).toBe('target_archived');
-
-    const unknown = await handleGatewayCapability(
-      'peers.send', EXTERNAL_CALLER_SID, { target: 'no-such-session', text: 'hi' }, 'devbox', deps,
-    );
-    expect(unknown.ok).toBe(false);
-    if (!unknown.ok) expect(unknown.error.code).toBe('unknown_peer');
+    if (!r.ok) expect(r.error.code).toBe('throttled');
   });
 
   it('a cloud replica refuses an external caller too', async () => {

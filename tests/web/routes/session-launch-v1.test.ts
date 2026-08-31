@@ -8,6 +8,10 @@
  *        quickStartSession core, host allowlist validation, taskId link mode,
  *        frozen error envelope on every failure.
  *
+ * POST /delegate is GONE (its describe block with it): creating a task and
+ * starting a session are two calls now — task_create then session_start
+ * (POST /tasks/:id/start, covered by tests/web/task-start-host-inheritance.test.ts).
+ *
  * Same harness as quick-start-model-validation.test.ts: mounted routers +
  * supertest, session-runner side effects mocked away, SESSION_START captured
  * off the bus.
@@ -37,7 +41,7 @@ import request from 'supertest';
 import path from 'node:path';
 import { sessionLaunchV1Router } from '../../../src/web/routes/session-launch-v1.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
-import { addTask, getTask, listTasks, _resetForTesting as resetTaskManager } from '../../../src/core/task-manager.js';
+import { addTask, getTask, _resetForTesting as resetTaskManager } from '../../../src/core/task-manager.js';
 import { getSessionByClaudeId } from '../../../src/core/session-tracker.js';
 import { WALNUT_HOME, CONFIG_FILE } from '../../../src/constants.js';
 import { bus, EventNames } from '../../../src/core/event-bus.js';
@@ -152,80 +156,6 @@ describe('GET /api/v1/sessions/launch-options', () => {
     expect(res.status).toBe(200);
     const cwds = (res.body.dirs as Array<{ cwd: string }>).map((d) => d.cwd);
     expect(cwds).toEqual(['/Users/me/real-proj']);
-  });
-});
-
-describe('POST /api/v1/delegate', () => {
-  it('creates one task and accepts one session start atomically', async () => {
-    const res = await request(createApp())
-      .post('/api/v1/delegate')
-      .send({ cwd: '/tmp/delegate-new', title: 'Delegate new work', project: 'Walnut', message: 'implement it' });
-
-    expect(res.status).toBe(202);
-    expect(res.body.action).toBe('created_started');
-    expect(res.body.accepted).toBe(true);
-    expect(res.body.title).toBe('Delegate new work');
-    expect(res.body.ref).toContain(res.body.taskId);
-    expect((await listTasks()).map((task) => task.id)).toEqual([res.body.taskId]);
-    expect(starts).toHaveLength(1);
-    expect(starts[0].data).toMatchObject({
-      taskId: res.body.taskId,
-      cwd: '/tmp/delegate-new',
-      project: 'Walnut',
-      message: 'implement it',
-    });
-  });
-
-  it('reuses only the explicit task id and does not create a duplicate', async () => {
-    const { task } = await addTask({ title: 'Explicit existing work', project: 'Walnut' });
-    const countBefore = (await listTasks()).length;
-    const res = await request(createApp())
-      .post('/api/v1/delegate')
-      .send({ taskId: task.id, message: 'continue exactly this task' });
-
-    expect(res.status).toBe(202);
-    expect(res.body.action).toBe('started_existing');
-    expect(res.body.taskId).toBe(task.id);
-    expect(await listTasks()).toHaveLength(countBefore);
-    expect(starts).toHaveLength(1);
-    expect(starts[0].data).toMatchObject({ taskId: task.id, message: 'continue exactly this task' });
-  });
-
-  it('requires an absolute cwd when creating new work', async () => {
-    const countBefore = (await listTasks()).length;
-    for (const body of [
-      { message: 'missing cwd' },
-      { cwd: 'relative/path', message: 'relative cwd' },
-    ]) {
-      const res = await request(createApp()).post('/api/v1/delegate').send(body);
-      expect(res.status).toBe(400);
-      expect(res.body.error.code).toBe('bad_request');
-    }
-    expect(await listTasks()).toHaveLength(countBefore);
-    expect(starts).toHaveLength(0);
-  });
-
-  it('never merges new work into a similar-title task', async () => {
-    const { task: existing } = await addTask({ title: 'Same title', project: 'Walnut' });
-    const countBefore = (await listTasks()).length;
-    const res = await request(createApp())
-      .post('/api/v1/delegate')
-      .send({ cwd: '/tmp/separate-work', title: 'Same title', project: 'Walnut', message: 'new unit of work' });
-
-    expect(res.status).toBe(202);
-    expect(res.body.taskId).not.toBe(existing.id);
-    expect(await listTasks()).toHaveLength(countBefore + 1);
-  });
-
-  it('rejects creation-only overrides when an existing task id is supplied', async () => {
-    const { task } = await addTask({ title: 'Existing', project: 'Walnut' });
-    const res = await request(createApp())
-      .post('/api/v1/delegate')
-      .send({ taskId: task.id, cwd: '/tmp/override', message: 'continue' });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error.message).toContain('Existing-task delegation accepts only taskId and message');
-    expect(starts).toHaveLength(0);
   });
 });
 

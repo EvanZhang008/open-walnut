@@ -13,7 +13,7 @@ The user wants you to learn a reusable skill from their request and save it.
 The request is open-ended and may mix two kinds of content, in any order: SOURCES to gather (directories, file paths, URLs, "what we just did", pasted notes) AND REQUIREMENTS that shape the skill (what to focus on, what to leave out, scope, naming). Treat EVERY part of the request as load-bearing — prose after a path or link is the user telling you what they want from that source. Never gather the first source and ignore the rest. If no request text was given, distill the workflow from THIS conversation: review the steps taken and capture them.
 
 Do this:
-1. Gather every source the user named, using the tools you already have — `file_read` for local files, `web_fetch` for URLs, the current conversation history if they referred to something you just did, and pasted text as-is. For codebase exploration, delegate to a session. If scope is ambiguous, make a reasonable choice and note it; do not stall.
+1. Gather every source the user named, using the tools you already have — `file_read` for local files, `web_fetch` for URLs, the current conversation history if they referred to something you just did, and pasted text as-is. For codebase exploration, hand the work to a session with `session_start`. If scope is ambiguous, make a reasonable choice and note it; do not stall.
 2. Apply every requirement/focus/constraint in the request to the skill you author — these govern what the SKILL.md covers, not just which sources you read.
 3. Confirm the skill name + category + one-line description with the user (creating a NEW skill always requires confirmation), then author ONE skill via `skill_manage` (action="create").
 

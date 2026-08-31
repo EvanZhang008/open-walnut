@@ -1317,9 +1317,12 @@ describe('agent gateway listener daemon-standalone vs daemon-source parity', () 
     expect(standaloneSrc).toMatch(/GATEWAY_MAX_LINE_BYTES/);
     expect(standaloneSrc).not.toMatch(/GATEWAY_MAX_LINE_BYTES\s*=/);
     expect(templateSrc).toContain(`GATEWAY_MAX_LINE_BYTES = ${mb} * 1024 * 1024`);
-    // And it must still clear the letter body it exists to carry.
-    const { LETTER_HTML_MAX_BYTES } = await import('../../src/core/human-inbox/types.js');
-    expect(GATEWAY_MAX_LINE_BYTES).toBeGreaterThan(LETTER_HTML_MAX_BYTES);
+    // It bounds the INLINE lane only. It used to have to clear the whole letter
+    // body cap, which is what made the body cap a transport number; a payload over
+    // GATEWAY_INLINE_ARGS_MAX_BYTES now travels as a path the hub range-reads, so
+    // the line only has to clear what still rides it — with room for the envelope.
+    const { GATEWAY_INLINE_ARGS_MAX_BYTES } = await import('../../src/providers/tool-args-source.js');
+    expect(GATEWAY_MAX_LINE_BYTES).toBeGreaterThan(GATEWAY_INLINE_ARGS_MAX_BYTES);
   });
 
   /**
@@ -1365,6 +1368,22 @@ describe('agent gateway listener daemon-standalone vs daemon-source parity', () 
     expect(templateSrc).not.toMatch(/JSON\.parse\(rest\[1\]\)/);
     // And the usage line tells an agent the payload can arrive by descriptor.
     expect(templateSrc).toMatch(/json\|@file\|-/);
+  });
+
+  it('the template wn CLI sends a big payload as argsFile, not inline', () => {
+    // Same trap one level up: reading the @file is not enough, because the read
+    // payload then had to fit ONE NDJSON line and ONE WebSocket frame to the hub.
+    // Over the threshold the request must carry only the path (the hub range-reads
+    // it in batches). This is the twin that gets forgotten, and the symptom on a
+    // remote host is a 100MB letter dying at the gateway line — which reads as a
+    // server bug, not a client one.
+    expect(templateSrc).toMatch(/GATEWAY_INLINE_ARGS_MAX_BYTES = 1024 \* 1024/);
+    expect(templateSrc).toMatch(/argsFile: wnArgsFile/);
+    // stdin has no file to name, so it gets spilled to one…
+    expect(templateSrc).toMatch(/walnut-args-/);
+    // …and only OUR spill is unlinked (a user's @file path is theirs).
+    expect(templateSrc).toMatch(/wnSpilledArgsFile/);
+    expect(templateSrc).toMatch(/unlinkSync\(wnSpilledArgsFile\)/);
   });
 });
 

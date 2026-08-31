@@ -60,10 +60,18 @@ export function registerCommands(program: Command): void {
     });
 
   program
+    .command('wait <id>')
+    .description('Block until a task settles (AGENT_COMPLETE/COMPLETE) or a reply request (rq-…) resolves')
+    .option('--timeout <secs>', 'Give up after this many seconds (default 1800; exit code 7)')
+    .action(async (id: string, options: Record<string, unknown>, cmd: Command) => {
+      const { runWait } = await import('./wait.js');
+      await runWait(id, options, cmd.optsWithGlobals());
+    });
+
+  program
     .command('start <task_id>')
-    .description('Start a Claude Code session for a task')
-    .option('--resume', 'Resume an existing session')
-    .option('--prompt <prompt>', 'Initial prompt for the session')
+    .description('Start a NEW session for a task (live session → use session_send)')
+    .option('--message <message>', 'First instruction for the session')
     .action(async (taskId: string, options: Record<string, unknown>, cmd: Command) => {
       const { runStart } = await import('./start.js');
       await runStart(taskId, options, cmd.optsWithGlobals());
@@ -270,23 +278,14 @@ export function registerCommands(program: Command): void {
       await runTools(args ?? [], cmd.optsWithGlobals());
     });
 
-  // One name everywhere: `walnut guide` / `walnut peers` work identically on
-  // the hub (this entry) and on remote hosts (the daemon's walnut shim).
+  // One name everywhere: `walnut guide` / `walnut wait` / `walnut tools` work
+  // identically on the hub (this entry) and on remote hosts (the daemon's shim).
   program
     .command('guide')
     .description('Print the full Walnut manual (recipes + safety rules)')
     .action(async (_options: Record<string, unknown>, cmd) => {
       const { runGuide } = await import('./guide.js');
       await runGuide(cmd.optsWithGlobals());
-    });
-
-  program
-    .command('peers [args...]')
-    .description('Discover and message the user\'s other Walnut sessions (list | send <target> <text...>)')
-    .allowUnknownOption(true)
-    .action(async (args: string[] | undefined, _options: Record<string, unknown>) => {
-      const { runWnCli } = await import('../providers/wn-cli.js');
-      process.exit(await runWnCli(['peers', ...(args ?? [])]));
     });
 
   program

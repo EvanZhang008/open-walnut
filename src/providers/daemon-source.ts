@@ -309,7 +309,7 @@ const crypto = require('crypto');
 
 process.umask(0o077);
 
-// ── wn: minimal peer-session CLI (agent gateway) ──
+// ── walnut: the minimal on-host walnut CLI (agent gateway) ──
 // Source-deploy twin of src/providers/wn-cli.ts — hand-inlined MINIMAL subset
 // (this template cannot import). Invoked from the argv dispatch in Main below
 // (async: the socket handlers call process.exit). Keep exit codes + command
@@ -320,19 +320,21 @@ function runWnMinimal(argv, stdinText) {
   process.stdout.on('error', function (e) { if (e && e.code === 'EPIPE') process.exit(0); });
   // Buffer stdout and FLUSH BEFORE EXITING. process.exit() discards whatever is
   // still queued for a pipe (pipes are async on macOS), so the old
-  // out(...) then process.exit(0) shape cut "wn ... --json | jq" at exactly the
+  // out(...) then process.exit(0) shape cut "walnut ... --json | jq" at exactly the
   // 64KB pipe buffer — invalid JSON for the agent that piped it. Mirror of
   // wn-cli.ts writeStdout(); exitWn is ASYNC, so every call site returns.
   var outBuf = '';
   var out = function (s) { outBuf += s + '\\n'; };
   var errOut = function (s) { process.stderr.write(s + '\\n'); };
   var exitWn = function (code) {
+    // Only OUR stdin spill is removed; a path the user passed with @ is theirs.
+    if (wnSpilledArgsFile) { try { fs.unlinkSync(wnSpilledArgsFile); } catch (e) { /* already gone */ } }
     if (!outBuf) return process.exit(code);
     var text = outBuf;
     outBuf = '';
     var done = false;
     var finishExit = function () { if (done) return; done = true; process.exit(code); };
-    // 5s cap so a runtime that never calls back cannot hang wn.
+    // 5s cap so a runtime that never calls back cannot hang walnut.
     var flushTimer = setTimeout(finishExit, 5000);
     if (flushTimer.unref) flushTimer.unref();
     try { process.stdout.write(text, finishExit); } catch (e) { finishExit(); }
@@ -379,6 +381,10 @@ function runWnMinimal(argv, stdinText) {
     if (s !== 'call' || r.length < 1) return null;
     return { name: r[0], raw: r[1] };
   };
+  // Payloads over this do not travel INSIDE the request — the hub range-reads
+  // the file instead. Twin of GATEWAY_INLINE_ARGS_MAX_BYTES in tool-args-source.ts.
+  var GATEWAY_INLINE_ARGS_MAX_BYTES = 1024 * 1024;
+  var wnSpilledArgsFile;
   var wnSlot = wnCallSlot(argv);
   var wnSrc = wnSlot ? wnArgsSource(wnSlot.raw) : null;
   if (stdinText === undefined && wnSrc && wnSrc.kind === 'stdin') {
@@ -388,12 +394,17 @@ function runWnMinimal(argv, stdinText) {
     process.stdin.on('end', function () { runWnMinimal(argv, stdinBuf); });
     return;
   }
-  var usage = 'usage: walnut guide | walnut peers list [--json] | walnut peers send <target> <text...> | walnut tools list|call <op> [json|@file|-]';
+  var usage = 'usage: walnut guide | walnut wait <id> [--timeout secs] | walnut tools list|call <op> [json|@file|-]';
   if (argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') { out(usage); return exitWn(0); }
-  if (argv[0] !== 'peers' && argv[0] !== 'tools' && argv[0] !== 'guide') { errOut('walnut: unknown command; ' + usage); return exitWn(2); }
+  if (argv[0] === 'peers') {
+    errOut('walnut: peers was replaced — list sessions with: walnut tools call session_list, message one with: walnut tools call session_send (args: to, text)');
+    return exitWn(2);
+  }
+  if (argv[0] !== 'wait' && argv[0] !== 'tools' && argv[0] !== 'guide') { errOut('walnut: unknown command; ' + usage); return exitWn(2); }
   // Mirror wn-cli.ts: --json is recognized only BEFORE positional args, so
   // message text can legitimately contain the token '--json'.
   var json = false;
+  var wnWait = null;
   var head = argv[0];
   var rest = argv.slice(1);
   while (rest.length && rest[0] === '--json') { json = true; rest.shift(); }
@@ -418,23 +429,64 @@ function runWnMinimal(argv, stdinText) {
         var src = wnSrc || wnArgsSource(rest[1]);
         if (src.kind === 'usage-error') { errOut('walnut: ' + src.message); return exitWn(2); }
         var rawText = '';
+        var wnArgsFile;
         if (src.kind === 'inline') rawText = src.json;
-        else if (src.kind === 'stdin') rawText = stdinText || '';
-        else if (src.kind === 'file') {
-          try { rawText = fs.readFileSync(src.path, 'utf-8'); }
-          catch (e) { errOut('walnut: cannot read arguments from ' + src.path + ': ' + e.message); return exitWn(2); }
+        else if (src.kind === 'stdin') {
+          rawText = stdinText || '';
+          if (Buffer.byteLength(rawText, 'utf-8') > GATEWAY_INLINE_ARGS_MAX_BYTES) {
+            // stdin is not a file the hub can range-read, so give it one.
+            wnArgsFile = require('path').join(
+              require('os').tmpdir(), 'walnut-args-' + process.pid + '-' + Date.now().toString(36) + '.json');
+            try { fs.writeFileSync(wnArgsFile, rawText, { encoding: 'utf-8', mode: 0o600 }); }
+            catch (e) { errOut('walnut: cannot stage a large payload at ' + wnArgsFile + ': ' + e.message); return exitWn(2); }
+            wnSpilledArgsFile = wnArgsFile;
+          }
         }
-        var parsedCall = wnParseToolArgs(rawText);
-        if (!parsedCall.ok) { errOut('walnut: ' + parsedCall.message); return exitWn(2); }
+        else if (src.kind === 'file') {
+          var wnAbs = require('path').resolve(src.path);
+          var wnSize = -1;
+          try { wnSize = fs.statSync(wnAbs).size; }
+          catch (e) { errOut('walnut: cannot read arguments from ' + src.path + ': ' + e.message); return exitWn(2); }
+          if (wnSize > GATEWAY_INLINE_ARGS_MAX_BYTES) wnArgsFile = wnAbs;
+          else {
+            try { rawText = fs.readFileSync(wnAbs, 'utf-8'); }
+            catch (e) { errOut('walnut: cannot read arguments from ' + src.path + ': ' + e.message); return exitWn(2); }
+          }
+        }
         op = 'tools.call';
-        args = { name: rest[0], args: parsedCall.args };
+        if (wnArgsFile !== undefined) {
+          // Over the inline threshold the request carries only the PATH; the hub
+          // pulls the file back from this host's daemon in bounded byte ranges
+          // (core/peers/gateway-args-file.ts). Keeps a 100MB letter body off the
+          // one NDJSON line + one WS frame this request would otherwise be.
+          args = { name: rest[0], argsFile: wnArgsFile };
+        } else {
+          var parsedCall = wnParseToolArgs(rawText);
+          if (!parsedCall.ok) { errOut('walnut: ' + parsedCall.message); return exitWn(2); }
+          args = { name: rest[0], args: parsedCall.args };
+        }
       }
     } else { errOut('walnut: ' + usage); return exitWn(2); }
   }
-  else if (sub === 'list' && rest.length === 0) { op = 'peers.list'; args = {}; }
-  else if (sub === 'send' && rest.length >= 2) {
-    op = 'peers.send';
-    args = { target: rest[0], text: rest.slice(1).join(' ') };
+  else if (head === 'wait') {
+    // Mirror of wn-cli.ts runWait: client-side poll (the hub never holds a
+    // request open), one readonly tools.call per 5s tick, exit 7 on timeout.
+    var waitId = sub;
+    var waitTimeoutSecs = 1800;
+    while (rest.length) {
+      var wa = rest.shift();
+      if (wa === '--timeout') { waitTimeoutSecs = Number(rest.shift()); }
+      else if (wa === '--json') { json = true; }
+      else { errOut('walnut: unexpected argument: ' + wa); return exitWn(2); }
+    }
+    if (!waitId) { errOut('walnut: wait requires <task-id | rq-id>'); return exitWn(2); }
+    if (!(waitTimeoutSecs > 0)) { errOut('walnut: --timeout needs seconds > 0'); return exitWn(2); }
+    op = 'tools.call';
+    args = {
+      name: waitId.indexOf('rq-') === 0 ? 'request_get' : 'task_get',
+      args: { id: waitId },
+    };
+    wnWait = { id: waitId, deadline: Date.now() + waitTimeoutSecs * 1000 };
   } else { errOut('walnut: ' + usage); return exitWn(2); }
   // Env-less fallback — mirror of wn-cli.ts resolveWnEndpoint. Inside a session
   // Walnut launched, both vars are injected. Started by hand (plain terminal,
@@ -467,6 +519,57 @@ function runWnMinimal(argv, stdinText) {
     if (code === 'unknown_caller') return 6;
     return 1;
   };
+  // walnut wait: poll loop twin of wn-cli.ts runWait — one request per 5s tick,
+  // re-dialing the socket each time; exit 0 when settled, 7 on timeout.
+  if (wnWait) {
+    var waitTick = function () {
+      var wsock = net.connect(sockPath);
+      var wbuf = '';
+      var wdone = false;
+      var wfinish = function (fn) { if (wdone) return; wdone = true; clearTimeout(wtimer); wsock.destroy(); fn(); };
+      var wtimer = setTimeout(function () { wfinish(retryOrTimeout); }, 30000);
+      var retryOrTimeout = function () {
+        if (Date.now() >= wnWait.deadline) {
+          out(JSON.stringify({ done: false, timeout: true, id: wnWait.id }));
+          return exitWn(7);
+        }
+        setTimeout(waitTick, 5000);
+      };
+      wsock.on('connect', function () { wsock.write(JSON.stringify({ v: 1, op: op, sid: sid, args: args }) + '\\n'); });
+      wsock.on('error', function () { wfinish(retryOrTimeout); });
+      wsock.on('close', function () { wfinish(retryOrTimeout); });
+      wsock.on('data', function (chunk) {
+        wbuf += chunk.toString('utf-8');
+        var wnl = wbuf.indexOf('\\n');
+        if (wnl === -1) return;
+        var wline = wbuf.slice(0, wnl);
+        wfinish(function () {
+          var wresp;
+          try { wresp = JSON.parse(wline); } catch (e) { return retryOrTimeout(); }
+          if (!wresp.ok) {
+            var werr = wresp.error || {};
+            errOut('walnut: ' + (werr.code || 'internal') + ': ' + (werr.message || 'gateway request failed'));
+            return exitWn(exitFor(werr.code));
+          }
+          var wres = wresp.result || {};
+          var settled, wsummary;
+          if (wnWait.id.indexOf('rq-') === 0) {
+            var wreq = wres.request || wres;
+            settled = wreq.status && wreq.status !== 'pending';
+            wsummary = { request: wnWait.id, status: wreq.status, outcome: wreq.outcome };
+          } else {
+            var wtask = wres.task || wres;
+            settled = wtask.phase === 'AGENT_COMPLETE' || wtask.phase === 'COMPLETE';
+            wsummary = { task: wtask.id || wnWait.id, title: wtask.title, phase: wtask.phase };
+          }
+          if (settled) { out(JSON.stringify(Object.assign({ done: true }, wsummary))); return exitWn(0); }
+          retryOrTimeout();
+        });
+      });
+    };
+    waitTick();
+    return;
+  }
   var sock = net.connect(sockPath);
   var buf = '';
   var finished = false;
@@ -495,27 +598,18 @@ function runWnMinimal(argv, stdinText) {
         errOut('walnut: ' + (err.code || 'internal') + ': ' + (err.message || 'gateway request failed'));
         return exitWn(exitFor(err.code));
       }
-      if (op === 'peers.list') {
-        var peers = (resp.result && resp.result.peers) || [];
-        if (peers.length === 0) { out('(no peer sessions)'); return exitWn(0); }
-        for (var i = 0; i < peers.length; i++) {
-          var p = peers[i];
-          out((p.self ? '*' : ' ') + ' ' + p.shortId + '  ' + (p.title || '(untitled)') + '  ' + (p.host || 'local') + '  ' + (p.status || '?'));
-        }
-      } else if (op === 'tools.list') {
+      if (op === 'tools.list') {
         var ops = (resp.result && resp.result.ops) || [];
         for (var j = 0; j < ops.length; j++) {
           out('  ' + ops[j].name + '  ' + (ops[j].title || '') + (ops[j].readonly ? ' (read)' : ' (write)'));
         }
-      } else if (op === 'tools.call') {
+      } else {
+        // tools.call — guide prints the manual as markdown, else pretty JSON.
         if (guide) {
           var sk = resp.result && resp.result.skill;
           if (!sk || !sk.content) { errOut('walnut: internal: the hub returned no manual content'); return exitWn(1); }
           out(String(sk.content).replace(/\\n$/, ''));
         } else out(JSON.stringify(resp.result, null, 2));
-      } else {
-        var r = resp.result || {};
-        out('sent to ' + String(r.targetSid || '').slice(0, 8) + ' "' + (r.targetTitle || '') + '" (queue depth ' + (r.queueDepth || 0) + ')');
       }
       return exitWn(0);
     });
@@ -2344,7 +2438,7 @@ function cmdMessageResult(ws, id, cmd) {
 // ── Agent gateway: on-host unix socket → Mac hub relay ──
 // Keep in sync with daemon-standalone.ts gateway section. The pure protocol
 // logic (parse/validate/alias resolution) from gateway-core.ts is hand-inlined
-// here — this template cannot import. A wn CLI writes one NDJSON request line
+// here — this template cannot import. A walnut CLI writes one NDJSON request line
 // to the daemon dir's agent-gateway.sock; the daemon resolves the caller's
 // CURRENT sid via gatewaySidAliases and relays to the Mac hub with the same
 // reverse-RPC shape as cmdLaunchRelay/cmdLaunchResult (relayId + pending map +
@@ -2354,9 +2448,10 @@ var GATEWAY_SOCK_PATH = path.join(DAEMON_DIR, 'agent-gateway.sock');
 var GATEWAY_SHIM_DIR = path.join(DAEMON_DIR, 'bin');
 var GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'walnut');
 // 28MB (keep in sync with gateway-core.ts): one human_inbox_send is ONE line,
-// and a digest letter that embeds base64 audio or video is megabytes. Must stay
-// above LETTER_HTML_MAX_BYTES (24MB) and below the 32MB WS frame this request
-// also crosses on a remote host.
+// and a digest letter that embeds base64 audio or video is megabytes. Bounds the
+// INLINE lane only — a payload over GATEWAY_INLINE_ARGS_MAX_BYTES (1MB) rides a
+// path the hub range-reads in batches, so a 100MB letter never touches this line.
+// Must stay below the 32MB WS frame an inline request also crosses on a remote host.
 var GATEWAY_MAX_LINE_BYTES = 28 * 1024 * 1024;
 var GATEWAY_OPS = ['peers.list', 'peers.send', 'tools.list', 'tools.call'];
 // 20s default (shorter than the 45s launch relay — peers ops have no long
@@ -2408,7 +2503,7 @@ function parseGatewayLine(line) {
   return { ok: true, request: { v: 1, op: parsed.op, sid: parsed.sid, args: args } };
 }
 
-// Mirror of gateway-core.ts EXTERNAL_CALLER_SID: an env-less wn (hand-started
+// Mirror of gateway-core.ts EXTERNAL_CALLER_SID: an env-less walnut (hand-started
 // agent or the user's own terminal on this host) identifies as 'external'. It
 // is a PROVENANCE label, never authorization — the owner-only socket already
 // vouched for the caller, and the hub grants 'external' nothing a tracked
@@ -2618,14 +2713,68 @@ function installUserWalnutShim() {
   if (installed.length > 0) logMsg('info', 'walnut on user PATH', { paths: installed });
 }
 
+// Does the stable copy at GATEWAY_SHIM_DIR need a refresh? Hand-inlined twin of
+// shimCoreNeedsCopy in gateway-core.ts (this template cannot import). Size plus
+// a version stamp only: the artifact is big, /tmp is not fast, and the daemon
+// version is a content hash of the daemon sources.
+function shimCoreNeedsCopy(srcSize, dstSize, stampedVersion, version) {
+  if (srcSize === null || srcSize <= 0) return false;
+  if (dstSize === null) return true;
+  if (dstSize !== srcSize) return true;
+  if (!stampedVersion || stampedVersion !== version) return true;
+  return false;
+}
+
+// Copy the launched script next to the shim and return that path (null = could
+// not). Twin of ensureShimCoreCopy in daemon-standalone.ts. The shim must exec a
+// path that OUTLIVES this process: an artifact launched from a stage temp dir is
+// deleted by the next deploy, and the shim then execs a path that is gone (exit
+// 126 on every 'walnut' call inside a live session). DAEMON_DIR is stable, so
+// the copy lives there. Temp name in the SAME dir + rename = atomic, never EXDEV.
+function ensureShimCoreCopy(srcPath) {
+  var dst = path.join(GATEWAY_SHIM_DIR, 'walnut-core.cjs');
+  var stampPath = dst + '.version';
+  var tmp = dst + '.tmp-' + process.pid;
+  var statSize = function (p) { try { return fs.statSync(p).size; } catch (e) { return null; } };
+  try {
+    var stamped = null;
+    try { stamped = fs.readFileSync(stampPath, 'utf-8').trim(); } catch (e) { /* absent */ }
+    if (!shimCoreNeedsCopy(statSize(srcPath), statSize(dst), stamped, DAEMON_VERSION)) {
+      return fs.existsSync(dst) ? dst : null;
+    }
+    fs.copyFileSync(srcPath, tmp);
+    fs.chmodSync(tmp, 0o700);
+    fs.renameSync(tmp, dst);
+    fs.writeFileSync(stampPath, DAEMON_VERSION);
+    logMsg('info', 'walnut shim core copied', { path: dst, version: DAEMON_VERSION });
+    return dst;
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch (e) { /* nothing to clean */ }
+    // A shim that works until the next deploy beats no shim at all — fall back
+    // to the running script instead of skipping the shim.
+    logMsg('warn', 'walnut shim core copy failed — shim will point at the running script', { error: err.message });
+    return null;
+  }
+}
+
 // PATH shim so walnut inside spawned sessions reaches this daemon's dispatch.
-// Source-deploy branch: exec node <this daemon.cjs> wn "$@" ('wn' is the
-// internal dispatch keyword, not a user-facing name).
-function writeWnShim() {
+// Source-deploy branch: exec node <this daemon.cjs> walnut "$@" — the shim always
+// passes the CANONICAL 'walnut' keyword now ('wn' still dispatches, for shims
+// written by daemons already deployed in the field).
+function writeWalnutShim() {
   try {
     fs.mkdirSync(GATEWAY_SHIM_DIR, { recursive: true, mode: 0o700 });
     var q = function (s) { return "'" + String(s).replace(/'/g, "'\\\\''") + "'"; };
-    var shim = '#!/bin/sh\\nexec ' + q(process.execPath) + ' ' + q(process.argv[1]) + ' wn "$@"\\n';
+    // The deployed script normally sits IN DAEMON_DIR (daemon.cjs /
+    // daemon-fallback.cjs), which is stable — then nothing is copied and this
+    // keeps its previous shape. Launched from anywhere else, it can vanish while
+    // sessions still hold the shim, so copy it into the daemon dir first.
+    var entry = process.argv[1] || '';
+    var target = entry;
+    if (entry && path.resolve(path.dirname(entry)) !== path.resolve(DAEMON_DIR)) {
+      target = ensureShimCoreCopy(entry) || entry;
+    }
+    var shim = '#!/bin/sh\\nexec ' + q(process.execPath) + ' ' + q(target) + ' walnut "$@"\\n';
     // One name: walnut. The retired wn file is removed, not rewritten.
     var sp = path.join(GATEWAY_SHIM_DIR, 'walnut');
     fs.writeFileSync(sp, shim, { mode: 0o755 });
@@ -2835,10 +2984,10 @@ async function cmdStart(ws, id, cmd) {
       ...(process.env.WALNUT_DISABLE_FILE_CHECKPOINTS === '1'
         ? {}
         : { CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1' }),
-      // Agent gateway (peer sessions): the wn CLI inside this session reads
+      // Agent gateway (peer sessions): the walnut CLI inside this session reads
       // these two to reach the on-host gateway socket. The sid may be a fresh
       // spawn's tmp id — gatewaySidAliases (cmdRename) resolves it to the
-      // current sid on every request. PATH append puts the wn shim on the
+      // current sid on every request. PATH append puts the walnut shim on the
       // session's PATH (this twin spawns claude directly, no shell preamble).
       // Keep in sync with daemon-standalone.ts.
       WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
@@ -6376,11 +6525,15 @@ function cleanup() {
 // ── Main ──
 const action = process.argv[2];
 
-// wn mode: the deployed daemon.cjs doubles as the peer-session CLI (the
-// on-PATH wn is a 2-line shim exec'ing node + this file). Async — the socket
-// handlers inside runWnMinimal call process.exit; the final usage branch
-// below must NOT fire for this action. Keep in sync with daemon-standalone.ts.
-if (action === 'wn') {
+// CLI mode: the deployed daemon.cjs doubles as the on-host walnut CLI (the
+// on-PATH walnut is a 2-line shim exec'ing node + this file). BOTH keywords
+// dispatch here: 'walnut' is canonical, 'wn' is a deprecated compat alias that
+// MUST stay because shims written by daemons already deployed in the field pass
+// 'wn', and a shim is only rewritten when its own daemon next boots. Async — the
+// socket handlers inside runWnMinimal call process.exit; the final usage branch
+// below must NOT fire for either keyword. Keep in sync with daemon-standalone.ts.
+var isDaemonCliKeyword = function (a) { return a === 'walnut' || a === 'wn'; };
+if (isDaemonCliKeyword(action)) {
   runWnMinimal(process.argv.slice(3));
 }
 
@@ -6497,11 +6650,11 @@ if (action === '--start') {
     });
   });
 
-  // Agent gateway: second (unix-socket) listener + on-PATH wn shim. Both
+  // Agent gateway: second (unix-socket) listener + on-PATH walnut shim. Both
   // additive — failures log a warning and never abort daemon startup.
   // Keep in sync with daemon-standalone.ts --start.
   startGatewayListener();
-  writeWnShim();
+  writeWalnutShim();
 
   // Listen on random port (localhost only)
   httpServer.listen(0, '127.0.0.1', () => {
@@ -6583,9 +6736,10 @@ if (action === '--start') {
     process.stdin.resume();
     process.stdin.on('end', () => {}); // Don't exit on stdin close
   }
-} else if (action !== 'wn') {
-  // 'wn' is handled above (async — must not fall into this usage error).
-  console.error('Usage: node daemon.js --start | --stop | --status | wn <args...>');
+} else if (!isDaemonCliKeyword(action)) {
+  // Both CLI keywords are handled above (async — neither must fall into this
+  // usage error). 'wn' is the deprecated alias kept for shims in the field.
+  console.error('Usage: node daemon.js --start | --stop | --status | walnut <args...>');
   process.exit(1);
 }
 `;

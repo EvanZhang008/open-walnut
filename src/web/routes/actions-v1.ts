@@ -55,8 +55,8 @@ const DESTRUCTIVE_OPS = new Set(['task_delete', 'task_merge'])
 
 /**
  * The second half of the floor, for a different reason than data loss: these ops
- * EXECUTE CODE (delegate and task_start spawn a coding CLI with a model-chosen
- * prompt, cwd and permission mode; session_send types into a live one) or REPLACE
+ * EXECUTE CODE (session_start spawns a coding CLI with a model-chosen prompt,
+ * cwd and permission mode; session_send types into a live one) or REPLACE
  * A WHOLE DOCUMENT (memory_write; note_write with an expectedHash overwrites an
  * existing note, without one it creates a new file in the vault).
  *
@@ -65,7 +65,7 @@ const DESTRUCTIVE_OPS = new Set(['task_delete', 'task_merge'])
  * emitting a harmless-looking `label` over an arbitrary call — and the card face
  * shows the label, not the args. One click must not be enough for these.
  */
-const POWERFUL_OPS = new Set(['delegate', 'task_start', 'session_send', 'memory_write', 'note_write'])
+const POWERFUL_OPS = new Set(['session_start', 'session_send', 'memory_write', 'note_write'])
 
 /** Why `tool` may not run on a bare click, or null when a bare click is fine. */
 function confirmReason(tool: string, destructiveTag: boolean): string | null {

@@ -200,8 +200,8 @@ export function buildLetterDeliveryText(
  * One session state gets the queue but NOT the dispatch: a session parked on a
  * permission prompt. Both delivery paths (processNext / injectMidTurn) auto-DENY
  * every pending prompt to make room for a new message, so answering a letter
- * from the phone would silently deny a tool call the human never saw (peers.send
- * refuses to send at all for exactly this reason). Dropping the answer isn't an
+ * from the phone would silently deny a tool call the human never saw (session_send
+ * defers to enqueue-only for exactly this reason). Dropping the answer isn't an
  * option either — an action can only be answered once. So the wrapped text is
  * ENQUEUED without emitting SESSION_SEND and rides the session's next drain
  * (turn end after the human resolves the prompt, startup recovery, daemon

@@ -41,6 +41,8 @@ import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { CLOUD_MODE } from '../../constants.js'
 import type { Task, TaskPhase } from '../../core/types.js'
+import { isKnownEngine } from '../../core/agents/engine-registry.js'
+import { SESSION_ENGINE_IDS } from '../../core/types.js'
 
 export const taskV1Router = Router()
 
@@ -229,12 +231,13 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
   }
 })
 
-// POST /api/v1/tasks/:id/start { resume?, prompt? } — start (or resume) a
-// session for an EXISTING task. Distinct from POST /api/v1/sessions, whose
-// body requires an absolute `cwd`: the CLI's `start <task_id>` names only a
-// task and lets the session-runner resolve cwd from the task/project chain.
-// Core lives in core/sessions/task-start.ts (shared with the CLI's direct
-// escape hatch).
+// POST /api/v1/tasks/:id/start { message?, cwd?, host?, model?, mode?, engine?,
+// expect_reply?, reply_timeout? } — start a NEW session for an EXISTING task
+// (the session_start op). Distinct from POST /api/v1/sessions, whose body
+// requires an absolute `cwd`: this one names only a task and lets the
+// session-runner resolve cwd from the task/project chain. A live session →
+// 409 with existing_session_id (use session_send). Core:
+// core/sessions/task-start.ts (shared with the CLI's direct escape hatch).
 taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: NextFunction) => {
   try {
     // Class C on a REPLICA: the cloud box has no session-runner/daemon, so the
@@ -246,26 +249,36 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
       return
     }
     const id = paramStr(req.params.id)
-    const { resume, prompt } = (req.body ?? {}) as { resume?: unknown; prompt?: unknown }
-    if (resume !== undefined && typeof resume !== 'boolean') {
-      sendError(res, 400, 'bad_request', 'resume must be a boolean')
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const str = (k: string): string | undefined => (typeof b[k] === 'string' && (b[k] as string) ? b[k] as string : undefined)
+    if (b.engine !== undefined && !isKnownEngine(b.engine)) {
+      sendError(res, 400, 'bad_request', `engine must be one of: ${SESSION_ENGINE_IDS.join(', ')}`)
       return
     }
-    if (prompt !== undefined && typeof prompt !== 'string') {
-      sendError(res, 400, 'bad_request', 'prompt must be a string')
-      return
-    }
-    const { startSessionForTask } = await import('../../core/sessions/task-start.js')
+    const rawSid = req.headers['x-walnut-caller-sid']
+    const callerSid = (Array.isArray(rawSid) ? rawSid[0] : rawSid ?? '').trim() || undefined
+    const { startSessionForTask, SessionExistsError } = await import('../../core/sessions/task-start.js')
     const { QuickStartError } = await import('../../core/sessions/quick-start.js')
     const { launchErrorCode } = await import('../../core/sessions/mobile-launch.js')
     try {
-      res.json(await startSessionForTask({
+      res.status(202).json(await startSessionForTask({
         taskIdPrefix: id,
-        ...(resume !== undefined ? { resume } : {}),
-        ...(prompt !== undefined ? { prompt } : {}),
+        message: str('message'),
+        cwd: str('cwd'),
+        host: str('host'),
+        model: str('model'),
+        mode: str('mode'),
+        engine: b.engine,
+        expectReply: b.expect_reply === true,
+        replyTimeoutSecs: typeof b.reply_timeout === 'number' ? b.reply_timeout : undefined,
+        callerSid,
         source: 'api-v1',
       }))
     } catch (err) {
+      if (err instanceof SessionExistsError) {
+        sendError(res, 409, 'session_exists', err.message, { existing_session_id: err.existingSessionId })
+        return
+      }
       if (err instanceof QuickStartError) {
         sendError(res, err.statusCode, launchErrorCode(err.statusCode), err.message)
         return

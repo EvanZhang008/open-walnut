@@ -23,19 +23,33 @@ describe('Main Agent self-knowledge eval contract', () => {
   });
 
   it('makes tracking-only and execution tools mutually explicit', () => {
-    const delegate = tool('delegate');
+    // `delegate` folded the two into one call and is gone. The pairing still has
+    // to be explicit, or the Main Agent records work the user asked it to do:
+    // task_create says it starts nothing AND names what does.
     const create = tool('task_create');
-    expect(delegate.description).toContain('Use task_create instead when the user only wants to record work');
     expect(create.description).toContain('without starting any work or session');
-    expect(create.description).toContain('use delegate instead');
+    expect(create.description).toContain('follow with session_start');
+    expect(create.description).not.toContain('delegate');
+
+    const start = tool('session_start');
+    expect(start.description.length).toBeGreaterThan(40);
   });
 
-  it('keeps the registry as the single schema source for delegate', () => {
-    const delegate = tool('delegate');
-    const op = getOp('delegate');
-    expect(op).toBeDefined();
-    expect(delegate.description).toBe(op?.description);
-    expect(delegate.input_schema).toEqual(opInputJsonSchema(op!));
+  it('names the same two verbs in the contract and in the registry', () => {
+    // The bootstrap prompt is the only thing the Main Agent reads before its
+    // first tool call, so an op it names must exist under that exact name.
+    const contract = renderSelfKnowledgeContract();
+    expect(contract).not.toContain('delegate');
+    for (const name of ['task_create', 'session_start', 'session_send']) {
+      expect(contract, name).toContain(`\`${name}\``);
+      expect(getOp(name), name).toBeDefined();
+    }
+    expect(getOp('delegate')).toBeUndefined();
+    // expect_reply is how a started session reports back — the contract must
+    // mention it, since nothing else teaches the reply loop pre-first-call.
+    expect(contract).toContain('expect_reply');
+    expect(opInputJsonSchema(getOp('session_start')!).properties).toHaveProperty('expect_reply');
+    expect(opInputJsonSchema(getOp('session_send')!).properties).toHaveProperty('expect_reply');
   });
 
   it('offers the whole 5-phase lifecycle, derived from PHASE_ORDER', () => {

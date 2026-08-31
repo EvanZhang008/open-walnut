@@ -3,11 +3,10 @@ import { outputJson } from '../utils/json-output.js';
 import { apiPost, reportApiError } from '../utils/api-client.js';
 import { requireDirectRunners } from './direct-registry.js';
 import type { GlobalOptions } from '../core/types.js';
-import type { TaskStartResult } from '../core/sessions/task-start.js';
+import type { SessionStartResult } from '../core/sessions/task-start.js';
 
 interface StartOptions {
-  resume?: boolean;
-  prompt?: string;
+  message?: string;
 }
 
 /**
@@ -18,6 +17,9 @@ interface StartOptions {
  * the session registry itself. (POST /api/v1/sessions can't express this — its
  * body requires an absolute `cwd`, while this command names only a task and
  * lets the runner resolve cwd from the task/project chain.)
+ *
+ * A task whose session is still live gets a 409 from the server pointing at
+ * session_send — starting is for tasks with no running session.
  */
 export async function runStart(
   taskIdPrefix: string,
@@ -32,12 +34,9 @@ export async function runStart(
   }
 
   try {
-    const result = await apiPost<TaskStartResult>(
+    const result = await apiPost<SessionStartResult>(
       `/api/v1/tasks/${encodeURIComponent(taskIdPrefix)}/start`,
-      {
-        ...(options.resume ? { resume: true } : {}),
-        ...(options.prompt !== undefined ? { prompt: options.prompt } : {}),
-      },
+      options.message !== undefined ? { message: options.message } : {},
     );
     printStart(result, globals);
   } catch (err) {
@@ -45,28 +44,12 @@ export async function runStart(
   }
 }
 
-export function printStart(result: TaskStartResult, globals: GlobalOptions): void {
-  if (result.action === 'resume') {
-    if (globals.json) {
-      outputJson({ action: 'resume', sessionId: result.sessionId });
-    } else {
-      console.log(chalk.yellow(`Resuming session: ${(result.sessionId ?? '').slice(0, 16)}`));
-    }
-    return;
-  }
-
-  if (result.resume_missed) {
-    if (globals.json) {
-      outputJson({ warning: 'No existing session found, starting new one' });
-    } else {
-      console.log(chalk.dim('No existing session found. Starting a new one.'));
-    }
-  }
-
+export function printStart(result: SessionStartResult, globals: GlobalOptions): void {
   if (globals.json) {
-    outputJson({ action: 'start', taskId: result.taskId });
+    outputJson({ action: 'start', taskId: result.taskId, ...(result.sessionId ? { sessionId: result.sessionId } : {}) });
   } else {
     console.log(chalk.green('Started session for task:'), result.title);
+    if (result.sessionId) console.log(chalk.dim(`Session: ${result.sessionId}`));
     console.log(chalk.dim('Session running via claude -p (non-blocking).'));
   }
 }

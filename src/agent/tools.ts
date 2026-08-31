@@ -79,7 +79,6 @@ import type { Config, SessionRecord, Task, TaskPhase, TaskPriority, TaskSource }
 // Leaf module (types only) — safe to import statically; getPluginTools() needs it
 // on the synchronous tool-lookup path in executeTool().
 import { registry } from '../core/integration-registry.js';
-import { getOp, opInputJsonSchema } from '../ops/index.js';
 import path from 'node:path';
 import { log } from '../logging/index.js';
 import { CLAUDE_HOME } from '../constants.js';
@@ -188,24 +187,6 @@ export interface ToolDefinition {
 
 function json(data: unknown): string {
   return JSON.stringify(data, null, 2);
-}
-
-function delegateAgentTool(): ToolDefinition {
-  const op = getOp('delegate');
-  if (!op) throw new Error('Missing registry op: delegate');
-  return {
-    name: op.name,
-    description: op.description,
-    input_schema: opInputJsonSchema(op),
-    async execute(params, meta) {
-      try {
-        const { delegateWork } = await import('../core/delegate-work.js');
-        return json(await delegateWork(params as never, meta?.source ?? 'agent'));
-      } catch (err) {
-        return `Error: ${err instanceof Error ? err.message : String(err)}`;
-      }
-    },
-  };
 }
 
 /** Where a resolved host/cwd value came from — used to arbitrate conflicts (more specific wins). */
@@ -556,8 +537,6 @@ async function runTaskQueryTool(
 }
 
 export const tools: ToolDefinition[] = [
-  delegateAgentTool(),
-
   // ── Task Tools ──
   {
     name: 'task_query',
@@ -819,7 +798,7 @@ export const tools: ToolDefinition[] = [
     name: 'task_create',
     description: `Record a task or empty project without starting any work or session.
 
-- type=task (default): Use only when the user wants tracking without execution. If work should start now, use delegate instead. Tasks optionally belong to a **project**; no project = **Inbox**. Prefer an existing project (matched case-insensitively). A project name that doesn't exist yet is created automatically. Use parent_task_id for child tasks (inherits project and source from parent).
+- type=task (default): Use only when the user wants tracking without execution. If work should start now, follow with session_start. Tasks optionally belong to a **project**; no project = **Inbox**. Prefer an existing project (matched case-insensitively). A project name that doesn't exist yet is created automatically. Use parent_task_id for child tasks (inherits project and source from parent).
 - type=project: Create an empty project up front (rarely needed; task creation auto-creates a project by name).`,
     input_schema: {
       type: 'object',

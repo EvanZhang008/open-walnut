@@ -106,6 +106,7 @@ import { sessionLaunchV1Router } from './routes/session-launch-v1.js'
 import { sessionControlV1Router } from './routes/session-control-v1.js'
 import { sessionLifecycleV1Router } from './routes/session-lifecycle-v1.js'
 import { taskV1Router } from './routes/task-v1.js'
+import { messagesV1Router } from './routes/messages-v1.js'
 import { personalAiV1Router } from './routes/personal-ai-v1.js'
 import { searchMemoryV1Router } from './routes/search-memory-v1.js'
 import { eventsV1Router, startMobileEventsFeed, stopMobileEventsFeed } from './routes/events-v1.js'
@@ -1060,11 +1061,21 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/plugins/:pluginId', createPluginBodyParser(registry, CLOUD_MODE))
   // Letters carry inline media (a digest's base64 audio/video), so their write
   // routes get their own parser above the 15mb default — same shape as the STT
-  // route right above. 32mb ≈ LETTER_HTML_MAX_BYTES (24MB) plus JSON envelope
-  // headroom; past that the handler below answers with a contract-shaped 413
-  // instead of Express's bare HTML one. Kept OFF the global parser deliberately:
-  // every other route should still refuse a 30MB body outright.
-  app.use(['/api/v1/human-inbox', '/api/human-inbox'], express.json({ limit: '32mb' }))
+  // route right above. This bounds the INLINE lane only: a document bigger than
+  // this is streamed to `POST /human-inbox/body` as raw bytes (no JSON parser
+  // touches a non-json Content-Type) and the letter then carries `html_ref`, so
+  // LETTER_HTML_MAX_BYTES (100MB) is not a function of this number. Past 32mb of
+  // inline JSON the handler below answers with a contract-shaped 413 that names
+  // the staging lane, instead of Express's bare HTML one. Kept OFF the global
+  // parser deliberately: every other route should still refuse a 30MB body.
+  //
+  // 24mb, not more, and the reason is the ONE frame an inline send still crosses:
+  // a cloud replica relays the whole letter JSON to the primary over the bridge,
+  // and `ws` answers a frame past its 32MB maxPayload by closing the socket with
+  // 1009 before any handler runs. So the inline lane is bounded by the frame minus
+  // envelope headroom, exactly as before — and the 100MB lane simply does not use
+  // this parser.
+  app.use(['/api/v1/human-inbox', '/api/human-inbox'], express.json({ limit: '24mb' }))
   app.use(['/api/v1/human-inbox', '/api/human-inbox'], inboxPayloadTooLargeHandler)
   app.use(express.json({ limit: '15mb' }))
   // Paste spill-over (>200K chars from the web UI) — needs req.body, so must
@@ -1489,6 +1500,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Task + focus endpoints (additive, Wave 1): detail/delete/star/notes/
   // reorder/batch + pin/tier — A-class (local store; replica rides the outbox).
   app.use('/api/v1', taskV1Router)
+  // Unified send surface (additive): POST /messages (session_send core) +
+  // GET /requests/:id (expect_reply status). Primary-only — 501 on a replica.
+  app.use('/api/v1', messagesV1Router)
   // Personal AI conversation management (additive, Wave 1): rename/delete/stop/
   // answer — A-class (the replica runs its own Personal AI).
   app.use('/api/v1', personalAiV1Router)
@@ -2540,6 +2554,22 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.web.error('hook dispatcher init failed — session triage and lifecycle hooks will NOT fire', {
       error: err instanceof Error ? err.message : String(err),
     })
+  }
+
+  // -- expect_reply deadline sweeper (primary only) --
+  // The phase-edge hook above is a HINT; this sweep is the guarantee: a pending
+  // session-request whose target never produced an edge (killed daemon, stale
+  // result gate, host offline) still notifies the asker at its deadline.
+  if (!CLOUD_MODE) {
+    const sweep = setInterval(() => {
+      void import('../core/sessions/session-request-notify.js')
+        .then(({ sweepSessionRequests }) => sweepSessionRequests())
+        .then((n) => { if (n > 0) log.session.info('session-request sweep notified askers', { count: n }) })
+        .catch((err) => log.session.warn('session-request sweep failed', {
+          error: err instanceof Error ? err.message : String(err),
+        }))
+    }, 60_000)
+    sweep.unref?.()
   }
 
   // -- Init SubagentRunner + SessionRunner --

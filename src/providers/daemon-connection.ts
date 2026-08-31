@@ -1022,7 +1022,7 @@ export class DaemonConnection {
 
   /**
    * Answer a daemon-relayed agent-gateway request (a `walnut` CLI inside one of
-   * this host's sessions calling peers.list / peers.send over the daemon's
+   * this host's sessions calling tools.list / tools.call over the daemon's
    * unix socket). Runs the hub-side capability router and replies with a
    * `gateway-result` carrying the relayId. Errors are reported back with an
    * errorCode (not thrown) so the daemon can fail the unix-socket request
@@ -2492,7 +2492,7 @@ export class DaemonConnection {
         void this.handleMessageRequest(event)
         return
       }
-      // Agent-gateway relay (wn CLI peers.list/peers.send): same internal
+      // Agent-gateway relay (walnut CLI peers.list/peers.send): same internal
       // handling — session-level eventHandlers never see it.
       if (event.ev === 'gateway-request') {
         void this.handleGatewayRequest(event)
@@ -2575,7 +2575,7 @@ export class DaemonConnection {
       }
       // gateway-request also targets the daemon's FIRST trusted client — after
       // a main-WS reconnect that can be this bulk socket; dropping it here
-      // would silently time out every wn CLI call until the next reconnect.
+      // would silently time out every walnut CLI call until the next reconnect.
       if ('ev' in msg && (msg as { ev?: string }).ev === 'gateway-request') {
         void this.handleGatewayRequest(msg as unknown as DaemonEvent)
       }

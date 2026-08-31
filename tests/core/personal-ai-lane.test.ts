@@ -237,7 +237,7 @@ describe('personalAiProfile', () => {
   it('carries the short operating contract without parameter tables', () => {
     const prompt = personalAiProfile('Ada').systemPrompt!
     expect(prompt).toContain('## Walnut operating contract')
-    expect(prompt).toContain('Use `delegate`')
+    expect(prompt).toContain('`session_start` starts a session')
     // The 4-phase rewrite (22b34fee) deliberately dropped "Only a human may set
     // COMPLETE" for "You may set any phase; none is reserved" — assert TODAY's
     // rule, so this test states the contract rather than a retired one.

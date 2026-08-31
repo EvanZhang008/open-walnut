@@ -43,7 +43,9 @@ afterEach(async () => {
 describe('tool definitions', () => {
   it('has all expected tools', () => {
     const names = tools.map((t) => t.name);
-    expect(names).toContain('delegate');
+    // `delegate` is gone: the Personal AI records with task_create and executes
+    // with its own session_start tool. Nothing here derives from the op registry.
+    expect(names).not.toContain('delegate');
     expect(names).toContain('task_query');
     expect(names).toContain('task_get');
     expect(names).toContain('task_create');
@@ -64,13 +66,20 @@ describe('tool definitions', () => {
     expect(names).toContain('config_update');
   });
 
-  it('derives delegate name, description, and schema from the shared op registry', () => {
-    const agentTool = tools.find((tool) => tool.name === 'delegate');
-    const op = getOp('delegate');
-    expect(agentTool).toBeDefined();
-    expect(op).toBeDefined();
-    expect(agentTool?.description).toBe(op?.description);
-    expect(agentTool?.input_schema).toEqual(opInputJsonSchema(op!));
+  it('no agent tool is a registry-derived shim any more', () => {
+    // delegateAgentTool() was the only tool whose name/description/schema came
+    // from the ops registry, and it died with the `delegate` op. The registry is
+    // still the source for the `walnut tools` surface — just not for these tools.
+    expect(getOp('delegate')).toBeUndefined();
+    for (const name of ['delegate', 'task_start', 'request_get']) {
+      expect(tools.find((t) => t.name === name), name).toBeUndefined();
+    }
+    // The registry ops that replaced it exist, and their schemas still render.
+    for (const name of ['session_start', 'session_send']) {
+      const op = getOp(name);
+      expect(op, name).toBeDefined();
+      expect(opInputJsonSchema(op!).properties, name).toBeDefined();
+    }
   });
 
   it('session_start has working_directory, task_id, runner, and agent_id in input_schema', () => {
