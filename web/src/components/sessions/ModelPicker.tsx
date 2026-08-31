@@ -12,7 +12,7 @@ import {
   normalizeSessionModelCatalogId,
 } from '@open-walnut/core';
 import type { SessionEffort, SessionModelCatalogEntry } from '@open-walnut/core';
-import { fetchCodexModelCatalog, fetchSessionLiveSettings, fetchSessionModelCatalog } from '@/api/sessions';
+import { fetchCodexModelCatalog, fetchEngineModelCatalog, fetchSessionLiveSettings, fetchSessionModelCatalog } from '@/api/sessions';
 import type { CodexModelInfo, SessionLiveSettings, SessionModelCatalog } from '@/api/sessions';
 import type { SessionEngine } from '@/types/session';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
@@ -20,8 +20,9 @@ import { engineLockReason } from '@/utils/engines';
 import { engineCaps, engineLabel } from '@/utils/engine-capabilities';
 import { useHostModelCatalog, seedHostCatalog } from '@/hooks/useModelCatalog';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
-import { formatModelName } from '@/hooks/useSessionUsage';
+import { formatModelName } from '@/utils/model-name';
 import { sortByModelStrength } from '@/utils/model-strength-order';
+import { parseAcpModelId, acpFamilyName, acpProviderGroupId, prettyGroupLabel, shortAcpModelName } from './acp-model-id';
 
 const EFFORTS = SESSION_EFFORTS;
 
@@ -67,6 +68,47 @@ function CodexMark() {
   );
 }
 
+/** Four-point spark in the provider's blue — Gemini's signature shape. */
+function GeminiMark() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="#4E86F7" aria-hidden>
+      <path d="M12 2c.9 5.3 4.7 9.1 10 10-5.3.9-9.1 4.7-10 10-.9-5.3-4.7-9.1-10-10 5.3-.9 9.1-4.7 10-10z" />
+    </svg>
+  );
+}
+
+/** Terminal frame with a solid block cursor — OpenCode's block-cursor motif. */
+function OpenCodeMark() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="3" />
+      <rect x="7" y="12" width="4.4" height="7.5" fill="currentColor" stroke="none" />
+      <path d="M14.2 16h3.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Long-necked bird silhouette — goose. */
+function GooseMark() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M5 19.5c5.5-.8 8-3.4 8-8V8.2c0-1.5 1.1-2.7 2.6-2.7 1.1 0 2 .6 2.4 1.6l1.5.6-1.5.9v2.9c0 4.6-3.5 8-8.5 8H5z" />
+      <circle cx="15.8" cy="7.4" r="0.4" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/** Sliders — the operator-configured `custom` adapter. */
+function CustomEngineMark() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden>
+      <path d="M4 7.5h9M17 7.5h3M4 16.5h3M11 16.5h9" />
+      <circle cx="15" cy="7.5" r="2" />
+      <circle cx="9" cy="16.5" r="2" />
+    </svg>
+  );
+}
+
 /** Neutral CLI-agent glyph for engines with no bespoke mark of their own. */
 function GenericEngineMark() {
   return (
@@ -81,6 +123,10 @@ function GenericEngineMark() {
 const PROVIDER_ICONS: Partial<Record<string, React.FC>> = {
   claude: ClaudeMark,
   codex: CodexMark,
+  gemini: GeminiMark,
+  opencode: OpenCodeMark,
+  goose: GooseMark,
+  custom: CustomEngineMark,
 };
 
 export function ProviderRail({ active, onSwitch, lockReason }: {
@@ -166,43 +212,9 @@ function fmtTokens(n?: number | null): string {
   return String(n);
 }
 
-/**
- * ACP encodes reasoning effort INTO the model id — "openai.gpt-5.6-sol[xhigh]"
- * — so a raw catalog renders as a wall of family×effort rows. Split the two
- * axes back apart: familyId is the id without the [effort] suffix, effort is
- * the suffix (null when the id carries none, e.g. mock/test models).
- */
-export function parseAcpModelId(modelId: string): { familyId: string; effort: string | null } {
-  // Same split as the server's splitAcpModelId (acp-session.ts) — a narrower
-  // class here silently mis-parses any effort the server accepts.
-  const m = /^(.*?)\[([^\]]+)\]$/.exec(modelId);
-  return m ? { familyId: m[1], effort: m[2] } : { familyId: modelId, effort: null };
-}
-
-/** "openai.gpt-5.6-sol" → "GPT 5.6 Sol" — family half of an ACP model id. */
-function acpFamilyName(familyId: string): string {
-  return familyId
-    .replace(/^(?:openai|codex|mock)[.:/_\s-]+/i, '')
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map((part) => part.toLowerCase() === 'gpt'
-      ? 'GPT'
-      : part.toLowerCase() === 'codex'
-        ? 'Codex'
-        : part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
-}
-
-/** Display form of a full ACP model id — "GPT 5.6 Sol · X-High".
- *  (Pill labels in SessionPanel + the lane composer use it.) */
-export function shortAcpModelName(modelId: string): string {
-  const { familyId, effort } = parseAcpModelId(modelId);
-  const family = acpFamilyName(familyId);
-  if (!effort) return family;
-  const label = SESSION_EFFORTS.find((e) => e.id === effort)?.label
-    ?? effort.charAt(0).toUpperCase() + effort.slice(1);
-  return `${family} · ${label}`;
-}
+// ACP model-id parsing lives in ./acp-model-id (pure module, unit-tested);
+// re-exported here so pill callers keep their historical import path.
+export { parseAcpModelId, acpProviderGroupId, shortAcpModelName } from './acp-model-id';
 
 interface ModelPickerProps {
   currentModel?: string;
@@ -214,6 +226,9 @@ interface ModelPickerProps {
   /** Session's host (undefined = local) — selects the host-level catalog cache
    *  so the picker renders CLI-truth rows instantly, before any live pull. */
   host?: string;
+  /** DRAFT ACP pane: the draft's folder — the engine probe runs there because
+   *  opencode/goose resolve provider+model config per project. */
+  cwd?: string;
   /** Switch model — applied live via apply_flag_settings (no respawn); the NEXT
    *  turn uses the new model. No Now/Next-turn split needed anymore. */
   onSwitch: (model: string) => void;
@@ -249,7 +264,7 @@ interface ModelPickerProps {
 }
 
 export function ModelPicker({
-  currentModel, currentEffort, sessionId, host, onSwitch, onEffortSwitch, onClose,
+  currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onClose,
   engine = 'claude', onProviderSwitch, providerLockReason, acpCurrentModelId, onAcpSwitch, autoRow,
   anchorRef,
 }: ModelPickerProps) {
@@ -274,29 +289,46 @@ export function ModelPicker({
     return () => { cancelled = true; };
   }, [sessionId, isAcpPane]);
 
-  // ── ACP pane: the provider-advertised catalog of a LIVE ACP session
-  // (onAcpSwitch set). One route serves EVERY ACP engine — the session's own
-  // adapter answers it — so there is nothing engine-specific in this fetch.
-  // An ACP DRAFT has no catalog to offer (models are discovered at session
-  // start), so the pane renders an explanatory row instead (acpModels null).
+  // ── ACP pane: the provider-advertised catalog. LIVE (sessionId set): the
+  // session's own adapter answers, engine-generic. DRAFT (no sessionId): the
+  // server probes the engine's adapter one-shot (GET /api/engines/:id/models)
+  // so real models are pickable BEFORE launch — the current selection is the
+  // caller's draft state (acpCurrentModelId prop), never the probe's default.
   const [acpModels, setAcpModels] = React.useState<CodexModelInfo[] | null>(null);
   const [acpCurrent, setAcpCurrent] = React.useState<string | undefined>(acpCurrentModelId);
   const [acpLoading, setAcpLoading] = React.useState(false);
+  const [acpError, setAcpError] = React.useState<string | null>(null);
   React.useEffect(() => { setAcpCurrent(acpCurrentModelId); }, [acpCurrentModelId, sessionId]);
+  // Depend on the callback's PRESENCE, not its identity: draft callers pass an
+  // inline arrow, and any parent re-render while the picker is open would
+  // otherwise re-fire the fetch and flash the list back to "Loading…".
+  const hasAcpSwitch = !!onAcpSwitch;
   React.useEffect(() => {
-    if (!isAcpPane || !sessionId || !onAcpSwitch) return;
+    if (!isAcpPane || !hasAcpSwitch) return;
     let cancelled = false;
     setAcpLoading(true);
-    fetchCodexModelCatalog(sessionId)
-      .then((c) => {
+    setAcpError(null);
+    const pull = sessionId
+      ? fetchCodexModelCatalog(sessionId).then((c) => {
+          if (cancelled) return;
+          setAcpModels(c.models);
+          setAcpCurrent(c.currentModelId);
+        })
+      : fetchEngineModelCatalog(engine, cwd).then((c) => {
+          if (cancelled) return;
+          setAcpModels(c.models);
+        });
+    pull
+      .catch((err: unknown) => {
         if (cancelled) return;
-        setAcpModels(c.models);
-        setAcpCurrent(c.currentModelId);
+        setAcpModels([]);
+        // Draft probes fail for OPERATOR reasons (engine not installed, no
+        // credentials) — show the adapter's own words, not a blank pane.
+        if (!sessionId) setAcpError(err instanceof Error ? err.message : String(err));
       })
-      .catch(() => { if (!cancelled) setAcpModels([]); })
       .finally(() => { if (!cancelled) setAcpLoading(false); });
     return () => { cancelled = true; };
-  }, [isAcpPane, sessionId, onAcpSwitch]);
+  }, [isAcpPane, sessionId, hasAcpSwitch, engine, cwd]);
 
   // ── Catalog: instant from the host-level cache (localStorage-seeded, WS-live
   // via useHostModelCatalog — the server pushes session:model-catalog on every
@@ -491,45 +523,78 @@ export function ModelPicker({
     return () => document.removeEventListener('mousedown', onDown);
   }, [popped, onClose, anchorRef]);
 
-  // ── ACP pane rows (live: provider catalog; draft: explanatory placeholder).
-  // ACP encodes effort into the model id (…-sol[xhigh]), which as raw rows is a
-  // 25-entry wall. Regroup to the SAME two flat columns the claude pane has:
-  // Model = one row per family, Effort = the shared ladder (rows the active
-  // family doesn't offer render disabled). A family/effort click composes the
-  // full id back (family switch keeps the current effort when offered).
-  const acpFamilies = React.useMemo(() => {
-    const fams = new Map<string, { familyId: string; label: string; byEffort: Map<string | null, CodexModelInfo> }>();
+  // ── ACP pane rows. ACP encodes effort into the model id (…-sol[xhigh],
+  // …/claude-sonnet-4-6/high), which as raw rows is a wall — opencode
+  // advertises 300+. Regroup on THREE axes: Provider (the id's provider
+  // prefix; the column hides when there's only one), Model = one row per
+  // family, Effort = the shared ladder (rows the active family doesn't offer
+  // render disabled). A family/effort click composes the full id back
+  // (family switch keeps the current effort when offered).
+  type AcpFamily = { familyId: string; label: string; byEffort: Map<string | null, CodexModelInfo> };
+  const acpGroups = React.useMemo(() => {
+    const groups = new Map<string, { id: string; label: string; families: Map<string, AcpFamily> }>();
     for (const m of acpModels ?? []) {
       const { familyId, effort } = parseAcpModelId(m.modelId);
-      let fam = fams.get(familyId);
+      const groupId = acpProviderGroupId(familyId);
+      let group = groups.get(groupId);
+      if (!group) {
+        // Prefer the provider's own spelling from the advertised name
+        // ("Amazon Bedrock/Claude …"); ids without one prettify the id.
+        const nameSlash = m.name.indexOf('/');
+        const label = groupId
+          ? (nameSlash > 0 ? m.name.slice(0, nameSlash).trim() : prettyGroupLabel(groupId))
+          : '';
+        group = { id: groupId, label, families: new Map() };
+        groups.set(groupId, group);
+      }
+      let fam = group.families.get(familyId);
       if (!fam) {
-        // Prefer the server's own name minus its "(effort)" tail — it keeps
-        // punctuation the id lost (e.g. "GPT-5.6 Sol", mock model names).
-        // KEEP the name === modelId guard: an adapter that advertises NO name
-        // gets the modelId as its name, whose effort is bracketed ("id[high]"),
-        // so this regex misses, .trim() is non-empty and the `|| ` fallback
-        // never fires — the row rendered the raw qualified id.
+        // Prefer the server's own name minus its provider prefix and its
+        // "(effort)" tail — it keeps punctuation the id lost (e.g. "GPT-5.6
+        // Sol", "Claude Sonnet 4.6 (US)"). KEEP the name === modelId guard:
+        // an adapter that advertises NO name gets the modelId as its name,
+        // whose effort is bracketed ("id[high]"), so the regex misses,
+        // .trim() is non-empty and the `|| ` fallback never fires — the row
+        // rendered the raw qualified id.
+        const nameSlash = m.name.indexOf('/');
+        const withoutGroup = groupId && nameSlash > 0 ? m.name.slice(nameSlash + 1) : m.name;
         const label = m.name === m.modelId
           ? acpFamilyName(familyId)
-          : m.name.replace(/\s*\((?:low|medium|high|xhigh|max)\)\s*$/i, '').trim()
+          : withoutGroup.replace(/\s*\((?:low|medium|high|xhigh|max)\)\s*$/i, '').trim()
             || acpFamilyName(familyId);
         fam = { familyId, label, byEffort: new Map() };
-        fams.set(familyId, fam);
+        group.families.set(familyId, fam);
       }
       fam.byEffort.set(effort, m);
     }
-    return sortByModelStrength(
-      [...fams.values()],
-      (family) => `${family.familyId} ${family.label}`,
-    );
+    // Insertion order (the provider's own catalog order) for groups; strength
+    // sort inside a group, same as before.
+    return [...groups.values()].map((group) => ({
+      id: group.id,
+      label: group.label,
+      families: sortByModelStrength(
+        [...group.families.values()],
+        (family) => `${family.familyId} ${family.label}`,
+      ),
+    }));
   }, [acpModels]);
   const acpActive = acpCurrent ? parseAcpModelId(acpCurrent) : null;
+  const acpAllFamilies = React.useMemo(() => acpGroups.flatMap((g) => g.families), [acpGroups]);
   const acpActiveFamily = acpActive
-    ? acpFamilies.find((f) => f.familyId === acpActive.familyId)
+    ? acpAllFamilies.find((f) => f.familyId === acpActive.familyId)
     : undefined;
+  // Group NAVIGATION selection — follows the active model until the user
+  // clicks a group; a click only changes which families are listed, never the
+  // model itself.
+  const [acpGroupSel, setAcpGroupSel] = React.useState<string | null>(null);
+  const acpActiveGroupId = acpActive ? acpProviderGroupId(acpActive.familyId) : null;
+  const acpSelectedGroup = acpGroups.find((g) => g.id === (acpGroupSel ?? acpActiveGroupId))
+    ?? acpGroups[0];
+  const acpFamilies = acpSelectedGroup?.families ?? [];
   // Hide the effort column entirely when NO family has effort variants (mock
   // catalogs) — mirrors the claude pane hiding effort for draft callers.
-  const acpHasEfforts = acpFamilies.some((f) => [...f.byEffort.keys()].some((e) => e !== null));
+  const acpHasEfforts = acpAllFamilies.some((f) => [...f.byEffort.keys()].some((e) => e !== null));
+  const acpGrouped = acpGroups.length > 1;
 
   const switchAcpFamily = (fam: { familyId: string; byEffort: Map<string | null, CodexModelInfo> }) => {
     if (!onAcpSwitch) return;
@@ -562,48 +627,97 @@ export function ModelPicker({
     return `${row.model.value} ${row.model.resolvedModel ?? ''} ${catalogRowLabel(row.model)}`;
   });
 
+  // Draft (no session yet): a "default" row on top — active until the user
+  // picks a real model; picking it back clears the draft's model choice.
+  const acpDraft = !sessionId;
+  const acpDefaultRow = onAcpSwitch && acpDraft && (
+    <button
+      type="button"
+      className={`model-picker-row${!acpCurrent ? ' model-picker-row-active' : ''}`}
+      role="option"
+      aria-selected={!acpCurrent}
+      data-testid="acp-default-row"
+      title={`${engineUi.displayName} picks its configured default model at launch`}
+      onClick={() => { if (acpCurrent) onAcpSwitch(''); }}
+    >
+      <span className="model-picker-row-check" aria-hidden>{!acpCurrent ? '✓' : ''}</span>
+      <span className="model-picker-row-name">{engineUi.displayName} default</span>
+    </button>
+  );
+
   const acpPane = (
     <>
       <div className="model-picker-header">
         <span className="model-picker-title">Switch Model</span>
         <span className="model-picker-current">
-          Current: {acpCurrent ? shortAcpModelName(acpCurrent) : engineUi.displayName}
+          Current: {acpCurrent ? shortAcpModelName(acpCurrent) : `${engineUi.displayName} default`}
         </span>
         <button className="model-picker-close" onClick={onClose} type="button">&times;</button>
       </div>
       <div className="model-picker-columns">
+        {onAcpSwitch && acpGrouped && (
+          <div className="model-picker-col model-picker-col-groups" role="listbox" aria-label="Provider">
+            <div className="model-picker-col-title">Provider</div>
+            {acpGroups.map((group) => {
+              const isSelected = group.id === acpSelectedGroup?.id;
+              const holdsActive = group.id === acpActiveGroupId && !!acpActive;
+              return (
+                <button
+                  key={group.id || '(none)'}
+                  type="button"
+                  className={`model-picker-row${isSelected ? ' model-picker-row-active' : ''}`}
+                  role="option"
+                  aria-selected={isSelected}
+                  title={group.label || 'Other models'}
+                  onClick={() => setAcpGroupSel(group.id)}
+                >
+                  <span className="model-picker-row-check" aria-hidden>{holdsActive ? '✓' : ''}</span>
+                  <span className="model-picker-row-name">{group.label || 'Other'}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div className="model-picker-col model-picker-col-models" role="listbox" aria-label="Model">
           <div className="model-picker-col-title">Model</div>
           {onAcpSwitch ? (
-            acpLoading ? (
-              <div className="model-picker-status">Loading {engineUi.displayName} models…</div>
-            ) : acpFamilies.length === 0 ? (
-              <div className="model-picker-status">No {engineUi.displayName} models reported by this session.</div>
-            ) : (
-              acpFamilies.map((fam) => {
-                const isActive = fam.familyId === acpActive?.familyId;
-                const sample = [...fam.byEffort.values()][0];
-                return (
-                  <button
-                    key={fam.familyId}
-                    type="button"
-                    className={`model-picker-row${isActive ? ' model-picker-row-active' : ''}`}
-                    role="option"
-                    aria-selected={isActive}
-                    title={sample?.description?.split('.')[0] ?? fam.label}
-                    onClick={() => { if (!isActive) switchAcpFamily(fam); }}
-                  >
-                    <span className="model-picker-row-check" aria-hidden>{isActive ? '✓' : ''}</span>
-                    <span className="model-picker-row-name">{fam.label}</span>
-                  </button>
-                );
-              })
-            )
+            <>
+              {acpDefaultRow}
+              {acpLoading ? (
+                <div className="model-picker-status">Loading {engineUi.displayName} models…</div>
+              ) : acpError ? (
+                <div className="model-picker-status">
+                  Couldn't list {engineUi.displayName} models: {acpError}
+                </div>
+              ) : acpFamilies.length === 0 ? (
+                <div className="model-picker-status">
+                  No {engineUi.displayName} models {sessionId ? 'reported by this session' : 'reported by the engine'}.
+                </div>
+              ) : (
+                acpFamilies.map((fam) => {
+                  const isActive = fam.familyId === acpActive?.familyId;
+                  const sample = [...fam.byEffort.values()][0];
+                  return (
+                    <button
+                      key={fam.familyId}
+                      type="button"
+                      className={`model-picker-row${isActive ? ' model-picker-row-active' : ''}`}
+                      role="option"
+                      aria-selected={isActive}
+                      title={sample?.description?.split('.')[0] ?? fam.label}
+                      onClick={() => { if (!isActive) switchAcpFamily(fam); }}
+                    >
+                      <span className="model-picker-row-check" aria-hidden>{isActive ? '✓' : ''}</span>
+                      <span className="model-picker-row-name">{fam.label}</span>
+                    </button>
+                  );
+                })
+              )}
+            </>
           ) : (
             <>
-              {/* A draft has no catalog yet (models are discovered at session
-                  start), but an empty pane reads as broken — render the one
-                  choice that IS true right now: the engine's own default. */}
+              {/* Legacy caller with no selection channel at all: render the
+                  one choice that IS true right now — the engine's default. */}
               <button
                 type="button"
                 className="model-picker-row model-picker-row-active"
@@ -655,7 +769,7 @@ export function ModelPicker({
 
   const panel = (
     <div
-      className={`model-picker${popped ? ' model-picker-popout' : ''}`}
+      className={`model-picker${popped ? ' model-picker-popout' : ''}${isAcpPane && onAcpSwitch ? ' model-picker-acp' : ''}${isAcpPane && acpGrouped && onAcpSwitch ? ' model-picker-acp-grouped' : ''}`}
       ref={popRef}
       style={popped ? menuPlacementStyle(placement) : undefined}
       // Portal menus still bubble React events into the host row's drag

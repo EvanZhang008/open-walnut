@@ -17279,8 +17279,14 @@ a.task-kebab-info:hover {
   flex-wrap: wrap;
   min-width: 0;
 }
+/* One button per engine in the catalog (was hardcoded to two). It WRAPS and is
+   capped at the row width: a six-engine catalog must not push the footer wider
+   than the column hosting it, and a horizontally scrolling segmented control
+   clips its own labels. */
 .sps-engine-toggle {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
@@ -17754,6 +17760,28 @@ a.task-kebab-info:hover {
   border-left: 1px solid var(--border);
   margin-left: 10px;
   padding-left: 10px;
+}
+
+/* ── ACP grouped pane: Provider | Model | Effort. Three columns need more
+   room than the two-pane default, and a 300-model provider catalog must
+   scroll INSIDE its column instead of growing the panel off-screen. */
+.model-picker-col-groups {
+  flex: 1.1;
+  border-right: 1px solid var(--border);
+  margin-right: 10px;
+  padding-right: 10px;
+}
+
+.model-picker-popout.model-picker-acp-grouped {
+  width: min(680px, calc(100vw - 24px));
+}
+
+/* Column-internal scroll applies to EVERY ACP catalog, grouped or not — a
+   single-provider catalog can still be hundreds of families, and scrolling
+   the whole panel would drag the Effort column out of view. */
+.model-picker-acp .model-picker-columns .model-picker-col {
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
 }
 
 .model-picker-col-title {

@@ -56,7 +56,7 @@ import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists, CwdMissingError } from './cwd-check.js'
 import { classifyDeliveryFailure, isDaemonCommandOutcomeUnknown } from './delivery-failure.js'
-import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp } from './acp-session.js'
+import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
 import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-registry.js'
 import { extractImageFilePathFromInput } from '../core/session-history.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind } from '../core/types.js'
@@ -8382,6 +8382,7 @@ export class SessionRunner {
     host?: string
     cwd?: string
     mode?: string
+    model?: string
     project?: string
     title?: string
     lane?: string
@@ -8405,12 +8406,25 @@ export class SessionRunner {
       )
     }
     const cwd = data.cwd || process.env.HOME || process.cwd()
+    // Draft-picked model → standard ACP config, applied by replayPersistedConfig
+    // right after establish. Codex catalogs qualify effort into the id
+    // ("base[effort]") while its `model` option takes the BASE id, so split;
+    // engines whose option values ARE the full id (opencode's provider/model/
+    // effort) pass through splitAcpModelId unchanged.
+    const draftModel = data.model?.trim() || undefined
+    const { base: draftModelBase, effort: draftModelEffort } = draftModel
+      ? splitAcpModelId(draftModel)
+      : { base: undefined, effort: undefined }
+    const draftAcpConfig: Record<string, string> | undefined = draftModelBase
+      ? { model: draftModelBase, ...(draftModelEffort ? { reasoning_effort: draftModelEffort } : {}) }
+      : undefined
     const session = new AcpSession({
       taskId: data.taskId,
       project: data.project ?? '',
       cwd,
       mode: (data.mode as SessionMode | undefined) ?? 'default',
       engine,
+      ...(draftAcpConfig ? { acpConfig: draftAcpConfig } : {}),
       ...(data.lane ? await buildAcpLaneConfig(data.lane) : {}),
       directWsUrl: this._testDaemonUrl,
       artifacts: this._testAcpArtifacts,
@@ -8423,11 +8437,29 @@ export class SessionRunner {
     this.acpSessions.set(sid, session)
 
     const title = data.title ?? data.message.slice(0, 120)
+    // Persist the draft's model choice ONLY when the adapter's `model` config
+    // option actually advertises the base id — that is the exact gate
+    // replayPersistedConfig applied a moment ago, so persisting past it would
+    // pin a model on the record (pill + respawn replay) that never took
+    // effect. Stale-catalog picks degrade to the provider default, honestly.
+    const modelAdvertised = !!draftModelBase && session.sessionControls.some(
+      (control) => control.id === 'model'
+        && control.options.some((option) => option.value === draftModelBase),
+    )
+    if (draftModelBase && !modelAdvertised) {
+      log.session.warn('acp: draft-picked model is not advertised by the adapter — launching on its default', {
+        sessionId: sid, engine, model: draftModel,
+      })
+    }
     try {
       const { updateSessionRecord } = await import('../core/session-tracker.js')
       await updateSessionRecord(sid, {
         title,
         description: data.message.slice(0, 500),
+        // The record is the durable copy: acpConfig so a worker respawn
+        // replays the choice, acpModel so the pill shows it immediately.
+        ...(modelAdvertised && draftAcpConfig ? { acpConfig: draftAcpConfig } : {}),
+        ...(modelAdvertised && draftModel ? { acpModel: draftModel } : {}),
       })
     } catch (err) {
       log.session.warn('acp: failed to persist session title', {

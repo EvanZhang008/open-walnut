@@ -30,8 +30,8 @@
 // does this natively); `update`/`delete` touch only that occurrence
 // (span:.thisEvent).
 //
-// Compiled, signed and cached lazily by src/core/helper-build.ts, for
-// src/core/calendar/sources/eventkit.ts (which owns HELPER_VERSION).
+// Compiled lazily by src/core/calendar/sources/eventkit.ts via
+// `xcrun swiftc -O` into WALNUT_HOME/cache (same pattern as walnut-extract).
 
 import Darwin
 import EventKit

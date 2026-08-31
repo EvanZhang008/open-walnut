@@ -49,7 +49,7 @@ import {
   normalizeEngine,
   resolveEngineForHost,
 } from '@/utils/engines';
-import { ModelPicker } from './ModelPicker';
+import { ModelPicker, shortAcpModelName } from './ModelPicker';
 import { draftComposerKey, type DraftColumn } from './draft-column';
 import type { QuickStartPath, QuickStartTaskMeta } from './SessionPathSelector';
 import '@/styles/walnut-agent.css';
@@ -96,10 +96,12 @@ const PARSE_MAX_CHARS = 500;
  * provider is clickable (the engine is still a choice here), and picking an ACP
  * engine clears the model (ACP discovers models at session start).
  */
-function DraftModelPill({ meta, onMetaChange, host, walnut }: {
+function DraftModelPill({ meta, onMetaChange, host, cwd, walnut }: {
   meta: QuickStartTaskMeta;
   onMetaChange: (updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
   host?: string | null;
+  /** Draft folder — the ACP engine probe runs there (per-project provider config). */
+  cwd?: string;
   /** Ask Walnut: the profile rides the CLI's system-prompt flags, so only the
    *  claude engine can carry it — other providers render locked with that reason. */
   walnut?: boolean;
@@ -116,29 +118,32 @@ function DraftModelPill({ meta, onMetaChange, host, walnut }: {
   // showing a remembered ACP engine here would be the pill lying about launch.
   const engine = walnut ? 'claude' : resolveEngineForHost(meta.engine, host, catalog);
   const entry = engineEntry(catalog, engine);
-  // ACP engines advertise their models at session start, so the pill shows the
-  // ENGINE instead of a model nobody has picked yet.
+  // ACP engines: the server probes the engine's adapter for its catalog, so a
+  // draft picks a real model up front (launch wires it through acpConfig).
+  // No pick yet → the pill shows the ENGINE (its default model launches).
   const acpModels = entry.capabilities.modelCatalog === 'provider-advertised';
   const selectedLabel = meta.model
     ? options.find((o) => o.value === meta.model)?.label ?? meta.model
     : autoResolved ? `Auto (${autoResolved})` : 'Auto';
+  const acpPillLabel = meta.model ? shortAcpModelName(meta.model) : entry.displayName;
   return (
     <>
       <button
         type="button"
         className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill draft-model-select"
         title={acpModels
-          ? `${entry.displayName} (via ACP) — models are discovered at session start. Click to change provider.`
+          ? `${entry.displayName} (via ACP) — session model: ${meta.model ? acpPillLabel : `${entry.displayName} default`}. Click to switch model / provider.`
           : `Session model: ${selectedLabel} — click to switch model / provider`}
         data-model={meta.model ?? ''}
         onClick={(e) => { pillRef.current = e.currentTarget; setOpen((v) => !v); }}
       >
-        {acpModels ? entry.displayName : selectedLabel}
+        {acpModels ? acpPillLabel : selectedLabel}
       </button>
       {open && (
         <ModelPicker
           currentModel={meta.model}
           host={host ?? undefined}
+          cwd={cwd}
           engine={engine}
           onSwitch={(model) => {
             setOpen(false);
@@ -154,6 +159,13 @@ function DraftModelPill({ meta, onMetaChange, host, walnut }: {
             ? 'Ask Walnut runs on the claude engine (the Personal AI profile rides its system prompt)'
             : engineLockReason(engineEntry(catalog, provider), host))}
           autoRow={{ resolvedLabel: autoResolved, active: !meta.model }}
+          // ACP draft: selection lands in meta.model (same field the claude
+          // pane uses — the launch payload already carries it) and rides the
+          // spawn as acpConfig. '' = back to the engine's default.
+          acpCurrentModelId={acpModels ? meta.model : undefined}
+          onAcpSwitch={(modelId) => {
+            onMetaChange((m) => ({ ...m, model: modelId || undefined }));
+          }}
           anchorRef={pillRef}
         />
       )}
@@ -486,6 +498,7 @@ export function DraftSessionPanel({
                 meta={draft.meta}
                 onMetaChange={(updater) => onMetaChange(draft.id, updater)}
                 host={draft.host}
+                cwd={draft.cwd || undefined}
                 walnut={isWalnut}
               />
               {/* A bound draft is already a task, and a fork's sibling task is

@@ -134,3 +134,28 @@ describe('GET /api/engines', () => {
     expect(server).toContain("app.use('/api/engines'")
   })
 })
+
+describe('GET /api/engines/:id/models', () => {
+  it('answers the draft-time catalog for an ACP engine (fixture mode, zero spawns)', async () => {
+    process.env.WALNUT_ENGINE_PROBE_ALL = '1'
+    const res = await request(createApp()).get('/api/engines/opencode/models')
+    expect(res.status).toBe(200)
+    expect(res.body.engine).toBe('opencode')
+    expect(res.body.source).toBe('mock')
+    expect((res.body.models as Array<{ modelId: string }>).map((m) => m.modelId))
+      .toEqual(['mock-gpt-best', 'mock-gpt-fast'])
+    expect(res.body.currentModelId).toBe('mock-gpt-best')
+  })
+
+  it('404s for claude (its catalog rides the host model-catalog pipeline)', async () => {
+    process.env.WALNUT_ENGINE_PROBE_ALL = '1'
+    const res = await request(createApp()).get('/api/engines/claude/models')
+    expect(res.status).toBe(404)
+  })
+
+  it('404s for an unknown engine id', async () => {
+    process.env.WALNUT_ENGINE_PROBE_ALL = '1'
+    const res = await request(createApp()).get('/api/engines/gemni/models')
+    expect(res.status).toBe(404)
+  })
+})

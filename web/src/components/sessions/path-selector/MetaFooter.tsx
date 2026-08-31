@@ -140,10 +140,12 @@ function EngineToggle({ meta, onChange, host }: Pick<Props, 'meta' | 'onChange' 
             type="button"
             className={`sps-engine-btn${entry.id === active ? ' active' : ''}`}
             disabled={!!lock}
-            // Picking the default engine CLEARS the field (storage contract);
-            // any other engine also clears the model, whose catalog it can't use.
+            // Picking the default engine CLEARS the field (storage contract).
+            // ANY actual engine change also clears the model — catalogs don't
+            // overlap in either direction (an ACP id must not ride a claude
+            // launch as --model, nor a claude id an ACP launch's acpConfig).
             onClick={() => onChange(m => (entry.isDefault
-              ? { ...m, engine: undefined }
+              ? { ...m, engine: undefined, ...(entry.id !== active ? { model: undefined } : {}) }
               : { ...m, engine: normalizeEngine(entry.id), model: undefined }))}
             title={lock ?? engineTitle(entry)}
           >

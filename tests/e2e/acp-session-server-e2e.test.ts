@@ -852,6 +852,37 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
       .toHaveLength(nativeStartsBefore)
   })
 
+  // Declared LAST in this suite on purpose: it creates a SECOND codex session,
+  // and findRuntimeId() (used by the re-attach + worker-kill tests above)
+  // asserts a single journal in streamsDir.
+  it('launches with a draft-picked model: quick-start model rides acpConfig and applies at spawn', async () => {
+    // The draft picker's selection travels the normal quick-start `model`
+    // param; for ACP engines it must land as acpConfig and be APPLIED to the
+    // adapter right after establish (replayPersistedConfig), not just saved.
+    const resp = await fetch(apiUrl('/api/sessions/quick-start'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cwd: os.tmpdir(), message: 'hello with a picked model', engine: 'codex', model: 'mock-gpt-fast' }),
+    })
+    expect(resp.status).toBe(200)
+    const { taskId: pickedTaskId } = await resp.json() as { taskId: string }
+    const pickedSessionId = await sessionIdForTask(pickedTaskId, 'codex')
+    await waitFor(() => eventsFor(pickedSessionId, EventNames.SESSION_RESULT).length > 0, 15_000, 'picked-model first turn')
+
+    // Record carries the choice (pill truth) + the durable replay copy.
+    const records = await getSessionsForTask(pickedTaskId)
+    const rec = records.find((r) => r.claudeSessionId === pickedSessionId)!
+    expect(rec.acpModel).toBe('mock-gpt-fast')
+    expect(rec.acpConfig).toEqual(expect.objectContaining({ model: 'mock-gpt-fast' }))
+
+    // The ADAPTER actually runs it — the live catalog's currentModelId is the
+    // provider's own answer, not a walnut-side echo.
+    const catalog = await fetch(apiUrl(`/api/sessions/${pickedSessionId}/model-catalog`))
+    expect(catalog.status).toBe(200)
+    expect((await catalog.json() as { currentModelId?: string }).currentModelId).toBe('mock-gpt-fast')
+  }, 30_000)
+
+
   function findRuntimeId(): string {
     const files = fs.readdirSync(streamsDir).filter((f) => f.endsWith('.acp.jsonl'))
     expect(files.length).toBe(1)

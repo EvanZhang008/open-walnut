@@ -4,16 +4,19 @@
  * using the Mac's existing logins. No per-provider OAuth in Walnut; macOS
  * owns cloud sync.
  *
- * Compiling, signing and caching the helper binary belong to
- * src/core/helper-build.ts (its header explains why the signature is what decides
- * whether the user's calendar grant survives a rebuild). No swiftc on the box
- * means this source reports not-configured with an actionable message instead of
- * crashing.
+ * Helper compile pattern follows attachment-text.ts (walnut-extract): source
+ * ships in src/data/, `xcrun swiftc -O` lazily once per machine into
+ * WALNUT_HOME/cache, versioned binary name. No swiftc → source reports
+ * not-configured with an actionable message instead of crashing.
  */
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { CLOUD_MODE } from '../../../constants.js';
-import { ensureHelper, type HelperSpec } from '../../helper-build.js';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { WALNUT_HOME, CLOUD_MODE } from '../../../constants.js';
+import { log } from '../../../logging/index.js';
 import type {
   CalendarEvent,
   CalendarEventCreate,
@@ -36,21 +39,15 @@ const execFileAsync = promisify(execFile);
 // (a cancelled or declined invitation stays in the EventKit store, and dropping
 // those fields made it indistinguishable from a live meeting), and accepts a
 // `refresh` argument that pulls from the remote accounts first.
-// NOTE: on a machine with no codesigning certificate the helper stays ad-hoc
-// signed, so its TCC identity includes its content hash and any recompile asks
-// for the calendar permission once more. That is expected, not a regression, and
-// the Permission Doctor exists to walk the user through it. With a certificate the
-// grant survives the bump (see src/core/helper-build.ts).
-// v5 is not a source change either: it replaces the cached ad-hoc binary with a
-// certificate-signed one, which is the only way the existing cache could ever get a
-// signature (ensureHelper returns an existing file untouched, and re-signing in place
-// changes the content hash and would break the grant the user already has). Cost:
-// macOS asks for Calendars once more.
-const HELPER_VERSION = 'v5';
+// NOTE: every version bump (or any recompile) changes the binary's cdhash,
+// which is the identity TCC keys the grant to — so users see ONE fresh
+// permission prompt after an upgrade. That is expected, not a regression;
+// the Permission Doctor exists to walk them through it.
+const HELPER_VERSION = 'v4';
 const HELPER_TIMEOUT_MS = 30_000;
 
 /** Embedded plist: tccd reads usage keys from here once the helper is its own
- *  responsible process. Both keys required, because macOS 14+ wants the FullAccess
+ *  responsible process. Both keys required — macOS 14+ wants the FullAccess
  *  variant but refuses outright if the legacy key is absent. */
 const HELPER_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -84,18 +81,66 @@ export class CalendarHelperError extends Error {
   }
 }
 
-const HELPER_SPEC: HelperSpec = {
-  name: 'walnut-calendar',
-  version: HELPER_VERSION,
-  /** Version-free on purpose: a certificate-signed calendar grant is remembered
-   *  against this string, so it must not move when HELPER_VERSION does. */
-  identifier: 'dev.openwalnut.calendar',
-  infoPlist: HELPER_INFO_PLIST,
-};
+function helperSourcePath(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(here, 'data/walnut-calendar.swift'), // dist/cli.js → dist/data
+    path.resolve(here, '../data/walnut-calendar.swift'),
+    path.resolve(here, '../../../src/data/walnut-calendar.swift'), // src/core/calendar/sources → src/data
+    path.resolve(here, '../../data/walnut-calendar.swift'),
+  ];
+  for (const c of candidates) if (fs.existsSync(c)) return c;
+  return candidates[0];
+}
+
+let helperPromise: Promise<string | null> | null = null;
+
+async function ensureHelper(): Promise<string | null> {
+  if (helperPromise) return helperPromise;
+  helperPromise = (async () => {
+    if (process.platform !== 'darwin' || CLOUD_MODE) return null;
+    const bin = path.join(WALNUT_HOME, 'cache', `walnut-calendar-${HELPER_VERSION}`);
+    if (fs.existsSync(bin)) return bin;
+    const src = helperSourcePath();
+    if (!fs.existsSync(src)) {
+      log.calendar.warn('eventkit: helper source missing, calendar disabled', { src });
+      return null;
+    }
+    await fsp.mkdir(path.dirname(bin), { recursive: true });
+    // Embed the Info.plist into the binary (__TEXT,__info_plist) so tccd can
+    // read the calendar usage keys when the helper disclaims responsibility.
+    const plistPath = path.join(WALNUT_HOME, 'cache', `walnut-calendar-${HELPER_VERSION}.plist`);
+    await fsp.writeFile(plistPath, HELPER_INFO_PLIST);
+    const compiled = await new Promise<boolean>((resolve) => {
+      const child = spawn(
+        'nice',
+        ['-n', '10', 'xcrun', 'swiftc', '-O', '-o', bin, src,
+         '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist',
+         '-Xlinker', plistPath],
+        { stdio: ['ignore', 'ignore', 'pipe'] }
+      );
+      let stderr = '';
+      child.stderr.on('data', (d) => {
+        stderr += String(d);
+      });
+      child.on('error', () => resolve(false));
+      child.on('close', (code) => {
+        if (code !== 0) {
+          log.calendar.warn('eventkit: swift compile failed, calendar disabled', {
+            error: stderr.slice(0, 400),
+          });
+        }
+        resolve(code === 0);
+      });
+    });
+    return compiled ? bin : null;
+  })();
+  return helperPromise;
+}
 
 /** Run a helper subcommand; helper always emits JSON (error shape on exit 1). */
 async function runHelper<T>(args: string[]): Promise<T> {
-  const bin = await ensureHelper(HELPER_SPEC, 'walnut-calendar.swift');
+  const bin = await ensureHelper();
   if (!bin) {
     throw new CalendarHelperError(
       'Calendar helper unavailable (needs macOS + Xcode Command Line Tools for one-time compile).',

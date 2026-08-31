@@ -14,6 +14,7 @@
 
 import { Router, type Request, type Response } from 'express'
 import { ENGINE_REGISTRY, DEFAULT_ENGINE, type EngineCapabilities } from '../../core/agents/engine-registry.js'
+import type { SessionEngine } from '../../core/types.js'
 import { probeEngines, type EngineAvailability } from '../../core/agents/engine-probe.js'
 import { log } from '../../logging/index.js'
 
@@ -54,4 +55,35 @@ enginesRouter.get('/', async (_req: Request, res: Response) => {
   }
   const engines = [...ENGINE_REGISTRY.values()].map((caps) => toCatalogEntry(caps, availability.get(caps.id) ?? PROBE_UNKNOWN))
   res.json({ engines })
+})
+
+// GET /api/engines/:id/models — the engine's provider-advertised model catalog
+// for DRAFT surfaces (no session exists yet to ask). One-shot adapter probe
+// behind a cache; the probe module owns the deadline, so this route can never
+// hang past it. Claude is a deliberate 404: its catalog rides the host-level
+// model-catalog pipeline, not ACP.
+enginesRouter.get('/:id/models', async (req: Request, res: Response) => {
+  const id = String(req.params.id) as SessionEngine
+  const caps = ENGINE_REGISTRY.get(id)
+  if (!caps || caps.runtimeKind !== 'acp') {
+    res.status(404).json({ error: `no provider model catalog for engine '${id}'` })
+    return
+  }
+  // Draft folder: opencode/goose resolve provider+model config per project,
+  // so the probe must run where the launch will (nonexistent dir → $HOME).
+  const rawCwd = req.query.cwd
+  const cwd = typeof rawCwd === 'string' && rawCwd.trim() && rawCwd.length <= 1024
+    ? rawCwd.trim()
+    : undefined
+  try {
+    const { getEngineModelCatalog } = await import('../../providers/engine-model-probe.js')
+    const catalog = await getEngineModelCatalog(id, { cwd })
+    res.json(catalog)
+  } catch (err) {
+    // Honest degrade: "couldn't list" with the adapter's own words (missing
+    // credentials, not installed) beats an empty list pretending to be one.
+    const message = err instanceof Error ? err.message : String(err)
+    log.web.warn('engine model catalog probe failed', { engine: id, error: message })
+    res.status(502).json({ error: message, engine: id })
+  }
 })

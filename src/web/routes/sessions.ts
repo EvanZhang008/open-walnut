@@ -56,6 +56,7 @@ import {
 import { filterSessionsByQuery } from '../../core/session-search.js'
 import { QUICK_START_MESSAGE_HARD_LIMIT, WALNUT_HOME } from '../../constants.js'
 import { engineCaps, isAcpEngine, isKnownEngine, normalizeEngine } from '../../core/agents/engine-registry.js'
+import { splitAcpModelId } from '../../providers/acp-session.js'
 import { SESSION_ENGINE_IDS } from '../../core/types.js'
 
 /** Client-supplied session ids must be well-formed UUIDs (they become CLI --session-id args and file names). */
@@ -350,12 +351,29 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     // Auto, which read as "my model choice was ignored".
     let model: string | undefined
     if (typeof rawModel === 'string' && rawModel && rawModel !== 'default') {
-      const resolved = resolveModelSwitchValue(rawModel)
-      if (!resolved) {
-        res.status(400).json({ error: `Invalid model: ${rawModel}. Use a catalog value (GET /api/sessions/host-model-catalogs) or one of: ${[...VALID_SESSION_MODEL_IDS].join('/')}` })
-        return
+      if (engine !== undefined && isAcpEngine(normalizeEngine(engine))) {
+        // ACP engines: the id belongs to the PROVIDER's catalog (probed at
+        // draft time — GET /api/engines/:id/models), not the claude switch
+        // validator, so only shape-check it here. The adapter stays the
+        // authority: the spawn applies it through standard ACP config, which
+        // only accepts ids the provider actually advertises.
+        const trimmed = rawModel.trim()
+        // No whitespace/control chars, bounded length, and a non-empty BASE id
+        // after the effort split ("[high]" alone persists a lie otherwise).
+        if (!trimmed || trimmed.length > 256 || /[\s\x00-\x1f]/.test(trimmed)
+          || !splitAcpModelId(trimmed).base) {
+          res.status(400).json({ error: `Invalid model: ${rawModel}` })
+          return
+        }
+        model = trimmed
+      } else {
+        const resolved = resolveModelSwitchValue(rawModel)
+        if (!resolved) {
+          res.status(400).json({ error: `Invalid model: ${rawModel}. Use a catalog value (GET /api/sessions/host-model-catalogs) or one of: ${[...VALID_SESSION_MODEL_IDS].join('/')}` })
+          return
+        }
+        model = resolved
       }
-      model = resolved
     }
 
     if (mode) {

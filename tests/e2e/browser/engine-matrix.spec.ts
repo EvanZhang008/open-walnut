@@ -137,6 +137,59 @@ for (const { id, displayName } of ENGINE_CASES) {
   })
 }
 
+test('OpenCode draft lists probed models and the pick rides the launch payload', async ({ page }) => {
+  test.setTimeout(90_000)
+  const audit = await installBrowserAudit(page, walnutHome)
+  const draft = await openDraftWithEngine(page, `${fixtureRoot}/projects/walnut`, 'OpenCode')
+
+  // The draft model pill opens the ACP pane, which must list the PROBED
+  // catalog (GET /api/engines/opencode/models — the fixture answers the mock
+  // models) instead of the old "discovered at session start" placeholder.
+  await draft.locator('.draft-model-select').click()
+  const picker = page.locator('.model-picker')
+  await expect(picker).toBeVisible()
+  const defaultRow = picker.getByTestId('acp-default-row')
+  await expect(defaultRow).toHaveAttribute('aria-selected', 'true')
+  const bestRow = picker.locator('.model-picker-row', { hasText: 'Mock GPT Best' })
+  await expect(bestRow).toBeVisible({ timeout: 10_000 })
+  await bestRow.click()
+  // The pick replaces the engine-default choice and lands on the pill.
+  await expect(defaultRow).toHaveAttribute('aria-selected', 'false')
+  await page.keyboard.press('Escape')
+  await expect(picker).toBeHidden()
+  await expect(draft.locator('.draft-model-select')).toHaveText(/GPT Best/)
+
+  let capturedBody: Record<string, unknown> | null = null
+  page.on('request', (request) => {
+    if (request.method() === 'POST'
+      && new URL(request.url()).pathname === '/api/sessions/quick-start') {
+      capturedBody = request.postDataJSON() as Record<string, unknown>
+    }
+  })
+  const quickStartResponse = page.waitForResponse((response) =>
+    response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/sessions/quick-start')
+
+  const prompt = 'draft model pick test'
+  const chatInput = draft.locator('.chat-input-textarea')
+  await chatInput.fill(prompt)
+  await chatInput.press('Enter')
+
+  expect((await quickStartResponse).status()).toBe(200)
+  await expect.poll(() => capturedBody, { timeout: 5000 }).not.toBeNull()
+  expect(capturedBody!.engine).toBe('opencode')
+  expect(capturedBody!.model).toBe('mock-gpt-best')
+
+  // The session still launches and streams — the model choice must never
+  // break the spawn (it rides acpConfig, applied post-establish).
+  const panel = page.locator(REAL_PANEL)
+  await expect(panel).toBeVisible({ timeout: 15_000 })
+  await expect(
+    panel.getByText(`hello from mock-acp (you said: ${prompt})`, { exact: true }),
+  ).toHaveCount(1, { timeout: 30_000 })
+  await audit.assertClean()
+})
+
 test('an engine the server cannot run renders disabled with its reason', async ({ page }) => {
   const audit = await installBrowserAudit(page, walnutHome)
   // The fixture forces every engine "installed" (WALNUT_ENGINE_PROBE_ALL=1), which

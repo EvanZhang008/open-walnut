@@ -450,6 +450,17 @@ export async function setCodexSessionModel(
   return apiPost(`/api/sessions/${sessionId}/model`, { model });
 }
 
+/** The ENGINE's model catalog for a DRAFT (no session exists yet): the server
+ *  runs a cached one-shot adapter probe. 502 (adapter not answering — missing
+ *  credentials / not installed) rejects with the adapter's own words. */
+export async function fetchEngineModelCatalog(
+  engine: string,
+  cwd?: string,
+): Promise<{ engine: string; models: CodexModelInfo[]; currentModelId?: string; source: 'probe' | 'mock' }> {
+  const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : '';
+  return apiGet(`/api/engines/${encodeURIComponent(engine)}/models${query}`);
+}
+
 export interface SessionControlOption {
   value: string;
   name: string;

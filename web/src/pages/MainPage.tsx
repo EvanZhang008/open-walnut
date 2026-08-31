@@ -4,7 +4,7 @@ import type { SessionEngine, Task } from '@open-walnut/core';
 import { SESSION_MODELS } from '@open-walnut/core';
 import { getHostCatalog } from '@/hooks/useModelCatalog';
 import { getEngineCatalog, useEngineCatalog } from '@/hooks/useEngineCatalog';
-import { engineDisplayName, launchEngineForHost } from '@/utils/engines';
+import { engineDisplayName, launchEngineForHost, normalizeEngine } from '@/utils/engines';
 import { useChat, mergeAdjacentErrors, type TaskContext, type ImageAttachment } from '@/hooks/useChat';
 import { useAgentConsole } from '@/hooks/useAgentConsole';
 import { useConversations, ACTIVE_CONV_KEY } from '@/hooks/useConversations';
@@ -2256,9 +2256,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         ...(metaSnapshot.startDate ? { start_date: metaSnapshot.startDate } : {}),
         ...(metaSnapshot.endDate ? { end_date: metaSnapshot.endDate } : {}),
       } : undefined;
-      // Model is a session arg, not task metadata. undefined = Auto (let the
-      // CLI/config default decide) — only forwarded when the user picks one.
-      const model = metaSnapshot?.model;
       // ACP engines are local-only: if the user picked one and then confirmed a
       // remote-host path (the toggle disables but meta keeps the stale value),
       // fall back to the default engine instead of letting the server reject the
@@ -2268,6 +2265,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const engine = opts?.walnutAgent
         ? undefined
         : launchEngineForHost(metaSnapshot?.engine, qsp.host, getEngineCatalog());
+      // Model is a session arg, not task metadata. undefined = Auto (let the
+      // CLI/config default decide) — only forwarded when the user picks one,
+      // AND only when the engine that will actually launch is the one the
+      // model was picked under: the downgrades above (remote host, Ask
+      // Walnut) silently change the engine, and catalogs don't overlap (an
+      // opencode id must not ride a claude launch as --model).
+      const pickedUnder = normalizeEngine(metaSnapshot?.engine) ?? 'claude';
+      const model = pickedUnder === (engine ?? 'claude') ? metaSnapshot?.model : undefined;
 
       const settled = quickStartSession({
         cwd: qsp.cwd,
