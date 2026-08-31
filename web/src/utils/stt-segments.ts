@@ -32,6 +32,18 @@ export interface CommitPointOptions {
   minSilenceMs: number;
   /** Don't bother committing segments shorter than this. */
   minSegmentMs: number;
+  /**
+   * Once the open window is longer than this, start accepting shorter pauses
+   * (see relaxAfterMs in the escalation note below). Omit to never relax.
+   */
+  relaxAfterMs?: number;
+  /** Shortest pause the relaxed search will ever cut at. */
+  minSilenceFloorMs?: number;
+  /**
+   * Beyond this window length, cut at the quietest point even with no
+   * qualifying pause at all. Omit to never force a cut.
+   */
+  forceAfterMs?: number;
 }
 
 /**
@@ -44,14 +56,42 @@ export interface CommitPointOptions {
  * both sides of the cut so neither the committed segment nor the new window
  * starts mid-phoneme. Returns the cut position in samples, or null if the
  * window has no qualifying pause yet.
+ *
+ * ESCALATION (relaxAfterMs / forceAfterMs). A fixed 800ms requirement assumes
+ * the speaker eventually pauses that long. Fast continuous talkers do not: in a
+ * measured 27s dictation not one gap qualified, so the window never advanced,
+ * every 2s tick re-transcribed the whole thing, and tick cost grew from 0.6s to
+ * 4.4s — the exact runaway the segment design exists to prevent. So the longer
+ * the window stays open, the shorter a pause we accept (down to
+ * minSilenceFloorMs), and past forceAfterMs we cut at the quietest point even
+ * with no pause at all. A slightly awkward cut costs a word boundary once;
+ * an unbounded window costs every remaining tick of the dictation.
  */
 export function findSilenceCommitPoint(
   blocks: readonly PcmBlockInfo[],
   windowStartSample: number,
   opts: CommitPointOptions,
 ): number | null {
-  const minSilenceSamples = (opts.minSilenceMs / 1000) * opts.sampleRate;
-  const minSegmentSamples = (opts.minSegmentMs / 1000) * opts.sampleRate;
+  const perMs = opts.sampleRate / 1000;
+  const minSegmentSamples = opts.minSegmentMs * perMs;
+  const windowEnd = blocks.length
+    ? Math.max(windowStartSample, blocks[blocks.length - 1].startSample + blocks[blocks.length - 1].length)
+    : windowStartSample;
+  const windowMs = (windowEnd - windowStartSample) / perMs;
+
+  // How long a pause we insist on, given how long this window has been open.
+  // Interpolates from minSilenceMs at relaxAfterMs down to the floor at
+  // forceAfterMs, so a talker who pauses only briefly still gets commits.
+  const requiredSilenceMs = (() => {
+    const { relaxAfterMs, forceAfterMs, minSilenceFloorMs, minSilenceMs } = opts;
+    if (relaxAfterMs === undefined || windowMs <= relaxAfterMs) return minSilenceMs;
+    const floor = Math.min(minSilenceFloorMs ?? minSilenceMs, minSilenceMs);
+    const span = (forceAfterMs ?? relaxAfterMs * 2) - relaxAfterMs;
+    if (span <= 0) return floor;
+    const progress = Math.min(1, (windowMs - relaxAfterMs) / span);
+    return minSilenceMs - (minSilenceMs - floor) * progress;
+  })();
+  const minSilenceSamples = requiredSilenceMs * perMs;
 
   let best: number | null = null;
   let runStart: number | null = null; // start of the current silent run
@@ -81,7 +121,45 @@ export function findSilenceCommitPoint(
   // A run still open at the end of capture counts too: the user is pausing
   // right now, which is exactly when committing is cheapest.
   closeRun();
-  return best;
+  if (best !== null) return best;
+
+  if (opts.forceAfterMs !== undefined && windowMs >= opts.forceAfterMs && sawVoice) {
+    return quietestCutPoint(blocks, windowStartSample, windowEnd, minSegmentSamples, perMs);
+  }
+  return null;
+}
+
+/**
+ * Last resort for speech with no usable pause: cut between the two quietest
+ * adjacent blocks in the committable stretch. That is the least-bad boundary
+ * available — a dip in energy is usually a consonant or word edge rather than
+ * the middle of a vowel.
+ *
+ * The last second is excluded so the cut never lands on the word the user is
+ * saying right now, and the cut must still leave a worthwhile segment behind it.
+ */
+function quietestCutPoint(
+  blocks: readonly PcmBlockInfo[],
+  windowStartSample: number,
+  windowEnd: number,
+  minSegmentSamples: number,
+  perMs: number,
+): number | null {
+  const earliest = windowStartSample + minSegmentSamples;
+  const latest = windowEnd - 1000 * perMs;
+  if (latest <= earliest) return null;
+
+  let bestAt: number | null = null;
+  let bestRms = Infinity;
+  for (const b of blocks) {
+    const mid = b.startSample + Math.floor(b.length / 2);
+    if (mid < earliest || mid > latest) continue;
+    if (b.rms < bestRms) {
+      bestRms = b.rms;
+      bestAt = mid;
+    }
+  }
+  return bestAt;
 }
 
 /**

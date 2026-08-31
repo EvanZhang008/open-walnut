@@ -106,6 +106,15 @@ const COMMIT_SILENCE_MS = 800;
 // Don't bother committing scraps — a segment shorter than this is cheap to
 // keep re-drafting and committing it would just multiply requests.
 const COMMIT_MIN_SEGMENT_MS = 3000;
+// Continuous talkers never leave an 800ms gap, and without a commit every tick
+// re-transcribes the whole open segment: a measured 27s dictation went from
+// 0.6s to 4.4s per tick and never advanced. So past 5s of unbroken speech we
+// accept shorter and shorter pauses, and past 12s we cut at the quietest point
+// regardless. Those bounds keep the open window near 10s of audio, which the
+// engine drafts in about a second — the ceiling this feature is held to.
+const COMMIT_RELAX_AFTER_MS = 5000;
+const COMMIT_SILENCE_FLOOR_MS = 260;
+const COMMIT_FORCE_AFTER_MS = 12000;
 // Timeslice handed to MediaRecorder.start(), so one chunk ≈ one second of audio.
 // Chunk counts are how we compare "audio the newest draft saw" against "audio the
 // user was still talking in" without decoding anything.
@@ -572,6 +581,9 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
             voiceRms: VOICE_RMS,
             minSilenceMs: COMMIT_SILENCE_MS,
             minSegmentMs: COMMIT_MIN_SEGMENT_MS,
+            relaxAfterMs: COMMIT_RELAX_AFTER_MS,
+            minSilenceFloorMs: COMMIT_SILENCE_FLOOR_MS,
+            forceAfterMs: COMMIT_FORCE_AFTER_MS,
           });
           if (commitAt !== null) {
             // A complete phrase with silence on both sides: this pass sees full

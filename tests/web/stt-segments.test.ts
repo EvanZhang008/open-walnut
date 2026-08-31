@@ -73,6 +73,63 @@ describe('findSilenceCommitPoint', () => {
     const cut = findSilenceCommitPoint(b, windowStart, OPTS);
     expect(cut).toBe(s(9000) + s(1000) / 2);
   });
+
+  // Escalation: the field failure was a 27s dictation where no gap ever reached
+  // 800ms, so the window never advanced and each tick re-transcribed everything.
+  describe('escalation for continuous speech', () => {
+    const ESC = { ...OPTS, relaxAfterMs: 5000, minSilenceFloorMs: 260, forceAfterMs: 12000 };
+
+    it('still requires the full pause while the window is young', () => {
+      // 6.3s window: the requirement has only eased to ~700ms, so a 300ms
+      // breath is still not a cut point.
+      const b = blocks([[5000, 0.1], [300, 0.001], [1000, 0.1]]);
+      expect(findSilenceCommitPoint(b, 0, ESC)).toBeNull();
+    });
+
+    it('accepts a short breath once the window has run long', () => {
+      // 10.5s window: the requirement has eased to ~376ms, so this 400ms breath
+      // now qualifies where the strict 800ms rule would have ignored it.
+      const b = blocks([[10000, 0.1], [400, 0.001], [100, 0.1]]);
+      const cut = findSilenceCommitPoint(b, 0, ESC);
+      expect(cut).toBe(s(10000) + s(400) / 2);
+    });
+
+    it('force-cuts at the quietest block when speech never pauses at all', () => {
+      // Unbroken 16s of speech with one relatively quiet stretch at 8s.
+      const b = blocks([[8000, 0.2], [200, 0.05], [8000, 0.2]]);
+      const cut = findSilenceCommitPoint(b, 0, ESC);
+      expect(cut).not.toBeNull();
+      // Lands in the quiet dip, not at an arbitrary offset.
+      expect(cut!).toBeGreaterThanOrEqual(s(8000));
+      expect(cut!).toBeLessThan(s(8200));
+    });
+
+    it('never force-cuts into the last second (the word being spoken now)', () => {
+      // Quietest stretch is at the very end — cutting there would slice the
+      // live word, so the earlier dip must win instead.
+      const b = blocks([[6000, 0.2], [200, 0.06], [9000, 0.2], [400, 0.03]]);
+      const cut = findSilenceCommitPoint(b, 0, ESC);
+      expect(cut).not.toBeNull();
+      expect(cut!).toBeLessThan(s(15000));
+    });
+
+    it('does not force-cut before the minimum segment length', () => {
+      const b = blocks([[2000, 0.2]]);
+      expect(findSilenceCommitPoint(b, 0, ESC)).toBeNull();
+    });
+
+    it('measures the window from windowStart, not from capture start', () => {
+      // 20s of capture but the window opened at 18s: only 2s is open, so the
+      // escalation must not fire.
+      const b = blocks([[18000, 0.1], [2000, 0.1]]);
+      expect(findSilenceCommitPoint(b, s(18000), ESC)).toBeNull();
+    });
+
+    it('behaves exactly as before when escalation is not configured', () => {
+      const b = blocks([[10000, 0.1], [400, 0.001], [100, 0.1]]);
+      expect(findSilenceCommitPoint(b, 0, OPTS)).toBeNull();
+    });
+  });
 });
 
 describe('joinSegments', () => {

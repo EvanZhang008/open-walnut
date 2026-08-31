@@ -30,12 +30,52 @@ export async function isFfmpegAvailable(extraDirs: string[] = []): Promise<boole
 }
 
 /**
+ * True when the buffer is already exactly what the engines want (16kHz mono
+ * 16-bit PCM WAV), so ffmpeg has nothing to do. Walks the RIFF chunk list to
+ * find `fmt ` rather than assuming a 44-byte header, and rejects anything it
+ * cannot fully verify.
+ */
+export function isConformingWav(buf: Buffer): boolean {
+  if (buf.length < 44) return false;
+  if (buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WAVE') return false;
+  let offset = 12;
+  while (offset + 8 <= buf.length) {
+    const id = buf.toString('ascii', offset, offset + 4);
+    const size = buf.readUInt32LE(offset + 4);
+    if (id === 'fmt ') {
+      if (offset + 8 + 16 > buf.length) return false;
+      const audioFormat = buf.readUInt16LE(offset + 8);
+      const channels = buf.readUInt16LE(offset + 10);
+      const sampleRate = buf.readUInt32LE(offset + 12);
+      const bitsPerSample = buf.readUInt16LE(offset + 22);
+      return audioFormat === 1 && channels === 1 && sampleRate === 16000 && bitsPerSample === 16;
+    }
+    offset += 8 + size + (size % 2); // RIFF chunks are word-aligned
+  }
+  return false;
+}
+
+/**
  * Convert base64 audio to 16kHz mono WAV file.
  * Returns the path to the WAV file (caller must clean up).
+ *
+ * Already-conforming WAV skips ffmpeg entirely. That matters for live dictation:
+ * the browser encodes each draft slice as 16kHz mono WAV itself, so converting
+ * was pure overhead on a 2s timer — a process spawn that normally costs ~100ms
+ * but was measured at 3.3s on a busy machine, the largest single spike in a slow
+ * dictation.
  */
 export async function convertToWav(audioBase64: string, inputFormat: string): Promise<string> {
   const inputPath = tempPath(inputFormat);
   const outputPath = tempPath('wav');
+
+  if (inputFormat === 'wav') {
+    const buf = Buffer.from(audioBase64, 'base64');
+    if (isConformingWav(buf)) {
+      await writeFile(outputPath, buf);
+      return outputPath;
+    }
+  }
 
   try {
     await writeFile(inputPath, Buffer.from(audioBase64, 'base64'));
