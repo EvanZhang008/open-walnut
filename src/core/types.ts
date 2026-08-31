@@ -1266,6 +1266,11 @@ export interface Config {
     mlx_port?: number;
     /** Idle TTL in minutes — daemon auto-shuts after inactivity (default: 10) */
     mlx_idle_ttl_minutes?: number;
+    // cleanup (polish) — local mlx_lm text daemon that strips fillers/stutters
+    // from transcripts; shares mlx_python_path (pip install mlx-lm there)
+    /** HF model id (default: mlx-community/Qwen3-4B-Instruct-2507-4bit) */
+    cleanup_model?: string;
+    cleanup_port?: number;
     /** Load the STT models at server startup instead of on the first dictation.
      *  Daemon engines (mlx, whisper-server) pay their 5-15s model load once per
      *  boot; prewarming moves that off the user's first utterance. Costs the

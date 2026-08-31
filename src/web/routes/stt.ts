@@ -11,6 +11,7 @@ import { transcribeAudio, runShadowTranscription, createEngine, getOrCreateEngin
 import { saveRecordingAudio, writeRecordingResult, listRecordings, readRecordingAudio } from '../../core/stt/recordings.js';
 import { createWhisperCppEngine } from '../../core/stt/engine-whisper-cpp.js';
 import { startMicRecording, stopMicRecording, isMicRecording } from '../../core/stt/mic-record.js';
+import { cleanupTranscript, warmupCleanup, isCleanupAvailable } from '../../core/stt/cleanup-mlx.js';
 import { detectSystem } from '../../core/stt/detect.js';
 import { installViaBrew, downloadGgmlModel, MODEL_CATALOG, VAD_MODEL, getModelDir, SHERPA_MODEL_CATALOG, downloadSherpaModel, getSherpaModelDir, findSherpaModels, type SetupEvent } from '../../core/stt/setup.js';
 import { log } from '../../logging/index.js';
@@ -208,6 +209,43 @@ sttRouter.post('/save', express.json({ limit: '35mb' }), async (req: Request, re
   } catch (err) {
     next(err);
   }
+});
+
+/**
+ * POST /api/stt/cleanup
+ * Polish a transcript with the local cleanup model: strip fillers (呃/嗯),
+ * stutters, and false starts without rewording anything. Guardrails run
+ * server-side (cleanup-guard.ts) and the ORIGINAL text is returned whenever
+ * the model's output is rejected or the daemon is unavailable, so callers can
+ * apply the response unconditionally.
+ * Body: { text: string } → { text, applied, reason?, durationMs }
+ */
+sttRouter.post('/cleanup', express.json({ limit: '1mb' }), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { text } = req.body;
+    if (typeof text !== 'string' || !text.trim()) {
+      res.status(400).json({ error: 'Missing/invalid text' });
+      return;
+    }
+    const config = await getConfig();
+    const result = await cleanupTranscript(config, text);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/stt/cleanup/warmup
+ * Fire-and-forget model preload, called when a dictation starts so the ~4s
+ * load happens while the user is still speaking. 200 even when cleanup is not
+ * configured (mlx-lm missing) — warmup must never break recording.
+ */
+sttRouter.post('/cleanup/warmup', async (_req: Request, res: Response) => {
+  const config = await getConfig();
+  const avail = await isCleanupAvailable(config);
+  if (avail.available) void warmupCleanup(config).catch(err => log.stt.warn(`cleanup warmup failed: ${err}`));
+  res.json({ ok: true, available: avail.available, ...(avail.error ? { error: avail.error } : {}) });
 });
 
 /**
