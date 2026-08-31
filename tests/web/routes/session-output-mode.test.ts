@@ -392,6 +392,58 @@ describe('session:send — rich', () => {
   })
 })
 
+// ── Slash commands must reach the CLI byte-exact (inc-1788194545341) ─────────
+// The CLI treats input as a command ONLY when the raw string startsWith('/')
+// (processUserInput). The rich-output wrapper prefixed "/compact" into
+// "[Rich output mode: …]\n\n/compact" — a plain chat message the model then
+// role-played ("已压缩上下文…") while zero compact_boundary events ever appeared.
+describe('session:send — slash commands bypass the wrapper', () => {
+  it('an owed ON edge does not prefix a slash command, and stays owed', async () => {
+    await setConfigOutputMode('rich')
+    const sid = await newSession()   // edge owed: never told anything
+
+    await callSend({ sessionId: sid, message: '/compact' })
+    expect(await drain(sid)).toBe('/compact')
+    // The edge was NOT consumed — the record still owes the instruction…
+    expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBeUndefined()
+
+    // …and the next real message carries it.
+    await callSend({ sessionId: sid, message: TEXT })
+    expect(await drain(sid)).toBe(`${RICH_OUTPUT_MODE_ON_INSTRUCTION}\n\n${TEXT}`)
+    expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
+  })
+
+  it('the standing reminder never rides a slash command (it would land in the args)', async () => {
+    await setConfigOutputMode('rich')
+    const sid = await newSession()
+    await callSend({ sessionId: sid, message: TEXT })   // consume the edge
+    await drain(sid)
+
+    await callSend({ sessionId: sid, message: '/compact keep the file list' })
+    expect(await drain(sid)).toBe('/compact keep the file list')
+
+    // Ordinary sends still get the reminder — the skip is per-message.
+    await callSend({ sessionId: sid, message: 'back to normal' })
+    expect(await drain(sid)).toBe(`back to normal\n\n${RICH_OUTPUT_MODE_REMINDER}`)
+  })
+
+  it('an owed OFF edge does not prefix a slash command either', async () => {
+    await setConfigOutputMode('markdown')
+    const sid = await newSession()
+    await patchSession(sid, { output_mode: 'rich' })
+    await callSend({ sessionId: sid, message: TEXT })
+    await drain(sid)
+
+    await patchSession(sid, { output_mode: 'markdown' })   // OFF edge now owed
+    await callSend({ sessionId: sid, message: '/compact' })
+    expect(await drain(sid)).toBe('/compact')
+    expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
+
+    await callSend({ sessionId: sid, message: 'plain please' })
+    expect(await drain(sid)).toBe(`${RICH_OUTPUT_MODE_OFF_INSTRUCTION}\n\nplain please`)
+  })
+})
+
 // The client must render what the user typed, not the machine wrapper. This is
 // the inverse of the emitter above, so keeping the two in one file makes a
 // format drift fail loudly instead of silently showing the instruction.

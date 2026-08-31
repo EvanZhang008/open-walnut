@@ -224,9 +224,18 @@ export function registerSessionChatRpc(): void {
     // touched the pill follows Settings live (core/sessions/output-mode.ts).
     // getConfig() can't throw (it falls back to defaults internally); the catch
     // only keeps a storage hiccup from failing the send.
+    // A slash command must reach the CLI byte-exact: the CLI treats input as a
+    // command ONLY when the raw string startsWith('/') (processUserInput), so a
+    // prefixed "/compact" becomes a plain chat message the model then role-plays
+    // ("已压缩上下文…") without any real compaction (inc-1788194545341). A suffix
+    // is nearly as bad — it rides into the command's argument string. Skip the
+    // wrapper entirely; the edge stays owed and ships on the next real message.
     const outputModeConfig = await getConfig().catch(() => null)
     const outputMode = resolveOutputModeDirective(record, outputModeConfig)
-    augmentedMessage = applyOutputModeDirective(outputMode, augmentedMessage)
+    const isSlashCommand = augmentedMessage.startsWith('/')
+    if (!isSlashCommand) {
+      augmentedMessage = applyOutputModeDirective(outputMode, augmentedMessage)
+    }
 
     // Enqueue and notify in one call. augmentedMessage may include image refs;
     // original data.message is used for bus events (UI display).
@@ -245,7 +254,7 @@ export function registerSessionChatRpc(): void {
     // leave the session still "owing" the instruction, or the mode change would
     // be silently lost. A failure to persist here is logged, not surfaced — the
     // worst case is the instruction repeating on the next send.
-    if (outputMode.prefix) {
+    if (outputMode.prefix && !isSlashCommand) {
       await updateSessionRecord(data.sessionId, { output_mode_injected: outputMode.mode })
         .catch((err) => log.web.warn('session:send output-mode edge persist failed', {
           sessionId: data.sessionId, outputMode: outputMode.mode,
