@@ -217,19 +217,21 @@ export function registerSessionChatRpc(): void {
 
     // Output mode: the reply-style preference has no control channel, so the
     // model only learns about it from the conversation. Full instruction on the
-    // CHANGE edge (record-authoritative), then a one-line reminder as a SUFFIX on
-    // every later send while rich holds — a one-shot instruction decays after a
-    // turn or two. Same shape as plan mode in routes/chat.ts. The mode itself
-    // resolves record → config → built-in default, so a session that never
-    // touched the pill follows Settings live (core/sessions/output-mode.ts).
-    // getConfig() can't throw (it falls back to defaults internally); the catch
-    // only keeps a storage hiccup from failing the send.
+    // CHANGE edge (record-authoritative), then a one-line reminder on every
+    // later send while rich holds — a one-shot instruction decays after a
+    // turn or two. Both land AFTER the user's text. Same shape as plan mode in
+    // routes/chat.ts. The mode itself resolves record → config → built-in
+    // default, so a session that never touched the pill follows Settings live
+    // (core/sessions/output-mode.ts). getConfig() can't throw (it falls back to
+    // defaults internally); the catch only keeps a storage hiccup from failing
+    // the send.
     // A slash command must reach the CLI byte-exact: the CLI treats input as a
-    // command ONLY when the raw string startsWith('/') (processUserInput), so a
-    // prefixed "/compact" becomes a plain chat message the model then role-plays
-    // ("已压缩上下文…") without any real compaction (inc-1788194545341). A suffix
-    // is nearly as bad — it rides into the command's argument string. Skip the
-    // wrapper entirely; the edge stays owed and ships on the next real message.
+    // command ONLY when the raw string startsWith('/') (processUserInput) —
+    // when the instruction was a prefix, "/compact" became a plain chat message
+    // the model then role-played ("已压缩上下文…") without any real compaction
+    // (inc-1788194545341). Appended text is nearly as bad — it rides into the
+    // command's argument string. Skip the wrapper entirely; the edge stays owed
+    // and ships on the next real message.
     const outputModeConfig = await getConfig().catch(() => null)
     const outputMode = resolveOutputModeDirective(record, outputModeConfig)
     const isSlashCommand = augmentedMessage.startsWith('/')
@@ -254,7 +256,7 @@ export function registerSessionChatRpc(): void {
     // leave the session still "owing" the instruction, or the mode change would
     // be silently lost. A failure to persist here is logged, not surfaced — the
     // worst case is the instruction repeating on the next send.
-    if (outputMode.prefix && !isSlashCommand) {
+    if (outputMode.instruction && !isSlashCommand) {
       await updateSessionRecord(data.sessionId, { output_mode_injected: outputMode.mode })
         .catch((err) => log.web.warn('session:send output-mode edge persist failed', {
           sessionId: data.sessionId, outputMode: outputMode.mode,

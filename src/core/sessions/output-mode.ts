@@ -6,14 +6,16 @@
  * conversation. Two things ride the outgoing message, exactly like plan mode in
  * web/routes/chat.ts:
  *
- *   · EDGE (the mode changed, or nothing was ever said): the FULL instruction as
- *     a PREFIX, once.
- *   · STANDING (rich holds): a one-line reminder as a SUFFIX on every later send.
- *     A one-shot instruction measurably decays — the model writes HTML for the
- *     turn that carried it and drifts back to plain markdown a turn or two later.
- *     The reminder is last thing in the message on purpose (recency) and costs
- *     ~15 tokens. Markdown mode appends NOTHING, so a session on plain markdown
- *     still pays exactly zero.
+ *   · EDGE (the mode changed, or nothing was ever said): the FULL instruction,
+ *     once.
+ *   · STANDING (rich holds): a one-line reminder on every later send. A one-shot
+ *     instruction measurably decays — the model writes HTML for the turn that
+ *     carried it and drifts back to plain markdown a turn or two later. The
+ *     reminder costs ~15 tokens. Markdown mode appends NOTHING, so a session on
+ *     plain markdown still pays exactly zero.
+ *
+ * BOTH land AFTER the user's text (recency helps, and the human's words stay
+ * first — user-requested 2026-08-31; the instruction used to be a prefix).
  *
  * The edge lives on the RECORD (`output_mode_injected` vs the EFFECTIVE mode),
  * not in the client, so a reload or a second tab cannot each inject their own
@@ -99,20 +101,20 @@ export function resolveEffectiveOutputMode(
 }
 
 export interface OutputModeDirective {
-  /** The effective mode. Persist as `output_mode_injected` once `prefix` shipped. */
+  /** The effective mode. Persist as `output_mode_injected` once `instruction` shipped. */
   mode: SessionOutputMode;
-  /** Full instruction to PREPEND (a blank line separates it from the text), or
-   *  null when the model has already been told this mode. Non-null ⇒ the caller
-   *  must advance `output_mode_injected` after the text is safely queued. */
-  prefix: string | null;
-  /** One-line reminder to APPEND, or null (markdown mode / this send already
-   *  carries the full instruction, which would make the reminder redundant). */
-  suffix: string | null;
+  /** Full edge instruction to APPEND after the text (a blank line separates it),
+   *  or null when the model has already been told this mode. Non-null ⇒ the
+   *  caller must advance `output_mode_injected` after the text is safely queued. */
+  instruction: string | null;
+  /** One-line standing reminder to APPEND, or null (markdown mode / this send
+   *  already carries the full instruction, which would make it redundant). */
+  reminder: string | null;
 }
 
 /**
  * What this send must carry. Never null: markdown with nothing owed yields
- * `{ prefix: null, suffix: null }`, i.e. the message is left byte-identical.
+ * `{ instruction: null, reminder: null }`, i.e. the message is left byte-identical.
  */
 export function resolveOutputModeDirective(
   record: Pick<SessionRecord, 'output_mode' | 'output_mode_injected'> | null | undefined,
@@ -123,25 +125,25 @@ export function resolveOutputModeDirective(
   const edge = mode !== told;
   return {
     mode,
-    prefix: edge
+    instruction: edge
       ? (mode === 'rich' ? RICH_OUTPUT_MODE_ON_INSTRUCTION : RICH_OUTPUT_MODE_OFF_INSTRUCTION)
       : null,
     // The full ON instruction already says everything the reminder does, so the
     // edge send doesn't carry both.
-    suffix: mode === 'rich' && !edge ? RICH_OUTPUT_MODE_REMINDER : null,
+    reminder: mode === 'rich' && !edge ? RICH_OUTPUT_MODE_REMINDER : null,
   };
 }
 
 /**
- * Wrap the text that goes to the CLI. The prefix lands OUTSIDE any image
- * preamble the caller already built (the attachment block stays adjacent to the
- * user's own words); the reminder lands after everything.
+ * Wrap the text that goes to the CLI. Machine text always lands AFTER the
+ * user's words (and after any image preamble the caller already built): the
+ * human reads their own message first, and recency serves the model better.
+ * The old prefix placement also broke anything position-sensitive about the
+ * start of the message — a prefixed "/compact" stopped being a slash command.
  */
 export function applyOutputModeDirective(directive: OutputModeDirective, message: string): string {
-  let out = message;
-  if (directive.prefix) out = `${directive.prefix}\n\n${out}`;
-  if (directive.suffix) out = `${out}\n\n${directive.suffix}`;
-  return out;
+  const tail = directive.instruction ?? directive.reminder;
+  return tail ? `${message}\n\n${tail}` : message;
 }
 
 /** Is this whole LINE one of ours? Line-anchored on purpose: a human sentence
