@@ -204,8 +204,9 @@ describe('the SESSION_START a lane emits', () => {
     // send it again).
     expect(ev.message).toBe('do a thing')
 
-    // Full replacement of the CLI's own prompt, carrying the two work modes.
-    expect(ev.profile?.systemPromptMode).toBe('replace')
+    // Appended on top of the CLI's own prompt (keeps env/date/skills/MCP
+    // instructions), carrying the two work modes.
+    expect(ev.profile?.systemPromptMode).toBe('append')
     expect(ev.profile?.systemPrompt).toContain('Personal AI')
     expect(ev.profile?.systemPrompt).toContain('## Walnut operating contract')
     // Walnut's data reaches the CLI over MCP, not native tools.
@@ -221,9 +222,12 @@ describe('the SESSION_START a lane emits', () => {
 // ══════════════════════════════════════════════════════════════════
 
 describe('personalAiProfile', () => {
-  it('is a full-replace persona plus the walnut MCP mount', () => {
+  it('is an appended persona plus the walnut MCP mount', () => {
     const profile = personalAiProfile('Ada')
-    expect(profile.systemPromptMode).toBe('replace')
+    expect(profile.systemPromptMode).toBe('append')
+    // The precedence header settles the identity conflict with the CLI's own
+    // prompt (persona wins on identity/tone, default keeps tools/safety/env).
+    expect(profile.systemPrompt).toContain('## Persona override')
     expect(profile.mcpServers).toEqual(walnutMcpProfile().mcpServers)
     // No tool restriction in the MVP — the Personal AI runs on the user's own machine.
     expect(profile.allowedTools).toBeUndefined()

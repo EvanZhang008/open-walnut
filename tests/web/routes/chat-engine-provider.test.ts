@@ -298,7 +298,7 @@ describe("agent.provider = 'claude-code' → lane session", () => {
       expect(started[0].lane).toBe(`chat:general:${conv}`)
       expect(started[0].preassignedSessionId).toBe(laneSessionId)
       expect(started[0].message).toContain('plan my week')
-      expect(started[0].profile?.systemPromptMode).toBe('replace')
+      expect(started[0].profile?.systemPromptMode).toBe('append')
       expect(started[0].profile?.systemPrompt).toContain('## Walnut operating contract')
       expect(started[0].profile?.mcpServers?.walnut).toEqual({ command: 'open-walnut', args: ['mcp'] })
 

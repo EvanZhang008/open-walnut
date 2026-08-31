@@ -432,6 +432,55 @@ export async function buildLaneProfile(
   return { profile, effort };
 }
 
+/** Last drift-repair attempt per session — the check reads skills + memory
+ *  files, so once per TTL per session is plenty (a lane re-resolves every turn;
+ *  this is the equivalent budget for quick-start walnut sessions). */
+const walnutProfileRefreshAt = new Map<string, number>();
+const WALNUT_PROFILE_REFRESH_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Profile drift repair for "Ask Walnut" quick-start sessions — the counterpart
+ * of resolveLane's per-turn refresh for chat lanes, hooked into
+ * sendMessageToSession and AWAITED there so a send that triggers a cold
+ * --resume spawns with the freshly-written profile (resolveResumeArgs reads
+ * the record after this returns).
+ *
+ * The persona/effort live on the RECORD (spawn-time args, no live channel), so
+ * a walnut session minted before a personalAiProfile upgrade would keep the
+ * stale persona forever without this. Identified by the task's `walnut_agent`
+ * flag (the same per-task marker the UI keys the amber title on) — no new
+ * record field. Every failure degrades to "stale persona until next attempt";
+ * nothing here may throw into the send path.
+ */
+export async function refreshWalnutSessionProfile(sessionId: string): Promise<void> {
+  const last = walnutProfileRefreshAt.get(sessionId);
+  if (last && Date.now() - last < WALNUT_PROFILE_REFRESH_TTL_MS) return;
+  if (walnutProfileRefreshAt.size > 1000) walnutProfileRefreshAt.clear();
+  // Stamped BEFORE the work, deliberately: a transient failure suppresses
+  // retries for one TTL instead of hammering the store on every send.
+  walnutProfileRefreshAt.set(sessionId, Date.now());
+  try {
+    const { getSessionByClaudeId, updateSessionRecord } = await import('../session-tracker.js');
+    const record = await getSessionByClaudeId(sessionId);
+    // Lanes have their own repair in resolveLane; ACP has no profile channel;
+    // a record without a stamped prompt was never a persona session.
+    if (!record || record.lane || !record.profile?.systemPrompt) return;
+    if (isAcpEngine(resolveEngine(record.engine))) return;
+    if (!record.taskId) return;
+    const { getTask } = await import('../task-manager.js');
+    const task = await getTask(record.taskId).catch(() => null);
+    if (!task?.walnut_agent) return;
+    const { profile, effort } = await buildLaneProfile(await getConfig(), 'general');
+    if (record.profile.systemPrompt === profile.systemPrompt) return;
+    await updateSessionRecord(sessionId, { profile, effort });
+    log.session.info('Ask Walnut: stale profile refreshed on record', { sessionId, taskId: record.taskId });
+  } catch (err) {
+    log.session.warn('Ask Walnut: profile refresh failed', {
+      sessionId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 /**
  * Wait for the record an ACP spawn creates for this lane. ACP mints its
  * own session id at provider `session/new` — there is no preassigned id to seed

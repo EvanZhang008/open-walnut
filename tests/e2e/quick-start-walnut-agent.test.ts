@@ -8,8 +8,9 @@
  *     client tier still wins)
  *   - the session record carries the Personal AI profile (persona + walnut MCP
  *     mount) so a cold --resume re-applies it
- *   - ACP engines are rejected (the profile rides --system-prompt), and so is a
- *     remote host (the Personal AI runs where the server runs)
+ *   - ACP engines are rejected (the profile rides the CLI's system-prompt
+ *     flags, which ACP lacks), and so is a remote host (the Personal AI runs
+ *     where the server runs)
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -89,8 +90,11 @@ describe('quick-start walnutAgent', () => {
     const record = await getSessionByClaudeId(res.sessionId!)
     expect(record).toBeTruthy()
     expect(record!.cwd).toBe(WALNUT_HOME)
-    expect(record!.profile?.systemPromptMode).toBe('replace')
+    expect(record!.profile?.systemPromptMode).toBe('append')
     expect(record!.profile?.systemPrompt).toContain('Personal AI')
+    // Persona rides ON TOP of the CLI default prompt (append keeps env/date,
+    // CLI skill discovery, MCP instructions); the header settles precedence.
+    expect(record!.profile?.systemPrompt).toContain('## Persona override')
     expect(Object.keys(record!.profile?.mcpServers ?? {})).toContain('walnut')
     // NOT a hidden chat lane — this is a visible, ordinary task session.
     expect(record!.lane).toBeFalsy()
@@ -106,7 +110,7 @@ describe('quick-start walnutAgent', () => {
     expect(res.task?.focus_tier).toBe('backlog')
   })
 
-  it('rejects ACP engines (profile rides --system-prompt)', async () => {
+  it('rejects ACP engines (profile rides the CLI system-prompt flags)', async () => {
     const res = await quickStart({ walnutAgent: true, message: 'hi', engine: 'codex' })
     expect(res.status).toBe(400)
     expect(res.error).toMatch(/claude engine/i)
@@ -122,5 +126,26 @@ describe('quick-start walnutAgent', () => {
     const res = await quickStart({ message: 'hi' })
     expect(res.status).toBe(400)
     expect(res.error).toMatch(/cwd/i)
+  })
+
+  it('drift repair: a stale persisted persona is refreshed to the current build', async () => {
+    const res = await quickStart({ walnutAgent: true, message: 'note something' })
+    expect(res.status).toBe(200)
+    const sid = res.sessionId!
+
+    // Simulate a session minted before a personalAiProfile upgrade.
+    const { updateSessionRecord } = await import('../../src/core/session-tracker.js')
+    const record = await getSessionByClaudeId(sid)
+    await updateSessionRecord(sid, {
+      profile: { ...record!.profile!, systemPrompt: 'OLD PERSONA (pre-upgrade)' },
+    })
+
+    const { refreshWalnutSessionProfile } = await import('../../src/core/sessions/personal-ai-lane.js')
+    await refreshWalnutSessionProfile(sid)
+
+    const refreshed = await getSessionByClaudeId(sid)
+    expect(refreshed!.profile?.systemPrompt).toContain('Personal AI')
+    expect(refreshed!.profile?.systemPrompt).toContain('## Persona override')
+    expect(refreshed!.profile?.systemPromptMode).toBe('append')
   })
 })

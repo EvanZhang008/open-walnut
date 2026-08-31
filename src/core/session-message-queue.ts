@@ -259,6 +259,18 @@ export async function sendMessageToSession(
   const msg = await enqueueMessage(sessionId, opts?.enqueueMessage ?? message, { id: opts?.messageId });
   const source = opts?.source ?? 'unknown';
 
+  // Ask Walnut drift repair — AWAITED before SESSION_SEND is emitted, because
+  // the record profile is consumed exactly when this send triggers a cold
+  // --resume (resolveResumeArgs); a fire-and-forget would lose that race and
+  // ship the stale persona one more spawn. Cheap by construction: an ordinary
+  // session pays one indexed record read and early-returns; only a real
+  // Ask-Walnut session rebuilds, at most once per TTL. Never fails a send —
+  // the helper catches everything internally.
+  try {
+    const { refreshWalnutSessionProfile } = await import('./sessions/personal-ai-lane.js');
+    await refreshWalnutSessionProfile(sessionId);
+  } catch { /* stale persona until next attempt */ }
+
   // Tell session-runner to process the queued message
   bus.emit(EventNames.SESSION_SEND, {
     sessionId,

@@ -2264,7 +2264,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // fall back to the default engine instead of letting the server reject the
       // quick-start. ONE rule, shared with the toggle and the draft model pill.
       // Ask Walnut forces the native engine outright — the Personal AI profile
-      // rides --system-prompt, which ACP engines have no channel for.
+      // rides the CLI's system-prompt flags, which ACP engines have no channel for.
       const engine = opts?.walnutAgent
         ? undefined
         : launchEngineForHost(metaSnapshot?.engine, qsp.host, getEngineCatalog());

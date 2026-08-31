@@ -7,8 +7,10 @@
  *     always shown (role, skills index, memory, 52 tool schemas, apiMessages).
  *   - claude-code (Personal AI lane): the turn runs in a `claude` CLI session, so
  *     none of that assembly is fed to the model. The honest view is the lane's
- *     LAUNCH CONFIG — the exact `--system-prompt`, model/effort/cwd, MCP
- *     mounts — plus the last turn's exact input-token count. Tools, skills
+ *     LAUNCH CONFIG — the exact `--append-system-prompt` persona block,
+ *     model/effort/cwd, MCP mounts — plus the last turn's exact input-token
+ *     count. The CLI's own default prompt (env/date, tool guidance, gitStatus)
+ *     sits above the persona and is NOT shown or counted here; tools, skills
  *     discovery, and compaction are owned by the CLI itself.
  */
 
@@ -95,7 +97,7 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
       const engineNote = [
         '## Engine: Claude Code session',
         '',
-        'Main-AI turns run in a long-lived `claude` CLI session, not the in-process loop. The prompt below is the EXACT `--system-prompt` the session was launched with (full replace) — Walnut injects the persona, standing memory, and its skills index into it, engine-neutrally. Tools and context compaction are owned by the session CLI itself, exactly like a coding session.',
+        'Main-AI turns run in a long-lived `claude` CLI session, not the in-process loop. The prompt below is the EXACT `--append-system-prompt` block the session was launched with — Walnut injects the persona, standing memory, and its skills index into it, engine-neutrally, ON TOP of the CLI\'s own default prompt (identity, tool guidance, env info with today\'s date, gitStatus). That default prompt is in the model\'s context too but is NOT shown or counted below, so the token numbers here understate the session total. Tools and context compaction are owned by the session CLI itself, exactly like a coding session.',
         '',
         record
           ? `- Session: \`${record.claudeSessionId}\` (${record.process_status}${record.effectiveEffort || record.effort ? `, effort ${record.effectiveEffort ?? record.effort}` : ''})`

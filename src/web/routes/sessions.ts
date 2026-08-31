@@ -294,7 +294,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
 
     const isWalnutAgent = walnutAgent === true
     if (isWalnutAgent) {
-      // The profile rides --system-prompt; ACP engines have no channel for it,
+      // The profile rides the CLI's system-prompt flags; ACP has no channel for it,
       // so an ACP Ask-Walnut would silently launch a bare provider chat.
       if (engine !== undefined && isAcpEngine(normalizeEngine(engine))) {
         res.status(400).json({ error: 'walnutAgent requires the claude engine' })

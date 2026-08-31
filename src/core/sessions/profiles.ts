@@ -49,8 +49,29 @@ export function walnutMcpProfile(): SessionProfile {
 }
 
 /**
- * The Personal AI's own profile — a full-replace system prompt plus the Walnut MCP
- * mount, i.e. "the Personal AI is just a session with a profile".
+ * Persona precedence header for APPEND-mode profiles.
+ *
+ * Persona profiles ride `--append-system-prompt` (NOT `--system-prompt`): a
+ * full replace throws away the CLI's whole default prompt — verified in the CLI
+ * source, that means the env block (today's date / cwd / platform / model),
+ * gitStatus, the MCP servers' `instructions` section (the walnut mount's usage
+ * note among them), the tool-orchestration / tone / output-efficiency
+ * guidance, and the CLI's own memory prompt. (CLAUDE.md/AGENTS.md and the
+ * Skill tool's listing were never affected — they ride userContext and the
+ * tool schema, not the system prompt.) Append keeps all of that (the same
+ * pattern the CLI itself uses for custom agents) and layers the persona on
+ * top — this header settles the identity conflict explicitly: persona wins on
+ * WHO/HOW-TO-SPEAK, the default prompt keeps authority on tools and safety.
+ */
+function personaPrecedenceHeader(): string {
+  return `## Persona override
+
+The sections below define WHO YOU ARE and HOW YOU SPEAK. Where they conflict with the coding-agent identity, tone, or response-length rules above, this persona wins. Everything else above still applies: keep following the tool-usage and safety guidance, and use the environment info (working directory, today's date, platform) given above.`
+}
+
+/**
+ * The Personal AI's own profile — an appended persona system prompt plus the
+ * Walnut MCP mount, i.e. "the Personal AI is just a session with a profile".
  *
  * `name` is the user's display name (`config.user.name`); the caller resolves it
  * so this stays pure/synchronous — it is built on the spawn path and rebuilt on
@@ -77,8 +98,8 @@ export function personalAiProfile(name: string, skillsIndex?: string, memoryCont
   const memorySection = memoryContext?.trim() ? `\n\n${memoryContext}` : ''
   return mergeProfiles(
     {
-      systemPrompt: `${buildRoleSection(name)}${memorySection}${skillsSection}`,
-      systemPromptMode: 'replace',
+      systemPrompt: `${personaPrecedenceHeader()}\n\n${buildRoleSection(name)}${memorySection}${skillsSection}`,
+      systemPromptMode: 'append',
     },
     walnutMcpProfile(),
   )!
@@ -100,8 +121,8 @@ export function consoleAgentProfile(
   const contextSection = contextBlock?.trim() ? `\n\n${contextBlock}` : ''
   return mergeProfiles(
     {
-      systemPrompt: `${persona}\n\n${buildWorkModesSection()}${contextSection}${skillsSection}`,
-      systemPromptMode: 'replace',
+      systemPrompt: `${personaPrecedenceHeader()}\n\n${persona}\n\n${buildWorkModesSection()}${contextSection}${skillsSection}`,
+      systemPromptMode: 'append',
     },
     walnutMcpProfile(),
   )!

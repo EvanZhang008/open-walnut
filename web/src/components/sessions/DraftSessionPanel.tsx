@@ -100,8 +100,8 @@ function DraftModelPill({ meta, onMetaChange, host, walnut }: {
   meta: QuickStartTaskMeta;
   onMetaChange: (updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
   host?: string | null;
-  /** Ask Walnut: the profile rides --system-prompt, so only the claude engine
-   *  can carry it — other providers render locked with that reason. */
+  /** Ask Walnut: the profile rides the CLI's system-prompt flags, so only the
+   *  claude engine can carry it — other providers render locked with that reason. */
   walnut?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -408,7 +408,7 @@ export function DraftSessionPanel({
               >
                 <span className="draft-intent-ic" aria-hidden="true">🛠</span>
                 <span className="draft-intent-t">Start Task</span>
-                <span className="draft-intent-d">Coding work in a folder — becomes a session column.</span>
+                <span className="draft-intent-d">A coding session in any folder, with any agent: Claude, Codex, and more.</span>
               </button>
               <button
                 type="button"
@@ -418,7 +418,7 @@ export function DraftSessionPanel({
               >
                 <span className="draft-intent-ic" aria-hidden="true">🥜</span>
                 <span className="draft-intent-t">Ask Walnut</span>
-                <span className="draft-intent-d">Questions, plans, memory — answers in place.</span>
+                <span className="draft-intent-d">A quick session with Walnut: organize tasks, plan your day, configure Walnut, ask or search anything.</span>
               </button>
             </div>
             {/* Composer seeds — prefill, never send. Only while the composer is

@@ -151,7 +151,7 @@ export function ContextInspectorPanel({ data, loading, error, onRefresh }: Conte
           </pre>
         </ContextSection>
 
-        <ContextSection title={isLane ? 'System Prompt (launch --system-prompt)' : 'Role & Rules'} tokens={sections.roleAndRules.tokens}>
+        <ContextSection title={isLane ? 'Persona Prompt (launch --append-system-prompt)' : 'Role & Rules'} tokens={sections.roleAndRules.tokens}>
           <ContextMarkdown content={sections.roleAndRules.content} />
         </ContextSection>
 

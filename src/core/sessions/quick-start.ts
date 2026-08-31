@@ -79,8 +79,8 @@ export interface QuickStartParams {
    * personal-ai-lane's buildLaneProfile) instead of as a bare coding agent.
    * Everything else is an ORDINARY quick-start — a normal task, a visible
    * session — the route just pre-fills project 'Ask Walnut' and cwd WALNUT_HOME.
-   * Native (claude) engine only: the profile rides --system-prompt, which ACP
-   * engines have no channel for (route enforces).
+   * Native (claude) engine only: the profile rides the CLI's system-prompt
+   * flags, which ACP engines have no channel for (route enforces).
    */
   walnutAgent?: boolean;
 }

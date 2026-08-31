@@ -386,12 +386,13 @@ describe('profile presets', () => {
     })
   })
 
-  it('personalAiProfile is a full-replace persona + the walnut MCP mount', () => {
+  it('personalAiProfile is an appended persona + the walnut MCP mount', () => {
     // Was "is a P3 stub" (it threw). P3 implemented it; the persona/addendum
     // contract lives in tests/core/personal-ai-lane.test.ts — this only pins the shape
     // the arg-assembly tests above depend on.
     const profile = personalAiProfile('Ada')
-    expect(profile.systemPromptMode).toBe('replace')
+    expect(profile.systemPromptMode).toBe('append')
+    expect(profile.systemPrompt).toContain('## Persona override')
     expect(profile.systemPrompt).toContain('You are Walnut')
     expect(profile.mcpServers).toEqual(walnutMcpProfile().mcpServers)
   })
