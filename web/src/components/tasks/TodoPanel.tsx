@@ -2130,7 +2130,10 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
     if (titleRef.current) titleRef.current.textContent = task.title;
   }, [task.title]);
 
-  const handleTitleClick = useCallback((e: React.MouseEvent) => {
+  // Rename is DOUBLE-click only (2026-08-31, matches SortableTierCard): a single
+  // click opens the card; click-to-edit popped the outlined editor over the
+  // title on every open, which read as a glitch.
+  const handleTitleDoubleClick = useCallback((e: React.MouseEvent) => {
     if (!onUpdateTitle) return;
     clickPosRef.current = { x: e.clientX, y: e.clientY };
     setIsEditing(true);
@@ -2204,7 +2207,8 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
         contentEditable={isEditing}
         suppressContentEditableWarning
         title={task.title}
-        onClick={isEditing ? (e) => e.stopPropagation() : handleTitleClick}
+        onClick={isEditing ? (e) => e.stopPropagation() : undefined}
+        onDoubleClick={isEditing ? undefined : handleTitleDoubleClick}
         onBlur={isEditing ? commitEdit : undefined}
         onKeyDown={isEditing ? (e) => {
           if (e.nativeEvent.isComposing || e.keyCode === 229) return;

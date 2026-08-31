@@ -252,9 +252,11 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
     if (titleRef.current) titleRef.current.textContent = task.title;
   }, [task.title]);
 
-  const handleTitleClick = useCallback((e: React.MouseEvent) => {
+  // Rename is DOUBLE-click only (2026-08-31): a single click opens the session,
+  // and the old click-to-edit meant every open also popped the white outlined
+  // contentEditable box over the title — read as a rendering glitch.
+  const handleTitleDoubleClick = useCallback((e: React.MouseEvent) => {
     if (!onUpdateTitle) return;
-    // Don't stop propagation — let card onClick fire too (opens session)
     clickPosRef.current = { x: e.clientX, y: e.clientY };
     setIsEditing(true);
   }, [onUpdateTitle]);
@@ -347,7 +349,8 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         contentEditable={isEditing}
         suppressContentEditableWarning
         title={task.title}
-        onClick={isEditing ? (e) => e.stopPropagation() : handleTitleClick}
+        onClick={isEditing ? (e) => e.stopPropagation() : undefined}
+        onDoubleClick={isEditing ? undefined : handleTitleDoubleClick}
         onBlur={isEditing ? commitEdit : undefined}
         onKeyDown={isEditing ? (e) => {
           if (e.nativeEvent.isComposing || e.keyCode === 229) return;
