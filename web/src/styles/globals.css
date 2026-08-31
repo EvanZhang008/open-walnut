@@ -10066,9 +10066,9 @@ body.walnut-dragging {
   display: flex;
   align-items: center;
   gap: 6px;
-  /* A1 gutter: 14px margin keeps a fixed dot column outside the card's own
-     background/border, mirroring .todo-panel-item. */
-  margin-left: 14px;
+  /* A1 gutter: 8px margin keeps a fixed dot column outside the card's own
+     background/border (dot flush at x=0 now that the project label sits at 0). */
+  margin-left: 8px;
   padding: 4px 6px;
   border-radius: 6px;
   cursor: pointer;
@@ -10206,12 +10206,12 @@ body.walnut-dragging {
 
 /* A+B drag affordance (Linear style, user-picked 2026-08-30): the whole card is
    the drag activator (5px pointer distance keeps click-to-open working); this
-   grip is a hover-reveal HINT floated in the 14px left gutter, swapping places
+   grip is a hover-reveal HINT floated in the 8px left gutter, swapping places
    with the unread dot on hover. It keeps pointer-events so a press ON it still
    bubbles to the card's activator (the e2e drag helpers press here). */
 .todo-pinned-drag-handle {
   position: absolute;
-  left: -11px;
+  left: -8px;
   top: 50%;
   transform: translateY(-50%);
   cursor: grab;
@@ -10222,6 +10222,11 @@ body.walnut-dragging {
   user-select: none;
   touch-action: none;
   transition: opacity 0.12s;
+}
+/* Folder members: the grip shares the member dot's inside-the-rail slot. */
+.todo-pinned-card.task-grouped > .todo-pinned-drag-handle,
+.todo-focus-card.task-grouped > .todo-pinned-drag-handle {
+  left: -11px;
 }
 .todo-pinned-card:hover .todo-pinned-drag-handle,
 .todo-focus-card:hover .todo-pinned-drag-handle {
@@ -10410,7 +10415,7 @@ body.walnut-dragging {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-left: 14px; /* A1 dot gutter — see .todo-pinned-card */
+  margin-left: 8px; /* A1 dot gutter — see .todo-pinned-card */
   padding: 4px 6px;
   border-radius: 6px;
   cursor: pointer;
@@ -10810,7 +10815,7 @@ body.walnut-dragging {
   gap: 5px;
   padding: 4px 8px 3px;
   margin-top: 4px;
-  margin-left: 14px;
+  margin-left: 8px;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary, #6b7280);
@@ -10883,7 +10888,7 @@ body.walnut-dragging {
    keeps pointer-events so a press on it bubbles to the chip's activator. */
 .task-group-chip-grip {
   position: absolute;
-  left: -12px;
+  left: -9px;
   top: 50%;
   transform: translateY(-50%);
   font-size: 9px;
@@ -11012,14 +11017,14 @@ body.walnut-dragging {
   position: relative;
   margin-left: 30px;
 }
-/* Tier member cards: 38px indent = the rail at x≈21 PLUS a full 14px gutter of
-   their own INSIDE it, so the unread dot / hover grip (both at left:-11, same
-   as loose cards) sit between the rail and the card — a member's dot belongs
-   inside its folder's line, not out in the panel's far-left column. */
+/* Tier member cards: 32px indent = the rail at x≈15 PLUS a full 14px gutter of
+   their own INSIDE it, so the unread dot / hover grip (left:-11 → x≈21) sit
+   between the rail and the card — a member's dot belongs inside its folder's
+   line, not out in the panel's far-left column. */
 .todo-focus-card.task-grouped,
 .todo-pinned-card.task-grouped {
   position: relative;
-  margin-left: 38px;
+  margin-left: 32px;
 }
 /* Panel rows can't use margin for the member indent: content-visibility clips
    descendant painting at the row's padding box, so the dot must stay INSIDE
@@ -11044,7 +11049,7 @@ body.walnut-dragging {
   background: var(--group-outline);
   pointer-events: none;
 }
-/* Tier member cards sit at margin 38 — pull the rail back to x≈21 (under the
+/* Tier member cards sit at margin 32 — pull the rail back to x≈15 (under the
    folder head's icon), leaving the dot/grip gutter between rail and card. */
 .todo-focus-card.task-grouped::before,
 .todo-pinned-card.task-grouped::before {
@@ -11266,15 +11271,21 @@ body.walnut-dragging {
 }
 
 /* Pinned / Focus / Satellite cards (A1 gutter): the dot floats absolutely in the
-   card's 14px left gutter (margin-left on the card), so it takes NO flex slot —
+   card's 8px left gutter (margin-left on the card), so it takes NO flex slot —
    the old net-zero margin dance is gone and circles align with or without a dot. */
 .todo-pinned-card > .task-unread-dot,
 .todo-focus-card > .task-unread-dot {
   position: absolute;
-  left: -11px;
+  left: -8px;
   top: 50%;
   transform: translateY(-50%);
   margin: 0;
+}
+/* Folder members keep the wider -11 pull: their 14px gutter sits INSIDE the
+   rail (card at 32, rail at 15), so -11 centers the dot between the two. */
+.todo-pinned-card.task-grouped > .task-unread-dot,
+.todo-focus-card.task-grouped > .task-unread-dot {
+  left: -11px;
 }
 
 /* List-row form — floated into the A1 gutter left of the row's highlight.
@@ -12997,7 +13008,9 @@ body.walnut-dragging {
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 6px 8px 2px;
+  /* Flush left: the project header is the top of the hierarchy, so its icon
+     anchors the panel's left edge (loose cards 8, folder icons 16, members 32). */
+  padding: 6px 8px 2px 0;
   font-size: 11px;
   font-weight: 600;
   color: var(--fg-muted);
