@@ -1,7 +1,8 @@
 /**
  * LaneComposerControls — the main-AI chat composer's controls row when the
- * lane engine is active: a mode pill (permission mode, Shift+Tab cycles) and
- * the model pill (opens the shared ModelPicker; live model/effort switch).
+ * lane engine is active: a mode pill (permission mode, Shift+Tab cycles), the
+ * output-mode pill (markdown vs rich HTML replies) and the model pill (opens
+ * the shared ModelPicker; live model/effort switch).
  *
  * Deliberately a SUBSET of the session composer's controls: no SideQuestion
  * "btw" drawer and no notes pill (user call, 2026-08-15) — the chat surface
@@ -24,6 +25,7 @@ import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { engineCaps } from '@/utils/engine-capabilities';
 import { ModelPicker, shortAcpModelName, type ProviderId } from '@/components/sessions/ModelPicker';
+import { OutputModePill } from '@/components/sessions/OutputModePill';
 
 interface LaneComposerControlsProps {
   sessionId: string | null;
@@ -154,6 +156,13 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
           <span className="mode-toggle-pill-shortcut">{'⇧'}Tab</span>
         </button>
       )}
+      {/* Reply style is engine-neutral (it's an instruction, not a CLI flag), so
+          unlike the permission pill it shows for every engine. */}
+      <OutputModePill
+        sessionId={sessionId}
+        mode={session?.output_mode}
+        onOptimistic={(output_mode) => setSession((s) => s ? { ...s, output_mode } : s)}
+      />
       <button
         type="button"
         className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill"

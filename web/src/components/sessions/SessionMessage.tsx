@@ -17,6 +17,7 @@ import { pinLabelFor } from '@/hooks/useSessionPins';
 import { copyRichText, copyTextRobust } from '@/utils/clipboard';
 import { markdownToRichHtml } from '@/utils/markdown';
 import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
+import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { BashToolCall } from './BashToolCall';
 import { log } from '@/utils/log';
 
@@ -1109,12 +1110,9 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
       <div className="session-msg-content" onClick={handleContentClick}>
         {thinking && <SessionThinking text={thinking} />}
         {text && (useSegments ? (
-          <SuggestSegments segments={segments} cwd={sessionCwd} />
+          <SuggestSegments segments={segments} cwd={sessionCwd} scope={message.msgId} />
         ) : (
-          <div
-            className="markdown-body"
-            dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(text, sessionCwd) }}
-          />
+          <RichMarkdown text={text} cwd={sessionCwd} scope={message.msgId} />
         ))}
         {tools && tools.length > 0 && (() => {
           // CLI content order is prose first, tool_use blocks after — render

@@ -31341,3 +31341,36 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   color: var(--fg-muted);
   font-size: 11.5px;
 }
+
+/* ── Rich blocks: model-written HTML inside an assistant reply ───────────────
+   A reply's HTML is rendered natively, so a chunk that carries markup gets
+   containment: `contain: layout style paint` keeps its own CSS from reflowing
+   the page and clips anything it paints outside itself. Positioning is relative
+   so an absolutely positioned child anchors to the block, not to the app. CSS
+   inside the block is confined separately (scopeStyleHtml rewrites every rule
+   under `[data-rblk]`) — this is the layer that catches what CSS cannot. */
+.rich-html-chunk {
+  contain: layout style paint;
+  position: relative;
+}
+
+/* A script-bearing block that has not finished arriving. Deliberately inert:
+   half a widget is worse than a placeholder. */
+.rich-app-building {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+/* The sandboxed island itself — height is set inline from the frame's own
+   measurement (see HtmlAppIsland), never from CSS. */
+.rich-island {
+  width: 100%;
+  border: 0;
+  display: block;
+}

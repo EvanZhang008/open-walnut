@@ -68,6 +68,25 @@ function stripImageRefPrefix(message: string): string {
   return sep === -1 ? message : message.slice(sep + 2);
 }
 
+/**
+ * Same deal for the output-mode edge instruction: when the session's Output mode
+ * toggle CHANGED, `session:send` prepends one `[Rich output mode: ON|OFF] …`
+ * line + a blank line ahead of everything else (src/core/sessions/output-mode.ts).
+ * It sits OUTSIDE the image preamble, so strip it first.
+ */
+function stripOutputModePrefix(message: string): string {
+  if (!message.startsWith('[Rich output mode: ')) return message;
+  const sep = message.indexOf('\n\n');
+  return sep === -1 ? message : message.slice(sep + 2);
+}
+
+/** Every server-side rewrite `session:send` can put in front of the user's own
+ *  text, peeled off in the order it was applied (outermost first). Exported for
+ *  the contract test that pins it against the emitter. */
+export function stripSendPrefixes(message: string): string {
+  return stripImageRefPrefix(stripOutputModePrefix(message));
+}
+
 export function useSessionSend(activeSessionId: string | null): UseSessionSendReturn {
   const [optimisticMsgs, setOptimisticMsgs] = useState<OptimisticMessage[]>([]);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -95,10 +114,11 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
               .filter(m => !existing.has(m.id))
               .map(m => {
                 // The queue stores the ENQUEUED text, which for an attachment send
-                // carries the server's `[Images attached …]` + paths prefix. Render
+                // carries the server's `[Images attached …]` + paths prefix (and on
+                // an output-mode change, the `[Rich output mode: …]` line). Render
                 // the user-facing part, but dedup against the full enqueued form
                 // (that is what history echoes) — see OptimisticMessage.dedupText.
-                const display = stripImageRefPrefix(m.message);
+                const display = stripSendPrefixes(m.message);
                 // 'parked' = the server stopped auto-retrying this row (permanent
                 // failure, e.g. the session's working folder was deleted). Reuse the
                 // 'failed' presentation so it keeps Retry + Discard instead of looking

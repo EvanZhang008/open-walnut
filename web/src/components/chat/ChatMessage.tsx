@@ -15,6 +15,7 @@ import { useSelectionFrozen } from '@/utils/selection-guard';
 import { parseAskQuestionInput } from './QuestionPopover';
 import { SubagentBlock } from './SubagentBlock';
 import { SuggestSegments, useSuggestSegments } from './SuggestSegments';
+import { RichMarkdown } from './RichBlocks';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
@@ -848,27 +849,18 @@ function MemoizedTextBlock({ content, cardScope, onClick }: { content: string; c
   // `cards` covers a mounted card AND a half-arrived one being hidden: the raw
   // string path would leak the hidden body as prose (see useSuggestSegments).
   const { segments, useSegments: cards } = useSuggestSegments(displayContent, cardScope);
-  const labelsVersion = useEntityLabelsVersion();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
-  const html = useMemo(() => (cards ? '' : renderMarkdownWithRefs(displayContent)), [cards, displayContent, labelsVersion]);
   // Distinct keys, so the mid-stream flip from "plain html" to "segments"
   // REMOUNTS the host instead of asking React to turn a
   // dangerouslySetInnerHTML node into a children node in place.
   if (cards) {
     return (
       <div key="segments" ref={hostRef}>
-        <SuggestSegments segments={segments} onClick={onClick} />
+        <SuggestSegments segments={segments} scope={cardScope} onClick={onClick} />
       </div>
     );
   }
   return (
-    <div
-      key="html"
-      ref={hostRef}
-      className="markdown-body"
-      onClick={onClick}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <RichMarkdown key="html" hostRef={hostRef} text={displayContent} scope={cardScope} onClick={onClick} />
   );
 }
 
@@ -1382,12 +1374,15 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
               {/* History replay arrives without blocks, so cards have to work on
                   this path too — otherwise a reloaded card degrades to prose. */}
               {legacyCards ? (
-                <SuggestSegments segments={legacySegments} onClick={handleContentClick} />
+                <SuggestSegments segments={legacySegments} scope={cardScope} onClick={handleContentClick} />
               ) : (
-                <div
-                  className="markdown-body"
+                // `html === null` means this message type renders nothing here
+                // (blocks path / compaction rows), so feed the renderer '' —
+                // same empty markdown div the `html ?? ''` above produced.
+                <RichMarkdown
+                  text={html !== null ? content : ''}
+                  scope={cardScope}
                   onClick={handleContentClick}
-                  dangerouslySetInnerHTML={{ __html: html ?? '' }}
                 />
               )}
               {isErrorNotification && (() => {

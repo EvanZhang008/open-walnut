@@ -205,6 +205,21 @@ export function sessionModeFromCli(cliMode: string): SessionMode | null {
   return SESSION_MODES.find((m) => m.cli === cliMode)?.id ?? null;
 }
 
+// ── Session output-mode registry ───────────────────────────────────────────
+// How the model is asked to FORMAT its replies: 'markdown' (default) is plain
+// markdown, 'rich' lets it write HTML the client renders natively. Unlike a
+// permission mode there is no control channel for this — the CLI only learns
+// about it through the conversation, so the instruction rides the next message
+// after a CHANGE and never again (src/core/sessions/output-mode.ts).
+
+export type SessionOutputMode = 'markdown' | 'rich';
+
+/** Runtime allowlist for route/patch validation. */
+export const SESSION_OUTPUT_MODE_IDS: readonly SessionOutputMode[] = ['markdown', 'rich'] as const;
+
+/** What a record with no stored preference means (i.e. every older session). */
+export const DEFAULT_SESSION_OUTPUT_MODE: SessionOutputMode = 'markdown';
+
 /**
  * Reasoning-effort capability of a model: whether it accepts an effort level at
  * all, and whether it accepts the higher `xhigh` / top `max` levels specifically.
@@ -1828,6 +1843,13 @@ export interface SessionRecord {
    */
   mcpMountStatus?: Record<string, string>;
   human_note?: string;
+  /** Reply-style preference the human picked in the composer. Undefined =
+   *  DEFAULT_SESSION_OUTPUT_MODE ('markdown'). */
+  output_mode?: SessionOutputMode;
+  /** The last output mode we actually TOLD the CLI about. Server-authoritative
+   *  edge state: the instruction is only prefixed when this differs from
+   *  `output_mode`, so a reload or a second device can't double-inject it. */
+  output_mode_injected?: SessionOutputMode;
   /** Claude model used by this session (e.g. "claude-opus-4-6"). Display only. */
   model?: string;
   /** CLI model string passed to --model (e.g. "opus[1m]"). Preserves [1m] suffix for resume. */

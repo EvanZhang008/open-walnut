@@ -18,8 +18,8 @@ import { SessionControlError } from './session-controls.js';
 import { bus, EventNames } from '../event-bus.js';
 import { safeKillProcessGroup } from '../process-group-kill.js';
 import { log } from '../../logging/index.js';
-import type { SessionRecord, SessionMode } from '../types.js';
-import { SESSION_MODE_IDS } from '../types.js';
+import type { SessionRecord, SessionMode, SessionOutputMode } from '../types.js';
+import { SESSION_MODE_IDS, SESSION_OUTPUT_MODE_IDS } from '../types.js';
 import type { SessionHistoryMessage } from '../session-history.js';
 import { DEFAULT_ENGINE, engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 
@@ -236,6 +236,9 @@ export interface SessionPatchInput {
   archived?: unknown;
   archive_reason?: unknown;
   mode?: unknown;
+  /** Reply-style preference ('markdown' | 'rich'). Metadata only — it reaches
+   *  the model as an instruction on the next send, not through the live CLI. */
+  output_mode?: unknown;
   /** Full replacement list of pinned messages (the client owns the order). */
   pinned_messages?: unknown;
 }
@@ -294,7 +297,7 @@ export function normalizePinnedMessages(value: unknown): import('../types.js').S
  * all side effects, so callers can't optimistically merge stale fields.
  */
 export async function patchSession(sessionId: string, input: SessionPatchInput): Promise<SessionRecord> {
-  const { title, activity, human_note, archived, archive_reason, mode, pinned_messages } = input;
+  const { title, activity, human_note, archived, archive_reason, mode, output_mode, pinned_messages } = input;
 
   if (title !== undefined && (typeof title !== 'string' || title.length > 500)) {
     throw new SessionControlError('title must be a string (max 500 chars)', 400);
@@ -314,6 +317,9 @@ export async function patchSession(sessionId: string, input: SessionPatchInput):
   if (mode !== undefined && !CLAUDE_SESSION_MODES.includes(mode as SessionMode)) {
     throw new SessionControlError(`mode must be one of: ${CLAUDE_SESSION_MODES.join(', ')}`, 400);
   }
+  if (output_mode !== undefined && !SESSION_OUTPUT_MODE_IDS.includes(output_mode as SessionOutputMode)) {
+    throw new SessionControlError(`output_mode must be one of: ${SESSION_OUTPUT_MODE_IDS.join(', ')}`, 400);
+  }
   // NOTE: an empty patch is tolerated (no-op update) — the web PATCH has always
   // accepted it. The v1 route layers its own at-least-one-field 400 on top.
 
@@ -331,6 +337,7 @@ export async function patchSession(sessionId: string, input: SessionPatchInput):
   if (title !== undefined) updates.title = title as string;
   if (activity !== undefined) updates.activity = activity as string;
   if (human_note !== undefined) updates.human_note = human_note as string;
+  if (output_mode !== undefined) updates.output_mode = output_mode as SessionOutputMode;
   if (pinned_messages !== undefined) updates.pinnedMessages = normalizePinnedMessages(pinned_messages);
   if (archived !== undefined) {
     updates.archived = archived as boolean;

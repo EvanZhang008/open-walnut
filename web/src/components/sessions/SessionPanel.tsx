@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { copyTextDeferred } from '@/utils/clipboard';
 import { SessionChatHistory } from './SessionChatHistory';
 import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNotes';
+import { OutputModePill } from './OutputModePill';
 import { useSessionPins } from '@/hooks/useSessionPins';
 import { SessionPinsContext } from '@/contexts/SessionPinsContext';
 import { SessionRewindContext, type SessionRewindApi } from '@/contexts/SessionRewindContext';
@@ -1403,6 +1404,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                       <span className="mode-toggle-pill-shortcut">{'\u21E7'}Tab</span>
                     </button>
                   )}
+                  <OutputModePill
+                    sessionId={session.claudeSessionId}
+                    mode={session.output_mode}
+                    onOptimistic={(output_mode) => setSession(prev => prev ? { ...prev, output_mode } : prev)}
+                  />
                   <SideQuestionDrawer sessionId={session?.claudeSessionId} />
                   <SessionNotesPill
                     noteState={noteState}
@@ -1942,6 +1948,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                       <span className="mode-toggle-pill-shortcut">{'\u21E7'}Tab</span>
                     </button>
                   )}
+                  <OutputModePill
+                    sessionId={session.claudeSessionId}
+                    mode={session.output_mode}
+                    onOptimistic={(output_mode) => setSession(prev => prev ? { ...prev, output_mode } : prev)}
+                  />
                   <SideQuestionDrawer sessionId={session?.claudeSessionId} />
                   <SessionNotesPill
                     noteState={noteState}

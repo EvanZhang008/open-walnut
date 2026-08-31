@@ -6,7 +6,6 @@ import { useSessionStream, type StreamingBlock } from '@/hooks/useSessionStream'
 import { useEvent } from '@/hooks/useWebSocket';
 import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
-import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { SessionMessage, SessionThinking, PlanCard, CollapsedPlanWrite, GenericToolCall, TaskGroupPrompt, agentModelLabel, ToolRunShell, toolRunPhrase, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, MergedHistoryToolRun, SystemGroupRun, SystemLineCollapsible, systemGroupMemberFromHistory, type SystemGroupMember } from './SessionMessage';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
 import { computeRenderWindow, type RenderWindowAnchor } from './render-window';
@@ -26,8 +25,9 @@ import { engineCaps } from '@/utils/engine-capabilities';
 import type { ImageAttachment } from '@/api/chat';
 import { respondToPermission } from '@/api/sessions';
 import { parseAskUserQuestionInput, buildAskUserAnswers, allAskUserQuestionsAnswered, toggleAskUserSelection, type AskQuestion } from './ask-user-question';
-import { renderMarkdownWithRefs, findImagePaths, resolveImagePath } from '@/utils/markdown';
+import { findImagePaths, resolveImagePath } from '@/utils/markdown';
 import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
+import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { useSelectionScrollGuard, useSelectionFrozen, useSelectionFrozenWith } from '@/utils/selection-guard';
 import { runWhenVisible, visibleInterval } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
@@ -182,9 +182,6 @@ function StreamingTextBlock({ content, msgId, sessionCwd, sessionHost, sessionId
   // the same key after a reload. Split on the FROZEN value so the selection
   // freeze covers the card too.
   const { segments, useSegments } = useSuggestSegments(displayContent, msgId);
-  const labelsVersion = useEntityLabelsVersion();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
-  const html = useMemo(() => (useSegments ? '' : renderMarkdownWithRefs(displayContent, sessionCwd)), [useSegments, displayContent, sessionCwd, labelsVersion]);
   const imagePaths = useMemo(() => findImagePaths(displayContent), [displayContent]);
   const handleClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
   return (
@@ -194,15 +191,16 @@ function StreamingTextBlock({ content, msgId, sessionCwd, sessionHost, sessionId
           dangerouslySetInnerHTML node into a children node in place. */}
       {useSegments ? (
         <div key="segments" ref={hostRef}>
-          <SuggestSegments segments={segments} cwd={sessionCwd} onClick={handleClick} />
+          <SuggestSegments segments={segments} cwd={sessionCwd} scope={msgId} onClick={handleClick} />
         </div>
       ) : (
-        <div
+        <RichMarkdown
           key="html"
-          ref={hostRef}
-          className="markdown-body"
+          hostRef={hostRef}
+          text={displayContent}
+          cwd={sessionCwd}
+          scope={msgId}
           onClick={handleClick}
-          dangerouslySetInnerHTML={{ __html: html }}
         />
       )}
       {imagePaths.length > 0 && (() => {

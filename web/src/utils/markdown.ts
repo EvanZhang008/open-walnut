@@ -471,8 +471,17 @@ export function renderToolResultWithRefs(text: string): string {
     const withPills = injectJsonIdLinks(html);
     // Step 4: Linkify file paths inside code blocks (tool results are mostly code)
     const withCodePaths = linkifyPathsInCode(withPills);
-    // Step 5: Sanitize
-    return DOMPurify.sanitize(withCodePaths, { ADD_ATTR: SANITIZE_ATTRS });
+    // Step 5: Sanitize. Same posture as renderMarkdownWithRefs' default: no
+    // `<form>`/`action`/`formaction` (a submit target navigates the whole app
+    // away) and no `<style>` — a tool result is not a place anyone authors CSS
+    // for, and one page-author rule in there restyles the console. FORCE_BODY
+    // keeps a leading element from being parsed into `<head>` and dropped.
+    return DOMPurify.sanitize(withCodePaths, {
+      ADD_ATTR: SANITIZE_ATTRS,
+      FORCE_BODY: true,
+      FORBID_TAGS: ['form', 'style'],
+      FORBID_ATTR: ['action', 'formaction'],
+    });
   } catch {
     return DOMPurify.sanitize(text);
   }
@@ -1004,13 +1013,40 @@ const MD_CACHE_SKIP_LENGTH = 10_000; // skip caching very long texts to avoid me
  *  Version-in-key would instead strand stale entries in the 200 LRU slots. */
 let mdCacheLabelsVersion = -1;
 
-export function renderMarkdownWithRefs(text: string, sessionCwd?: string, host?: string): string {
+/** Per-call sanitizer posture. Today just the one opt-in; see `allowStyle`. */
+export interface RenderMarkdownOptions {
+  /**
+   * Let a model-written `<style>` block through.
+   *
+   * OFF by default, and that default is the important half. Almost every caller
+   * of this function renders text into a SHARED surface — a plan popup, a thinking
+   * block, a tool result, a suggest card body, the triage summary, a diff row —
+   * where a `<style>` cannot be confined to anything, so one `body{display:none}`
+   * blanks the console for as long as that message is on screen. Only the rich
+   * CHUNK path (RichBlocks.tsx) opts in, because it is the one caller that stamps
+   * a `data-rblk` scope on its wrapper and rewrites every rule under it first.
+   */
+  allowStyle?: boolean;
+}
+
+export function renderMarkdownWithRefs(
+  text: string,
+  sessionCwd?: string,
+  host?: string,
+  opts?: RenderMarkdownOptions,
+): string {
+  const allowStyle = opts?.allowStyle === true;
   const labelsVersion = getEntityLabelsVersion();
   if (labelsVersion !== mdCacheLabelsVersion) {
     mdCache.clear();
     mdCacheLabelsVersion = labelsVersion;
   }
-  const key = host ? `${text}\0${sessionCwd ?? ''}\0${host}` : sessionCwd ? `${text}\0${sessionCwd}` : text;
+  // The posture is part of the identity: the same text renders differently with
+  // and without style, so it must not share a cache slot.
+  const flags = allowStyle ? 'S\0' : '';
+  const key = host
+    ? `${flags}${text}\0${sessionCwd ?? ''}\0${host}`
+    : sessionCwd ? `${flags}${text}\0${sessionCwd}` : `${flags}${text}`;
   const cached = text.length <= MD_CACHE_SKIP_LENGTH ? mdCache.get(key) : undefined;
   if (cached !== undefined) {
     mdCache.delete(key);
@@ -1026,7 +1062,30 @@ export function renderMarkdownWithRefs(text: string, sessionCwd?: string, host?:
     const raw = marked.parse(preprocessed);
     let parsed = typeof raw === 'string' ? raw : '';
     parsed = linkifyPathsInCode(parsed, sessionCwd);
-    html = DOMPurify.sanitize(parsed, { ADD_ATTR: SANITIZE_ATTRS });
+    // Models write raw HTML in replies now and we render it natively, so this
+    // sanitize call is the boundary for model-authored markup. A `<form>` is the
+    // one interactive element that can leave the page: submitting navigates the
+    // whole app away (or POSTs somewhere), and there is no legitimate reason for
+    // a chat answer to own a submit target — the interactive widgets that matter
+    // (radio/checkbox/details) work without one. `formaction` is the same escape
+    // hatch spelled on a button.
+    //
+    // FORCE_BODY is what makes a LEADING `<style>` survive at all. Without it
+    // DOMPurify parses through `DOMParser.parseFromString(html, 'text/html')`,
+    // whose "before head" insertion mode puts a leading `<style>` into `<head>`;
+    // DOMPurify then returns `body` only, so the element vanished — content
+    // included, since `style` is in its DEFAULT_FORBID_CONTENTS. Measured with
+    // dompurify 3.3.1 in a real DOM: `<style>…</style><div>x</div>` → `<div>x</div>`
+    // without the flag, both elements with it, and `<script>`/`<form>`/`action`/
+    // `formaction` are still stripped either way. "Here is the CSS, here is the
+    // markup" is the order a model writes most naturally, so this was the common
+    // shape, not the exotic one.
+    html = DOMPurify.sanitize(parsed, {
+      ADD_ATTR: SANITIZE_ATTRS,
+      FORCE_BODY: true,
+      FORBID_TAGS: allowStyle ? ['form'] : ['form', 'style'],
+      FORBID_ATTR: ['action', 'formaction'],
+    });
   } catch {
     html = DOMPurify.sanitize(text);
   }

@@ -14,6 +14,7 @@ import { normalizeEngine } from '../../core/agents/engine-registry.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQueued, unparkMessage } from '../../core/session-message-queue.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
+import { resolveOutputModeEdge, applyOutputModeInstruction } from '../../core/sessions/output-mode.js'
 import { saveImageToDisk, resolveImageRefs } from './images.js'
 import { log } from '../../logging/index.js'
 import { sessionRunner } from '../../providers/claude-code-session.js'
@@ -213,6 +214,16 @@ export function registerSessionChatRpc(): void {
       })
     }
 
+    // Output-mode EDGE: the reply-style preference has no control channel, so
+    // the model only learns about it from the conversation. Prefix the
+    // instruction exactly once per change (record-authoritative — see
+    // core/sessions/output-mode.ts), outside any image preamble so the
+    // attachment block stays adjacent to the user's own words.
+    const outputModeEdge = resolveOutputModeEdge(record)
+    if (outputModeEdge) {
+      augmentedMessage = applyOutputModeInstruction(outputModeEdge.instruction, augmentedMessage)
+    }
+
     // Enqueue and notify in one call. augmentedMessage may include image refs;
     // original data.message is used for bus events (UI display).
     // NOTE: model is NOT forwarded — it was already applied live above (and
@@ -225,6 +236,18 @@ export function registerSessionChatRpc(): void {
       interrupt: data.interrupt === true ? true : undefined,
       enqueueMessage: augmentedMessage,
     })
+
+    // Advance the edge only AFTER the text is safely queued: a throw above must
+    // leave the session still "owing" the instruction, or the mode change would
+    // be silently lost. A failure to persist here is logged, not surfaced — the
+    // worst case is the instruction repeating on the next send.
+    if (outputModeEdge) {
+      await updateSessionRecord(data.sessionId, { output_mode_injected: outputModeEdge.mode })
+        .catch((err) => log.web.warn('session:send output-mode edge persist failed', {
+          sessionId: data.sessionId, outputMode: outputModeEdge.mode,
+          error: err instanceof Error ? err.message : String(err),
+        }))
+    }
 
     // Lane-bound session (thin-layer main-AI chat): the transcript lives in the
     // CLI's JSONL, so chat-history's touchConversation never runs — feed the
@@ -270,7 +293,8 @@ export function registerSessionChatRpc(): void {
     // Return the AUGMENTED text alongside the id. The optimistic bubble holds the
     // user's ORIGINAL text (what they typed), but the CLI — and therefore the
     // canonical JSONL echo that history parses — sees `augmentedMessage` (image
-    // refs prepended above). Text-based optimistic dedup compares bubble.text
+    // refs and/or the output-mode instruction prepended above). Any server-side
+    // rewrite must therefore ride this field. Text-based optimistic dedup compares bubble.text
     // against persisted history text, so for any message with attachments the two
     // are STRUCTURALLY unequal and the bubble can never be absorbed: it stays
     // pinned at the bottom of the timeline below newer content until a refresh

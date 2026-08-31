@@ -55,6 +55,12 @@ export interface SessionRecord {
    *  prettified client-side (shortAcpModelName). */
   acpModelName?: string;
   human_note?: string;
+  /** Reply-style preference: 'markdown' (default) or 'rich' HTML. Mirrors
+   *  SessionOutputMode in src/core/types.ts. */
+  output_mode?: import('@open-walnut/core').SessionOutputMode;
+  /** Last mode the server actually told the CLI about (edge state). Read-only
+   *  for the client — never PATCHed. */
+  output_mode_injected?: import('@open-walnut/core').SessionOutputMode;
   /** Messages the human pinned — the timeline's table of contents. */
   pinnedMessages?: SessionPinnedMessage[];
   /** Set on a session born from a rewind: the parent message uuid its spawn

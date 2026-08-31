@@ -34,9 +34,9 @@
  * replaced it. Hence `needsSegments`, which is true for BOTH reasons.
  */
 import { useMemo } from 'react';
-import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { SuggestCard } from './SuggestCard';
+import { RichMarkdown } from './RichBlocks';
 import {
   splitSuggestSegments, hasCardSegment, needsSegments, type SuggestSegment,
 } from '@/utils/suggest-parse';
@@ -62,24 +62,35 @@ export function useSuggestSegments(text: string, scope?: string): {
 }
 
 /** Ordered markdown runs + `<suggest>` action cards. */
-export function SuggestSegments({ segments, cwd, onClick }: {
+export function SuggestSegments({ segments, cwd, scope, onClick }: {
   segments: SuggestSegment[];
   /** Session cwd, so relative file paths in the prose stay clickable. */
   cwd?: string;
+  /** Stable per-message id — the same value the caller gave useSuggestSegments. */
+  scope?: string;
   onClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
 }) {
-  // Subscribe pill titles for the inline renderMarkdownWithRefs in the map.
+  // Subscribe pill titles for the card bodies rendered in the map.
   useEntityLabelsVersion();
   return (
     <>
       {segments.map((seg, i) => seg.kind === 'card' ? (
         <SuggestCard key={`${seg.card.id}-${i}`} card={seg.card} onContentClick={onClick} />
       ) : (
-        <div
+        // Prose around a card gets the same block-stable treatment as a whole
+        // message: a card and a model-written HTML widget can share one answer.
+        //
+        // The SEGMENT INDEX is folded into the scope. RichMarkdown derives one CSS
+        // scope id per instance from it, and each prose run is its own instance —
+        // so passing the bare message scope would give two runs the SAME
+        // `data-rblk`, and a `<style>` in the run before a card would reach into
+        // the run after it (and both runs' chunk keys would collide).
+        <RichMarkdown
           key={i}
-          className="markdown-body"
+          text={seg.text}
+          cwd={cwd}
+          scope={scope === undefined ? undefined : `${scope}#${i}`}
           onClick={onClick}
-          dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(seg.text, cwd) }}
         />
       ))}
     </>
