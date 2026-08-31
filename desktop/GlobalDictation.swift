@@ -1,6 +1,7 @@
 /**
  * Global dictation: press the hotkey anywhere in macOS, speak, press it again,
- * and the transcription lands on the clipboard.
+ * and the transcription is inserted at the cursor of the focused app (and/or
+ * copied to the clipboard — both are configurable in the Dictation menu).
  *
  * Why this lives in the app and not in a script: recording the microphone needs
  * a TCC grant, and macOS only prompts for one on behalf of a signed app bundle
@@ -22,11 +23,14 @@
  *
  * Transcription reuses the normal server route (POST /api/stt/transcribe), so
  * dictation gets the same engine, the same vocabulary bias, and the same
- * recoverable history as the mic button in the web UI.
+ * recoverable history as the mic button in the web UI. An optional polish pass
+ * (POST /api/stt/cleanup, a local text model) strips fillers and stutters; the
+ * server guarantees the original text comes back whenever polish cannot help.
  */
 
 import Cocoa
 import AVFoundation
+import ApplicationServices
 import Carbon.HIToolbox
 
 /// Fired by the Carbon handler; the handler cannot capture Swift context.
@@ -52,6 +56,8 @@ final class GlobalDictation: NSObject {
     /// (Fn+arrow, brightness keys) do not read as one gesture.
     private let doubleTapWindow: TimeInterval = 0.45
     private static let doubleTapFnKey = "dictationDoubleTapFn"
+    /// Drives the HUD waveform from the recorder's live metering.
+    private var meterTimer: Timer?
 
     var isRecording: Bool { recorder?.isRecording ?? false }
 
@@ -59,6 +65,26 @@ final class GlobalDictation: NSObject {
     static var doubleTapFnEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: doubleTapFnKey) }
         set { UserDefaults.standard.set(newValue, forKey: doubleTapFnKey) }
+    }
+
+    /// Where the result goes. Both default ON: the text lands at the cursor of
+    /// whatever app is focused (the Wispr-style flow) AND stays on the clipboard
+    /// as the paper trail. If the user turns both off, clipboard silently wins —
+    /// dictating into nothing would look like the feature broke.
+    static var typeIntoAppEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: "dictationTypeIntoApp") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "dictationTypeIntoApp") }
+    }
+    static var copyToClipboardEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: "dictationCopyClipboard") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "dictationCopyClipboard") }
+    }
+    /// Local polish pass (strip 呃/嗯, stutters, false starts). ON by default:
+    /// the server falls back to the raw transcript instantly when the local
+    /// model is not installed, so enabling it costs nothing where it can't run.
+    static var polishEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: "dictationPolish") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "dictationPolish") }
     }
 
     init(portProvider: @escaping () -> Int?) {
@@ -215,7 +241,11 @@ final class GlobalDictation: NSObject {
             }
             recorder = rec
             recordingURL = url
-            showHUD("Listening… press the hotkey again to finish", style: .recording, autoHide: nil)
+            showWaveformHUD()
+            startMeterTimer()
+            // Load the models while the user is talking, not after they stop.
+            fireAndForget(path: "/api/stt/warmup")
+            if Self.polishEnabled { fireAndForget(path: "/api/stt/cleanup/warmup") }
             let work = DispatchWorkItem { [weak self] in
                 guard let self = self, self.isRecording else { return }
                 self.stopAndTranscribe()
@@ -228,9 +258,38 @@ final class GlobalDictation: NSObject {
         }
     }
 
+    private func startMeterTimer() {
+        meterTimer?.invalidate()
+        // 20 Hz matches the bar animation duration; faster looks jittery.
+        meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            guard let self = self, let rec = self.recorder, rec.isRecording else { return }
+            rec.updateMeters()
+            let db = rec.averagePower(forChannel: 0)
+            // Speech sits roughly between -50 dB (quiet room) and -8 dB (loud);
+            // map that band to 0…1 so the bars use their full height.
+            let level = max(0, min(1, (CGFloat(db) + 50) / 42))
+            self.hud?.pushLevel(level)
+        }
+    }
+
+    private func stopMeterTimer() {
+        meterTimer?.invalidate()
+        meterTimer = nil
+    }
+
+    private func fireAndForget(path: String) {
+        guard let port = portProvider(),
+              let url = URL(string: "http://127.0.0.1:\(port)\(path)") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 10
+        URLSession.shared.dataTask(with: req).resume()
+    }
+
     private func stopAndTranscribe() {
         autoStopWork?.cancel()
         autoStopWork = nil
+        stopMeterTimer()
         guard let rec = recorder, let url = recordingURL else { return }
         rec.stop()
         recorder = nil
@@ -292,13 +351,111 @@ final class GlobalDictation: NSObject {
                                  style: .error, autoHide: 4)
                     return
                 }
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-                let preview = text.count > 60 ? String(text.prefix(60)) + "…" : text
-                self.showHUD("Copied: \(preview)", style: .done, autoHide: 4)
-                DesktopLogger.shared.log("dictation_copied", fields: ["chars": String(text.count)])
+                self.maybePolish(text, port: port) { final, polished in
+                    DispatchQueue.main.async { self.deliver(final, polished: polished) }
+                }
             }
         }.resume()
+    }
+
+    // MARK: - Polish
+
+    /// Runs the optional local cleanup pass. Always calls back with usable text:
+    /// the server returns the original on any guardrail rejection, and this
+    /// method falls back to the raw transcript on any transport failure — the
+    /// polish pass may only ever improve the result, never delay or lose it.
+    private func maybePolish(_ text: String, port: Int, completion: @escaping (String, Bool) -> Void) {
+        guard Self.polishEnabled,
+              let endpoint = URL(string: "http://127.0.0.1:\(port)/api/stt/cleanup") else {
+            completion(text, false)
+            return
+        }
+        showHUD("Polishing…", style: .working, autoHide: nil)
+        var req = URLRequest(url: endpoint)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text])
+        // Polish is a bonus pass — if the local model is still loading, the raw
+        // transcript must not wait behind it for long.
+        req.timeoutInterval = 20
+        URLSession.shared.dataTask(with: req) { data, response, _ in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let json = data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
+            let cleaned = (json?["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let applied = json?["applied"] as? Bool ?? false
+            if status == 200 && !cleaned.isEmpty {
+                completion(cleaned, applied)
+            } else {
+                completion(text, false)
+            }
+        }.resume()
+    }
+
+    // MARK: - Delivery
+
+    private func deliver(_ text: String, polished: Bool) {
+        let preview = text.count > 60 ? String(text.prefix(60)) + "…" : text
+        let wantType = Self.typeIntoAppEnabled
+        // Clipboard wins when both are off: dictating into nothing would look
+        // like the feature broke.
+        let wantCopy = Self.copyToClipboardEnabled || !wantType
+        var copied = false
+        if wantCopy {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            copied = true
+        }
+        if wantType {
+            if AXIsProcessTrusted(), typeText(text) {
+                showHUD(copied ? "Inserted and copied: \(preview)" : "Inserted: \(preview)",
+                        style: .done, autoHide: 4)
+                DesktopLogger.shared.log("dictation_inserted",
+                                         fields: ["chars": String(text.count), "polished": String(polished)])
+                return
+            }
+            // No Accessibility grant (or event posting failed): the text must
+            // not be lost, so it goes to the clipboard with an explanation.
+            if !copied {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
+            DesktopLogger.shared.log("dictation_type_unavailable", fields: [:])
+            showHUD("Copied — grant Accessibility (System Settings, Privacy and Security) to insert into apps",
+                    style: .done, autoHide: 6)
+            return
+        }
+        showHUD("Copied: \(preview)", style: .done, autoHide: 4)
+        DesktopLogger.shared.log("dictation_copied",
+                                 fields: ["chars": String(text.count), "polished": String(polished)])
+    }
+
+    /// Types text into the focused app by synthesizing keyboard events that
+    /// carry the unicode payload directly (no key codes, so it works for any
+    /// language and any layout). Requires Accessibility; the caller checks.
+    /// Chunked because keyboardSetUnicodeString truncates beyond 20 UTF-16
+    /// units per event.
+    private func typeText(_ text: String) -> Bool {
+        guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
+        let units = Array(text.utf16)
+        var index = 0
+        while index < units.count {
+            let chunk = Array(units[index..<min(index + 20, units.count)])
+            guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else {
+                return false
+            }
+            chunk.withUnsafeBufferPointer { buf in
+                down.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: buf.baseAddress)
+                up.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: buf.baseAddress)
+            }
+            down.post(tap: .cghidEventTap)
+            up.post(tap: .cghidEventTap)
+            index += 20
+            // Slow consumers (Electron apps, terminals) drop events posted
+            // back-to-back; 3ms per 20 units is imperceptible (75ms for 500 chars).
+            usleep(3000)
+        }
+        return true
     }
 
     // MARK: - HUD
@@ -307,10 +464,18 @@ final class GlobalDictation: NSObject {
         if hud == nil { hud = DictationHUD() }
         hud?.show(message, style: style, autoHide: autoHide)
     }
+
+    private func showWaveformHUD() {
+        if hud == nil { hud = DictationHUD() }
+        hud?.showWaveform()
+    }
 }
 
 /**
- * Small floating status panel, shown near the top of the active screen.
+ * Floating status panel at the bottom of the active screen (with a small gap),
+ * where macOS's own dictation pill lives — that is where users' eyes already go.
+ * While recording it is a dark pill with live waveform bars driven by the mic's
+ * metering; for every other state it is a text pill.
  *
  * It is a non-activating panel on purpose: dictation is used while another app
  * has focus, and stealing focus to say "Listening…" would defeat the point.
@@ -330,14 +495,97 @@ final class DictationHUD {
     }
 
     private var panel: NSPanel?
+    private var container: NSView?
     private var label: NSTextField?
     private var dot: NSView?
+    private var waveContainer: NSView?
+    private var bars: [CALayer] = []
+    private var levels: [CGFloat]
     private var hideWork: DispatchWorkItem?
+
+    private let barCount = 26
+    private let barWidth: CGFloat = 3
+    private let barGap: CGFloat = 2.5
+    private let waveHeight: CGFloat = 36
+    private let messageSize = NSSize(width: 380, height: 44)
+    /// Gap between the HUD and the bottom edge of the visible screen area.
+    private let bottomGap: CGFloat = 26
+
+    init() {
+        levels = Array(repeating: 0, count: barCount)
+    }
+
+    // MARK: Waveform mode (recording)
+
+    func showWaveform() {
+        buildIfNeeded()
+        hideWork?.cancel()
+        levels = Array(repeating: 0, count: barCount)
+        let dotSpan: CGFloat = 24
+        let barsSpan = CGFloat(barCount) * (barWidth + barGap) - barGap
+        let width = dotSpan + barsSpan + 18
+        setPanelSize(NSSize(width: width, height: waveHeight))
+        // Dark pill reads as "live" and matches the system dictation indicator.
+        container?.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.82).cgColor
+        container?.layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
+        label?.isHidden = true
+        waveContainer?.isHidden = false
+        dot?.isHidden = false
+        dot?.layer?.backgroundColor = Style.recording.accent.cgColor
+        dot?.frame = NSRect(x: 12, y: (waveHeight - 9) / 2, width: 9, height: 9)
+        waveContainer?.frame = NSRect(x: dotSpan, y: 0, width: barsSpan, height: waveHeight)
+        renderBars()
+        layout()
+        panel?.orderFrontRegardless()
+    }
+
+    /// Feed one metering sample (0…1). The history scrolls left so the pill
+    /// reads as a live waveform, not a symmetric VU meter.
+    func pushLevel(_ level: CGFloat) {
+        guard waveContainer?.isHidden == false else { return }
+        levels.removeFirst()
+        levels.append(level)
+        renderBars()
+    }
+
+    private func renderBars() {
+        guard let wave = waveContainer else { return }
+        if bars.count != barCount {
+            bars.forEach { $0.removeFromSuperlayer() }
+            bars = (0..<barCount).map { _ in
+                let bar = CALayer()
+                bar.backgroundColor = NSColor.white.withAlphaComponent(0.92).cgColor
+                bar.cornerRadius = barWidth / 2
+                wave.layer?.addSublayer(bar)
+                return bar
+            }
+        }
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.05)
+        for (i, bar) in bars.enumerated() {
+            let height = 3 + levels[i] * (waveHeight - 16)
+            bar.frame = CGRect(x: CGFloat(i) * (barWidth + barGap),
+                               y: (waveHeight - height) / 2,
+                               width: barWidth,
+                               height: height)
+        }
+        CATransaction.commit()
+    }
+
+    // MARK: Message mode (transcribing / done / error)
 
     func show(_ message: String, style: Style, autoHide: TimeInterval?) {
         buildIfNeeded()
+        setPanelSize(messageSize)
+        container?.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.97).cgColor
+        container?.layer?.borderColor = NSColor.separatorColor.cgColor
+        waveContainer?.isHidden = true
+        label?.isHidden = false
         label?.stringValue = message
+        label?.frame = NSRect(x: 31, y: 12, width: messageSize.width - 45, height: 20)
+        dot?.isHidden = false
         dot?.layer?.backgroundColor = style.accent.cgColor
+        dot?.frame = NSRect(x: 14, y: 18, width: 9, height: 9)
         layout()
         panel?.orderFrontRegardless()
         hideWork?.cancel()
@@ -347,9 +595,11 @@ final class DictationHUD {
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
     }
 
+    // MARK: Plumbing
+
     private func buildIfNeeded() {
         guard panel == nil else { return }
-        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 44),
+        let p = NSPanel(contentRect: NSRect(origin: .zero, size: messageSize),
                         styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)
         p.isFloatingPanel = true
@@ -360,41 +610,55 @@ final class DictationHUD {
         p.ignoresMouseEvents = true
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        let container = NSView(frame: p.contentView!.bounds)
-        container.wantsLayer = true
-        container.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.97).cgColor
-        container.layer?.cornerRadius = 11
-        container.layer?.borderWidth = 1
-        container.layer?.borderColor = NSColor.separatorColor.cgColor
-        container.layer?.shadowOpacity = 0.22
-        container.layer?.shadowRadius = 10
-        container.layer?.shadowOffset = CGSize(width: 0, height: -2)
+        let c = NSView(frame: p.contentView!.bounds)
+        c.autoresizingMask = [.width, .height]
+        c.wantsLayer = true
+        c.layer?.cornerRadius = 11
+        c.layer?.borderWidth = 1
+        c.layer?.shadowOpacity = 0.22
+        c.layer?.shadowRadius = 10
+        c.layer?.shadowOffset = CGSize(width: 0, height: -2)
 
         let d = NSView(frame: NSRect(x: 14, y: 18, width: 9, height: 9))
         d.wantsLayer = true
         d.layer?.cornerRadius = 4.5
-        container.addSubview(d)
+        c.addSubview(d)
         dot = d
 
         let l = NSTextField(labelWithString: "")
-        l.frame = NSRect(x: 31, y: 12, width: 315, height: 20)
         l.font = .systemFont(ofSize: 12.5)
         l.lineBreakMode = .byTruncatingTail
-        container.addSubview(l)
+        c.addSubview(l)
         label = l
 
-        p.contentView = container
+        let w = NSView(frame: .zero)
+        w.wantsLayer = true
+        w.isHidden = true
+        c.addSubview(w)
+        waveContainer = w
+
+        p.contentView = c
+        container = c
         panel = p
     }
 
-    /// Re-centres near the top of whichever screen currently has the mouse, so the
-    /// HUD shows up where the user is working on a multi-display setup.
+    private func setPanelSize(_ size: NSSize) {
+        guard let p = panel else { return }
+        var frame = p.frame
+        frame.size = size
+        p.setFrame(frame, display: false)
+        // The pill mode is fully rounded; the wider message pill keeps softer corners.
+        container?.layer?.cornerRadius = size.height == waveHeight ? waveHeight / 2 : 11
+    }
+
+    /// Bottom-centre of whichever screen currently has the mouse, with a gap —
+    /// the HUD shows up where the user is working on a multi-display setup.
     private func layout() {
         guard let p = panel else { return }
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
         guard let frame = screen?.visibleFrame else { return }
         let size = p.frame.size
-        p.setFrameOrigin(NSPoint(x: frame.midX - size.width / 2, y: frame.maxY - size.height - 18))
+        p.setFrameOrigin(NSPoint(x: frame.midX - size.width / 2, y: frame.minY + bottomGap))
     }
 }

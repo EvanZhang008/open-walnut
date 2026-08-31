@@ -1,5 +1,6 @@
 import Cocoa
 import WebKit
+import ApplicationServices
 
 // MARK: - Configuration
 
@@ -1512,6 +1513,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         dictation?.toggle()
     }
 
+    /// Delivery preferences (see GlobalDictation for the semantics: clipboard
+    /// silently wins when both are off, so the result is never dropped).
+    @objc func toggleInsertIntoApp(_ sender: NSMenuItem) {
+        let wanted = sender.state != .on
+        GlobalDictation.typeIntoAppEnabled = wanted
+        sender.state = wanted ? .on : .off
+        // Inserting text synthesizes keyboard events, which needs Accessibility.
+        // Ask now, at the moment the user opts in, not mid-dictation.
+        if wanted && !AXIsProcessTrusted() {
+            let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            AXIsProcessTrustedWithOptions(opts)
+        }
+    }
+
+    @objc func toggleCopyClipboard(_ sender: NSMenuItem) {
+        let wanted = sender.state != .on
+        GlobalDictation.copyToClipboardEnabled = wanted
+        sender.state = wanted ? .on : .off
+    }
+
+    @objc func togglePolish(_ sender: NSMenuItem) {
+        let wanted = sender.state != .on
+        GlobalDictation.polishEnabled = wanted
+        sender.state = wanted ? .on : .off
+    }
+
     @objc func resetConfig() {
         // Destructive (forgets which installation this app points to) — always
         // confirm. This used to run bare off ⌘, and wiped the config silently.
@@ -1548,16 +1575,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ","))
         appMenu.addItem(NSMenuItem(title: "Reset Setup...", action: #selector(resetConfig), keyEquivalent: ""))
         appMenu.addItem(NSMenuItem.separator())
+        // Dictation gets its own submenu: two triggers plus three delivery
+        // preferences is too much to inline in the app menu.
+        let dictationMenuItem = NSMenuItem(title: "Dictation", action: nil, keyEquivalent: "")
+        let dictationMenu = NSMenu(title: "Dictation")
         // Discoverability for the global hotkey, and a way to dictate without it
         // (another app may already own the key combination).
-        let dictateItem = NSMenuItem(title: "Dictate to Clipboard", action: #selector(toggleDictation), keyEquivalent: "d")
+        let dictateItem = NSMenuItem(title: "Start Dictation", action: #selector(toggleDictation), keyEquivalent: "d")
         dictateItem.keyEquivalentModifierMask = [.control, .option, .command]
-        appMenu.addItem(dictateItem)
+        dictationMenu.addItem(dictateItem)
         // Off by default: it needs an Input Monitoring grant, and the app should
         // not ask for one nobody requested.
         let fnItem = NSMenuItem(title: "Double-tap Fn to Dictate", action: #selector(toggleDoubleTapFn), keyEquivalent: "")
         fnItem.state = GlobalDictation.doubleTapFnEnabled ? .on : .off
-        appMenu.addItem(fnItem)
+        dictationMenu.addItem(fnItem)
+        dictationMenu.addItem(NSMenuItem.separator())
+        let insertItem = NSMenuItem(title: "Insert into Active App", action: #selector(toggleInsertIntoApp), keyEquivalent: "")
+        insertItem.state = GlobalDictation.typeIntoAppEnabled ? .on : .off
+        dictationMenu.addItem(insertItem)
+        let clipboardItem = NSMenuItem(title: "Copy to Clipboard", action: #selector(toggleCopyClipboard), keyEquivalent: "")
+        clipboardItem.state = GlobalDictation.copyToClipboardEnabled ? .on : .off
+        dictationMenu.addItem(clipboardItem)
+        let polishItem = NSMenuItem(title: "Polish Transcript (Local AI)", action: #selector(togglePolish), keyEquivalent: "")
+        polishItem.state = GlobalDictation.polishEnabled ? .on : .off
+        dictationMenu.addItem(polishItem)
+        dictationMenuItem.submenu = dictationMenu
+        appMenu.addItem(dictationMenuItem)
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(NSMenuItem(title: "Quit Walnut", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appMenuItem.submenu = appMenu
