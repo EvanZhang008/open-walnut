@@ -10173,8 +10173,17 @@ body.walnut-dragging {
    background (red attention, done, hover) is deliberately untouched — the old
    3px left bar crowded the gutter where the unread dot / rail already live. */
 .todo-pinned-card-session-open {
-  box-shadow: inset 0 0 0 1.5px var(--accent);
   padding-right: 22px; /* keep the title clear of the chevron */
+  /* One-shot press-and-settle on open (user-picked V1): a slight scale dip via
+     the standalone `scale` property so it can never clobber dnd-kit's inline
+     translate transform. Plays once when the class lands, then rests. */
+  animation: session-open-press 0.34s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+@keyframes session-open-press {
+  0%   { scale: 1; }
+  35%  { scale: 0.985; }
+  100% { scale: 1; }
 }
 
 .todo-pinned-card-session-open::after {
@@ -10189,6 +10198,18 @@ body.walnut-dragging {
   border-radius: 0.5px;
   transform: translate(0, -50%) rotate(45deg);
   pointer-events: none;
+  /* chevron slides in once, then sits still */
+  animation: session-open-chev 0.4s cubic-bezier(0.2, 0.8, 0.3, 1) 0.1s backwards;
+}
+
+@keyframes session-open-chev {
+  from { opacity: 0; transform: translate(-6px, -50%) rotate(45deg); }
+  to   { opacity: 1; transform: translate(0, -50%) rotate(45deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .todo-pinned-card-session-open,
+  .todo-pinned-card-session-open::after { animation: none; }
 }
 
 /* The right edge belongs to the hover actions (▶ / kebab) — the chevron yields. */
