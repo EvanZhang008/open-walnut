@@ -123,6 +123,58 @@ function endOfParen(css: string, from: number): number {
   return -1;
 }
 
+/**
+ * Length of the leading run of whitespace and comments in a prelude, or -1 when a
+ * comment never terminates.
+ *
+ * A prelude does not have to start with its selector: a model annotating its CSS
+ * puts a comment line above the rule it explains. Folding that comment into the
+ * selector is what killed animations — the prefixed result reads as a QUALIFIED
+ * rule whose selector is `[data-rblk="x"] <comment> @keyframes spin`, which is
+ * invalid, so the browser dropped the entire @keyframes; and because the comment
+ * masked the leading `@`, the keyframes-rename pass never fired either, leaving
+ * every `animation: spin` pointing at a name that no longer existed. Comments are
+ * whitespace to a CSS tokenizer, so they are skippable here too: they ride through
+ * verbatim in place, and the rule-vs-at-rule decision is made on the first token
+ * that is neither a comment nor whitespace.
+ */
+function leadingTrivia(prelude: string): number {
+  let i = 0;
+  while (i < prelude.length) {
+    const ch = prelude[i];
+    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f') { i++; continue; }
+    if (ch === '/' && prelude[i + 1] === '*') {
+      const close = prelude.indexOf('*/', i + 2);
+      if (close < 0) return -1;
+      i = close + 2;
+      continue;
+    }
+    break;
+  }
+  return i;
+}
+
+/**
+ * `prelude` with comments removed, for matching only (never for output).
+ *
+ * An unterminated comment eats the rest, which is harmless here: the caller only
+ * uses the result to read an at-rule's name, and a nameless match is dropped.
+ */
+function stripComments(prelude: string): string {
+  let out = '';
+  let i = 0;
+  while (i < prelude.length) {
+    if (prelude[i] === '/' && prelude[i + 1] === '*') {
+      const close = prelude.indexOf('*/', i + 2);
+      if (close < 0) break;
+      i = close + 2;
+      continue;
+    }
+    out += prelude[i++];
+  }
+  return out;
+}
+
 /** Index of the quote closing the string opened at `from`, or -1. */
 function endOfString(css: string, from: number): number {
   const quote = css[from];
@@ -178,17 +230,26 @@ function scopeRules(css: string, scopeSel: string, nesting: number, ctx: ScopeCt
   while (i < css.length) {
     const tok = readPrelude(css, i);
     if (!tok) return null;
-    const prelude = css.slice(i, tok.at);
-    const at = /^\s*@([\w-]+)/.exec(prelude)?.[1].toLowerCase();
+    const raw = css.slice(i, tok.at);
+    // Leading comments/whitespace are emitted VERBATIM and then ignored, so a
+    // comment can neither become part of a prefixed selector nor mask a leading `@`.
+    const lead = leadingTrivia(raw);
+    if (lead < 0) return null; // unterminated comment — drop, same fail-safe as elsewhere
+    // Only a COMMENT is worth re-emitting; whitespace-only trivia was always
+    // trimmed away, and echoing it would just blank-line every rule apart.
+    const trivia = raw.slice(0, lead).includes('/*') ? raw.slice(0, lead) : '';
+    const prelude = raw.slice(lead);
+    const at = /^@([\w-]+)/.exec(prelude)?.[1].toLowerCase();
 
     if (tok.term === 'eof') {
-      // Trailing junk with no `{` — a truncated rule mid-stream, or garbage.
-      return prelude.trim() === '' ? out : null;
+      // Trailing junk with no `{` — a truncated rule mid-stream, or garbage. A
+      // trailing COMMENT is not junk, so it survives with nothing after it.
+      return prelude.trim() === '' ? out + trivia : null;
     }
     if (tok.term === ';') {
       // `@import` must never survive: it pulls a whole stylesheet in, unscoped,
       // and it is a network fetch we did not ask for.
-      if (at && !DROP_AT.has(at)) out += `${prelude.trim()};\n`;
+      if (at && !DROP_AT.has(at)) out += `${trivia}${prelude.trim()};\n`;
       i = tok.at + 1;
       continue;
     }
@@ -198,6 +259,7 @@ function scopeRules(css: string, scopeSel: string, nesting: number, ctx: ScopeCt
     const body = css.slice(tok.at + 1, close);
     i = close + 1;
     if (at && DROP_AT.has(at)) continue;
+    out += trivia;
     if (at?.endsWith('keyframes')) {
       // The BODY is safe verbatim (`from` / `50%` are not selectors, and
       // prefixing them would break the animation) but the NAME is a document-wide
@@ -205,7 +267,10 @@ function scopeRules(css: string, scopeSel: string, nesting: number, ctx: ScopeCt
       // can hijack an animation the app itself defines. So the name is suffixed
       // with the scope id and every `animation`/`animation-name` reference to it
       // is rewritten to match (rewriteKeyframeRefs, after this pass).
-      const named = KEYFRAMES_RE.exec(prelude);
+      // A TRAILING comment (`@keyframes spin /* the loop */ {`) is the mirror of
+      // the leading one handled above, and it fails KEYFRAMES_RE just the same —
+      // which silently DROPS the animation. Strip comments before matching.
+      const named = KEYFRAMES_RE.exec(stripComments(prelude));
       if (!named) continue; // unparseable name (or a quoted one) — drop, don't guess
       ctx.keyframes.add(named[2]);
       out += `@${named[1]} ${named[2]}-${ctx.scopeId} {${body}}\n`;

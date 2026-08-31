@@ -20,7 +20,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
-import { scopeStyleHtml } from '@/utils/rich-blocks';
+import { collapseRawtextBlankLines, scopeStyleHtml } from '@/utils/rich-blocks';
 
 const STEPPER = [
   '<style>',
@@ -72,5 +72,74 @@ describe('model-written HTML through renderMarkdownWithRefs', () => {
     // the CSS unscoped. The rewrite must not depend on that closer existing.
     const scoped = scopeStyleHtml('<style>body { background: #f00 }', 'blk1');
     expect(scoped).toContain('[data-rblk="blk1"] { background: #f00 }');
+  });
+});
+
+/**
+ * A blank line inside `<style>` used to destroy the CSS after it, and a comment
+ * above an at-rule used to kill the at-rule. Both are what a model actually
+ * writes: a readability gap between sections, a numbered comment heading over the
+ * animation. Both were silent — the widget rendered, unstyled and unanimated.
+ *
+ * This is the only tier where the REAL renderer runs, so it is the only honest
+ * place to assert the whole pipeline (collapse → marked → scope) end to end. The
+ * DOM-level proof that the animation actually plays lives in the Playwright tier.
+ */
+describe('an animated widget the way a model writes it', () => {
+  const ANIM_DEMO = [
+    '<div class="anim-demo">',
+    '<style>',
+    '.anim-demo { border: 1px solid #ccc }',
+    '.anim-demo .row { display: flex }',
+    '',
+    '/* 1. loop */',
+    '@keyframes ad-flow { from { background-position: 0 0 } to { background-position: 40px 0 } }',
+    '.anim-demo .pipe { animation: ad-flow 1s linear infinite }',
+    '</style>',
+    '',
+    '<div class="row"><span class="pipe">·</span></div>',
+    '</div>',
+  ].join('\n');
+
+  /** Exactly what RichChunkView does to one chunk. */
+  function renderChunk(text: string, scope = 'blk1'): string {
+    return scopeStyleHtml(
+      renderMarkdownWithRefs(collapseRawtextBlankLines(text), undefined, undefined, { allowStyle: true }),
+      scope,
+    );
+  }
+
+  it('keeps all four CSS rules, scoped, past the blank line', () => {
+    const css = /<style>([\s\S]*?)<\/style>/.exec(renderChunk(ANIM_DEMO))![1];
+    expect(css).toContain('[data-rblk="blk1"] .anim-demo { border: 1px solid #ccc }');
+    expect(css).toContain('[data-rblk="blk1"] .anim-demo .row { display: flex }');
+    expect(css).toContain('@keyframes ad-flow-blk1 {');
+    expect(css).toContain('[data-rblk="blk1"] .anim-demo .pipe { animation: ad-flow-blk1 1s linear infinite }');
+    // Nothing from the second half leaked out as markdown-parsed markup.
+    expect(css).not.toContain('<p>');
+    expect(css).not.toContain('<br>');
+  });
+
+  it('renames the keyframes consistently in the definition AND the reference', () => {
+    const css = /<style>([\s\S]*?)<\/style>/.exec(renderChunk(ANIM_DEMO))![1];
+    const defined = /@keyframes\s+([\w-]+)/.exec(css)![1];
+    const used = /animation:\s*([\w-]+)/.exec(css)![1];
+    expect(used).toBe(defined);
+    expect(defined).toBe('ad-flow-blk1'); // scoped, so two replies cannot collide
+  });
+
+  it('leaves the markup it styles intact', () => {
+    const html = renderChunk(ANIM_DEMO);
+    expect(html).toContain('<div class="anim-demo">');
+    expect(html).toContain('<span class="pipe">');
+  });
+
+  it('does not rewrite a fenced CSS sample that shows the same shape', () => {
+    // A doc TEACHING this CSS keeps its blank lines and renders as code, not style.
+    const doc = ['Like this:', '', '```html', ...ANIM_DEMO.split('\n'), '```'].join('\n');
+    const html = renderMarkdownWithRefs(collapseRawtextBlankLines(doc), undefined, undefined, { allowStyle: true });
+    expect(html).toContain('<pre>');
+    expect(html).toContain('&lt;style&gt;');
+    expect(html).toMatch(/display: flex \}\n\n/); // the sample's blank line survives
   });
 });

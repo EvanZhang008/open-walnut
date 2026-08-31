@@ -17,7 +17,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   splitRichChunks, scopeStyleHtml, hasRichContent, extractAppHtml, isAppComplete,
-  richScopeId, richChunkKey, richChunkKeys,
+  collapseRawtextBlankLines, richScopeId, richChunkKey, richChunkKeys,
   type RichChunk,
 } from '@/utils/rich-blocks';
 
@@ -539,6 +539,129 @@ describe('richScopeId / richChunkKey', () => {
   });
 });
 
+// ── Rawtext blank lines ──────────────────────────────────────────────────────
+
+/**
+ * The bug: CommonMark ends a raw-HTML block at the FIRST blank line, so a blank
+ * line a model writes between its layout rules and its animation section made
+ * marked markdown-parse the rest of the stylesheet — the remaining rules came back
+ * wrapped in `<p>`/`<br>` INSIDE the `<style>`, which destroys the CSS. Blank lines
+ * are pure whitespace in CSS and JS, so they are collapsed before rendering.
+ *
+ * What must NOT be collapsed is the other half of the contract: a `<style>` shown
+ * inside a fence is a doc SAMPLE, and a blank line in a `<textarea>` is content.
+ */
+describe('collapseRawtextBlankLines', () => {
+  const STYLE_WITH_GAP = [
+    '<div class="anim-demo">',
+    '<style>',
+    '.anim-demo { border: 1px solid #ccc }',
+    '.anim-demo .row { display: flex }',
+    '',
+    '/* 1. loop */',
+    '@keyframes ad-flow { from { left: 0 } to { left: 40px } }',
+    '.anim-demo .pipe { animation: ad-flow 1s linear infinite }',
+    '</style>',
+    '',
+    '<div class="row">x</div>',
+    '</div>',
+  ].join('\n');
+
+  it('leaves text with no style/script alone, byte for byte', () => {
+    expect(collapseRawtextBlankLines(DETAILS)).toBe(DETAILS);
+    expect(collapseRawtextBlankLines('a\n\nb')).toBe('a\n\nb');
+  });
+
+  it('deletes the blank line that would end the raw-HTML block', () => {
+    const out = collapseRawtextBlankLines(STYLE_WITH_GAP);
+    // Every rule is still there, and nothing inside the block is separated by a
+    // blank line any more.
+    const css = /<style>([\s\S]*?)<\/style>/.exec(out)![1];
+    expect(css).toContain('.anim-demo { border: 1px solid #ccc }');
+    expect(css).toContain('.anim-demo .row { display: flex }');
+    expect(css).toContain('/* 1. loop */');
+    expect(css).toContain('@keyframes ad-flow');
+    expect(css).toContain('animation: ad-flow 1s linear infinite');
+    expect(css).not.toMatch(/\n[ \t]*\n/);
+    // The blank line AFTER the block is prose structure, not CSS — untouched.
+    expect(out).toContain('</style>\n\n<div class="row">');
+  });
+
+  it('collapses a run of several blank lines, keeping the next line indented', () => {
+    expect(collapseRawtextBlankLines('<style>\n.a{}\n\n   \n\t\n  .b{}\n</style>'))
+      .toBe('<style>\n.a{}\n  .b{}\n</style>');
+  });
+
+  it('handles CRLF, keeping the line endings it was given', () => {
+    expect(collapseRawtextBlankLines('<style>\r\n.a{}\r\n\r\n.b{}\r\n</style>'))
+      .toBe('<style>\r\n.a{}\r\n.b{}\r\n</style>');
+  });
+
+  it('collapses an UNCLOSED style block, which the browser will still run', () => {
+    // The closer may simply not have streamed in yet; on insert the browser closes
+    // the element and runs the CSS, so this body needs the same treatment.
+    expect(collapseRawtextBlankLines('<style media="print">\n.a{}\n\n.b{}'))
+      .toBe('<style media="print">\n.a{}\n.b{}');
+  });
+
+  it('is not fooled by a closer-looking string inside the CSS', () => {
+    expect(collapseRawtextBlankLines('<style>\n/* </div> */\n\n.a{}\n</style>\n\n<p>after</p>'))
+      .toBe('<style>\n/* </div> */\n.a{}\n</style>\n\n<p>after</p>');
+  });
+
+  it('collapses a <script> body too', () => {
+    expect(collapseRawtextBlankLines('<script>\nvar a = 1\n\nvar b = 2\n</script>'))
+      .toBe('<script>\nvar a = 1\nvar b = 2\n</script>');
+  });
+
+  it('leaves <textarea> content alone — a blank line there is CONTENT', () => {
+    const t = '<textarea>\nline one\n\nline two\n</textarea>';
+    expect(collapseRawtextBlankLines(t)).toBe(t);
+    // …and a textarea before a style block must not stop the style from collapsing.
+    expect(collapseRawtextBlankLines(`${t}\n<style>\n.a{}\n\n.b{}\n</style>`))
+      .toBe(`${t}\n<style>\n.a{}\n.b{}\n</style>`);
+  });
+
+  it('leaves a <style> shown inside a fence alone — that is a doc SAMPLE', () => {
+    const doc = '```html\n<style>\n.a{}\n\n.b{}\n</style>\n```';
+    expect(collapseRawtextBlankLines(doc)).toBe(doc);
+    const indented = 'Example:\n\n    <style>\n    .a{}\n\n    .b{}\n    </style>\n';
+    expect(collapseRawtextBlankLines(indented)).toBe(indented);
+  });
+
+  it('leaves a <style> inside an HTML comment alone', () => {
+    const c = '<!-- <style>\n.a{}\n\n.b{}\n</style> -->\n<p>x</p>';
+    expect(collapseRawtextBlankLines(c)).toBe(c);
+  });
+
+  it('collapses every block when there are several', () => {
+    expect(collapseRawtextBlankLines('<style>\n.a{}\n\n.b{}\n</style>\n\n<p>mid</p>\n\n<style>\n.c{}\n\n.d{}\n</style>'))
+      .toBe('<style>\n.a{}\n.b{}\n</style>\n\n<p>mid</p>\n\n<style>\n.c{}\n.d{}\n</style>');
+  });
+
+  it('is idempotent, and stable across a growing prefix', () => {
+    // Idempotence + prefix stability together are what rule out flicker: as the
+    // block streams in, what a frame already showed is what the next frame shows.
+    for (const shape of [STYLE_WITH_GAP, STEPPER, '<style>\n.a{}\n\n\n.b{}\n</style>\n\n<script>\nx\n\ny\n</script>']) {
+      const full = collapseRawtextBlankLines(shape);
+      expect(collapseRawtextBlankLines(full)).toBe(full);
+      for (let n = 0; n < shape.length; n++) {
+        if (n > 0 && shape[n - 1] !== '\n') continue; // only complete lines
+        const out = collapseRawtextBlankLines(shape.slice(0, n));
+        expect(collapseRawtextBlankLines(out)).toBe(out); // idempotent at every prefix
+        expect(full.startsWith(out)).toBe(true);          // and never rewritten later
+      }
+    }
+  });
+
+  it('does not touch the chunker, so the streaming boundaries are unchanged', () => {
+    // The transform is a RENDER-time step. If it ever moved into splitRichChunks,
+    // the prefix invariant's "text is preserved exactly" clause would break.
+    const { stable, tail } = splitRichChunks(STYLE_WITH_GAP);
+    expect(stable.map((c) => c.text).join('') + (tail?.text ?? '')).toBe(STYLE_WITH_GAP);
+  });
+});
+
 // ── CSS scoping ──────────────────────────────────────────────────────────────
 
 const SCOPE = '[data-rblk="s1"]';
@@ -653,5 +776,74 @@ describe('scopeStyleHtml', () => {
 
   it('refuses to let a scope id break out of the attribute selector', () => {
     expect(scopeStyleHtml('<style>.a{color:red}</style>', 'x"] , * ')).toContain('[data-rblk="x"]');
+  });
+
+  // ── Comments in a rule prelude ───────────────────────────────────────────────
+  //
+  // The bug: the prelude was taken verbatim, so a comment ABOVE a rule was folded
+  // into the selector. Before an at-rule that was fatal — `[scope] <comment>
+  // @keyframes k` is a qualified rule with an invalid selector, so the browser
+  // dropped the whole animation, and the masked `@` also meant the keyframes
+  // rename never ran, leaving every `animation: k` pointing at a dead name.
+  // Comments are whitespace to the CSS tokenizer, so they must ride through in
+  // place and never decide anything.
+
+  it('keeps a comment out of the selector it precedes', () => {
+    expect(scopedCss('/* hi */\n.a { color: red }')).toBe(`/* hi */ ${SCOPE} .a { color: red }`);
+    expect(scopedCss('.a { color: red }\n/* mid */\n.b { color: blue }'))
+      .toBe(`${SCOPE} .a { color: red } /* mid */ ${SCOPE} .b { color: blue }`);
+  });
+
+  it('still sees the @ behind a comment, so the at-rule survives and is renamed', () => {
+    // THE animation-killer. Both halves matter: the @keyframes must stay an
+    // at-rule (never gain a selector prefix) AND its name must still be scoped.
+    const out = scopedCss('/* 1. loop */\n@keyframes k { from { opacity: 0 } to { opacity: 1 } }\n.a { animation: k 1s linear infinite }');
+    expect(out).toContain('/* 1. loop */ @keyframes k-s1 {');
+    expect(out).not.toContain(`${SCOPE} /*`);
+    expect(out).not.toMatch(/\S\s+@keyframes k \{/); // never a prefixed @keyframes
+    expect(out).toContain(`${SCOPE} .a { animation: k-s1 1s linear infinite }`);
+  });
+
+  it('reads the keyframes name past a TRAILING comment instead of dropping it', () => {
+    // The mirror of the case above, and it fails the same name regex — except the
+    // failure mode there is a SILENT drop: the animation simply never exists.
+    const out = scopedCss('@keyframes k /* the loop */ { to { opacity: 1 } }\n.a { animation-name: k }');
+    expect(out).toContain('@keyframes k-s1 {');
+    expect(out).toContain(`${SCOPE} .a { animation-name: k-s1 }`);
+  });
+
+  it('sees @media, @import and @font-face behind a comment too', () => {
+    expect(scopedCss('/* c */\n@media (max-width: 500px) { .a { color: red } }'))
+      .toBe(`/* c */ @media (max-width: 500px) { ${SCOPE} .a { color: red } }`);
+    // A dropped at-rule takes its own comment with it — the comment described it.
+    expect(scopedCss('/* fonts */\n@import url("evil.css");\n.a { color: red }'))
+      .toBe(`${SCOPE} .a { color: red }`);
+    expect(scopedCss('/* fonts */\n@font-face { font-family: X }')).toBe('');
+  });
+
+  it('leaves comments inside a declaration block exactly where they were', () => {
+    expect(scopedCss('.a { color: red; /* c */ background: blue }'))
+      .toBe(`${SCOPE} .a { color: red; /* c */ background: blue }`);
+    expect(scopedCss('@keyframes k { /* c */ to { opacity: 1 } }'))
+      .toBe('@keyframes k-s1 { /* c */ to { opacity: 1 } }');
+  });
+
+  it('is not confused by braces, at-rules or quotes INSIDE a comment', () => {
+    expect(scopedCss('/* } @media { " */\n.a { color: red }'))
+      .toBe(`/* } @media { " */ ${SCOPE} .a { color: red }`);
+    // Several comments in a row, and one after the last rule.
+    expect(scopedCss('/* a */ /* b */\n.a { color: red }\n/* end */'))
+      .toBe(`/* a */ /* b */ ${SCOPE} .a { color: red } /* end */`);
+  });
+
+  it('treats a comment opener inside a STRING as ordinary selector text', () => {
+    expect(scopedCss('[x="/*"] { color: red }')).toBe(`${SCOPE} [x="/*"] { color: red }`);
+    expect(scopedCss('.a::after { content: "/* not a comment */" }'))
+      .toBe(`${SCOPE} .a::after { content: "/* not a comment */" }`);
+  });
+
+  it('drops the block on an unterminated comment rather than guessing', () => {
+    expect(scopedCss('/* never closed\n.a { color: red }')).toBe('');
+    expect(scopedCss('.a { color: red }\n/* never closed')).toBe('');
   });
 });

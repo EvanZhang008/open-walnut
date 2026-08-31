@@ -25,6 +25,10 @@
  *   6. angle brackets that are prose (a `<https://…>` autolink) do not count as an
  *      open element — the old depth counter never closed one, which silently
  *      disabled freezing for everything after it in the reply.
+ *   7. a model's own formatting habits inside `<style>` — a blank line between
+ *      sections, a comment line above `@keyframes` — do not silently delete the
+ *      CSS. Only the real DOM can prove an animation lives, so this one reads
+ *      computed styles and the CSSOM rather than the rendered string.
  *
  * Harness is the one from single-timeline-fault-injection.spec.ts: the app's own
  * /ws socket is captured in an init script and events are dispatched into it, so
@@ -441,5 +445,87 @@ test.describe('Rich HTML streaming', () => {
     await expect(page.locator('.session-history .wz-step-1')).toBeHidden();
     expect(await page.evaluate(() => (document.querySelector('.wz') as HTMLElement | null)?.dataset.pwMarker))
       .toBe('kept');
+  });
+
+  /**
+   * The two ways a model's own formatting habits used to silently kill its CSS.
+   * Both were invisible: the widget still rendered, just unstyled and frozen.
+   *
+   *  · a BLANK LINE inside `<style>` (models put one between sections). CommonMark
+   *    ends a raw-HTML block at the first blank line, so marked stopped passing the
+   *    text through and markdown-parsed the rest of the stylesheet into `<p>`/`<br>`
+   *    INSIDE the element's rawtext — every rule after the gap was lost.
+   *    collapseRawtextBlankLines strips those blank lines before rendering.
+   *  · a COMMENT line above an at-rule, the way a model labels its animation
+   *    section. The comment was folded into the rule prelude, which made the
+   *    @keyframes a QUALIFIED rule with an invalid selector — the browser dropped
+   *    it — and masked the leading `@`, so the keyframes-rename pass never ran
+   *    either and every `animation:` reference pointed at a name nothing defined.
+   *
+   * Only the real DOM can prove the animation LIVES, hence the three assertions:
+   * a post-gap layout rule actually computes (`display: flex`), the computed
+   * `animation-name` is the SCOPED name, and a CSSKeyframesRule by that exact name
+   * is in the stylesheet. The last one is the honest one: `animation-name` computes
+   * to whatever identifier was declared whether or not any keyframes exist.
+   */
+  test('7. a blank line and a comment before @keyframes do not kill the CSS', async ({ page }) => {
+    await mockFrozenHistory(page);
+    await mockSessionDetail(page);
+    await openSession(page);
+
+    const ANIM = [
+      '<div class="anim-demo">',
+      '<style>',
+      '.anim-demo { border: 1px solid #ccc; padding: 4px; }',
+      '.anim-demo .pipe { width: 40px; height: 12px; background-size: 40px 12px; }',
+      '', // ← the raw-HTML-block terminator
+      '/* 1. the flow loop */', // ← the at-rule masker
+      '@keyframes ad-flow { from { background-position: 0 0; } to { background-position: 40px 0; } }',
+      '.anim-demo .row { display: flex; gap: 6px; }',
+      '.anim-demo .pipe { animation: ad-flow 1s linear infinite; }',
+      '</style>',
+      '<div class="row"><span class="pipe"></span><span class="tag">flowing</span></div>',
+      '</div>',
+    ].join('\n');
+
+    await streamDeltas(page, `${ANIM}\n\nThat is the pipeline animation.`);
+
+    await expect(page.locator('.session-history .anim-demo .row')).toBeVisible();
+    const scopeId = await scopeIdOf(page, '.anim-demo');
+    expect(scopeId).toBeTruthy();
+
+    // (a) a rule that lives AFTER the blank line actually computes.
+    await expect(page.locator('.session-history .anim-demo .row')).toHaveCSS('display', 'flex');
+
+    // (b) the animation reference survived, renamed under this message's scope.
+    const pipe = page.locator('.session-history .anim-demo .pipe');
+    await expect.poll(
+      () => pipe.evaluate((el) => getComputedStyle(el).animationName),
+      { timeout: 5000 },
+    ).toBe(`ad-flow-${scopeId}`);
+
+    // (c) …and the @keyframes it points at really parsed. Without this the name
+    // above could be a dangling identifier and the element would sit still.
+    const keyframeNames = await page.evaluate(() => {
+      const names: string[] = [];
+      for (const el of document.querySelectorAll('.session-history .rich-blocks style')) {
+        const sheet = (el as HTMLStyleElement).sheet;
+        if (!sheet) continue;
+        for (const rule of Array.from(sheet.cssRules)) {
+          if (rule instanceof CSSKeyframesRule) names.push(rule.name);
+        }
+      }
+      return names;
+    });
+    expect(keyframeNames, 'the @keyframes was dropped — the animation cannot run')
+      .toContain(`ad-flow-${scopeId}`);
+
+    // The comment rode through in place rather than becoming part of a selector.
+    const css = await page.locator('.session-history .rich-blocks style').first().textContent();
+    expect(css ?? '').toContain('/* 1. the flow loop */');
+    expect(css ?? '').not.toMatch(/\[data-rblk="[^"]+"\]\s*\/\*/);
+
+    mkdirSync(SHOT_DIR, { recursive: true });
+    await page.screenshot({ path: `${SHOT_DIR}/anim-demo-styled.png` });
   });
 });

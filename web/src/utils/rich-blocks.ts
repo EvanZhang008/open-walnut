@@ -64,6 +64,12 @@ const VOID_TAGS = new Set([
 const RAWTEXT_TAGS = new Set(['style', 'script', 'textarea']);
 
 /**
+ * Rawtext elements whose body is a language where a blank line is only whitespace.
+ * `<textarea>` is deliberately absent: a blank line there is CONTENT the user sees.
+ */
+const COLLAPSIBLE_RAWTEXT = new Set(['style', 'script']);
+
+/**
  * Walnut's own inline pill syntax, NOT model HTML. renderMarkdownWithRefs
  * rewrites these into `<a>` before marked ever runs, so they never reach the
  * rendered output as tags. Counting them would be actively wrong: the
@@ -168,6 +174,18 @@ function tagEnd(text: string, start: number): number {
     if (ch === '>') return i + 1;
   }
   return -1;
+}
+
+/**
+ * The `</name>` that ends the rawtext body starting at `from`, or null when the
+ * closer has not arrived. Case-insensitive and tolerant of `</style >`, and it
+ * cannot be fooled by markup-looking text in the body — inside rawtext the ONLY
+ * thing that ends the element is its own closer, so a `</div>` in CSS is a string.
+ */
+function rawtextClose(text: string, from: number, name: string): { at: number; end: number } | null {
+  const m = new RegExp(`</${name}\\s*>`, 'i').exec(text.slice(from));
+  if (!m) return null;
+  return { at: from + m.index, end: from + m.index + m[0].length };
 }
 
 // ── Code regions (a tag inside code is a SAMPLE, not markup) ─────────────────
@@ -369,16 +387,92 @@ function scanHtmlState(
     stack.push(name);
 
     if (RAWTEXT_TAGS.has(name)) {
-      const close = new RegExp(`</${name}\\s*>`, 'i').exec(text.slice(end));
+      const close = rawtextClose(text, end, name);
       if (!close) return blockToEnd();
-      const at = end + close.index;
-      assign(at + close[0].length - 1, true);
+      assign(close.end - 1, true);
       popTo(name);
-      i = at + close[0].length;
+      i = close.end;
     }
   }
   assign(text.length, false);
   return { depth, blocked, endDepth: stack.length, truncated: false };
+}
+
+// ── Rawtext blank lines (CommonMark's raw-HTML block terminator) ─────────────
+
+/**
+ * A newline plus one or more blank (or whitespace-only) lines. The captured first
+ * newline is kept, so CRLF stays CRLF and the indentation of the next real line is
+ * preserved — the collapse must be invisible in the CSS/JS it touches.
+ */
+const BLANK_LINE_RUN_RE = /(\r?\n)(?:[ \t]*\r?\n)+/g;
+
+/**
+ * Delete blank lines INSIDE every `<style>` / `<script>` body.
+ *
+ * WHY this exists: CommonMark ends a raw-HTML block at the first blank line. A
+ * model writing readable CSS puts one between its layout rules and its animation
+ * section, and at that point marked stops passing the text through verbatim and
+ * markdown-parses the REST of the stylesheet — the remaining rules come back
+ * wrapped in `<p>`/`<br>` that land inside the element's RAWTEXT content, so the
+ * `<style>` ends up holding markup instead of CSS and every rule after the blank
+ * line is lost (measured: a four-rule block kept two). A blank line is pure
+ * whitespace in both CSS and JS, so removing it there costs nothing and keeps the
+ * HTML block whole.
+ *
+ * Three things it must get right, none of which a `<style>[\s\S]*?</style>` regex
+ * does: a `<style>` shown inside a fenced code block is a code SAMPLE and keeps
+ * its blank lines (a doc explaining CSS would otherwise be rewritten); an
+ * UNCLOSED `<style>` still collapses, because the browser closes it on insert and
+ * runs the CSS anyway; and `<textarea>` is left alone, where a blank line is
+ * content. It therefore walks tags with the same scanner the depth pass uses
+ * (comments, `<!DOCTYPE>`, quote-aware tag ends, the prose-that-looks-like-a-tag
+ * allowlist, code regions).
+ *
+ * Render-time only: never call this from the chunker. Boundary decisions have to
+ * keep seeing the text exactly as it arrived, or the prefix invariant moves.
+ */
+export function collapseRawtextBlankLines(text: string): string {
+  if (!/<(?:style|script)\b/i.test(text)) return text;
+  const skip = makeSkip(text);
+  let out = '';
+  let copied = 0; // text before this index is already in `out`
+  let i = 0;
+  while (i < text.length) {
+    const lt = text.indexOf('<', i);
+    if (lt < 0) break;
+    if (skip(lt)) { i = lt + 1; continue; }
+    if (text.startsWith('<!--', lt)) {
+      // A `<style>` written inside a comment is inert; an unterminated comment
+      // swallows everything after it, so there is nothing left to collapse.
+      const close = text.indexOf('-->', lt + 4);
+      if (close < 0) break;
+      i = close + 3;
+      continue;
+    }
+    if (text[lt + 1] === '!') {
+      const gt = text.indexOf('>', lt);
+      if (gt < 0) break;
+      i = gt + 1;
+      continue;
+    }
+    const m = TAG_NAME_RE.exec(text.slice(lt, lt + 64));
+    if (!m) { i = lt + 1; continue; }
+    const end = tagEnd(text, lt);
+    if (end < 0) break; // tag still arriving — it has no body yet
+    const name = m[2].toLowerCase();
+    i = end;
+    if (m[1] === '/' || !isMarkupTag(text.slice(lt, end), name)) continue;
+    if (!RAWTEXT_TAGS.has(name)) continue;
+    const close = rawtextClose(text, end, name);
+    const bodyEnd = close ? close.at : text.length;
+    if (COLLAPSIBLE_RAWTEXT.has(name)) {
+      out += text.slice(copied, end) + text.slice(end, bodyEnd).replace(BLANK_LINE_RUN_RE, '$1');
+      copied = bodyEnd;
+    }
+    i = close ? close.end : text.length;
+  }
+  return copied === 0 ? text : out + text.slice(copied);
 }
 
 // ── Boundaries ───────────────────────────────────────────────────────────────
