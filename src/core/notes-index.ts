@@ -436,7 +436,7 @@ export function divergentCopyGroups(): CollisionEntry[][] {
     .all() as Array<{ id: string; path: string; title: string; body: string; created: string | null }>
   const groups = new Map<string, CollisionEntry[]>()
   for (const r of rows) {
-    const key = `${r.title.trim().toLowerCase()} ${r.body}`
+    const key = `${r.title.trim().toLowerCase()}\u0000${r.body}`
     const g = groups.get(key) ?? []
     g.push({ id: r.id, path: r.path, created: r.created })
     groups.set(key, g)

@@ -265,7 +265,7 @@ export function conversationKey(system: string, messages: MessageParam[]): strin
   }
   // djb2 — cheap, stable, no crypto need (key is an in-process Map key only).
   let hash = 5381;
-  const s = `${system} ${firstText}`;
+  const s = `${system}\u0000${firstText}`;
   for (let i = 0; i < s.length; i++) hash = ((hash << 5) + hash + s.charCodeAt(i)) | 0;
   return `${(hash >>> 0).toString(36)}_${firstText.length}`;
 }

@@ -232,7 +232,7 @@ export function createWriter(db: SearchDb): Writer {
   type PreparedPair = { first: ReturnType<SearchDb['prepare']>; after: ReturnType<SearchDb['prepare']> };
   const missingVecStmts = new Map<string, PreparedPair>();
   function missingStmtsFor(excludeKinds: string[]): PreparedPair {
-    const key = excludeKinds.join(' ');
+    const key = excludeKinds.join('\u0000');
     let pair = missingVecStmts.get(key);
     if (!pair) {
       const excl = excludeKinds.length
