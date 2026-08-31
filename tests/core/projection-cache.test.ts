@@ -16,8 +16,12 @@
  *      a long bridge outage.
  *   4. pushProjectionToCloud: sends over the daemon mobile-event lane
  *      UNCONDITIONALLY (no feed-consumer gate — the cloud cache must stay
- *      warm with no phone attached) and skips payloads over the 1MB frame cap
+ *      warm with no phone attached) and skips payloads over the frame cap
  *      (an oversized bridge frame killed every in-flight RPC on 2026-08-09).
+ *      The cap is PER KIND: the transcript lane keeps the tight 1MB guard, the
+ *      list lane gets PROJECTION_PUSH_MAX_BYTES. Sizing the list lane off the
+ *      transcript guard is what froze the cloud replica's task list — the task
+ *      projection crossed 1MB at 3,079 rows and every push after was dropped.
  *
  * Real files, real fs — constants redirected to a temp dir; only the daemon
  * connection (network) is mocked.
@@ -205,9 +209,30 @@ describe('pushProjectionToCloud', () => {
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
-  it('skips payloads over the 1MB frame cap', async () => {
+  it('skips a transcript payload over the 1MB transcript-lane cap', async () => {
     fakeConn = { hasCapability: () => true, send: sendSpy };
     pushProjectionToCloud('transcript-upsert', { sid: 's1', data: 'x'.repeat(1_100_000) });
+    await flush();
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it('SENDS a list projection past 1MB — the size that froze the replica task list', async () => {
+    // Regression: the real task projection is 1,152,724 bytes at 3,079 rows.
+    // Under the old shared 1MB cap this push was skipped on every export, so
+    // the cloud replica served its last-pushed copy indefinitely.
+    fakeConn = { hasCapability: () => true, send: sendSpy };
+    pushProjectionToCloud('projection-upsert', { which: 'tasks', data: 'x'.repeat(1_152_724) });
+    await flush();
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(sendSpy.mock.calls[0]![0]).toBe('mobile-event');
+  });
+
+  it('still skips a list projection past the list-lane cap', async () => {
+    const { PROJECTION_PUSH_MAX_BYTES } = await import('../../src/core/projection-cache.js');
+    fakeConn = { hasCapability: () => true, send: sendSpy };
+    pushProjectionToCloud('projection-upsert', {
+      which: 'tasks', data: 'x'.repeat(PROJECTION_PUSH_MAX_BYTES + 1_000),
+    });
     await flush();
     expect(sendSpy).not.toHaveBeenCalled();
   });

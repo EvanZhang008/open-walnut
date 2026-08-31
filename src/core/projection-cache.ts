@@ -41,8 +41,39 @@ const SAFE_ID_RE = /^[A-Za-z0-9_-]+$/;
 /** Bridge frame budget. The ws maxPayload is 32MB, but one oversized frame
  *  (1009 close) kills every in-flight RPC on the shared bridge socket
  *  (2026-08-09 incident) — cap far below it. Transcripts are pre-clipped
- *  (TRANSCRIPT_TAIL rows × TEXT_MAX chars) so this should never fire. */
-const PUSH_MAX_BYTES = 1_048_576; // 1MB
+ *  (TRANSCRIPT_TAIL rows × TEXT_MAX chars) so this should never fire.
+ *
+ *  Exported because a LIST projection can genuinely reach it: a payload past
+ *  this cap is skipped outright below, so the cloud replica keeps serving its
+ *  previous copy forever (silent staleness, not an error). The session exporter
+ *  therefore sizes its own row budget against this number instead of guessing —
+ *  see PROJECTION_BYTE_BUDGET in session-projection.ts.
+ *
+ *  This is the budget for the TRANSCRIPT lane, whose content is user-shaped
+ *  (message text) and therefore the thing a tight guard is actually for. */
+export const PUSH_MAX_BYTES = 1_048_576; // 1MB
+
+/**
+ * Frame budget for the two LIST projections ('projection-upsert'). Deliberately
+ * larger than PUSH_MAX_BYTES, because sizing them off the transcript guard was
+ * itself a bug: the task projection reached 1,152,724 bytes at 3,079 rows and
+ * every export since has been SKIPPED, freezing the cloud replica's task list
+ * on its last-pushed copy. Trimming rows to fit 1MB was the wrong trade — the
+ * same projection is what GET /api/v1/tasks serves to the LOCAL phone, and that
+ * route filters (q/project/tag/status) over these rows with no paging, so a
+ * dropped row is a task the phone cannot list OR find.
+ *
+ * 4MB is sized against the REAL limits on the path, all verified: the cloud's
+ * WebSocketServer answers a frame past `maxPayload` with a 1009 close at 32MB
+ * (src/web/ws/handler.ts), the daemon's own send queue closes a slow client at
+ * 256MB (SEND_QUEUE_MAX_BYTES in daemon-standalone.ts), and daemon-connection
+ * keeps the ws default 100MB. So this sits 8x below the nearest kill line while
+ * carrying today's payload with 3.5x headroom. The list builders still enforce
+ * their own byte budget beneath it (80% of this) so the frame can never be the
+ * thing that discovers the ceiling — see PROJECTION_BYTE_BUDGET in
+ * task-projection.ts / session-projection.ts.
+ */
+export const PROJECTION_PUSH_MAX_BYTES = 4 * 1_048_576; // 4MB
 
 export function projectionCachePath(which: ProjectionKind): string {
   return path.join(PROJECTION_CACHE_DIR, `${which}.json`);
@@ -195,9 +226,12 @@ export function pushProjectionToCloud(
       } catch {
         return; // unserializable payload — nothing sane to send
       }
-      if (size > PUSH_MAX_BYTES) {
+      // Per-kind budget: the list lane is bounded and essential, the transcript
+      // lane carries user-shaped text. See the two constants above.
+      const cap = kind === 'projection-upsert' ? PROJECTION_PUSH_MAX_BYTES : PUSH_MAX_BYTES;
+      if (size > cap) {
         log.session.warn('projection-cache: push skipped — payload exceeds frame cap', {
-          kind, size, cap: PUSH_MAX_BYTES,
+          kind, size, cap,
         });
         return;
       }

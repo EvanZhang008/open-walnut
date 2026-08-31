@@ -116,6 +116,39 @@ describe('task-outbox: cloud side', () => {
     // Unchanged mtime → cheap skip (returns 0 without re-reading).
     expect(await outbox.importProjectionOnCloud()).toBe(0);
   });
+
+  // The delete-reconcile pass infers "the primary deleted it" from ABSENCE, so
+  // it is only sound against a complete list. These two cases are a pair: the
+  // same absent row must be deleted by a complete projection and survive a
+  // truncated one, otherwise the exporter's byte budget would silently delete
+  // live tasks on the replica instead of merely omitting them.
+  async function seedAbsentRowAndImport(truncated: boolean): Promise<{ mods: Modules; id: string }> {
+    const mods = await loadWithCloudMode(true);
+    const { outbox, tm, projection } = mods;
+    const { task: local } = await tm.addTask({ title: 'only on the replica', source: 'local' });
+    // exportedAt comfortably past the row's write → clears IMPORT_DELETE_SAFETY_MS.
+    await fsp.mkdir(path.dirname(projection.PROJECTION_FILE), { recursive: true });
+    await fsp.writeFile(projection.PROJECTION_FILE, JSON.stringify({
+      version: projection.PROJECTION_VERSION,
+      exportedAt: new Date(Date.now() + 20 * 60_000).toISOString(),
+      ...(truncated ? { truncated: true } : {}),
+      tasks: [],
+    }));
+    await outbox.importProjectionOnCloud();
+    return { mods, id: local.id };
+  }
+
+  it('a COMPLETE projection reconciles a primary-side delete (row absent → removed locally)', async () => {
+    const { mods, id } = await seedAbsentRowAndImport(false);
+    current = mods;
+    expect((await mods.tm.listTasks()).some((t) => t.id === id)).toBe(false);
+  });
+
+  it('a TRUNCATED projection must NOT delete the rows its budget dropped', async () => {
+    const { mods, id } = await seedAbsentRowAndImport(true);
+    current = mods;
+    expect((await mods.tm.listTasks()).some((t) => t.id === id)).toBe(true);
+  });
 });
 
 // ── Primary side: applyOutboxOnPrimary ──────────────────────────────────────

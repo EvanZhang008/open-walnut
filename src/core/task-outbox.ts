@@ -540,10 +540,18 @@ export async function importProjectionOnCloud(): Promise<number> {
   const toInsert: Array<Omit<Task, 'id'> & { id: string }> = [];
   const toUpdate: Array<{ id: string; patch: Partial<Task> }> = [];
 
-  // Mac-side deletes (see the header comment for the guard rationale).
+  // Mac-side deletes (see the header comment for the guard rationale). Requires
+  // a COMPLETE list: this pass reads "local row absent from the projection" as
+  // "the primary deleted it". A projection whose export budget dropped rows sets
+  // `truncated`, and then absence proves nothing — running this pass against one
+  // would delete perfectly live tasks from the replica.
   const projectionIds = new Set(projection.tasks.map((t) => t.id));
   const projectionAt = Date.parse(projection.exportedAt);
-  if (Number.isFinite(projectionAt)) {
+  if (projection.truncated) {
+    log.task.warn('task-outbox: projection is truncated — skipping delete reconcile', {
+      rows: projection.tasks.length, exportedAt: projection.exportedAt,
+    });
+  } else if (Number.isFinite(projectionAt)) {
     for (const row of local.values()) {
       if (projectionIds.has(row.id)) continue;
       if (row.status === 'done') continue; // retention window omits old done rows

@@ -1659,7 +1659,7 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
     // Sessions THIS cloud box owns (cloud.exec) never enter the Mac-authored
     // projection — the exporter is primary-only and that file must keep exactly
     // ONE writer (no content clock: two writers would let git-sync's commit-time
-    // LWW replace a whole 500-row list). So the union happens HERE, at read time,
+    // LWW replace the whole list). So the union happens HERE, at read time,
     // on the box that holds both halves. Own rows are re-tagged to the cloud host
     // alias by unionOwnedSessions: their stored host is '', which downstream
     // means "the primary box" and would route their sends to the wrong machine.

@@ -29,6 +29,7 @@ import { log } from '../logging/index.js'
 import {
   legacyProjectionFilesEnabled,
   pickFresherEnvelope,
+  PROJECTION_PUSH_MAX_BYTES,
   pushProjectionToCloud,
   readProjectionCache,
   writeProjectionCache,
@@ -41,6 +42,23 @@ export const PROJECTION_FILE = path.join(TASKS_DIR, 'projection.json')
 
 const DONE_RETENTION_DAYS = 14
 const DEBOUNCE_MS = 3_000
+/**
+ * Payload backstop, NOT the visibility rule (that is DONE_RETENTION_DAYS). This
+ * list rides ONE bridge frame, and pushProjectionToCloud does not error on an
+ * oversized payload — it SKIPS it, so the cloud replica silently freezes on its
+ * last-pushed copy. That is exactly what happened: 3,079 rows × ~374B reached
+ * 1,152,724 bytes, past the old 1MB transcript-lane cap, and every export since
+ * was dropped.
+ *
+ * 80% of the list-lane frame budget, so the builder discovers the ceiling before
+ * the wire does. At today's volume this does NOT bind (1.15MB of 3.35MB), which
+ * is deliberate: trimming rows here would trim what GET /api/v1/tasks serves the
+ * LOCAL phone too, and that route has no paging and filters (q/project/tag) over
+ * these very rows — a cut row is a task the phone can neither list nor find. The
+ * budget exists for the day the list triples, and when it engages, pinned rows
+ * are the ones guaranteed to survive.
+ */
+const PROJECTION_BYTE_BUDGET = Math.floor(PROJECTION_PUSH_MAX_BYTES * 0.8)
 
 /** Slim task shape shipped to the companion — v2 contract (category removed). */
 export interface ProjectedTask {
@@ -82,6 +100,16 @@ export interface TaskProjection {
   version: typeof PROJECTION_VERSION
   exportedAt: string
   tasks: ProjectedTask[]
+  /**
+   * Set (additive, omitted when false) when the byte budget dropped eligible
+   * rows. It exists because ABSENCE IS MEANINGFUL to one consumer: the
+   * replica's importProjectionOnCloud reads "local row not in the projection"
+   * as a primary-side delete and deletes its own copy. That inference is only
+   * valid for a COMPLETE list, so a truncated envelope must disarm it —
+   * otherwise the budget would not merely hide rows, it would DELETE them on
+   * the replica.
+   */
+  truncated?: true
   /** Custom focus-tier registry (additive) — lets the REPLICA validate tier
    *  values and bucket its tier split like the primary. Absent on projections
    *  from an older primary. */
@@ -121,7 +149,21 @@ export function projectTask(t: Task): ProjectedTask {
  * Build the projection in memory. Shared by the file export below and the
  * mobile events feed's snapshot frame (events-v1), which needs the same rows
  * without a disk round trip. Works on both boxes (the replica has a real
- * local task store).
+ * local task store). This is the ONLY writer of the projection's contents.
+ *
+ * Eligibility is DONE_RETENTION_DAYS. On top of that sits a byte backstop
+ * (PROJECTION_BYTE_BUDGET) which, when it engages, must never be the thing that
+ * decides WHICH tasks the phone can see — so the fill is ordered: pinned rows
+ * first (the board is the pinned set, in pin_order), then everything else by
+ * `updated_at` newest-first. Emit order is the eligible set's original order, so
+ * no consumer's ordering assumption changes.
+ *
+ * That ordered fill is only paid when the budget can ACTUALLY bite. This runs
+ * inline per request on routes the phone polls (GET /api/v1/tasks on both boxes,
+ * plus the events-v1 SSE snapshot on every connect) and the eligible set grows
+ * without bound, so the common answer — "everything fits" — costs ONE whole-array
+ * measurement instead of a per-row serialize, a wrapper object per row and two
+ * extra sorts.
  */
 export async function buildTaskProjection(): Promise<TaskProjection> {
   // Lazy import breaks the task-manager ↔ projection cycle risk.
@@ -134,19 +176,87 @@ export async function buildTaskProjection(): Promise<TaskProjection> {
   // an exemption here makes the projection (git-synced + pushed over the
   // bridge on every task change) converge on "every task ever". The phone's
   // working-set view shows open pins plus the last 14 days of finished ones.
-  const tasks = all
-    .filter((t) => {
-      if (t.status !== 'done') return true
-      const doneAt = Date.parse(t.completed_at ?? t.updated_at)
-      return Number.isFinite(doneAt) && doneAt >= cutoff
-    })
-    .map(projectTask)
-  return {
+  const eligible = all.filter((t) => {
+    if (t.status !== 'done') return true
+    const doneAt = Date.parse(t.completed_at ?? t.updated_at)
+    return Number.isFinite(doneAt) && doneAt >= cutoff
+  })
+
+  const envelope = (tasks: ProjectedTask[], truncated: boolean): TaskProjection => ({
     version: PROJECTION_VERSION,
     exportedAt: new Date().toISOString(),
     tasks,
+    // Tells the replica's importer that absence no longer implies deletion.
+    ...(truncated ? { truncated: true as const } : {}),
     ...(customTiers.length > 0 ? { custom_tiers: customTiers.map((t) => ({ id: t.id, label: t.label })) } : {}),
+  })
+
+  // FAST PATH — prove the budget cannot bite, then skip the ordered fill. `rows`
+  // is already in the emit order (the store's own), so this IS the answer. What
+  // this saves is the ORDERING work, which measurement showed dominates: a
+  // wrapper object per row, a priority sort and a re-sort (0.54ms of a 3.14ms
+  // selection at 3,079 rows, p90 0.85ms). The accounting uses the same per-row
+  // formula as the fill below, so both paths agree on the budget boundary.
+  const rows = eligible.map(projectTask)
+  let fastBytes = 0
+  for (const row of rows) fastBytes += Buffer.byteLength(JSON.stringify(row), 'utf8') + 1
+  if (fastBytes <= PROJECTION_BYTE_BUDGET) {
+    return envelope(rows, false)
   }
+
+  // SLOW PATH — priority order for the budget only. Pinned rows go first, in
+  // board order (pin_order asc, unordered pins last) so a budget that bites
+  // inside the pinned set still keeps the TOP of the board. Unpinned rows follow
+  // by updated_at, newest first (ISO-8601 is byte-ordered, so relational compare
+  // is the same order localeCompare gives without the ICU collation cost).
+  const pinOrder = (r: ProjectedTask) =>
+    typeof r.pin_order === 'number' ? r.pin_order : Number.POSITIVE_INFINITY
+  const ordered = rows.map((row, index) => ({ index, row })).sort((a, b) => {
+    if (Boolean(a.row.pinned) !== Boolean(b.row.pinned)) return a.row.pinned ? -1 : 1
+    if (a.row.pinned && b.row.pinned && pinOrder(a.row) !== pinOrder(b.row)) {
+      return pinOrder(a.row) - pinOrder(b.row)
+    }
+    const x = a.row.updated_at ?? '', y = b.row.updated_at ?? ''
+    return x < y ? 1 : x > y ? -1 : 0
+  })
+
+  const kept: Array<{ index: number; row: ProjectedTask }> = []
+  let bytes = 0
+  let dropped = 0
+  let droppedPinned = 0
+  for (const entry of ordered) {
+    // +1 for the comma this row costs inside the serialized array.
+    const rowBytes = Buffer.byteLength(JSON.stringify(entry.row), 'utf8') + 1
+    if (bytes + rowBytes > PROJECTION_BYTE_BUDGET) {
+      // Keep counting instead of breaking — the warn is only useful if it says
+      // how much of the list was actually lost.
+      dropped++
+      if (entry.row.pinned) droppedPinned++
+      continue
+    }
+    kept.push(entry)
+    bytes += rowBytes
+  }
+  // Back to the input's own order: the priority sort above is a budget device,
+  // not a contract change.
+  const tasks = kept.sort((a, b) => a.index - b.index).map((e) => e.row)
+
+  if (dropped > 0) {
+    // ONE warn per export (not per row). The session projection spent months
+    // shrinking its own window in silence; this one must never do the same.
+    log.task.warn('task projection truncated by budget', {
+      eligible: eligible.length,
+      shipped: tasks.length,
+      dropped,
+      droppedPinned,
+      boundBy: 'bytes',
+      byteBudget: PROJECTION_BYTE_BUDGET,
+      bytes,
+      retentionDays: DONE_RETENTION_DAYS,
+    })
+  }
+
+  return envelope(tasks, dropped > 0)
 }
 
 /**

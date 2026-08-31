@@ -68,6 +68,7 @@ import { log } from '../logging/index.js'
 import {
   legacyProjectionFilesEnabled,
   pickFresherEnvelope,
+  PROJECTION_PUSH_MAX_BYTES,
   pushProjectionToCloud,
   readProjectionCache,
   readTranscriptCache,
@@ -82,10 +83,45 @@ import { engineCaps } from './agents/engine-registry.js'
 export const SESSION_PROJECTION_FILE = path.join(WALNUT_HOME, 'sessions', 'projection.json')
 export const SESSION_TRANSCRIPTS_DIR = path.join(WALNUT_HOME, 'sessions', 'transcripts')
 
+/**
+ * Retention window for TERMINAL sessions. Applies to `error` as well as
+ * `stopped`: an errored session is just as dead, but it used to fall through the
+ * `stopped`-only gate into the eligible set forever — a slow unbounded leak that
+ * would eventually eat the budget with rows from years ago (25 error rows in the
+ * store today, 2 of them listable, all currently inside the window, so closing
+ * this changes nothing now and cannot grow later).
+ */
 const STOPPED_RETENTION_DAYS = 14
+/** Terminal statuses the retention window applies to. */
+const TERMINAL_STATUSES = new Set(['stopped', 'error'])
 const DEBOUNCE_MS = 3_000
 const DESCRIPTION_MAX = 300
-const MAX_SESSIONS = 500
+/**
+ * Row budget — a payload-safety backstop, NOT the visibility rule. The
+ * visibility rule is STOPPED_RETENTION_DAYS, and the budget must be big enough
+ * that the documented window actually fits, otherwise the budget silently
+ * BECOMES the rule. At 500 it did: 962 retention-eligible sessions on a real
+ * box meant 462 in-window rows were dropped and the effective window shrank to
+ * 8.1 days. 88 of those dropped rows were SESSIONS owned by a pinned task, and
+ * they were the only session row for 86 distinct pinned board tasks — the phone
+ * (GET /api/v1/sessions, no paging) then re-routed those 86 task rows into a New
+ * Session draft. 1500 is measured headroom over today's 962, not a
+ * guess, and it is the budget that normally binds: at the measured ~645B/row it
+ * is ~967KB, comfortably inside the byte ceiling below.
+ */
+const MAX_SESSIONS = 1_500
+/**
+ * Byte ceiling — the backstop the row cap cannot provide, because titles/cwd
+ * have no clip and one fat row is unbounded. This list rides ONE bridge frame
+ * and pushProjectionToCloud SKIPS an oversized payload rather than erroring, so
+ * the cloud replica would freeze on its last copy forever (which is exactly what
+ * the task projection did at 1.15MB). 80% of the LIST-lane frame budget, so the
+ * builder always discovers the ceiling before the wire does, and so this never
+ * sits below MAX_SESSIONS' own worst case (~967KB) — two budgets that contradict
+ * each other make the documented row cap unreachable.
+ * Measured on real data: 962 rows = 620KB, ~645B/row.
+ */
+const PROJECTION_BYTE_BUDGET = Math.floor(PROJECTION_PUSH_MAX_BYTES * 0.8)
 /** Transcript tail shipped per session (slim rows, not full JSONL). */
 const TRANSCRIPT_TAIL = 100
 /** Min gap between transcript export sweeps (remote reads go over SSH). */
@@ -119,6 +155,17 @@ export interface SessionProjection {
   version: 1
   exportedAt: string
   sessions: ProjectedSession[]
+  /**
+   * Set (additive, omitted when false) when a budget dropped eligible rows.
+   * No consumer infers deletion from absence here TODAY — unlike the task
+   * projection, whose replica importer does exactly that and would have deleted
+   * the dropped rows (see TaskProjection.truncated). This is deliberate
+   * headroom: the ONLY thing standing between this list and that same class of
+   * bug is that nobody has written the reconcile pass yet, and the ceiling is
+   * just 1.56x above today's payload. A consumer that starts treating absence
+   * as meaningful must check this flag first.
+   */
+  truncated?: true
 }
 
 /** Exported: the mobile events feed (events-v1) maps single rows with it. */
@@ -149,7 +196,23 @@ export function projectSession(s: SessionRecord, task: Task | undefined): Projec
 /**
  * Build the projection in memory (primary box). Shared by the file export
  * below and the mobile events feed's snapshot frame (events-v1), which needs
- * the same rows without paying a disk round trip.
+ * the same rows without paying a disk round trip. This function is the ONLY
+ * writer of the session projection's contents — see the single-writer note at
+ * GET /api/v1/sessions (src/web/routes/api-v1.ts) before adding a second one.
+ *
+ * Selection is an ORDER, not a slice. It used to be `sort by recency → take
+ * 500`, which quietly made the budget the visibility rule and evicted pinned
+ * board tasks' only session row (see MAX_SESSIONS). Now the eligible set is
+ * filled in priority order: sessions owned by a PINNED task first (those rows
+ * are what the phone's board needs to route a tap into the existing session
+ * rather than a New Session draft), then everything else newest-first. Output
+ * order stays recency-descending, as before.
+ *
+ * That ordered fill is only paid when a budget can ACTUALLY bite. This runs
+ * inline per request on routes the phone polls (GET /api/v1/sessions,
+ * session-extras-v1, and the events-v1 SSE snapshot on every connect), so the
+ * common answer — "everything fits" — takes one row count check and ONE
+ * whole-array measurement, not a per-row serialize plus two extra sorts.
  */
 export async function buildSessionProjection(): Promise<SessionProjection> {
   // Lazy imports keep cloud boxes (which never export) from touching the
@@ -161,22 +224,102 @@ export async function buildSessionProjection(): Promise<SessionProjection> {
   const taskById = new Map(allTasks.map((t) => [t.id, t]))
   const cutoff = Date.now() - STOPPED_RETENTION_DAYS * 24 * 60 * 60 * 1000
 
-  const sessions = allSessions
+  // ISO-8601 timestamps are byte-ordered, so relational compare is the same
+  // order localeCompare gives at a fraction of the cost (no ICU collation).
+  const newestFirst = (a: string | undefined, b: string | undefined) => {
+    const x = a ?? '', y = b ?? ''
+    return x < y ? 1 : x > y ? -1 : 0
+  }
+
+  const eligible = allSessions
     .filter((s) => {
       // isListableSession excludes BOTH environment sessions and lane-bound ones
       // (a lane session backs a UI conversation surface, not a listed session).
       if (!isListableSession(s) || s.archived) return false
-      if (s.process_status === 'stopped') {
+      if (TERMINAL_STATUSES.has(s.process_status)) {
         const at = Date.parse(s.lastActiveAt ?? s.startedAt)
         return Number.isFinite(at) && at >= cutoff
       }
       return true
     })
-    .sort((a, b) => (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? ''))
-    .slice(0, MAX_SESSIONS)
-    .map((s) => projectSession(s, s.taskId ? taskById.get(s.taskId) : undefined))
+    .sort((a, b) => newestFirst(a.lastActiveAt, b.lastActiveAt))
 
-  return { version: 1, exportedAt: new Date().toISOString(), sessions }
+  // projectSession stamps `pinned` from the owning task, so the rows carry
+  // everything the priority order below needs — no second task lookup, and the
+  // priority can never disagree with the stamped flag.
+  const rows = eligible.map((s) => projectSession(s, s.taskId ? taskById.get(s.taskId) : undefined))
+  const exportedAt = () => new Date().toISOString()
+
+  // FAST PATH — prove no budget can bite, then skip the ordered fill entirely.
+  // `rows` is already in the output order (eligible was sorted newest-first), so
+  // this IS the answer. What this saves is the ORDERING work, which measurement
+  // showed dominates: a wrapper object per row, a priority sort and a re-sort
+  // (0.31ms of a 2.11ms session selection, 0.54ms of a 3.14ms task one). The
+  // accounting uses the same per-row formula as the fill below, so both paths
+  // agree exactly on the budget boundary.
+  if (rows.length <= MAX_SESSIONS) {
+    let fastBytes = 0
+    for (const row of rows) fastBytes += Buffer.byteLength(JSON.stringify(row), 'utf8') + 1
+    if (fastBytes <= PROJECTION_BYTE_BUDGET) {
+      return { version: 1, exportedAt: exportedAt(), sessions: rows }
+    }
+  }
+
+  // SLOW PATH — a budget bites, so order matters. filter() is stable, so both
+  // groups stay newest-first inside themselves.
+  const ordered = [...rows.filter((r) => r.pinned), ...rows.filter((r) => !r.pinned)]
+
+  const sessions: ProjectedSession[] = []
+  let bytes = 0
+  let dropped = 0
+  let droppedPinned = 0
+  let bytesBound = false
+  for (const row of ordered) {
+    // +1 for the comma this row costs inside the serialized array.
+    const rowBytes = Buffer.byteLength(JSON.stringify(row), 'utf8') + 1
+    const overRows = sessions.length >= MAX_SESSIONS
+    const overBytes = bytes + rowBytes > PROJECTION_BYTE_BUDGET
+    if (overRows || overBytes) {
+      // Keep counting rather than breaking: the warn below is only useful if it
+      // reports how much of the documented window was actually lost.
+      if (overBytes) bytesBound = true
+      dropped++
+      if (row.pinned) droppedPinned++
+      continue
+    }
+    sessions.push(row)
+    bytes += rowBytes
+  }
+  sessions.sort((a, b) => newestFirst(a.last_active_at, b.last_active_at))
+
+  if (dropped > 0) {
+    // ONE warn per export (not per row). The 500-row cap shrank the window from
+    // 14 days to 8 in total silence for months; whichever budget binds, that
+    // now shows up in the log with the numbers needed to raise it. Both binders
+    // are reported — reporting only 'rows' hid a payload that was ALSO at its
+    // byte ceiling, which is the one that can silently kill the push.
+    const rowsBound = sessions.length >= MAX_SESSIONS
+    log.session.warn('session projection truncated by budget', {
+      eligible: eligible.length,
+      shipped: sessions.length,
+      dropped,
+      droppedPinned,
+      boundBy: rowsBound && bytesBound ? 'rows+bytes' : rowsBound ? 'rows' : 'bytes',
+      rowBudget: MAX_SESSIONS,
+      byteBudget: PROJECTION_BYTE_BUDGET,
+      bytes,
+      retentionDays: STOPPED_RETENTION_DAYS,
+      oldestShipped: sessions[sessions.length - 1]?.last_active_at,
+    })
+  }
+
+  return {
+    version: 1,
+    exportedAt: exportedAt(),
+    sessions,
+    // Symmetry with TaskProjection: absence is not evidence of deletion here.
+    ...(dropped > 0 ? { truncated: true as const } : {}),
+  }
 }
 
 /**
