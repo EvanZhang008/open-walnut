@@ -45,6 +45,10 @@ const DEFAULT_IDLE_TTL_MS = 10 * 60 * 1000;
 // weights (~2 GB), so the startup wait is generous rather than tight.
 const STARTUP_TIMEOUT_MS = 120_000;
 const HEALTH_CHECK_INTERVAL_MS = 500;
+// Fixed default port so that SUCCESSIVE walnut servers (redeploys, ephemeral
+// test children) find and adopt one already-warm daemon instead of each paying
+// the model load. 7893 sits next to walnut's other fixed ports (7891 sessions).
+const DEFAULT_MLX_PORT = 7893;
 
 /**
  * The daemon script. stdlib-only on purpose (http.server + json) so the only
@@ -58,26 +62,28 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODEL_ID = sys.argv[1]
 PORT = int(sys.argv[2])
-PARENT_PID = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+IDLE_TTL_S = float(sys.argv[3]) if len(sys.argv) > 3 else 3600.0
 TMP_ROOT = os.path.realpath(tempfile.gettempdir())
-
-# Die with the parent: an abnormal node exit (SIGKILL/OOM) skips the JS cleanup
-# handlers, and a ~2 GB orphan daemon would otherwise live forever (and squat a
-# configured fixed port). kill(pid, 0) is a liveness probe, not a signal.
-def _watch_parent():
-    while True:
-        time.sleep(5)
-        try:
-            os.kill(PARENT_PID, 0)
-        except OSError:
-            os._exit(0)
-
-if PARENT_PID:
-    threading.Thread(target=_watch_parent, daemon=True).start()
 
 from mlx_audio.stt.utils import load_model
 model = load_model(MODEL_ID)
 gen_lock = threading.Lock()
+last_activity = time.time()
+
+# The daemon deliberately OUTLIVES the node process that spawned it: walnut
+# redeploys kill and restart the server many times a day, and dying with the
+# parent meant every restart re-paid the ~2 GB model load — the single biggest
+# cause of "dictation suddenly takes 15s". Instead the daemon sits on a fixed
+# port, successor servers adopt it (see ensureServerRunning), and THIS timer —
+# not a parent watchdog — bounds an orphan's life. Idle = no transcription for
+# the TTL; a generation in progress never counts as idle.
+def _watch_idle():
+    while True:
+        time.sleep(15)
+        if not gen_lock.locked() and time.time() - last_activity > IDLE_TTL_S:
+            os._exit(0)
+
+threading.Thread(target=_watch_idle, daemon=True).start()
 print("READY", flush=True)
 
 class Handler(BaseHTTPRequestHandler):
@@ -96,6 +102,14 @@ class Handler(BaseHTTPRequestHandler):
         self._reply(200, {"status": "ok", "model": MODEL_ID})
 
     def do_POST(self):
+        global last_activity
+        # Lets a config change (different model) retire the previous daemon
+        # cleanly even though no server holds its process handle anymore.
+        if self.path == "/shutdown":
+            self._reply(200, {"ok": True})
+            threading.Thread(target=lambda: (time.sleep(0.2), os._exit(0))).start()
+            return
+        last_activity = time.time()
         try:
             n = int(self.headers.get("Content-Length", "0"))
             req = json.loads(self.rfile.read(n) or b"{}")
@@ -130,6 +144,9 @@ class Handler(BaseHTTPRequestHandler):
             t0 = time.time()
             with gen_lock:
                 out = model.generate(wav, **kwargs)
+            # Stamp at completion too: the idle countdown starts from the last
+            # FINISHED request, not from when a long dictation began.
+            last_activity = time.time()
             text = (getattr(out, "text", None) or "").strip()
             self._reply(200, {"text": text, "engineMs": int((time.time() - t0) * 1000)})
         except Exception as e:  # noqa: BLE001 — daemon must answer, not die
@@ -180,9 +197,11 @@ async function findFreePort(): Promise<number> {
 export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
   const model = cfg.model || DEFAULT_MLX_MODEL;
   const idleTtlMs = cfg.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
+  // serverProcess is null while serving through an ADOPTED daemon (one spawned
+  // by a previous walnut server on the shared port) — the daemon self-manages
+  // its idle TTL, so not holding the process handle is fine.
   let serverProcess: ChildProcess | null = null;
   let serverPort: number | null = null;
-  let idleTimer: ReturnType<typeof setTimeout> | null = null;
   // Startup is long (model load 5-120s) and the socket only binds at the END of
   // it — so concurrent transcribe() calls (primary + shadow are now routine)
   // MUST share one in-flight start instead of health-checking a not-yet-listening
@@ -200,30 +219,43 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
   // walnut restart after a failed probe.
   let mlxImportOk = false;
 
-  function resetIdleTimer() {
-    if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => {
-      if (inFlight > 0) { resetIdleTimer(); return; } // never kill mid-transcription
-      log.stt.info(`mlx daemon idle for ${idleTtlMs / 1000}s — shutting down to free memory`);
-      killServer();
-    }, idleTtlMs);
-  }
-
   /**
-   * Kill the daemon. When `only` is given, no-op unless it is still the CURRENT
+   * Retire the daemon. When `only` is given, no-op unless it is still the CURRENT
    * child — a stale caller (e.g. a failed startup racing a successful restart)
-   * must never take down its successor.
+   * must never take down its successor. An adopted daemon (no process handle)
+   * gets an HTTP shutdown instead of a signal.
    */
   function killServer(only?: ChildProcess) {
     if (only && serverProcess !== only) return;
-    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
     if (serverProcess) {
       log.stt.info(`Killing mlx daemon (pid=${serverProcess.pid})`);
       serverProcess.kill('SIGTERM');
       const proc = serverProcess;
       setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000);
-      serverProcess = null;
-      serverPort = null;
+    } else if (serverPort && !only) {
+      log.stt.info(`Shutting down adopted mlx daemon on :${serverPort}`);
+      void fetch(`http://127.0.0.1:${serverPort}/shutdown`, {
+        method: 'POST', signal: AbortSignal.timeout(2000),
+      }).catch(() => {});
+    }
+    serverProcess = null;
+    serverPort = null;
+  }
+
+  /**
+   * Is a healthy walnut mlx daemon (for OUR model) already listening on `port`?
+   * Distinguishes three cases: ours (adopt), a walnut daemon for a different
+   * model (retire it, then spawn), and anything else (foreign — leave alone).
+   */
+  async function probeDaemon(port: number): Promise<'ours' | 'other-model' | 'none' | 'foreign'> {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2000) });
+      if (!res.ok) return 'foreign';
+      const json = await res.json() as { status?: string; model?: string };
+      if (json.status !== 'ok' || !json.model) return 'foreign';
+      return json.model === model ? 'ours' : 'other-model';
+    } catch {
+      return 'none';
     }
   }
 
@@ -253,14 +285,12 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
     // would misread that as a dead daemon and kill it.
     if (startingPromise) return startingPromise;
 
-    if (serverProcess && serverPort) {
-      const probed = serverProcess;
+    if (serverPort) {
+      const probed = serverProcess ?? undefined;
       try {
         const res = await fetch(`http://127.0.0.1:${serverPort}/`, { signal: AbortSignal.timeout(2000) });
-        if (res.ok) {
-          resetIdleTimer();
-          return serverPort;
-        }
+        if (res.ok) return serverPort;
+        throw new Error(`health ${res.status}`);
       } catch {
         // A daemon mid-generation can hold the GIL long enough to miss the 2s
         // probe. If a request is in flight it is BUSY, not dead — killing it
@@ -281,7 +311,28 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
   }
 
   async function startServer(): Promise<number> {
-    const port = cfg.port ?? await findFreePort();
+    let port = cfg.port ?? DEFAULT_MLX_PORT;
+
+    // A previous walnut server (we redeploy many times a day) may have left a
+    // warm daemon on the shared port. Adopting it skips the ~2 GB model load —
+    // THE fix for dictation stalling after every deploy. A daemon for a
+    // different model is retired first; a non-walnut listener means the port is
+    // simply taken, so fall back to an exclusive one.
+    const found = await probeDaemon(port);
+    if (found === 'ours') {
+      serverProcess = null;
+      serverPort = port;
+      log.stt.info(`Adopted existing mlx daemon on :${port} (model=${model})`);
+      return port;
+    }
+    if (found === 'other-model') {
+      log.stt.info(`Retiring mlx daemon on :${port} (different model)`);
+      await fetch(`http://127.0.0.1:${port}/shutdown`, { method: 'POST', signal: AbortSignal.timeout(2000) }).catch(() => {});
+      await new Promise(r => setTimeout(r, 500));
+    } else if (found === 'foreign') {
+      log.stt.warn(`Port ${port} is held by a non-walnut process — using an ephemeral port`);
+      port = await findFreePort();
+    }
     if (!scriptDir) {
       const { mkdtemp } = await import('node:fs/promises');
       scriptDir = await mkdtemp(join(tmpdir(), 'walnut-mlx-'));
@@ -290,9 +341,12 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
     await writeFile(scriptPath, MLX_SERVER_PY);
 
     log.stt.info(`Starting mlx daemon: ${cfg.pythonPath} ${scriptPath} ${model} :${port}`);
-    const proc = spawn(cfg.pythonPath, [scriptPath, model, String(port), String(process.pid)], {
+    // detached: the server often runs as a launchd job, and launchd kills the
+    // job's whole process group on `launchctl remove` (every redeploy). A
+    // daemon in its own group survives that, which is the point of adoption.
+    const proc = spawn(cfg.pythonPath, [scriptPath, model, String(port), String(idleTtlMs / 1000)], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      detached: false,
+      detached: true,
       env: sttSpawnEnv(),
     });
 
@@ -326,6 +380,14 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
     serverPort = port;
 
     const outcome = await waitForReady(proc, port, STARTUP_TIMEOUT_MS);
+    if (outcome === 'exited' && (await probeDaemon(port)) === 'ours') {
+      // Two walnut servers raced a cold start on the shared port; the other one
+      // won the bind and its daemon is healthy — adopt instead of failing.
+      serverProcess = null;
+      serverPort = port;
+      log.stt.info(`Lost the mlx daemon bind race — adopted the winner on :${port}`);
+      return port;
+    }
     if (outcome !== 'ready') {
       killServer(proc);
       const diagnostic = outputTail
@@ -340,14 +402,16 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
     }
 
     log.stt.info(`mlx daemon ready on port ${port} (pid=${proc.pid}, model=${model})`);
-    resetIdleTimer();
+    // Startup diagnostics are done; release the pipes and the handle so the
+    // daemon neither blocks this process's exit nor dies with it.
+    proc.stdout?.destroy();
+    proc.stderr?.destroy();
+    proc.unref();
     return port;
   }
 
-  const cleanup = () => killServer();
-  process.on('exit', cleanup);
-  process.on('SIGTERM', cleanup);
-  process.on('SIGINT', cleanup);
+  // Deliberately NO process-exit cleanup: the daemon is meant to outlive this
+  // server so the next deploy adopts it warm. Its own idle TTL bounds orphans.
 
   return {
     name: 'mlx',
@@ -357,15 +421,13 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
     },
 
     shutdown() {
+      // Config changed (model/TTL/port) — the daemon really is stale, retire it.
       killServer();
       if (scriptDir) {
         void import('node:fs/promises').then(({ rm }) =>
           rm(scriptDir!, { recursive: true, force: true })).catch(() => {});
         scriptDir = null;
       }
-      process.removeListener('exit', cleanup);
-      process.removeListener('SIGTERM', cleanup);
-      process.removeListener('SIGINT', cleanup);
     },
 
     async isAvailable() {
@@ -418,9 +480,6 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
       } finally {
         inFlight--;
         await cleanupTempFile(wavPath);
-        // Re-arm the idle TTL at request END too, so the countdown starts from
-        // the last completed request rather than its start.
-        if (serverProcess) resetIdleTimer();
       }
     },
   };
