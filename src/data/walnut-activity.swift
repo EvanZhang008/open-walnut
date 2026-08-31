@@ -21,8 +21,9 @@
 // grant per browser. That grant keys to THIS binary (see
 // reexecDisclaimedIfNeeded), not to whatever launched Walnut.
 //
-// Compiled lazily by src/core/time-tracking/outside-collector.ts via
-// `xcrun swiftc -O` into WALNUT_HOME/cache (same pattern as walnut-calendar).
+// Compiled, signed and cached lazily by src/core/helper-build.ts, for
+// src/core/time-tracking/outside-collector.ts. Bumping HELPER_VERSION below means
+// bumping it there too (a ratchet test pins the pair).
 
 import AppKit
 import CoreGraphics
@@ -43,7 +44,11 @@ import Foundation
 // moved off the app seen at startup (10/10 ticks); with run-loop servicing it
 // tracked iTerm2 → Finder → iTerm2. NSWorkspace.runningApplications
 // .first(isActive) is the SAME cache and was equally frozen — not a fallback.
-let HELPER_VERSION = "v3"
+// v4 is not a source change: it exists to replace the cached ad-hoc binary with a
+// certificate-signed one so the Automation grant stops resetting on every upgrade.
+// See src/core/helper-build.ts and the note beside HELPER_VERSION in
+// src/core/time-tracking/outside-collector.ts, which this string must equal.
+let HELPER_VERSION = "v4"
 /// One line per this many seconds. The server clamps banked duration itself, so
 /// a slow tick can never inflate a day.
 let SAMPLE_INTERVAL: TimeInterval = 5
