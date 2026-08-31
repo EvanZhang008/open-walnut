@@ -44,11 +44,19 @@ export const OUTPUT_MODE_INSTRUCTION_MARKER = '[Rich output mode: ';
  *  It deliberately does NOT say "inline <script> is stripped": a script-bearing
  *  chunk is routed to an island rather than stripped, so telling the model that
  *  would be a lie it might work around. The skill pointer keeps this line short:
- *  the component recipes are a whole document, loaded only if the model wants it. */
+ *  the component recipes are a whole document, loaded only if the model wants it.
+ *
+ *  The contrast rule earns its sentence: models reach for a pale hardcoded panel
+ *  (`background:#fff5f5`) and then leave the text muted or inherited, so the panel
+ *  arrives with grey-on-pink body copy that is genuinely hard to read (reported
+ *  with a screenshot 2026-08-31). Stating the PAIRING rather than banning hex is
+ *  deliberate: hardcoded colours are fine when the model owns both ends. */
 export const RICH_OUTPUT_MODE_ON_INSTRUCTION =
   `${OUTPUT_MODE_INSTRUCTION_MARKER}ON] When visual structure helps understanding, write HTML directly in your reply `
   + '(layout, colors, SVG diagrams, <details>, CSS-only interactivity) — the client renders it natively '
-  + 'while streaming. For anything needing <script>, emit a ```html-app fenced block '
+  + 'while streaming. Set text and background colour together or neither: a custom background with '
+  + 'inherited or muted text loses contrast (theme vars --fg, --fg-muted, --bg-secondary, --border always fit). '
+  + 'For anything needing <script>, emit a ```html-app fenced block '
   + '(rendered in a sandboxed iframe). Plain answers stay plain markdown. '
   + 'Component recipes (steppers, SVG diagrams, animations, islands): '
   + `\`walnut tools call skill_read '{"dirName":"rich-output"}'\`.`;

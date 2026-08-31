@@ -15,6 +15,23 @@ The Walnut web console renders raw HTML in an assistant reply as real DOM, strea
 2. **Your CSS is auto-scoped to your own message.** Every selector in a `<style>` block is rewritten to match only inside that reply, so plain class names (`.card`, `.row`) are safe and cannot restyle the app. `@keyframes` names are rewritten too. `@font-face`, `@property` and `@import` are dropped.
 3. **Other surfaces show raw tags** (phone, notifications, plain-text search snippets). Keep the prose around a widget meaningful on its own; never put the only copy of a fact inside markup.
 
+## Contrast: set both ends, or neither
+
+The one mistake that actually hurts readability. A panel gets a hardcoded pale background and its text is left muted or inherited, so the body copy lands grey-on-pink:
+
+```html
+<!-- BAD: background is pinned, text is not -->
+<div style="background:#fff5f5;padding:10px"><span style="color:var(--fg-muted)">barely readable</span></div>
+
+<!-- GOOD: both ends pinned -->
+<div style="background:#fff5f5;color:#7f1d1d;padding:10px">reads on that panel, and only that panel</div>
+
+<!-- ALSO GOOD: neither end pinned, theme handles it -->
+<div style="background:var(--bg-secondary);color:var(--fg);padding:10px">reads in light and dark</div>
+```
+
+Same rule inside a panel: a nested `<code>`, a caption, a table cell that inherits `--fg-muted` while sitting on your own background is the usual offender. Hardcoded hex is fine, as long as you own both ends of the pair.
+
 ## Recipes
 
 Callout / conclusion card:
