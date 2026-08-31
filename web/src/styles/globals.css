@@ -10223,13 +10223,6 @@ body.walnut-dragging {
   touch-action: none;
   transition: opacity 0.12s;
 }
-/* Folder member cards: grip rides the shared far-left column (clear of the rail),
-   same offset as their unread dot. */
-.todo-pinned-card.task-grouped > .todo-pinned-drag-handle,
-.todo-focus-card.task-grouped > .todo-pinned-drag-handle {
-  left: -27px;
-}
-
 .todo-pinned-card:hover .todo-pinned-drag-handle,
 .todo-focus-card:hover .todo-pinned-drag-handle {
   opacity: 0.5;
@@ -10679,7 +10672,7 @@ body.walnut-dragging {
 }
 /* Folder members: the pill starts at the member indent, not the row edge. */
 .todo-panel-item.task-grouped .todo-row-pill {
-  left: 30px;
+  left: 38px;
 }
 
 /* "Needs action" — phase is AGENT_COMPLETE / WAIT. Same red
@@ -11015,26 +11008,27 @@ body.walnut-dragging {
    whole folder. Shared by the home Todo panel (.todo-panel-item), the /tasks
    list (.task-card), and the pinned-tier cards (.todo-focus-card /
    .todo-pinned-card). --group-outline tracks the theme accent at low strength. */
-.task-card.task-grouped,
-.todo-focus-card.task-grouped,
-.todo-pinned-card.task-grouped {
+.task-card.task-grouped {
   position: relative;
   margin-left: 30px;
 }
-/* Panel rows can't use margin for the member indent: content-visibility clips
-   descendant painting at the row's padding box, so the far-left unread dot must
-   stay INSIDE the row — indent via padding instead (36px = 22 base + 14 step;
-   project buckets override to 44). The rail moves to a positive offset. */
-.todo-panel-item.task-grouped {
-  --dot-pull: -33px;
-  padding-left: 36px;
+/* Tier member cards: 38px indent = the rail at x≈21 PLUS a full 14px gutter of
+   their own INSIDE it, so the unread dot / hover grip (both at left:-11, same
+   as loose cards) sit between the rail and the card — a member's dot belongs
+   inside its folder's line, not out in the panel's far-left column. */
+.todo-focus-card.task-grouped,
+.todo-pinned-card.task-grouped {
+  position: relative;
+  margin-left: 38px;
 }
-/* Tier member cards keep the margin indent (no content-visibility there), but
-   their unread dot must sit in the shared far-left column (outer x≈3), clear
-   of the rail line at x≈21 — left:-11 would land ON the rail. */
-.todo-focus-card.task-grouped > .task-unread-dot,
-.todo-pinned-card.task-grouped > .task-unread-dot {
-  left: -27px;
+/* Panel rows can't use margin for the member indent: content-visibility clips
+   descendant painting at the row's padding box, so the dot must stay INSIDE
+   the row — indent via padding instead (44px = 22 base + 22 member step;
+   project buckets override to 52). Same geometry as the tier cards: member
+   pill at 38, dot at x≈27 between the rail (21) and the pill. */
+.todo-panel-item.task-grouped {
+  --dot-pull: -17px;
+  padding-left: 44px;
 }
 .todo-panel-item.task-grouped::before,
 .task-card.task-grouped::before,
@@ -11050,9 +11044,15 @@ body.walnut-dragging {
   background: var(--group-outline);
   pointer-events: none;
 }
+/* Tier member cards sit at margin 38 — pull the rail back to x≈21 (under the
+   folder head's icon), leaving the dot/grip gutter between rail and card. */
+.todo-focus-card.task-grouped::before,
+.todo-pinned-card.task-grouped::before {
+  left: -17px;
+}
 /* Panel rows indent via padding (see above), so their rail sits at a positive
    offset INSIDE the row box (x=21, between the folder head edge and the member
-   pill at 30) — a negative offset would be clipped by content-visibility. */
+   pill at 38) — a negative offset would be clipped by content-visibility. */
 .todo-panel-item.task-grouped::before {
   left: 21px;
 }
@@ -13293,11 +13293,11 @@ body.walnut-dragging {
   --dot-pull: -27px;
   padding-left: 30px;
 }
-/* Folder members in a bucket: content sits one indent step deeper (44px); the
-   unread dot stays in the SAME far-left column as every other row. */
+/* Folder members in a bucket: content one member step deeper (52px); the dot
+   lands at x≈27, INSIDE the folder's rail (21) and left of the pill (38). */
 .todo-group-project .todo-panel-item.task-grouped {
-  --dot-pull: -41px;
-  padding-left: 44px;
+  --dot-pull: -25px;
+  padding-left: 52px;
 }
 
 /* Drag overlay (floating copy while dragging) */
