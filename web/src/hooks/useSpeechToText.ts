@@ -369,14 +369,8 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
         chunksRef.current = [];
 
-        // The user already sent what they were looking at. Anything we deliver now
-        // would be a duplicate of that message, so drop the audio silently.
-        if (discardedRef.current) {
-          discardedRef.current = false;
-          lastDraftRef.current = null;
-          log.info('stt', 'recording discarded — the text was already sent');
-          return;
-        }
+        const discarded = discardedRef.current;
+        if (discarded) discardedRef.current = false;
 
         if (blob.size === 0) return;
 
@@ -386,7 +380,9 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         // whether real speech was detected, so a quiet or very short genuine recording is
         // still transcribed.
         if (deadStream) {
-          if (isMountedRef.current) {
+          // Nothing to report when the text was already sent — the user is not
+          // waiting on this recording, so an error would come out of nowhere.
+          if (isMountedRef.current && !discarded) {
             setError('No sound detected from the microphone. Check your mic device (or restart the browser) and try again.');
           }
           return;
@@ -429,6 +425,20 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
             persistHistory(await keepForRetry(), finalText);
           } catch { /* retry/history are best-effort */ }
         };
+
+        // The user hit send while still recording, so they already have the text
+        // they were looking at: delivering anything now would duplicate that
+        // message. Only the DELIVERY is skipped though — the clip still goes to
+        // the recordings history with the text as of the send, because dropping
+        // it outright left no Retry and no audio to debug a bad dictation with
+        // (a slow-dictation report had no recording for exactly this reason).
+        if (discarded) {
+          const sent = lastDraftRef.current ?? '';
+          lastDraftRef.current = null;
+          log.info('stt', `recording kept but not delivered — the text was already sent (${sent.length} chars)`);
+          void persistRecording(sent);
+          return;
+        }
 
         // How the stop is served depends on whether the user had finished talking.
         //
