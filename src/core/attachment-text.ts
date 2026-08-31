@@ -8,17 +8,17 @@
  * - Strictly serial: one extraction at a time, queued.
  * - Content-hash keyed: a file is never re-extracted unless its bytes change;
  *   failed extractions are recorded and not retried for the same bytes.
- * - The swift helper is compiled LAZILY once per machine into WALNUT_HOME/cache
- *   (system frameworks only, no third-party deps). No swiftc → feature quietly
- *   degrades to 'unavailable' (logged once).
+ * - Compiling, signing and caching the swift helper belong to
+ *   src/core/helper-build.ts (system frameworks only, no third-party deps). No
+ *   swiftc on the box and the feature quietly degrades to 'unavailable'.
  */
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { NOTES_DIR, WALNUT_HOME, CLOUD_MODE } from '../constants.js'
+import { NOTES_DIR, CLOUD_MODE } from '../constants.js'
+import { ensureHelper, type HelperSpec } from './helper-build.js'
 import { log } from '../logging/index.js'
 import {
   getAttachmentMeta,
@@ -40,54 +40,13 @@ export function isExtractableAttachment(relPath: string): boolean {
 
 // ── Lazy helper compilation ──────────────────────────────────────────────────
 
-let helperPromise: Promise<string | null> | null = null
-
-function helperSourcePath(): string {
-  // Production: tsup bundles everything into dist/cli.js, so import.meta.url's
-  // dir IS dist/ → dist/data/…. Dev (tsx/vitest): this file lives in src/core/
-  // → ../data/…. Try both shapes.
-  const here = path.dirname(fileURLToPath(import.meta.url))
-  const candidates = [
-    path.resolve(here, 'data/walnut-extract.swift'),       // dist/cli.js → dist/data
-    path.resolve(here, '../data/walnut-extract.swift'),    // src/core → src/data
-    path.resolve(here, '../../src/data/walnut-extract.swift'),
-  ]
-  for (const c of candidates) if (fs.existsSync(c)) return c
-  return candidates[0]
-}
-
-/** Compile (once) and return the extractor binary path, or null when impossible. */
-async function ensureHelper(): Promise<string | null> {
-  if (helperPromise) return helperPromise
-  helperPromise = (async () => {
-    if (process.platform !== 'darwin' || CLOUD_MODE) return null
-    const bin = path.join(WALNUT_HOME, 'cache', `walnut-extract-${HELPER_VERSION}`)
-    if (fs.existsSync(bin)) return bin
-    const src = helperSourcePath()
-    if (!fs.existsSync(src)) {
-      log.memory.warn('attachment-text: helper source missing, OCR disabled', { src })
-      return null
-    }
-    await fsp.mkdir(path.dirname(bin), { recursive: true })
-    const compiled = await new Promise<boolean>((resolve) => {
-      const child = spawn('nice', ['-n', '10', 'xcrun', 'swiftc', '-O', '-o', bin, src], {
-        stdio: ['ignore', 'ignore', 'pipe'],
-      })
-      let stderr = ''
-      child.stderr.on('data', (d) => { stderr += String(d) })
-      child.on('error', () => resolve(false))
-      child.on('close', (code) => {
-        if (code !== 0) {
-          log.memory.warn('attachment-text: swift compile failed, OCR disabled', {
-            error: stderr.slice(0, 400),
-          })
-        }
-        resolve(code === 0)
-      })
-    })
-    return compiled ? bin : null
-  })()
-  return helperPromise
+/** No infoPlist and no identifier-stability worry from TCC: PDFKit and Vision
+ *  need no permission at all. The identifier is still pinned and version-free so
+ *  every helper signs the same way (see src/core/helper-build.ts). */
+const HELPER_SPEC: HelperSpec = {
+  name: 'walnut-extract',
+  version: HELPER_VERSION,
+  identifier: 'dev.openwalnut.extract',
 }
 
 // ── Extraction (out-of-process, serial) ──────────────────────────────────────
@@ -157,7 +116,7 @@ async function extractOne(relPath: string): Promise<void> {
   // heal once it exists.
   if (existing && existing.content_hash === hash && existing.status !== 'unavailable') return
 
-  const bin = await ensureHelper()
+  const bin = await ensureHelper(HELPER_SPEC, 'walnut-extract.swift')
   if (!bin) {
     upsertAttachmentText({
       path: relPath, content_hash: hash, text: '', method: 'none',

@@ -1,39 +1,44 @@
 /**
- * Outside-activity collector — owns the walnut-activity helper child process and
+ * Outside-activity collector: owns the walnut-activity helper child process and
  * turns its 5-second NDJSON samples into banked time.
  *
- * The helper is compiled lazily once per machine (same pattern as the calendar
- * helper: source ships in src/data/, `xcrun swiftc -O` into WALNUT_HOME/cache
- * under a versioned name, embedded Info.plist, TCC responsibility disclaimed so
- * the Automation grant keys to the helper binary rather than to whatever
- * launched Walnut). No swiftc → the collector reports not-running instead of
- * crashing.
+ * Compiling, signing and caching the helper binary belong to
+ * src/core/helper-build.ts (its header explains why the signature is what decides
+ * whether the user's Automation grant survives a rebuild). No swiftc on the box
+ * means the collector reports not-running instead of crashing.
  *
  * OFF by default: sampling which app someone is in is exactly the kind of thing
  * that must be an explicit choice, so nothing spawns until config.time.outside
- * .enabled is true. Toggling is hot — no server restart.
+ * .enabled is true. Toggling is hot, with no server restart.
  *
  * Never one log line per tick: a sampler that logged per sample would write
  * 17k lines a day. Conditions are logged once each (warnOnce).
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import fs from 'node:fs';
-import fsp from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { CLOUD_MODE, IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js';
+import { CLOUD_MODE, IS_EPHEMERAL } from '../../constants.js';
+import {
+  clearFailedHelper, ensureHelper, helperFailure, resetHelperBuilds,
+  type HelperSpec, type HelperUnavailable,
+} from '../helper-build.js';
 import { log } from '../../logging/index.js';
 import { localDateKey } from './rollup.js';
 import { recordOutside, type OutsideRecord } from './outside-store.js';
 
-/** Bumping this recompiles the helper, which changes its cdhash — so macOS asks
- *  for the Automation grant once more. Expected on upgrade, not a regression.
+/** Bumped when src/data/walnut-activity.swift changes, so an upgraded machine
+ *  can never keep running the old cached binary.
  *  v2: signal forwarding + orphan self-reap in the helper (see the swift file).
  *  v3: the helper services its run loop, so a long-lived process sees app
  *  switches instead of reporting the app that was frontmost when it started.
+ *  v4: no source change. The bump exists to REPLACE the cached ad-hoc binary with
+ *  a certificate-signed one, which is what makes the Automation grant survive
+ *  future upgrades (see src/core/helper-build.ts). ensureHelper() returns an
+ *  existing cache untouched, so signing could not have reached it any other way,
+ *  and re-signing in place would have been worse: it changes the content hash and
+ *  would silently break the grant the user already has. Cost: macOS asks for
+ *  Automation once more, which is a prompt and one click.
  *  MUST equal HELPER_VERSION in src/data/walnut-activity.swift (ratchet test). */
-export const HELPER_VERSION = 'v3';
+export const HELPER_VERSION = 'v4';
 /** The helper's own cadence (src/data/walnut-activity.swift SAMPLE_INTERVAL). */
 export const TICK_MS = 5_000;
 /** Above this, the user is away from the keyboard: the sample is not attention. */
@@ -62,6 +67,10 @@ const HEALTHY_AFTER_MS = 60_000;
 /** A line longer than this is not one of our samples. */
 const MAX_LINE_BYTES = 64 * 1024;
 
+/** Embedded into the binary so tccd can caption the Automation prompt with
+ *  NSAppleEventsUsageDescription. It only reaches tccd because the helper re-execs
+ *  to disclaim parent responsibility and become its own TCC subject; without the
+ *  key there, the Apple Events request is refused outright. */
 const HELPER_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -178,26 +187,25 @@ export function sampleToRecord(sample: ActivitySample, durationMs: number, recei
 
 // ── helper binary ───────────────────────────────────────────────────────────
 
-function helperSourcePath(): string {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    path.resolve(here, 'data/walnut-activity.swift'), // dist/cli.js → dist/data
-    path.resolve(here, '../data/walnut-activity.swift'),
-    path.resolve(here, '../../data/walnut-activity.swift'), // src/core/time-tracking → src/data
-  ];
-  for (const c of candidates) if (fs.existsSync(c)) return c;
-  return candidates[0]!;
-}
+const HELPER_NAME = 'walnut-activity';
 
-/** Why this box has no helper. Null = fine, or not attempted yet. */
-export type HelperUnavailable = 'not_macos' | 'no_compiler' | 'compile_failed';
+const HELPER_SPEC: HelperSpec = {
+  name: HELPER_NAME,
+  version: HELPER_VERSION,
+  /** Version-free on purpose: a certificate-signed Automation grant is remembered
+   *  against this string, so it must not move when HELPER_VERSION does. */
+  identifier: 'dev.openwalnut.activity',
+  infoPlist: HELPER_INFO_PLIST,
+};
 
-let helperPromise: Promise<string | null> | null = null;
-let helperReason: HelperUnavailable | null = null;
+/** Why this box has no helper. Null = fine, or not attempted yet. It lives in
+ *  helper-build.ts now; re-exported so the barrel and the routes keep importing it
+ *  from here. */
+export type { HelperUnavailable };
 
 /** The last compile/availability failure, for the API's `reason` field. */
 export function outsideHelperReason(): HelperUnavailable | null {
-  return helperReason;
+  return helperFailure(HELPER_NAME);
 }
 
 /**
@@ -206,75 +214,12 @@ export function outsideHelperReason(): HelperUnavailable | null {
  * flight has no reason recorded, so it is never thrown away mid-run.
  */
 export function clearFailedHelperCache(): void {
-  if (helperReason === null) return;
-  helperPromise = null;
-  helperReason = null;
+  clearFailedHelper(HELPER_NAME);
 }
 
 /** Compile once per machine; null when this box can't have the helper at all. */
 export function ensureActivityHelper(): Promise<string | null> {
-  if (helperPromise) return helperPromise;
-  helperPromise = (async () => {
-    if (process.platform !== 'darwin' || CLOUD_MODE) {
-      helperReason = 'not_macos';
-      return null;
-    }
-    const bin = path.join(WALNUT_HOME, 'cache', `walnut-activity-${HELPER_VERSION}`);
-    if (fs.existsSync(bin)) return bin;
-    const src = helperSourcePath();
-    if (!fs.existsSync(src)) {
-      warnOnce('nosource', 'outside-activity helper source missing, tracking disabled', { src });
-      helperReason = 'compile_failed';
-      return null;
-    }
-    await fsp.mkdir(path.dirname(bin), { recursive: true });
-    // Embed the Info.plist (__TEXT,__info_plist) so tccd can read the Apple
-    // Events usage key once the helper disclaims parent responsibility.
-    const plistPath = path.join(WALNUT_HOME, 'cache', `walnut-activity-${HELPER_VERSION}.plist`);
-    await fsp.writeFile(plistPath, HELPER_INFO_PLIST);
-    // Compile to a per-process temp path and rename: the final path is the
-    // existsSync fast path forever after, so a swiftc killed mid-link (a machine
-    // reboot, a reaped test run) must never be able to leave a partial binary there.
-    const tmpBin = `${bin}.tmp-${process.pid}`;
-    const outcome = await new Promise<{ ok: boolean; code: number | null; stderr: string }>((resolve) => {
-      const child = spawn(
-        'nice',
-        ['-n', '10', 'xcrun', 'swiftc', '-O', '-o', tmpBin, src,
-         '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist',
-         '-Xlinker', plistPath],
-        { stdio: ['ignore', 'ignore', 'pipe'] },
-      );
-      let stderr = '';
-      child.stderr?.on('data', (d) => { stderr += String(d); });
-      child.on('error', (err) => resolve({ ok: false, code: null, stderr: err.message }));
-      child.on('close', (code) => resolve({ ok: code === 0, code, stderr }));
-    });
-    if (!outcome.ok) {
-      await fsp.rm(tmpBin, { force: true }).catch(() => {});
-      // "No compiler here" is a different user story from "our source won't
-      // build" — one is an install step, the other is our bug.
-      const missing = outcome.code === null || outcome.code === 127
-        || /xcrun: error|unable to find utility|command not found|no developer tools/i.test(outcome.stderr);
-      helperReason = missing ? 'no_compiler' : 'compile_failed';
-      warnOnce('nocompile', 'outside-activity swift compile failed, tracking disabled', {
-        reason: helperReason, code: outcome.code, error: outcome.stderr.slice(0, 400),
-      });
-      return null;
-    }
-    try {
-      await fsp.chmod(tmpBin, 0o755);
-      await fsp.rename(tmpBin, bin); // same dir → atomic, never EXDEV
-    } catch (err) {
-      await fsp.rm(tmpBin, { force: true }).catch(() => {});
-      helperReason = 'compile_failed';
-      warnOnce('noinstall', 'outside-activity helper could not be installed', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return null;
-    }
-    return bin;
-  })();
-  return helperPromise;
+  return ensureHelper(HELPER_SPEC, 'walnut-activity.swift');
 }
 
 // ── child lifecycle ─────────────────────────────────────────────────────────
@@ -481,7 +426,8 @@ function handleLine(line: string): void {
 /** Tests only: drop the compile cache and the once-per-condition log guards. */
 export function resetOutsideCollectorForTest(): void {
   stopOutsideCollector();
-  helperPromise = null;
-  helperReason = null;
+  // Unconditional, unlike clearFailedHelperCache(): a test that swaps WALNUT_HOME
+  // must not keep a memoized SUCCESS pointing at the previous cache dir.
+  resetHelperBuilds();
   warnedOnce.clear();
 }
