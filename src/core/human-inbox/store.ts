@@ -91,12 +91,22 @@ async function readStore(): Promise<LetterStoreFile> {
   }
 }
 
-/** Locked read-modify-write against a FRESH index. */
+/**
+ * Locked read-modify-write against a FRESH index.
+ *
+ * Every mutation in this file goes through here, which is why the content clock
+ * is stamped HERE and nowhere else: one place to update means no writer can ever
+ * forget it. git-sync's LWW merge reads this exact field to decide which copy of
+ * index.json is newer, so a store save without a fresh stamp is a save that can
+ * lose to a stale copy (2026-08-30: a replica's older index.json won the merge
+ * and flipped a read letter back to unread).
+ */
 async function withStore<R>(fn: (store: LetterStoreFile) => R): Promise<R> {
   let out!: R;
   const apply = (raw: unknown): LetterStoreFile => {
     const store = normalizeStore(raw);
     out = fn(store);
+    store.lastUpdated = new Date().toISOString();
     return store;
   };
   try {
@@ -237,6 +247,22 @@ async function commitBodySource(fileName: string, source: BodySource): Promise<v
   await takeStagedBody(source.ref, path.join(BODIES_DIR, fileName));
 }
 
+/** What statLetterBody knows about one body document. */
+export interface LetterBodyStat {
+  path: string;
+  /** Size on THIS box's disk, right now. */
+  bytes: number;
+  mtimeMs: number;
+  format: 'html' | 'markdown';
+  /**
+   * Size the sender recorded in the index, or null for a letter written before
+   * that was stamped. A box holding only a copy of the body (a cloud replica,
+   * whose blob arrives over git-sync) compares `bytes` against this to tell a
+   * complete copy from a half-synced one — see serveLetterBody.
+   */
+  recordedBytes: number | null;
+}
+
 /**
  * Stat a letter's body document without reading it — what the streaming route
  * needs to answer a Range, and what getLetter needs to decide whether to inline.
@@ -245,7 +271,7 @@ async function commitBodySource(fileName: string, source: BodySource): Promise<v
 export async function statLetterBody(
   id: string,
   turn?: number,
-): Promise<{ path: string; bytes: number; mtimeMs: number; format: 'html' | 'markdown' } | null> {
+): Promise<LetterBodyStat | null> {
   if (typeof id !== 'string' || !LETTER_ID_RE.test(id)) return null;
   const { letters } = await readStore();
   const record = letters.find(l => l.id === id);
@@ -253,14 +279,17 @@ export async function statLetterBody(
 
   let fileName: string;
   let format: 'html' | 'markdown';
+  let recordedBytes: number | null;
   if (turn === undefined) {
     format = record.bodyFormat;
     fileName = `${record.id}.${bodyExt(format)}`;
+    recordedBytes = typeof record.bodyBytes === 'number' ? record.bodyBytes : null;
   } else {
     const entry = record.thread[turn];
     if (!entry?.bodyFile || !entry.bodyFormat) return null;
     format = entry.bodyFormat;
     fileName = entry.bodyFile;
+    recordedBytes = typeof entry.bodyBytes === 'number' ? entry.bodyBytes : null;
   }
   // Same traversal guard as readBodyFile: the name came off a JSON index another
   // process wrote, so it is untrusted input even though we produced it.
@@ -272,10 +301,32 @@ export async function statLetterBody(
   try {
     const st = await fsp.stat(full);
     if (!st.isFile()) return null;
-    return { path: full, bytes: st.size, mtimeMs: st.mtimeMs, format };
+    return { path: full, bytes: st.size, mtimeMs: st.mtimeMs, format, recordedBytes };
   } catch {
     return null;
   }
+}
+
+/**
+ * Is the body document on THIS box's disk EXACTLY the document that was sent?
+ *
+ * Only interesting where the file is a COPY: on a cloud replica the blob arrives
+ * over git-sync, so it can be absent (not pulled yet), short, or LONGER than what
+ * was sent. Both wrong sizes have to fail, which is why this is `===` and not
+ * `>=`: short is a half-synced file (a cut-off page, a truncated `<audio>`), and
+ * long is a file something appended to — most plausibly git conflict markers,
+ * which the sync's marker self-heal only repairs for JSON, so a markdown body
+ * would keep them. Serving either as the document reads as a corrupt letter,
+ * while relaying costs nothing but a round trip and returns the primary's clean
+ * copy. Exact equality is safe because a body is WRITE-ONCE and `recordedBytes`
+ * is the byte length of the source it was written from.
+ *
+ * Unknown recorded size (a letter written before the stamp existed) counts as
+ * complete: there is nothing to compare against, and a present file is the only
+ * evidence available.
+ */
+export function bodyStatIsComplete(stat: LetterBodyStat): boolean {
+  return stat.recordedBytes === null || stat.bytes === stat.recordedBytes;
 }
 
 /**
@@ -386,13 +437,22 @@ export async function sendLetter(input: NewLetter): Promise<LetterRecord> {
     throw invalid('exactly one of html | html_ref | markdown is required');
   }
   const actions = input.actions;
-  if (actions !== undefined) {
-    if (input.type !== 'action_required') {
-      throw invalid('actions are only allowed when type is action_required');
-    }
+  // An action_required letter with no buttons is a dead end: the reader shows a
+  // subject and a decision badge with nothing to decide with, and the human is
+  // left guessing what the options even were (2026-08-30, a real letter). The
+  // type is the PROMISE of an affordance, so it is required here rather than
+  // patched over in each reader.
+  if (input.type === 'action_required') {
     if (!Array.isArray(actions) || actions.length === 0) {
-      throw invalid('actions must be a non-empty array');
+      throw invalid(
+        'action_required needs at least one action in `actions` — that is what the human taps; '
+        + 'use type=review or info if the human only needs to read this',
+      );
     }
+  } else if (actions !== undefined) {
+    throw invalid('actions are only allowed when type is action_required');
+  }
+  if (actions !== undefined) {
     if (actions.length > MAX_ACTIONS) {
       throw invalid(`at most ${MAX_ACTIONS} actions — a letter asks ONE question the human can answer with one tap`);
     }
@@ -441,6 +501,9 @@ export async function sendLetter(input: NewLetter): Promise<LetterRecord> {
     read: false,
     pinned: input.pin === true,
     archived: false,
+    // Recorded from the source, not from a later stat: this is the number a box
+    // that only holds a COPY of the body compares its own file against.
+    bodyBytes: bodySource.bytes,
     thread: [],
     ...(actions ? { actions: actions.map(a => ({ ...a })) } : {}),
     ...(() => {
@@ -538,7 +601,9 @@ export async function getLetter(
     const turnBody = await readBodyFile(entry.bodyFile);
     thread.push(turnBody === null
       ? { ...entry, bodyMissing: true }
-      : { ...entry, body: turnBody, bodyBytes: turnStat?.bytes });
+      // Recorded size stays when the file is gone: spreading `undefined` over it
+      // would erase the one number a reader can check its own copy against.
+      : { ...entry, body: turnBody, ...(turnStat ? { bodyBytes: turnStat.bytes } : {}) });
   }
 
   if (deferOwn) {
@@ -570,6 +635,23 @@ function find(store: LetterStoreFile, id: string): LetterRecord {
   const record = store.letters.find(l => l.id === id);
   if (!record) throw notFound(id);
   return record;
+}
+
+/**
+ * Move the read flag and stamp WHEN it moved. The ONE place `read` is assigned,
+ * so the stamp cannot drift from the flag.
+ *
+ * `readAt` has NO consumer today — the merge between two copies of this file is
+ * decided by the index's top-level `lastUpdated`, not by any per-letter field. It
+ * is written because `read` is a bare boolean with no order of its own, and that
+ * history cannot be recovered after the fact; the first reader that wants it
+ * (per-letter read history in a mobile reader) needs it already on disk. No stamp
+ * when the value is unchanged: re-opening an already-read letter is not news.
+ */
+function setReadFlag(letter: LetterRecord, read: boolean): void {
+  if (letter.read === read) return;
+  letter.read = read;
+  letter.readAt = Date.now();
 }
 
 /**
@@ -608,9 +690,10 @@ export async function agentReply(id: string, input: AgentReplyInput): Promise<Le
       bodyFileToWrite = `${letter.id}.r${letter.thread.length}.${bodyExt(richFormat)}`;
       entry.bodyFormat = richFormat;
       entry.bodyFile = bodyFileToWrite;
+      entry.bodyBytes = richSource.bytes;
     }
     letter.thread.push(entry);
-    letter.read = false;
+    setReadFlag(letter, false);
     letter.archived = false;
     return { ...letter };
   }));
@@ -625,7 +708,7 @@ export async function setRead(id: string, read: boolean): Promise<LetterRecord> 
   requireValidId(id);
   const record = await withWriteLock(() => withStore((store) => {
     const letter = find(store, id);
-    letter.read = read === true;
+    setReadFlag(letter, read === true);
     return { ...letter };
   }));
   // Read state is canonical here; the envelope notification only mirrors it.
@@ -700,7 +783,7 @@ export async function answerLetter(
       text: note ? `${action.label} — ${note}` : action.label,
       at,
     });
-    letter.read = true;
+    setReadFlag(letter, true);
     letter.archived = false;
     return { ...letter };
   }));
@@ -717,7 +800,7 @@ export async function humanReply(id: string, input: { text: string }): Promise<L
   const record = await withWriteLock(() => withStore((store) => {
     const letter = find(store, id);
     letter.thread.push({ from: 'human', text: boundThreadText(text), at: Date.now() });
-    letter.read = true;
+    setReadFlag(letter, true);
     letter.archived = false;
     return { ...letter };
   }));

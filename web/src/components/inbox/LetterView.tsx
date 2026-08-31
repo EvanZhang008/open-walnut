@@ -27,7 +27,7 @@ import { useTaskLabel } from '@/hooks/useEntityLabels';
 import { formatRelative } from '@/contexts/notifications';
 import { log } from '@/utils/log';
 import {
-  answerLetter, deliveryText, getLetter, humanReplyToLetter,
+  answerLetter, deliveryText, getLetter, humanReplyToLetter, isDecisionWithoutOptions,
   LETTER_TYPE_LABEL, type LetterDetail, type LetterEnvelope,
 } from '@/api/human-inbox';
 import { LetterBody } from './LetterBody';
@@ -224,6 +224,12 @@ export function LetterView({
   const answered = shown?.answered;
   const actions = shown?.actions ?? [];
   const canDecide = shown?.type === 'action_required' && actions.length > 0 && !answered;
+  // A letter that says it needs a decision but carries no options. The store now
+  // rejects that at send time, so this is only ever a letter ALREADY on disk —
+  // and for those, hiding everything (which is what canDecide alone did) left an
+  // "Action needed" badge over a document with no way to answer it. Say what
+  // happened and point at the one control that still works.
+  const decisionWithoutOptions = !!shown && isDecisionWithoutOptions(shown);
   // Deep-link back to the sender's own Inbox tab with this letter open, so the
   // cross-session rail and the per-session tab are one navigation apart.
   const openSessionHref = useMemo(
@@ -305,6 +311,12 @@ export function LetterView({
               onChange={(e) => setFreeText(e.target.value)}
               rows={2}
             />
+          </div>
+        )}
+        {decisionWithoutOptions && (
+          <div className="hib-note" data-testid="hib-no-options">
+            The sender marked this as needing a decision but attached no options to pick from.
+            Read the letter and answer in the reply box below.
           </div>
         )}
         {answered && (

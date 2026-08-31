@@ -187,9 +187,16 @@ describe('human inbox store — validation', () => {
       letterInput({ type: 'action_required', actions: [{ id: 'a', label: '' }] }),
       /non-empty id and label/,
     );
+    // An empty array and a missing key are the SAME defect from the reader's
+    // side: a letter that promises a decision and shows no way to make one. Both
+    // are rejected, with a message that names the alternative types.
     await expectInvalid(
       letterInput({ type: 'action_required', actions: [] }),
-      /non-empty array/,
+      /action_required needs at least one action/,
+    );
+    await expectInvalid(
+      letterInput({ type: 'action_required' }),
+      /use type=review or info if the human only needs to read this/,
     );
     await expectInvalid(
       letterInput({

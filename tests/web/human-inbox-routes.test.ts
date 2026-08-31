@@ -207,6 +207,15 @@ describe('POST /api/v1/human-inbox — send + sender stamping', () => {
       ['action without a label', {
         subject: 's', type: 'action_required', markdown: 'x', actions: [{ id: 'a' }],
       }],
+      // A decision letter with nothing to decide with. It used to be ACCEPTED,
+      // and the readers then showed a "Needs decision" badge over a document with
+      // no buttons — the human could not answer at all.
+      ['a decision with no options at all', {
+        subject: 's', type: 'action_required', markdown: 'x',
+      }],
+      ['a decision with an empty options list', {
+        subject: 's', type: 'action_required', markdown: 'x', actions: [],
+      }],
     ]
     for (const [label, payload] of cases) {
       const res = await post('/api/v1/human-inbox', payload, SENDER_SID)
@@ -214,6 +223,41 @@ describe('POST /api/v1/human-inbox — send + sender stamping', () => {
       expect((await res.json()).error.code, label).toBe('bad_request')
     }
     expect((await listLetters()).letters).toHaveLength(0)
+  })
+
+  it('teaches the caller what to do instead of an actionless decision letter', async () => {
+    // The message is the fix for an AGENT, which is the only thing that sends
+    // letters: it has to name the field AND the two types that mean "just read
+    // this", or the model's next attempt is the same letter again.
+    const res = await post('/api/v1/human-inbox', {
+      subject: 'Which cache should we keep?', type: 'action_required', markdown: 'A or B?',
+    }, SENDER_SID)
+    expect(res.status).toBe(400)
+    const { error } = await res.json()
+    expect(error.message).toMatch(/actions/)
+    expect(error.message).toMatch(/type=review or info/)
+    expect((await listLetters()).letters).toHaveLength(0)
+  })
+
+  it('accepts the same letter once it carries an option', async () => {
+    const id = await sendLetter({
+      subject: 'Which cache should we keep?',
+      type: 'action_required',
+      markdown: 'A or B?',
+      actions: [{ id: 'a', label: 'Keep A' }, { id: 'b', label: 'Keep B' }],
+    }, SENDER_SID)
+    const { letter } = await getLetter(id)
+    expect(letter.type).toBe('action_required')
+    expect(letter.actions?.map(a => a.id)).toEqual(['a', 'b'])
+  })
+
+  it('leaves every other type unaffected by the actions rule', async () => {
+    for (const type of ['completion', 'review', 'info'] as const) {
+      const id = await sendLetter({ subject: `a ${type} letter`, type, markdown: 'x' }, SENDER_SID)
+      const { letter } = await getLetter(id)
+      expect(letter.type).toBe(type)
+      expect(letter.actions).toBeUndefined()
+    }
   })
 
   it('refuses an oversize markdown body with 413 instead of writing it', async () => {

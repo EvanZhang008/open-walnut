@@ -30,6 +30,7 @@ import { createReadStream } from 'node:fs'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { HUMAN_INBOX_CHUNK_BYTES } from '../../core/human-inbox/types.js'
+import type { LetterBodyStat } from '../../core/human-inbox/store.js'
 import { callPrimaryControl, sendV1Error as sendError } from './v1-control-relay.js'
 
 const SERVER_RELAY_SID = '__server__'
@@ -128,15 +129,50 @@ export function parseTurn(raw: unknown): number | undefined {
   return Number.isInteger(n) && n >= 0 ? n : undefined
 }
 
-// ── Primary: stream the file ─────────────────────────────────────────────────
+// ── Local disk: stream the file ──────────────────────────────────────────────
+
+async function statLocalBody(id: string, turn: number | undefined): Promise<LetterBodyStat | null> {
+  const { statLetterBody } = await import('../../core/human-inbox/store.js')
+  return statLetterBody(id, turn)
+}
+
+/**
+ * The body document a REPLICA can serve itself, or null.
+ *
+ * The blob rides git-sync, so a replica normally holds a byte-identical copy of
+ * every letter body — reading it locally is one file stream instead of an N-chunk
+ * round trip per Range over the bridge, and it keeps working while the bridge is
+ * down. Two cases still have to relay, and the second is the subtle one: the
+ * letter (or its blob) hasn't synced yet, or the local file's size does not MATCH
+ * the size the sender recorded (either direction — see bodyStatIsComplete). A
+ * document that isn't byte-for-byte what was sent must never be served: it reads
+ * as a corrupt letter, which is worse than a slow one.
+ */
+async function localBodyIfComplete(
+  id: string,
+  turn: number | undefined,
+): Promise<LetterBodyStat | null> {
+  const stat = await statLocalBody(id, turn)
+  if (!stat) return null
+  const { bodyStatIsComplete } = await import('../../core/human-inbox/store.js')
+  if (bodyStatIsComplete(stat)) return stat
+  log.notif.info('human-inbox: local body copy is not the sent size — relaying from the primary', {
+    letterId: id, localBytes: stat.bytes, recordedBytes: stat.recordedBytes,
+  })
+  return null
+}
 
 async function servePrimary(req: Request, res: Response, id: string, turn: number | undefined): Promise<void> {
-  const { statLetterBody } = await import('../../core/human-inbox/store.js')
-  const stat = await statLetterBody(id, turn)
+  const stat = await statLocalBody(id, turn)
   if (!stat) {
     sendError(res, 404, 'not_found', `Letter body not found: ${id}`)
     return
   }
+  await serveLocalStat(req, res, stat)
+}
+
+/** Answer from a stat we already have — the Range half, shared by both boxes. */
+async function serveLocalStat(req: Request, res: Response, stat: LetterBodyStat): Promise<void> {
   const range = parseByteRange(req.headers.range, stat.bytes)
   if (range === 'unsatisfiable') {
     res.setHeader('Content-Range', `bytes */${stat.bytes}`)
@@ -283,7 +319,10 @@ async function serveReplica(req: Request, res: Response, id: string, turn: numbe
  */
 async function serveFramed(res: Response, id: string, turn: number | undefined): Promise<void> {
   const { planLetterFrame } = await import('../../core/human-inbox/letter-frame.js')
-  const readSlice = CLOUD_MODE
+  // Same local-first rule as the raw form: a replica reads its own copy of the
+  // blob when it has all of it, and only falls back to the chunked relay.
+  const relayOnly = CLOUD_MODE && (await localBodyIfComplete(id, turn)) === null
+  const readSlice = relayOnly
     ? async (start: number, length: number) => {
       const chunk = await pullChunk(res, id, turn, start, length)
       return chunk === null ? null : { data: chunk.data, fileSize: chunk.fileSize, format: chunk.format }
@@ -351,7 +390,15 @@ async function streamRest(
   }
 }
 
-/** Route handler — mounted as `GET /human-inbox/:id/body`. */
+/**
+ * Route handler — mounted as `GET /human-inbox/:id/body`.
+ *
+ * A replica serves the document off its OWN disk whenever it holds a complete
+ * copy (the blob rides git-sync), and relays only when it doesn't. The relay is
+ * the fallback, not the default: it costs a bridge round trip per chunk per
+ * Range, and it is the only half that can fail when the bridge is down — a body
+ * the box already has on disk should not depend on the tunnel being up.
+ */
 export async function serveLetterBody(req: Request, res: Response, id: string): Promise<void> {
   const turn = parseTurn(req.query.turn)
   if (req.query.frame === '1') {
@@ -359,6 +406,11 @@ export async function serveLetterBody(req: Request, res: Response, id: string): 
     return
   }
   if (CLOUD_MODE) {
+    const local = await localBodyIfComplete(id, turn)
+    if (local) {
+      await serveLocalStat(req, res, local)
+      return
+    }
     await serveReplica(req, res, id, turn)
     return
   }

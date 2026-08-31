@@ -50,6 +50,11 @@ export interface ThreadEntry {
   text: string;
   bodyFormat?: LetterBodyFormat;
   bodyFile?: string;
+  /**
+   * Size the SENDER recorded for `bodyFile`, stamped at write time. Same job as
+   * LetterRecord.bodyBytes: it is what a replica compares its own copy against.
+   */
+  bodyBytes?: number;
   at: number;
 }
 
@@ -65,8 +70,25 @@ export interface LetterRecord {
   sender: LetterSender;
   createdAt: number;
   read: boolean;
+  /**
+   * When `read` last CHANGED. Recorded metadata only — NOTHING reads it yet.
+   * Conflict resolution between two copies of the index is decided by the file's
+   * top-level `lastUpdated` (see LetterStoreFile), not by this. It is here because
+   * `read` is a bare boolean and a boolean carries no order at all, so the moment
+   * anything wants to reconcile or display per-letter read history (the phone's
+   * reader is the likely first caller) the information has to already be on disk.
+   * Absent on a letter whose read flag has never moved.
+   */
+  readAt?: number;
   pinned: boolean;
   archived: boolean;
+  /**
+   * Size of the body document as the SENDER wrote it. Stamped at send time, so
+   * it travels with the index — which is what lets a box holding only a COPY of
+   * the body (a cloud replica, whose blob arrives over git-sync) tell a complete
+   * copy from a half-synced one without asking the primary.
+   */
+  bodyBytes?: number;
   actions?: LetterAction[];
   answered?: LetterAnswer;
   thread: ThreadEntry[];

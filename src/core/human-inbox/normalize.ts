@@ -26,6 +26,13 @@ export const BODY_FILE_RE = /^lt-[0-9a-z]{1,12}-[0-9a-z]{4,12}(?:\.r\d{1,4})?\.(
 
 export interface LetterStoreFile {
   version: 1;
+  /**
+   * ISO stamp of the last write, set by the store on EVERY save (see withStore).
+   * This is the file's content clock: git-sync's LWW merge reads exactly this
+   * top-level field (contentClockMs in src/integrations/git-sync.ts) and prefers
+   * the newer content, instead of the box whose 30s tick happened to commit last.
+   */
+  lastUpdated?: string;
   letters: LetterRecord[];
 }
 
@@ -64,6 +71,7 @@ function normalizeThread(raw: unknown): ThreadEntry[] {
       at: typeof e.at === 'number' ? e.at : 0,
       ...(e.bodyFormat === 'html' || e.bodyFormat === 'markdown' ? { bodyFormat: e.bodyFormat } : {}),
       ...(typeof e.bodyFile === 'string' ? { bodyFile: e.bodyFile } : {}),
+      ...(typeof e.bodyBytes === 'number' && e.bodyBytes >= 0 ? { bodyBytes: e.bodyBytes } : {}),
     });
   }
   return out;
@@ -100,6 +108,12 @@ function normalizeRecord(raw: unknown): LetterRecord | null {
     sender: normalizeSender(r.sender),
     createdAt: typeof r.createdAt === 'number' ? r.createdAt : 0,
     read: r.read === true,
+    // Both survive normalization. `bodyBytes` is load-bearing (a replica compares
+    // its own copy of the body against it); `readAt` is recorded metadata with no
+    // reader yet, and dropping it on every rewrite would quietly make it useless
+    // to the first one — see LetterRecord.readAt.
+    ...(typeof r.readAt === 'number' && r.readAt > 0 ? { readAt: r.readAt } : {}),
+    ...(typeof r.bodyBytes === 'number' && r.bodyBytes >= 0 ? { bodyBytes: r.bodyBytes } : {}),
     pinned: r.pinned === true,
     archived: r.archived === true,
     thread: normalizeThread(r.thread),
@@ -129,5 +143,9 @@ export function normalizeStore(raw: unknown): LetterStoreFile {
     const record = normalizeRecord(entry);
     if (record) letters.push(record);
   }
-  return { version: 1, letters };
+  return {
+    version: 1,
+    ...(typeof parsed.lastUpdated === 'string' ? { lastUpdated: parsed.lastUpdated } : {}),
+    letters,
+  };
 }

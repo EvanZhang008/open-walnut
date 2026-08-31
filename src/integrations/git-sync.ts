@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { WALNUT_HOME } from '../constants.js';
+import { CLOUD_MODE, WALNUT_HOME } from '../constants.js';
 import { bus, EventNames } from '../core/event-bus.js';
 import { markCriticalSection } from '../core/event-loop-monitor.js';
 import { safeKillProcessGroup } from '../core/process-group-kill.js';
@@ -618,6 +618,112 @@ const EXTRA_IGNORE_PATTERNS = [
 ];
 
 /**
+ * Data the REPLICA may never author a commit for. Not an ignore rule: the
+ * PRIMARY must keep committing these (they are user data and git is their only
+ * backup), so they cannot go in the .gitignore template — the split is per-BOX,
+ * and CLOUD_MODE is what tells the two apart.
+ *
+ * `human-inbox/` is primary-authoritative in the same way session-requests.json
+ * is primary-only: every `/api/v1/human-inbox` route on a replica RELAYS to the
+ * primary over `server.human-inbox.*` (see core/human-inbox/relay.ts), staging a
+ * body there answers 501, and the replica never reads its local copy for
+ * anything. So the replica holds a read-only mirror it received over git, and the
+ * only commit it could ever author against it is a REVERT of the primary's newer
+ * write. That is not theoretical: 2026-08-30 a replica auto-save committed its
+ * older index.json over the primary's, flipping a letter the human had read back
+ * to unread and taking a thread turn with it.
+ *
+ * NOT extended to notifications.json even though it looks like the same hazard:
+ * the replica genuinely AUTHORS that file (routes/notifications.ts writes the
+ * local store with no relay, and session-tracker / hooks / plugins all record
+ * into it on the box they run on), so refusing to commit it would silently
+ * discard the phone's own mark-read and dismiss actions instead of syncing them.
+ */
+export const CLOUD_NEVER_STAGE_DIRS = ['human-inbox'];
+
+/**
+ * The `git add` for an auto-commit. On the primary this is the plain `add -A` it
+ * has always been; on a replica the never-author dirs are excluded by pathspec.
+ * Pure, so a test can read the exact argument line for both shapes.
+ */
+export function stageAllArgs(cloudMode: boolean): string {
+  if (!cloudMode || CLOUD_NEVER_STAGE_DIRS.length === 0) return 'add -A';
+  // Both forms on purpose: the bare name excludes the directory, the /** form is
+  // there so a future entry that names a FILE pattern keeps working.
+  const excludes = CLOUD_NEVER_STAGE_DIRS
+    .map(dir => `':(exclude)${dir}' ':(exclude)${dir}/**'`)
+    .join(' ');
+  return `add -A -- . ${excludes}`;
+}
+
+/**
+ * Stage the worktree for an auto-commit, honouring the replica's never-author
+ * list. Every routine commit path funnels through here.
+ *
+ * Three steps on a replica, and the third is the one that is easy to miss:
+ *
+ *  1. `add` with the dirs excluded — nothing new about them can be staged;
+ *  2. `reset` those dirs — anything ALREADY in the index (an older build's
+ *     `add -A`, a `rm --cached` pass) is dropped, so the guarantee holds for a
+ *     box that is mid-upgrade rather than only for fresh dirt;
+ *  3. restore the dirs from HEAD when they are dirty. Excluding a TRACKED dirty
+ *     path from every commit leaves it dirty forever, and `git rebase` refuses
+ *     outright with unstaged changes ("cannot rebase: You have unstaged
+ *     changes") while `merge` refuses to overwrite them — so the pull half of
+ *     the very next tick would fail too, and the replica would stop receiving
+ *     ANY upstream data, not just letters. The replica has no authority over
+ *     these paths, so HEAD is the honest answer, and the discard is logged.
+ */
+export async function stageAllForCommit(
+  opts: { cwd?: string; cloudMode?: boolean } = {},
+): Promise<void> {
+  const cloudMode = opts.cloudMode ?? CLOUD_MODE;
+  const gitOpts = opts.cwd ? { cwd: opts.cwd } : undefined;
+  if (cloudMode) await restoreNeverStagePaths(gitOpts);
+  await gitAsync(stageAllArgs(cloudMode), gitOpts);
+  if (!cloudMode) return;
+  for (const dir of CLOUD_NEVER_STAGE_DIRS) {
+    // Best-effort: a repo with no HEAD yet (initSync's first commit) has nothing
+    // to reset to, and there is nothing staged there to drop either.
+    await gitSafeAsync(`reset -q -- "${dir}"`, gitOpts);
+  }
+}
+
+/**
+ * Put the never-author dirs back to HEAD when a replica has diverged there.
+ *
+ * Asks git directly, SCOPED to those dirs, rather than reusing the caller's
+ * porcelain snapshot: one cheap index-only call on the replica, and immune to a
+ * trap that already bit this — `gitAsync` trims its whole stdout, so the FIRST
+ * porcelain line of a `status` loses the leading space of a ` M path` status and
+ * a fixed `slice(3)` then eats a character of the filename.
+ *
+ * Only TRACKED changes are restored. An untracked local file blocks nothing and
+ * is left on disk for a human to look at.
+ */
+async function restoreNeverStagePaths(gitOpts: { cwd?: string } | undefined): Promise<void> {
+  const scope = CLOUD_NEVER_STAGE_DIRS.map(dir => `"${dir}"`).join(' ');
+  const status = await gitSafeAsync(`status --porcelain -- ${scope}`, gitOpts);
+  if (!status) return;
+  const diverged = status
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0 && !line.startsWith('??'))
+    // Strip the XY status, whatever whitespace survived the trim.
+    .map(line => line.replace(/^\S{1,2}\s+/, ''));
+  if (diverged.length === 0) return;
+  log.git.error(
+    'git-sync: replica-local changes under a primary-authoritative path — restoring them from HEAD. '
+    + 'This box relays every write for these paths, so a local difference is a stale mirror, and '
+    + 'committing it would revert the primary (2026-08-30 incident).',
+    { files: diverged.slice(0, 20), count: diverged.length, dirs: CLOUD_NEVER_STAGE_DIRS },
+  );
+  for (const dir of CLOUD_NEVER_STAGE_DIRS) {
+    await gitSafeAsync(`checkout -q HEAD -- "${dir}"`, gitOpts);
+  }
+}
+
+/**
  * Append missing CRITICAL_IGNORES / EXTRA_IGNORE_PATTERNS to an existing
  * .gitignore (idempotent). Called from ensureRepo() so every boot self-heals
  * older installations.
@@ -759,7 +865,10 @@ export function initSync(remoteUrl?: string): void {
   // Initial commit if repo is empty
   const hasCommits = gitSafe('log --oneline -1') !== null;
   if (!hasCommits) {
-    git('add -A');
+    // Same never-author rule as the tick's commits (see stageAllForCommit): a
+    // replica must not publish primary-authoritative data even in its very first
+    // commit. Nothing to reset or restore here — there is no HEAD yet.
+    git(stageAllArgs(CLOUD_MODE));
     gitSafe('commit -m "open-walnut init"');
   }
 }
@@ -1115,6 +1224,12 @@ export async function recoverOrphanedGitSurgery(
     );
 
     // 1. Snapshot the live worktree on the detached HEAD (newest data on disk).
+    //    Deliberately a WHOLE-tree `add -A`, with no never-author exclusion
+    //    (stageAllForCommit): step 2's `checkout -f` overwrites the worktree, so
+    //    anything left out of this snapshot is destroyed rather than merely
+    //    unpublished. A replica reverting a letter here is recoverable — the
+    //    stores' `lastUpdated` content clock makes the primary's newer copy win
+    //    the merge — while data this step drops is not.
     await gitSafeAsync('add -A', opts);
     await gitSafeAsync('commit -q -m "rescue: live worktree at orphaned-rebase recovery"', opts);
     const rescueTip = await gitSafeAsync('rev-parse HEAD', opts);
@@ -1555,7 +1670,7 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
       // (2026-08-22). Runs on the dirty snapshot we already have, before add.
       await healConflictMarkeredJsonFromStatus(dirtyLines, 'syncInner:commit');
 
-      await gitAsync('add -A');
+      await stageAllForCommit();
 
       // …and re-check: `add -A` itself can re-track a machine-local file the
       // instant before a pull could carry its remote deletion to disk.
@@ -2152,13 +2267,13 @@ export async function commitIfDirty(): Promise<boolean> {
   await healConflictMarkeredJsonFromStatus(lines, 'commitIfDirty');
 
   try {
-    await gitAsync('add -A');
+    await stageAllForCommit();
   } catch (err) {
     if (!isLockContention(err)) throw err;
     // Lock held by another process — wait briefly (async, loop keeps running) and retry once
     await new Promise((r) => setTimeout(r, 300));
     clearStaleLock(5_000);
-    await gitAsync('add -A');
+    await stageAllForCommit();
   }
 
   // Honest count: from what is ACTUALLY staged at commit time, not the

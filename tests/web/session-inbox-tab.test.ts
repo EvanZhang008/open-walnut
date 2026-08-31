@@ -13,7 +13,7 @@
  *      wrong session never claims it, a claim consumes it, and a stale one expires.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { LetterEnvelope } from '../../web/src/api/human-inbox';
+import { isDecisionWithoutOptions, type LetterEnvelope } from '../../web/src/api/human-inbox';
 import {
   attentionLetterCount, inboxChipTitle, lettersForSession, letterSessionMatch,
   unreadLetterCount, decisionLetterCount,
@@ -84,6 +84,30 @@ describe('lettersForSession', () => {
   it('tolerates a record with no sender object', () => {
     const all = [{ ...letter({ id: 'lt-1' }), sender: undefined } as unknown as LetterEnvelope];
     expect(lettersForSession(all, 'sess-a')).toEqual([]);
+  });
+});
+
+describe('a decision letter with no options', () => {
+  // The store now refuses to accept one, so these are letters ALREADY on disk.
+  // The reader gated its whole decision block on having buttons, so such a letter
+  // rendered an "Action needed" badge over a document with nothing to answer it
+  // with — the human could not tell whether the options were lost or never sent.
+  it('is recognised, so the reader can say so instead of showing nothing', () => {
+    expect(isDecisionWithoutOptions(letter({ id: 'a', type: 'action_required' }))).toBe(true);
+    expect(isDecisionWithoutOptions(letter({ id: 'b', type: 'action_required', actions: [] }))).toBe(true);
+  });
+
+  it('is not confused with a healthy decision, a plain letter, or an answered one', () => {
+    expect(isDecisionWithoutOptions(
+      letter({ id: 'c', type: 'action_required', actions: [{ id: 'go', label: 'Go' }] }),
+    )).toBe(false);
+    expect(isDecisionWithoutOptions(letter({ id: 'd', type: 'info' }))).toBe(false);
+    expect(isDecisionWithoutOptions(letter({ id: 'e', type: 'review' }))).toBe(false);
+    expect(isDecisionWithoutOptions(letter({
+      id: 'f',
+      type: 'action_required',
+      answered: { actionId: 'go', label: 'Go', at: 5 },
+    }))).toBe(false);
   });
 });
 

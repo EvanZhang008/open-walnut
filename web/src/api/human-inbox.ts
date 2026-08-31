@@ -276,6 +276,18 @@ export function isAwaitingDecision(l: LetterEnvelope): boolean {
   return l.type === 'action_required' && !l.answered && !l.archived;
 }
 
+/**
+ * A letter that PROMISED a decision and carries nothing to decide with.
+ *
+ * The server now refuses to accept one, so this only ever matches a letter
+ * already on disk. It still has to be named, because the reader used to gate the
+ * whole decision block on `actions.length > 0` and so showed an "Action needed"
+ * badge above a document with no way to answer it.
+ */
+export function isDecisionWithoutOptions(l: LetterEnvelope): boolean {
+  return l.type === 'action_required' && (l.actions?.length ?? 0) === 0 && !l.answered;
+}
+
 export const LETTER_TYPE_LABEL: Record<LetterType, string> = {
   completion: 'Completed',
   action_required: 'Action needed',

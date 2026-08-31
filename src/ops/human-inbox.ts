@@ -27,12 +27,15 @@ defineOp({
     + 'Writing standard: one phone screen, background in 1-2 sentences, then the point; '
     + 'self-contained (never "see the session"); link long artifacts by path instead of pasting them. '
     + 'Body is markdown (usual choice) or self-contained html with inline styles, exactly one of the two. '
-    + 'type=action_required means you need a decision: give `actions` as the options, and the human '
-    + 'taps one, whose choice is delivered back into this session. Never write who you are; the '
+    + 'type=action_required means you need a decision and REQUIRES `actions`, at least one: the human '
+    + 'taps one option and that choice is delivered back into this session. Without them the letter is '
+    + 'a dead end, so it is rejected — if the human only needs to read this, send review or info '
+    + 'instead. Never write who you are; the '
     + 'sender (session, task, host) is stamped for you. Returns the letter id, which you need to reply.',
   input: {
     subject: z.string().min(1).describe('One line the human reads first, like an email subject'),
-    type: LETTER_TYPE.describe('completion | action_required | review | info'),
+    type: LETTER_TYPE.describe(
+      'completion | action_required | review | info. action_required also requires `actions`'),
     markdown: z.string().optional().describe('Letter body as markdown (exactly one of markdown | html)'),
     html: z.string().optional().describe(
       'Letter body as self-contained HTML, no scripts (inline styles only). The one body that may '
@@ -44,7 +47,9 @@ defineOp({
       + '`walnut tools call human_inbox_send @/path/payload.json` (the file is transferred in '
       + 'batches for you, so size is not your problem).'),
     text: z.string().optional().describe('Short plain-text preview for the envelope row and the phone push'),
-    actions: z.array(ACTION).optional().describe('action_required only: the options rendered as buttons'),
+    actions: z.array(ACTION).min(1).optional().describe(
+      'The options rendered as buttons. REQUIRED (at least one) when type=action_required, and '
+      + 'rejected on any other type: a decision letter with no options is one the human cannot answer'),
     task_refs: z.array(z.string()).optional().describe('Task ids this letter is about; rendered as clickable pills'),
     pin: z.boolean().optional().describe('Pin it to the top of the inbox (digests, standing reports)'),
   },
