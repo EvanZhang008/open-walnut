@@ -19,7 +19,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CLOUD_MODE } from '../../constants.js';
-import { calendarAuthStatus } from '../calendar/sources/eventkit.js';
+import { calendarAuthStatus, calendarHelperFallback } from '../calendar/sources/eventkit.js';
 import { log } from '../../logging/index.js';
 import type { Config } from '../types.js';
 import type { LauncherInfo, PermissionsReport, PermissionStatus } from './types.js';
@@ -233,6 +233,11 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
     probeFullDiskAccess(),
   ]);
 
+  // calendarAuthStatus asks the CURRENT helper. A previous generation can still
+  // be holding the grant and serving real events, and saying "not granted" over
+  // a full calendar is how a correct panel loses the user's trust.
+  const calFallback = calState === 'granted' ? null : calendarHelperFallback();
+
   const permissions: PermissionStatus[] = [
     {
       id: 'calendar',
@@ -242,7 +247,13 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
       // macOS never re-prompts, so the fix becomes settings-only. The dialog
       // picks its button off this field.
       fixKind: calState === 'not-determined' ? 'prompt' : 'settings-only',
-      why: 'Shows your Mac calendar events (iCloud, Google, Exchange) in the calendar view.',
+      why:
+        'Shows your Mac calendar events (iCloud, Google, Exchange) in the calendar view.'
+        + (calFallback
+          ? ` Your calendar is working right now through an older copy of the helper (${calFallback.version}),`
+            + ' so nothing is missing; granting the current one just retires the old copy.'
+          : ''),
+      ...(calFallback ? { workingVia: `an older copy of the helper (${calFallback.version})` } : {}),
       // The v2+ helper disclaims parent responsibility, so the grant target
       // is the helper itself — launcher-independent by design.
       grantTarget: 'walnut-calendar (asks by itself — one Allow click)',

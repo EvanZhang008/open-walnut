@@ -76,6 +76,18 @@ export interface PermissionStatus {
    * enabled toggle will otherwise assume our probe is broken.
    */
   staleGrant?: boolean;
+  /**
+   * Set when the FEATURE is working even though this permission reads as denied,
+   * naming what is standing in (e.g. "an older copy of the helper (v4)").
+   *
+   * The calendar can do exactly this: a version bump leaves the previous helper
+   * in place still holding its grant, and the reader falls back to it rather than
+   * showing an empty day. The probe asks the CURRENT helper, so without this
+   * field the panel reports "not granted" beside a calendar that is visibly full
+   * of events, which reads as a broken probe and makes every other row in the
+   * panel less believable.
+   */
+  workingVia?: string;
 }
 
 export interface LauncherInfo {

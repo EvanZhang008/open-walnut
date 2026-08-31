@@ -103,6 +103,27 @@ export interface HelperSpec {
   /** Embedded into __TEXT,__info_plist. Required when tccd must read a usage
    *  description string (Calendars, Apple Events). Omit when no prompt exists. */
   infoPlist?: string;
+  /**
+   * Hardened-runtime entitlement keys this helper needs, e.g.
+   * `com.apple.security.personal-information.calendars`.
+   *
+   * NOT optional polish for a PROMPTABLE permission: we sign with
+   * `--options runtime`, and under the hardened runtime tccd refuses to show the
+   * prompt at all unless the binary declares the matching entitlement. It does
+   * not fail loudly either. It logs
+   *
+   *   Prompting policy for hardened runtime; service: kTCCServiceCalendar
+   *   requires entitlement com.apple.security.personal-information.calendars
+   *   but it is missing for accessing={identifier=dev.openwalnut.calendar…}
+   *
+   * and the request returns denied while the status stays notDetermined, so the
+   * UI says "not asked yet" forever and no button can fix it. Measured here on
+   * 2026-08-31: the moment these helpers went from ad-hoc to certificate-signed
+   * they became unpromptable, because an ad-hoc binary gets tccd's lax policy
+   * and a hardened-runtime one does not. Every promptable helper MUST list its
+   * entitlement here, and a ratchet test pins the pair.
+   */
+  entitlements?: readonly string[];
 }
 
 interface BuildOutcome {
@@ -384,11 +405,41 @@ async function signHelper(binPath: string, spec: HelperSpec): Promise<void> {
     });
     return;
   }
+  const entitlementsFile = await writeEntitlements(binPath, spec);
+  try {
+    await signWithCandidates(binPath, spec, candidates, entitlementsFile);
+  } finally {
+    if (entitlementsFile) await fsp.rm(entitlementsFile, { force: true }).catch(() => {});
+  }
+}
+
+/** The entitlements plist for this helper, or null when it needs none. */
+async function writeEntitlements(binPath: string, spec: HelperSpec): Promise<string | null> {
+  if (!spec.entitlements || spec.entitlements.length === 0) return null;
+  const body = spec.entitlements.map((key) => `\t<key>${key}</key>\n\t<true/>`).join('\n');
+  const plist = '<?xml version="1.0" encoding="UTF-8"?>\n'
+    + '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+    + '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+    + `<plist version="1.0">\n<dict>\n${body}\n</dict>\n</plist>\n`;
+  // Beside the binary being signed (already a private temp path), so it is never
+  // world-writable and never collides between concurrent builds.
+  const file = `${binPath}.entitlements.plist`;
+  await fsp.writeFile(file, plist);
+  return file;
+}
+
+async function signWithCandidates(
+  binPath: string,
+  spec: HelperSpec,
+  candidates: readonly { hash: string; name: string }[],
+  entitlementsFile: string | null,
+): Promise<void> {
   for (const candidate of candidates) {
     // --timestamp: without a secure timestamp a signature can stop validating once
     // the certificate expires, and Apple Development certs expire yearly.
     const signed = await run('codesign', [
       '--force', '--sign', candidate.hash, '-i', spec.identifier,
+      ...(entitlementsFile ? ['--entitlements', entitlementsFile] : []),
       '--timestamp', '--options', 'runtime', binPath,
     ]);
     if (!signed.ok) {

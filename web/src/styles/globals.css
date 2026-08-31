@@ -25873,6 +25873,12 @@ a.file-link:hover {
 .permission-state-dot.permission-state-granted { background: var(--success, #30a46c); }
 .permission-state-dot.permission-state-denied { background: var(--error, #e5484d); }
 .permission-state-dot.permission-state-not-determined { background: var(--warning, #f5a623); }
+/* Working through a stand-in: green, because the feature works, ringed because
+   there is still something to tidy up. */
+.permission-state-dot.permission-state-working {
+  background: var(--success, #30a46c);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warning, #f5a623) 55%, transparent);
+}
 
 /* ============================================================================
    Session "Changed" view — full-screen File Diff + relocated session chat

@@ -37,8 +37,18 @@ import { recordOutside, type OutsideRecord } from './outside-store.js';
  *  and re-signing in place would have been worse: it changes the content hash and
  *  would silently break the grant the user already has. Cost: macOS asks for
  *  Automation once more, which is a prompt and one click.
+ *  v5: no source change either. v4 turned out to be UNGRANTABLE, and the reason is
+ *  worth keeping: signing with a certificate also puts the binary under the
+ *  hardened runtime, and under that runtime tccd refuses to show the Automation
+ *  prompt for a binary that does not declare
+ *  com.apple.security.automation.apple-events. It reports nothing to the caller
+ *  either, so the request just comes back denied and the UI can only say "not
+ *  granted" forever. v5 carries the entitlement (see HELPER_SPEC), and it needs a
+ *  NEW file name rather than a re-sign because tccd had already recorded an entry
+ *  for v4's path whose code requirement no longer matches, and it will not
+ *  re-prompt for that path.
  *  MUST equal HELPER_VERSION in src/data/walnut-activity.swift (ratchet test). */
-export const HELPER_VERSION = 'v4';
+export const HELPER_VERSION = 'v5';
 /** The helper's own cadence (src/data/walnut-activity.swift SAMPLE_INTERVAL). */
 export const TICK_MS = 5_000;
 /** Above this, the user is away from the keyboard: the sample is not attention. */
@@ -196,6 +206,11 @@ const HELPER_SPEC: HelperSpec = {
    *  against this string, so it must not move when HELPER_VERSION does. */
   identifier: 'dev.openwalnut.activity',
   infoPlist: HELPER_INFO_PLIST,
+  // Without this, a certificate-signed helper can never be granted Automation at
+  // all: tccd applies its hardened-runtime prompting policy and refuses to show
+  // the dialog for a binary that does not declare the entitlement. See the
+  // `entitlements` field's comment in src/core/helper-build.ts.
+  entitlements: ['com.apple.security.automation.apple-events'],
 };
 
 /** Why this box has no helper. Null = fine, or not attempted yet. It lives in

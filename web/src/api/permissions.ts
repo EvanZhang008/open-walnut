@@ -31,6 +31,10 @@ export interface PermissionStatus {
    *  build of the helper, so it no longer applies. Only a remove-and-re-add
    *  fixes it; toggling does nothing. The UI must say "re-add", not "add". */
   staleGrant?: boolean;
+  /** The feature works even though this reads as denied, naming what stands in
+   *  (e.g. "an older copy of the helper (v4)"). Saying "not granted" beside a
+   *  calendar full of events reads as a broken probe. */
+  workingVia?: string;
 }
 
 export interface PermissionsReport {

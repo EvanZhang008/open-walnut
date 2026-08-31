@@ -48,7 +48,7 @@ import Foundation
 // certificate-signed one so the Automation grant stops resetting on every upgrade.
 // See src/core/helper-build.ts and the note beside HELPER_VERSION in
 // src/core/time-tracking/outside-collector.ts, which this string must equal.
-let HELPER_VERSION = "v4"
+let HELPER_VERSION = "v5"
 /// One line per this many seconds. The server clamps banked duration itself, so
 /// a slow tick can never inflate a day.
 let SAMPLE_INTERVAL: TimeInterval = 5

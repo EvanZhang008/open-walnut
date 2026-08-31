@@ -85,8 +85,8 @@ export function PermissionsSection() {
           {shown.map((p) => (
             <div key={p.id} className="settings-row-inline permission-row">
               <span
-                className={`permission-state-dot permission-state-${p.state}`}
-                aria-label={STATE_LABEL[p.state] ?? p.state}
+                className={`permission-state-dot permission-state-${p.workingVia ? 'working' : p.state}`}
+                aria-label={p.workingVia ? 'Working' : STATE_LABEL[p.state] ?? p.state}
               />
               <div className="permission-row-main">
                 <div className="permission-row-label">{p.label}</div>
@@ -95,8 +95,14 @@ export function PermissionsSection() {
               {/* A stale grant looks GRANTED in System Settings (the row is there,
                   the toggle is on) while nothing works, so the state word has to
                   say which of the two "not granted" situations this is. */}
+              {/* Order matters: "working through a stand-in" is the truth the user
+                  can check against their own screen, so it outranks the raw probe
+                  result. Reporting "not granted" beside a calendar full of events
+                  is what made this whole panel look broken. */}
               <span className="settings-muted permission-row-state">
-                {p.staleGrant ? 'Needs re-adding' : STATE_LABEL[p.state] ?? p.state}
+                {p.workingVia
+                  ? 'Working (older copy)'
+                  : p.staleGrant ? 'Needs re-adding' : STATE_LABEL[p.state] ?? p.state}
               </span>
               {p.state !== 'granted' && (
                 <button className="btn btn-sm" onClick={() => setFixing(p)}>

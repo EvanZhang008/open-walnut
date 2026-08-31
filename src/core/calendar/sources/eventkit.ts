@@ -47,7 +47,18 @@ const execFileAsync = promisify(execFile);
 // signature (ensureHelper returns an existing file untouched, and re-signing in place
 // changes the content hash and would break the grant the user already has). Cost:
 // macOS asks for Calendars once more.
-const HELPER_VERSION = 'v5';
+//
+// v6 exists because v5 turned out to be UNGRANTABLE, and the reason is worth
+// keeping. Signing it with a certificate also put it under the hardened runtime,
+// and under that runtime tccd refuses to show the Calendars prompt for a binary
+// that does not declare com.apple.security.personal-information.calendars. It
+// does not report this to the caller: the request returns denied while the status
+// stays notDetermined, so the UI reads "not asked yet" forever and no button can
+// change it. Only tccd's own log said so. v6 carries the entitlement (see
+// HELPER_SPEC below), and it needs a NEW file name rather than a re-sign of v5
+// because tccd had already recorded an entry for v5's path whose code
+// requirement no longer matches, and it will not re-prompt for that path.
+const HELPER_VERSION = 'v6';
 const HELPER_TIMEOUT_MS = 30_000;
 
 /** Embedded plist: tccd reads usage keys from here once the helper is its own
@@ -92,6 +103,11 @@ const HELPER_SPEC: HelperSpec = {
    *  against this string, so it must not move when HELPER_VERSION does. */
   identifier: 'dev.openwalnut.calendar',
   infoPlist: HELPER_INFO_PLIST,
+  // Without this, a certificate-signed helper can never be granted Calendars at
+  // all: tccd applies its hardened-runtime prompting policy and refuses to show
+  // the dialog for a binary that does not declare the entitlement. See the
+  // `entitlements` field's comment in src/core/helper-build.ts.
+  entitlements: ['com.apple.security.personal-information.calendars'],
 };
 
 /**
