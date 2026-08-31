@@ -488,7 +488,7 @@ function runWnMinimal(argv, stdinText) {
     };
     wnWait = { id: waitId, deadline: Date.now() + waitTimeoutSecs * 1000 };
   } else { errOut('walnut: ' + usage); return exitWn(2); }
-  // Env-less fallback — mirror of wn-cli.ts resolveWnEndpoint. Inside a session
+  // Env-less fallback — mirror of wn-cli.ts resolveWalnutCliEndpoint. Inside a session
   // Walnut launched, both vars are injected. Started by hand (plain terminal,
   // self-launched agent), fall back to this host's well-known daemon socket and
   // identify as 'external'. Trusted ONLY when it is a socket owned by this user
@@ -2731,7 +2731,14 @@ function shimCoreNeedsCopy(srcSize, dstSize, stampedVersion, version) {
 // deleted by the next deploy, and the shim then execs a path that is gone (exit
 // 126 on every 'walnut' call inside a live session). DAEMON_DIR is stable, so
 // the copy lives there. Temp name in the SAME dir + rename = atomic, never EXDEV.
+// Cheap by construction: an artifact ALREADY inside the stable daemon dir (the
+// normal source deploy: DAEMON_DIR/daemon.cjs) is used as-is and never copied,
+// a matching size + version stamp skips the copy on an ordinary restart, and
+// COPYFILE_FICLONE makes a same-volume copy a COW clone (a clone stays valid
+// after the source is deleted, which is the whole point).
 function ensureShimCoreCopy(srcPath) {
+  // Already stable: the daemon dir is exactly the place the copy would go.
+  if (path.resolve(path.dirname(srcPath)) === path.resolve(DAEMON_DIR)) return srcPath;
   var dst = path.join(GATEWAY_SHIM_DIR, 'walnut-core.cjs');
   var stampPath = dst + '.version';
   var tmp = dst + '.tmp-' + process.pid;
@@ -2742,11 +2749,12 @@ function ensureShimCoreCopy(srcPath) {
     if (!shimCoreNeedsCopy(statSize(srcPath), statSize(dst), stamped, DAEMON_VERSION)) {
       return fs.existsSync(dst) ? dst : null;
     }
-    fs.copyFileSync(srcPath, tmp);
+    var startedAt = Date.now();
+    fs.copyFileSync(srcPath, tmp, fs.constants.COPYFILE_FICLONE);
     fs.chmodSync(tmp, 0o700);
     fs.renameSync(tmp, dst);
     fs.writeFileSync(stampPath, DAEMON_VERSION);
-    logMsg('info', 'walnut shim core copied', { path: dst, version: DAEMON_VERSION });
+    logMsg('info', 'walnut shim core copied', { path: dst, version: DAEMON_VERSION, ms: Date.now() - startedAt });
     return dst;
   } catch (err) {
     try { fs.unlinkSync(tmp); } catch (e) { /* nothing to clean */ }
@@ -2755,6 +2763,33 @@ function ensureShimCoreCopy(srcPath) {
     logMsg('warn', 'walnut shim core copy failed — shim will point at the running script', { error: err.message });
     return null;
   }
+}
+
+// Sweep GATEWAY_SHIM_DIR of core copies the freshly written shim does NOT name.
+// Twin of reapShimCoreArtifacts in daemon-standalone.ts. Two kinds of debris, each
+// artifact-sized and both permanent until this ran: a 'walnut-core.cjs.tmp-<pid>'
+// left behind when a SIGKILL/OOM/power loss lands between copyFileSync and
+// renameSync (the catch only covers a THROWN copy, and every attempt picks a fresh
+// pid-suffixed name, so they accumulate), and a stable copy from an earlier deploy
+// this daemon no longer execs (an artifact already in DAEMON_DIR takes the no-copy
+// path forever) sitting there with its orphaned '.version' stamp. Hosts here have
+// run out of disk before. Called only AFTER the shim is rewritten: nothing names
+// these files then, and unlink never disturbs a process already exec'ing the inode.
+function reapShimCoreArtifacts(referenced) {
+  try {
+    var keep = referenced.map(function (p) { return path.resolve(p); });
+    var ownTmp = 'walnut-core.cjs.tmp-' + process.pid;
+    var names = fs.readdirSync(GATEWAY_SHIM_DIR);
+    for (var i = 0; i < names.length; i++) {
+      var name = names[i];
+      if (name.indexOf('walnut-core') !== 0 || name === ownTmp) continue;
+      var full = path.join(GATEWAY_SHIM_DIR, name);
+      // A '.version' stamp lives and dies with the copy it stamps.
+      var stamps = name.slice(-8) === '.version' ? full.slice(0, -8) : full;
+      if (keep.indexOf(path.resolve(stamps)) !== -1) continue;
+      try { fs.unlinkSync(full); } catch (e) { /* already gone */ }
+    }
+  } catch (e) { /* hygiene — never fail startup over it */ }
 }
 
 // PATH shim so walnut inside spawned sessions reaches this daemon's dispatch.
@@ -2766,20 +2801,19 @@ function writeWalnutShim() {
     fs.mkdirSync(GATEWAY_SHIM_DIR, { recursive: true, mode: 0o700 });
     var q = function (s) { return "'" + String(s).replace(/'/g, "'\\\\''") + "'"; };
     // The deployed script normally sits IN DAEMON_DIR (daemon.cjs /
-    // daemon-fallback.cjs), which is stable — then nothing is copied and this
-    // keeps its previous shape. Launched from anywhere else, it can vanish while
-    // sessions still hold the shim, so copy it into the daemon dir first.
+    // daemon-fallback.cjs), which is stable — then ensureShimCoreCopy returns it
+    // unchanged and this keeps its previous shape. Launched from anywhere else it
+    // can vanish while sessions still hold the shim, so it is copied in first.
     var entry = process.argv[1] || '';
-    var target = entry;
-    if (entry && path.resolve(path.dirname(entry)) !== path.resolve(DAEMON_DIR)) {
-      target = ensureShimCoreCopy(entry) || entry;
-    }
+    var target = entry ? (ensureShimCoreCopy(entry) || entry) : entry;
     var shim = '#!/bin/sh\\nexec ' + q(process.execPath) + ' ' + q(target) + ' walnut "$@"\\n';
     // One name: walnut. The retired wn file is removed, not rewritten.
     var sp = path.join(GATEWAY_SHIM_DIR, 'walnut');
     fs.writeFileSync(sp, shim, { mode: 0o755 });
     fs.chmodSync(sp, 0o755);
     try { fs.unlinkSync(path.join(GATEWAY_SHIM_DIR, 'wn')); } catch (e) {}
+    // The shim now names its final target — anything else in here is debris.
+    reapShimCoreArtifacts([target]);
   } catch (err) {
     logMsg('warn', 'walnut shim write failed', { error: err.message });
   }

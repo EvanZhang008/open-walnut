@@ -1065,7 +1065,7 @@ export class AcpSession {
       initialAgentMode = resolveCodexInitialMode({ walnutDefault })
     }
     // Non-lane codex sessions get the same walnut context every native claude
-    // session gets (wn gateway + skill pointer); lanes get the self-knowledge
+    // session gets (walnut gateway + skill pointer); lanes get the self-knowledge
     // contract instead (they ARE the personal AI — the hint would be circular).
     let defaultInstructions: string | undefined
     if (this.cfg.lane) {

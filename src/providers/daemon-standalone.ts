@@ -2176,8 +2176,18 @@ function installUserWalnutShim() {
  *
  * Atomicity: write to a temp name in the SAME dir, then rename. Same-dir rename
  * is atomic and can never be EXDEV, and a session mid-exec keeps the old inode.
+ *
+ * Cost: this runs on the startup path the parent's port-file wait watches, so it
+ * must stay cheap. Three things keep it that way: a binary that ALREADY lives in
+ * the stable daemon dir (every SSH-deployed host) is used as-is and never copied;
+ * a matching size + version stamp skips the copy on an ordinary restart; and
+ * COPYFILE_FICLONE makes a same-volume copy a COW clone instead of hundreds of MB
+ * of real I/O. A clone stays valid after the source is deleted, which is the
+ * whole point.
  */
 function ensureShimCoreCopy(): string | null {
+  // Already stable: the daemon dir is exactly the place the copy would go.
+  if (path.resolve(path.dirname(process.execPath)) === path.resolve(DAEMON_DIR)) return process.execPath
   const dst = path.join(GATEWAY_SHIM_DIR, SHIM_CORE_BASENAME)
   const stampPath = dst + '.version'
   const tmp = dst + '.tmp-' + process.pid
@@ -2194,11 +2204,14 @@ function ensureShimCoreCopy(): string | null {
       version: DAEMON_VERSION,
     })
     if (!needsCopy) return fs.existsSync(dst) ? dst : null
-    fs.copyFileSync(process.execPath, tmp)
+    const startedAt = Date.now()
+    fs.copyFileSync(process.execPath, tmp, fs.constants.COPYFILE_FICLONE)
     fs.chmodSync(tmp, 0o700)
     fs.renameSync(tmp, dst)
     fs.writeFileSync(stampPath, DAEMON_VERSION)
-    logMsg('info', 'walnut shim core copied', { path: dst, version: DAEMON_VERSION })
+    logMsg('info', 'walnut shim core copied', {
+      path: dst, version: DAEMON_VERSION, ms: Date.now() - startedAt,
+    })
     return dst
   } catch (err) {
     try { fs.unlinkSync(tmp) } catch { /* nothing to clean */ }
@@ -2210,6 +2223,37 @@ function ensureShimCoreCopy(): string | null {
     })
     return null
   }
+}
+
+/**
+ * Sweep GATEWAY_SHIM_DIR of core copies the freshly written shim does NOT name.
+ *
+ * Two kinds of debris, each one artifact-sized (tens to hundreds of MB) and both
+ * permanent until this ran: (1) `walnut-core.tmp-<pid>` left behind when a
+ * SIGKILL/OOM/power loss lands between copyFileSync and renameSync — the catch
+ * only covers a thrown copy, and every attempt picks a fresh pid-suffixed name,
+ * so they accumulate; (2) a stable copy from an earlier deploy this daemon no
+ * longer execs (an artifact already in DAEMON_DIR takes the no-copy path forever),
+ * which would otherwise sit there with its orphaned `.version` stamp. Hosts here
+ * have run out of disk before.
+ *
+ * Call only AFTER the shim has been rewritten: nothing names these files then, and
+ * unlink does not disturb a process already exec'ing the inode.
+ * Keep in sync with daemon-source.ts.
+ */
+function reapShimCoreArtifacts(referenced: string[]) {
+  try {
+    const keep = new Set(referenced.map((p) => path.resolve(p)))
+    const ownTmp = SHIM_CORE_BASENAME + '.tmp-' + process.pid
+    for (const name of fs.readdirSync(GATEWAY_SHIM_DIR)) {
+      if (!name.startsWith(SHIM_CORE_BASENAME) || name === ownTmp) continue
+      const full = path.join(GATEWAY_SHIM_DIR, name)
+      // A `.version` stamp lives and dies with the copy it stamps.
+      const stamps = name.endsWith('.version') ? full.slice(0, -'.version'.length) : full
+      if (keep.has(path.resolve(stamps))) continue
+      try { fs.unlinkSync(full) } catch { /* already gone */ }
+    }
+  } catch { /* hygiene — never fail startup over it */ }
 }
 
 /** PATH shim so `walnut` inside spawned sessions reaches this daemon's dispatch. */
@@ -2238,6 +2282,8 @@ function writeWalnutShim() {
     fs.writeFileSync(p, shim, { mode: 0o755 })
     fs.chmodSync(p, 0o755)
     try { fs.unlinkSync(path.join(GATEWAY_SHIM_DIR, 'wn')) } catch {}
+    // The shim now names its final target — anything else in here is debris.
+    reapShimCoreArtifacts(argv)
   } catch (err) {
     logMsg('warn', 'walnut shim write failed', { error: (err as Error).message })
   }
@@ -5345,7 +5391,9 @@ function cleanup() {
     try { fs.unlinkSync(path.join(GATEWAY_SHIM_DIR, 'wn')) } catch {} // retired alias, older daemons wrote it
     // walnut-core (the stable copy of this artifact) is deliberately KEPT: the
     // size+version stamp makes the successor reuse it, which is what turns a
-    // restart into a stat instead of a ~60MB copy. One file, bounded size.
+    // restart into a stat instead of a ~60MB copy. One file, bounded size — and
+    // if the successor turns out not to need it, its writeWalnutShim reaps it
+    // (reapShimCoreArtifacts), so this is never dead weight for long.
   }
   logMsg('info', 'daemon cleanup complete', { uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000) })
 }

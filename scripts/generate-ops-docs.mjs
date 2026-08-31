@@ -73,7 +73,7 @@ export function generateOpsCatalog() {
 
   lines.push(
     '',
-    'Use `walnut tools help <op>` or `wn tools help <op>` for the full live description. Use the generic `api` operation only when no named operation exists.',
+    'Use `walnut tools help <op>` for the full live description. Use the generic `api` operation only when no named operation exists.',
     '',
     END,
   )

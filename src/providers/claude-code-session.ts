@@ -8777,7 +8777,7 @@ export class SessionRunner {
       log.session.info('using caller-provided system prompt', { taskId, promptLength: data.appendSystemPrompt.length })
     }
 
-    // Session context (wn gateway + walnut skill pointer). Task-independent —
+    // Session context (walnut gateway + walnut skill pointer). Task-independent —
     // every managed session gets it, taskless ones included.
     {
       try {
@@ -9025,7 +9025,7 @@ export class SessionRunner {
       }
     }
 
-    // Build system prompt. Session context (wn gateway + walnut skill pointer)
+    // Build system prompt. Session context (walnut gateway + walnut skill pointer)
     // is task-independent — taskless sessions get it too.
     let systemPrompt: string | undefined
     if (data.appendSystemPrompt) {

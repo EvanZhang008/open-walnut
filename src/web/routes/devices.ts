@@ -58,7 +58,13 @@ async function getSelfCloudDeviceName(): Promise<string | null> {
   return null
 }
 
-/** `server` is omitted when no reachable address exists — see the POST handler. */
+/**
+ * `server` is omitted when no reachable address exists — see the POST handler.
+ *
+ * The `wn://` scheme is INTENTIONALLY not part of the internal wn→walnut rename:
+ * it is the shipped iOS pairing contract (AppConfig.parsePairingURI, the QR
+ * scanner, pasted links), so changing it would break already-installed builds.
+ */
 function buildPairingURI(name: string, token: string, origin?: string): string {
   const server = origin ? `&server=${encodeURIComponent(origin)}` : ''
   return `wn://pair?name=${encodeURIComponent(name)}&token=${token}${server}`

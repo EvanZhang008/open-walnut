@@ -42,8 +42,11 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-core.ts',
   'src/providers/daemon-fold.ts',
   'src/providers/daemon-source.ts',
-  // Agent gateway (peer sessions): shared protocol logic + the wn CLI, both
+  // Agent gateway (peer sessions): shared protocol logic + the walnut CLI, both
   // bundled into the daemon binary. Same order as scripts/build-daemon.sh.
+  // (The CLI file is still named wn-cli.ts — the rename is deferred; when it
+  // happens, this entry and scripts/build-daemon.sh must move in ONE commit or
+  // the two hashes disagree and the version guard can never converge.)
   'src/providers/gateway-core.ts',
   'src/providers/wn-cli.ts',
   // How `walnut tools call` reads its args (inline / @file / stdin). Bundled

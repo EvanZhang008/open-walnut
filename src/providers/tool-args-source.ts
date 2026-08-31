@@ -1,7 +1,7 @@
 /**
  * Where `walnut tools call <op> …` reads its JSON arguments from.
  *
- * Shared by BOTH CLI faces (src/providers/wn-cli.ts, bundled into the daemon
+ * Shared by BOTH CLI faces (src/providers/wn-cli.ts — the walnut CLI bundled into the daemon
  * binary, and src/commands/tools.ts on the hub) so the three spellings behave
  * identically wherever an agent runs.
  *
