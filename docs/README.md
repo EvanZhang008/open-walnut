@@ -35,6 +35,8 @@ must live under one of these top-level categories instead of directly under
 
 ## Designs
 
+- [Mail base and Chat base](design/mail-chat-base.md) - two core domains with
+  plugin providers, approval-gated sends, and the provider contract.
 - [Notes redesign](design/notes-redesign/) - product, UX, editor, search, and
   implementation contracts for notes.
 - [Session changed view](design/session-changed-view.md) - changed-files review
