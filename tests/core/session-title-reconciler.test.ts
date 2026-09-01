@@ -173,6 +173,35 @@ describe('sweepPlaceholderTitles', () => {
     expect((await getSessionByClaudeId(sid))?.title).toBe('Docx preview support');
   });
 
+  it('titles an Ask Walnut placeholder task (walnut_agent flag, non-cwd placeholder)', async () => {
+    // Regression: the sweep's textual prefilter only admitted "Session: …"
+    // titles, so Ask Walnut tasks never even became candidates.
+    const sid = nextSid();
+    const { task } = await addTask({ title: 'Ask Walnut', walnut_agent: true });
+    await updateTask(task.id, { cwd: CWD }, { source: 'test' });
+    await createSessionRecord(sid, task.id, 'Ask Walnut', CWD, { title: 'Ask Walnut' });
+    historyTailMock.mockResolvedValue(userHistory('where is my interview prep?'));
+
+    const stats = await sweepPlaceholderTitles();
+
+    expect(stats).toEqual({ candidates: 1, attempted: 1, retitled: 1, errors: 0 });
+    expect((await getTask(task.id)).title).toBe('Docx preview support');
+  });
+
+  it('leaves an ordinary task the user titled exactly "Ask Walnut" alone (no flag)', async () => {
+    const sid = nextSid();
+    const { task } = await addTask({ title: 'Ask Walnut' });
+    await updateTask(task.id, { cwd: CWD }, { source: 'test' });
+    await createSessionRecord(sid, task.id, 'Quick Start', CWD, { title: 'Ask Walnut' });
+    historyTailMock.mockResolvedValue(userHistory('hello'));
+
+    const stats = await sweepPlaceholderTitles();
+
+    expect(stats).toEqual(ZERO);
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    expect((await getTask(task.id)).title).toBe('Ask Walnut');
+  });
+
   it('is idempotent — a titled task is no longer a candidate', async () => {
     const sid = nextSid();
     const task = await makeTaskAndSession(sid);

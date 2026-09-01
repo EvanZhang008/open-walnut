@@ -102,6 +102,35 @@ export function defaultSessionTaskTitle(cwd: string): string {
   return `Session: ${path.basename(cwd.replace(/\/+$/, '') || '/')}`;
 }
 
+/** The placeholder an Ask Walnut launch mints instead of the cwd-derived one
+ *  ("Session: .open-walnut" would name the data dir, which means nothing). */
+export const ASK_WALNUT_PLACEHOLDER_TITLE = 'Ask Walnut';
+
+/**
+ * THE placeholder gate for auto-titling: returns the placeholder this task
+ * still wears, or undefined when the title carries human signal. Every titling
+ * trigger (launch kick, onMessageSend hook, turn-complete net, observed-message,
+ * reconciler sweep) must decide through this one function — the Ask Walnut
+ * placeholder was invisible to all of them while each derived its own
+ * `Session: <basename>` candidates from cwd, so those tasks never got titled.
+ * Try EVERY cwd the caller knows (cwd-rename-detector can move cwd after
+ * launch). The Ask Walnut match is keyed on the walnut_agent flag, never the
+ * bare string, so a user-typed "Ask Walnut" on an ordinary task is kept.
+ * Known limit: a walnut_agent task the user deliberately renames BACK to
+ * exactly "Ask Walnut" is indistinguishable from the placeholder and may be
+ * retitled — inherent to keying on the string.
+ */
+export function matchPlaceholderTitle(
+  task: { title?: string; walnut_agent?: boolean },
+  cwds: Array<string | undefined | null>,
+): string | undefined {
+  const title = task.title ?? '';
+  if (task.walnut_agent && title === ASK_WALNUT_PLACEHOLDER_TITLE) return title;
+  return cwds.filter((c): c is string => !!c)
+    .map(defaultSessionTaskTitle)
+    .find((ph) => title === ph);
+}
+
 /**
  * Create (or reuse) the task and emit SESSION_START. Returns the task.
  * Throws QuickStartError with an HTTP-ish statusCode on invalid input so the
@@ -187,7 +216,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     // Normal mode: create new task. Ask Walnut gets its own placeholder — the
     // generic one is "Session: <basename(cwd)>", which for WALNUT_HOME reads
     // "Session: .open-walnut" (the data dir's name means nothing to the user).
-    const placeholderTitle = walnutAgent ? 'Ask Walnut' : defaultSessionTaskTitle(cwd);
+    const placeholderTitle = walnutAgent ? ASK_WALNUT_PLACEHOLDER_TITLE : defaultSessionTaskTitle(cwd);
     const title = params.taskTitle?.trim() || placeholderTitle;
     // Folder → default project: when THIS launch creates the registry row (the
     // draft's folder-derived default, typically the folder's basename), the
@@ -371,10 +400,10 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   // native engine only — ACP mints its own ids and has no control pipe. The
   // placeholder check here skips callers with a real title (fix-walnut,
   // routines, retries of an already-titled task) without the helper's poll.
-  if (preassignedSessionId && !isAcpEngine(engine) && message.trim()
-      && updatedTask.title === (walnutAgent ? 'Ask Walnut' : defaultSessionTaskTitle(cwd))) {
+  const launchPlaceholder = matchPlaceholderTitle(updatedTask, [cwd]);
+  if (preassignedSessionId && !isAcpEngine(engine) && message.trim() && launchPlaceholder) {
     import('../session-hooks/builtins.js')
-      .then(({ autoTitleFromLaunch }) => autoTitleFromLaunch(preassignedSessionId, updatedTask.id, message, cwd))
+      .then(({ autoTitleFromLaunch }) => autoTitleFromLaunch(preassignedSessionId, updatedTask.id, message, cwd, launchPlaceholder))
       .catch((err) => log.web.warn(`${source}: launch auto-title failed`, {
         taskId: updatedTask.id, error: err instanceof Error ? err.message : String(err),
       }));

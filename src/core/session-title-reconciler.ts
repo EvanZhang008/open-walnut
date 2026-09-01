@@ -100,7 +100,7 @@ export async function sweepPlaceholderTitles(now = Date.now()): Promise<{
   const passStart = Date.now();
   try {
     const { listTasksSlim } = await import('./task-manager.js');
-    const { defaultSessionTaskTitle } = await import('./sessions/quick-start.js');
+    const { matchPlaceholderTitle, ASK_WALNUT_PLACEHOLDER_TITLE } = await import('./sessions/quick-start.js');
     const { getSessionsForTask } = await import('./session-tracker.js');
     const { autoTitleFromObservedMessage } = await import('./session-hooks/builtins.js');
 
@@ -111,7 +111,7 @@ export async function sweepPlaceholderTitles(now = Date.now()): Promise<{
     // 3493 rows/tick); the sweep needs only id/title/status/created_at/cwd.
     const suspects = (await listTasksSlim({ minimal: true })).filter((t) =>
       t.status !== 'done'
-      && (t.title ?? '').startsWith('Session: ')
+      && ((t.title ?? '').startsWith('Session: ') || (t.title ?? '') === ASK_WALNUT_PLACEHOLDER_TITLE)
       && now - new Date(t.created_at).getTime() < MAX_TASK_AGE_MS);
 
     let deadlineHit = false;
@@ -128,9 +128,7 @@ export async function sweepPlaceholderTitles(now = Date.now()): Promise<{
         }
         const sessions = (await getSessionsForTask(task.id)).filter((s) => !s.archived);
         if (!sessions.length) continue;
-        const isPlaceholder = [task.cwd, ...sessions.map((s) => s.cwd)]
-          .filter((c): c is string => !!c)
-          .some((c) => task.title === defaultSessionTaskTitle(c));
+        const isPlaceholder = !!matchPlaceholderTitle(task, [task.cwd, ...sessions.map((s) => s.cwd)]);
         if (!isPlaceholder) continue;
         stats.candidates++;
         seenThisPass.add(task.id);

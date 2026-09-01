@@ -113,6 +113,35 @@ describe('sessionAutoTitleHook', () => {
     expect((await getSessionByClaudeId(sid))?.title).toBe('Fix login redirect loop');
   });
 
+  it('titles a walnut_agent task wearing the "Ask Walnut" launch placeholder', async () => {
+    // Regression: every trigger derived only `Session: <basename>` candidates
+    // from cwd, so Ask Walnut tasks (placeholder "Ask Walnut") were never
+    // titled — the launch kick bailed silently and no later trigger matched.
+    const sid = nextSid();
+    const { task } = await addTask({ title: 'Ask Walnut', walnut_agent: true });
+    await updateTask(task.id, { cwd: CWD }, { source: 'test' });
+    await createSessionRecord(sid, task.id, 'Ask Walnut', CWD, { title: 'Ask Walnut' });
+    registerFakeSession(sid, async () => 'Find the interview prep task');
+
+    await sessionAutoTitleHook.handler(payloadFor(sid, await getTask(task.id), 'where is my interview prep?'));
+
+    expect((await getTask(task.id)).title).toBe('Find the interview prep task');
+    expect((await getSessionByClaudeId(sid))?.title).toBe('Find the interview prep task');
+  });
+
+  it('never touches an ordinary task the user titled exactly "Ask Walnut" (no walnut_agent flag)', async () => {
+    const sid = nextSid();
+    const { task } = await addTask({ title: 'Ask Walnut' });
+    await updateTask(task.id, { cwd: CWD }, { source: 'test' });
+    await createSessionRecord(sid, task.id, 'Quick Start', CWD, { title: 'Ask Walnut' });
+    const fake = registerFakeSession(sid, async () => 'Should never be asked');
+
+    await sessionAutoTitleHook.handler(payloadFor(sid, await getTask(task.id), 'hello there'));
+
+    expect(fake.generateSessionTitle).not.toHaveBeenCalled();
+    expect((await getTask(task.id)).title).toBe('Ask Walnut');
+  });
+
   it('never asks when the task title is not the exact placeholder', async () => {
     const sid = nextSid();
     const task = await makeTaskAndSession(sid, 'My real title');

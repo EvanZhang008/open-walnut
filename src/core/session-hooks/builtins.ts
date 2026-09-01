@@ -1183,7 +1183,19 @@ async function askAndApplyTitle(
     // 10s old) — re-read before spending a CLI round-trip, so a send that
     // follows a successful titling doesn't re-ask and discard.
     const { getTask, updateTask } = await import('../task-manager.js');
-    if (((await getTask(taskId)).title ?? '') !== placeholder) return false;
+    const freshTitle = (await getTask(taskId)).title ?? '';
+    if (freshTitle !== placeholder) {
+      // Silent-guard trap (2026-08-31: Ask Walnut tasks sat untitled with ZERO
+      // log lines because the caller derived the wrong placeholder) — leave a
+      // trace so a mismatch is diagnosable from the log alone. `info`, not
+      // `debug`: the default log threshold drops debug, which would keep this
+      // exactly as silent as before. Volume is bounded (once per launch kick;
+      // the other triggers pre-gate via matchPlaceholderTitle).
+      log.session.info('session-auto-title: skipped — task title is not the expected placeholder', {
+        sessionId, taskId, expectedPlaceholder: placeholder, title: freshTitle,
+      });
+      return false;
+    }
 
     bumpAutoTitleAttempts(sessionId);
     const { ContentValidationError, validatePluginContent, pluginContentRequirement } =
@@ -1227,6 +1239,17 @@ async function askAndApplyTitle(
       log.session.warn('session-auto-title: no title from any channel — placeholder kept', {
         sessionId, taskId, provider: acp ? 'acp' : 'native',
         hadLiveSession: !!(acp || live), backendAvailable: backendTitleAvailable(),
+      });
+      return false;
+    }
+    // A model echoing the placeholder back is a non-answer, not a title: the
+    // prompt shows it ("Current placeholder title: …") and only the backend's
+    // cleanTitleAnswer screens the `Session: …` shape — the Ask Walnut
+    // placeholder (and the CLI-titler channel entirely) would slip through,
+    // "succeed", and reset the reconciler's backoff into a 5-min retry loop.
+    if (title.trim() === placeholder) {
+      log.session.warn('session-auto-title: channel echoed the placeholder — kept, counted as failure', {
+        sessionId, taskId, channel,
       });
       return false;
     }
@@ -1314,13 +1337,18 @@ async function askAndApplyTitle(
  * the onMessageSend hook still covers the next human send (shared attempt cap).
  */
 export async function autoTitleFromLaunch(
-  sessionId: string, taskId: string, message: string, cwd: string,
+  sessionId: string, taskId: string, message: string, cwd: string, placeholder?: string,
 ): Promise<void> {
   const trimmed = (message ?? '').trim();
   if (!trimmed) return; // path-first: nothing to title from — the hook owns it
   if (/^\/[a-z][\w-]*(\s|$)/i.test(trimmed)) return; // command grammar, not a paste path
-  const { defaultSessionTaskTitle } = await import('../sessions/quick-start.js');
-  const placeholder = defaultSessionTaskTitle(cwd);
+  // Trust the caller's placeholder when given: quick-start already matched the
+  // task title through matchPlaceholderTitle (which knows the Ask Walnut form);
+  // re-deriving from cwd here silently killed titling for those tasks.
+  if (!placeholder) {
+    const { defaultSessionTaskTitle } = await import('../sessions/quick-start.js');
+    placeholder = defaultSessionTaskTitle(cwd);
+  }
 
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
   // 60s: a cold spawn's init can take ~27s (2026-08-08 incident: a 30s
@@ -1384,11 +1412,8 @@ export async function autoTitleFromObservedMessage(
   try { task = await getTask(taskId); } catch { return false; }
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId).catch(() => undefined);
-  const { defaultSessionTaskTitle } = await import('../sessions/quick-start.js');
-  const placeholder = [record?.cwd, task.cwd]
-    .filter((c): c is string => !!c)
-    .map(defaultSessionTaskTitle)
-    .find((ph) => (task.title ?? '') === ph);
+  const { matchPlaceholderTitle } = await import('../sessions/quick-start.js');
+  const placeholder = matchPlaceholderTitle(task, [record?.cwd, task.cwd]);
   if (!placeholder) return false;
 
   return askAndApplyTitle(sessionId, taskId, message, placeholder, opts);
@@ -1421,18 +1446,12 @@ export const sessionAutoTitleHook: SessionHookDefinition = {
     // (/compact, /files …), not an absolute path the user pasted first.
     if (/^\/[a-z][\w-]*(\s|$)/i.test(message)) return;
 
-    // Only while the task still wears the quick-start placeholder. Exact match
-    // against the shared definition (not a loose /^Session: /) so a user title
-    // that happens to start with "Session: " is never clobbered. Try BOTH cwds:
-    // cwd-rename-detector (below in this file) can move task/session cwd after
-    // launch, and the placeholder was minted from the LAUNCH cwd — matching only
-    // the current one would silently kill titling after any rename.
-    const { defaultSessionTaskTitle } = await import('../sessions/quick-start.js');
-    const taskTitle = p.task.title ?? '';
-    const placeholder = [p.session?.cwd, p.task.cwd]
-      .filter((c): c is string => !!c)
-      .map(defaultSessionTaskTitle)
-      .find((ph) => taskTitle === ph);
+    // Only while the task still wears a quick-start placeholder ("Session: …"
+    // from either cwd, or the Ask Walnut launch form). Exact match through the
+    // shared gate (not a loose /^Session: /) so a user title that happens to
+    // start with "Session: " is never clobbered.
+    const { matchPlaceholderTitle } = await import('../sessions/quick-start.js');
+    const placeholder = matchPlaceholderTitle(p.task, [p.session?.cwd, p.task.cwd]);
     if (!placeholder) return;
 
     await askAndApplyTitle(p.sessionId, p.taskId, message, placeholder);
@@ -1468,13 +1487,9 @@ export const sessionAutoTitleTurnCompleteHook: SessionHookDefinition = {
     const p = payload as OnTurnCompletePayload;
     if (!p.taskId || !p.task) return;
 
-    // Same placeholder gate as the primary trigger (both cwds — see there).
-    const { defaultSessionTaskTitle } = await import('../sessions/quick-start.js');
-    const taskTitle = p.task.title ?? '';
-    const placeholder = [p.session?.cwd, p.task.cwd]
-      .filter((c): c is string => !!c)
-      .map(defaultSessionTaskTitle)
-      .find((ph) => taskTitle === ph);
+    // Same placeholder gate as the primary trigger (see there).
+    const { matchPlaceholderTitle } = await import('../sessions/quick-start.js');
+    const placeholder = matchPlaceholderTitle(p.task, [p.session?.cwd, p.task.cwd]);
     if (!placeholder) return;
 
     // The turn payload carries the ASSISTANT result, not the user's message —

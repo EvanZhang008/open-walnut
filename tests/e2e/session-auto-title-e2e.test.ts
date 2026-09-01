@@ -185,4 +185,30 @@ describe('session auto-title E2E (text-first quick start)', () => {
     const rec = await recRes.json() as { session?: { title?: string }; title?: string }
     expect(rec.session?.title ?? rec.title).toBe('Side title: title-test:add dark mode to settings')
   }, 60_000)
+
+  it('titles an Ask Walnut launch from its "Ask Walnut" placeholder (launch kick)', async () => {
+    // Regression: quick-start passed the walnut placeholder gate, but
+    // autoTitleFromLaunch re-derived `Session: <basename>` from cwd and bailed
+    // silently — Ask Walnut tasks were never titled. The kick now receives the
+    // matched placeholder from quick-start.
+    const res = await fetch(apiUrl('/api/sessions/quick-start'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ walnutAgent: true, message: 'title-test:find my interview prep notes' }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { taskId: string; sessionId?: string }
+    expect(body.sessionId).toBeTruthy()
+
+    const title = await pollUntil(
+      () => getTaskTitle(body.taskId),
+      (t) => t !== 'Ask Walnut',
+      30_000,
+    )
+    expect(title).toBe('Side title: title-test:find my interview prep notes')
+
+    const recRes = await fetch(apiUrl(`/api/sessions/${body.sessionId}`))
+    const rec = await recRes.json() as { session?: { title?: string }; title?: string }
+    expect(rec.session?.title ?? rec.title).toBe('Side title: title-test:find my interview prep notes')
+  }, 60_000)
 })
