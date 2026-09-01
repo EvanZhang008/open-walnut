@@ -10083,9 +10083,13 @@ body.walnut-dragging {
 /* Focused tier card: NO background repaint (2026-08-31, user call). Clicking a
    card used to flash accent-blue and then settle into the session-open ring —
    the transient repaint read as a glitch, and selection must never override the
-   card's own state color. The ring + chevron are the "current" affordance. */
+   card's own state color. Selection is marked by an inset ring instead: with
+   the session-open ring dropped (chevron-only now), the ring shape is free to
+   mean "selected", it never repaints the card's own state background, and it
+   answers "which card did locate land on" after the pulse fades. */
 .todo-pinned-card-active {
   background: transparent;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
 /* Transient pulse after a "locate" jump (session panel → task) so the target
@@ -10097,7 +10101,12 @@ body.walnut-dragging {
 }
 
 .todo-card-locate-flash {
-  animation: todo-locate-flash 1.5s ease-out;
+  /* !important: .todo-pinned-card-session-open sets its own `animation`
+     (press-and-settle) LATER in this file at equal specificity, which silently
+     clobbered this pulse on exactly the card a session-panel locate targets
+     (that card's session is by definition open). The pulse is a one-shot,
+     user-initiated cue and must always win the cascade. */
+  animation: todo-locate-flash 1.5s ease-out !important;
   border-radius: 8px;
 }
 
