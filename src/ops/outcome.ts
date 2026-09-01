@@ -23,9 +23,19 @@
 /** The one-line mental model, quoted where an agent is most likely to be wrong. */
 export const TASK_IS_INERT = 'A task is an inert record; only a session does work.'
 
-/** The dispatch call, ready to run. */
-export function dispatchHint(taskId: string): string {
-  return `Nothing is running yet. Dispatch: walnut tools call session_start '{"task":"${taskId}","message":"..."}'`
+/**
+ * The dispatch call, ready to run.
+ *
+ * `known` is false when the response body carries no session fields (the slim
+ * PATCH/complete projections): the call is still the right next step, but
+ * claiming "nothing is running" from a field the server never sent would be a
+ * confident wrong answer.
+ */
+export function dispatchHint(taskId: string, known = true): string {
+  const call = `walnut tools call session_start '{"task":"${taskId}","message":"..."}'`
+  return known
+    ? `Nothing is running yet. Dispatch: ${call}`
+    : `If no session is on it yet, dispatch: ${call}`
 }
 
 /** How a started/messaged session reports back — the anti-polling line. */

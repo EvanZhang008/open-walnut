@@ -53,7 +53,7 @@ const DAEMON_SOURCE_FILES = [
   // into the CLI above, so a change here must move the version — an unchanged
   // version means no host redeploys and @file silently stays unsupported.
   'src/providers/tool-args-source.ts',
-  // How the CLI renders the op catalog + one op's parameters (shared with the
+  // How the CLI renders the op catalog + the parameters of one op (shared with the
   // hub CLI). Bundled into the CLI above: an unchanged version means remote
   // hosts keep printing the old signature-less catalog.
   'src/ops/op-help.ts',

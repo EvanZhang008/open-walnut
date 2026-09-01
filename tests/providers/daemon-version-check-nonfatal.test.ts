@@ -190,7 +190,11 @@ describe('daemon version guard: hash source lists stay in lockstep', () => {
       tsSrc.indexOf('const DAEMON_SOURCE_FILES = ['),
       tsSrc.indexOf('] as const', tsSrc.indexOf('const DAEMON_SOURCE_FILES = [')),
     )
-    const tsList = [...tsBlock.matchAll(/'([^']+)'/g)].map(m => m[1])
+    // Strip the // comments FIRST: the entries are explained by comments, and an
+    // ordinary apostrophe in one of them ("one op's parameters") made this
+    // quote-scanner read prose as file paths and fail with a diff nobody could
+    // read (2026-09-01). Comments are not data.
+    const tsList = [...tsBlock.replace(/\/\/[^\n]*/g, '').matchAll(/'([^']+)'/g)].map(m => m[1])
 
     const shBlock = shSrc.slice(
       shSrc.indexOf('SOURCES=('),

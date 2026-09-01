@@ -41,11 +41,23 @@ function taskId(task: unknown): string {
   return typeof id === 'string' ? id : ''
 }
 
-/** Does this task body show a session attached? Absent field → assume none. */
-function hasSession(task: unknown): boolean {
-  const t = (task ?? {}) as { session_id?: unknown; session_ids?: unknown }
-  if (typeof t.session_id === 'string' && t.session_id) return true
-  return Array.isArray(t.session_ids) && t.session_ids.length > 0
+/**
+ * Does this task body show a session attached?
+ *
+ * 'unknown' is a real third answer and must stay one: the PATCH and complete
+ * responses return a SLIM projection with no session fields at all, so reading a
+ * missing field as "none" makes the result state the opposite of the truth (it
+ * told a task being updated from inside its own live session that nothing was
+ * working on it). When the body cannot answer, say nothing about attachment.
+ */
+function sessionState(task: unknown): 'attached' | 'none' | 'unknown' {
+  const t = (task ?? {}) as Record<string, unknown>
+  for (const key of ['session_id', 'exec_session_id'] as const) {
+    if (typeof t[key] === 'string' && t[key]) return 'attached'
+  }
+  if (Array.isArray(t.session_ids) && t.session_ids.length > 0) return 'attached'
+  const reported = 'session_id' in t || 'session_ids' in t || 'exec_session_id' in t
+  return reported ? 'none' : 'unknown'
 }
 
 const SORT = z.enum(['updated_desc', 'created_desc', 'completed_desc', 'priority', 'title_asc', 'pin_order'])
@@ -177,17 +189,19 @@ defineOp({
     const task = (b.task ?? b) as Record<string, unknown>
     const phase = typeof task.phase === 'string' ? task.phase
       : typeof task.status === 'string' ? task.status : 'unknown'
-    const attached = hasSession(task)
+    const attachment = sessionState(task)
     const id = taskId(task) || String(args.id ?? '')
     return withOutcome(
       { ...b },
-      attached
+      attachment === 'attached'
         ? `Phase ${phase}, with a session attached — that session is where the work lives.`
-        : `Phase ${phase}, and NO session is attached: nothing is working on this task. ${TASK_IS_INERT}`,
-      attached
+        : attachment === 'none'
+          ? `Phase ${phase}, and NO session is attached: nothing is working on this task. ${TASK_IS_INERT}`
+          : `Phase ${phase}. ${TASK_IS_INERT}`,
+      attachment === 'attached'
         ? 'Read what it did with session_transcript, or add context with session_send '
           + `'{"to":"${id}","text":"..."}'.`
-        : dispatchHint(id),
+        : dispatchHint(id, attachment === 'none'),
     )
   },
   tags: { readonly: true, remote: 'allow' },
@@ -322,14 +336,16 @@ defineOp({
     // A phase write is bookkeeping. It does not start work, and it does not
     // stop a session that is already running — the single most common wrong
     // assumption about this op.
-    const running = hasSession(task)
+    const attachment = sessionState(task)
     const outcome = `Task fields updated (${changed}). No session was started or stopped by this. `
-      + (running ? 'Its existing session keeps running.' : `No session is attached. ${TASK_IS_INERT}`)
+      + (attachment === 'attached' ? 'Its existing session keeps running.'
+        : attachment === 'none' ? `No session is attached. ${TASK_IS_INERT}`
+          : TASK_IS_INERT)
     const next = body.phase === 'AGENT_COMPLETE'
       ? 'Marked ready for the human to look at. Nothing else is required of you.'
-      : running
+      : attachment === 'attached'
         ? `Talk to its session: walnut tools call session_send '{"to":"${taskId(task) || String(id)}","text":"..."}'`
-        : dispatchHint(taskId(task) || String(id))
+        : dispatchHint(taskId(task) || String(id), attachment === 'none')
     return withOutcome({ ...(patched ?? {}) }, outcome, next)
   },
   tags: { readonly: false, remote: 'allow', destructive: false },
@@ -350,16 +366,18 @@ defineOp({
   bind: { method: 'POST', path: '/tasks/:id/complete' },
   mapResult: ({ body }) => {
     const task = (body as { task?: unknown } | undefined)?.task
-    const running = hasSession(task)
+    const attachment = sessionState(task)
     return withOutcome(
       withRef(task, { completed: true }),
       'Task marked complete. Completing a task does not stop anything: '
-      + (running
+      + (attachment === 'attached'
         ? 'the session it owns is still alive and still costs a process.'
-        : 'no session was attached to it.'),
-      running
-        ? 'If that work is really finished, stop the session from the Walnut UI (or leave it to the idle reaper).'
-        : 'Nothing else is required.',
+        : attachment === 'none'
+          ? 'no session was attached to it.'
+          : 'any session on it keeps running until it is stopped.'),
+      attachment === 'none'
+        ? 'Nothing else is required.'
+        : 'If that work is really finished, stop the session from the Walnut UI (or leave it to the idle reaper).',
     )
   },
   // remote 'allow': completing a task is ordinary, reversible work. This was

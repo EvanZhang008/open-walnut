@@ -76,7 +76,7 @@ describe('mapResult-based writes render outcome + next from a server body', () =
     expect(withSession.outcome).toContain('still alive')
 
     const noSession = op.mapResult!({
-      body: { task: { id: 't_2', title: 'Note to self' } },
+      body: { task: { id: 't_2', title: 'Note to self', session_ids: [] } },
       args: { id: 't_2' },
     }) as { outcome: string; next: string }
     expect(noSession.outcome).toContain('no session was attached')
@@ -116,7 +116,7 @@ describe('mapResult-based writes render outcome + next from a server body', () =
   it('task_get says whether a session is attached, not just the phase word', () => {
     const op = listOps().find((o) => o.name === 'task_get')!
     const idle = op.mapResult!({
-      body: { task: { id: 't_1', phase: 'TODO' } }, args: { id: 't_1' },
+      body: { task: { id: 't_1', phase: 'TODO', session_ids: [] } }, args: { id: 't_1' },
     }) as { outcome: string; next: string }
     expect(idle.outcome).toContain('NO session is attached')
     expect(idle.outcome).toContain(TASK_IS_INERT)
@@ -127,6 +127,30 @@ describe('mapResult-based writes render outcome + next from a server body', () =
     }) as { outcome: string; next: string }
     expect(busy.outcome).toContain('with a session attached')
     expect(busy.next).toContain('session_transcript')
+  })
+
+  it('a body with NO session fields never claims "no session is attached"', () => {
+    // The PATCH and complete responses return a slim projection with no session
+    // fields at all. Reading a missing field as "none" made task_update tell a
+    // task being updated from inside its own live session that nothing was
+    // working on it — the exact class of confident wrong answer this work is
+    // about (caught live, 2026-09-01).
+    const slim = { id: 't_1', title: 'Fix it', phase: 'AGENT_COMPLETE', status: 'in_progress' }
+
+    const get = listOps().find((o) => o.name === 'task_get')!
+      .mapResult!({ body: { task: slim }, args: { id: 't_1' } }) as { outcome: string; next: string }
+    expect(get.outcome).not.toContain('NO session')
+    expect(get.next).toContain('If no session is on it yet')
+
+    const complete = listOps().find((o) => o.name === 'task_complete')!
+      .mapResult!({ body: { task: slim }, args: { id: 't_1' } }) as { outcome: string }
+    expect(complete.outcome).not.toContain('no session was attached')
+    expect(complete.outcome).toContain('keeps running until it is stopped')
+  })
+
+  it('dispatchHint drops the "nothing is running" claim when attachment is unknown', () => {
+    expect(dispatchHint('t_1', false)).not.toContain('Nothing is running')
+    expect(dispatchHint('t_1', false)).toContain('session_start')
   })
 
   it('session_list teaches which noun does the work', () => {
@@ -196,6 +220,19 @@ describe('task_create + start_session — create and dispatch in one call', () =
     expect(r.outcome).toContain('The task exists')
     expect(r.next).toContain('Retry the dispatch alone')
     expect(r.next).toContain(task.id)
+  })
+})
+
+describe('task_update on the slim PATCH projection', () => {
+  it('says the phase write started and stopped nothing, and invents no attachment state', async () => {
+    const op = listOps().find((o) => o.name === 'task_update')!
+    const call = (async () => ({ task: { id: 't_1', phase: 'AGENT_COMPLETE' } })) as never
+    const r = await op.handler!({ id: 't_1', phase: 'AGENT_COMPLETE' }, call) as
+      { outcome: string; next: string }
+    expect(r.outcome).toContain('No session was started or stopped by this')
+    expect(r.outcome).not.toContain('No session is attached')
+    expect(r.outcome).toContain(TASK_IS_INERT)
+    expect(r.next).toContain('ready for the human')
   })
 })
 
