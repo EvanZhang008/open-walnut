@@ -4591,15 +4591,40 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     ];
   }, [tasks, filtered, isSearchMode, deferredSearchQuery, searchResults, taskQueryState, matchesCanonicalQuery]);
 
-  // Counts and cross-section visibility use the complete match set, but the main
-  // list mounts a bounded number of rows so neither search phase can stall typing.
-  const searchFiltered = useMemo(
-    () => searchMatches.slice(0, 40),
+  // Completed-results fold (search only): the ranked list shows OPEN tasks by
+  // default — a broad query used to bury live work under strikethrough history.
+  // Completed matches collapse into one footer row ("N completed hidden — show")
+  // so the moment a user misses a completed task they know why and where. The
+  // reveal is per-search: it resets when search closes, never persists.
+  // Tasks completed THIS session keep their grace slot in the open list so
+  // checking a box in search results doesn't rip the row out from under the
+  // cursor (same recentlyCompleted grace the plain list uses).
+  const searchOpenMatches = useMemo(
+    () => searchMatches.filter((t) => t.status !== 'done' || recentlyCompletedRef.current.has(t.id)),
     [searchMatches],
   );
+  const searchDoneCount = searchMatches.length - searchOpenMatches.length;
+  const [showDoneResults, setShowDoneResults] = useState(false);
+  useEffect(() => {
+    if (!isSearchMode) setShowDoneResults(false);
+  }, [isSearchMode]);
 
-  // Count of search results (for display)
-  const searchResultCount = isSearchMode ? searchMatches.length : null;
+  // Counts and cross-section visibility use the complete match set, but the main
+  // list mounts a bounded number of rows so neither search phase can stall typing.
+  // Revealed completed rows get their own bounded slice appended AFTER every open
+  // row — rank order within each group is preserved.
+  const searchFiltered = useMemo(() => {
+    const open = searchOpenMatches.slice(0, 40);
+    if (!showDoneResults) return open;
+    const openIds = new Set(open.map((t) => t.id));
+    return [...open, ...searchMatches.filter((t) => !openIds.has(t.id) && t.status === 'done').slice(0, 25)];
+  }, [searchOpenMatches, searchMatches, showDoneResults]);
+
+  // Count of search results (for display) — counts what the list SHOWS, the
+  // fold row carries the hidden remainder.
+  const searchResultCount = isSearchMode
+    ? (showDoneResults ? searchMatches.length : searchOpenMatches.length)
+    : null;
 
   // Pinned membership and ordering stay based on the complete tier arrays. Filters only
   // constrain the rendered IDs so hidden cards keep their stable pin position.
@@ -7014,7 +7039,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                 title hit. */}
             {isSearching
               ? <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2, margin: '0 auto' }} />
-              : <p className="text-sm">No tasks match &lsquo;{deferredSearchQuery}&rsquo;</p>}
+              : (
+                <p className="text-sm">
+                  {searchDoneCount > 0
+                    ? <>No open tasks match &lsquo;{deferredSearchQuery}&rsquo;</>
+                    : <>No tasks match &lsquo;{deferredSearchQuery}&rsquo;</>}
+                </p>
+              )}
           </div>
         )}
         {!loading && !isSearchMode && filtered.length === 0 && (
@@ -7110,6 +7141,24 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               });
             })()}
           </div>
+        )}
+        {/* Completed-results fold — search only: appears whenever the query
+            matched completed tasks, whether or not any open row rendered, so a
+            "missing" completed task always explains itself right where the
+            user is looking. */}
+        {!loading && isSearchMode && searchDoneCount > 0 && (
+          <button
+            type="button"
+            className="todo-search-done-fold"
+            onClick={() => setShowDoneResults((v) => !v)}
+            title={showDoneResults
+              ? 'Hide completed results'
+              : 'Show completed results below the open ones'}
+          >
+            {showDoneResults
+              ? `✓ hide ${searchDoneCount} completed`
+              : `✓ ${searchDoneCount} completed result${searchDoneCount === 1 ? '' : 's'} hidden — show`}
+          </button>
         )}
         {/* Flat mode: ungrouped list sorted by selected sort option */}
         {!loading && !isSearchMode && groupBy === 'none' && sorted.length > 0 && (

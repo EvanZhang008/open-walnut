@@ -31010,6 +31010,23 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 .todo-pinned-stale-fold:hover { opacity: 1; color: var(--accent); }
 
+/* Completed-results fold at the tail of the search list (design B): a ghost
+   row that explains hidden completed matches and toggles them inline. */
+.todo-search-done-fold {
+  display: block;
+  width: 100%;
+  text-align: center;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 7px 14px 9px;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  border-top: 1px dashed var(--border);
+}
+.todo-search-done-fold:hover { color: var(--accent); }
+
 /* ── Agent task search (✦ AI section pinned atop the task panel) ─────────── */
 .agent-search-panel {
   margin: 6px 8px 8px;
