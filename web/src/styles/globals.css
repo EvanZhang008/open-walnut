@@ -6588,6 +6588,7 @@ select {
   padding: 8px 12px;
   outline: none;
   overflow-y: auto;
+  overflow-x: hidden; /* textarea UA default is overflow-x:auto; browser-zoom subpixel rounding makes scrollWidth exceed clientWidth by 1px and shows a phantom horizontal scrollbar. Content always word-wraps, so horizontal scroll is never needed. */
 }
 /* Kill the global textarea:focus accent ring INSIDE the card — the card itself
    (.chat-input-box:focus-within) is the only focus affordance. */
