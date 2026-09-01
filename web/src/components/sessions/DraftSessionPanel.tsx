@@ -50,6 +50,7 @@ import {
   resolveEngineForHost,
 } from '@/utils/engines';
 import { ModelPicker, shortAcpModelName } from './ModelPicker';
+import { fetchEngineModelCatalog } from '@/api/sessions';
 import { draftComposerKey, type DraftColumn } from './draft-column';
 import type { QuickStartPath, QuickStartTaskMeta } from './SessionPathSelector';
 import '@/styles/walnut-agent.css';
@@ -89,6 +90,10 @@ const PARSE_MIN_CHARS = 12;
  *  signal is in the first sentence, and a 400 would just mean no suggestions. */
 const PARSE_MAX_CHARS = 500;
 
+/** Engine catalogs already prefetched this page load (`engine|cwd`) — one
+ *  probe warm-up per target is plenty; the server holds the real cache. */
+const prefetchedEngineCatalogs = new Set<string>();
+
 /**
  * DraftModelPill — the draft composer's model control: a pill (same classes as
  * a real session's model pill) opening the SHARED two-pane picker
@@ -122,6 +127,25 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut }: {
   // draft picks a real model up front (launch wires it through acpConfig).
   // No pick yet → the pill shows the ENGINE (its default model launches).
   const acpModels = entry.capabilities.modelCatalog === 'provider-advertised';
+  // PREFETCH the engine's catalog when an ACP engine lands on the draft — the
+  // probe takes up to 15s cold, and warming the server cache here turns the
+  // picker's first open from "Loading…" into an instant list. Shaped so it
+  // can never crowd the browser's 6-connection fetch pool: debounced (a cwd
+  // being typed fires nothing), deduped per engine+cwd per page load (also
+  // absorbs StrictMode double-mount), and aborted client-side after 4s — the
+  // SERVER probe keeps running and still lands in the cache, which is the
+  // whole point; the picker's own fetch reads it from there.
+  useEffect(() => {
+    if (!acpModels) return;
+    const key = `${engine}|${cwd ?? ''}`;
+    if (prefetchedEngineCatalogs.has(key)) return;
+    const timer = window.setTimeout(() => {
+      prefetchedEngineCatalogs.add(key);
+      fetchEngineModelCatalog(engine, cwd || undefined, { timeoutMs: 4_000 })
+        .catch(() => { /* picker shows the real error */ });
+    }, 1_200);
+    return () => window.clearTimeout(timer);
+  }, [acpModels, engine, cwd]);
   const selectedLabel = meta.model
     ? options.find((o) => o.value === meta.model)?.label ?? meta.model
     : autoResolved ? `Auto (${autoResolved})` : 'Auto';

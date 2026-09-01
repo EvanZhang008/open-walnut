@@ -24,7 +24,7 @@ import { useSessionUsage, formatModelName, getContextWindowSize, contextBadgeTit
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { engineCaps } from '@/utils/engine-capabilities';
-import { ModelPicker, shortAcpModelName, type ProviderId } from '@/components/sessions/ModelPicker';
+import { ModelPicker, acpModelDisplayName, type ProviderId } from '@/components/sessions/ModelPicker';
 import { OutputModePill } from '@/components/sessions/OutputModePill';
 
 interface LaneComposerControlsProps {
@@ -115,9 +115,9 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
   const isAcp = engineUi.isAcp;
   const rawModel = liveUsage.model || session?.model;
   const displayModel = isAcp
-    // 3 tiers: the provider's own name, else prettify the id, else the engine.
-    ? (session?.acpModelName
-      ?? (session?.acpModel ? shortAcpModelName(session.acpModel) : engineUi.displayName))
+    // Same rule as the session panel's pill (acpModelDisplayName): provider's
+    // own name minus its provider prefix, else prettify the id, else engine.
+    ? (acpModelDisplayName(session?.acpModel, session?.acpModelName) ?? engineUi.displayName)
     : formatModelName(rawModel);
   let contextPercent = liveUsage.contextPercent;
   let badgeUsage = liveUsage;

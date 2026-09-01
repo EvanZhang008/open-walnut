@@ -7,7 +7,7 @@
  * seeded into the probe cache or forced by WALNUT_ENGINE_PROBE_ALL=1, so the
  * response never depends on which provider CLIs this machine has installed.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import express from 'express'
 import request from 'supertest'
 
@@ -15,6 +15,15 @@ import { enginesRouter } from '../../../src/web/routes/engines.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { SESSION_ENGINE_IDS } from '../../../src/core/types.js'
 import { _resetEngineProbeCache, _seedEngineProbeCache } from '../../../src/core/agents/engine-probe.js'
+import { resetEngineModelCatalogCache, _seedEngineModelCatalogCache } from '../../../src/providers/engine-model-probe.js'
+
+// The model-catalog probe reads engines.<id>.adapter_cmd from walnut config —
+// pin getConfig to an EMPTY config so these tests never depend on (or spawn
+// anything from) the developer machine's real ~/.open-walnut/config.yaml.
+vi.mock('../../../src/core/config-manager.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/core/config-manager.js')>()
+  return { ...actual, getConfig: async () => ({}) }
+})
 
 interface EngineEntry {
   id: string
@@ -136,6 +145,8 @@ describe('GET /api/engines', () => {
 })
 
 describe('GET /api/engines/:id/models', () => {
+  beforeEach(() => { resetEngineModelCatalogCache() })
+
   it('answers the draft-time catalog for an ACP engine (fixture mode, zero spawns)', async () => {
     process.env.WALNUT_ENGINE_PROBE_ALL = '1'
     const res = await request(createApp()).get('/api/engines/opencode/models')
@@ -143,7 +154,13 @@ describe('GET /api/engines/:id/models', () => {
     expect(res.body.engine).toBe('opencode')
     expect(res.body.source).toBe('mock')
     expect((res.body.models as Array<{ modelId: string }>).map((m) => m.modelId))
-      .toEqual(['mock-gpt-best', 'mock-gpt-fast'])
+      .toEqual([
+        'mock-gpt-best',
+        'mock-gpt-fast',
+        'mock-provider/deep-thinker/medium',
+        'mock-provider/deep-thinker/high',
+        'mock-provider/quick-drafter',
+      ])
     expect(res.body.currentModelId).toBe('mock-gpt-best')
   })
 
@@ -157,5 +174,36 @@ describe('GET /api/engines/:id/models', () => {
     process.env.WALNUT_ENGINE_PROBE_ALL = '1'
     const res = await request(createApp()).get('/api/engines/gemni/models')
     expect(res.status).toBe(404)
+  })
+
+  it('502s with the probe\'s own words when the adapter cannot answer', async () => {
+    // A cached failure entry stands in for a dead adapter: the route must
+    // degrade to an HONEST error body carrying the probe's message, never a
+    // hang or an empty list pretending to be a catalog.
+    _seedEngineModelCatalogCache('custom', undefined, { error: 'adapter spawn failed: ENOENT (seeded)' })
+    const res = await request(createApp()).get('/api/engines/custom/models')
+    expect(res.status).toBe(502)
+    expect(res.body.engine).toBe('custom')
+    expect(res.body.error).toContain('adapter spawn failed')
+  })
+
+  it('serves the cache on a plain read and ?refresh=1 busts it', async () => {
+    // Seed a marker catalog: a plain read must answer it verbatim (no spawn),
+    // and refresh=1 must SKIP it — the re-probe then fails (no adapter binary
+    // exists in this test), proving the cached entry was bypassed.
+    _seedEngineModelCatalogCache('custom', undefined, {
+      result: {
+        engine: 'custom',
+        models: [{ modelId: 'stale-cached-model', name: 'Stale Cached' }],
+        fetchedAt: Date.now(),
+        source: 'probe',
+      },
+    })
+    const cached = await request(createApp()).get('/api/engines/custom/models')
+    expect(cached.status).toBe(200)
+    expect((cached.body.models as Array<{ modelId: string }>).map((m) => m.modelId))
+      .toEqual(['stale-cached-model'])
+    const refreshed = await request(createApp()).get('/api/engines/custom/models?refresh=1')
+    expect(refreshed.status).toBe(502)
   })
 })

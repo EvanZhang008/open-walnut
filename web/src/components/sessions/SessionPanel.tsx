@@ -51,7 +51,7 @@ import { timeAgo } from '@/utils/time';
 import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
 import { SessionKebabSection } from './SessionKebabSection';
-import { ModelPicker, shortAcpModelName } from './ModelPicker';
+import { ModelPicker, acpModelDisplayName } from './ModelPicker';
 import { modelSupportsEffort, SESSION_EFFORTS, SESSION_MODE_LABELS } from '@open-walnut/core';
 import { TaskQuickActions } from './TaskQuickActions';
 import { useFullscreen } from '@/hooks/useFullscreen';
@@ -1141,9 +1141,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
       title={`Switch ${engineUi.displayName} model`}
       onClick={(e) => { modelPillRef.current = e.currentTarget; setModelPickerOpen((v) => !v); }}
     >
-      {/* 3 tiers: the provider's own name, else prettify the id, else the engine. */}
-      {session?.acpModelName
-        ?? (session?.acpModel ? shortAcpModelName(session.acpModel) : engineUi.displayName)}
+      {/* 3 tiers: the provider's own name (minus its provider prefix — a pill
+          reading "Amazon Bedrock/Claude…" is all provider, no model), else
+          prettify the id, else the engine. */}
+      {acpModelDisplayName(session?.acpModel, session?.acpModelName) ?? engineUi.displayName}
       {contextPercent != null && (
         <span className="session-detail-context-pct"> {contextPercent}%</span>
       )}

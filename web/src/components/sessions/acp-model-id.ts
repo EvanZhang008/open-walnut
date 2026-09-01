@@ -11,6 +11,7 @@
  */
 import { SESSION_EFFORTS, SESSION_EFFORT_IDS } from '@open-walnut/core';
 import { formatModelName } from '@/utils/model-name';
+import { sortByModelStrength } from '@/utils/model-strength-order';
 
 /** "low|medium|high|xhigh|max" — derived so a new effort level can't drift. */
 const EFFORT_ALTERNATION = SESSION_EFFORT_IDS.join('|');
@@ -81,4 +82,137 @@ export function shortAcpModelName(modelId: string): string {
   const label = SESSION_EFFORTS.find((e) => e.id === effort)?.label
     ?? effort.charAt(0).toUpperCase() + effort.slice(1);
   return `${family} · ${label}`;
+}
+
+/**
+ * Pill label for a LIVE session: the adapter's advertised name wins (it keeps
+ * punctuation the id lost), but minus its provider prefix — opencode spells
+ * names "Amazon Bedrock/Claude Sonnet 4.6 (US)", and a 32-char pill full of
+ * provider is a pill with no model in it. The prefix is stripped ONLY when the
+ * model ID itself is provider-grouped (so a '/' that is genuinely part of a
+ * model's name survives). No name → derive from the id; neither → null, the
+ * caller falls back to the engine name.
+ */
+export function acpModelDisplayName(modelId?: string, advertisedName?: string): string | null {
+  if (advertisedName) {
+    const groupId = modelId ? acpProviderGroupId(parseAcpModelId(modelId).familyId) : '';
+    if (groupId) {
+      const slash = advertisedName.indexOf('/');
+      // Strip ONLY when the name's prefix really is the provider ("Amazon
+      // Bedrock/…" for amazon-bedrock/…) — a grouped id whose name merely
+      // contains a slash ("Claude w/ tools") must survive whole.
+      if (slash > 0) {
+        const prefix = advertisedName.slice(0, slash);
+        const canon = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+        if (canon(prefix) === canon(groupId)) {
+          return advertisedName.slice(slash + 1).trim() || advertisedName;
+        }
+      }
+    }
+    return advertisedName;
+  }
+  return modelId ? shortAcpModelName(modelId) : null;
+}
+
+// ── Catalog filter matching ─────────────────────────────────────────────────
+
+/** Separator-insensitive haystack form: "Claude Sonnet 4.6 (US)" and
+ *  "us.anthropic.claude-sonnet-4-6" both normalize their ./-/_// to spaces,
+ *  so the query "sonnet 4-6" (or "sonnet 4.6", or "sonnet-4-6") hits either. */
+function normalizeForFilter(s: string): string {
+  return s.toLowerCase().replace(/[\s./_-]+/g, ' ');
+}
+
+/** Does this family match the picker's filter query? Every whitespace token
+ *  must hit SOMEWHERE in the label + family id + provider label — "bedrock
+ *  sonnet" (provider + model, exactly what the row displays) is the natural
+ *  query, and contiguous-substring matching would reject it. Separator style
+ *  is ignored — users type model names from memory, and memory doesn't keep
+ *  track of dots versus dashes. */
+export function acpFilterMatch(
+  family: { label: string; familyId: string; groupLabel?: string },
+  query: string,
+): boolean {
+  const tokens = normalizeForFilter(query).split(' ').filter(Boolean);
+  if (tokens.length === 0) return true;
+  const haystack = normalizeForFilter(`${family.label} ${family.familyId} ${family.groupLabel ?? ''}`);
+  return tokens.every((token) => haystack.includes(token));
+}
+
+// ── Catalog grouping — the pure half of the picker's ACP pane ───────────────
+
+/** The catalog row shape both catalog endpoints answer with. */
+export interface AcpCatalogModel {
+  modelId: string;
+  name: string;
+  description?: string;
+}
+
+export interface AcpModelFamily {
+  familyId: string;
+  label: string;
+  /** Which provider group this family lives in — carried on the family so a
+   *  cross-group FILTERED list can still say where a match came from. */
+  groupId: string;
+  groupLabel: string;
+  byEffort: Map<string | null, AcpCatalogModel>;
+}
+
+export interface AcpModelGroup {
+  id: string;
+  label: string;
+  families: AcpModelFamily[];
+}
+
+/**
+ * Regroup a flat ACP catalog on three axes: Provider (the id's provider
+ * prefix), Model (one family per row), Effort (the qualifier variants). ACP
+ * encodes effort INTO the model id (…-sol[xhigh], …/claude-sonnet-4-6/high),
+ * so a raw catalog renders as a wall — opencode advertises 300+ rows.
+ * Groups keep the provider's own catalog order; families sort by strength.
+ */
+export function groupAcpModels(models: readonly AcpCatalogModel[]): AcpModelGroup[] {
+  const groups = new Map<string, { id: string; label: string; families: Map<string, AcpModelFamily> }>();
+  for (const m of models) {
+    const { familyId, effort } = parseAcpModelId(m.modelId);
+    const groupId = acpProviderGroupId(familyId);
+    let group = groups.get(groupId);
+    if (!group) {
+      // Prefer the provider's own spelling from the advertised name
+      // ("Amazon Bedrock/Claude …"); ids without one prettify the id.
+      const nameSlash = m.name.indexOf('/');
+      const label = groupId
+        ? (nameSlash > 0 ? m.name.slice(0, nameSlash).trim() : prettyGroupLabel(groupId))
+        : '';
+      group = { id: groupId, label, families: new Map() };
+      groups.set(groupId, group);
+    }
+    let fam = group.families.get(familyId);
+    if (!fam) {
+      // Prefer the server's own name minus its provider prefix and its
+      // "(effort)" tail — it keeps punctuation the id lost (e.g. "GPT-5.6
+      // Sol", "Claude Sonnet 4.6 (US)"). KEEP the name === modelId guard:
+      // an adapter that advertises NO name gets the modelId as its name,
+      // whose effort is bracketed ("id[high]"), so the regex misses,
+      // .trim() is non-empty and the `|| ` fallback never fires — the row
+      // rendered the raw qualified id.
+      const nameSlash = m.name.indexOf('/');
+      const withoutGroup = groupId && nameSlash > 0 ? m.name.slice(nameSlash + 1) : m.name;
+      const label = m.name === m.modelId
+        ? acpFamilyName(familyId)
+        : withoutGroup.replace(/\s*\((?:low|medium|high|xhigh|max)\)\s*$/i, '').trim()
+          || acpFamilyName(familyId);
+      fam = { familyId, label, groupId, groupLabel: group.label, byEffort: new Map() };
+      group.families.set(familyId, fam);
+    }
+    fam.byEffort.set(effort, m);
+  }
+  return [...groups.values()].map((group) => ({
+    id: group.id,
+    label: group.label,
+    families: sortByModelStrength(
+      [...group.families.values()],
+      (family) => `${family.familyId} ${family.label}`,
+    ),
+  }));
 }

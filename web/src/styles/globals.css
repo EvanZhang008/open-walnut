@@ -17563,6 +17563,44 @@ a.task-kebab-info:hover {
   color: var(--fg-muted);
 }
 
+/* ACP pane: type-ahead filter over large/grouped catalogs (opencode ~300).
+   Sticky: the Model column scrolls internally, and a filter that scrolls away
+   with its own results can't be corrected without scrolling back up. */
+.model-picker-filter {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 2px 0 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg-primary);
+}
+
+.model-picker-filter:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.model-picker-filter::placeholder {
+  color: var(--fg-muted);
+}
+
+/* Provider tag on cross-group filter matches ("Sonnet 4.6 — Amazon Bedrock"). */
+.model-picker-row-group {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+/* Retry after a failed draft probe — sits under the error text. */
+.model-picker-retry {
+  margin-top: 8px;
+}
+
 .model-picker-header {
   display: flex;
   align-items: center;

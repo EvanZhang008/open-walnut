@@ -882,6 +882,36 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
     expect((await catalog.json() as { currentModelId?: string }).currentModelId).toBe('mock-gpt-fast')
   }, 30_000)
 
+  it('launches with an EFFORT-qualified pick: base model applies, unknown effort is dropped without failing the launch', async () => {
+    // Codex dialect: "base[effort]" splits into acpConfig
+    // {model, reasoning_effort}. The mock adapter advertises the model option
+    // but NO reasoning_effort option — replayPersistedConfig must apply the
+    // base and skip the effort (log-and-continue), never fail the spawn.
+    const resp = await fetch(apiUrl('/api/sessions/quick-start'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cwd: os.tmpdir(), message: 'hello with an effort-qualified model', engine: 'codex', model: 'mock-gpt-fast[high]' }),
+    })
+    expect(resp.status).toBe(200)
+    const { taskId: effortTaskId } = await resp.json() as { taskId: string }
+    const effortSessionId = await sessionIdForTask(effortTaskId, 'codex')
+    await waitFor(() => eventsFor(effortSessionId, EventNames.SESSION_RESULT).length > 0, 15_000, 'effort-qualified first turn')
+
+    // The record keeps the FULL qualified pick (pill truth), and the replay
+    // copy carries both halves — the base under 'model', the qualifier under
+    // 'reasoning_effort' for adapters that do advertise it.
+    const records = await getSessionsForTask(effortTaskId)
+    const rec = records.find((r) => r.claudeSessionId === effortSessionId)!
+    expect(rec.acpModel).toBe('mock-gpt-fast[high]')
+    expect(rec.acpConfig).toEqual(expect.objectContaining({ model: 'mock-gpt-fast', reasoning_effort: 'high' }))
+
+    // Adapter truth: the base model applied; the missing effort option did
+    // not poison the switch.
+    const catalog = await fetch(apiUrl(`/api/sessions/${effortSessionId}/model-catalog`))
+    expect(catalog.status).toBe(200)
+    expect((await catalog.json() as { currentModelId?: string }).currentModelId).toBe('mock-gpt-fast')
+  }, 30_000)
+
 
   function findRuntimeId(): string {
     const files = fs.readdirSync(streamsDir).filter((f) => f.endsWith('.acp.jsonl'))

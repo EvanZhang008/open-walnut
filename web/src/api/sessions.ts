@@ -456,9 +456,20 @@ export async function setCodexSessionModel(
 export async function fetchEngineModelCatalog(
   engine: string,
   cwd?: string,
+  opts?: { refresh?: boolean; timeoutMs?: number },
 ): Promise<{ engine: string; models: CodexModelInfo[]; currentModelId?: string; source: 'probe' | 'mock' }> {
-  const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : '';
-  return apiGet(`/api/engines/${encodeURIComponent(engine)}/models${query}`);
+  const params = new URLSearchParams();
+  if (cwd) params.set('cwd', cwd);
+  // Retry after a probe failure: busts the server's cached failure entry.
+  if (opts?.refresh) params.set('refresh', '1');
+  const qs = params.toString();
+  // 20s default: must OUTLIVE the server's 15s probe deadline — with the
+  // browser's default 15s the fetch aborts ("signal timed out") right as the
+  // server is composing its honest error (or its answer), and the picker
+  // loses the adapter's words. Prefetch callers pass a SHORT timeout instead:
+  // aborting client-side frees the connection slot while the server-side
+  // probe runs on and still lands in the cache.
+  return apiGet(`/api/engines/${encodeURIComponent(engine)}/models${qs ? `?${qs}` : ''}`, undefined, { timeoutMs: opts?.timeoutMs ?? 20_000 });
 }
 
 export interface SessionControlOption {

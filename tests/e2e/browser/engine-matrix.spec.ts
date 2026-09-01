@@ -150,9 +150,35 @@ test('OpenCode draft lists probed models and the pick rides the launch payload',
   await expect(picker).toBeVisible()
   const defaultRow = picker.getByTestId('acp-default-row')
   await expect(defaultRow).toHaveAttribute('aria-selected', 'true')
+  // The default row names the engine's RESOLVED default (the probe's
+  // currentModelId), not just "default".
+  await expect(defaultRow).toHaveText(/OpenCode default \(GPT Best\)/, { timeout: 10_000 })
+
+  // The fixture catalog carries a second provider group ('Mock Provider') so
+  // the grouped layout is exercised here too: the Provider column exists,
+  // clicking a group swaps the family list without changing the selection.
+  const providerCol = picker.locator('.model-picker-col-groups')
+  await expect(providerCol).toBeVisible()
+  await providerCol.locator('.model-picker-row', { hasText: 'Mock Provider' }).click()
+  await expect(picker.locator('.model-picker-row', { hasText: 'Deep Thinker' })).toBeVisible()
+  await expect(defaultRow).toHaveAttribute('aria-selected', 'true') // navigation ≠ selection
+
+  // Type-ahead filter. Multi-token AND across the axes ("deep thinker" is
+  // label tokens); a match from a NAMED group carries its provider tag.
+  const filter = picker.getByTestId('acp-model-filter')
+  await filter.fill('deep thinker')
+  const thinkerRow = picker.locator('.model-picker-row', { hasText: 'Deep Thinker' })
+  await expect(thinkerRow).toBeVisible({ timeout: 10_000 })
+  await expect(thinkerRow.locator('.model-picker-row-group')).toHaveText(/Mock Provider/)
+  // Cross-group reach: the anonymous group's model matches too, tagless.
+  await filter.fill('best')
   const bestRow = picker.locator('.model-picker-row', { hasText: 'Mock GPT Best' })
   await expect(bestRow).toBeVisible({ timeout: 10_000 })
+  await expect(bestRow.locator('.model-picker-row-group')).toHaveCount(0)
+  // Picking straight from the filtered list works — and the pick clears the
+  // query + follows the picked family's group, so the ✓ is visible.
   await bestRow.click()
+  await expect(filter).toHaveValue('')
   // The pick replaces the engine-default choice and lands on the pill.
   await expect(defaultRow).toHaveAttribute('aria-selected', 'false')
   await page.keyboard.press('Escape')

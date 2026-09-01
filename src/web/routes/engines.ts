@@ -75,9 +75,12 @@ enginesRouter.get('/:id/models', async (req: Request, res: Response) => {
   const cwd = typeof rawCwd === 'string' && rawCwd.trim() && rawCwd.length <= 1024
     ? rawCwd.trim()
     : undefined
+  // ?refresh=1 — the picker's "Retry": a cached failure (45s TTL) must not
+  // outlive the operator's fix, so a retry click re-probes immediately.
+  const refresh = req.query.refresh === '1'
   try {
     const { getEngineModelCatalog } = await import('../../providers/engine-model-probe.js')
-    const catalog = await getEngineModelCatalog(id, { cwd })
+    const catalog = await getEngineModelCatalog(id, { cwd, refresh })
     res.json(catalog)
   } catch (err) {
     // Honest degrade: "couldn't list" with the adapter's own words (missing

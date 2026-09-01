@@ -43,12 +43,18 @@ export interface EngineModelCatalog {
   source: 'probe' | 'mock'
 }
 
-const PROBE_TIMEOUT_MS = 10_000
+// 15s: opencode's cold start measured 2-4s idle but >10s while the machine is
+// under endpoint-agent load — a deadline that only holds on an idle box turns
+// every busy-hour picker open into a cached failure + manual Retry.
+const PROBE_TIMEOUT_MS = 15_000
 const SUCCESS_TTL_MS = 10 * 60_000
 /** Failures stay cached briefly: a misconfigured engine (no creds) must not
  *  re-spawn its adapter on every picker open, but must recover fast after the
  *  operator fixes the config. */
 const FAILURE_TTL_MS = 45_000
+/** Hard bound on concurrent adapter spawns across ALL keys — see the check
+ *  in getEngineModelCatalog. */
+const MAX_INFLIGHT_PROBES = 8
 
 interface CacheEntry {
   at: number
@@ -65,15 +71,33 @@ export function resetEngineModelCatalogCache(): void {
   inflight.clear()
 }
 
+/** Test hook: pin a cache entry (success or failure) so route tests can prove
+ *  cache reads and refresh busting without timing games or real adapters.
+ *  `at` backdates the entry so TTL expiry is testable too. */
+export function _seedEngineModelCatalogCache(
+  engine: SessionEngine,
+  cwd: string | undefined,
+  entry: { result?: EngineModelCatalog; error?: string },
+  at: number = Date.now(),
+): void {
+  cache.set(`${engine}|${cwd ?? ''}`, { at, ...entry })
+}
+
 /** Same fixture switch as engine-probe: fixtures force-install every engine
- *  and have no real adapters, so the catalog answers with the mock adapter's
- *  models (tests/providers/mock-acp-agent.mjs advertises the same two). */
+ *  and have no real adapters, so the catalog answers for the mock adapter
+ *  (tests/providers/mock-acp-agent.mjs). The two flat models match what that
+ *  agent advertises (launchable end-to-end in fixtures); the 'mock-provider/*'
+ *  rows exist ONLY to exercise the picker's grouped/effort UI — the mock agent
+ *  does not advertise them, so a fixture launch must not pick one. */
 function mockCatalog(engine: SessionEngine): EngineModelCatalog {
   return {
     engine,
     models: [
       { modelId: 'mock-gpt-best', name: 'Mock GPT Best', description: 'Best mock model' },
       { modelId: 'mock-gpt-fast', name: 'Mock GPT Fast', description: 'Fast mock model' },
+      { modelId: 'mock-provider/deep-thinker/medium', name: 'Mock Provider/Deep Thinker (medium)', description: 'Grouped mock model, medium effort' },
+      { modelId: 'mock-provider/deep-thinker/high', name: 'Mock Provider/Deep Thinker (high)', description: 'Grouped mock model, high effort' },
+      { modelId: 'mock-provider/quick-drafter', name: 'Mock Provider/Quick Drafter', description: 'Grouped mock model, no effort variants' },
     ],
     currentModelId: 'mock-gpt-best',
     fetchedAt: Date.now(),
@@ -254,12 +278,15 @@ async function probeEngine(engine: SessionEngine, cwd?: string): Promise<EngineM
  * `cwd` should be the DRAFT's folder: opencode/goose resolve provider+model
  * config per project, so a $HOME probe could list a catalog the launch in
  * that folder won't offer. Cache is keyed per engine+cwd for the same reason.
+ * `refresh` skips the cache READ (both halves — a cached failure must not
+ * outlive an operator's "Retry" click after they fixed credentials/config);
+ * the fresh answer still lands in the cache, and in-flight dedupe still holds.
  * `options.env` swaps ONLY the fixture-switch read (WALNUT_ENGINE_PROBE_ALL)
  * for tests — the adapter spawn always builds its env from real config.
  */
 export async function getEngineModelCatalog(
   engine: SessionEngine,
-  options: { env?: NodeJS.ProcessEnv; cwd?: string } = {},
+  options: { env?: NodeJS.ProcessEnv; cwd?: string; refresh?: boolean } = {},
 ): Promise<EngineModelCatalog> {
   if (!isAcpEngine(engine)) {
     throw new Error(`engine '${engine}' does not advertise a provider model catalog`)
@@ -267,7 +294,7 @@ export async function getEngineModelCatalog(
   const probeEnv = options.env ?? process.env
   if (probeEnv.WALNUT_ENGINE_PROBE_ALL === '1') return mockCatalog(engine)
   const key = `${engine}|${options.cwd ?? ''}`
-  const cached = cache.get(key)
+  const cached = options.refresh ? undefined : cache.get(key)
   if (cached) {
     const age = Date.now() - cached.at
     if (cached.result && age < SUCCESS_TTL_MS) return cached.result
@@ -275,6 +302,12 @@ export async function getEngineModelCatalog(
   }
   const running = inflight.get(key)
   if (running) return running
+  // Global fan-out bound: dedupe and per-key caches are both keyed on the RAW
+  // cwd, so a burst of distinct cwds (or refresh=1 calls) could otherwise
+  // stack an adapter child per request. More engines than exist, but finite.
+  if (inflight.size >= MAX_INFLIGHT_PROBES) {
+    throw new Error(`too many engine model probes in flight (${inflight.size}) — retry shortly`)
+  }
   const probe = probeEngine(engine, options.cwd)
     .then((result) => {
       cache.set(key, { at: Date.now(), result })
