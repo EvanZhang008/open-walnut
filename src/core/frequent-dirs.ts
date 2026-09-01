@@ -235,6 +235,9 @@ async function compileFromSessionsInternal(): Promise<void> {
     for (const s of sessions) {
       if (!s.cwd) continue
       if (isTriageSession(s)) continue
+      // Lane sessions (chat lanes, side threads) inherit their parent's cwd —
+      // counting them would let one conversation stuff the launcher's ranking.
+      if (s.lane) continue
       if (s.archived) continue
 
       const key = `${s.cwd}::${s.host ?? '__local__'}`

@@ -11,7 +11,10 @@ export interface SideQuestion {
   id: string;
   sessionId: string;
   question: string;
-  answer: string;
+  /** Optional since side threads: a thread entry stores the question only (the
+   *  answer lives in its session transcript). Legacy one-shot rows always have
+   *  one, but render defensively. */
+  answer?: string;
   createdAt: string;
   promotedTaskId?: string;
   /** UI-only: set after promote to label "subtask" vs "task" (not persisted). */

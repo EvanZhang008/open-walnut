@@ -20,10 +20,26 @@ export interface SideQuestion {
   id: string;
   sessionId: string;
   question: string;
-  answer: string;
+  /**
+   * LEGACY one-shot `/btw` answer. Absent on side-thread entries: a thread's
+   * answer lives in its own session transcript, not here.
+   */
+  answer?: string;
   createdAt: string;
+  /**
+   * SIDE THREAD: the hidden fork session backing this question. Its presence is
+   * what makes an entry a thread rather than a legacy Q&A.
+   */
+  threadSessionId?: string;
+  /** Display label for a thread (defaults to the question at the UI layer). */
+  title?: string;
   /** Set once promoted into a task, so the UI can show "✓ task created". */
   promotedTaskId?: string;
+}
+
+/** Split a stored list into the two shapes the drawer renders. */
+export function isSideThreadEntry(entry: SideQuestion): boolean {
+  return typeof entry.threadSessionId === 'string' && entry.threadSessionId.length > 0;
 }
 
 const DIR = path.join(WALNUT_HOME, 'side-questions');
@@ -74,6 +90,50 @@ export async function addSideQuestion(
   });
 }
 
+/**
+ * Record a side THREAD. The caller owns the id (it is also the lane component
+ * and the route path segment), so one id addresses the record, the store row and
+ * the HTTP resource.
+ */
+export async function addSideThread(
+  sessionId: string,
+  input: { id: string; question: string; threadSessionId: string; title?: string },
+): Promise<SideQuestion> {
+  return withLock(sessionId, async () => {
+    const list = await readJsonFile<SideQuestion[]>(fileFor(sessionId), []);
+    const entry: SideQuestion = {
+      id: input.id,
+      sessionId,
+      question: input.question,
+      threadSessionId: input.threadSessionId,
+      ...(input.title ? { title: input.title } : {}),
+      createdAt: new Date().toISOString(),
+    };
+    list.push(entry);
+    await writeJsonFile(fileFor(sessionId), list);
+    log.web.info('side thread persisted', {
+      sessionId, id: entry.id, threadSessionId: input.threadSessionId,
+    });
+    return entry;
+  });
+}
+
+/** Drop a thread entry (the session record is retired separately). */
+export async function removeSideThread(sessionId: string, id: string): Promise<boolean> {
+  return deleteSideQuestion(sessionId, id);
+}
+
+/** Stamp a thread entry with the task it was promoted into. False = the entry
+ *  is gone (retired concurrently) and nothing was written — the caller decides
+ *  whether that voids the promote. */
+export async function markThreadPromoted(
+  sessionId: string,
+  id: string,
+  taskId: string,
+): Promise<boolean> {
+  return markPromoted(sessionId, id, taskId);
+}
+
 export async function getSideQuestion(
   sessionId: string,
   id: string,
@@ -86,14 +146,14 @@ export async function markPromoted(
   sessionId: string,
   id: string,
   taskId: string,
-): Promise<void> {
-  await withLock(sessionId, async () => {
+): Promise<boolean> {
+  return withLock(sessionId, async () => {
     const list = await readJsonFile<SideQuestion[]>(fileFor(sessionId), []);
     const entry = list.find((q) => q.id === id);
-    if (entry) {
-      entry.promotedTaskId = taskId;
-      await writeJsonFile(fileFor(sessionId), list);
-    }
+    if (!entry) return false;
+    entry.promotedTaskId = taskId;
+    await writeJsonFile(fileFor(sessionId), list);
+    return true;
   });
 }
 

@@ -1863,6 +1863,15 @@ export interface SessionRecord {
    * and re-sending the flag would cut those new turns off).
    */
   pendingResumeSessionAt?: string;
+  /**
+   * The exact `--append-system-prompt` text this session's LAST spawn ran with
+   * (walnut gateway + task context, as finally assembled in handleStart). A
+   * side-thread fork re-sends this VERBATIM instead of building fresh context:
+   * the system prompt is the first block of the API prefix, so one changed byte
+   * there costs the entire parent prompt-cache (measured live 2026-09-01:
+   * cache_read collapsed to the 15K shared base, 217K re-written).
+   */
+  appliedAppendSystemPrompt?: string;
   /** Messages the human pinned, in pin order. Drives the timeline's TOC. */
   pinnedMessages?: SessionPinnedMessage[];
   /**

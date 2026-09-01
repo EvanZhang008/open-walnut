@@ -35,6 +35,7 @@ import {
 } from './derive/session.js';
 import { deriveTaskHookPoints, buildTaskContext } from './derive/task.js';
 import { log } from '../../logging/index.js';
+import { isSideThreadLane } from '../sessions/side-thread-fork.js';
 
 const DEFAULT_HANDLER_TIMEOUT_MS = 30_000;
 const DEFAULT_AGENT_TIMEOUT_MS = 120_000;
@@ -266,6 +267,13 @@ export class HookDispatcher {
 
       // Build context (cached per session)
       const context = await this.payloadBuilder.build(sessionId, taskId, event.traceId);
+      // Side threads are hidden asides with no task: session hooks (on-stop
+      // deploys, phase transitions, summaries) are written for the session the
+      // user launched, and firing them per aside would be pure noise + spend.
+      // Promotion clears the lane, so a promoted session gets hooks again.
+      // NOTE: PayloadBuilder caches the record ~10s, so a just-promoted
+      // session can stay skipped for up to that window.
+      if (isSideThreadLane(context.session?.lane)) return;
       const payload = { ...context, event: name, ...extraPayload };
 
       // Filter hooks by session criteria

@@ -11,9 +11,13 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 import { WALNUT_HOME } from '../../src/constants.js';
 import {
   addSideQuestion,
+  addSideThread,
+  isSideThreadEntry,
   listSideQuestions,
   getSideQuestion,
   markPromoted,
+  markThreadPromoted,
+  removeSideThread,
   deleteSideQuestion,
 } from '../../src/core/side-questions.js';
 
@@ -65,5 +69,54 @@ describe('side-questions store', () => {
 
   it('returns empty list for an unknown session', async () => {
     expect(await listSideQuestions('never-existed')).toEqual([]);
+  });
+});
+
+// Side THREADS share the same per-parent file: a thread carries a session id and
+// no answer (its answer lives in that session's transcript), a legacy /btw entry
+// carries an answer and no session id, and both must survive the same read.
+describe('side threads in the same store', () => {
+  it('round-trips a thread entry with a caller-owned id', async () => {
+    const entry = await addSideThread('sess-1', {
+      id: 'sth-1', question: 'why hasPipe?', threadSessionId: 'fork-sid', title: 'FIFO',
+    });
+    expect(entry.id).toBe('sth-1');
+    expect(entry.threadSessionId).toBe('fork-sid');
+    expect(entry.title).toBe('FIFO');
+    expect(entry.answer).toBeUndefined();
+
+    const got = await getSideQuestion('sess-1', 'sth-1');
+    expect(got?.threadSessionId).toBe('fork-sid');
+    expect(isSideThreadEntry(got!)).toBe(true);
+  });
+
+  it('reads legacy Q&As and threads out of one file', async () => {
+    const legacy = await addSideQuestion('sess-mix', 'legacy q', 'legacy a');
+    await addSideThread('sess-mix', { id: 'sth-2', question: 'thread q', threadSessionId: 'fork-2' });
+
+    const list = await listSideQuestions('sess-mix');
+    expect(list).toHaveLength(2);
+    expect(list.filter(isSideThreadEntry).map((e) => e.id)).toEqual(['sth-2']);
+    expect(list.filter((e) => !isSideThreadEntry(e)).map((e) => e.id)).toEqual([legacy.id]);
+    expect(isSideThreadEntry(legacy)).toBe(false);
+  });
+
+  it('marks a thread promoted and removes it', async () => {
+    await addSideThread('sess-2', { id: 'sth-3', question: 'q', threadSessionId: 'fork-3' });
+    await markThreadPromoted('sess-2', 'sth-3', 'task-9');
+    expect((await getSideQuestion('sess-2', 'sth-3'))?.promotedTaskId).toBe('task-9');
+
+    expect(await removeSideThread('sess-2', 'sth-3')).toBe(true);
+    expect(await listSideQuestions('sess-2')).toHaveLength(0);
+    expect(await removeSideThread('sess-2', 'sth-3')).toBe(false);
+  });
+
+  it('serializes concurrent writes to one parent (no lost entry)', async () => {
+    await Promise.all([
+      addSideThread('sess-3', { id: 'sth-a', question: 'a', threadSessionId: 'f-a' }),
+      addSideThread('sess-3', { id: 'sth-b', question: 'b', threadSessionId: 'f-b' }),
+      addSideQuestion('sess-3', 'legacy', 'ans'),
+    ]);
+    expect(await listSideQuestions('sess-3')).toHaveLength(3);
   });
 });

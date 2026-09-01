@@ -144,6 +144,32 @@ describe('fetchSessionHistory coalescing', () => {
     await expect(dead).resolves.toBeTruthy();
   });
 
+  it('a remount inside the abort window gets a FRESH request, not the doomed promise', async () => {
+    // The eager delete-on-abort exists exactly for this: fast thread-chip
+    // switching unmounts + remounts the same history shape before the aborted
+    // fetch settles. The remount must not adopt the rejected promise.
+    const calls = deferApiGet();
+    const ac = new AbortController();
+    const doomed = fetchSessionHistory('sess-1', { tail: 400, signal: ac.signal });
+    ac.abort();
+    expect(calls[0].signal?.aborted).toBe(true);
+
+    // Remount BEFORE the doomed request settles → a second network call.
+    const fresh = fetchSessionHistory('sess-1', { tail: 400 });
+    expect(mocks.apiGet).toHaveBeenCalledTimes(2);
+
+    // The doomed request settles late — its .finally must NOT evict the fresh
+    // entry (identity-guarded), so a third caller still coalesces onto it.
+    calls[0].reject(new DOMException('aborted', 'AbortError'));
+    await expect(doomed).rejects.toThrow();
+    const third = fetchSessionHistory('sess-1', { tail: 400 });
+    expect(mocks.apiGet).toHaveBeenCalledTimes(2);
+
+    calls[1].resolve(RESPONSE);
+    await expect(fresh).resolves.toBeTruthy();
+    await expect(third).resolves.toBeTruthy();
+  });
+
   it('a failed request rejects all subscribers and is not cached for the next call', async () => {
     const calls = deferApiGet();
     const p1 = fetchSessionHistory('sess-1', { tail: 400 });

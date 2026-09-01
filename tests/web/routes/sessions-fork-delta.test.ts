@@ -105,6 +105,31 @@ describe('GET /:sessionId/history — fork chain + ?since', () => {
     expect(res2.status).toBe(503);
   });
 
+  it('?tail larger than the transcript keeps forkBoundaryIndex intact (no negative-drop inflation)', async () => {
+    await seedForkPair();
+    const app = createApp();
+
+    // REGRESSION: tail=200 on a 4-msg thread — `total - tail` is negative, and
+    // subtracting it INFLATED the boundary past the array (reported 196 on a
+    // 6-msg thread live), so inject/UI sliced the aside down to nothing.
+    const big = await request(app).get('/api/sessions/fork-child/history?tail=200');
+    expect(big.status).toBe(200);
+    expect(big.body.messages).toHaveLength(4);
+    expect(big.body.forkBoundaryIndex).toBe(2);
+
+    // A tail that really drops rows shifts the boundary by the dropped count…
+    const shifted = await request(app).get('/api/sessions/fork-child/history?tail=3');
+    expect(shifted.status).toBe(200);
+    expect(shifted.body.messages).toHaveLength(3);
+    expect(shifted.body.forkBoundaryIndex).toBe(1);
+
+    // …and drops the claim entirely once the boundary falls off the window.
+    const gone = await request(app).get('/api/sessions/fork-child/history?tail=1');
+    expect(gone.status).toBe(200);
+    expect(gone.body.messages).toHaveLength(1);
+    expect(gone.body.forkBoundaryIndex).toBeUndefined();
+  });
+
   it('ancestor read fails + full fetch (no since) → 200 partial view (lenient first load)', async () => {
     await seedForkPair();
     failingSids.add('fork-src');

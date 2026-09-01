@@ -681,6 +681,18 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     autoCollapsed.current = false;
     setChatCollapsed(false);
   }, [session?.cwd]);
+  // "Inject to chat" from a side thread → the SAME prefill driver as a code
+  // selection: replace the draft, reveal the composer, focus it. The thread's
+  // Q&A becomes ordinary text the user can edit before sending (nothing is sent
+  // for them). Reveal must happen in this batch — a collapsed chat column is
+  // `display:none`, so ChatInput's focus() would land on <body> and eat the
+  // user's next keystrokes (same trap as handleSelectCode).
+  const handleInjectFromThread = useCallback((text: string) => {
+    setPrefillText(text);
+    setPrefillNonce((n) => n + 1);
+    autoCollapsed.current = false;
+    setChatCollapsed(false);
+  }, []);
   // A line comment from the diff → send straight to this session's main agent.
   const handleDiffComment = useCallback((message: string) => {
     void send(sessionId, message);
@@ -1418,7 +1430,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                     mode={session.output_mode}
                     onOptimistic={(output_mode) => setSession(prev => prev ? { ...prev, output_mode } : prev)}
                   />
-                  <SideQuestionDrawer sessionId={session?.claudeSessionId} />
+                  <SideQuestionDrawer
+                    sessionId={session?.claudeSessionId}
+                    engine={session?.engine}
+                    cwd={session?.cwd}
+                    host={session?.host}
+                    onInjectToComposer={handleInjectFromThread}
+                  />
                   <SessionNotesPill
                     noteState={noteState}
                     expanded={notesOpen}
@@ -1963,7 +1981,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                     mode={session.output_mode}
                     onOptimistic={(output_mode) => setSession(prev => prev ? { ...prev, output_mode } : prev)}
                   />
-                  <SideQuestionDrawer sessionId={session?.claudeSessionId} />
+                  <SideQuestionDrawer
+                    sessionId={session?.claudeSessionId}
+                    engine={session?.engine}
+                    cwd={session?.cwd}
+                    host={session?.host}
+                    onInjectToComposer={handleInjectFromThread}
+                  />
                   <SessionNotesPill
                     noteState={noteState}
                     expanded={notesOpen}

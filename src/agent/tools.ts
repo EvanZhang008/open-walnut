@@ -72,6 +72,7 @@ import {
   isEnvironmentSession,
 } from '../core/session-tracker.js';
 import type { SessionLimitResult } from '../core/session-tracker.js';
+import { isSideThreadLane } from '../core/sessions/side-thread-fork.js';
 import { bus, EventNames } from '../core/event-bus.js';
 import { getConfig, updateConfig } from '../core/config-manager.js';
 import { SESSION_MODES, SESSION_MODE_IDS } from '../core/types.js';
@@ -1544,7 +1545,14 @@ queries: ["pipeline API allowlisting", "PAPINS SigV4", "pipeline allowlist"]  â†
         const sessions = resolvedTaskId
           ? await getSessionsForTask(resolvedTaskId)
           : await listSessions();
-        let filtered = sessions.filter((s) => s.provider !== 'embedded');
+        // Lane-bound sessions back a UI surface (a chat conversation, a side
+        // thread), not a user-launched session â€” the same rule every session
+        // list applies (isListableSession). The TASK-scoped branch filters side
+        // lanes only: a promoted Personal-AI conversation keeps its `chat:`
+        // lane while carrying a real taskId, and hiding it from its own task's
+        // session_list would make that task look sessionless.
+        let filtered = sessions.filter((s) => s.provider !== 'embedded'
+          && (resolvedTaskId ? !isSideThreadLane(s.lane) : !s.lane));
         if (!includeArchived) {
           filtered = filtered.filter((s) => !s.archived);
         }

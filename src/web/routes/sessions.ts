@@ -652,6 +652,16 @@ async function applySessionSearch(sessions: SessionRecord[], q: unknown): Promis
 const SEARCH_CANDIDATE_LIMIT = 2000
 
 // GET /api/sessions?q=<filter>
+/** Multi-KB spawn-time bookkeeping never belongs on a LIST payload — it is
+ *  read back record-by-record where needed (side-thread fork, cold resume). */
+function stripHeavyRecordFields<T extends { appliedAppendSystemPrompt?: string }>(sessions: T[]): T[] {
+  return sessions.map((s) => {
+    if (s.appliedAppendSystemPrompt === undefined) return s
+    const { appliedAppendSystemPrompt: _dropped, ...rest } = s
+    return rest as T
+  })
+}
+
 sessionsRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const query = typeof req.query.q === 'string' ? req.query.q.trim() : ''
@@ -661,7 +671,7 @@ sessionsRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
     // session backs a UI conversation surface, not a listed session).
     let sessions = all.filter(s => isListableSession(s) && !s.archived)
     sessions = await applySessionSearch(sessions, query)
-    res.json({ sessions: await enrichWithHostnames(await enrichWithLiveStatus(sessions)) })
+    res.json({ sessions: stripHeavyRecordFields(await enrichWithHostnames(await enrichWithLiveStatus(sessions))) })
   } catch (err) {
     next(err)
   }
@@ -683,7 +693,7 @@ sessionsRouter.get('/recent', async (req: Request, res: Response, next: NextFunc
         .sort((a, b) => (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? ''))
         .slice(0, limit)
     }
-    res.json({ sessions: await enrichWithHostnames(await enrichWithLiveStatus(sessions)) })
+    res.json({ sessions: stripHeavyRecordFields(await enrichWithHostnames(await enrichWithLiveStatus(sessions))) })
   } catch (err) {
     next(err)
   }
@@ -1231,7 +1241,28 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
             })
           }
         }
-        if (allSourceMessages.length > 0) {
+        // ── EMBED detection ──
+        // `claude --resume X --fork-session` COPIES the resumed prefix into the
+        // fork's own JSONL (message uuids preserved, sessionId rewritten), so a
+        // fork that has run a turn already CONTAINS its ancestors — prepending
+        // them again rendered the parent conversation twice (measured live:
+        // 2-msg parent → 6-msg thread history). Detect the embed by looking for
+        // the ancestors' last message id inside the fork's own transcript; when
+        // found, skip the prepend and put the boundary AT the embedded copy.
+        // Streams-source reads and not-yet-turned forks don't embed → prepend
+        // as before.
+        let embeddedBoundary = -1
+        if (allSourceMessages.length > 0 && messages.length > 0) {
+          for (let a = allSourceMessages.length - 1; a >= 0 && a >= allSourceMessages.length - 3; a--) {
+            const anchorId = allSourceMessages[a]?.msgId
+            if (!anchorId) continue
+            const idx = messages.findIndex((m) => m.msgId === anchorId)
+            if (idx >= 0) { embeddedBoundary = idx + (allSourceMessages.length - 1 - a); break }
+          }
+        }
+        if (embeddedBoundary >= 0) {
+          forkBoundaryIndex = embeddedBoundary + 1
+        } else if (allSourceMessages.length > 0) {
           messages = [...allSourceMessages, ...messages]
           forkBoundaryIndex = allSourceMessages.length
         }
@@ -1374,9 +1405,13 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     }
 
     const sliced = tail && tail > 0 ? messages.slice(-tail) : messages
-    // Adjust forkBoundaryIndex for the sliced window
-    const adjustedForkBoundary = forkBoundaryIndex != null && tail && tail > 0
-      ? (forkBoundaryIndex >= total - tail ? forkBoundaryIndex - (total - tail) : undefined)
+    // Adjust forkBoundaryIndex for the sliced window. `dropped` is clamped at 0:
+    // a tail LARGER than the transcript drops nothing, and the raw `total - tail`
+    // would go negative and INFLATE the boundary past the array (a 6-msg thread
+    // asked with tail=200 reported boundary 196 → clients sliced to empty).
+    const dropped = tail && tail > 0 ? Math.max(0, total - tail) : 0
+    const adjustedForkBoundary = forkBoundaryIndex != null
+      ? (forkBoundaryIndex >= dropped ? forkBoundaryIndex - dropped : undefined)
       : forkBoundaryIndex
     // True initial prompt of the conversation (fork prefix included) — computed
     // BEFORE the tail slice, because the slice is exactly what drops it. Windowed
@@ -1875,6 +1910,115 @@ sessionsRouter.delete('/:sessionId/side-question/:id', async (req: Request, res:
       return
     }
     next(err)
+  }
+})
+
+// ── Side threads ─────────────────────────────────────────────────────────────
+// A side thread is a HIDDEN fork session of this session (no task row) that
+// answers an aside without touching the main transcript. Follow-up messages need
+// no route here — the client sends them to the thread's session id through the
+// ordinary session:send RPC. Lifecycle lives in core/sessions/side-thread-*.ts.
+
+/** The manager (TTL timers, boot/idle sweeps — the ONLY reaper for these
+ *  sessions) runs on the PRIMARY only, so a replica accepting a create would
+ *  mint hidden CLI processes nothing ever retires. GET stays available (it is
+ *  a pure read); every mutating route refuses on the replica. */
+function refuseSideThreadsOnReplica(res: Response): boolean {
+  if (!process.env.WALNUT_CLOUD_MODE) return false
+  res.status(501).json({ error: 'Side threads are managed by the primary server' })
+  return true
+}
+
+/** SessionControlError → HTTP, with the fork veto reported by code. */
+function sendSideThreadError(err: unknown, res: Response, next: NextFunction): void {
+  if (err instanceof SessionControlError) {
+    if (err.extra?.code === 'ACP_FORK_UNSUPPORTED') {
+      res.status(409).json({ error: 'fork_unsupported' })
+      return
+    }
+    res.status(err.statusCode).json({ error: err.message })
+    return
+  }
+  next(err)
+}
+
+// GET /api/sessions/:sessionId/side-threads — threads + legacy one-shot Q&As
+sessionsRouter.get('/:sessionId/side-threads', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { sideThreadManager } = await import('../../core/sessions/side-thread-manager.js')
+    res.json(await sideThreadManager.listThreads(String(req.params.sessionId)))
+  } catch (err) {
+    sendSideThreadError(err, res, next)
+  }
+})
+
+// POST /api/sessions/:sessionId/side-threads/standby — prewarm a fork so the
+// first ask pays no spawn latency. Answers IMMEDIATELY: the spawn takes seconds
+// and the client only needs to know the request was accepted.
+sessionsRouter.post('/:sessionId/side-threads/standby', async (req: Request, res: Response) => {
+  if (refuseSideThreadsOnReplica(res)) return
+  const sessionId = String(req.params.sessionId)
+  res.json({ ok: true })
+  try {
+    const { sideThreadManager } = await import('../../core/sessions/side-thread-manager.js')
+    await sideThreadManager.ensureStandby(sessionId)
+  } catch (err) {
+    log.web.warn('side thread standby prewarm failed', {
+      sessionId, error: err instanceof Error ? err.message : String(err),
+    })
+  }
+})
+
+// POST /api/sessions/:sessionId/side-threads — open a thread and ask in it
+sessionsRouter.post('/:sessionId/side-threads', async (req: Request, res: Response, next: NextFunction) => {
+  if (refuseSideThreadsOnReplica(res)) return
+  try {
+    const { question, title } = (req.body ?? {}) as { question?: unknown; title?: unknown }
+    if (!question || typeof question !== 'string' || !question.trim()) {
+      res.status(400).json({ error: 'question (non-empty string) is required' })
+      return
+    }
+    const { sideThreadManager } = await import('../../core/sessions/side-thread-manager.js')
+    const thread = await sideThreadManager.createThread(String(req.params.sessionId), {
+      question,
+      ...(typeof title === 'string' && title.trim() ? { title } : {}),
+    })
+    res.json({ thread })
+  } catch (err) {
+    sendSideThreadError(err, res, next)
+  }
+})
+
+// POST /api/sessions/:sessionId/side-threads/:threadId/promote — task + un-hide
+sessionsRouter.post('/:sessionId/side-threads/:threadId/promote', async (req: Request, res: Response, next: NextFunction) => {
+  if (refuseSideThreadsOnReplica(res)) return
+  try {
+    const { title } = (req.body ?? {}) as { title?: unknown }
+    const { promoteSideThread } = await import('../../core/sessions/side-thread-promote.js')
+    const result = await promoteSideThread(
+      String(req.params.sessionId),
+      String(req.params.threadId),
+      typeof title === 'string' && title.trim() ? { title } : undefined,
+    )
+    res.json({
+      taskId: result.taskId,
+      ...(result.parentTaskId ? { parentTaskId: result.parentTaskId } : {}),
+      sessionId: result.sessionId,
+    })
+  } catch (err) {
+    sendSideThreadError(err, res, next)
+  }
+})
+
+// DELETE /api/sessions/:sessionId/side-threads/:threadId — stop + archive + forget
+sessionsRouter.delete('/:sessionId/side-threads/:threadId', async (req: Request, res: Response, next: NextFunction) => {
+  if (refuseSideThreadsOnReplica(res)) return
+  try {
+    const { sideThreadManager } = await import('../../core/sessions/side-thread-manager.js')
+    await sideThreadManager.retireThread(String(req.params.sessionId), String(req.params.threadId))
+    res.json({ ok: true })
+  } catch (err) {
+    sendSideThreadError(err, res, next)
   }
 })
 

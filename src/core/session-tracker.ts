@@ -556,6 +556,11 @@ export async function getActiveSessionsByHost(): Promise<Record<string, SessionR
     if (s.process_status !== 'running') continue;
     // Embedded/SDK sessions have no OS process — don't count toward host limits
     if (s.provider === 'embedded' || s.provider === 'sdk') continue;
+    // Side threads are hidden asides of another session: they must not occupy a
+    // capacity slot, and they must not be the reason a host is kept awake.
+    // Prefix literal = SIDE_LANE_PREFIX (side-thread-fork.ts, which imports
+    // this module — importing back would be circular).
+    if (s.lane?.startsWith('side:')) continue;
     if (!await isSessionProcessAlive(s)) {
       staleIds.push(s.claudeSessionId);
       continue;
@@ -1081,7 +1086,12 @@ export async function createSessionRecord(
         if (extra?.forkedFromSessionId && existing.forkedFromSessionId !== extra.forkedFromSessionId) materialChange = true;
         if (extra?.cliModel && existing.cliModel !== extra.cliModel) materialChange = true;
         if (extra?.effort && existing.effort !== extra.effort) materialChange = true;
-        if (extra?.lane && existing.lane !== extra.lane) materialChange = true;
+        // Lane: NEVER written from this path. The runner echoes its spawn-time
+        // _lane through here on EVERY turn result, which is stale the moment a
+        // side-thread standby is consumed (lane rename) or a thread is promoted
+        // (lane cleared) — and "fill if missing" would resurrect a promoted
+        // session's cleared lane. Every lane record is seeded with its lane at
+        // creation; changes go through updateSessionRecord + sessionRunner.syncLane.
         // Profile: the RECORD is the source of truth for spawn-time config (the
         // resume path rebuilds args from record.profile). The runner echoes its
         // in-memory _profile through here at result time, which is stale the
@@ -1126,7 +1136,6 @@ export async function createSessionRecord(
         // Write-once (see materialChange above): never clobber a record profile
         // with the runner's stale in-memory copy.
         if (extra?.profile && existing.profile === undefined) existing.profile = extra.profile;
-        if (extra?.lane) existing.lane = extra.lane;
 
         commitStatusVersion(existing, beforeStatus, now);
         writeSessionRowSqlite(handle, existing);

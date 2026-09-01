@@ -22,6 +22,7 @@ import { log } from '../../logging/index.js';
 import type { SessionRecord } from '../types.js';
 import { buildPeerWrapper } from '../peers/peer-wrapper.js';
 import { PeerThrottle, PEER_PENDING_CAP } from '../peers/peer-throttle.js';
+import { isSideThreadLane } from './side-thread-fork.js';
 import {
   buildReplyDeliveryText,
   buildReplyTrailer,
@@ -94,7 +95,13 @@ const displayHost = (host: string | undefined): string =>
 async function sendCandidates(): Promise<SessionRecord[]> {
   const { listSessions, isEnvironmentSession } = await import('../session-tracker.js');
   const all = await listSessions();
-  return all.filter((s) => s.provider !== 'embedded' && !isEnvironmentSession(s));
+  // Side threads are hidden asides of another session, addressable only by their
+  // own id — never a name/prefix match target for a peer send.
+  return all.filter(
+    (s) => s.provider !== 'embedded'
+      && !isEnvironmentSession(s)
+      && !isSideThreadLane(s.lane),
+  );
 }
 
 export interface ResolvedTarget {

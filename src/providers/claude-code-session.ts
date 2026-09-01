@@ -2987,6 +2987,12 @@ export class ClaudeCodeSession {
     log.session.debug('session teardown expected', { taskId: this.taskId, sessionId: this.claudeSessionId ?? undefined, reason })
   }
 
+  /** Record-side lane changes (side-thread consume/promote) must reach the live
+   *  instance, or persistSessionRecord echoes the stale spawn-time lane back. */
+  setLane(lane: string | undefined): void {
+    this._lane = lane
+  }
+
   /** Reject + clear any in-flight side questions (e.g. on session teardown) so the
    *  drawer's promise settles instead of hanging until its own timeout. */
   private _rejectAllSideQuestions(reason: string | Error): void {
@@ -7898,6 +7904,18 @@ export class SessionRunner {
     this.findSessionByClaudeId(claudeSessionId)?.markExpectedTeardown(reason)
   }
 
+  /**
+   * Sync a LIVE session's in-memory lane with a record-side lane change (side
+   * threads: standby consume renames the lane, promote clears it). Without
+   * this, persistSessionRecord echoes the stale spawn-time `_lane` back into
+   * the record on the next turn result. Safe no-op when not in memory — a cold
+   * resume re-reads the lane from the record (resolveResumeArgs).
+   */
+  syncLane(claudeSessionId: string, lane: string | undefined): void {
+    const session = this.findSessionByClaudeId(claudeSessionId)
+    if (session) session.setLane(lane)
+  }
+
   /** Public lookup for health monitor — returns hung-detection timestamps for a session. */
   getSessionTimestamps(claudeSessionId: string): { lastClaudeOutputAt: number; lastMessageDeliveryAt: number } | undefined {
     const session = this.findSessionByClaudeId(claudeSessionId)
@@ -8865,6 +8883,68 @@ export class SessionRunner {
       }
     }
 
+    // Side-thread forks: the system prompt is the FIRST block of the API prefix,
+    // so to reuse the parent's prompt cache it must match BYTE-FOR-BYTE what the
+    // parent's live process runs with — the freshly built context above cannot
+    // (taskless vs task content, drifting skills index). Replace it with the
+    // parent's stored spawn-time prompt when available; a parent from before
+    // this field existed keeps the fresh build (cache miss, self-heals on its
+    // next respawn).
+    {
+      const { parseSideLaneKey } = await import('../core/sessions/side-thread-fork.js')
+      const sideIds = parseSideLaneKey(data.lane)
+      if (sideIds) {
+        try {
+          const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+          const parentRecord = await getSessionByClaudeId(sideIds.parentSid)
+          // Same byte cap as the profile prompt (MAX_PROFILE_PROMPT_BYTES
+          // rationale): the value rides the spawn argv and gets shell-quoted
+          // into an SSH command line for remote hosts — an unbounded read-back
+          // from disk must not become a spawn-failure lever.
+          const inherited = parentRecord?.appliedAppendSystemPrompt
+          if (inherited && Buffer.byteLength(inherited, 'utf8') <= 65536) {
+            appendSystemPrompt = inherited
+            log.session.info('side thread: inherited parent system prompt verbatim', {
+              parentSid: sideIds.parentSid, promptLength: appendSystemPrompt.length,
+            })
+          } else {
+            log.session.info('side thread: parent has no stored system prompt — fresh build (cache prefix will diverge)', {
+              parentSid: sideIds.parentSid,
+            })
+          }
+        } catch (err) {
+          log.session.warn('side thread: parent prompt lookup failed — fresh build', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
+    }
+
+    // Remember the exact prompt this spawn runs with, so a future side-thread
+    // fork of THIS session can reproduce its cache prefix byte-for-byte.
+    // Oversized prompts are skipped: the fork-side read-back caps at 64KB too,
+    // so storing more would only bloat every listSessions() row parse.
+    if (data.preassignedSessionId && appendSystemPrompt
+        && Buffer.byteLength(appendSystemPrompt, 'utf8') <= 65536) {
+      const promptToStore = appendSystemPrompt
+      const sidToStore = data.preassignedSessionId
+      void (async () => {
+        const { updateSessionRecord } = await import('../core/session-tracker.js')
+        try {
+          await updateSessionRecord(sidToStore, { appliedAppendSystemPrompt: promptToStore })
+        } catch {
+          // Not all start paths pre-seed the record (task_start emits with only a
+          // preassigned id; the row is first written from the CLI's init line).
+          // Wait for the spawn to land, then retry once — without this, every
+          // task-started parent silently loses the cache-prefix inheritance.
+          await new Promise((r) => setTimeout(r, 10_000))
+          await updateSessionRecord(sidToStore, { appliedAppendSystemPrompt: promptToStore })
+        }
+      })().catch((err) => log.session.warn('applied-system-prompt persist failed — side threads of this session will miss the cache prefix', {
+        sessionId: sidToStore, error: err instanceof Error ? err.message : String(err),
+      }))
+    }
+
     // Resolve SSH host config from config
     const { getConfig } = await import('../core/config-manager.js')
     const config = await getConfig()
@@ -8927,8 +9007,11 @@ export class SessionRunner {
     }
     session.send(message, cwd, resumeId, mode, resolvedModel, appendSystemPrompt, data.host, sshTarget, isFork, config.session?.permission_prompt, spillFile, config.session?.stream_partial_messages, resolvedEffort, undefined, Object.keys(sendOpts).length > 0 ? sendOpts : undefined)
 
-    // Record directory usage for the frequent-dirs persistent store (fire-and-forget)
-    if (cwd) {
+    // Record directory usage for the frequent-dirs persistent store
+    // (fire-and-forget). Lane spawns are excluded: a side thread runs in the
+    // parent's cwd, so every drawer prewarm would otherwise inflate that
+    // directory's launcher ranking without any human launching there.
+    if (cwd && !data.lane) {
       import('../core/frequent-dirs.js').then(({ recordDirectory }) => {
         recordDirectory(cwd, data.host ?? null, taskProject).catch(() => {})
       }).catch(() => {})
@@ -9640,12 +9723,14 @@ export class SessionRunner {
     profile?: import('../core/types.js').SessionProfile
     lane?: string
     resumeSessionAt?: string
+    appendSystemPrompt?: string
   }> {
     let resolvedModel: string | undefined
     let resolvedEffort: import('../core/types.js').SessionEffort | undefined
     let resolvedProfile: import('../core/types.js').SessionProfile | undefined
     let resolvedLane: string | undefined
     let resolvedResumeSessionAt: string | undefined
+    let resolvedAppendSystemPrompt: string | undefined
     try {
       const { getSessionByClaudeId: getSession } = await import('../core/session-tracker.js')
       const record = await getSession(sessionId)
@@ -9659,6 +9744,15 @@ export class SessionRunner {
       // death in that window makes the next resume pick up the ABANDONED
       // branch tip. Cleared on turn result (clearPendingResumeSessionAt).
       if (record?.pendingResumeSessionAt) resolvedResumeSessionAt = record.pendingResumeSessionAt
+      // Re-emit the spawn-time --append-system-prompt. Without it every cold
+      // resume runs with a DIFFERENT system prompt than the turns already in
+      // the transcript, and the byte-exact cache-prefix invariant side threads
+      // depend on (types.ts appliedAppendSystemPrompt) breaks precisely on the
+      // recovery path the thread cap/idle reapers make routine.
+      if (record?.appliedAppendSystemPrompt
+          && Buffer.byteLength(record.appliedAppendSystemPrompt, 'utf8') <= 65536) {
+        resolvedAppendSystemPrompt = record.appliedAppendSystemPrompt
+      }
       // Fall back to stored CLI model for --resume so the [1m] context window
       // marker is preserved.  record.cliModel stores the original --model arg
       // (e.g. "opus[1m]").  record.model stores the *reported* model from init
@@ -9691,6 +9785,7 @@ export class SessionRunner {
     return {
       model: resolvedModel, effort: resolvedEffort, profile: resolvedProfile,
       lane: resolvedLane, resumeSessionAt: resolvedResumeSessionAt,
+      appendSystemPrompt: resolvedAppendSystemPrompt,
     }
   }
 
@@ -9926,7 +10021,7 @@ export class SessionRunner {
     // Model/effort routes persist BEFORE applying their process-local control
     // requests. Re-read after the old process is stopped so changes made during
     // the restart window are applied to the replacement CLI.
-    const { model, effort, profile, lane, resumeSessionAt } = await this.resolveResumeArgs(sessionId)
+    const { model, effort, profile, lane, resumeSessionAt, appendSystemPrompt: resumePrompt } = await this.resolveResumeArgs(sessionId)
     const refreshedRecord = await getSessionByClaudeId(sessionId)
     const resumeMode = modeOverride ?? refreshedRecord?.mode ?? record.mode
     log.session.info('reinitialize: respawning fresh CLI (no turn)', { sessionId, taskId: record.taskId, host: record.host, model, mode: resumeMode })
@@ -9938,7 +10033,7 @@ export class SessionRunner {
     // Empty message ⇒ daemon spawns idle: init event + SessionStart hook fire,
     // no user turn runs. onSpawnSettled reports spawn success/failure only.
     await new Promise<void>((resolve, reject) => {
-      target!.send('', record.cwd ?? undefined, sessionId, resumeMode, model, undefined, record.host ?? undefined, sshTarget, undefined, cfg.session?.permission_prompt, undefined, cfg.session?.stream_partial_messages, effort,
+      target!.send('', record.cwd ?? undefined, sessionId, resumeMode, model, resumePrompt, record.host ?? undefined, sshTarget, undefined, cfg.session?.permission_prompt, undefined, cfg.session?.stream_partial_messages, effort,
         (ok, err) => {
           if (ok) {
             import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
@@ -10068,6 +10163,7 @@ export class SessionRunner {
         profile: resolvedProfile,
         lane: resolvedLane,
         resumeSessionAt: resolvedResumeAt,
+        appendSystemPrompt: resolvedResumePrompt,
       } = await this.resolveResumeArgs(sessionId)
 
       // Rehydrate: if this.sessions lost the entry (e.g. reconciler didn't flag the
@@ -10263,7 +10359,7 @@ export class SessionRunner {
           // send() returns. send() is fire-and-forget; the SSH/daemon deploy that can
           // fail (publickey denied) happens asynchronously. Removing the message before
           // that confirmation is what silently lost messages. See onSpawnSettled doc.
-          session.send(combined, record.cwd ?? undefined, sessionId, resumeMode, resolvedModel, undefined, record.host ?? undefined, sshTarget, undefined, resumeConfig.session?.permission_prompt, undefined, resumeConfig.session?.stream_partial_messages, resolvedEffort,
+          session.send(combined, record.cwd ?? undefined, sessionId, resumeMode, resolvedModel, resolvedResumePrompt, record.host ?? undefined, sshTarget, undefined, resumeConfig.session?.permission_prompt, undefined, resumeConfig.session?.stream_partial_messages, resolvedEffort,
             (ok, err) => {
               if (ok) this.settleResumeSuccess(sessionId, session, msgs)
               else this.settleResumeFailure(sessionId, msgs, err ?? new Error('resume spawn failed'))
@@ -10314,7 +10410,7 @@ export class SessionRunner {
       // Settle the queue from send()'s spawn callback, not synchronously — the remote
       // SSH/daemon deploy can fail AFTER send() returns. See onSpawnSettled doc on send().
       const settleTarget = targetSession
-      targetSession.send(combined, targetSession.cwd ?? undefined, sessionId, existingResumeMode, resolvedModel, undefined, resumeHost ?? undefined, resumeSshTarget, undefined, resumeConfig2.session?.permission_prompt, undefined, resumeConfig2.session?.stream_partial_messages, resolvedEffort,
+      targetSession.send(combined, targetSession.cwd ?? undefined, sessionId, existingResumeMode, resolvedModel, resolvedResumePrompt, resumeHost ?? undefined, resumeSshTarget, undefined, resumeConfig2.session?.permission_prompt, undefined, resumeConfig2.session?.stream_partial_messages, resolvedEffort,
         (ok, err) => {
           if (ok) this.settleResumeSuccess(sessionId, settleTarget, msgs)
           else this.settleResumeFailure(sessionId, msgs, err ?? new Error('resume spawn failed'))

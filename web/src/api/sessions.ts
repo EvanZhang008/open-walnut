@@ -188,9 +188,14 @@ export async function fetchSessionHistory(
     const created: InflightHistory = {
       controller,
       subscribers: 0,
-      promise: fetchSessionHistoryRaw(sessionId, params, opts?.source, opts?.tail, controller.signal)
-        .finally(() => { inflightHistory.delete(key); }),
+      promise: undefined as unknown as Promise<SessionHistoryResult>,
     };
+    // Identity-guarded settle-delete: the eager delete-on-abort below means a
+    // SUCCESSOR entry can occupy this key before this promise settles — an
+    // unconditional delete here would evict that live successor and break
+    // coalescing for every caller after it (duplicate whale fetches).
+    created.promise = fetchSessionHistoryRaw(sessionId, params, opts?.source, opts?.tail, controller.signal)
+      .finally(() => { if (inflightHistory.get(key) === created) inflightHistory.delete(key); });
     inflightHistory.set(key, created);
     entry = created;
   }
@@ -198,7 +203,13 @@ export async function fetchSessionHistory(
   live.subscribers++;
   const onAbort = () => {
     live.subscribers--;
-    if (live.subscribers <= 0) live.controller.abort();
+    if (live.subscribers <= 0) {
+      // Drop the entry BEFORE aborting: the .finally delete only runs on settle,
+      // and a remount inside that window would adopt the rejected promise and
+      // surface a spurious "signal is aborted" error (fast thread-chip switching).
+      if (inflightHistory.get(key) === live) inflightHistory.delete(key);
+      live.controller.abort();
+    }
   };
   if (opts?.signal) {
     if (opts.signal.aborted) { onAbort(); }

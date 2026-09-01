@@ -2743,6 +2743,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     changesPrewarmer = new SessionChangesPrewarmer()
     changesPrewarmer.start()
 
+    // -- Start side-thread manager --
+    // Side threads are taskless hidden forks, so no other reaper will ever touch
+    // them: this owns their standby TTL, live cap and idle retirement, and sweeps
+    // standbys orphaned by the previous process at boot.
+    const { sideThreadManager } = await import('../core/sessions/side-thread-manager.js')
+    sideThreadManager.start()
+
     // -- Start session reaper (periodic cleanup of high-volume triage session records) --
     sessionReaper = new SessionReaper()
     sessionReaper.start()
@@ -3621,11 +3628,22 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           const laneRecord = sessionId ? await getSessionByClaudeId(sessionId) : null
           const { parseLaneKey } = await import('../core/sessions/personal-ai-lane.js')
           const laneIds = parseLaneKey(laneRecord?.lane)
+          // Side threads: a hidden fork of a coding session, so the cost IS a
+          // pass-through external-CLI cost and stays source:'session' — a new
+          // source value would move it out of the dashboard's session_cost bucket
+          // and into Walnut's own spend (every aggregate keys off `!= 'session'`).
+          // What it lacks is a task: the thread has no task row, so bill it to the
+          // PARENT session's task and the parent's cost stays complete.
+          const { parseSideLaneKey } = await import('../core/sessions/side-thread-fork.js')
+          const sideIds = parseSideLaneKey(laneRecord?.lane)
+          const sideParentTaskId = sideIds
+            ? (await getSessionByClaudeId(sideIds.parentSid).catch(() => null))?.taskId || undefined
+            : undefined
           usageTracker.record({
             ...(laneIds ? { source: 'chat' as const, agentId: laneIds.agentId } : { source: 'session' as const }),
             model: 'claude-code-cli',
             sessionId,
-            taskId,
+            taskId: sideParentTaskId ?? taskId,
             external_cost_usd: costDelta,
             duration_ms: duration,
           })
@@ -5075,6 +5093,10 @@ export async function stopServer(): Promise<void> {
     changesPrewarmer.stop()
     changesPrewarmer = null
   }
+  try {
+    const { sideThreadManager } = await import('../core/sessions/side-thread-manager.js')
+    sideThreadManager.stop()
+  } catch { /* import failed (partial dist) — nothing to stop; stop() itself is a no-op when never started */ }
   if (sessionReaper) {
     sessionReaper.stop()
     sessionReaper = null

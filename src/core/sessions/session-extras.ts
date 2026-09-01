@@ -241,9 +241,17 @@ export async function promoteSessionSideQuestion(
   sessionId: string,
   id: string,
 ): Promise<{ taskId: string; parentTaskId?: string }> {
-  const { getSideQuestion, markPromoted } = await import('../side-questions.js');
+  const { getSideQuestion, markPromoted, isSideThreadEntry } = await import('../side-questions.js');
   const entry = await getSideQuestion(sessionId, id);
   if (!entry) throw new SessionControlError('Side question not found', 404);
+  // Threads and legacy Q&As share one store + id space. A THREAD promoted
+  // through this legacy path would link the PARENT session and stamp
+  // promotedTaskId, making the real promote 409 forever after — refuse.
+  if (isSideThreadEntry(entry)) {
+    throw new SessionControlError(
+      'This is a side thread — promote it via POST /side-threads/:threadId/promote', 409,
+    );
+  }
   // If this session is working on a task, file the promoted Q&A as a SUBTASK
   // of it (addTask inherits the parent's project/source). Ad-hoc sessions
   // fall back to a top-level task in Inbox.

@@ -323,29 +323,53 @@ export function installLogErrorNotifications(
     const title = human.title.length > 120 ? `${human.title.slice(0, 120)}…` : human.title;
     const body = human.message ? capBody(human.message) : undefined;
 
-    void upsertNotification({
-      kind: 'operation-error', severity: 'error', title, body,
-      timestamp: now, dedupKey,
-      category: human.category,
-      ...(detail ? { detail } : {}),
-      ...(sessionId ? { sessionId } : {}),
-      ...(taskId ? { taskId } : {}),
-      ...(recoveryKey ? { recoveryKey } : {}),
-      ...(causeKey ? { causeKey } : {}),
-    }).then(({ record, outcome }) => {
-      // A first occurrence toasts; a later one (after the TTL window) patches the
-      // existing card's count/body in place rather than re-toasting the UI.
-      if (!broadcast) return;
-      broadcast(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record);
-    }).catch((err) => {
-      // Persist failed → drop the TTL entry so the next occurrence retries
-      // instead of being suppressed for a full window with nothing durable.
-      if (recentKeys.get(dedupKey) === now) {
-        recentKeys.delete(dedupKey);
-        recentKeyConditions.delete(dedupKey);
+    // Async wrapper because the side-thread suppression needs an awaited record
+    // read, which the old fire-and-forget `void upsertNotification(...)` could
+    // not do. Its `.catch` makes a failed dynamic import a log line, never an
+    // unhandledRejection (this sink is installed during boot, where one is fatal).
+    void (async () => {
+      // Side threads are hidden asides: no list can show the session a card
+      // would name, and the thread's transcript renders a TURN error in place.
+      // But a thread that never initialized has no transcript to render into —
+      // an init/spawn failure must still reach the human. The log line stays
+      // for forensics either way; only the bell card is suppressed.
+      if (sessionId) {
+        const [{ getSessionByClaudeId }, { isSideThreadLane }] = await Promise.all([
+          import('../session-tracker.js'),
+          import('../sessions/side-thread-fork.js'),
+        ]);
+        const rec = await getSessionByClaudeId(sessionId).catch(() => null);
+        const initialized = !!rec && (!!rec.outputFile || rec.consumedOffset !== undefined);
+        if (rec && isSideThreadLane(rec.lane) && initialized) return;
       }
-      // notif-subsystem logs are excluded from the sink, so this cannot loop.
-      log.notif.warn('log-error bridge: failed to persist notification', {
+      await upsertNotification({
+        kind: 'operation-error', severity: 'error', title, body,
+        timestamp: now, dedupKey,
+        category: human.category,
+        ...(detail ? { detail } : {}),
+        ...(sessionId ? { sessionId } : {}),
+        ...(taskId ? { taskId } : {}),
+        ...(recoveryKey ? { recoveryKey } : {}),
+        ...(causeKey ? { causeKey } : {}),
+      }).then(({ record, outcome }) => {
+        // A first occurrence toasts; a later one (after the TTL window) patches the
+        // existing card's count/body in place rather than re-toasting the UI.
+        if (!broadcast) return;
+        broadcast(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record);
+      }).catch((err) => {
+        // Persist failed → drop the TTL entry so the next occurrence retries
+        // instead of being suppressed for a full window with nothing durable.
+        if (recentKeys.get(dedupKey) === now) {
+          recentKeys.delete(dedupKey);
+          recentKeyConditions.delete(dedupKey);
+        }
+        // notif-subsystem logs are excluded from the sink, so this cannot loop.
+        log.notif.warn('log-error bridge: failed to persist notification', {
+          dedupKey, error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    })().catch((err) => {
+      log.notif.warn('log-error bridge: suppression lookup failed', {
         dedupKey, error: err instanceof Error ? err.message : String(err),
       });
     });
