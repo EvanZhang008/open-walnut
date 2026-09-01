@@ -17,7 +17,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   splitRichChunks, scopeStyleHtml, hasRichContent, extractAppHtml, isAppComplete,
-  collapseRawtextBlankLines, richScopeId, richChunkKey, richChunkKeys,
+  collapseRawtextBlankLines, collapseHtmlBlankLines, richScopeId, richChunkKey, richChunkKeys,
   type RichChunk,
 } from '@/utils/rich-blocks';
 
@@ -659,6 +659,110 @@ describe('collapseRawtextBlankLines', () => {
     // the prefix invariant's "text is preserved exactly" clause would break.
     const { stable, tail } = splitRichChunks(STYLE_WITH_GAP);
     expect(stable.map((c) => c.text).join('') + (tail?.text ?? '')).toBe(STYLE_WITH_GAP);
+  });
+});
+
+/**
+ * The same CommonMark trap one level out: a blank line inside an ORDINARY element,
+ * which is how a model paragraphs a long SVG or a hand-built table.
+ *
+ * Reported 2026-09-01 (inc-1788285690198): a two-column diagram drew its left
+ * column and printed its right column as a code block of `<rect x="430" …/>`. The
+ * blank line ended the raw-HTML block, and the model's four-space-indented SVG
+ * children then read as an indented code block.
+ *
+ * The rule is NOT "delete every blank line inside markup" — that would merge
+ * paragraphs a model wrote on purpose. It is "delete the ones that would break the
+ * structure", i.e. those sitting directly inside an element that cannot hold a
+ * paragraph. Inside a `<div>` or a `<td>` a `<p>` is legal and the browser
+ * assembles what the model meant, so the blank line stays.
+ */
+describe('collapseHtmlBlankLines', () => {
+  const SVG_TWO_COLUMN = [
+    '<div style="padding:14px">',
+    '<svg viewBox="0 0 620 200">',
+    '  <g font-size="13">',
+    '    <rect x="8" y="28"/><text x="20" y="48">TODO</text>',
+    '',
+    '    <rect x="430" y="28"/><text x="442" y="48">todo</text>',
+    '  </g>',
+    '</svg>',
+    '</div>',
+  ].join('\n');
+
+  it('deletes the blank line between two groups of SVG children', () => {
+    const out = collapseHtmlBlankLines(SVG_TWO_COLUMN);
+    expect(out).not.toMatch(/\n[ \t]*\n/);
+    expect(out).toBe(SVG_TWO_COLUMN.split('\n').filter((l) => l !== '').join('\n'));
+  });
+
+  it('keeps a blank line inside a <div> — a paragraph is legal there', () => {
+    // The model wrote the break deliberately, and ending the HTML block costs
+    // nothing structurally: the browser still nests the <p> in the <div>.
+    const card = '<div class="card">\n<b>Title</b>\n\nBody text.\n</div>';
+    expect(collapseHtmlBlankLines(card)).toBe(card);
+  });
+
+  it('keeps a blank line inside a <td> and a <li> for the same reason', () => {
+    const td = '<table>\n<tr><td>\nfirst\n\nsecond\n</td></tr>\n</table>';
+    expect(collapseHtmlBlankLines(td)).toBe(td);
+    const li = '<ul>\n<li>\nfirst\n\nsecond\n</li>\n</ul>';
+    expect(collapseHtmlBlankLines(li)).toBe(li);
+  });
+
+  it('deletes one BETWEEN rows, where a <p> would be foster-parented out', () => {
+    expect(collapseHtmlBlankLines('<table>\n<tr><td>a</td></tr>\n\n<tr><td>b</td></tr>\n</table>'))
+      .toBe('<table>\n<tr><td>a</td></tr>\n<tr><td>b</td></tr>\n</table>');
+  });
+
+  it('deletes one between list items', () => {
+    expect(collapseHtmlBlankLines('<ul>\n<li>a</li>\n\n<li>b</li>\n</ul>'))
+      .toBe('<ul>\n<li>a</li>\n<li>b</li>\n</ul>');
+  });
+
+  it('leaves a blank line inside <pre> alone — there it is CONTENT', () => {
+    const pre = '<div>\n<pre>\nline one\n\nline three\n</pre>\n</div>';
+    expect(collapseHtmlBlankLines(pre)).toBe(pre);
+  });
+
+  it('leaves top-level prose structure completely alone', () => {
+    const doc = '<p>one</p>\n\nplain prose\n\nmore prose';
+    expect(collapseHtmlBlankLines(doc)).toBe(doc);
+    expect(collapseHtmlBlankLines('a\n\nb')).toBe('a\n\nb');
+  });
+
+  it('leaves the same shape inside a fence alone — that is a doc SAMPLE', () => {
+    const doc = ['Like this:', '', '```html', ...SVG_TWO_COLUMN.split('\n'), '```'].join('\n');
+    expect(collapseHtmlBlankLines(doc)).toBe(doc);
+  });
+
+  it('still does the rawtext pass it wraps', () => {
+    expect(collapseHtmlBlankLines('<style>\n.a{}\n\n.b{}\n</style>'))
+      .toBe('<style>\n.a{}\n.b{}\n</style>');
+  });
+
+  it('handles CRLF, keeping the line endings it was given', () => {
+    expect(collapseHtmlBlankLines('<svg>\r\n<g>\r\n<rect/>\r\n\r\n<rect/>\r\n</g>\r\n</svg>'))
+      .toBe('<svg>\r\n<g>\r\n<rect/>\r\n<rect/>\r\n</g>\r\n</svg>');
+  });
+
+  it('is idempotent, and stable across a growing prefix', () => {
+    const STYLED_SVG = '<div>\n<style>\n.a{}\n\n.b{}\n</style>\n<svg>\n<g>\n<rect/>\n\n<rect/>\n</g>\n</svg>\n</div>';
+    for (const shape of [SVG_TWO_COLUMN, STYLED_SVG, STEPPER]) {
+      const full = collapseHtmlBlankLines(shape);
+      expect(collapseHtmlBlankLines(full)).toBe(full);
+      for (let n = 0; n < shape.length; n++) {
+        if (n > 0 && shape[n - 1] !== '\n') continue; // only complete lines
+        const out = collapseHtmlBlankLines(shape.slice(0, n));
+        expect(collapseHtmlBlankLines(out)).toBe(out);
+        expect(full.startsWith(out)).toBe(true); // never rewritten later
+      }
+    }
+  });
+
+  it('does not touch the chunker, so the streaming boundaries are unchanged', () => {
+    const { stable, tail } = splitRichChunks(SVG_TWO_COLUMN);
+    expect(stable.map((c) => c.text).join('') + (tail?.text ?? '')).toBe(SVG_TWO_COLUMN);
   });
 });
 

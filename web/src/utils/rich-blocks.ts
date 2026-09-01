@@ -70,6 +70,33 @@ const RAWTEXT_TAGS = new Set(['style', 'script', 'textarea']);
 const COLLAPSIBLE_RAWTEXT = new Set(['style', 'script']);
 
 /**
+ * Elements that cannot hold a paragraph, so a blank line directly inside one is
+ * destructive rather than merely lossy — see collapseHtmlBlankLines.
+ *
+ * Two families, both justified by the content model rather than by taste. SVG
+ * containers: their children are shapes, and an HTML `<p>` dropped among them is
+ * not rendered at all (the incident: a diagram's second column came back as a code
+ * block). Table/list/select structure: a `<p>` between rows or cells is
+ * FOSTER-PARENTED by the HTML parser, i.e. moved out of the table entirely, so the
+ * text jumps above the widget it belonged to.
+ *
+ * Deliberately ABSENT: `div`, `section`, `td`, `li`, `blockquote`, `details` and
+ * friends. A `<p>` is legal inside those, so the blank line ends the HTML block and
+ * the browser still assembles what the model meant — nothing is destroyed, and
+ * deleting the blank line there would silently merge two paragraphs the model
+ * wrote on purpose. `pre` is absent for the stronger reason that a blank line in it
+ * is content.
+ */
+const NO_PARAGRAPH_CHILDREN = new Set([
+  // SVG containers (names arrive lowercased, so `clipPath` reads as `clippath`).
+  'svg', 'g', 'defs', 'symbol', 'marker', 'mask', 'clippath', 'pattern', 'filter',
+  'lineargradient', 'radialgradient', 'switch', 'text', 'tspan',
+  // HTML structure whose children are rows / items / options.
+  'table', 'thead', 'tbody', 'tfoot', 'tr', 'colgroup', 'ul', 'ol', 'dl',
+  'select', 'optgroup', 'datalist', 'picture', 'audio', 'video', 'map',
+]);
+
+/**
  * Walnut's own inline pill syntax, NOT model HTML. renderMarkdownWithRefs
  * rewrites these into `<a>` before marked ever runs, so they never reach the
  * rendered output as tags. Counting them would be actively wrong: the
@@ -304,14 +331,20 @@ function lineSpans(text: string): LineSpan[] {
  * invariant across an arriving `<div class="…` : while the tag is incomplete no
  * boundary forms after it, and once its `>` lands the line is inside a tag, so
  * still no boundary. Same answer before and after — nothing to unfreeze.
+ *
+ * `inner` is the INNERMOST open element name at each line start (`''` at top
+ * level). Only collapseHtmlBlankLines reads it: whether a blank line is harmless
+ * or destructive depends on what element it sits directly inside, and this scan
+ * owns the only stack that knows.
  */
 function scanHtmlState(
   text: string,
   lines: LineSpan[],
   skip: (index: number) => boolean,
-): { depth: number[]; blocked: boolean[]; endDepth: number; truncated: boolean } {
+): { depth: number[]; blocked: boolean[]; inner: string[]; endDepth: number; truncated: boolean } {
   const depth = new Array<number>(lines.length).fill(0);
   const blocked = new Array<boolean>(lines.length).fill(false);
+  const inner = new Array<string>(lines.length).fill('');
   const stack: string[] = [];
   let cursor = 0;
 
@@ -320,13 +353,14 @@ function scanHtmlState(
     while (cursor < lines.length && lines[cursor].start <= pos) {
       depth[cursor] = stack.length;
       blocked[cursor] = isBlocked;
+      inner[cursor] = stack[stack.length - 1] ?? '';
       cursor++;
     }
   };
   /** An unfinished construct swallows the rest of the text. */
   const blockToEnd = () => {
     assign(text.length, true);
-    return { depth, blocked, endDepth: stack.length, truncated: true };
+    return { depth, blocked, inner, endDepth: stack.length, truncated: true };
   };
   const top = (): string | undefined => stack[stack.length - 1];
   /** `</name>` unwinds to the nearest matching open element, or is ignored. */
@@ -395,7 +429,7 @@ function scanHtmlState(
     }
   }
   assign(text.length, false);
-  return { depth, blocked, endDepth: stack.length, truncated: false };
+  return { depth, blocked, inner, endDepth: stack.length, truncated: false };
 }
 
 // ── Rawtext blank lines (CommonMark's raw-HTML block terminator) ─────────────
@@ -473,6 +507,53 @@ export function collapseRawtextBlankLines(text: string): string {
     i = close ? close.end : text.length;
   }
   return copied === 0 ? text : out + text.slice(copied);
+}
+
+/**
+ * Render-time entry point: delete the blank lines that would BREAK the model's
+ * markup, and only those.
+ *
+ * Reported 2026-09-01 (inc-1788285690198): a two-column SVG diagram drew its left
+ * column and then printed its right column as a code block full of
+ * `<rect x="430" …/>`. Two CommonMark rules did it, neither of them a bug: a
+ * raw-HTML block ENDS at the first blank line, and a line indented four spaces
+ * after a blank line IS an indented code block. The model had paragraphed a long
+ * `<svg>` (a blank line between the two column groups) and indented its children,
+ * which is exactly how a person writes a readable diagram.
+ *
+ * Two passes, in this order:
+ *   1. `<style>`/`<script>` bodies — a blank line there is whitespace in CSS/JS.
+ *   2. a blank line sitting directly inside an element that cannot hold a
+ *      paragraph (NO_PARAGRAPH_CHILDREN — SVG containers, table/list structure).
+ *
+ * Everywhere else the blank line stays. Inside a `<div>` or a `<td>` a paragraph is
+ * legal, so ending the HTML block there costs nothing structurally and the browser
+ * assembles what the model meant; deleting it would merge two paragraphs the model
+ * wrote deliberately. `<pre>` keeps its blank lines because there they are content.
+ *
+ * Render-time ONLY, like the pass it wraps: boundary decisions must keep seeing the
+ * text exactly as it arrived, or the prefix invariant moves and a frozen chunk
+ * shifts.
+ */
+export function collapseHtmlBlankLines(text: string): string {
+  const collapsed = collapseRawtextBlankLines(text);
+  if (!collapsed.includes('<') || !/\n[ \t]*\r?\n/.test(collapsed)) return collapsed;
+
+  const lines = lineSpans(collapsed);
+  const skip = makeSkip(collapsed);
+  const { depth, blocked, inner } = scanHtmlState(collapsed, lines, skip);
+
+  let out = '';
+  let copied = 0; // text before this index is already in `out`
+  for (let i = 0; i < lines.length; i++) {
+    const { start, end } = lines[i];
+    if (collapsed.slice(start, end).trim() !== '') continue;
+    // `blocked` covers rawtext bodies (pass 1 owns those) and multi-line tags.
+    if (depth[i] === 0 || blocked[i] || !NO_PARAGRAPH_CHILDREN.has(inner[i])) continue;
+    out += collapsed.slice(copied, start);
+    copied = Math.min(end + 1, collapsed.length); // the line AND its newline go
+  }
+  return copied === 0 ? collapsed : out + collapsed.slice(copied);
 }
 
 // ── Boundaries ───────────────────────────────────────────────────────────────

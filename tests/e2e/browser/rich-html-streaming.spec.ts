@@ -711,4 +711,61 @@ test.describe('Rich HTML streaming', () => {
     await page.screenshot({ path: `${SHOT_DIR}/carry-across-card.png` });
     await expect(page.locator('body')).not.toContainText('Something went wrong rendering the page.');
   });
+
+  /**
+   * A blank line inside a long `<svg>`, which is how a model paragraphs a diagram
+   * (reported 2026-09-01, inc-1788285690198). Only the real DOM can prove the fix:
+   * the question is whether the second group of children became SVG SHAPES or
+   * literal text, and the rendered string alone cannot tell you what the SVG
+   * namespace accepted.
+   *
+   * Both halves of the reported symptom are asserted — every rect drew, and no
+   * code block appeared — because the old behaviour produced exactly one of each.
+   */
+  test('11. a blank line inside an <svg> does not turn its second half into a code block', async ({ page }) => {
+    await mockFrozenHistory(page);
+    await mockSessionDetail(page);
+    await openSession(page);
+    const history = page.locator('.session-history');
+
+    const DIAGRAM = [
+      'Here is the shape:',
+      '',
+      '<div style="background:var(--bg-secondary);color:var(--fg);padding:14px">',
+      '<svg viewBox="0 0 620 200" style="width:100%;max-width:620px">',
+      '  <g font-size="13">',
+      '    <rect class="lhs" x="8" y="28" width="190" height="30" fill="#3b3f46"/><text x="20" y="48" fill="#e6e8ea">TODO</text>',
+      '    <rect class="lhs" x="8" y="68" width="190" height="30" fill="#1e5c40"/><text x="20" y="88" fill="#d6f2e4">COMPLETE</text>',
+      '',
+      '    <rect class="rhs" x="430" y="28" width="150" height="30" fill="#3b3f46"/><text x="442" y="48" fill="#e6e8ea">todo</text>',
+      '    <rect class="rhs" x="430" y="68" width="150" height="30" fill="#1e5c40"/><text x="442" y="88" fill="#d6f2e4">done</text>',
+      '  </g>',
+      '</svg>',
+      '</div>',
+      '',
+      'DIAGRAM-TAIL-OK',
+    ].join('\n');
+
+    await streamDeltas(page, DIAGRAM);
+    await expect(history).toContainText('DIAGRAM-TAIL-OK');
+
+    // BOTH columns are real SVG geometry in the SVG namespace.
+    await expect(history.locator('svg rect.lhs')).toHaveCount(2);
+    await expect(history.locator('svg rect.rhs')).toHaveCount(2);
+    expect(await history.locator('svg rect.rhs').first().evaluate(
+      (el) => el.namespaceURI,
+    )).toBe('http://www.w3.org/2000/svg');
+    // A drawn rect has a box; a rect the parser rejected does not.
+    const box = await history.locator('svg rect.rhs').first().boundingBox();
+    expect(box?.width ?? 0).toBeGreaterThan(0);
+
+    // The old symptom: the second half arriving as an indented code block.
+    expect(await history.locator('.rich-blocks pre, .rich-blocks code').count()).toBe(0);
+    await expect(history).not.toContainText('&lt;rect');
+    await expect(history).not.toContainText('x="430"');
+
+    mkdirSync(SHOT_DIR, { recursive: true });
+    await page.screenshot({ path: `${SHOT_DIR}/svg-blank-line.png` });
+    await expect(page.locator('body')).not.toContainText('Something went wrong rendering the page.');
+  });
 });

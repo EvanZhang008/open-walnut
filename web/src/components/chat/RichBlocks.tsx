@@ -44,7 +44,7 @@ import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import {
   splitRichChunks, scopeStyleHtml, hasRichContent, extractAppHtml, isAppComplete,
-  collapseRawtextBlankLines, richScopeId, richChunkKey, type RichChunk,
+  collapseHtmlBlankLines, richScopeId, richChunkKey, type RichChunk,
 } from '@/utils/rich-blocks';
 
 /** An island can never be shorter than this or taller than this (px). */
@@ -144,12 +144,13 @@ const RichChunkView = memo(function RichChunkView({ text, kind, scopeId, cwd }: 
   // is exactly what that hook exists to make hard to forget. Keep both.
   const labelsVersion = useEntityLabelsVersion();
   const rendered = useMemo(
-    // A blank line inside a `<style>`/`<script>` ends the raw-HTML block for
-    // CommonMark, which markdown-parses the rest of the CSS into the element's
-    // rawtext and destroys it. Collapsed HERE, not in renderMarkdownWithRefs: this
-    // is the only surface that keeps a model `<style>` at all, and the chunker must
-    // keep seeing the text byte-for-byte as it arrived.
-    () => renderMarkdownWithRefs(collapseRawtextBlankLines(text), cwd, undefined, { allowStyle: true }),
+    // A blank line ends the raw-HTML block for CommonMark, which then
+    // markdown-parses the rest of the element and destroys it: CSS turns into
+    // `<p>`/`<br>` inside a `<style>`, and an indented SVG child turns into a code
+    // block. Collapsed HERE, not in renderMarkdownWithRefs: this is the only
+    // surface that keeps model markup at all, and the chunker must keep seeing the
+    // text byte-for-byte as it arrived.
+    () => renderMarkdownWithRefs(collapseHtmlBlankLines(text), cwd, undefined, { allowStyle: true }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates the label lookups inside
     [text, cwd, labelsVersion],
   );

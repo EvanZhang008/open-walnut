@@ -20,7 +20,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
-import { collapseRawtextBlankLines, scopeStyleHtml } from '@/utils/rich-blocks';
+import { collapseRawtextBlankLines, collapseHtmlBlankLines, scopeStyleHtml } from '@/utils/rich-blocks';
 
 const STEPPER = [
   '<style>',
@@ -141,5 +141,69 @@ describe('an animated widget the way a model writes it', () => {
     expect(html).toContain('<pre>');
     expect(html).toContain('&lt;style&gt;');
     expect(html).toMatch(/display: flex \}\n\n/); // the sample's blank line survives
+  });
+});
+
+/**
+ * A blank line inside an ORDINARY element, which is how a model paragraphs a long
+ * SVG (reported 2026-09-01, inc-1788285690198: a two-column phase/status diagram
+ * where the left column drew and the right column came back as a code block full
+ * of `<rect x="430" …/>`).
+ *
+ * Two CommonMark rules meet to destroy it, and neither is a bug in marked: a
+ * raw-HTML block ENDS at the first blank line, and a line indented four spaces
+ * after a blank line IS an indented code block. So the `<svg>` closes early
+ * (leaving the first half to render), and the model's neatly indented remaining
+ * children become literal text. Deleting a blank line that sits inside an open
+ * element costs nothing in HTML — whitespace between element children is
+ * insignificant — except in `<pre>`/`<textarea>`, where it is content.
+ */
+describe('a blank line inside an open element', () => {
+  const SVG_TWO_COLUMN = [
+    '<div style="padding:14px">',
+    '<svg viewBox="0 0 620 200" style="width:100%">',
+    '  <g font-size="13">',
+    '    <rect x="8" y="28" width="190" height="30" fill="#3b3f46"/><text x="20" y="48">TODO</text>',
+    '    <rect x="8" y="148" width="190" height="30" fill="#1e5c40"/><text x="20" y="168">COMPLETE</text>',
+    '',
+    '    <rect x="430" y="28" width="150" height="30" fill="#3b3f46"/><text x="442" y="48">todo</text>',
+    '    <rect x="430" y="148" width="150" height="30" fill="#1e5c40"/><text x="442" y="168">done</text>',
+    '  </g>',
+    '</svg>',
+    '</div>',
+  ].join('\n');
+
+  function renderChunk(text: string): string {
+    return renderMarkdownWithRefs(collapseHtmlBlankLines(text), undefined, undefined, { allowStyle: true });
+  }
+
+  it('renders the whole diagram as markup, not half of it plus a code block', () => {
+    const html = renderChunk(SVG_TWO_COLUMN);
+    // The reported symptom: the second column arriving as literal text.
+    expect(html).not.toContain('&lt;rect');
+    expect(html).not.toMatch(/<pre|<code/);
+    // Both columns are real markup, and the element that holds them is intact.
+    expect(html).toContain('x="8"');
+    expect(html).toContain('x="430"');
+    expect(html).toContain('</svg>');
+    expect(html).toContain('</g>');
+  });
+
+  it('keeps a blank line that separates two top-level blocks', () => {
+    // Only blank lines INSIDE an open element are removed; ordinary prose
+    // paragraphs must still be two paragraphs.
+    const html = renderChunk('<p>one</p>\n\nplain prose\n\nmore prose');
+    expect(html).toMatch(/<p>plain prose<\/p>/);
+    expect(html).toMatch(/<p>more prose<\/p>/);
+  });
+
+  it('leaves a blank line inside <pre> alone — there it is content', () => {
+    const pre = '<div>\n<pre>\nline one\n\nline three\n</pre>\n</div>';
+    expect(collapseHtmlBlankLines(pre)).toBe(pre);
+  });
+
+  it('does not touch the same shape inside a fenced code sample', () => {
+    const doc = ['Like this:', '', '```html', ...SVG_TWO_COLUMN.split('\n'), '```'].join('\n');
+    expect(collapseHtmlBlankLines(doc)).toBe(doc);
   });
 });
