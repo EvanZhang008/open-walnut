@@ -120,8 +120,9 @@ enum TimelineHostedCell {
             .font(.footnote)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
-        case .text, .userBubble, .code:
-            // Dedicated TextKit cells own these kinds; unreachable here.
+        case .text, .userBubble, .code, .richHTML, .richIsland:
+            // Dedicated cells own these kinds (TextKit for prose/code, a
+            // WKWebView cell for the rich ones); unreachable here.
             EmptyView()
         }
     }

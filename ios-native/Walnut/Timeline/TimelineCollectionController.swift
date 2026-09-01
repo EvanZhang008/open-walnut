@@ -78,6 +78,13 @@ final class TimelineCollectionController: UIViewController {
                                 forCellWithReuseIdentifier: TimelineUserBubbleCell.reuseID)
         collectionView.register(TimelineCodeCell.self,
                                 forCellWithReuseIdentifier: TimelineCodeCell.reuseID)
+        // Rich rows get TWO pools over one class: a card and an island differ
+        // in whether their web view may run JavaScript, and that is fixed at
+        // web-view creation, so the pools must not mix.
+        collectionView.register(TimelineRichHTMLCell.self,
+                                forCellWithReuseIdentifier: TimelineRichHTMLCell.contentReuseID)
+        collectionView.register(TimelineRichHTMLCell.self,
+                                forCellWithReuseIdentifier: TimelineRichHTMLCell.islandReuseID)
         collectionView.register(UICollectionViewCell.self,
                                 forCellWithReuseIdentifier: TimelineHostedCell.reuseID)
         view.addSubview(collectionView)
@@ -332,6 +339,19 @@ final class TimelineCollectionController: UIViewController {
             )
         case .code(let text, let contentSize):
             (cell as? TimelineCodeCell)?.configure(text: text, contentSize: contentSize)
+        case .richHTML(let html, let key, let streaming):
+            // The cell is told the width the ROW was measured at, not left to
+            // read its own bounds: the builder's height lookup keys on this
+            // number, and a height banked under any other one is never read.
+            (cell as? TimelineRichHTMLCell)?.configureContent(
+                html: html, key: key, streaming: streaming, rowID: row.id,
+                contentWidth: TimelineMetrics.richContentWidth(contentWidth), delegate: self
+            )
+        case .richIsland(let html, let key, let complete):
+            (cell as? TimelineRichHTMLCell)?.configureIsland(
+                html: html, key: key, complete: complete, rowID: row.id,
+                contentWidth: TimelineMetrics.richContentWidth(contentWidth), delegate: self
+            )
         default:
             TimelineHostedCell.configure(cell, row: row, delegate: self)
         }
@@ -347,6 +367,8 @@ final class TimelineCollectionController: UIViewController {
         case .text: return TimelineTextCell.reuseID
         case .userBubble: return TimelineUserBubbleCell.reuseID
         case .code: return TimelineCodeCell.reuseID
+        case .richHTML: return TimelineRichHTMLCell.contentReuseID
+        case .richIsland: return TimelineRichHTMLCell.islandReuseID
         default: return TimelineHostedCell.reuseID
         }
     }

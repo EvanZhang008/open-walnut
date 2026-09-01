@@ -8,29 +8,16 @@ import SwiftUI
 ///
 /// Launch with `--timeline-harness` (RootView checks the argument), or push
 /// it from any DEBUG navigation.
+///
+/// Every control is driven by ACCESSIBILITY IDENTIFIER, so the ids are a contract
+/// with the flows that tap them, not labels: no id may be contained in another
+/// (`TimelineHarnessIdentifierTests` pins that, and says which tap it cost).
 struct TimelineHarnessView: View {
     @State private var store = TimelineHarnessStore()
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Button(store.streamOn ? "Stop stream" : "Start stream") {
-                    store.streamOn ? store.stopStream() : store.startStream()
-                }
-                .accessibilityIdentifier("harness.stream")
-                Button("Append 50") { store.appendMessages(50) }
-                    .accessibilityIdentifier("harness.append")
-                Button("Bottom") { store.scrollToBottomSignal += 1 }
-                    .accessibilityIdentifier("harness.bottom")
-                Spacer()
-                Text("\(store.messages.count) msgs")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("harness.count")
-            }
-            .font(.footnote)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            controls
             Divider()
             TimelineHost(
                 messages: store.messages,
@@ -48,6 +35,57 @@ struct TimelineHarnessView: View {
         }
         .navigationTitle("Timeline Harness")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// The control bar, WRAPPED onto two rows rather than laid out on one.
+    ///
+    /// The horizontal scroller this replaces was worse than it looked: a scroller
+    /// lays its content out at whatever width the content wants, so on a 402pt
+    /// phone "Rich stream" ended at x=428 and the message counter sat entirely off
+    /// screen. A tap is dispatched at a POINT, so those were controls neither a
+    /// gate agent nor a human could hit at all — and the failure reads as "the
+    /// harness is broken", which cost a whole gate pass.
+    ///
+    /// Two rows fit any phone width by construction, and a new control joins a row
+    /// instead of pushing one past the edge. `lineLimit` + `minimumScaleFactor` are
+    /// the floor under that: at an accessibility text size a row shrinks its own
+    /// labels rather than overflowing, so every control stays on screen.
+    private var controls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Button(store.streamOn ? "Stop stream" : "Start stream") {
+                    store.streamOn ? store.stopStream() : store.startStream()
+                }
+                .accessibilityIdentifier("harness.plainStream")
+                Button("Append 50") { store.appendMessages(50) }
+                    .accessibilityIdentifier("harness.append")
+                Button("Bottom") { store.scrollToBottomSignal += 1 }
+                    .accessibilityIdentifier("harness.bottom")
+                Spacer(minLength: 0)
+                Text("\(store.messages.count) msgs")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("harness.count")
+            }
+            HStack(spacing: 12) {
+                // Rich HTML: append every shape the rich-output skill teaches,
+                // or stream one in mid-tag to watch the tail behave.
+                Button("Rich") { store.appendRichMessages() }
+                    .accessibilityIdentifier("harness.richMixed")
+                Button("Rich only") { store.replaceWithRichMessages() }
+                    .accessibilityIdentifier("harness.richOnly")
+                Button(store.streamOn ? "Stop" : "Rich stream") {
+                    store.streamOn ? store.stopStream() : store.startRichStream()
+                }
+                .accessibilityIdentifier("harness.richStream")
+                Spacer(minLength: 0)
+            }
+        }
+        .font(.footnote)
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 }
 
@@ -107,6 +145,50 @@ final class TimelineHarnessStore {
         }
         messages = next
         scrollToBottomSignal += 1
+    }
+
+    /// Append one of every rich-HTML shape (see TimelineRichFixtures) to the
+    /// existing synthetic history — the mixed case, where web-view rows sit
+    /// between ordinary native text and tool chips.
+    func appendRichMessages() {
+        var next = messages
+        for (id, text) in TimelineRichFixtures.messages(startingAt: counter) {
+            counter += 1
+            next.append(ChatMessage(
+                id: id, role: "assistant", text: text,
+                createdAt: "2026-08-08T08:00:00Z", kind: nil
+            ))
+        }
+        messages = next
+        scrollToBottomSignal += 1
+    }
+
+    /// Only the rich fixtures, nothing else — the screenshot view, where every
+    /// row on screen is one of the shapes under test.
+    func replaceWithRichMessages() {
+        messages = []
+        appendRichMessages()
+    }
+
+    /// Stream a rich reply the way a model writes one: the tail sits mid-tag for
+    /// several ticks, which is the case a naive renderer paints as half a `<div`.
+    func startRichStream() {
+        guard !streamOn else { return }
+        streamOn = true
+        streaming = true
+        liveText = ""
+        activity = "Thinking"
+        let chunks = TimelineRichFixtures.streamingChunks()
+        streamTask = Task { @MainActor [weak self] in
+            for chunk in chunks {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self, self.streamOn else { return }
+                self.liveText += chunk
+                self.activity = "Writing"
+            }
+            guard let self, self.streamOn else { return }
+            self.activity = nil
+        }
     }
 
     func startStream() {

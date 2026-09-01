@@ -100,6 +100,11 @@ const server = http.createServer((req, res) => {
         id: SID, title: 'Perf check session', host: '', process_status: IDLE ? 'idle' : 'running',
         started_at: new Date().toISOString(), last_active_at: new Date().toISOString(),
         message_count: transcript.messages.length, cwd: '/tmp',
+        // The Tasks board is the PINNED working set, so a session only gets a row
+        // when it reports a task of its own AND that it is pinned. Without both
+        // fields the probe's navigation ("Tasks" → the session row) has nothing
+        // to tap: the board is not a session list.
+        task_id: `${SID}-task`, pinned: true,
       }],
       syncedAt: new Date().toISOString(),
     }))

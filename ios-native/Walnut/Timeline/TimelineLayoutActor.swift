@@ -16,7 +16,8 @@ import CoreGraphics
 /// dictionary hit — a 21 ev/s storm re-BUILDS only the live tail while the
 /// 105 history messages replay from cache. Live head rows use the dedicated
 /// head cache (LiveMarkdownWindow's quantized head is byte-stable across
-/// many ticks).
+/// many ticks); a live window carrying raw HTML has no head, because it is
+/// segmented whole (see TimelineRowBuilder.liveRows).
 actor TimelineLayoutActor {
     private let builder = TimelineRowBuilder()
     private var generation = 0
@@ -33,6 +34,19 @@ actor TimelineLayoutActor {
     /// Live-head memo (see TimelineRowBuilder.liveRows).
     private var headCache: (key: String, rows: [TimelineRow])?
     private var tailRevision = 0
+
+    /// Memo entries whose rows hold a rich-HTML document → the height-cache
+    /// identities those rows read (document keys + row ids). Rich rows are the
+    /// ONE kind whose height is measured by the cell (WebKit is
+    /// main-thread-only) and banked afterwards, so a memoized row would
+    /// otherwise replay the rough first guess for ever and the measurement would
+    /// never reach the layout.
+    ///
+    /// The identities are what keeps the response proportional: a measurement
+    /// touches the rows that read the number that moved, and every other
+    /// message's memo — plus the live head's TextKit measurement — is none of
+    /// its business.
+    private var richEntryIdentities: [String: Set<String>] = [:]
 
     /// Submit the newest input. `onSnapshot` is invoked (on the actor) for
     /// every COMPLETED build — the caller hops to the main queue itself.
@@ -59,8 +73,10 @@ actor TimelineLayoutActor {
         if input.width != cacheWidth {
             rowCache = [:]
             headCache = nil
+            richEntryIdentities.removeAll(keepingCapacity: true)
             cacheWidth = input.width
         }
+        applyRichHeightChanges()
         var rows: [TimelineRow] = []
         rows.reserveCapacity(input.messages.count * 2 + 4)
         if input.showLoadEarlier {
@@ -74,6 +90,8 @@ actor TimelineLayoutActor {
                 let built = builder.rows(for: message, width: input.width,
                                          expandedRowIDs: input.expandedRowIDs)
                 rowCache[key] = built
+                let identities = TimelineRowBuilder.richIdentities(in: built)
+                if !identities.isEmpty { richEntryIdentities[key] = identities }
                 rows.append(contentsOf: built)
             }
         }
@@ -81,6 +99,7 @@ actor TimelineLayoutActor {
             // Simple pressure valve: drop everything and let the next build
             // repopulate from the visible window (bounded at ≤400 messages).
             rowCache = [:]
+            richEntryIdentities.removeAll(keepingCapacity: true)
         }
         if input.streaming {
             tailRevision += 1
@@ -95,6 +114,49 @@ actor TimelineLayoutActor {
             headCache = nil
         }
         return TimelineSnapshot(rows: rows, width: input.width, generation: generation)
+    }
+
+    /// Fold the heights measured since the last build into the memo.
+    ///
+    /// A measurement changes a HEIGHT, never markup, so the rows it affects are
+    /// re-banked in place through the builder's own height resolver: dropping
+    /// their memo entry would re-segment the reply and re-parse its markdown to
+    /// arrive at byte-identical rows, which on a card-heavy reply is that work
+    /// once per card as the cards measure themselves one by one. Everything the
+    /// change set does not name — other messages, and the live head's TextKit
+    /// measurement, which is exactly the cost the live window exists to bound —
+    /// is left alone.
+    ///
+    /// The race is benign and pre-existing: a height banked between this drain
+    /// and the end of the build is reported to the NEXT build, and the host
+    /// always resubmits after recording, so the row converges one build later.
+    private func applyRichHeightChanges() {
+        switch RichHTMLHeightCache.shared.drainChanges() {
+        case .none:
+            return
+        case .everything:
+            // No identity describes a wholesale replacement (a test reset), so
+            // the only correct answer is the blunt one: drop every rich entry and
+            // let the next build guess again.
+            for key in richEntryIdentities.keys { rowCache.removeValue(forKey: key) }
+            richEntryIdentities.removeAll(keepingCapacity: true)
+            headCache = nil
+        case .identities(let changed):
+            for (key, identities) in richEntryIdentities
+            where !identities.isDisjoint(with: changed) {
+                guard let cached = rowCache[key] else { continue }
+                rowCache[key] = builder.rebankRichHeights(cached, width: cacheWidth,
+                                                          changed: changed)
+            }
+            // The head is memoized on its own byte-stable string, so a card
+            // sitting in it would be just as stuck as one in a message — but a
+            // head with no rich row has nothing a measurement can move.
+            if let head = headCache,
+               !TimelineRowBuilder.richIdentities(in: head.rows).isDisjoint(with: changed) {
+                headCache = (head.key, builder.rebankRichHeights(head.rows, width: cacheWidth,
+                                                                 changed: changed))
+            }
+        }
     }
 
     /// Everything that can change a message's rows must be in the key.

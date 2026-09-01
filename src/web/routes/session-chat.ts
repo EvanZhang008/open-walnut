@@ -14,8 +14,7 @@ import { normalizeEngine } from '../../core/agents/engine-registry.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQueued, unparkMessage } from '../../core/session-message-queue.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
-import { resolveOutputModeDirective, applyOutputModeDirective, stripOutputModeWrappers } from '../../core/sessions/output-mode.js'
-import { getConfig } from '../../core/config-manager.js'
+import { prepareOutputModeSend } from '../../core/sessions/output-mode-send.js'
 import { saveImageToDisk, resolveImageRefs } from './images.js'
 import { log } from '../../logging/index.js'
 import { sessionRunner } from '../../providers/claude-code-session.js'
@@ -221,23 +220,12 @@ export function registerSessionChatRpc(): void {
     // later send while rich holds — a one-shot instruction decays after a
     // turn or two. Both land AFTER the user's text. Same shape as plan mode in
     // routes/chat.ts. The mode itself resolves record → config → built-in
-    // default, so a session that never touched the pill follows Settings live
-    // (core/sessions/output-mode.ts). getConfig() can't throw (it falls back to
-    // defaults internally); the catch only keeps a storage hiccup from failing
-    // the send.
-    // A slash command must reach the CLI byte-exact: the CLI treats input as a
-    // command ONLY when the raw string startsWith('/') (processUserInput) —
-    // when the instruction was a prefix, "/compact" became a plain chat message
-    // the model then role-played ("已压缩上下文…") without any real compaction
-    // (inc-1788194545341). Appended text is nearly as bad — it rides into the
-    // command's argument string. Skip the wrapper entirely; the edge stays owed
-    // and ships on the next real message.
-    const outputModeConfig = await getConfig().catch(() => null)
-    const outputMode = resolveOutputModeDirective(record, outputModeConfig)
-    const isSlashCommand = augmentedMessage.startsWith('/')
-    if (!isSlashCommand) {
-      augmentedMessage = applyOutputModeDirective(outputMode, augmentedMessage)
-    }
+    // default, so a session that never touched the pill follows Settings live.
+    // The wrapping, the slash-command exemption and the edge advance all live in
+    // core/sessions/output-mode-send.ts, because the PHONE send paths need the
+    // identical three steps and a second copy of them drifted immediately.
+    const outputMode = await prepareOutputModeSend(data.sessionId, record, augmentedMessage)
+    augmentedMessage = outputMode.enqueueText
 
     // Enqueue and notify in one call. augmentedMessage may include image refs;
     // original data.message is used for bus events (UI display).
@@ -254,15 +242,8 @@ export function registerSessionChatRpc(): void {
 
     // Advance the edge only AFTER the text is safely queued: a throw above must
     // leave the session still "owing" the instruction, or the mode change would
-    // be silently lost. A failure to persist here is logged, not surfaced — the
-    // worst case is the instruction repeating on the next send.
-    if (outputMode.instruction && !isSlashCommand) {
-      await updateSessionRecord(data.sessionId, { output_mode_injected: outputMode.mode })
-        .catch((err) => log.web.warn('session:send output-mode edge persist failed', {
-          sessionId: data.sessionId, outputMode: outputMode.mode,
-          error: err instanceof Error ? err.message : String(err),
-        }))
-    }
+    // be silently lost.
+    await outputMode.commit()
 
     // Lane-bound session (thin-layer main-AI chat): the transcript lives in the
     // CLI's JSONL, so chat-history's touchConversation never runs — feed the
@@ -317,7 +298,7 @@ export function registerSessionChatRpc(): void {
     // for display (core/session-history.ts), so the basis is the augmented text
     // minus that wrapper — i.e. the image preamble, if any, plus the user's own
     // words. Emitter and matcher must agree on one basis; this is it.
-    const displayedByHistory = stripOutputModeWrappers(augmentedMessage)
+    const displayedByHistory = outputMode.displayText
     return {
       messageId: msg.id,
       ...(displayedByHistory !== data.message ? { dedupText: displayedByHistory } : {}),

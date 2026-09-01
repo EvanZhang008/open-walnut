@@ -77,6 +77,10 @@ import {
 } from './projection-cache.js'
 import type { SessionRecord, Task } from './types.js'
 import { engineCaps } from './agents/engine-registry.js'
+// Per-message text clipping, shared with the cloud twin in
+// web/routes/session-stream-v1.ts: an HTML-bearing reply gets a larger budget and
+// the cut is made where it cannot leave half a tag behind.
+import { clipTranscriptText } from './sessions/transcript-clip.js'
 
 /** LEGACY git-synced paths — dual-written while `sync.legacy_projection_files`
  *  is on (see projection-cache.ts); the cache/ paths are the live copies. */
@@ -367,8 +371,6 @@ export interface SessionTranscript {
   messages: ProjectedTranscriptMessage[]
 }
 
-const TEXT_MAX = 4_000
-
 let lastTranscriptSweep = 0
 let transcriptSweepRunning = false
 
@@ -433,7 +435,7 @@ export async function buildSessionTranscript(sessionId: string): Promise<Session
     if (text) {
       messages.push({
         role: m.role,
-        text: text.length > TEXT_MAX ? text.slice(0, TEXT_MAX) + '…' : text,
+        text: clipTranscriptText(text),
         timestamp: m.timestamp,
       })
     }

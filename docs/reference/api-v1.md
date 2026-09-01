@@ -626,7 +626,9 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
 - `GET /api/v1/sessions/:id/transcript?fresh=1` →
   `{ "sessionId", "exportedAt", "truncated", "messages": [ { role, text,
   timestamp, kind?, detail?, resultPreview?, agent? } ] }` — a slim transcript
-  tail (last ~100 entries; text capped at 4 KB/row; `kind: "tool"` rows carry
+  tail (last ~100 entries; text capped at 4 KB/row, or 12 KB for a row that
+  carries HTML, and the cut is made where it cannot leave half a tag behind so a
+  rich reply is never truncated mid-attribute; `kind: "tool"` rows carry
   the tool name, plus additive `detail` (input summary) / `resultPreview`
   (clipped output) when available). `agent` (additive, 2026-08) appears on
   `Task`/`Agent` tool rows and names the delegated subagent (team agent name,

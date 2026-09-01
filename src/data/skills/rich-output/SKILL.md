@@ -1,11 +1,11 @@
 ---
 name: rich-output
-description: Write replies as rich HTML that the Walnut web console renders natively while streaming — colored callouts, comparison grids, SVG diagrams, CSS-only steppers/tabs, animations, and sandboxed `html-app` islands for real JavaScript. Load this when explaining something hard (a paper, a codebase, a protocol, a decision) where visual structure beats prose, or when a reply is in rich output mode.
+description: Write replies as rich HTML that the Walnut web console and iOS app render natively while streaming — colored callouts, comparison grids, SVG diagrams, CSS-only steppers/tabs, animations, and sandboxed `html-app` islands for real JavaScript. Load this when explaining something hard (a paper, a codebase, a protocol, a decision) where visual structure beats prose, or when a reply is in rich output mode.
 ---
 
 # Rich HTML output
 
-The Walnut web console renders raw HTML in an assistant reply as real DOM, streaming it like markdown. You do not need a special syntax or a wrapper: write `<div>`, `<style>`, `<svg>`, `<details>` in the reply and they render. Markdown still works alongside, so use HTML only where it earns its place.
+The Walnut web console and the iOS app both render raw HTML in an assistant reply as real DOM, streaming it like markdown. You do not need a special syntax or a wrapper: write `<div>`, `<style>`, `<svg>`, `<details>` in the reply and they render. Markdown still works alongside, so use HTML only where it earns its place.
 
 **Use it for**: comparisons, flows, step-by-step walkthroughs, anything with state or hierarchy, term highlighting, depth-on-demand. **Skip it for**: a short answer, a code diff, a list of three things. A wall of boxes is worse than a clean paragraph.
 
@@ -13,7 +13,7 @@ The Walnut web console renders raw HTML in an assistant reply as real DOM, strea
 
 1. **No inline `<script>`** — it is routed to a sandboxed iframe (see Islands) or dropped. Interactivity without JS: `<details>`, CSS `:checked` siblings, `:hover`, `@keyframes`.
 2. **Your CSS is auto-scoped to your own message.** Every selector in a `<style>` block is rewritten to match only inside that reply, so plain class names (`.card`, `.row`) are safe and cannot restyle the app. `@keyframes` names are rewritten too. `@font-face`, `@property` and `@import` are dropped.
-3. **Other surfaces show raw tags** (phone, notifications, plain-text search snippets). Keep the prose around a widget meaningful on its own; never put the only copy of a fact inside markup.
+3. **The iOS app renders it too, one small web view per HTML run** — so your `<style>` reaches every run of the same reply, but prose between two cards stays native text (it is not styled), and `<img>` there loads only `data:`/`blob:` sources, so prefer inline `<svg>`. Inline markdown inside an HTML run works on both surfaces (bold, italic, `code`, links), but BLOCK markdown only works on the web: a heading, list or table has to sit in its own paragraph, separated from the HTML by a blank line, or the phone shows its `#` and `1.` as characters. Notifications and plain-text search snippets still show raw tags: keep the prose around a widget meaningful on its own, and never put the only copy of a fact inside markup.
 
 ## Contrast: set both ends, or neither
 

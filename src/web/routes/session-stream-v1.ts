@@ -35,6 +35,9 @@ import { CLOUD_MODE } from '../../constants.js'
 import { bus } from '../../core/event-bus.js'
 import { emitSse, attachSse, sseConnCount } from '../sse-channels.js'
 import { sessionStreamBuffer, budgetSnapshotBlocks } from '../session-stream-buffer.js'
+import { prepareOutputModeSend } from '../../core/sessions/output-mode-send.js'
+import { clipTranscriptText } from '../../core/sessions/transcript-clip.js'
+import { stripOutputModeWrappers } from '../../core/sessions/output-mode.js'
 import { log } from '../../logging/index.js'
 
 export const sessionStreamV1Router = Router()
@@ -374,6 +377,11 @@ async function cloudSend(
     log.web.info('mobile send falling back to direct bridge sequence', {
       sessionId, host, messageId, reason: relayErr,
     })
+    // Deliberately carries NO output-mode directive: the wrapper has to be paired
+    // with advancing `output_mode_injected` on the session record, which lives on
+    // the primary — and this path exists precisely for when the primary is not
+    // reachable. Wrapping here would re-send the full instruction on every send
+    // for as long as the outage lasts. The next relayed send fixes the mode.
     await cloudSendDirect(res, host, projected, sessionId, text, messageId)
   } catch (err) {
     if (err instanceof CloudImageError) {
@@ -519,7 +527,6 @@ async function cloudSendDirect(
 // ─── Cloud fresh transcript: raw jsonl over the bridge → slim tail ──────────
 
 const TRANSCRIPT_TAIL_ROWS = 200
-const TRANSCRIPT_TEXT_MAX = 4_000
 // Tail-only read over the bridge: ~200 rendered rows fit comfortably in the
 // last 512KB even with tool-result noise. A whale session's full 10MB+ jsonl
 // as one bridge frame is exactly the proxy-killing payload class (inc-…925).
@@ -585,13 +592,13 @@ export async function buildTranscriptViaBridge(sessionId: string): Promise<Recor
       // everything the human's turn carries survives.
       if (typeof content === 'string') {
         const text = content.trim()
-        if (text && !isInterruptMarker(text)) messages.push({ role: 'user', text: clip(text), timestamp })
+        if (text && !isInterruptMarker(text)) messages.push({ role: 'user', text: clipUserText(text), timestamp })
       } else if (Array.isArray(content)) {
         for (const block of content) {
           const b = block as { type?: string; text?: string }
           const text = b.type === 'text' ? b.text?.trim() : undefined
           if (text && !isInterruptMarker(text)) {
-            messages.push({ role: 'user', text: clip(text), timestamp })
+            messages.push({ role: 'user', text: clipUserText(text), timestamp })
           }
         }
       }
@@ -633,8 +640,22 @@ export async function buildTranscriptViaBridge(sessionId: string): Promise<Recor
   }
 }
 
+/** Same budgets and the same HTML-safe cut as the primary path — a rich reply
+ *  must not arrive whole on one route and cut mid-attribute on the other
+ *  (core/sessions/transcript-clip.ts). */
 function clip(text: string): string {
-  return text.length > TRANSCRIPT_TEXT_MAX ? text.slice(0, TRANSCRIPT_TEXT_MAX) + '…' : text
+  return clipTranscriptText(text)
+}
+
+/** A USER row, minus the output-mode wrapper the send path appended and the CLI
+ *  echoed into its JSONL. The primary path strips it at the history projection
+ *  choke point (core/session-history.ts); this route is a SECOND parser of the
+ *  same JSONL, so without the same call the phone shows the machine instruction
+ *  as part of what the human typed — on every message, since the reminder rides
+ *  every send while rich holds. Strip BEFORE clipping so the budget is spent on
+ *  the human's words. */
+function clipUserText(text: string): string {
+  return clipTranscriptText(stripOutputModeWrappers(text))
 }
 
 /** The CLI's abort echo ("[Request interrupted by user( for tool use)]") —
@@ -724,13 +745,23 @@ sessionStreamV1Router.post('/sessions/:id/messages', async (req: Request, res: R
     const rawMid = req.body?.messageId
     const clientMessageId = typeof rawMid === 'string' && /^qm-[A-Za-z0-9-]{1,64}$/.test(rawMid)
       ? rawMid : undefined
+    // Output mode rides the phone's sends too. The model only learns its reply
+    // STYLE from the conversation, and the instruction/reminder used to be
+    // applied by the web RPC alone — so a rich session answered the console in
+    // HTML and answered the phone in plain markdown, and a phone turn in the
+    // middle of a rich session dropped the standing reminder entirely. Same
+    // three steps as the console (core/sessions/output-mode-send.ts): wrap the
+    // text the CLI receives, leave what the human sees alone, advance the edge
+    // only after the enqueue.
+    const outputMode = await prepareOutputModeSend(sessionId, record, enqueueText ?? text)
     const { sendMessageToSession } = await import('../../core/session-message-queue.js')
     const msg = await sendMessageToSession(sessionId, text, {
       source: 'mobile',
       taskId: record.taskId,
-      ...(enqueueText ? { enqueueMessage: enqueueText } : {}),
+      ...(outputMode.enqueueText !== text ? { enqueueMessage: outputMode.enqueueText } : {}),
       ...(clientMessageId ? { messageId: clientMessageId } : {}),
     })
+    await outputMode.commit()
     log.web.info('mobile session send accepted', { sessionId, messageId: msg.id, imageCount: images.length })
     res.status(202).json({ messageId: msg.id })
   } catch (err) {

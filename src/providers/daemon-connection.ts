@@ -990,12 +990,21 @@ export class DaemonConnection {
         if (!record) {
           reply = { relayId, error: `Session not found: ${sessionId}`, errorKind: 'not_found' }
         } else {
+          // Output mode: this is the phone's send arriving over the cloud bridge,
+          // so it owes the model the same instruction/reminder a console send
+          // does — the replica has no session record to resolve it from, and the
+          // edge marker lives here on the primary, which is why the wrapping
+          // happens at the enqueue rather than back on the EC2 box.
+          const { prepareOutputModeSend } = await import('../core/sessions/output-mode-send.js')
+          const outputMode = await prepareOutputModeSend(sessionId, record, message)
           const { sendMessageToSession } = await import('../core/session-message-queue.js')
           const msg = await sendMessageToSession(sessionId, message, {
             source: 'mobile',
             taskId: record.taskId,
             messageId,
+            ...(outputMode.changed ? { enqueueMessage: outputMode.enqueueText } : {}),
           })
+          await outputMode.commit()
           rememberMobileEnqueue(messageId)
           log.session.info('DaemonConnection: message relay enqueued (durable)', {
             host: this.hostKey, relayId, sessionId, messageId: msg.id,

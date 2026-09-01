@@ -113,6 +113,30 @@ struct TimelineHost: UIViewControllerRepresentable {
                     expandedRowIDs.insert(rowID)
                 }
                 resubmit() // heights change; rebuild off-main
+            case .richHeight(let rowID, let key, let width, let height):
+                // A rich cell measured its web document. Bank it and rebuild so
+                // the row carries the real height instead of the first guess —
+                // this is the ONE row kind whose height flows main → actor,
+                // because WebKit can only be measured on the main thread.
+                //
+                // Why this cannot ping-pong: the cell reports only when its
+                // measurement moves by more than its 1pt dead band, and this
+                // guard drops a report the cache already agrees with. A rebuild
+                // sets the row to exactly the height the document produced, so
+                // the web view's frame stops changing and no further report is
+                // generated — one rebuild per genuine height change, and zero
+                // for a re-attach of an unchanged card. (A document sized in
+                // viewport units can still measure differently after being
+                // resized; the cell's own report budget bounds that case.)
+                //
+                // Banked as ONE change (`recordMeasurement`), not as a document
+                // record plus a row record: the actor invalidates from the set of
+                // identities that moved, and a measurement is one event about one
+                // row — two separate changes stamped the cache twice for it.
+                let cache = RichHTMLHeightCache.shared
+                guard cache.height(key: key, width: width) != height else { return }
+                cache.recordMeasurement(key: key, width: width, rowID: rowID, height: height)
+                resubmit()
             default:
                 onAction(action)
             }

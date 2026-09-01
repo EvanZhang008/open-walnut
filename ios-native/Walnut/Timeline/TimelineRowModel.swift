@@ -61,6 +61,17 @@ enum TimelineRowContent {
     case notification(badge: String, icon: String, isError: Bool,
                       body: NSAttributedString, collapsedLine: String,
                       collapsible: Bool, expanded: Bool)
+    /// Raw-HTML run from a rich reply, rendered as ONE self-contained web
+    /// document. Nothing is stripped from the markup: the document runs with
+    /// scripting off under a no-network CSP, so a `<script>` in it is inert —
+    /// markup that WANTS to run arrives as `.richIsland` instead. `key` is the
+    /// content digest the measured height is banked under; `streaming` marks a
+    /// still-growing tail so the cell throttles its reloads.
+    case richHTML(html: String, key: String, streaming: Bool)
+    /// ```html-app island: its own sandboxed document, scripts allowed.
+    /// `complete == false` renders a placeholder — mounting a half-written
+    /// island would run half a script (same rule as the web console).
+    case richIsland(html: String, key: String, complete: Bool)
     /// "Earlier output hidden while streaming" chip on the live row.
     case truncationChip
     /// Shimmering activity row while the agent thinks / runs tools.
@@ -83,9 +94,23 @@ extension TimelineRowContent {
         case .toolChip: return "toolChip"
         case .chip: return "chip"
         case .notification: return "notification"
+        case .richHTML: return "richHTML"
+        case .richIsland: return "richIsland"
         case .truncationChip: return "truncationChip"
         case .activity: return "activity"
         case .loadEarlier: return "loadEarlier"
+        }
+    }
+
+    /// Does this row's height come from a WKWebView measurement rather than
+    /// from the actor's own arithmetic? The layout actor memoizes rows per
+    /// message, and only these rows can have their height revised after the
+    /// fact — so only these memo entries need dropping when a measurement
+    /// lands (see TimelineLayoutActor's rich invalidation).
+    var isRichDocument: Bool {
+        switch self {
+        case .richHTML, .richIsland: return true
+        default: return false
         }
     }
 }
@@ -126,5 +151,9 @@ enum TimelineRowAction {
     /// Raised when a tapped link is a FilePreviewLink rather than a web URL.
     case previewFile(path: String)
     case toggleExpanded(rowID: String)
+    /// A rich cell measured its document: the coordinator banks the height and
+    /// rebuilds so the row carries the real number. Handled INSIDE the
+    /// coordinator (like `toggleExpanded`) — the page never sees it.
+    case richHeight(rowID: String, key: String, width: CGFloat, height: CGFloat)
     case loadEarlier
 }

@@ -15,8 +15,14 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-msg-relay'))
 
 const getSessionMock = vi.fn()
+// updateSessionRecord is here because the relay now applies the output-mode
+// directive (core/sessions/output-mode-send.ts) and advances the record's edge
+// marker after the enqueue — the phone's sends carry the same instruction the
+// console's do.
+const updateSessionMock = vi.fn(async () => undefined)
 vi.mock('../../src/core/session-tracker.js', () => ({
   getSessionByClaudeId: getSessionMock,
+  updateSessionRecord: updateSessionMock,
 }))
 
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
@@ -48,6 +54,7 @@ beforeEach(async () => {
   await loadQueue()
   resetCache()
   getSessionMock.mockReset()
+  updateSessionMock.mockClear()
 })
 
 afterEach(async () => {
@@ -69,8 +76,25 @@ describe('handleMessageRequest', () => {
     const queue = await getQueue(SID)
     expect(queue).toHaveLength(1)
     expect(queue[0].id).toBe(mid)
-    expect(queue[0].message).toBe('hello')
+    // The human's words lead; the output-mode instruction is appended after them
+    // (rich is the default, and this record was never told anything yet).
+    const { RICH_OUTPUT_MODE_ON_INSTRUCTION } = await import('../../src/core/sessions/output-mode.js')
+    expect(queue[0].message.startsWith('hello')).toBe(true)
+    expect(queue[0].message).toContain(RICH_OUTPUT_MODE_ON_INSTRUCTION)
     expect(queue[0].status).toBe('pending')
+    expect(updateSessionMock).toHaveBeenCalledWith(SID, { output_mode_injected: 'rich' })
+  })
+
+  it('a markdown-mode session relays the phone text byte-identical', async () => {
+    getSessionMock.mockResolvedValue({
+      taskId: 'task-9', host: null, output_mode: 'markdown', output_mode_injected: 'markdown',
+    })
+    const { conn } = makeConn()
+    const mid = `qm-mobile-md-${Date.now()}`
+    await fire(conn, { ev: 'message-request', relayId: 8, sessionId: SID, message: 'plain', messageId: mid })
+    const queue = await getQueue(SID)
+    expect(queue[0].message).toBe('plain')
+    expect(updateSessionMock).not.toHaveBeenCalled()
   })
 
   it('a replay AFTER delivery+drain is acked WITHOUT re-enqueueing (ledger)', async () => {

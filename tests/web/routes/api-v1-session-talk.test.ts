@@ -129,7 +129,12 @@ describe('POST /api/v1/sessions/:id/messages', () => {
 
     const { getQueue } = await import('../../../src/core/session-message-queue.js')
     const queue = await getQueue(SID)
-    expect(queue.some((m) => m.id === body.messageId && m.message === 'hello from the phone')).toBe(true)
+    // The human's words are the START of the enqueued text. They are no longer
+    // the WHOLE of it: a phone send now carries the output-mode directive the
+    // console has always carried (see the output-mode describe block below), and
+    // that machine line is appended AFTER the message.
+    const queued = queue.find((m) => m.id === body.messageId)
+    expect(queued?.message.startsWith('hello from the phone')).toBe(true)
   })
 
   it('404 for an unknown session', async () => {
@@ -189,6 +194,88 @@ describe('POST /api/v1/sessions/:id/messages', () => {
       }),
     })
     expect(res.status).toBe(202)
+  })
+})
+
+/**
+ * Output mode on the PHONE's send path.
+ *
+ * The model learns its reply STYLE only from the conversation, and for a long
+ * time only the web `session:send` RPC injected it. So a rich session answered
+ * the console in HTML and answered the phone in plain markdown, and a phone turn
+ * in the middle of a rich session dropped the standing reminder that stops the
+ * model drifting back to markdown. Both paths now go through
+ * core/sessions/output-mode-send.ts, so the semantics pinned in
+ * session-output-mode.test.ts apply here too: full instruction on the edge, a
+ * one-line reminder afterwards, nothing at all in markdown mode, and never a
+ * wrapper on a slash command.
+ *
+ * Would-fail-if-reverted: drop the prepareOutputModeSend call in
+ * session-stream-v1.ts and the first two assertions break; skip the commit() and
+ * the reminder case sees a second full instruction instead.
+ */
+describe('POST /api/v1/sessions/:id/messages — output mode', () => {
+  async function freshSession(id: string, patch?: Record<string, unknown>): Promise<void> {
+    await createSessionRecord(id, `task-${id}`, 'test-project', '/tmp', { title: id })
+    if (patch) {
+      const { updateSessionRecord } = await import('../../../src/core/session-tracker.js')
+      await updateSessionRecord(id, patch)
+    }
+  }
+
+  async function send(id: string, text: string): Promise<string> {
+    const res = await fetch(apiUrl(`/api/v1/sessions/${id}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+    expect(res.status).toBe(202)
+    const { messageId } = await res.json() as { messageId: string }
+    return messageId
+  }
+
+  async function enqueued(id: string, messageId: string): Promise<string> {
+    const { getQueue } = await import('../../../src/core/session-message-queue.js')
+    const queue = await getQueue(id)
+    return queue.find((m) => m.id === messageId)?.message ?? ''
+  }
+
+  it('first send carries the full instruction and advances the edge; the next carries the reminder', async () => {
+    const sid = 'talk-output-mode-edge-01'
+    await freshSession(sid)
+    const {
+      RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER,
+    } = await import('../../../src/core/sessions/output-mode.js')
+    const { getSessionByClaudeId } = await import('../../../src/core/session-tracker.js')
+
+    const first = await enqueued(sid, await send(sid, 'explain the daemon'))
+    expect(first.startsWith('explain the daemon')).toBe(true)
+    expect(first).toContain(RICH_OUTPUT_MODE_ON_INSTRUCTION)
+    // The edge is recorded on the RECORD, so a second device cannot inject a
+    // second copy of the instruction.
+    expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
+
+    const second = await enqueued(sid, await send(sid, 'and the reconnect path?'))
+    expect(second).not.toContain(RICH_OUTPUT_MODE_ON_INSTRUCTION)
+    expect(second).toContain(RICH_OUTPUT_MODE_REMINDER)
+  })
+
+  it('markdown mode leaves the phone message byte-identical', async () => {
+    const sid = 'talk-output-mode-md-01'
+    await freshSession(sid, { output_mode: 'markdown', output_mode_injected: 'markdown' })
+    const text = await enqueued(sid, await send(sid, 'plain please'))
+    expect(text).toBe('plain please')
+  })
+
+  it('a slash command reaches the CLI byte-exact and stays owed', async () => {
+    const sid = 'talk-output-mode-slash-01'
+    await freshSession(sid)
+    const { getSessionByClaudeId } = await import('../../../src/core/session-tracker.js')
+    // The CLI only treats input as a command when the raw string starts with
+    // '/', and appended text rides into the command's argument string — so the
+    // wrapper is skipped entirely and the edge ships with the next real message.
+    expect(await enqueued(sid, await send(sid, '/compact'))).toBe('/compact')
+    expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBeUndefined()
   })
 })
 

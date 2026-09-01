@@ -30,10 +30,38 @@ enum TimelineMetrics {
     static let tableRowSpacing: CGFloat = 6
     static let tableColSpacing: CGFloat = 16
     static let maxRenderedTableRows = 60
+    /// Vertical padding around a rich-HTML row. A little more than the code
+    /// card's, because a card's neighbours are often other rounded containers:
+    /// at 4pt a `<details>` border landed ~2pt from a chip row's outline, and two
+    /// rounded boxes almost touching reads as a rendering bug.
+    static let richVMargin: CGFloat = 6
+    /// A rich card can never be shorter than this — a document that measures
+    /// near zero (all-CSS, an image still decoding) must still be a visible,
+    /// tappable row rather than a 1pt sliver.
+    static let richMinHeight: CGFloat = 40
+    /// …nor taller than this, and past it the cell hands scrolling back to the
+    /// web view so nothing is unreachable. Deliberately far above the web
+    /// console's 1600pt island cap: a nested scroller is much worse on a phone
+    /// than in a mouse-driven pane (a vertical pan that starts inside the card
+    /// steals the transcript's own scroll), so the cap is set past what a
+    /// transcript row can even hold — a row's markup is clipped server-side at
+    /// 12 KB — and a tall card scrolls WITH the conversation. The nested-scroll
+    /// path survives only as the "someone found a way" backstop.
+    static let richMaxHeight: CGFloat = 4000
+    /// Height of the "building interactive block…" placeholder shown while an
+    /// island is still arriving.
+    static let richIslandBuildingHeight: CGFloat = 34
 
     /// Width available to assistant text at a given page width.
     static func assistantTextWidth(_ pageWidth: CGFloat) -> CGFloat {
         max(40, pageWidth - hMargin * 2 - assistantTrailingGap)
+    }
+
+    /// Width a rich card's web view gets at a given page width — the width its
+    /// measured height is keyed on, so the builder's lookup and the cell's
+    /// report have to agree on exactly this expression.
+    static func richContentWidth(_ pageWidth: CGFloat) -> CGFloat {
+        max(40, pageWidth - hMargin * 2)
     }
 
     /// Width available to user-bubble text.
@@ -131,46 +159,247 @@ final class TimelineRowBuilder {
     ) -> [TimelineRow] {
         let prefix = idPrefix ?? message.id
         let text = message.text
+        if RichHTMLSegments.isRich(text) {
+            return richRows(text, width: width, idPrefix: prefix, cache: cache,
+                            clipOversized: clipOversized, revision: revision)
+        }
+
         var rows: [TimelineRow] = []
         var index = 0
         func nextID() -> String { defer { index += 1 }; return "\(prefix)#\(index)" }
-        func appendText(_ attributed: NSAttributedString) {
-            let h = measurer.height(attributed, width: TimelineMetrics.assistantTextWidth(width))
-            rows.append(TimelineRow(
-                id: nextID(), revision: revision, content: .text(attributed),
-                height: h + TimelineMetrics.textVPad * 2
-            ))
-        }
 
         if ChatMarkdownBody.isBlockMarkdown(text) || ChatMarkdownBody.containsImageRef(text) {
-            let blocks = MarkdownParser.parse(text, cache: cache, clipOversized: clipOversized)
-            for piece in TimelineTextStyler.pieces(from: blocks) {
-                switch piece {
-                case .text(let attributed):
-                    appendText(attributed)
-                case .code(let code):
-                    let size = measurer.codeSize(code, font: TimelineTextStyler.codeFont)
-                    rows.append(TimelineRow(
-                        id: nextID(), revision: revision,
-                        content: .code(text: code, contentSize: size),
-                        height: size.height + TimelineMetrics.codePadding * 2
-                            + TimelineMetrics.codeVMargin * 2
-                    ))
-                case .image(let raw, let alt):
-                    rows.append(TimelineRow(
-                        id: nextID(), revision: revision,
-                        content: .image(raw: raw, alt: alt),
-                        height: TimelineMetrics.imageSlotHeight
-                    ))
-                case .table(let header, let tableRows):
-                    rows.append(tableRow(id: nextID(), revision: revision,
-                                         header: header, rows: tableRows))
-                }
-            }
+            appendBlockRows(text, width: width, revision: revision, cache: cache,
+                            clipOversized: clipOversized, nextID: nextID, into: &rows)
         } else if !text.isEmpty {
-            appendText(TimelineTextStyler.inlineText(text))
+            rows.append(textRow(id: nextID(), revision: revision,
+                                attributed: TimelineTextStyler.inlineText(text), width: width))
         }
         return rows
+    }
+
+    /// Rows for a reply that carries raw HTML: markdown runs stay native text
+    /// rows, html runs become web documents, in source order.
+    ///
+    /// ONE id counter across the whole reply, so a card appearing between two
+    /// paragraphs doesn't renumber (and therefore re-create) the rows after it.
+    ///
+    /// Split out from `assistantRows` so a caller that ALREADY classified the
+    /// text can come straight here: the live path re-classifies its whole window
+    /// every tick, and paying that scan twice per tick bought nothing.
+    private func richRows(_ text: String, width: CGFloat, idPrefix: String,
+                          cache: MarkdownParser.CacheMode, clipOversized: Bool,
+                          revision: Int) -> [TimelineRow] {
+        var rows: [TimelineRow] = []
+        var index = 0
+        func nextID() -> String { defer { index += 1 }; return "\(idPrefix)#\(index)" }
+
+        // `cache == .skip` is this builder's existing "you are looking at the
+        // live tail" signal (liveRows routes the live window that way), which is
+        // exactly what the segmenter needs to know: a card the model is still
+        // writing must not be frozen as a finished segment.
+        let live = cache == .skip
+        let segments = RichHTMLSegments.segments(text, streaming: live)
+        for (position, segment) in segments.enumerated() {
+            // Only the LAST segment can still grow — every earlier one is frozen
+            // byte-for-byte once emitted (the segmenter's prefix invariant). So
+            // "churning" is a property of the trailing run, not of the message:
+            // flagging a settled card as streaming would make its cell throttle
+            // reloads it is never going to get, and spending the caller's
+            // per-tick revision on a frozen run reloads a cell whose content
+            // cannot have changed.
+            let churning = live && position == segments.count - 1
+            switch segment {
+            case .markdown(let markdown):
+                appendBlockRows(markdown, width: width, revision: churning ? revision : 0,
+                                cache: cache, clipOversized: clipOversized,
+                                nextID: nextID, into: &rows)
+            case .html(let html, let key):
+                // A segment with nothing to draw gets no row at all. While
+                // streaming, a `<style>` block the model writes before its card is
+                // its own segment, and rendering it produced an empty 40pt box
+                // above the card the reader is watching. Its rules still reach the
+                // card: the segmenter copies every message-level `<style>` into
+                // every html segment.
+                guard RichHTMLSegments.hasRenderableContent(html: html) else { continue }
+                rows.append(richRow(id: nextID(), html: html, key: key,
+                                    streaming: churning, width: width))
+            case .island(let html, let key, let complete):
+                rows.append(islandRow(id: nextID(), html: html, key: key,
+                                      complete: complete, width: width))
+            }
+        }
+        return rows
+    }
+
+    /// The block pipeline (parse → styled pieces → one row per piece). Factored
+    /// out because a rich reply runs it once per markdown run: two copies would
+    /// drift, and the copy the rich path used would be the one nobody notices
+    /// is out of date.
+    private func appendBlockRows(
+        _ text: String, width: CGFloat, revision: Int,
+        cache: MarkdownParser.CacheMode, clipOversized: Bool,
+        nextID: () -> String, into rows: inout [TimelineRow]
+    ) {
+        let blocks = MarkdownParser.parse(text, cache: cache, clipOversized: clipOversized)
+        for piece in TimelineTextStyler.pieces(from: blocks) {
+            switch piece {
+            case .text(let attributed):
+                rows.append(textRow(id: nextID(), revision: revision,
+                                    attributed: attributed, width: width))
+            case .code(let code):
+                let size = measurer.codeSize(code, font: TimelineTextStyler.codeFont)
+                rows.append(TimelineRow(
+                    id: nextID(), revision: revision,
+                    content: .code(text: code, contentSize: size),
+                    height: size.height + TimelineMetrics.codePadding * 2
+                        + TimelineMetrics.codeVMargin * 2
+                ))
+            case .image(let raw, let alt):
+                rows.append(TimelineRow(
+                    id: nextID(), revision: revision,
+                    content: .image(raw: raw, alt: alt),
+                    height: TimelineMetrics.imageSlotHeight
+                ))
+            case .table(let header, let tableRows):
+                rows.append(tableRow(id: nextID(), revision: revision,
+                                     header: header, rows: tableRows))
+            }
+        }
+    }
+
+    private func textRow(id: String, revision: Int, attributed: NSAttributedString,
+                         width: CGFloat) -> TimelineRow {
+        let h = measurer.height(attributed, width: TimelineMetrics.assistantTextWidth(width))
+        return TimelineRow(id: id, revision: revision, content: .text(attributed),
+                           height: h + TimelineMetrics.textVPad * 2)
+    }
+
+    // MARK: - Rich HTML rows
+
+    /// One web document.
+    ///
+    /// `revision` rides the document key's hash rather than the caller's
+    /// revision: a streaming card keeps the SAME row id across ticks (that is
+    /// what stops the cell from being torn down and losing `<details>` state),
+    /// so without a content-derived revision the diff would see "same id, same
+    /// height" and never hand the cell the markup that just arrived.
+    private func richRow(id: String, html: String, key: String,
+                         streaming: Bool, width: CGFloat) -> TimelineRow {
+        TimelineRow(
+            id: id, revision: key.hashValue,
+            content: .richHTML(html: html, key: key, streaming: streaming),
+            height: richRowHeight(id: id, html: html, key: key, width: width)
+        )
+    }
+
+    private func islandRow(id: String, html: String, key: String,
+                           complete: Bool, width: CGFloat) -> TimelineRow {
+        // An incomplete island renders as a LABEL, never a web view: mounting
+        // it would run half a script (the web console refuses for the same
+        // reason). Its placeholder height is a constant, so the row does not
+        // resize on every tick while the model finishes writing the block.
+        let height = complete
+            ? richRowHeight(id: id, html: html, key: key, width: width)
+            : TimelineMetrics.richIslandBuildingHeight + TimelineMetrics.richVMargin * 2
+        return TimelineRow(
+            // Completion must be visible to the diff even if the html between
+            // the last building tick and the closing fence is byte-identical.
+            id: id, revision: key.hashValue &+ (complete ? 1 : 0),
+            content: .richIsland(html: html, key: key, complete: complete),
+            height: height
+        )
+    }
+
+    /// A rich row's FULL height: best-known document height, clamped, plus the
+    /// row's own margins. One formula, shared by the first build and by a
+    /// re-bank — a second copy would drift the moment the clamps move.
+    private func richRowHeight(id: String, html: String, key: String,
+                               width: CGFloat) -> CGFloat {
+        documentHeight(id: id, html: html, key: key, width: width)
+            + TimelineMetrics.richVMargin * 2
+    }
+
+    /// The height-cache identities the rich rows in `rows` read: a rich row's
+    /// height comes from its DOCUMENT key or, mid-stream, from its ROW id, so a
+    /// measurement that moves either one moves this row. Empty means "no row
+    /// here can be revised after the fact", which is how the actor knows a memo
+    /// entry (or the live head) is none of a measurement's business.
+    static func richIdentities(in rows: [TimelineRow]) -> Set<String> {
+        var identities: Set<String> = []
+        for row in rows {
+            switch row.content {
+            case .richHTML(_, let key, _), .richIsland(_, let key, _):
+                identities.insert(RichHTMLHeightCache.documentIdentity(key))
+                identities.insert(RichHTMLHeightCache.rowIdentity(row.id))
+            default:
+                continue
+            }
+        }
+        return identities
+    }
+
+    /// Re-resolve the heights of exactly the rich rows whose banked height just
+    /// moved, leaving every other row — and the markdown parse behind it —
+    /// alone.
+    ///
+    /// A measurement changes a HEIGHT, never markup, so the alternative (throw
+    /// the memo entry away and rebuild the message) re-segmented the reply and
+    /// re-parsed its markdown to arrive at byte-identical rows. On a reply that
+    /// segments into many documents that is once per card as the cards measure
+    /// themselves one by one; here it is two dictionary lookups per moved row.
+    func rebankRichHeights(_ rows: [TimelineRow], width: CGFloat,
+                           changed: Set<String>) -> [TimelineRow] {
+        var out = rows
+        for (index, row) in rows.enumerated() {
+            switch row.content {
+            case .richHTML(let html, let key, _):
+                guard Self.moved(row.id, key, changed) else { continue }
+                out[index] = TimelineRow(
+                    id: row.id, revision: row.revision, content: row.content,
+                    height: richRowHeight(id: row.id, html: html, key: key, width: width))
+            case .richIsland(let html, let key, let complete):
+                // A building island is a fixed-height placeholder, never a
+                // measured document: re-banking it would hand the placeholder
+                // the height of the card it is going to become.
+                guard complete, Self.moved(row.id, key, changed) else { continue }
+                out[index] = TimelineRow(
+                    id: row.id, revision: row.revision, content: row.content,
+                    height: richRowHeight(id: row.id, html: html, key: key, width: width))
+            default:
+                continue
+            }
+        }
+        return out
+    }
+
+    private static func moved(_ rowID: String, _ key: String, _ changed: Set<String>) -> Bool {
+        changed.contains(RichHTMLHeightCache.documentIdentity(key))
+            || changed.contains(RichHTMLHeightCache.rowIdentity(rowID))
+    }
+
+    /// Height for a rich document, best source first: the exact measurement
+    /// banked for this document at this width → whatever this ROW last
+    /// measured → a rough estimate.
+    ///
+    /// The per-ROW fallback is not only for streaming. A `<style>` block the
+    /// model writes LATE is harvested into every earlier html segment (the
+    /// alternative being a permanently unstyled card), so a settled card's key
+    /// can change once, late. Keyed on the row instead, its height survives
+    /// that: without the fallback a finished card would visibly jump back to
+    /// the estimate and then re-measure.
+    ///
+    /// Clamped HERE as well as in the cell: an estimate or a stale row height
+    /// must never claim more room than the cell will ever report, or the card
+    /// keeps a permanent gap underneath it.
+    private func documentHeight(id: String, html: String, key: String,
+                                width: CGFloat) -> CGFloat {
+        let contentWidth = TimelineMetrics.richContentWidth(width)
+        let cache = RichHTMLHeightCache.shared
+        let height = cache.height(key: key, width: contentWidth)
+            ?? cache.lastHeight(rowID: id)
+            ?? RichHTMLHeightCache.estimate(html: html, width: contentWidth)
+        return min(TimelineMetrics.richMaxHeight, max(TimelineMetrics.richMinHeight, height))
     }
 
     // MARK: - Live turn (LiveMarkdownWindow semantics)
@@ -178,6 +407,9 @@ final class TimelineRowBuilder {
     /// Rows for the streaming live turn. Head rows are byte-stable across
     /// ticks (LiveMarkdownWindow quantization) — the actor caches them keyed
     /// on the head string; only the tail re-parses/re-measures per tick.
+    ///
+    /// A RICH window is the one exception: it is rendered whole (see below), so
+    /// there is no head to memoize while the model is writing markup.
     func liveRows(
         liveText: String, storeTruncated: Bool, activity: String?,
         width: CGFloat, tailRevision: Int,
@@ -191,29 +423,70 @@ final class TimelineRowBuilder {
                 rows.append(TimelineRow(id: "live-truncated", revision: 0,
                                         content: .truncationChip, height: 26))
             }
-            if !seg.head.isEmpty {
-                if let cached = cachedHead, cached.key == seg.head {
-                    rows.append(contentsOf: cached.rows)
-                } else {
-                    let headRows = assistantRows(
-                        ChatMessage(id: "live-head", role: "assistant", text: seg.head,
-                                    createdAt: "", kind: nil),
-                        width: width, idPrefix: "live-head", cache: .shared,
-                        clipOversized: false
-                    )
-                    headCache = (seg.head, headRows)
-                    rows.append(contentsOf: headRows)
-                }
-            } else {
+            // The text LiveMarkdownWindow decided to render, as one string. The
+            // head/tail pair is a MEMOIZATION device, not a rendering boundary;
+            // `head + tail` is the window by construction, and is `liveText`
+            // itself whenever nothing was dropped (so an ordinary tick copies
+            // nothing).
+            let window = seg.omittedPrefix ? seg.head + seg.tail : liveText
+            if RichHTMLSegments.isRich(window) {
+                // A rich window is segmented WHOLE, never split into head and
+                // tail. `safeBoundary` balances code fences and nothing else, so
+                // it happily cuts on a blank line at HTML depth 1. Measured on a
+                // 12K card-shaped reply whose card straddles the boundary: the
+                // head document ended mid-`<div>`, and the tail — whose own depth
+                // scan starts at zero — then cut the remainder at every blank line
+                // inside the card, turning ONE card into eight documents, the last
+                // of them nothing but the orphaned `</div>`. None of them carried
+                // the harvested `<style>` either, because the harvest is
+                // MESSAGE-scoped inside the segmenter and a second call cannot see
+                // the first call's CSS: the reader watched the bottom of a card
+                // render naked until the turn settled and the finalized message
+                // was segmented in one piece. Both halves of that are structural —
+                // one document needs one segmentation over one text — so the split
+                // has to go rather than be repaired.
+                //
+                // The cost this gives up is the head's parse memo, and it stays
+                // bounded because the WINDOW is bounded (`windowKeep`) — which is
+                // the guarantee LiveMarkdownWindow actually makes. Per-tick work
+                // is O(window), never O(reply), which is the 0x8BADF00D bug class
+                // the window exists to close.
+                //
+                // ONE id namespace for the whole window, too: a card keeps its
+                // row id (and therefore its banked height and its `<details>`
+                // state) as the window slides, where the two-prefix split
+                // renumbered every tail row and changed its prefix each time the
+                // head boundary advanced a quantum.
                 headCache = nil
-            }
-            if !seg.tail.isEmpty {
-                rows.append(contentsOf: assistantRows(
-                    ChatMessage(id: "live-tail", role: "assistant", text: seg.tail,
-                                createdAt: "", kind: nil),
-                    width: width, idPrefix: "live-tail", cache: .skip,
+                rows.append(contentsOf: richRows(
+                    window, width: width, idPrefix: "live", cache: .skip,
                     clipOversized: false, revision: tailRevision
                 ))
+            } else {
+                if !seg.head.isEmpty {
+                    if let cached = cachedHead, cached.key == seg.head {
+                        rows.append(contentsOf: cached.rows)
+                    } else {
+                        let headRows = assistantRows(
+                            ChatMessage(id: "live-head", role: "assistant", text: seg.head,
+                                        createdAt: "", kind: nil),
+                            width: width, idPrefix: "live-head", cache: .shared,
+                            clipOversized: false
+                        )
+                        headCache = (seg.head, headRows)
+                        rows.append(contentsOf: headRows)
+                    }
+                } else {
+                    headCache = nil
+                }
+                if !seg.tail.isEmpty {
+                    rows.append(contentsOf: assistantRows(
+                        ChatMessage(id: "live-tail", role: "assistant", text: seg.tail,
+                                    createdAt: "", kind: nil),
+                        width: width, idPrefix: "live-tail", cache: .skip,
+                        clipOversized: false, revision: tailRevision
+                    ))
+                }
             }
         } else {
             headCache = nil
