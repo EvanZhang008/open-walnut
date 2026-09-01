@@ -273,6 +273,10 @@ export function registerCommands(program: Command): void {
     .command('tools [args...]')
     .description('List, inspect, and invoke Walnut operations (list | help <op> | call <op> \'{json}\')')
     .allowUnknownOption(true)
+    // Commander's built-in help option would swallow `--help` ANYWHERE in the
+    // args, so `tools call <op> --help` printed commander's usage instead of the
+    // op's schema. runTools answers both forms itself.
+    .helpOption(false)
     .action(async (args: string[] | undefined, _options: Record<string, unknown>, cmd) => {
       const { runTools } = await import('./tools.js');
       await runTools(args ?? [], cmd.optsWithGlobals());

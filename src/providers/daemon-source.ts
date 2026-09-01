@@ -395,7 +395,9 @@ function runWnMinimal(argv, stdinText) {
     return;
   }
   var usage = 'usage: walnut guide | walnut wait <id> [--timeout secs] | walnut tools list | walnut tools help <op> | walnut tools call <op> [json|@file|-|--help]';
-  if (argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') { out(usage); return exitWn(0); }
+  // Twin of SKILL_POINTER in src/ops/op-help.ts.
+  var wnSkillPointer = 'Model (task vs session) + recipes: walnut tools call skill_read \\'{"dirName":"walnut"}\\'';
+  if (argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') { out(usage); out(wnSkillPointer); return exitWn(0); }
   if (argv[0] === 'peers') {
     errOut('walnut: peers was replaced — list sessions with: walnut tools call session_list, message one with: walnut tools call session_send (args: to, text)');
     return exitWn(2);
@@ -643,12 +645,17 @@ function runWnMinimal(argv, stdinText) {
           out('Usage:');
           out("  walnut tools call " + helpRow.name + " '{...}'");
           out("  walnut tools call " + helpRow.name + " @/tmp/args.json   # payloads over ~128KB must not go in argv");
+          out('');
+          out(wnSkillPointer);
         } else {
           for (var j = 0; j < ops.length; j++) {
             out('  ' + ops[j].name + '  ' + (ops[j].title || '') + (ops[j].readonly ? ' (read)' : ' (write)'));
             // The signature is what stops an agent guessing argument names.
             if (ops[j].signature) out('      args: ' + ops[j].signature);
           }
+          out('');
+          // A half-answer is exactly when the skill stops being read: name it here.
+          out(wnSkillPointer);
         }
       } else {
         // tools.call — guide prints the manual as markdown, else pretty JSON.

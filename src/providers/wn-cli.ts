@@ -28,7 +28,7 @@ import path from 'node:path'
 import type { GatewayError, GatewayErrorCode, GatewayOp, GatewayRequest, GatewayResponse } from './gateway-core.js'
 import { EXTERNAL_CALLER_SID, wellKnownGatewaySocketPath } from './gateway-core.js'
 import { GATEWAY_INLINE_ARGS_MAX_BYTES, classifyArgsSource, parseToolArgs } from './tool-args-source.js'
-import { formatOpHelp, formatToolsTable, type ToolRow } from '../ops/op-help.js'
+import { SKILL_POINTER, formatOpHelp, formatToolsTable, type ToolRow } from '../ops/op-help.js'
 
 // Catalog/detail rendering is SHARED with the hub CLI (src/commands/tools.ts)
 // so the two faces can never disagree about what an op's arguments are.
@@ -193,8 +193,16 @@ USAGE
   walnut wait <id> [--timeout secs] [--json]   block until a task settles or a reply request resolves
   walnut --help | walnut tools --help
 
+THE MODEL (get this wrong and nothing runs)
+  A task is an inert RECORD. A session is the live process that does the WORK.
+  Pinning a task or moving it to Focus is human attention, never dispatch — it
+  starts nothing. Every task/session write answers with 'outcome' (what really
+  changed) and 'next' (the exact next call); read those two instead of guessing.
+  Full model + recipes: \`walnut guide\` (same text as skill_read walnut).
+
 THE THREE VERBS (keep it simple)
   task_create      record a task            walnut tools call task_create '{"title":"..."}'
+                   record AND start it      walnut tools call task_create '{"title":"...","start_session":true}'
   session_start    start a session for it   walnut tools call session_start '{"task":"<id>","message":"..."}'
   session_send     message any session      walnut tools call session_send '{"to":"<id|task|title>","text":"..."}'
   Add "expect_reply":true to either send/start to be told when the work finishes;
@@ -261,6 +269,8 @@ Requests relay through the Walnut daemon to the hub — works on ANY host with a
 Walnut-managed session, no server or tunnel setup needed. Destructive operations
 (e.g. task_delete) are local-only and refused here. Writes share the peer-send
 rate budget. Results print as pretty JSON.
+
+${SKILL_POINTER}
 `
 
 export function helpText(topic: 'root' | 'tools'): string {

@@ -29,6 +29,32 @@ project lives in the **Inbox**. Two ways in — use whichever is available:
   server is mounted in this session. Prefer these when present: structured
   results, no shell quoting.
 
+## The model in four lines (read this before any write)
+
+1. **A task is an inert record.** Creating, updating, pinning or re-tiering one
+   runs nothing. It is a row the human reads.
+2. **A session is the thing that works.** It is a live coding-agent process with
+   a working directory. Work happens only when a session exists.
+3. **Pin and focus tier are human attention, never dispatch.** Moving a task to
+   Focus does not start, schedule, or prioritize any execution.
+4. **So "make this happen" is always two nouns:** a task to hang it on, and a
+   session started on that task.
+
+```
+task_create            → a row exists, nothing runs
+   ↓ session_start (or task_create with start_session: true)
+session running        → the work is happening
+   ↓ session_send                    ↓ its reply arrives in your session
+add context mid-flight             (do not poll; walnut wait only if blocked)
+   ↓ task_update phase=AGENT_COMPLETE
+the human is told it is ready to look at
+```
+
+Every task/session write answers with **`outcome`** (what actually changed,
+including what did *not* happen) and **`next`** (the exact next call). Read those
+two fields instead of assuming: `task_create` says in words that no session is
+attached, and `task_pin_set` says pinning dispatched nothing.
+
 ## Start here: one command answers "what can I call?"
 
 **Any Walnut question is an operation call. Never guess a subcommand, and never
@@ -108,7 +134,7 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `task_list` | List / query Walnut tasks (read) | status? (todo\|in_progress\|done): Legacy 3-state: todo \| in_progress \| done; completion? (string): Comma list of todo \| in_progress \| complete (in_progress includes AGENT_COMPLETE); phases? (string): Comma list of exact phases: TODO \| IN_PROGRESS \| AGENT_COMPLETE \| COMPLETE; project? (string): Project name (exact, case-insensitive); "" for the Inbox; projects? (string): Comma list of project names; priorities? (string): Comma list of immediate \| important \| backlog \| none; source? (string): Task source (exact), e.g. "local"; sprint? (string): Sprint name (exact); tag? (string): Exact tag match (single); tags_any? (string): Comma list : match tasks carrying ANY of these tags; tags_all? (string): Comma list : match tasks carrying ALL of these tags; pinned? (boolean): Filter pinned/unpinned tasks; focus_tier? (string): Comma list of pin tiers: focus \| satellite \| backlog \| wait \| a custom ct_* id. Only pinned tasks match; satellite = pinned with no stored tier; working_set? (boolean): Shortcut: the WHOLE pinned board (all tiers, completed pins included) sorted by pin_order : no default limit, so the board is never silently cut; unread? (boolean): Tasks with agent output the human has not opened yet; blocked? (boolean): Tasks blocked/unblocked by incomplete dependencies; parent_task_id? (string): Children of this parent task (exact id); group_id? (string): Members of a virtual group (exact id, e.g. "g_xxx"); q? (string): Case-insensitive substring on the task title; ids? (string): Comma list of exact task ids : fetch a specific set in one call; time_basis? (created\|updated\|created_or_updated\|due\|completed): Which timestamp the window filters: created \| updated \| created_or_updated \| due \| completed; last_hours? (integer): Relative window: the last N hours; last_days? (integer): Relative window: the last N days; time_from? (string): Absolute window start (inclusive), ISO-8601 or YYYY-MM-DD; time_until? (string): Absolute window end (exclusive), ISO-8601 or YYYY-MM-DD; sort? (updated_desc\|created_desc\|completed_desc\|priority\|title_asc\|pin_order): Result order (default updated_desc; working_set defaults to pin_order); limit? (integer): Max rows (1-200), applied after sort. Default 50, EXCEPT working_set=true which returns the whole board unless you pass a limit; fields? (list\|full, default "list"): list = slim rows (default); full = every field including note (heavy : combine with ids or a small limit) |
 | `task_get` | Get one Walnut task (read) | id (string): Task id or a unique id prefix |
 | `task_get_bulk` | Get many Walnut tasks with chosen fields (read) | ids (array<string>): Task ids (exact, or a unique id prefix) : 1 to 50 per call; fields? (array<string>): Fields to return: title \| status \| phase \| project \| priority \| tags \| start_date \| due_date \| end_date \| created_at \| updated_at \| completed_at \| pinned \| focus_tier \| pin_order \| unread \| blocked_by \| last_session_update \| summary \| note \| progress \| dates. Omit for the triage default (title, status, phase, project, priority, due_date, updated_at, pinned, focus_tier, unread, summary) |
-| `task_create` | Create a Walnut task (write) | title (string): Task title (required); project? (string): Project name; omit or "" for the Inbox; priority? (immediate\|important\|backlog\|none): immediate \| important \| backlog \| none; due_date? (string): YYYY-MM-DD or a full ISO-8601 datetime; description? (string): Longer body text (write-only); pinned? (boolean): Join the pinned board (default true). false keeps the task off the board; focus_tier? (string): Pin tier the task is born into (implies pinned): focus \| satellite \| backlog \| wait \| a registered ct_* id. Omit for Satellite; unknown tiers are rejected, not silently downgraded |
+| `task_create` | Create a Walnut task (write) | title (string): Task title (required); project? (string): Project name; omit or "" for the Inbox; priority? (immediate\|important\|backlog\|none): immediate \| important \| backlog \| none; due_date? (string): YYYY-MM-DD or a full ISO-8601 datetime; description? (string): Longer body text (write-only); pinned? (boolean): Join the pinned board (default true). false keeps the task off the board; focus_tier? (string): Pin tier the task is born into (implies pinned): focus \| satellite \| backlog \| wait \| a registered ct_* id. Omit for Satellite; unknown tiers are rejected, not silently downgraded; start_session? (boolean): Also start a coding session on the new task (create + dispatch in one call). Default false: creating a task starts nothing; start_message? (string): First instruction for that session (only with start_session; defaults to a sentence naming the task) |
 | `task_update` | Update a Walnut task (write) | id (string): Task id or a unique id prefix; status? (todo\|in_progress\|done): Legacy status: todo \| in_progress \| done; phase? (TODO\|IN_PROGRESS\|AGENT_COMPLETE\|COMPLETE): Task lifecycle phase; priority? (immediate\|important\|backlog\|none); due_date? (string): ISO-8601 date/datetime, or "" to clear; start_date? (string): ISO-8601 date/datetime, or "" to clear; project? (string): Project name; "" = Inbox; title? (string): New title (non-empty, <= 500 chars); description? (string): Replaces the description (write-only); tags? (array<string>): FULL replacement of the task tags |
 | `task_complete` | Complete a Walnut task (write) | id (string): Task id or a unique id prefix |
 | `task_merge` | Merge duplicate Walnut tasks (write, local-only) | survivor_id (string): Task id (or unique prefix) that survives the merge; victim_ids (array<string>): Duplicate task ids to merge into the survivor and delete |
@@ -214,14 +240,20 @@ Work is recorded, started, and continued by three ops and nothing else. Pick by 
 | Intent | Call | What it does |
 |---|---|---|
 | Write it down, start nothing | `task_create` | Pure bookkeeping. No process, no cwd needed. |
-| Get it running now | `session_start` | Opens a NEW session for an EXISTING task and sends the first message. Returns `sessionId`. |
+| Write it down AND start it | `task_create` with `"start_session": true` | One call: creates the task, then starts a session on it. If the start fails the task still exists and the result says so (`session_error` + the retry line), because a created task is not a failure. |
+| Get an existing task running | `session_start` | Opens a NEW session for an EXISTING task and sends the first message. Returns `sessionId`. |
 | Talk to work that already runs | `session_send` | The one way to message any session: yours never, someone else's always by handle. |
 
 ```bash
 walnut tools call task_create  '{"title":"Fix the flaky auth test","project":"marina"}'
+walnut tools call task_create  '{"title":"Fix the flaky auth test","start_session":true,"start_message":"Reproduce the flake, then fix it."}'
 walnut tools call session_start '{"task":"t_7d41c0a9","message":"Reproduce the flake, then fix it."}'
 walnut tools call session_send  '{"to":"t_7d41c0a9","text":"The fixture moved to tests/setup/tmp.ts"}'
 ```
+
+Default to plain `task_create` when the user is only recording something: a
+session is a real process with a real cost, so it starts when someone asked for
+work to start, not as a side effect of writing a note to self.
 
 - Quick work with no tracking request: just do it. No op at all.
 - `session_start` needs a task first, so `task_create` then `session_start` is the normal pair. It resolves cwd from the task, its parent chain, then the project default, so pass `cwd` only to override that.

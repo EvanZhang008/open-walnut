@@ -65,6 +65,15 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
   const { listOps, getOp, executeOp } = await import('../ops/index.js')
   const sub = args[0]
 
+  // `walnut tools --help` / `-h`: commander no longer handles this (its help
+  // option ate `--help` in `tools call <op> --help`), so print the same manual
+  // page the in-session CLI prints.
+  if (sub === '--help' || sub === '-h') {
+    const { helpText } = await import('../providers/wn-cli.js')
+    console.log(helpText('tools'))
+    return
+  }
+
   if (sub === 'list' || sub === undefined) {
     const readonly = args.includes('--readonly')
     const ops = listOps().filter((o) => !readonly || o.tags.readonly)
@@ -103,10 +112,11 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
   }
 
   if (sub === 'help') {
+    // A bare `tools help` is a request for the manual, not a usage error.
     const name = args[1]
-    if (!name) {
-      console.error('usage: walnut tools help <op>')
-      process.exitCode = 1
+    if (!name || name === '--help' || name === '-h') {
+      const { helpText } = await import('../providers/wn-cli.js')
+      console.log(helpText('tools'))
       return
     }
     printOpHelp(name)

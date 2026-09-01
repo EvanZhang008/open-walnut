@@ -7,9 +7,11 @@
  * CLI faces render from here, so pin the rendering itself: pure, no socket, no
  * server.
  */
+import { readFileSync } from 'node:fs'
 import { describe, it, expect } from 'vitest'
 import { z } from 'zod'
 import {
+  SKILL_POINTER,
   fieldType,
   formatOpHelp,
   formatParamSignature,
@@ -108,6 +110,31 @@ describe('formatOpHelp', () => {
     expect(formatOpHelp({ name: 'walnut_status', params: [] })).toContain('Parameters: none')
     const old = formatOpHelp({ name: 'walnut_status' })
     expect(old).toContain('not reported by this Walnut server')
+  })
+})
+
+describe('the catalog and the op detail point back to the skill', () => {
+  // A half-answer is what suppressed skill loading: the CLI gave a usable op
+  // name, so the agent never went looking for the task-vs-session model.
+  it('both renderings name skill_read walnut', () => {
+    const table = formatToolsTable([{ name: 'task_list', title: 'List tasks', readonly: true }])
+    expect(table).toContain(SKILL_POINTER)
+    expect(formatOpHelp({ name: 'task_list', params: [] })).toContain(SKILL_POINTER)
+    expect(SKILL_POINTER).toContain('skill_read')
+    expect(SKILL_POINTER).toContain('task vs session')
+  })
+
+  it('the daemon source twin prints the same pointer', () => {
+    // daemon-source.ts cannot import, so the string is hand-inlined there.
+    const twin = readFileSync(
+      new URL('../../../src/providers/daemon-source.ts', import.meta.url), 'utf-8',
+    )
+    // Compare on the quote-free part: the twin escapes its quotes for the
+    // enclosing template literal, so the raw bytes differ by backslashes only.
+    const [prefix] = SKILL_POINTER.split(':')
+    expect(twin).toContain(prefix)
+    expect(twin).toContain('{"dirName":"walnut"}')
+    expect(twin).toContain('out(wnSkillPointer)')
   })
 })
 

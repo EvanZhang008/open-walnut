@@ -8,6 +8,7 @@ import { z } from 'zod'
 import { defineOp, type HttpBinding } from './registry.js'
 import { materializeBinding } from './executor.js'
 import { taskRefTag } from '../utils/entity-refs.js'
+import { TASK_IS_INERT, REPLY_ARRIVES_HINT, dispatchHint, withOutcome } from './outcome.js'
 import { PHASE_ORDER } from '../core/phase.js'
 import {
   BULK_GET_FIELDS,
@@ -27,11 +28,24 @@ const REF_INSTRUCTION =
   'Include the `ref` string verbatim in your reply to the user so Walnut renders a clickable task pill.'
 
 /** Attach the ref tag + paste instruction to a task-mutating result. */
-function withRef(task: unknown, extra: Record<string, unknown> = {}): unknown {
+function withRef(task: unknown, extra: Record<string, unknown> = {}): Record<string, unknown> {
   const t = (task ?? {}) as { id?: unknown; title?: unknown }
   const id = typeof t.id === 'string' ? t.id : ''
   const title = typeof t.title === 'string' ? t.title : ''
   return { ...extra, task, ref: taskRefTag(id, title), instruction: REF_INSTRUCTION }
+}
+
+/** Task id out of a v1 task body, for the outcome lines. */
+function taskId(task: unknown): string {
+  const id = (task as { id?: unknown } | undefined)?.id
+  return typeof id === 'string' ? id : ''
+}
+
+/** Does this task body show a session attached? Absent field → assume none. */
+function hasSession(task: unknown): boolean {
+  const t = (task ?? {}) as { session_id?: unknown; session_ids?: unknown }
+  if (typeof t.session_id === 'string' && t.session_id) return true
+  return Array.isArray(t.session_ids) && t.session_ids.length > 0
 }
 
 const SORT = z.enum(['updated_desc', 'created_desc', 'completed_desc', 'priority', 'title_asc', 'pin_order'])
@@ -156,6 +170,26 @@ defineOp({
     id: z.string().min(1).describe('Task id or a unique id prefix'),
   },
   bind: { method: 'GET', path: '/tasks/:id' },
+  // A bare phase word ("todo") reads as "queued for execution" in most agent
+  // frameworks. Say the part the word hides: whether a session is attached.
+  mapResult: ({ body, args }) => {
+    const b = (body ?? {}) as Record<string, unknown>
+    const task = (b.task ?? b) as Record<string, unknown>
+    const phase = typeof task.phase === 'string' ? task.phase
+      : typeof task.status === 'string' ? task.status : 'unknown'
+    const attached = hasSession(task)
+    const id = taskId(task) || String(args.id ?? '')
+    return withOutcome(
+      { ...b },
+      attached
+        ? `Phase ${phase}, with a session attached — that session is where the work lives.`
+        : `Phase ${phase}, and NO session is attached: nothing is working on this task. ${TASK_IS_INERT}`,
+      attached
+        ? 'Read what it did with session_transcript, or add context with session_send '
+          + `'{"to":"${id}","text":"..."}'.`
+        : dispatchHint(id),
+    )
+  },
   tags: { readonly: true, remote: 'allow' },
 })
 
@@ -190,11 +224,13 @@ defineOp({
   name: 'task_create',
   title: 'Create a Walnut task',
   description:
-    'Record a task without starting any work or session. Use this only when the user wants tracking ' +
-    'without execution; follow with `session_start` when work should start now. An omitted/empty project means ' +
-    'Inbox, and an unknown project name auto-creates its registry row. A new task lands on the pinned ' +
-    'board in the Satellite tier; pass focus_tier to put it straight into another tier, or pinned=false ' +
-    'to keep it off the board. The result carries a `ref` tag.',
+    'Record a task. Creating a task starts NOTHING: a task is an inert record, and only a session ' +
+    'does work — so pass start_session=true when the work should begin now (one call: the task is ' +
+    'created, then a session is started on it), or call session_start yourself later. An omitted/empty ' +
+    'project means Inbox, and an unknown project name auto-creates its registry row. A new task lands ' +
+    'on the pinned board in the Satellite tier; pass focus_tier to put it straight into another tier, ' +
+    'or pinned=false to keep it off the board (pinning is human attention, never dispatch). The result ' +
+    'carries a `ref` tag plus `outcome` / `next`.',
   input: {
     title: z.string().min(1).describe('Task title (required)'),
     project: z.string().optional().describe('Project name; omit or "" for the Inbox'),
@@ -205,9 +241,49 @@ defineOp({
     // Exact ids only — this rides straight to the server, which validates
     // against the registry. Label tolerance lives in the agent tool.
     focus_tier: z.string().optional().describe('Pin tier the task is born into (implies pinned): focus | satellite | backlog | wait | a registered ct_* id. Omit for Satellite; unknown tiers are rejected, not silently downgraded'),
+    start_session: z.boolean().optional().describe('Also start a coding session on the new task (create + dispatch in one call). Default false: creating a task starts nothing'),
+    start_message: z.string().optional().describe('First instruction for that session (only with start_session; defaults to a sentence naming the task)'),
   },
-  bind: { method: 'POST', path: '/tasks' },
-  mapResult: ({ body }) => withRef((body as { task?: unknown } | undefined)?.task),
+  /**
+   * Handler, not a plain binding, because of `start_session`. The two steps are
+   * deliberately NOT one transaction: if the create succeeds and the start
+   * fails, the task EXISTS, so failing the whole call would tell the agent the
+   * opposite of the truth. The result then carries the task, `session_error`,
+   * and the retry line — an honest partial success.
+   */
+  handler: async (args, call) => {
+    const { start_session: startSession, start_message: startMessage, ...fields } = args
+    const created = await call('POST', '/tasks', fields) as { task?: unknown } | undefined
+    const task = created?.task
+    const id = taskId(task)
+    if (startSession !== true) {
+      return withOutcome(
+        withRef(task),
+        `Task recorded. No session is working on it. ${TASK_IS_INERT}`,
+        dispatchHint(id),
+      )
+    }
+    try {
+      const started = await call(
+        'POST',
+        `/tasks/${encodeURIComponent(id)}/start`,
+        startMessage === undefined ? {} : { message: startMessage },
+      ) as Record<string, unknown> | undefined
+      const sessionId = typeof started?.sessionId === 'string' ? started.sessionId : ''
+      return withOutcome(
+        withRef(task, { session: started }),
+        `Task recorded AND a session was started on it${sessionId ? ` (${sessionId})` : ''}; it is working now.`,
+        REPLY_ARRIVES_HINT,
+      )
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return withOutcome(
+        withRef(task, { session_error: message }),
+        `Task recorded, but the session did NOT start (${message}). The task exists; nothing is running.`,
+        `Retry the dispatch alone: walnut tools call session_start '{"task":"${id}","message":"..."}'`,
+      )
+    }
+  },
   tags: { readonly: false, remote: 'allow' },
 })
 
@@ -239,7 +315,22 @@ defineOp({
     if (Object.keys(body).length === 0) {
       throw new Error('task_update needs at least one field to change besides `id`.')
     }
-    return call('PATCH', `/tasks/${encodeURIComponent(String(id))}`, body)
+    const patched = await call('PATCH', `/tasks/${encodeURIComponent(String(id))}`, body) as
+      { task?: unknown } | undefined
+    const task = patched?.task
+    const changed = Object.keys(body).join(', ')
+    // A phase write is bookkeeping. It does not start work, and it does not
+    // stop a session that is already running — the single most common wrong
+    // assumption about this op.
+    const running = hasSession(task)
+    const outcome = `Task fields updated (${changed}). No session was started or stopped by this. `
+      + (running ? 'Its existing session keeps running.' : `No session is attached. ${TASK_IS_INERT}`)
+    const next = body.phase === 'AGENT_COMPLETE'
+      ? 'Marked ready for the human to look at. Nothing else is required of you.'
+      : running
+        ? `Talk to its session: walnut tools call session_send '{"to":"${taskId(task) || String(id)}","text":"..."}'`
+        : dispatchHint(taskId(task) || String(id))
+    return withOutcome({ ...(patched ?? {}) }, outcome, next)
   },
   tags: { readonly: false, remote: 'allow', destructive: false },
 })
@@ -257,7 +348,20 @@ defineOp({
   // surface a sync-push failure (the v1 PATCH swallows it via asyncPush).
   // Same reasoning as the CLI's `done`.
   bind: { method: 'POST', path: '/tasks/:id/complete' },
-  mapResult: ({ body }) => withRef((body as { task?: unknown } | undefined)?.task, { completed: true }),
+  mapResult: ({ body }) => {
+    const task = (body as { task?: unknown } | undefined)?.task
+    const running = hasSession(task)
+    return withOutcome(
+      withRef(task, { completed: true }),
+      'Task marked complete. Completing a task does not stop anything: '
+      + (running
+        ? 'the session it owns is still alive and still costs a process.'
+        : 'no session was attached to it.'),
+      running
+        ? 'If that work is really finished, stop the session from the Walnut UI (or leave it to the idle reaper).'
+        : 'Nothing else is required.',
+    )
+  },
   // remote 'allow': completing a task is ordinary, reversible work. This was
   // briefly 'deny' as the gateway half of the human-only completion gate; that
   // whole distinction is gone, and a peer session finishing a task it was asked
@@ -282,7 +386,13 @@ defineOp({
     const body = await call('POST', `/tasks/${encodeURIComponent(String(survivor_id))}/merge`, {
       victim_ids,
     }) as { task?: unknown; merged?: number; sessions_relinked?: number }
-    return withRef(body?.task, { merged: body?.merged, sessions_relinked: body?.sessions_relinked })
+    return withOutcome(
+      withRef(body?.task, { merged: body?.merged, sessions_relinked: body?.sessions_relinked }),
+      `${body?.merged ?? 0} duplicate task(s) deleted; `
+      + `${body?.sessions_relinked ?? 0} session link(s) moved onto the survivor, so no conversation was lost. `
+      + 'Running sessions were not interrupted.',
+      `Read the survivor back if you need its merged state: walnut tools call task_get '{"id":"${taskId(body?.task) || String(survivor_id)}"}'`,
+    )
   },
   tags: { readonly: false, remote: 'deny', destructive: true },
 })
@@ -301,7 +411,13 @@ defineOp({
   handler: async (args, call) => {
     const { id, force } = args
     await call('DELETE', `/tasks/${encodeURIComponent(String(id))}${force ? '?force=true' : ''}`)
-    return { deleted: true, id }
+    return withOutcome(
+      { deleted: true, id },
+      force === true
+        ? 'Task deleted permanently, and its active sessions were stopped first.'
+        : 'Task deleted permanently. It had no active session (a task with one refuses the delete unless force is true).',
+      'Nothing else is required. This cannot be undone, so do not delete anything else the user did not name.',
+    )
   },
   tags: { readonly: false, remote: 'deny', destructive: true },
 })

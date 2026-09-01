@@ -110,6 +110,17 @@ function accessLabel(row: ToolRow): string {
 const CATALOG_WIDTH = 100
 
 /**
+ * The pointer back to the skill, printed under every catalog and every op help.
+ *
+ * A half-answer suppresses skill loading: an agent that gets a usable op name
+ * from `tools list` never bounces out to the skill, so it keeps a wrong picture
+ * of task-vs-session (real incident, 2026-08-31). The CLI therefore has to name
+ * the skill at the exact moment it half-answers.
+ */
+export const SKILL_POINTER =
+  'Model (task vs session) + recipes: walnut tools call skill_read \'{"dirName":"walnut"}\''
+
+/**
  * The operations catalog: one line per op, plus an indented `args:` line
  * carrying its parameter signature. The signature is what stops an agent from
  * guessing argument names, so it is never truncated — long ones wrap.
@@ -132,6 +143,7 @@ export function formatToolsTable(ops: ToolRow[]): string {
     ...lines,
     '',
     'Run `walnut tools help <op>`, then `walnut tools call <op> \'{json}\'`.',
+    SKILL_POINTER,
   ].join('\n')
 }
 
@@ -165,6 +177,8 @@ export function formatOpHelp(row: ToolRow): string {
     `  walnut tools call ${row.name} ${example}`,
     `  echo ${example} | walnut tools call ${row.name}`,
     `  walnut tools call ${row.name} @/tmp/args.json   # payloads over ~128KB must not go in argv`,
+    '',
+    SKILL_POINTER,
   )
   return lines.join('\n')
 }

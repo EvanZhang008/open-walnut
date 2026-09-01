@@ -58,6 +58,19 @@ defineOp({
     status: z.enum(['running', 'idle', 'stopped', 'error']).optional().describe('Filter by process status'),
   },
   bind: { method: 'GET', path: '/sessions' },
+  mapResult: ({ body }) => {
+    const b = (body ?? {}) as Record<string, unknown>
+    const rows = Array.isArray(b.sessions) ? b.sessions : []
+    const running = rows.filter((s) => (s as { process_status?: unknown }).process_status === 'running').length
+    return {
+      ...b,
+      // Reads change nothing, but this is where the task/session distinction is
+      // easiest to teach: these rows are the things actually doing work.
+      outcome: `${rows.length} session(s) listed, ${running} of them working right now. `
+        + 'A session is a live process doing work; its task row is just the record it hangs on.',
+      next: 'Talk to one with session_send (never yourself), or start one for a task with session_start.',
+    }
+  },
   tags: { readonly: true, remote: 'allow' },
 })
 
