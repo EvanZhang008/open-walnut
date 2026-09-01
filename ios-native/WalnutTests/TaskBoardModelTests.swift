@@ -196,28 +196,86 @@ final class TaskBoardModelTests: XCTestCase {
 
     // MARK: - The heading count
 
-    /// The number on a heading is what you can SEE in the band — toggling
-    /// `hide done` changes it, which is the feedback that the toggle worked. A
-    /// count including hidden rows would disagree with the rows below it.
+    /// The number on a heading is what you can SEE in the band — toggling the done
+    /// fold changes it, which is the feedback that the toggle worked. A count
+    /// including hidden rows would disagree with the rows below it.
+    ///
+    /// The DEFAULT half is what this case now leads with: nobody has expanded
+    /// anything, so the heading reads the band's OPEN count.
     func testHeadingCountMatchesTheVisibleRows() {
         let tasks = [task("a"), task("b", status: "done", phase: "COMPLETE"), task("c")]
         let order = ["focus": ["a", "b", "c"]]
         let tierOf = ["a": "focus", "b": "focus", "c": "focus"]
 
-        let shown = BoardModel.bands(
+        let folded = BoardModel.bands(
             tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: order, customTiers: []
         )
-        XCTAssertEqual(shown.first?.count, 3)
+        XCTAssertEqual(folded.first?.count, 2, "the default count is the OPEN count")
+        XCTAssertEqual(folded.first?.rows.map(\.id), ["a", "c"])
+        XCTAssertEqual(folded.first?.hiddenDone, 1, "and says how many it is suppressing")
+
+        let shown = BoardModel.bands(
+            tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: order,
+            customTiers: [], shownDoneTiers: ["focus"]
+        )
+        XCTAssertEqual(shown.first?.count, 3, "the count follows the rows")
         XCTAssertEqual(shown.first?.rows.count, 3)
         XCTAssertEqual(shown.first?.hiddenDone, 0)
+    }
 
-        let hidden = BoardModel.bands(
-            tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: order,
-            customTiers: [], hiddenDoneTiers: ["focus"]
+    /// Done rows fold in EVERY band of a default board, not just the one being looked
+    /// at — the reported defect, stated as the number the screen shows: `Focus 75` over
+    /// 16 open rows and `All 270` over 91, because 179 of 270 pinned rows were finished.
+    func testEveryBandFoldsItsDoneRowsWithNoToggleAtAll() {
+        let tasks = [
+            task("f1"), task("f2", status: "done", phase: "COMPLETE"),
+            task("s1"), task("s2", status: "done", phase: "COMPLETE"),
+            task("b1", status: "done", phase: "COMPLETE"),
+        ]
+        let bands = BoardModel.bands(
+            tasks: tasks, sessions: [],
+            tierOf: ["f1": "focus", "f2": "focus", "s1": "satellite", "s2": "satellite",
+                     "b1": "backlog"],
+            tierOrder: ["focus": ["f1", "f2"], "satellite": ["s1", "s2"], "backlog": ["b1"]],
+            customTiers: []
         )
-        XCTAssertEqual(hidden.first?.count, 2, "the count follows the rows")
-        XCTAssertEqual(hidden.first?.rows.count, 2)
-        XCTAssertEqual(hidden.first?.hiddenDone, 1, "and says how many it is suppressing")
+        for band in bands {
+            XCTAssertTrue(band.rows.allSatisfy { !$0.isDone },
+                "\(band.bandId) drew a completed row on a board nobody has expanded")
+        }
+        XCTAssertEqual(bands.map { $0.count }, [1, 1, 0], "every heading counts open work")
+        XCTAssertEqual(bands.map { $0.hiddenDone }, [1, 1, 1],
+            "and every one of them says how many it is holding back")
+    }
+
+    /// The toggle is the ONLY thing that brings them back, and it brings back exactly
+    /// the band it was tapped on — a fold nobody can undo would be a delete.
+    func testExpandingOneBandBringsBackThatBandsDoneRowsOnly() {
+        let tasks = [
+            task("f1"), task("f2", status: "done", phase: "COMPLETE"),
+            task("s1"), task("s2", status: "done", phase: "COMPLETE"),
+        ]
+        func bands(_ shown: Set<String>) -> [BoardBand] {
+            BoardModel.bands(
+                tasks: tasks, sessions: [],
+                tierOf: ["f1": "focus", "f2": "focus", "s1": "satellite", "s2": "satellite"],
+                tierOrder: ["focus": ["f1", "f2"], "satellite": ["s1", "s2"]],
+                customTiers: [], shownDoneTiers: shown
+            )
+        }
+        let expanded = bands(["focus"])
+        XCTAssertEqual(expanded.first(where: { $0.bandId == "focus" })?.rows.map(\.id),
+            ["f1", "f2"], "the expanded band shows its done row, in place")
+        XCTAssertEqual(expanded.first(where: { $0.bandId == "focus" })?.hiddenDone, 0)
+        XCTAssertEqual(expanded.first(where: { $0.bandId == "satellite" })?.rows.map(\.id),
+            ["s1"], "the band nobody touched is still folded")
+
+        // …and folding it again is the same board it started as, so the toggle is a
+        // round trip rather than a one-way door.
+        XCTAssertEqual(bands([]).map { $0.rows.map(\.id) },
+                       [["f1"], ["s1"]])
+        XCTAssertEqual(bands(["focus"]).map { $0.rows.map(\.id) },
+                       [["f1", "f2"], ["s1"]])
     }
 
     // MARK: - Done stays in place
@@ -225,25 +283,31 @@ final class TaskBoardModelTests: XCTestCase {
     /// The load-bearing rule: completing a task does NOT move it. Its position
     /// is the memory of where the work happened, so it stays exactly where it was
     /// (struck through) rather than folding to the bottom of the band.
+    ///
+    /// Stated on an EXPANDED band, which is where the rule is now observable: folded is
+    /// the default, and a folded band has no position to argue about. The rule itself is
+    /// untouched by the flip — what the fold decides is whether the row is drawn, never
+    /// where.
     func testCompletingATaskDoesNotMoveItWithinItsBand() {
         let order = ["focus": ["a", "b", "c"]]
         let tierOf = ["a": "focus", "b": "focus", "c": "focus"]
         let before = BoardModel.bands(
             tasks: [task("a"), task("b"), task("c")], sessions: [],
-            tierOf: tierOf, tierOrder: order, customTiers: []
+            tierOf: tierOf, tierOrder: order, customTiers: [], shownDoneTiers: ["focus"]
         )
         // Same tasks; the MIDDLE one is now done.
         let after = BoardModel.bands(
             tasks: [task("a"), task("b", status: "done", phase: "COMPLETE"), task("c")],
-            sessions: [], tierOf: tierOf, tierOrder: order, customTiers: []
+            sessions: [], tierOf: tierOf, tierOrder: order, customTiers: [],
+            shownDoneTiers: ["focus"]
         )
         XCTAssertEqual(before.first?.rows.map(\.id), after.first?.rows.map(\.id),
             "a completion must not reorder the band")
         XCTAssertEqual(after.first?.rows[1].isDone, true, "it is struck through IN PLACE")
     }
 
-    /// `hide done` is PER BAND: hiding in Focus must not silently hide the done
-    /// rows in Satellite, which the user isn't even looking at.
+    /// The done fold is PER BAND in both directions: expanding Focus must not also
+    /// unfold Satellite, which the user isn't even looking at.
     func testHideDoneAffectsOnlyItsOwnBand() {
         let tasks = [
             task("f1"), task("f2", status: "done", phase: "COMPLETE"),
@@ -253,19 +317,21 @@ final class TaskBoardModelTests: XCTestCase {
             tasks: tasks, sessions: [],
             tierOf: ["f1": "focus", "f2": "focus", "s1": "satellite", "s2": "satellite"],
             tierOrder: ["focus": ["f1", "f2"], "satellite": ["s1", "s2"]],
-            customTiers: [], hiddenDoneTiers: ["focus"]
+            customTiers: [], shownDoneTiers: ["satellite"]
         )
         XCTAssertEqual(bands.first(where: { $0.bandId == "focus" })?.rows.map(\.id), ["f1"])
         XCTAssertEqual(bands.first(where: { $0.bandId == "satellite" })?.rows.map(\.id), ["s1", "s2"])
     }
 
-    /// A band that is ALL done and hiding must still render its heading, or the
-    /// `show done` toggle that would bring the rows back would be gone too.
+    /// A band that is ALL done and folded must still render its heading, or the
+    /// `show done (N)` toggle that would bring the rows back would be gone too. With
+    /// folding the default this is the shape of a whole finished band on a cold board,
+    /// not an edge case someone has to reach by tapping.
     func testABandHidingEveryRowKeepsItsHeading() {
         let bands = BoardModel.bands(
             tasks: [task("d", status: "done", phase: "COMPLETE")], sessions: [],
             tierOf: ["d": "focus"], tierOrder: ["focus": ["d"]],
-            customTiers: [], hiddenDoneTiers: ["focus"]
+            customTiers: []
         )
         XCTAssertEqual(bands.map(\.bandId), ["focus"])
         XCTAssertEqual(bands.first?.rows.count, 0)
@@ -316,7 +382,11 @@ final class TaskBoardModelTests: XCTestCase {
             // `busy` even has a live session, which is the strongest claim an
             // unpinned task can make — and it is still not a pin.
             sessions: [session("s", taskId: "busy", status: "running")],
-            tierOf: ["filed": "focus"], tierOrder: ["focus": ["filed"]], customTiers: []
+            tierOf: ["filed": "focus"], tierOrder: ["focus": ["filed"]], customTiers: [],
+            // MEMBERSHIP is the question here, not the done fold, so the band `finished`
+            // lands in (a pin with no tier takes the default one) is expanded — a folded
+            // row would leave "pinned but finished" and "not pinned at all" looking alike.
+            shownDoneTiers: [BoardModel.defaultTierId]
         )
         let shown = Set(bands.flatMap(\.rows).map(\.id))
         XCTAssertEqual(shown, ["filed", "finished"],
@@ -705,11 +775,12 @@ final class TaskBoardModelTests: XCTestCase {
         }
     }
 
-    /// `hide done` folds a band's completions and the heading says how many, in EVERY
-    /// band. This used to be the tail band's asymmetry: `unfiledRows` never read the
+    /// The done fold applies to EVERY band and the heading says how many, both ways
+    /// round. This used to be the tail band's asymmetry: `unfiledRows` never read the
     /// hide-done set, so the one band that actually buried live work under a completed
     /// backlog (2,903 of 3,161 rows) was the one band that could not be folded. That
-    /// band is gone; the uniform rule is what is pinned now.
+    /// band is gone; the uniform rule is what is pinned now — and the fold is what the
+    /// board opens on.
     func testEveryBandFoldsItsDoneRowsAndSaysHowMany() {
         let tasks = [
             task("live"),
@@ -719,20 +790,20 @@ final class TaskBoardModelTests: XCTestCase {
         let tierOf = ["live": "satellite", "done1": "satellite", "done2": "satellite"]
         let tierOrder = ["satellite": ["live", "done1", "done2"]]
 
-        let visible = BoardModel.bands(
+        let folded = BoardModel.bands(
             tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: tierOrder,
             customTiers: [], now: Self.now
         )
-        XCTAssertEqual(visible.first?.rows.map(\.id), ["live", "done1", "done2"],
-            "with the toggle off a completed task stays exactly where it was")
-        XCTAssertEqual(visible.first?.hiddenDone, 0)
-
-        let folded = BoardModel.bands(
-            tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: tierOrder,
-            customTiers: [], hiddenDoneTiers: ["satellite"], now: Self.now
-        )
         XCTAssertEqual(folded.first?.rows.map(\.id), ["live"])
         XCTAssertEqual(folded.first?.hiddenDone, 2, "the heading says what to un-hide")
+
+        let visible = BoardModel.bands(
+            tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: tierOrder,
+            customTiers: [], shownDoneTiers: ["satellite"], now: Self.now
+        )
+        XCTAssertEqual(visible.first?.rows.map(\.id), ["live", "done1", "done2"],
+            "expanded, a completed task is exactly where it always was")
+        XCTAssertEqual(visible.first?.hiddenDone, 0)
     }
 
     /// Folding every row in a band still leaves the band, so the `show done (N)`
@@ -741,7 +812,7 @@ final class TaskBoardModelTests: XCTestCase {
         let bands = BoardModel.bands(
             tasks: [task("d", status: "done", phase: "COMPLETE")], sessions: [],
             tierOf: ["d": "backlog"], tierOrder: ["backlog": ["d"]], customTiers: [],
-            hiddenDoneTiers: ["backlog"], now: Self.now
+            now: Self.now
         )
         XCTAssertEqual(bands.map(\.bandId), ["backlog"])
         XCTAssertEqual(bands.first?.rows.count, 0)
@@ -803,7 +874,15 @@ final class TaskBoardModelTests: XCTestCase {
             BoardModel.rowIds(BoardModel.bands(
                 tasks: tasks, sessions: sessions, tierOf: tierOf, tierOrder: tierOrder,
                 customTiers: [], query: query, grouping: grouping,
-                dateFilter: dateFilter, now: Self.now
+                dateFilter: dateFilter,
+                // `done` is expanded in BOTH groupings (it is a tier band under one and a
+                // project band under the other), because the question here is the
+                // POPULATION: a row folded on one side and drawn on the other would make
+                // the two groupings differ for a reason that has nothing to do with
+                // grouping, and a row folded on both would take `done` out of the case
+                // entirely.
+                shownDoneTiers: ["backlog", BoardModel.projectBandPrefix + "marina"],
+                now: Self.now
             ))
         }
 
@@ -846,9 +925,10 @@ final class TaskBoardModelTests: XCTestCase {
         }
     }
 
-    /// `hide done` is keyed by BAND id, and a project literally called "focus"
+    /// The done fold is keyed by BAND id, and a project literally called "focus"
     /// must not inherit the Focus tier's switch. That is the entire reason
-    /// project bands are namespaced.
+    /// project bands are namespaced — and it matters MORE now that the switch is an
+    /// expand: a key that leaked would show completions nobody asked to see.
     func testHideDoneIsKeyedByBandIdSoAProjectCannotCollideWithATier() {
         let tasks = [
             task("t1", project: "focus"),
@@ -856,21 +936,21 @@ final class TaskBoardModelTests: XCTestCase {
         ]
         let bands = BoardModel.bands(
             tasks: tasks, sessions: [], tierOf: [:], tierOrder: [:], customTiers: [],
-            grouping: .project, hiddenDoneTiers: ["focus"], now: Self.now
+            grouping: .project, shownDoneTiers: ["focus"], now: Self.now
         )
         XCTAssertEqual(bands.map(\.bandId), [BoardModel.projectBandPrefix + "focus"])
-        XCTAssertEqual(bands.first?.rows.map(\.id), ["t1", "t2"],
-            "the tier's key must not hide the same-named project's done row")
-        XCTAssertEqual(bands.first?.hiddenDone, 0)
+        XCTAssertEqual(bands.first?.rows.map(\.id), ["t1"],
+            "the TIER's key must not expand the same-named project's done row")
+        XCTAssertEqual(bands.first?.hiddenDone, 1, "and the heading says what to un-hide")
 
-        // The project's OWN key does hide it.
-        let hidden = BoardModel.bands(
+        // The project's OWN key does expand it.
+        let shown = BoardModel.bands(
             tasks: tasks, sessions: [], tierOf: [:], tierOrder: [:], customTiers: [],
-            grouping: .project, hiddenDoneTiers: [BoardModel.projectBandPrefix + "focus"],
+            grouping: .project, shownDoneTiers: [BoardModel.projectBandPrefix + "focus"],
             now: Self.now
         )
-        XCTAssertEqual(hidden.first?.rows.map(\.id), ["t1"])
-        XCTAssertEqual(hidden.first?.hiddenDone, 1, "and the heading says what to un-hide")
+        XCTAssertEqual(shown.first?.rows.map(\.id), ["t1", "t2"])
+        XCTAssertEqual(shown.first?.hiddenDone, 0)
     }
 
     // MARK: - Folders nested inside their project (the desktop console's tree)
@@ -915,13 +995,13 @@ final class TaskBoardModelTests: XCTestCase {
         tasks rows: [WalnutTask]? = nil,
         folders: [TaskFolder]? = nil,
         query: String = "",
-        hiddenDoneTiers: Set<String> = [],
+        shownDoneTiers: Set<String> = [],
         grouping: BoardGrouping = .project
     ) -> [BoardBand] {
         BoardModel.bands(
             tasks: rows ?? folderFixtureTasks, sessions: [],
             tierOf: [:], tierOrder: [:], customTiers: [],
-            query: query, grouping: grouping, hiddenDoneTiers: hiddenDoneTiers,
+            query: query, grouping: grouping, shownDoneTiers: shownDoneTiers,
             folders: BoardFolderIndex.build(folders ?? folderFixture), now: Self.now
         )
     }
@@ -975,13 +1055,18 @@ final class TaskBoardModelTests: XCTestCase {
             // pinned board at all — the folder must not drag it back on.
             TaskFolder(groupId: "g_done", label: "Shipped", memberIds: ["done", "unpinned"], project: "marina"),
         ]
+        // The bands `done` lands in, one per grouping (the default tier under `.tier`,
+        // its FOLDER under `.project`) — expanded so the completed row is part of the
+        // population this case compares, the same reason
+        // `testSwitchingGroupingNeverChangesThePopulation` names two keys.
+        let expanded: Set<String> = [BoardModel.defaultTierId, "folder:g_done"]
         for dateFilter in BoardDateFilter.allCases {
             for query in ["", "marina", "m", "nothing-matches-this"] {
                 func ids(_ grouping: BoardGrouping) -> [String] {
                     BoardModel.bands(
                         tasks: rows, sessions: [], tierOf: [:], tierOrder: [:],
                         customTiers: [], query: query, grouping: grouping,
-                        dateFilter: dateFilter,
+                        dateFilter: dateFilter, shownDoneTiers: expanded,
                         folders: BoardFolderIndex.build(folders), now: Self.now
                     ).flatMap { $0.rows.map(\.id) }
                 }
@@ -994,8 +1079,15 @@ final class TaskBoardModelTests: XCTestCase {
         }
         // …and "identical" is not two empties: the pinned set is what both show.
         XCTAssertEqual(
-            Set(folderBands(tasks: rows, folders: folders).flatMap { $0.rows.map(\.id) }),
+            Set(folderBands(tasks: rows, folders: folders, shownDoneTiers: expanded)
+                .flatMap { $0.rows.map(\.id) }),
             ["i1", "i2", "m1", "m2", "m3", "a1", "done"]
+        )
+        // Fold it back (the default) and `done` is the ONE row that leaves — the fold
+        // takes completions out of the band and nothing else out of the board.
+        XCTAssertEqual(
+            Set(folderBands(tasks: rows, folders: folders).flatMap { $0.rows.map(\.id) }),
+            ["i1", "i2", "m1", "m2", "m3", "a1"]
         )
     }
 
@@ -1094,8 +1186,10 @@ final class TaskBoardModelTests: XCTestCase {
         XCTAssertTrue(bands.isEmpty)
     }
 
-    /// `hide done` is per BAND, and a folder band is a band: folding one must not touch
-    /// its project's loose rows or its sibling folders.
+    /// The done fold is per BAND, and a folder band is a band: expanding one must not
+    /// touch its project's loose rows or its sibling folders. Expressed as "the project
+    /// band is the one expanded, the folder keeps the default fold", which is the
+    /// direction a reader actually travels now.
     func testHideDoneFoldsOneFolderBandOnly() {
         let rows = [
             task("m1", project: "marina"),
@@ -1107,12 +1201,13 @@ final class TaskBoardModelTests: XCTestCase {
             groupId: "g_alpha", label: "Alpha", memberIds: ["f1", "fdone"], project: "marina"
         )]
         let bands = folderBands(
-            tasks: rows, folders: folders, hiddenDoneTiers: ["folder:g_alpha"]
+            tasks: rows, folders: folders, shownDoneTiers: ["proj:marina"]
         )
         XCTAssertEqual(bands.map(\.bandId), ["proj:marina", "folder:g_alpha"])
-        XCTAssertEqual(bands[0].rows.map(\.id), ["m1", "mdone"], "the project band is untouched")
+        XCTAssertEqual(bands[0].rows.map(\.id), ["m1", "mdone"], "the expanded band shows its done row")
         XCTAssertEqual(bands[0].hiddenDone, 0)
-        XCTAssertEqual(bands[1].rows.map(\.id), ["f1"])
+        XCTAssertEqual(bands[1].rows.map(\.id), ["f1"],
+            "the folder inside it keeps the default fold")
         XCTAssertEqual(bands[1].hiddenDone, 1, "and the folder heading says what to un-hide")
     }
 
@@ -1463,18 +1558,90 @@ final class TaskBoardModelTests: XCTestCase {
         XCTAssertEqual(bandChips.map(\.count), bands.map(\.count))
     }
 
-    /// A chip's count is the band's VISIBLE count, so `hide done` moves both
+    /// A chip's count is the band's VISIBLE count, so the done fold moves both
     /// together. A chip that counted hidden rows would disagree with the heading
     /// immediately below it.
+    ///
+    /// This is the reported defect at chip scale: the bar said `Focus 75` over 16 open
+    /// rows because the fold was opt-out. Default folded, the chip is the OPEN count,
+    /// and it grows by exactly the N in `show done (N)` when that band is expanded.
     func testChipCountsFollowTheVisibleRowsLikeTheHeadingDoes() {
         let tasks = [task("a"), task("b", status: "done", phase: "COMPLETE")]
+        func chips(_ shown: Set<String>) -> [BoardModel.BandChip] {
+            BoardModel.chips(BoardModel.bands(
+                tasks: tasks, sessions: [], tierOf: ["a": "focus", "b": "focus"],
+                tierOrder: ["focus": ["a", "b"]], customTiers: [], shownDoneTiers: shown
+            ))
+        }
+        XCTAssertEqual(chips([]).first?.count, 1, "All counts what the board shows")
+        XCTAssertEqual(chips([]).last?.count, 1, "and so does the band's own chip")
+        XCTAssertEqual(chips(["focus"]).first?.count, 2, "expanding the band grows both")
+        XCTAssertEqual(chips(["focus"]).last?.count, 2)
+    }
+
+    /// The invariant, stated at the number the user reads: **`All` is the sum of what the
+    /// bands show, and on a default board that is the OPEN count.** Both halves are
+    /// asserted against the rows rather than against a constant, and then against the
+    /// count of open tasks in the fixture, so a fold that dropped a row from a band but
+    /// not from the chip (or the reverse) fails here.
+    func testTheAllChipIsTheOpenCountAndTheSumOfTheBandsAtTheSameTime() {
+        let tasks = [
+            task("f1"), task("f2", status: "done", phase: "COMPLETE"),
+            task("f3"), task("s1"), task("s2", status: "done", phase: "COMPLETE"),
+            task("b1", status: "done", phase: "COMPLETE"),
+            task("w1"),
+        ]
+        let tierOf = ["f1": "focus", "f2": "focus", "f3": "focus", "s1": "satellite",
+                      "s2": "satellite", "b1": "backlog", "w1": "wait"]
+        let tierOrder = ["focus": ["f1", "f2", "f3"], "satellite": ["s1", "s2"],
+                         "backlog": ["b1"], "wait": ["w1"]]
+        let open = tasks.count { !$0.isDone }
+
         let bands = BoardModel.bands(
-            tasks: tasks, sessions: [], tierOf: ["a": "focus", "b": "focus"],
-            tierOrder: ["focus": ["a", "b"]], customTiers: [], hiddenDoneTiers: ["focus"]
+            tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: tierOrder, customTiers: []
         )
-        let chips = BoardModel.chips(bands)
-        XCTAssertEqual(chips.first?.count, 1, "All counts what the board shows")
-        XCTAssertEqual(chips.last?.count, bands.first?.count)
+        let all = BoardModel.chips(bands).first
+        XCTAssertEqual(all?.count, bands.reduce(0) { $0 + $1.count },
+            "All must be the sum of the band counts")
+        XCTAssertEqual(all?.count, bands.flatMap(\.rows).count,
+            "…which is the number of rows the board is drawing")
+        XCTAssertEqual(all?.count, open, "…which on a default board is the OPEN count (4 of 7)")
+
+        // Expand every band and All grows by exactly the folded rows it was holding
+        // back — the same rows, still counted once.
+        let expandedAll = BoardModel.chips(BoardModel.bands(
+            tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: tierOrder,
+            customTiers: [], shownDoneTiers: Set(bands.map(\.bandId))
+        )).first
+        XCTAssertEqual(expandedAll?.count, tasks.count)
+        XCTAssertEqual(expandedAll?.count,
+                       (all?.count ?? 0) + bands.reduce(0) { $0 + $1.hiddenDone })
+    }
+
+    /// An explicit expand is the reader's decision and it OUTLIVES the store: a task
+    /// arriving, a title changing, any refresh that rebuilds the bands must not re-fold
+    /// a band that was opened. The set is the view's state and the model is pure, so the
+    /// property to pin here is that the same set keeps producing the same answer over
+    /// changed inputs — which is what `BoardBandsKey.shownDoneBands` then carries
+    /// through the memo (`BoardBandsCacheTests.testEveryInputInvalidates`).
+    func testAnExpandedBandStaysExpandedWhenTheStoreChangesUnderneathIt() {
+        let base = [task("a"), task("b", status: "done", phase: "COMPLETE")]
+        func rows(_ tasks: [WalnutTask], order: [String]) -> [String] {
+            BoardModel.bands(
+                tasks: tasks, sessions: [],
+                tierOf: Dictionary(uniqueKeysWithValues: order.map { ($0, "focus") }),
+                tierOrder: ["focus": order], customTiers: [], shownDoneTiers: ["focus"]
+            ).first?.rows.map(\.id) ?? []
+        }
+        XCTAssertEqual(rows(base, order: ["a", "b"]), ["a", "b"])
+        // A new task lands in the same band…
+        XCTAssertEqual(rows(base + [task("c")], order: ["a", "b", "c"]), ["a", "b", "c"],
+            "a store change must not re-fold a band the reader opened")
+        // …and so does another completion.
+        XCTAssertEqual(
+            rows(base + [task("c", status: "done", phase: "COMPLETE")], order: ["a", "b", "c"]),
+            ["a", "b", "c"]
+        )
     }
 
     func testAnEmptyBoardStillOffersTheAllChip() {
@@ -1516,15 +1683,15 @@ final class TaskBoardModelTests: XCTestCase {
 
         for grouping in BoardGrouping.allCases {
             for dateFilter in BoardDateFilter.allCases {
-                for hidden in [Set<String>(), ["focus"], [BoardModel.projectBandPrefix + "marina"]] {
+                for shown in [Set<String>(), ["focus"], [BoardModel.projectBandPrefix + "marina"]] {
                     for query in ["", "1", "marina"] {
                         let bands = BoardModel.bands(
                             tasks: tasks, sessions: sessions, tierOf: tierOf,
                             tierOrder: tierOrder, customTiers: [], query: query,
                             grouping: grouping, dateFilter: dateFilter,
-                            hiddenDoneTiers: hidden, now: Self.now
+                            shownDoneTiers: shown, now: Self.now
                         )
-                        let state = "grouping=\(grouping) date=\(dateFilter) hidden=\(hidden.sorted()) query=\"\(query)\""
+                        let state = "grouping=\(grouping) date=\(dateFilter) shown=\(shown.sorted()) query=\"\(query)\""
                         let rows = bands.flatMap(\.rows).count
                         XCTAssertEqual(
                             BoardModel.chips(bands).first?.count, rows,
@@ -1917,7 +2084,7 @@ final class TaskBoardModelTests: XCTestCase {
             "backlog": "backlog",
             "wait": "wait",
             // The retired tail band's id. Kept in this table on purpose: a stored
-            // `hiddenDoneBands` entry or an old automation flow can still name it, and
+            // `shownDoneBands` entry or an old automation flow can still name it, and
             // the fold must keep answering the same string it always did.
             "unpinned": "unpinned",
             "ct_abc12345": "ct_abc12345",
@@ -2739,11 +2906,11 @@ final class BoardBandsCacheTests: XCTestCase {
 
     private func key(
         gen: UInt64 = 1, query: String = "", grouping: BoardGrouping = .tier,
-        dateFilter: BoardDateFilter = .all, hiddenDone: Set<String> = [], nowBucket: Int = 0
+        dateFilter: BoardDateFilter = .all, shownDone: Set<String> = [], nowBucket: Int = 0
     ) -> BoardBandsKey {
         BoardBandsKey(
             inputsGen: gen, query: query, grouping: grouping, dateFilter: dateFilter,
-            hiddenDoneBands: hiddenDone, nowBucket: nowBucket
+            shownDoneBands: shownDone, nowBucket: nowBucket
         )
     }
 
@@ -2778,7 +2945,9 @@ final class BoardBandsCacheTests: XCTestCase {
             ("a keystroke", key(query: "alpha")),
             ("the grouping control", key(grouping: .project)),
             ("the date filter", key(dateFilter: .now)),
-            ("a band's hide-done toggle", key(hiddenDone: ["focus"])),
+            // An explicit expand has to survive the memo, or the tap would look like it
+            // did nothing until some unrelated input happened to move the key.
+            ("a band's done toggle", key(shownDone: ["focus"])),
             ("the clock, under the .now filter", key(dateFilter: .now, nowBucket: 1)),
         ]
         for (what, changed) in variants {

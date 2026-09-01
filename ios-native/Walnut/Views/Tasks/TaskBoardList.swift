@@ -68,9 +68,12 @@ import SwiftUI
 struct TaskBoardList: View {
     let bands: [BoardBand]
     let tierChoices: [(id: String, label: String)]
-    /// Band ids whose `hide done` is on. A BAND id, not a tier id: under project
-    /// grouping these are `proj:<name>`, which is why the model namespaces them.
-    let hiddenDoneBands: Set<String>
+    // No `hiddenDoneBands` here on purpose. The heading's toggle is phrased from the
+    // BAND (`BoardModel.doneToggle`), which is the only thing that knows how many rows
+    // it is actually suppressing; handing the view the set as well would let the label
+    // and the rows disagree — and with folding now the DEFAULT, the set's own answer
+    // for an untouched band ("not expanded") says nothing about whether that band has
+    // anything to expand.
     /// Which band's create row is open, by band id (nil = none).
     let openCreateBand: String?
     /// Just-created row id — its whole row takes a green tint so its landing place is
@@ -433,10 +436,10 @@ struct TaskBoardList: View {
     /// — the same colour as a link, the same weight as the heading, no shape of its own —
     /// so a toggle that changes what the band shows looked like part of the band's name.
     private func hideDoneButton(_ band: BoardBand) -> some View {
-        let hidden = hiddenDoneBands.contains(band.bandId)
-        let word = hidden
-            ? "show done\(band.hiddenDone > 0 ? " (\(band.hiddenDone))" : "")"
-            : "hide done"
+        // ONE value decides the word, the glyph and the VoiceOver label, and it is read
+        // off the band rather than off a set the view holds — see `BoardModel.doneToggle`.
+        let toggle = BoardModel.doneToggle(band)
+        let word = toggle.word
         return Button {
             onToggleHideDone(band.bandId)
         } label: {
@@ -448,7 +451,7 @@ struct TaskBoardList: View {
                 } else {
                     // The glyph says the same thing the word does: an eye that is closed
                     // hides, an open one shows.
-                    Image(systemName: hidden ? "eye" : "eye.slash")
+                    Image(systemName: toggle.glyph)
                 }
             }
             .font(.system(BoardHeadingType.control, weight: .semibold))

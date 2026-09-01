@@ -92,7 +92,7 @@ struct TasksView: View {
 
     // MARK: - Board state (the default filter's bands)
     //
-    // Bands hiding their done rows, and which band's create row is open. Both are
+    // Bands showing their done rows, and which band's create row is open. Both are
     // sets/optionals of BAND ids rather than per-row view state so a store refresh
     // can't reset them. (There is no expanded-row state: a row's tap opens its
     // session — the row itself never grows.)
@@ -102,8 +102,16 @@ struct TasksView: View {
     // precisely so the two groupings can share this state without a project
     // called "focus" inheriting the Focus tier's hide-done switch.
 
-    /// Bands whose `hide done` is on, by band id.
-    @State private var hiddenDoneBands: Set<String> = []
+    /// Bands the reader has EXPANDED to show their done rows, by band id.
+    ///
+    /// Empty is the shipped default and it means every band folds its completions
+    /// (`BoardModel.bands(shownDoneTiers:)`), so the board opens on open work: the
+    /// counts on the headings and the chips are then open counts, which is what the
+    /// screen is for. This set is the exception, one explicit tap per band, and it
+    /// lives here (not per row, not per launch preference) for the same reason
+    /// `openCreateBand` does: a store refresh must not silently re-fold a band the
+    /// reader just opened.
+    @State private var shownDoneBands: Set<String> = []
     /// Which band's foot create row is open, by band id (exactly one: two
     /// keyboards on one list is not a thing).
     @State private var openCreateBand: String?
@@ -1488,7 +1496,7 @@ struct TasksView: View {
             query: trimmedQuery,
             grouping: grouping.wrappedValue,
             dateFilter: filter,
-            hiddenDoneBands: hiddenDoneBands,
+            shownDoneBands: shownDoneBands,
             // `.all` admits every row regardless of the clock, so its bands are
             // time-independent and the bucket is a constant. Under `.now` a start date
             // that passes has to show up, and a minute is the granularity that costs one
@@ -1505,10 +1513,10 @@ struct TasksView: View {
                 query: trimmedQuery,
                 grouping: grouping.wrappedValue,
                 dateFilter: filter,
-                // The model still spells this parameter `hiddenDoneTiers`; what it
-                // matches against is `bandId`, which is a tier id only under tier
-                // grouping. The set we hold is named for what it really holds.
-                hiddenDoneTiers: hiddenDoneBands,
+                // The model spells this parameter `shownDoneTiers`; what it matches
+                // against is `bandId`, which is a tier id only under tier grouping.
+                // Empty = every band folds its done rows, which is the default.
+                shownDoneTiers: shownDoneBands,
                 // Used by project grouping only. Empty (a server without the endpoint,
                 // a failed fetch, an offline cold start) = the flat project bands.
                 folders: folders,
@@ -1599,7 +1607,6 @@ struct TasksView: View {
             TaskBoardList(
                 bands: bands,
                 tierChoices: tasks.allTierChoices,
-                hiddenDoneBands: hiddenDoneBands,
                 openCreateBand: openCreateBand,
                 newRowId: highlightedTaskId,
                 tierOf: tasks.taskTiers,
@@ -1608,8 +1615,8 @@ struct TasksView: View {
                 resolvingRowId: resolvingRowId,
                 onToggleHideDone: { bandId in
                     withAnimation(.snappy(duration: 0.2)) {
-                        if hiddenDoneBands.contains(bandId) { hiddenDoneBands.remove(bandId) }
-                        else { hiddenDoneBands.insert(bandId) }
+                        if shownDoneBands.contains(bandId) { shownDoneBands.remove(bandId) }
+                        else { shownDoneBands.insert(bandId) }
                     }
                 },
                 onToggleCreate: { bandId in

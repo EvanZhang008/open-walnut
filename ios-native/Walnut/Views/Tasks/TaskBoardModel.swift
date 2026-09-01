@@ -199,8 +199,10 @@ struct BoardBand: Identifiable, Equatable {
     let bandId: String
     let label: String
     let rows: [BoardRow]
-    /// Rows this band is currently suppressing because `hide done` is on. Shown
-    /// on the heading so hiding is never a silent disappearance.
+    /// Rows this band is currently suppressing because its done rows are folded —
+    /// which is the DEFAULT now (see `bands(shownDoneTiers:)`), so on a board nobody
+    /// has touched this is nonzero wherever a band has completed work. Shown on the
+    /// heading (`show done (N)`) so folding is never a silent disappearance.
     let hiddenDone: Int
     /// What the foot's `+` creates, or nil for a band with no create affordance.
     ///
@@ -221,9 +223,15 @@ struct BoardBand: Identifiable, Equatable {
     var nest: BoardBandNest? = nil
 
     var id: String { bandId }
-    /// The heading's number is what you can actually SEE in the band — toggling
-    /// `hide done` changes it, which is the feedback that the toggle worked. A
-    /// count that included hidden rows would disagree with the rows below it.
+    /// The heading's number is what you can actually SEE in the band — toggling the
+    /// done fold changes it, which is the feedback that the toggle worked. A count
+    /// that included hidden rows would disagree with the rows below it.
+    ///
+    /// Since done rows fold by default, this reads as the band's OPEN count on a
+    /// board nobody has expanded, and the chip above it carries the same number
+    /// (`chips` reads it off the band). Expand a band and it counts what is then on
+    /// screen, done included: still "what you can see", and the `show done (N)` label
+    /// is what carries the done count in the folded state.
     var count: Int { rows.count }
 }
 
@@ -565,6 +573,39 @@ enum BoardModel {
         return row.knownSessionIds == nil ? .unknown : .start
     }
 
+    // MARK: - The band's done toggle
+
+    /// What a band's done toggle says and which way it points — as ONE value, read off
+    /// the BAND.
+    ///
+    /// The band is the only thing that knows: `hiddenDone` is how many rows it is
+    /// actually suppressing, computed in the same pass that built the rows. The view
+    /// used to phrase this from the expanded/folded SET instead, which was harmless
+    /// while showing was the default and is not any more: with folding the default,
+    /// every band would offer `show done` — including the ones with nothing done to
+    /// show, i.e. a control that promises rows that do not exist. Same defect shape as
+    /// `affordance` vs `hasKnownSession`: a label phrased from state the label's own
+    /// subject can contradict.
+    struct DoneToggle: Equatable {
+        /// True while the band is suppressing rows, so the toggle offers to SHOW them.
+        let folding: Bool
+        /// The word (and the VoiceOver label): `show done (N)` while folding N rows,
+        /// `hide done` otherwise. A band with no done rows at all reads `hide done` —
+        /// tapping it is a no-op either way, and it is the phrase that band has always
+        /// shown, so the flip introduces no new wording where there is nothing to fold.
+        let word: String
+
+        /// Closed eye hides, open eye shows — the glyph the heading falls back to when
+        /// Dynamic Type takes the word away.
+        var glyph: String { folding ? "eye" : "eye.slash" }
+    }
+
+    static func doneToggle(_ band: BoardBand) -> DoneToggle {
+        band.hiddenDone > 0
+            ? DoneToggle(folding: true, word: "show done (\(band.hiddenDone))")
+            : DoneToggle(folding: false, word: "hide done")
+    }
+
     // MARK: - "This row wants a human" (the red row)
 
     /// The desktop's rule, verbatim (`web/src/utils/session-status.ts`
@@ -693,10 +734,21 @@ enum BoardModel {
     ///     "never asked", which is not the same as "no sessions" — see
     ///     `BoardRow.knownSessionIds`. Empty (the default) is the state a cold board
     ///     starts in and every row behaves exactly as it did before this existed.
-    ///   - hiddenDoneTiers: bands whose `hide done` is on. Done rows are dropped
-    ///     from those bands only — everywhere else a completed task stays EXACTLY
-    ///     where it was, struck through, because the position is the memory of
-    ///     where the work happened.
+    ///   - shownDoneTiers: the bands that are showing their done rows. Done FOLDS BY
+    ///     DEFAULT (the empty set = every band folded), so this is the EXCEPTION set:
+    ///     the bands the reader explicitly expanded with `show done (N)`.
+    ///
+    ///     The default is the flip this parameter's name records. It used to be
+    ///     `hiddenDoneTiers`, an opt-OUT set, so the board counted and drew every
+    ///     completed pin until you folded each band by hand — measured on the real
+    ///     store: `Focus 75` over 16 open rows, `All 270` over 91, with 179 of the
+    ///     270 finished. A working set's question is what is still open, so that is
+    ///     what the band, its heading count and its chip now answer; a completed row
+    ///     is memory, one tap away and never deleted.
+    ///
+    ///     What did NOT change: inside a band that IS showing its done rows, a
+    ///     completed task stays EXACTLY where it was, struck through, because the
+    ///     position is the memory of where the work happened.
     ///   - now: injected so the date filter is testable without a clock.
     static func bands(
         tasks: [WalnutTask],
@@ -707,7 +759,7 @@ enum BoardModel {
         query: String = "",
         grouping: BoardGrouping = .tier,
         dateFilter: BoardDateFilter = .all,
-        hiddenDoneTiers: Set<String> = [],
+        shownDoneTiers: Set<String> = [],
         folders: BoardFolderIndex = .empty,
         knownSessionIds: [String: [String]] = [:],
         now: Date = Date()
@@ -806,14 +858,14 @@ enum BoardModel {
         if grouping == .project {
             return projectBands(
                 rows: order.compactMap { rowById[$0] }, query: query,
-                dateFilter: dateFilter, hiddenDoneTiers: hiddenDoneTiers,
+                dateFilter: dateFilter, shownDoneTiers: shownDoneTiers,
                 folders: folders, now: now
             )
         }
         return tierBands(
             rowById: rowById, tierById: tierById, order: order,
             tiers: tiers, tierOrder: tierOrder, query: query,
-            dateFilter: dateFilter, hiddenDoneTiers: hiddenDoneTiers, now: now
+            dateFilter: dateFilter, shownDoneTiers: shownDoneTiers, now: now
         )
     }
 
@@ -832,7 +884,7 @@ enum BoardModel {
         tierOrder: [String: [String]],
         query: String,
         dateFilter: BoardDateFilter,
-        hiddenDoneTiers: Set<String>,
+        shownDoneTiers: Set<String>,
         now: Date
     ) -> [BoardBand] {
         var extrasByTier: [String: [String]] = [:]
@@ -851,7 +903,9 @@ enum BoardModel {
             // `filter`/`count` calls over the same array is three walks and two
             // throwaway arrays per band per body pass; a band is rebuilt on every
             // keystroke, so the pass count is what the budget notices.
-            let hidingDone = hiddenDoneTiers.contains(tier.id)
+            // Folded unless this band was explicitly expanded — the default, not the
+            // exception (see `shownDoneTiers`).
+            let hidingDone = !shownDoneTiers.contains(tier.id)
             var rows: [BoardRow] = []
             rows.reserveCapacity(ids.count)
             var doneCount = 0
@@ -909,7 +963,7 @@ enum BoardModel {
         rows source: [BoardRow],
         query: String,
         dateFilter: BoardDateFilter,
-        hiddenDoneTiers: Set<String>,
+        shownDoneTiers: Set<String>,
         folders: BoardFolderIndex = .empty,
         now: Date
     ) -> [BoardBand] {
@@ -970,7 +1024,9 @@ enum BoardModel {
                 let isFolder = !folderId.isEmpty
                 let bandId = isFolder ? folderBandPrefix + folderId : projectBandId
                 let label = isFolder ? (folders.labelOf[folderId] ?? folderId) : projectLabel
-                let hidingDone = hiddenDoneTiers.contains(bandId)
+                // Folded unless expanded, exactly as a tier band is: the default lives
+                // in ONE place per builder and both builders state the same rule.
+                let hidingDone = !shownDoneTiers.contains(bandId)
                 let sorted = (inProject[folderId] ?? []).sorted { a, b in
                     if a.done != b.done { return !a.done }
                     if a.live != b.live { return a.live }
@@ -1099,6 +1155,11 @@ enum BoardModel {
     /// to include the tail band, so it read "All 3,175" over a working set of ~264:
     /// the chip was reporting the size of the task STORE. Nothing about the
     /// arithmetic here changed; what changed is that no band is the store any more.
+    ///
+    /// The arithmetic still has not changed, and that is what carries the invariant
+    /// through the done-fold flip: `All` sums what the bands SHOW, so on a default
+    /// board it is the open count (measured on the real store: 91, not 270) and it
+    /// grows by exactly N the moment a band's `show done (N)` is tapped.
     static let allChipLabel = "All"
 
     static func chips(_ bands: [BoardBand]) -> [BandChip] {
@@ -1249,7 +1310,11 @@ struct BoardBandsKey: Equatable {
     let query: String
     let grouping: BoardGrouping
     let dateFilter: BoardDateFilter
-    let hiddenDoneBands: Set<String>
+    /// The bands the reader expanded to show their done rows (see
+    /// `bands(shownDoneTiers:)`). Part of the key because it changes which rows a band
+    /// holds — which is also what makes an explicit expand survive every rebuild the
+    /// store publishes underneath it.
+    let shownDoneBands: Set<String>
     let nowBucket: Int
 }
 

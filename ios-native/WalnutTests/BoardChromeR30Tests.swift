@@ -362,6 +362,58 @@ final class BoardChromeR30Tests: XCTestCase {
         XCTAssertEqual(meta.tokens, ["ended", "Marina"])
     }
 
+    // MARK: - The heading's done toggle (done folds by default)
+
+    /// The toggle is phrased from the BAND, and the band is the only thing that knows how
+    /// many rows it is suppressing. Folded with rows to show is the DEFAULT state now, so
+    /// this is the label a cold board draws on every band that has finished work.
+    func testTheDoneToggleOffersToShowExactlyWhatTheBandIsHoldingBack() {
+        let toggle = BoardModel.doneToggle(band("focus", hiddenDone: 59))
+        XCTAssertEqual(toggle.word, "show done (59)")
+        XCTAssertTrue(toggle.folding)
+        XCTAssertEqual(toggle.glyph, "eye", "a closed eye is what you tap to open")
+    }
+
+    /// Expanded, it offers the way back. No count in the word: the rows are on screen, so
+    /// the number is the heading's job and repeating it here would be two answers to one
+    /// question.
+    func testTheDoneToggleOffersToFoldAgainOnceTheBandIsExpanded() {
+        let toggle = BoardModel.doneToggle(band("focus", hiddenDone: 0))
+        XCTAssertEqual(toggle.word, "hide done")
+        XCTAssertFalse(toggle.folding)
+        XCTAssertEqual(toggle.glyph, "eye.slash")
+    }
+
+    /// THE case the flip creates, and the reason the label reads the band instead of the
+    /// view's expanded set: a band with nothing done is folded like every other band, and
+    /// it must not offer to `show done` rows that do not exist. Phrased from the set it
+    /// would have, because "not expanded" says nothing about whether there is anything to
+    /// expand.
+    func testABandWithNothingDoneNeverOffersToShowDoneRows() {
+        let toggle = BoardModel.doneToggle(band("wait", hiddenDone: 0))
+        XCTAssertEqual(toggle.word, "hide done",
+            "a folded band with no completions must not promise rows it does not have")
+        XCTAssertFalse(toggle.word.contains("show"))
+    }
+
+    /// The arrangement, source-scanned for the same reason `affordance` is above: what must
+    /// not come back is a line of code. The heading may not re-derive the toggle from a set
+    /// of expanded band ids, and the list may not take that set as a property again —
+    /// either one lets the label and the rows disagree.
+    func testTheHeadingReadsTheToggleOffTheBandAndNeverOffTheExpandedSet() throws {
+        let source = code(in: try source("Walnut/Views/Tasks/TaskBoardList.swift"))
+        XCTAssertTrue(
+            source.contains("BoardModel.doneToggle(band)"),
+            "the heading stopped reading the one rule that knows what the band is folding"
+        )
+        for phrase in ["hiddenDoneBands", "shownDoneBands"] {
+            XCTAssertFalse(
+                source.contains(phrase),
+                "TaskBoardList reads `\(phrase)` again — the label is back to guessing"
+            )
+        }
+    }
+
     // MARK: - The nav row's chips
 
     /// The fair share: two chips capped at half the row each fit BY ARITHMETIC, which is the
@@ -390,6 +442,15 @@ final class BoardChromeR30Tests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    /// A band that is suppressing `hiddenDone` rows.
+    ///
+    /// No rows on purpose: `hiddenDone` is the ONLY field the heading's toggle is allowed
+    /// to read (that is the rule these cases pin), so a fixture carrying visible rows
+    /// would invite an assertion about a number the toggle must not consult.
+    private func band(_ id: String, hiddenDone: Int) -> BoardBand {
+        BoardBand(bandId: id, label: id, rows: [], hiddenDone: hiddenDone, createSeed: nil)
+    }
 
     /// One dynamic colour resolved for a scheme, as a 0-255 grey. The bar's surfaces are all
     /// neutral, so the channel average is the whole story.
