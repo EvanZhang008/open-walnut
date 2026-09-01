@@ -120,8 +120,10 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `session_transcript` | Read a session transcript (read) | id (string): Session id; fresh? (boolean): Force a live transcript read (primary box only) |
 | `memory_read` | Read Walnut memory (MEMORY.md / USER.md) (read) | doc (global\|user): Which memory document |
 | `memory_write` | Write Walnut memory (MEMORY.md / USER.md) (write) | doc (global\|user): Which memory document; content (string): Complete new document content |
-| `note_read` | Read a note (read) | path (string): Vault-relative note path |
+| `note_read` | Read a note (read) | path? (string): Vault-relative note path (or a note title); id? (string): Frontmatter note id from note_search (n_...) : use either id or path |
 | `note_write` | Create or update a note (write) | path (string): Vault-relative note path; content (string): Full markdown content; expectedHash? (string): contentHash from note_read (update only) |
+| `note_edit` | Edit part of a note (write) | path? (string): Vault-relative note path (or a note title); id? (string): Frontmatter note id from note_search (n_...) : use either id or path; old_str (string): Exact text to replace (must match the note byte-for-byte); new_str (string): Replacement text ("" deletes old_str); replace_all? (boolean): Replace every occurrence instead of requiring exactly one; expectedHash? (string): contentHash from note_read : the edit aborts if the note changed |
+| `note_attach` | Attach an image to a note (write) | notePath (string): Vault-relative path of the note the image belongs to; data (string): Base64-encoded image bytes (no "data:...;base64," prefix); mediaType (image/png\|image/jpeg\|image/gif\|image/webp): Image MIME type |
 | `note_search` | Search notes (read) | q (string): Search query; mode? (hybrid\|string\|semantic): Search mode (default hybrid); limit? (integer): Max results (default 30) |
 | `api` | Call any Walnut API endpoint (write) | method (GET\|POST\|PUT\|PATCH\|DELETE): HTTP method; path (string): Absolute API path starting with /api/; body? (object): JSON body for write methods |
 | `session_start` | Start a session for a task (write, primary-only) | task (string): Task id or unique prefix; message? (string): First instruction; defaults to a sentence naming the task; cwd? (string): Absolute working directory; omit to resolve from the task/project; host? (string): Execution host alias; omit for the primary box; model? (string): Session model id or provider model value; mode? (plan\|default\|dontAsk\|accept\|auto\|bypass): Session permission mode; engine? (claude\|codex\|gemini\|opencode\|goose\|custom): Coding agent engine; default claude; expect_reply? (boolean): Route the session's reply back to your session; enables the no-reply fallback notification; reply_timeout? (integer): Seconds before the no-reply notification (default 3600) |
@@ -138,6 +140,55 @@ Prefer the named operations below. Their schemas are the current source of truth
 Use `walnut tools help <op>` for the full live description. Use the generic `api` operation only when no named operation exists.
 
 <!-- ops-catalog:end -->
+
+## Notes editing recipe
+
+The vault is the user's real knowledge base, so every write is either a create,
+a locked whole-file replace, or a partial edit. Pick by size of the change:
+
+```bash
+walnut tools call note_search '{"q":"achievement datapoint"}'          # find it (returns id AND path)
+walnut tools call note_read   '{"id":"n_mq6vtf1nu9v"}'                 # id from the search hit works
+walnut tools call note_read   '{"path":"work/achievements/Dashboard"}' # so does the path (.md optional)
+walnut tools call note_edit   '{"path":"work/achievements/Dashboard","old_str":"- 2026 Q2 review","new_str":"- 2026 Q2 review (shipped)"}'
+walnut tools call note_write  '{"path":"work/new note","content":"# Title\n"}'   # create: no expectedHash
+```
+
+**Small change inside a big note: use `note_edit`.** It reads the note itself,
+replaces one exact string, and writes it back under the hash it just read, so
+the body never travels through your command line. `old_str` must match the note
+byte for byte (indentation and line breaks included) and must appear exactly
+once, otherwise the op refuses and tells you which case you hit; pass
+`replace_all: true` when you really mean every occurrence. Optional
+`expectedHash` (from an earlier `note_read`) makes it abort if the note moved
+under you.
+
+**Whole rewrite: read, keep the hash, write it back.** `note_read` returns
+`{ content, contentHash, updatedAt }`. Send that `contentHash` back as
+`expectedHash` on `note_write`, along with the complete new body. Without
+`expectedHash` the write is a CREATE and refuses to touch an existing note.
+
+**`conflict` means the note changed since your read, not "permission denied".**
+Re-run `note_read`, re-apply your change to the fresh text, and write again
+with the new hash. Never retry the same body with the same stale hash.
+
+**id or path, either one.** `note_search` puts `id` first in every hit, and
+`note_read` / `note_edit` accept `id`, `path`, or even a bare note title. Ids
+are stable across renames; paths are what a human recognizes.
+
+**Images: `note_attach`, then embed.** It saves the image into the vault next to
+the note (an `_attachment/` folder, the Obsidian convention) and returns the
+vault path to embed as `![[<path>]]` with a follow-up `note_edit`. Base64 image
+data does not fit in one command-line argument, so write the JSON to a file:
+
+```bash
+jq -n --arg d "$(base64 -i shot.png)" '{notePath:"work/achievements/Dashboard",data:$d,mediaType:"image/png"}' > /tmp/attach.json
+walnut tools call note_attach @/tmp/attach.json
+```
+
+Same rule for any big payload: one argv entry dies at 128KB inside `execve`
+before Walnut sees it, so pass `@/tmp/args.json` or `-` (stdin) instead of
+inlining a long note body.
 
 ## Ref emission (IMPORTANT)
 

@@ -600,6 +600,18 @@ export function getNoteIdByPath(relPath: string): string | undefined {
 }
 
 /**
+ * Resolve a frontmatter id → the note's vault-relative path. The inverse of
+ * getNoteIdByPath: note_search answers with `id` FIRST on every hit, so an
+ * agent that hands that id back must get the note, not "invalid path".
+ */
+export function getNotePathById(id: string): string | undefined {
+  const d = getNotesIndexDb()
+  if (!d) return undefined
+  const row = d.prepare(`SELECT path FROM notes WHERE id=?`).get(id) as { path: string } | undefined
+  return row?.path
+}
+
+/**
  * Resolve a name (title OR basename) → matching note ids (case-insensitive).
  * Matches like Obsidian: `[[Title]]` resolves on the note's display title OR its
  * filename basename (so `[[dup]]` matches `a/dup.md`). The basename match uses a

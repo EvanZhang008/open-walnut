@@ -45,6 +45,7 @@ SOURCES=(
   src/providers/gateway-core.ts
   src/providers/wn-cli.ts
   src/providers/tool-args-source.ts
+  src/ops/op-help.ts
   src/providers/acp-daemon.ts
   src/providers/agent-command-map.ts
   src/providers/acp-worker/worker.ts

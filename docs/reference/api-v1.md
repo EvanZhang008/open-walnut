@@ -218,6 +218,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | GET | `/api/v1/sessions/recent?limit=` | Most-recent sessions, v1 projection shape |
 | GET | `/api/v1/sessions/summaries?limit=` | Parsed session summary markdown files |
 | GET | `/api/v1/notes/list` | Flat note list with ids ([[ autocomplete) |
+| GET | `/api/v1/notes/resolve?ref=` | One note reference (id, path, or title) → its path |
 | POST | `/api/v1/notes/tags/rename` | Rename a tag across carrying notes |
 | GET | `/api/v1/memory/telemetry` | Memory-entry write-path evidence |
 | POST | `/api/v1/memory/daily-log/compact` | Manual extractive daily-log compaction |
@@ -1446,6 +1447,15 @@ Class A (the REPLICA runs its own Personal AI). `agentId` as usual (absent →
   cold). `POST /api/v1/notes/tags/rename` body `{ "from", "to" }` →
   `{ "ok", "updated" }` — targeted rewrite of carrying notes (frontmatter +
   inline). Class A.
+- `GET /api/v1/notes/resolve?ref=` → `{ "id", "path", "title", "matchedBy":
+  "id" | "path" | "name" }` — one note REFERENCE to its vault path. `ref`
+  accepts a frontmatter id (`n_…`, the first field of every notes-search hit),
+  a vault-relative path (`.md` optional), or a bare title/basename resolved the
+  way `[[wikilinks]]` are. Unknown → `404`; a title matching several notes →
+  `409 conflict` listing the candidates (a confident wrong answer would hand
+  back the wrong note to overwrite). Class A. This is what lets the notes
+  operations (`note_read`, `note_edit`) take an id where they used to demand a
+  path.
 - `POST /api/v1/chat/compact?agentId=&conversationId=` → `{ "ok",
   "async": true }` or `{ "ok", "alreadyRunning": true }` — fire-and-forget
   background compaction. Class A (the replica compacts its own Personal AI).

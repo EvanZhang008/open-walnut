@@ -96,6 +96,56 @@ describe('backlinks / links', () => {
   })
 })
 
+describe('note reference resolution (GET /notes/resolve)', () => {
+  it('resolves a frontmatter id, a path, and a title to the same note', async () => {
+    await fs.mkdir(path.join(NOTES_DIR, 'work'), { recursive: true })
+    await fs.writeFile(
+      path.join(NOTES_DIR, 'work', 'Datapoint log.md'),
+      '---\nid: n_resolveprobe1\ntitle: Datapoint log\n---\n\n# Datapoint log\nbody\n',
+    )
+    const { reconcileNoteNow } = await import('../../../src/core/notes-indexer.js')
+    await reconcileNoteNow('work/Datapoint log.md')
+
+    const app = createApp()
+    // The id is the FIRST field of every note_search hit, so it is the form an
+    // agent hands back — it must resolve, not answer "invalid path".
+    const byId = await request(app).get('/api/v1/notes/resolve?ref=n_resolveprobe1')
+    expect(byId.status).toBe(200)
+    expect(byId.body).toMatchObject({ path: 'work/Datapoint log.md', matchedBy: 'id' })
+
+    const byPath = await request(app).get('/api/v1/notes/resolve?ref=work/Datapoint log')
+    expect(byPath.status).toBe(200)
+    expect(byPath.body).toMatchObject({ path: 'work/Datapoint log.md', matchedBy: 'path', id: 'n_resolveprobe1' })
+
+    const byTitle = await request(app).get('/api/v1/notes/resolve?ref=Datapoint log')
+    expect(byTitle.status).toBe(200)
+    expect(byTitle.body).toMatchObject({ path: 'work/Datapoint log.md', matchedBy: 'name' })
+  })
+
+  it('404 for an unknown ref, 400 for a missing one, and 409 when a title is ambiguous', async () => {
+    const app = createApp()
+    const missing = await request(app).get('/api/v1/notes/resolve')
+    expect(missing.status).toBe(400)
+
+    const unknownId = await request(app).get('/api/v1/notes/resolve?ref=n_nothinghere')
+    expect(unknownId.status).toBe(404)
+    expect(unknownId.body.error.message).toContain('n_nothinghere')
+
+    await fs.mkdir(path.join(NOTES_DIR, 'a'), { recursive: true })
+    await fs.mkdir(path.join(NOTES_DIR, 'b'), { recursive: true })
+    await fs.writeFile(path.join(NOTES_DIR, 'a', 'dup.md'), '---\nid: n_dupone\n---\nA\n')
+    await fs.writeFile(path.join(NOTES_DIR, 'b', 'dup.md'), '---\nid: n_duptwo\n---\nB\n')
+    const { reconcileNoteNow } = await import('../../../src/core/notes-indexer.js')
+    await reconcileNoteNow('a/dup.md')
+    await reconcileNoteNow('b/dup.md')
+
+    // A confident wrong answer here would hand back the wrong note to overwrite.
+    const ambiguous = await request(app).get('/api/v1/notes/resolve?ref=dup')
+    expect(ambiguous.status).toBe(409)
+    expect(ambiguous.body.error.message).toContain('matches 2 notes')
+  })
+})
+
 describe('tags', () => {
   it('lists tag counts and the notes under a tag', async () => {
     await fs.writeFile(path.join(NOTES_DIR, 'tagged.md'), '# Tagged\n#wave2demo content\n')

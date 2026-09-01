@@ -394,7 +394,7 @@ function runWnMinimal(argv, stdinText) {
     process.stdin.on('end', function () { runWnMinimal(argv, stdinBuf); });
     return;
   }
-  var usage = 'usage: walnut guide | walnut wait <id> [--timeout secs] | walnut tools list|call <op> [json|@file|-]';
+  var usage = 'usage: walnut guide | walnut wait <id> [--timeout secs] | walnut tools list | walnut tools help <op> | walnut tools call <op> [json|@file|-|--help]';
   if (argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') { out(usage); return exitWn(0); }
   if (argv[0] === 'peers') {
     errOut('walnut: peers was replaced — list sessions with: walnut tools call session_list, message one with: walnut tools call session_send (args: to, text)');
@@ -412,6 +412,8 @@ function runWnMinimal(argv, stdinText) {
   while (rest.length && rest[0] === '--json') { json = true; rest.shift(); }
   var op, args;
   var guide = false;
+  // Set when this tools.list request is really "show me ONE op's schema".
+  var wnHelpOp = null;
   if (head === 'guide') {
     // Sugar over tools.call skill_read {dirName:'walnut'} — mirrors wn-cli.ts.
     if (sub !== undefined) { errOut('walnut: guide takes no arguments'); return exitWn(2); }
@@ -420,11 +422,31 @@ function runWnMinimal(argv, stdinText) {
     args = { name: 'skill_read', args: { dirName: 'walnut' } };
   }
   else if (head === 'tools') {
-    // Minimal tools twin: list + call (+ help via list). Same hub capabilities
-    // as the full wn-cli.ts; keep in sync.
+    // Minimal tools twin: list + call (+ help via a one-op list). Same hub
+    // capabilities as the full wn-cli.ts; keep in sync.
     if (sub === 'list' && rest.length === 0) { op = 'tools.list'; args = {}; }
     else if ((sub === 'call' || sub === 'help') && rest.length >= 1) {
-      if (sub === 'help') { op = 'tools.list'; args = {}; }
+      // 'tools help <op>' and 'tools call <op> --help' both ask for ONE op's
+      // schema. Asking the hub for the whole catalog and printing it (what this
+      // twin used to do for help) answered "what are this op's parameters?"
+      // with the op LIST, and --help reached the JSON parser as arguments.
+      var wantsHelp = sub === 'help';
+      var helpName = rest[0];
+      if (sub === 'help') {
+        for (var hj = 0; hj < rest.length; hj++) {
+          if (rest[hj].charAt(0) !== '-') { helpName = rest[hj]; break; }
+        }
+      } else {
+        for (var hi = 1; hi < rest.length; hi++) {
+          if (rest[hi] === '--help' || rest[hi] === '-h') wantsHelp = true;
+        }
+      }
+      if (wantsHelp) {
+        if (!helpName || helpName.charAt(0) === '-') { errOut('walnut: tools help requires <op>'); return exitWn(2); }
+        op = 'tools.list';
+        wnHelpOp = helpName;
+        args = { name: helpName };
+      }
       else {
         var src = wnSrc || wnArgsSource(rest[1]);
         if (src.kind === 'usage-error') { errOut('walnut: ' + src.message); return exitWn(2); }
@@ -600,8 +622,33 @@ function runWnMinimal(argv, stdinText) {
       }
       if (op === 'tools.list') {
         var ops = (resp.result && resp.result.ops) || [];
-        for (var j = 0; j < ops.length; j++) {
-          out('  ' + ops[j].name + '  ' + (ops[j].title || '') + (ops[j].readonly ? ' (read)' : ' (write)'));
+        if (wnHelpOp) {
+          var helpRow = null;
+          for (var k = 0; k < ops.length; k++) { if (ops[k].name === wnHelpOp) helpRow = ops[k]; }
+          if (!helpRow) { errOut('walnut: unknown op: ' + wnHelpOp + ' (run: walnut tools list)'); return exitWn(1); }
+          out(helpRow.name);
+          out('');
+          if (helpRow.description) { out('  ' + helpRow.description); out(''); }
+          var ps = helpRow.params;
+          if (!ps) out('Parameters: not reported by this Walnut server (upgrade it to see them)');
+          else if (ps.length === 0) out('Parameters: none');
+          else {
+            out('Parameters:');
+            for (var pi = 0; pi < ps.length; pi++) {
+              out('  ' + ps[pi].name + ' (' + ps[pi].type + ', ' + (ps[pi].required ? 'required' : 'optional') + ')');
+              if (ps[pi].description) out('    ' + ps[pi].description);
+            }
+          }
+          out('');
+          out('Usage:');
+          out("  walnut tools call " + helpRow.name + " '{...}'");
+          out("  walnut tools call " + helpRow.name + " @/tmp/args.json   # payloads over ~128KB must not go in argv");
+        } else {
+          for (var j = 0; j < ops.length; j++) {
+            out('  ' + ops[j].name + '  ' + (ops[j].title || '') + (ops[j].readonly ? ' (read)' : ' (write)'));
+            // The signature is what stops an agent guessing argument names.
+            if (ops[j].signature) out('      args: ' + ops[j].signature);
+          }
         }
       } else {
         // tools.call — guide prints the manual as markdown, else pretty JSON.

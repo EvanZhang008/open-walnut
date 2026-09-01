@@ -325,6 +325,131 @@ describe('ops registry — parity with the live server (P4)', () => {
     expect((await executeOp('task_pin_set', { id: prefix, pinned: false }, { apiBase: base })).ok).toBe(true)
   })
 
+  // The notes ops an agent actually strings together (2026-09-01 session): find
+  // a note, read it by whichever field the search gave, change one line, and be
+  // told what to do when the write is refused.
+  it('notes: create → read by path OR id → partial edit → conflict guidance', async () => {
+    const addr = server.address()
+    if (!addr || typeof addr === 'string') throw new Error('no port')
+    const base = `http://127.0.0.1:${addr.port}`
+    const notePath = 'ops-probe/Edit probe'
+
+    const created = await executeOp(
+      'note_write',
+      { path: notePath, content: '# Edit probe\n\n- one\n- two\n' },
+      { apiBase: base },
+    )
+    expect(created.ok, created.ok ? '' : created.message).toBe(true)
+
+    // A6-adjacent: creating over an existing note used to say only "Note
+    // already exists", which reads as a dead end instead of a missing argument.
+    const dup = await executeOp('note_write', { path: notePath, content: 'x' }, { apiBase: base })
+    expect(dup.ok).toBe(false)
+    if (!dup.ok) {
+      expect(dup.message).toContain('note exists')
+      expect(dup.message).toContain('expectedHash from note_read')
+    }
+
+    const read = await executeOp('note_read', { path: notePath }, { apiBase: base })
+    expect(read.ok, read.ok ? '' : read.message).toBe(true)
+    const first = read.ok ? (read.result as { content: string; contentHash: string }) : null
+    expect(first?.content).toContain('- one')
+
+    // Read by the frontmatter id the create stamped (what note_search returns).
+    const stampedId = /^id:\s*(\S+)/m.exec(first?.content ?? '')?.[1] ?? ''
+    expect(stampedId, 'create stamps a frontmatter id').toMatch(/^n_/)
+    const { reconcileNoteNow } = await import('../../src/core/notes-indexer.js')
+    await reconcileNoteNow(`${notePath}.md`)
+    const byId = await executeOp('note_read', { id: stampedId }, { apiBase: base })
+    expect(byId.ok, byId.ok ? '' : byId.message).toBe(true)
+    if (byId.ok) expect((byId.result as { path: string }).path).toBe(`${notePath}.md`)
+
+    // A5: partial edit, no whole body on the wire.
+    const edited = await executeOp(
+      'note_edit',
+      { path: notePath, old_str: '- two', new_str: '- two (done)', expectedHash: first?.contentHash },
+      { apiBase: base },
+    )
+    expect(edited.ok, edited.ok ? '' : edited.message).toBe(true)
+    if (edited.ok) expect((edited.result as { replacements: number }).replacements).toBe(1)
+
+    const after = await executeOp('note_read', { path: notePath }, { apiBase: base })
+    if (after.ok) {
+      const body = (after.result as { content: string }).content
+      expect(body).toContain('- two (done)')
+      expect(body).toContain('- one')
+    }
+
+    // The stale hash is now wrong: the edit must refuse and say what to do.
+    const stale = await executeOp(
+      'note_edit',
+      { path: notePath, old_str: '- one', new_str: '- ONE', expectedHash: first?.contentHash },
+      { apiBase: base },
+    )
+    expect(stale.ok).toBe(false)
+    if (!stale.ok) {
+      expect(stale.message).toContain('changed since you read it')
+      expect(stale.message).toContain('note_read')
+    }
+
+    // A missing / ambiguous old_str names the case instead of writing garbage.
+    const missing = await executeOp(
+      'note_edit',
+      { path: notePath, old_str: 'text that is not there', new_str: 'x' },
+      { apiBase: base },
+    )
+    expect(missing.ok).toBe(false)
+    if (!missing.ok) expect(missing.message).toContain('old_str not found')
+
+    const twice = await executeOp('note_edit', { path: notePath, old_str: '-', new_str: '*' }, { apiBase: base })
+    expect(twice.ok).toBe(false)
+    if (!twice.ok) expect(twice.message).toMatch(/appears \d+ times/)
+
+    const all = await executeOp(
+      'note_edit',
+      { path: notePath, old_str: '- ', new_str: '* ', replace_all: true },
+      { apiBase: base },
+    )
+    expect(all.ok, all.ok ? '' : all.message).toBe(true)
+    if (all.ok) expect((all.result as { replacements: number }).replacements).toBeGreaterThan(1)
+
+    // Neither path nor id is a usage error, not a mystery 400.
+    const neither = await executeOp('note_edit', { old_str: 'a', new_str: 'b' }, { apiBase: base })
+    expect(neither.ok).toBe(false)
+    if (!neither.ok) expect(neither.message).toContain('pass path')
+  })
+
+  it('note_attach saves an image beside the note and returns its vault path', async () => {
+    const addr = server.address()
+    if (!addr || typeof addr === 'string') throw new Error('no port')
+    const base = `http://127.0.0.1:${addr.port}`
+    const notePath = 'ops-probe/Attach probe'
+    expect((await executeOp('note_write', { path: notePath, content: '# Attach probe\n' }, { apiBase: base })).ok)
+      .toBe(true)
+
+    // 1x1 transparent PNG.
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=='
+    const attached = await executeOp(
+      'note_attach',
+      { notePath, data: png, mediaType: 'image/png' },
+      { apiBase: base },
+    )
+    expect(attached.ok, attached.ok ? '' : attached.message).toBe(true)
+    if (attached.ok) {
+      const r = attached.result as { ok: boolean; path: string; name: string }
+      expect(r.ok).toBe(true)
+      expect(r.path).toContain('ops-probe/_attachment/')
+      expect(r.name).toMatch(/\.png$/)
+    }
+
+    const bad = await executeOp(
+      'note_attach',
+      { notePath, data: png, mediaType: 'image/tiff' },
+      { apiBase: base },
+    )
+    expect(bad.ok).toBe(false)
+  })
+
   it('handler-based ops still hit real endpoints (task_update round-trip)', async () => {
     const addr = server.address()
     if (!addr || typeof addr === 'string') throw new Error('no port')

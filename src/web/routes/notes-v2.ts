@@ -51,6 +51,8 @@ import {
   notesForTag,
   notePathsForTag,
   getNoteIdByPath,
+  getNotePathById,
+  findNoteIdsByName,
   countNotesUnderFolder,
   searchFolders,
   updateNotePath,
@@ -1582,6 +1584,58 @@ export async function listNotesFlat(): Promise<{ notes: Array<{ id: string; titl
       return { id: '', title: name, path: relPath, name }
     }),
   }
+}
+
+/**
+ * Resolve one note REFERENCE to its vault path. A reference is any of the three
+ * things a caller actually holds: a frontmatter id (`n_...`, the FIRST field of
+ * every note_search hit), a vault-relative path (with or without `.md`), or a
+ * bare title/basename. Shared by the internal route and GET /api/v1/notes/resolve.
+ *
+ * Throws NotesOpError 404 when nothing matches and 409 when a title is
+ * ambiguous — a confident wrong answer here means the caller reads (or worse,
+ * overwrites) a different note than the one they meant.
+ */
+export async function resolveNoteRef(
+  ref: unknown,
+): Promise<{ id: string | null; path: string; title: string | null; matchedBy: 'id' | 'path' | 'name' }> {
+  if (typeof ref !== 'string' || !ref.trim()) {
+    throw new NotesOpError('ref (note id, path, or title) is required', 400)
+  }
+  ensureIndexBootstrap()
+  const raw = ref.trim()
+
+  // 1. Frontmatter id — the only form that cannot also be a path.
+  const byId = getNotePathById(raw)
+  if (byId) return { id: raw, path: byId, title: null, matchedBy: 'id' }
+
+  // 2. A real file at that path (index-independent, so it works cold too).
+  const fullPath = resolveSafePath(raw)
+  if (!fullPath) throw new NotesOpError('invalid path', 400)
+  const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
+  try {
+    await fsp.stat(filePath)
+    const relPath = toRelPath(filePath)
+    return { id: getNoteIdByPath(relPath) ?? null, path: relPath, title: null, matchedBy: 'path' }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+  }
+
+  // 3. Title / basename, the way [[wikilinks]] resolve.
+  const named = findNoteIdsByName(raw)
+  if (named.length === 1) {
+    return { id: named[0].id, path: named[0].path, title: raw, matchedBy: 'name' }
+  }
+  if (named.length > 1) {
+    throw new NotesOpError(
+      `"${raw}" matches ${named.length} notes: ${named.slice(0, 5).map((n) => n.path).join(', ')}. Pass one exact path or id.`,
+      409,
+    )
+  }
+  if (raw.startsWith('n_')) {
+    throw new NotesOpError(`No note with id ${raw} (the id index may be cold; try the path from note_search)`, 404)
+  }
+  throw new NotesOpError(`Note not found: ${raw}`, 404)
 }
 
 // GET /api/notes-v2/list — flat note list. Now returns id per note (feeds [[ authoring).

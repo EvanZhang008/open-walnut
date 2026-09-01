@@ -179,6 +179,11 @@ describe('POST /api/v1/actions/invoke — code and whole-document ops need confi
     ['session_send', { to: 's_1', text: 'go' }],
     ['memory_write', { doc: 'global', content: 'replaced' }],
     ['note_write', { path: 'Projects/Example', content: 'replaced' }],
+    // A partial note edit and an attachment upload are still writes into the
+    // user's vault, and the card face shows a label, not the passage being
+    // rewritten or the file being dropped in.
+    ['note_edit', { path: 'Projects/Example', old_str: 'a', new_str: 'b' }],
+    ['note_attach', { notePath: 'Projects/Example', data: 'AAAA', mediaType: 'image/png' }],
   ];
 
   for (const [tool, args] of oneClickForbidden) {

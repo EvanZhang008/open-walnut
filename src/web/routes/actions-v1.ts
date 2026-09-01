@@ -56,21 +56,25 @@ const DESTRUCTIVE_OPS = new Set(['task_delete', 'task_merge'])
 /**
  * The second half of the floor, for a different reason than data loss: these ops
  * EXECUTE CODE (session_start spawns a coding CLI with a model-chosen prompt,
- * cwd and permission mode; session_send types into a live one) or REPLACE
- * A WHOLE DOCUMENT (memory_write; note_write with an expectedHash overwrites an
- * existing note, without one it creates a new file in the vault).
+ * cwd and permission mode; session_send types into a live one) or WRITE THE
+ * USER'S DOCUMENTS (memory_write; note_write with an expectedHash overwrites an
+ * existing note, without one it creates a new file in the vault; note_edit
+ * rewrites a passage inside an existing note; note_attach drops a binary file
+ * into the vault).
  *
  * The threat is not only a buggy model. The Personal AI reads task titles from
  * sync plugins, notes, and session transcripts, so any of those can steer it into
  * emitting a harmless-looking `label` over an arbitrary call — and the card face
  * shows the label, not the args. One click must not be enough for these.
  */
-const POWERFUL_OPS = new Set(['session_start', 'session_send', 'memory_write', 'note_write'])
+const POWERFUL_OPS = new Set([
+  'session_start', 'session_send', 'memory_write', 'note_write', 'note_edit', 'note_attach',
+])
 
 /** Why `tool` may not run on a bare click, or null when a bare click is fine. */
 function confirmReason(tool: string, destructiveTag: boolean): string | null {
   if (destructiveTag || DESTRUCTIVE_OPS.has(tool)) return `${tool} cannot be undone — confirm before running it`
-  if (POWERFUL_OPS.has(tool)) return `${tool} runs code or replaces a whole document — confirm before running it`
+  if (POWERFUL_OPS.has(tool)) return `${tool} runs code or writes the user's documents — confirm before running it`
   return null
 }
 

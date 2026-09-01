@@ -12,6 +12,7 @@
  *   GET    /notes/tags                    → { tags }
  *   GET    /notes/tags/:tag/notes         → { notes }
  *   GET    /notes/list                    → { notes }         (Wave 3)
+ *   GET    /notes/resolve?ref=            → { id, path, title, matchedBy }
  *   POST   /notes/tags/rename { from, to } → { ok, updated }  (Wave 3)
  *   DELETE /notes/attachment/*path        → { ok }
  *   DELETE /notes/folder/*path            → { ok, deletedNotes }
@@ -151,6 +152,15 @@ notesExtrasV1Router.get('/notes/tags/:tag/notes', async (req: Request, res: Resp
 notesExtrasV1Router.get('/notes/list', async (_req: Request, res: Response, next: NextFunction) => {
   const { listNotesFlat } = await import('./notes-v2.js')
   await runNotesOp(res, next, () => listNotesFlat())
+})
+
+// GET /api/v1/notes/resolve?ref= — one note reference (frontmatter id, vault
+// path, or title) → its path. note_search answers with `id` first, so this is
+// what lets an agent hand that id straight back to note_read / note_edit.
+notesExtrasV1Router.get('/notes/resolve', async (req: Request, res: Response, next: NextFunction) => {
+  const { resolveNoteRef } = await import('./notes-v2.js')
+  const ref = req.query.ref ?? req.query.id ?? req.query.path
+  await runNotesOp(res, next, () => resolveNoteRef(ref))
 })
 
 // POST /api/v1/notes/tags/rename { from, to } (Wave 3) — rename a tag across

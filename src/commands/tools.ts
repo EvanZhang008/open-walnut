@@ -13,24 +13,14 @@
 
 import { z } from 'zod'
 import type { GlobalOptions } from '../core/types.js'
-
-/** Render one zod field's type for help output (best-effort, not exhaustive). */
-function fieldType(schema: z.ZodTypeAny): { type: string; required: boolean; description?: string } {
-  let cur: z.ZodTypeAny = schema
-  let required = true
-  // Unwrap optional/default wrappers to reach the base type.
-  for (let i = 0; i < 5; i++) {
-    const def = (cur as { def?: { type?: string } }).def
-    if (def?.type === 'optional' || def?.type === 'default') {
-      required = false
-      cur = (cur as unknown as { unwrap: () => z.ZodTypeAny }).unwrap()
-    } else break
-  }
-  const def = (cur as { def?: { type?: string; entries?: Record<string, unknown> } }).def
-  let type = def?.type ?? 'unknown'
-  if (type === 'enum' && def?.entries) type = Object.keys(def.entries).join(' | ')
-  return { type, required, description: schema.description }
-}
+import {
+  fieldType,
+  formatOpHelp,
+  formatParamSignature,
+  formatToolsTable,
+  opParams,
+  type ZodLike,
+} from '../ops/op-help.js'
 
 /**
  * Parse `--flag value` pairs into args, coercing types from the op's zod
@@ -48,7 +38,7 @@ function parseFlagArgs(
     const key = flag.slice(2).replace(/-/g, '_')
     const schema = input[key]
     if (!schema) return `unknown flag --${flag.slice(2)} for this op (see \`walnut tools help\`)`
-    const t = fieldType(schema).type
+    const t = fieldType(schema as ZodLike).type
     if (t === 'boolean') {
       // --force or --force true/false
       const next = rest[i + 1]
@@ -78,20 +68,38 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
   if (sub === 'list' || sub === undefined) {
     const readonly = args.includes('--readonly')
     const ops = listOps().filter((o) => !readonly || o.tags.readonly)
+    const rows = ops.map((o) => ({
+      name: o.name,
+      title: o.title,
+      readonly: o.tags.readonly,
+      remote: o.tags.remote,
+      // The signature is the whole point of the catalog for an agent: without
+      // it the next step is guessing `q` vs `query`.
+      signature: formatParamSignature(opParams(o.input as Record<string, ZodLike>)),
+    }))
     if (globals.json) {
       const { outputJson } = await import('../utils/json-output.js')
-      outputJson(ops.map((o) => ({ name: o.name, title: o.title, readonly: o.tags.readonly, remote: o.tags.remote })))
+      outputJson(rows)
       return
     }
-    console.log('Available operations:\n')
-    const width = Math.max(...ops.map((o) => o.name.length))
-    for (const op of ops) {
-      const flags = [op.tags.readonly ? 'read' : 'write', op.tags.remote === 'deny' ? 'local-only' : null]
-        .filter(Boolean).join(', ')
-      console.log(`  ${op.name.padEnd(width)}  ${op.title} (${flags})`)
-    }
-    console.log('\nRun `walnut tools help <op>` for parameters, `walnut tools call <op> \'{json}\'` to execute.')
+    console.log(formatToolsTable(rows))
     return
+  }
+
+  // `tools help <op>` and `tools call <op> --help` render the SAME detail.
+  const printOpHelp = (name: string): boolean => {
+    const op = getOp(name)
+    if (!op) {
+      console.error(`Unknown op: ${name}. Run \`walnut tools list\`.`)
+      process.exitCode = 1
+      return false
+    }
+    console.log(formatOpHelp({
+      name: op.name,
+      description: op.description,
+      params: opParams(op.input as Record<string, ZodLike>),
+    }))
+    return true
   }
 
   if (sub === 'help') {
@@ -101,32 +109,7 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       process.exitCode = 1
       return
     }
-    const op = getOp(name)
-    if (!op) {
-      console.error(`Unknown op: ${name}. Run \`walnut tools list\`.`)
-      process.exitCode = 1
-      return
-    }
-    console.log(`${op.name}\n`)
-    console.log(`  ${op.description}\n`)
-    const fields = Object.entries(op.input)
-    if (fields.length === 0) {
-      console.log('Parameters: none')
-    } else {
-      console.log('Parameters:')
-      for (const [key, schema] of fields) {
-        const f = fieldType(schema)
-        console.log(`  ${key} (${f.type}, ${f.required ? 'required' : 'optional'})`)
-        if (f.description) console.log(`    ${f.description}`)
-      }
-    }
-    console.log('\nUsage:')
-    const example = fields.length > 0
-      ? `'{"${fields[0][0]}":"value"}'`
-      : `'{}'`
-    console.log(`  walnut tools call ${op.name} ${example}`)
-    console.log(`  echo ${example} | walnut tools call ${op.name}`)
-    console.log(`  walnut tools call ${op.name} @/tmp/args.json   # payloads over ~128KB must not go in argv`)
+    printOpHelp(name)
     return
   }
 
@@ -140,6 +123,14 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
     const op = getOp(name)
     const rest = args.slice(2)
     let parsed: Record<string, unknown> = {}
+
+    // `--help` anywhere in a call means "show me the schema", never "parse me
+    // as JSON". It used to reach the JSON parser and die with "JSON Parse
+    // error", which reads as a broken CLI (2026-09-01 session).
+    if (rest.includes('--help') || rest.includes('-h')) {
+      printOpHelp(name)
+      return
+    }
 
     if (rest[0]?.startsWith('--')) {
       // Human-friendly flag form: --status todo --q "login bug". Types are

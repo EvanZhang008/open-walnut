@@ -88,7 +88,7 @@ export async function handleGatewayCapability(
   }
   switch (capability) {
     case 'tools.list':
-      return handleToolsList();
+      return handleToolsList(payload ?? {});
     case 'tools.call':
       return handleToolsCall(callerSid, payload ?? {}, host, d);
     // Old daemons / old shims still speak these — answer with the replacement
@@ -111,18 +111,34 @@ export async function handleGatewayCapability(
 // the `walnut tools` CLI use, against this hub's own local API. Remote policy
 // is per-op (`tags.remote`): destructive ops refuse the gateway transport.
 
-async function handleToolsList(): Promise<CapabilityOutcome> {
+/**
+ * The catalog. Every row carries a one-line parameter SIGNATURE so the remote
+ * `walnut tools list` shows arguments instead of bare names (agents guessed
+ * `query` vs `q` from the old output). `payload.name` narrows the answer to one
+ * op and adds its full parameter rows — that is how `walnut tools help <op>`
+ * and `walnut tools call <op> --help` get a schema without shipping every op's
+ * parameter descriptions over the socket.
+ */
+async function handleToolsList(payload: Record<string, unknown>): Promise<CapabilityOutcome> {
   const { listOps } = await import('../../ops/index.js');
+  const { opParams, formatParamSignature } = await import('../../ops/op-help.js');
+  const wanted = typeof payload.name === 'string' ? payload.name.trim() : '';
+  const ops = wanted ? listOps().filter((o) => o.name === wanted) : listOps();
   return {
     ok: true,
     result: {
-      ops: listOps().map((o) => ({
-        name: o.name,
-        title: o.title,
-        description: o.description,
-        readonly: o.tags.readonly,
-        remote: o.tags.remote,
-      })),
+      ops: ops.map((o) => {
+        const params = opParams(o.input);
+        return {
+          name: o.name,
+          title: o.title,
+          description: o.description,
+          readonly: o.tags.readonly,
+          remote: o.tags.remote,
+          signature: formatParamSignature(params),
+          ...(wanted ? { params } : {}),
+        };
+      }),
     },
   };
 }

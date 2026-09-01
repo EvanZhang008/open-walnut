@@ -48,6 +48,45 @@ describe('gateway tools.list', () => {
     const del = ops.find((o) => o.name === 'task_delete');
     expect(del?.remote).toBe('deny');
   });
+
+  it('every row carries an argument signature (remote `tools list` showed none)', async () => {
+    const r = await handleGatewayCapability('tools.list', CALLER, {}, 'devbox', deps());
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const ops = r.result.ops as Array<{ name: string; signature?: string; params?: unknown }>;
+    for (const op of ops) expect(op.signature, op.name).toBeTruthy();
+    expect(ops.find((o) => o.name === 'note_read')?.signature).toBe('path?, id?');
+    expect(ops.find((o) => o.name === 'walnut_status')?.signature).toBe('(none)');
+    // The full catalog stays light: per-parameter descriptions ride only the
+    // single-op request below.
+    for (const op of ops) expect(op.params, op.name).toBeUndefined();
+  });
+
+  it('a named request answers with ONE op plus its full parameter rows', async () => {
+    const r = await handleGatewayCapability('tools.list', CALLER, { name: 'note_edit' }, 'devbox', deps());
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const ops = r.result.ops as Array<{
+      name: string
+      params?: Array<{ name: string; type: string; required: boolean; description?: string }>
+    }>;
+    expect(ops).toHaveLength(1);
+    expect(ops[0].name).toBe('note_edit');
+    const params = ops[0].params ?? [];
+    expect(params.map((p) => p.name)).toEqual(
+      ['path', 'id', 'old_str', 'new_str', 'replace_all', 'expectedHash'],
+    );
+    expect(params.find((p) => p.name === 'old_str')).toMatchObject({ type: 'string', required: true });
+    expect(params.find((p) => p.name === 'replace_all')?.required).toBe(false);
+    expect(params.find((p) => p.name === 'old_str')?.description).toBeTruthy();
+  });
+
+  it('an unknown named op answers with an empty catalog, not the whole list', async () => {
+    const r = await handleGatewayCapability('tools.list', CALLER, { name: 'nope_not_real' }, 'devbox', deps());
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.result.ops).toEqual([]);
+  });
 });
 
 describe('gateway tools.call — policy gates', () => {

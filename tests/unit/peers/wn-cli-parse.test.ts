@@ -61,6 +61,26 @@ describe('parseWalnutCliArgs — tools + guide', () => {
     expect(parseWalnutCliArgs(['tools', 'nope']).kind).toBe('usage-error');
   });
 
+  it('`tools call <op> --help` asks for the SCHEMA, never the JSON parser', () => {
+    // 2026-09-01: --help arrived as the args payload, so the answer to "what
+    // does this op take?" was 'invalid JSON arguments: JSON Parse error'.
+    for (const flag of ['--help', '-h']) {
+      expect(parseWalnutCliArgs(['tools', 'call', 'note_read', flag])).toEqual({
+        kind: 'tools.help', name: 'note_read',
+      });
+    }
+    // A payload that merely CONTAINS the word stays a call.
+    expect(parseWalnutCliArgs(['tools', 'call', 'session_send', '{"text":"--help"}'])).toEqual({
+      kind: 'tools.call', name: 'session_send', rawJson: '{"text":"--help"}',
+    });
+  });
+
+  it('`tools help <op> --json` still names the op (flags are not the op name)', () => {
+    expect(parseWalnutCliArgs(['tools', 'help', '--json', 'note_edit'])).toEqual({
+      kind: 'tools.help', name: 'note_edit',
+    });
+  });
+
   it('parses guide and rejects extra guide arguments', () => {
     expect(parseWalnutCliArgs(['guide'])).toEqual({ kind: 'guide' });
     expect(parseWalnutCliArgs(['guide', 'extra']).kind).toBe('usage-error');
@@ -248,6 +268,13 @@ describe('formatToolsTable', () => {
     expect(out).toContain('(write)');
     expect(out).toContain('write, local-only');
     expect(formatToolsTable([])).toBe('(no operations)');
+  });
+
+  it('shows the argument signature the hub sends (the whole point of the catalog)', () => {
+    const out = formatToolsTable([
+      { name: 'note_read', title: 'Read a note', readonly: true, signature: 'path?, id?' },
+    ]);
+    expect(out).toContain('args: path?, id?');
   });
 });
 

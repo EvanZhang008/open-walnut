@@ -28,6 +28,12 @@ import path from 'node:path'
 import type { GatewayError, GatewayErrorCode, GatewayOp, GatewayRequest, GatewayResponse } from './gateway-core.js'
 import { EXTERNAL_CALLER_SID, wellKnownGatewaySocketPath } from './gateway-core.js'
 import { GATEWAY_INLINE_ARGS_MAX_BYTES, classifyArgsSource, parseToolArgs } from './tool-args-source.js'
+import { formatOpHelp, formatToolsTable, type ToolRow } from '../ops/op-help.js'
+
+// Catalog/detail rendering is SHARED with the hub CLI (src/commands/tools.ts)
+// so the two faces can never disagree about what an op's arguments are.
+export { formatToolsTable }
+export type { ToolRow }
 
 /** Client-side wait for the daemon's single response line. */
 export const WALNUT_CLI_TIMEOUT_MS = 30_000
@@ -102,13 +108,19 @@ function parseToolsArgs(args: string[]): WalnutCliParsed {
     return { kind: 'tools.list', json }
   }
   if (sub === 'help') {
-    const name = rest[0]
+    const name = rest.find((a) => !a.startsWith('-'))
     if (!name) return { kind: 'usage-error', message: 'tools help requires <op>' }
     return { kind: 'tools.help', name }
   }
   if (sub === 'call') {
     const name = rest[0]
     if (!name) return { kind: 'usage-error', message: 'tools call requires <op>' }
+    // `--help` after the op name asks for the SCHEMA. Treating it as the args
+    // payload sent it to the JSON parser, so the answer to "what does this op
+    // take?" was 'invalid JSON arguments: JSON Parse error' (2026-09-01).
+    if (rest.slice(1).some((a) => a === '--help' || a === '-h')) {
+      return { kind: 'tools.help', name }
+    }
     return { kind: 'tools.call', name, rawJson: rest[1] }
   }
   return { kind: 'usage-error', message: `unknown tools subcommand: ${sub} (expected list | help | call)` }
@@ -226,8 +238,9 @@ EXIT CODES
 const HELP_TOOLS = `walnut tools — call Walnut operations (tasks, search, memory, notes) from any session
 
 USAGE
-  walnut tools list [--json]           catalog of available operations
+  walnut tools list [--json]           catalog of available operations, each with its arguments
   walnut tools help <op>               parameters + call syntax for one operation
+  walnut tools call <op> --help        the same detail, from the call you were about to make
   walnut tools call <op> ['{json}']    execute with inline JSON
   walnut tools call <op> @<file>       execute with the JSON in a file
   walnut tools call <op> -             execute with the JSON on stdin
@@ -519,7 +532,11 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
         ...(argsFile !== undefined ? { argsFile } : { args: callArgs }),
       }
       : parsed.kind === 'guide' ? { name: 'skill_read', args: { dirName: 'walnut' } }
-        : {}
+        // One-op catalog request: the hub answers with that op's full parameter
+        // rows instead of the whole (much larger) catalog. An older hub ignores
+        // `name` and returns everything — the render below still finds the row.
+        : parsed.kind === 'tools.help' ? { name: parsed.name }
+          : {}
 
   let resp: GatewayResponse
   try {
@@ -566,22 +583,12 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
       process.stderr.write(`walnut: unknown op: ${parsed.name} — run \`walnut tools list\`\n`)
       return 1
     }
-    await writeStdout(`${opRow.name}\n\n  ${opRow.description}\n\nUsage:\n  walnut tools call ${opRow.name} '{...}'\n`)
+    await writeStdout(formatOpHelp(opRow) + '\n')
   } else {
     // tools.call — the op result verbatim, pretty JSON.
     await writeStdout(JSON.stringify(resp.result, null, 2) + '\n')
   }
   return 0
-}
-
-// ── tools output formatting (pure) ──
-
-export interface ToolRow {
-  name: string
-  title?: string
-  description?: string
-  readonly?: boolean
-  remote?: string
 }
 
 // ── walnut wait — client-side poll loop ──
@@ -657,15 +664,4 @@ async function runWait(
   }
   await writeStdout(JSON.stringify({ done: false, timeout: true, waitedSecs: parsed.timeoutSecs, ...last }, null, parsed.json ? 0 : 2) + '\n')
   return 7
-}
-
-export function formatToolsTable(ops: ToolRow[]): string {
-  if (ops.length === 0) return '(no operations)'
-  const width = Math.max(...ops.map((o) => o.name.length))
-  const lines = ops.map((o) => {
-    const flags = [o.readonly ? 'read' : 'write', o.remote === 'deny' ? 'local-only' : null]
-      .filter(Boolean).join(', ')
-    return `  ${o.name.padEnd(width)}  ${o.title ?? ''} (${flags})`
-  })
-  return ['Available operations:', '', ...lines, '', 'Run `walnut tools help <op>`, then `walnut tools call <op> \'{json}\'`.'].join('\n')
 }
