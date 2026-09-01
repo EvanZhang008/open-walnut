@@ -124,4 +124,56 @@ describe('runPeriodic (tick hygiene)', () => {
     handle.stop();
     expect(sawOverBudget).toBe(true);
   });
+
+  // Regression: schedule() re-armed without clearing the pending handle, and it
+  // runs both at construction AND in every tick's finally. So an out-of-band
+  // kick() (the pin-retirement boot pass is the first caller) left the original
+  // interval timer live: the task then fired TWICE per interval forever, plus one
+  // extra for every additional kick. A daily sweep became two daily sweeps.
+  it('kick() re-arms instead of stacking timers, and stop() cancels what is live', async () => {
+    const HOUR = 60 * 60 * 1000;
+    // Only the long interval timers count as "armed schedules" — the short
+    // timers a tick body awaits are not schedules.
+    const armed = new Set<unknown>();
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    const setSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(
+      ((fn: () => void, ms?: number, ...rest: unknown[]) => {
+        const t = (realSetTimeout as unknown as (...a: unknown[]) => unknown)(fn, ms, ...rest);
+        if ((ms ?? 0) >= 1000) armed.add(t);
+        return t;
+      }) as unknown as typeof setTimeout,
+    );
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout').mockImplementation(
+      ((t: unknown) => {
+        armed.delete(t);
+        (realClearTimeout as unknown as (a: unknown) => void)(t);
+      }) as unknown as typeof clearTimeout,
+    );
+    // Settle via the REAL timer so the spy's >=1000ms filter never sees it.
+    const settle = (): Promise<void> =>
+      new Promise<void>(resolve => { realSetTimeout(resolve, 40); });
+
+    try {
+      let runs = 0;
+      const handle = runPeriodic('test.rearm', HOUR, 10_000, async () => { runs++; });
+      expect(armed.size).toBe(1); // construction armed exactly one
+
+      handle.kick();
+      await settle();
+      expect(runs).toBe(1);
+      expect(armed.size).toBe(1); // the tick's re-arm REPLACED the construction timer
+
+      handle.kick();
+      await settle();
+      expect(runs).toBe(2);
+      expect(armed.size).toBe(1); // still one, however many kicks
+
+      handle.stop();
+      expect(armed.size).toBe(0);
+    } finally {
+      setSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
+  });
 });

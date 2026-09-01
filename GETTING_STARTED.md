@@ -257,6 +257,17 @@ TODO → IN_PROGRESS → ... → AGENT_COMPLETE → ... → COMPLETE
 
 When the AI finishes its work, the task moves to `AGENT_COMPLETE`. Only you mark it `COMPLETE` — the AI never closes tasks without your approval.
 
+### Retiring Finished Pins
+
+New tasks are pinned to the board, and completing one does not unpin it, so work you just finished stays visible in its tier. A completed pin then retires on its own three days later. Set the window (or switch retirement off) in `~/.open-walnut/config.yaml`:
+
+```yaml
+tasks:
+  pin_retirement_days: 3   # days a finished pin stays on the board; 0 or negative keeps pins forever
+```
+
+Retirement only unpins. It never deletes a task, never touches an open task however old, and changes no other field.
+
 ---
 
 ## Starting Sessions (Claude Code)

@@ -532,6 +532,8 @@ let sendQueueFlushHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
 /** Primary box only: re-resumes sessions whose host/daemon died under them. */
 let autoRecoverHandle: { stop: () => void } | null = null
+/** Primary box only: daily retirement of completed pins (core/task-pin-retirement.ts). */
+let pinRetirementHandle: import('../core/periodic-task.js').PeriodicHandle | null = null
 let claudeSettingsWatcherStop: (() => void) | null = null
 /** Unhooks the host-connected → publishRecovery listener (daemon-connection's
  *  listener set is module-global, so an in-process restart must not stack them). */
@@ -2635,6 +2637,46 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       }, delayMs)
       timer.unref?.()
     }
+  }
+
+  // -- Pin retirement (completed pins expire off the board) --
+  // task_create pins by default and completion deliberately does NOT unpin, so
+  // without a clock the pinned set only grows: measured 2026-08-31 on the live
+  // box, 1,237 pins of which 91 were open work, and the Focus tier alone held
+  // 703 rows for 16 real tasks. The sweep unpins any COMPLETED pin finished more
+  // than `tasks.pin_retirement_days` (default 3) ago; the FIRST run is therefore
+  // also the one-time cleanup of the accumulated backlog (no migration script).
+  //
+  // Primary only: task rows on the replica are a projection of these, so a sweep
+  // there would race the import and be overwritten by it.
+  if (!CLOUD_MODE) {
+    void (async () => {
+      try {
+        const { sweepPinRetirement, PIN_RETIREMENT_SWEEP_INTERVAL_MS, PIN_RETIREMENT_BOOT_DELAY_MS } =
+          await import('../core/task-pin-retirement.js')
+        const { runPeriodic } = await import('../core/periodic-task.js')
+        // runPeriodic (the mandatory shape for periodic background work) gives
+        // the reentrancy lock, the per-tick budget the chunked sweep checks
+        // between chunks, stall attribution by name, and jitter. Its first tick
+        // is one interval away, so the boot pass is an explicit early kick.
+        pinRetirementHandle = runPeriodic('pin-retirement', PIN_RETIREMENT_SWEEP_INTERVAL_MS, 60_000, async (ctx) => {
+          const report = await sweepPinRetirement({ shouldStop: () => ctx.overBudget() })
+          if (report.retired > 0 || report.stoppedEarly) {
+            log.web.info('pin retirement pass', {
+              retired: report.retired, candidates: report.candidates,
+              scanned: report.scanned, days: report.days,
+              oldestKept: report.oldestKept, stoppedEarly: report.stoppedEarly,
+            })
+          }
+        })
+        const kick = setTimeout(() => { pinRetirementHandle?.kick?.() }, PIN_RETIREMENT_BOOT_DELAY_MS)
+        kick.unref?.()
+      } catch (err) {
+        log.web.warn('pin retirement wiring failed — completed pins will not retire', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    })()
   }
 
   // -- Init SubagentRunner + SessionRunner --
@@ -5165,6 +5207,10 @@ export async function stopServer(): Promise<void> {
     sendQueueFlushHandle = null
   }
   stopMobileEventsFeed()
+  if (pinRetirementHandle) {
+    pinRetirementHandle.stop()
+    pinRetirementHandle = null
+  }
   if (autoContinueHandle) {
     autoContinueHandle.stop()
     autoContinueHandle = null

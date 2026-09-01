@@ -149,6 +149,96 @@ describe('task-outbox: cloud side', () => {
     current = mods;
     expect((await mods.tm.listTasks()).some((t) => t.id === id)).toBe(true);
   });
+
+  // Pin retirement (core/task-pin-retirement.ts) is the one primary write that
+  // deliberately leaves `updated_at` alone — bumping 1,100 finished rows would
+  // sort the junk it just retired to the top of every recency surface. The
+  // `updated_at` LWW gate would therefore drop the unpin, and since a finished
+  // task never gets another edit the replica would keep every retired pin
+  // forever. These three cases pin the equal-clock branch that closes that hole
+  // WITHOUT weakening LWW for anything else.
+  async function seedPinnedReplicaRow(): Promise<{
+    mods: Modules; id: string; updatedAt: string;
+    writeProjection: (row: Record<string, unknown>) => Promise<void>;
+  }> {
+    const mods = await loadWithCloudMode(true);
+    const { tm, projection } = mods;
+    const { task } = await tm.addTask({ title: 'finished pin', source: 'local' });
+    await tm.updateTaskRaw(task.id, {
+      pinned: true, pin_order: 3, focus_tier: 'focus',
+      phase: 'COMPLETE', status: 'done',
+      completed_at: new Date(Date.now() - 9 * 86_400_000).toISOString(),
+    });
+    const row = (await tm.listTasks()).find((t) => t.id === task.id)!;
+    const writeProjection = async (projected: Record<string, unknown>): Promise<void> => {
+      await fsp.mkdir(path.dirname(projection.PROJECTION_FILE), { recursive: true });
+      await fsp.writeFile(projection.PROJECTION_FILE, JSON.stringify({
+        version: projection.PROJECTION_VERSION,
+        exportedAt: new Date().toISOString(),
+        // truncated: absence must not be read as a primary-side delete here —
+        // this fixture ships exactly one row on purpose.
+        truncated: true,
+        tasks: [projected],
+      }));
+    };
+    return { mods, id: task.id, updatedAt: row.updated_at, writeProjection };
+  }
+
+  it('applies a clock-silent primary unpin (pin retirement) at an EQUAL updated_at', async () => {
+    const { mods, id, updatedAt, writeProjection } = await seedPinnedReplicaRow();
+    current = mods;
+    // Exactly what the primary exports after the sweep: same clock, no pin keys.
+    await writeProjection({
+      id, title: 'finished pin', status: 'done', phase: 'COMPLETE', priority: 'none',
+      project: '', created_at: updatedAt, updated_at: updatedAt,
+    });
+
+    expect(await mods.outbox.importProjectionOnCloud()).toBe(1);
+    const after = (await mods.tm.listTasks()).find((t) => t.id === id)!;
+    expect(after.pinned).toBeFalsy();
+    expect(after.pin_order).toBeUndefined();
+    expect(after.focus_tier).toBeUndefined();
+    // The pin-only patch must not move the replica's clock either — that is what
+    // keeps the pass idempotent instead of ping-ponging with the next export.
+    expect(after.updated_at).toBe(updatedAt);
+  });
+
+  it('does nothing when the clocks AND the pin state already agree', async () => {
+    const { mods, id, updatedAt, writeProjection } = await seedPinnedReplicaRow();
+    current = mods;
+    await writeProjection({
+      id, title: 'finished pin', status: 'done', phase: 'COMPLETE', priority: 'none',
+      project: '', created_at: updatedAt, updated_at: updatedAt,
+      pinned: true, pin_order: 3, focus_tier: 'focus',
+    });
+
+    expect(await mods.outbox.importProjectionOnCloud()).toBe(0);
+    const after = (await mods.tm.listTasks()).find((t) => t.id === id)!;
+    expect(after.pinned).toBe(true);
+    expect(after.focus_tier).toBe('focus');
+  });
+
+  it('never reverts a replica-side pin edit that has not reached the primary yet', async () => {
+    const { mods, id, updatedAt, writeProjection } = await seedPinnedReplicaRow();
+    current = mods;
+    // The replica unpinned by hand, which moves ITS clock forward (togglePin
+    // stamps updated_at) — so the older projection still claiming the pin must
+    // lose, and the equal-clock branch must not fire on a NEWER local row.
+    const replicaClock = new Date(Date.parse(updatedAt) + 60_000).toISOString();
+    await mods.tm.updateTaskRaw(id, {
+      pinned: false, pin_order: null, focus_tier: null, updated_at: replicaClock,
+    } as never);
+    await writeProjection({
+      id, title: 'finished pin', status: 'done', phase: 'COMPLETE', priority: 'none',
+      project: '', created_at: updatedAt, updated_at: updatedAt,
+      pinned: true, pin_order: 3, focus_tier: 'focus',
+    });
+
+    expect(await mods.outbox.importProjectionOnCloud()).toBe(0);
+    const after = (await mods.tm.listTasks()).find((t) => t.id === id)!;
+    expect(after.pinned).toBeFalsy();
+    expect(after.updated_at).toBe(replicaClock);
+  });
 });
 
 // ── Primary side: applyOutboxOnPrimary ──────────────────────────────────────

@@ -124,6 +124,26 @@ const UPDATE_WHITELIST: (keyof Task)[] = [
 const LEGACY_SKIP_WHEN_EMPTY: (keyof Task)[] = ['description', 'note'];
 const LEGACY_NEVER_APPLY: (keyof Task)[] = ['summary'];
 
+/**
+ * True when the primary's projected pin state disagrees with the replica's row.
+ * Used by importProjectionOnCloud for the one primary write that deliberately
+ * does NOT move `updated_at` (pin retirement); see the branch that calls it.
+ *
+ * Normalized both sides because the projection omits rather than falsifies:
+ * `pinned` is absent when false, and `pin_order` / `focus_tier` are omitted
+ * entirely on an unpinned row.
+ */
+function pinStateDiffers(
+  projected: { pinned?: boolean; pin_order?: number; focus_tier?: string },
+  row: Task,
+): boolean {
+  if (!!projected.pinned !== !!row.pinned) return true;
+  const projectedOrder = typeof projected.pin_order === 'number' ? projected.pin_order : null;
+  const rowOrder = typeof row.pin_order === 'number' ? row.pin_order : null;
+  if (projectedOrder !== rowOrder) return true;
+  return (projected.focus_tier ?? '') !== (row.focus_tier ?? '');
+}
+
 let opSeq = 0;
 
 /**
@@ -628,6 +648,33 @@ export async function importProjectionOnCloud(): Promise<number> {
           tags: p.tags,
           summary: p.summary,
           updated_at: p.updated_at,
+        },
+      });
+    } else if (
+      Date.parse(p.updated_at) === Date.parse(row.updated_at) &&
+      pinStateDiffers(p, row)
+    ) {
+      // SAME clock, DIFFERENT pin state. The `updated_at` LWW gate above assumes
+      // every primary write moves the row's clock, and one deliberately does not:
+      // pin retirement (core/task-pin-retirement.ts) unpins old completed rows
+      // WITHOUT touching updated_at, because bumping 1,100 finished tasks would
+      // sort them all to the top of every recency surface (the 40-entry recent-task
+      // ledger, search decay) — the exact junk it just retired. Without this branch
+      // the replica keeps every retired pin forever and the phone board never
+      // shrinks, since a finished task never gets another edit to carry the change.
+      //
+      // Only the pin trio is patched, and `updated_at` is deliberately left alone,
+      // so the pass is idempotent (the next import sees matching pin state).
+      // Equality is the whole safety argument: any replica-side pin write bumps its
+      // own row's clock (togglePin / reorderPins), so equal clocks mean neither box
+      // has an unsynced pin edit — and rows with a queued op are already excluded
+      // by `pendingIds` above.
+      toUpdate.push({
+        id: p.id,
+        patch: {
+          pinned: !!p.pinned,
+          pin_order: (p.pin_order ?? null) as Task['pin_order'],
+          focus_tier: (p.focus_tier ?? null) as Task['focus_tier'],
         },
       });
     }

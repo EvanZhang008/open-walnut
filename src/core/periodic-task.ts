@@ -87,6 +87,14 @@ export function runPeriodic(
   }
 
   const schedule = (): void => {
+    // Cancel whatever is already armed BEFORE arming again. schedule() has three
+    // callers (construction, every tick's finally, the skipped-tick branch) and
+    // kick() runs a tick out of band, so an out-of-band tick used to re-arm on
+    // top of the still-pending construction timer: two live timers, i.e. the task
+    // firing twice per interval forever, plus one more for every extra kick().
+    // Clearing here also keeps stop() correct — `timer` is always the only handle
+    // in flight, so cancelling it cancels everything.
+    if (timer) { clearTimeout(timer); timer = null }
     if (stopped) return
     const jitter = baseInterval * 0.1 * (Math.random() * 2 - 1)
     timer = setTimeout(() => { void tick() }, Math.max(250, baseInterval + jitter))
