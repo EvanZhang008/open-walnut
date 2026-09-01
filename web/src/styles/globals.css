@@ -10092,57 +10092,10 @@ body.walnut-dragging {
   box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
-/* One soft sweep of accent light travels across the card, left to right —
-   the shared "here it is" cue for both locate jumps and click-to-open
-   (user-picked W1, single slow pass). It rides background-image longhands so
-   the card's own background-color (red attention, done, …) never repaints. */
-@keyframes todo-locate-sweep {
-  0% {
-    background-image: linear-gradient(100deg, transparent 18%, color-mix(in srgb, var(--accent) 22%, transparent) 45%, transparent 72%);
-    background-size: 260% 100%;
-    background-repeat: no-repeat;
-    background-position: 130% 0;
-  }
-  100% {
-    background-image: linear-gradient(100deg, transparent 18%, color-mix(in srgb, var(--accent) 22%, transparent) 45%, transparent 72%);
-    background-size: 260% 100%;
-    background-repeat: no-repeat;
-    background-position: -130% 0;
-  }
-}
-
-/* Same sweep under a second name for the click-to-open path: if the open and
-   locate animations shared one name, the name would survive the class change
-   and keep its FINISHED state — locate on an open card would never replay. */
-@keyframes todo-open-sweep {
-  0% {
-    background-image: linear-gradient(100deg, transparent 18%, color-mix(in srgb, var(--accent) 22%, transparent) 45%, transparent 72%);
-    background-size: 260% 100%;
-    background-repeat: no-repeat;
-    background-position: 130% 0;
-  }
-  100% {
-    background-image: linear-gradient(100deg, transparent 18%, color-mix(in srgb, var(--accent) 22%, transparent) 45%, transparent 72%);
-    background-size: 260% 100%;
-    background-repeat: no-repeat;
-    background-position: -130% 0;
-  }
-}
-
-/* The selection ring breathes to full accent once alongside the sweep, then
-   relaxes back to its resting 55% alpha. */
-@keyframes todo-locate-ring {
-  0%, 55% { box-shadow: inset 0 0 0 1.5px var(--accent); }
-  100%    { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent); }
-}
-
+/* Locate (session panel → task) is scroll-only by user call (2026-08-31):
+   no transient animation — the constant selection ring and the session-open
+   chevron are the "which card" answer. The class is kept as a hook. */
 .todo-card-locate-flash {
-  /* !important: .todo-pinned-card-session-open sets its own `animation`
-     LATER in this file at equal specificity, which silently clobbered this
-     cue on exactly the card a session-panel locate targets (that card's
-     session is by definition open). The locate cue is a one-shot,
-     user-initiated signal and must always win the cascade. */
-  animation: todo-locate-sweep 0.9s cubic-bezier(0.4, 0, 0.2, 1), todo-locate-ring 1.4s ease-out !important;
   border-radius: 8px;
 }
 
@@ -10219,16 +10172,6 @@ body.walnut-dragging {
    3px left bar crowded the gutter where the unread dot / rail already live. */
 .todo-pinned-card-session-open {
   padding-right: 22px; /* keep the title clear of the chevron */
-  /* One-shot open transition: a slight press (standalone `scale` so it can
-     never clobber dnd-kit's inline translate) plus the same single light
-     sweep the locate jump uses — click and locate share one vocabulary. */
-  animation: session-open-press 0.34s cubic-bezier(0.2, 0.8, 0.3, 1), todo-open-sweep 0.9s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-@keyframes session-open-press {
-  0%   { scale: 1; }
-  35%  { scale: 0.985; }
-  100% { scale: 1; }
 }
 
 .todo-pinned-card-session-open::after {
@@ -10243,19 +10186,6 @@ body.walnut-dragging {
   border-radius: 0.5px;
   transform: translate(0, -50%) rotate(45deg);
   pointer-events: none;
-  /* chevron slides in once, then sits still */
-  animation: session-open-chev 0.4s cubic-bezier(0.2, 0.8, 0.3, 1) 0.1s backwards;
-}
-
-@keyframes session-open-chev {
-  from { opacity: 0; transform: translate(-6px, -50%) rotate(45deg); }
-  to   { opacity: 1; transform: translate(0, -50%) rotate(45deg); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .todo-pinned-card-session-open,
-  .todo-pinned-card-session-open::after,
-  .todo-card-locate-flash { animation: none !important; }
 }
 
 /* The right edge belongs to the hover actions (▶ / kebab) — the chevron yields. */
