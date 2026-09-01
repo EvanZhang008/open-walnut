@@ -127,7 +127,7 @@ describe('fork title async refinement', () => {
     expect(source.group_id).toBe(fork.group_id);
   });
 
-  it('keeps an Ask Walnut fork flat (no auto-folder) and inherits walnut_agent', async () => {
+  it('groups an Ask Walnut fork like any other and inherits walnut_agent', async () => {
     const parent = await addTask({
       title: 'Ask Walnut', project: 'Ask Walnut', walnut_agent: true,
     });
@@ -144,9 +144,10 @@ describe('fork title async refinement', () => {
 
     const fork = await getTaskById(body.taskId);
     const source = await getTaskById(parent.task.id);
-    // The Ask Walnut project IS the grouping — no "<title> Variants" folder.
-    expect(fork.group_id).toBeUndefined();
-    expect(source.group_id).toBeUndefined();
+    // Folder behavior is uniform across all tasks (the board shows the owning
+    // project on the folder chip, so the project is never visually replaced).
+    expect(fork.group_id).toBeTruthy();
+    expect(source.group_id).toBe(fork.group_id);
     // A fork of a Walnut conversation is still a Walnut conversation.
     expect(fork.walnut_agent).toBe(true);
   });

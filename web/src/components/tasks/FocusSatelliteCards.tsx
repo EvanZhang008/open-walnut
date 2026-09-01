@@ -39,10 +39,15 @@ export { groupSortableId } from './tier-group-sentinels';
  *    Being a collision target is also correct: dropping on a chip means "land above
  *    this group", and it's the natural target when swapping two groups.
  */
-export function GroupChip({ groupId, tier, label, onRename, onDissolve, onHide }: {
+export function GroupChip({ groupId, tier, label, project, onRename, onDissolve, onHide }: {
   groupId: string;
   tier: FocusTier;
   label: string;
+  /** Owning project, shown as a muted prefix. Passed only when the tier is NOT
+   *  rendering project label rows (flat/custom modes): without it the chip is
+   *  the only container line visible and reads as if it REPLACED the project
+   *  ("Ask Walnut Variants" hijacking "Ask Walnut", user report 2026-08-31). */
+  project?: string;
   onRename?: (groupId: string, label: string) => void;
   onDissolve?: (groupId: string) => void;
   onHide?: (groupId: string) => void;
@@ -75,6 +80,14 @@ export function GroupChip({ groupId, tier, label, onRename, onDissolve, onHide }
       <span className="task-group-chip-icon" aria-hidden="true">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z" /></svg>
       </span>
+      {project !== undefined && (
+        <span
+          className="task-group-chip-project"
+          style={{ color: 'var(--fg-muted)', fontWeight: 400, whiteSpace: 'nowrap' }}
+        >
+          {project}&nbsp;/
+        </span>
+      )}
       <span
         className="task-group-chip-label"
         onClick={(e) => { e.stopPropagation(); onRename?.(groupId, label); }}

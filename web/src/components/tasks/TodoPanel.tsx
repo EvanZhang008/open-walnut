@@ -6237,7 +6237,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         if (runFollows) continue;
         out.push(
           <GroupChip key={groupSortableId(gid, tier)} groupId={gid} tier={tier}
-            label={taskGroups?.[gid] ?? ''} onRename={handleRenameGroup}
+            label={taskGroups?.[gid] ?? ''}
+            project={!showFolders && folderMeta?.[gid] !== undefined
+              ? (folderMeta[gid].project || 'Inbox') : undefined}
+            onRename={handleRenameGroup}
             onDissolve={handleDissolveGroup} onHide={handleHideGroup} />
         );
         continue;
@@ -6337,7 +6340,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (gi?.isLead) {
         out.push(
           <GroupChip key={groupSortableId(gi.groupId, tier)} groupId={gi.groupId} tier={tier}
-            label={gi.label} onRename={handleRenameGroup}
+            label={gi.label} project={!showFolders ? (task.project || 'Inbox') : undefined}
+            onRename={handleRenameGroup}
             onDissolve={handleDissolveGroup} onHide={handleHideGroup} />
         );
       }
