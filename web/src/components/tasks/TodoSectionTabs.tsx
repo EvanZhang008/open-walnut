@@ -67,9 +67,14 @@ interface TodoSectionTabsProps {
   counts: Partial<Record<TodoSection, number>>;
   /** User-defined tiers — each gets its own tab between Wait and Recent. */
   customTiers?: CustomTierDef[];
+  /** Search mode only: completed-results toggle chip pinned to the strip's right
+      edge. The strip is the one row that stays visible while search results own
+      the panel, so the toggle lives here — a fold row at the list TAIL forced
+      scrolling to the bottom to reach it (user ruling 2026-08-31). */
+  searchDone?: { count: number; shown: boolean; onToggle: () => void };
 }
 
-export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange, counts, customTiers }: TodoSectionTabsProps) {
+export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange, counts, customTiers, searchDone }: TodoSectionTabsProps) {
   // Custom tier tabs slot in right after the built-in tiers so the strip reads
   // tiers-then-feeds: All | Focus | Satellite | Backlog | Wait | <customs> | Recent | Tasks | Notes.
   const sections: { id: TodoSection; label: string; title: string }[] = [];
@@ -106,6 +111,21 @@ export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange,
           </button>
         );
       })}
+      {searchDone && (
+        <button
+          type="button"
+          className={`todo-section-tab todo-search-done-chip${searchDone.shown ? ' is-active' : ''}`}
+          aria-pressed={searchDone.shown}
+          onClick={searchDone.onToggle}
+          title={searchDone.shown
+            ? 'Hide completed results'
+            : 'Include completed results, ranked by relevance'}
+        >
+          <span className="todo-section-tab-icon" aria-hidden="true">✓</span>
+          <span className="todo-search-done-chip-label">Done</span>
+          <span className="todo-section-tab-count">{searchDone.count > 99 ? '99+' : searchDone.count}</span>
+        </button>
+      )}
     </div>
   );
 });

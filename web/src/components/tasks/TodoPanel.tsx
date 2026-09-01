@@ -4591,11 +4591,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     ];
   }, [tasks, filtered, isSearchMode, deferredSearchQuery, searchResults, taskQueryState, matchesCanonicalQuery]);
 
-  // Completed-results fold (search only): the ranked list shows OPEN tasks by
+  // Completed-results toggle (search only): the ranked list shows OPEN tasks by
   // default — a broad query used to bury live work under strikethrough history.
-  // Completed matches collapse into one footer row ("N completed hidden — show")
-  // so the moment a user misses a completed task they know why and where. The
-  // reveal is per-search: it resets when search closes, never persists.
+  // The "✓ Done N" chip in the section-tab strip reveals them, and revealed rows
+  // interleave in PURE relevance order — appending them below every open row
+  // forced a scroll to the bottom (user ruling 2026-08-31). The reveal is
+  // per-search: it resets when search closes, never persists.
   // Tasks completed THIS session keep their grace slot in the open list so
   // checking a box in search results doesn't rip the row out from under the
   // cursor (same recentlyCompleted grace the plain list uses).
@@ -4611,17 +4612,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Counts and cross-section visibility use the complete match set, but the main
   // list mounts a bounded number of rows so neither search phase can stall typing.
-  // Revealed completed rows get their own bounded slice appended AFTER every open
-  // row — rank order within each group is preserved.
-  const searchFiltered = useMemo(() => {
-    const open = searchOpenMatches.slice(0, 40);
-    if (!showDoneResults) return open;
-    const openIds = new Set(open.map((t) => t.id));
-    return [...open, ...searchMatches.filter((t) => !openIds.has(t.id) && t.status === 'done').slice(0, 25)];
-  }, [searchOpenMatches, searchMatches, showDoneResults]);
+  const searchFiltered = useMemo(
+    () => (showDoneResults ? searchMatches : searchOpenMatches).slice(0, 40),
+    [searchOpenMatches, searchMatches, showDoneResults],
+  );
 
   // Count of search results (for display) — counts what the list SHOWS, the
-  // fold row carries the hidden remainder.
+  // Done chip carries the hidden remainder.
   const searchResultCount = isSearchMode
     ? (showDoneResults ? searchMatches.length : searchOpenMatches.length)
     : null;
@@ -6492,7 +6489,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       />
 
       {/* Section tabs — one section owns the panel at a time (see TodoSectionTabs). */}
-      <TodoSectionTabs active={effectiveSection} onChange={handleSectionChange} counts={sectionCounts} customTiers={customTiers} />
+      <TodoSectionTabs
+        active={effectiveSection}
+        onChange={handleSectionChange}
+        counts={sectionCounts}
+        customTiers={customTiers}
+        searchDone={isSearchMode && searchDoneCount > 0
+          ? { count: searchDoneCount, shown: showDoneResults, onToggle: () => setShowDoneResults((v) => !v) }
+          : undefined}
+      />
 
       {/* Mini-bar: high-frequency verbs that used to hide in the View dropdown.
           ONLY on the Tasks section view — the pinned tiers and the stacked All
@@ -7040,11 +7045,22 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             {isSearching
               ? <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2, margin: '0 auto' }} />
               : (
-                <p className="text-sm">
-                  {searchDoneCount > 0
-                    ? <>No open tasks match &lsquo;{deferredSearchQuery}&rsquo;</>
-                    : <>No tasks match &lsquo;{deferredSearchQuery}&rsquo;</>}
-                </p>
+                searchDoneCount > 0
+                  ? (
+                    <>
+                      <p className="text-sm">No open tasks match &lsquo;{deferredSearchQuery}&rsquo;</p>
+                      {/* Inline mirror of the ✓ Done chip so the answer is right
+                          where the user is already looking, not up in the strip. */}
+                      <button
+                        type="button"
+                        className="todo-search-done-reveal"
+                        onClick={() => setShowDoneResults(true)}
+                      >
+                        Show {searchDoneCount} completed result{searchDoneCount === 1 ? '' : 's'}
+                      </button>
+                    </>
+                  )
+                  : <p className="text-sm">No tasks match &lsquo;{deferredSearchQuery}&rsquo;</p>
               )}
           </div>
         )}
@@ -7141,24 +7157,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               });
             })()}
           </div>
-        )}
-        {/* Completed-results fold — search only: appears whenever the query
-            matched completed tasks, whether or not any open row rendered, so a
-            "missing" completed task always explains itself right where the
-            user is looking. */}
-        {!loading && isSearchMode && searchDoneCount > 0 && (
-          <button
-            type="button"
-            className="todo-search-done-fold"
-            onClick={() => setShowDoneResults((v) => !v)}
-            title={showDoneResults
-              ? 'Hide completed results'
-              : 'Show completed results below the open ones'}
-          >
-            {showDoneResults
-              ? `✓ hide ${searchDoneCount} completed`
-              : `✓ ${searchDoneCount} completed result${searchDoneCount === 1 ? '' : 's'} hidden — show`}
-          </button>
         )}
         {/* Flat mode: ungrouped list sorted by selected sort option */}
         {!loading && !isSearchMode && groupBy === 'none' && sorted.length > 0 && (

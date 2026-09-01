@@ -30978,22 +30978,24 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 .todo-pinned-stale-fold:hover { opacity: 1; color: var(--accent); }
 
-/* Completed-results fold at the tail of the search list (design B): a ghost
-   row that explains hidden completed matches and toggles them inline. */
-.todo-search-done-fold {
-  display: block;
-  width: 100%;
-  text-align: center;
-  border: none;
+/* Completed-results toggle chip: rides the right edge of the section-tab strip
+   during search. Inherits .todo-section-tab visuals; label stays visible (the
+   tab label-collapse rule keys off .todo-section-tab-label, which this avoids). */
+.todo-search-done-chip { margin-left: auto; flex-shrink: 0; }
+.todo-search-done-chip-label { white-space: nowrap; }
+/* Empty-state mirror of the chip when a query matched ONLY completed tasks. */
+.todo-search-done-reveal {
+  display: inline-block;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
   background: none;
   cursor: pointer;
-  padding: 7px 14px 9px;
-  margin-top: 2px;
+  padding: 4px 10px;
   font-size: 11px;
   color: var(--fg-muted);
-  border-top: 1px dashed var(--border);
 }
-.todo-search-done-fold:hover { color: var(--accent); }
+.todo-search-done-reveal:hover { color: var(--accent); border-color: var(--accent); }
 
 /* ── Agent task search (✦ AI section pinned atop the task panel) ─────────── */
 .agent-search-panel {
