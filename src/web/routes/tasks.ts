@@ -1196,6 +1196,10 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
       res.status(400).json({ error: 'unread must be a boolean' })
       return
     }
+    if (req.body.walnut_agent !== undefined && typeof req.body.walnut_agent !== 'boolean') {
+      res.status(400).json({ error: 'walnut_agent must be a boolean' })
+      return
+    }
     if (req.body.parent_task_id !== undefined && typeof req.body.parent_task_id !== 'string') {
       res.status(400).json({ error: 'parent_task_id must be a string (task ID or empty string to remove)' })
       return

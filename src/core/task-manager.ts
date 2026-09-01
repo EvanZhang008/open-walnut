@@ -3028,6 +3028,8 @@ export interface UpdateTaskInput {
   set_depends_on?: string[];      // Replace all dependencies (overwrite)
   cwd?: string;                   // Task-level cwd override. Empty string clears.
   cwd_missing?: boolean;          // Flag when the cwd no longer exists on disk.
+  /** Mark/unmark as an Ask Walnut (Personal-AI) task — see Task.walnut_agent. */
+  walnut_agent?: boolean;
 }
 
 // ── Cross-source migration ──
@@ -3322,6 +3324,8 @@ export async function updateTask(
   if (updates.start_date !== undefined) task.start_date = updates.start_date || undefined;
   if (updates.end_date !== undefined) task.end_date = updates.end_date || undefined;
   if (updates.unread !== undefined) task.unread = updates.unread;
+  // Stored as presence-only (true or absent), mirroring addTask.
+  if (updates.walnut_agent !== undefined) task.walnut_agent = updates.walnut_agent || undefined;
   // Track parent change for plugin notification (fired after writeStore)
   let parentChangeAction: (() => void) | undefined;
   if (updates.parent_task_id !== undefined) {

@@ -474,25 +474,37 @@ export async function forkSessionToTask(
       // any other hand-made task (Satellite = pinned, no stored tier).
       pinned: true,
       ...(inheritedTier ? { focus_tier: inheritedTier } : {}),
+      // Forking an Ask Walnut conversation yields another Ask Walnut
+      // conversation: without the flag the fork loses the amber marker AND the
+      // persona drift repair (both key on task.walnut_agent, never on project).
+      ...(sourceTask.walnut_agent ? { walnut_agent: true } : {}),
     });
     // Visually group the source task + fork. Reuse the source task's existing
     // group if it already belongs to one. Best-effort: a grouping failure must
     // not abort the fork — the fork task still exists standalone.
+    //
+    // EXCEPT Ask Walnut conversations (walnut_agent): their project is already
+    // the grouping, and the auto "<title> Variants" folder band visually
+    // hijacked the project header on the board (user report 2026-08-31). The
+    // fork stays a flat sibling; lineage still rides forkedFromSessionId and
+    // the "- fork of <source>" title.
     let forkGroupId: string | undefined;
-    try {
-      if (sourceTask.group_id) {
-        const r = await addToGroup(sourceTask.group_id, [newFork.id]);
-        forkGroupId = r.group_id;
-      } else {
-        // Seed label with the source title; refined to an AI group name below.
-        const r = await groupTasks([sourceTask.id, newFork.id], sourceTask.title);
-        forkGroupId = r.group_id;
+    if (!sourceTask.walnut_agent) {
+      try {
+        if (sourceTask.group_id) {
+          const r = await addToGroup(sourceTask.group_id, [newFork.id]);
+          forkGroupId = r.group_id;
+        } else {
+          // Seed label with the source title; refined to an AI group name below.
+          const r = await groupTasks([sourceTask.id, newFork.id], sourceTask.title);
+          forkGroupId = r.group_id;
+        }
+      } catch (err) {
+        log.session.warn('fork: failed to group source + fork', {
+          sourceTaskId: sourceTask.id, forkTaskId: newFork.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
-    } catch (err) {
-      log.session.warn('fork: failed to group source + fork', {
-        sourceTaskId: sourceTask.id, forkTaskId: newFork.id,
-        error: err instanceof Error ? err.message : String(err),
-      });
     }
 
     // Emit task:created with the FINAL persisted state, not the stale addTask()

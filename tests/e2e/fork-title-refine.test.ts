@@ -39,7 +39,9 @@ function apiUrl(p: string): string {
 
 async function getTaskById(id: string) {
   const res = await fetch(apiUrl(`/api/tasks/${id}`));
-  const { task } = await res.json() as { task: { id: string; title: string } };
+  const { task } = await res.json() as {
+    task: { id: string; title: string; group_id?: string; walnut_agent?: boolean };
+  };
   return task;
 }
 
@@ -104,5 +106,48 @@ describe('fork title async refinement', () => {
     await new Promise((r) => setTimeout(r, 300));
     const task = await getTaskById(body.taskId);
     expect(task.title).toBe('Fork of Plain Parent');
+  });
+
+  it('groups an ordinary fork with its source task', async () => {
+    const parent = await addTask({ title: 'Grouped Parent', category: 'Inbox' });
+    const sid = 'fork-src-session-3';
+    await createSessionRecord(sid, parent.task.id, 'proj', '/tmp/fork-cwd-3');
+
+    const res = await fetch(apiUrl(`/api/sessions/${sid}/fork`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ create_child_task: true }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { taskId: string };
+
+    const fork = await getTaskById(body.taskId);
+    const source = await getTaskById(parent.task.id);
+    expect(fork.group_id).toBeTruthy();
+    expect(source.group_id).toBe(fork.group_id);
+  });
+
+  it('keeps an Ask Walnut fork flat (no auto-folder) and inherits walnut_agent', async () => {
+    const parent = await addTask({
+      title: 'Ask Walnut', project: 'Ask Walnut', walnut_agent: true,
+    });
+    const sid = 'fork-src-session-walnut';
+    await createSessionRecord(sid, parent.task.id, 'Ask Walnut', '/tmp/fork-cwd-w');
+
+    const res = await fetch(apiUrl(`/api/sessions/${sid}/fork`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ create_child_task: true }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { taskId: string };
+
+    const fork = await getTaskById(body.taskId);
+    const source = await getTaskById(parent.task.id);
+    // The Ask Walnut project IS the grouping — no "<title> Variants" folder.
+    expect(fork.group_id).toBeUndefined();
+    expect(source.group_id).toBeUndefined();
+    // A fork of a Walnut conversation is still a Walnut conversation.
+    expect(fork.walnut_agent).toBe(true);
   });
 });
