@@ -144,6 +144,10 @@ export function ContextMenu({ point, items, onClose, ariaLabel, testId }: Contex
         // A right-click INSIDE the menu must not open the browser's menu on top
         // of ours, and must not close it either (that reads as a mis-click).
         onContextMenu={(e) => e.preventDefault()}
+        // Menu-portal hard rule (web/src/AGENTS.md): React events bubble through
+        // portals into the OWNING component tree, so without this a press inside
+        // the menu reaches a dnd-kit activator row and arms a drag of that row.
+        onPointerDown={(e) => e.stopPropagation()}
       >
         {rows.map((row, index) => {
           if (row.divider) return <div key={row.key ?? `div-${index}`} className="wn-context-menu-divider" />;

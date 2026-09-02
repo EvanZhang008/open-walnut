@@ -16,6 +16,9 @@
  *  - moving a task to another project auto-unfolders it (the folder is the
  *    project's private structure, so it never follows the task) — both on
  *    updateTask and on the raw sync path
+ *  - moveFolderToProject is the inverse: moving the FOLDER carries its whole
+ *    subtree (descendant folders + every member task, membership kept) and the
+ *    moved folder becomes top-level in the destination
  *  - group_id round-trips through the SQLite payload blob (no dedicated column)
  *  - group_id is local-only (never part of a plugin push) — verified structurally
  *    by it living only in payload (covered by the round-trip test).
@@ -38,6 +41,8 @@ import {
   createFolder,
   deleteFolder,
   setFolderParent,
+  moveFolderToProject,
+  getProjectRecord,
   renameGroup,
   setGroupHidden,
   listGroups,
@@ -48,6 +53,8 @@ import {
 } from '../../src/core/task-manager.js';
 import { closeDb, getDb } from '../../src/core/task-db.js';
 import { WALNUT_HOME } from '../../src/constants.js';
+import { registry } from '../../src/core/integration-registry.js';
+import { createMockPlugin, createNoopSync } from './plugin-test-utils.js';
 
 beforeEach(async () => {
   closeDb();
@@ -520,6 +527,396 @@ describe('project move auto-unfolders the task', () => {
     const reloaded = await getTask(a);
     expect(reloaded.unread).toBe(true);
     expect(reloaded.group_id).toBe(g.group_id);
+  });
+});
+
+/**
+ * moveFolderToProject — the INVERSE of the auto-unfolder above. Moving a TASK
+ * across projects drops its folder; moving the FOLDER takes its whole subtree
+ * (descendant folders + every member task) along, and members keep group_id.
+ */
+describe('moveFolderToProject', () => {
+  it('moves the folder, its descendants and every member task, keeping membership', async () => {
+    const root = await createFolder('Root', 'Marina');
+    const child = await createFolder('Child', 'Marina', root.group_id);
+    const grand = await createFolder('Grand', 'Marina', child.group_id);
+    const [rootTask, childTask, grandTask, loose] = await makeTasks(
+      ['Root member', 'Child member', 'Grand member', 'Unfoldered'], 'Marina',
+    );
+    await addToGroup(root.group_id, [rootTask]);
+    await addToGroup(child.group_id, [childTask]);
+    await addToGroup(grand.group_id, [grandTask]);
+
+    const result = await moveFolderToProject(root.group_id, 'Acme');
+
+    expect(result.group_id).toBe(root.group_id);
+    expect(result.project).toBe('Acme');
+    expect(result.moved_folder_ids).toEqual([root.group_id, child.group_id, grand.group_id]);
+    expect(result.moved_task_ids.sort()).toEqual([rootTask, childTask, grandTask].sort());
+
+    // Every folder in the subtree now belongs to the destination project.
+    for (const gid of [root.group_id, child.group_id, grand.group_id]) {
+      expect((await folder(gid))?.project).toBe('Acme');
+    }
+    // The subtree's SHAPE survives: descendants keep their parent links.
+    expect((await folder(child.group_id))?.parent_id).toBe(root.group_id);
+    expect((await folder(grand.group_id))?.parent_id).toBe(child.group_id);
+
+    // Members moved WITH their membership intact (the whole point).
+    for (const [id, gid] of [[rootTask, root.group_id], [childTask, child.group_id], [grandTask, grand.group_id]] as const) {
+      const t = await getTask(id);
+      expect(t.project).toBe('Acme');
+      expect(t.group_id).toBe(gid);
+    }
+    // A non-member in the old project is untouched.
+    expect((await getTask(loose)).project).toBe('Marina');
+    // group_id survives a real reload from SQLite (it rides the payload blob).
+    closeDb();
+    _resetForTesting();
+    expect((await getTask(childTask)).group_id).toBe(child.group_id);
+    expect((await folder(child.group_id))?.project).toBe('Acme');
+  });
+
+  it('clears the moved folder\'s parent_id but leaves that parent behind', async () => {
+    const parent = await createFolder('Stays', 'Marina');
+    const mover = await createFolder('Goes', 'Marina', parent.group_id);
+    const sibling = await createFolder('Also stays', 'Marina', parent.group_id);
+
+    await moveFolderToProject(mover.group_id, 'Acme');
+
+    // The mover is top-level in the destination — its old parent lives in the
+    // old project and can't be its parent any more.
+    expect((await folder(mover.group_id))?.parent_id).toBeUndefined();
+    expect((await folder(mover.group_id))?.project).toBe('Acme');
+    // The old parent and its other child are untouched.
+    expect((await folder(parent.group_id))?.project).toBe('Marina');
+    expect((await folder(parent.group_id))?.parent_id).toBeUndefined();
+    expect((await folder(sibling.group_id))?.project).toBe('Marina');
+    expect((await folder(sibling.group_id))?.parent_id).toBe(parent.group_id);
+  });
+
+  it('is a no-op when the folder is already in the target project (incl. a recase)', async () => {
+    const f = await createFolder('Already home', 'Marina');
+    const [a] = await makeTasks(['Member'], 'Marina');
+    await addToGroup(f.group_id, [a]);
+
+    const same = await moveFolderToProject(f.group_id, 'Marina');
+    expect(same).toEqual({
+      group_id: f.group_id, project: 'Marina', moved_task_ids: [], moved_folder_ids: [],
+    });
+    // Case-only difference resolves to the SAME project → still a no-op.
+    const recased = await moveFolderToProject(f.group_id, 'marina');
+    expect(recased.project).toBe('Marina');
+    expect(recased.moved_task_ids).toEqual([]);
+    expect((await folder(f.group_id))?.project).toBe('Marina');
+    expect((await getTask(a)).project).toBe('Marina');
+  });
+
+  it("moves a folder to Inbox ('') and back out again", async () => {
+    const f = await createFolder('Travels', 'Marina');
+    const [a] = await makeTasks(['Member'], 'Marina');
+    await addToGroup(f.group_id, [a]);
+
+    const toInbox = await moveFolderToProject(f.group_id, '');
+    expect(toInbox.project).toBe('');
+    expect(toInbox.moved_task_ids).toEqual([a]);
+    expect((await folder(f.group_id))?.project).toBe('');
+    expect((await getTask(a)).project).toBe('');
+    expect((await getTask(a)).group_id).toBe(f.group_id);
+    // Inbox has no registry row, by design.
+    expect(await getProjectRecord('')).toBeNull();
+
+    const back = await moveFolderToProject(f.group_id, 'Marina');
+    expect(back.moved_task_ids).toEqual([a]);
+    expect((await getTask(a)).project).toBe('Marina');
+    expect((await getTask(a)).group_id).toBe(f.group_id);
+  });
+
+  it('adopts the destination project\'s canonical spelling', async () => {
+    await makeTasks(['Anchor'], 'Marina');   // mints the 'Marina' registry row
+    const f = await createFolder('Recase', 'Acme');
+    const [a] = await makeTasks(['Member'], 'Acme');
+    await addToGroup(f.group_id, [a]);
+
+    const moved = await moveFolderToProject(f.group_id, 'MARINA');
+    expect(moved.project).toBe('Marina');
+    expect((await folder(f.group_id))?.project).toBe('Marina');
+    expect((await getTask(a)).project).toBe('Marina');
+  });
+
+  it('auto-creates the destination registry row for an EMPTY folder', async () => {
+    const f = await createFolder('Pioneer', 'Marina');
+    expect(await getProjectRecord('Greenfield')).toBeNull();
+
+    const moved = await moveFolderToProject(f.group_id, 'Greenfield');
+
+    expect(moved.moved_task_ids).toEqual([]);
+    expect(moved.moved_folder_ids).toEqual([f.group_id]);
+    expect((await folder(f.group_id))?.project).toBe('Greenfield');
+    // Same precedent as a task move / task_create: source 'local'.
+    expect(await getProjectRecord('Greenfield')).toMatchObject({ name: 'Greenfield', source: 'local' });
+  });
+
+  it('throws "not found" for an unknown folder id', async () => {
+    await expect(moveFolderToProject('g_ghost', 'Acme')).rejects.toThrow(/not found/);
+  });
+
+  it('rejects an unusable destination project NAME before touching anything', async () => {
+    const f = await createFolder('Guarded', 'Marina');
+    await expect(moveFolderToProject(f.group_id, '.hidden')).rejects.toThrow(/cannot start with/);
+    await expect(moveFolderToProject(f.group_id, '../etc')).rejects.toThrow(/not allowed/);
+    // A project name is also an object key — the JS-magic names are refused.
+    await expect(moveFolderToProject(f.group_id, '__proto__')).rejects.toThrow(/reserved/i);
+    await expect(moveFolderToProject(f.group_id, 'constructor')).rejects.toThrow(/reserved/i);
+    // ...and it becomes a path segment, so its length is capped.
+    await expect(moveFolderToProject(f.group_id, 'x'.repeat(201))).rejects.toThrow(/max 200/);
+    expect((await folder(f.group_id))?.project).toBe('Marina');
+  });
+
+  /**
+   * PROTOTYPE POLLUTION regression. `store.task_groups[gid]` is a plain-object
+   * index, so `task_groups['__proto__']` used to return Object.prototype: the
+   * truthy value passed the "folder exists" check and the op then wrote
+   * `rec.project = target` onto the PROTOTYPE. After that every plain object in
+   * the process inherited `.project`, so updateTask's
+   * `if (updates.project !== undefined)` fired on EVERY update and re-projected
+   * unrelated tasks. Own-property lookups make a magic id simply "not found".
+   */
+  it('refuses a JS-magic folder id and never writes to Object.prototype', async () => {
+    const [a, b] = await makeTasks(['A', 'B'], 'Marina');
+    const g = await groupTasks([a, b], 'Real folder');
+
+    for (const magic of ['__proto__', 'constructor', 'prototype']) {
+      await expect(moveFolderToProject(magic, 'Acme')).rejects.toThrow(/not found/);
+      // Same flaw class on every other folder op that indexes by id.
+      await expect(setFolderParent(magic, g.group_id)).rejects.toThrow(/not found/);
+      await expect(deleteFolder(magic)).rejects.toThrow(/not found/);
+      await expect(renameGroup(magic, 'Hijacked')).rejects.toThrow(/not found/);
+      await expect(setGroupHidden(magic, true)).rejects.toThrow(/not found/);
+      await expect(addToGroup(magic, [a])).rejects.toThrow(/not found/);
+    }
+
+    // Nothing leaked onto the prototype (the payload the attack would write).
+    const probe = {} as Record<string, unknown>;
+    expect(probe.project).toBeUndefined();
+    expect(probe.label).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(Object.prototype, 'project')).toBe(false);
+
+    // ...and the store still behaves: a title-only update must NOT see an
+    // inherited `project` and re-project the task (the persistence mechanism).
+    const { task } = await updateTask(a, { title: 'Still in Marina' });
+    expect(task.project).toBe('Marina');
+    expect(task.group_id).toBe(g.group_id);
+    expect((await folder(g.group_id))?.project).toBe('Marina');
+    // The real folder is untouched by any of the rejected calls.
+    expect((await folder(g.group_id))?.member_ids.sort()).toEqual([a, b].sort());
+  });
+
+  /**
+   * A provider push failure must NOT abort the batch. Before: the members rode a
+   * plain `for` loop of awaited updateTask calls, so the FIRST throw left the
+   * already-moved tasks in the destination and the folder record in the old
+   * project — a split the user could only fix by dragging again.
+   */
+  it('keeps going when a PROVIDER member fails, still moves the folder + local members', async () => {
+    let rejectPush = false;
+    registry.replace('prov-a', createMockPlugin({ id: 'prov-a' }));
+    registry.replace('prov-b', createMockPlugin({
+      id: 'prov-b',
+      sync: {
+        ...createNoopSync(),
+        createTask: async () => {
+          if (rejectPush) throw new Error('remote rejected the task');
+          return null;
+        },
+      },
+    }));
+
+    // Two provider-claimed projects: the folder starts in prov-a's, moves to prov-b's.
+    await addTask({ title: 'Alpha claimer', project: 'Alpha', source: 'prov-a' });
+    await addTask({ title: 'Beta claimer', project: 'Beta', source: 'prov-b' });
+    expect(await getProjectRecord('Beta')).toMatchObject({ source: 'prov-b' });
+
+    const f = await createFolder('Mixed sources', 'Alpha');
+    const { task: providerMember } = await addTask({ title: 'Synced member', project: 'Alpha', source: 'prov-a' });
+    // Explicit 'local' outranks the project claim (see addTask) — without it the
+    // registry row would source this task to prov-a as well.
+    const { task: local } = await addTask({ title: 'Local member', project: 'Alpha', source: 'local' });
+    const localMember = local.id;
+    expect(local.source).toBe('local');
+    await addToGroup(f.group_id, [providerMember.id, localMember]);
+
+    rejectPush = true;   // the destination provider now refuses the migrated task
+    const moved = await moveFolderToProject(f.group_id, 'Beta');
+
+    // The failure is REPORTED, not thrown...
+    expect(moved.failed).toHaveLength(1);
+    expect(moved.failed![0].id).toBe(providerMember.id);
+    expect(moved.failed![0].error).toMatch(/prov-b/);
+    // ...the local member still moved...
+    expect(moved.moved_task_ids).toContain(localMember);
+    // ...and the folder record went with it.
+    expect(moved.moved_folder_ids).toEqual([f.group_id]);
+    expect(moved.project).toBe('Beta');
+
+    // Durable, not just in-memory.
+    closeDb();
+    _resetForTesting();
+    const reloaded = await getTask(localMember);
+    expect(reloaded.project).toBe('Beta');
+    expect(reloaded.source).toBe('local');       // local stays local under a claim
+    expect(reloaded.group_id).toBe(f.group_id);  // membership survives the move
+    expect((await folder(f.group_id))?.project).toBe('Beta');
+  });
+
+  /**
+   * The concurrent-join window: planning reads the member list OUTSIDE the lock,
+   * so a task that joins the folder while the move is in flight used to be
+   * stranded in the old project (and a re-run couldn't fix it — the folder record
+   * already matched, so the call was a no-op). The final lock now re-walks the
+   * subtree from a fresh read and sweeps whatever it finds.
+   *
+   * The join is injected from inside the destination plugin's push, which
+   * updateTask AWAITS for a migrating task — i.e. genuinely after the planning
+   * read and before the final lock.
+   */
+  it('sweeps a task that joined the folder DURING the move', async () => {
+    let lateJoin: (() => Promise<void>) | null = null;
+    registry.replace('prov-a', createMockPlugin({ id: 'prov-a' }));
+    registry.replace('prov-joiner', createMockPlugin({
+      id: 'prov-joiner',
+      sync: {
+        ...createNoopSync(),
+        createTask: async () => {
+          const join = lateJoin;
+          lateJoin = null;              // once only
+          if (join) await join();
+          return null;
+        },
+      },
+    }));
+
+    await addTask({ title: 'Alpha claimer', project: 'Alpha', source: 'prov-a' });
+    await addTask({ title: 'Beta claimer', project: 'Beta', source: 'prov-joiner' });
+
+    const f = await createFolder('Racy', 'Alpha');
+    const { task: providerMember } = await addTask({ title: 'Migrating member', project: 'Alpha', source: 'prov-a' });
+    await addToGroup(f.group_id, [providerMember.id]);
+    // Not members yet — the planning read will not see either of them. One local
+    // (swept inside the final lock) and one provider-sourced (deferred to the
+    // per-task path afterwards, since a raw rewrite would skip its claim rules).
+    const { task: lateLocal } = await addTask({ title: 'Joined mid-move', project: 'Alpha', source: 'local' });
+    const { task: lateProvider } = await addTask({ title: 'Also joined mid-move', project: 'Alpha' });
+    expect(lateProvider.source).toBe('prov-a');   // inherited from the project claim
+
+    lateJoin = async () => { await addToGroup(f.group_id, [lateLocal.id, lateProvider.id]); };
+    const moved = await moveFolderToProject(f.group_id, 'Beta');
+
+    expect(lateJoin, 'the mid-move join must actually have run').toBeNull();
+    // Both late joiners were carried into the destination with the rest.
+    expect(moved.moved_task_ids).toContain(lateLocal.id);
+    expect(moved.moved_task_ids).toContain(lateProvider.id);
+    expect(moved.failed).toBeUndefined();
+    for (const id of [lateLocal.id, lateProvider.id]) {
+      const reloadedLate = await getTask(id);
+      expect(reloadedLate.project).toBe('Beta');
+      expect(reloadedLate.group_id).toBe(f.group_id);
+    }
+    // The member the planning read DID see moved too (provider path).
+    expect((await getTask(providerMember.id)).project).toBe('Beta');
+    expect((await folder(f.group_id))?.project).toBe('Beta');
+  });
+
+  /**
+   * A case-only difference is real drift to normalize, not a no-op: the registry
+   * is NOCASE, so two spellings of one project cannot both be right. The old
+   * early-return (case-insensitive "already there") left members spelled the old
+   * way forever.
+   */
+  it('normalizes a case-only re-spelling of the SAME project (record + members)', async () => {
+    await makeTasks(['Anchor'], 'Marina');                 // mints the canonical row
+    const [member] = await makeTasks(['Member'], 'Marina');
+    await updateTaskRaw(member, { project: 'marina' });    // drifted spelling
+    const f = await createFolder('Drifted', 'marina');     // ...on the record too
+    await addToGroup(f.group_id, [member]);                // join is case-insensitive
+    expect((await getTask(member)).project).toBe('marina');
+
+    const moved = await moveFolderToProject(f.group_id, 'MARINA');
+
+    expect(moved.project).toBe('Marina');                 // canonical spelling wins
+    expect(moved.moved_task_ids).toEqual([member]);
+    expect(moved.moved_folder_ids).toEqual([f.group_id]);
+    expect((await getTask(member)).project).toBe('Marina');
+    expect((await getTask(member)).group_id).toBe(f.group_id);
+    expect((await folder(f.group_id))?.project).toBe('Marina');
+  });
+
+  /** A record-less legacy folder with live members gets its row minted, not a throw. */
+  it('mints a missing registry row for a legacy folder instead of refusing the move', async () => {
+    const [a, b] = await makeTasks(['A', 'B'], 'Marina');
+    const g = await groupTasks([a, b], 'Has a record');
+    // Simulate a pre-v9 store: membership on the tasks, no registry row.
+    getDb()!.prepare('DELETE FROM task_groups WHERE id = ?').run(g.group_id);
+    _resetForTesting();
+    // Only the membership-derived listing knows about it now (label = lead title).
+    expect((await folder(g.group_id))?.member_ids.sort()).toEqual([a, b].sort());
+
+    const moved = await moveFolderToProject(g.group_id, 'Acme');
+    expect(moved.project).toBe('Acme');
+    // The row now exists, labelled from the lead member.
+    expect((await folder(g.group_id))?.label).toBe('A');
+    expect(moved.moved_task_ids.sort()).toEqual([a, b].sort());
+    expect(moved.moved_folder_ids).toEqual([g.group_id]);
+    expect((await folder(g.group_id))?.project).toBe('Acme');
+    for (const id of [a, b]) {
+      const t = await getTask(id);
+      expect(t.project).toBe('Acme');
+      expect(t.group_id).toBe(g.group_id);
+    }
+  });
+
+  // ── The project-move semantics updateTask already guarantees must survive ──
+
+  it('keeps a LOCAL member local when the destination project is provider-claimed', async () => {
+    // updateTask's rule: a local task filed under a provider-claimed project keeps
+    // source 'local' (the project is just a folder there, nothing is pushed).
+    // Moving the whole folder must not sneak past that and promote the task.
+    await addTask({ title: 'Claimer', project: 'Synced', source: 'ms-todo' });
+    expect(await getProjectRecord('Synced')).toMatchObject({ source: 'ms-todo' });
+
+    const f = await createFolder('Local folder', 'Marina');
+    const [a] = await makeTasks(['Local member'], 'Marina');
+    await addToGroup(f.group_id, [a]);
+
+    const moved = await moveFolderToProject(f.group_id, 'Synced');
+    expect(moved.moved_task_ids).toEqual([a]);
+
+    const reloaded = await getTask(a);
+    expect(reloaded.project).toBe('Synced');
+    expect(reloaded.source).toBe('local');
+    expect(reloaded.group_id).toBe(f.group_id);
+    // The move never re-claims the destination project.
+    expect(await getProjectRecord('Synced')).toMatchObject({ source: 'ms-todo' });
+  });
+
+  it('migrates a PROVIDER-sourced member to local when the folder moves to Inbox', async () => {
+    // Same rule as a bare updateTask({ project: '' }): Inbox is local-only, so a
+    // provider-sourced task moved there adopts source 'local' and drops its
+    // remote linkage — while KEEPING its folder membership.
+    const { task } = await addTask({ title: 'Synced member', project: 'Synced', source: 'ms-todo' });
+    expect(task.source).toBe('ms-todo');
+    const f = await createFolder('Synced folder', 'Synced');
+    await addToGroup(f.group_id, [task.id]);
+
+    const moved = await moveFolderToProject(f.group_id, '');
+    expect(moved.moved_task_ids).toEqual([task.id]);
+
+    const reloaded = await getTask(task.id);
+    expect(reloaded.project).toBe('');
+    expect(reloaded.source).toBe('local');
+    expect(reloaded.ext).toBeUndefined();
+    expect(reloaded.group_id).toBe(f.group_id);
+    expect((await folder(f.group_id))?.project).toBe('');
   });
 });
 

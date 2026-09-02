@@ -264,6 +264,11 @@ interface UseTasksReturn {
   deleteFolder: (groupId: string) => void;
   /** Move a folder in the nesting tree (null = top-level). */
   setFolderParent: (groupId: string, parentId: string | null) => void;
+  /** Move a folder to another project ('' = Inbox): subfolders + members come
+   *  along. Resolves TRUE when the server accepted the move (callers use that to
+   *  register the destination project locally), FALSE on failure or when a move
+   *  for this folder is already in flight. Never rejects. */
+  moveFolderToProject: (groupId: string, project: string) => Promise<boolean>;
 }
 
 export interface FolderMeta {
@@ -1006,5 +1011,70 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       .catch((err) => { onOpError(err); refetchGroups(); });
   }, [onOpError, refetchGroups]);
 
-  return { tasks, taskGroups, hiddenGroups, folderMeta, loading, refreshing, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, reorder, moveTask, reparentTask, bakeOrder, deleteTask, batchSetPhase, batchDelete, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb, createFolder: createFolderCb, deleteFolder: deleteFolderCb, setFolderParent: setFolderParentCb };
+  // Move a whole folder across projects. Optimistic on the two things the UI reads
+  // to place a folder row (its own project + every member's project); nested
+  // subfolders and their members ride the server's `task:groups-changed` event,
+  // since only the server knows the subtree.
+  //
+  // Three things this path is careful about:
+  //  · It SNAPSHOTS what it overwrites and restores it on failure (same duty as
+  //    create's tmp-row removal). Without that, a rejected move left the folder
+  //    and its members drawn under a project the server never accepted.
+  //  · `parent_id` is dropped, not carried: a moved folder becomes TOP-LEVEL in
+  //    the destination (its old parent stays behind), so keeping the stale id
+  //    would nest it under a folder in another project until the refetch landed.
+  //  · No success refetch — the WS `task:groups-changed` handler above already
+  //    refetches both the task list and the folder registry.
+  const movingFolders = useRef<Set<string>>(new Set());
+  const moveFolderToProjectCb = useCallback((groupId: string, project: string): Promise<boolean> => {
+    // One move per folder at a time: a second one would snapshot the FIRST
+    // move's optimistic state as "previous" and restore that on failure.
+    if (movingFolders.current.has(groupId)) {
+      log.info('tasks', 'folder move already in flight → ignored', { groupId, project });
+      return Promise.resolve(false);
+    }
+    movingFolders.current.add(groupId);
+    let prevMeta: FolderMeta | undefined;
+    let prevProjects: Array<[string, string]> = [];
+    setFolderMeta((prev) => {
+      const cur = prev[groupId];
+      if (!cur) return prev;
+      prevMeta = cur;
+      const next: FolderMeta = { ...cur, project };
+      delete next.parent_id;
+      return { ...prev, [groupId]: next };
+    });
+    setTasks((prev) => {
+      prevProjects = prev.filter((t) => t.group_id === groupId).map((t) => [t.id, t.project ?? '']);
+      return prev.map((t) => (t.group_id === groupId ? { ...t, project } : t));
+    });
+    return tasksApi.moveFolderToProject(groupId, project)
+      .then((res) => {
+        // Local members always move; provider-backed ones can fail individually.
+        // The move itself succeeded, so no rollback — but silence here would
+        // leave the user believing every task made it.
+        if (res.failed?.length) {
+          showOperationError(`Folder moved, but ${res.failed.length} synced task(s) failed to move: ${res.failed[0].error}`);
+        }
+        return true;
+      })
+      .catch((err) => {
+        if (prevMeta) {
+          const restoreMeta = prevMeta;
+          setFolderMeta((prev) => (prev[groupId] ? { ...prev, [groupId]: restoreMeta } : prev));
+        }
+        if (prevProjects.length) {
+          const restore = new Map(prevProjects);
+          setTasks((prev) => prev.map((t) => (restore.has(t.id) ? { ...t, project: restore.get(t.id)! } : t)));
+        }
+        // onOpError shows the banner AND refetches the task list; the folder
+        // registry needs its own refetch.
+        onOpError(err as Error);
+        refetchGroups();
+        return false;
+      })
+      .finally(() => { movingFolders.current.delete(groupId); });
+  }, [onOpError, refetchGroups, showOperationError]);
+
+  return { tasks, taskGroups, hiddenGroups, folderMeta, loading, refreshing, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, reorder, moveTask, reparentTask, bakeOrder, deleteTask, batchSetPhase, batchDelete, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb, createFolder: createFolderCb, deleteFolder: deleteFolderCb, setFolderParent: setFolderParentCb, moveFolderToProject: moveFolderToProjectCb };
 }

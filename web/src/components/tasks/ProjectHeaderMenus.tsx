@@ -87,9 +87,8 @@ const ICON_MENU_SESSION = (
 const ICON_MENU_SEPARATOR = (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M2 8h12" /></svg>
 );
-const ICON_MENU_FOLDER = (
-  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z" /></svg>
-);
+// Same glyph the folder ROWS draw, at this menu's 14px size (Icons.tsx owns the path).
+const ICON_MENU_FOLDER = ICONS.folderOutlineIcon(14);
 
 export interface PlusAction {
   key: string;

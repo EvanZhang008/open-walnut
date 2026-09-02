@@ -417,3 +417,22 @@ export async function setTaskFolderParent(
 ): Promise<{ group_id: string; parent_id?: string }> {
   return apiPatch(`/api/tasks/folders/${groupId}`, { parent_id: parentId });
 }
+
+/**
+ * Move a folder to another project ('' = Inbox). The whole subtree travels:
+ * descendant folders and every member task move too, keeping their membership.
+ * The folder becomes top-level in the destination (its old parent stays behind).
+ */
+export async function moveFolderToProject(
+  groupId: string,
+  project: string,
+): Promise<{
+  group_id: string;
+  project: string;
+  moved_task_ids: string[];
+  moved_folder_ids: string[];
+  /** Provider-backed members whose move failed (local members always move). */
+  failed?: Array<{ id: string; error: string }>;
+}> {
+  return apiPatch(`/api/tasks/folders/${groupId}`, { project });
+}

@@ -24,6 +24,16 @@
  *      folder" entry point), PATCH /api/tasks/folders/:gid nests / un-nests it,
  *      DELETE /api/tasks/folders/:gid releases its members in place, and the error
  *      contract is 404 for an unknown id vs 400 for a caller-fixable violation.
+ *   7. PATCH /api/tasks/folders/:gid with { project } → the folder, its descendant
+ *      folders and every member task move to the other project (members keep
+ *      group_id); '' = Inbox works; same-project is a 200 no-op; parent_id and
+ *      project in one call is 400.
+ *   8. Input hardening on the same route: a traversal project name is 400 and
+ *      moves nothing; a JS-magic folder id (`__proto__`) is refused and leaves the
+ *      server unpolluted (a later create with no project still means Inbox); a
+ *      malformed folder id is 400 on shape; and `keepGroupId` — the internal flag
+ *      that lets a folder move keep membership — can NOT be smuggled through a
+ *      PATCH /api/tasks/:id body.
  *
  * Each test asserts on the HTTP response body + WS events + persisted GET — never on
  * internal state — so each fails if the feature were reverted.
@@ -76,6 +86,14 @@ interface FolderResult {
   label: string;
   project: string;
   parent_id?: string;
+}
+
+interface FolderMoveResult {
+  group_id: string;
+  project: string;
+  moved_task_ids: string[];
+  moved_folder_ids: string[];
+  failed?: Array<{ id: string; error: string }>;
 }
 
 // ── Server state ──
@@ -156,11 +174,27 @@ function createFolder(body: Record<string, unknown>): Promise<Response> {
 
 /** PATCH /api/tasks/folders/:gid — move a folder in the nesting tree. */
 function setFolderParent(groupId: string, parentId: string | null): Promise<Response> {
+  return patchFolder(groupId, { parent_id: parentId });
+}
+
+/** PATCH /api/tasks/folders/:gid with a RAW body — for the project move and the
+ *  "one move per call" guard, which need bodies the typed helpers can't express. */
+function patchFolder(groupId: string, body: Record<string, unknown>): Promise<Response> {
   return fetch(apiUrl(`/api/tasks/folders/${groupId}`), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ parent_id: parentId }),
+    body: JSON.stringify(body),
   });
+}
+
+/** Add tasks to an existing folder (the membership route the folder tests reuse). */
+async function addToFolder(groupId: string, taskIds: string[]): Promise<void> {
+  const res = await fetch(apiUrl(`/api/tasks/groups/${groupId}/add`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task_ids: taskIds }),
+  });
+  expect(res.status).toBe(200);
 }
 
 /** GET the aggregate group listing (asserts 200 — the route-order regression guard). */
@@ -686,5 +720,206 @@ describe('folder REST API (/api/tasks/folders)', () => {
     const res = await fetch(apiUrl('/api/tasks/folders/g_does_not_exist'), { method: 'DELETE' });
     expect(res.status).toBe(404);
     expect(((await res.json()) as { error?: string }).error).toMatch(/not found/i);
+  });
+
+  /**
+   * PATCH { project } moves a folder to ANOTHER project. The whole subtree goes:
+   * descendant folders, and every member task (which keeps its group_id — the
+   * folder is what moved, so membership survives). The moved folder becomes
+   * top-level in the destination.
+   * Fails if reverted: 400 "parent_id must be a string or null" instead of a move.
+   */
+  it('PATCH /folders/:gid with a project moves the subtree and its member tasks', async () => {
+    const root = (await (await createFolder({ label: 'Move root', project: 'e2e-grp-alpha' })).json()) as FolderResult;
+    const child = (await (await createFolder({
+      label: 'Move child', project: 'e2e-grp-alpha', parent_id: root.group_id,
+    })).json()) as FolderResult;
+    const rootTask = await createTask('Project move root member');
+    const childTask = await createTask('Project move child member');
+    await addToFolder(root.group_id, [rootTask.id]);
+    await addToFolder(child.group_id, [childTask.id]);
+
+    const ws = await connectWs();
+    try {
+      const eventPromise = waitForWsEvent(ws, 'task:groups-changed');
+      const res = await patchFolder(root.group_id, { project: 'e2e-grp-dest' });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as FolderMoveResult;
+
+      expect(body.group_id).toBe(root.group_id);
+      expect(body.project).toBe('e2e-grp-dest');
+      expect(body.moved_folder_ids).toEqual([root.group_id, child.group_id]);
+      expect(body.moved_task_ids.sort()).toEqual([rootTask.id, childTask.id].sort());
+
+      const frame = await eventPromise;
+      const evData = frame.data as { group_id?: string; project?: string };
+      expect(evData.group_id).toBe(root.group_id);
+      expect(evData.project).toBe('e2e-grp-dest');
+
+      const groups = await listGroups();
+      const listedRoot = groups.find((g) => g.group_id === root.group_id)!;
+      const listedChild = groups.find((g) => g.group_id === child.group_id)!;
+      expect(listedRoot.project).toBe('e2e-grp-dest');
+      expect(listedRoot.parent_id).toBeUndefined();
+      expect(listedChild.project).toBe('e2e-grp-dest');
+      // The subtree's shape survives the move.
+      expect(listedChild.parent_id).toBe(root.group_id);
+
+      // Members moved WITH their membership.
+      const movedRootTask = await getTask(rootTask.id);
+      expect(movedRootTask.project).toBe('e2e-grp-dest');
+      expect(movedRootTask.group_id).toBe(root.group_id);
+      const movedChildTask = await getTask(childTask.id);
+      expect(movedChildTask.project).toBe('e2e-grp-dest');
+      expect(movedChildTask.group_id).toBe(child.group_id);
+    } finally {
+      ws.close();
+      await delay(50);
+    }
+  });
+
+  /** '' = Inbox is a real destination (and never gets a registry row). */
+  it("PATCH /folders/:gid moves a folder to Inbox ('')", async () => {
+    const f = (await (await createFolder({ label: 'To Inbox', project: 'e2e-grp-alpha' })).json()) as FolderResult;
+    const task = await createTask('Inbox-bound member');
+    await addToFolder(f.group_id, [task.id]);
+
+    const res = await patchFolder(f.group_id, { project: '' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as FolderMoveResult;
+    expect(body.project).toBe('');
+    expect(body.moved_task_ids).toEqual([task.id]);
+
+    expect((await listGroups()).find((g) => g.group_id === f.group_id)!.project).toBe('');
+    const moved = await getTask(task.id);
+    expect(moved.project).toBe('');
+    expect(moved.group_id).toBe(f.group_id);
+  });
+
+  /** Same-project is a 200 no-op, not an error — the drag landed where it started. */
+  it('PATCH /folders/:gid answers 200 with empty moves when the project is unchanged', async () => {
+    const f = (await (await createFolder({ label: 'Stays put', project: 'e2e-grp-alpha' })).json()) as FolderResult;
+    const res = await patchFolder(f.group_id, { project: 'e2e-grp-alpha' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      group_id: f.group_id, project: 'e2e-grp-alpha', moved_task_ids: [], moved_folder_ids: [],
+    });
+  });
+
+  it('PATCH /folders/:gid rejects parent_id + project in one call with 400', async () => {
+    const parent = (await (await createFolder({ label: 'Combo parent', project: 'e2e-grp-alpha' })).json()) as FolderResult;
+    const f = (await (await createFolder({ label: 'Combo child', project: 'e2e-grp-alpha' })).json()) as FolderResult;
+
+    const res = await patchFolder(f.group_id, { parent_id: parent.group_id, project: 'e2e-grp-dest' });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error?: string }).error).toMatch(/not both/i);
+
+    // Nothing was applied.
+    const listed = (await listGroups()).find((g) => g.group_id === f.group_id)!;
+    expect(listed.project).toBe('e2e-grp-alpha');
+    expect(listed.parent_id).toBeUndefined();
+  });
+
+  it('PATCH /folders/:gid answers 404 for an unknown id and 400 for a non-string project', async () => {
+    const unknown = await patchFolder('g_does_not_exist', { project: 'e2e-grp-dest' });
+    expect(unknown.status).toBe(404);
+    expect(((await unknown.json()) as { error?: string }).error).toMatch(/not found/i);
+
+    const f = (await (await createFolder({ label: 'Type guard', project: 'e2e-grp-alpha' })).json()) as FolderResult;
+    const badType = await patchFolder(f.group_id, { project: 42 });
+    expect(badType.status).toBe(400);
+    expect(((await badType.json()) as { error?: string }).error).toMatch(/must be a string/i);
+  });
+
+  /**
+   * A destination project name becomes a FILESYSTEM PATH SEGMENT
+   * (memory/projects/<name>/), so a traversal attempt is refused with 400 and the
+   * folder + its member stay exactly where they were.
+   */
+  it('PATCH /folders/:gid rejects a traversal project name with 400 and moves nothing', async () => {
+    const f = (await (await createFolder({ label: 'Traversal guard', project: 'e2e-grp-alpha' })).json()) as FolderResult;
+    const member = await createTask('Stays in alpha');
+    await addToFolder(f.group_id, [member.id]);
+
+    const res = await patchFolder(f.group_id, { project: '../etc' });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error?: string }).error).toMatch(/not allowed|invalid project name/i);
+
+    // Nothing moved: neither the folder record nor its member.
+    expect((await listGroups()).find((g) => g.group_id === f.group_id)!.project).toBe('e2e-grp-alpha');
+    const reloaded = await getTask(member.id);
+    expect(reloaded.project).toBe('e2e-grp-alpha');
+    expect(reloaded.group_id).toBe(f.group_id);
+  });
+
+  /**
+   * PROTOTYPE POLLUTION regression (a folder id is an object key).
+   * `PATCH /api/tasks/folders/__proto__` used to pass the store's truthiness
+   * existence check — `task_groups['__proto__']` resolves through
+   * Object.prototype — and then wrote `project` onto the PROTOTYPE. After that
+   * every later request body inherited `.project`, so updateTask's
+   * `if (updates.project !== undefined)` fired on every update and re-projected
+   * unrelated tasks. The request must fail, and the SERVER must still behave
+   * afterwards: a create with no project must land in Inbox.
+   */
+  it('PATCH /folders/__proto__ is refused and leaves the server unpolluted', async () => {
+    for (const magic of ['__proto__', 'constructor', 'prototype']) {
+      const res = await patchFolder(magic, { project: 'polluted' });
+      expect(res.status, `PATCH /folders/${magic} must fail`).toBeGreaterThanOrEqual(400);
+      expect(res.status).toBeLessThan(500);
+      const del = await fetch(apiUrl(`/api/tasks/folders/${magic}`), { method: 'DELETE' });
+      expect(del.status).toBeGreaterThanOrEqual(400);
+      expect(del.status).toBeLessThan(500);
+    }
+
+    // The probe: a create with NO project must still mean Inbox. If
+    // Object.prototype carried `project: 'polluted'`, the parsed request body
+    // would inherit it and this task would land in that project instead.
+    const created = await fetch(apiUrl('/api/tasks'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Pollution probe' }),
+    });
+    expect(created.status).toBe(201);
+    const probe = (await created.json()) as { task: { id: string; project?: string } };
+    expect(probe.task.project ?? '').toBe('');
+    // ...and the folder listing is still clean (no record acquired the payload).
+    expect((await listGroups()).every((g) => g.project !== 'polluted')).toBe(true);
+  });
+
+  /** A malformed folder id never reaches the store — it's rejected on shape. */
+  it('PATCH /folders/:gid rejects a malformed folder id with 400', async () => {
+    const res = await patchFolder('g$bad!id', { project: 'e2e-grp-dest' });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error?: string }).error).toMatch(/invalid folder id/i);
+  });
+
+  /**
+   * RATCHET: `keepGroupId` is INTERNAL. moveFolderToProject is the only caller
+   * allowed to keep a task's folder membership across a project change; a plain
+   * task PATCH must never buy that behaviour by putting the flag in its body
+   * (updateTask takes it in its THIRD argument, which the route hard-codes).
+   */
+  it('PATCH /tasks/:id can NOT smuggle keepGroupId through the request body', async () => {
+    const f = (await (await createFolder({ label: 'No smuggling', project: 'e2e-grp-alpha' })).json()) as FolderResult;
+    const member = await createTask('Leaves the folder');
+    await addToFolder(f.group_id, [member.id]);
+    expect((await getTask(member.id)).group_id).toBe(f.group_id);
+
+    const res = await fetch(apiUrl(`/api/tasks/${member.id}`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'e2e-grp-dest', keepGroupId: true }),
+    });
+    expect(res.status).toBe(200);
+
+    // The project move applied, and the auto-unfolder still ran.
+    const reloaded = await getTask(member.id);
+    expect(reloaded.project).toBe('e2e-grp-dest');
+    expect(reloaded.group_id).toBeUndefined();
+    // The folder itself stayed in its own project, minus the member.
+    const listed = (await listGroups()).find((g) => g.group_id === f.group_id)!;
+    expect(listed.project).toBe('e2e-grp-alpha');
+    expect(listed.member_ids).not.toContain(member.id);
   });
 });

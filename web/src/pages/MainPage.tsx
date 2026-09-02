@@ -346,7 +346,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const engineCatalog = useEngineCatalog();
   const { connectionState } = useWebSocket();
   const { notify } = useNotifications();
-  const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, toggleComplete, setPhase, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, folderMeta, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden, createFolder, deleteFolder } = useTasksContext();
+  const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, toggleComplete, setPhase, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, folderMeta, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden, createFolder, deleteFolder, moveFolderToProject } = useTasksContext();
   const favorites = useFavorites();
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
@@ -2843,6 +2843,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onSetGroupHidden={setGroupHidden}
           onCreateFolder={createFolder}
           onDeleteFolder={deleteFolder}
+          onMoveFolderToProject={moveFolderToProject}
           onOpenSession={handleToggleSession}
           onStartSession={handleStartSessionForTask}
           openSessionIds={openSessionIdSet}

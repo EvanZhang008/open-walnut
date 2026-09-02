@@ -17,6 +17,24 @@ export const ICON_PHASE_COMPLETE = <svg width="14" height="14" viewBox="0 0 16 1
 // ── Action / UI icons ──
 /** 📁 folder outline — FOLDER rows (a project's local sub-folders) */
 export const ICON_FOLDER = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 4a1 1 0 011-1h3.6l1.6 1.8h5.8a1 1 0 011 1V12a1 1 0 01-1 1h-11a1 1 0 01-1-1z"/></svg>;
+/**
+ * 📁 folder OUTLINE, folder-ROW flavour — the glyph every folder row draws: the
+ * pinned tier's chip, the main list's folder header row, the empty-folder row,
+ * and the project "+" menu's "New folder" item. Those four inlined the same
+ * `<svg>` (drifting corner geometry was one edit away). Rows draw it at 12px and
+ * menu items at 14px, hence the factory plus a 12px constant.
+ */
+export function folderOutlineIcon(size: number = 12): ReactNode {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z" /></svg>
+  );
+}
+export const ICON_FOLDER_OUTLINE = folderOutlineIcon();
+/** ▶ collapse chevron — ONE glyph for every `.collapse-chevron` button (CSS
+ *  rotates it when expanded). Shared so the tier chip and the list rows can
+ *  never drift apart; it lives here rather than in TodoPanel because
+ *  FocusSatelliteCards importing TodoPanel would be a cycle. */
+export const CHEVRON_GLYPH = '▶';
 /** 📁 folder FILLED — PROJECT labels. Solid vs outline is the at-a-glance
  *  project/folder distinction: project = solid, folder = hollow. */
 export const ICON_FOLDER_SOLID = <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 4a1 1 0 011-1h3.6l1.6 1.8h5.8a1 1 0 011 1V12a1 1 0 01-1 1h-11a1 1 0 01-1-1z"/></svg>;

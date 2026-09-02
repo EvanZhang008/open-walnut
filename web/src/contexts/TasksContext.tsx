@@ -43,6 +43,9 @@ export interface TasksContextValue {
   createFolder: (label: string, project: string, parentId?: string) => void;
   deleteFolder: (groupId: string) => void;
   setFolderParent: (groupId: string, parentId: string | null) => void;
+  /** Move a folder to another project ('' = Inbox): subfolders + members come
+   *  along. Resolves true only when the server accepted the move. */
+  moveFolderToProject: (groupId: string, project: string) => Promise<boolean>;
 }
 
 const TasksContext = createContext<TasksContextValue | null>(null);
@@ -60,10 +63,13 @@ export function TasksProvider({ children }: { children: ReactNode }) {
   }, [t.tasks, t.loading]);
 
   // Stabilize context value: useMemo prevents new object identity on every render.
-  // useTasks callbacks are already stable (useCallback), so only data fields trigger updates.
+  // useTasks callbacks are already stable (useCallback), so only data fields trigger
+  // updates. EVERY data field must be listed — folderMeta was missing, so a folder's
+  // project/parent change (create, re-parent, move to another project) reached the
+  // context only when some OTHER field happened to change in the same render.
   const value = useMemo<TasksContextValue>(() => t,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- t's callbacks are stable via useCallback
-    [t.tasks, t.taskGroups, t.hiddenGroups, t.loading, t.refreshing, t.error, t.operationError]);
+    [t.tasks, t.taskGroups, t.hiddenGroups, t.folderMeta, t.loading, t.refreshing, t.error, t.operationError]);
 
   return <TasksContext.Provider value={value}>{children}</TasksContext.Provider>;
 }

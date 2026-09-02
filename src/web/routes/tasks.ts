@@ -40,6 +40,7 @@ import {
   createFolder,
   deleteFolder,
   setFolderParent,
+  moveFolderToProject,
   getCustomTiers,
   getBoardCounts,
   setPluginTaskField,
@@ -1090,6 +1091,24 @@ function sendFolderError(res: Response, err: unknown): void {
   res.status(/not found/i.test(msg) ? 404 : 400).json({ error: msg })
 }
 
+/**
+ * A folder id from the URL becomes an object key (`store.task_groups[gid]`), so
+ * its SHAPE is validated before it ever reaches the store. Real ids are minted
+ * as `g_<id>`; the pattern stays wider than that on purpose so legacy/imported
+ * ids keep working, but it refuses anything that isn't a plain opaque key —
+ * including the JS-magic names (`__proto__`) that used to resolve through
+ * Object.prototype, pass the "does this folder exist" check, and let the op
+ * write onto the prototype. The store layer refuses them too (own-property
+ * lookups); this is the cheap outer gate that answers 400 instead of 404.
+ */
+const FOLDER_ID_SHAPE = /^[A-Za-z0-9_-]{1,64}$/
+
+function rejectBadFolderId(res: Response, groupId: string): boolean {
+  if (FOLDER_ID_SHAPE.test(groupId)) return false
+  res.status(400).json({ error: 'invalid folder id' })
+  return true
+}
+
 // POST /api/tasks/folders — create an EMPTY folder under a project ('' = Inbox),
 // optionally nested via parent_id. The "project + → New folder" entry point.
 tasksRouter.post('/folders', async (req: Request, res: Response) => {
@@ -1115,12 +1134,32 @@ tasksRouter.post('/folders', async (req: Request, res: Response) => {
   }
 })
 
-// PATCH /api/tasks/folders/:groupId — move a folder in the nesting tree.
-// Body: { parent_id: string | null } (null = make it top-level).
+// PATCH /api/tasks/folders/:groupId — move a folder, either in the nesting tree
+// or to another project. Body: { parent_id: string | null } (null = make it
+// top-level) OR { project: string } ('' = Inbox). Exactly one per call — the two
+// moves have different blast radius (a project move takes the whole subtree and
+// its member tasks with it), so combining them in one request is a caller bug.
 tasksRouter.patch('/folders/:groupId', async (req: Request, res: Response) => {
   try {
     const groupId = param(req.params.groupId)
-    const { parent_id } = req.body as { parent_id?: string | null }
+    if (rejectBadFolderId(res, groupId)) return
+    const { parent_id, project } = req.body as { parent_id?: string | null; project?: string }
+    if (parent_id !== undefined && project !== undefined) {
+      res.status(400).json({ error: 'pass parent_id or project, not both' })
+      return
+    }
+    if (project !== undefined) {
+      if (typeof project !== 'string') {
+        res.status(400).json({ error: "project must be a string ('' = Inbox)" })
+        return
+      }
+      // A partial move still moved the folder, so the listing changed and the
+      // event fires either way; per-task failures ride the response body.
+      const moved = await moveFolderToProject(groupId, project)
+      bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: moved.group_id, project: moved.project }, ['web-ui', 'main-agent'], { source: 'api' })
+      res.json(moved)
+      return
+    }
     if (parent_id !== null && typeof parent_id !== 'string') {
       res.status(400).json({ error: 'parent_id must be a string or null' })
       return
@@ -1139,6 +1178,7 @@ tasksRouter.patch('/folders/:groupId', async (req: Request, res: Response) => {
 tasksRouter.delete('/folders/:groupId', async (req: Request, res: Response) => {
   try {
     const groupId = param(req.params.groupId)
+    if (rejectBadFolderId(res, groupId)) return
     const result = await deleteFolder(groupId)
     bus.emit(EventNames.TASK_GROUPS_CHANGED, { dissolved_group_ids: [result.group_id] }, ['web-ui', 'main-agent'], { source: 'api' })
     res.json(result)

@@ -257,10 +257,19 @@ export function TaskActionMenuItems({
  * scroll closers must exempt `.task-kebab-project-flyout` — it is intentionally
  * outside their menu ref.
  */
-export function ProjectPickerFlyout({ open, anchorRef, current, onPick, onClose, preferSide }: {
+export function ProjectPickerFlyout({ open, anchorRef, anchorPoint, align, current, onPick, onClose, preferSide }: {
   open: boolean;
-  /** The trigger the flyout is placed against. */
+  /** The trigger the flyout is placed against. Ignored when `anchorPoint` is set. */
   anchorRef: RefObject<HTMLElement | null>;
+  /**
+   * Anchor at a viewport POINT instead of a trigger element — used by the folder
+   * right-click menu, whose "Move to project…" row has already closed the menu it
+   * came from, so there is no element left to hang the flyout on. Must be
+   * referentially stable (keep it in state): useMenuPlacement takes it as a dep.
+   */
+  anchorPoint?: { x: number; y: number } | null;
+  /** Horizontal alignment (see useMenuPlacement). Default 'right', as for a kebab. */
+  align?: 'right' | 'left' | 'center';
   /** Current project ('' = Inbox), shown with a ✓. null = no single current value. */
   current: string | null;
   onPick: (project: string) => void;
@@ -278,6 +287,8 @@ export function ProjectPickerFlyout({ open, anchorRef, current, onPick, onClose,
   const placement = useMenuPlacement(open, anchorRef, listRef, {
     minHeight: 160,
     preferSide,
+    anchorPoint,
+    align,
     onAnchorLost: onClose,
   });
   if (!open) return null;

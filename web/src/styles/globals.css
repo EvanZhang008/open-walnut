@@ -10831,6 +10831,15 @@ body.walnut-dragging {
   user-select: none;
 }
 .task-group-chip .collapse-chevron { margin-left: -4px; }
+/* A folder row whose whole body folds/unfolds on click (main list header row and
+   the pinned tier chip). The chevron is the discoverable affordance; the pointer
+   cursor tells the user the rest of the row acts the same way. The label keeps
+   its own text cursor (it renames), and the ⊘/✕ buttons keep theirs. */
+.task-group-chip-clickable { cursor: pointer; }
+/* --bg-hover, not the --hover-bg fallback some older rules use: that token is
+   never defined, so its literal black-alpha fallback is invisible in dark mode. */
+.task-group-chip-clickable:hover { background: var(--bg-hover); }
+.task-group-chip-clickable .task-group-chip-label { cursor: text; }
 .task-group-chip-icon {
   font-size: 11px;
   opacity: 0.85;

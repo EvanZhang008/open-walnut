@@ -977,12 +977,35 @@ export class InvalidProjectNameError extends Error {
  *
  * Inbox ('') is legal in the MODEL but never reaches here: every caller returns
  * early for the empty name (it has no registry row and needs no directory).
+ *
+ * A project name is ALSO an object key (store.projects is keyed by it), so the
+ * three JS-magic names are refused outright: a value written under `__proto__`
+ * or read back through `constructor`/`prototype` is not the row the caller
+ * meant, and one of those reads is a prototype-pollution hole. The length cap
+ * keeps the name inside every filesystem's path-segment limit (255 bytes) with
+ * room for multi-byte characters.
  */
+export const MAX_PROJECT_NAME_LENGTH = 200;
+
+const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 export function assertValidProjectName(name: string): string {
   const trimmed = (name ?? '').trim();
   if (!trimmed) {
     throw new InvalidProjectNameError(
       'Project name must be a non-empty string. To clear a project, move its tasks to Inbox.',
+      trimmed,
+    );
+  }
+  if (trimmed.length > MAX_PROJECT_NAME_LENGTH) {
+    throw new InvalidProjectNameError(
+      `Invalid project name: it is ${trimmed.length} characters long (max ${MAX_PROJECT_NAME_LENGTH}) — a project name becomes a directory segment.`,
+      trimmed,
+    );
+  }
+  if (RESERVED_OBJECT_KEYS.has(trimmed.toLowerCase())) {
+    throw new InvalidProjectNameError(
+      `Invalid project name "${name}": '${trimmed}' is a reserved JavaScript object key and cannot name a project.`,
       trimmed,
     );
   }
@@ -3180,7 +3203,10 @@ function migrateTaskSource(
 export async function updateTask(
   idPrefix: string,
   updates: UpdateTaskInput,
-  eventOptions?: { source?: string; extraTargets?: string[]; ifPhase?: TaskPhase; asyncPush?: boolean },
+  // `keepGroupId` is INTERNAL (never parsed off an HTTP body): it suppresses the
+  // auto-unfolder below for the one caller that legitimately needs it,
+  // moveFolderToProject — see the comment at that line.
+  eventOptions?: { source?: string; extraTargets?: string[]; ifPhase?: TaskPhase; asyncPush?: boolean; keepGroupId?: boolean },
 ): Promise<{ task: Task }> {
   // Lock-internal phase: validate + mutate + persist. Returns enough state for
   // the post-lock push. Push runs OUTSIDE the lock because autoPushIfConfigured
@@ -3277,8 +3303,12 @@ export async function updateTask(
 
     if (!assigned) task.project = newProject;
     // A folder is the project's private structure — it never follows a task
-    // across projects. Any project move drops the membership.
-    if (projectChanged && task.group_id) delete task.group_id;
+    // across projects. Any project move drops the membership. The ONE exception
+    // is a FOLDER move (moveFolderToProject): there the folder itself is what
+    // changed project, so its members must keep their membership. That caller
+    // opts out here rather than clearing and re-writing group_id in a second
+    // pass, which would emit twice per task and race a concurrent read.
+    if (projectChanged && task.group_id && !eventOptions?.keepGroupId) delete task.group_id;
   }
   if (updates.phase !== undefined && VALID_PHASES.has(updates.phase)) {
     // CAS guard: if caller specified ifPhase, only apply phase change if current phase matches
@@ -4339,21 +4369,42 @@ export async function mergeTaskInto(
 //   project in place, child folders re-parent to the deleted folder's parent,
 //   and no task is ever deleted.
 // - Joining/leaving a folder never changes task.project.
+// - moveFolderToProject is the inverse of that last rule and the only op that
+//   changes a folder's project: the FOLDER moves, so its members (and its whole
+//   descendant subtree) move with it and KEEP their group_id.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Nesting ceiling: a parent chain longer than this is rejected on write. */
 export const FOLDER_MAX_DEPTH = 5;
+
+/**
+ * The ONLY way to read a folder record by id. `store.task_groups[gid]` is a
+ * plain-object index, so a caller-supplied id resolves through
+ * Object.prototype: `task_groups['__proto__']` / `['constructor']` returned a
+ * truthy non-record, which passed every `if (!rec) throw not found` existence
+ * check and then let the op write fields onto Object.prototype — after which
+ * `updates.project !== undefined` was true on EVERY later update and the
+ * corruption persisted store-wide. An own-property check makes an id that isn't
+ * a real key simply "not found", which is what the caller contract already
+ * says. Never index task_groups with an untrusted id directly.
+ */
+function folderRecord(store: TaskStore, groupId: string): TaskGroupRecord | undefined {
+  const groups = store.task_groups;
+  if (!groups || typeof groupId !== 'string') return undefined;
+  if (!Object.prototype.hasOwnProperty.call(groups, groupId)) return undefined;
+  return groups[groupId];
+}
 
 /** Depth of a folder = 1 + number of ancestors. Broken/cyclic chains count as
  *  the walked length (the cycle guard rejects them separately on write). */
 function folderDepth(store: TaskStore, groupId: string): number {
   let depth = 1;
   const seen = new Set<string>([groupId]);
-  let cur = store.task_groups?.[groupId]?.parent_id;
+  let cur = folderRecord(store, groupId)?.parent_id;
   while (cur && !seen.has(cur)) {
     depth += 1;
     seen.add(cur);
-    cur = store.task_groups?.[cur]?.parent_id;
+    cur = folderRecord(store, cur)?.parent_id;
   }
   return depth;
 }
@@ -4361,7 +4412,7 @@ function folderDepth(store: TaskStore, groupId: string): number {
 /** The project a folder belongs to. Falls back to deriving from the first live
  *  member for records that predate the v9 backfill (defensive only). */
 function folderProject(store: TaskStore, groupId: string): string {
-  const rec = store.task_groups?.[groupId];
+  const rec = folderRecord(store, groupId);
   if (rec?.project !== undefined) return rec.project;
   return store.tasks.find((t) => t.group_id === groupId)?.project ?? '';
 }
@@ -4446,7 +4497,7 @@ export async function addToGroup(groupId: string, idPrefixes: string[]): Promise
   return withWriteLock(async () => {
     const store = await readStore();
     const existing = store.tasks.filter((t) => t.group_id === groupId);
-    if (existing.length === 0 && !store.task_groups?.[groupId]) {
+    if (existing.length === 0 && !folderRecord(store, groupId)) {
       throw new Error(`Group "${groupId}" not found.`);
     }
     const project = folderProject(store, groupId);
@@ -4459,8 +4510,8 @@ export async function addToGroup(groupId: string, idPrefixes: string[]): Promise
     }
     for (const t of toAdd) t.group_id = groupId;
     const members = store.tasks.filter((t) => t.group_id === groupId);
-    const label = store.task_groups?.[groupId]?.label ?? members[0]?.title ?? groupId;
-    if (!store.task_groups?.[groupId]) {
+    const label = folderRecord(store, groupId)?.label ?? members[0]?.title ?? groupId;
+    if (!folderRecord(store, groupId)) {
       store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label, project } };
     }
     await writeStore(store);
@@ -4506,7 +4557,7 @@ export async function createFolder(
     if (!trimmed) throw new Error('Folder name cannot be empty.');
     const proj = project.trim();
     if (parentId !== undefined) {
-      const parent = store.task_groups?.[parentId];
+      const parent = folderRecord(store, parentId);
       if (!parent) throw new Error(`Parent folder "${parentId}" not found.`);
       if (!sameProject(folderProject(store, parentId), proj)) {
         throw new Error('A folder can only nest inside a folder of the same project.');
@@ -4535,7 +4586,7 @@ export async function deleteFolder(
 ): Promise<{ group_id: string; released_task_ids: string[]; reparented_folder_ids: string[] }> {
   return withWriteLock(async () => {
     const store = await readStore();
-    const rec = store.task_groups?.[groupId];
+    const rec = folderRecord(store, groupId);
     const members = store.tasks.filter((t) => t.group_id === groupId);
     if (!rec && members.length === 0) throw new Error(`Group "${groupId}" not found.`);
     const released: string[] = [];
@@ -4571,7 +4622,7 @@ export async function setFolderParent(
 ): Promise<{ group_id: string; parent_id?: string }> {
   return withWriteLock(async () => {
     const store = await readStore();
-    const rec = store.task_groups?.[groupId];
+    const rec = folderRecord(store, groupId);
     if (!rec) throw new Error(`Group "${groupId}" not found.`);
     if (parentId === null) {
       delete rec.parent_id;
@@ -4579,7 +4630,7 @@ export async function setFolderParent(
       return { group_id: groupId };
     }
     if (parentId === groupId) throw new Error('A folder cannot be its own parent.');
-    const parent = store.task_groups?.[parentId];
+    const parent = folderRecord(store, parentId);
     if (!parent) throw new Error(`Parent folder "${parentId}" not found.`);
     if (!sameProject(folderProject(store, parentId), folderProject(store, groupId))) {
       throw new Error('A folder can only nest inside a folder of the same project.');
@@ -4591,7 +4642,7 @@ export async function setFolderParent(
       if (cur === groupId) throw new Error('That move would make the folder its own ancestor.');
       if (seen.has(cur)) break;
       seen.add(cur);
-      cur = store.task_groups?.[cur]?.parent_id;
+      cur = folderRecord(store, cur)?.parent_id;
     }
     // Depth cap: the subtree rooted at groupId must still fit under the parent.
     const subtreeDepth = (gid: string, guard: Set<string>): number => {
@@ -4612,6 +4663,251 @@ export async function setFolderParent(
   });
 }
 
+/** A folder plus every descendant folder, root first, walked from the CURRENT
+ *  parent links. Cycle-guarded so a corrupt chain can't spin forever. */
+function folderSubtree(store: TaskStore, groupId: string): string[] {
+  const out: string[] = [groupId];
+  const seen = new Set<string>([groupId]);
+  for (let i = 0; i < out.length; i += 1) {
+    const parent = out[i];
+    for (const [gid, rec] of Object.entries(store.task_groups ?? {})) {
+      if (rec.parent_id === parent && !seen.has(gid)) {
+        seen.add(gid);
+        out.push(gid);
+      }
+    }
+  }
+  return out;
+}
+
+export interface FolderMoveResult {
+  group_id: string;
+  project: string;
+  moved_task_ids: string[];
+  moved_folder_ids: string[];
+  /** Per-task failures. Present ONLY when non-empty: the folder still moved, and
+   *  re-running the same call retries exactly these rows. */
+  failed?: Array<{ id: string; error: string }>;
+}
+
+/**
+ * Move a folder — and its whole subtree — to another project ('' = Inbox).
+ *
+ * A folder belongs to exactly ONE project, so re-projecting it means moving the
+ * folder record, every DESCENDANT folder record, and every member task of that
+ * subtree. This is the one project move where the folder DOES follow the tasks:
+ * the folder itself is what the user moved, so members KEEP their group_id
+ * instead of being auto-unfoldered (updateTask's internal `keepGroupId`).
+ *
+ * Members are partitioned BY SOURCE, and only the provider-sourced ones ride
+ * updateTask:
+ *
+ * - LOCAL members move in the SAME write lock that rewrites the folder records:
+ *   one targeted project rewrite per row, ONE store write, ONE bulk
+ *   `task:updated` event. Deliberately NOT a loop over updateTask, for the
+ *   reason setPhaseBulk already documents: that pays a full write-lock +
+ *   whole-store rewrite per task and emits one WS frame per row, so a 20-member
+ *   folder cost 20 lock cycles and made the board redraw row by row. It also
+ *   made the op non-atomic — the first failure aborted the batch with half the
+ *   members in the new project and the folder still in the old one. The bulk
+ *   event shape (`task: null` + `taskIds`) is the codebase's established one
+ *   (see task-pin-retirement.ts): the browser collapses it into a single
+ *   debounced refetch. A local member needs nothing else — updateTask's project
+ *   branch for a local row is a plain assignment (it stays local even under a
+ *   provider-claimed destination) plus an updated_at bump.
+ * - PROVIDER-SOURCED members keep the full per-task updateTask, because the
+ *   whole project-move contract lives there: destination claim rules,
+ *   migrateTaskSource, the released-remote-id ledger, remote mark-moved. They
+ *   run with `asyncPush` so a slow or failing remote can't stall the local move,
+ *   and a push failure stamps sync_error instead of throwing.
+ *
+ * Failures NEVER abort the batch. Each bad row is collected into `failed` and
+ * the folder-record phase still runs: leaving the folder behind because one
+ * provider rejected one task is the worse outcome (the user's drag visibly did
+ * nothing), and the folder record is the thing the UI reads.
+ *
+ * Order matters. Member tasks move FIRST, folder records LAST, and the final
+ * lock RE-WALKS the subtree from a fresh read before writing: a task that joined
+ * the folder during the (unlocked) planning window is swept along instead of
+ * being stranded in the old project, and re-running the call actually converges.
+ * Member selection compares projects EXACTLY (not case-insensitively) so a
+ * case-only re-spelling normalizes the members too.
+ *
+ * The root's parent_id clears when that parent is no longer in the destination
+ * project — its old parent stays behind — while descendants keep their parent
+ * links, so the subtree's shape survives.
+ */
+export async function moveFolderToProject(
+  groupId: string,
+  project: string,
+): Promise<FolderMoveResult> {
+  // Planning read only — readStore hands back a clone, and the authoritative
+  // re-read happens under the final lock below.
+  const store = await readStore();
+  const plannedRoot = folderRecord(store, groupId);
+  const hasLiveMembers = store.tasks.some((t) => t.group_id === groupId);
+  if (!plannedRoot && !hasLiveMembers) throw new Error(`Group "${groupId}" not found.`);
+
+  const requested = project.trim();
+  const current = folderProject(store, groupId);
+  // Canonical spelling wins so two casings can't split one project, and a name
+  // about to mint a NEW registry row passes the shape gate (same rule as addTask).
+  const projects = store.projects ?? {};
+  const registryKey = requested
+    ? Object.keys(projects).find((k) => k.toLowerCase() === requested.toLowerCase())
+    : undefined;
+  if (requested && !registryKey) assertValidProjectName(requested);
+  const target = registryKey ?? requested;
+
+  const plannedSubtree = folderSubtree(store, groupId);
+  const inSubtree = new Set(plannedSubtree);
+  const strays = store.tasks.filter(
+    (t) => t.group_id && inSubtree.has(t.group_id) && t.project !== target,
+  );
+  const recordsToMove = plannedSubtree.filter((gid) => {
+    const rec = folderRecord(store, gid);
+    return !rec || rec.project !== target;
+  });
+
+  // Already there — but ONLY when the records AND every member match the target
+  // EXACTLY. A case-only difference in either place is real drift to normalize,
+  // not a no-op: returning early there left members spelled two ways in one
+  // project, which is exactly what the registry's NOCASE identity can't express.
+  if (strays.length === 0 && recordsToMove.length === 0) {
+    return { group_id: groupId, project: target, moved_task_ids: [], moved_folder_ids: [] };
+  }
+
+  const failed: Array<{ id: string; error: string }> = [];
+  const failedIds = new Set<string>();
+  const movedTaskIds: string[] = [];
+
+  /** Provider-sourced member: the full contract, one updateTask, never fatal. */
+  const moveProviderMember = async (id: string): Promise<void> => {
+    try {
+      await updateTask(
+        id,
+        { project: target },
+        { source: 'folder-move', keepGroupId: true, asyncPush: true },
+      );
+      movedTaskIds.push(id);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      failedIds.add(id);
+      failed.push({ id, error: message });
+      log.task.warn('folder move: member task failed to move (batch continues)', {
+        groupId, taskId: id, to: target, error: message,
+      });
+    }
+  };
+
+  // 1. Provider-sourced members, outside any lock (updateTask takes its own).
+  for (const t of strays) {
+    if (t.source === 'local') continue;
+    await moveProviderMember(t.id);
+  }
+
+  // 2. Local members + folder records + destination registry row, in ONE lock.
+  //    The subtree is re-walked from a FRESH read here: the store changed under
+  //    us (step 1, and any concurrent addToGroup), so the planning snapshot is
+  //    both stale to write back and incomplete to act on.
+  const { movedFolderIds, sweptTaskIds, deferredProviderIds, createdProject } = await withWriteLock(async () => {
+    const fresh = await readStore();
+    let root = folderRecord(fresh, groupId);
+    if (!root) {
+      // Record-less legacy folder with live members: mint the registry row as
+      // part of the move (same tolerance as addToGroup / deleteFolder) rather
+      // than refusing to move tasks that plainly belong to a folder.
+      const members = fresh.tasks.filter((t) => t.group_id === groupId);
+      if (members.length === 0) throw new Error(`Group "${groupId}" not found.`);
+      fresh.task_groups = {
+        ...(fresh.task_groups ?? {}),
+        [groupId]: { label: members[0].title || groupId, project: target },
+      };
+      root = folderRecord(fresh, groupId)!;
+      log.task.info('folder move: minted a missing registry row for a legacy folder', {
+        groupId, members: members.length, project: target,
+      });
+    }
+
+    const subtreeIds = folderSubtree(fresh, groupId);
+    const freshSubtree = new Set(subtreeIds);
+
+    // Sweep every member still outside the destination. EXACT compare so a
+    // re-spelling normalizes; `group_id` is deliberately untouched (the folder
+    // is what moved).
+    const swept: string[] = [];
+    const deferred: string[] = [];
+    const now = new Date().toISOString();
+    for (const t of fresh.tasks) {
+      if (!t.group_id || !freshSubtree.has(t.group_id)) continue;
+      if (t.project === target) continue;
+      if (failedIds.has(t.id)) continue;           // already reported — don't churn
+      if (t.source !== 'local') { deferred.push(t.id); continue; }
+      t.project = target;
+      t.updated_at = now;
+      swept.push(t.id);
+    }
+
+    const moved: string[] = [];
+    for (const gid of subtreeIds) {
+      const rec = folderRecord(fresh, gid);
+      if (!rec) continue;
+      rec.project = target;
+      moved.push(gid);
+    }
+    // The root leaves its old parent behind when that parent lives in a
+    // different project; a pure re-spelling keeps the nesting intact.
+    if (root.parent_id) {
+      const parentProject = folderRecord(fresh, root.parent_id)?.project;
+      if (parentProject === undefined || !sameProject(parentProject, target)) delete root.parent_id;
+    }
+    // Registry row for the destination ('' = Inbox never gets one). This is the
+    // normal path now: the local sweep above writes rows directly, so nothing
+    // else mints the row (only a provider member's updateTask can, and then it
+    // already exists and keeps its own claim).
+    let created: { name: string; source: TaskSource } | undefined;
+    const freshProjects = fresh.projects ?? {};
+    if (target && !Object.keys(freshProjects).some((k) => k.toLowerCase() === target.toLowerCase())) {
+      fresh.projects = { ...freshProjects, [target]: { source: 'local' } };
+      created = { name: target, source: 'local' };
+    }
+    await writeStore(fresh);
+    return { movedFolderIds: moved, sweptTaskIds: swept, deferredProviderIds: deferred, createdProject: created };
+  });
+  if (createdProject) emitProjectCreated(createdProject.name, createdProject.source);
+
+  movedTaskIds.push(...sweptTaskIds);
+  if (sweptTaskIds.length > 0) {
+    // ONE bulk event for every locally-moved row (see the docblock): `task: null`
+    // + `taskIds` is the shape the browser coalesces into a single debounced
+    // refetch, and the indexers re-enqueue exactly these ids.
+    bus.emit(
+      EventNames.TASK_UPDATED,
+      { task: null, taskIds: sweptTaskIds, fields: ['project'] },
+      ['web-ui'],
+      { source: 'folder-move' },
+    );
+  }
+
+  // A provider-sourced member the planning read missed (it joined mid-move, or
+  // its own move failed earlier) can't be swept by a raw project rewrite — that
+  // would skip the claim/migration contract — so it gets the same per-task path.
+  for (const id of deferredProviderIds) await moveProviderMember(id);
+
+  log.task.info('folder moved to another project', {
+    groupId, from: current, to: target,
+    tasksMoved: movedTaskIds.length, foldersMoved: movedFolderIds.length,
+    swept: sweptTaskIds.length, failed: failed.length,
+  });
+  return {
+    group_id: groupId,
+    project: target,
+    moved_task_ids: movedTaskIds,
+    moved_folder_ids: movedFolderIds,
+    ...(failed.length > 0 ? { failed } : {}),
+  };
+}
+
 /** Rename a group's label. */
 export async function renameGroup(groupId: string, label: string): Promise<{ group_id: string; label: string }> {
   return withWriteLock(async () => {
@@ -4619,7 +4915,7 @@ export async function renameGroup(groupId: string, label: string): Promise<{ gro
     const trimmed = label.trim();
     if (!trimmed) throw new Error('Group label cannot be empty.');
     const hasMembers = store.tasks.some((t) => t.group_id === groupId);
-    const existing = store.task_groups?.[groupId];
+    const existing = folderRecord(store, groupId);
     if (!hasMembers && !existing) throw new Error(`Group "${groupId}" not found.`);
     // Preserve project/parent_id/hidden — a rename must not flatten the folder.
     store.task_groups = {
@@ -4641,7 +4937,7 @@ export async function setGroupHidden(groupId: string, hidden: boolean): Promise<
   return withWriteLock(async () => {
     const store = await readStore();
     const hasMembers = store.tasks.some((t) => t.group_id === groupId);
-    const existing = store.task_groups?.[groupId];
+    const existing = folderRecord(store, groupId);
     if (!hasMembers && !existing) throw new Error(`Group "${groupId}" not found.`);
     // Preserve the label (default: lead member's title) and the folder fields.
     const label = existing?.label ?? store.tasks.find((t) => t.group_id === groupId)?.title ?? groupId;

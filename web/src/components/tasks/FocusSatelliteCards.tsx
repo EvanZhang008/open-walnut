@@ -11,6 +11,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { useDroppable, useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { groupSortableId } from './tier-group-sentinels';
+import { useFolderContextMenu } from './FolderContextMenu';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStartButton } from './TaskStartButton';
 import * as ICONS from '../common/Icons';
@@ -39,23 +40,55 @@ export { groupSortableId } from './tier-group-sentinels';
  *    Being a collision target is also correct: dropping on a chip means "land above
  *    this group", and it's the natural target when swapping two groups.
  */
-export function GroupChip({ groupId, tier, label, project, onRename, onDissolve, onHide }: {
+export function GroupChip({ groupId, tier, label, project, showProjectPrefix, count, collapsed, inert, onRename, onDissolve, onHide, onToggleCollapse, onMoveToProject }: {
   groupId: string;
   tier: FocusTier;
   label: string;
-  /** Owning project, shown as a muted prefix. Passed only when the tier is NOT
+  /** The folder's owning project ('' = Inbox, undefined = not known yet). ONE
+   *  prop, two uses: the context menu needs it in every mode so "Move to
+   *  project…" can tick (and no-op on) the current one, and `showProjectPrefix`
+   *  additionally draws it as a muted prefix. */
+  project?: string;
+  /** Draw the owning project as a muted prefix. Set only when the tier is NOT
    *  rendering project label rows (flat/custom modes): without it the chip is
    *  the only container line visible and reads as if it REPLACED the project
    *  ("Ask Walnut Variants" hijacking "Ask Walnut", user report 2026-08-31). */
-  project?: string;
+  showProjectPrefix?: boolean;
+  /** Member count, mirroring the main list's folder header. */
+  count?: number;
+  /** Collapsed = this folder's member cards are display:none'd by the tier loop. */
+  collapsed?: boolean;
+  /** A pinned drag is live: the chip stays visually identical (same class, same
+   *  title — it still IS a foldable folder) but the collapse GESTURE is refused
+   *  while the sentinel handoff owns the pointer. */
+  inert?: boolean;
   onRename?: (groupId: string, label: string) => void;
   onDissolve?: (groupId: string) => void;
   onHide?: (groupId: string) => void;
+  onToggleCollapse?: (groupId: string) => void;
+  onMoveToProject?: (groupId: string, project: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: groupSortableId(groupId, tier),
     data: { type: 'group', groupId, tier },
   });
+  const folderMenu = useFolderContextMenu({
+    onRename,
+    onToggleCollapse,
+    onMoveToProject,
+    onHide,
+    onDelete: onDissolve,
+  });
+  // Click anywhere on the chip = fold/unfold, mirroring the main list's header
+  // row. The label (rename), the chevron and the ⊘/✕ buttons all stopPropagation,
+  // so they never reach this — that IS the mechanism, no target sniffing needed.
+  // dnd-kit swallows the click once its 5px activation fired, so a real drag
+  // can't also toggle; isDragging/inert covers the rest of the gesture window.
+  const canCollapse = !!onToggleCollapse;
+  const toggleCollapse = useCallback(() => {
+    if (!canCollapse || inert || isDragging) return;
+    onToggleCollapse?.(groupId);
+  }, [canCollapse, inert, isDragging, onToggleCollapse, groupId]);
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -65,27 +98,42 @@ export function GroupChip({ groupId, tier, label, project, onRename, onDissolve,
     position: 'relative',
   };
   return (
+    <>
     <div
       ref={setNodeRef}
       style={style}
       data-group-id={groupId}
-      className={`task-group-chip${isDragging ? ' task-group-chip-dragging' : ''}`}
-      title="Folder — press and drag to move the whole folder"
+      className={`task-group-chip${isDragging ? ' task-group-chip-dragging' : ''}${canCollapse ? ' task-group-chip-clickable' : ''}`}
+      title={canCollapse
+        ? `Folder — click to ${collapsed ? 'expand' : 'collapse'}, press and drag to move the whole folder`
+        : 'Folder — press and drag to move the whole folder'}
       // A+B drag: the whole chip is the activator (5px distance keeps the label's
       // click-to-rename and the ⊘/✕ buttons working); the gutter grip is a hint.
       {...attributes}
       {...listeners}
+      onClick={toggleCollapse}
+      onContextMenu={(e) => folderMenu.open(e, { groupId, label, project, collapsed })}
     >
       <span className="task-group-chip-grip" aria-hidden="true" title="Drag to move the whole folder">⣿</span>
+      {onToggleCollapse && (
+        <button
+          className={`collapse-chevron${!collapsed ? ' expanded' : ''}`}
+          onClick={(e) => { e.stopPropagation(); toggleCollapse(); }}
+          title={collapsed ? 'Expand folder' : 'Collapse folder'}
+          aria-label={collapsed ? 'Expand folder' : 'Collapse folder'}
+        >
+          {ICONS.CHEVRON_GLYPH}{/* same glyph as the main list; CSS rotates it when expanded */}
+        </button>
+      )}
       <span className="task-group-chip-icon" aria-hidden="true">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z" /></svg>
+        {ICONS.ICON_FOLDER_OUTLINE}
       </span>
-      {project !== undefined && (
+      {showProjectPrefix && project !== undefined && (
         <span
           className="task-group-chip-project"
           style={{ color: 'var(--fg-muted)', fontWeight: 400, whiteSpace: 'nowrap' }}
         >
-          {project}&nbsp;/
+          {project || 'Inbox'}&nbsp;/
         </span>
       )}
       <span
@@ -95,6 +143,9 @@ export function GroupChip({ groupId, tier, label, project, onRename, onDissolve,
       >
         {label}
       </span>
+      {count !== undefined && count > 0 && (
+        <span className="task-group-chip-count" aria-hidden="true">{count}</span>
+      )}
       {onHide && (
         <button
           className="task-group-chip-hide"
@@ -116,6 +167,12 @@ export function GroupChip({ groupId, tier, label, project, onRename, onDissolve,
         </button>
       )}
     </div>
+    {/* Rendered as a SIBLING of the chip, not a child: both overlays portal to
+        <body>, but React events still bubble through the component tree, and the
+        chip IS the drag activator — a pointerdown inside the menu would arm a
+        drag of the whole folder. */}
+    {folderMenu.node}
+    </>
   );
 }
 
@@ -177,6 +234,11 @@ interface SortableTierCardProps {
    *  member. The header chip itself is now rendered standalone by TodoPanel (see
    *  GroupChip), so the rename/dissolve/hide callbacks live there, not here. */
   groupInfo?: TierGroupRenderInfo;
+  /** This card's folder is collapsed — hide it with .task-folder-collapsed
+   *  (display:none) rather than unmounting it, exactly as the main list does:
+   *  the id must stay in the tier's SortableContext or dnd-kit's indices shift
+   *  under a live drag. */
+  folderCollapsed?: boolean;
   /** Multi-select (shared with the main list): in select mode a click toggles
    *  selection instead of opening the card; a leading checkbox + highlight show state. */
   selectMode?: boolean;
@@ -188,7 +250,7 @@ interface SortableTierCardProps {
   isGroupTarget?: boolean;
 }
 
-export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onSetStartDate, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, groupInfo, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
+export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onSetStartDate, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, groupInfo, folderCollapsed, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
   // Live circle: error red / waiting red-pulse / running green-pulse.
   const circleClass = useTaskCircle(task);
   const {
@@ -291,7 +353,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
   const cardClass = tier === 'focus' ? 'todo-focus-card' : 'todo-pinned-card';
   // Virtual-group cluster classes — reuse the main list's rail/rounding styling.
   const groupClass = groupInfo
-    ? ` task-grouped${groupInfo.isLead ? ' task-group-lead' : ''}${groupInfo.isLast ? ' task-group-last' : ''}`
+    ? ` task-grouped${groupInfo.isLead ? ' task-group-lead' : ''}${groupInfo.isLast ? ' task-group-last' : ''}${folderCollapsed ? ' task-folder-collapsed' : ''}`
     : '';
 
   // NOTE: the group header chip is rendered STANDALONE by TodoPanel's tier loop (keyed
