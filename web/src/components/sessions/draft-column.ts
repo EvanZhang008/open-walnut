@@ -192,52 +192,6 @@ function dirKey(d: { cwd: string; host: string | null }): string {
   return `${d.host ?? '__local__'}::${d.cwd}`;
 }
 
-/**
- * The folder an UNSEEDED draft opens on: the most recently used one in the cache.
- *
- * Why a default exists at all. A draft with `cwd === ''` cannot launch — the panel's
- * `startWith` returns false and opens the folder picker instead — so "+ then type
- * then Start" spent the Start click on a picker rather than on a session. Nothing
- * on screen said so: the button is enabled, the composer keeps the text, and no
- * request is made. A create that silently becomes a file browser reads as "it can't
- * start", which is exactly how it was reported.
- *
- * Why the MOST RECENT rather than the most used. This is a starting point, not a
- * decision: the folder a person is working in right now is the one they just
- * launched in, whereas the all-time favourite can be a repo they left months ago.
- * It stays a suggestion in every sense — `cwdPinned` is deliberately NOT set, so a
- * project's async `default_cwd` may still refine it, the picker and the quick chips
- * override it in one click, and the pill shows the folder name the whole time.
- *
- * Deliberately reads the SYNCHRONOUS module cache only (`peekWorkingDirs`), like
- * every other read in this file: the draft-open path is contractually network-free,
- * so a cold cache means "no default" (the old empty-cwd behavior, picker and all),
- * never "go fetch". MainPage warms that cache on mount.
- */
-export function defaultDraftDir(): { cwd: string; host: string | null; hostLabel?: string } | null {
-  const cached = peekWorkingDirs();
-  if (!cached) return null;
-  let best: WorkingDirEntry | undefined;
-  let bestMs = -Infinity;
-  for (const d of cached.dirs) {
-    if (!d.cwd) continue;
-    const ms = lastUsedMs(d);
-    // `best === undefined` is what makes an all-unparseable store still answer:
-    // `lastUsedMs` maps a missing/garbage `lastUsed` to -Infinity, and
-    // `-Infinity > -Infinity` is false, so a strict comparison alone selected
-    // NOTHING and handed back null — reinstating the empty-cwd draft (and the
-    // silent Start) for exactly the store that looks most broken. First
-    // launchable row wins the tie.
-    if (best === undefined || ms > bestMs) { bestMs = ms; best = d; }
-  }
-  if (!best) return null;
-  return {
-    cwd: best.cwd,
-    host: best.host ?? null,
-    ...(best.hostLabel ? { hostLabel: best.hostLabel } : {}),
-  };
-}
-
 /** How many chips are picked by ABSOLUTE use count vs. by recency.
  *
  *  4+4. It was 2+2, on the theory that a short row is a scannable row. The row is

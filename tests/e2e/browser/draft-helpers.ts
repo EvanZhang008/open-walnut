@@ -219,11 +219,13 @@ export async function expectV4Stack(panel: Locator): Promise<void> {
   // Geometry only means anything once the column has stopped sliding in.
   await settleLayout(panel)
 
-  // 1. The empty body is ONE centered hint and nothing else. `>*` count, not a
-  //    :not() filter: this is what forbids re-introducing chips/buttons there.
+  // 1. The empty body is ONE block and nothing else. `>*` count, not a :not()
+  //    filter: this is what forbids re-introducing chips/buttons there. On a
+  //    plain draft that block is the entry fork (two intent cards, Start Task
+  //    pre-selected); bound/fork drafts keep the one-line hint instead.
   const body = panel.locator('.draft-session-body')
   await expect(body.locator('> *')).toHaveCount(1)
-  await expect(body.locator('.draft-quick-hint')).toBeVisible()
+  await expect(body.locator('.draft-intent-stack, .draft-quick-hint')).toBeVisible()
 
   // 2. The whole launch stack lives INSIDE the composer wrapper, above the
   //    composer card. `draftLaunchBar` is already scoped to
@@ -239,14 +241,14 @@ export async function expectV4Stack(panel: Locator): Promise<void> {
   //    by use + 4 most recent), so it must not sit where the user aims for the
   //    fixed controls; the pills stay glued to the composer.
   const [hintY, chipsY, metaY, pillsY, composerY] = await Promise.all([
-    topOf(body.locator('.draft-quick-hint'), 'the body hint'),
+    topOf(body.locator('.draft-intent-stack, .draft-quick-hint'), 'the body block'),
     // The whole quick GROUP (its caption + the chips), which is what row 1 is now.
     topOf(bar.locator('.draft-quick-block'), 'the quick-access group'),
     topOf(bar.locator('.sps-meta-footer .sps-meta-row').first(), 'the pin-tier row'),
     topOf(bar.locator('.draft-composer-bar'), 'the cwd/project pills row'),
     topOf(composer, 'the composer'),
   ])
-  expect(hintY, 'the body hint sits above the launch stack').toBeLessThan(chipsY)
+  expect(hintY, 'the body block sits above the launch stack').toBeLessThan(chipsY)
   expect(chipsY, 'quick-access chips are the TOP row of the stack').toBeLessThan(metaY)
   expect(metaY, 'the pin-tier row sits between the chips and the pills').toBeLessThan(pillsY)
   expect(pillsY, 'the pills are the LAST row before the composer').toBeLessThan(composerY)

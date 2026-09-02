@@ -237,9 +237,10 @@ export function DraftSessionPanel({
   // One-tap composer seeds for the Ask Walnut tab — ChatInput's prefill contract
   // (replace + focus + caret-to-end, re-appliable via the nonce; never sends).
   const [prefill, setPrefill] = useState<{ text: string; nonce: number }>({ text: '', nonce: 0 });
-  // A Start was refused because no folder is chosen (only reachable on a cold
-  // working-dirs cache, where the draft can't be given a default). Drives the
-  // one-line notice above the launch bar — see startWith.
+  // A Start was refused because no folder is chosen. An unseeded draft opens
+  // with NO folder by design (the user picks one; nothing is pre-selected), so
+  // this is the ordinary "typed first, forgot the folder" path, not an edge
+  // case. Drives the one-line notice above the launch bar — see startWith.
   const [needsFolder, setNeedsFolder] = useState(false);
   // Slash-command palette, same source a real session's composer uses: no folder
   // yet → the LOCAL list (skills + built-ins, no project commands); once a

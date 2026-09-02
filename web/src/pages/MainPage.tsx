@@ -33,7 +33,7 @@ import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import {
-  applyDraftParse, ASK_WALNUT_PROJECT, clearAiFields, defaultDraftDir, draftComposerKey,
+  applyDraftParse, ASK_WALNUT_PROJECT, clearAiFields, draftComposerKey,
   withDirLaunchMemory, launchDivergesFromDirMemory, projectForFolderPick, suggestDiff,
   type DraftColumn,
 } from '@/components/sessions/draft-column';
@@ -1175,23 +1175,19 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
 
     const id = `${DRAFT_COL_PREFIX}${Date.now()}-${draftSeqRef.current++}`;
-    // Path source, in order: the seed (a task's own cwd, or a project's default
-    // patched in asynchronously), else the most recently used folder in the
-    // working-dirs cache (defaultDraftDir).
-    //
-    // That fallback is what makes "+ → type → Start" actually start. An empty cwd
-    // is not a neutral default: the panel REFUSES to launch on it and opens the
-    // folder picker instead, so the Start click produced a file browser, no
-    // request, and no error — indistinguishable from a dead button. A suggested
-    // folder is recoverable in one click (picker / quick chip); a silent no-op is
-    // not. Deliberately NOT `cwdPinned` — nobody chose it, so a project's async
-    // default_cwd may still refine it, exactly like the seeded-from-memory case.
-    // Cold cache → '' and the old picker-first behavior, unchanged.
+    // The folder comes from the SEED only (a task's own cwd, or a project's
+    // default patched in asynchronously). An unseeded "+" opens EMPTY: no folder,
+    // no project. There used to be a "most recently used folder" fallback here;
+    // it was removed on the user's call (2026-09-02: "it should never pre-select
+    // the project or path, just show empty"). A pre-filled pill reads as a
+    // decision already made, and one that is right only some of the time is
+    // worse than a blank one. Start on an empty cwd is not a dead button: the
+    // panel says "Pick a folder first" and opens the picker (see
+    // DraftSessionPanel.startWith).
     const pinnedSeed = !!(seed?.cwd && seed.cwdPinned);
-    const fallbackDir = seed?.cwd ? null : defaultDraftDir();
-    const cwd = seed?.cwd ?? fallbackDir?.cwd ?? '';
-    const host = seed?.cwd ? (seed.host ?? null) : (fallbackDir?.host ?? null);
-    const hostLabel = seed?.cwd ? seed.hostLabel : fallbackDir?.hostLabel;
+    const cwd = seed?.cwd ?? '';
+    const host = seed?.cwd ? (seed.host ?? null) : null;
+    const hostLabel = seed?.cwd ? seed.hostLabel : undefined;
     setDraftColumns(prev => [
       ...prev,
       {

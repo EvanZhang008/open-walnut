@@ -234,38 +234,26 @@ test('a quick-access chip is a bare basename and sets cwd AND project in one off
   }
 
   // The starting point for both pills, so the flip below is a real change rather
-  // than a value that was already there.
-  //
-  // A fresh draft now opens on the MOST RECENTLY USED folder (defaultDraftDir) —
-  // an empty cwd cannot launch, so the old "Choose folder…" start state made
-  // Start silently open the picker instead of starting. The invariant that
-  // matters here is therefore "not the chip we are about to click", not "empty":
-  // the target chip is a low-count folder, so it is only the default when this
-  // spec's own seeding launch was the most recent one — which is exactly when
-  // clicking it would be a no-op and prove nothing. Pick a different chip then.
-  const defaultLabel = (await draftCwdPill(panel).innerText()).trim()
-  expect(defaultLabel, 'a fresh draft must open on SOME launchable folder').not.toBe('Choose folder…')
-  const flipTarget = defaultLabel.startsWith(basenameOf(cwd))
-    ? draftQuickChips(panel).and(page.locator(`[title="${paths.find(p => p !== cwd) ?? cwd}"]`))
-    : dirChip
-  const flipCwd = defaultLabel.startsWith(basenameOf(cwd))
-    ? (paths.find(p => p !== cwd) ?? cwd)
-    : cwd
+  // than a value that was already there. A fresh draft opens EMPTY by design:
+  // nothing pre-selects a folder or a project (user rule, 2026-09-02) — the chip
+  // click below is what fills them.
+  await expect(draftCwdPill(panel)).toHaveText('Choose folder…')
+  await expect(draftProjectPill(panel)).toHaveText('Inbox')
 
   const seen = watchForbiddenRequests(page)
-  await flipTarget.click()
+  await dirChip.click()
 
   // BOTH pills relabel off ONE click: the cwd (the same assertion openDraftOnCwd
   // makes after driving the real picker) and the project that declares this folder
   // as its default_cwd. A chip that only set the folder would leave the task
   // filed in the Inbox while the session ran in a project's checkout.
-  await expect(draftCwdPill(panel)).toContainText(basenameOf(flipCwd))
-  if (flipCwd === cwd) await expect(draftProjectPill(panel)).toHaveText(CHIP_PROJECT)
+  await expect(draftCwdPill(panel)).toContainText(basenameOf(cwd))
+  await expect(draftProjectPill(panel)).toHaveText(CHIP_PROJECT)
   // …and the row does NOT reshuffle: the clicked chip stays, at the same slot,
   // now active and inert. (Retiring it re-ranked every chip 21ms after the pick,
   // so a double-click landed back on the folder just left.)
-  await expect(flipTarget).toHaveCount(1)
-  await expect(flipTarget).toHaveClass(/draft-quick-chip-active/)
+  await expect(dirChip).toHaveCount(1)
+  await expect(dirChip).toHaveClass(/draft-quick-chip-active/)
   expect(await draftChipPaths(panel), 'a pick must not reorder the chip row').toEqual(paths)
   // The picker never opened, either: a chip is a shortcut PAST it.
   await expect(page.locator('.session-path-selector')).toHaveCount(0)
