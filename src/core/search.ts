@@ -1,10 +1,12 @@
 import { log } from '../logging/index.js';
-import { timed } from './observability/metrics.js';
+import { count, observe, timed } from './observability/metrics.js';
 import { CLOUD_MODE } from '../constants.js';
 import { CJK_CHAR_RE, splitQueryTerms, contentQueryTerms, termInText } from './cjk.js';
+import { bus, EventNames } from './event-bus.js';
 import { listTasks } from './task-manager.js';
 import { listSessions } from './session-tracker.js';
 import type { SessionRecord, Task } from './types.js';
+import type { QuerySegments } from '../lib/hybrid-search/index.js';
 
 export interface SearchResult {
   type: 'task' | 'memory' | 'session';
@@ -536,15 +538,232 @@ export function searchTaskAndSessionReferences(
   return [...bestByTask.values()].sort((a, b) => b.score - a.score);
 }
 
+// ── query-result memo ──
+
+/**
+ * Short-TTL memo in front of search().
+ *
+ * One /api/search is not one search: it fans out into three hybrid lanes plus a
+ * full task + session store read, and identical queries arrive in bursts —
+ * the AI-search child re-asks the same question while it reasons, the browser
+ * re-issues on focus/mount, and a human editing a query re-submits prefixes it
+ * already sent. Measured on the live server under load (2026-08-30): the same
+ * query repeated back-to-back cost 1.08s and 1.37s after a 4.5s cold run, i.e.
+ * the repeat paid full price for an answer that had not changed.
+ *
+ * 20s, not minutes: the index is written continuously (event-bus upserts debounce
+ * at 2s), so a memo long enough to matter for a burst is still short enough that
+ * a task created mid-session shows up in the next search a human would notice.
+ */
+export const SEARCH_RESULT_CACHE_TTL_MS = 20_000;
+export const SEARCH_RESULT_CACHE_CAP = 100;
+
+export interface TtlLru<V> {
+  get(key: string): V | undefined;
+  set(key: string, value: V): void;
+  clear(): void;
+  readonly size: number;
+}
+
+/**
+ * Insertion-ordered Map as a TTL+LRU: `get` re-inserts (youngest end) but never
+ * refreshes the stamp — a hot key must still go stale on schedule, otherwise a
+ * repeatedly-queried term could serve a minutes-old answer forever.
+ */
+export function createTtlLru<V>(
+  options: { ttlMs: number; cap: number; now?: () => number },
+): TtlLru<V> {
+  const now = options.now ?? Date.now;
+  const entries = new Map<string, { value: V; at: number }>();
+  const evictOldest = () => {
+    for (const oldest of entries.keys()) { entries.delete(oldest); break; }
+  };
+  return {
+    get(key) {
+      const hit = entries.get(key);
+      if (!hit) return undefined;
+      if (now() - hit.at >= options.ttlMs) {
+        entries.delete(key);
+        return undefined;
+      }
+      entries.delete(key);
+      entries.set(key, hit);
+      return hit.value;
+    },
+    set(key, value) {
+      entries.delete(key);
+      entries.set(key, { value, at: now() });
+      while (entries.size > options.cap) evictOldest();
+    },
+    clear() { entries.clear(); },
+    get size() { return entries.size; },
+  };
+}
+
+const resultCache = createTtlLru<SearchResult[]>({
+  ttlMs: SEARCH_RESULT_CACHE_TTL_MS,
+  cap: SEARCH_RESULT_CACHE_CAP,
+});
+
+/** Test hook / safety valve; the bus subscriber below calls it on every write. */
+export function clearSearchResultCache(): void {
+  resultCache.clear();
+}
+
+/**
+ * Writes that change what a search would return. Without invalidation the memo's
+ * own 20s TTL IS the staleness window, and that window is user-visible: the memo
+ * also fronts the frozen `/api/v1/search` the iOS app calls, whose global section
+ * renders ONLY server hits (the web TodoPanel hides the same gap behind its own
+ * client-side substring match). Create a task, search its exact title within 20s,
+ * and the memoized pre-create answer comes back even though the index has it.
+ *
+ * These are exactly the events the search-v2 indexer syncs on (src/core/search/
+ * wiring.ts), so a clear here can never run ahead of the index. A whole-cache
+ * clear is the right granularity at cap 100 — the entries are keyed by query text,
+ * so there is no way to tell which of them a given task/session could appear in.
+ */
+const CACHE_INVALIDATING_EVENTS: readonly string[] = [
+  EventNames.TASK_CREATED,
+  EventNames.TASK_UPDATED,
+  EventNames.TASK_COMPLETED,
+  EventNames.TASK_DELETED,
+  EventNames.SESSION_STARTED,
+  EventNames.SESSION_CONTENT_UPDATED,
+  EventNames.SESSION_RESULT,
+  EventNames.SESSION_ERROR,
+  EventNames.SESSION_DELETED,
+];
+
+let resultCacheInvalidationBound = false;
+
+/**
+ * Bound lazily, the first time an answer is actually memoized: importing this
+ * module must not register a bus subscriber in a process that only ever reads
+ * (CLI, agent tools), and a process with the memo off needs no invalidation.
+ * `interest` keeps the subscriber from being woken by streaming events.
+ */
+function bindResultCacheInvalidation(): void {
+  if (resultCacheInvalidationBound) return;
+  resultCacheInvalidationBound = true;
+  try {
+    bus.subscribe(
+      'search-result-cache',
+      (event) => { if (CACHE_INVALIDATING_EVENTS.includes(event.name)) resultCache.clear(); },
+      { global: true, interest: [...CACHE_INVALIDATING_EVENTS] },
+    );
+  } catch { /* invalidation is hygiene — never break search over it */ }
+}
+
+/**
+ * Cache key. Case is PRESERVED on purpose: the query reaches FTS tokenization
+ * and snippet extraction, so 'CDK' and 'cdk' are not provably the same request.
+ * Whitespace collapse IS provably safe (every lane splits on /\s+/ anyway).
+ */
+export function searchResultCacheKey(
+  query: string,
+  types: ReadonlyArray<string>,
+  limit: number,
+): string {
+  return `${limit}\u0000${[...types].sort().join(',')}\u0000${query.trim().replace(/\s+/g, ' ')}`;
+}
+
+function resultCacheEnabled(): boolean {
+  const flag = process.env.WALNUT_SEARCH_RESULT_CACHE;
+  if (flag === '1') return true;
+  if (flag === '0') return false;
+  // OFF by default under vitest: the suite mutates its mocked stores between
+  // two identical queries (and asserts a THROW on the second), so a memo would
+  // serve the previous test's answer. Tests that want it set the flag.
+  return !process.env.VITEST && process.env.NODE_ENV !== 'test';
+}
+
 // ── Main search function ──
 
 export async function search(
   query: string,
   options: SearchOptions = {},
 ): Promise<SearchResult[]> {
+  const types = options.types ?? DEFAULT_SEARCH_TYPES;
+  const limit = options.limit ?? 20;
   // Metric per lane combo (bounded: a handful of type sets exist in the UI).
-  const laneLabel = (options.types ?? DEFAULT_SEARCH_TYPES).slice().sort().join(',');
-  return timed('search.global', () => searchInner(query, options), { types: laneLabel });
+  const laneLabel = types.slice().sort().join(',');
+  // Timed by hand, not via timed(): a memo hit and a real search differ by two
+  // orders of magnitude, so ONE unlabelled series would go bimodal and
+  // search.global p50/p90 would sink as the hit rate climbs — hiding a real
+  // regression in the miss path. timed() takes its labels up front, and the
+  // hit/miss decision only exists inside the measured block, hence `cached`
+  // as a label here ('off' = memo disabled, so the label stays bounded at 3).
+  const startedAt = performance.now();
+  let cached: 'hit' | 'miss' | 'off' = 'off';
+  let failed = false;
+  try {
+    // Memo INSIDE the timer: a cache hit is still an /api/search latency, and
+    // hiding it would make search.global look better than the app feels.
+    const memoable = resultCacheEnabled() && query.trim().length > 0;
+    const key = memoable ? searchResultCacheKey(query, types, limit) : '';
+    if (memoable) {
+      const hit = resultCache.get(key);
+      if (hit) {
+        cached = 'hit';
+        count('search.result_cache', 1, { result: 'hit' });
+        // Defensive copy: callers decorate rows in place (score penalties,
+        // isAutoExpanded, slim-mode enrichment), and a memo that hands out its
+        // own array would accumulate every caller's edits.
+        return hit.map((row) => ({ ...row }));
+      }
+      cached = 'miss';
+      count('search.result_cache', 1, { result: 'miss' });
+    }
+    const results = await searchInner(query, options);
+    // Store the copy, hand out the fresh array (nothing else references it yet).
+    if (memoable) {
+      bindResultCacheInvalidation();
+      resultCache.set(key, results.map((row) => ({ ...row })));
+    }
+    return results;
+  } catch (err) {
+    failed = true;
+    throw err;
+  } finally {
+    const labels = { types: laneLabel, cached };
+    observe('search.global', performance.now() - startedAt, labels);
+    if (failed) count('search.global.error', 1, labels);
+  }
+}
+
+/**
+ * Lazy loader for the v2 lane, plus one-time registration of the hybrid
+ * library's timing observer.
+ *
+ * Dynamic import on purpose: a static one would drag better-sqlite3 (and the
+ * embed worker chain) into every consumer of this module — CLI, agent tools,
+ * and the WALNUT_SEARCH_V2=0 rollback path that must never touch it.
+ * The library cannot import walnut's metrics registry (it is a standalone
+ * directory, gated by tests/lib/hybrid-search-boundary.test.ts), so the host
+ * registers a callback and owns where the numbers land.
+ */
+let hybridObserverInstalled = false;
+async function loadSearchV2Lane() {
+  const [wiring, lib] = await Promise.all([
+    import('./search/wiring.js'),
+    import('../lib/hybrid-search/index.js'),
+  ]);
+  if (!hybridObserverInstalled) {
+    hybridObserverInstalled = true;
+    lib.setQuerySegmentObserver(publishHybridSegments);
+  }
+  return wiring.searchV2Lane;
+}
+
+/** Label values are fixed enum strings (5 semantic states x 4 embed sources at
+ *  most) — the registry caps at 500 series process-wide. */
+function publishHybridSegments(seg: QuerySegments): void {
+  observe('search.hybrid.keyword_ms', seg.keywordMs);
+  observe('search.hybrid.embed_ms', seg.embedMs);
+  observe('search.hybrid.rescore_ms', seg.rescoreMs);
+  observe('search.hybrid.total_ms', seg.totalMs);
+  count('search.hybrid.query', 1, { semantic: seg.semantic, embed: seg.embedSource });
 }
 
 /**
@@ -589,16 +808,19 @@ async function searchInner(
       ? Math.min(mergeTermCount, Math.round(coverageFrac * mergeTermCount))
       : undefined;
 
-  // Tasks loaded lazily — only when needed for BM25 fallback or child expansion
+  // Tasks loaded lazily — only when needed for BM25 fallback or child expansion.
+  // Timed because the whole-store read is a peer of the hybrid lanes in this
+  // request's budget: without its own series, a tail spent in the task store
+  // looks identical to a tail spent in the index.
   let tasks: Task[] | null = null;
   async function getTasks(): Promise<Task[]> {
-    if (!tasks) tasks = await listTasks();
+    if (!tasks) tasks = await timed('search.stores.tasks', () => listTasks());
     return tasks;
   }
 
   let sessions: SessionRecord[] | null = null;
   async function getSessions(): Promise<SessionRecord[]> {
-    if (!sessions) sessions = await listSessions();
+    if (!sessions) sessions = await timed('search.stores.sessions', () => listSessions());
     return sessions;
   }
 
@@ -672,7 +894,7 @@ async function searchInner(
       }
     } else try {
       if (v2Enabled) {
-        const { searchV2Lane } = await import('./search/wiring.js');
+        const searchV2Lane = await loadSearchV2Lane();
         for (const hit of await searchV2Lane(normalizedQuery, { kinds: ['task'], limit })) {
           appendTaskResult({
             type: 'task',
@@ -762,7 +984,7 @@ async function searchInner(
         (await getSessions()).map((s) => [s.claudeSessionId, s.taskId]),
       );
       if (v2Enabled) {
-        const { searchV2Lane } = await import('./search/wiring.js');
+        const searchV2Lane = await loadSearchV2Lane();
         for (const hit of await searchV2Lane(normalizedQuery, { kinds: ['session'], limit })) {
           if (seenSessionIds.has(hit.ref)) continue;
           const ownerTaskId = taskBySession.get(hit.ref);
@@ -828,7 +1050,7 @@ async function searchInner(
   if (types.includes('memory') && qmdEnabled) {
     try {
       if (v2Enabled) {
-        const { searchV2Lane } = await import('./search/wiring.js');
+        const searchV2Lane = await loadSearchV2Lane();
         // The memory leg has always been the whole file-backed universe (the
         // QMD default sources spanned memory + notes + skills); matchField
         // carries the v2 kind so callers can still tell them apart.

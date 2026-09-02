@@ -130,6 +130,68 @@ export interface ScoredHit {
   semantic?: string;
 }
 
+/**
+ * Per-query timing breakdown of the hybrid path, published to whoever registered
+ * a `setQuerySegmentObserver`.
+ *
+ * Why an observer instead of a metrics import: this directory may not import
+ * walnut code (see the header + tests/lib/hybrid-search-boundary.test.ts), so
+ * the library measures and the HOST decides where the numbers go. Fields are
+ * plain numbers/enums on purpose — a metrics label must stay low-cardinality,
+ * so the raw query text is deliberately NOT part of this record (it only ever
+ * reaches the slow-query log line, capped).
+ */
+export interface QuerySegments {
+  /** Keyword lanes (FTS5 strict + relaxed + pool assembly). */
+  keywordMs: number;
+  /** Query embedding + doc-level KNN recall round-trip (0 when skipped). */
+  embedMs: number;
+  /** Vector fetch + cosine blend + demotion/slot caps. */
+  rescoreMs: number;
+  totalMs: number;
+  /** Same ladder as ScoredHit.semantic: ok / cold / timeout / skipped / disabled. */
+  semantic: string;
+  /** How the embedding was served (see QueryEmbedding.source). 'none' = no
+   *  vector was obtained at all: either the step was skipped or the worker
+   *  missed its deadline — `semantic` says which ('skipped'/'disabled' vs
+   *  'timeout'). */
+  embedSource: 'worker' | 'cache' | 'cache-vec' | 'none';
+  /** Keyword pool size handed to the rescore (before the recall union). */
+  poolSize: number;
+  /** Docs the semantic recall union added to the pool. */
+  recallAdded: number;
+}
+
+export type QuerySegmentObserver = (segments: QuerySegments) => void;
+
+let segmentObserver: QuerySegmentObserver | null = null;
+
+/** Host hook for query timings; pass null to detach. Never throws into the
+ *  search path — an observer bug must not break a search. */
+export function setQuerySegmentObserver(observer: QuerySegmentObserver | null): void {
+  segmentObserver = observer;
+}
+
+/** A hybrid query slower than this logs ONE warn line with its segments. Under
+ *  the 150ms embed deadline plus the keyword lanes, anything past half a second
+ *  means the machine (or the pool) is the problem, and the split says which. */
+export const SLOW_QUERY_LOG_MS = 500;
+/**
+ * Minimum gap between two slow-query warn lines.
+ *
+ * The threshold fires per LANE, not per request: one /api/search runs three legs
+ * (task, session, memory) and the agent lane fans several query variants out in
+ * parallel, so a single keystroke-debounced burst is already a dozen candidates.
+ * It also fires precisely when the machine is loaded, which is the condition it
+ * exists to detect — unthrottled, that means the log of the incident you are
+ * trying to read is buried under the detector's own output. One line per gap,
+ * carrying how many lines it stands for and the worst total among them.
+ */
+export const SLOW_QUERY_LOG_MIN_GAP_MS = 10_000;
+/** Query text is unbounded (agents paste paragraphs); the log keeps a handle,
+ *  not the payload. */
+const LOGGED_QUERY_CHARS = 80;
+
 export interface SearchIndex {
   upsert(doc: Doc): UpsertResult;
   remove(kind: string, ref: string): boolean;
@@ -265,6 +327,12 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     `SELECT doc_id, vec FROM doc_vec WHERE doc_id IN (${ids.map(() => '?').join(',')})`,
   ).all(...ids) as Array<{ doc_id: number; vec: Buffer }>;
 
+  // Slow-query warn throttle (see SLOW_QUERY_LOG_MIN_GAP_MS). Per index handle,
+  // which is one per process — the fan-out this collapses is within one request.
+  let slowLoggedAt = 0;
+  let slowSuppressed = 0;
+  let slowSuppressedMaxMs = 0;
+
   return {
     upsert: (doc) => writer.upsert(doc),
     remove: (kind, ref) => writer.remove(kind, ref),
@@ -275,9 +343,60 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     searchSemantic: async (query, searchOptions = {}) => {
       const limit = searchOptions.limit ?? 20;
       const deadline = searchOptions.semanticDeadlineMs ?? 150;
+      // Segment stopwatch. Every return below funnels through publish() so a
+      // degraded path is measured too — a query that quietly fell back to
+      // keyword order is exactly the one worth seeing in the tail.
+      const t0 = performance.now();
+      const seg = {
+        keywordMs: 0,
+        embedMs: 0,
+        rescoreMs: 0,
+        totalMs: 0,
+        semantic: 'unknown',
+        embedSource: 'none' as QuerySegments['embedSource'],
+        poolSize: 0,
+        recallAdded: 0,
+      };
+      const publish = <T>(semantic: string, hits: T): T => {
+        seg.semantic = semantic;
+        seg.totalMs = performance.now() - t0;
+        try {
+          segmentObserver?.(seg);
+        } catch { /* an observer bug must never break a search */ }
+        if (seg.totalMs > SLOW_QUERY_LOG_MS) {
+          const at = Date.now();
+          if (at - slowLoggedAt < SLOW_QUERY_LOG_MIN_GAP_MS) {
+            slowSuppressed++;
+            slowSuppressedMaxMs = Math.max(slowSuppressedMaxMs, seg.totalMs);
+          } else {
+            log('warn', 'hybrid-search: slow query', {
+              ...seg,
+              keywordMs: Math.round(seg.keywordMs),
+              embedMs: Math.round(seg.embedMs),
+              rescoreMs: Math.round(seg.rescoreMs),
+              totalMs: Math.round(seg.totalMs),
+              deadlineMs: deadline,
+              kinds: searchOptions.kinds?.join(',') ?? 'all',
+              limit,
+              query: query.slice(0, LOGGED_QUERY_CHARS),
+              // How many equally-slow lanes this line stands for since the last
+              // one got through, and the worst of them.
+              suppressed: slowSuppressed,
+              suppressedMaxMs: Math.round(slowSuppressedMaxMs),
+            });
+            slowLoggedAt = at;
+            slowSuppressed = 0;
+            slowSuppressedMaxMs = 0;
+          }
+        }
+        return hits;
+      };
       if (!embedder || deadline <= 0) {
-        return runKeyword(query, searchOptions, limit)
+        const hits = runKeyword(query, searchOptions, limit)
           .map((h) => toScored(h, embedder ? 'skipped' : 'disabled'));
+        seg.keywordMs = performance.now() - t0;
+        seg.poolSize = hits.length;
+        return publish(embedder ? 'skipped' : 'disabled', hits);
       }
       // Overfetch: the rescore can only reorder what the keyword lanes hand
       // it, so give it headroom beyond the page the caller asked for. Floor
@@ -290,13 +409,19 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         searchOptions,
         Math.max(limit, Math.min(100, Math.max(60, limit * 3))),
       );
+      seg.keywordMs = performance.now() - t0;
+      seg.poolSize = pool.length;
       const recallK = searchOptions.kinds?.length ? RECALL_K_KIND_FILTERED : RECALL_K;
       lastQueryAt = Date.now();
+      const tEmbed = performance.now();
       const reply = await embedder.embedQuery(query, deadline, recallK);
+      seg.embedMs = performance.now() - tEmbed;
+      seg.embedSource = reply?.source ?? 'none';
       lastQueryAt = Date.now();
       if (!reply || closed) {
-        return pool.slice(0, limit).map((h) => toScored(h, 'timeout'));
+        return publish('timeout', pool.slice(0, limit).map((h) => toScored(h, 'timeout')));
       }
+      const tRescore = performance.now();
       const queryVec = reply.vec;
       // Semantic recall union: docs the keyword lanes could not reach (zero
       // term overlap — cross-lingual queries, full paraphrases). They join the
@@ -342,7 +467,11 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
           }
         }
       }
-      if (pool.length === 0) return [];
+      seg.recallAdded = recallDocIds.size;
+      if (pool.length === 0) {
+        seg.rescoreMs = performance.now() - tRescore;
+        return publish('ok', [] as ScoredHit[]);
+      }
       // Max cosine over a doc's chunk vectors: the best-matching passage
       // speaks for the doc.
       const bestCos = new Map<number, number>();
@@ -357,7 +486,8 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         // No candidate has vectors yet (fresh index mid-backfill): keyword
         // order, honestly labelled — 'ok' here would make a cold rollout
         // indistinguishable from a working rescore.
-        return pool.slice(0, limit).map((h) => toScored(h, 'cold'));
+        seg.rescoreMs = performance.now() - tRescore;
+        return publish('cold', pool.slice(0, limit).map((h) => toScored(h, 'cold')));
       }
       // e5-family cosines live in a compressed band (~0.7-0.95), so the raw
       // value barely discriminates. Normalize within the candidate set, like
@@ -429,7 +559,8 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         if (recallDocIds.has(pending[pick].docId)) recallUsed++;
         final.push(pending.splice(pick, 1)[0].out);
       }
-      return final;
+      seg.rescoreMs = performance.now() - tRescore;
+      return publish('ok', final);
     },
     backfillVectors: async (backfillOptions = {}) => {
       if (!embedder || closed) return { embedded: 0, drained: true, cursor: null };

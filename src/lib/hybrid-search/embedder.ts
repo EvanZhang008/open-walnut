@@ -28,6 +28,9 @@ export interface EmbedderRuntimeConfig {
   /** Index db file for the worker's own READONLY connection (semantic recall
    *  lane). Omitted for :memory: indexes — a worker thread can't see them. */
   dbPath?: string;
+  /** How long a cached reply may still serve its RECALL list (default 20s).
+   *  Test seam / tuning knob; the cached VECTOR has no expiry. */
+  recallFreshMs?: number;
 }
 
 /** One semantic-recall candidate from the worker's doc-level KNN. */
@@ -40,6 +43,11 @@ export interface QueryEmbedding {
   vec: Int8Array;
   /** Doc-level KNN neighbours (empty when recall is disabled/unavailable). */
   recall: RecallHit[];
+  /** How this reply was served — instrumentation only, never scoring input.
+   *  'worker' = fresh inference; 'cache' = LRU hit, no worker round-trip;
+   *  'cache-vec' = the worker missed its deadline and a cached vector rescued
+   *  the rescore (recall dropped). */
+  source?: 'worker' | 'cache' | 'cache-vec';
 }
 
 export interface Embedder {
@@ -58,6 +66,35 @@ export interface Embedder {
 export const MAX_EMBED_CHARS = 2000;
 
 const MAX_CONSECUTIVE_CRASHES = 3;
+
+/**
+ * Query-embedding LRU (per embedder instance, i.e. per index handle).
+ *
+ * Why it pays: ONE /api/search fans out into three lanes (tasks, sessions,
+ * files) and every lane embeds the SAME query string, serially, each with its
+ * own deadline — three model round-trips for one keystroke. Repeated/overlapping
+ * queries land within seconds of each other too (debounced typing, the AI-search
+ * child re-asking).
+ *
+ * What may be reused, and for how long, differs by field:
+ *  - `vec` is deterministic for a fixed model+prefix → no expiry.
+ *  - `recall` is a SNAPSHOT of index state (the worker's level-0 KNN over
+ *    doc_vec, which the paced backfill rewrites continuously), so it may only
+ *    be served while fresh. After that the worker runs again; if THAT blows its
+ *    deadline the cached vector still rescues the cosine rescore, with recall
+ *    dropped rather than served stale (a doc id freed by a delete can be reused
+ *    by a later insert, and a wrong doc entering the page as a "neighbour" is
+ *    worse than no recall at all).
+ */
+export const QUERY_CACHE_CAP = 200;
+export const DEFAULT_RECALL_FRESH_MS = 20_000;
+
+interface CachedQuery {
+  vec: Int8Array;
+  recall: RecallHit[];
+  /** When the recall snapshot was taken. */
+  at: number;
+}
 
 interface WorkerReply {
   rows: Int8Array[];
@@ -223,12 +260,28 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
     passageIdleTimer.unref?.();
   }
 
+  // See CachedQuery: insertion-ordered Map used as the LRU (re-set on hit
+  // moves an entry to the young end; the oldest key is evicted at the cap).
+  const queryCache = new Map<string, CachedQuery>();
+  const recallFreshMs = config.recallFreshMs ?? DEFAULT_RECALL_FRESH_MS;
+
   return {
     async embedQuery(text, deadlineMs = 150, recallK) {
       const prefixed = (config.queryPrefix ?? '') + text.slice(0, MAX_EMBED_CHARS);
       // Recall requires a real db file the worker can open on its own.
-      const job = queryLane.submit([prefixed], config.dbPath ? recallK : undefined);
-      if (!job) return null;
+      const wantRecall = config.dbPath ? recallK : undefined;
+      const cacheKey = `${wantRecall ?? 0}\u0000${prefixed}`;
+      const cached = queryCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < recallFreshMs) {
+        queryCache.delete(cacheKey);
+        queryCache.set(cacheKey, cached); // touch: youngest
+        return { vec: cached.vec, recall: cached.recall, source: 'cache' };
+      }
+      /** Cached vector as the fallback when the worker can't answer in time. */
+      const rescue = (): QueryEmbedding | null =>
+        (cached ? { vec: cached.vec, recall: [], source: 'cache-vec' } : null);
+      const job = queryLane.submit([prefixed], wantRecall);
+      if (!job) return rescue();
       job.promise.catch(() => {}); // settled after we gave up ≠ unhandled
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -242,10 +295,24 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
             timer = setTimeout(() => resolve(null), deadlineMs);
           }),
         ]);
-        if (!reply) queryLane.abandon(job.id); // deadline: drop the live closure
-        return reply ? { vec: reply.rows[0], recall: reply.recall } : null;
+        if (!reply) {
+          queryLane.abandon(job.id); // deadline: drop the live closure
+          return rescue();
+        }
+        const out: QueryEmbedding = {
+          vec: reply.rows[0],
+          recall: reply.recall,
+          source: 'worker',
+        };
+        queryCache.delete(cacheKey);
+        queryCache.set(cacheKey, { vec: out.vec, recall: out.recall, at: Date.now() });
+        if (queryCache.size > QUERY_CACHE_CAP) {
+          // Map iteration is insertion order → the first key is the oldest.
+          for (const oldest of queryCache.keys()) { queryCache.delete(oldest); break; }
+        }
+        return out;
       } catch {
-        return null;
+        return rescue();
       } finally {
         if (timer) clearTimeout(timer);
       }
@@ -264,6 +331,7 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
 
     async dispose() {
       disposed = true;
+      queryCache.clear();
       if (passageIdleTimer) clearTimeout(passageIdleTimer);
       await Promise.all([queryLane.terminate(), passageLane.terminate()]);
     },
