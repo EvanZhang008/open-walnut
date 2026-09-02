@@ -341,6 +341,14 @@ struct TaskBoardList: View {
                         identifier: "board.heading.\(Self.slug(nest.projectBandId))"
                     )
                 }
+                // The same rule one level down: an ANCESTOR folder with no rows of its own
+                // has no band, so its name is drawn here — otherwise this band's indent
+                // would claim to be inside something the screen never named.
+                ForEach(Array(nest.leadFolders.enumerated()), id: \.element.id) { index, step in
+                    ancestorFolderHeading(
+                        step, isFirstLine: !nest.leadsProject && index == 0
+                    )
+                }
                 folderHeading(band, nest: nest)
             }
             .modifier(BoardHeadingChrome(
@@ -395,9 +403,27 @@ struct TaskBoardList: View {
         .accessibilityIdentifier(identifier)
     }
 
+    /// How much further in each level of folder nesting starts.
+    ///
+    /// One step, applied per level, is the whole of "the board nests": a subfolder's heading
+    /// starts `folderIndentStep` right of its parent's, so the two read as parent and child
+    /// instead of as siblings that happen to share a project. 14pt is a hair wider than the
+    /// folder glyph, which is what keeps the two levels' glyphs from lining up into a
+    /// column.
+    static let folderIndentStep: CGFloat = 14
+
+    /// Leading inset for a folder heading at `depth` (1 = directly under its project).
+    static func folderIndent(depth: Int) -> CGFloat {
+        CGFloat(max(0, depth - 1)) * folderIndentStep
+    }
+
     /// A FOLDER band's heading: indented behind a vertical rail, hollow folder glyph,
     /// label in sentence case. The rail is what makes the indent read as "inside the
     /// project above" rather than as a heading that happens to start further right.
+    ///
+    /// A SUBFOLDER is the same line, one `folderIndentStep` further in per level — the
+    /// board's flat `[BoardBand]` array carries the tree as `BoardBandNest.depth`, so
+    /// nesting is one padding value here rather than a second container.
     private func folderHeading(_ band: BoardBand, nest: BoardBandNest) -> some View {
         HStack(spacing: 7) {
             // The rail: one hairline standing in the project's gutter, the same trick
@@ -406,7 +432,7 @@ struct TaskBoardList: View {
             Rectangle()
                 .fill(.quaternary)
                 .frame(width: 1)
-                .padding(.leading, 5)
+                .padding(.leading, 5 + Self.folderIndent(depth: nest.depth))
             Image(systemName: "folder")
                 .font(.system(BoardHeadingType.folderGlyph, weight: .semibold))
                 // Same concrete ink as the label beside it: `.tertiary` here resolved to
@@ -421,10 +447,43 @@ struct TaskBoardList: View {
             Spacer(minLength: 6)
             if BoardHeadingType.showsCount(typeSize) { countLabel(band) }
         }
-        .padding(.top, nest.leadsProject ? 1 : Self.headingTopGap - 4)
+        .padding(.top, nest.leadsProject || !nest.leadFolders.isEmpty
+            ? 1 : Self.headingTopGap - 4)
         // This IS the line that meets the card under a folder band, so it owes the same
         // gap a flush heading does.
         .padding(.bottom, Self.headingLabelToCard)
+    }
+
+    /// An ANCESTOR folder's name, drawn above this band's own heading because that folder
+    /// has no band of its own on screen (it holds no rows, or a chip selected this
+    /// subfolder alone).
+    ///
+    /// Same line as a folder heading minus the two controls: `hide done` and the count
+    /// belong to a BAND, and this line is standing in for a band that is not being
+    /// rendered — a toggle here would fold rows the reader cannot see.
+    private func ancestorFolderHeading(
+        _ step: BoardFolderStep, isFirstLine: Bool
+    ) -> some View {
+        HStack(spacing: 7) {
+            Rectangle()
+                .fill(.quaternary)
+                .frame(width: 1)
+                .padding(.leading, 5 + Self.folderIndent(depth: step.depth))
+            Image(systemName: "folder")
+                .font(.system(BoardHeadingType.folderGlyph, weight: .semibold))
+                .foregroundStyle(BoardHeadingType.ink)
+            Text(step.label)
+                .font(.system(BoardHeadingType.folderLabel, weight: .semibold))
+                .foregroundStyle(BoardHeadingType.ink)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 6)
+        }
+        .padding(.top, isFirstLine ? Self.headingTopGap - 4 : 1)
+        // What follows is another heading line, not the card — the same 3pt the project
+        // line above it uses, so a two- or three-level header reads as one block.
+        .padding(.bottom, 3)
+        .accessibilityElement(children: .combine)
     }
 
     /// The done toggle lives on the heading it affects — a global switch would hide

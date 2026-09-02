@@ -1316,8 +1316,14 @@ final class TaskBoardModelTests: XCTestCase {
     /// The words on the phone's controls are the desktop's words. Both surfaces
     /// call the same thing the same thing, or "align the features" is only half
     /// done.
+    /// `.tier` reads "Custom order" and not "Tier", which is this test's own premise
+    /// applied to the control the desktop actually ships: its tier bar toggles
+    /// `By project` ⇄ `↕ Custom order`, and "custom" there is the manual pin order —
+    /// exactly what `tierBands` follows (the split's arrays are `pin_order`). "Tier" was
+    /// the phone's own word for the same decision, i.e. the drift this case exists to
+    /// catch.
     func testFilterLabelsMatchTheDesktopVocabulary() {
-        XCTAssertEqual(BoardGrouping.tier.label, "Tier")
+        XCTAssertEqual(BoardGrouping.tier.label, "Custom order")
         XCTAssertEqual(BoardGrouping.project.label, "By project")
         XCTAssertEqual(BoardDateFilter.all.label, "All")
         XCTAssertEqual(BoardDateFilter.now.label, "Now")
@@ -2525,13 +2531,21 @@ final class BoardRowNeedsActionSurfaceTests: XCTestCase {
     /// the case that fails if the join is wired to the wrong row, the wrong id or the
     /// wrong field while both halves still pass their own tests.
     func testTheListPaintsRedForExactlyTheRowsThatWantAHuman() {
+        let tasks = [
+            task("wants-a-human", phase: "AGENT_COMPLETE"),
+            task("ordinary", phase: "TODO"),
+            task("finished", phase: "AGENT_COMPLETE", status: "done"),
+        ]
+        // Done folds by default, so the finished row is off the board until a band is
+        // asked to show it. This case is about row PAINTING, and the finished row is the
+        // half that proves a COMPLETED needs-action row gets no red paper — so reveal
+        // every band rather than drop the row and lose that half.
+        let folded = BoardModel.bands(
+            tasks: tasks, sessions: [], tierOf: [:], tierOrder: [:], customTiers: []
+        )
         let bands = BoardModel.bands(
-            tasks: [
-                task("wants-a-human", phase: "AGENT_COMPLETE"),
-                task("ordinary", phase: "TODO"),
-                task("finished", phase: "AGENT_COMPLETE", status: "done"),
-            ],
-            sessions: [], tierOf: [:], tierOrder: [:], customTiers: []
+            tasks: tasks, sessions: [], tierOf: [:], tierOrder: [:], customTiers: [],
+            shownDoneTiers: Set(folded.map(\.bandId))
         )
         let rows = bands.flatMap(\.rows)
         XCTAssertEqual(rows.count, 3, "all three are pinned, so all three are on the board")

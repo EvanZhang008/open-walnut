@@ -620,6 +620,25 @@ struct TasksView: View {
                         .listRowSeparator(.hidden)
                     }
                     .listSectionSpacing(2)
+
+                    // Row 3: the grouping + date decisions as two inline toggle chips —
+                    // the desktop's own `tier-view-bar`, on the bar rather than one tap
+                    // inside the band bar's filter menu ("它不是在一个菜单里面,它就是在那
+                    // 个 bar 里面"). Same bindings the menu writes, so there is one source
+                    // of truth and no second copy of the state; see `BoardViewBar` for why
+                    // it is a row of its own and not a third zone inside the band bar's
+                    // card.
+                    Section {
+                        BoardViewBar(grouping: grouping, dateFilter: dateFilter)
+                            .frame(height: TasksChromeMetrics.viewBar)
+                            .listRowInsets(EdgeInsets())
+                            // A control strip on the PAGE, not a card: the chips are the
+                            // objects here, and a card behind them would put three stacked
+                            // cards above the board's first task row.
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                    }
+                    .listSectionSpacing(2)
                 }
 
                 // Todoist-grade quick add rides the TOP of EVERY filter, the board

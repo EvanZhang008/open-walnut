@@ -155,18 +155,32 @@ enum BoardRowState: Equatable {
 }
 
 /// How the board groups its rows — the phone's half of the desktop's grouping
-/// control (`[['project','By project'],['none','Flat']]` in ViewDropdown).
+/// control.
 ///
-/// The desktop's other value is "Flat" because its default grouping IS project.
 /// The board's own structure is the tier split, so the pair here is tier (its
 /// native shape) vs project (the desktop's) — a third "flat" option would throw
 /// away the one thing that makes this screen a board.
+///
+/// # The WORDS are the desktop tier bar's, and `.tier` is its "Custom order"
+///
+/// The desktop's tier bar (`tier-view-bar` in TodoPanel) toggles `By project` ⇄
+/// `↕ Custom order`, and "custom" there means the manual pin order rather than
+/// project clusters. `.tier` IS that mode on the phone: `tierBands` follows the
+/// tier split's own arrays, which the server returns in `pin_order`, so the rows
+/// are in the order the user arranged. The only difference is screen shape — the
+/// phone shows every tier at once (its bands ARE the tiers) where the desktop is
+/// already inside one tier tab.
+///
+/// It used to say "Tier", which named the band split and said nothing about the
+/// order, so the phone and the desktop had two names for one decision. One name,
+/// used by every surface that presents this value (the toggle chip on the view
+/// bar, the band bar's filter menu and sheet, VoiceOver).
 enum BoardGrouping: String, CaseIterable, Identifiable {
     case tier, project
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .tier: return "Tier"
+        case .tier: return "Custom order"
         case .project: return "By project"
         }
     }
@@ -261,6 +275,36 @@ struct BoardBandNest: Equatable {
     /// keeps its context. Computed in ONE place (`BoardModel.relead`) so the builder and
     /// the chip filter cannot disagree.
     var leadsProject: Bool
+    /// How deep this folder sits: 1 directly under its project heading, 2 for a subfolder,
+    /// clamped at `BoardFolderIndex.maxDepth`. The heading indents by it, which is what
+    /// makes a subfolder read as being INSIDE its parent rather than beside it.
+    ///
+    /// Defaulted (with the two fields below) so the memberwise initializer keeps its
+    /// existing shape: a one-level folder band, and every test that builds a nest by hand,
+    /// is constructed exactly as before.
+    var depth: Int = 1
+    /// This folder's ancestors, root first. Carried on the band because `relead` is what
+    /// decides which of them still need drawing, and it only sees the bands.
+    var ancestors: [BoardFolderStep] = []
+    /// The ancestor headings THIS band has to draw above its own, because no band before it
+    /// did — the folder equivalent of `leadsProject`, and what keeps a subfolder from being
+    /// shown nested under a name that is nowhere on the screen (its parent folder holds no
+    /// rows of its own, or a chip selected the subfolder alone). Computed in `relead`.
+    var leadFolders: [BoardFolderStep] = []
+}
+
+/// One folder in a nest's ancestry: what to draw, and how far in.
+///
+/// A value rather than a bare id, because the heading that draws it may be drawing an
+/// ancestor whose OWN band is not on screen — there is nothing else to read the label and
+/// the indent off.
+struct BoardFolderStep: Equatable, Identifiable {
+    let folderId: String
+    let label: String
+    /// Visual depth, on the same 1-based scale as `BoardBandNest.depth`.
+    let depth: Int
+
+    var id: String { folderId }
 }
 
 /// task → folder, and folder → label, inverted ONCE from `GET /tasks/groups`.
@@ -281,26 +325,129 @@ struct BoardFolderIndex: Equatable {
     let folderOf: [String: String]
     /// folder id → display label.
     let labelOf: [String: String]
+    /// folder id → PARENT folder id, and it is a NORMALISED map: a self-parent, a cycle,
+    /// a parent nobody listed and a parent in another project are all absent, which makes
+    /// that folder a root. See `build` for why each of those is a root and not a dropped
+    /// band.
+    ///
+    /// The normalisation happens ONCE, in `build`, and its inputs (each folder's project,
+    /// which is what rejects a cross-project link) stay local to that walk. This type
+    /// deliberately does not keep them: a stored copy that no reader needs is a second
+    /// answer to "which project owns this folder" waiting to disagree with `TaskFolder`.
+    let parentOf: [String: String]
 
     static let empty = BoardFolderIndex(folderOf: [:], labelOf: [:])
+
+    /// The server's own nesting ceiling (`FOLDER_MAX_DEPTH`): a folder is at depth 1 when
+    /// it sits directly under its project. Mirrored here so the phone draws the same tree
+    /// the server is willing to store — and so a chain that got deeper through drift is
+    /// drawn CLAMPED rather than as an indent that walks off the screen.
+    static let maxDepth = 5
+
+    init(
+        folderOf: [String: String],
+        labelOf: [String: String],
+        parentOf: [String: String] = [:]
+    ) {
+        self.folderOf = folderOf
+        self.labelOf = labelOf
+        self.parentOf = parentOf
+    }
 
     /// True when there is no hierarchy to draw — the flat by-project board.
     var isEmpty: Bool { folderOf.isEmpty && labelOf.isEmpty }
 
+    /// A folder's ancestors, ROOT FIRST, excluding itself. Empty for a root.
+    ///
+    /// Safe on any input because `parentOf` is acyclic by construction, and it still
+    /// carries its own visited set: this is the function every renderer walks, and a
+    /// hierarchy walk that can loop is worth two lines of insurance.
+    func ancestors(of folderId: String) -> [String] {
+        var chain: [String] = []
+        var seen: Set<String> = [folderId]
+        var current = parentOf[folderId]
+        while let id = current, !seen.contains(id) {
+            chain.append(id)
+            seen.insert(id)
+            current = parentOf[id]
+        }
+        return chain.reversed()
+    }
+
+    /// A folder's depth: 1 directly under its project, clamped at `maxDepth`.
+    func depth(of folderId: String) -> Int {
+        min(Self.maxDepth, ancestors(of: folderId).count + 1)
+    }
+
+    /// Invert `GET /tasks/groups` once: members → owning folder, and `parent_id` →
+    /// a tree the board can render.
+    ///
+    /// # Every broken link becomes a ROOT, never a dropped folder
+    ///
+    /// The one failure this must not have is an invisible task: a folder whose parent is
+    /// missing, hidden from the listing, in another project, its own parent, or part of a
+    /// cycle still has REAL rows, and they have to appear somewhere. So each of those links
+    /// is simply not honoured and the folder is drawn at the top level of its project. The
+    /// alternative — skipping a folder whose parent cannot be resolved — is how a pinned
+    /// task disappears from the one screen that is supposed to show all of them.
+    ///
+    /// Cycles are broken at the link that closes them, which is why the resolution is a
+    /// walk with a visited set rather than a single `parent_id` lookup: two folders naming
+    /// each other (server drift, or a `parent_id` written by an older build) would
+    /// otherwise make every reader that follows the chain hang.
     static func build(_ folders: [TaskFolder]) -> BoardFolderIndex {
         var folderOf: [String: String] = [:]
         var labelOf: [String: String] = [:]
+        // LOCAL, and it stays local: the only question it answers (may this child nest inside
+        // that parent) is settled below, in this same call.
+        var projectOf: [String: String] = [:]
+        var claimed: [String: String] = [:]
         labelOf.reserveCapacity(folders.count)
         for folder in folders {
             guard !folder.groupId.isEmpty else { continue }
             // A folder with no label still needs one — its id is ugly but addressable,
             // and a blank heading would read as a rendering bug.
             labelOf[folder.groupId] = folder.label.isEmpty ? folder.groupId : folder.label
+            projectOf[folder.groupId] = folder.project
+            if let parent = folder.parentId, !parent.isEmpty, parent != folder.groupId {
+                claimed[folder.groupId] = parent
+            }
             for taskId in folder.memberIds where !taskId.isEmpty {
                 folderOf[taskId] = folder.groupId
             }
         }
-        return BoardFolderIndex(folderOf: folderOf, labelOf: labelOf)
+
+        // Keep only links whose parent EXISTS and lives in the same project (the server's
+        // own rule for a nest), then drop any link that would close a cycle.
+        var parentOf: [String: String] = [:]
+        for (child, parent) in claimed {
+            guard labelOf[parent] != nil else { continue }
+            let childProject = (projectOf[child] ?? "").lowercased()
+            let parentProject = (projectOf[parent] ?? "").lowercased()
+            guard childProject == parentProject else { continue }
+            parentOf[child] = parent
+        }
+        for child in parentOf.keys.sorted() where closesACycle(child, in: parentOf) {
+            parentOf[child] = nil
+        }
+
+        return BoardFolderIndex(folderOf: folderOf, labelOf: labelOf, parentOf: parentOf)
+    }
+
+    /// Does following `start`'s parents come back to a folder already on the walk?
+    ///
+    /// Sorted iteration in the caller plus this check makes the break DETERMINISTIC: the
+    /// same drifted store always yields the same tree, so a folder does not move between
+    /// two headings on every refresh.
+    private static func closesACycle(_ start: String, in parentOf: [String: String]) -> Bool {
+        var seen: Set<String> = [start]
+        var current = parentOf[start]
+        while let id = current {
+            if seen.contains(id) { return true }
+            seen.insert(id)
+            current = parentOf[id]
+        }
+        return false
     }
 }
 
@@ -1010,16 +1157,12 @@ enum BoardModel {
             let projectLabel = name.isEmpty ? NewTaskSeed.inboxHeader : name
             let inProject = buckets[name] ?? [:]
             // The project's LOOSE rows first (id `proj:<name>`, the shipped band id and
-            // the shipped accessibility ids), then its folders by label A→Z with the
-            // folder id as the tie-break so two folders sharing a name still order
-            // deterministically — an unstable order would make rows jump between two
-            // identical-looking headings on every rebuild.
-            let folderIds = inProject.keys.filter { !$0.isEmpty }.sorted { a, b in
-                let left = folders.labelOf[a] ?? a
-                let right = folders.labelOf[b] ?? b
-                if left != right { return left.localizedCaseInsensitiveCompare(right) == .orderedAscending }
-                return a < b
-            }
+            // the shipped accessibility ids), then its folders as a TREE in pre-order:
+            // a folder, then its subfolders, so a nested folder's rows are rendered
+            // INSIDE the parent they belong to instead of after it as a sibling.
+            let folderIds = folderOrder(
+                withRows: inProject.keys.filter { !$0.isEmpty }, folders: folders
+            )
             for folderId in [""] + folderIds {
                 let isFolder = !folderId.isEmpty
                 let bandId = isFolder ? folderBandPrefix + folderId : projectBandId
@@ -1065,7 +1208,9 @@ enum BoardModel {
                         projectBandId: projectBandId,
                         projectLabel: projectLabel,
                         // Filled in by `relead` below, in one place.
-                        leadsProject: false
+                        leadsProject: false,
+                        depth: folders.depth(of: folderId),
+                        ancestors: folderSteps(folders.ancestors(of: folderId), folders: folders)
                     ) : nil
                 ))
             }
@@ -1073,7 +1218,89 @@ enum BoardModel {
         return relead(bands)
     }
 
-    /// Decide which band draws each project's heading.
+    /// One project's folders, as a TREE walked in pre-order: a folder, then its
+    /// subfolders, then the next sibling.
+    ///
+    /// # What this fixes
+    ///
+    /// The board used to sort the folders that HAVE ROWS by label and render them as one
+    /// flat list, so a subfolder appeared as a sibling of its own parent ("你现在完完全是同
+    /// 一个 level"). The data has always carried `parent_id`; only the rendering was flat.
+    ///
+    /// # Two rules, and both exist to keep rows on screen
+    ///
+    ///  - The walk covers every folder that has rows PLUS their ancestors, even ancestors
+    ///    with no rows of their own. An ancestor with no rows contributes no band (the
+    ///    empty-band rule is unchanged), but it has to take part in the ORDER, or its
+    ///    children would be ordered against a parent the walk never visited.
+    ///  - Anything the tree cannot place is placed at the TOP LEVEL rather than dropped: a
+    ///    parent outside this project, or one `BoardFolderIndex.build` already refused
+    ///    (missing, self, cyclic), leaves that folder a root. A folder that is not in the
+    ///    returned order is a folder whose rows are not on the board, which is the one
+    ///    outcome this function must never have.
+    ///
+    /// Siblings sort by label A→Z with the id as the tie-break, so two folders sharing a
+    /// name still order deterministically — an unstable order would make rows jump between
+    /// two identical-looking headings on every rebuild.
+    static func folderOrder(
+        withRows ids: [String], folders: BoardFolderIndex
+    ) -> [String] {
+        guard !ids.isEmpty else { return [] }
+        // Every folder that takes part: the ones with rows, and their ancestors.
+        var involved = Set(ids)
+        for id in ids {
+            for ancestor in folders.ancestors(of: id) { involved.insert(ancestor) }
+        }
+        // parent → children, with "" standing for the top level of this project.
+        var childrenOf: [String: [String]] = [:]
+        for id in involved {
+            let parent = folders.parentOf[id]
+            let key = (parent != nil && involved.contains(parent!)) ? parent! : ""
+            childrenOf[key, default: []].append(id)
+        }
+        let label = { (id: String) in folders.labelOf[id] ?? id }
+        for (key, children) in childrenOf {
+            childrenOf[key] = children.sorted { a, b in
+                let left = label(a)
+                let right = label(b)
+                if left != right {
+                    return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
+                }
+                return a < b
+            }
+        }
+        // Pre-order walk. `visited` is belt AND braces: `parentOf` is acyclic by
+        // construction, and a hierarchy walk that could loop is not worth the risk.
+        var order: [String] = []
+        var visited = Set<String>()
+        func walk(_ id: String) {
+            guard !visited.contains(id) else { return }
+            visited.insert(id)
+            order.append(id)
+            for child in childrenOf[id] ?? [] { walk(child) }
+        }
+        for root in childrenOf[""] ?? [] { walk(root) }
+        // A folder the walk somehow missed still gets its band, at the top level. This is
+        // the "an orphan's rows are never invisible" guarantee, stated as code rather than
+        // as a comment about the code above.
+        for id in ids.sorted() where !visited.contains(id) {
+            visited.insert(id)
+            order.append(id)
+        }
+        return order
+    }
+
+    /// Folder ids → the steps a heading can draw (label + indent depth).
+    static func folderSteps(_ ids: [String], folders: BoardFolderIndex) -> [BoardFolderStep] {
+        ids.map { id in
+            BoardFolderStep(
+                folderId: id, label: folders.labelOf[id] ?? id, depth: folders.depth(of: id)
+            )
+        }
+    }
+
+    /// Decide which band draws each project's heading, and which ANCESTOR FOLDER headings
+    /// it has to draw with it.
     ///
     /// A folder band leads its project when nothing earlier in the array has already
     /// drawn that heading — i.e. when the project's loose band was dropped for being
@@ -1082,6 +1309,11 @@ enum BoardModel {
     /// the alternative is the builder deciding it and the chip filter silently
     /// invalidating that decision, which shows up as a folder heading floating with no
     /// project above it.
+    ///
+    /// Ancestor FOLDERS are the same rule one level down, and it earns its place the moment
+    /// folders nest: a parent folder that holds no rows of its own gets no band, so without
+    /// this its child would draw indented under nothing — and a chip that selects one
+    /// subfolder would show it indented with neither its parent nor its project named.
     static func relead(_ bands: [BoardBand]) -> [BoardBand] {
         var drawn = Set<String>()
         return bands.map { band in
@@ -1093,6 +1325,9 @@ enum BoardModel {
             }
             nest.leadsProject = !drawn.contains(nest.projectBandId)
             drawn.insert(nest.projectBandId)
+            nest.leadFolders = nest.ancestors.filter { !drawn.contains($0.folderId) }
+            for step in nest.ancestors { drawn.insert(step.folderId) }
+            drawn.insert(nest.folderId)
             band.nest = nest
             return band
         }

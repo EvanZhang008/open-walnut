@@ -120,12 +120,15 @@ final class TasksChromeCollapseTests: XCTestCase {
     /// renders the nav row, the chip row AND that row. It is therefore the TALLEST chrome, by
     /// exactly the chip row plus its gap.
     ///
-    /// The important half is that the number is counted at all: `chromeHeight` feeds the
-    /// compact bar's collapse threshold, so a board chrome understated by ~54pt would collapse
-    /// the header while it is still on screen. The pin threshold is NOT affected, because it
-    /// is what rides ABOVE row 2 and the quick add is below it — `TasksBoardChipRowPinTests`
-    /// asserts that separately.
-    func testTheBoardCountsBothOfItsHeaderRows() {
+    /// What this test is and is NOT (2026-09-02 review). It is the one written-down statement
+    /// of which rows the board renders above its first task row, and it fails when someone
+    /// adds or drops a header row without saying so here. It is NOT protection for a
+    /// threshold: `chromeHeight` feeds the compact bar's collapse machine, the board has no
+    /// compact bar, and `isCollapsed` refuses to collapse a filter that has none — so no live
+    /// threshold on the board reads this sum. The board's live threshold is the PIN threshold,
+    /// which counts what rides ABOVE row 2 (`TasksBoardChipRowPinTests`), and no row added
+    /// below the chips can move it.
+    func testTheBoardCountsAllOfItsHeaderRows() {
         let board = TasksChromeMetrics.chromeHeight(filter: .sessions, offline: false)
         // The arithmetic, so a regression names the number. `listHeaderPadding` is part of
         // it: the List puts that much above its first section, and leaving it out of the
@@ -136,16 +139,18 @@ final class TasksChromeCollapseTests: XCTestCase {
             TasksChromeMetrics.listHeaderPadding
                 + TasksChromeMetrics.navRow + TasksChromeMetrics.sectionGap
                 + TasksChromeMetrics.bandBar + TasksChromeMetrics.sectionGap
+                + TasksChromeMetrics.viewBar + TasksChromeMetrics.sectionGap
                 + TasksChromeMetrics.quickAdd + TasksChromeMetrics.sectionGap,
             accuracy: 0.01,
-            "the board renders the nav row, the chip row and the quick add"
+            "the board renders the nav row, the chip row, the view bar and the quick add"
         )
         for other in TaskFilter.allCases where other != .sessions {
             XCTAssertEqual(
                 board - TasksChromeMetrics.chromeHeight(filter: other, offline: false),
-                TasksChromeMetrics.bandBar + TasksChromeMetrics.sectionGap,
+                TasksChromeMetrics.bandBar + TasksChromeMetrics.sectionGap
+                    + TasksChromeMetrics.viewBar + TasksChromeMetrics.sectionGap,
                 accuracy: 0.01,
-                "\(other): the board's extra chrome is its chip row and nothing else"
+                "\(other): the board's extra chrome is its chip row and its view bar, and nothing else"
             )
         }
     }
@@ -204,8 +209,11 @@ final class TasksChromeCollapseTests: XCTestCase {
         }
     }
 
+    /// Scoped to the filters that HAVE a bar: `isCollapsed` refuses to collapse a filter with
+    /// nothing to collapse into (see its own doc — on the board that publish invalidated the
+    /// whole List for a bar that never draws). `BoardViewBarTests` owns the other direction.
     func testScrollingPastTheChromeCollapsesIt() {
-        for filter in TaskFilter.allCases {
+        for filter in TaskFilter.allCases where TasksChromeMetrics.hasCompactBar(filter) {
             for offline in [false, true] {
                 let chrome = TasksChromeMetrics.chromeHeight(filter: filter, offline: offline)
                 XCTAssertTrue(
@@ -230,7 +238,7 @@ final class TasksChromeCollapseTests: XCTestCase {
     /// chrome is gone. The floor is now `collapseLead` itself, which is a bound on
     /// the OTHER side (see below) and cannot delay the bar.
     func testTheBarArrivesBeforeTheChromeFullyClears() {
-        for filter in TaskFilter.allCases {
+        for filter in TaskFilter.allCases where TasksChromeMetrics.hasCompactBar(filter) {
             for offline in [false, true] {
                 let chrome = TasksChromeMetrics.chromeHeight(filter: filter, offline: offline)
                 let threshold = TasksChromeMetrics.collapseThreshold(filter: filter, offline: offline)
@@ -326,8 +334,10 @@ final class TasksChromeCollapseTests: XCTestCase {
 
     func testInsideTheBandTheStateIsSticky() {
         // The definition of no flicker: within the dead band, whatever state we
-        // were in is the state we stay in.
-        for filter in TaskFilter.allCases {
+        // were in is the state we stay in. Filters WITH a bar only — a filter without
+        // one is never collapsed at any offset, which is a stronger statement and
+        // `BoardViewBarTests` makes it.
+        for filter in TaskFilter.allCases where TasksChromeMetrics.hasCompactBar(filter) {
             let collapse = TasksChromeMetrics.collapseThreshold(filter: filter, offline: false)
             let expand = TasksChromeMetrics.expandThreshold(filter: filter, offline: false)
             let mid = (collapse + expand) / 2
@@ -350,11 +360,12 @@ final class TasksChromeCollapseTests: XCTestCase {
         // Walk the whole travel one point at a time, then back, and count the
         // transitions. A monotone drag must produce exactly ONE each way.
         //
-        // `.sessions` has the leanest chrome and therefore the narrowest (clamped)
-        // dead band, which makes it the hardest case for this assertion even though
-        // it is the one filter that draws no compact bar — `isCollapsed` is pure
-        // geometry and runs for every filter.
-        let filter = TaskFilter.sessions
+        // A filter that HAS a bar, necessarily: since 2026-09-02 `isCollapsed` returns false
+        // outright for one that does not, so `.sessions` would report zero flips and say
+        // nothing about strobing. Every compact-bar filter carries the same chrome (nav row +
+        // quick add), so any of them is the hardest case there is.
+        let filter = TaskFilter.today
+        XCTAssertTrue(TasksChromeMetrics.hasCompactBar(filter))
         let top = Int(TasksChromeMetrics.chromeHeight(filter: filter, offline: false)) + 200
         var collapsed = false
         var flips = 0
@@ -769,7 +780,9 @@ final class ChromeCollapseTrackerTests: XCTestCase {
         let tracker = ChromeCollapseTracker()
         var collapsed = false
         var applied: [Bool] = []
-        let filter = TaskFilter.sessions
+        // A compact-bar filter: the board never collapses at all now (`isCollapsed`), so it
+        // would publish nothing and this test would pass while measuring nothing.
+        let filter = TaskFilter.today
         let travel = Int(TasksChromeMetrics.chromeHeight(filter: filter, offline: false)) + 200
 
         func feed(_ y: CGFloat) {

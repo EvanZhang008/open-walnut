@@ -115,17 +115,19 @@ final class TasksBoardChipRowPinTests: XCTestCase {
             )
             // And the chips are INSIDE the chrome, not after it: their row sits between the
             // pin point and the end of the header. What follows it below the pin point is the
-            // chip row itself and (since R30) the board's own top-level quick add — a row
-            // ADDED UNDER the chips cannot move the point where the chips reach the top edge,
-            // which is the property this pairing exists to state.
+            // chip row itself, the view bar (grouping + date chips) and the board's own
+            // top-level quick add — a row ADDED UNDER the chips cannot move the point where
+            // the chips reach the top edge, which is the property this pairing exists to
+            // state, and it is what the view-bar row was checked against when it landed.
             let chrome = TasksChromeMetrics.chromeHeight(filter: .sessions, offline: offline)
             XCTAssertLessThan(pin, chrome, "offline=\(offline): the chip row is part of the chrome")
             XCTAssertEqual(
                 pin + TasksChromeMetrics.bandBar + TasksChromeMetrics.sectionGap
+                    + TasksChromeMetrics.viewBar + TasksChromeMetrics.sectionGap
                     + TasksChromeMetrics.quickAdd + TasksChromeMetrics.sectionGap,
                 chrome,
                 accuracy: 0.01,
-                "offline=\(offline): only the chip row and the quick add sit below the pin point"
+                "offline=\(offline): only the chip row, the view bar and the quick add sit below the pin point"
             )
         }
     }
@@ -242,12 +244,13 @@ final class TasksBoardChipRowPinTests: XCTestCase {
             )
             // `chromeHeight` reads the same "what rides above row 2" answer, which is what
             // stops the two from drifting apart again. What it adds BELOW row 2 (the chip
-            // row's own height, and since R30 the board's quick add) is exactly what the pin
-            // threshold must NOT include.
+            // row's own height, the view bar's two toggle chips, and since R30 the board's
+            // quick add) is exactly what the pin threshold must NOT include.
             XCTAssertEqual(
                 TasksChromeMetrics.chromeHeight(filter: .sessions, offline: offline),
                 TasksChromeMetrics.rowTwoContentTop(offline: offline)
                     + TasksChromeMetrics.bandBar + TasksChromeMetrics.sectionGap
+                    + TasksChromeMetrics.viewBar + TasksChromeMetrics.sectionGap
                     + TasksChromeMetrics.quickAdd + TasksChromeMetrics.sectionGap,
                 accuracy: 0.01, "offline=\(offline)"
             )

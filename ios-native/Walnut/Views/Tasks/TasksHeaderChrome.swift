@@ -19,8 +19,11 @@ import SwiftUI
 enum TasksChromeMetrics {
 
     // Measured on an iPhone 16 Pro (402x874pt) from a `maestro hierarchy` dump of
-    // the real store: the quick-add row spans ~48pt and the offline banner ~44pt.
-    // Section gaps are the `listSectionSpacing(2)` the chrome sections carry.
+    // the real store: the quick-add row spans 52pt and the offline banner ~44pt.
+    //
+    // `sectionGap` is the exception: it is what the chrome sections ASK for, and the
+    // platform does not resolve it to that. Two measurements say so and they agree with
+    // each other — read `sectionGap`'s own note before citing any number here as measured.
 
     /// The nav row (Pin | Calendar) — **row 1** of the header, and the FIRST thing in
     /// the scrollable content on every filter.
@@ -76,12 +79,58 @@ enum TasksChromeMetrics {
     /// are the same object; two that differ by 8pt are two guesses at one idea.
     static let bandBar: CGFloat = 52
 
+    /// The board's VIEW BAR — **row 3**: the grouping and date decisions as two inline
+    /// toggle chips (`BoardViewBar`). Board only; every other filter goes straight from
+    /// row 1 to its quick add.
+    ///
+    /// 36, and it is the smallest number that holds its content rather than a round one:
+    /// the chips cap their type at `BoardBandBar.chipTypeCap` (footnote at xxLarge ≈ 17pt),
+    /// which with the capsule's 5pt vertical padding is a 28pt control, and 4pt of air
+    /// either side is what keeps it from touching the card above and the card below.
+    ///
+    /// It is NOT a card, deliberately: it is a control strip on the page, the same way a
+    /// band heading is, and it aligns with the headings' own content inset
+    /// (`BoardBandCard.headingContentInset`). A third 52pt card between the band bar and
+    /// the quick add would put three stacked cards above the first task row.
+    ///
+    /// # Why it is a CONSTANT
+    ///
+    /// Not because an arithmetic term needs it: the only live threshold on this screen is
+    /// `chipsPinThreshold`, and that counts what rides ABOVE row 2, so nothing about this row
+    /// can move it (`chromeHeight` does count it, and for the board nothing reads that — see
+    /// there). The real reason is the row itself: `BoardViewBar` draws at exactly this height,
+    /// and a header row that grew with the content size category would push every task row
+    /// below it down at accessibility sizes, on the screen whose job is showing rows. That is
+    /// also why the chips cap their type instead of the row growing to fit them.
+    static let viewBar: CGFloat = 36
+
     /// The quick-add row's height — MEASURED (2026-08-30: the card runs y 336..388 on the
     /// board at scroll-top), not the 48 this used to estimate. It feeds the collapse
     /// arithmetic, and the board now renders this row too, so an estimate 4pt short would
     /// put the compact bar's threshold 4pt early on every filter that has one.
     static let quickAdd: CGFloat = 52
     static let offlineBanner: CGFloat = 44
+
+    /// What one chrome section boundary is ASKED to be (`listSectionSpacing(2)`) — and NOT
+    /// what the platform resolves it to.
+    ///
+    /// Two independent measurements on the built binary (2026-09-02 review) put the real
+    /// boundary at ~9pt, and they agree with each other: on the board at scroll-top the band
+    /// bar's card ends at y 331 and the view bar starts at y 340 (9pt), and turning the
+    /// offline banner on shifts the rows below it by 53pt where these constants predict
+    /// 44 + 2 = 46 (also 9pt). So the error is in THIS constant, not in `offlineBanner`, and
+    /// it is per boundary — the board crosses four of them, i.e. the arithmetic below
+    /// understates the real chrome by ~28pt and every threshold derived from it fires that
+    /// much early. Same class as `listHeaderPadding`, which exists because the List's own
+    /// padding above its first section was missing from this arithmetic too.
+    ///
+    /// Deliberately NOT re-tuned here. These constants also place the board's pin hand-off,
+    /// and its correctness was established by a FRAME CAPTURE of the crossing (R27, see
+    /// `chipsPinThreshold`) — with a 9pt gap that hand-off is currently ~7pt early, which is
+    /// a candidate cause of the chip clipping reported at the transition. Fixing it is a
+    /// re-derivation against a fresh capture of the flip, not a nudge of one number: raising
+    /// this to 9 moves `rowTwoContentTop`, `chipsPinThreshold` and `chromeHeight` at once and
+    /// would have to be verified on the device, frame by frame, in the same way.
     static let sectionGap: CGFloat = 2
 
     /// Height the List puts above its content that the ROWS do not account for: the
@@ -243,28 +292,35 @@ enum TasksChromeMetrics {
         hasPinnedChips(filter) && pinned
     }
 
-    /// Total scrollable header height for a filter.
+    /// Total scrollable header height for a filter — every row this filter puts above its
+    /// first task row, which is what the COMPACT BAR has to stand in for.
     ///
-    /// The BOARD is no longer the leanest, and that is a product decision rather than
-    /// drift: R30 gave it the reference screen's top-level quick add (see `TasksView`), so
-    /// it carries the chip row AND that row where every other filter carries only the quick
-    /// add. It has to be counted here or the chrome is understated by ~54pt and everything
-    /// derived from this number (the compact bar's collapse threshold and its hysteresis)
-    /// fires while the header is still on screen.
+    /// # Who reads it, and who does not (2026-09-02 review)
     ///
-    /// What did NOT change is the PIN threshold: it is `rowTwoContentTop`, i.e. what rides
-    /// ABOVE row 2, and the quick add is below it. A row added under the chips cannot move
-    /// the point where the chips reach the top edge.
+    /// Only the compact bar's machine: `collapseThreshold` → `expandThreshold` →
+    /// `isCollapsed`. The BOARD has no compact bar (`hasCompactBar` is false for it, and
+    /// `isCollapsed` now refuses to run at all for such a filter), so the board branch below
+    /// answers nobody in the app; the board's own live threshold is `chipsPinThreshold`,
+    /// which counts what rides ABOVE row 2 and is therefore untouched by anything under the
+    /// chips.
+    ///
+    /// The board's rows are still counted, deliberately. This function is documented as the
+    /// filter's header height and it is the one place that arithmetic is written down, so a
+    /// branch that quietly omitted two rows the board really renders would be a wrong answer
+    /// for the next reader rather than a saving. What was removed is the CLAIM that counting
+    /// them protects the collapse threshold on the board: nothing there collapses, and a
+    /// justification that names a path nobody walks is how a number survives a review it
+    /// should not have.
     ///
     /// Everything above row 2 comes from `rowTwoContentTop` rather than being re-added
     /// here: the pin threshold reads the same function, and two copies of "what rides
     /// above the chips" is how the two answers drifted by `listHeaderPadding` in the
     /// first place.
     static func chromeHeight(filter: TaskFilter, offline: Bool) -> CGFloat {
-        // The board: chips in row 2, then the quick add. Every other filter: the quick add
-        // IS row 2.
+        // The board: chips in row 2, the view bar (grouping + date chips) in row 3, then
+        // the quick add. Every other filter: the quick add IS row 2.
         let rowsBelowTheTop = filter == .sessions
-            ? bandBar + sectionGap + quickAdd
+            ? bandBar + sectionGap + viewBar + sectionGap + quickAdd
             : quickAdd
         return rowTwoContentTop(offline: offline) + rowsBelowTheTop + sectionGap
     }
@@ -330,12 +386,27 @@ enum TasksChromeMetrics {
     /// is currently showing, should it show now? Pure so it can be tested without
     /// a running app.
     ///
+    /// # A filter with nothing to collapse INTO never collapses
+    ///
+    /// The guard is not a shortcut, it is what keeps this answer from having a cost with no
+    /// effect (2026-09-02 review). `TasksView` publishes the result into `@State` inside a
+    /// `withAnimation`, and `@State` on that view is read by its whole body — so on the BOARD,
+    /// which draws no compact bar, crossing this threshold used to invalidate the board
+    /// derive, the chips and the List diff to toggle a flag nothing draws. That is precisely
+    /// the hitch `BoardChipsPinLatch` was built to keep off the scroll path, arriving through
+    /// the other threshold on the same handler.
+    ///
+    /// It also makes the rule ONE rule: `hasCompactBar` decides whether a filter has a bar,
+    /// and now decides whether it has a collapse as well, instead of the second half being an
+    /// accident of `showsCompactBar` discarding a true.
+    ///
     /// - Parameter scrolled: points scrolled down from the top of the content
     ///   (`contentOffset.y + contentInsets.top`; 0 at rest, negative while
     ///   rubber-banding past the top).
     static func isCollapsed(
         scrolled: CGFloat, wasCollapsed: Bool, filter: TaskFilter, offline: Bool
     ) -> Bool {
+        guard hasCompactBar(filter) else { return false }
         if wasCollapsed {
             return scrolled > expandThreshold(filter: filter, offline: offline)
         }
