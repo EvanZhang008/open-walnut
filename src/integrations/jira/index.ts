@@ -123,7 +123,9 @@ export default function register(api: PluginApi): void {
 
   api.registerExtIndex({
     source: 'jira',
-    paths: [{ key: 'issue_key', json: '$.jira.issue_key' }],
+    // UNIQUE for the same reason as the other sync plugins: one remote issue maps
+    // to at most one local task, enforced by the DB rather than by a racy read.
+    paths: [{ key: 'issue_key', json: '$.jira.issue_key', unique: true }],
   });
 
   // Exact (case-insensitive) match on the configured project name. Unset = claim

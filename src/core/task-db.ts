@@ -1414,6 +1414,7 @@ export function ensureExtIndexes(specs: Iterable<ExtIndexSpec>): void {
   if (!handle) {
     throw new Error('ensureExtIndexes: task-db is not open');
   }
+  extIndexUniquenessGaps.length = 0;
   for (const spec of specs) {
     const safeSource = sanitizeIdent(spec.source);
     // Escape the SQL string literal for the WHERE clause. We can't
@@ -1421,20 +1422,111 @@ export function ensureExtIndexes(specs: Iterable<ExtIndexSpec>): void {
     // is the only option. Single quotes are the only metachar we need to
     // worry about.
     const sourceLiteral = spec.source.replace(/'/g, "''");
-    for (const p of spec.paths) {
+    for (const [i, p] of spec.paths.entries()) {
       if (!SAFE_IDENT.test(p.key)) {
         throw new Error(`ensureExtIndexes: path key "${p.key}" must match /^[a-z0-9_]+$/`);
       }
+      // paths[0] is the primary identity path — UNIQUE unless opted out.
+      const wantUnique = p.unique ?? i === 0;
       const indexName = `idx_tasks_ext_${safeSource}_${p.key}`;
       // p.json was validated at registration time; we still wrap it as a
       // SQL string literal (json_extract accepts a string arg).
       const jsonLiteral = p.json.replace(/'/g, "''");
-      const sql =
-        `CREATE INDEX IF NOT EXISTS "${indexName}" ` +
-        `ON tasks(json_extract(ext, '${jsonLiteral}')) ` +
-        `WHERE source = '${sourceLiteral}';`;
-      handle.exec(sql);
+      const create = (unique: boolean): void => {
+        handle.exec(
+          `CREATE ${unique ? 'UNIQUE ' : ''}INDEX IF NOT EXISTS "${indexName}" ` +
+          `ON tasks(json_extract(ext, '${jsonLiteral}')) ` +
+          `WHERE source = '${sourceLiteral}';`,
+        );
+      };
+
+      if (!wantUnique) {
+        create(false);
+        continue;
+      }
+
+      // `CREATE UNIQUE INDEX IF NOT EXISTS` is a NO-OP when a non-unique index
+      // of that name already exists (every DB created before this change has
+      // one), so the old index has to go first. Dropping is safe: it is
+      // recreated on the very next statement, inside the same open.
+      if (indexExists(handle, indexName) && !indexIsUnique(handle, indexName)) {
+        handle.exec(`DROP INDEX IF EXISTS "${indexName}";`);
+      }
+      try {
+        create(true);
+      } catch (err) {
+        // A pre-existing duplicate blocks the constraint. Boot must NOT die over
+        // it (a dark server is worse than an unenforced index), but the violation
+        // list is itself the bug report: log every offending group loudly, fall
+        // back to the plain index, and record the gap so /api/config can show it.
+        const violations = listExtIdViolations(spec.source, p.json);
+        log.task.error('ext-id UNIQUE index blocked by existing duplicates', {
+          source: spec.source, path: p.json, indexName,
+          groups: violations.length,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        for (const v of violations) {
+          log.task.error('ext-id duplicate group (two local tasks own one remote id)', {
+            source: spec.source, remoteId: v.remoteId, taskIds: v.taskIds,
+          });
+        }
+        extIndexUniquenessGaps.push({
+          source: spec.source, path: p.json, groups: violations.length,
+        });
+        create(false);
+      }
     }
   }
+}
+
+/** Does an index of this name exist on the tasks table? */
+function indexExists(handle: DatabaseType, indexName: string): boolean {
+  const row = handle
+    .prepare("SELECT 1 AS n FROM sqlite_master WHERE type = 'index' AND name = ?")
+    .get(indexName) as { n: number } | undefined;
+  return !!row;
+}
+
+/** Is the named index UNIQUE? (PRAGMA index_list exposes the flag directly.) */
+function indexIsUnique(handle: DatabaseType, indexName: string): boolean {
+  const rows = handle.pragma('index_list(tasks)') as Array<{ name: string; unique: number }>;
+  return rows.some((r) => r.name === indexName && r.unique === 1);
+}
+
+/**
+ * Sources whose primary ext-id index could NOT be opened UNIQUE because the
+ * table already holds duplicates. Empty = the invariant is enforced by the DB
+ * for every loaded sync plugin. Surfaced on GET /api/config so a degraded state
+ * is visible instead of silent.
+ */
+const extIndexUniquenessGaps: Array<{ source: string; path: string; groups: number }> = [];
+
+export function getExtIndexUniquenessGaps(): ReadonlyArray<{ source: string; path: string; groups: number }> {
+  return extIndexUniquenessGaps;
+}
+
+/**
+ * Every remote id under `jsonPath` that MORE THAN ONE task of `source` holds.
+ * The query the UNIQUE index would reject, run explicitly so the failure can be
+ * reported as data rather than as an opaque SQLITE_CONSTRAINT. Also the repair
+ * script's health check (see scripts/repair-remote-id-duplicates.mjs).
+ */
+export function listExtIdViolations(
+  source: string,
+  jsonPath: string,
+): Array<{ remoteId: string; taskIds: string[] }> {
+  const handle = getDb();
+  if (!handle) return [];
+  const rows = handle
+    .prepare(
+      `SELECT json_extract(ext, ?) AS remote_id, group_concat(id) AS ids, COUNT(*) AS n
+         FROM tasks
+        WHERE source = ? AND json_extract(ext, ?) IS NOT NULL
+        GROUP BY remote_id
+        HAVING n > 1
+        ORDER BY remote_id`,
+    )
+    .all(jsonPath, source, jsonPath) as Array<{ remote_id: string; ids: string; n: number }>;
+  return rows.map((r) => ({ remoteId: r.remote_id, taskIds: (r.ids ?? '').split(',') }));
 }
 

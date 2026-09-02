@@ -77,9 +77,13 @@ export function recordRemoteLink(args: {
   reason?: string;
   /** Only meaningful for state='deleted'. Defaults to false (unconfirmed). */
   remoteDeleteConfirmed?: boolean;
-}): void {
+}): boolean {
   const db = getDb();
-  if (!db) return;
+  // A LOST CLAIM WRITE IS HOW THE FORK HAPPENS: if the ownership fact never
+  // reaches the ledger, the next pull sees an unclaimed remote id and mints a
+  // duplicate task. Returning false lets the framework call sites log that
+  // loudly instead of degrading in silence.
+  if (!db) return false;
   db.prepare(
     `INSERT INTO task_remote_links
        (remote_source, remote_id, task_id, remote_list, state, reason, remote_delete_confirmed, updated_at)
@@ -97,6 +101,7 @@ export function recordRemoteLink(args: {
     confirmed: args.remoteDeleteConfirmed ? 1 : 0,
     updated_at: new Date().toISOString(),
   });
+  return true;
 }
 
 /** Look up the ledger row for one remote id. */
@@ -117,6 +122,60 @@ export function getRemoteLink(source: string, remoteId: string): RemoteLink | un
 export function isRemoteIdBlocked(source: string, remoteId: string): boolean {
   const link = getRemoteLink(source, remoteId);
   return !!link && (link.state === 'released' || link.state === 'deleted');
+}
+
+/**
+ * Is this remote id CURRENTLY owned by a live local task?
+ *
+ * The hole isRemoteIdBlocked left open (2026-09-01 regression): it refuses a
+ * released or deleted id, but says nothing about an id a living task holds right
+ * now — so a pull that raced the owner's own ext write happily inserted a SECOND
+ * task for it. Three tasks forked this way in one sync tick.
+ *
+ * `excludeTaskId` lets a caller ask "does anyone OTHER than me hold this?",
+ * which is what deleteTask needs before it tombstones or remote-deletes an id.
+ *
+ * Checks the ledger row AND that its task still exists: a stale 'owned' row
+ * pointing at a deleted task must not block a legitimate re-import forever.
+ */
+export function isRemoteIdClaimedByLiveTask(
+  source: string,
+  remoteId: string,
+  excludeTaskId?: string,
+): { claimed: boolean; byTaskId?: string } {
+  const db = getDb();
+  if (!db) return { claimed: false };
+  const row = db.prepare(
+    `SELECT l.task_id AS task_id
+       FROM task_remote_links l
+       JOIN tasks t ON t.id = l.task_id
+      WHERE l.remote_source = ? AND l.remote_id = ? AND l.state = 'owned'
+        AND (? IS NULL OR l.task_id != ?)
+      LIMIT 1`,
+  ).get(source, remoteId, excludeTaskId ?? null, excludeTaskId ?? null) as
+    { task_id: string } | undefined;
+  return row ? { claimed: true, byTaskId: row.task_id } : { claimed: false };
+}
+
+/**
+ * Every OTHER live task that holds any of `remoteIds` for `source`. The question
+ * deleteTask must ask before writing a 'deleted' tombstone: the ledger PK is
+ * (remote_source, remote_id), so tombstoning an id a sibling row still owns
+ * overwrites that sibling's 'owned' row and makes every future pull treat the
+ * survivor as deleted — and the remote delete would then destroy the survivor's
+ * real remote twin.
+ */
+export function findLiveClaimants(
+  source: string,
+  remoteIds: string[],
+  excludeTaskId: string,
+): Array<{ remoteId: string; taskId: string }> {
+  const out: Array<{ remoteId: string; taskId: string }> = [];
+  for (const remoteId of remoteIds) {
+    const hit = isRemoteIdClaimedByLiveTask(source, remoteId, excludeTaskId);
+    if (hit.claimed && hit.byTaskId) out.push({ remoteId, taskId: hit.byTaskId });
+  }
+  return out;
 }
 
 /** Deleted-but-unconfirmed rows for one provider — the sync tick's retry list. */

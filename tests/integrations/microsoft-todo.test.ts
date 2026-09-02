@@ -908,6 +908,152 @@ describe('pushTask', () => {
 // remote_list alias (push side)
 // ────────────────────────────────────────────────────────────────────
 
+// ────────────────────────────────────────────────────────────────────
+// pushTask — a stored (list, id) pair that Graph rejects
+//
+// Measured on the live account 2026-09-02: two tasks carried ext.id from the OLD
+// list beside an ext.list_id already rewritten to the NEW one, and every push
+// PATCHed /lists/{new}/tasks/{old} forever. Graph answers that pair with
+// 400 ParentFolderDoesNotContainTaskWithGivenId — NOT 404 — so a recovery that
+// matched only 404 left the wedge exactly where it was.
+//
+// The dangerous half is the repair: re-POSTing (right for a dead id) would mint a
+// SECOND remote item for one that is merely misfiled. So the recovery has to look
+// for the item first, and these tests pin that it does.
+// ────────────────────────────────────────────────────────────────────
+
+describe('pushTask — stale (list, id) pair recovery', () => {
+  const PARENT_MISMATCH = {
+    error: {
+      code: 'invalidRequest',
+      message: 'Parent folder specified does not contain a Task with given Id',
+      innerError: { code: 'ParentFolderDoesNotContainTaskWithGivenId' },
+    },
+  };
+
+  it('a 400 parent-mismatch relocates the item and PATCHes its REAL list', async () => {
+    const LISTS = {
+      value: [{ id: 'list-new', displayName: 'personal' }, { id: 'list-old', displayName: 'archive' }],
+    };
+    setupGraphResponses([
+      { body: LISTS },                                // resolveListId → 'personal' = list-new
+      { status: 400, body: PARENT_MISMATCH },         // PATCH the stored pair → the wedge
+      { body: LISTS },                                // locateRemoteTask enumerates lists
+      // Only ONE probe happens: the stored list is skipped as already-known-bad,
+      // so list-old is the single candidate — and it has the item.
+      { body: { id: 'ms-1', title: 'Found here' } },
+      { body: { id: 'ms-1', title: 'Patched', lastModifiedDateTime: '2026-09-02T00:00:00Z' } },
+    ]);
+
+    const task = makeTask({ ms_todo_id: 'ms-1', ms_todo_list: 'list-new', project: 'personal' });
+    const result = await pushTask(task);
+
+    // Same id kept — the item was never re-created.
+    expect(result.msTaskId).toBe('ms-1');
+    const methods = mockHttpsRequest.mock.calls.map((c: any[]) => c[0].method);
+    expect(methods).not.toContain('POST');
+    // The retry went to the list that actually holds the item...
+    const patchPaths = mockHttpsRequest.mock.calls
+      .filter((c: any[]) => c[0].method === 'PATCH').map((c: any[]) => c[0].path);
+    expect(patchPaths).toHaveLength(2);
+    expect(patchPaths[1]).toContain('/lists/list-old/tasks/ms-1');
+    // ...and list_id was corrected to it, written together with the id.
+    expect(result.listId).toBe('list-old');
+    expect(getMsExt(task).id).toBe('ms-1');
+    expect(getMsExt(task).list_id).toBe('list-old');
+  });
+
+  it('re-creates ONLY when the id is in no list at all', async () => {
+    setupGraphResponses([
+      { body: { value: [{ id: 'list-new', displayName: 'personal' }] } },
+      { status: 404, body: { error: { code: 'itemNotFound' } } },   // PATCH
+      { body: { value: [{ id: 'list-new', displayName: 'personal' }] } }, // locate: lists
+      // list-new is the skipped one, so no probes remain → not found anywhere
+      { body: { id: 'ms-recreated', lastModifiedDateTime: '2026-09-02T00:00:00Z' } }, // POST
+    ]);
+
+    const task = makeTask({ ms_todo_id: 'ms-dead', ms_todo_list: 'list-new', project: 'personal' });
+    const result = await pushTask(task);
+
+    expect(result.msTaskId).toBe('ms-recreated');
+    expect(mockHttpsRequest.mock.calls.map((c: any[]) => c[0].method)).toContain('POST');
+    expect(getMsExt(task).id).toBe('ms-recreated');
+    expect(getMsExt(task).list_id).toBe(result.listId);
+  });
+
+  // Real ids from the live account, trimmed: the middle segment after `GAAI` is
+  // the parent list. `…1uimvg…` and `…1uimvw…` are two different lists, which is
+  // what makes the first pair below self-contradictory.
+  const ID_IN_OLD = 'AQMkGAAI1uimvgAAAPQ05ueahVdDACPN3OgUAAAA=';
+  const LIST_OLD = 'AQMkGAAI1uimvgAAAA==';
+  const LIST_NEW = 'AQMkGAAI1uimvwAAAA==';
+
+  it('re-anchors a self-contradictory identity BEFORE deciding migrate-vs-patch', async () => {
+    // The exact live shape: item id from the old list, list_id already rewritten
+    // to the new one. Graph would ACCEPT a PATCH to the wrong list, so nothing
+    // ever errors — the contradiction has to be noticed up front, from the ids
+    // alone, or the row pushes "fine" forever and its next migration deletes
+    // from a list the item is not in.
+    setupGraphResponses([
+      { body: { value: [{ id: LIST_NEW, displayName: 'personal' }, { id: LIST_OLD, displayName: 'archive' }] } },
+      // locateRemoteTask enumerates, then probes the list the ID ITSELF names
+      // first — so LIST_OLD is candidate #1 and one GET settles it, even though
+      // LIST_NEW comes first in the list response.
+      { body: { value: [{ id: LIST_NEW, displayName: 'personal' }, { id: LIST_OLD, displayName: 'archive' }] } },
+      { body: { id: ID_IN_OLD } },
+      // Re-anchored to LIST_OLD, which now differs from the project's list →
+      // ordinary migration: DELETE from the real list, POST into the target.
+      { body: {} },
+      { body: { id: 'ms-migrated', lastModifiedDateTime: '2026-09-02T00:00:00Z' } },
+    ]);
+
+    const task = makeTask({ ms_todo_id: ID_IN_OLD, ms_todo_list: LIST_NEW, project: 'personal' });
+    const result = await pushTask(task);
+
+    const calls = mockHttpsRequest.mock.calls.map((c: any[]) => `${c[0].method} ${c[0].path}`);
+    // The DELETE went to the list that really held the item — the whole point.
+    // Addressed to LIST_NEW it would have silently failed and orphaned the item.
+    expect(calls.some((c) => c.startsWith('DELETE') && c.includes(LIST_OLD))).toBe(true);
+    expect(calls.some((c) => c.startsWith('DELETE') && c.includes(LIST_NEW))).toBe(false);
+    // One probe, not a 26-list scan: the id named its own list.
+    expect(calls.filter((c) => c.startsWith('GET') && c.includes('/tasks/'))).toHaveLength(1);
+    expect(result.msTaskId).toBe('ms-migrated');
+    expect(result.listId).toBe(LIST_NEW);
+    expect(getMsExt(task).list_id).toBe(LIST_NEW);
+  });
+
+  it('leaves a CONSISTENT identity alone — no extra lookups on the common path', async () => {
+    // The guard must not tax the 1968-of-1970 rows that are fine: one list
+    // resolution, one PATCH, nothing else.
+    setupGraphResponses([
+      { body: { value: [{ id: LIST_OLD, displayName: 'personal' }] } },
+      { body: { id: ID_IN_OLD, lastModifiedDateTime: '2026-09-02T00:00:00Z' } },
+    ]);
+
+    const task = makeTask({ ms_todo_id: ID_IN_OLD, ms_todo_list: LIST_OLD, project: 'personal' });
+    await pushTask(task);
+
+    expect(mockHttpsRequest).toHaveBeenCalledTimes(2);
+    expect(mockHttpsRequest.mock.calls[1][0].method).toBe('PATCH');
+  });
+
+  it('a PATCH failure that is NOT a stale pair still throws (no blind re-create)', async () => {
+    // 500/429/auth must keep their retry semantics: inventing a remote item on a
+    // transient error is how one flaky tick becomes a permanent duplicate.
+    setupGraphResponses([
+      { body: { value: [{ id: 'list-1', displayName: 'personal' }] } },
+      { status: 500, body: { error: { code: 'internalServerError' } } },
+    ]);
+
+    const task = makeTask({ ms_todo_id: 'ms-1', ms_todo_list: 'list-1', project: 'personal' });
+    await expect(pushTask(task)).rejects.toThrow(/500/);
+    expect(mockHttpsRequest.mock.calls.map((c: any[]) => c[0].method)).not.toContain('POST');
+    // The identity is untouched, so the next tick retries the same pair.
+    expect(getMsExt(task).id).toBe('ms-1');
+    expect(getMsExt(task).list_id).toBe('list-1');
+  });
+});
+
 describe('pushTask — remote_list alias', () => {
   it('pushes into the aliased legacy list, not a new project-named one', async () => {
     // A project migrated off the retired two-level model: name "HomeLab",

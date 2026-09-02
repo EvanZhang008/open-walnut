@@ -25,7 +25,7 @@ import { getDb, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction
 import { runMigrationIfNeeded } from './task-db-migration.js';
 import { migrateProjectMemoryDirs } from './memory-dir-migration.js';
 import { getExtIndexSpec } from './ext-index-registry.js';
-import { recordRemoteLink } from './task-remote-links.js';
+import { recordRemoteLink, findLiveClaimants } from './task-remote-links.js';
 
 // CJK detection regex — used only for log enrichment so that "plugin not loaded"
 // warnings flag the cases that an external sync plugin's validateContent would
@@ -245,6 +245,9 @@ export function _resetForTesting(): void {
   rowShadowDataVersion = null;
   pendingRowShadow = null;
   writeLockDepth = 0;
+  // Statements are bound to a connection the caller is about to replace.
+  findByExtIdStmts.clear();
+  findByExtIdStmtsDb = null;
 }
 
 // ── Write lock: serializes all read-modify-write operations ──
@@ -1659,16 +1662,25 @@ async function pushToPlugin(
     const plugin = registry.get(task.source);
     if (!plugin) return { success: true }; // Unknown source, skip silently
 
+    const extBefore = JSON.stringify(task.ext ?? null);
     const syncFn = plugin.sync[method] as (...a: unknown[]) => Promise<unknown>;
     const result = await syncFn(task, ...args);
 
-    // If createTask returned ExtData, merge into task.ext
-    if (method === 'createTask' && result) {
+    // Persist the remote identity after ANY hook that can assign or re-key one,
+    // not just createTask. `updateProject` / `updateTitle` reach the same
+    // DELETE-old + POST-new migration inside the plugin, which mutates task.ext
+    // in memory; before this, only createTask's return value was persisted, so a
+    // project-rename fallback push re-keyed the remote item and then DROPPED the
+    // new id — leaving the row on a dead id and the new remote item unclaimed
+    // (i.e. free for the next pull to import as a duplicate).
+    const extMutatedInMemory = JSON.stringify(task.ext ?? null) !== extBefore;
+    if (result || extMutatedInMemory) {
       await withWriteLock(async () => {
         const store = await readStore();
         const found = store.tasks.find(t => t.id === task.id);
         if (found) {
-          found.ext = { ...found.ext, ...result as Record<string, unknown> };
+          if (result) found.ext = { ...found.ext, ...result as Record<string, unknown> };
+          if (extMutatedInMemory && task.ext) found.ext = { ...found.ext, ...task.ext };
           found.sync_error = undefined;
           // Derive external_url from plugin display metadata if not already set
           if (!found.external_url && plugin.display?.getExternalUrl) {
@@ -1679,7 +1691,11 @@ async function pushToPlugin(
           // Ledger ownership of the freshly assigned remote id.
           const { ids, remoteList } = remoteIdsFromExt(found.source, found.ext);
           for (const remoteId of ids) {
-            recordRemoteLink({ source: found.source, remoteId, taskId: found.id, remoteList, state: 'owned' });
+            if (!recordRemoteLink({ source: found.source, remoteId, taskId: found.id, remoteList, state: 'owned' })) {
+              log.task.error('claim write LOST: remote id not ledgered as owned', {
+                taskId: found.id, source: found.source, method, remoteId,
+              });
+            }
           }
           bus.emit(EventNames.TASK_UPDATED, { task: found }, ['web-ui'], { source: 'sync' });
         }
@@ -3110,15 +3126,68 @@ function recordReleasedRemoteId(
 }
 
 /**
+ * Is any remote id this task holds ALSO held by a different live task?
+ *
+ * The 2026-09-01 fork left duplicate rows carrying the SURVIVOR's remote id.
+ * Deleting such a row the normal way is destructive in two ways: the ledger PK
+ * is (remote_source, remote_id), so writing a 'deleted' tombstone OVERWRITES the
+ * survivor's 'owned' row and every future pull then treats the survivor as
+ * deleted; and the plugin's deleteTask hook would delete the survivor's real
+ * remote twin at the provider. So a shared id means: no tombstone, no remote
+ * delete, local-only delete.
+ *
+ * Two sources of truth, because they disagree exactly in the broken case: the
+ * ledger (the survivor holds the 'owned' row) and the tasks table itself (a
+ * forked row can hold an ext id with NO ledger row at all).
+ */
+async function findSharedRemoteIdClaimants(
+  task: Task,
+): Promise<Array<{ remoteId: string; taskId: string }>> {
+  try {
+    const { ids } = remoteIdsFromExt(task.source, task.ext);
+    if (ids.length === 0) return [];
+    const found = new Map<string, string>();
+    for (const { remoteId, taskId } of findLiveClaimants(task.source, ids, task.id)) {
+      found.set(remoteId, taskId);
+    }
+    // Direct ext-table check: catches a claimant with no ledger row (which is
+    // precisely the shape a forked duplicate has).
+    for (const remoteId of ids) {
+      if (found.has(remoteId)) continue;
+      const owner = await findTaskByExtId(task.source, remoteId).catch(() => undefined);
+      if (owner && owner.id !== task.id) found.set(remoteId, owner.id);
+    }
+    return [...found].map(([remoteId, taskId]) => ({ remoteId, taskId }));
+  } catch (err) {
+    // Unknown answer must not be read as "safe to destroy" — treat an error as
+    // "shared" so the caller degrades to a local-only delete.
+    log.task.warn('shared remote-id check failed, treating id as shared', {
+      taskId: task.id, source: task.source,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return [{ remoteId: '(unknown)', taskId: '(check-failed)' }];
+  }
+}
+
+/**
  * Ledger a local delete: the remote twin must go too (state='deleted',
  * unconfirmed until the provider acknowledges). Framework-side so a plugin
  * that forgets its deleteTask hook can't leave the id re-importable.
+ *
+ * `skipRemoteIds` holds ids another live task still owns — those must keep their
+ * 'owned' row (see findSharedRemoteIdClaimants).
  */
-function recordDeletedRemoteIds(tasks: Task[]): void {
+function recordDeletedRemoteIds(tasks: Task[], skipRemoteIds?: Set<string>): void {
   for (const task of tasks) {
     try {
       const { ids, remoteList } = remoteIdsFromExt(task.source, task.ext);
       for (const remoteId of ids) {
+        if (skipRemoteIds?.has(remoteId)) {
+          log.task.warn('skipped remote-id tombstone: another live task owns it', {
+            taskId: task.id, source: task.source, remoteId,
+          });
+          continue;
+        }
         recordRemoteLink({
           source: task.source, remoteId, taskId: task.id, remoteList,
           state: 'deleted', reason: 'local-delete',
@@ -4107,6 +4176,11 @@ export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
     throw new ActiveSessionError(task.id, activeIds);
   }
 
+  // Does another LIVE task hold any of this task's remote ids? Computed BEFORE
+  // the row is removed, because the answer decides whether the remote twin and
+  // the ledger row belong to us at all. A shared id ⇒ local-only delete.
+  const shared = await findSharedRemoteIdClaimants(task);
+
   // Remove from store. The task's folder (if any) stays — folders are never
   // auto-pruned; an emptied folder persists until explicitly deleted.
   store.tasks = store.tasks.filter((t) => t.id !== task.id);
@@ -4115,16 +4189,25 @@ export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
   // Ledger the remote id as deleted BEFORE attempting the remote delete: even
   // if the network call fails, no pull may ever re-import this id. The sync
   // tick retries unconfirmed deletes until the provider acknowledges.
-  recordDeletedRemoteIds([task]);
+  recordDeletedRemoteIds([task], new Set(shared.map((s) => s.remoteId)));
 
-  // Fire-and-forget: delete from remote provider via plugin
-  pushToPlugin(task, 'deleteTask').catch((err) => {
-    log.task.warn('failed to delete task from remote', {
-      taskId: task.id,
-      source: task.source,
-      error: err instanceof Error ? err.message : String(err),
+  if (shared.length > 0) {
+    // Local-only delete: the remote item is the OTHER task's twin. Deleting it
+    // (or tombstoning the id) would damage a task the user is keeping.
+    log.task.warn('local-only delete: remote id is held by another live task', {
+      taskId: task.id, source: task.source,
+      sharedWith: shared.map((s) => `${s.taskId}:${s.remoteId.slice(-12)}`),
     });
-  });
+  } else {
+    // Fire-and-forget: delete from remote provider via plugin
+    pushToPlugin(task, 'deleteTask').catch((err) => {
+      log.task.warn('failed to delete task from remote', {
+        taskId: task.id,
+        source: task.source,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
 
   return { task };
   });
@@ -4232,9 +4315,20 @@ export async function deleteTasksByIds(
     }
   }
 
-  // Ledger first (same reasoning as deleteTask), then fire-and-forget remote deletes.
-  recordDeletedRemoteIds(deleted);
+  // Ledger first (same reasoning as deleteTask), then fire-and-forget remote
+  // deletes — skipping any id another live task still owns (see
+  // findSharedRemoteIdClaimants: tombstoning it would mark the SURVIVOR deleted
+  // and delete the survivor's remote twin).
   for (const task of deleted) {
+    const shared = await findSharedRemoteIdClaimants(task);
+    recordDeletedRemoteIds([task], new Set(shared.map((s) => s.remoteId)));
+    if (shared.length > 0) {
+      log.task.warn('local-only delete: remote id is held by another live task', {
+        taskId: task.id, source: task.source,
+        sharedWith: shared.map((s) => `${s.taskId}:${s.remoteId.slice(-12)}`),
+      });
+      continue;
+    }
     pushToPlugin(task, 'deleteTask').catch((err) => {
       log.task.warn('failed to delete task from remote', {
         taskId: task.id,
@@ -6359,8 +6453,17 @@ export async function addTasksBulk(
   await ensureInit();
   return withWriteLock(async () => {
     const insertCols = [...TASK_COLUMNS, 'payload'];
+    // Plain INSERT, NOT `INSERT OR REPLACE`. Two silent data-loss modes hid
+    // behind OR REPLACE, and with the ext-id UNIQUE index the second one becomes
+    // catastrophic:
+    //   1. generateId() is base36(now) + 2 random bytes, so a 50-row batch has a
+    //      ~1.85% chance of an id collision (tests/core/generate-id-collision.test.ts).
+    //      OR REPLACE overwrote the earlier row and reported success.
+    //   2. A pulled row carrying a remote id a LIVE task already owns would
+    //      REPLACE that task — deleting the survivor instead of merely forking it.
+    // A constraint violation is now a loud per-row skip.
     const insertSql =
-      'INSERT OR REPLACE INTO tasks (' + insertCols.join(', ') + ') VALUES (' +
+      'INSERT INTO tasks (' + insertCols.join(', ') + ') VALUES (' +
       insertCols.map((c) => '@' + c).join(', ') + ')';
 
     const created: Task[] = [];
@@ -6393,7 +6496,21 @@ export async function addTasksBulk(
         for (const col of insertCols) {
           bound[col] = partial[col] === undefined ? null : partial[col];
         }
-        stmt.run(bound);
+        try {
+          stmt.run(bound);
+        } catch (err) {
+          // UNIQUE violation = either a minted-id collision or a remote id a live
+          // task already owns. Both mean "do not write this row"; neither may take
+          // an existing task with it. Skipping keeps the rest of the batch.
+          const message = err instanceof Error ? err.message : String(err);
+          if (/UNIQUE constraint failed/i.test(message)) {
+            log.task.warn('addTasksBulk: skipped row on UNIQUE constraint', {
+              title: task.title, source: task.source, taskId: task.id, error: message,
+            });
+            continue;
+          }
+          throw err;
+        }
         created.push(task);
       }
     });
@@ -6472,12 +6589,22 @@ export async function deleteTasksBulk(ids: string[]): Promise<{ deleted: Task[] 
 /** Prepared-statement cache, keyed on `${source}|${jsonPath}` so multiple
  *  plugins (and multiple paths per plugin) share one cache without colliding. */
 const findByExtIdStmts: Map<string, ReturnType<import('better-sqlite3').Database['prepare']>> = new Map();
+/** The handle every cached statement above was prepared against. A prepared
+ *  statement dies with its connection, so a cache that outlives a reopen hands
+ *  back statements that throw "The database connection is not open" forever —
+ *  which silently disables ext-id lookup, i.e. the join key the whole anti-fork
+ *  contract depends on. Keyed on the handle so a reopen re-prepares instead. */
+let findByExtIdStmtsDb: ReturnType<typeof getDb> | null = null;
 
 function getFindByExtIdStmt(source: string, jsonPath: string) {
+  const db = getDb()!;
+  if (findByExtIdStmtsDb !== db) {
+    findByExtIdStmts.clear();
+    findByExtIdStmtsDb = db;
+  }
   const cacheKey = `${source}|${jsonPath}`;
   const cached = findByExtIdStmts.get(cacheKey);
   if (cached) return cached;
-  const db = getDb()!;
   // source and jsonPath were validated when the spec was registered (see
   // PluginApi.registerExtIndex / ensureExtIndexes). The extId value is bound
   // through `?`, never interpolated.

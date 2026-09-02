@@ -298,12 +298,26 @@ export interface ExtIndexPath {
   /** SQLite json_extract path inside the `ext` column.
    *  e.g. '$.jira.issue_key' or '$."ms-todo".id'. */
   json: string;
+  /**
+   * Open this index as UNIQUE, so two local tasks can never hold the same remote
+   * id for this source. Defaults to TRUE for the FIRST path in `paths` (the
+   * primary identity path) and false for the rest — a secondary path like
+   * `short_id` may legitimately repeat.
+   *
+   * Why a default and not opt-in: "one remote item maps to at most one local
+   * task" is a FRAMEWORK invariant (see task-remote-links.ts), so a plugin that
+   * never thought about it still gets the guarantee. Three rounds of the
+   * task-forking bug (Apr 2026, Aug 2026, Sep 2026) all came from enforcing this
+   * with a racy read instead of a constraint. Set `unique: false` to opt out.
+   */
+  unique?: boolean;
 }
 
 export interface ExtIndexSpec {
   /** Must equal the plugin's manifest.id and the value written into Task.source. */
   source: string;
-  /** Indexes to open. findTaskByExtId tries paths in order until one matches. */
+  /** Indexes to open. findTaskByExtId tries paths in order until one matches.
+   *  paths[0] is the primary identity path and is UNIQUE unless opted out. */
   paths: ExtIndexPath[];
 }
 

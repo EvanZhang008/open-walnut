@@ -23,7 +23,7 @@ import {
 } from './task-manager.js';
 import { bus, EventNames } from './event-bus.js';
 import { isLegacyInboxGroup, isRetiredQuickStartGroup } from '../utils/format.js';
-import { isRemoteIdBlocked } from './task-remote-links.js';
+import { isRemoteIdBlocked, isRemoteIdClaimedByLiveTask } from './task-remote-links.js';
 import type { RegisteredPlugin, RemoteSyncItem, SyncPollContext } from './integration-types.js';
 import type { Task } from './types.js';
 
@@ -442,6 +442,17 @@ export class SyncReconciler {
         if (isRemoteIdBlocked(pluginId, remote.remoteId)) {
           log.web.debug('sync-reconciler: skipped ledgered remote id', {
             pluginId, remoteId: remote.remoteId, title: remote.title,
+          });
+          continue;
+        }
+        // Claim gate: an id a LIVE local task already owns must never mint a
+        // second task. computeDiff only reached toCreate because its in-memory
+        // snapshot had not observed the owner's ext write yet — the ledger has.
+        // This is the hole that forked three tasks on 2026-09-01.
+        const claim = isRemoteIdClaimedByLiveTask(pluginId, remote.remoteId);
+        if (claim.claimed) {
+          log.web.warn('sync-reconciler: refused to create — remote id already owned by a live task', {
+            pluginId, remoteId: remote.remoteId, title: remote.title, ownedBy: claim.byTaskId,
           });
           continue;
         }

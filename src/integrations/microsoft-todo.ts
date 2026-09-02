@@ -26,7 +26,7 @@ import {
   setProjectMetadata,
   findTaskByExtId,
 } from '../core/task-manager.js';
-import { isRemoteIdBlocked, recordRemoteLink } from '../core/task-remote-links.js';
+import { isRemoteIdBlocked, isRemoteIdClaimedByLiveTask, recordRemoteLink } from '../core/task-remote-links.js';
 import type { Config } from '../core/types.js';
 
 // ── Plugin-system helpers ──
@@ -276,7 +276,16 @@ export function graphRequest<T>(
             reject(new Error(`Graph API ${method} ${urlPath}: invalid JSON response`));
           }
         } else {
-          reject(new Error(`Graph API ${method} ${urlPath} returned ${res.statusCode}: ${data}`));
+          // Carry the status as a property, not just inside the message. Recovery
+          // code has to branch on it (a stale identity is a 404 OR a 400), and
+          // regexing a human-readable string for that is how the 400 shape was
+          // missed in the first place.
+          const err = new Error(
+            `Graph API ${method} ${urlPath} returned ${res.statusCode}: ${data}`,
+          ) as Error & { status?: number; body?: string };
+          err.status = res.statusCode;
+          err.body = data;
+          reject(err);
         }
       });
     });
@@ -299,6 +308,97 @@ async function fetchTaskLists(token: string): Promise<MSTodoList[]> {
     '/me/todo/lists',
   );
   return response.value;
+}
+
+/**
+ * The container segment a hierarchical remote id carries, or null.
+ *
+ * A remote item id embeds its parent list's distinctive middle segment verbatim,
+ * so `itemId.includes(segmentOf(listId))` answers "do these two belong together?"
+ * with no network call. Measured over the live store: 1970 of 1970 synced rows
+ * parsed, 1968 consistent, and the 2 inconsistent ones were exactly the pair this
+ * whole change is about.
+ */
+function containerSegment(containerId: string | undefined): string | null {
+  if (!containerId) return null;
+  const trimmed = containerId.replace(/A+=*$/, '');
+  const m = trimmed.match(/GAA.(.+)$/);
+  return m && m[1].length >= 4 ? m[1] : null;
+}
+
+/**
+ * Does the stored identity contradict itself — an item id from one list beside a
+ * list_id naming a different one?
+ *
+ * WHY THIS IS CHECKED UP FRONT INSTEAD OF WAITING FOR AN ERROR: Graph accepts a
+ * PATCH addressed to the WRONG list as long as the item id is real (verified
+ * against the live account 2026-09-02: the item's lastModifiedDateTime advanced),
+ * while a GET or DELETE on the very same pair returns 400
+ * ParentFolderDoesNotContainTaskWithGivenId. So an inconsistent row pushes
+ * "successfully" forever and never surfaces an error to recover from — but the
+ * DELETE half of its next list migration silently fails, orphaning the real
+ * remote item for the next pull to fork. Nothing self-heals; it has to be looked
+ * for.
+ *
+ * Conservative by construction: unparseable ids answer false (unknown is not
+ * broken), and a false positive costs one extra lookup that confirms the list.
+ */
+function identityIsSelfContradictory(itemId?: string, listId?: string): boolean {
+  const seg = containerSegment(listId);
+  if (!seg || !itemId) return false;
+  return !itemId.includes(seg);
+}
+
+/**
+ * Which list does this remote item ACTUALLY live in?
+ *
+ * Answers the question a stale (list, id) pair raises. Graph reports that pair
+ * two different ways and neither says which of the two halves is wrong:
+ *   404                                        — id unknown in this list
+ *   400 ParentFolderDoesNotContainTaskWithGivenId — id exists, wrong parent
+ * Both are also what a genuinely deleted item looks like, so the only way to
+ * tell "moved" from "gone" is to go look.
+ *
+ * That distinction decides between two opposite repairs: re-POST (correct for a
+ * dead id) would MINT A SECOND REMOTE ITEM for one that is merely misfiled, so
+ * this must run before any recovery that creates.
+ *
+ * Returns the real list id, or null when no list has it. `skipListId` is the one
+ * already known to fail. Never throws: a probe failure only means "unknown",
+ * which the caller must already handle.
+ */
+async function locateRemoteTask(
+  token: string,
+  msTaskId: string,
+  skipListId?: string,
+): Promise<string | null> {
+  let lists: MSTodoList[];
+  try {
+    lists = await fetchTaskLists(token);
+  } catch {
+    return null;
+  }
+  const candidates = lists.filter((l) => l.id !== skipListId);
+  // Probe the list the id NAMES first. The account here has 26 lists, so a blind
+  // scan is up to 26 sequential round trips; the item id embeds its own parent
+  // segment, which turns the normal case into one call. Ordering only — every
+  // list is still tried, so an id whose segment we cannot read loses nothing.
+  candidates.sort((a, b) => {
+    const rank = (l: MSTodoList) => {
+      const seg = containerSegment(l.id);
+      return seg && msTaskId.includes(seg) ? 0 : 1;
+    };
+    return rank(a) - rank(b);
+  });
+  for (const list of candidates) {
+    try {
+      await graphRequest<MSTodoTask>(token, 'GET', `/me/todo/lists/${list.id}/tasks/${msTaskId}`);
+      return list.id;
+    } catch {
+      // 404 / 400 here just means "not this one".
+    }
+  }
+  return null;
 }
 
 // -- Checklist item operations --
@@ -953,7 +1053,15 @@ async function syncProjectAliasAfterRename(listDisplayName: string): Promise<str
 
 // -- Push/pull operations --
 
-export async function pushTask(task: Task): Promise<{ msTaskId: string; serverTimestamp: string }> {
+export async function pushTask(task: Task): Promise<{
+  msTaskId: string;
+  serverTimestamp: string;
+  /** The list the item actually lives in NOW — same resolution pass as msTaskId,
+   *  so a caller can never pair a fresh id with a stale list (or vice versa). */
+  listId: string;
+  /** Former ids this task has held (list migrations re-key the remote item). */
+  previousIds: string[];
+}> {
   // Guard: never push a task whose project is claimed by a different source.
   // Keeps ms-todo from creating remote lists for projects another plugin owns.
   // Inbox ('') has no registry row and can never be claimed, so a provider task
@@ -1001,7 +1109,28 @@ export async function pushTask(task: Task): Promise<{ msTaskId: string; serverTi
   let actualListId = listId;
 
   const existingMsTodoId = getMsTodoId(task);
-  const existingMsTodoList = getMsTodoList(task);
+  let existingMsTodoList = getMsTodoList(task);
+
+  // Repair a self-contradictory stored identity BEFORE deciding migrate-vs-patch.
+  //
+  // Every decision below trusts `existingMsTodoList` to say where the item is,
+  // and a wrong answer is invisible: the same-list PATCH still succeeds (Graph
+  // tolerates a wrong list in the URL), so the row keeps pushing "fine" while its
+  // next migration DELETEs from a list the item is not in — leaving the real item
+  // behind for a pull to fork. Two live tasks sat in exactly that state.
+  //
+  // The check is a local string test, so this costs one Graph lookup only for a
+  // row that is already known to be inconsistent.
+  if (existingMsTodoId && identityIsSelfContradictory(existingMsTodoId, existingMsTodoList)) {
+    const foundIn = await locateRemoteTask(token, existingMsTodoId, undefined);
+    log.web.warn('ms-todo: stored identity contradicts itself — re-anchoring to the real list', {
+      taskId: task.id, msTaskId: existingMsTodoId,
+      storedListId: existingMsTodoList, foundIn: foundIn ?? '(nowhere)',
+    });
+    // Only trust a positive answer. "Nowhere" leaves the row alone so the ordinary
+    // push path can hit its error and run the dead-identity recovery.
+    if (foundIn) existingMsTodoList = foundIn;
+  }
 
   if (existingMsTodoId) {
     // Check if the task moved to a different list (project changed)
@@ -1038,6 +1167,29 @@ export async function pushTask(task: Task): Promise<{ msTaskId: string; serverTi
       );
       msTaskId = created.id;
       serverTimestamp = created.lastModifiedDateTime;
+
+      // CLAIM THE NEW ID IMMEDIATELY, before any further await.
+      //
+      // This is the fix for the 2026-09-01 fork. The remote item now EXISTS in
+      // the new list, but the local row still points at the old id, and the
+      // framework's ext write + ledger row landed ~5 SECONDS later (measured:
+      // POST at 18:07:32.708, claim at 18:07:38.6). Any pull of the new list
+      // inside that window saw an unclaimed remote id and minted a duplicate
+      // task. Writing the ledger row here collapses the window to microseconds,
+      // and the pull paths' isRemoteIdClaimedByLiveTask gate then refuses it.
+      //
+      // Ledgering BEFORE the local ext write is deliberate: an 'owned' row whose
+      // task does not yet carry the id is harmless (it only blocks creates),
+      // whereas the reverse order leaves the window open.
+      if (!recordRemoteLink({
+        source: 'ms-todo', remoteId: msTaskId, taskId: task.id,
+        remoteList: listId, state: 'owned', reason: 'list-migration-claim',
+      })) {
+        log.web.error('ms-todo: claim write LOST for freshly created remote id', {
+          taskId: task.id, newId: msTaskId, listId,
+        });
+      }
+
       log.web.info('ms-todo ext.id assigned', {
         taskId: task.id,
         oldId: existingMsTodoId,
@@ -1055,18 +1207,19 @@ export async function pushTask(task: Task): Promise<{ msTaskId: string; serverTi
       (task.ext['ms-todo'] as Record<string, unknown>).previous_ids = prevIds;
     } else {
       // Same list — update in place.
-      // If PATCH fails (network, auth, 5xx, rate limit, or even 404), throw and let
-      // the upper layer set sync_error. The next sync tick will retry the PATCH with
-      // the same ext.id. NEVER fallback to POST create — doing so leaves the original
-      // remote task as an orphan and produces ghost duplicates on the next full pull.
+      // If PATCH fails (network, auth, 5xx, rate limit), throw and let the upper
+      // layer set sync_error. The next sync tick retries with the same ext.id.
+      // A 404 is the ONE exception, handled below: it proves the stored identity
+      // is dead, so retrying it forever is a permanent wedge, not a retry.
+      // Clears must be explicit on PATCH: mapToRemote omits absent dates, and
+      // Graph treats an omitted field as "leave unchanged" — so a locally
+      // cleared start/due would survive remotely and resurrect on the next
+      // pull. `null` is Graph's documented "delete this field" marker.
+      // Built outside the try because the stale-pair recovery re-PATCHes with it.
+      const patchBody: Record<string, unknown> = { ...msBody };
+      if (!task.due_date) patchBody.dueDateTime = null;
+      if (!task.start_date) patchBody.startDateTime = null;
       try {
-        // Clears must be explicit on PATCH: mapToRemote omits absent dates, and
-        // Graph treats an omitted field as "leave unchanged" — so a locally
-        // cleared start/due would survive remotely and resurrect on the next
-        // pull. `null` is Graph's documented "delete this field" marker.
-        const patchBody: Record<string, unknown> = { ...msBody };
-        if (!task.due_date) patchBody.dueDateTime = null;
-        if (!task.start_date) patchBody.startDateTime = null;
         const patched = await graphRequest<MSTodoTask>(
           token,
           'PATCH',
@@ -1076,17 +1229,95 @@ export async function pushTask(task: Task): Promise<{ msTaskId: string; serverTi
         msTaskId = existingMsTodoId;
         serverTimestamp = patched.lastModifiedDateTime;
       } catch (err) {
-        // Log before re-throwing — next tick will retry with the same ext.id
         const errMsg = err instanceof Error ? err.message : String(err);
         const httpStatus = (err as { status?: number })?.status;
-        log.web.warn('ms-todo PATCH failed (will retry next tick with same ext.id)', {
-          taskId: task.id,
-          existingMsTodoId,
-          listId,
-          httpStatus,
-          error: errMsg,
-        });
-        throw err;
+        // The stored (list, id) pair is not a real pair. Retrying it every tick is
+        // a permanent wedge, not a retry: two tasks sat in exactly this state on
+        // 2026-09-01 with `ext.id` on the old list and `list_id` already moved,
+        // PATCHing /lists/{new}/tasks/{old} forever while the real remote item sat
+        // unclaimed for the next pull to fork.
+        //
+        // Graph reports the same broken pair two ways, and 400 is the one measured
+        // live here — matching only 404 left the wedge in place:
+        //   404                                        — id unknown in this list
+        //   400 ParentFolderDoesNotContainTaskWithGivenId — id exists, wrong parent
+        const staleIdentity = httpStatus === 404
+          || /ParentFolderDoesNotContainTaskWithGivenId/.test(errMsg);
+        if (staleIdentity) {
+          // MOVED or GONE? Ask before recovering. Re-POSTing an item that is
+          // merely misfiled would create a SECOND remote item for it — the exact
+          // duplicate this whole change exists to prevent, just on the remote side.
+          const foundIn = await locateRemoteTask(token, existingMsTodoId, listId);
+
+          if (foundIn) {
+            // Only `list_id` was wrong. Keep the id, correct the list, PATCH where
+            // the item really is. The row is left on a TRUTHFUL identity rather
+            // than a repaired-but-still-half-guessed one; if that list is not
+            // where the task's project belongs, the next push takes the ordinary
+            // migration branch (which claims the new id on POST). Self-healing in
+            // one extra tick beats re-implementing migration inside a catch.
+            log.web.warn('ms-todo PATCH stale pair — item lives in another list, correcting list_id', {
+              taskId: task.id, msTaskId: existingMsTodoId,
+              storedListId: listId, actualListId: foundIn, httpStatus,
+            });
+            const patched = await graphRequest<MSTodoTask>(
+              token, 'PATCH', `/me/todo/lists/${foundIn}/tasks/${existingMsTodoId}`, patchBody,
+            );
+            msTaskId = existingMsTodoId;
+            serverTimestamp = patched.lastModifiedDateTime;
+            actualListId = foundIn;
+            // Re-point the ledger at the list the item is actually in, so a pull
+            // of that list sees the id as owned instead of unclaimed.
+            recordRemoteLink({
+              source: 'ms-todo', remoteId: existingMsTodoId, taskId: task.id,
+              remoteList: foundIn, state: 'owned', reason: 'stale-list-id-corrected',
+            });
+          } else {
+            // Nowhere to be found: the identity really is dead.
+            //
+            // Re-creating was previously forbidden because it "leaves the original
+            // as an orphan and produces ghost duplicates on the next full pull".
+            // Neither holds once we have looked: there is no original left to
+            // orphan, and the new id is ledgered as owned the instant the POST
+            // returns, so a racing pull is refused by isRemoteIdClaimedByLiveTask
+            // instead of forking a copy.
+            log.web.warn('ms-todo PATCH stale pair — identity is dead everywhere, re-creating', {
+              taskId: task.id, deadMsTodoId: existingMsTodoId, listId, httpStatus,
+            });
+            // Release the dead id so no pull can ever re-import it as a new task.
+            recordRemoteLink({
+              source: 'ms-todo', remoteId: existingMsTodoId, taskId: task.id,
+              remoteList: listId, state: 'released', reason: 'patch-stale-dead-identity',
+            });
+            const recreated = await graphRequest<MSTodoTask>(
+              token, 'POST', `/me/todo/lists/${listId}/tasks`, msBody,
+            );
+            msTaskId = recreated.id;
+            serverTimestamp = recreated.lastModifiedDateTime;
+            if (!recordRemoteLink({
+              source: 'ms-todo', remoteId: msTaskId, taskId: task.id,
+              remoteList: listId, state: 'owned', reason: 'patch-stale-recreate-claim',
+            })) {
+              log.web.error('ms-todo: claim write LOST for freshly created remote id', {
+                taskId: task.id, newId: msTaskId, listId,
+              });
+            }
+            log.web.info('ms-todo ext.id assigned', {
+              taskId: task.id, oldId: existingMsTodoId, newId: msTaskId,
+              reason: 'patch_stale_recreate',
+            });
+          }
+        } else {
+          // Log before re-throwing — next tick will retry with the same ext.id
+          log.web.warn('ms-todo PATCH failed (will retry next tick with same ext.id)', {
+            taskId: task.id,
+            existingMsTodoId,
+            listId,
+            httpStatus,
+            error: errMsg,
+          });
+          throw err;
+        }
       }
     }
   } else {
@@ -1108,6 +1339,16 @@ export async function pushTask(task: Task): Promise<{ msTaskId: string; serverTi
     );
     msTaskId = created.id;
     serverTimestamp = created.lastModifiedDateTime;
+    // Same immediate claim as the migration branch above: the remote item exists
+    // now, so the id must be unclaimable by a concurrent pull from this instant.
+    if (!recordRemoteLink({
+      source: 'ms-todo', remoteId: msTaskId, taskId: task.id,
+      remoteList: listId, state: 'owned', reason: 'first-create-claim',
+    })) {
+      log.web.error('ms-todo: claim write LOST for freshly created remote id', {
+        taskId: task.id, newId: msTaskId, listId,
+      });
+    }
     log.web.info('ms-todo ext.id assigned', {
       taskId: task.id,
       newId: msTaskId,
@@ -1115,8 +1356,18 @@ export async function pushTask(task: Task): Promise<{ msTaskId: string; serverTi
     });
   }
 
-  // Persist list ID change back to local task via ext
-  // (caller should persist these changes)
+  // Write the identity back onto the task as ONE unit.
+  //
+  // `id` and `list_id` must never be written apart: the 2026-09-01 survivors
+  // ended up with a NEW list_id beside a DEAD old id, which made every later
+  // push PATCH `/lists/{new}/tasks/{old}` (404 forever) while the real remote
+  // item sat unclaimed for the next pull to fork. Both keys are derived here
+  // from the SAME resolution pass (`listId`, resolved once at the top of this
+  // function) so they cannot disagree.
+  //
+  // The returned identity — not this mutation — is the contract the framework
+  // persists. The mutation stays only because `autoPushTask`'s in-flight dedup
+  // hands one caller's promise to another, and callers still read task.ext.
   if (!task.ext) task.ext = {};
   if (!task.ext['ms-todo']) task.ext['ms-todo'] = {};
   (task.ext['ms-todo'] as Record<string, unknown>).id = msTaskId;
@@ -1124,7 +1375,12 @@ export async function pushTask(task: Task): Promise<{ msTaskId: string; serverTi
 
   // Subtask checklist sync removed (subtasks are now child tasks)
 
-  return { msTaskId, serverTimestamp };
+  return {
+    msTaskId,
+    serverTimestamp,
+    listId: actualListId,
+    previousIds: ((msExt(task) as Record<string, unknown> | undefined)?.previous_ids as string[]) ?? [],
+  };
 }
 
 export async function pullTasks(
@@ -1363,14 +1619,16 @@ function importLegacyTombstonesOnce(deletedMsIds: string[] | undefined): void {
 // -- Auto-push (fire-and-forget with per-task dedup) --
 
 /** Inflight push promises keyed by task ID. Prevents duplicate concurrent pushes. */
-const msPushInflight = new Map<string, Promise<{ msTaskId: string; serverTimestamp: string } | null>>();
+type MsPushIdentity = Awaited<ReturnType<typeof pushTask>>;
+
+const msPushInflight = new Map<string, Promise<MsPushIdentity | null>>();
 
 /**
  * Push a single task to Microsoft To-Do. Returns { msTaskId, serverTimestamp } on success, null on failure.
  * Designed for fire-and-forget usage — never throws.
  * Per-task dedup: concurrent calls for the same task reuse the inflight promise.
  */
-export async function autoPushTask(task: Task): Promise<{ msTaskId: string; serverTimestamp: string } | null> {
+export async function autoPushTask(task: Task): Promise<MsPushIdentity | null> {
   const key = task.id;
   const existing = msPushInflight.get(key);
   if (existing) return existing;
@@ -1477,6 +1735,13 @@ export async function reconcilePulledTasks(
       if (remoteUpdated > syncedAt) {
         const updates = mapToLocal(msTask, list.displayName);
         updates.project = listProject;
+        // mapToLocal emits ext as { id } only. The full-pull path adds list_id
+        // (see fullPullAllTasks) and this one did not, so an update could leave a
+        // row holding an id with no list — the same "identity written in pieces"
+        // shape that wedged pushes into PATCHing a list the item isn't in.
+        if (updates.ext?.['ms-todo']) {
+          (updates.ext['ms-todo'] as Record<string, unknown>).list_id = list.id;
+        }
 
         // Checklist-to-subtask sync removed (subtasks are now child tasks)
 
@@ -1492,6 +1757,24 @@ export async function reconcilePulledTasks(
       if (isRemoteIdBlocked('ms-todo', msTask.id)) {
         log.web.debug('reconcilePulledTasks: skipped ledgered remote id', {
           title: msTask.title, listName: list.displayName,
+        });
+        continue;
+      }
+      // Claim gate: `findTaskByExtId` above is a racy SELECT — it misses an owner
+      // whose ext write has not committed yet (a list migration POSTs the new
+      // remote item ~5s before the local claim lands). The ledger row is written
+      // the instant the POST returns, so ask it too. Without this gate a pull
+      // that lands inside that window forks the task (2026-09-01: 3 tasks).
+      const liveClaim = isRemoteIdClaimedByLiveTask('ms-todo', msTask.id);
+      if (liveClaim.claimed) {
+        // `remoteId` is what makes a refusal diagnosable, and its absence cost
+        // real time here. The line alone cannot say WHY the lookup above missed;
+        // with the id in hand, comparing it against the owner's stored ext
+        // separates the benign mid-migration window from a remote item the owner
+        // has already moved on from and that will now be refused every tick.
+        log.web.warn('reconcilePulledTasks: refused to create — remote id already owned by a live task', {
+          title: msTask.title, listName: list.displayName, ownedBy: liveClaim.byTaskId,
+          remoteId: msTask.id,
         });
         continue;
       }

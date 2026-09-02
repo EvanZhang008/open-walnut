@@ -63,7 +63,17 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // its "Reveal in Finder / Open in default app" items when false instead of
     // offering menu entries that always 400.
     const canRevealLocalFiles = !CLOUD_MODE && process.platform === 'darwin'
-    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, cloud: CLOUD_MODE })
+    // remoteIdUniquenessGaps: non-empty means a sync plugin's remote-id UNIQUE
+    // index could NOT be opened because the tasks table already holds two rows
+    // owning one remote id. That is the task-forking bug's footprint, and the
+    // constraint is the guarantee against it — so a degraded state is reported
+    // here rather than being silently tolerated. Empty = enforced by the DB.
+    let remoteIdUniquenessGaps: ReadonlyArray<{ source: string; path: string; groups: number }> = []
+    try {
+      const { getExtIndexUniquenessGaps } = await import('../../core/task-db.js')
+      remoteIdUniquenessGaps = getExtIndexUniquenessGaps()
+    } catch { /* diagnostics only */ }
+    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE })
   } catch (err) {
     next(err)
   }

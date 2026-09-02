@@ -17,7 +17,8 @@ export default function register(api: PluginApi): void {
       const { autoPushTask } = await import('../microsoft-todo.js');
       const result = await autoPushTask(task);
       if (result) {
-        return { 'ms-todo': { id: result.msTaskId, list_id: (task.ext?.['ms-todo'] as Record<string, unknown>)?.list_id } };
+        // From the returned identity, not read back off `task` — see pushTask below.
+        return { 'ms-todo': { id: result.msTaskId, list_id: result.listId } };
       }
       return null;
     },
@@ -89,9 +90,20 @@ export default function register(api: PluginApi): void {
     async pushTask(task: Task): Promise<PushResult> {
       const { pushTask: msPushTask } = await import('../microsoft-todo.js');
       const result = await msPushTask(task);
+      // Build ext from the RETURNED identity, never by reading list_id back off
+      // `task` — that read could observe a different resolution pass than the one
+      // that produced `msTaskId` and pair a new id with a stale list (the
+      // 2026-09-01 half-written ext). `previous_ids` is carried explicitly so the
+      // framework's top-level ext merge can't drop the adopt-path aliases.
       return {
         serverTimestamp: result.serverTimestamp,
-        ext: { 'ms-todo': { id: result.msTaskId, list_id: (task.ext?.['ms-todo'] as Record<string, unknown>)?.list_id } },
+        ext: {
+          'ms-todo': {
+            id: result.msTaskId,
+            list_id: result.listId,
+            ...(result.previousIds.length > 0 ? { previous_ids: result.previousIds } : {}),
+          },
+        },
       };
     },
     async associateSubtask(_parent: Task, _child: Task) {
@@ -150,7 +162,10 @@ export default function register(api: PluginApi): void {
 
   api.registerExtIndex({
     source: 'ms-todo',
-    paths: [{ key: 'id', json: '$."ms-todo".id' }],
+    // UNIQUE: two local tasks holding one remote id is the task-forking bug
+    // (three rounds: Apr 2026, Aug 2026, Sep 2026). Enforced by the DB so it
+    // cannot depend on a racy read winning.
+    paths: [{ key: 'id', json: '$."ms-todo".id', unique: true }],
   });
 
   api.registerSourceClaim(() => {
