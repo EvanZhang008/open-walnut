@@ -290,6 +290,31 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
+# ── Type-check the SPA before building it ───────────────────────────────────
+# 2026-09-02: a deploy built the shared working tree while another agent was
+# mid-refactor in a component (state variable deleted, a useMemo deps array
+# still naming it). vite does not type-check, the smoke boot only asks for
+# /api/config, so the bundle shipped and crashed on the first paint of `/` in
+# every browser. `tsc --noEmit` on web/ names exactly that class of defect
+# (`Cannot find name 'groupBy'`) in under a minute. A failure here is usually
+# someone else's unfinished edit: wait for them or coordinate, and only reach
+# for WALNUT_DEVPROD_SKIP_TSC=1 when the error is provably unrelated to `/`.
+if [[ "${WALNUT_DEVPROD_SKIP_TSC:-0}" != "1" ]]; then
+  WEB_TSC="$REPO_ROOT/web/node_modules/.bin/tsc"
+  [[ -x "$WEB_TSC" ]] || WEB_TSC="$REPO_ROOT/node_modules/.bin/tsc"
+  if [[ -x "$WEB_TSC" ]]; then
+    echo "Type-checking web/ before the build (WALNUT_DEVPROD_SKIP_TSC=1 skips)."
+    if ! (cd "$REPO_ROOT/web" && "$WEB_TSC" --noEmit -p tsconfig.json); then
+      echo "web/ type-check FAILED — deploy aborted, production server on :$PORT untouched." >&2
+      echo "A half-edited component ships as a first-paint crash; fix (or wait for the" >&2
+      echo "author of) the errors above, or WALNUT_DEVPROD_SKIP_TSC=1 if provably unrelated." >&2
+      exit 1
+    fi
+  else
+    echo "web/ type-check skipped: no tsc binary found under web/ or the repo root." >&2
+  fi
+fi
+
 npm run web:build
 
 # ── Stage the dist on the temp volume before ANY boot ───────────────────────
@@ -442,6 +467,27 @@ if [[ "${WALNUT_DEVPROD_SKIP_SMOKE:-0}" != "1" ]]; then
       fi
       sleep 0.5
     done
+    # ── Smoke render: does `/` actually paint? ──────────────────────────────
+    # /api/config proves the server booted; it says nothing about the SPA.
+    # 2026-09-02 a dist whose bundle threw on first render passed this block and
+    # took the home page down in every browser. Load `/` once in a headless
+    # browser against the SAME isolated smoke server. Three-valued on purpose:
+    # a definitive crash (error boundary fired / banner shown / #root empty)
+    # fails the deploy with prod untouched; "could not tell" (no browser, page
+    # never settled under machine load) proceeds with a warning, because a
+    # deploy blocked by an overloaded Mac is its own outage. Set
+    # WALNUT_DEVPROD_RENDER_STRICT=1 to fail closed on doubt too.
+    smoke_render_rc=0
+    if [[ "$smoke_ok" == "1" && "${WALNUT_DEVPROD_SKIP_RENDER:-0}" != "1" ]]; then
+      RENDER_SECS="${WALNUT_DEVPROD_RENDER_SECS:-60}"
+      "$NODE_BIN" "$REPO_ROOT/scripts/devprod-render-check.mjs" \
+        "http://localhost:$smoke_port/" --timeout-ms "$(( RENDER_SECS * 1000 ))" \
+        || smoke_render_rc=$?
+      if [[ "$smoke_render_rc" == "2" && "${WALNUT_DEVPROD_RENDER_STRICT:-0}" != "1" ]]; then
+        echo "Smoke render UNDETERMINED — proceeding (WALNUT_DEVPROD_RENDER_STRICT=1 fails closed here)." >&2
+        smoke_render_rc=0
+      fi
+    fi
     smoke_cleanup
     if [[ "$smoke_ok" != "1" ]]; then
       echo "Smoke boot FAILED: fresh dist did not serve /api/config within ${SMOKE_SECS}s." >&2
@@ -449,7 +495,13 @@ if [[ "${WALNUT_DEVPROD_SKIP_SMOKE:-0}" != "1" ]]; then
       tail -n 25 "$SMOKE_LOG" >&2 || true
       exit 1
     fi
-    echo "Smoke boot OK: fresh dist binds and serves."
+    if [[ "$smoke_render_rc" != "0" ]]; then
+      echo "Smoke render FAILED: fresh dist serves /api/config but crashes on the first paint of /." >&2
+      echo "Production server on :$PORT was NOT touched. Fix the render error above" >&2
+      echo "(WALNUT_DEVPROD_SKIP_RENDER=1 skips this check for emergencies)." >&2
+      exit 1
+    fi
+    echo "Smoke boot OK: fresh dist binds, serves, and paints /."
   fi
 fi
 

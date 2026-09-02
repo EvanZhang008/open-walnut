@@ -64,6 +64,7 @@ export const SLOW_TEST_FILES = [
   'tests/core/git-versioning.test.ts', // 5s
 
   // ── Real HTTP server + session plumbing ────────────────────────────────────
+  'tests/scripts/devprod-render-check.test.ts', // ~25s — launches a headless Chromium per verdict
   'tests/web/routes/bug-report.test.ts', // 5s
   'tests/web/routes/task-hook-maintainer.test.ts', // 5s
   'tests/web/routes/chat-plan-mode.test.ts', // 5s

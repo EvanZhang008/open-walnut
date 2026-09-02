@@ -701,6 +701,25 @@ export class SessionHealthMonitor {
 
       // Skip team-active sessions — poll loop produces no Claude output, but is not hung
       if (runner.isTeamActive(session.claudeSessionId)) continue
+
+      // ── Free in-memory gates FIRST, daemon RPC only for a real suspect ────
+      // Every check below reads the runner's own timestamps, so it costs
+      // nothing; the isBackgroundWorkActive probe underneath reaches the daemon
+      // (~90ms, 30s worst case). Asking the daemon about every running session
+      // before finding out whether the session even looks hung is what made
+      // this phase 1.3-2.2s of a 30s-interval check() that runs ON the web
+      // event loop (2026-09-01 typing lag). The probe can only ever SUPPRESS a
+      // flag, so deferring it changes no outcome.
+      const ts = runner.getSessionTimestamps(session.claudeSessionId)
+      if (!ts) continue
+      if (ts.lastMessageDeliveryAt === 0) continue  // no message delivered yet
+
+      // Only flag if a message was delivered AFTER the last Claude output
+      if (ts.lastClaudeOutputAt >= ts.lastMessageDeliveryAt) continue
+
+      const waitingMs = Date.now() - ts.lastMessageDeliveryAt
+      if (waitingMs < WARN_THRESHOLD_MS) continue
+
       // Skip sessions running a dynamic workflow / background subagents — the main turn
       // produces no output for minutes, but the session is busy, not hung. L2: this PULLs the
       // daemon-authoritative task state and reconciles any lost-terminal event before deciding,
@@ -712,16 +731,6 @@ export class SessionHealthMonitor {
         runner.isBackgroundWorkActive(session.claudeSessionId), true,
         'isBackgroundWorkActive', session.claudeSessionId,
       )) continue
-
-      const ts = runner.getSessionTimestamps(session.claudeSessionId)
-      if (!ts) continue
-      if (ts.lastMessageDeliveryAt === 0) continue  // no message delivered yet
-
-      // Only flag if a message was delivered AFTER the last Claude output
-      if (ts.lastClaudeOutputAt >= ts.lastMessageDeliveryAt) continue
-
-      const waitingMs = Date.now() - ts.lastMessageDeliveryAt
-      if (waitingMs < WARN_THRESHOLD_MS) continue
 
       const waitingMin = Math.round(waitingMs / 60_000)
 
@@ -829,29 +838,12 @@ export class SessionHealthMonitor {
       // would make nearly every idle CLI immortal. A reaped session resumes
       // via --resume on the next send; nothing is lost.)
 
+      // ── Cheap, in-memory exemptions ─────────────────────────────────────
       // Skip team-active sessions — lead session is polling for in-process teammate
       // results (Claude Code team mode). No JSONL output during poll loop sleep, but
       // the session is NOT idle — teammates are working on the remote/local host.
       if (runner?.isTeamActive(session.claudeSessionId)) {
         log.session.debug('health monitor: skipping idle check — team active', {
-          sessionId: session.claudeSessionId, taskId: session.taskId,
-        })
-        continue
-      }
-
-      // Skip sessions running a dynamic workflow / background subagents — they can run
-      // for many minutes (up to the CLI's 10-min bg-wait ceiling) with no main-turn
-      // output, but the session is busy, not idle. Killing it would abort the workflow.
-      // L2: PULLs the daemon-authoritative task state and reconciles any lost-terminal event
-      // first, so a wedged session self-heals on this tick (see reconcileFromDaemon).
-      // Bounded (see probeWithTimeout): on timeout assume ACTIVE. The false branch
-      // of this check leads to killing the session, so an unknown answer must never
-      // be read as "idle" — that would reap a live workflow because a host was slow.
-      if (await probeWithTimeout(
-        runner?.isBackgroundWorkActive?.(session.claudeSessionId) ?? false, true,
-        'isBackgroundWorkActive', session.claudeSessionId,
-      )) {
-        log.session.debug('health monitor: skipping idle check — background work active', {
           sessionId: session.claudeSessionId, taskId: session.taskId,
         })
         continue
@@ -866,9 +858,6 @@ export class SessionHealthMonitor {
         })
         continue
       }
-
-      // Check if process is actually alive before spending time on idle check
-      if (!await cachedIsAlive(session)) continue
 
       // Determine last activity time:
       // 1. Prefer SessionManager.lastEventAt (works for both local and remote)
@@ -911,13 +900,53 @@ export class SessionHealthMonitor {
       const episodeBaseMs = Number.isNaN(warnStatusChangeMs)
         ? lastActiveMs : Math.max(lastActiveMs, warnStatusChangeMs)
       const remainingMs = Math.max(0, idleTimeoutMs - (now - episodeBaseMs))
-      if (remainingMs <= WILL_REAP_WARN_WINDOW_MS) {
-        this.emitWillReap(session, { remainingMs, idleDurationMs, idleTimeoutMs, episodeBaseMs })
-      } else {
-        // Out of the window — either activity recovered or this session was
-        // never close. Forget the episode so the NEXT one warns again.
+
+      // ── Cheap discriminator BEFORE any daemon round trip ────────────────
+      // Out of the warn window the tick can neither warn nor reap, so nothing
+      // below can change an outcome for this session: leave now, before the
+      // expensive probes. Forget the episode too, so the NEXT one warns again
+      // (either activity recovered or this session was never close).
+      //
+      // Ordering, not throttling, is the fix. The idle thresholds are 1-2
+      // HOURS, but this loop used to run `isBackgroundWorkActive` — a daemon
+      // RPC (reconcileFromDaemon) — for EVERY session before it ever looked at
+      // how idle the session was. Serial, ~90ms each: at 71 live sessions the
+      // idleTimeout phase alone measured 6.0-6.6s of a 10s check(), and
+      // check() runs on the web event loop every 30s. That is what "I type and
+      // Walnut freezes for a second" was (2026-09-01: 206 of 220 event-loop
+      // stalls named health-monitor.check, worst 2.7s). The daemon pull is NOT
+      // lost: reconcilePendingBackgroundTasks() already runs it for every
+      // session, in PARALLEL, earlier in the same tick.
+      if (remainingMs > WILL_REAP_WARN_WINDOW_MS) {
         this.willReapWarnedBase.delete(session.claudeSessionId)
+        continue
       }
+
+      // ── Candidates only (inside the 5-min warn window): expensive probes ──
+      // Check if process is actually alive before spending time on idle check.
+      if (!await cachedIsAlive(session)) continue
+
+      // Skip sessions running a dynamic workflow / background subagents — they can run
+      // for many minutes (up to the CLI's 10-min bg-wait ceiling) with no main-turn
+      // output, but the session is busy, not idle. Killing it would abort the workflow.
+      // L2: PULLs the daemon-authoritative task state and reconciles any lost-terminal event
+      // first, so a wedged session self-heals on this tick (see reconcileFromDaemon).
+      // Bounded (see probeWithTimeout): on timeout assume ACTIVE. The false branch
+      // of this check leads to killing the session, so an unknown answer must never
+      // be read as "idle" — that would reap a live workflow because a host was slow.
+      if (await probeWithTimeout(
+        runner?.isBackgroundWorkActive?.(session.claudeSessionId) ?? false, true,
+        'isBackgroundWorkActive', session.claudeSessionId,
+      )) {
+        log.session.debug('health monitor: skipping idle check — background work active', {
+          sessionId: session.claudeSessionId, taskId: session.taskId,
+        })
+        continue
+      }
+
+      // Warning is emitted only AFTER every exemption above, so a session any
+      // of them spares is never announced as a reap candidate.
+      this.emitWillReap(session, { remainingMs, idleDurationMs, idleTimeoutMs, episodeBaseMs })
 
       if (idleDurationMs < idleTimeoutMs) continue
 
