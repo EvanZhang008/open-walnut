@@ -1,53 +1,48 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// These tests mock the QMD lane (memoryNotesSearch) by name; search v2 went
-// default-ON (f395723a), which routes prefetch elsewhere. Pin the flag so the
-// QMD path stays covered until Phase 4 retires it.
-process.env.WALNUT_SEARCH_V2 = '0';
+const mocks = vi.hoisted(() => ({ searchV2Lane: vi.fn() }));
 
-vi.mock('../../src/core/memory-search.js', () => ({
-  memoryNotesSearch: vi.fn(),
+vi.mock('../../src/core/search/wiring.js', () => ({
+  searchV2Lane: mocks.searchV2Lane,
+  isSearchV2Enabled: () => true,
 }));
 
 import { buildSkillPrefetchHint } from '../../src/agent/skill-prefetch.js';
-import { memoryNotesSearch } from '../../src/core/memory-search.js';
 
-const mockSearch = vi.mocked(memoryNotesSearch);
+const mockSearch = mocks.searchV2Lane;
 
 beforeEach(() => {
   mockSearch.mockReset();
 });
 
-const result = (filepath: string) => ({
-  filepath,
+/** One skill-kind index hit; `ref` is the absolute file path. */
+const result = (ref: string) => ({
+  kind: 'skill',
+  ref,
   title: '',
-  snippet: '',
-  score: 0.5,
-  finalScore: 0.6,
-  source: 'memory_skill',
-  collection: 'skill',
+  text: '',
+  score: 0.6,
+  components: { coverage: 1, cosine: 0 },
+  semantic: 'off',
 });
 
 describe('buildSkillPrefetchHint', () => {
   it('returns one hint line with skill names from SKILL.md paths', async () => {
     mockSearch.mockResolvedValue([
       result('/home/u/.open-walnut/skills/finance/tax-filing/SKILL.md'),
-      result('/home/u/.open-walnut/skills/eks-oncall/SKILL.md'),
+      result('/home/u/.open-walnut/skills/team-oncall/SKILL.md'),
     ]);
     const hint = await buildSkillPrefetchHint('how do I file my taxes this year?');
     expect(hint).toBe(
-      'Possibly relevant skills: tax-filing, eks-oncall — load with skill_view if applicable.',
+      'Possibly relevant skills: tax-filing, team-oncall — load with skill_view if applicable.',
     );
-    // Searches ONLY the skill collection, with over-fetch (post-filter crowding),
-    // and with rerank DISABLED: this runs on every agent turn, in the web server's
-    // event loop, purely to produce one advisory hint line. The reranker there cost
-    // seconds of first-token latency and stalled every route while it scored.
+    // Searches ONLY the skill kind, with over-fetch (post-filter crowding), and
+    // with the semantic rescore deadline at 0: this runs on every agent turn,
+    // inside the web server's event loop, purely to produce one advisory hint
+    // line. Waiting on an embedding there cost seconds of first-token latency.
     expect(mockSearch).toHaveBeenCalledWith(
-      ['how do I file my taxes this year?'],
-      ['memory_skill'],
-      12,
-      undefined,
-      { rerank: false },
+      'how do I file my taxes this year?',
+      { kinds: ['skill'], limit: 12, semanticDeadlineMs: 0 },
     );
   });
 
@@ -64,8 +59,8 @@ describe('buildSkillPrefetchHint', () => {
   });
 
   it('ignores support-file hits (references/, overview history) — SKILL.md only', async () => {
-    // The widened skill glob (**/*.md) also indexes support files. Their
-    // dirname would produce junk names ("references", "history") in the hint.
+    // The skill kind indexes every .md under skills/, support files included.
+    // Their dirname would produce junk names ("references", "history").
     mockSearch.mockResolvedValue([
       result('/s/walnut/overview/history/log.md'),
       result('/s/finance/tax-filing/references/deadlines.md'),
@@ -92,14 +87,14 @@ describe('buildSkillPrefetchHint', () => {
     expect(await buildSkillPrefetchHint('ok')).toBeNull();
     expect(await buildSkillPrefetchHint('')).toBeNull();
 
-    mockSearch.mockRejectedValue(new Error('store not ready'));
+    mockSearch.mockRejectedValue(new Error('index not ready'));
     expect(await buildSkillPrefetchHint('a long enough user message')).toBeNull();
   });
 
   it('truncates very long messages to 500 chars for the query', async () => {
     mockSearch.mockResolvedValue([]);
     await buildSkillPrefetchHint('z'.repeat(2000));
-    const [queries] = mockSearch.mock.calls[0];
-    expect((queries as string[])[0]).toHaveLength(500);
+    const [query] = mockSearch.mock.calls[0];
+    expect(query as string).toHaveLength(500);
   });
 });

@@ -1,18 +1,119 @@
 /**
  * Agent tool: memory_notes_search
- * Hybrid search across memory and notes via QMD.
+ * Hybrid search (keyword lanes + semantic rescore) over the search index.
  */
+import path from 'node:path';
 import type { ToolDefinition } from '../tools.js';
 import {
-  memoryNotesSearch,
-  type MemorySearchResult,
-} from '../../core/memory-search.js';
-import {
+  extractSnippet,
   searchSessionReferences,
   searchTaskAndSessionReferences,
 } from '../../core/search.js';
 import { listTasks } from '../../core/task-manager.js';
 import { listSessions } from '../../core/session-tracker.js';
+import { GLOBAL_SKILLS_DIR, MEMORY_DIR, NOTES_DIR } from '../../constants.js';
+
+/**
+ * One row of tool output. The shape is the tool's stable contract (it predates
+ * the single-index engine): `source`/`collection` name the logical bucket a hit
+ * came from, recovered from the file path — see classifyFileHit.
+ */
+interface SearchRow {
+  filepath: string;
+  title: string;
+  snippet: string;
+  score: number;
+  finalScore: number;
+  source: string;
+  collection: string;
+  taskId?: string;
+  sessionId?: string;
+}
+
+/** Tool source names → index doc kinds. Every memory_* collection except
+ *  skills is one v2 kind ('memory', the whole memory dir); the collection is
+ *  recovered from the path afterwards so `sources`/`path` filters still work. */
+const SOURCE_KIND: Record<string, 'memory' | 'skill' | 'note' | 'task' | 'session'> = {
+  memory_daily: 'memory', memory_topic: 'memory', memory_project: 'memory', memory_repo: 'memory',
+  memory_compaction: 'memory', memory_global: 'memory', memory_session: 'memory',
+  memory_skill: 'skill',
+  note_vault: 'note',
+  task: 'task',
+  session: 'session',
+};
+const MEMORY_DIR_SOURCE: Record<string, string> = {
+  daily: 'memory_daily', topics: 'memory_topic', projects: 'memory_project', repos: 'memory_repo',
+  compaction: 'memory_compaction', sessions: 'memory_session',
+};
+
+/** Name the tool's `source` bucket and collection-relative path of a file hit.
+ *  The bucket names are the tool's own schema (memory_daily, note_vault, …) and
+ *  stay stable; they map onto the index's five kinds. */
+function classifyFileHit(kind: 'memory' | 'skill' | 'note', absPath: string): { source: string; rel: string } {
+  if (kind === 'note') return { source: 'note_vault', rel: path.relative(NOTES_DIR, absPath) };
+  if (kind === 'skill') return { source: 'memory_skill', rel: path.relative(GLOBAL_SKILLS_DIR, absPath) };
+  const rel = path.relative(MEMORY_DIR, absPath);
+  if (rel === 'MEMORY.md') return { source: 'memory_global', rel };
+  const top = rel.split(path.sep)[0] ?? '';
+  return { source: MEMORY_DIR_SOURCE[top] ?? 'memory_topic', rel: rel.split(path.sep).slice(1).join('/') };
+}
+
+/**
+ * Index leg: sources default to all memory buckets; `path` is
+ * collection-relative. Each query runs once and a doc keeps its best score
+ * across queries (the cross-query merge).
+ */
+async function searchIndexSemantic(
+  queries: string[],
+  sources: string[] | undefined,
+  limit: number,
+  pathPrefix: string | undefined,
+): Promise<SearchRow[]> {
+  const { searchV2Lane } = await import('../../core/search/wiring.js');
+  const active = sources ?? Object.keys(SOURCE_KIND).filter((s) => s.startsWith('memory_'));
+  const wanted = new Set(active);
+  const kinds = [...new Set(active.map((s) => SOURCE_KIND[s]).filter(Boolean))];
+  if (kinds.length === 0) return [];
+
+  const best = new Map<string, SearchRow>();
+  for (const query of queries) {
+    for (const hit of await searchV2Lane(query, { kinds, limit: limit * 2 })) {
+      let result: SearchRow;
+      if (hit.kind === 'task' || hit.kind === 'session') {
+        result = {
+          // Tasks and sessions are rows, not files. `filepath` is a stable
+          // synthetic handle so a caller can dedupe hits; taskId/sessionId
+          // below are what actually opens one.
+          filepath: hit.kind === 'task' ? `task://${hit.ref}` : `session://${hit.ref}`,
+          title: hit.title,
+          snippet: extractSnippet(hit.text, query),
+          score: hit.score,
+          finalScore: hit.score,
+          source: hit.kind,
+          collection: hit.kind,
+          ...(hit.kind === 'task' ? { taskId: hit.ref } : { sessionId: hit.ref }),
+        };
+      } else {
+        const { source, rel } = classifyFileHit(hit.kind as 'memory' | 'skill' | 'note', hit.ref);
+        if (!wanted.has(source)) continue;
+        if (pathPrefix && !rel.startsWith(pathPrefix)) continue;
+        result = {
+          filepath: hit.ref,
+          title: hit.title,
+          snippet: extractSnippet(hit.text, query),
+          score: hit.score,
+          finalScore: hit.score,
+          source,
+          collection: source.replace(/^(memory|note)_/, ''),
+        };
+      }
+      const key = `${hit.kind}:${hit.ref}`;
+      const prev = best.get(key);
+      if (!prev || result.finalScore > prev.finalScore) best.set(key, result);
+    }
+  }
+  return [...best.values()].sort((a, b) => b.finalScore - a.finalScore).slice(0, limit);
+}
 
 export const memoryNotesSearchTool: ToolDefinition = {
   name: 'memory_notes_search',
@@ -111,7 +212,7 @@ The search uses keyword matching (BM25, AND logic) + vector similarity (semantic
     const wantsTask = sources?.includes('task') === true;
     const wantsSession = sources?.includes('session') === true;
 
-    const references: MemorySearchResult[] = [];
+    const references: SearchRow[] = [];
     const semanticQueries: string[] = [];
     if (wantsTask || wantsSession) {
       const [tasks, sessions] = await Promise.all([listTasks(), listSessions()]);
@@ -126,9 +227,7 @@ The search uses keyword matching (BM25, AND logic) + vector similarity (semantic
           const source = match.type === 'task' ? 'task' : 'session';
           const id = match.taskId ?? match.sessionId!;
           references.push({
-            filepath: source === 'task'
-              ? `qmd://tasks/task-${id}`
-              : `qmd://sessions/sess-${id}`,
+            filepath: source === 'task' ? `task://${id}` : `session://${id}`,
             title: match.title,
             snippet: match.snippet,
             score: match.score,
@@ -147,27 +246,21 @@ The search uses keyword matching (BM25, AND logic) + vector similarity (semantic
       semanticQueries.push(...queries);
     }
 
-    // rerank:false — the single worst offender measured on this vault: 28.7s for
-    // one call, stalling the event loop 2949ms. This tool searches ALL sources, so
-    // it feeds the reranker the most candidates of any caller. And because the
-    // agent loop runs inside the web server process, that stall is app-wide: the
-    // Personal AI answering a question froze every route for every surface (web, iOS,
-    // cloud). Quality delta was negligible (top-1 identical across 4 probes),
-    // which is the whole reason the reranker loses this trade.
-    //
-    // If a genuinely recall-critical caller ever needs the reranker back, it must
-    // first move off the server's event loop (a worker, like the QMD index
-    // worker) — not just flip this flag.
-    const semanticResults = semanticQueries.length > 0
-      ? await memoryNotesSearch(semanticQueries, sources, limit, pathPrefix, { rerank: false })
-      : [];
-    const resultKey = (result: MemorySearchResult): string =>
+    // No cross-encoder reranking on this path, ever: the agent loop runs INSIDE
+    // the web server process, so a native rerank pass stalls every route for
+    // every surface (measured 28.7s for one call, 2949ms of event-loop stall,
+    // for a top-1 that was identical without it). The index's own semantic
+    // rescore runs in a worker thread under a deadline instead.
+    const semanticResults = semanticQueries.length === 0
+      ? []
+      : await searchIndexSemantic(semanticQueries, sources, limit, pathPrefix);
+    const resultKey = (result: SearchRow): string =>
       result.taskId
         ? `task:${result.taskId}`
         : result.sessionId
           ? `session:${result.sessionId}`
           : `${result.source}:${result.filepath}`;
-    const deduped = new Map<string, MemorySearchResult>();
+    const deduped = new Map<string, SearchRow>();
     for (const result of [...references, ...semanticResults]) {
       const key = resultKey(result);
       if (!deduped.has(key)) deduped.set(key, result);

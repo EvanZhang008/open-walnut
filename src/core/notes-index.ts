@@ -10,7 +10,8 @@
  * memory-index.ts: better-sqlite3, WAL, schema-version migration.
  *
  * This file is the STORAGE PRIMITIVE only — no fs reads, no frontmatter parsing,
- * no QMD. The reconciler (notes-indexer.ts) drives writes; routes drive reads.
+ * no search index. The reconciler (notes-indexer.ts) drives writes; routes
+ * drive reads.
  */
 import Database, { type Database as DatabaseType } from 'better-sqlite3'
 import fs from 'node:fs'
@@ -445,10 +446,10 @@ export function divergentCopyGroups(): CollisionEntry[][] {
 }
 
 /** Update just the path of a note (move/rename — links key on id, survive).
- * content_hash is RESET so the follow-up reconcile doesn't hash-skip: the QMD
- * semantic doc is keyed by path, so a move must re-point it (the old path's
- * doc gets deactivated by the ENOENT reconcile). With the hash preserved, the
- * skip made moved notes vanish from semantic search until their next edit. */
+ * content_hash is RESET so the follow-up reconcile doesn't hash-skip: the
+ * indexed doc is keyed by path, so a move must re-point it (the old path's doc
+ * is removed by the ENOENT reconcile). With the hash preserved, the skip made
+ * moved notes vanish from semantic search until their next edit. */
 export function updateNotePath(fromRel: string, toRel: string): boolean {
   const d = getNotesIndexDb()
   if (!d) return false

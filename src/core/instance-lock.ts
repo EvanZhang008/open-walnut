@@ -228,7 +228,7 @@ export class ForeignDbHolderError extends Error {
  * task DB. WALNUT_IGNORE_DB_HOLDERS=1 downgrades to a logged error.
  *
  * Patience loop: during a dev:prod restart the OLD server's shutdown tail
- * (audio save, qmd close) can hold the DB for a few seconds after its port
+ * (audio save, index close) can hold the DB for a few seconds after its port
  * closed. A holder that disappears within ~15s is that — wait it out; only a
  * holder that survives every round is a genuine resident co-writer.
  */

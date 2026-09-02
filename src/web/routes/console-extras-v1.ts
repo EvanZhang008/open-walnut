@@ -2,7 +2,7 @@
  * /api/v1 console extras (additive, Wave 3) — usage detail breakdowns,
  * provider status, search-index status, plugin metadata, Life Tracker
  * timeline, and heartbeat. Semantics identical to the internal routes
- * (usage.ts / config.ts / qmd.ts / integrations.ts / timeline.ts /
+ * (usage.ts / config.ts / search-index.ts / integrations.ts / timeline.ts /
  * heartbeat.ts) — same shared functions, zero duplicated logic.
  *
  *   GET  /usage/summary | /daily | /by-source | /by-model | /by-agent
@@ -162,8 +162,8 @@ consoleExtrasV1Router.get('/config/providers', async (_req: Request, res: Respon
 consoleExtrasV1Router.get('/qmd/status', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     if (primaryOnly(res, 'The semantic search index')) return
-    const { buildQmdStatusPayload } = await import('./qmd.js')
-    res.json(await buildQmdStatusPayload())
+    const { buildSearchIndexStatusPayload } = await import('./search-index.js')
+    res.json(await buildSearchIndexStatusPayload())
   } catch (err) {
     next(err)
   }

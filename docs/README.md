@@ -15,9 +15,12 @@ must live under one of these top-level categories instead of directly under
 
 ## Investigation
 
-- [QMD search performance](investigation/qmd-search-performance/README.md) -
+- [Search performance](investigation/qmd-search-performance/README.md) -
   multilingual embedding quality, reranker latency, search races, and index
-  maintenance.
+  maintenance. Historical: it studies the third-party engine Walnut used before
+  the in-house hybrid index
+  ([`src/lib/hybrid-search/README.md`](../src/lib/hybrid-search/README.md)), and
+  it is the reasoning behind that replacement.
 - [Duplicate task rows](investigation/duplicate-task-rows/README.md) - one remote
   item owning several task rows, and the orphaned sessions left when a twin is
   deleted.

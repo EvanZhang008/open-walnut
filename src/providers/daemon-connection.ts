@@ -3325,8 +3325,8 @@ export class DaemonConnection {
       // link look stale and tore it down into a reconnect storm (2026-08-01).
       // A counter only advances when this callback actually runs, i.e. while
       // the process is awake — sleep of any length costs at most one tick.
-      // 3x instead of 2x also absorbs transient event-loop stalls at boot (QMD
-      // rebuild, session recovery) that used to cascade into mass reattach.
+      // 3x instead of 2x also absorbs transient event-loop stalls at boot
+      // (index rebuild, session recovery) that used to cascade into mass reattach.
       if (this._pongPending) {
         this._missedPongs += 1
         if (this._missedPongs >= 3) {

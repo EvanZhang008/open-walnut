@@ -228,7 +228,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | GET | `/api/v1/files/recent-dirs` | Union of session + "@"-picker recents |
 | GET | `/api/v1/usage/summary\|daily\|by-source\|by-model\|by-agent\|recent\|pricing` | Usage detail breakdowns (501 on REPLICA; pricing works everywhere) |
 | GET | `/api/v1/config/providers` | Provider readiness, key hints stripped |
-| GET | `/api/v1/qmd/status` | Semantic search index health (501 on REPLICA) |
+| GET | `/api/v1/qmd/status` | Search index health, frozen path name (501 on REPLICA) |
 | GET | `/api/v1/integrations` | Registered plugin display metadata |
 | GET | `/api/v1/integrations/settings` | Plugin settings metadata, secrets masked |
 | GET | `/api/v1/timeline?date=` | Life Tracker day timeline (501 on REPLICA) |
@@ -1405,9 +1405,12 @@ Class A (the REPLICA runs its own Personal AI). `agentId` as usual (absent →
   `key_hint` (last-4 of a key) **stripped**: even a key fragment doesn't
   belong at the paired-device trust level. Works on both boxes; the replica
   describes its own credentials.
-- `GET /api/v1/qmd/status` → semantic-search index health (model, store
-  stats, state machine, progress). **REPLICA: 501** (no QMD store on the
-  companion). The maintenance actions (download/reindex) stay desktop-only.
+- `GET /api/v1/qmd/status` → search index health (model, per-kind doc counts,
+  state machine, progress). **REPLICA: 501** (the companion holds no index).
+  The maintenance actions (download/reindex) stay desktop-only. The path keeps
+  its old name because it is frozen and the phone reads it; the payload is now
+  built from the single hybrid index (`src/web/routes/search-index.ts`), whose
+  canonical route is `/api/search-index/status`.
 - `GET /api/v1/integrations` → `[{ id, name, description, badge, … }]`;
   `GET /api/v1/integrations/settings` → per-plugin configSchema + uiHints +
   current values with secret-ish keys masked (`••••••`). Class A.

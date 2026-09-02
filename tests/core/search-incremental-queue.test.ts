@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createQmdIncrementalQueue } from '../../src/core/qmd-incremental-queue.js';
+import { createIncrementalQueue } from '../../src/core/search/incremental-queue.js';
 
-describe('QMD incremental retry queue', () => {
+describe('search incremental retry queue', () => {
   it('retries a failed batch without losing it', async () => {
     vi.useFakeTimers();
     try {
       const dispatch = vi.fn()
         .mockRejectedValueOnce(new Error('worker failed'))
         .mockResolvedValueOnce(undefined);
-      const queue = createQmdIncrementalQueue({
+      const queue = createIncrementalQueue({
         debounceMs: 10,
         retryBaseMs: 20,
         retryMaxMs: 20,
@@ -39,7 +39,7 @@ describe('QMD incremental retry queue', () => {
       const dispatch = vi.fn()
         .mockRejectedValueOnce(deferred)
         .mockResolvedValueOnce(undefined);
-      const queue = createQmdIncrementalQueue({
+      const queue = createIncrementalQueue({
         debounceMs: 10,
         retryBaseMs: 20,
         retryMaxMs: 20,
@@ -72,7 +72,7 @@ describe('QMD incremental retry queue', () => {
     const dispatch = vi.fn()
       .mockImplementationOnce(() => first)
       .mockResolvedValueOnce(undefined);
-    const queue = createQmdIncrementalQueue({
+    const queue = createIncrementalQueue({
       debounceMs: 0,
       retryBaseMs: 0,
       retryMaxMs: 0,
@@ -97,7 +97,7 @@ describe('QMD incremental retry queue', () => {
     const dispatch = vi.fn()
       .mockImplementationOnce(() => first)
       .mockResolvedValueOnce(undefined);
-    const queue = createQmdIncrementalQueue({
+    const queue = createIncrementalQueue({
       debounceMs: 0,
       retryBaseMs: 0,
       retryMaxMs: 0,
@@ -120,7 +120,7 @@ describe('QMD incremental retry queue', () => {
   it('coalesces each ID to its latest operation for reporting', async () => {
     const onSuccess = vi.fn();
     const dispatch = vi.fn(async () => undefined);
-    const queue = createQmdIncrementalQueue({
+    const queue = createIncrementalQueue({
       debounceMs: 60_000,
       dispatch,
       onSuccess,
@@ -144,7 +144,7 @@ describe('QMD incremental retry queue', () => {
     vi.useFakeTimers();
     try {
       const dispatch = vi.fn(async () => undefined);
-      const queue = createQmdIncrementalQueue({
+      const queue = createIncrementalQueue({
         debounceMs: 10,
         minIntervalMs: 1_000,
         dispatch,
@@ -175,7 +175,7 @@ describe('QMD incremental retry queue', () => {
     vi.useFakeTimers();
     try {
       const dispatch = vi.fn(async () => undefined);
-      const queue = createQmdIncrementalQueue({
+      const queue = createIncrementalQueue({
         debounceMs: 10,
         minIntervalMs: 1_000,
         dispatch,
@@ -207,7 +207,7 @@ describe('QMD incremental retry queue', () => {
     vi.useFakeTimers();
     try {
       const dispatch = vi.fn(async () => undefined);
-      const queue = createQmdIncrementalQueue({
+      const queue = createIncrementalQueue({
         debounceMs: 10,
         minIntervalMs: 60_000,
         dispatch,

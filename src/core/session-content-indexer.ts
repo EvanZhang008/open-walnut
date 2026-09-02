@@ -1,23 +1,24 @@
 /**
  * Session content indexer — turns parsed session history into filtered,
- * search-friendly text for QMD embedding.
+ * search-friendly text for the search index.
  *
  * WHY a separate module: the JSONL→text filtering is pure and noisy to get
  * right (code blocks, tool payloads, base64, size caps). Keeping it out of
- * qmd-session-sync.ts makes it unit-testable in isolation. (It is also the
+ * the session serializer makes it unit-testable in isolation. (It is also the
  * natural home for a future daemon-side filter that would let remote sessions
  * be indexed without shipping their full multi-MB JSONL over the tunnel — a
  * 14MB log filters down to ~50KB. For now only local sessions are indexed.)
  *
- * Output shape (one virtual doc per session, QMD chunks on `## ` headings):
+ * Output shape (one doc per session; the indexer chunks on `## ` headings):
  *
  *   ## Turn 1 (2026-05-05 10:00)
  *   User: ...
  *   Assistant: ...
  *   Tools: Bash, Read
  *
- * The gist block and metadata are prepended by the caller (qmd-session-sync),
- * not here — this module only handles the conversation body.
+ * The gist block and metadata are prepended by the caller
+ * (src/core/search/serializers.ts), not here — this module only handles the
+ * conversation body.
  */
 import type { SessionHistoryMessage } from './session-history.js';
 

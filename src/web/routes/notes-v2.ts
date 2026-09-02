@@ -4,7 +4,7 @@
  *
  * Structure (search / backlinks / list / tags) is served from a rebuildable
  * structural sidecar (notes-index.sqlite) instead of O(n) full-vault file scans.
- * The semantic leg of search comes from the existing QMD store (memory-search.ts).
+ * The semantic leg of search comes from the hybrid search index (search/wiring.ts).
  * Files on disk stay the source of truth; the sidecar reconciles on change.
  */
 
@@ -18,9 +18,7 @@ import { computeContentHash } from '../../utils/file-ops.js'
 import { withFileLock } from '../../utils/file-lock.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
-import { memoryNotesSearch } from '../../core/memory-search.js'
 import { timed } from '../../core/observability/metrics.js'
-import { isQmdBackgroundIndexRunning } from '../../core/qmd-background-indexer.js'
 import { getConfig } from '../../core/config-manager.js'
 import {
   parseFrontmatter,
@@ -85,7 +83,7 @@ export class NotesOpError extends Error {
 // Honors the DO-NOT-TOUCH on server.ts: we don't wire boot there. The index
 // initializes off-loop on first router use; the in-process fast path reconciles
 // via the existing NOTES_UPDATED bus event (the fs.watch catch-all lives in
-// qmd-watcher.ts). interest-filtered so we don't wake on unrelated events.
+// notes-watcher.ts). interest-filtered so we don't wake on unrelated events.
 let indexBootstrapped = false
 export function ensureIndexBootstrap(): void {
   if (indexBootstrapped) return
@@ -766,7 +764,7 @@ notesV2Router.delete('/folder/*path', async (req: Request, res: Response, next: 
 // POST /api/notes-v2/move — rename/move only. updateWikiLinksInAll REMOVED:
 // id-keyed links survive a rename because the edge keys on the target's
 // frontmatter id, not the basename. Move = file rename + one-row path update
-// in the index + one QMD virtual-path remap (handled by reconcile of both paths).
+// in the index + one search-index ref remap (handled by reconcile of both paths).
 /**
  * Move/rename a note or attachment. Shared by this router's POST /move and
  * POST /api/v1/notes/move — throws NotesOpError so each edge maps its shape.
@@ -817,8 +815,8 @@ export async function moveNote(from: unknown, to: unknown): Promise<{ ok: true }
   if (!isAttachment) {
     // Fast path: a one-row path update keeps the id (and all edges) intact.
     updateNotePath(fromRel, toRel)
-    // Then reconcile both paths: the old path's QMD doc deactivates (file gone),
-    // the new path indexes (and re-points the QMD virtual path).
+    // Then reconcile both paths: the old path's index doc is removed (file
+    // gone), the new path indexes.
     scheduleNotesIndexUpdate(fromRel)
     scheduleNotesIndexUpdate(toRel)
   }
@@ -1042,12 +1040,12 @@ export function makeSnippet(
 }
 
 /**
- * Convert a QMD absolute filepath → vault-relative → note id (case-insensitive).
+ * Convert an absolute note filepath → vault-relative → note id (case-insensitive).
  * BLOCKING correctness: the semantic leg returns an ABSOLUTE filepath; the index
  * stores vault-relative paths. Without this, every both-leg note double-lists.
  * Falls back to the relPath as the dedupe key only if the note is unindexed.
  */
-function idFromQmdPath(filepath: string): string {
+function idFromAbsPath(filepath: string): string {
   let rel = path.relative(NOTES_DIR, filepath).replace(/\\/g, '/')
   if (rel.startsWith('..')) rel = filepath.replace(/\\/g, '/') // not under vault
   const id = findNoteIdByRelPath(rel)
@@ -1061,7 +1059,7 @@ function findNoteIdByRelPath(rel: string): string | undefined {
 const BIG = 1_000_000
 
 /**
- * Semantic-only relevance floor + cap. QMD happily returns low-score noise
+ * Semantic-only relevance floor + cap. The index happily returns low-score noise
  * ("Shoping", "Post office" for query "dental") which made search feel broken.
  * We keep semantic hits that either (a) ALSO matched as a string (matchType
  * 'both', no floor) or (b) clear the floor; and we cap how many semantic-ONLY
@@ -1083,22 +1081,6 @@ const FOLDER_ONLY_CAP = 5
  * legit "find my scanned document" case working without the flooding.
  */
 const ATTACHMENT_CAP = 3
-
-/**
- * Interactive-search relevance floor for the RRF-only (rerank-disabled) semantic
- * leg. Without the local reranker QMD scores a hit as `1 / rrfRank`, so the
- * [0,1] cosine-like scale SEMANTIC_FLOOR assumes no longer applies: rank 1 =
- * 1.0, rank 2 = 0.5, rank 3 = 0.33 … Reusing 0.45 here would keep only the top
- * TWO semantic rows. 1/6 keeps the top six — the same recall the reranked path
- * produced — while still dropping the long RRF tail.
- *
- * Why rerank is off at all: the reranker is a local llama.cpp cross-encoder over
- * up to 40 candidate chunks. Cold (uncached query) that costs 5–8s of the ~8s
- * total request, and it runs on EVERY keystroke-debounced search. `/api/search`
- * already passes `rerank: false` for exactly this reason; the notes panel was
- * the last interactive surface still paying for it.
- */
-const SEMANTIC_RRF_FLOOR = 1 / 6
 
 /**
  * Same job for the search-v2 leg (WALNUT_SEARCH_V2=1), different scale: the v2
@@ -1163,17 +1145,16 @@ async function performNotesSearchInner(opts: {
     }
 
     // Run both legs; allSettled so one failing never zeroes the other.
-    // Cloud companion has no QMD store — the semantic leg would lazily init
-    // the embedding model (hundreds of MB, pins the small instance). String/FTS
-    // search is the cloud answer (same gate as initQmdStores in server.ts).
+    // Cloud companion has no index — the semantic leg would lazily init the
+    // embedding model (hundreds of MB, pins the small instance). String/FTS
+    // search is the cloud answer (same gate as the wiring in server.ts).
     const wantString = mode === 'hybrid' || mode === 'string'
-    const wantSemantic = !CLOUD_MODE && (mode === 'hybrid' || mode === 'semantic')
-    const v2Active = process.env.WALNUT_SEARCH_V2 !== '0'
+    const wantSemantic = !CLOUD_MODE
       && process.env.WALNUT_DISABLE_SEARCH !== '1'
-      && !CLOUD_MODE
+      && (mode === 'hybrid' || mode === 'semantic')
 
-    // The v2 leg maps to the shape the merge loop consumes (filepath/score/
-    // snippet/title — same fields the QMD results carry).
+    // Maps index hits to the shape the merge loop consumes (filepath/score/
+    // snippet/title).
     const v2SemanticLeg = async () => {
       const { searchV2Lane } = await import('../../core/search/wiring.js')
       const { extractSnippet } = await import('../../core/search.js')
@@ -1198,16 +1179,7 @@ async function performNotesSearchInner(opts: {
 
     const [stringSettled, semanticSettled] = await Promise.allSettled([
       wantString ? Promise.resolve(stringSearch(q, limit * 2, { excludeFolders })) : Promise.resolve([]),
-      // rerank:false + overfetch 1 — see SEMANTIC_RRF_FLOOR. This is the
-      // difference between a ~60ms and a ~8s notes search.
-      wantSemantic
-        ? (v2Active
-          ? v2SemanticLeg()
-          : memoryNotesSearch(q, ['note_vault'], limit * 2, undefined, {
-              rerank: false,
-              overfetchMultiplier: 1,
-            }))
-        : Promise.resolve([]),
+      wantSemantic ? v2SemanticLeg() : Promise.resolve([]),
     ])
 
     const byId = new Map<string, SearchResultRow>()
@@ -1250,10 +1222,10 @@ async function performNotesSearchInner(opts: {
       // semantic opinion can lift a body hit to the top of the body band, but
       // can never outrank deliberate authored structure.
       const toSemanticBand = (raw: number): number =>
-        v2Active ? 0.55 + 0.35 * Math.max(0, Math.min(1, raw)) : raw
+        0.55 + 0.35 * Math.max(0, Math.min(1, raw))
       for (const h of semanticSettled.value) {
-        // Folder exclusion for the semantic leg: QMD returns absolute paths,
-        // so filter on the vault-relative form (JS mirror of the SQL filter).
+        // Folder exclusion for the semantic leg: the index stores absolute
+        // paths, so filter on the vault-relative form (JS mirror of the SQL filter).
         const relForFilter = path.relative(NOTES_DIR, h.filepath).replace(/\\/g, '/')
         if (isPathExcluded(relForFilter, excludeFolders)) continue
         // v2 bands from COSINE, not the leg's additive score: the additive mix
@@ -1261,9 +1233,9 @@ async function performNotesSearchInner(opts: {
         // noise doc containing all query words rode it to the 0.85 ceiling as
         // a fake 'both'), while a doc with no cosine at all carries no
         // semantic opinion worth merging.
-        const sem = v2Active ? (h as { cos?: number }).cos : h.score
+        const sem = h.cos
         if (sem === undefined) continue
-        const id = idFromQmdPath(h.filepath)
+        const id = idFromAbsPath(h.filepath)
         const existing = byId.get(id)
         if (existing) {
           // Already a string hit → promote to 'both' (no floor — string match
@@ -1273,7 +1245,7 @@ async function performNotesSearchInner(opts: {
           if (!existing.snippet.includes('<mark>') && h.snippet) {
             existing.snippet = highlightTokens(cleanSnippetText(h.snippet), snippetTokens(q), q)
           }
-        } else if (sem >= (v2Active ? SEARCH_V2_NOTE_COS_FLOOR : SEMANTIC_RRF_FLOOR)) {
+        } else if (sem >= SEARCH_V2_NOTE_COS_FLOOR) {
           // Semantic-only: keep only above the relevance floor (drops noise).
           byId.set(id, {
             id,
@@ -1357,10 +1329,10 @@ async function performNotesSearchInner(opts: {
     let semanticOnly = 0
     let folderOnly = 0
     let attachments = 0
-    // "Strong semantic" under the two scales: QMD cosine-like ≥0.5; v2 after
+    // "Strong semantic" on the banded scale: after
     // toSemanticBand ≥0.70 (cosine ≥0.43). The band floor is ~0.67, so the old
     // 0.5 would exempt EVERY v2 semantic hit from the folder-only cap.
-    const strongSemantic = v2Active ? 0.7 : 0.5
+    const strongSemantic = 0.7
     for (const r of results) {
       if (r.matchType === 'semantic') {
         if (semanticOnly >= SEMANTIC_ONLY_CAP) continue
@@ -1771,13 +1743,16 @@ notesV2Router.get('/index/status', async (_req: Request, res: Response, next: Ne
     ensureIndexBootstrap()
     const lastRebuild = getIndexMeta('last_full_rebuild')
     let embedState: 'idle' | 'embedding' | 'unavailable' = 'idle'
-    if (CLOUD_MODE) {
-      // No QMD store on the companion — don't lazy-init it just to report status.
+    if (CLOUD_MODE || process.env.WALNUT_DISABLE_SEARCH === '1') {
+      // No search index on the companion (or when indexing is off) — don't
+      // lazy-init one just to report status.
       embedState = 'unavailable'
     } else {
-      // Never open SQLite from a status request. During a worker pass that can
-      // synchronously wait on the writer lock and freeze every HTTP request.
-      embedState = isQmdBackgroundIndexRunning() ? 'embedding' : 'idle'
+      // Read the wiring's in-memory backfill flag; never open SQLite from a
+      // status request (that can synchronously wait on the writer lock and
+      // freeze every HTTP request).
+      const { getSearchIndexStatus } = await import('../../core/search/wiring.js')
+      embedState = getSearchIndexStatus().backfillRunning ? 'embedding' : 'idle'
     }
     res.json({
       docCount: docCount(),

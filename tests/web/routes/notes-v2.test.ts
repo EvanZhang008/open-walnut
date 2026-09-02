@@ -5,38 +5,19 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants('notes-v2-test'));
 
-// The semantic leg (QMD) is not under test here — stub memoryNotesSearch so the
+// The semantic leg is not under test here — stub the whole index lane so the
 // hybrid search exercises only the structural (string) leg deterministically.
-vi.mock('../../../src/core/memory-search.js', () => ({
-  memoryNotesSearch: vi.fn(async () => []),
-}));
-
-// The reconciler drives the QMD semantic store per changed file (best-effort).
-// Stub the store so reconcile never opens a real notes-search.sqlite / loads an
-// embedding model — that async file I/O would otherwise race test teardown and is
-// not under test here (the structural sidecar is what these tests assert).
-vi.mock('../../../src/core/qmd-store.js', () => ({
-  DEFAULT_QMD_MODEL: 'test-model',
-  embedQmdStore: vi.fn(async (
-    store: { embed: (options: unknown) => Promise<unknown> },
-    _label: string,
-    options: unknown,
-  ) => store.embed(options)),
-  getNotesStore: vi.fn(async () => ({
-    internal: {
-      findActiveDocument: () => undefined,
-      insertContent: () => {},
-      insertDocument: () => {},
-      updateDocumentTitle: () => {},
-      updateDocument: () => {},
-      deactivateDocument: () => {},
-      getActiveDocumentPaths: () => [],
-      cleanupOrphanedVectors: () => 0,
-      deleteInactiveDocuments: () => 0,
-      cleanupOrphanedContent: () => 0,
-    },
-    embed: async () => {},
-    getStatus: async () => ({ needsEmbedding: 0 }),
+// It also keeps the reconciler (which upserts each changed note into the index,
+// best-effort) from opening a real search.sqlite or loading an embedding model:
+// that async file I/O would otherwise race test teardown.
+vi.mock('../../../src/core/search/wiring.js', () => ({
+  isSearchV2Enabled: () => true,
+  searchV2Lane: vi.fn(async () => []),
+  upsertSearchV2File: vi.fn(async () => {}),
+  sweepSearchV2Files: vi.fn(async () => ({ changed: 0, removed: 0 })),
+  getSearchIndexStatus: vi.fn(() => ({
+    enabled: true, model: null, docs: 0, byKind: {}, vectors: 0,
+    backfillRunning: false, error: null,
   })),
 }));
 
@@ -111,8 +92,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await quiesceIndex();
-  // maxRetries: the off-loop indexer can still be flushing a sqlite/QMD write
-  // when teardown starts; a bare rm intermittently hits ENOTEMPTY (flake).
+  // maxRetries: the off-loop indexer can still be flushing a sqlite write when
+  // teardown starts; a bare rm intermittently hits ENOTEMPTY (flake).
   await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 

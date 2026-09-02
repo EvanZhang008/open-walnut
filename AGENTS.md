@@ -278,7 +278,7 @@ death).
 | iOS app | `ios-native/` (xcodegen; `project.yml`) | frozen contract [API v1](./docs/reference/api-v1.md) |
 | Cloud companion | `src/web/ws/bridge-registry.ts`, `scripts/cloud/setup.sh` | infra: `infra/` (CDK); deploy = bundle→S3→SSM |
 | Voice input (STT) | `src/core/stt/`, `src/web/routes/stt-v1.ts` | routes primary/bridge/openai by reachability |
-| Memory & search | `src/core/memory-*.ts`, `src/core/qmd-*.ts` | [QMD search and indexing](./docs/investigation/qmd-search-performance/README.md) |
+| Memory & search | `src/core/memory-*.ts`, `src/core/search/`, `src/lib/hybrid-search/` | [hybrid-search README](./src/lib/hybrid-search/README.md) |
 | Event bus | `src/core/event-bus.ts` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Subagents | `src/providers/` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Cron | `src/core/cron/` | [ARCHITECTURE.md](./ARCHITECTURE.md) |

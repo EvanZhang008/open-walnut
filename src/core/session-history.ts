@@ -1672,7 +1672,7 @@ function seedIncrementalState(
 
 /**
  * Tail-bounded history read for consumers that only need RECENT messages
- * (QMD content indexing keeps ≤50 KB; the phone transcript sweep keeps the
+ * (search content indexing keeps ≤50 KB; the phone transcript sweep keeps the
  * last 100 messages). For files ≤ maxTailBytes this is a plain
  * readSessionHistory (shares its cache + incremental path). For whales it
  * range-reads ONLY the last maxTailBytes and parses that window — a 233 MB

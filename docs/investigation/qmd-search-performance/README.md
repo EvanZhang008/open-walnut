@@ -1,6 +1,13 @@
 # QMD Search Performance Study
 
-Status: implemented and verified on 2026-07-19.
+Status: implemented and verified on 2026-07-19. **Historical as of 2026-09-01:** the third-party
+engine studied here (`@tobilu/qmd`) has been removed. Its three unfixable limits (a hardcoded
+porter/unicode61 tokenizer, keyword lanes that annihilate on a single missing term, and `1/rank`
+scores that carry no word coverage) are exactly what this study kept working around, and they are
+why Walnut now runs its own index: [`src/lib/hybrid-search/README.md`](../../../src/lib/hybrid-search/README.md).
+Everything below still describes real product behavior (the split interactive/agent search, the
+structured identifier lane, serialized index mutations), so treat it as the reasoning trail, not as
+a map of today's code.
 
 This directory records the investigation that changed Walnut's task and session
 search from a slow, race-prone interaction into a split search architecture:

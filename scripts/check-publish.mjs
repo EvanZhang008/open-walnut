@@ -26,11 +26,9 @@ const required = [
   // is where it has to be caught (scripts/ship-builtin-plugins.mjs writes these).
   'dist/integrations/walnut-time/manifest.json',
   'dist/integrations/walnut-time/dist/web.mjs',
-  'dist/workers/qmd-index-worker.js',
   'dist/daemon-binaries/acp-worker.js', // plain JS bundle (kept; daemon-* binaries excluded)
   'patches',
   'scripts/postinstall.mjs',
-  'scripts/patch-qmd.mjs',
 ];
 
 const missing = required.filter((rel) => !existsSync(join(root, rel)));

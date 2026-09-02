@@ -1,7 +1,8 @@
 /**
- * WALNUT_SEARCH_V2=1 end-to-end through the real /api/search route: the three
- * searchInner legs must serve from the hybrid-search index while the
- * reference lane keeps running in front of it (exact-id short-circuit).
+ * End-to-end through the real /api/search route against a REAL index (no lane
+ * mocks): the three searchInner legs must serve from the hybrid-search index
+ * while the reference lane keeps running in front of it (exact-id
+ * short-circuit).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -26,11 +27,7 @@ function createApp() {
   return app;
 }
 
-let previousFlag: string | undefined;
-
 beforeEach(async () => {
-  previousFlag = process.env.WALNUT_SEARCH_V2;
-  process.env.WALNUT_SEARCH_V2 = '1';
   // Keyword-only: don't spawn a real embed worker in route tests.
   process.env.WALNUT_SEARCH_V2_SEMANTIC = '0';
   _resetForTesting();
@@ -39,16 +36,14 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  if (previousFlag === undefined) delete process.env.WALNUT_SEARCH_V2;
-  else process.env.WALNUT_SEARCH_V2 = previousFlag;
   delete process.env.WALNUT_SEARCH_V2_SEMANTIC;
   resetSearchV2IndexForTests();
   _resetForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
-describe('GET /api/search with WALNUT_SEARCH_V2=1', () => {
-  it('serves task results from the v2 index, subword matching included', async () => {
+describe('GET /api/search over the hybrid index', () => {
+  it('serves task results from the index, subword matching included', async () => {
     const { task } = await addTask({ title: 'Fix AcmeEventOperator reconciler' });
     getSearchV2Index().upsert({
       kind: 'task',
@@ -70,7 +65,7 @@ describe('GET /api/search with WALNUT_SEARCH_V2=1', () => {
 
   it('keeps the exact-reference lane in front of the index', async () => {
     const { task } = await addTask({ title: 'Reference lane stays authoritative' });
-    // NOT in the v2 index at all — an exact id must still resolve.
+    // NOT in the index at all — an exact id must still resolve.
     const res = await request(createApp()).get(`/api/search?q=${task.id}`);
     expect(res.status).toBe(200);
     expect(res.body.results[0]?.taskId).toBe(task.id);

@@ -37,7 +37,13 @@ const EXCLUDED_FILE_RE = [
 /** Key prefix the sqlite snapshots ride under inside the backup. */
 export const SQLITE_SNAPSHOT_PREFIX = '.sqlite-snapshots';
 
-const REBUILDABLE_SQLITE_RE = /(-search|-index)\.sqlite$/;
+/**
+ * Rebuildable index DBs: never worth backing up, because a reindex from the
+ * canonical stores reproduces them. `search.sqlite` (the hybrid index) has no
+ * prefix, so it needs its own alternative — matching only `-search` used to
+ * quietly ship a multi-hundred-MB derived index in every backup.
+ */
+const REBUILDABLE_SQLITE_RE = /(^|\/)(search|.*-search|.*-index)\.sqlite$/;
 
 /**
  * Canonical sqlite DBs — live-written, so raw copies can be torn mid-write.

@@ -1,36 +1,45 @@
 /**
  * Category 7: Integration Tests (Cross-Subsystem)
  *
- * Tests full end-to-end flows across QMD search, memory tools, working memory,
- * and the HTTP API layer.
+ * Tests full end-to-end flows across the search index, memory tools, working
+ * memory, and the HTTP API layer.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { vi } from 'vitest';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import type { Server as HttpServer } from 'node:http';
 import { createMockConstants } from '../helpers/mock-constants.js';
 import {
   seedDailyLog,
   seedTopicFile,
-  seedProjectMemory,
   seedGlobalMemory,
-  seedWorkingMemory,
   daysAgoStr,
 } from '../helpers/memory-v2-seeders.js';
-import { waitForSearchResults } from '../helpers/qmd-wait.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-import { WALNUT_HOME } from '../../src/constants.js';
+import { WALNUT_HOME, workingMemoryFile } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
-import { memoryNotesSearch } from '../../src/core/memory-search.js';
 import { memoryNotesSearchTool } from '../../src/agent/tools/memory-notes-search-tool.js';
+import {
+  resetSearchV2IndexForTests,
+  sweepSearchV2Files,
+} from '../../src/core/search/wiring.js';
 
 let server: HttpServer;
 let port: number;
 
 function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`;
+}
+
+/** Run the tool and parse its JSON rows ([] for "No results found."). */
+async function searchRows(
+  params: Record<string, unknown>,
+): Promise<Array<{ source: string; title: string; snippet: string; filepath: string }>> {
+  const raw = await memoryNotesSearchTool.execute(params);
+  return raw === 'No results found.' ? [] : JSON.parse(raw as string);
 }
 
 beforeAll(async () => {
@@ -52,31 +61,41 @@ beforeAll(async () => {
     WALNUT_HOME,
     'Global memory unique marker xylophone_quantum_entanglement_test_marker for integration tests.',
   );
-  seedWorkingMemory(
-    WALNUT_HOME,
-    '# Active Focus\nRunning memory v2 integration tests with unique_wm_marker_12345.\n# User Requests\n_empty_\n# Decisions & Rationale\n_empty_\n# Struggles & Breakthroughs\n_empty_\n# Session Status\n_empty_\n# Open Threads\n_empty_\n# Learnings\n_empty_',
+  // Working memory is per-conversation and lives under conversations/ — outside
+  // every indexed root. Seeded here so 7.3 can prove it stays out of search.
+  const wmPath = workingMemoryFile('general', 'conv-memory-v2-integration');
+  await fs.mkdir(path.dirname(wmPath), { recursive: true });
+  await fs.writeFile(
+    wmPath,
+    '# Active Focus\nRunning memory v2 integration tests with unique_wm_marker_12345.\n',
+    'utf-8',
   );
 
   server = await startServer({ port: 0, dev: true });
   const addr = server.address();
   port = typeof addr === 'object' && addr ? addr.port : 0;
 
-  // Wait for QMD indexing
-  await waitForSearchResults(
-    () => memoryNotesSearch('Kubernetes pod autoscaling'),
-    { maxWaitMs: 60000, pollIntervalMs: 2000 },
-  );
+  // Index the seeded files now rather than waiting out the server's delayed
+  // startup backfill — the sweep upserts inline, so the queries below are
+  // deterministic.
+  await sweepSearchV2Files();
 }, 120000);
 
 afterAll(async () => {
   await stopServer();
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  resetSearchV2IndexForTests();
+  // Teardown only: the just-stopped server can still flush a WAL/log file
+  // into the temp home while we unlink it (ENOTEMPTY under load). Retry,
+  // then let the OS reap the temp dir rather than failing a green suite.
+  await fs
+    .rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+    .catch(() => {});
 }, 30000);
 
 describe('Category 7: Integration Tests', () => {
-  // ── 7.1 QMD Search Through HTTP API ──
+  // ── 7.1 Index Search Through HTTP API ──
 
-  it('7.1: QMD search works through HTTP API', async () => {
+  it('7.1: index search works through HTTP API', async () => {
     const res = await fetch(apiUrl('/api/search?q=Kubernetes&types=memory'));
     expect(res.status).toBe(200);
 
@@ -97,7 +116,7 @@ describe('Category 7: Integration Tests', () => {
 
   it('7.2: full pipeline from seed to search to get', async () => {
     // Step 1: Search for the kubernetes topic
-    const searchResults = await memoryNotesSearch('pod autoscaling');
+    const searchResults = await searchRows({ queries: ['pod autoscaling'] });
     expect(searchResults.length).toBeGreaterThan(0);
 
     // Step 2: Verify the search result contains the kubernetes topic
@@ -110,37 +129,38 @@ describe('Category 7: Integration Tests', () => {
     expect(topResult!.snippet).toMatch(/Kubernetes|pod|autoscaling|HPA|VPA/i);
   });
 
-  // ── 7.3 Working Memory NOT Visible in QMD Search ──
+  // ── 7.3 Working Memory NOT Visible in Search ──
 
-  it('7.3: working memory is NOT indexed by QMD search', async () => {
-    // Search for the unique marker in working memory
-    const results = await memoryNotesSearch('unique_wm_marker_12345');
+  it('7.3: working memory is NOT indexed', async () => {
+    // The volatile scratchpad lives under conversations/, which is not one of
+    // the indexed roots (memory/, notes/, skills/) — so it can never leak into
+    // recall no matter what the user typed into it.
+    const results = await searchRows({ queries: ['unique_wm_marker_12345'] });
 
-    // Working memory file lives at memory/working-memory.md which is NOT
-    // under any QMD collection path (daily/, topics/, etc.)
-    // Check that no result snippet contains the unique marker (filepath may be a qmd:// URI)
     const wmResult = results.find((r) =>
       r.snippet.includes('unique_wm_marker_12345'),
     );
     expect(wmResult).toBeUndefined();
   });
 
-  // ── 7.4 Global MEMORY.md in QMD Search ──
+  // ── 7.4 Global MEMORY.md in Search ──
 
-  it('7.4: global MEMORY.md appears in QMD search as source=global', async () => {
+  it('7.4: global MEMORY.md appears in search as source=memory_global', async () => {
     // Search for the unique marker in global memory
-    const results = await memoryNotesSearch(
-      'xylophone_quantum_entanglement_test_marker',
-      ['memory_global'],
-    );
+    const results = await searchRows({
+      queries: ['xylophone_quantum_entanglement_test_marker'],
+      sources: ['memory_global'],
+    });
 
     expect(results.length).toBeGreaterThan(0);
 
+    // The tool recovers the legacy bucket name from the file path.
     const globalResult = results.find((r) => r.source === 'memory_global');
     expect(globalResult).toBeDefined();
-    // QMD uses qmd:// URI format — verify it's from the global collection
-    expect(globalResult!.collection).toBe('global');
-    // The snippet should contain our unique marker
-    expect(globalResult!.snippet).toContain('xylophone_quantum_entanglement_test_marker');
+    expect(globalResult!.filepath.endsWith('MEMORY.md')).toBe(true);
+    // The snippet must show the matched text. It is a BOUNDED window now
+    // (~40 chars of context either side), so a 42-char marker gets clipped at
+    // the tail — assert the match is present, not that the window is unbounded.
+    expect(globalResult!.snippet).toContain('xylophone_quantum_entanglement');
   });
 });

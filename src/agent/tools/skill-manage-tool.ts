@@ -19,19 +19,26 @@ import {
 import { clearSkillsCache } from '../../core/skill-loader.js';
 import { screenSkillWrite } from '../../core/memory-safety.js';
 import { recordSkillCreated, recordSkillPatched, removeSkillUsage } from '../../core/skill-usage.js';
-import { dispatchQmdIncrementalIndex } from '../../core/qmd-dispatcher.js';
 import { appendOverviewLog, appendSkillHistoryLog } from '../../core/overview-log.js';
 import { log } from '../../logging/index.js';
 
 export const MAX_SKILL_DESC_CHARS = 60;
 
-/** Refresh the QMD skill collection in the background (best-effort). */
+/** Sweep the file kinds into the search index (best-effort, background). The
+ *  periodic 10-min sweep is the safety net; kicking one now keeps a
+ *  just-written skill (create/patch/delete/log rotation — several distinct
+ *  paths) findable in the same conversation. mtime-diffed, so an unchanged
+ *  vault costs a stat walk only. */
 function refreshSkillIndex(): void {
-  void dispatchQmdIncrementalIndex({ memory: true }).catch((err) => {
-    log.agent.debug('skill_manage: QMD skill index refresh failed', {
-      error: err instanceof Error ? err.message : String(err),
+  void import('../../core/search/wiring.js')
+    .then(({ isSearchV2Enabled, sweepSearchV2Files }) => {
+      if (isSearchV2Enabled()) return sweepSearchV2Files();
+    })
+    .catch((err) => {
+      log.agent.debug('skill_manage: search index refresh failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     });
-  });
 }
 
 /**

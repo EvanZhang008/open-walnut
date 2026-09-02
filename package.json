@@ -45,7 +45,6 @@
     "!dist/**/*.map",
     "!dist/**/*.gz",
     "patches",
-    "scripts/patch-qmd.mjs",
     "scripts/postinstall.mjs",
     "README.md",
     "LICENSE"
@@ -130,7 +129,6 @@
   "optionalDependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "^0.12.0",
     "@huggingface/transformers": "^4.2.0",
-    "@tobilu/qmd": "2.1.0",
     "screencapturekit-audio-capture": "^1.3.6"
   },
   "devDependencies": {

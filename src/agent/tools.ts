@@ -1319,10 +1319,7 @@ Actions:
   // ── Search Tools ──
   {
     name: 'task_search',
-    // Env is fixed at process start, so a load-time ternary picks the
-    // description matching the engine the execute() below will actually use.
-    description: process.env.WALNUT_SEARCH_V2 !== '0'
-      ? `Search tasks via hybrid keyword search (identifier-aware subword index). Indexed fields: title, description, summary, note, conversation_log, tags, project. Task IDs, session IDs, commit SHAs, and external URLs resolve directly from structured records first. Auto-expands child tasks of matched parents.
+    description: `Search tasks via hybrid keyword search (identifier-aware subword index). Indexed fields: title, description, summary, note, conversation_log, tags, project. Task IDs, session IDs, commit SHAs, and external URLs resolve directly from structured records first. Auto-expands child tasks of matched parents.
 
 ## How matching works
 
@@ -1335,38 +1332,7 @@ Actions:
 
 1. Prefer specific identifiers (ticket IDs, camelCase names, acronyms) — they and their subwords match exactly.
 2. 2-4 content words per query beat long sentences (glue words dilute the coverage score).
-3. Multiple queries still help for synonyms/aliases the task text might use; results merge keeping each task's best score.`
-      : `Search tasks via hybrid search (QMD: BM25 + vector + reranking) with BM25 keyword fallback. QMD indexes human-readable fields: title, description, summary, note, conversation_log, tags, and project. Task IDs, session IDs, and external URLs are resolved directly from structured records before QMD. Auto-expands child tasks of matched parents.
-
-## How matching works
-
-Each query you pass runs TWICE against the task index:
-1. **BM25 keyword** (lex) — every word in the query must appear in the task text (AND logic). Uses Porter stemmer, so "allowlisting" matches "allowlist", but "AIHub" does NOT match "AI Hub" (tokenizer splits on space).
-2. **Vector similarity** (semantic) — finds tasks semantically close to the query, even if exact words differ.
-
-Results from all queries merge via RRF (Reciprocal Rank Fusion). More queries = better recall.
-
-## Why multiple queries matter
-
-A single long query is a recall disaster. Example:
-- Target task: "Track PAPINS SigV4 Allowlisting for Pipeline APIs — P382997071"
-- Task body mentions: PAPINS, SigV4, Pipeline APIs, Allowlisting, EKS AI Hub
-- Task body does NOT mention: "AIHub" (connected), "deploy", "CDK", "NGS"
-
-queries: ["AIHub pipeline API allowlist deploy CDK"]  → **0 BM25 hits** (task has no "AIHub"/"deploy"/"CDK"), falls back to vec, returns wrong tasks.
-
-queries: ["pipeline API allowlisting", "PAPINS SigV4", "pipeline allowlist"]  → first query matches (3 words all present), BM25 finds target at rank 1.
-
-## Rules
-
-1. **Split your user's mental model from the task's actual words.** User may say "AIHub deploy work" but task text uses "EKS AI Hub" and mentions no "deploy". Include BOTH: what the user said AND what might literally be in the task.
-2. **First query: natural language** (for reranker) — e.g., "pipeline API allowlisting request"
-3. **Rest: 2-3 word keyword phrases** covering acronyms/aliases/synonyms — e.g., "PAPINS", "SigV4 pipeline", "pipeline allowlist"
-4. **Prefer specific identifiers** (ticket IDs, acronyms like PAPINS/SigV4) over generic terms
-5. **Beware tokenizer splits:** "AIHub" ≠ "AI Hub" ≠ "eksaihub". Include variants if unsure.
-
-**Good:** queries: ["pipeline API allowlisting request", "PAPINS SigV4", "pipeline allowlist", "AI Hub pipeline"]
-**Bad:**  queries: ["pipeline API allowlisting NGS search deploy CDK"]   ← 6-word AND, any missing word = 0 hits`,
+3. Multiple queries still help for synonyms/aliases the task text might use; results merge keeping each task's best score.`,
     input_schema: {
       type: 'object',
       properties: {
@@ -1375,7 +1341,7 @@ queries: ["pipeline API allowlisting", "PAPINS SigV4", "pipeline allowlist"]  �
           items: { type: 'string' },
           minItems: 1,
           maxItems: 5,
-          description: '1-5 focused search queries. First = natural language (for reranking), rest = short keyword phrases (2-3 words each, with synonyms/aliases). Each query runs independently; results merge via RRF.',
+          description: '1-5 focused search queries. Short keyword phrases (2-4 content words each) with synonyms/aliases. Each query runs independently; results merge keeping each task\'s best score.',
         },
         limit: { type: 'number', description: 'Max results to return. Default: 20' },
       },
@@ -1417,12 +1383,10 @@ queries: ["pipeline API allowlisting", "PAPINS SigV4", "pipeline allowlist"]  �
 
       try {
         if (semanticQueries.length > 0) {
-          const wiring = process.env.WALNUT_SEARCH_V2 !== '0'
-            ? await import('../core/search/wiring.js')
-            : null;
-          if (wiring?.isSearchV2Enabled()) {
-            // Search v2: run each query through the keyword lanes, keep each
-            // task's best score across queries (same merge the QMD RRF gave).
+          const wiring = await import('../core/search/wiring.js');
+          if (wiring.isSearchV2Enabled()) {
+            // Run each query through the keyword lanes, keep each task's best
+            // score across queries.
             const bestHits = new Map<string, Awaited<ReturnType<typeof wiring.searchV2Lane>>[number]>();
             for (const q of semanticQueries) {
               for (const hit of await wiring.searchV2Lane(q, { kinds: ['task'], limit })) {
@@ -1441,37 +1405,23 @@ queries: ["pipeline API allowlisting", "PAPINS SigV4", "pipeline allowlist"]  �
               });
             }
           } else {
-            // rerank:false. "It's an agent tool, nobody's watching a spinner" is NOT
-            // a reason to keep the reranker here: the agent loop runs IN THE WEB
-            // SERVER PROCESS (src/web/server.ts imports agent/loop.js directly), and
-            // QMD's reranker is a native llama.cpp call. Measured on this vault:
-            // task_search 14.7s with rerank vs 0.26s without, and it stalled the
-            // event loop 609ms — i.e. every tool call degraded the whole app for
-            // every user. Quality delta was nil where it matters (top-1 hit
-            // identical across 4 probe queries; 46x total latency).
-            const { memoryNotesSearch } = await import('../core/memory-search.js');
-            const qmdResults = await memoryNotesSearch(
-              semanticQueries,
-              ['task'],
-              limit,
-              undefined,
-              { rerank: false },
-            );
-            for (const result of qmdResults) {
-              appendResult({
-                type: 'task',
-                title: result.title,
-                snippet: result.snippet,
-                taskId: result.taskId,
-                score: result.finalScore,
-                matchField: 'task',
-              });
+            // Indexing disabled on this host (WALNUT_DISABLE_SEARCH / cloud
+            // replica): in-process BM25 over the already-loaded task list.
+            const merged = new Map<string, import('../core/search.js').SearchResult>();
+            for (const q of semanticQueries) {
+              for (const r of bm25ScoreTasks(allTasks, q)) {
+                const prev = merged.get(r.taskId!);
+                if (!prev || r.score > prev.score) merged.set(r.taskId!, r);
+              }
+            }
+            for (const result of [...merged.values()].sort((a, b) => b.score - a.score)) {
+              appendResult(result);
             }
           }
         }
       } catch {
-        // Graceful degradation: QMD unavailable — fallback to BM25 keyword search
-        // Run each query, keep best score per task
+        // Graceful degradation: the index lane threw — fall back to BM25
+        // keyword search. Run each query, keep best score per task.
         const merged = new Map<string, import('../core/search.js').SearchResult>();
         for (const q of semanticQueries) {
           for (const r of bm25ScoreTasks(allTasks, q)) {

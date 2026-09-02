@@ -22,7 +22,7 @@
  *   POST /notes/move { from, to }     → { ok }
  *   POST /notes/folder { path }       → { ok }
  *
- * Replica classes: /search needs the QMD semantic store which never
+ * Replica classes: /search needs the search index, which never
  * initializes on the cloud box (would pin the small instance) → relayed to
  * the primary over `server.search`; 501 not_supported_cloud only when the
  * relay can't serve (bridge down / old primary). Notes search degrades
@@ -51,7 +51,7 @@ const SERVER_RELAY_SID = '__server__'
 // ─── Global search ───────────────────────────────────────────────────────────
 
 // GET /api/v1/search?q=&types=task,memory,session&limit=20
-// B-class on replica since 2026-08-22: the semantic QMD store never
+// B-class on replica since 2026-08-22: the search index never
 // initializes on the cloud box, but the primary is usually REACHABLE over the
 // bridge — so relay the query (`server.search`) instead of refusing outright.
 // The 501 remains only when the relay itself can't serve (bridge down, old

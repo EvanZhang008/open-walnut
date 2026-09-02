@@ -1,7 +1,7 @@
 import { log } from '../logging/index.js';
 import { count, observe, timed } from './observability/metrics.js';
 import { CLOUD_MODE } from '../constants.js';
-import { CJK_CHAR_RE, splitQueryTerms, contentQueryTerms, termInText } from './cjk.js';
+import { contentQueryTerms, termInText } from './cjk.js';
 import { bus, EventNames } from './event-bus.js';
 import { listTasks } from './task-manager.js';
 import { listSessions } from './session-tracker.js';
@@ -19,34 +19,14 @@ export interface SearchResult {
   isAutoExpanded?: boolean; // true if included because parent matched (not direct hit)
   score: number;
   matchField: string;   // field name of best keyword match
-  /** Whole-document query-term hit count from the QMD layer (see
-   *  MemorySearchResult.coveredTermHits). Merge-ranking input, not API surface. */
+  /** Whole-document query-term hit count from the index lane (reconstructed
+   *  from the hybrid coverage fraction). Merge-ranking input, not API surface. */
   coveredTermHits?: number;
 }
 
 export interface SearchOptions {
   limit?: number;
   types?: ('task' | 'memory' | 'session')[];
-}
-
-/**
- * Cap on a QMD snippet handed back to a caller.
- *
- * QMD returns a whole matched chunk, and a session chunk is a transcript slice:
- * measured 2026-08-16, THREE session hits carried 9,831 chars (~2.5K tokens) of
- * raw turn-by-turn log. Every consumer pays that — an agent burns its context on
- * it, and the search UI renders a wall of text — for a relevance preview nobody
- * reads past the first line. The keyword lanes have always trimmed (extractSnippet);
- * the QMD lanes passed the chunk through untouched.
- */
-const MAX_SNIPPET_CHARS = 400;
-
-/** Trim a QMD chunk to a preview, preferring a cut at a line break. */
-function capSnippet(snippet: string | undefined): string {
-  if (!snippet) return '';
-  const flat = snippet.replace(/\s+/g, ' ').trim();
-  if (flat.length <= MAX_SNIPPET_CHARS) return flat;
-  return flat.slice(0, MAX_SNIPPET_CHARS).trimEnd() + '…';
 }
 
 export function extractSnippet(
@@ -104,15 +84,15 @@ export function extractSnippet(
  * title". Humans and agents overwhelmingly query by paraphrasing what they
  * remember of the title, one or two synonyms off ("Helm chart CRD *upgrade
  * handling* in CDK" for the title "Helm CRD *update behavior* in CDK") — and
- * the QMD lanes lose exactly this shape: FTS AND-annihilates on the synonym,
- * and no-rerank scoring is 1/rank, so the true hit surfaces at #4 in its lane
- * with score 0.225 and drowns in the cross-store merge (2026-08-20 eval:
- * A08-A10 all MISS despite 4+ of the title's words appearing verbatim).
+ * a pure keyword lane loses exactly this shape: a strict AND annihilates on
+ * the synonym, and the relaxed lane ranks the true hit behind longer documents
+ * that happen to repeat one common word (2026-08-20 eval: A08-A10 all MISS
+ * despite 4+ of the title's words appearing verbatim).
  *
  * Fires only when the query has >= 2 terms and at least half of them (and
  * >= 2 absolute) appear in the title. Returns a score in the 0.6..1.0 band —
- * deliberately comparable to the QMD lanes' 1/rank x source-weight scale, so
- * a full title paraphrase (1.0) ties the semantic #1 and a half match (0.8)
+ * deliberately comparable to the index lane's normalized score scale, so a
+ * full title paraphrase (1.0) ties the semantic #1 and a half match (0.8)
  * lands just under it. Single-term queries stay with FTS (which handles them
  * well) — firing there would surface every title containing one common word.
  */
@@ -136,7 +116,7 @@ const TITLE_LANE_MIN_F1 = 0.4;
  * of the sort structure instead of a special case.
  *
  * Freshly completed ≈ no penalty; half the max at 14 days; full 0.12 for old
- * history. Running/TODO/AGENT_COMPLETE (awaiting the human) pay nothing. */
+ * history. Running/TODO/NEED_ACTION (awaiting the human) pay nothing. */
 export const LIVENESS_PENALTY_MAX = 0.12;
 export const LIVENESS_HALF_LIFE_DAYS = 14;
 
@@ -228,7 +208,8 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// ── BM25 keyword scoring — fallback when QMD task store is unavailable ──
+// ── BM25 keyword scoring — fallback when the search index is unavailable
+// (WALNUT_DISABLE_SEARCH=1, a cloud replica, or the index lane throwing) ──
 
 export function bm25ScoreTasks(tasks: Task[], query: string): SearchResult[] {
   const results: SearchResult[] = [];
@@ -369,8 +350,8 @@ function referenceMatchScore(
 }
 
 /**
- * Deterministic identifier lane beside QMD. Opaque task/session IDs and URLs
- * are poor embedding inputs, but copied references must always resolve.
+ * Deterministic identifier lane beside the index. Opaque task/session IDs and
+ * URLs are poor embedding inputs, but copied references must always resolve.
  */
 export function searchTaskReferences(tasks: Task[], rawQuery: string): SearchResult[] {
   const query = rawQuery.trim().toLowerCase();
@@ -738,7 +719,7 @@ export async function search(
  *
  * Dynamic import on purpose: a static one would drag better-sqlite3 (and the
  * embed worker chain) into every consumer of this module — CLI, agent tools,
- * and the WALNUT_SEARCH_V2=0 rollback path that must never touch it.
+ * and the WALNUT_DISABLE_SEARCH=1 keyword-only path that must never touch it.
  * The library cannot import walnut's metrics registry (it is a standalone
  * directory, gated by tests/lib/hybrid-search-boundary.test.ts), so the host
  * registers a callback and owns where the numbers land.
@@ -790,15 +771,13 @@ async function searchInner(
   if (normalizedQuery.length === 0) return [];
 
   const results: SearchResult[] = [];
-  let qmdFailure: unknown;
-  const qmdEnabled =
+  let laneFailure: unknown;
+  // WALNUT_DISABLE_SEARCH=1 (and cloud replicas): no index exists — the task
+  // and session lanes degrade to the in-process BM25 scorers, memory is
+  // skipped. Keyword-only, but never a dead end.
+  const searchEnabled =
     process.env.WALNUT_DISABLE_SEARCH !== '1'
     && !CLOUD_MODE;
-  // Search v2 (hybrid-search lib) replaces the three QMD legs below unless the
-  // flag opts out (=0 → QMD rollback path). Env check duplicated from
-  // wiring.isSearchV2Enabled() so the opted-out path never loads the wiring
-  // module (and its better-sqlite3 chain).
-  const v2Enabled = qmdEnabled && process.env.WALNUT_SEARCH_V2 !== '0';
   // v2's coverage component is a fraction over ITS tokenization of the query;
   // the merge below wants a hit count over contentQueryTerms. Same terms in
   // practice — reconstruct the count from the fraction.
@@ -825,7 +804,7 @@ async function searchInner(
   }
 
   // Exact copied references are navigation commands, not semantic queries.
-  // Resolve them before QMD/memory search so unrelated high-similarity content
+  // Resolve them before the index lanes so unrelated high-similarity content
   // cannot displace or surround the authoritative target.
   if (types.includes('task')) {
     const allTasks = await getTasks();
@@ -844,9 +823,9 @@ async function searchInner(
     if (exactSessions.length > 0) return exactSessions.slice(0, limit);
   }
 
-  // Task search: deterministic references take precedence over QMD's BM25 +
-  // vector ranking. QMD intentionally indexes human-readable task content, not
-  // opaque IDs, so an identifier hit should not trigger semantic noise.
+  // Task search: deterministic references take precedence over the hybrid
+  // index's ranking. The index carries human-readable task content, not opaque
+  // IDs, so an identifier hit should not trigger semantic noise.
   if (types.includes('task')) {
     const taskResults: SearchResult[] = [];
     const seenTaskIds = new Set<string>();
@@ -866,9 +845,9 @@ async function searchInner(
       appendTaskResult(result);
     }
 
-    // Title-paraphrase lane (see titleMatchScore). Runs before QMD so a task
-    // whose title the user is clearly reworsing can't be displaced by 1/rank
-    // scores from semantically-adjacent noise.
+    // Title-paraphrase lane (see titleMatchScore). Runs before the index lane
+    // so a task whose title the user is clearly rewording can't be displaced
+    // by semantically-adjacent noise.
     const titleHits = allTasks
       .map((t) => ({ task: t, score: titleMatchScore(t.title, normalizedQuery) }))
       .filter((h) => h.score > 0)
@@ -888,50 +867,28 @@ async function searchInner(
 
     // Exact references returned above. Partial references remain pinned first,
     // but still merge semantic matches instead of suppressing the whole result set.
-    if (!qmdEnabled) {
+    if (!searchEnabled) {
       for (const result of bm25ScoreTasks(allTasks, normalizedQuery)) {
         appendTaskResult(result);
       }
     } else try {
-      if (v2Enabled) {
-        const searchV2Lane = await loadSearchV2Lane();
-        for (const hit of await searchV2Lane(normalizedQuery, { kinds: ['task'], limit })) {
-          appendTaskResult({
-            type: 'task',
-            title: hit.title,
-            snippet: extractSnippet(hit.text, normalizedQuery),
-            taskId: hit.ref,
-            score: hit.score,
-            matchField: 'task',
-            coveredTermHits: v2CoveredHits(hit.components.coverage),
-          });
-        }
-      } else {
-        const { memoryNotesSearch } = await import('./memory-search.js');
-        const qmdResults = await memoryNotesSearch(
-          normalizedQuery,
-          ['task'],
-          limit,
-          undefined,
-          { rerank: false, overfetchMultiplier: 1 },
-        );
-        for (const r of qmdResults) {
-          appendTaskResult({
-            type: 'task',
-            title: r.title,
-            snippet: capSnippet(r.snippet),
-            taskId: r.taskId,
-            score: r.finalScore,
-            matchField: 'task',
-            coveredTermHits: r.coveredTermHits,
-          });
-        }
+      const searchV2Lane = await loadSearchV2Lane();
+      for (const hit of await searchV2Lane(normalizedQuery, { kinds: ['task'], limit })) {
+        appendTaskResult({
+          type: 'task',
+          title: hit.title,
+          snippet: extractSnippet(hit.text, normalizedQuery),
+          taskId: hit.ref,
+          score: hit.score,
+          matchField: 'task',
+          coveredTermHits: v2CoveredHits(hit.components.coverage),
+        });
       }
     } catch (err) {
-      // QMD task search failed — fall back to BM25 keyword search.
+      // Index lane failed — fall back to BM25 keyword search.
       const msg = err instanceof Error ? err.message : String(err);
-      log.agent.warn('QMD task search failed — falling back to BM25 keyword search', { query: normalizedQuery, error: msg });
-      qmdFailure ??= err;
+      log.agent.warn('hybrid task search failed — falling back to BM25 keyword search', { query: normalizedQuery, error: msg });
+      laneFailure ??= err;
       for (const result of bm25ScoreTasks(allTasks, normalizedQuery)) {
         appendTaskResult(result);
       }
@@ -946,7 +903,7 @@ async function searchInner(
     results.push(...taskResults);
   }
 
-  // Session search: delegate to QMD
+  // Session search: hybrid index over transcript-backed session docs.
   if (types.includes('session')) {
     const referenceResults = searchSessionReferences(await getSessions(), normalizedQuery);
     results.push(...referenceResults);
@@ -973,7 +930,7 @@ async function searchInner(
     const seenSessionIds = new Set(
       results.filter((r) => r.type === 'session' && r.sessionId).map((r) => r.sessionId),
     );
-    if (!qmdEnabled) {
+    if (!searchEnabled) {
       results.push(...bm25ScoreSessions(await getSessions(), normalizedQuery)
         .filter((result) => !seenSessionIds.has(result.sessionId)));
     } else try {
@@ -983,119 +940,61 @@ async function searchInner(
       const taskBySession = new Map(
         (await getSessions()).map((s) => [s.claudeSessionId, s.taskId]),
       );
-      if (v2Enabled) {
-        const searchV2Lane = await loadSearchV2Lane();
-        for (const hit of await searchV2Lane(normalizedQuery, { kinds: ['session'], limit })) {
-          if (seenSessionIds.has(hit.ref)) continue;
-          const ownerTaskId = taskBySession.get(hit.ref);
-          results.push({
-            type: 'session',
-            title: hit.title || hit.ref,
-            snippet: extractSnippet(hit.text, normalizedQuery),
-            sessionId: hit.ref,
-            ...(ownerTaskId ? { taskId: ownerTaskId } : {}),
-            score: hit.score,
-            matchField: 'session',
-            coveredTermHits: v2CoveredHits(hit.components.coverage),
-          });
-        }
-      } else {
-        const { memoryNotesSearch } = await import('./memory-search.js');
-        const qmdResults = await memoryNotesSearch(
-          normalizedQuery,
-          ['session'],
-          limit,
-          undefined,
-          { rerank: false, overfetchMultiplier: 1 },
-        );
-        for (const r of qmdResults) {
-          if (seenSessionIds.has(r.sessionId)) continue;
-          const ownerTaskId = r.sessionId ? taskBySession.get(r.sessionId) : undefined;
-          results.push({
-            type: 'session',
-            title: r.title,
-            snippet: capSnippet(r.snippet),
-            sessionId: r.sessionId,
-            ...(ownerTaskId ? { taskId: ownerTaskId } : {}),
-            score: r.finalScore,
-            matchField: r.source,
-            coveredTermHits: r.coveredTermHits,
-          });
-        }
+      const searchV2Lane = await loadSearchV2Lane();
+      for (const hit of await searchV2Lane(normalizedQuery, { kinds: ['session'], limit })) {
+        if (seenSessionIds.has(hit.ref)) continue;
+        const ownerTaskId = taskBySession.get(hit.ref);
+        results.push({
+          type: 'session',
+          title: hit.title || hit.ref,
+          snippet: extractSnippet(hit.text, normalizedQuery),
+          sessionId: hit.ref,
+          ...(ownerTaskId ? { taskId: ownerTaskId } : {}),
+          score: hit.score,
+          matchField: 'session',
+          coveredTermHits: v2CoveredHits(hit.components.coverage),
+        });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log.agent.warn('QMD session search failed — falling back to metadata keyword search', {
+      log.agent.warn('hybrid session search failed — falling back to metadata keyword search', {
         query: normalizedQuery,
         error: msg,
       });
-      qmdFailure ??= err;
+      laneFailure ??= err;
       results.push(...bm25ScoreSessions(await getSessions(), normalizedQuery)
         .filter((result) => !seenSessionIds.has(result.sessionId)));
     }
   }
 
-  // Memory search: delegate to QMD.
-  //
-  // rerank:false like the task/session legs above. This was the LAST interactive
-  // leg still running QMD's local llama.cpp cross-encoder, and it was the worst
-  // offender: measured 11–20s on a cold query, and because llama.cpp scoring is a
-  // native call it PINNED THE EVENT LOOP for ~11s (`event-loop blocked (probe
-  // late) lateByMs:11026`) — i.e. one search in the box froze every route for the
-  // whole app. That violates the "never block the web server" rule outright.
-  //
-  // Measured quality cost of dropping it (4 real queries, top-10): the #1 hit was
-  // identical every time, top-5 overlap 3–5 of 5. Not free, but nowhere near
-  // worth 11s of app-wide freeze on a keystroke path.
-  if (types.includes('memory') && qmdEnabled) {
+  // Memory search: the file-backed universe (memory + notes + skills) in one
+  // index lane; matchField carries the v2 kind so callers can tell them apart.
+  // No BM25 fallback here — with no index there is no file content in memory
+  // to score, so the lane simply contributes nothing.
+  if (types.includes('memory') && searchEnabled) {
     try {
-      if (v2Enabled) {
-        const searchV2Lane = await loadSearchV2Lane();
-        // The memory leg has always been the whole file-backed universe (the
-        // QMD default sources spanned memory + notes + skills); matchField
-        // carries the v2 kind so callers can still tell them apart.
-        for (const hit of await searchV2Lane(normalizedQuery, { kinds: ['memory', 'note', 'skill'], limit })) {
-          results.push({
-            type: 'memory',
-            title: hit.title,
-            snippet: extractSnippet(hit.text, normalizedQuery),
-            path: hit.ref,
-            score: hit.score,
-            matchField: hit.kind,
-            coveredTermHits: v2CoveredHits(hit.components.coverage),
-          });
-        }
-      } else {
-        const { memoryNotesSearch } = await import('./memory-search.js');
-        const qmdResults = await memoryNotesSearch(
-          normalizedQuery,
-          undefined,
-          limit,
-          undefined,
-          { rerank: false, overfetchMultiplier: 1 },
-        );
-        for (const r of qmdResults) {
-          results.push({
-            type: 'memory',
-            title: r.title,
-            snippet: capSnippet(r.snippet),
-            path: r.filepath,
-            score: r.finalScore,
-            matchField: r.source,
-            coveredTermHits: r.coveredTermHits,
-          });
-        }
+      const searchV2Lane = await loadSearchV2Lane();
+      for (const hit of await searchV2Lane(normalizedQuery, { kinds: ['memory', 'note', 'skill'], limit })) {
+        results.push({
+          type: 'memory',
+          title: hit.title,
+          snippet: extractSnippet(hit.text, normalizedQuery),
+          path: hit.ref,
+          score: hit.score,
+          matchField: hit.kind,
+          coveredTermHits: v2CoveredHits(hit.components.coverage),
+        });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log.agent.warn('QMD memory search failed — no memory results', { query: normalizedQuery, error: msg });
-      qmdFailure ??= err;
+      log.agent.warn('hybrid memory search failed — no memory results', { query: normalizedQuery, error: msg });
+      laneFailure ??= err;
     }
   }
 
-  // A total QMD outage must not look like an authoritative empty result. The
+  // A total index outage must not look like an authoritative empty result. The
   // browser preserves its immediate local matches when this request fails.
-  if (results.length === 0 && qmdFailure) throw qmdFailure;
+  if (results.length === 0 && laneFailure) throw laneFailure;
 
   const isReference = (result: SearchResult): boolean =>
     result.matchField === 'id'
@@ -1103,39 +1002,28 @@ async function searchInner(
     || result.matchField === 'commit_sha'
     || result.matchField === 'external_url';
 
-  // Multi-term queries: rank by term coverage before per-store score.
-  // Each store ranks independently and no-rerank scores are 1/rank × source
-  // weight (SOURCE_WEIGHTS in memory-search.ts), so cross-store scores are
-  // NOT comparable — a memory doc matching only "timeout" at store-rank #1
-  // (1.0 × 1.1) would outrank the task matching EVERY term at store-rank #2
-  // (0.5). Docs covering more of the query are what a human means by a
-  // multi-term query, so coverage wins the merge.
+  // Multi-term queries: rank by term coverage before per-lane score. The
+  // reference, title, and index lanes score on different scales, so the merge
+  // cannot compare raw scores across them — docs covering more of the query
+  // are what a human means by a multi-term query, so coverage wins the merge.
   //
-  // Graded (hits/terms), not all-or-nothing: the haystack is title + QMD's
-  // bestChunk — a single chunk, not the whole doc — so on long queries even
-  // the best doc usually misses a term or two in its selected chunk, and a
-  // binary rule would silently never fire. Buckets (×4, rounded) absorb
-  // one-term noise so near-ties fall through to the score comparator.
-  //
-  // Originally CJK-only, widened to ALL multi-term queries (2026-08-20 eval):
-  // the same cross-store incomparability let "aihub progress log"
-  // (memory_skill, matched 1 of 5 terms, score 1.2) outrank the session
-  // titled "Helm CRD update behavior in CDK" (matched 4 of 5, title lane
-  // 0.846) on every English paraphrase query — A09/A10 stuck at #4-#5 purely
-  // because the merge sorted by scores from different scales. The old
-  // Latin-skip rationale ("their FTS lane ANDs correctly") is true WITHIN a
-  // store but was never true ACROSS stores, which is where this sort runs.
-  // Stopword-free terms so agent-phrased glue ("which…from…") doesn't dilute
-  // every candidate's fraction equally except the right one's.
+  // Graded (hits/terms), not all-or-nothing: on long queries even the best doc
+  // usually misses a term or two, and a binary rule would silently never fire.
+  // Buckets (×4, rounded) absorb one-term noise so near-ties fall through to
+  // the score comparator. Widened from CJK-only to ALL multi-term queries
+  // (2026-08-20 eval: English paraphrase queries were stuck at #4-#5 purely
+  // because the merge sorted by scores from different scales). Stopword-free
+  // terms so agent-phrased glue ("which…from…") doesn't dilute every
+  // candidate's fraction equally except the right one's.
   const coverage = new Map<SearchResult, number>();
   {
     const terms = contentQueryTerms(normalizedQuery);
     if (terms.length > 1) {
       for (const result of results) {
-        // Whole-document hit count from the QMD layer when available; the
+        // Whole-document hit count from the index lane when available; the
         // title+snippet scan is the fallback for lanes that never had the
         // body (references, title lane, BM25 fallback). The snippet is ONE
-        // chunk of a transcript and routinely misses terms the document
+        // slice of a transcript and routinely misses terms the document
         // contains, which made coverage punish exactly the right docs.
         let hits = result.coveredTermHits;
         if (hits === undefined) {
@@ -1156,8 +1044,8 @@ async function searchInner(
   // page. Task docs and session docs are focused by construction (one task /
   // one session's work) and keep full credit.
   const GRAB_BAG_SOURCES = new Set([
-    'memory_global', 'memory_skill', 'memory_daily', 'memory_compaction',
-    // v2 kind for the skills tree (the v2 equivalent of memory_skill).
+    // Skill docs (SKILL.md + support files) are reference manuals: they
+    // mention almost any term combination somewhere.
     'skill',
   ]);
   const effectiveCoverage = (r: SearchResult): number => {
@@ -1170,9 +1058,8 @@ async function searchInner(
     || effectiveCoverage(b) - effectiveCoverage(a)
     || b.score - a.score);
 
-  // Per-type floor on the merged page. Cross-store scores are 1/rank × source
-  // weight — NOT comparable (memory_topic's 1.3 beats task's 1.0 at every
-  // rank) — so one prolific store can legally fill the whole page and blank
+  // Per-type floor on the merged page. Lane scores are not comparable across
+  // types, so one prolific lane can legally fill the whole page and blank
   // out a lane the caller explicitly asked for. Guarantee each requested type
   // that HAS results at least a few visible rows; the remainder stays
   // score-ordered. floor = limit/(3×types), i.e. 2 rows/type at the default

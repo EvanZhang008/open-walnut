@@ -336,7 +336,7 @@ npm run web:dev
 - React, Vite, and TypeScript
 - Anthropic Claude and other configurable model providers
 - Claude Code CLI with stream-JSON I/O
-- QMD search with BM25 and local vector embeddings
+- Built-in hybrid search: SQLite FTS5 keyword lanes plus local vector rescore
 - Vitest and Playwright
 
 ## Star History

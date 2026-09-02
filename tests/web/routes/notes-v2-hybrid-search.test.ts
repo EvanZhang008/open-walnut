@@ -1,13 +1,13 @@
 /**
  * HYBRID SEARCH + INDEX/IDENTITY coverage (IMPL-CONTRACT §1.2 #8, §7.1).
  *
- * The sibling `notes-v2.test.ts` stubs `memoryNotesSearch → []`, so it exercises
+ * The sibling `notes-v2.test.ts` stubs the index lane to `[]`, so it exercises
  * ONLY the structural (string) leg. This file drives the SEMANTIC leg with
  * controlled hits so the parts that are otherwise untested get asserted:
  *   - dedupe-by-id → exactly ONE row when a note is hit by BOTH legs
- *     (`matchType: 'both'`), proving `idFromQmdPath` maps the semantic leg's
- *     ABSOLUTE filepath back to the note's id (the "double-lists every both-leg
- *     note" trap).
+ *     (`matchType: 'both'`), proving `idFromAbsPath` maps the semantic leg's
+ *     ABSOLUTE file path back to the note's id (the "double-lists every
+ *     both-leg note" trap).
  *   - FROZEN ranking: an exact/both hit is NEVER ordered below a purely-semantic
  *     hit, even when the semantic hit's raw score is higher.
  *   - a purely-semantic hit surfaces as `matchType: 'semantic'`.
@@ -16,7 +16,7 @@
  *   - index rebuild reproduces state from disk (the rebuildable-sidecar invariant).
  *
  * The string leg stays REAL (reads the structural sidecar), so the both-leg
- * dedupe is genuine. Only the Claude-adjacent embedding engine is mocked.
+ * dedupe is genuine. Only the index lane (and with it the embedder) is mocked.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -25,50 +25,21 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants('notes-v2-hybrid-test'));
 
-// The semantic leg under test here is the QMD one (memory-search.js mock
-// below). Search v2 became the default on 2026-08-26 and routes the semantic
-// leg elsewhere, so pin the flag to the legacy lane; this leg and its tests
-// retire together in Phase 4.
-process.env.WALNUT_SEARCH_V2 = '0';
-
 // A per-test controllable semantic leg. Each test sets `semanticHits` to the
-// MemorySearchResult[] the QMD engine should "return" (or makes the mock throw
-// to simulate an unavailable engine). filepath MUST be ABSOLUTE (that is what
-// the real memoryNotesSearch emits; the route remaps it via idFromQmdPath).
+// index hits the lane should "return" (or makes the mock throw to simulate an
+// unavailable engine). `ref` MUST be ABSOLUTE (that is what the index stores;
+// the route remaps it via idFromAbsPath). Mocking the lane also keeps reconcile
+// from ever opening a real search.sqlite / loading an embedding model.
 let semanticHits: any[] = [];
 let semanticThrows = false;
-vi.mock('../../../src/core/memory-search.js', () => ({
-  memoryNotesSearch: vi.fn(async () => {
+vi.mock('../../../src/core/search/wiring.js', () => ({
+  isSearchV2Enabled: () => true,
+  searchV2Lane: vi.fn(async () => {
     if (semanticThrows) throw new Error('embedding engine unavailable');
     return semanticHits;
   }),
-}));
-
-// Stub the QMD store so reconcile never opens a real notes-search.sqlite / loads
-// an embedding model (same rationale as the sibling route test).
-vi.mock('../../../src/core/qmd-store.js', () => ({
-  DEFAULT_QMD_MODEL: 'test-model',
-  embedQmdStore: vi.fn(async (
-    store: { embed: (options: unknown) => Promise<unknown> },
-    _label: string,
-    options: unknown,
-  ) => store.embed(options)),
-  getNotesStore: vi.fn(async () => ({
-    internal: {
-      findActiveDocument: () => undefined,
-      insertContent: () => {},
-      insertDocument: () => {},
-      updateDocumentTitle: () => {},
-      updateDocument: () => {},
-      deactivateDocument: () => {},
-      getActiveDocumentPaths: () => [],
-      cleanupOrphanedVectors: () => 0,
-      deleteInactiveDocuments: () => 0,
-      cleanupOrphanedContent: () => 0,
-    },
-    embed: async () => {},
-    getStatus: async () => ({ needsEmbedding: 0 }),
-  })),
+  upsertSearchV2File: vi.fn(async () => {}),
+  sweepSearchV2Files: vi.fn(async () => ({ changed: 0, removed: 0 })),
 }));
 
 import express from 'express';
@@ -100,17 +71,24 @@ function absInVault(relPath: string): string {
   return path.join(NOTES_DIR, relPath);
 }
 
-/** Build a MemorySearchResult-shaped semantic hit. */
-function semanticHit(relPath: string, score: number, title = '', snippet = 'semantic excerpt') {
+/** Build one note-kind index hit. `cos` is the similarity the route bands into
+ *  `semanticScore`; `semantic: 'ok'` marks the rescore as having really run
+ *  (a degraded lane carries keyword order and no semantic opinion). */
+function semanticHit(relPath: string, cos: number, title = '', text = 'semantic excerpt') {
   return {
-    filepath: absInVault(relPath),
+    kind: 'note',
+    ref: absInVault(relPath),
     title,
-    snippet,
-    score,
-    finalScore: score,
-    source: 'note_vault',
-    collection: 'vault',
+    text,
+    score: cos,
+    components: { coverage: 0, cosine: cos },
+    semantic: 'ok',
   };
+}
+
+/** The route's frozen cosine → semanticScore band (0.55 … 0.90). */
+function semanticBand(cos: number): number {
+  return 0.55 + 0.35 * Math.max(0, Math.min(1, cos));
 }
 
 async function syncIndex(): Promise<void> {
@@ -157,8 +135,10 @@ describe('hybrid search: dedupe-by-id + labels', () => {
     const apolloRows = res.body.results.filter((r: any) => r.path === 'apollo.md');
     expect(apolloRows).toHaveLength(1); // deduped — the whole point
     expect(apolloRows[0].matchType).toBe('both');
-    // Both transparency scores present on a both-leg hit.
-    expect(apolloRows[0].semanticScore).toBeCloseTo(0.9);
+    // Both transparency scores present on a both-leg hit. The semantic one is
+    // the BANDED cosine, not the lane's additive score (which re-counts the
+    // keyword evidence the string leg already banded).
+    expect(apolloRows[0].semanticScore).toBeCloseTo(semanticBand(0.9));
     expect(apolloRows[0].stringScore).toBeGreaterThan(0);
   });
 
@@ -369,7 +349,7 @@ describe('hybrid search: degraded semantic leg', () => {
   it('returns string results + degraded flag when the semantic engine throws', async () => {
     await writeNote('notes.md', '# Notes\n\nImportant meeting notes here.');
     await syncIndex();
-    semanticThrows = true; // QMD leg rejects
+    semanticThrows = true; // the index lane rejects
 
     const app = createApp();
     const res = await request(app).get('/api/notes-v2/search?q=meeting');

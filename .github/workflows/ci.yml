@@ -17,9 +17,6 @@ env:
   # tests/setup/worker-budget.ts defaults CI jobs to 4 workers. Resource-heavy
   # tiers override that per command where parallelism causes timeout flakes.
   CI: 'true'
-  # Headless runners have no usable Vulkan device. QMD's auto mode otherwise
-  # launches repeated doomed native builds across the parallel test workers.
-  QMD_LLAMA_GPU: 'off'
 
 jobs:
   # ── Gate 1: type-check + build. Everything else is moot if this fails. ───────
@@ -63,7 +60,7 @@ jobs:
           # one known failure, so test:baseline fails only on failures absent
           # from tests/setup/known-failures.json — i.e. real regressions.
           #
-          # Several nominally-fast files initialize servers and CPU-only QMD.
+          # Several nominally-fast files initialize servers and a CPU embedder.
           # Four workers oversubscribe the 4-core runner and have produced
           # different unrelated timeout failures across successive runs, so
           # keep this gate serial for deterministic signal.

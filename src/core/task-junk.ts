@@ -2,8 +2,8 @@
  * Junk / test-task detection — the single source of truth for "this task is
  * test debris, keep it out of ranked surfaces".
  *
- * Used by BOTH the QMD semantic index (qmd-task-sync.ts skips junk at insert
- * time and lets prune remove already-indexed junk) and the recent-task ledger
+ * Used by BOTH the search index (the task serializer skips junk at insert time
+ * and the sweep removes already-indexed junk) and the recent-task ledger
  * (task-ledger.ts). Evidence for why this exists: pure-title probe tasks from
  * E2E runs ("Burst message echo test", "V6 unread dot probe") and test
  * projects kept outranking real tasks in task_search (0.875 vs 0.4 on

@@ -25,7 +25,7 @@ export const IS_EPHEMERAL = process.argv.includes('--_ephemeral-child');
  * True when running as a headless cloud companion (WALNUT_CLOUD_MODE=1).
  * Cloud mode serves the same HTTP API + offline chat brain + git sync node,
  * but the box has no Claude Code CLI, no local session daemon, no macOS
- * audio, and no qmd semantic indexes — subsystems that presume those are
+ * audio, and no local search index — subsystems that presume those are
  * gated on this flag. Read at import time, same constraint as IS_EPHEMERAL.
  */
 export const CLOUD_MODE = process.env.WALNUT_CLOUD_MODE === '1';

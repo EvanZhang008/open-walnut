@@ -4,25 +4,42 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMockConstants } from '../../helpers/mock-constants.js';
 
-// This file tests the QMD (legacy) search lane BY NAME — its mocks target
-// memory-search.js, which the search-v2 path never calls. v2 became the
-// default on 2026-08-26, so pin the flag to the legacy lane here; the lane
-// and this file both retire together in Phase 4.
-process.env.WALNUT_SEARCH_V2 = '0';
-
-const { memoryNotesSearchMock, listSessionsMock } = vi.hoisted(() => ({
-  memoryNotesSearchMock: vi.fn(),
+/**
+ * The reference lanes (ids, commit SHAs, external URLs) run in FRONT of the
+ * ranked index lane: a pasted identifier is a navigation command, so it must
+ * never be displaced by semantically-adjacent noise. An EXACT match answers
+ * alone and never wakes the index; a PARTIAL one pins its owner on top and lets
+ * the ranked lane fill in below. The index lane is mocked by name here so "was
+ * it consulted at all?" is directly assertable.
+ */
+const { searchLaneMock, listSessionsMock } = vi.hoisted(() => ({
+  searchLaneMock: vi.fn(),
   listSessionsMock: vi.fn(),
 }));
 
 vi.mock('../../../src/constants.js', () =>
   createMockConstants('walnut-search-reference-bypass'));
-vi.mock('../../../src/core/memory-search.js', () => ({
-  memoryNotesSearch: memoryNotesSearchMock,
+vi.mock('../../../src/core/search/wiring.js', () => ({
+  isSearchV2Enabled: () => true,
+  searchV2Lane: searchLaneMock,
 }));
 vi.mock('../../../src/core/session-tracker.js', () => ({
   listSessions: listSessionsMock,
 }));
+
+/** One index hit. `ref` is the task id / session id / file path. */
+function laneHit(over: Record<string, unknown>) {
+  return {
+    kind: 'task',
+    ref: 'unset',
+    title: '',
+    text: '',
+    score: 0.5,
+    components: { coverage: 1, cosine: 0 },
+    semantic: 'off',
+    ...over,
+  };
+}
 
 import { WALNUT_HOME } from '../../../src/constants.js';
 import {
@@ -46,7 +63,7 @@ function createApp() {
 
 beforeEach(async () => {
   _resetForTesting();
-  memoryNotesSearchMock.mockReset().mockResolvedValue([]);
+  searchLaneMock.mockReset().mockResolvedValue([]);
   listSessionsMock.mockReset();
   listSessionsMock.mockResolvedValue([{
     claudeSessionId: 'standalone-session-reference',
@@ -61,7 +78,7 @@ afterEach(async () => {
 });
 
 describe('GET /api/search structured references', () => {
-  it('returns an exact session-id task without invoking QMD', async () => {
+  it('returns an exact session-id task without invoking the index', async () => {
     const { task } = await addTask({
       title: 'Structured reference target',
       project: 'Quick Start',
@@ -84,10 +101,10 @@ describe('GET /api/search structured references', () => {
         score: 1,
       }),
     ]);
-    expect(memoryNotesSearchMock).not.toHaveBeenCalled();
+    expect(searchLaneMock).not.toHaveBeenCalled();
   });
 
-  it('bypasses QMD for every structured task reference field', async () => {
+  it('bypasses the index for every structured task reference field', async () => {
     const { task } = await addTask({
       title: 'All structured references',
       project: 'Quick Start',
@@ -121,10 +138,10 @@ describe('GET /api/search structured references', () => {
         taskId: task.id,
       }));
     }
-    expect(memoryNotesSearchMock).not.toHaveBeenCalled();
+    expect(searchLaneMock).not.toHaveBeenCalled();
   });
 
-  it('returns a standalone session ID without invoking QMD', async () => {
+  it('returns a standalone session ID without invoking the index', async () => {
     const res = await request(createApp())
       .get('/api/search')
       .query({
@@ -140,7 +157,7 @@ describe('GET /api/search structured references', () => {
         matchField: 'session_id',
       }),
     ]);
-    expect(memoryNotesSearchMock).not.toHaveBeenCalled();
+    expect(searchLaneMock).not.toHaveBeenCalled();
   });
 
   it('joins an exact SessionRecord.taskId when task session fields are stale', async () => {
@@ -155,13 +172,12 @@ describe('GET /api/search structured references', () => {
       taskId: task.id,
       title: 'Record-owned Codex session',
     }]);
-    memoryNotesSearchMock.mockResolvedValue([{
+    searchLaneMock.mockResolvedValue([laneHit({
+      ref: 'unrelated-task',
       title: 'Unrelated semantic result',
-      snippet: 'Numeric noise',
-      taskId: 'unrelated-task',
-      finalScore: 99,
-      source: 'task',
-    }]);
+      text: 'Numeric noise',
+      score: 99,
+    })]);
 
     const res = await request(createApp())
       .get('/api/search')
@@ -176,10 +192,10 @@ describe('GET /api/search structured references', () => {
         score: 1,
       }),
     ]);
-    expect(memoryNotesSearchMock).not.toHaveBeenCalled();
+    expect(searchLaneMock).not.toHaveBeenCalled();
   });
 
-  it('pins the authoritative partial session owner and still merges QMD', async () => {
+  it('pins the authoritative partial session owner and still merges ranked hits', async () => {
     const { task: staleTask } = await addTask({
       title: 'Stale task-side owner',
       project: 'Quick Start',
@@ -198,19 +214,22 @@ describe('GET /api/search structured references', () => {
       taskId: authoritativeTask.id,
       title: 'Record-owned session',
     }]);
-    memoryNotesSearchMock.mockResolvedValue([{
+    searchLaneMock.mockResolvedValue([laneHit({
+      ref: 'semantic-task',
       title: 'Semantic companion result',
-      snippet: 'Related implementation',
-      taskId: 'semantic-task',
-      finalScore: 1,
-      source: 'task',
-    }]);
+      text: 'Related implementation',
+      score: 1,
+    })]);
 
     const res = await request(createApp())
       .get('/api/search')
       .query({ q: SESSION_ID.slice(0, 8), types: 'task' });
 
     expect(res.status).toBe(200);
+    // A PARTIAL id is a strong hint, not a navigation command: the owner is
+    // pinned first (from SessionRecord.taskId, which is authoritative over the
+    // stale task-side session_ids link, scored 0.99 for "prefix, not exact"),
+    // and the ranked lane still contributes below it.
     expect(res.body.results).toEqual([
       expect.objectContaining({
         taskId: authoritativeTask.id,
@@ -221,17 +240,16 @@ describe('GET /api/search structured references', () => {
         taskId: 'semantic-task',
       }),
     ]);
-    expect(memoryNotesSearchMock).toHaveBeenCalledOnce();
+    expect(searchLaneMock).toHaveBeenCalledOnce();
   });
 
-  it('disables QMD reranking for an ordinary interactive task query', async () => {
-    memoryNotesSearchMock.mockResolvedValue([{
+  it('asks the index lane for the task kind on an ordinary interactive query', async () => {
+    searchLaneMock.mockResolvedValue([laneHit({
+      ref: 'semantic-task-id',
       title: 'Semantic result',
-      snippet: 'Related achievement',
-      taskId: 'semantic-task-id',
-      finalScore: 0.82,
-      source: 'task',
-    }]);
+      text: 'Related achievement',
+      score: 0.82,
+    })]);
 
     const res = await request(createApp())
       .get('/api/search')
@@ -244,22 +262,22 @@ describe('GET /api/search structured references', () => {
         taskId: 'semantic-task-id',
       }),
     ]);
-    expect(memoryNotesSearchMock).toHaveBeenCalledWith(
+    // The call shape IS the contract on this interactive path: one lane call,
+    // the caller's limit, and no extra scoring knob (an in-process quality pass
+    // here used to freeze every route in the app for seconds per query).
+    expect(searchLaneMock).toHaveBeenCalledWith(
       'career accomplishments',
-      ['task'],
-      20,
-      undefined,
-      { rerank: false, overfetchMultiplier: 1 },
+      { kinds: ['task'], limit: 20 },
     );
   });
 
-  it('falls back to session metadata when QMD session search fails', async () => {
+  it('falls back to session metadata when the index session lane fails', async () => {
     listSessionsMock.mockResolvedValue([{
       claudeSessionId: 'session-fallback-id',
       title: 'Authentication middleware investigation',
       description: 'Debugged refresh token rotation',
     }]);
-    memoryNotesSearchMock.mockRejectedValue(new Error('QMD unavailable'));
+    searchLaneMock.mockRejectedValue(new Error('index unavailable'));
 
     const res = await request(createApp())
       .get('/api/search')
@@ -275,14 +293,14 @@ describe('GET /api/search structured references', () => {
     ]);
   });
 
-  it('disables QMD reranking for an ordinary interactive session query', async () => {
-    memoryNotesSearchMock.mockResolvedValue([{
+  it('asks the index lane for the session kind on an ordinary interactive query', async () => {
+    searchLaneMock.mockResolvedValue([laneHit({
+      kind: 'session',
+      ref: 'semantic-session-id',
       title: 'Semantic session result',
-      snippet: 'Related implementation work',
-      sessionId: 'semantic-session-id',
-      finalScore: 0.76,
-      source: 'session',
-    }]);
+      text: 'Related implementation work',
+      score: 0.76,
+    })]);
 
     const res = await request(createApp())
       .get('/api/search')
@@ -295,17 +313,14 @@ describe('GET /api/search structured references', () => {
         sessionId: 'semantic-session-id',
       }),
     ]);
-    expect(memoryNotesSearchMock).toHaveBeenCalledWith(
+    expect(searchLaneMock).toHaveBeenCalledWith(
       'implementation discussion',
-      ['session'],
-      20,
-      undefined,
-      { rerank: false, overfetchMultiplier: 1 },
+      { kinds: ['session'], limit: 20 },
     );
   });
 
-  it('surfaces a total QMD failure instead of returning an authoritative empty set', async () => {
-    memoryNotesSearchMock.mockRejectedValue(new Error('QMD unavailable'));
+  it('surfaces a total index failure instead of returning an authoritative empty set', async () => {
+    searchLaneMock.mockRejectedValue(new Error('index unavailable'));
 
     const res = await request(createApp())
       .get('/api/search')
@@ -333,7 +348,7 @@ describe('GET /api/search structured references', () => {
       expect(res.body.results).toEqual([
         expect.objectContaining({ taskId: task.id }),
       ]);
-      expect(memoryNotesSearchMock).not.toHaveBeenCalled();
+      expect(searchLaneMock).not.toHaveBeenCalled();
     } finally {
       if (previous === undefined) delete process.env.WALNUT_DISABLE_SEARCH;
       else process.env.WALNUT_DISABLE_SEARCH = previous;

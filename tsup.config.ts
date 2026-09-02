@@ -28,7 +28,6 @@ export default defineConfig({
     'src/hooks/on-compact.ts',
     'src/web/server.ts',
     'src/session-server/index.ts',
-    'src/workers/qmd-index-worker.ts',
     'src/workers/git-compaction-worker.ts',
     'src/lib/hybrid-search/embed-worker.ts',
     ...actionEntries,
@@ -45,5 +44,5 @@ export default defineConfig({
   splitting: false,
   sourcemap: true,
   dts: false,
-  external: ['better-sqlite3', '@anthropic-ai/claude-agent-sdk', 'esbuild', 'screencapturekit-audio-capture', '@homebridge/node-pty-prebuilt-multiarch', '@tobilu/qmd', '@huggingface/transformers'],
+  external: ['better-sqlite3', '@anthropic-ai/claude-agent-sdk', 'esbuild', 'screencapturekit-audio-capture', '@homebridge/node-pty-prebuilt-multiarch', '@huggingface/transformers'],
 });

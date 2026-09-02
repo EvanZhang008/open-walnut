@@ -17,31 +17,12 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('notes-identity-test'))
 
-// Reconcile drives the QMD semantic store best-effort; stub it so no real
-// notes-search.sqlite / embedding model is opened during these structural tests.
-vi.mock('../../src/core/qmd-store.js', () => ({
-  DEFAULT_QMD_MODEL: 'test-model',
-  embedQmdStore: vi.fn(async (
-    store: { embed: (options: unknown) => Promise<unknown> },
-    _label: string,
-    options: unknown,
-  ) => store.embed(options)),
-  getNotesStore: vi.fn(async () => ({
-    internal: {
-      findActiveDocument: () => undefined,
-      insertContent: () => {},
-      insertDocument: () => {},
-      updateDocumentTitle: () => {},
-      updateDocument: () => {},
-      deactivateDocument: () => {},
-      getActiveDocumentPaths: () => [],
-      cleanupOrphanedVectors: () => 0,
-      deleteInactiveDocuments: () => 0,
-      cleanupOrphanedContent: () => 0,
-    },
-    embed: async () => {},
-    getStatus: async () => ({ needsEmbedding: 0 }),
-  })),
+// Reconcile drives the search index best-effort; stub it so no real
+// search.sqlite / embedding model is opened during these structural tests.
+vi.mock('../../src/core/search/wiring.js', () => ({
+  isSearchV2Enabled: () => true,
+  upsertSearchV2File: vi.fn(async () => {}),
+  sweepSearchV2Files: vi.fn(async () => ({ changed: 0, removed: 0 })),
 }))
 
 import { WALNUT_HOME, NOTES_DIR } from '../../src/constants.js'

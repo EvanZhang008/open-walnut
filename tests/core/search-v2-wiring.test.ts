@@ -1,5 +1,5 @@
 /**
- * Search v2 wiring: flag gate, keyword lane adapter, event-bus incremental
+ * Search wiring: the enable gate, keyword lane adapter, event-bus incremental
  * sync (task upsert + junk-classified removal), and the markdown file sweep.
  *
  * Runs against the test-isolated OPEN_WALNUT_HOME (global-setup), so the
@@ -21,18 +21,13 @@ import {
   type SearchV2Wiring,
 } from '../../src/core/search/wiring.js';
 
-const originalFlag = process.env.WALNUT_SEARCH_V2;
-
 beforeAll(() => {
-  process.env.WALNUT_SEARCH_V2 = '1';
   // Keyword-only in tests: the semantic lane would spawn a real worker thread
   // and load the ONNX model. The semantic layer has its own lib tests + eval.
   process.env.WALNUT_SEARCH_V2_SEMANTIC = '0';
 });
 
 afterAll(() => {
-  if (originalFlag === undefined) delete process.env.WALNUT_SEARCH_V2;
-  else process.env.WALNUT_SEARCH_V2 = originalFlag;
   delete process.env.WALNUT_SEARCH_V2_SEMANTIC;
   resetSearchV2IndexForTests();
 });
@@ -47,16 +42,14 @@ async function waitFor(check: () => boolean, timeoutMs = 8_000): Promise<void> {
 }
 
 describe('isSearchV2Enabled', () => {
-  it('defaults ON; WALNUT_SEARCH_V2=0 and WALNUT_DISABLE_SEARCH opt out', () => {
-    expect(isSearchV2Enabled()).toBe(true);
-    delete process.env.WALNUT_SEARCH_V2; // unset = on (2026-08-26 cutover)
+  it('indexing is always on; only WALNUT_DISABLE_SEARCH opts out', () => {
+    // There is no engine flag any more (the QMD stack is gone): the index IS
+    // the engine, so the only question left is whether this host indexes at all.
     expect(isSearchV2Enabled()).toBe(true);
     process.env.WALNUT_DISABLE_SEARCH = '1';
     expect(isSearchV2Enabled()).toBe(false);
     delete process.env.WALNUT_DISABLE_SEARCH;
-    process.env.WALNUT_SEARCH_V2 = '0';
-    expect(isSearchV2Enabled()).toBe(false);
-    process.env.WALNUT_SEARCH_V2 = '1';
+    expect(isSearchV2Enabled()).toBe(true);
   });
 });
 

@@ -18,8 +18,8 @@
  * renamed to log.<yyyymmdd>-<seq>.md (date-stamped volume names double as the
  * time index) and a fresh log.md starts with a link to the previous volume.
  *
- * Search: volumes are plain md under skills/ — covered by the QMD skill
- * collection's all-md glob; no separate index.
+ * Search: volumes are plain md under skills/ — covered by the search index's
+ * skill kind; no separate index.
  */
 import fs from 'node:fs';
 import path from 'node:path';

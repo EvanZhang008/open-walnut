@@ -6,44 +6,33 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-const qmdMocks = vi.hoisted(() => ({
-  update: vi.fn(async () => {}),
-  embed: vi.fn(async () => {}),
+const indexMocks = vi.hoisted(() => ({
+  sweepSearchV2Files: vi.fn(async () => ({ changed: 0, removed: 0 })),
 }));
 
-// QMD store pulls in native embedding deps — mock the refresh path entirely.
-vi.mock('../../src/core/qmd-store.js', () => ({
-  DEFAULT_QMD_MODEL: 'test-model',
-  embedQmdStore: vi.fn(async (
-    store: { embed: (options: unknown) => Promise<unknown> },
-    _label: string,
-    options: unknown,
-  ) => store.embed(options)),
-  getMemoryStore: vi.fn(async () => ({
-    update: qmdMocks.update,
-    embed: qmdMocks.embed,
-  })),
+// The real sweep opens search.sqlite and walks the vault — stub the whole
+// index-refresh path so skill writes stay pure filesystem work here.
+vi.mock('../../src/core/search/wiring.js', () => ({
+  isSearchV2Enabled: () => true,
+  sweepSearchV2Files: indexMocks.sweepSearchV2Files,
 }));
 
 import { skillManageTool } from '../../src/agent/tools/skill-manage-tool.js';
 import { skillViewTool } from '../../src/agent/tools/skill-view-tool.js';
 import { loadSkillUsage } from '../../src/core/skill-usage.js';
 import { clearSkillsCache } from '../../src/core/skill-loader.js';
-import { waitForQmdIndexWork } from '../../src/core/qmd-work-queue.js';
 import { WALNUT_HOME, GLOBAL_SKILLS_DIR } from '../../src/constants.js';
 
 let originalCwd: string;
 
-async function settleQmdRefreshes(): Promise<void> {
-  // dispatchQmdIncrementalIndex() loads the inline worker through a dynamic
-  // import in tests. Resolve that same module first so earlier dispatch
-  // continuations enter the shared QMD queue before waiting for its tail.
-  await import('../../src/core/qmd-maintenance.js');
-  await waitForQmdIndexWork();
+/** The index refresh is fire-and-forget (`void import(...).then(sweep)`) — let
+ *  the microtask chain plus one macrotask tick land before asserting on it. */
+async function settleIndexRefreshes(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 20));
 }
 
 beforeEach(async () => {
-  await settleQmdRefreshes();
+  await settleIndexRefreshes();
   vi.clearAllMocks();
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
@@ -53,7 +42,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await settleQmdRefreshes();
+  await settleIndexRefreshes();
   process.chdir(originalCwd);
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -104,28 +93,29 @@ describe('skill_manage create', () => {
     expect(usage['tax-filing']?.created_at).toBeDefined();
   });
 
-  it('serializes repeated skill refreshes through the global QMD queue', async () => {
-    let releaseFirst!: () => void;
-    qmdMocks.update.mockImplementationOnce(() =>
-      new Promise<void>((resolve) => { releaseFirst = resolve; }));
-
+  it('kicks a search-index refresh after every skill write', async () => {
+    // A just-written skill must be findable in the same conversation; the
+    // 10-min periodic sweep is only the safety net. Each write path kicks one
+    // refresh (mtime-diffed, so an unchanged vault costs a stat walk).
     await create();
+    await vi.waitFor(() => {
+      expect(indexMocks.sweepSearchV2Files).toHaveBeenCalledTimes(1);
+    });
+
     await skillManageTool.execute({
       action: 'patch',
       name: 'tax-filing',
       old_string: 'Deadline: April 15.',
       new_string: 'Deadline: April 15 (Oct 15 with extension).',
     });
-
     await vi.waitFor(() => {
-      expect(qmdMocks.update).toHaveBeenCalledTimes(1);
+      expect(indexMocks.sweepSearchV2Files).toHaveBeenCalledTimes(2);
     });
 
-    releaseFirst();
-    await settleQmdRefreshes();
-
-    expect(qmdMocks.update).toHaveBeenCalledTimes(2);
-    expect(qmdMocks.embed).toHaveBeenCalledTimes(2);
+    await skillManageTool.execute({ action: 'delete', name: 'tax-filing' });
+    await vi.waitFor(() => {
+      expect(indexMocks.sweepSearchV2Files).toHaveBeenCalledTimes(3);
+    });
   });
 
   it('rejects duplicate names', async () => {

@@ -672,7 +672,7 @@ export type SessionControlAction =
   | 'queue' | 'queue.edit' | 'queue.delete'
   // Box-level family (sessionId ignored):
   | 'server.notifications' | 'server.notifications.mark-read' | 'server.notifications.dismiss'
-  // Global search: the QMD/semantic store lives on the primary only, so a
+  // Global search: the search index lives on the primary only, so a
   // replica relays the query here instead of refusing outright — the Mac
   // being reachable is exactly the common case for a phone on the replica.
   | 'server.search'

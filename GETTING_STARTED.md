@@ -187,8 +187,8 @@ The data directory structure:
   chat-history.json        # Persistent chat history
   cron-jobs.json           # Scheduled jobs
   usage.sqlite             # Usage tracking
-  memory-search.sqlite     # Search index (BM25 + vector)
-  notes-search.sqlite      # Notes search index
+  search.sqlite            # Search index over everything (keyword + vector)
+  models/                  # Embedding model weights, fetched on first use
   tasks/
     tasks.json             # Task database
     archive/               # Completed task archives
@@ -358,7 +358,7 @@ Open Walnut accumulates knowledge over time. The more you use it, the smarter it
 | **Daily logs** | `memory/daily/YYYY-MM-DD.md` | Timestamped activity records |
 | **Session summaries** | `memory/sessions/` | Auto-captured when coding sessions end |
 | **Compaction archive** | `memory/compaction/` | Working memory snapshots saved during context compaction |
-| **Search index** | `~/.open-walnut/memory-search.sqlite` and `notes-search.sqlite` | Hybrid search (BM25 + vector via QMD) |
+| **Search index** | `~/.open-walnut/search.sqlite` | Hybrid search (BM25 keyword lanes + vector rescore) |
 
 ### Working Memory
 
@@ -376,47 +376,31 @@ The agent searches across all memory layers using hybrid keyword + semantic sear
 
 ## Search & Embedding Setup
 
-Open Walnut uses [QMD](https://github.com/tobi/qmd) (`@tobilu/qmd`) as its built-in search engine — a local hybrid search library combining BM25 keyword matching, vector embeddings, and re-ranking. No external services needed.
+Search is built in and runs entirely on your machine: one SQLite file (`~/.open-walnut/search.sqlite`) holding a keyword index over tasks, sessions, notes, memory files and skills, plus small quantized vectors used to rescore the keyword candidates. No external services, no separate search process.
 
 ### What Happens on First Start
 
-The BGE-M3 embedding model (~1.16 GB) downloads automatically from HuggingFace on first server start. This is a one-time download that can take **5-30 minutes** depending on your connection speed. The model is cached at:
+Nothing you have to wait for. The keyword half answers immediately (a few milliseconds), and it is a complete search on its own. The embedding model is fetched in the background on first use and cached under `~/.open-walnut/models/`; until it arrives, results are keyword-ranked. Indexing your existing data happens in the background too, paced so it never competes with the UI.
 
-```
-~/.cache/qmd/models/          # macOS / Linux (default)
-$XDG_CACHE_HOME/qmd/models/   # if XDG_CACHE_HOME is set
-%LOCALAPPDATA%\qmd\models\    # Windows
-```
+Queries mixing Chinese and English work out of the box: the tokenizer splits `camelCase`, `snake_case` and `kebab-case` identifiers into their parts and indexes Chinese as ordered character pairs, so `operator` finds `PlatformEventOperator` and a Chinese phrase matches in order rather than as a bag of characters.
 
-BGE-M3 supports **multilingual search** (strong Chinese + English coverage, plus 100+ other languages) out of the box.
+### Choosing an Embedding Model
 
-### Using a Different Model
+Two models ship as presets, selected with an environment variable before startup:
 
-Set the `QMD_EMBED_MODEL` environment variable before starting:
+| Preset | Model | Dimensions | Notes |
+|---|---|---|---|
+| `qwen3-0.6b` (default) | `onnx-community/Qwen3-Embedding-0.6B-ONNX` | 1024 | Best recall on realistic, wordy queries; strong Chinese + English |
+| `e5-small` | `Xenova/multilingual-e5-small` | 384 | ~4x faster per query, a third of the index size; slightly weaker recall |
 
 ```bash
-export QMD_EMBED_MODEL="hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf"
+export WALNUT_SEARCH_V2_EMBED_MODEL=e5-small   # pick a preset
+export WALNUT_SEARCH_V2_SEMANTIC=0             # keyword-only, no model at all
+export WALNUT_DISABLE_SEARCH=1                 # do not index anything
 npm start
 ```
 
-You can also change the model from the web UI: **Settings → Search & Embeddings**.
-
-Available model options:
-
-| Model | URI | Size | Languages | Notes |
-|---|---|---|---|---|
-| **BGE-M3** (Walnut default) | `hf:CompendiumLabs/bge-m3-gguf/bge-m3-f16.gguf` | ~1.16 GB | Multilingual (100+ languages, strong Chinese + English) | Best quality; set by Walnut at startup |
-| **Qwen3-Embedding-0.6B** | `hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf` | ~640 MB | Multilingual (strong Chinese + English) | Smaller alternative |
-| **EmbeddingGemma** (QMD library default) | `hf:ggml-org/embeddinggemma-300M-Q8_0/embeddinggemma-300M-Q8_0.gguf` | ~300 MB | English only | Lightest option; what QMD uses if no override is set |
-
-After changing models, you must click **Re-index** in **Settings → Search & Embeddings** to rebuild the search index with the new model.
-
-You can also set the model persistently in `~/.open-walnut/config.yaml`:
-
-```yaml
-search:
-  qmd_model: "hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf"
-```
+Switching presets is safe: the index notices the model changed, drops the stored vectors, and re-embeds in the background. Keyword search keeps working the whole time. **Settings → Search & Embeddings** shows index health, per-kind document counts, and a **Rebuild index** button.
 
 ---
 
@@ -637,15 +621,17 @@ All commands support `--json` for structured output.
 
 ### Search or embedding model issues
 
-**Symptoms**: First startup takes a long time, or search returns no vector results.
+**Symptoms**: results look keyword-only, or **Settings → Search & Embeddings** reports an error.
 
-**The BGE-M3 embedding model (~1.16 GB) downloads on first start.** This is a one-time download that can take 5-30 minutes. If the download is interrupted, delete the specific model file (e.g. `~/.cache/qmd/models/bge-m3-f16.gguf`) and restart.
+The embedding model is fetched on first use into `~/.open-walnut/models/`. Until it finishes, search answers from the keyword lanes alone, which is a working search, not a failure. If the download was interrupted, delete that folder and restart; it re-fetches.
 
-**To use a smaller model** (faster download, less disk):
+**To use a smaller, faster model** (a third of the index size):
 ```bash
-export QMD_EMBED_MODEL="hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf"
+export WALNUT_SEARCH_V2_EMBED_MODEL=e5-small
 npm start
 ```
+
+If a machine should never spend anything on embeddings, `WALNUT_SEARCH_V2_SEMANTIC=0` keeps keyword search and skips the model entirely.
 
 See [Search & Embedding Setup](#search--embedding-setup) for all model options.
 

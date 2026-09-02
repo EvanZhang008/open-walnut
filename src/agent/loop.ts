@@ -221,8 +221,9 @@ export async function runAgentLoop(
     system = options.system;
   } else {
     // Skill prefetch runs CONCURRENTLY with prompt building and is capped at
-    // 300ms — it sits on the send hot path, and an unbounded QMD search (cold
-    // model load) here would stall first-token latency. Timeout/error → no hint.
+    // 300ms — it sits on the send hot path, and an unbounded search here would
+    // stall first-token latency. Timeout/error → no hint. (The keyword lane it
+    // uses now answers in single-digit ms, so the cap is headroom, not a race.)
     const hintPromise: Promise<string | null> = typeof userMessage === 'string'
       ? Promise.race([
           buildSkillPrefetchHint(userMessage),

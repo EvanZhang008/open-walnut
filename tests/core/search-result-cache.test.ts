@@ -118,14 +118,10 @@ describe('searchResultCacheKey', () => {
 });
 
 describe('search() memo (wired)', () => {
-  const OLD_V2 = process.env.WALNUT_SEARCH_V2;
   const OLD_FLAG = process.env.WALNUT_SEARCH_RESULT_CACHE;
 
   beforeEach(() => {
     vi.resetModules();
-    // QMD path: lets the memory lane be mocked by name without loading the v2
-    // index (better-sqlite3 + embed worker) into a unit test.
-    process.env.WALNUT_SEARCH_V2 = '0';
     // The memo is OFF by default under vitest (the suite mutates its mocked
     // stores between identical queries); these tests are the ones that want it.
     process.env.WALNUT_SEARCH_RESULT_CACHE = '1';
@@ -133,18 +129,26 @@ describe('search() memo (wired)', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.doUnmock('../../src/core/memory-search.js');
-    if (OLD_V2 === undefined) delete process.env.WALNUT_SEARCH_V2;
-    else process.env.WALNUT_SEARCH_V2 = OLD_V2;
+    vi.doUnmock('../../src/core/search/wiring.js');
     if (OLD_FLAG === undefined) delete process.env.WALNUT_SEARCH_RESULT_CACHE;
     else process.env.WALNUT_SEARCH_RESULT_CACHE = OLD_FLAG;
   });
 
+  /** Mock the index lane by name — no real search.sqlite / embed worker in a
+   *  unit test. One call per search() (the memory lane asks once). */
   function mockLane() {
     const lane = vi.fn().mockResolvedValue([
-      { title: 'Helm CRD update behavior', snippet: 'body about helm', filepath: '/m/a.md', finalScore: 0.9, source: 'memory' },
+      {
+        kind: 'memory',
+        ref: '/m/a.md',
+        title: 'Helm CRD update behavior',
+        text: 'body about helm',
+        score: 0.9,
+        components: { coverage: 1, cosine: 0 },
+        semantic: 'off',
+      },
     ]);
-    vi.doMock('../../src/core/memory-search.js', () => ({ memoryNotesSearch: lane }));
+    vi.doMock('../../src/core/search/wiring.js', () => ({ searchV2Lane: lane }));
     return lane;
   }
 
@@ -206,7 +210,7 @@ describe('search() memo (wired)', () => {
     // A total outage throws so the browser keeps its local matches; caching the
     // throw would freeze that error in place for 20s after the store recovered.
     const lane = vi.fn().mockRejectedValue(new Error('store down'));
-    vi.doMock('../../src/core/memory-search.js', () => ({ memoryNotesSearch: lane }));
+    vi.doMock('../../src/core/search/wiring.js', () => ({ searchV2Lane: lane }));
     const { search } = await import('../../src/core/search.js');
     await expect(search('helm crd', { types: ['memory'] })).rejects.toThrow('store down');
     await expect(search('helm crd', { types: ['memory'] })).rejects.toThrow('store down');

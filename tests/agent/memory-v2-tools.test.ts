@@ -1,14 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fsp from 'node:fs/promises';
+import path from 'node:path';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 let tmpDir: string;
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-// Mock the QMD search to avoid real model initialization
-vi.mock('../../src/core/memory-search.js', () => ({
-  memoryNotesSearch: vi.fn(),
+// Mock the index lane so no real search.sqlite / embed worker is opened.
+const mocks = vi.hoisted(() => ({ searchV2Lane: vi.fn() }));
+vi.mock('../../src/core/search/wiring.js', () => ({
+  searchV2Lane: mocks.searchV2Lane,
 }));
 
 // Mock the files handler to avoid complex dependency chain
@@ -24,21 +26,34 @@ vi.mock('../../src/agent/tools/files/index.js', () => ({
   }),
 }));
 
-import { WALNUT_HOME } from '../../src/constants.js';
+import { GLOBAL_SKILLS_DIR, MEMORY_DIR, WALNUT_HOME } from '../../src/constants.js';
 import { memoryNotesSearchTool } from '../../src/agent/tools/memory-notes-search-tool.js';
-import { memoryNotesSearch } from '../../src/core/memory-search.js';
 import { addTask, _resetForTesting } from '../../src/core/task-manager.js';
 
 /**
  * Suite 9: Agent Tools (Unit)
  */
 
+/** One index hit as searchV2Lane returns it. */
+function hit(over: Record<string, unknown>) {
+  return {
+    kind: 'memory',
+    ref: path.join(MEMORY_DIR, 'topics', 'placeholder.md'),
+    title: 'Placeholder',
+    text: '',
+    score: 0.5,
+    components: { coverage: 1, cosine: 0 },
+    semantic: 'off',
+    ...over,
+  };
+}
+
 beforeEach(async () => {
   _resetForTesting();
   tmpDir = WALNUT_HOME;
   await fsp.rm(tmpDir, { recursive: true, force: true });
   await fsp.mkdir(tmpDir, { recursive: true });
-  vi.mocked(memoryNotesSearch).mockClear();
+  mocks.searchV2Lane.mockReset();
 });
 
 afterEach(async () => {
@@ -47,25 +62,19 @@ afterEach(async () => {
 
 describe('memory_notes_search tool', () => {
   it('9.1: returns formatted results', async () => {
-    vi.mocked(memoryNotesSearch).mockResolvedValue([
-      {
-        filepath: '/memory/daily/2026-04-12.md',
+    mocks.searchV2Lane.mockResolvedValue([
+      hit({
+        ref: path.join(MEMORY_DIR, 'daily', '2026-04-12.md'),
         title: 'Today',
-        snippet: 'Worked on tests',
-        score: 0.85,
-        finalScore: 0.7654321,
-        source: 'daily',
-        collection: 'daily',
-      },
-      {
-        filepath: '/memory/topics/walnut.md',
+        text: 'Worked on tests',
+        score: 0.7654321,
+      }),
+      hit({
+        ref: path.join(MEMORY_DIR, 'topics', 'walnut.md'),
         title: 'Walnut',
-        snippet: 'TypeScript React frontend',
-        score: 0.9,
-        finalScore: 0.9123456,
-        source: 'topic',
-        collection: 'topic',
-      },
+        text: 'TypeScript React frontend',
+        score: 0.9123456,
+      }),
     ]);
 
     const result = await memoryNotesSearchTool.execute({
@@ -83,39 +92,67 @@ describe('memory_notes_search tool', () => {
       expect(r).toHaveProperty('filepath');
       expect(r).toHaveProperty('score');
     }
-    // Score should be rounded to 3 decimal places
-    expect(parsed[0].score).toBe(0.765);
-    expect(parsed[1].score).toBe(0.912);
+    // Rows come back score-ordered, each rounded to 3 decimal places.
+    expect(parsed[0].score).toBe(0.912);
+    expect(parsed[1].score).toBe(0.765);
+    // The QMD-era `source` contract survives: the bucket is recovered from the
+    // file path, so callers still see memory_topic / memory_daily.
+    expect(parsed[0].source).toBe('memory_topic');
+    expect(parsed[1].source).toBe('memory_daily');
   });
 
   it('9.2: returns "No results found." for empty results', async () => {
-    vi.mocked(memoryNotesSearch).mockResolvedValue([]);
+    mocks.searchV2Lane.mockResolvedValue([]);
     const result = await memoryNotesSearchTool.execute({
       queries: ['nonexistent'],
     });
     expect(result).toBe('No results found.');
   });
 
-  it('9.3: passes queries/sources/limit/path parameters correctly', async () => {
-    vi.mocked(memoryNotesSearch).mockResolvedValue([]);
+  it('9.3: maps sources onto index kinds and over-fetches for the merge', async () => {
+    mocks.searchV2Lane.mockResolvedValue([]);
     await memoryNotesSearchTool.execute({
       queries: ['test'],
       sources: ['memory_daily', 'note_vault'],
-      path: 'walnut/overview/history/',
     });
-    // 5th arg pins rerank:false — QMD's reranker is a native llama.cpp call that
-    // blocks the event loop, and the agent loop runs inside the web server process,
-    // so leaving it on froze the whole app for ~3s per tool call (28.7s call).
-    expect(memoryNotesSearch).toHaveBeenCalledWith(
-      ['test'],
-      ['memory_daily', 'note_vault'],
-      15,
-      'walnut/overview/history/',
-      { rerank: false },
-    );
+    // Every memory_* bucket is one 'memory' kind; note_vault is 'note'. The
+    // lane is over-fetched (2x limit) because sources/path filtering happens
+    // after the hits come back.
+    expect(mocks.searchV2Lane).toHaveBeenCalledWith('test', {
+      kinds: ['memory', 'note'],
+      limit: 30,
+    });
   });
 
-  it('9.4: resolves an exact task ID without invoking QMD', async () => {
+  it('9.3b: filters hits by the collection-relative path prefix', async () => {
+    mocks.searchV2Lane.mockResolvedValue([
+      hit({
+        kind: 'skill',
+        ref: path.join(GLOBAL_SKILLS_DIR, 'walnut', 'overview', 'history', '2026-08.md'),
+        title: 'August history',
+        text: 'shipped the search rewrite',
+        score: 0.4,
+      }),
+      hit({
+        kind: 'skill',
+        ref: path.join(GLOBAL_SKILLS_DIR, 'finance', 'tax.md'),
+        title: 'Tax notes',
+        text: 'unrelated',
+        score: 0.9,
+      }),
+    ]);
+
+    const result = await memoryNotesSearchTool.execute({
+      queries: ['history'],
+      sources: ['memory_skill'],
+      path: 'walnut/overview/history/',
+    });
+    const parsed = JSON.parse(result as string);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].title).toBe('August history');
+  });
+
+  it('9.4: resolves an exact task ID without touching the index lane', async () => {
     const { task } = await addTask({
       title: 'Structured agent memory result',
       project: 'Quick Start',
@@ -128,7 +165,7 @@ describe('memory_notes_search tool', () => {
       sources: ['task'],
     });
 
-    expect(memoryNotesSearch).not.toHaveBeenCalled();
+    expect(mocks.searchV2Lane).not.toHaveBeenCalled();
     expect(JSON.parse(result as string)).toEqual([
       expect.objectContaining({
         source: 'task',

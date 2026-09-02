@@ -7,7 +7,7 @@
  *   ~/.open-walnut/search-golden.local.yaml      real terms, NEVER committed
  *
  * Backends:
- *   qmd   (default) — live queries via HTTP GET /api/search on a running
+ *   http  (default) — live queries via HTTP GET /api/search on a running
  *                     server (read-only; never mutates any index)
  *   v2              — the in-house hybrid-search engine. Fixture queries run
  *                     against an in-memory index built from the public yaml's
@@ -62,7 +62,7 @@ function opt(name, dflt) {
   const i = args.indexOf(name);
   return i >= 0 && args[i + 1] ? args[i + 1] : dflt;
 }
-const BACKEND = opt('--backend', 'qmd');
+const BACKEND = opt('--backend', 'http');
 const SERVER = opt('--server', 'http://localhost:3456');
 const INDEX_DB = opt('--index-db', '/tmp/walnut-search-v2/search.sqlite');
 const LIMIT = parseInt(opt('--limit', '10'), 10);
@@ -228,7 +228,7 @@ async function runV2(index, query) {
   };
 }
 
-async function runQmdHttp(query) {
+async function runLiveHttp(query) {
   const url = `${SERVER}/api/search?q=${encodeURIComponent(query.query)}&limit=${LIMIT}`;
   const t0 = performance.now();
   const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
@@ -254,10 +254,11 @@ async function runBackend(query) {
       : runV2(await getV2FixtureIndex(), query);
   }
   if (query.dataset !== 'live') {
-    // QMD cannot index the inline fixture corpus without touching prod.
+    // The HTTP backend hits a live server; it cannot index the inline fixture
+    // corpus without touching production data.
     return null;
   }
-  if (BACKEND === 'qmd') return runQmdHttp(query);
+  if (BACKEND === 'http') return runLiveHttp(query);
   throw new Error(`unknown backend "${BACKEND}"`);
 }
 

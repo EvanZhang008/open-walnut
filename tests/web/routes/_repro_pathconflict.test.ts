@@ -3,7 +3,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createMockConstants } from '../../helpers/mock-constants.js';
 vi.mock('../../../src/constants.js', () => createMockConstants('notes-pathconflict'));
-vi.mock('../../../src/core/memory-search.js', () => ({ memoryNotesSearch: vi.fn(async () => []) }));
+// Structural reconcile only: keep the search index (better-sqlite3 + sweep)
+// out of this repro.
+vi.mock('../../../src/core/search/wiring.js', () => ({
+  isSearchV2Enabled: () => false,
+  upsertSearchV2File: vi.fn(async () => {}),
+  sweepSearchV2Files: vi.fn(async () => ({ changed: 0, removed: 0 })),
+}));
 import { WALNUT_HOME } from '../../../src/constants.js';
 import { closeNotesIndexDb, listNotes, getNoteByPath } from '../../../src/core/notes-index.js';
 import { reconcileNoteNow } from '../../../src/core/notes-indexer.js';

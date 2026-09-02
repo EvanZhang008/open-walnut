@@ -235,7 +235,7 @@ else:
     # The narrow {global:true} subscribers interest-set was supposed to silence.
     # If ANY of these show up on streaming events, the interest array regressed
     # (or a new global subscriber was added without one) — that's the real alarm.
-    REGRESSION={'audio-transcriber','qmd-task-sync','qmd-session-sync','dependency-unblock','git-versioning'}
+    REGRESSION={'audio-transcriber','search-v2-task-sync','search-v2-session-sync','dependency-unblock','git-versioning'}
     print("  per subscriber (woken count for streaming events):")
     for sub,c in per.most_common():
         if sub in ('main-ai','session-hooks'):

@@ -10,10 +10,12 @@ the [self-report](../../docs/decision/summarizer-self-report.md) and
 [session-end](../../docs/decision/no-session-end-gist.md) decisions before changing
 turn-complete task updates or session lifecycle hooks.
 
-**QMD search/indexing:** read
-[`docs/investigation/qmd-search-performance/README.md`](../../docs/investigation/qmd-search-performance/README.md) before
-changing interactive search, embedding models, reranking, indexing workers, cleanup, or
-compaction.
+**Search/indexing:** the engine is `src/lib/hybrid-search/` (self-contained library: tokenizer,
+FTS5 schema, two keyword lanes, vector rescore, embed worker) with `src/core/search/` as the
+walnut adapter (serializers, event-bus wiring, backfill). Read
+[`src/lib/hybrid-search/README.md`](../lib/hybrid-search/README.md) before changing interactive
+search, the tokenizer, embedding models, or the indexing path. The library must keep ZERO walnut
+imports (`tests/lib/hybrid-search-boundary.test.ts` enforces it).
 
 ## Invariants you must not break (even without reading the skill)
 

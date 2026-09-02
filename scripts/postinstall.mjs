@@ -3,7 +3,7 @@
  * Unified postinstall — routes between two very different install shapes:
  *
  * DEV CHECKOUT (git clone; web/ + src/ present):
- *   patch-package && (cd web && npm install) && node scripts/patch-qmd.mjs
+ *   patch-package && (cd web && npm install)
  *   Strict: any failure fails the install, same as the historical inline chain.
  *
  * PUBLISHED PACKAGE (npm install open-walnut / npx open-walnut):
@@ -12,7 +12,6 @@
  *     PARENT node_modules, so it can never find it. Instead we parse our own
  *     patch file (single-hunk, single-line change) and apply it directly to
  *     the resolved install location.
- *   - patch-qmd.mjs handles its own resolution (require-based candidate).
  *   Fail-open: a cosmetic patch failure must never break `npm install` for a
  *   consumer — warn loudly and continue.
  */
@@ -35,7 +34,6 @@ if (isDevCheckout) {
   // ── Dev chain (strict) ──
   if (!run('npx', ['patch-package'])) process.exit(1);
   if (!run('npm', ['install'], { cwd: join(root, 'web') })) process.exit(1);
-  if (!run(process.execPath, [join(root, 'scripts', 'patch-qmd.mjs')])) process.exit(1);
   process.exit(0);
 }
 
@@ -110,11 +108,4 @@ try {
   warn(`SDK patch failed (continuing): ${err instanceof Error ? err.message : err}`);
 }
 
-// patch-qmd resolves its own targets (including hoisted installs) and is
-// idempotent; isolate its strict throws so install never fails on it.
-const qmd = spawnSync(process.execPath, [join(root, 'scripts', 'patch-qmd.mjs')], {
-  stdio: 'inherit',
-  cwd: root,
-});
-if (qmd.status !== 0) warn('qmd search patch failed (continuing — search recall slightly degraded)');
 process.exit(0);

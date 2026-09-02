@@ -1,13 +1,11 @@
 /**
- * CJK-aware query term splitting, shared by the lex-query builder
- * (memory-search.ts) and the cross-store coverage ranking (search.ts).
+ * CJK-aware query term splitting for the RANKING side of search (search.ts:
+ * coverage tiebreak, title lane, snippet term highlighting).
  *
- * QMD's FTS index uses SQLite FTS5 with tokenize='porter unicode61', which
- * keeps a contiguous CJK run as ONE token. That tokenizer string is hardcoded
- * inside @tobilu/qmd (dist/store.js), so Walnut cannot swap in a CJK
- * segmenter without forking QMD AND re-indexing every store — which is why
- * the workaround lives on the QUERY side (splitting terms here) instead of
- * the index side.
+ * Not the tokenizer. The index has its own (src/lib/hybrid-search/tokenizer.ts,
+ * which indexes CJK as ordered character pairs); this module answers a
+ * different question: "which terms of the query should a result be judged on
+ * containing", which is a scoring concern and stays on the query side.
  *
  * Script_Extensions (not Script) is required: Katakana's prolonged sound mark
  * ー (U+30FC) and the middle dot ・ (U+30FB) are Script=Common, so a plain

@@ -2,10 +2,10 @@
  * System zone of the notification center — ambient health, not feed entries:
  * remote daemons, the data backup, and the embedding-search index.
  *
- * Its own component for two reasons beyond file size: the QMD status poll lives
- * here, so mounting only when the System tab is showing means the poll doesn't
- * run while the user reads Errors or Automation; and the panel file stays near
- * the repo's ~500 LOC guideline.
+ * Its own component for two reasons beyond file size: the search-index status
+ * poll lives here, so mounting only when the System tab is showing means the
+ * poll doesn't run while the user reads Errors or Automation; and the panel
+ * file stays near the repo's ~500 LOC guideline.
  */
 import { memo, useEffect, useState } from 'react';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
@@ -13,82 +13,71 @@ import { formatRelative } from '@/contexts/notifications';
 import { visibleInterval } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
 
-interface QmdStoreStats {
+interface IndexStoreStats {
   totalIndexed: number;
-  totalEmbedded: number;
-  totalChunks: number;
+  totalEmbedded: number | null;
+  totalChunks: number | null;
 }
 
-export interface QmdStatus {
-  model: { name: string; downloaded: boolean };
-  stores: {
-    memory: QmdStoreStats | null;
-    notes: QmdStoreStats | null;
-    tasks: QmdStoreStats | null;
-    sessions: QmdStoreStats | null;
-  };
-  status: 'ready' | 'indexing' | 'downloading' | 'error';
+export interface SearchIndexStatus {
+  model: { name: string; downloaded: boolean | null };
+  stores: Record<string, IndexStoreStats | null>;
+  status: 'ready' | 'indexing' | 'error';
   error: string | null;
-  progress: { chunksEmbedded: number; totalChunks: number; store: string } | null;
 }
 
 /**
- * QMD status, split into two rates on purpose:
+ * Search-index status, split into two rates on purpose:
  *   `enabled` (the panel is open) does ONE fetch — the System rail's warning dot
  *     needs the error state before the user ever opens the System tab, so a
  *     system-tab-only fetch would make the dot appear only after you look.
  *   `live` (the System tab is the one showing) allows the 3s progress refresh,
  *     which is the part that would otherwise poll behind Errors/Automation.
  */
-export function useQmdStatus(enabled: boolean, live: boolean): QmdStatus | null {
-  const [qmdStatus, setQmdStatus] = useState<QmdStatus | null>(null);
+export function useSearchIndexStatus(enabled: boolean, live: boolean): SearchIndexStatus | null {
+  const [indexStatus, setIndexStatus] = useState<SearchIndexStatus | null>(null);
 
   useEffect(() => {
     if (!enabled) return;
     const ac = new AbortController();
-    const fetchQmd = () => {
-      fetch('/api/qmd/status', { signal: ac.signal })
+    const fetchStatus = () => {
+      fetch('/api/search-index/status', { signal: ac.signal })
         .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-        .then((data: QmdStatus) => setQmdStatus(data))
+        .then((data: SearchIndexStatus) => setIndexStatus(data))
         .catch(err => {
           if (err instanceof DOMException && err.name === 'AbortError') return;
-          log.warn('notifications', 'QMD status fetch failed', { error: String(err) });
+          log.warn('notifications', 'search index status fetch failed', { error: String(err) });
         });
     };
-    fetchQmd();
+    fetchStatus();
     if (!live) return () => ac.abort();
     // visibleInterval: indexing can run for many minutes — hidden tabs skip.
     const cancel = visibleInterval(() => {
-      if (qmdStatus?.status === 'indexing' || qmdStatus?.status === 'downloading') fetchQmd();
+      if (indexStatus?.status === 'indexing') fetchStatus();
     }, 3000);
     return () => { ac.abort(); cancel(); };
-  }, [enabled, live, qmdStatus?.status]);
+  }, [enabled, live, indexStatus?.status]);
 
-  return qmdStatus;
+  return indexStatus;
 }
 
 /** Whether the System zone should wear a warning marker on the rail. */
-export function qmdUnhealthy(qmdStatus: QmdStatus | null): boolean {
-  return qmdStatus?.status === 'error';
+export function searchIndexUnhealthy(status: SearchIndexStatus | null): boolean {
+  return status?.status === 'error';
 }
 
-/** One store's `embedded/indexed docs · N chunks` row, warning-tinted when behind. */
-function StoreRow({ label, stats }: { label: string; stats: QmdStoreStats }) {
+/** One kind's indexed-document row. */
+function StoreRow({ label, stats }: { label: string; stats: IndexStoreStats }) {
   return (
     <div className="notification-detail-row">
       <span>{label}</span>
-      <span className={`notification-detail-value ${
-        stats.totalEmbedded >= stats.totalIndexed ? 'ok' : 'warn'
-      }`}>
-        {stats.totalEmbedded}/{stats.totalIndexed} docs
-        {' · '}{stats.totalChunks} chunks
-      </span>
+      <span className="notification-detail-value ok">{stats.totalIndexed} docs</span>
     </div>
   );
 }
 
 export const NotificationSystemPane = memo(function NotificationSystemPane(
-  { qmdStatus }: { qmdStatus: QmdStatus | null },
+  { indexStatus }: { indexStatus: SearchIndexStatus | null },
 ) {
   const { health, gitSync, loading } = useSystemHealth();
 
@@ -190,15 +179,15 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
       </div>
 
       {/* Embedding Search status */}
-      {qmdStatus && (
-        <div className={`notification-card ${qmdStatus.status === 'error' ? 'warn' : 'ok'}`}>
+      {indexStatus && (
+        <div className={`notification-card ${indexStatus.status === 'error' ? 'warn' : 'ok'}`}>
           <div className="notification-card-row">
             <span className={`notification-card-icon ${
-              qmdStatus.status === 'error' ? 'error'
-                : (qmdStatus.status === 'downloading' || qmdStatus.status === 'indexing') ? 'pulsing'
+              indexStatus.status === 'error' ? 'error'
+                : indexStatus.status === 'indexing' ? 'pulsing'
                 : 'ok'
             }`}>
-              {qmdStatus.status === 'error' ? '✗' : '✓'}
+              {indexStatus.status === 'error' ? '✗' : '✓'}
             </span>
             <span className="notification-card-label">Embedding Search</span>
           </div>
@@ -207,27 +196,24 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
             <div className="notification-detail-row">
               <span>Model</span>
               <span className={`notification-detail-value ${
-                qmdStatus.status === 'ready' ? 'ok'
-                  : qmdStatus.status === 'error' ? 'warn'
+                indexStatus.status === 'ready' ? 'ok'
+                  : indexStatus.status === 'error' ? 'warn'
                   : ''
               }`}>
-                {qmdStatus.model.name}{' '}
-                ({qmdStatus.status === 'ready' ? 'Ready'
-                  : qmdStatus.status === 'downloading' ? 'Downloading'
-                  : qmdStatus.status === 'indexing'
-                    ? (qmdStatus.progress && qmdStatus.progress.totalChunks > 0
-                      ? `Indexing ${qmdStatus.progress.store} ${Math.round(qmdStatus.progress.chunksEmbedded / qmdStatus.progress.totalChunks * 100)}%`
-                      : 'Indexing')
+                {indexStatus.model.name}{' '}
+                ({indexStatus.status === 'ready' ? 'Ready'
+                  : indexStatus.status === 'indexing' ? 'Indexing'
                   : 'Error'})
               </span>
             </div>
-            {qmdStatus.stores.memory && <StoreRow label="Memory" stats={qmdStatus.stores.memory} />}
-            {qmdStatus.stores.notes && <StoreRow label="Notes" stats={qmdStatus.stores.notes} />}
-            {qmdStatus.stores.tasks && <StoreRow label="Tasks" stats={qmdStatus.stores.tasks} />}
-            {qmdStatus.stores.sessions && <StoreRow label="Sessions" stats={qmdStatus.stores.sessions} />}
-            {qmdStatus.error && (
+            {indexStatus.stores.tasks && <StoreRow label="Tasks" stats={indexStatus.stores.tasks} />}
+            {indexStatus.stores.sessions && <StoreRow label="Sessions" stats={indexStatus.stores.sessions} />}
+            {indexStatus.stores.notes && <StoreRow label="Notes" stats={indexStatus.stores.notes} />}
+            {indexStatus.stores.memory && <StoreRow label="Memory" stats={indexStatus.stores.memory} />}
+            {indexStatus.stores.skills && <StoreRow label="Skills" stats={indexStatus.stores.skills} />}
+            {indexStatus.error && (
               <div className="notification-detail-row error">
-                <span className="notification-error-text">{qmdStatus.error}</span>
+                <span className="notification-error-text">{indexStatus.error}</span>
               </div>
             )}
           </div>

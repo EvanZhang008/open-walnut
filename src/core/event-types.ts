@@ -147,7 +147,7 @@ export interface SessionDeletedEvent {
   sessionIds: string[];
 }
 
-/** A persisted session field included in the QMD document changed. */
+/** A persisted session field included in the indexed document changed. */
 export interface SessionContentUpdatedEvent {
   sessionId: string;
 }

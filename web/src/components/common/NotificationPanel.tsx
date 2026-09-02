@@ -30,7 +30,7 @@ import {
 } from '@/contexts/notifications';
 import { respondToPermission } from '@/api/sessions';
 import { PermissionAnswerForm } from './PermissionAnswerForm';
-import { NotificationSystemPane, useQmdStatus, qmdUnhealthy } from './NotificationSystemPane';
+import { NotificationSystemPane, useSearchIndexStatus, searchIndexUnhealthy } from './NotificationSystemPane';
 import { navigateToTarget } from '@/utils/open-session';
 import { log } from '@/utils/log';
 import { useHumanInbox } from '@/hooks/useHumanInbox';
@@ -61,7 +61,7 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   // is a refinement of one section, not a sibling of the others.
   const [errorCategory, setErrorCategory] = useState<string | null>(null);
   const navigate = useNavigate();
-  const qmdStatus = useQmdStatus(open, section === 'system');
+  const indexStatus = useSearchIndexStatus(open, section === 'system');
 
   // Letters live in their OWN store (durable documents), so the rail reads them
   // from there instead of from the 200-entry feed — which can have dropped a
@@ -122,12 +122,12 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   // derivation (git-sync unprotected or failing) — the same one the Sidebar's
   // status pill reads; the index error state is the other thing shown in there
   // that can be broken.
-  const systemUnhealthy = hasIssues || qmdUnhealthy(qmdStatus);
+  const systemUnhealthy = hasIssues || searchIndexUnhealthy(indexStatus);
   // …and how MANY of them are broken, for the rail badge (the derivation is in
   // the model so it is testable and can't drift from the flags above).
   const systemIssues = systemIssueCount({
     gitSyncFailing: hasIssues,
-    indexUnhealthy: qmdUnhealthy(qmdStatus),
+    indexUnhealthy: searchIndexUnhealthy(indexStatus),
   });
 
   // Items of the active section, newest first. Sorting on effectiveTs (not
@@ -375,8 +375,8 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
           <div className="nfc-detail">
             {section === 'system' ? (
               /* Ambient health (daemons / backup / embedding search) — its own
-                 component so the QMD poll only runs while this tab is showing. */
-              <NotificationSystemPane qmdStatus={qmdStatus} />
+                 component so the search-index poll only runs while this tab is showing. */
+              <NotificationSystemPane indexStatus={indexStatus} />
             ) : section === 'inbox' ? (
               <InboxPane
                 letters={inbox.letters}

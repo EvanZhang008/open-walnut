@@ -600,7 +600,7 @@ describe('task tools', () => {
 });
 
 describe('search tool', () => {
-  it('search resolves an exact session ID without invoking QMD', async () => {
+  it('search resolves an exact session ID without touching the index lane', async () => {
     const created = await executeTool('task_create', {
       title: 'Fix authentication bug',
     });
@@ -608,9 +608,9 @@ describe('search tool', () => {
     expect(taskId).toBeTruthy();
     const sessionId = 'agent-search-session-reference-12345678';
     await addSessionToHistory(taskId!, sessionId);
-    const memorySearch = await import('../../src/core/memory-search.js');
-    const qmdSearch = vi.spyOn(memorySearch, 'memoryNotesSearch')
-      .mockRejectedValue(new Error('QMD must not run for an exact reference'));
+    const wiring = await import('../../src/core/search/wiring.js');
+    const indexLane = vi.spyOn(wiring, 'searchV2Lane')
+      .mockRejectedValue(new Error('the index lane must not run for an exact reference'));
 
     const result = await executeTool('task_search', {
       queries: [sessionId],
@@ -619,8 +619,8 @@ describe('search tool', () => {
     expect(parsed).toHaveLength(1);
     expect(parsed[0].task_id).toBe(taskId);
     expect(parsed[0].title).toContain('authentication');
-    expect(qmdSearch).not.toHaveBeenCalled();
-    qmdSearch.mockRestore();
+    expect(indexLane).not.toHaveBeenCalled();
+    indexLane.mockRestore();
   });
 
   it('search rejects the removed singular-query contract', async () => {

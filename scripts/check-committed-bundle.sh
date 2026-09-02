@@ -33,7 +33,6 @@ ENTRIES=(
   src/hooks/on-compact.ts
   src/web/server.ts
   src/session-server/index.ts
-  src/workers/qmd-index-worker.ts
   src/workers/git-compaction-worker.ts
 )
 

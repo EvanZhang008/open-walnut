@@ -1,9 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// The QMD integration blocks below mock memoryNotesSearch by name; search v2
-// went default-ON (f395723a) and routes those lanes elsewhere. Pin the flag so
-// the QMD path stays covered until Phase 4 retires it.
-process.env.WALNUT_SEARCH_V2 = '0';
 import {
   scoreMatch,
   extractSnippet,
@@ -169,7 +165,7 @@ describe('searchSessionReferences', () => {
     title: 'Reference session',
   } as SessionRecord;
 
-  it('resolves exact and meaningful partial session IDs without QMD', () => {
+  it('resolves exact and meaningful partial session IDs without the index', () => {
     expect(searchSessionReferences([session], sessionId)[0]).toEqual(
       expect.objectContaining({
         sessionId,
@@ -271,103 +267,107 @@ describe('searchSessionTaskReferences', () => {
   });
 });
 
-describe('QMD memory search integration', () => {
+/** One hit as `searchV2Lane` returns it. `components.coverage` is the
+ *  whole-document query-term fraction the cross-lane coverage tiebreak reads. */
+function laneHit(over: Record<string, unknown>) {
+  return {
+    kind: 'memory',
+    ref: 'memory/a.md',
+    title: '',
+    text: '',
+    score: 0.5,
+    components: { coverage: 1, cosine: 0 },
+    semantic: 'off',
+    ...over,
+  };
+}
+
+/** Mock the index lane, answering per requested kind set. */
+function mockLane(byKinds: (kinds: string[] | undefined) => unknown[]) {
+  const lane = vi.fn(async (_q: string, opts?: { kinds?: string[] }) => byKinds(opts?.kinds));
+  vi.doMock('../../src/core/search/wiring.js', () => ({ searchV2Lane: lane }));
+  return lane;
+}
+
+/** Empty stores: these tests exercise the merge, not the task/session files. */
+function mockEmptyStores() {
+  vi.doMock('../../src/core/task-manager.js', () => ({
+    listTasks: vi.fn().mockResolvedValue([]),
+  }));
+  vi.doMock('../../src/core/session-tracker.js', () => ({
+    listSessions: vi.fn().mockResolvedValue([]),
+  }));
+}
+
+describe('index memory search integration', () => {
   beforeEach(() => {
     vi.resetModules();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.doUnmock('../../src/core/memory-search.js');
+    vi.doUnmock('../../src/core/search/wiring.js');
   });
 
-  it('search() maps results from the QMD memory search lane', async () => {
-    const mockMemoryNotesSearch = vi.fn().mockResolvedValue([
-      {
+  it('search() maps hits from the index memory lane', async () => {
+    const lane = mockLane(() => [
+      laneHit({
+        ref: 'memory/notes.md',
         title: 'TypeScript patterns',
-        snippet: 'Some content about TypeScript patterns',
-        filepath: 'memory/notes.md',
-        finalScore: 0.9,
-        source: 'memory',
-      },
-      {
+        text: 'Some content about TypeScript patterns',
+        score: 0.9,
+      }),
+      laneHit({
+        ref: 'memory/other.md',
         title: 'More TypeScript',
-        snippet: 'Another chunk about TypeScript',
-        filepath: 'memory/other.md',
-        finalScore: 0.7,
-        source: 'memory',
-      },
+        text: 'Another chunk about TypeScript',
+        score: 0.7,
+      }),
     ]);
-
-    vi.doMock('../../src/core/memory-search.js', () => ({
-      memoryNotesSearch: mockMemoryNotesSearch,
-    }));
 
     const { search } = await import('../../src/core/search.js');
     const results = await search('TypeScript', { types: ['memory'] });
 
     expect(results.length).toBe(2);
     expect(results[0].type).toBe('memory');
+    // matchField carries the index kind so callers can tell the file-backed
+    // universes apart (memory / note / skill).
     expect(results[0].matchField).toBe('memory');
     expect(results[0].path).toBe('memory/notes.md');
-    // rerank MUST be false on this interactive lane. QMD's reranker is a local
-    // llama.cpp cross-encoder: measured 11-20s on a cold query AND it pinned the
-    // event loop for ~11s (one search froze every route in the app). Asserting the
-    // options object here is the regression guard — a well-meaning "improve
-    // relevance" change that drops it reintroduces an app-wide freeze.
-    expect(mockMemoryNotesSearch).toHaveBeenCalledWith(
-      'TypeScript',
-      undefined,
-      20,
-      undefined,
-      { rerank: false, overfetchMultiplier: 1 },
-    );
+    // The whole file-backed universe rides ONE lane call.
+    expect(lane).toHaveBeenCalledWith('TypeScript', {
+      kinds: ['memory', 'note', 'skill'],
+      limit: 20,
+    });
   });
 
-  it('caps QMD snippets so one search cannot flood a caller with transcript', async () => {
+  it('bounds hit snippets so one search cannot flood a caller with transcript', async () => {
     // Measured 2026-08-16 during the real MCP-vs-CLI A/B: THREE session hits
     // carried 9,831 chars (~2.5K tokens) of raw turn-by-turn transcript, because
-    // the QMD lanes passed the whole matched chunk through. An agent spent its
-    // context on it; the hardest eval task was dominated by that payload.
+    // the lane of the day passed the whole matched chunk through. An agent spent
+    // its context on it; the hardest eval task was dominated by that payload.
+    // Every lane now snippets the raw doc text itself (extractSnippet), so the
+    // caller-visible payload stays a preview no matter how big the document is.
     const hugeChunk = 'Turn 41 ran a command\n'.repeat(400); // ~8.8K chars
-    vi.doMock('../../src/core/task-manager.js', () => ({
-      listTasks: vi.fn().mockResolvedValue([]),
-    }));
-    vi.doMock('../../src/core/session-tracker.js', () => ({
-      listSessions: vi.fn().mockResolvedValue([]),
-    }));
-    vi.doMock('../../src/core/memory-search.js', () => ({
-      memoryNotesSearch: vi.fn(async (_q: string, sources?: string[]) => {
-        if (sources?.includes('session')) {
-          return [{
-            title: 'huge session', snippet: hugeChunk,
-            filepath: 'qmd://session/sess-abc', sessionId: 'abc',
-            finalScore: 0.9, source: 'session',
-          }];
-        }
-        return [{
-          title: 'huge memory', snippet: hugeChunk,
-          filepath: 'memory/m.md', finalScore: 0.8, source: 'memory_project',
-        }];
-      }),
-    }));
+    mockEmptyStores();
+    mockLane((kinds) => kinds?.includes('session')
+      ? [laneHit({ kind: 'session', ref: 'abc', title: 'huge session', text: hugeChunk, score: 0.9 })]
+      : [laneHit({ ref: 'memory/m.md', title: 'huge memory', text: hugeChunk, score: 0.8 })]);
 
     const { search } = await import('../../src/core/search.js');
     const results = await search('command', { types: ['memory', 'session'] });
 
     expect(results.length).toBeGreaterThan(0);
     for (const r of results) {
-      expect(r.snippet.length).toBeLessThanOrEqual(401); // 400 + the ellipsis
+      expect(r.snippet.length).toBeLessThanOrEqual(200);
     }
     // Still a usable preview, and collapsed to one line (no raw newlines).
     expect(results[0].snippet).toContain('Turn 41');
     expect(results[0].snippet).not.toContain('\n');
   });
 
-  it('surfaces a total QMD failure instead of returning an authoritative empty set', async () => {
-    vi.doMock('../../src/core/memory-search.js', () => ({
-      memoryNotesSearch: vi.fn().mockRejectedValue(new Error('Database not available')),
-    }));
+  it('surfaces a total index-lane failure instead of returning an authoritative empty set', async () => {
+    mockLane(() => { throw new Error('Database not available'); });
 
     const { search } = await import('../../src/core/search.js');
     await expect(search('TypeScript', { types: ['memory'] }))
@@ -375,37 +375,25 @@ describe('QMD memory search integration', () => {
   });
 
   it('mixed CJK/Latin query: full-term-coverage hit outranks a higher-scored partial hit', async () => {
-    // Task and memory stores rank independently; no-rerank scores are 1/rank,
-    // so a memory doc matching ONLY "timeout" at its store's #1 (score 1.0 ×
-    // weight 1.1) used to beat the task matching BOTH terms at its store's #2
-    // (0.5). Coverage must win the cross-store merge for mixed queries.
-    vi.doMock('../../src/core/task-manager.js', () => ({
-      listTasks: vi.fn().mockResolvedValue([]),
-    }));
-    vi.doMock('../../src/core/session-tracker.js', () => ({
-      listSessions: vi.fn().mockResolvedValue([]),
-    }));
-    vi.doMock('../../src/core/memory-search.js', () => ({
-      memoryNotesSearch: vi.fn(async (_q: string, sources?: string[]) => {
-        if (sources?.includes('task')) {
-          return [{
-            title: '请求 timeout 频发 — 查能否自动重试',
-            snippet: '让 daemon 自动重试 timeout 的请求',
-            filepath: 'qmd://task/task-t1',
-            taskId: 't1',
-            finalScore: 0.5,
-            source: 'task',
-          }];
-        }
-        return [{
-          title: 'triage memory',
-          snippet: 'unrelated doc that only mentions timeout once',
-          filepath: 'memory/triage.md',
-          finalScore: 1.1,
-          source: 'memory_project',
-        }];
-      }),
-    }));
+    // The task and memory lanes score on their own scales, so a memory doc
+    // matching ONLY "timeout" can out-score a task matching BOTH terms.
+    // Coverage must win the cross-lane merge for mixed queries.
+    mockEmptyStores();
+    mockLane((kinds) => kinds?.includes('task')
+      ? [laneHit({
+        kind: 'task', ref: 't1',
+        title: '请求 timeout 频发 — 查能否自动重试',
+        text: '让 daemon 自动重试 timeout 的请求',
+        score: 0.5,
+        components: { coverage: 1, cosine: 0 }, // both terms
+      })]
+      : [laneHit({
+        ref: 'memory/triage.md',
+        title: 'triage memory',
+        text: 'unrelated doc that only mentions timeout once',
+        score: 1.1,
+        components: { coverage: 0.5, cosine: 0 }, // one of two terms
+      })]);
 
     const { search } = await import('../../src/core/search.js');
     const results = await search('timeout 自动重试', { types: ['task', 'memory'] });
@@ -416,29 +404,20 @@ describe('QMD memory search integration', () => {
 
   it('pure-Latin multi-term query: coverage outranks a higher-scored partial hit', async () => {
     // Coverage ranking was CJK-only at first; the 2026-08-20 eval showed the
-    // same cross-store score incomparability buries English paraphrase hits
-    // ("aihub progress log" at memory-score 1.2 beat the session matching 4
-    // of 5 terms), so the tiebreak now applies to every multi-term query.
-    vi.doMock('../../src/core/task-manager.js', () => ({
-      listTasks: vi.fn().mockResolvedValue([]),
-    }));
-    vi.doMock('../../src/core/session-tracker.js', () => ({
-      listSessions: vi.fn().mockResolvedValue([]),
-    }));
-    vi.doMock('../../src/core/memory-search.js', () => ({
-      memoryNotesSearch: vi.fn(async (_q: string, sources?: string[]) => {
-        if (sources?.includes('task')) {
-          return [{
-            title: 'timeout retry task', snippet: 'covers timeout and retry',
-            filepath: 'qmd://task/task-t1', taskId: 't1', finalScore: 0.5, source: 'task',
-          }];
-        }
-        return [{
-          title: 'timeout-only doc', snippet: 'only timeout here',
-          filepath: 'memory/m.md', finalScore: 1.1, source: 'memory_project',
-        }];
-      }),
-    }));
+    // same cross-lane score incomparability buries English paraphrase hits, so
+    // the tiebreak now applies to every multi-term query.
+    mockEmptyStores();
+    mockLane((kinds) => kinds?.includes('task')
+      ? [laneHit({
+        kind: 'task', ref: 't1', title: 'timeout retry task',
+        text: 'covers timeout and retry', score: 0.5,
+        components: { coverage: 1, cosine: 0 },
+      })]
+      : [laneHit({
+        ref: 'memory/m.md', title: 'timeout-only doc',
+        text: 'only timeout here', score: 1.1,
+        components: { coverage: 0.5, cosine: 0 },
+      })]);
 
     const { search } = await import('../../src/core/search.js');
     const results = await search('timeout retry', { types: ['task', 'memory'] });
@@ -447,36 +426,26 @@ describe('QMD memory search integration', () => {
     expect(results[1].title).toBe('timeout-only doc');
   });
 
-  it('grab-bag memory sources get their coverage bucket halved in the merge', async () => {
-    // MEMORY.md / progress logs contain almost any term combination
+  it('grab-bag sources get their coverage bucket halved in the merge', async () => {
+    // Skill docs (reference manuals) mention almost any term combination
     // somewhere, so full coverage from them is base rate, not signal.
-    vi.doMock('../../src/core/task-manager.js', () => ({
-      listTasks: vi.fn().mockResolvedValue([]),
-    }));
-    vi.doMock('../../src/core/session-tracker.js', () => ({
-      listSessions: vi.fn().mockResolvedValue([]),
-    }));
-    vi.doMock('../../src/core/memory-search.js', () => ({
-      memoryNotesSearch: vi.fn(async (_q: string, sources?: string[]) => {
-        if (sources?.includes('task')) {
-          return [{
-            title: 'timeout retry task', snippet: 'covers timeout and retry',
-            filepath: 'qmd://task/task-t1', taskId: 't1', finalScore: 0.5, source: 'task',
-            coveredTermHits: 2,
-          }];
-        }
-        return [{
-          title: 'MEMORY.md — Global', snippet: 'timeout somewhere, retry elsewhere',
-          filepath: 'memory/MEMORY.md', finalScore: 1.3, source: 'memory_global',
-          coveredTermHits: 2,
-        }];
-      }),
-    }));
+    mockEmptyStores();
+    mockLane((kinds) => kinds?.includes('task')
+      ? [laneHit({
+        kind: 'task', ref: 't1', title: 'timeout retry task',
+        text: 'covers timeout and retry', score: 0.5,
+        components: { coverage: 1, cosine: 0 },
+      })]
+      : [laneHit({
+        kind: 'skill', ref: 'skills/ops/SKILL.md', title: 'Ops manual',
+        text: 'timeout somewhere, retry elsewhere', score: 1.3,
+        components: { coverage: 1, cosine: 0 },
+      })]);
 
     const { search } = await import('../../src/core/search.js');
     const results = await search('timeout retry', { types: ['task', 'memory'] });
 
-    // Both cover 2/2, but memory_global is a grab-bag source: its bucket is
+    // Both cover 2/2, but the skill doc is a grab-bag source: its bucket is
     // halved, so the focused task doc wins despite the lower raw score.
     expect(results[0].title).toBe('timeout retry task');
   });
@@ -489,7 +458,7 @@ describe('default search lanes (2026-08-15 star incident)', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.doUnmock('../../src/core/memory-search.js');
+    vi.doUnmock('../../src/core/search/wiring.js');
     vi.doUnmock('../../src/core/task-manager.js');
     vi.doUnmock('../../src/core/session-tracker.js');
   });
@@ -502,32 +471,19 @@ describe('default search lanes (2026-08-15 star incident)', () => {
   });
 
   it('search() with NO types option consults the session lane and returns its hits', async () => {
-    vi.doMock('../../src/core/task-manager.js', () => ({
-      listTasks: vi.fn().mockResolvedValue([]),
-    }));
-    vi.doMock('../../src/core/session-tracker.js', () => ({
-      listSessions: vi.fn().mockResolvedValue([]),
-    }));
-    const memoryNotesSearch = vi.fn(async (_q: string, sources?: string[]) => {
-      if (sources?.includes('session')) {
-        return [{
-          title: 'star removal session',
-          snippet: 'retire the star system — StarButton deleted',
-          filepath: 'qmd://session/sess-8df36131',
-          sessionId: '8df36131',
-          finalScore: 0.9,
-          source: 'session',
-        }];
-      }
-      return [];
-    });
-    vi.doMock('../../src/core/memory-search.js', () => ({ memoryNotesSearch }));
+    mockEmptyStores();
+    const lane = mockLane((kinds) => kinds?.includes('session')
+      ? [laneHit({
+        kind: 'session', ref: '8df36131', title: 'star removal session',
+        text: 'retire the star system — StarButton deleted', score: 0.9,
+      })]
+      : []);
 
     const { search } = await import('../../src/core/search.js');
     const results = await search('StarButton'); // deliberately NO types option
 
-    const sessionLaneQueried = memoryNotesSearch.mock.calls.some(
-      (c) => Array.isArray(c[1]) && c[1].includes('session'),
+    const sessionLaneQueried = lane.mock.calls.some(
+      (c) => (c[1] as { kinds?: string[] } | undefined)?.kinds?.includes('session') === true,
     );
     expect(sessionLaneQueried).toBe(true);
     expect(results.some((r) => r.type === 'session' && r.sessionId === '8df36131')).toBe(true);

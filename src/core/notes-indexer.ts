@@ -1,12 +1,12 @@
 /**
- * notes-indexer.ts — the reconciler that keeps notes-index.sqlite + the QMD
+ * notes-indexer.ts — the reconciler that keeps notes-index.sqlite + the search
  * semantic store in sync with the markdown vault.
  *
  * Design (IMPL-CONTRACT §8, reuses in-repo patterns):
  * - Per-path COALESCING QUEUE + one better-sqlite3 transaction per drain
  *   (not a single global timer): a 500-file git pull becomes one transaction +
- *   one debounced QMD pass, never 500 interleaved reconciles.
- * - HASH-SKIP: skip a note whose file bytes are unchanged (qmd-task-sync shape).
+ *   one debounced semantic pass, never 500 interleaved reconciles.
+ * - HASH-SKIP: skip a note whose file bytes are unchanged.
  * - SEMANTIC store driven PER-FILE via insertContent/insertDocument/updateDocument/
  *   deactivateDocument — NEVER store.update() on the save path (that synchronously
  *   re-globs + readFileSync's the whole vault → event-loop starvation).
@@ -47,10 +47,6 @@ import {
 import { computeContentHash } from '../utils/file-ops.js'
 import { bus, EventNames } from './event-bus.js'
 import { log } from '../logging/index.js'
-import {
-  dispatchQmdIncrementalIndex,
-  usesQmdIndexWorker,
-} from './qmd-dispatcher.js'
 
 // Wiki-link: [[target]] or [[target|label]]. We resolve on `target` (the part
 // before a real `|alias`), matching the on-disk Obsidian-native form (§2.2).
@@ -184,24 +180,15 @@ function isIndexableRelPath(relPath: string): boolean {
 }
 
 /**
- * Queue one semantic note update. Production returns after enqueue so a note
- * save never waits for native SQLite/vector work; tests use the inline mode and
- * retain deterministic completion.
+ * Upsert one note into the search index (dynamic import so consumers of this
+ * module never drag better-sqlite3 in). upsertSearchV2File removes the doc
+ * when the file is gone, so deletion rides the same call.
  */
 async function reconcileSemantic(relPath: string): Promise<void> {
   if (CLOUD_MODE) return
-  const pending = dispatchQmdIncrementalIndex({ notePaths: [relPath] })
-  if (usesQmdIndexWorker()) {
-    void pending.catch((err) => {
-      log.memory.debug('notes-indexer: semantic reconcile failed', {
-        path: relPath,
-        error: err instanceof Error ? err.message : String(err),
-      })
-    })
-    return
-  }
   try {
-    await pending
+    const { upsertSearchV2File } = await import('./search/wiring.js')
+    await upsertSearchV2File('note', path.join(NOTES_DIR, relPath))
   } catch (err) {
     log.memory.debug('notes-indexer: semantic reconcile failed', {
       path: relPath,
@@ -394,7 +381,7 @@ async function drainQueue(): Promise<void> {
 
 /**
  * Stop the reconciler: cancel the pending debounce timer and drop queued paths.
- * Mirrors startQmdWatcher().stop(). Lets the ephemeral server (temp OPEN_WALNUT_HOME)
+ * Mirrors startNotesWatcher().stop(). Lets the ephemeral server (temp OPEN_WALNUT_HOME)
  * and tests tear down without a stray debounced reconcile re-creating the sidecar
  * in a directory being removed. Call resetNotesIndexer() to re-arm.
  */
@@ -425,7 +412,7 @@ export function isRebuilding(): boolean {
 export interface RebuildIndexOptions {
   /** Recompute every note vector even when its content hash is unchanged. */
   forceSemantic?: boolean
-  /** Surface semantic failures to callers such as the QMD recovery endpoint. */
+  /** Surface semantic failures to callers that need a hard answer (strict rebuild). */
   strictSemantic?: boolean
   onProgress?: (progress: {
     chunksEmbedded: number
@@ -471,18 +458,17 @@ export async function collectIndexableNotePaths(): Promise<string[]> {
  * step handles most, but a clean rebuild benefits from a settle pass).
  */
 async function rebuildSemanticIndex(
-  options: RebuildIndexOptions,
+  _options: RebuildIndexOptions,
 ): Promise<void> {
   if (CLOUD_MODE || stopped) return
 
-  await dispatchQmdIncrementalIndex({
-    notesFull: true,
-    forceNotes: options.forceSemantic,
-  }, {
-    onProgress: options.onProgress
-      ? (_store, progress) => options.onProgress!(progress)
-      : undefined,
-  })
+  // mtime-based sweep over the file kinds: re-upserts every changed note and
+  // evicts stale docs. Vector re-embeds ride the index's own backfill loop
+  // (the writer drops a changed doc's vectors on upsert), so there is no
+  // separate "force" pass to run here.
+  const { sweepSearchV2Files, isSearchV2Enabled } = await import('./search/wiring.js')
+  if (!isSearchV2Enabled()) return
+  await sweepSearchV2Files()
   log.memory.info('notes-index: semantic rebuild complete')
 }
 

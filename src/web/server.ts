@@ -62,13 +62,6 @@ import { sessionRunner } from '../providers/claude-code-session.js'
 import { SessionHealthMonitor } from '../core/session-health-monitor.js'
 import { SessionReaper } from '../core/session-reaper.js'
 import { isClaudeCliInstalled } from '../core/claude-cli-detect.js'
-import {
-  runQmdBackgroundIndex,
-  stopQmdBackgroundIndex,
-} from '../core/qmd-background-indexer.js'
-import { dispatchQmdIncrementalIndex } from '../core/qmd-dispatcher.js'
-import { createQmdIncrementalQueue } from '../core/qmd-incremental-queue.js'
-import { runQmdIndexWork, waitForQmdIndexWork } from '../core/qmd-work-queue.js'
 import { subagentRunner } from '../providers/subagent-runner.js'
 import { getTask, listTasks } from '../core/task-manager.js'
 import type { Task } from '../core/types.js'
@@ -89,7 +82,7 @@ import { createPluginBodyParser, createPluginRouteDispatcher } from './plugin-ro
 import { setPluginApiBase } from '../core/plugins/server-api.js'
 import { systemRouter } from './routes/system.js'
 import { cloudSetupRouter } from './routes/cloud-setup.js'
-import { qmdRouter } from './routes/qmd.js'
+import { searchIndexRouter } from './routes/search-index.js'
 import { notesRouter } from './routes/notes.js'
 import { notesV2Router } from './routes/notes-v2.js'
 import { repositoriesRouter } from './routes/repositories.js'
@@ -498,8 +491,7 @@ let recordingReaperHandle: { stop: () => void } | null = null
 let externalSessionImporter:
   import('../core/sessions/external-session-import.js').ExternalSessionImporterHandle | null = null
 let terminalReaperHandle: { stop: () => void } | null = null
-let qmdWatcherHandle: { stop: () => void } | null = null
-let qmdSyncStop: (() => Promise<void>) | null = null
+let notesWatcherHandle: { stop: () => void } | null = null
 let searchV2WiringHandle: { stop(): Promise<void> } | null = null
 let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
 let diskWatermarkHandle: { stop: () => void; poll: () => Promise<unknown> } | null = null
@@ -804,8 +796,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Ensure ~/.open-walnut/ directory structure exists and seed config defaults
   const { initDirectories } = await import('../core/init.js')
   await initDirectories()
-  const { initializeQmdRuntimeModel } = await import('../core/qmd-model.js')
-  await initializeQmdRuntimeModel()
 
   // Route every log.error()/log.fatal() into the notification center (deduped
   // + storm-throttled in the bridge). Installed before any subsystem starts so
@@ -1480,7 +1470,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/system', systemRouter)
   // One-click cloud-companion provisioning (Mac-side job engine).
   app.use('/api/cloud-setup', cloudSetupRouter)
-  app.use('/api/qmd', qmdRouter)
+  // /api/search-index (canonical) + /api/qmd (legacy alias, one release).
+  app.use(['/api/search-index', '/api/qmd'], searchIndexRouter)
   app.use('/api/push', pushRouter)
   app.use('/api/auth', authRouter)
   // First-boot claim flow (cloud mode) — publicly reachable by design; the
@@ -1550,7 +1541,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // ~/.claude/skills stays read-only), repositories — mostly A-class.
   app.use('/api/v1', libraryV1Router)
   // Console extras (additive, Wave 3): usage breakdowns, provider status
-  // (key_hint stripped), qmd status, integrations read, timeline, heartbeat —
+  // (key_hint stripped), search-index status, integrations read, timeline, heartbeat —
   // primary-bound stores answer 501 on a REPLICA.
   app.use('/api/v1', consoleExtrasV1Router)
   app.use('/api/browser-logs', browserLogsRouter)
@@ -1755,10 +1746,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     resetUpdaterState()
   }
 
-  // Reset QMD route state to clear stale downloading/indexing status from a previous run
+  // Reset search-index route state to clear a stale rebuild status from a previous run
   {
-    const { resetQmdRouteState } = await import('./routes/qmd.js')
-    resetQmdRouteState()
+    const { resetSearchIndexRouteState } = await import('./routes/search-index.js')
+    resetSearchIndexRouteState()
   }
 
   // -- Cloud-companion setup job: resume one that was mid-flight when the Mac
@@ -1953,250 +1944,34 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // (Dream directory init removed with the retired dream loop — topics/ and
   // index.md are legacy; the skills/ tree is the knowledge store now.)
 
-  // -- QMD hybrid search stores --
-  // Opt-out for lean/clean-room deployments (Docker onboarding test, CI) where the
-  // embedding model download is unwanted and search isn't exercised.
+  // -- Filesystem watcher for the markdown roots --
+  // The search index itself is wired below; this is only the fs.watch leg that
+  // feeds it (and the notes structural reconciler). It must run even when the
+  // index is off: git-synced notes never pass through a write route, so
+  // without file events a synced note stays unsearchable until the next
+  // restart's drift scan (a note saved from the phone was invisible to the
+  // phone's own search minutes later, dogfood R14).
   if (process.env.WALNUT_DISABLE_SEARCH === '1') {
-    log.memory.info('QMD search disabled via WALNUT_DISABLE_SEARCH=1 — skipping embedding model init')
-  } else if (CLOUD_MODE || !(await (await import('../core/qmd-store.js')).isQmdAvailable())) {
-    // Cloud companion (no semantic indexes) or qmd optionalDependency missing
-    // (node-llama-cpp can't build, e.g. glibc < 2.28). Keyword/FTS search
-    // still works — and it MUST still see file events: git-synced notes never
-    // pass through a write route, so without the structural watcher a synced
-    // note stays unsearchable until the next restart's drift scan (a note
-    // saved from the phone via the primary was invisible to the phone's own
-    // search minutes later, dogfood R14). Start the watcher with the semantic
-    // leg off; the notes-indexer's own CLOUD_MODE guards keep embedding work
-    // out regardless.
-    log.memory.info(CLOUD_MODE
-      ? 'cloud mode: skipping QMD semantic index init (structural notes watcher still on)'
-      : 'QMD semantic search unavailable on this host (optional dependency not installed) — keyword search only, structural notes watcher still on')
-    try {
-      const { startQmdWatcher } = await import('../core/qmd-watcher.js')
-      qmdWatcherHandle = startQmdWatcher({ semantic: false })
-    } catch (err) {
-      log.memory.warn('structural notes watcher failed to start', {
-        error: err instanceof Error ? err.message : String(err),
-      })
-    }
-  } else try {
-    const { startQmdWatcher } = await import('../core/qmd-watcher.js')
-    const {
-      setQmdRouteStatus,
-      setQmdEmbedProgress,
-      setQmdStoreStats,
-    } = await import('./routes/qmd.js')
-    setQmdRouteStatus('indexing')
-    qmdWatcherHandle = startQmdWatcher()
-    log.memory.info('QMD watcher started')
-
-    // Warm the query path: the FIRST search after a restart used to pay the
-    // whole embedding-model load (measured 10s+, tripping client timeouts and
-    // reading as "search is broken"). One throwaway query right after boot
-    // moves that cost off the user's first keystroke. Fire-and-forget with a
-    // small delay so it never competes with the listen/startup critical path.
-    if (!options.dev) {
-      setTimeout(() => {
-        void (async () => {
-          const t0 = Date.now()
-          try {
-            const { memoryNotesSearch } = await import('../core/memory-search.js')
-            await memoryNotesSearch('warmup', undefined, 1, undefined, { rerank: false, overfetchMultiplier: 1 })
-            log.memory.info('QMD query path warmed', { ms: Date.now() - t0 })
-          } catch (err) {
-            log.memory.debug('QMD query warmup failed (first real search pays the load)', {
-              error: err instanceof Error ? err.message : String(err),
-            })
-          }
-        })()
-      }, 3_000)
-    }
-
-    const qmdBackfillDelayMs = options.dev ? 0 : 60_000
-    let qmdBackfillTimer: ReturnType<typeof setTimeout>
-
-    if (options.dev) {
-      // Deterministic in-process path for focused QMD tests. Production never
-      // executes these synchronous native operations in the web process.
-      const { initQmdStores } = await import('../core/qmd-store.js')
-      let qmdInitError: unknown
-      const qmdInitPromise = runQmdIndexWork('qmd:startup-init', () =>
-        initQmdStores({ onProgress: setQmdEmbedProgress }))
-        .catch(err => {
-          qmdInitError = err
-        })
-
-      qmdBackfillTimer = setTimeout(() => {
-        ;(async () => {
-          await qmdInitPromise
-          if (qmdInitError) throw qmdInitError
-          const taskSync = await import('../core/qmd-task-sync.js')
-          const sessionSync = await import('../core/qmd-session-sync.js')
-          await runQmdIndexWork('tasks:startup-sync', () => taskSync.syncAllTasks({
-            onProgress: (progress) => setQmdEmbedProgress('task', progress),
-          }))
-          await runQmdIndexWork('sessions:startup-sync', () => sessionSync.syncAllSessions({
-            onProgress: (progress) => setQmdEmbedProgress('session', progress),
-          }))
-          const { collectQmdCorpusStats } = await import('../core/qmd-stats.js')
-          const stats = await runQmdIndexWork(
-            'qmd:status-snapshot',
-            collectQmdCorpusStats,
-          )
-          setQmdStoreStats(stats)
-        })().then(() => {
-          setQmdRouteStatus('ready')
-          log.memory.info('Task + session QMD sync complete')
-        }).catch(err => {
-          const message = err instanceof Error ? err.message : String(err)
-          setQmdRouteStatus('error', message)
-          log.memory.warn('Task/session QMD sync failed', { error: message })
-        })
-      }, qmdBackfillDelayMs)
-    } else {
-      // Production indexing is isolated in a lower-priority child process.
-      // better-sqlite3/sqlite-vec and local embedding inference are synchronous;
-      // a Promise queue alone cannot keep the web event loop responsive.
-      qmdBackfillTimer = setTimeout(() => {
-        void (async () => {
-          const [
-            { resolveConfiguredQmdModel },
-            { qmdStoresRequireModelReset },
-          ] = await Promise.all([
-            import('../core/qmd-model.js'),
-            import('../core/qmd-store.js'),
-          ])
-          const model = await resolveConfiguredQmdModel()
-          const resetStores = qmdStoresRequireModelReset(model)
-          await runQmdBackgroundIndex({
-            initialize: true,
-            model,
-            resetStores,
-            onProgress: setQmdEmbedProgress,
-            onStats: setQmdStoreStats,
-          })
-        })().then(() => {
-          setQmdRouteStatus('ready')
-          log.memory.info('Background QMD corpus sync complete')
-        }).catch(err => {
-          const message = err instanceof Error ? err.message : String(err)
-          setQmdRouteStatus('error', message)
-          log.memory.warn('Background QMD corpus sync failed', { error: message })
-        })
-      }, qmdBackfillDelayMs)
-      log.memory.info('QMD corpus sync scheduled in background worker', {
-        delayMs: qmdBackfillDelayMs,
-      })
-    }
-
-    // ── Incremental QMD sync via event bus (debounced) ──
-    // Collect changed task/session IDs in Sets, flush after 2s idle.
-    // embed() is called once per flush (not per event) to avoid thrashing.
-    {
-      const DEBOUNCE_MS = 2000;
-      // Session cooldown: an ACTIVE session fires session:result every turn,
-      // and each flush re-reads + re-embeds its whole conversation in the
-      // worker (observed 62 re-embeds/day of one 46MB session, 5GB worker RSS
-      // peaks). 10min staleness is fine for search; deletes bypass the hold.
-      // Tasks stay uncooled — their docs are tiny (title/description).
-      const SESSION_REEMBED_MIN_INTERVAL_MS = 10 * 60_000;
-      const taskQueue = createQmdIncrementalQueue({
-        debounceMs: DEBOUNCE_MS,
-        dispatch: (taskIds) => dispatchQmdIncrementalIndex(
-          { taskIds },
-          { onStats: setQmdStoreStats },
-        ),
-        onSuccess: (counts) => {
-          log.memory.info('QMD incremental task sync', counts)
-        },
-        onError: (err, retryInMs) => {
-          log.memory.warn('QMD incremental task sync failed; retry scheduled', {
-            error: err instanceof Error ? err.message : String(err),
-            retryInMs,
-          })
-        },
-      })
-      const sessionQueue = createQmdIncrementalQueue({
-        debounceMs: DEBOUNCE_MS,
-        minIntervalMs: SESSION_REEMBED_MIN_INTERVAL_MS,
-        dispatch: (sessionIds) => dispatchQmdIncrementalIndex(
-          { sessionIds },
-          { onStats: setQmdStoreStats },
-        ),
-        onSuccess: (counts) => {
-          log.memory.info('QMD incremental session sync', counts)
-        },
-        onError: (err, retryInMs) => {
-          log.memory.warn('QMD incremental session sync failed; retry scheduled', {
-            error: err instanceof Error ? err.message : String(err),
-            retryInMs,
-          })
-        },
-      })
-
-      bus.subscribe('qmd-task-sync', (event) => {
-        if (event.name === EventNames.TASK_CREATED || event.name === EventNames.TASK_UPDATED || event.name === EventNames.TASK_COMPLETED) {
-          const data = event.data as {
-            task?: { id?: string } | null;
-            taskIds?: string[];
-          };
-          const taskIds = data.task?.id ? [data.task.id] : data.taskIds ?? [];
-          for (const taskId of taskIds) {
-            if (taskId) taskQueue.enqueue(taskId, 'sync')
-          }
-        } else if (event.name === EventNames.TASK_DELETED) {
-          const taskId = (event.data as { task?: { id?: string } })?.task?.id;
-          if (taskId) {
-            taskQueue.enqueue(taskId, 'delete')
-          }
-        }
-        // interest below keeps this off the high-frequency streaming fan-out
-      }, { global: true, interest: ['task:created', 'task:updated', 'task:completed', 'task:deleted'] })
-
-      bus.subscribe('qmd-session-sync', (event) => {
-        if (event.name === EventNames.SESSION_DELETED) {
-          const sessionIds = (event.data as { sessionIds?: string[] })?.sessionIds ?? [];
-          for (const sessionId of sessionIds) {
-            sessionQueue.enqueue(sessionId, 'delete')
-          }
-        } else if (event.name === EventNames.SESSION_STARTED
-          || event.name === EventNames.SESSION_CONTENT_UPDATED
-          || event.name === EventNames.SESSION_RESULT
-          || event.name === EventNames.SESSION_ERROR) {
-          const sessionId = (event.data as { sessionId?: string })?.sessionId;
-          if (sessionId) {
-            sessionQueue.enqueue(sessionId, 'sync')
-          }
-        }
-      }, {
-        global: true,
-        interest: [
-          'session:started',
-          'session:content-updated',
-          'session:deleted',
-          'session:result',
-          'session:error',
-        ],
-      })
-
-      await qmdSyncStop?.()
-      qmdSyncStop = async () => {
-        clearTimeout(qmdBackfillTimer)
-        const queueStops = [taskQueue.stop(), sessionQueue.stop()]
-        await stopQmdBackgroundIndex()
-        await Promise.all(queueStops)
-      }
-    }
+    log.memory.info('search indexing disabled via WALNUT_DISABLE_SEARCH=1 — keyword-only search')
+  }
+  try {
+    const { startNotesWatcher } = await import('../core/notes-watcher.js')
+    // semantic:false = structural only (cloud replica / indexing disabled):
+    // the notes reconciler still runs, nothing feeds the search index.
+    const semantic = process.env.WALNUT_DISABLE_SEARCH !== '1' && !CLOUD_MODE
+    notesWatcherHandle = startNotesWatcher({ semantic })
+    log.memory.info('notes/memory watcher started', { semantic })
   } catch (err) {
-    log.memory.warn('QMD startup failed', {
+    log.memory.warn('notes/memory watcher failed to start', {
       error: err instanceof Error ? err.message : String(err),
     })
   }
 
-  // ── Search v2 (hybrid-search) — default ON; =0 falls back to QMD ──
-  // Primary only (the cloud replica story lands with Phase 3/4). The outer env
-  // check keeps the opted-out path from loading the wiring module at all.
-  if (process.env.WALNUT_SEARCH_V2 !== '0' && !CLOUD_MODE) {
+  // ── Search index wiring (hybrid-search) ──
+  // Primary only: on a cloud replica the embed model would pin the instance.
+  // The outer check keeps a disabled host from loading the wiring module
+  // (and its better-sqlite3 chain) at all.
+  if (process.env.WALNUT_DISABLE_SEARCH !== '1' && !CLOUD_MODE) {
     try {
       const wiring = await import('../core/search/wiring.js')
       if (wiring.isSearchV2Enabled()) {
@@ -2912,7 +2687,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // -- Recent-task ledger (Personal AI context) --
   // Any task mutation invalidates the cached render; a fresh task gets its
   // one-liner generated in the background (cheap Haiku-tier call, fire-and-
-  // forget — see task-ledger-desc.ts). Deliberately OUTSIDE the QMD block:
+  // forget — see task-ledger-desc.ts). Deliberately OUTSIDE the search block:
   // the ledger derives from the task store alone and must work with semantic
   // search disabled.
   bus.subscribe('task-ledger', (event) => {
@@ -5144,39 +4919,20 @@ export async function stopServer(): Promise<void> {
   // Always detach — sessions are detached child processes and must survive
   // server shutdown. Never kill session PIDs from stopServer().
   sessionRunner.destroy()
-  if (qmdSyncStop) {
-    await qmdSyncStop()
-    qmdSyncStop = null
-  }
   if (searchV2WiringHandle) {
     await searchV2WiringHandle.stop().catch(() => {})
     searchV2WiringHandle = null
   }
-  // Also covers a worker started through the admin route in cloud mode or
-  // before startup finished assigning qmdSyncStop.
-  await stopQmdBackgroundIndex()
-  bus.unsubscribe('qmd-task-sync')
-  bus.unsubscribe('qmd-session-sync')
   bus.unsubscribe('task-ledger')
-  if (qmdWatcherHandle) {
-    qmdWatcherHandle.stop()
-    qmdWatcherHandle = null
+  if (notesWatcherHandle) {
+    notesWatcherHandle.stop()
+    notesWatcherHandle = null
   }
   // Detach the log-error → notification bridge (a test's next startServer()
   // reinstalls it; leaving it set would write to a torn-down store).
   import('../core/notifications/log-error-bridge.js')
     .then(({ uninstallLogErrorNotifications }) => uninstallLogErrorNotifications())
     .catch(() => {})
-  // Close QMD stores — MUST be awaited: llm.dispose() releases the Metal
-  // residency sets; exiting before it runs trips a GGML_ASSERT abort in
-  // node-llama-cpp's static destructors (SIGABRT on shutdown).
-  try {
-    const { closeQmdStores } = await import('../core/qmd-store.js')
-    await waitForQmdIndexWork()
-    await closeQmdStores()
-  } catch { /* best-effort */ }
-  const { resetQmdRuntimeModel } = await import('../core/qmd-model.js')
-  resetQmdRuntimeModel()
   if (gitAutoCommitHandle) {
     gitAutoCommitHandle.stop()
     gitAutoCommitHandle = null

@@ -4,6 +4,46 @@ All notable changes to Open Walnut are documented here. This project follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions may include
 breaking changes).
 
+## [Unreleased]
+
+### Changed
+
+- **Search runs on Walnut's own hybrid index.** Tasks, sessions, notes, memory files and skills
+  now live in one SQLite file (`~/.open-walnut/search.sqlite`): a keyword index built on a
+  tokenizer that splits `camelCase`/`snake_case`/`kebab-case` identifiers into their parts and
+  indexes Chinese as ordered character pairs, plus quantized vectors used only to rescore the
+  keyword candidates. Cold interactive search went from seconds to milliseconds, and queries like
+  `operator` now find `PlatformEventOperator`, which no configuration of the previous engine could
+  do. Embedding models are ONNX presets chosen with `WALNUT_SEARCH_V2_EMBED_MODEL`
+  (`qwen3-0.6b` default, `e5-small` for a smaller/faster index); `WALNUT_SEARCH_V2_SEMANTIC=0`
+  gives keyword-only search with no model at all.
+- Search index maintenance moved to `/api/search-index/*`. `/api/qmd/*` still answers as an alias,
+  and the frozen `/api/v1/qmd/status` keeps its path and payload shape for the iOS app.
+- **Settings → Search & Embeddings** no longer has a model picker or a download step: the model is
+  fetched automatically on first use into `~/.open-walnut/models/`. The panel shows index health,
+  per-kind document counts, a rebuild button, and the excluded-folders list.
+
+### Removed
+
+- The `@tobilu/qmd` search engine and everything built on it: four separate index databases, the
+  fork-based background indexer, the native GGUF model loader, and the postinstall patches that
+  had to rewrite the library's compiled output on every install. Retired `search:` config keys
+  (`qmd_model`, `rrf_alpha`, `enabled`) are ignored rather than rejected, so old config files
+  keep working.
+
+### Upgrade notes
+
+After upgrading, these are dead weight and safe to delete by hand (Walnut never touches them
+again, and nothing recreates them):
+
+```bash
+rm -f ~/.open-walnut/{memory,notes,task,session}-search.sqlite*   # old index databases
+rm -rf ~/.cache/qmd                                              # old GGUF model cache
+```
+
+Nothing needs to be re-indexed: the new index has been building itself in the background since the
+release that introduced it.
+
 ## [0.3.0] — 2026-07-16
 
 Walnut goes mobile. **71 commits** since 0.2.0 add a native iOS companion app and the

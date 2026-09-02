@@ -79,7 +79,7 @@ export class GitVersioningService {
     });
   }
 
-  /** Notify of a memory file change (called from qmd-watcher). */
+  /** Notify of a memory file change (called from notes-watcher). */
   notifyMemoryChange(filename: string): void {
     this.markDirty(`memory/${filename}`, 'memory', filename);
   }

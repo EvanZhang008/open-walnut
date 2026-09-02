@@ -1,5 +1,11 @@
 # Walnut Memory v2 — Wiki-based Knowledge Architecture
 
+> **Superseded in part (2026-09-01):** the memory/notes architecture in this plan shipped, but its
+> search decision did not survive. `@tobilu/qmd` has been removed; search now runs on Walnut's own
+> index ([`src/lib/hybrid-search/README.md`](../../src/lib/hybrid-search/README.md)), so the
+> QMD sections below (two instances, `qmdScore × sourceWeight × temporalDecay`, the reranker and
+> query-expansion models) describe a system that no longer exists. Do not build on them.
+
 ---
 
 ## Part 1: Research

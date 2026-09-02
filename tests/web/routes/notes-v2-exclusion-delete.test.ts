@@ -22,42 +22,15 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants('notes-v2-excl-del-test'));
 
-// This file exercises the QMD semantic lane BY NAME (memoryNotesSearch mock
-// below). Search v2 is default-on, which routes hybrid searches to its own
-// leg and never calls the mock — pin the flag off for the QMD path this test
-// was written against. Retire with Phase 4 (QMD deletion).
-process.env.WALNUT_SEARCH_V2 = '0';
-
-// Controllable semantic leg (same pattern as the sibling hybrid test).
+// Controllable semantic leg (same pattern as the sibling hybrid test): mock the
+// index lane by name so reconcile never opens a real search.sqlite and the
+// route's semantic hits are exactly what each test dictates.
 let semanticHits: any[] = [];
-vi.mock('../../../src/core/memory-search.js', () => ({
-  memoryNotesSearch: vi.fn(async () => semanticHits),
-}));
-
-// Stub the QMD store so reconcile never opens a real notes-search.sqlite.
-vi.mock('../../../src/core/qmd-store.js', () => ({
-  DEFAULT_QMD_MODEL: 'test-model',
-  embedQmdStore: vi.fn(async (
-    store: { embed: (options: unknown) => Promise<unknown> },
-    _label: string,
-    options: unknown,
-  ) => store.embed(options)),
-  getNotesStore: vi.fn(async () => ({
-    internal: {
-      findActiveDocument: () => undefined,
-      insertContent: () => {},
-      insertDocument: () => {},
-      updateDocumentTitle: () => {},
-      updateDocument: () => {},
-      deactivateDocument: () => {},
-      getActiveDocumentPaths: () => [],
-      cleanupOrphanedVectors: () => 0,
-      deleteInactiveDocuments: () => 0,
-      cleanupOrphanedContent: () => 0,
-    },
-    embed: async () => {},
-    getStatus: async () => ({ needsEmbedding: 0 }),
-  })),
+vi.mock('../../../src/core/search/wiring.js', () => ({
+  isSearchV2Enabled: () => true,
+  searchV2Lane: vi.fn(async () => semanticHits),
+  upsertSearchV2File: vi.fn(async () => {}),
+  sweepSearchV2Files: vi.fn(async () => ({ changed: 0, removed: 0 })),
 }));
 
 import express from 'express';
@@ -108,16 +81,18 @@ function seedAttachmentText(relPath: string, text: string): void {
   });
 }
 
-/** Absolute vault path — the form the semantic leg emits. */
+/** One note-kind index hit; `ref` is the absolute vault path the route maps
+ *  back to a note id. `semantic: 'ok'` + a cosine are what make the route treat
+ *  it as a real semantic opinion. */
 function semanticHit(relPath: string, score: number, title = '') {
   return {
-    filepath: path.join(NOTES_DIR, relPath),
+    kind: 'note',
+    ref: path.join(NOTES_DIR, relPath),
     title,
-    snippet: 'semantic excerpt',
+    text: 'semantic excerpt',
     score,
-    finalScore: score,
-    source: 'note_vault',
-    collection: 'vault',
+    components: { coverage: 0, cosine: score },
+    semantic: 'ok',
   };
 }
 

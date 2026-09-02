@@ -1,8 +1,10 @@
 /**
  * Category 5: Agent Memory Tools E2E
  *
- * Tests the memory_notes_search agent tool with a real server
- * and real QMD stores. No QMD mocking — files are seeded and indexed for real.
+ * Tests the memory_notes_search agent tool with a real server and the real
+ * search index. Nothing is mocked — files are seeded and indexed for real
+ * (keyword-only: the semantic lane is off suite-wide, see
+ * tests/setup/runtime-dir-isolation.ts).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { vi } from 'vitest';
@@ -17,14 +19,16 @@ import {
   seedNotesFile,
   daysAgoStr,
 } from '../helpers/memory-v2-seeders.js';
-import { waitForSearchResults } from '../helpers/qmd-wait.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import { memoryNotesSearchTool } from '../../src/agent/tools/memory-notes-search-tool.js';
-import { memoryNotesSearch } from '../../src/core/memory-search.js';
+import {
+  resetSearchV2IndexForTests,
+  sweepSearchV2Files,
+} from '../../src/core/search/wiring.js';
 
 let server: HttpServer;
 let port: number;
@@ -85,24 +89,25 @@ beforeAll(async () => {
   server = await startServer({ port: 0, dev: true });
   const addr = server.address();
   port = typeof addr === 'object' && addr ? addr.port : 0;
-
-  // Wait for QMD indexing — memory store AND the notes vault. The notes
-  // index bootstraps LAZILY on first notes-v2 API hit (see notes-v2.ts
-  // ensureIndexBootstrap), so touch the route once before waiting.
-  await waitForSearchResults(
-    () => memoryNotesSearch('API design'),
-    { maxWaitMs: 60000, pollIntervalMs: 2000 },
-  );
+  // Touch the notes route once: the structural notes index bootstraps LAZILY
+  // on the first notes-v2 API hit (see notes-v2.ts ensureIndexBootstrap).
   await fetch(`http://localhost:${port}/api/notes-v2/list`);
-  await waitForSearchResults(
-    () => memoryNotesSearch('engineering work', ['note_vault']),
-    { maxWaitMs: 60000, pollIntervalMs: 2000 },
-  );
+
+  // Index the seeded files NOW instead of waiting out the server's delayed
+  // startup backfill: the sweep walks memory/, notes/ and skills/ and upserts
+  // inline, so the tool below queries a fully-populated index deterministically.
+  await sweepSearchV2Files();
 }, 150000);
 
 afterAll(async () => {
   await stopServer();
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  resetSearchV2IndexForTests();
+  // Teardown only: the just-stopped server can still flush a WAL/log file
+  // into the temp home while we unlink it (ENOTEMPTY under load). Retry,
+  // then let the OS reap the temp dir rather than failing a green suite.
+  await fs
+    .rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+    .catch(() => {});
 }, 30000);
 
 // ── 5.1 memory_notes_search Tool - Basic Search ──
@@ -198,8 +203,8 @@ describe('memory_notes_search Tool', () => {
       queries: ['xylophone_nonexistent_term_12345_zzz'],
     });
 
-    // QMD BM25 may return fuzzy partial matches — verify either "No results found."
-    // or valid JSON array is returned (not an error)
+    // The keyword lanes may return fuzzy partial matches — verify either
+    // "No results found." or a valid JSON array comes back (not an error).
     if (result === 'No results found.') {
       expect(result).toBe('No results found.');
     } else {

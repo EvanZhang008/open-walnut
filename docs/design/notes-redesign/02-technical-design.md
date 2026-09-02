@@ -1,5 +1,14 @@
 # Notes / PKM Redesign — Technical Design (Unified)
 
+> **Engine note (2026-09-01):** wherever this document says QMD (`notes-search.sqlite`,
+> `store.update()`, `insertContent`/`insertDocument`, virtual paths), that third-party engine has
+> been removed. The semantic leg is now Walnut's own index
+> (`src/lib/hybrid-search/`, one `search.sqlite`, driven per changed file by
+> `src/core/search/wiring.ts`). Everything the design says about the STRUCTURAL sidecar
+> (`notes-index.sqlite`), the reconciler, and the two-leg merge is still how the code works, and the
+> hot-path rule it insisted on (drive the semantic store one changed file at a time, never a
+> whole-vault synchronous rescan on save) is exactly what the replacement does.
+
 > **Status:** Design phase. No implementation in this document — architecture diagrams, data models,
 > API contracts, and pseudocode only. No code is written into `src/` or `web/src/`.
 > **Role of this doc:** the **single, coherent technical design** that integrates the two deep dives

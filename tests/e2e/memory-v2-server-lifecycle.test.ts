@@ -1,7 +1,7 @@
 /**
  * Category 6: Server Lifecycle E2E
  *
- * Tests QMD store initialization, file watcher indexing, server shutdown,
+ * Tests search-index initialization, file watcher indexing, server shutdown,
  * working memory ensured on startup, dream directories, and updater reset.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -17,7 +17,6 @@ import {
   seedGlobalMemory,
   daysAgoStr,
 } from '../helpers/memory-v2-seeders.js';
-import { waitForQmdMemoryIndex, waitForSearchResults } from '../helpers/qmd-wait.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
@@ -30,10 +29,29 @@ import {
   WORKING_MEMORY_FILE,
 } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
-import { memoryNotesSearch } from '../../src/core/memory-search.js';
+import {
+  getSearchV2Index,
+  resetSearchV2IndexForTests,
+  searchV2Lane,
+} from '../../src/core/search/wiring.js';
 
 let server: HttpServer;
 let port: number;
+
+/** Poll until `check` passes (index writes land asynchronously). */
+async function waitUntil(
+  check: () => Promise<boolean>,
+  { maxWaitMs = 30_000, pollIntervalMs = 1_000 } = {},
+): Promise<boolean> {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    try {
+      if (await check()) return true;
+    } catch { /* index may not be ready yet — keep polling */ }
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
+  }
+  return false;
+}
 
 beforeAll(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
@@ -41,43 +59,40 @@ beforeAll(async () => {
 
   // Seed some initial memory files
   seedDailyLog(WALNUT_HOME, daysAgoStr(0), 'Server lifecycle test daily log entry.');
-  seedTopicFile(WALNUT_HOME, 'lifecycle-test', 'Server lifecycle topic for testing QMD initialization.');
+  seedTopicFile(WALNUT_HOME, 'lifecycle-test', 'Server lifecycle topic for testing index initialization.');
   seedGlobalMemory(WALNUT_HOME, 'Global memory for lifecycle tests.');
 
   server = await startServer({ port: 0, dev: true });
   const addr = server.address();
   port = typeof addr === 'object' && addr ? addr.port : 0;
-
-  // Wait for initial QMD indexing
-  await waitForSearchResults(
-    () => memoryNotesSearch('lifecycle test'),
-    { maxWaitMs: 60000, pollIntervalMs: 2000 },
-  );
 }, 120000);
 
 afterAll(async () => {
   await stopServer();
+  resetSearchV2IndexForTests();
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
 }, 30000);
 
 describe('Category 6: Server Lifecycle', () => {
-  // ── 6.1 QMD Stores Initialize on Server Start ──
+  // ── 6.1 The Search Index Initializes on Server Start ──
 
-  it('6.1: QMD SQLite databases exist after server start', () => {
-    const memoryDb = path.join(WALNUT_HOME, 'memory-search.sqlite');
-    const notesDb = path.join(WALNUT_HOME, 'notes-search.sqlite');
-
-    expect(fs.existsSync(memoryDb)).toBe(true);
-    expect(fs.existsSync(notesDb)).toBe(true);
+  it('6.1: the search SQLite database exists after server start', () => {
+    // ONE index file for every kind now (tasks, sessions, memory, notes,
+    // skills) — the per-store *-search.sqlite databases are gone.
+    expect(fs.existsSync(path.join(WALNUT_HOME, 'search.sqlite'))).toBe(true);
   });
 
-  it('6.1b: QMD memory store has indexed content', async () => {
-    // If QMD is working, searching for seeded content should return results
-    const results = await memoryNotesSearch('lifecycle test');
-    expect(results.length).toBeGreaterThan(0);
-  });
+  it('6.1b: the startup backfill indexes the seeded memory files', async () => {
+    // An empty index triggers a full backfill shortly after startup (delayed
+    // off the critical path), so this polls rather than asserting instantly.
+    const found = await waitUntil(
+      async () => (await searchV2Lane('lifecycle test', { kinds: ['memory'] })).length > 0,
+      { maxWaitMs: 60_000, pollIntervalMs: 2_000 },
+    );
+    expect(found).toBe(true);
+  }, 90000);
 
-  // ── 6.2 QMD Watcher Detects New Files ──
+  // ── 6.2 The Watcher Detects New Files ──
 
   it('6.2: watcher detects new files after server start', async () => {
     // Write a new topic file after server is already running
@@ -85,20 +100,23 @@ describe('Category 6: Server Lifecycle', () => {
     fs.mkdirSync(path.dirname(newTopicPath), { recursive: true });
     fs.writeFileSync(
       newTopicPath,
-      'Brand new topic about testing the QMD file watcher functionality.',
+      'Brand new topic about testing the memory file watcher functionality.',
       'utf-8',
     );
 
-    // Wait for watcher debounce (2s) + update + embed
-    const found = await waitForSearchResults(
-      () => memoryNotesSearch('QMD file watcher functionality', ['memory_topic']),
-      { maxWaitMs: 30000, pollIntervalMs: 2000 },
+    // The memory leg coalesces for 2s, then upserts that ONE file.
+    const found = await waitUntil(
+      async () => getSearchV2Index().getDoc('memory', newTopicPath) !== null,
+      { maxWaitMs: 30_000, pollIntervalMs: 1_000 },
     );
-
     expect(found).toBe(true);
+
+    // …and it is searchable, not merely present.
+    const hits = await searchV2Lane('file watcher functionality', { kinds: ['memory'] });
+    expect(hits.some((h) => h.ref === newTopicPath)).toBe(true);
   }, 45000);
 
-  // ── 6.3 QMD Watcher Ignores Non-Markdown Files ──
+  // ── 6.3 The Watcher Ignores Non-Markdown Files ──
 
   it('6.3: watcher ignores non-markdown files', async () => {
     // Write a binary file
@@ -106,13 +124,10 @@ describe('Category 6: Server Lifecycle', () => {
     fs.mkdirSync(path.dirname(pngPath), { recursive: true });
     fs.writeFileSync(pngPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 
-    // Wait a bit for the watcher to potentially process
-    await waitForQmdMemoryIndex(4000);
+    // Wait past the memory leg's 2s coalescing window.
+    await new Promise((r) => setTimeout(r, 4000));
 
-    // Search for the filename content — should not find the binary file
-    const results = await memoryNotesSearch('image.png');
-    const hasImage = results.some((r) => r.filepath.includes('image.png'));
-    expect(hasImage).toBe(false);
+    expect(getSearchV2Index().getDoc('memory', pngPath)).toBeNull();
   }, 15000);
 
   // ── 6.5 Working Memory Is Lazy (per-conversation) ──
@@ -128,7 +143,7 @@ describe('Category 6: Server Lifecycle', () => {
   it('6.6: retired dream index is not created at startup', () => {
     // The dream loop is retired (2026-07 unification): index.md belongs to
     // the old layout and must not be regrown by server start. (TOPICS_DIR
-    // exists here only because this suite seeds topic files for QMD tests.)
+    // exists here only because this suite seeds topic files for index tests.)
     expect(fs.existsSync(MEMORY_INDEX_FILE)).toBe(false);
     // compaction/ is still a live directory (background compaction output).
     expect(fs.existsSync(COMPACTION_DIR)).toBe(true);

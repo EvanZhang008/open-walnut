@@ -1,11 +1,11 @@
-export type QmdIncrementalOperation = 'sync' | 'delete';
+export type IncrementalOperation = 'sync' | 'delete';
 
 interface PendingChange {
   generation: number;
-  operation: QmdIncrementalOperation;
+  operation: IncrementalOperation;
 }
 
-export interface QmdIncrementalQueueOptions {
+export interface IncrementalQueueOptions {
   debounceMs?: number;
   retryBaseMs?: number;
   retryMaxMs?: number;
@@ -24,8 +24,8 @@ export interface QmdIncrementalQueueOptions {
   onError?: (error: unknown, retryInMs: number) => void;
 }
 
-export interface QmdIncrementalQueue {
-  enqueue: (id: string, operation: QmdIncrementalOperation) => void;
+export interface IncrementalQueue {
+  enqueue: (id: string, operation: IncrementalOperation) => void;
   flushNow: () => Promise<void>;
   stop: () => Promise<void>;
 }
@@ -39,13 +39,13 @@ function retryAfterHint(error: unknown): number {
 }
 
 /**
- * Debounce QMD entity changes and retain them until a worker acknowledges the
+ * Debounce entity changes and retain them until the dispatcher acknowledges the
  * batch. Per-ID generations prevent an older successful batch from deleting a
  * newer event that arrived while the worker was running.
  */
-export function createQmdIncrementalQueue(
-  options: QmdIncrementalQueueOptions,
-): QmdIncrementalQueue {
+export function createIncrementalQueue(
+  options: IncrementalQueueOptions,
+): IncrementalQueue {
   const debounceMs = Math.max(0, options.debounceMs ?? 2_000);
   const retryBaseMs = Math.max(0, options.retryBaseMs ?? 1_000);
   const retryMaxMs = Math.max(retryBaseMs, options.retryMaxMs ?? 30_000);

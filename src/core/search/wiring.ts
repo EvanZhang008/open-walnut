@@ -1,19 +1,17 @@
 /**
- * Search v2 wiring: the walnut-side lifecycle of the hybrid-search index.
+ * Search wiring: the walnut-side lifecycle of the hybrid-search index.
  *
- * Default ON; WALNUT_SEARCH_V2=0 falls back to QMD (kept until Phase 4). When on:
  *   - one index handle per process (~/.open-walnut/search.sqlite)
- *   - event-bus driven incremental upserts (tasks + sessions), reusing the
- *     debounce/generation/cooldown queue the QMD path proved out
+ *   - event-bus driven incremental upserts (tasks + sessions) through the
+ *     debounce/generation/cooldown queue
  *   - a startup backfill when the index is empty/gate-wiped, plus a periodic
- *     mtime-based sweep for the file kinds (memory/note/skill)
+ *     mtime-based sweep for the file kinds (memory/note/skill), with
+ *     event-driven single-file upserts (upsertSearchV2File) in between
  *
  * Index writes are inline in the web process ON PURPOSE: single-doc upsert is
  * ~0.5ms and the tokenizer runs at ~48 Mchar/s, so there is nothing to fork
- * for (the QMD child-process indexer existed because QMD writes were
- * seconds-long native calls). The one long operation — the first full
- * backfill — streams via async iterators, so the event loop breathes between
- * batches.
+ * for. The one long operation — the first full backfill — streams via async
+ * iterators, so the event loop breathes between batches.
  */
 
 import fs from 'node:fs';
@@ -30,7 +28,7 @@ import {
 } from '../../lib/hybrid-search/index.js';
 import { CLOUD_MODE, GLOBAL_SKILLS_DIR, MEMORY_DIR, NOTES_DIR, WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
-import { createQmdIncrementalQueue, type QmdIncrementalQueue } from '../qmd-incremental-queue.js';
+import { createIncrementalQueue, type IncrementalQueue } from './incremental-queue.js';
 import { EventNames, type EventBus } from '../event-bus.js';
 import { listTasks } from '../task-manager.js';
 import { listSessions } from '../session-tracker.js';
@@ -48,12 +46,10 @@ export const SEARCH_V2_KIND_WEIGHTS = {
 } as const;
 
 export function isSearchV2Enabled(): boolean {
-  // Default ON since 2026-08-26 (QMD stays as the WALNUT_SEARCH_V2=0 rollback
-  // path until Phase 4 deletes it). Cloud replicas stay off: no QMD store
-  // there either, and the embed model would pin the small instance — the
-  // replica search story lands with Phase 3/4.
-  return process.env.WALNUT_SEARCH_V2 !== '0'
-    && process.env.WALNUT_DISABLE_SEARCH !== '1'
+  // WALNUT_DISABLE_SEARCH=1 means "don't index, don't download a model" —
+  // callers degrade to in-process keyword scoring. Cloud replicas stay off:
+  // the embed model would pin the small instance.
+  return process.env.WALNUT_DISABLE_SEARCH !== '1'
     && !CLOUD_MODE;
 }
 
@@ -155,6 +151,61 @@ export async function searchV2Lane(
   });
 }
 
+/**
+ * Event-driven single-file upsert for the file kinds (memory/note/skill).
+ * The 10-min sweep remains the safety net; this keeps a just-saved note or
+ * skill searchable within seconds instead of a sweep interval. Removes the
+ * doc when the file is gone.
+ */
+export async function upsertSearchV2File(
+  kind: 'memory' | 'note' | 'skill',
+  absPath: string,
+): Promise<void> {
+  if (!isSearchV2Enabled()) return;
+  // Mirror the sweep's exclusion — otherwise an event-driven upsert re-adds
+  // the doc and the next sweep evicts it, forever.
+  if (kind === 'note' && path.basename(absPath) === 'global-notes.md') return;
+  const index = getSearchV2Index();
+  try {
+    const [raw, stat] = await Promise.all([fsp.readFile(absPath, 'utf8'), fsp.stat(absPath)]);
+    index.upsert(markdownToDoc(kind, absPath, raw, stat.mtimeMs));
+  } catch {
+    index.remove(kind, absPath);
+  }
+}
+
+export interface SearchIndexStatus {
+  enabled: boolean;
+  model: string | null;
+  docs: number;
+  byKind: Record<string, number>;
+  vectors: number;
+  backfillRunning: boolean;
+  error: string | null;
+}
+
+/** Status snapshot for /api/search-index (and the frozen /api/qmd/status forward). */
+export function getSearchIndexStatus(): SearchIndexStatus {
+  if (!isSearchV2Enabled()) {
+    return { enabled: false, model: null, docs: 0, byKind: {}, vectors: 0, backfillRunning: false, error: null };
+  }
+  const index = getSearchV2Index();
+  const stats = index.stats();
+  const embedder = buildEmbedderConfig();
+  return {
+    enabled: true,
+    model: embedder?.modelId ?? null,
+    docs: stats.docs,
+    byKind: stats.byKind,
+    vectors: stats.vectors,
+    backfillRunning: backfillState.running,
+    error: backfillState.error,
+  };
+}
+
+/** Module-level backfill visibility for getSearchIndexStatus(). */
+const backfillState: { running: boolean; error: string | null } = { running: false, error: null };
+
 // ── incremental sync ──
 
 async function syncTasks(taskIds: string[]): Promise<void> {
@@ -251,6 +302,28 @@ async function* walkMd(root: string): AsyncGenerator<{ absPath: string; mtimeMs:
   }
 }
 
+/**
+ * Manual full rebuild (the Settings "Re-index" button). Rejects when a
+ * backfill/rebuild is already running. Fire-and-forget from the route; state
+ * is visible through getSearchIndexStatus().
+ */
+export async function rebuildSearchIndex(): Promise<{ inserted: number }> {
+  if (backfillState.running) throw new Error('a rebuild is already in progress');
+  backfillState.running = true;
+  backfillState.error = null;
+  try {
+    const index = getSearchV2Index();
+    const result = await index.rebuildAll(iterateAllDocs({}));
+    log.memory.info('search index manual rebuild complete', { inserted: result.inserted });
+    return { inserted: result.inserted };
+  } catch (err) {
+    backfillState.error = err instanceof Error ? err.message : String(err);
+    throw err;
+  } finally {
+    backfillState.running = false;
+  }
+}
+
 // ── lifecycle ──
 
 const FILE_SWEEP_INTERVAL_MS = 10 * 60_000;
@@ -268,16 +341,16 @@ export interface SearchV2Wiring {
 export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
   const index = getSearchV2Index();
 
-  const taskQueue: QmdIncrementalQueue = createQmdIncrementalQueue({
+  const taskQueue: IncrementalQueue = createIncrementalQueue({
     debounceMs: DEBOUNCE_MS,
     dispatch: (ids) => syncTasks(ids),
     onError: (err, retryInMs) => log.memory.warn('search-v2 task sync failed; retry scheduled', {
       error: err instanceof Error ? err.message : String(err), retryInMs,
     }),
   });
-  // Same cooldown rationale as the QMD queue: an active session fires
-  // session:result every turn and each flush re-reads its transcript tail.
-  const sessionQueue: QmdIncrementalQueue = createQmdIncrementalQueue({
+  // Cooldown: an active session fires session:result every turn and each
+  // flush re-reads its transcript tail.
+  const sessionQueue: IncrementalQueue = createIncrementalQueue({
     debounceMs: DEBOUNCE_MS,
     minIntervalMs: SESSION_REEMBED_MIN_INTERVAL_MS,
     dispatch: (ids) => syncSessions(ids),
@@ -421,6 +494,8 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
   const backfillTimer = setTimeout(() => {
     void (async () => {
       try {
+        backfillState.running = true;
+        backfillState.error = null;
         if (index.stats().docs === 0) {
           log.memory.info('search-v2 backfill starting (empty index)');
           const t0 = Date.now();
@@ -433,9 +508,12 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
           }
         }
       } catch (err) {
+        backfillState.error = err instanceof Error ? err.message : String(err);
         log.memory.warn('search-v2 backfill/sweep failed', {
           error: err instanceof Error ? err.message : String(err),
         });
+      } finally {
+        backfillState.running = false;
       }
       sweepTimer = setInterval(() => {
         void sweepSearchV2Files().catch((err) => {

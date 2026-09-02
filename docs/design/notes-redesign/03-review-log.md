@@ -1,5 +1,10 @@
 # Notes / PKM Redesign — Review Log (audit trail)
 
+> **Engine note (2026-09-01):** the QMD findings below (R1-4 path normalization, R1-5 the
+> synchronous whole-vault rescan on save, R2-7 the API shape) are historical: that engine has been
+> removed in favour of Walnut's own index (`src/lib/hybrid-search/`). The findings themselves still
+> hold; only the store they were written against changed.
+
 > **Status:** Design-phase audit trail. This document records the two adversarial Bar-Raiser rounds and the
 > three-persona customer walkthrough that hardened the design, with **how each finding was resolved or why it
 > was rejected**. It is the provenance record for `02-technical-design.md` (the integration authority),

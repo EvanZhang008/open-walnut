@@ -88,9 +88,10 @@ type CanonicalStatusProjection = Omit<
   'sessionId' | 'statusRevision' | 'statusUpdatedAt'
 >;
 
-function qmdContentProjection(record: SessionRecord): string {
-  // Keep this list aligned with qmd-session-sync.ts serialization. Status,
-  // activity, PID, usage, and transport fields deliberately do not reindex.
+function searchContentProjection(record: SessionRecord): string {
+  // Keep this list aligned with the session serializer in
+  // src/core/search/serializers.ts. Status, activity, PID, usage, and transport
+  // fields deliberately do not reindex.
   return JSON.stringify([
     record.title,
     record.description,
@@ -1660,7 +1661,7 @@ export async function updateSessionRecord(
   updates: SessionRecordUpdates,
 ): Promise<SessionRecord> {
   await ensureSessionInit();
-  let qmdContentChanged = false;
+  let searchContentChanged = false;
   const updated = await withWriteLock(async () => {
     const db = getDb();
     if (!db) {
@@ -1675,7 +1676,7 @@ export async function updateSessionRecord(
         throw new Error(`Session not found: ${claudeSessionId}`);
       }
       const session = rowToSession(row);
-      const qmdContentBefore = qmdContentProjection(session);
+      const searchContentBefore = searchContentProjection(session);
 
       // No-op guard BEFORE any UPDATE SQL — critical to avoid write-lock storms
       // when the daemon replays identical init/model/pid updates.
@@ -1684,13 +1685,13 @@ export async function updateSessionRecord(
       }
 
       writeSessionRowSqlite(handle, session);
-      qmdContentChanged =
-        qmdContentBefore !== qmdContentProjection(session);
+      searchContentChanged =
+        searchContentBefore !== searchContentProjection(session);
       log.session.info('session record updated', { sessionId: claudeSessionId, fields: Object.keys(updates) });
       return session;
     });
   });
-  if (qmdContentChanged) {
+  if (searchContentChanged) {
     bus.emit(
       EventNames.SESSION_CONTENT_UPDATED,
       { sessionId: claudeSessionId },

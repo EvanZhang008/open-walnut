@@ -22,7 +22,7 @@
  * injected).
  *
  * Storage rules (mirrors skill-usage.ts):
- *  - dot-prefixed sidecar → invisible to the `*.md` memory index / QMD watcher.
+ *  - dot-prefixed sidecar → invisible to the `*.md` memory index / notes watcher.
  *  - the INJECTED PROMPT IS NEVER TOUCHED. Nothing here adds a single character
  *    to what renderForPrompt() emits every turn.
  *  - every operation is best-effort: telemetry must NEVER fail a memory write.
