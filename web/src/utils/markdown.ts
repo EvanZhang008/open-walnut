@@ -84,12 +84,104 @@ const cjkAwareUrlTokenizer: NonNullable<MarkedExtension['tokenizer']> = {
   },
 };
 
+/**
+ * `**bold.**next` in CJK prose — the third CommonMark rule that only misfires
+ * because Chinese has no spaces between words.
+ *
+ * CommonMark closes `**` only on a RIGHT-FLANKING run, and a run preceded by
+ * punctuation and followed by a letter is not right-flanking. In English that
+ * rule earns its keep (`**a.**b` is genuinely ambiguous). In Chinese a bold
+ * sentence ENDS in punctuation and the next sentence starts immediately, with no
+ * space anywhere, so `**便签的比喻还成立。**之前我说:` printed four literal
+ * asterisks instead of a bold clause (reported 2026-09-01). Measured: this is the
+ * ONLY refused shape — `。**` before a space, a newline, or more punctuation all
+ * close correctly today.
+ *
+ * Scoped so CommonMark keeps deciding everything it decides well:
+ *   · the run must be one marked would find NO closer for. The first `**` that is
+ *     right-flanking hands the whole span back to CommonMark, so this can never
+ *     lengthen or reshape emphasis that already works.
+ *   · the emphasised text must contain a CJK character. `**a.**b` in English is
+ *     untouched, because the no-word-spaces argument does not apply to it.
+ *   · `**` inside an inline code span is a code SAMPLE and is skipped, and the
+ *     span may not cross a blank line.
+ *
+ * An inline extension rather than a tokenizer override: marked's flanking rules
+ * live in a compiled regex built from its own punctuation classes, and rebuilding
+ * that regex here would be Walnut reinterpreting someone else's grammar. This is
+ * strictly ADDITIVE — it creates emphasis only where marked produced none.
+ */
+const CJK_RE = /[　-〿぀-ヿ㐀-䶿一-鿿豈-﫿가-힯＀-￯]/;
+/** Unicode punctuation or symbol — the same class marked's flanking rules use. */
+const PUNCT_RE = /[\p{P}\p{S}]/u;
+
+/** Inline-code spans in `src`: a run of N backticks closed by the next run of N. */
+function inlineCodeSpans(src: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  for (let i = 0; i < src.length; i++) {
+    if (src[i] !== '`') continue;
+    let run = 0;
+    while (src[i + run] === '`') run++;
+    const marker = '`'.repeat(run);
+    let at = i + run;
+    let close = -1;
+    while (at < src.length) {
+      const found = src.indexOf(marker, at);
+      if (found < 0) break;
+      let after = 0;
+      while (src[found + marker.length + after] === '`') after++;
+      if (after === 0) { close = found; break; }
+      at = found + marker.length + after;
+    }
+    if (close < 0) { i += run - 1; continue; } // unclosed run is literal
+    spans.push([i, close + marker.length]);
+    i = close + marker.length - 1;
+  }
+  return spans;
+}
+
+const cjkStrongExtension: NonNullable<MarkedExtension['extensions']>[number] = {
+  name: 'cjkStrong',
+  level: 'inline',
+  tokenizer(src: string) {
+    // No `start()`: marked's inline text rule already stops at `*`, so this is
+    // called with src beginning at the delimiter. A `start()` here would add an
+    // O(n) scan per text token for nothing (see the PERF note below).
+    if (!src.startsWith('**') || src.length < 5) return undefined;
+    const spans = inlineCodeSpans(src);
+    const inCode = (at: number) => spans.some(([s, e]) => at >= s && at < e);
+
+    for (let i = src.indexOf('**', 2); i >= 2; i = src.indexOf('**', i + 1)) {
+      if (inCode(i)) continue;
+      const before = src[i - 1];
+      const after = src[i + 2]; // undefined at end of src
+      if (before === '*' || after === '*') return undefined; // nested/uneven runs
+      if (/\s/.test(before)) continue;                       // cannot close at all
+      // Right-flanking per CommonMark ⇒ marked closes here itself. Hands the
+      // whole decision back, so this extension can never override a working span.
+      if (!PUNCT_RE.test(before) || after === undefined || /\s/.test(after) || PUNCT_RE.test(after)) {
+        return undefined;
+      }
+      const text = src.slice(2, i);
+      if (!text || /\n[ \t]*\n/.test(text) || !CJK_RE.test(text)) return undefined;
+      return {
+        type: 'strong',
+        raw: src.slice(0, i + 2),
+        text,
+        tokens: this.lexer.inlineTokens(text),
+      };
+    }
+    return undefined;
+  },
+};
+
 // Applied to the global singleton so chat, the Files/Changed markdown preview,
 // the context inspector and copy-as-rich-text all share one del contract.
 // The notes instance also escapes raw inline HTML, which would break the chat
 // path (it pre-injects task-ref/file-link HTML), so that retune stays local.
 marked.use({ tokenizer: doubleTildeDelTokenizer });
 marked.use({ tokenizer: cjkAwareUrlTokenizer });
+marked.use({ extensions: [cjkStrongExtension] });
 
 // ── Global inline extensions: legacy [id|label] task pills + inline image paths ──
 // These mutate the GLOBAL marked singleton, so they apply to EVERY renderer that
@@ -1245,10 +1337,11 @@ export function resolveImagePath(path: string, cwd?: string): string | null {
  */
 const noteMarked = new Marked({ breaks: true, gfm: true });
 noteMarked.use({
-  // Same double-tilde + CJK-autolink contracts as the global singleton (single
-  // source above) — this is a separate Marked instance, so it needs its own
-  // registration.
+  // Same double-tilde + CJK-autolink + CJK-strong contracts as the global
+  // singleton (single source above) — this is a separate Marked instance, so it
+  // needs its own registration.
   tokenizer: { ...doubleTildeDelTokenizer, ...cjkAwareUrlTokenizer },
+  extensions: [cjkStrongExtension],
   renderer: {
     html({ text }: { text: string }) {
       return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

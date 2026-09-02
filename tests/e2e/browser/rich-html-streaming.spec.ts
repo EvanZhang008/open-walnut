@@ -220,8 +220,14 @@ test.describe('Rich HTML streaming', () => {
     await expect(page.locator('.session-history .rich-blocks').first()).toBeVisible();
     await expect(page.locator('.session-history .wz-step-1')).toBeVisible();
     await expect(page.locator('.session-history .wz-step-2')).toBeHidden();
-    expect(await page.locator('.session-history .rich-blocks .rich-chunk').count())
-      .toBeGreaterThanOrEqual(2);
+    // Polled, not a bare count(): text deltas are coalesced on a 150ms timer, so
+    // under machine load the second chunk lands after the first assertions pass.
+    // (Measured 2026-09-01 at load 30: this line alone failed ~1 run in 3 while
+    // every auto-retrying assertion around it passed.)
+    await expect.poll(
+      () => page.locator('.session-history .rich-blocks .rich-chunk').count(),
+      { timeout: 15_000 },
+    ).toBeGreaterThanOrEqual(2);
     const scopeId = await scopeIdOf(page, '.wz');
     expect(scopeId).toBeTruthy();
 
@@ -767,5 +773,31 @@ test.describe('Rich HTML streaming', () => {
     mkdirSync(SHOT_DIR, { recursive: true });
     await page.screenshot({ path: `${SHOT_DIR}/svg-blank-line.png` });
     await expect(page.locator('body')).not.toContainText('Something went wrong rendering the page.');
+  });
+
+  /**
+   * `**加粗句。**下一句` reaches the SCREEN as bold (reported 2026-09-01: four
+   * literal asterisks mid-paragraph). The rule and its scope are pinned in
+   * tests/web/markdown/cjk-strong.test.ts against the real renderer; this one
+   * exists because that tier asserts a STRING, and the claim the user made is
+   * about what they see.
+   */
+  test('12. a bold Chinese clause followed immediately by more text renders bold', async ({ page }) => {
+    await mockFrozenHistory(page);
+    await mockSessionDetail(page);
+    await openSession(page);
+    const history = page.locator('.session-history');
+
+    await streamDeltas(page, '**结论先说,便签 15 秒被重写一次。**之前那句是我编的。\n\nBOLD-TAIL-OK');
+    // 15s, not the 5s default: deltas coalesce on a 150ms timer and this box runs
+    // several agent sessions, so a loaded run needs the headroom (see test 1).
+    await expect(history).toContainText('BOLD-TAIL-OK', { timeout: 15_000 });
+
+    const strong = history.locator('strong', { hasText: '便签 15 秒被重写一次' });
+    await expect(strong).toHaveCount(1, { timeout: 15_000 });
+    expect(await strong.evaluate((el) => getComputedStyle(el).fontWeight)).toMatch(/^(bold|[6-9]\d\d)$/);
+    // The literal asterisks the user photographed are gone from the message.
+    await expect(history).not.toContainText('**');
+    await expect(history).toContainText('之前那句是我编的');
   });
 });
