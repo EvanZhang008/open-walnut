@@ -39,6 +39,7 @@ import { useRevealFile } from '@/hooks/useRevealFile';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useLiveEdit, type LiveEdit } from '@/hooks/useLiveEdit';
+import { useEmbeddedImageFreshness, type EmbeddedImageFreshness } from '@/hooks/useEmbeddedImageFreshness';
 import { FileHistoryPanel } from '@/components/common/FileHistoryPanel';
 import { ICON_NEW_TAB } from '@/components/common/Icons';
 import { FileSourceEditor, type FileSourceEditorHandle } from '@/components/common/FileSourceEditor';
@@ -262,18 +263,20 @@ export function FileContentView({
   // up the version just recorded without a remount.
   const [historyOpen, setHistoryOpen] = useState(false);
   const [versionsSeen, setVersionsSeen] = useState(0);
-  // Bumped when a Refresh has LANDED its read (not when the button is pressed —
-  // that would remount the editor onto the old bytes and again onto the new).
-  // Two jobs: it is part of the editor key, so a Refresh whose bytes did not
-  // change still repaints (the old key kept the editor, and with it every <img>
-  // exactly as painted); and with versionsSeen it forms the image URL version,
-  // so the repainted <img> is a NEW url the browser must actually fetch. A
-  // diagram the agent regenerated stayed stale through Refresh without both.
-  // Seeded per MOUNT (not 0) so re-opening a file is a new URL too: the memory
-  // cache outlives the pane, and "close it, open it again" must also see the
-  // current picture. Unchanged bytes answer 304, so the extra request is cheap.
+  // Version folded into every embedded image URL (`&r=`). A byte-identical
+  // <img src> is answered from the browser's per-document memory cache with no
+  // request (WebKit never re-asks for a URL it already loaded), so a diagram the
+  // agent regenerated kept its old pixels until the whole app was reloaded.
+  // Seeded per MOUNT so re-opening a file is a new URL; moved forward whenever
+  // the pane learns the bytes changed: a re-read that landed different content
+  // (the remounted editor paints fresh URLs) and, most of the time, the quiet
+  // in-place check below, which swaps a changed <img> and reports the version
+  // it used so any later ProseMirror repaint emits that same fresh URL.
   const [imageEpoch, setImageEpoch] = useState(() => Date.now());
-  const imageVersion = `${imageEpoch}.${versionsSeen}`;
+  const imageVersion = String(imageEpoch);
+  // The in-place checker, reachable from the load effect (declared below, after
+  // the refs it needs exist).
+  const imageFreshnessRef = useRef<EmbeddedImageFreshness | null>(null);
   // The hash of the bytes the editor was seeded from. Its ONLY job is the
   // editor remount key: it advances on a fresh READ (so a Refresh that landed
   // new bytes reseeds the editor) — deliberately NOT on save, which would
@@ -485,6 +488,9 @@ export function FileContentView({
     let cancelled = false;
     const isReload = lastTokenRef.current !== null && lastTokenRef.current !== reloadToken;
     lastTokenRef.current = reloadToken;
+    // What the pane held before this read — a reload compares against it to
+    // tell "new bytes" (remount) from "same bytes" (leave the editor alone).
+    const lockBefore = lockHashRef.current;
     if (isReload) setReloading(true);
     else { setLoading(true); setData(null); }
     // Media/PDF/images render straight from the raw-bytes URL — no JSON content
@@ -537,7 +543,18 @@ export function FileContentView({
         setStaleDraft(plan.stale);
         setDraftRestored(plan.seed != null);
         setBaseHash(d.contentHash);
-        if (isReload) setImageEpoch((n) => n + 1);
+        if (isReload) {
+          if (d.contentHash !== lockBefore) {
+            // New bytes remount the editor; give the repaint fresh image URLs.
+            setImageEpoch(Date.now());
+          } else {
+            // Same bytes, no remount, nothing repaints — so the pictures are
+            // checked where they stand. This is what makes Refresh work for
+            // "the diagram changed but the text did not" WITHOUT disturbing the
+            // editor (caret, scroll, selection all stay).
+            void imageFreshnessRef.current?.checkNow();
+          }
+        }
       })
       .catch((err) => {
         if (cancelled) return;
@@ -816,6 +833,9 @@ export function FileContentView({
     setDraftRestored(false);
     // The pull that brought these bytes recorded them as an `agent` version.
     setVersionsSeen((n) => n + 1);
+    // The same writer very likely regenerated the pictures the text refers to;
+    // they are checked where they stand (no remount happened for the text).
+    void imageFreshnessRef.current?.checkNow();
   }, [applyDiskContent, dropDraft, filePath, host]);
 
   /**
@@ -840,6 +860,18 @@ export function FileContentView({
     void flushDraft();
     log.info('file-editor', 'restored a version into the editor', { path: filePath, host, version: label });
   }, [filePath, host, flushDraft]);
+
+  // Embedded pictures follow the disk on their own — see the hook's header. Runs
+  // for every rendered pane (WYSIWYG, read-only markdown, HTML preview), not just
+  // editable ones: a picture you are only looking at goes stale the same way.
+  const imageFreshness = useEmbeddedImageFreshness({
+    rootRef: contentRef,
+    enabled: !loading && !raw && data?.content != null,
+    sessionId,
+    fileKey: `${host ?? ''}\0${filePath}`,
+    onChanged: (version) => setImageEpoch(version),
+  });
+  imageFreshnessRef.current = imageFreshness;
 
   const live = useLiveEdit({
     path: filePath,
@@ -1908,9 +1940,7 @@ export function FileContentView({
           path + baseHash + seedNonce so a fresh READ (Refresh / external
           reload) or a Discard remounts onto new bytes — both editors are
           seed-once by design, which is what keeps the caret still while
-          typing. The WYSIWYG key also carries imageEpoch: a Refresh that found
-          the SAME bytes must still repaint, or its embedded images keep the
-          pixels they were first painted with (see imageEpoch above). A SAVE deliberately does NOT remount (markClean re-baselines
+          typing. A SAVE deliberately does NOT remount (markClean re-baselines
           in place; a remount yanked the caret to line 1 on ⌘S). A tab switch
           remounts (different component) but seeds from the carried draft.
           Preview tab → Notes WYSIWYG (same TipTap as /notes); Source tab and
@@ -1918,7 +1948,7 @@ export function FileContentView({
       {!loading && editing && data?.content != null && (
         editingWysiwyg ? (
           <FileMarkdownEditor
-            key={`wys:${filePath}:${baseHash ?? ''}:${seedNonce}:${imageEpoch}`}
+            key={`wys:${filePath}:${baseHash ?? ''}:${seedNonce}`}
             ref={editorRef}
             initialValue={draftRef.current ?? data.content}
             path={filePath}
