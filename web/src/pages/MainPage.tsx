@@ -59,6 +59,7 @@ import { useSessionSend } from '@/hooks/useSessionSend';
 import { useLaneSession } from '@/hooks/useLaneSession';
 import { createAgentDef, updateAgentDef } from '@/api/agents';
 import { log } from '@/utils/log';
+import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
 import { visibleInterval } from '@/utils/page-visibility';
 import { useContextInspector } from '@/hooks/useContextInspector';
 import { useUrlSync } from '@/hooks/useUrlSync';
@@ -2061,7 +2062,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Escape key unfocuses the current task (since clicking no longer toggles off)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && focusedTaskRef.current && !e.defaultPrevented) {
+      // escapeWasConsumedByOthers, not defaultPrevented: the beep guard's
+      // window-bubble listener is registered before this one and prevents every
+      // unclaimed Escape, so the raw flag cannot tell a real handler's claim
+      // apart from beep suppression.
+      if (e.key === 'Escape' && focusedTaskRef.current && !escapeWasConsumedByOthers(e)) {
         // Don't unfocus if a modal/dialog/popover is open (they handle Escape themselves)
         const active = document.activeElement;
         if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable)) return;

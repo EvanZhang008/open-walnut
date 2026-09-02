@@ -1,0 +1,285 @@
+/* File History panel (FileHistoryPanel.tsx).
+ *
+ * Visual language matches the file viewer's own toolbar (.fv-*) and the file
+ * tree (.sfe-*): small text, quiet borders, theme variables only. Every colour
+ * comes from globals.css so both themes are covered by construction — a
+ * hardcoded background is how a strip ends up unreadable in one of them.
+ *
+ * Layout: a flex COLUMN that fills whatever the parent gives it. The list
+ * scrolls, and the diff underneath takes the remaining height with its own
+ * scroll, so a 90-version file can never push the diff off screen.
+ */
+
+.fh-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
+.fh-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fh-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--fg-secondary);
+}
+
+.fh-file {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.fh-close {
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  padding: 2px 6px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.fh-close:hover {
+  background: var(--bg-tertiary);
+  color: var(--fg);
+}
+
+/* ── States ─────────────────────────────────────────────────────────────── */
+
+.fh-loading,
+.fh-empty,
+.fh-note,
+.fh-same {
+  flex: 0 0 auto;
+  padding: 10px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.fh-error {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  border-bottom: 1px solid var(--error);
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+  color: var(--error);
+}
+
+/* ── Timeline list ──────────────────────────────────────────────────────── */
+
+.fh-list {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+}
+
+.fh-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-left: 2px solid transparent;
+  background: none;
+  font-size: 12px;
+  text-align: left;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.fh-row:hover {
+  background: var(--bg-hover);
+}
+
+.fh-row.is-selected {
+  border-left-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.fh-pill {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+}
+
+/* One pill per writer. Saves by a human are the accent; everything automatic
+   stays neutral so the eye finds "my own save" first. */
+.fh-pill-user {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.fh-pill-live {
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  color: var(--warning);
+}
+
+.fh-pill-agent,
+.fh-pill-merge {
+  background: var(--session-ref-subtle);
+  color: var(--session-ref);
+}
+
+.fh-pill-commit {
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.fh-when {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.fh-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-secondary);
+}
+
+.fh-row-busy {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+}
+
+/* ── Selected version vs the current buffer ─────────────────────────────── */
+
+.fh-diff {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+}
+
+.fh-diff-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+}
+
+.fh-diff-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--fg-secondary);
+}
+
+.fh-restore {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+}
+
+.fh-restore:hover {
+  filter: brightness(1.08);
+}
+
+.fh-restore-hint {
+  flex: 0 0 auto;
+  padding: 0 8px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
+
+.fh-diff-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.fh-diff-table {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* ── The flyout the editor mounts the panel in ─────────────────────────────
+   Overlays part of the file pane instead of joining its flex column: the editor
+   keeps its size and scroll position while versions are compared, and nothing
+   in the column layout (`:has(> .fv-source-editor)`) has to know the panel
+   exists. Two shapes, picked by how much room the pane has:
+     - normal pane (shares the row with chat, ~600px wide): a BOTTOM drawer. A
+       side panel here covered Save/Discard and most of the text; a drawer keeps
+       the whole toolbar and the top of the file in view, and a diff reads better
+       at full width anyway.
+     - fullscreen: a right-hand side panel, the editor stays readable beside it.
+   The panel's own ✕ closes it as well as the toolbar button. */
+.file-content-view:has(> .fv-history-flyout) {
+  position: relative;
+}
+
+.fv-history-flyout {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: min(60%, 440px);
+  z-index: 6;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.18);
+}
+.fv-history-flyout > .fh-panel {
+  border-left: 0;
+  border-top: 1px solid var(--border);
+}
+
+.file-content-view.fv-fullscreen > .fv-history-flyout {
+  top: 0;
+  left: auto;
+  height: auto;
+  width: min(480px, 45%);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.18);
+}
+.file-content-view.fv-fullscreen > .fv-history-flyout > .fh-panel {
+  border-left: 1px solid var(--border);
+  border-top: 0;
+}

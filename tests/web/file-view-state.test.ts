@@ -307,6 +307,104 @@ describe('per-file scroll offset', () => {
   });
 });
 
+/**
+ * The view state is keyed by PATH, so a rename or delete has to take it along.
+ * Left behind, a record does not merely go unused: the offsets resurface on
+ * whatever file is created at that name later, so a brand-new file opened at a
+ * stranger's reading position in Source mode. (The unsaved-draft store already had
+ * this fixed; this is the same rule for the other path-keyed store.)
+ */
+describe('view state follows a rename', () => {
+  it('moves the record for the renamed file', async () => {
+    const { saveFileScroll, loadFileScroll, moveFileViewState } = await load();
+    saveFileScroll(undefined, '/marina/a.md', { top: 900, source: true });
+    moveFileViewState(undefined, '/marina/a.md', '/marina/b.md');
+
+    expect(loadFileScroll(undefined, '/marina/a.md')).toBeNull();
+    expect(loadFileScroll(undefined, '/marina/b.md')).toEqual({ top: 900, source: true });
+  });
+
+  it('a DIRECTORY rename carries every descendant', async () => {
+    const { saveFileScroll, loadFileScroll, moveFileViewState } = await load();
+    saveFileScroll(undefined, '/marina/a/one.md', { top: 100 });
+    saveFileScroll(undefined, '/marina/a/deep/two.md', { top: 200 });
+    moveFileViewState(undefined, '/marina/a', '/marina/b');
+
+    expect(loadFileScroll(undefined, '/marina/b/one.md')?.top).toBe(100);
+    expect(loadFileScroll(undefined, '/marina/b/deep/two.md')?.top).toBe(200);
+    expect(loadFileScroll(undefined, '/marina/a/one.md')).toBeNull();
+    expect(loadFileScroll(undefined, '/marina/a/deep/two.md')).toBeNull();
+  });
+
+  it('matches path SEGMENTS — renaming /a/b leaves /a/bc alone', async () => {
+    const { saveFileScroll, loadFileScroll, moveFileViewState } = await load();
+    saveFileScroll(undefined, '/a/b/one.md', { top: 111 });
+    saveFileScroll(undefined, '/a/bc/two.md', { top: 222 });
+    moveFileViewState(undefined, '/a/b', '/a/moved');
+
+    expect(loadFileScroll(undefined, '/a/moved/one.md')?.top).toBe(111);
+    expect(loadFileScroll(undefined, '/a/bc/two.md')?.top).toBe(222); // untouched
+  });
+
+  it('only touches the requested host (the host is part of the key)', async () => {
+    const { saveFileScroll, loadFileScroll, moveFileViewState } = await load();
+    saveFileScroll(undefined, '/repo/a.md', { top: 300 });
+    saveFileScroll('devbox', '/repo/a.md', { top: 400 });
+    moveFileViewState(undefined, '/repo/a.md', '/repo/b.md');
+
+    expect(loadFileScroll(undefined, '/repo/b.md')?.top).toBe(300);
+    expect(loadFileScroll('devbox', '/repo/a.md')?.top).toBe(400);
+    expect(loadFileScroll('devbox', '/repo/b.md')).toBeNull();
+  });
+
+  it('the moved record wins over one already sitting at the new name', async () => {
+    const { saveFileScroll, loadFileScroll, moveFileViewState } = await load();
+    saveFileScroll(undefined, '/m/b.md', { top: 10 });   // an older reader of that name
+    saveFileScroll(undefined, '/m/a.md', { top: 500 });
+    moveFileViewState(undefined, '/m/a.md', '/m/b.md');
+
+    expect(loadFileScroll(undefined, '/m/b.md')?.top).toBe(500);
+  });
+
+  it('a rename with nothing remembered writes nothing', async () => {
+    const { moveFileViewState } = await load();
+    moveFileViewState(undefined, '/m/never-read.md', '/m/other.md');
+    expect(storage.getItem('open-walnut-file-view-scroll')).toBeNull();
+  });
+});
+
+describe('view state dies with a delete', () => {
+  it('forgets the deleted file', async () => {
+    const { saveFileScroll, loadFileScroll, deleteFileViewStateUnder } = await load();
+    saveFileScroll(undefined, '/marina/a.md', { top: 900 });
+    deleteFileViewStateUnder(undefined, '/marina/a.md');
+    expect(loadFileScroll(undefined, '/marina/a.md')).toBeNull();
+  });
+
+  it('a DIRECTORY delete forgets the whole subtree, segment-wise', async () => {
+    const { saveFileScroll, loadFileScroll, deleteFileViewStateUnder } = await load();
+    saveFileScroll(undefined, '/a/b/one.md', { top: 100 });
+    saveFileScroll(undefined, '/a/b/deep/two.md', { top: 200 });
+    saveFileScroll(undefined, '/a/bc/three.md', { top: 300 });
+    deleteFileViewStateUnder(undefined, '/a/b');
+
+    expect(loadFileScroll(undefined, '/a/b/one.md')).toBeNull();
+    expect(loadFileScroll(undefined, '/a/b/deep/two.md')).toBeNull();
+    expect(loadFileScroll(undefined, '/a/bc/three.md')?.top).toBe(300);
+  });
+
+  it('a throwing localStorage never propagates out of either mover', async () => {
+    const { moveFileViewState, deleteFileViewStateUnder } = await load();
+    vi.stubGlobal('localStorage', {
+      getItem() { throw new Error('denied'); },
+      setItem() { throw new Error('quota'); },
+      removeItem() { throw new Error('denied'); },
+    });
+    expect(() => moveFileViewState(undefined, '/a.md', '/b.md')).not.toThrow();
+    expect(() => deleteFileViewStateUnder(undefined, '/a.md')).not.toThrow();
+  });
+});
+
 describe('degrades safely instead of throwing', () => {
   it('corrupt JSON reads as empty', async () => {
     const { loadFileScroll, saveFileScroll } = await load();

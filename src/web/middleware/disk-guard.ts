@@ -24,6 +24,9 @@
  *  - /notifications/*   — mark-read/dismiss on the very alert this guard fires.
  *  - /system/*          — health/diagnostics; a stuck box must stay inspectable.
  *  - /config/test-connection — read-only probe despite being a POST.
+ *  - /files/delete      — deleting is how a full disk gets fixed. It was blocked
+ *    with everything else, so the guard refused the one action that ends the
+ *    outage; every other file mutation stays blocked (all of them consume space).
  */
 
 import type { Request, Response, NextFunction } from 'express';
@@ -34,6 +37,7 @@ const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 /** Mount-relative path prefixes exempt from the block (see header). */
 const EXEMPT_PREFIXES = [
   '/browser-logs', '/v1/client-logs', '/notifications', '/system', '/config/test-connection',
+  '/files/delete',
 ];
 
 export function diskGuardMiddleware(req: Request, res: Response, next: NextFunction): void {

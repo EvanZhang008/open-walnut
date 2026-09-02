@@ -1240,6 +1240,14 @@ rejected, 4096-char cap.
   preview iframe). Identical sandbox to the JSON path (one shared
   implementation); errors come back as plain-text bodies with the same
   status codes (404 missing, 502 remote transport).
+- `GET /api/v1/file-raw/<host>/<path...>[?download=1]` (additive, 2026-09): the
+  PATH-shaped twin of `file-content?raw=1`, same bytes and same sandbox. Use this
+  shape for HTML previews: a document's relative URLs resolve against its URL's
+  path and drop the query, so from the query-shaped URL `<img src="diagram.png">`
+  pointed at `/api/v1/diagram.png`; from `/api/v1/file-raw/local/Users/me/proj/index.html`
+  it resolves to a sibling under this route. `<host>` is `local` or a host alias;
+  the remainder is the file's absolute path (or `~/…` for remote), one
+  percent-encoded segment per component. REPLICA: `302` to the query-shaped relay.
 - `PUT /api/v1/file-content` `{ path, host?, content, expectedHash? }` →
   `{ "ok", "size", "contentHash" }` — save an edit made in the Files-panel
   editor. Shares the read path's sandbox verbatim (one `assertPathAllowed` for

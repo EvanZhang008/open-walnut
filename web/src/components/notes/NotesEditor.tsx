@@ -38,6 +38,8 @@ import { Callout } from './extensions/callout-node';
 import { WikiEmbedNode } from './extensions/wiki-embed-node';
 import { TagTrigger } from './extensions/tag-trigger';
 import type { TagTriggerState } from './extensions/tag-trigger';
+import { ResolvedImage } from './extensions/resolved-image';
+import type { ResolvedImageStorage } from './extensions/resolved-image';
 import { NotesBubbleMenu } from './NotesBubbleMenu';
 import { TagAutocomplete } from './TagAutocomplete';
 import type { TagSuggestion } from './TagAutocomplete';
@@ -85,6 +87,18 @@ interface NotesEditorProps {
    * images fall back to the chat image store (`/api/images`) as before.
    */
   attachmentNotePath?: string;
+  /**
+   * Directory the edited file lives in (e.g. `/home/dev/repo/designs`). Set it
+   * and a relative markdown image (`![alt](diagram.png)`) RENDERS through
+   * `/api/local-image` instead of resolving against the SPA origin and drawing a
+   * broken-image box. The document model is untouched — the saved markdown keeps
+   * the path the author typed (see extensions/resolved-image.ts).
+   *
+   * Unset (every Notes surface) ⇒ the plain Image node, behaviour unchanged.
+   */
+  imageBaseDir?: string;
+  /** Remote exec host that owns `imageBaseDir`; forwarded as `&host=`. */
+  imageHost?: string;
 }
 
 /**
@@ -306,7 +320,7 @@ function detachListItemChildren(editor: Editor): boolean {
   }
 }
 
-export function NotesEditor({ content, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, tagSuggestions, attachmentNotePath }: NotesEditorProps) {
+export function NotesEditor({ content, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   /**
@@ -414,10 +428,20 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
       Placeholder.configure({
         placeholder: placeholder ?? 'Write your notes here... (Markdown supported)',
       }),
-      Image.configure({
-        inline: true,
-        allowBase64: true,
-      }),
+      // Files panel (imageBaseDir set): resolve a relative `![](diagram.png)`
+      // against the file's directory when PAINTING it, never in the doc model.
+      // Notes surfaces pass no baseDir and keep the plain node.
+      imageBaseDir
+        ? ResolvedImage.configure({
+            inline: true,
+            allowBase64: true,
+            baseDir: imageBaseDir,
+            host: imageHost,
+          })
+        : Image.configure({
+            inline: true,
+            allowBase64: true,
+          }),
       Markdown.configure({
         html: true, // needed for <img> tags in markdown
         transformPastedText: true,
@@ -635,6 +659,25 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
     const storage = editor.storage.wikiEmbed;
     if (storage) storage.notePath = attachmentNotePath || '';
   }, [editor, attachmentNotePath]);
+
+  // Same shape for the image base dir: the editor is built ONCE (useEditor with
+  // no deps, and setOptions never rebuilds the extension manager), so a later
+  // imageBaseDir/imageHost can only reach renderHTML through storage. A mutation
+  // is also the only safe channel — re-creating the editor to re-configure the
+  // extension would reseed from the mount-time content and yank the caret to
+  // line 1 mid-typing. Only the ResolvedImage node declares these keys, so the
+  // Notes surfaces (plain Image, storage `{}`) are skipped. Already-painted
+  // images keep their src until ProseMirror re-renders them; that's fine because
+  // the Files panel remounts on a path change (its `key` carries filePath), so
+  // this channel only has to cover a value that arrives late.
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    const storage: ResolvedImageStorage | undefined = editor.storage.image;
+    if (storage && 'baseDir' in storage) {
+      storage.baseDir = imageBaseDir;
+      storage.host = imageHost;
+    }
+  }, [editor, imageBaseDir, imageHost]);
 
   // Sync external content changes (e.g. initial load, popup↔inline sync).
   // Uses isSourceRef to break the save-sync loop: when THIS editor was the

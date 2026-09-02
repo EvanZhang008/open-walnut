@@ -43,6 +43,15 @@ export interface FileSourceEditorHandle {
    * (and its undo history) alive while making dirty-tracking correct again.
    */
   markClean: () => void;
+  /**
+   * Replace the WHOLE document in place — Live Edit's merge/pull path.
+   *
+   * Deliberately not a remount: the parent's remount key is what reseeds an
+   * editor, and reseeding while the user is typing yanks the caret to line 1.
+   * `getValue()` returns the new text immediately after this call, and the
+   * caller (not this editor) decides whether the result counts as clean.
+   */
+  setValue: (text: string) => void;
   /** Scroll a 1-based line into view (centered) — reference-jump target.
    *  `term` flashes the landed-on keyword so the eye finds it instantly.
    *  Optional: the WYSIWYG editor shares this handle type and has no lines. */
@@ -70,6 +79,13 @@ interface FileSourceEditorProps {
   path: string;
   /** Fired when the doc's dirtiness (differs from seed) changes. */
   onDirtyChange: (dirty: boolean) => void;
+  /**
+   * Fired on EVERY doc change, unlike the transition-only onDirtyChange. The
+   * parent's debounced draft writer needs each keystroke, not just the moment
+   * the file became dirty — including edits made back TOWARDS the seed, which
+   * are what let it delete a draft that no longer differs from disk.
+   */
+  onDocChange?: () => void;
   /** Cmd/Ctrl+S. */
   onSave: () => void;
   /** Scroll this 1-based line into view (centered) on mount — deep links. */
@@ -124,13 +140,15 @@ const editorTheme = EditorView.theme({
 });
 
 export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEditorProps>(
-  function FileSourceEditor({ initialValue, path, onDirtyChange, onSave, initialLine, initialFlashTerm, onSelectText, onSymbolClick }, ref) {
+  function FileSourceEditor({ initialValue, path, onDirtyChange, onDocChange, onSave, initialLine, initialFlashTerm, onSelectText, onSymbolClick }, ref) {
     const hostRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     // Latest-callback refs: the listeners live inside a once-created view and must
     // read the CURRENT callbacks, not the mount-time closures.
     const onDirtyChangeRef = useRef(onDirtyChange);
     onDirtyChangeRef.current = onDirtyChange;
+    const onDocChangeRef = useRef(onDocChange);
+    onDocChangeRef.current = onDocChange;
     const onSaveRef = useRef(onSave);
     onSaveRef.current = onSave;
     const onSelectTextRef = useRef(onSelectText);
@@ -150,6 +168,23 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
           dirtyRef.current = false;
           onDirtyChangeRef.current(false);
         }
+      },
+      setValue: (text: string) => {
+        const view = viewRef.current;
+        // No view yet ⇒ the seed IS the document; move it so the mount uses it.
+        if (!view) { seedRef.current = text; return; }
+        const doc = view.state.doc;
+        if (doc.toString() === text) return;
+        const sel = view.state.selection.main;
+        view.dispatch({
+          changes: { from: 0, to: doc.length, insert: text },
+          // The selection is CLAMPED, not mapped: a whole-document replacement
+          // maps every position to the end of the change, so mapping would park
+          // the caret at EOF on every merge. Clamping the original offsets keeps
+          // it where the user was typing (the merged text is mostly the same
+          // lines, so the offset is still close to the right place).
+          selection: { anchor: Math.min(sel.anchor, text.length), head: Math.min(sel.head, text.length) },
+        });
       },
       scrollToLine: (line: number, term?: string) => {
         const view = viewRef.current;
@@ -203,6 +238,7 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
             onSelectTextRef.current(null);
           }
           if (!u.docChanged) return;
+          onDocChangeRef.current?.();
           const dirty = u.state.doc.toString() !== seedRef.current;
           // Fire only on TRANSITIONS — a per-keystroke setState in the parent
           // would re-render the whole preview pane on every character.

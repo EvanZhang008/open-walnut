@@ -233,6 +233,46 @@ filesV1Router.get('/files/recent-dirs', async (_req: Request, res: Response, nex
   }
 })
 
+// GET /api/v1/file-raw/<host>/<path...> — the PATH-SHAPED twin of
+// `file-content?raw=1` (additive, 2026-09). A previewed HTML file's relative
+// <img>/<link>/<a> URLs resolve against the document URL's PATH and drop the
+// query, so from the query-shaped URL every relative reference pointed at
+// `/api/v1/<name>`. Point the WKWebView at this shape instead and
+// `diagram.png` resolves to a sibling under the same route. `<host>` is
+// `local` or a host alias; the remainder is the file's absolute (or `~/`,
+// remote only) path, one percent-encoded segment per component. Same shared
+// `serveRawFileContent`, therefore the same sandbox. REPLICA: 302 to the
+// query-shaped bridge relay, which is the one shape the replica can serve.
+filesV1Router.get('/file-raw/:host/*rest', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { hostFromSegment, pathFromRemainder } = await import('./file-raw.js')
+    const host = hostFromSegment(String(req.params.host ?? ''))
+    const restParam = (req.params as Record<string, unknown>).rest
+    const rest = Array.isArray(restParam) ? restParam.join('/') : String(restParam ?? '')
+    const filePath = pathFromRemainder(rest)
+    const download = req.query.download === '1' || req.query.download === 'true'
+    if (CLOUD_MODE) {
+      const params = new URLSearchParams({ path: filePath, raw: '1' })
+      if (host) params.set('host', host)
+      if (download) params.set('download', '1')
+      res.redirect(302, `/api/v1/file-content?${params}`)
+      return
+    }
+    const { serveRawFileContent, FileContentError } = await import('./file-content.js')
+    try {
+      await serveRawFileContent(req, res, filePath, host, download)
+    } catch (err) {
+      if (err instanceof FileContentError) {
+        sendError(res, err.statusCode, err.statusCode === 403 ? 'not_supported_cloud' : 'bad_request', err.message)
+        return
+      }
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
 // Router-level error funnel — keeps unexpected failures in the frozen shape.
 filesV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   log.web.error('api-v1 files route error', {

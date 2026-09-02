@@ -42,6 +42,12 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-core.ts',
   'src/providers/daemon-fold.ts',
   'src/providers/daemon-source.ts',
+  // The capability list itself. Both twins report it on `hello` — the standalone
+  // one imports it, the source one has it substituted in — so a capability-only
+  // edit changes what every host advertises. Without this entry that edit left
+  // the version string identical, no host redeployed, and the server gated the
+  // new feature off forever on the very daemons the edit was written for.
+  'src/providers/daemon-capabilities.ts',
   // Agent gateway (peer sessions): shared protocol logic + the walnut CLI, both
   // bundled into the daemon binary. Same order as scripts/build-daemon.sh.
   // (The CLI file is still named wn-cli.ts — the rename is deferred; when it

@@ -20233,6 +20233,36 @@ td.usage-share-col {
   margin-left: 8px;
 }
 
+/* Inline create/rename row: keeps the row chrome (arrow slot, icon, indent) so
+   the pending entry sits exactly where the real one will. The row itself is a
+   pointer/no-select surface, which an <input> must opt out of. */
+.sfe-edit-row {
+  cursor: default;
+  user-select: text;
+}
+
+.sfe-edit-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0 3px;
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  /* BOTH are set on purpose: inheriting either one loses the pair — the row's
+     hover tint or `.selected`'s accent colour would leave the text unreadable. */
+  background: var(--bg);
+  color: var(--fg);
+  outline: none;
+}
+
+.sfe-edit-error {
+  padding: 2px 8px 4px;
+  color: var(--danger, #c0392b);
+  font-size: 11px;
+  white-space: normal;
+}
+
 .sfe-loading,
 .sfe-empty,
 .sfe-preview-empty {
@@ -24891,6 +24921,48 @@ a.file-link:hover {
   color: var(--warning, #f59e0b);
 }
 
+/* "Draft restored" — a 4s receipt next to Save/Discard, so a buffer that came
+   back from the draft store doesn't look like it was never gone. Kept to two
+   words on purpose: the longer wording wrapped to two lines in this toolbar
+   slot, which reads like a layout bug. The full sentence lives in the title. */
+.fv-draft-note {
+  align-self: center;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+/* A draft written against bytes that have since changed on disk. Full-width
+   strip above the editor; both colors are set together (a background without a
+   matching foreground inherits whatever the theme happens to give it, which is
+   how a strip ends up unreadable in one of the two themes). */
+.fv-draft-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--fg);
+}
+
+/* File-tree row marker: this path has unsaved text waiting in a draft. */
+/* Tree marker for a file holding unsaved work. MUST stay the same colour as
+   .fv-dirty-dot: they mean the identical thing in two places, and this one was
+   briefly --accent, which in the light theme is the same blue as a selected row
+   — so on the selected file it read as "selected", not as "unsaved". */
+.sfe-draft-dot {
+  margin-left: auto;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--warning, #f59e0b);
+}
+
 /* Save failure / conflict: a one-line BANNER above the editor — deliberately not
    built on .file-viewer-error, whose height:100% whole-pane empty state grew to
    swallow the editor when the two were siblings (caught in UI verification). */
@@ -24924,11 +24996,13 @@ a.file-link:hover {
 /* Chrome rows keep their natural height in that column; only the editor grows. */
 .file-content-view:has(> .fv-source-editor) > .fv-html-toolbar,
 .file-content-view:has(> .fv-source-editor) > .fv-save-error,
+.file-content-view:has(> .fv-source-editor) > .fv-draft-banner,
 .file-content-view:has(> .fv-source-editor) > .file-viewer-truncated,
 .file-content-view:has(> .fv-source-editor) > .fv-reloading-badge,
 .file-content-view:has(> .fv-source-editor) > .fv-search-bar,
 .file-content-view:has(> .fv-wysiwyg-editor) > .fv-html-toolbar,
 .file-content-view:has(> .fv-wysiwyg-editor) > .fv-save-error,
+.file-content-view:has(> .fv-wysiwyg-editor) > .fv-draft-banner,
 .file-content-view:has(> .fv-wysiwyg-editor) > .file-viewer-truncated,
 .file-content-view:has(> .fv-wysiwyg-editor) > .fv-reloading-badge,
 .file-content-view:has(> .fv-wysiwyg-editor) > .fv-search-bar {
@@ -25343,14 +25417,22 @@ a.file-link:hover {
 }
 
 /* Backdrop under Walnut's own right-click menu — invisible, just swallows the
-   next click / right-click so the menu closes instead of stacking. */
+   next click / right-click so the menu closes instead of stacking.
+
+   Both z-indexes must beat .open-walnut-fullscreen (9001): the session panel
+   PROMOTES ITSELF to fullscreen when the Files view opens, so the whole tree
+   lives in a 9001 stacking context and the .notes-context-menu default (1000)
+   drew this menu UNDERNEATH the panel — a menu you could see in the DOM, could
+   not see on screen, and whose items were unclickable (a tree row won every hit
+   test). Same trap, same numbers as .code-ctx-menu / .code-ctx-backdrop. */
 .file-ctx-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 999;
+  z-index: 10009;
 }
 .file-ctx-menu {
   min-width: 172px;
+  z-index: 10010;
 }
 
 /* Download button — an <a> styled like the toolbar tabs */
@@ -25473,6 +25555,7 @@ a.file-link:hover {
 .file-content-view.fv-fullscreen > .fv-reloading-badge,
 .file-content-view.fv-fullscreen > .fv-search-bar,
 .file-content-view.fv-fullscreen > .fv-save-error,
+.file-content-view.fv-fullscreen > .fv-draft-banner,
 .file-content-view.fv-fullscreen > .file-viewer-truncated {
   position: static;
   flex: 0 0 auto;

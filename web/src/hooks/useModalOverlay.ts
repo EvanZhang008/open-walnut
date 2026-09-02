@@ -24,11 +24,23 @@ export function unlockScroll() {
 
 /**
  * Shared modal overlay behavior: Escape-to-close + ref-counted body scroll lock.
- * Escape calls `e.stopPropagation()` so nested modals close one at a time.
+ *
+ * An overlay MUST stop propagation on Escape. That is what makes nested modals
+ * close one at a time, and it is the only thing that keeps the outer Escape
+ * handlers from acting on the same keypress — most of them (context menus,
+ * useFullscreen, inline editors) check nothing at all, so `preventDefault()` is
+ * not a substitute for stopping.
+ *
+ * preventDefault comes FIRST. The beep guard folds its beep suppression into
+ * `stopPropagation` (utils/escape-beep-guard.ts, because a stopped event never
+ * reaches the guard's own listener), so stopping first would record the GUARD as
+ * the owner of the key and `escapeWasConsumedByOthers` would report that nobody
+ * consumed this Escape.
  */
 export function useModalOverlay(onClose: () => void) {
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') {
+      e.preventDefault();
       e.stopPropagation();
       onClose();
     }

@@ -16,10 +16,20 @@ export interface FileContentResponse {
 export async function fetchFileContent(
   filePath: string,
   host?: string,
-  opts: { noCache?: boolean } = {},
+  opts: {
+    noCache?: boolean;
+    /**
+     * Record what this read found as a version in the file's history. Only the
+     * EDITOR passes this (the mention popup, diff view and pop-out are lookups,
+     * not sessions of work). `baseline` = the bytes as found when the file was
+     * opened; `agent` = bytes another writer put there while it was open.
+     */
+    track?: 'baseline' | 'agent';
+  } = {},
 ): Promise<FileContentResponse> {
   const params = new URLSearchParams({ path: filePath });
   if (host) params.set('host', host);
+  if (opts.track) params.set('track', opts.track);
 
   // An explicit Refresh must reach disk — a cached 200 would silently serve the
   // pre-edit bytes and make the button look broken.
@@ -48,7 +58,18 @@ export class FileSaveConflictError extends Error {
 export async function saveFileContent(
   filePath: string,
   content: string,
-  opts: { host?: string; expectedHash?: string } = {},
+  opts: {
+    host?: string;
+    expectedHash?: string;
+    /**
+     * Who is writing, for the file's history timeline. `user` = an explicit Save
+     * (its own entry). `live` = a Live Edit auto-write, which the server FOLDS into
+     * the previous live entry when it is recent, so a typing burst is one version,
+     * not one per keystroke pause. `merge` = the result of auto-merging another
+     * writer's bytes with the user's. Omitted = `user`.
+     */
+    writer?: 'user' | 'live' | 'merge';
+  } = {},
 ): Promise<{ size: number; contentHash: string }> {
   const res = await fetch('/api/file-content', {
     method: 'PUT',
@@ -58,6 +79,7 @@ export async function saveFileContent(
       content,
       ...(opts.host ? { host: opts.host } : {}),
       ...(opts.expectedHash ? { expectedHash: opts.expectedHash } : {}),
+      ...(opts.writer ? { writer: opts.writer } : {}),
     }),
   });
   const body = await res.json().catch(() => ({} as Record<string, unknown>));
@@ -78,10 +100,17 @@ export async function saveFileContent(
  * so without it the Refresh button was a no-op for every raw-rendered kind.
  */
 export function rawFileContentUrl(filePath: string, host?: string, reload?: number): string {
-  const params = new URLSearchParams({ path: filePath, raw: '1' });
-  if (host) params.set('host', host);
-  if (reload) params.set('r', String(reload));
-  return `/api/file-content?${params}`;
+  // PATH-shaped, not query-shaped, on purpose: a document's relative URLs resolve
+  // against its URL's PATH and the query string is dropped. From
+  // `/api/file-content?path=…&raw=1` an HTML preview's `<img src="diagram.png">`
+  // became `/api/diagram.png` — every relative image in every previewed HTML
+  // file was broken. From `/api/file-raw/local/…/proj/index.html` it resolves to
+  // a sibling under the same route, which serves it. One encoded segment per
+  // path component so `#`, `?` and spaces in a filename survive the trip.
+  const segments = filePath.split('/').filter((s, i) => i === 0 ? s.length > 0 : true);
+  const encodedPath = segments.map(encodeURIComponent).join('/');
+  const url = `/api/file-raw/${encodeURIComponent(host || 'local')}/${encodedPath}`;
+  return reload ? `${url}?r=${reload}` : url;
 }
 
 /**
@@ -149,6 +178,98 @@ export async function fetchReferences(
     throw new Error(typeof body?.error === 'string' ? body.error : `Reference search failed: ${res.status}`);
   }
   return body as ReferencesResponse;
+}
+
+/**
+ * A file mutation the server refused. `code` is the machine-readable reason
+ * (`invalid` | `forbidden` | `not_found` | `exists` | `is_directory` |
+ * `no_space` | `unsupported` | `daemon_needs_upgrade` | `remote`, or `'unknown'`
+ * when the body carried none), and `message` is the server's own prose — shown
+ * to the user VERBATIM, because for `daemon_needs_upgrade` the message is the
+ * actual instruction.
+ */
+export class FileOpError extends Error {
+  constructor(message: string, public code: string, public status: number) {
+    super(message);
+    this.name = 'FileOpError';
+  }
+}
+
+/**
+ * A mutation that is STILL RUNNING when the server's deadline passed (a recursive
+ * delete of a huge tree, a copy over a slow tunnel). Not a failure: the work
+ * continues on the host, and the tree will show the result when it lands. This is
+ * distinct from FileOpError on purpose — the old behaviour turned a remote
+ * timeout into "Could not complete", while the daemon went on and deleted the
+ * folder anyway, so the user was told it failed and the folder was gone.
+ */
+export class FileOpPending extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FileOpPending';
+  }
+}
+
+async function fileOp(
+  op: 'mkdir' | 'create' | 'rename' | 'duplicate' | 'delete',
+  body: Record<string, unknown>,
+): Promise<{ path?: string }> {
+  const res = await fetch(`/api/files/${op}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const parsed = await res.json().catch(() => ({} as Record<string, unknown>));
+  if (res.status === 202) {
+    throw new FileOpPending(
+      typeof parsed?.message === 'string' ? parsed.message : 'Still working on it…',
+    );
+  }
+  if (!res.ok) {
+    throw new FileOpError(
+      typeof parsed?.error === 'string' ? parsed.error : `${op} failed: ${res.status}`,
+      typeof parsed?.code === 'string' ? parsed.code : 'unknown',
+      res.status,
+    );
+  }
+  return parsed as { path?: string };
+}
+
+/** Create an empty file. Fails with code `exists` when something is already there. */
+export async function createFile(filePath: string, host?: string): Promise<string> {
+  const body = await fileOp('create', { path: filePath, ...(host ? { host } : {}) });
+  return body.path ?? filePath;
+}
+
+/** Create a directory (parents are the server's business, not the caller's). */
+export async function createFolder(dirPath: string, host?: string): Promise<string> {
+  const body = await fileOp('mkdir', { path: dirPath, ...(host ? { host } : {}) });
+  return body.path ?? dirPath;
+}
+
+/** Move/rename a file or directory to `newPath`. */
+export async function renamePath(filePath: string, newPath: string, host?: string): Promise<string> {
+  const body = await fileOp('rename', { path: filePath, newPath, ...(host ? { host } : {}) });
+  return body.path ?? newPath;
+}
+
+/** Copy a file or directory to `newPath` (recursive for directories, server-side). */
+export async function duplicatePath(filePath: string, newPath: string, host?: string): Promise<string> {
+  const body = await fileOp('duplicate', { path: filePath, newPath, ...(host ? { host } : {}) });
+  return body.path ?? newPath;
+}
+
+/** Delete a file, or a directory when `recursive` is set. Permanent — confirm first. */
+export async function deletePath(
+  filePath: string,
+  host?: string,
+  opts: { recursive?: boolean } = {},
+): Promise<void> {
+  await fileOp('delete', {
+    path: filePath,
+    ...(host ? { host } : {}),
+    ...(opts.recursive ? { recursive: true } : {}),
+  });
 }
 
 /** A single directory entry for the file explorer tree. */

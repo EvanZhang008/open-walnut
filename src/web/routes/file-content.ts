@@ -28,6 +28,7 @@ import type { DaemonFileReader } from '../../core/daemon-file-reader.js'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { computeContentHash } from '../../utils/file-ops.js'
 import { withFileLock } from '../../utils/file-lock.js'
+import { recordSnapshot, type SnapshotWriter } from '../../core/file-history.js'
 import { log } from '../../logging/index.js'
 
 /**
@@ -674,7 +675,26 @@ fileContentRouter.get('/', async (req: Request, res: Response, next: NextFunctio
     // (Remote `host=` reads run on the target daemon and keep their own scope.
     // The Mac/trusted-LAN FileViewer is intentionally unconfined — it's the
     // owner's own machine.)
-    res.json(await readFileContentPayload(rawPath, host))
+    const payload = await readFileContentPayload(rawPath, host)
+
+    // History baseline: `?track=baseline` (the viewer opening a file) or
+    // `?track=agent` (a re-read after an agent wrote it) records what the user
+    // is looking at, so "Opened" is the floor of every timeline even on a file
+    // git has never seen. Only a WHOLE text read qualifies — a truncated or
+    // binary payload isn't a version anything could be restored from. Any other
+    // value of `track` is ignored.
+    //
+    // Fire-and-forget on purpose: the read must not wait for (or fail with) the
+    // store. recordSnapshot swallows its own errors.
+    const track = req.query.track
+    if ((track === 'baseline' || track === 'agent')
+      && payload.content !== null && !payload.truncated && !payload.binary) {
+      // Same sandboxed path the history route keys on (assertPathAllowed already
+      // succeeded inside readFileContentPayload, so this cannot throw here).
+      const { filePath } = assertPathAllowed(rawPath, host, 'read')
+      void recordSnapshot({ host, path: filePath, content: payload.content, writer: track })
+    }
+    res.json(payload)
   } catch (err) {
     if (err instanceof FileContentError) {
       res.status(err.statusCode).json({ error: err.message })
@@ -697,13 +717,23 @@ fileContentRouter.get('/', async (req: Request, res: Response, next: NextFunctio
  */
 fileContentRouter.put('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { path: rawPath, host, content, expectedHash } = req.body ?? {}
-    const result = await writeFileContentPayload(
-      rawPath,
-      typeof host === 'string' && host.length > 0 ? host : undefined,
-      content,
-      expectedHash,
-    )
+    const { path: rawPath, host, content, expectedHash, writer } = req.body ?? {}
+    const hostArg = typeof host === 'string' && host.length > 0 ? host : undefined
+    const result = await writeFileContentPayload(rawPath, hostArg, content, expectedHash)
+    // History: record what was just saved. `writer` says WHO saved it so the
+    // timeline can label it — an explicit allowlist, because an unknown value
+    // would otherwise become a pill nobody can read. Anything else is a plain
+    // user save.
+    const w: SnapshotWriter = writer === 'live' || writer === 'merge' ? writer : 'user'
+    try {
+      const { filePath } = assertPathAllowed(rawPath, hostArg, 'write')
+      void recordSnapshot({ host: hostArg, path: filePath, content: content as string, writer: w })
+    } catch (histErr) {
+      // Must never turn a SUCCESSFUL save into an error response.
+      log.web.warn('file-history: post-save record skipped', {
+        error: histErr instanceof Error ? histErr.message : String(histErr),
+      })
+    }
     res.json(result)
   } catch (err) {
     if (err instanceof FileConflictError) {

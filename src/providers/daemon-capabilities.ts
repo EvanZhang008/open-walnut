@@ -170,6 +170,18 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * a sidecar (path-resolve-core.cjs) and advertise this only when that load
  * succeeds. Optional: without it the server uses its own RPC-based walk.
  *
+ * 'fs-mutate-v1' — host-local file MUTATION for the session Files panel
+ * (fs.rename / fs.rm / fs.copy, plus the `exclusive` flags on fs.mkdir and
+ * fs.write). Each command runs the same input floor host-side before touching
+ * the disk (absolute path, no '.'/'..' segment, never '/' or HOME, at least two
+ * segments) and refuses to clobber an existing target, so a rename can never
+ * silently delete a file and a delete can never walk off into a system root.
+ * NOT sidecar-gated: both twins implement it inline over fs.promises, so a
+ * current daemon of either flavor can always answer. Deliberately NOT on the
+ * bridge allowlist either — a compromised cloud box must never mutate exec-host
+ * files. Optional: without it the route answers 501 daemon_needs_upgrade, which
+ * self-heals on the next auto-deploy.
+ *
  * 'grep-v1' — host-local symbol search (fs.grep), backing "find references" in
  * the Files viewer. The daemon runs `git grep` (or a pruned `grep -r` outside a
  * repo) next to the files and returns only the small match list, never the
@@ -177,6 +189,16 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * child_process, so a current daemon of either flavor can always answer.
  * Optional: without it the route answers 503 "daemon needs upgrade for
  * reference search" until the next auto-deploy.
+ *
+ * 'git-file-history-v1' — host-local git history for ONE file (git.fileLog /
+ * git.fileShow), backing the History panel of the Files viewer. Same rule as
+ * git.diff: git and the file must live on the same host, so the daemon runs the
+ * two invocations and only the small commit list (or one version's text) crosses
+ * the tunnel. NOT sidecar-gated: both twins implement it inline over
+ * child_process. Deliberately NOT on the bridge allowlist either — it reads
+ * arbitrary host paths. Optional: without it the History panel still shows
+ * Walnut's own snapshots and reports git as unavailable
+ * (reason 'daemon_needs_upgrade') until the next auto-deploy.
  */
 export const ADVERTISED_DAEMON_CAPABILITIES = [
   ...REQUIRED_DAEMON_CAPABILITIES,
@@ -200,6 +222,8 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // button still works.
   'vscode-v1',
   'grep-v1',
+  'git-file-history-v1',
+  'fs-mutate-v1',
   'fs.readBounded',
   // 'skill-sync-v2' — walnut-skill distribution (skills.sync command). The
   // server pushes the current walnut SKILL.md at connect; the daemon keeps

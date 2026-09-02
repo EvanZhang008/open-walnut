@@ -42,6 +42,7 @@ SOURCES=(
   src/providers/daemon-core.ts
   src/providers/daemon-fold.ts
   src/providers/daemon-source.ts
+  src/providers/daemon-capabilities.ts
   src/providers/gateway-core.ts
   src/providers/wn-cli.ts
   src/providers/tool-args-source.ts

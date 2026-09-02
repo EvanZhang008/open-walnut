@@ -604,6 +604,85 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       .toMatch(/search-grep-core\.ts/)
   })
 
+  // Host-local git history for ONE file (git.fileLog / git.fileShow): the Files
+  // panel's History timeline. Same inline shape as fs.grep — both twins run git
+  // themselves over child_process, so 'git-file-history-v1' is unconditional on a
+  // current daemon and NOT sidecar-gated. The sha check is the security-relevant
+  // half: that string reaches a `git show <sha>:<path>` argument, so both twins
+  // must refuse a non-sha BEFORE spawning anything.
+  it("both twins dispatch git.fileLog/git.fileShow; 'git-file-history-v1' advertised but NOT required", () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toContain("case 'git.fileLog'")
+      expect(src).toContain("case 'git.fileShow'")
+      expect(src).toMatch(/function cmdGitFileLog/)
+      expect(src).toMatch(/function cmdGitFileShow/)
+      // Validate-then-spawn: the regex, the refusal, and the same `--follow` log
+      // format on both sides (a one-sided format edit silently changes parsing).
+      expect(src).toContain('GIT_FILE_SHA_RE = /^[0-9a-f]{7,40}$/')
+      expect(src).toContain("'git.fileShow: invalid sha'")
+      expect(src).toContain("GIT_FILE_LOG_FORMAT = '%H%x1f%ct%x1f%an%x1f%s'")
+      expect(src).toMatch(/'--follow'/)
+      // Bounded: a timeout and a maxBuffer on every invocation, and a hard cap on
+      // the version being shown (the editor could not hold more anyway).
+      expect(src).toMatch(/GIT_FILE_SHOW_MAX_BYTES = 8 \* 1024 \* 1024/)
+      expect(src).toMatch(/timeout: 8_?000/)
+      // `~` expansion, like every other path-taking command.
+      expect(src).toMatch(/function gitFileExpandHome/)
+      // A path git never tracked is "no history", never an error response.
+      expect(src).toMatch(/commits: \[\] \}\)/)
+    }
+    // The server-side local twin must carry the SAME sha rule (it feeds the same
+    // `git show` argument for a __local__ path).
+    expect(readFile(path.join(ROOT, 'src/core/file-history-git.ts')))
+      .toContain('GIT_SHA_RE = /^[0-9a-f]{7,40}$/')
+    // Advertised, never required — an old daemon must stay usable (the History
+    // panel degrades to Walnut's own snapshots).
+    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
+    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')
+    expect(reqStart).toBeGreaterThan(-1)
+    expect(capsSrc.slice(reqStart, capsSrc.indexOf('] as const', reqStart)))
+      .not.toMatch(/'git-file-history-v1'/)
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
+    expect(capsSrc.slice(advStart, capsSrc.indexOf('] as const', advStart)))
+      .toMatch(/'git-file-history-v1'/)
+    // NOT sidecar-gated: both twins implement it inline, so the static literal
+    // getDaemonSource() substitutes is the whole answer for a source deploy.
+    const gatedStart = templateSrc.indexOf('SIDECAR_GATED_CAPABILITIES = new Set([')
+    expect(templateSrc.slice(gatedStart, templateSrc.indexOf('])', gatedStart)))
+      .not.toContain("'git-file-history-v1'")
+  })
+  it('neither twin exposes the file-history family on the cloud bridge', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      const allowStart = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')
+      expect(allowStart).toBeGreaterThan(-1)
+      const allowBody = src.slice(allowStart, src.indexOf('])', allowStart))
+      for (const cmd of ["'git.fileLog'", "'git.fileShow'"]) {
+        expect(allowBody, `${cmd} reads arbitrary host paths — never from a compromised cloud box`)
+          .not.toContain(cmd)
+      }
+    }
+  })
+
+  // The template BODY is an embedded JS string: a backtick would terminate it
+  // early, and an UNESCAPED `${` would interpolate a local identifier at build
+  // time (the two escaped `\${` occurrences are deliberate — they ship a literal
+  // shell/regex `${` to the host). Both are compile errors here, but both are
+  // also easy to reintroduce while porting code from the TypeScript twin, so the
+  // invariant is pinned explicitly rather than left to tsc.
+  it('the daemon-source template body has no backtick and no unescaped interpolation', () => {
+    const open = templateSrc.indexOf('const DAEMON_SOURCE = `')
+    expect(open, 'DAEMON_SOURCE template not found').toBeGreaterThan(-1)
+    const bodyStart = templateSrc.indexOf('`', open) + 1
+    const bodyEnd = templateSrc.lastIndexOf('`')
+    expect(bodyEnd).toBeGreaterThan(bodyStart)
+    const body = templateSrc.slice(bodyStart, bodyEnd)
+    expect(body.includes('`'), 'a backtick inside the template would end it early').toBe(false)
+    const unescaped = body.match(/(?<!\\)\$\{/g) ?? []
+    expect(unescaped.length, 'an unescaped ${ interpolates at build time').toBe(0)
+  })
+
   // External-session scan (sessions.discoverExternal): same sidecar-gated
   // shape as changes-v1. Locked on BOTH twins so the bun binary and the
   // source-deployed template can't drift on a host-local capability.
@@ -694,6 +773,87 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
     const advEnd = capsSrc.indexOf('] as const', advStart)
     expect(capsSrc.slice(advStart, advEnd)).toMatch(/'fs\.readBounded'/)
+  })
+
+  // File MUTATION family (fs.rename / fs.rm / fs.copy, 'fs-mutate-v1'): the
+  // Files panel's rename/duplicate/delete. Behavioral coverage runs the SOURCE
+  // twin (daemon-fs-mutate.test.ts); the bun binary has no harness, so these
+  // byte checks are its only guard. Every clause below is a data-loss shape:
+  // the floor (EDENIED) stops a mutation aimed at '/' or a home directory, and
+  // errorOnExist + the lstat pre-checks stop a rename/copy from silently
+  // replacing another file.
+  it('both twins dispatch fs.rename / fs.rm / fs.copy and share the mutation floor', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toContain("case 'fs.rename'")
+      expect(src).toContain("case 'fs.rm'")
+      expect(src).toContain("case 'fs.copy'")
+      expect(src).toMatch(/function fsMutateFloor/)
+      expect(src).toMatch(/function cmdFsRename/)
+      expect(src).toMatch(/function cmdFsRm/)
+      expect(src).toMatch(/function cmdFsCopy/)
+      // Every mutating command must consult the floor and refuse with EDENIED:
+      // fs.rename / fs.rm / fs.copy, plus fs.write and fs.mkdir on their
+      // `exclusive` (Files-panel create) branch. Creating a file was once the one
+      // mutation with NO host-side check, which is also what the capability blurb
+      // already claimed was covered.
+      expect((src.match(/refused: path outside the mutation floor \(EDENIED\)/g) ?? []).length,
+        'fs.rename/fs.rm/fs.copy plus exclusive fs.write/fs.mkdir must each refuse with EDENIED').toBe(5)
+      // The floor must be applied to the path the KERNEL reaches, not the string:
+      // without resolving the parent, one symlinked ancestor carries any target
+      // past every rule below (a link to the home directory made `~/.ssh`
+      // deletable through a request that looked entirely ordinary).
+      expect(src, 'the resolving wrapper must exist').toMatch(/function fsMutateResolve/)
+      expect(src, 'the parent must be realpath-ed before the checks')
+        .toMatch(/realpath\(path\.dirname\(p\)\)/)
+      // …and every destructive command must go through the RESOLVING wrapper,
+      // never the bare string floor.
+      expect((src.match(/await fsMutateResolve\(/g) ?? []).length,
+        'rename(2) + rm(1) + copy(2) + write(1) + mkdir(1) call sites').toBe(7)
+      // The host-side denylist. The SERVER's copy is built from the server's own
+      // home directory, so on a remote host it compares a Linux path against a
+      // Mac home and matches nothing — this is the only thing protecting that
+      // host's credentials and Walnut's own stream JSONLs.
+      expect(src, 'host-side denylist must exist').toMatch(/function fsMutateDenied/)
+      expect(src).toMatch(/seg === '\.ssh'/)
+      expect(src).toContain('open-walnut-streams')
+      // Never-clobber: an existing target is an EEXIST, and cp is asked to fail
+      // on an existing entry rather than merge into it.
+      expect(src).toContain('errorOnExist: true')
+      expect((src.match(/target already exists \(EEXIST\)/g) ?? []).length).toBe(2)
+      expect(src).toContain('target is a directory (EISDIR)')
+      // The floor's segment-wise '.'/'..' rule (a substring check would reject
+      // an ordinary name like 'mod..old') and its two-segment minimum.
+      expect(src).toMatch(/seg === '\.' \|\| seg === '\.\.'/)
+      expect(src).toMatch(/\.length > 0\)\.length < 2\) return (?:null|false)/)
+    }
+  })
+  it('neither twin exposes the mutation family on the cloud bridge', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      const allowStart = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')
+      expect(allowStart).toBeGreaterThan(-1)
+      const allowBody = src.slice(allowStart, src.indexOf('])', allowStart))
+      for (const cmd of ["'fs.rename'", "'fs.rm'", "'fs.copy'", "'fs.mkdir'"]) {
+        expect(allowBody, `${cmd} must never be reachable from a compromised cloud box`)
+          .not.toContain(cmd)
+      }
+    }
+  })
+  it("'fs-mutate-v1' is advertised but NOT required (old daemons must stay usable)", () => {
+    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
+    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')
+    const reqEnd = capsSrc.indexOf('] as const', reqStart)
+    expect(reqStart).toBeGreaterThan(-1)
+    expect(capsSrc.slice(reqStart, reqEnd)).not.toMatch(/'fs-mutate-v1'/)
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
+    const advEnd = capsSrc.indexOf('] as const', advStart)
+    expect(capsSrc.slice(advStart, advEnd)).toMatch(/'fs-mutate-v1'/)
+    // NOT sidecar-gated: both twins implement it inline, so the static literal
+    // getDaemonSource() substitutes is the whole answer for a source deploy.
+    const gatedStart = templateSrc.indexOf('SIDECAR_GATED_CAPABILITIES = new Set([')
+    expect(templateSrc.slice(gatedStart, templateSrc.indexOf('])', gatedStart)))
+      .not.toContain("'fs-mutate-v1'")
   })
 
   it('both twins scrub WALNUT_DAEMON_PARENT_PID from the CLI spawn env', () => {

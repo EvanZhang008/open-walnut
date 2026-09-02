@@ -11,6 +11,26 @@ import { getDaemonConnection } from '../providers/daemon-connection.js'
 import { getConfig } from './config-manager.js'
 import type { SshTarget } from '../providers/session-io.js'
 import type { SessionFileReader } from './session-file-reader.js'
+import type { FileGitCommit } from './file-history-git.js'
+
+/**
+ * The daemon on this host predates a capability the caller needs.
+ *
+ * Thrown (never swallowed) so the HTTP edge can answer with something the user
+ * can act on: the daemon auto-upgrades on the next session message to that host,
+ * so "try again in a moment" is the whole remedy. Distinct class because the
+ * route maps it to 501, not to the generic 502 "remote failed".
+ */
+export class DaemonNeedsUpgradeError extends Error {
+  constructor(public host: string, public capability = 'fs-mutate-v1') {
+    super(
+      `The Walnut daemon on ${host} needs an upgrade before it can change files ` +
+      `(missing '${capability}'). It upgrades itself the next time you send a message ` +
+      'to a session on that host — try again after that.',
+    )
+    this.name = 'DaemonNeedsUpgradeError'
+  }
+}
 
 export class DaemonFileReader implements SessionFileReader {
   private host: string
@@ -172,6 +192,137 @@ export class DaemonFileReader implements SessionFileReader {
       const errMsg = typeof result.error === 'string' ? result.error : 'unknown'
       throw new Error('fs.write failed: ' + errMsg)
     }
+  }
+
+  // ── Mutation family ('fs-mutate-v1') ──
+  //
+  // Every one of these is HOST work: the daemon owns the file descriptors and
+  // runs the input floor (absolute, no '.'/'..' segment, not '/' or HOME, ≥2
+  // segments) plus the never-clobber checks itself — only the small verdict
+  // crosses the tunnel. A KNOWN missing capability is refused up front, because
+  // "unknown command: fs.rename" in a UI toast tells the user nothing.
+
+  /**
+   * Resolve the connection for a mutating command, refusing a daemon we KNOW is
+   * too old.
+   *
+   * Unknown capabilities (`hello` not answered yet, or it failed) is not the same
+   * thing as a missing one, and treating it as one produced advice that could
+   * never help: a 501 "upgrade the daemon and try again" for a connection that
+   * simply hadn't finished handshaking. So assume capable and let the RPC decide
+   * — the same posture daemon-connection.ts takes elsewhere (`if (this._capabilities
+   * && !this.hasCapability(…))`). A genuinely old daemon answers "unknown
+   * command", which the HTTP edge maps to daemon_needs_upgrade for real.
+   */
+  private async mutateConnection() {
+    await this.resolve()
+    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    if (conn.capabilitiesKnown && !conn.hasCapability('fs-mutate-v1')) {
+      throw new DaemonNeedsUpgradeError(this.host)
+    }
+    return conn
+  }
+
+  /** Rename/move a path. The daemon refuses an existing target (EEXIST). */
+  async renamePath(from: string, to: string): Promise<void> {
+    const conn = await this.mutateConnection()
+    const result = await conn.send('fs.rename', { from, to })
+    if (!result.ok) {
+      throw new Error('fs.rename failed: ' + (typeof result.error === 'string' ? result.error : 'unknown'))
+    }
+  }
+
+  /**
+   * Delete a path. A directory needs `recursive` or the daemon says EISDIR.
+   *
+   * `timeoutMs` exists because a recursive delete of a big tree outruns
+   * `conn.send`'s 30s default, and that rejection used to be reported to the user
+   * as a failure WHILE the daemon went on to finish deleting. Callers that can
+   * wait pass a long timeout and answer "still working" on their own clock.
+   */
+  async removePath(remotePath: string, recursive: boolean, timeoutMs?: number): Promise<void> {
+    const conn = await this.mutateConnection()
+    const result = await conn.send('fs.rm', { path: remotePath, recursive }, timeoutMs)
+    if (!result.ok) {
+      throw new Error('fs.rm failed: ' + (typeof result.error === 'string' ? result.error : 'unknown'))
+    }
+  }
+
+  /** Copy a file or directory tree. The daemon refuses an existing target.
+   *  `timeoutMs`: same unbounded-tree reasoning as removePath. */
+  async copyPath(from: string, to: string, timeoutMs?: number): Promise<void> {
+    const conn = await this.mutateConnection()
+    const result = await conn.send('fs.copy', { from, to }, timeoutMs)
+    if (!result.ok) {
+      throw new Error('fs.copy failed: ' + (typeof result.error === 'string' ? result.error : 'unknown'))
+    }
+  }
+
+  /** Create ONE directory; an existing one is an EEXIST, not a silent no-op. */
+  async mkdirExclusive(remotePath: string): Promise<void> {
+    const conn = await this.mutateConnection()
+    const result = await conn.send('fs.mkdir', { path: remotePath, exclusive: true })
+    if (!result.ok) {
+      throw new Error('fs.mkdir failed: ' + (typeof result.error === 'string' ? result.error : 'unknown'))
+    }
+  }
+
+  /** Create an EMPTY file, refusing to overwrite an existing one (flag 'wx'). */
+  async createEmptyFile(remotePath: string): Promise<void> {
+    const conn = await this.mutateConnection()
+    const result = await conn.send('fs.write', {
+      path: remotePath, data: '', encoding: 'utf-8', exclusive: true,
+    })
+    if (!result.ok) {
+      throw new Error('fs.write failed: ' + (typeof result.error === 'string' ? result.error : 'unknown'))
+    }
+  }
+
+  // ── Git file history ('git-file-history-v1') ──
+  //
+  // Both are HOST work: git and the file must be on the same machine, so the
+  // daemon runs the invocation and only the commit list / one version's text
+  // crosses the tunnel. Capability-checked FIRST for the same reason as the
+  // mutation family: "unknown command: git.fileLog" tells the user nothing,
+  // while DaemonNeedsUpgradeError lets the route answer "git history needs a
+  // daemon upgrade on this host" and keep serving Walnut's own snapshots.
+
+  private async gitHistoryConnection() {
+    await this.resolve()
+    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    if (conn.capabilitiesKnown && !conn.hasCapability('git-file-history-v1')) {
+      throw new DaemonNeedsUpgradeError(this.host, 'git-file-history-v1')
+    }
+    return conn
+  }
+
+  /** Commits that touched one file, newest first. repoRoot null = not a git repo. */
+  async gitFileLog(
+    cwd: string,
+    remotePath: string,
+    limit?: number,
+  ): Promise<{ repoRoot: string | null; commits: FileGitCommit[] }> {
+    const conn = await this.gitHistoryConnection()
+    const result = await conn.send('git.fileLog', {
+      cwd, path: remotePath, ...(limit !== undefined ? { limit } : {}),
+    })
+    if (!result.ok) {
+      throw new Error('git.fileLog failed: ' + (typeof result.error === 'string' ? result.error : 'unknown'))
+    }
+    return {
+      repoRoot: typeof result.repoRoot === 'string' ? result.repoRoot : null,
+      commits: Array.isArray(result.commits) ? result.commits as FileGitCommit[] : [],
+    }
+  }
+
+  /** One file's content at one commit. Throws when git has no such object. */
+  async gitFileShow(cwd: string, remotePath: string, sha: string): Promise<string> {
+    const conn = await this.gitHistoryConnection()
+    const result = await conn.send('git.fileShow', { cwd, path: remotePath, sha })
+    if (!result.ok) {
+      throw new Error('git.fileShow failed: ' + (typeof result.error === 'string' ? result.error : 'unknown'))
+    }
+    return typeof result.content === 'string' ? result.content : ''
   }
 
   /**

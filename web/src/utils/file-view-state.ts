@@ -255,7 +255,61 @@ export function saveFileScroll(
   if (keys.length > SCROLL_MAX_ENTRIES) {
     for (const k of keys.slice(0, keys.length - SCROLL_MAX_ENTRIES)) delete map[k];
   }
+  writeScrollMap(map);
+}
+
+function writeScrollMap(map: ScrollMap): void {
   try {
     localStorage.setItem(LS_SCROLL, JSON.stringify(map));
   } catch { /* quota/denied */ }
+}
+
+/**
+ * Carry the remembered scroll offset + Preview/Source choice across a rename —
+ * the record for `from` and every record UNDER it, since a directory rename
+ * moves whole subtrees.
+ *
+ * A path-keyed record that stays behind is not merely lost: the same offsets
+ * resurface when a file is later created at the old name, so reopening a
+ * brand-new file jumped to a stranger's reading position. Matching is
+ * SEGMENT-wise (`/a/b` never touches `/a/bc`), and the host is part of the key,
+ * so one host's rename can't disturb the other's records.
+ *
+ * Best-effort and synchronous, like every other write here: a failure just means
+ * "start at the top".
+ */
+export function moveFileViewState(host: string | undefined, from: string, to: string): void {
+  try {
+    const map = readScrollMap();
+    const fromKey = scrollKey(host, from);
+    const moves = new Map<string, string>();
+    for (const key of Object.keys(map)) {
+      if (key === fromKey) moves.set(key, scrollKey(host, to));
+      else if (key.startsWith(`${fromKey}/`)) moves.set(key, scrollKey(host, `${to}${key.slice(fromKey.length)}`));
+    }
+    if (moves.size === 0) return;
+    const dests = new Set(moves.values());
+    const next: ScrollMap = {};
+    for (const [key, value] of Object.entries(map)) {
+      // A moved record is re-inserted LAST (it was just touched, so it belongs at
+      // the fresh end of the write-order LRU), and it WINS over any record already
+      // sitting at the destination name.
+      if (moves.has(key) || dests.has(key)) continue;
+      next[key] = value;
+    }
+    for (const [key, dest] of moves) next[dest] = map[key]!;
+    writeScrollMap(next);
+  } catch { /* corrupt/denied — the offsets are comfort, not data */ }
+}
+
+/** Forget the view state of a deleted path and everything under it (segment-wise). */
+export function deleteFileViewStateUnder(host: string | undefined, path: string): void {
+  try {
+    const map = readScrollMap();
+    const base = scrollKey(host, path);
+    const dead = Object.keys(map).filter((k) => k === base || k.startsWith(`${base}/`));
+    if (dead.length === 0) return;
+    for (const k of dead) delete map[k];
+    writeScrollMap(map);
+  } catch { /* corrupt/denied */ }
 }

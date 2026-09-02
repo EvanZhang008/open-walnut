@@ -11,6 +11,11 @@
  * mention picker) — type a fragment, pick a suggestion, jump there.
  *
  * Expanded-dir state persists in localStorage, keyed per host + resolved root.
+ *
+ * Every listing is stale-while-revalidate over `cache/dirlist-idb`: the last
+ * known rows paint immediately (a remote listing is an SSH-tunnel round trip, and
+ * the tree used to render a bare `Loading…` until the first one landed), and the
+ * network fetch always still runs and overwrites them.
  */
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -20,6 +25,8 @@ import { fetchSessionChangedPaths } from '@/api/session-changes';
 import { FileContentView } from '@/components/common/FileContentView';
 import { ReferencePanel } from '@/components/common/ReferencePanel';
 import { FileTreeContextMenu, type FileTreeContextTarget } from './FileTreeContextMenu';
+import { FileTreeEditRow } from './FileTreeEditRow';
+import { useFileTreeMutations, judgeRestoredSelection } from './useFileTreeMutations';
 import { parentPath, revealAncestors } from './reveal-ancestors';
 import { ICON_REFRESH, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED } from '@/components/common/Icons';
 import { formatSize } from '@/utils/format';
@@ -31,6 +38,10 @@ import {
   type FileHistory,
 } from '@/utils/file-view-state';
 import { vaultRelativeNotePath } from '@/utils/notes-link';
+import { useFileDraftPaths } from '@/utils/file-drafts';
+import {
+  getCachedDirList, getCachedDirListsBulk, setCachedDirList, deleteCachedDirListsUnder,
+} from '@/cache/dirlist-idb';
 import { useRevealFile } from '@/hooks/useRevealFile';
 import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
@@ -96,6 +107,9 @@ const LS_OPEN_ROOTS = 'open-walnut-file-explorer-open-roots';
 // the panel; the preview pane is the star, the tree is navigation chrome.
 const LS_TREE_WIDTH = 'open-walnut-file-explorer-tree-width2';
 const LS_TREE_COLLAPSED = 'open-walnut-file-explorer-tree-collapsed';
+// How many persisted-expanded dirs a re-open reconstructs: the cache prime and
+// the eager refetch walk the SAME list, so one bound keeps them in step.
+const MAX_RESTORE_LOADS = 64;
 const TREE_WIDTH_DEFAULT = 200;
 const TREE_WIDTH_MIN = 140;
 const TREE_WIDTH_MAX = 600;
@@ -106,6 +120,14 @@ function lsKeyFor(host: string | undefined, root: string): string {
 
 function lsOpenRootsKey(host: string | undefined, root: string): string {
   return `${LS_OPEN_ROOTS}:${host ?? 'local'}:${root}`;
+}
+
+function loadExpandedSet(host: string | undefined, root: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(lsKeyFor(host, root));
+    if (raw) return new Set(JSON.parse(raw) as string[]);
+  } catch { /* corrupt/denied — start collapsed */ }
+  return new Set();
 }
 
 function loadOpenRoots(host: string | undefined, root: string): Set<string> | null {
@@ -140,7 +162,17 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   const [childrenMap, setChildrenMap] = useState<Map<string, DirEntry[]>>(new Map());
   const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set());
   const [errorPaths, setErrorPaths] = useState<Map<string, string>>(new Map());
+  // Dirs currently showing CACHED rows that no fetch has confirmed yet. Only
+  // consumed to decide what a failed refetch does: with cached rows on screen a
+  // failure is a quiet note (below), never a wipe-and-error.
+  const [stalePaths, setStalePaths] = useState<Set<string>>(new Set());
+  const stalePathsRef = useRef(stalePaths);
+  stalePathsRef.current = stalePaths;
+  // "Showing the last known contents — couldn't reach the host." Muted, keeps rows.
+  const [staleErrors, setStaleErrors] = useState<Map<string, string>>(new Map());
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const selectedFileRef = useRef(selectedFile);
+  selectedFileRef.current = selectedFile;
   const [rootError, setRootError] = useState<string | null>(null);
   // The path the user asked for when the backend could only offer a nearby
   // directory instead. Rendered as a calm, dismissible note above the tree — a raw
@@ -192,6 +224,8 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   // mirror lets the stable callback read the latest key without taking it as a dep.
   const lsKeyRef = useRef(lsKeyFor(host, root));
   lsKeyRef.current = lsKeyFor(host, root);
+  const lsOpenRootsKeyRef = useRef(lsOpenRootsKey(host, root));
+  lsOpenRootsKeyRef.current = lsOpenRootsKey(host, root);
 
   // Mirror of loaded-dir keys + in-flight set, read inside callbacks/effects
   // without adding them as deps (avoids needless callback churn / stale resets).
@@ -203,6 +237,16 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   // A restored selection awaiting existence-check against its parent listing —
   // a file deleted since the last visit must not leave a dead preview pane.
   const pendingValidateRef = useRef<string | null>(null);
+  // Dirs a NETWORK listing has answered for since the last reset. `stalePaths`
+  // can't answer this: the bulk prime marks every candidate it read, INCLUDING
+  // dirs the fetch already beat it to (deliberately — the mark also picks "muted
+  // note" over "red error" for a later failure), so a fresh dir can carry a stale
+  // mark. The stale-selection pruner destroys persisted state, so it needs the
+  // strict truth, not the conservative one.
+  const freshDirsRef = useRef<Set<string>>(new Set());
+  // Bumped on every full reset (cwd/host change). The cache prime is async, so
+  // this is what stops one session's cached rows landing in another's tree.
+  const resetGenRef = useRef(0);
 
   // ── Remembered file + browser-style back/forward history ──────────────────
   // Keyed by a STABLE scope, never by `root`: the Files chip roots at the session
@@ -234,6 +278,23 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   const commitSelectionRef = useRef(commitSelection);
   commitSelectionRef.current = commitSelection;
 
+  /** Fresh rows landed for these paths: drop the cached-guess mark and any
+   *  "showing the last known contents" note. */
+  const clearStale = useCallback((...paths: string[]) => {
+    setStalePaths((prev) => {
+      if (!paths.some((p) => prev.has(p))) return prev;
+      const next = new Set(prev);
+      for (const p of paths) next.delete(p);
+      return next;
+    });
+    setStaleErrors((prev) => {
+      if (!paths.some((p) => prev.has(p))) return prev;
+      const next = new Map(prev);
+      for (const p of paths) next.delete(p);
+      return next;
+    });
+  }, []);
+
   const loadDir = useCallback(async (
     dirPath: string,
     opts: { isRoot?: boolean; restoreExpanded?: boolean; noCache?: boolean } = {},
@@ -244,6 +305,32 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     inFlightRef.current.add(dirPath);
     setLoadingPaths((prev) => new Set(prev).add(dirPath));
     setErrorPaths((prev) => { const next = new Map(prev); next.delete(dirPath); return next; });
+
+    // ── Stale-while-revalidate ────────────────────────────────────────────────
+    // Kick the cache read WITHOUT awaiting it, then fall straight through to the
+    // fetch below. This ordering is the whole contract: the network call is
+    // issued on this same synchronous run, so a slow, empty or broken cache read
+    // can neither delay it nor replace it. The cached rows only ever land in a
+    // dir the tree has nothing for, and only while the fetch has not answered.
+    //   noCache (Refresh, post-mutation re-lists) skips the paint entirely.
+    //   showHidden changes the CONTENT of a listing, so hidden mode skips the
+    //   cache on BOTH sides rather than keying by the flag: the flag is per-mount
+    //   state that always starts false, so the instant-paint path never runs in
+    //   hidden mode and keying it would buy nothing — while a second key scope
+    //   would double every invalidation and put a wrong-mode listing (hidden rows
+    //   in a hidden-off tree) one mistake away from painting.
+    let painted = false;
+    let freshLanded = false;
+    const cacheRead = (!noCache && !showHidden && !childrenMapRef.current.has(dirPath))
+      ? getCachedDirList(host, dirPath).catch(() => null)
+      : null;
+    void cacheRead?.then((rec) => {
+      if (freshLanded || !rec || rec.entries.length === 0) return;
+      painted = true;
+      setChildrenMap((prev) => (prev.has(dirPath) ? prev : new Map(prev).set(dirPath, rec.entries)));
+      setStalePaths((prev) => (prev.has(dirPath) ? prev : new Set(prev).add(dirPath)));
+    });
+
     try {
       // cwd + sessionId let the backend SELF-HEAL a path that doesn't exist
       // (resolve it against the session's transcript / git index, then list what
@@ -255,26 +342,34 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       // The same applies when the backend HEALED an unlistable path: `res.path` is
       // then a different directory entirely, and every child path must hang off it.
       const canonical = res.path && (isRoot || res.path !== dirPath) ? res.path : dirPath;
+      freshLanded = true;
+      freshDirsRef.current.add(dirPath);
+      freshDirsRef.current.add(canonical);
       setChildrenMap((prev) => new Map(prev).set(canonical, res.entries));
+      // Fresh rows are on screen: this dir is no longer a cached guess, and any
+      // "couldn't reach the host" note from an earlier attempt is answered.
+      clearStale(dirPath, canonical);
+      // Persist for the next open. Writes on the noCache path too — a Refresh
+      // must correct what a later panel-open will paint from, not bypass it.
+      if (!showHidden) void setCachedDirList(host, canonical, res);
       // A stand-in listing gets a plain "couldn't find X" note, not an error.
       setNotFound(res.requestedPath ?? null);
       if (isRoot) {
         if (canonical !== root) setRoot(canonical);
         setRootError(null);
         if (restoreExpanded) {
-          let restored = new Set<string>();
-          try {
-            const raw = localStorage.getItem(lsKeyFor(host, canonical));
-            if (raw) restored = new Set(JSON.parse(raw) as string[]);
-          } catch { /* corrupt/denied — start collapsed */ }
+          const restored = loadExpandedSet(host, canonical);
           setExpanded(restored);
           // ROOT-CAUSE fix for "refresh auto-closed my folders + first click is
           // dead": restoring `expanded` alone re-marks dirs as open, but their
           // children were never fetched, so nothing renders below them and the
           // first click merely flips the stale expanded bit (invisible). Eagerly
           // load every restored dir's children so the tree actually reopens.
-          for (const p of [...restored].slice(0, 64)) {
-            if (!childrenMapRef.current.has(p)) void loadDirRef.current?.(p);
+          // NO `childrenMap.has` guard: the reset effect primes exactly these
+          // paths from the cache, and skipping them here would turn an instant
+          // paint into a tree that never refreshes.
+          for (const p of [...restored].slice(0, MAX_RESTORE_LOADS)) {
+            void loadDirRef.current?.(p);
           }
         }
         // If the user typed a file path (or a click deep-linked one), the backend
@@ -296,35 +391,94 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
             commitSelectionRef.current(remembered, { push: false });
             pendingValidateRef.current = remembered;
             const dir = parentPath(remembered);
-            if (dir !== canonical && !childrenMapRef.current.has(dir)) void loadDirRef.current?.(dir);
+            // Fetch unless a FRESH listing already answered for this dir — the
+            // validation below waits for one, so skipping the fetch because the
+            // cache had painted rows would leave the question open forever (and
+            // answering it FROM those cached rows is what deleted a live file's
+            // remembered selection + history stop).
+            if (dir !== canonical && !freshDirsRef.current.has(dir)) void loadDirRef.current?.(dir);
           }
         }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error('file-explorer', 'failed to list dir', { dirPath, host, error: msg });
-      if (isRoot) setRootError(msg);
+      // The cache read may still be in flight; the fetch has already failed, so
+      // letting it finish costs nothing and can only turn an error pane into
+      // usable rows. (Registered second, so its paint runs before this line.)
+      if (cacheRead) await cacheRead;
+      // A stale listing is far more useful than an error pane, so when rows are
+      // on screen — from this call's paint OR from the reset effect's bulk prime
+      // — the failure is a muted note beside them, not a replacement for them.
+      if (painted || stalePathsRef.current.has(dirPath)) {
+        setStaleErrors((prev) => new Map(prev).set(dirPath, msg));
+      } else if (isRoot) setRootError(msg);
       else setErrorPaths((prev) => new Map(prev).set(dirPath, msg));
     } finally {
       inFlightRef.current.delete(dirPath);
       setLoadingPaths((prev) => { const next = new Set(prev); next.delete(dirPath); return next; });
     }
-  }, [host, showHidden, root, cwd, sessionId]);
+  }, [host, showHidden, root, cwd, sessionId, clearStale]);
   loadDirRef.current = loadDir;
 
   // Full reset + load root only when the session (cwd/host) changes — NOT when
   // showHidden flips (that's handled below without nuking expand/selection state).
   // loadDir is intentionally omitted: it changes with showHidden, which must not reset.
   useEffect(() => {
+    const gen = ++resetGenRef.current;
     const initialRoot = cwd || '~';
     setRoot(initialRoot);
     setChildrenMap(new Map());
+    // Dropping the rows drops their freshness: whatever repaints these dirs next
+    // may well be the cache.
+    freshDirsRef.current = new Set();
     setErrorPaths(new Map());
+    setStalePaths(new Set());
+    setStaleErrors(new Map());
     setSelectedFile(null);
     setFocusedDir(null);
     pendingValidateRef.current = null;
-    setExpanded(new Set()); // re-restored in loadDir once the root resolves to absolute
+    // Which dirs were open last time is ALREADY on disk in localStorage, so it
+    // needs no await — which is what makes an instant reconstruction possible.
+    // loadDir re-reads it under the canonical root and wins on any disagreement.
+    const restored = loadExpandedSet(host, initialRoot);
+    setExpanded(restored);
     setOpenRoots(new Set([initialRoot])); // cwd section open; re-keyed on canonicalization below
+    // Paint the whole previously-visible tree from ONE IndexedDB transaction.
+    // Only the root and the RESTORED-expanded paths, never everything cached:
+    // a dir the user collapsed left the persisted set, so it can't be resurrected.
+    if (!showHidden) {
+      const wanted = [initialRoot, ...[...restored].slice(0, MAX_RESTORE_LOADS)];
+      void getCachedDirListsBulk(host, wanted).then((cached) => {
+        // A newer reset (different session) owns the tree now — its rows are not ours.
+        if (resetGenRef.current !== gen || cached.size === 0) return;
+        const paintable = [...cached.keys()].filter((p) => cached.get(p)!.entries.length > 0);
+        if (paintable.length === 0) return;
+        // "Already loaded?" is decided INSIDE the updater, against the map React
+        // actually holds — childrenMapRef out here still points at the render
+        // before this effect's clear, so it is not an authority yet.
+        setChildrenMap((prev) => {
+          let next = prev;
+          for (const p of paintable) {
+            // Never clobber: the fetch may already have answered for this dir.
+            if (next.has(p)) continue;
+            if (next === prev) next = new Map(prev);
+            next.set(p, cached.get(p)!.entries);
+          }
+          return next;
+        });
+        // Deliberately marks every candidate, including one the fetch just beat us
+        // to: the mark only chooses "muted note" over "red error" on a LATER
+        // failure, and with real rows on screen that is the better of the two.
+        setStalePaths((prev) => {
+          const next = new Set(prev);
+          for (const p of paintable) next.add(p);
+          return next;
+        });
+      });
+    }
+    // Unconditional and NOT gated on the prime: the cache is a prefill, the fetch
+    // is the answer. Every restored dir gets refetched from inside this call.
     void loadDir(initialRoot, { isRoot: true, restoreExpanded: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cwd, host]);
@@ -381,23 +535,35 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   // the last visit) once its parent directory listing lands — otherwise the
   // preview pane sits on a permanent "file not found". It leaves the history too:
   // a Back button that lands on a dead file is worse than a shorter stack.
+  //
+  // Gated on a FRESH listing (judgeRestoredSelection). This effect runs on every
+  // childrenMap change, which includes the bulk cache prime and loadDir's cached
+  // paint — and a cached listing that predates the file said "not there", so the
+  // pruner used to clear the remembered file and drop its history stop, both
+  // PERSISTED, for a file that exists. `pendingValidateRef` stays armed until real
+  // rows land so the fresh answer is the one that decides.
   useEffect(() => {
     const pending = pendingValidateRef.current;
     if (!pending) return;
-    const entries = childrenMap.get(parentPath(pending));
-    if (!entries) return; // listing not in yet
+    const dir = parentPath(pending);
+    const verdict = judgeRestoredSelection({
+      path: pending,
+      entries: childrenMap.get(dir),
+      parentIsFresh: freshDirsRef.current.has(dir),
+    });
+    if (verdict === 'wait') return;
     pendingValidateRef.current = null;
-    const name = lastSegment(pending);
-    if (!entries.some((e) => e.name === name && e.type === 'file')) {
-      setSelectedFile((cur) => (cur === pending ? null : cur));
-      saveSelectedFile(host, scopeRef.current, null);
-      const pruned = removeFromFileHistory(historyRef.current, pending);
-      if (pruned !== historyRef.current) {
-        historyRef.current = pruned;
-        setHistory(pruned);
-        saveFileHistory(host, scopeRef.current, pruned);
-      }
+    if (verdict === 'keep') return;
+    setSelectedFile((cur) => (cur === pending ? null : cur));
+    saveSelectedFile(host, scopeRef.current, null);
+    const pruned = removeFromFileHistory(historyRef.current, pending);
+    if (pruned !== historyRef.current) {
+      historyRef.current = pruned;
+      setHistory(pruned);
+      saveFileHistory(host, scopeRef.current, pruned);
     }
+    // childrenMap is the trigger: every fresh listing installs a NEW map, so this
+    // re-runs the moment real rows for the pending file's dir land.
   }, [childrenMap, host]);
 
   // Changed-file quick access: ONE section per git repo/submodule the session
@@ -511,6 +677,12 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     return [cwdSection, ...rest];
   }, [root, changedRoots]);
 
+  // Which paths are SECTION HEADERS: they open via `openRoots`, and they can't be
+  // renamed/deleted (the mutation hook needs both facts).
+  const rootPaths = useMemo(() => new Set(rootSections.map((s) => s.path)), [rootSections]);
+  const rootPathsRef = useRef(rootPaths);
+  rootPathsRef.current = rootPaths;
+
   // Flatten one root's expanded subtree into visible rows (DFS). Memoized per
   // childrenMap/expanded change so unrelated re-renders don't re-walk the tree.
   const rowsByRoot = useMemo(() => {
@@ -537,6 +709,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     const parent = parentPath(root);
     if (parent !== root) {
       setChildrenMap(new Map());
+      freshDirsRef.current = new Set();
+      setStalePaths(new Set());
+      setStaleErrors(new Map());
       // The open file SURVIVES a re-root (VS Code keeps your editor open while you
       // browse elsewhere), and the memory is scope-keyed now, so clearing it here
       // would only flash the empty pane before loadDir restored the same file.
@@ -591,6 +766,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     setPathQuery('');
     if (!next || next === root) return;
     setChildrenMap(new Map());
+    freshDirsRef.current = new Set();
+    setStalePaths(new Set());
+    setStaleErrors(new Map());
     // Selection survives the jump for the same reason as goUp: the memory is
     // scope-keyed, so clearing it here would just flash the empty preview pane.
     // Typing a FILE path still wins — loadDir's res.selectedFile is explicit.
@@ -602,16 +780,21 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   // ── Right-click menu (Walnut's own, not the browser's) ────────────────────
   const navigate = useNavigate();
   const { canReveal, reveal, error: revealError, clearError: clearRevealError } = useRevealFile(host);
+  // Files with unsaved edits parked in the draft store (survives closing the pane).
+  const draftPaths = useFileDraftPaths(host);
   const [ctxMenu, setCtxMenu] = useState<FileTreeContextTarget | null>(null);
 
-  const openContextMenu = useCallback((e: React.MouseEvent, node: { path: string; type: 'dir' | 'file' }) => {
+  const openContextMenu = useCallback((
+    e: React.MouseEvent,
+    node: { path: string; type: 'dir' | 'file'; isRoot?: boolean; relativeRoot?: string },
+  ) => {
     e.preventDefault();
     e.stopPropagation();
     const point = { x: e.clientX, y: e.clientY };
     // Open immediately (a right-click must never feel laggy); the vault-note
     // check is async (notesDir fetch) and patches "Open in Notes" in when it
     // resolves — for the same target only, so a fast re-click can't cross-fill.
-    setCtxMenu({ point, path: node.path, type: node.type });
+    setCtxMenu({ point, path: node.path, type: node.type, isRoot: node.isRoot, relativeRoot: node.relativeRoot });
     if (node.type === 'file') {
       void vaultRelativeNotePath(node.path, host).then((rel) => {
         if (!rel) return;
@@ -633,6 +816,71 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     setRefLine(null);
     commitSelection(filePath);
   }, [commitSelection]);
+
+  // ── File mutations (create / rename / duplicate / delete) ─────────────────
+  // All the API calls + tree-state repair live in the hook; this component only
+  // renders `editing` as a row and hands the menu its callbacks.
+  // A renamed/deleted DIRECTORY invalidates more than its parent's listing: its
+  // own persisted record and every descendant's still point at a path that no
+  // longer exists, and re-listing the parent can't see any of them. The mutation
+  // hook reports the affected dir paths; dropping the subtree is our business.
+  const forgetCachedSubtrees = useCallback((paths: string[]) => {
+    for (const p of paths) void deleteCachedDirListsUnder(host, p);
+  }, [host]);
+
+  const {
+    editing, editError, pendingNotice, startCreate, startRename, cancelEdit, commitEdit, duplicate, remove,
+  } = useFileTreeMutations({
+    host, loadDir, childrenMapRef, rootPathsRef, selectedFileRef, scopeRef, historyRef,
+    lsExpandedKeyRef: lsKeyRef, lsOpenRootsKeyRef,
+    setExpanded, setChildrenMap, setOpenRoots, setHistory, commitSelection, selectFile,
+    onDirPathsChanged: forgetCachedSubtrees,
+  });
+
+  // WHERE the edit row renders. A dir can be visible in more than one open root
+  // section (a changed-repo section overlapping the cwd tree), and rendering the
+  // input in each of them would put two focused inputs on screen — so the first
+  // section that shows the target wins, and a target that is only a section
+  // HEADER (its children are rows, it is not) renders above its children.
+  const editTarget = editing ? (editing.kind === 'rename' ? editing.path : editing.parentDir) : null;
+  const editAnchor = useMemo<{ rootPath: string; asRow: boolean } | null>(() => {
+    if (!editTarget) return null;
+    for (const s of rootSections) {
+      if (!openRoots.has(s.path)) continue;
+      if (rowsByRoot.get(s.path)?.some((n) => n.path === editTarget)) {
+        return { rootPath: s.path, asRow: true };
+      }
+    }
+    const section = rootSections.find((s) => s.path === editTarget);
+    return section ? { rootPath: section.path, asRow: false } : null;
+  }, [editTarget, rootSections, rowsByRoot, openRoots]);
+
+  const renderEditRow = useCallback((depth: number) => {
+    if (!editing) return null;
+    const currentName = editing.kind === 'rename' ? lastSegment(editing.path) : '';
+    // Rename preselects the STEM (VS Code): typing replaces the name and keeps
+    // the extension. Dirs and dotfiles have no stem to isolate — select it all.
+    const dot = currentName.lastIndexOf('.');
+    const stemLength = editing.kind === 'rename' && editing.type === 'file' && dot > 0
+      ? dot
+      : undefined;
+    return (
+      <FileTreeEditRow
+        // Keyed on the edit identity: switching New File → New Folder (or to a
+        // different target) must REMOUNT, or the input keeps the old typed value
+        // and never re-runs its focus/select effect.
+        key={`${editing.kind}:${editTarget ?? ''}`}
+        kind={editing.kind}
+        depth={depth}
+        initialValue={currentName}
+        entryType={editing.kind === 'rename' ? editing.type : undefined}
+        stemLength={stemLength}
+        error={editError}
+        onCommit={(name) => { void commitEdit(name); }}
+        onCancel={cancelEdit}
+      />
+    );
+  }, [editing, editTarget, editError, commitEdit, cancelEdit]);
 
   // ── Browser-style Back / Forward over the files read in this scope ─────────
   // Both buttons move the index WITHOUT pushing (that would truncate the tail —
@@ -856,8 +1104,28 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
 
       <div className="session-file-explorer-body">
         {!treeCollapsed && (
-        <div className="session-file-explorer-tree" style={{ width: `${treeWidth}px` }}>
+        <div
+          className="session-file-explorer-tree"
+          style={{ width: `${treeWidth}px` }}
+          // Empty background: every row handler stopPropagations, so anything
+          // reaching here is the blank space — right-clicking it targets the tree
+          // ROOT, which is what makes "New File… at the cwd" reachable with no row.
+          onContextMenu={(e) => openContextMenu(e, { path: root, type: 'dir', isRoot: true, relativeRoot: root })}
+        >
           {rootError && <div className="sfe-error">{rootError}</div>}
+          {/* A delete/duplicate the server answered 202 for: still running on the
+              host. Muted, not red — nothing failed, the tree re-lists on its own. */}
+          {pendingNotice && (
+            <div className="sfe-notice sfe-notice-pending" role="status">{pendingNotice}</div>
+          )}
+          {/* Cached rows are on screen and the refetch failed. Muted, not red, and
+              NOT in place of the tree: a listing from two minutes ago is far more
+              useful than an error pane where the files used to be. */}
+          {staleErrors.has(root) && (
+            <div className="sfe-notice" title={staleErrors.get(root)}>
+              Showing the last known contents — the refresh didn't get through.
+            </div>
+          )}
           {/* Only a GENUINE miss gets a note (the errno-replacement contract).
               A successful heal ("found it nearby") explains itself — the tree
               is already showing the right folder, so a banner is just noise
@@ -880,12 +1148,15 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
             const isOpen = openRoots.has(section.path);
             const rows = rowsByRoot.get(section.path) ?? [];
             const isRootLoading = loadingPaths.has(section.path);
+            const editRowHere = !!editAnchor && !editAnchor.asRow && editAnchor.rootPath === section.path;
             return (
               <div key={section.path} className="sfe-root-section">
                 <div
                   className={`session-file-explorer-node sfe-root-header${section.kind === 'changed' ? ' sfe-root-changed' : ''}`}
                   onClick={() => toggleRoot(section.path)}
-                  onContextMenu={(e) => openContextMenu(e, { path: section.path, type: 'dir' })}
+                  onContextMenu={(e) => openContextMenu(e, {
+                    path: section.path, type: 'dir', isRoot: true, relativeRoot: section.path,
+                  })}
                   title={section.path}
                 >
                   <span className="sfe-arrow">{isRootLoading ? '…' : isOpen ? '▼' : '▶'}</span>
@@ -898,10 +1169,12 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                     <span className="sfe-size sfe-changed-badge">{section.fileCount} changed</span>
                   )}
                 </div>
+                {/* A create straight into this root: first row under the header. */}
+                {isOpen && editRowHere && renderEditRow(1)}
                 {isOpen && !rootError && isRootLoading && rows.length === 0 && (
                   <div className="sfe-loading" style={{ paddingLeft: '22px' }}>Loading…</div>
                 )}
-                {isOpen && childrenMap.has(section.path) && rows.length === 0 && (
+                {isOpen && childrenMap.has(section.path) && rows.length === 0 && !editRowHere && (
                   <div className="sfe-empty" style={{ paddingLeft: '22px' }}>Empty directory</div>
                 )}
                 {isOpen && rows.map((node) => {
@@ -909,8 +1182,15 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                   const isSelected = node.type === 'file' && selectedFile === node.path;
                   const isLoading = loadingPaths.has(node.path);
                   const err = errorPaths.get(node.path);
+                  // Mutually exclusive with `err`: loadDir's catch picks one.
+                  const staleNote = staleErrors.get(node.path);
+                  const anchored = !!editAnchor && editAnchor.asRow && editAnchor.rootPath === section.path;
+                  const isRenaming = anchored && editing?.kind === 'rename' && editing.path === node.path;
+                  const createsHere = anchored && !!editing && editing.kind !== 'rename'
+                    && editing.parentDir === node.path;
                   return (
                     <div key={node.path}>
+                      {isRenaming ? renderEditRow(node.depth) : (
                       <div
                         className={`session-file-explorer-node${isSelected ? ' selected' : ''}`}
                         style={{ paddingLeft: `${8 + node.depth * 14}px` }}
@@ -919,7 +1199,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                           // Remember the file being read so reopening the panel resumes here.
                           else selectFile(node.path);
                         }}
-                        onContextMenu={(e) => openContextMenu(e, node)}
+                        onContextMenu={(e) => openContextMenu(e, { ...node, relativeRoot: section.path })}
                         title={node.path}
                       >
                         <span className="sfe-arrow">
@@ -927,13 +1207,31 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                         </span>
                         <span className="sfe-icon">{node.type === 'dir' ? '📁' : '📄'}</span>
                         <span className="sfe-name">{node.name}</span>
+                        {/* Unsaved edits live in the draft store, not in this pane, so a
+                            file can hold work while its editor is closed — the dot is the
+                            only way to find it again. */}
+                        {node.type === 'file' && draftPaths.has(node.path) && (
+                          <span className="sfe-draft-dot" title="Unsaved changes">●</span>
+                        )}
                         {/* size is local-only — daemon fs.ls returns just {name,type} for remote */}
                         {node.type === 'file' && node.size != null && (
                           <span className="sfe-size">{formatSize(node.size)}</span>
                         )}
                       </div>
+                      )}
+                      {/* A create INTO this dir: first row under it, one level deeper. */}
+                      {createsHere && renderEditRow(node.depth + 1)}
                       {err && (
                         <div className="sfe-error" style={{ paddingLeft: `${8 + (node.depth + 1) * 14}px` }}>{err}</div>
+                      )}
+                      {staleNote && isExpanded && (
+                        <div
+                          className="sfe-notice"
+                          style={{ paddingLeft: `${8 + (node.depth + 1) * 14}px` }}
+                          title={staleNote}
+                        >
+                          Showing the last known contents.
+                        </div>
                       )}
                     </div>
                   );
@@ -960,6 +1258,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
               key={selectedFile}
               path={selectedFile}
               host={host}
+              // Live Edit uses it to hear this session's agent writing the open
+              // file (session:tool-use/result) and pull those bytes in.
+              sessionId={sessionId}
               // Reference jumps ride refLine; the mount-time deep link keeps initialLine.
               line={refLine?.file === selectedFile ? refLine.line : (selectedFile === cwd ? initialLine : undefined)}
               lineTerm={refLine?.file === selectedFile ? refLine.term : (selectedFile === cwd ? initialTerm : undefined)}
@@ -999,6 +1300,11 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
           onDownload={(p) => { window.location.href = downloadFileUrl(p, host); }}
           onReveal={reveal}
           canReveal={canReveal}
+          onNewFile={(dir) => startCreate(dir, 'create-file')}
+          onNewFolder={(dir) => startCreate(dir, 'create-dir')}
+          onRename={(p) => startRename(p, ctxMenu.type)}
+          onDuplicate={(p) => { void duplicate(p, ctxMenu.type); }}
+          onDelete={(p, t) => { void remove(p, t); }}
         />
       )}
       {revealError && (

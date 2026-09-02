@@ -526,6 +526,10 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
   // data-loss family — a daemon death mid-sequence becomes delayed delivery,
   // not loss. The daemon writes NOTHING itself from this command.
   'session.message',
+  // DELIBERATELY ABSENT: the fs.rename / fs.rm / fs.copy mutation family (and
+  // fs.write / fs.mkdir). A compromised cloud box must never be able to move or
+  // delete files on an exec host — mutation is reachable only over the trusted
+  // SSH-tunneled walnut client.
 ])
 
 // DUP-DEBUG: per-process counter and lookup map for stable ws ids.
@@ -1442,6 +1446,11 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'image.save': return cmdImageSave(ws, id as number, cmd)
     case 'fs.write': return cmdFsWrite(ws, id as number, cmd)
     case 'fs.mkdir': return cmdFsMkdir(ws, id as number, cmd)
+    // Mutation family ('fs-mutate-v1'). NOT in BRIDGE_ALLOWED_COMMANDS — see
+    // the note there: a compromised cloud box must never move/delete host files.
+    case 'fs.rename': return cmdFsRename(ws, id as number, cmd)
+    case 'fs.rm': return cmdFsRm(ws, id as number, cmd)
+    case 'fs.copy': return cmdFsCopy(ws, id as number, cmd)
     case 'fs.ls': return cmdFsLs(ws, id as number, cmd)
     case 'fs.find': return cmdFsFind(ws, id as number, cmd)
     case 'fs.stat': return cmdFsStat(ws, id as number, cmd)
@@ -1456,6 +1465,10 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     )
     case 'fs.readRange': return cmdFsReadRange(ws, id as number, cmd)
     case 'git.diff': return cmdGitDiff(ws, id as number, cmd)
+    // File-history family ('git-file-history-v1'). NOT in BRIDGE_ALLOWED_COMMANDS:
+    // it reads arbitrary host paths, which the cloud bridge must never reach.
+    case 'git.fileLog': return cmdGitFileLog(ws, id as number, cmd)
+    case 'git.fileShow': return cmdGitFileShow(ws, id as number, cmd)
     case 'changes.compute': return cmdChangesCompute(ws, id as number, cmd)
     case 'changes.file': return cmdChangesFile(ws, id as number, cmd)
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id as number, cmd)
@@ -4399,15 +4412,36 @@ async function cmdFsWrite(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   // `typeof` not truthiness: EMPTY data is legal (clearing a file to zero bytes
   // is a real save), and `!data` rejected it as "missing".
   if (!filePath || typeof data !== 'string') return sendError(ws, id, 'fs.write: missing path or data')
+  // exclusive = "create a NEW file" (the Files panel's new-file affordance): no
+  // mkdir -p (a missing parent is a typo, not an intent) and flag 'wx' so an
+  // existing file is an EEXIST rather than a silent clobber. Absent = the
+  // editor's save path, unchanged.
+  const exclusive = cmd.exclusive === true
+
+  // The mutation floor applies to the exclusive (Files-panel "new file") path
+  // ONLY. The plain save path predates this command and legitimately writes
+  // relative and `~` paths that the floor refuses; adding the floor there would
+  // break saving. So the NEW affordance gets the guard, the old one keeps its
+  // contract. Without this, creating a file was the one mutation with no
+  // host-side check at all, contradicting what fs-mutate-v1 advertises.
+  let target = filePath
+  if (exclusive) {
+    const resolved = await fsMutateResolve(filePath)
+    if (!resolved) return sendError(ws, id, 'fs.write refused: path outside the mutation floor (EDENIED)')
+    target = resolved
+  }
 
   try {
-    await fs.promises.mkdir(path.dirname(filePath), { recursive: true })
+    if (!exclusive) await fs.promises.mkdir(path.dirname(target), { recursive: true })
     const enc = encoding || 'base64'
     const buf = enc === 'base64' ? Buffer.from(data, 'base64') : Buffer.from(data, 'utf-8')
-    await fs.promises.writeFile(filePath, buf)
+    if (exclusive) await fs.promises.writeFile(target, buf, { flag: 'wx' })
+    else await fs.promises.writeFile(target, buf)
     sendOk(ws, id, { written: true, size: buf.length })
   } catch (err: unknown) {
-    sendError(ws, id, 'fs.write failed: ' + (err as Error).message)
+    const e = err as NodeJS.ErrnoException
+    const code = e.code ?? ''
+    sendError(ws, id, 'fs.write failed: ' + e.message + (code ? ' (' + code + ')' : ''))
   }
 }
 
@@ -4420,14 +4454,217 @@ async function cmdFsMkdir(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
     dirPath = HOME_DIR + dirPath.slice(1)
   }
 
+  // exclusive = the UI's "new folder": recursive:false makes an existing
+  // directory an EEXIST, so the panel can say "that name is taken" instead of
+  // silently succeeding. Absent = the idempotent ensure-dir behavior every
+  // other caller depends on.
+  const exclusive = cmd.exclusive === true
+  // Same split as cmdFsWrite: the floor guards the UI's "new folder" only. The
+  // idempotent ensure-dir behaviour every other caller depends on keeps working
+  // on paths the floor would refuse (a daemon working dir two segments up, say).
+  if (exclusive) {
+    const resolved = await fsMutateResolve(dirPath)
+    if (!resolved) return sendError(ws, id, 'fs.mkdir refused: path outside the mutation floor (EDENIED)')
+    dirPath = resolved
+  }
   try {
     // recursive:true tolerates already-existing directories (idempotent)
-    await fs.promises.mkdir(dirPath, { recursive: true })
+    await fs.promises.mkdir(dirPath, { recursive: !exclusive })
     sendOk(ws, id, { created: true, resolvedPath: dirPath })
   } catch (err: unknown) {
     const e = err as NodeJS.ErrnoException
     const code = e.code ?? ''
     sendError(ws, id, 'fs.mkdir failed: ' + e.message + (code ? ' (' + code + ')' : ''))
+  }
+}
+
+/**
+ * Input floor EVERY mutating fs command runs before touching the disk
+ * ('fs-mutate-v1': fs.rename / fs.rm / fs.copy, plus fs.write and fs.mkdir when
+ * called with `exclusive` — see the note in cmdFsWrite for why only then).
+ * Callers go through fsMutateResolve, which adds the denylist and the symlink
+ * resolution; this function holds the string rules alone so it stays pure.
+ *
+ * The server validates too, but the daemon is the thing holding the file
+ * descriptors and it must not depend on a caller having been careful: one
+ * mis-serialized `undefined` reaching `rm -r /` is unrecoverable. Returns the
+ * `~`-expanded path, or null when the request must be refused (EDENIED).
+ *
+ * The rules, each guarding a specific way to lose data:
+ *  - absolute only (a relative path resolves against the daemon's cwd, which is
+ *    not a place the caller can reason about),
+ *  - no '.'/'..' SEGMENT — checked segment-wise, never by substring, so an
+ *    ordinary name like '..bar' or 'mod..old' stays usable,
+ *  - never '/' and never HOME_DIR itself,
+ *  - at least 2 non-empty segments, so '/tmp' and '/usr' are refused and only
+ *    something at '/a/b' depth or deeper can be touched.
+ * Keep in sync with daemon-source.ts fsMutateFloor and the server-side copy in
+ * src/web/routes/file-ops.ts.
+ */
+function fsMutateFloor(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw.length === 0) return null
+  let p = raw
+  if (p === '~' || p.startsWith('~/')) p = HOME_DIR + p.slice(1)
+  if (!path.isAbsolute(p)) return null
+  // Trailing slashes are cosmetic — strip them BEFORE the comparisons, or
+  // '/Users/me/' walks straight past the HOME_DIR check.
+  while (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1)
+  const segments = p.split('/')
+  for (const seg of segments) if (seg === '.' || seg === '..') return null
+  if (segments.filter((s) => s.length > 0).length < 2) return null
+  let home = HOME_DIR
+  while (home.length > 1 && home.endsWith('/')) home = home.slice(0, -1)
+  if (p === '/' || p === home) return null
+  return p
+}
+
+/**
+ * Host-side denylist for mutations. The server has one too, but the server's is
+ * built from the SERVER's `os.homedir()` — so on a remote host it compares a
+ * Linux path against a Mac home directory and matches nothing. That left this
+ * host's `~/.ssh` deletable through a trusted request, while the READ path
+ * (cmdFsReadBounded) has always refused it host-side. This closes that asymmetry.
+ *
+ * Segment-wise, never substring: `.ssh` as a path SEGMENT is the credential
+ * store, whereas a file merely named `my.ssh.notes` is not.
+ *
+ * Keep in sync with daemon-source.ts and isProtectedStatePath/isSecretPath in
+ * src/web/routes/file-ops.ts.
+ */
+function fsMutateDenied(p: string): boolean {
+  const segments = p.split('/').filter((s) => s.length > 0)
+  const base = segments.length > 0 ? segments[segments.length - 1] : ''
+  // Credential stores, wherever on this host they live. Nothing in a file
+  // manager needs to rename or delete these, and losing them locks the user (and
+  // Walnut's own ControlMaster access) out of the host.
+  for (const seg of segments) {
+    if (seg === '.ssh' || seg === '.aws' || seg === '.gnupg' || seg === '.kube' || seg === 'secrets') return true
+  }
+  if (base === 'auth.json' || base === 'bridge-tokens.json') return true
+  // Walnut's own irreplaceable state on this host. The stream JSONLs ARE the
+  // conversation history: there is no second copy to restore from.
+  // Both the legacy /tmp roots and the CURRENT home: streams moved to
+  // ~/.open-walnut/tmp/streams in 2026-08 (PROD_STREAMS_DIR), and every
+  // override the daemon honours is covered too, so a relocated install is
+  // protected on the same terms as the default one.
+  const runtimeRoots = [
+    '/tmp/open-walnut', '/tmp/open-walnut-streams',
+    path.join(HOME_DIR, '.open-walnut', 'tmp'),
+    process.env.WALNUT_DAEMON_DIR, process.env.WALNUT_STREAMS_DIR, process.env.WALNUT_LEGACY_STREAMS_DIR,
+  ].filter((r) => typeof r === 'string' && r.length > 0)
+  for (const root of runtimeRoots) {
+    if (p === root || p.indexOf(root + '/') === 0) return true
+  }
+  return false
+}
+
+/**
+ * The floor plus the denylist, applied to the path the KERNEL will reach.
+ *
+ * fsMutateFloor alone reads the path as a string, but the kernel walks it as a
+ * chain of directories, so any symlinked ancestor launders a target past every
+ * rule: `/tmp/link/.ssh` is 3 segments deep, holds no `..`, is not `/` and is not
+ * HOME_DIR, yet with `link` pointing at the home directory a recursive delete
+ * destroys the real `~/.ssh`. cmdFsReadBounded already resolves before checking;
+ * the destructive commands now do the same.
+ *
+ * Returns the ORIGINAL path, not the resolved one: a symlink must be renamed or
+ * deleted as the LINK and never followed to its target (see the lstat notes in
+ * cmdFsRename/cmdFsRm).
+ */
+async function fsMutateResolve(raw: unknown): Promise<string | null> {
+  const p = fsMutateFloor(raw)
+  if (!p) return null
+  if (fsMutateDenied(p)) return null
+  let real: string
+  try {
+    real = path.join(await fs.promises.realpath(path.dirname(p)), path.basename(p))
+  } catch {
+    // Parent missing or unreadable: there is no symlink chain to launder through,
+    // and the real fs call is about to produce an accurate ENOENT/EACCES. Do not
+    // convert that into a misleading EDENIED.
+    return p
+  }
+  if (real === p) return p
+  if (!fsMutateFloor(real) || fsMutateDenied(real)) return null
+  return p
+}
+
+async function cmdFsRename(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const from = await fsMutateResolve(cmd.from)
+  const to = await fsMutateResolve(cmd.to)
+  if (!from || !to) return sendError(ws, id, 'fs.rename refused: path outside the mutation floor (EDENIED)')
+
+  try {
+    // POSIX rename REPLACES an existing target without a word, so a rename in
+    // the Files panel could silently delete another file. lstat first (not stat:
+    // a symlink target must count as "taken", and the link itself is what moves).
+    let targetExists = true
+    try { await fs.promises.lstat(to) } catch { targetExists = false }
+    if (targetExists) {
+      return sendError(ws, id, 'fs.rename failed: target already exists (EEXIST)')
+    }
+    await fs.promises.rename(from, to)
+    sendOk(ws, id, { renamed: true })
+  } catch (err: unknown) {
+    const e = err as NodeJS.ErrnoException
+    const code = e.code ?? ''
+    sendError(ws, id, 'fs.rename failed: ' + e.message + (code ? ' (' + code + ')' : ''))
+  }
+}
+
+async function cmdFsRm(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const target = await fsMutateResolve(cmd.path)
+  if (!target) return sendError(ws, id, 'fs.rm refused: path outside the mutation floor (EDENIED)')
+  const recursive = cmd.recursive === true
+
+  try {
+    // The directory guard is OURS, not node's: node and bun disagree on the code
+    // for rm-a-directory-without-recursive (ERR_FS_EISDIR vs EISDIR vs EPERM),
+    // and the server maps on the code. lstat, so a symlink TO a directory is
+    // removed as the link and never followed.
+    const st = await fs.promises.lstat(target)
+    if (st.isDirectory() && !recursive) {
+      return sendError(ws, id, 'fs.rm failed: target is a directory (EISDIR)')
+    }
+    await fs.promises.rm(target, { recursive, force: false })
+    sendOk(ws, id, { removed: true })
+  } catch (err: unknown) {
+    const e = err as NodeJS.ErrnoException
+    const code = e.code ?? ''
+    sendError(ws, id, 'fs.rm failed: ' + e.message + (code ? ' (' + code + ')' : ''))
+  }
+}
+
+async function cmdFsCopy(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const from = await fsMutateResolve(cmd.from)
+  const to = await fsMutateResolve(cmd.to)
+  if (!from || !to) return sendError(ws, id, 'fs.copy refused: path outside the mutation floor (EDENIED)')
+
+  try {
+    // Same never-clobber rule as rename, and the same lstat reason. errorOnExist
+    // alone is not enough: it only fires per-entry inside a recursive copy.
+    let targetExists = true
+    try { await fs.promises.lstat(to) } catch { targetExists = false }
+    if (targetExists) {
+      return sendError(ws, id, 'fs.copy failed: target already exists (EEXIST)')
+    }
+    try {
+      await fs.promises.cp(from, to, { recursive: true, errorOnExist: true, force: false })
+    } catch (cpErr) {
+      // A copy that dies mid-tree (ENOSPC, EACCES on one entry) leaves a partial
+      // destination behind, and the never-clobber check above then answers EEXIST
+      // to every retry forever. `to` was verified absent moments ago, so whatever
+      // is there now is ours to remove. Best effort: the original error is what
+      // the caller needs to see.
+      await fs.promises.rm(to, { recursive: true, force: true }).catch(() => {})
+      throw cpErr
+    }
+    sendOk(ws, id, { copied: true })
+  } catch (err: unknown) {
+    const e = err as NodeJS.ErrnoException
+    const code = e.code ?? ''
+    sendError(ws, id, 'fs.copy failed: ' + e.message + (code ? ' (' + code + ')' : ''))
   }
 }
 
@@ -4689,6 +4926,109 @@ async function cmdGitDiff(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   } catch (err: unknown) {
     if (err instanceof GitDiffError) return sendError(ws, id, err.message)
     sendError(ws, id, 'git.diff failed: ' + (err as Error).message)
+  }
+}
+
+// ── Git history for ONE file (host-local — capability 'git-file-history-v1') ──
+// Same rule as git.diff: git and the file must be on the same host, so the
+// Files panel's history asks the daemon rather than shuttling bytes. Two
+// questions only — which commits touched this file, and what it looked like at
+// one of them — each ONE git invocation with a timeout and a maxBuffer.
+
+/** A sha as it arrives from a caller. Checked BEFORE spawning: it lands in a
+ *  `git show <sha>:<path>` argument. Mirrors GIT_SHA_RE in file-history-git.ts. */
+const GIT_FILE_SHA_RE = /^[0-9a-f]{7,40}$/
+const GIT_FILE_LOG_FORMAT = '%H%x1f%ct%x1f%an%x1f%s'
+const GIT_FILE_SHOW_MAX_BYTES = 8 * 1024 * 1024
+
+/** One git run for the file-history family. Never throws — exit codes are answers. */
+function gitFileExec(argv: string[], runCwd: string, maxBuffer: number) {
+  return new Promise<{ stdout: string; stderr: string; code: number; failure: string }>((resolve) => {
+    execFileCb(argv[0], argv.slice(1), { cwd: runCwd, timeout: 8_000, maxBuffer, encoding: 'utf-8' },
+      (err: NodeJS.ErrnoException | null, stdout: string, stderr: string) => {
+        if (!err) return resolve({ stdout, stderr, code: 0, failure: '' })
+        resolve({
+          stdout: stdout || '',
+          stderr: stderr || '',
+          code: typeof err.code === 'number' ? err.code : 1,
+          failure: err.message || '',
+        })
+      })
+  })
+}
+
+/** Expand a leading `~` against this host's HOME (same as the other commands). */
+function gitFileExpandHome(p: string): string {
+  return (p === '~' || p.startsWith('~/')) ? HOME_DIR + p.slice(1) : p
+}
+
+async function cmdGitFileLog(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const rawCwd = cmd.cwd as string
+  const rawPath = cmd.path as string
+  if (!rawCwd || typeof rawCwd !== 'string') return sendError(ws, id, 'git.fileLog: missing cwd')
+  if (!rawPath || typeof rawPath !== 'string') return sendError(ws, id, 'git.fileLog: missing path')
+  const cwd = gitFileExpandHome(rawCwd)
+  const filePath = gitFileExpandHome(rawPath)
+  const requested = typeof cmd.limit === 'number' && isFinite(cmd.limit) ? Math.floor(cmd.limit) : 30
+  const limit = Math.max(1, Math.min(requested, 200))
+  try {
+    const top = await gitFileExec(['git', 'rev-parse', '--show-toplevel'], cwd, 64 * 1024)
+    if (top.code !== 0 || !top.stdout.trim()) return sendOk(ws, id, { repoRoot: null, commits: [] })
+    const repoRoot = top.stdout.trim()
+    const rel = path.relative(repoRoot, filePath).split(path.sep).join('/')
+    if (!rel || rel === '..' || rel.startsWith('../')) return sendOk(ws, id, { repoRoot, commits: [] })
+    const res = await gitFileExec(
+      ['git', 'log', '--follow', '--no-color', '--format=' + GIT_FILE_LOG_FORMAT, '-n', String(limit), '--', rel],
+      repoRoot, 4 * 1024 * 1024,
+    )
+    // A path git never tracked exits non-zero: an ordinary "no history", not a failure.
+    if (res.code !== 0) return sendOk(ws, id, { repoRoot, commits: [] })
+    const commits: Array<{ sha: string; at: number; author: string; subject: string }> = []
+    for (const line of res.stdout.split('\n')) {
+      if (!line) continue
+      const parts = line.split('\x1f')
+      if (parts.length < 4) continue
+      const at = Number(parts[1]) * 1000
+      commits.push({
+        sha: parts[0], at: Number.isFinite(at) ? at : 0, author: parts[2],
+        subject: parts.slice(3).join('\x1f'),
+      })
+    }
+    sendOk(ws, id, { repoRoot, commits })
+  } catch (err: unknown) {
+    sendError(ws, id, 'git.fileLog failed: ' + (err as Error).message)
+  }
+}
+
+async function cmdGitFileShow(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const rawCwd = cmd.cwd as string
+  const rawPath = cmd.path as string
+  const sha = cmd.sha as string
+  if (!rawCwd || typeof rawCwd !== 'string') return sendError(ws, id, 'git.fileShow: missing cwd')
+  if (!rawPath || typeof rawPath !== 'string') return sendError(ws, id, 'git.fileShow: missing path')
+  if (!sha || typeof sha !== 'string' || !GIT_FILE_SHA_RE.test(sha)) {
+    return sendError(ws, id, 'git.fileShow: invalid sha')
+  }
+  const cwd = gitFileExpandHome(rawCwd)
+  const filePath = gitFileExpandHome(rawPath)
+  try {
+    const top = await gitFileExec(['git', 'rev-parse', '--show-toplevel'], cwd, 64 * 1024)
+    if (top.code !== 0 || !top.stdout.trim()) return sendError(ws, id, 'git.fileShow failed: not a git repository')
+    const repoRoot = top.stdout.trim()
+    const rel = path.relative(repoRoot, filePath).split(path.sep).join('/')
+    if (!rel || rel === '..' || rel.startsWith('../')) return sendError(ws, id, 'git.fileShow failed: file is outside the repository')
+    const res = await gitFileExec(['git', 'show', sha + ':' + rel], repoRoot, GIT_FILE_SHOW_MAX_BYTES)
+    if (res.code !== 0) {
+      if (/maxBuffer/i.test(res.failure)) {
+        return sendError(ws, id, 'git.fileShow failed: that version is larger than '
+          + GIT_FILE_SHOW_MAX_BYTES + ' bytes — too big to show')
+      }
+      return sendError(ws, id, 'git.fileShow failed: '
+        + (res.stderr.trim().split('\n')[0] || res.failure || 'git show failed'))
+    }
+    sendOk(ws, id, { content: res.stdout })
+  } catch (err: unknown) {
+    sendError(ws, id, 'git.fileShow failed: ' + (err as Error).message)
   }
 }
 

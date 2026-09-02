@@ -10,8 +10,11 @@
  *
  * Best-effort by contract: every failure (private browsing, quota, corrupted
  * DB, blocked upgrade) resolves to null / no-op and the caller falls back to
- * the network path. Nothing here may ever throw into a render path.
+ * the network path. Nothing here may ever throw into a render path. The DB
+ * scaffold is shared with the other browser caches (cache/keyed-idb-store.ts);
+ * only the policy below is this module's own.
  */
+import { createKeyedIdbStore } from './keyed-idb-store';
 import type { CachedHistory } from './session-cache';
 import { log } from '@/utils/log';
 
@@ -29,53 +32,25 @@ const MAX_PERSISTED_MESSAGES = 400;
 
 type PersistedHistory = CachedHistory & { savedAt: number };
 
-let dbPromise: Promise<IDBDatabase | null> | undefined;
-
-function openDb(): Promise<IDBDatabase | null> {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve) => {
-    try {
-      if (typeof indexedDB === 'undefined') { resolve(null); return; }
-      const req = indexedDB.open(DB_NAME, DB_VERSION);
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        // Version bump = incompatible shape: drop and recreate.
-        if (db.objectStoreNames.contains(STORE)) db.deleteObjectStore(STORE);
-        const store = db.createObjectStore(STORE);
-        store.createIndex('savedAt', 'savedAt');
-      };
-      req.onsuccess = () => {
-        const db = req.result;
-        // A later tab upgrading the schema must not deadlock on this one.
-        db.onversionchange = () => { try { db.close(); } catch { /* closing */ } dbPromise = undefined; };
-        resolve(db);
-      };
-      req.onerror = () => resolve(null);
-      req.onblocked = () => resolve(null);
-    } catch {
-      resolve(null);
-    }
-  });
-  return dbPromise;
-}
+// Keys are bare session ids (one namespace, no host dimension), and the cap is
+// a COUNT with no age rule: a session you viewed a year ago is still the fastest
+// honest answer for that session, it just loses its slot to 40 newer ones.
+const store = createKeyedIdbStore<PersistedHistory>({
+  dbName: DB_NAME,
+  storeName: STORE,
+  version: DB_VERSION,
+  timeField: 'savedAt',
+  maxRecords: MAX_ENTRIES,
+});
 
 /** Read one session's persisted history. ~1-5ms; null on any failure/miss. */
 export async function idbGetHistory(sid: string): Promise<CachedHistory | null> {
-  const db = await openDb();
-  if (!db) return null;
-  return new Promise((resolve) => {
-    try {
-      const tx = db.transaction(STORE, 'readonly');
-      const req = tx.objectStore(STORE).get(sid);
-      req.onsuccess = () => {
-        const v = req.result as PersistedHistory | undefined;
-        resolve(v && Array.isArray(v.messages) ? v : null);
-      };
-      req.onerror = () => resolve(null);
-    } catch {
-      resolve(null);
-    }
-  });
+  try {
+    const v = await store.get(sid);
+    return v && Array.isArray(v.messages) ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 // Trailing debounce per session: delta merges can write several times per
@@ -95,8 +70,6 @@ export function idbSetHistory(sid: string, data: CachedHistory): void {
 }
 
 async function writeNow(sid: string, data: CachedHistory): Promise<void> {
-  const db = await openDb();
-  if (!db) return;
   let entry: PersistedHistory = { ...data, savedAt: Date.now() };
   if (entry.messages.length > MAX_PERSISTED_MESSAGES) {
     const dropped = entry.messages.length - MAX_PERSISTED_MESSAGES;
@@ -112,48 +85,13 @@ async function writeNow(sid: string, data: CachedHistory): Promise<void> {
     };
   }
   try {
-    await new Promise<void>((resolve) => {
-      const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).put(entry, sid);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-      tx.onabort = () => resolve();
-    });
-    void pruneLru(db);
+    await store.put(sid, entry);
+    // Forced, not the once-per-page sweep: the cap has to hold for a page that
+    // visits a hundred sessions, so every write checks it.
+    void store.runHousekeep();
   } catch (err) {
     // Quota/clone failures are expected occasionally — log once per session.
     log.warn('history-idb', 'persist failed (cache degrades to network)', { sessionId: sid, error: String(err) });
-  }
-}
-
-let pruning = false;
-async function pruneLru(db: IDBDatabase): Promise<void> {
-  if (pruning) return;
-  pruning = true;
-  try {
-    await new Promise<void>((resolve) => {
-      const tx = db.transaction(STORE, 'readwrite');
-      const store = tx.objectStore(STORE);
-      const countReq = store.count();
-      countReq.onsuccess = () => {
-        let excess = countReq.result - MAX_ENTRIES;
-        if (excess <= 0) return;
-        // Oldest-first walk on the savedAt index; delete until under the cap.
-        const cursorReq = store.index('savedAt').openCursor();
-        cursorReq.onsuccess = () => {
-          const cursor = cursorReq.result;
-          if (!cursor || excess <= 0) return;
-          cursor.delete();
-          excess--;
-          cursor.continue();
-        };
-      };
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-      tx.onabort = () => resolve();
-    });
-  } finally {
-    pruning = false;
   }
 }
 
@@ -164,34 +102,14 @@ async function pruneLru(db: IDBDatabase): Promise<void> {
 export async function idbDeleteHistory(sid: string): Promise<void> {
   const pending = pendingWrites.get(sid);
   if (pending) { clearTimeout(pending); pendingWrites.delete(sid); }
-  const db = await openDb();
-  if (!db) return;
-  await new Promise<void>((resolve) => {
-    try {
-      const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).delete(sid);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-      tx.onabort = () => resolve();
-    } catch {
-      resolve();
-    }
-  });
+  try {
+    await store.delete(sid);
+  } catch { /* best effort */ }
 }
 
 /** Test/reset hook: drop every persisted entry. */
 export async function idbClearHistory(): Promise<void> {
-  const db = await openDb();
-  if (!db) return;
-  await new Promise<void>((resolve) => {
-    try {
-      const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).clear();
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-      tx.onabort = () => resolve();
-    } catch {
-      resolve();
-    }
-  });
+  try {
+    await store.clear();
+  } catch { /* best effort */ }
 }

@@ -1,0 +1,53 @@
+/* Live Edit — the Files panel toolbar's auto-write toggle and its receipts.
+   Its own file (not globals.css) so the feature can be read, reviewed and
+   reverted in one place. */
+
+/* Pill with a status dot, sitting in the same row as Save / Discard. The dot
+   carries the state at a glance; the word "Live" alone reads as a label rather
+   than a switch. */
+.fv-html-tab.fv-live-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  border-color: var(--border, rgba(127, 127, 127, 0.28));
+}
+
+.fv-html-tab.fv-live-toggle .fv-live-dot {
+  font-size: 9px;
+  line-height: 1;
+  /* Off state: the dot is present but inert, so turning it on is a color change
+     in the same shape instead of a layout shift. */
+  color: var(--fg-muted);
+}
+
+.fv-html-tab.fv-live-toggle.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.fv-html-tab.fv-live-toggle.active .fv-live-dot {
+  color: var(--accent);
+}
+
+/* Paused by a conflict: deliberately NOT the warning color. Nothing is broken
+   and nothing is unsaved — live writing is just off for this one file, and a
+   red pill next to a red conflict banner reads as two problems. */
+.fv-html-tab.fv-live-toggle.fv-live-suspended .fv-live-dot {
+  color: var(--warning, #f59e0b);
+}
+
+/* "Merged agent changes" / "Updated from agent". Shares .fv-draft-note (11px,
+   muted, nowrap). It is the one toolbar item allowed to SHRINK: the toolbar is a
+   non-wrapping flex row that fits a ~650px pane exactly, so an unshrinkable
+   receipt made every button squeeze and wrap its label ("Copy\nPath") for the
+   4s the receipt was up. Ellipsis on the receipt instead. */
+.fv-live-receipt {
+  margin-left: 2px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 11em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

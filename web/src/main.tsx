@@ -17,6 +17,7 @@ import { initUiPrefsSync } from './utils/ui-prefs-sync';
 import { selectionIntersects } from './utils/selection-guard';
 import { initSessionStatusStore } from './stores/init-session-status-store';
 import { installGlobalAutofillSuppression } from './utils/no-autofill';
+import { installEscapeBeepGuard } from './utils/escape-beep-guard';
 import { initStaleAssetRecovery } from './utils/stale-assets';
 import { initWebPlugins } from './plugins/loader';
 import { installPluginHostRuntime } from './plugins/runtime';
@@ -44,6 +45,12 @@ initStaleAssetRecovery();
 // No login form anywhere in Walnut — suppress password-manager autofill popups
 // (iCloud Passwords etc.) on every input/textarea, present and future.
 installGlobalAutofillSuppression();
+// The Mac app is a WKWebView: an Escape nobody preventDefault()s reaches AppKit
+// and NSBeeps. The guard swallows that default only once the page is finished
+// with the key, so `defaultPrevented` stays honest for in-page handlers (the
+// editors skip their own Escape bindings when it is set). Installed here, before
+// the app mounts, so its window-bubble listener runs ahead of every app handler's.
+installEscapeBeepGuard();
 
 // Clear text selection instantly on mousedown to avoid macOS inactive-selection pink flash.
 // Scoped (was unconditional, which broke copy entirely): never on right/middle click —

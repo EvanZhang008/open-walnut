@@ -12,8 +12,10 @@
  *  - the Source tab and every plain code file = CodeMirror.
  * Saving stays EXPLICIT (Save / ⌘S → PUT /api/file-content) with an optimistic
  * lock on the read's contentHash — never auto-save: an agent may be editing the
- * same repo in the same second. Non-editable files (truncated/binary/raw kinds)
- * keep the read-only views.
+ * same repo in the same second. Unsaved text is still never LOST: every
+ * keystroke is mirrored into an IndexedDB draft (@/utils/file-drafts) and
+ * replayed when the file is next read. Non-editable files (truncated/binary/raw
+ * kinds) keep the read-only views.
  *  - QUOTE: selecting text raises an "Ask about this" pill that prefills the
  *    session chat with a located, code-quoted reference (same affordance and the
  *    same buildSelectionPrefill composer as the Changed tab). In the WYSIWYG
@@ -28,11 +30,16 @@ import {
 import { formatSize } from '@/utils/format';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { loadFileScroll, saveFileScroll } from '@/utils/file-view-state';
+import {
+  saveFileDraft, loadFileDraft, deleteFileDraft, planDraftReplay, planStaleDraftRestore,
+} from '@/utils/file-drafts';
 import { highlightLines } from '@/utils/code-highlight';
 import { vaultRelativeNotePath } from '@/utils/notes-link';
 import { useRevealFile } from '@/hooks/useRevealFile';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useConfirm } from '@/hooks/useConfirm';
+import { useLiveEdit, type LiveEdit } from '@/hooks/useLiveEdit';
+import { FileHistoryPanel } from '@/components/common/FileHistoryPanel';
 import { ICON_NEW_TAB } from '@/components/common/Icons';
 import { FileSourceEditor, type FileSourceEditorHandle } from '@/components/common/FileSourceEditor';
 import { FileMarkdownEditor } from '@/components/common/FileMarkdownEditor';
@@ -46,6 +53,7 @@ import { CodeContextMenu, buildCodeContextTarget, type CodeContextTarget } from 
 import { copyTextRobust } from '@/utils/clipboard';
 import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
+import '@/styles/live-edit.css';
 
 interface FileContentViewProps {
   path: string;
@@ -54,6 +62,14 @@ interface FileContentViewProps {
    *  the eye finds the term, not just the row. */
   lineTerm?: string;
   host?: string;
+  /**
+   * Session whose agent may be writing this file. Only Live Edit uses it: a
+   * `session:tool-use`/`tool-result` pair naming this path is the signal to pull
+   * the agent's bytes into the editor (merging them when the buffer is dirty)
+   * instead of waiting for our own next write to 409. Absent (pop-out, "@"
+   * mention preview) → the 409 path still covers every collision.
+   */
+  sessionId?: string;
   /** Hide the "pop out to window" button (e.g. when already rendered inside a pop-out). */
   hidePopout?: boolean;
   /**
@@ -144,6 +160,11 @@ type OfficePreviewComponent = typeof import('@/components/common/OfficePreview')
 /** Speed steps shared by the toolbar select and the </> keyboard shortcuts. */
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
 
+/** Keystroke → draft write settle window. Short enough that a click away from
+ *  the panel almost always finds nothing pending, long enough that a typing
+ *  burst is one write. */
+const DRAFT_DEBOUNCE_MS = 400;
+
 /**
  * Files served as RAW BYTES and rendered by a native browser control, never
  * through the JSON content fetch — a whole-file text read would corrupt them
@@ -189,7 +210,8 @@ function findScroller(start: HTMLElement | null): HTMLElement | null {
 }
 
 export function FileContentView({
-  path: filePath, line, lineTerm, host, hidePopout, reloadToken = 0, onSelectCode, onSaved, onSymbolLookup,
+  path: filePath, line, lineTerm, host, sessionId, hidePopout, reloadToken = 0,
+  onSelectCode, onSaved, onSymbolLookup,
 }: FileContentViewProps) {
   const [data, setData] = useState<FileContentResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -221,6 +243,10 @@ export function FileContentView({
   const [editorDirty, setEditorDirty] = useState(false);
   const [draftDirty, setDraftDirty] = useState(false);
   const dirty = editorDirty || draftDirty;
+  // Live Edit reads dirtiness from inside async continuations (a disk pull that
+  // resolves mid-typing), so it gets a ref rather than this render's value.
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
   // App-wide themed dialog (never window.confirm — see handleDiscard).
   const confirm = useConfirm();
   const draftRef = useRef<string | null>(null);
@@ -229,6 +255,13 @@ export function FileContentView({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
+  // ── File history ───────────────────────────────────────────────────────────
+  // The version timeline for THIS file (Walnut snapshots + git). Stays open across
+  // file switches on purpose — the panel refetches for the new path — and
+  // `versionsSeen` is bumped by every write we made or adopted, so the list picks
+  // up the version just recorded without a remount.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [versionsSeen, setVersionsSeen] = useState(0);
   // The hash of the bytes the editor was seeded from. Its ONLY job is the
   // editor remount key: it advances on a fresh READ (so a Refresh that landed
   // new bytes reseeds the editor) — deliberately NOT on save, which would
@@ -244,6 +277,131 @@ export function FileContentView({
   // writer, and on any fresh read / successful save.
   const conflictHashRef = useRef<string | undefined>(undefined);
   const editorRef = useRef<FileSourceEditorHandle>(null);
+
+  // ── Unsaved-draft persistence ──────────────────────────────────────────────
+  // The dirty buffer used to live ONLY in React state, so leaving the Files
+  // panel (or switching files) dropped it silently. Every keystroke now lands in
+  // an IndexedDB side record (@/utils/file-drafts) that is replayed on the next
+  // read. The file itself is still only ever written by an explicit Save.
+  //
+  // The pending record carries its OWN identity (host/path/baseHash) and the
+  // text captured at keystroke time, because the flush can run after the
+  // component has already re-rendered for the NEXT file: by then `editorRef`
+  // points at the incoming file's editor, so reading getValue() at flush time
+  // would persist (or worse, delete) the wrong file's draft.
+  const pendingDraftRef = useRef<
+    { host: string | undefined; path: string; text: string; baseHash: string; disk: string | null } | null
+  >(null);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Draft found for a file whose bytes MOVED since it was written — kept out of
+  // the editor until the user says which version wins (the banner below). Its own
+  // baseHash rides along: restoring it re-arms the lock at THAT hash, which is
+  // what turns a later Save into the conflict warning instead of a silent
+  // overwrite of the newer file.
+  const [staleDraft, setStaleDraft] = useState<{ text: string; baseHash: string } | null>(null);
+  // Transient toolbar note after a matching-hash draft was seeded back.
+  const [draftRestored, setDraftRestored] = useState(false);
+
+  const cancelDraftTimer = useCallback(() => {
+    if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+  }, []);
+
+  /** Write (or clear) the pending draft now. Returns once storage has settled,
+   *  so a read that follows a flush can't observe the pre-flush record. */
+  const flushDraft = useCallback((): Promise<void> => {
+    cancelDraftTimer();
+    const p = pendingDraftRef.current;
+    pendingDraftRef.current = null;
+    if (!p) return Promise.resolve();
+    // Typed back to exactly what's on disk ⇒ there is nothing unsaved to keep.
+    if (p.disk != null && p.text === p.disk) return deleteFileDraft(p.host, p.path);
+    return saveFileDraft(p.host, p.path, { text: p.text, baseHash: p.baseHash });
+  }, [cancelDraftTimer]);
+
+  /** Drop the pending draft AND the stored record — save/discard outcomes. */
+  const dropDraft = useCallback((forPath: string, forHost: string | undefined) => {
+    cancelDraftTimer();
+    pendingDraftRef.current = null;
+    void deleteFileDraft(forHost, forPath);
+  }, [cancelDraftTimer]);
+
+  // The disk bytes the buffer is compared against, as a ref: the capture below
+  // runs from an editor callback and must not close over a stale `data`.
+  const diskContentRef = useRef<string | null>(null);
+  useEffect(() => { diskContentRef.current = data?.content ?? null; }, [data]);
+
+  // ── Live Edit ──────────────────────────────────────────────────────────────
+  // The bytes `lockHashRef` refers to — the merge BASE. Kept in step with the
+  // lock: set on every read and on every successful write, and set to null when
+  // the lock is re-armed at a hash whose bytes we don't have (a restored stale
+  // draft), because a merge against a guessed base is data loss.
+  const baseContentRef = useRef<string | null>(null);
+  // True for the duration of a programmatic setValue. A merge/pull applies text
+  // through the same editor callbacks a keystroke does, and without this the
+  // pull would immediately auto-write back exactly what it just read.
+  const applyingRef = useRef(false);
+  // Assigned right after useLiveEdit below. handleDocChange is defined here
+  // because it belongs to the draft writer (which predates live mode), so it
+  // reaches the hook through a ref instead of forcing the whole component to be
+  // reordered around it.
+  const liveRef = useRef<LiveEdit | null>(null);
+
+  // Which editor is mounted, as a ref: applyEditorText runs from async
+  // continuations and needs to know how the apply will echo (see below).
+  const wysiwygRef = useRef(false);
+
+  /** Record the buffer as the pending draft (debounced write to IndexedDB). */
+  const captureDraft = useCallback((text: string) => {
+    pendingDraftRef.current = {
+      host, path: filePath, text, baseHash: lockHashRef.current ?? '', disk: diskContentRef.current,
+    };
+    cancelDraftTimer();
+    draftTimerRef.current = setTimeout(() => { draftTimerRef.current = null; void flushDraft(); }, DRAFT_DEBOUNCE_MS);
+  }, [host, filePath, cancelDraftTimer, flushDraft]);
+
+  /** Put text in the live editor without a remount and without arming a write. */
+  const applyEditorText = useCallback((text: string) => {
+    applyingRef.current = true;
+    try {
+      editorRef.current?.setValue(text);
+    } finally {
+      if (wysiwygRef.current) {
+        // TipTap's setContent({emitUpdate:false}) emits nothing now, but a late
+        // normalization transaction can still arrive — so the flag lives one
+        // macrotask for that editor only.
+        setTimeout(() => { applyingRef.current = false; }, 0);
+      } else {
+        // CodeMirror ran its update listener synchronously inside dispatch, so
+        // the echo is over. Resetting NOW (not next macrotask) keeps a keystroke
+        // that lands in the same tick — IME commit, paste — armed for the write.
+        applyingRef.current = false;
+      }
+    }
+    // The draft must follow the buffer whichever editor echoed: the WYSIWYG one
+    // deliberately emits nothing for a programmatic apply, so without this a
+    // merged buffer left the panel with the PRE-merge text as its saved draft.
+    captureDraft(text);
+  }, [captureDraft]);
+
+  const handleDocChange = useCallback(() => {
+    const text = editorRef.current?.getValue();
+    if (text == null) return;
+    captureDraft(text);
+    // Only a USER edit arms the auto-write (see applyingRef). The draft capture
+    // above still runs for a programmatic apply — the record then matches disk,
+    // which is how the obsolete draft gets deleted.
+    if (!applyingRef.current) liveRef.current?.noteUserEdit();
+  }, [captureDraft]);
+
+  // Unmount is the reported failure mode ("left the panel, came back, gone"), so
+  // the last keystrokes are flushed rather than dropped with the timer.
+  useEffect(() => () => { void flushDraft(); }, [flushDraft]);
+
+  useEffect(() => {
+    if (!draftRestored) return;
+    const t = setTimeout(() => setDraftRestored(false), 4000);
+    return () => clearTimeout(t);
+  }, [draftRestored]);
 
   // Skip: back 3s (small — re-hear the last sentence), forward 10s (skip dead air).
   const skipBy = (deltaSec: number) => {
@@ -290,13 +448,22 @@ export function FileContentView({
     setShowSource(loadFileScroll(host, filePath)?.source === true);
     setFullscreen(false);
     setPlaybackRate(1);
-    // Draft/dirty state is per-FILE: switching files drops the previous file's
-    // buffer state (the beforeunload guard + explicit-save UX own data safety).
+    // In-MEMORY draft/dirty state is per-FILE: switching files resets it. The
+    // typed text itself is not lost — the cleanup below persists it first, and
+    // the read of this file replays it (see the restore block).
     setEditorDirty(false);
     setDraftDirty(false);
     draftRef.current = null;
+    // Belongs to the OUTGOING file's lock — the incoming read below sets it.
+    baseContentRef.current = null;
     setSaveError(null);
-  }, [filePath, host]);
+    setStaleDraft(null);
+    setDraftRestored(false);
+    // Cleanup runs with the OUTGOING file's closure, and before the reset above
+    // — so the last keystrokes of the file being left are written under their own
+    // path, not the incoming one's.
+    return () => { void flushDraft(); };
+  }, [filePath, host, flushDraft]);
 
   // Distinguishes "first load of this file" (blank → spinner) from "Refresh of
   // the file already on screen" (keep content, badge it as reloading).
@@ -312,21 +479,51 @@ export function FileContentView({
     // fetch (which would whole-file-read a potentially huge binary on the remote
     // side, and text-decode bytes that aren't text).
     if (rawKind(filePath)) { setLoading(false); setReloading(false); return; }
+    // Land the last keystrokes BEFORE the read that will look for them: a
+    // Refresh with a pending write would otherwise restore the previous draft
+    // and silently drop the newest characters.
+    const flushed = flushDraft();
     // A reload must bypass the HTTP cache, else a 200-from-cache hands back the
     // stale bytes and Refresh looks like a no-op.
-    fetchFileContent(filePath, host, { noCache: isReload })
-      .then((d) => {
+    // `track: 'baseline'` records what this open found as the file's "Opened"
+    // version, so History can always get back to the bytes the session started
+    // from — an edit is only undoable if the pre-edit state was kept. The server
+    // dedupes by hash, so re-opens of an unchanged file add nothing.
+    fetchFileContent(filePath, host, { noCache: isReload, track: 'baseline' })
+      .then(async (d) => {
         if (cancelled) return;
-        setData(d);
-        // Seed / re-seed the optimistic-lock token from whatever we just read;
-        // a fresh read supersedes any pending conflict hash. baseHash moves too,
-        // remounting any open editor onto the new bytes — so an explicit Refresh
-        // also drops any unsaved draft (deliberate: Refresh = "give me disk").
+        await flushed;
+        const draft = await loadFileDraft(host, filePath);
+        if (cancelled) return;
+
+        // ── Replay an unsaved draft ────────────────────────────────────────
+        // Refresh no longer means "throw my typing away" (it did, and that was
+        // the reported data loss). Discard is the only path that does. A draft
+        // written against OLDER bytes is held back for the banner instead:
+        // silently replaying over new bytes hides the other writer's work,
+        // silently dropping the draft hides the user's.
+        // ORDERING: draftRef must hold the seed BEFORE setBaseHash remounts the
+        // editor, because the editor seeds from `draftRef.current ?? data.content`
+        // at mount. Everything stays in this one continuation so React batches
+        // the state changes into a single render.
+        const plan = planDraftReplay(draft, { content: d.content, contentHash: d.contentHash });
+        // A fresh read supersedes any pending conflict hash, and the lock follows
+        // whatever the editor is seeded from. baseHash moves too, remounting any
+        // open editor onto the new bytes.
         conflictHashRef.current = undefined;
-        lockHashRef.current = d.contentHash;
-        draftRef.current = null;
-        setDraftDirty(false);
+        lockHashRef.current = plan.lockHash;
+        // The lock follows the seed, and the merge base follows the LOCK — which
+        // for a replayed draft is still the disk bytes (its baseHash matched), so
+        // `d.content` is right in both branches.
+        baseContentRef.current = d.content;
+        draftRef.current = plan.seed;
+        // Edited back to the original ⇒ nothing unsaved left to remember.
+        if (plan.drop) void deleteFileDraft(host, filePath);
+        setData(d);
+        setDraftDirty(plan.seed != null);
         setEditorDirty(false);
+        setStaleDraft(plan.stale);
+        setDraftRestored(plan.seed != null);
         setBaseHash(d.contentHash);
       })
       .catch((err) => {
@@ -339,7 +536,7 @@ export function FileContentView({
       })
       .finally(() => { if (!cancelled) { setLoading(false); setReloading(false); } });
     return () => { cancelled = true; };
-  }, [filePath, host, reloadToken]);
+  }, [filePath, host, reloadToken, flushDraft]);
 
   // Scroll to highlighted line after content renders
   useEffect(() => {
@@ -530,6 +727,7 @@ export function FileContentView({
   // plain markdown, read-only render for HTML (iframe) and MDX. Source tab /
   // non-renderable text: CodeMirror. Non-editable files keep the read views.
   const editingWysiwyg = canEdit && canWysiwyg && !showSource;
+  wysiwygRef.current = editingWysiwyg;
   const editingSource = canEdit && (showSource || !isRenderable);
   const editing = editingWysiwyg || editingSource;
   const showPreview = isRenderable && !showSource && !editingWysiwyg;
@@ -542,9 +740,129 @@ export function FileContentView({
     return buildLineNumberedHtml(data.content, filePath, line);
   }, [data, filePath, line, editing]);
 
+  /**
+   * Everything that must become true once bytes are on disk. Shared by the
+   * explicit Save and by Live Edit's auto-write — they differ only in what put
+   * the bytes there, so a divergence here would mean one of the two paths
+   * leaving a stale lock, a stale draft or a stuck dirty dot behind.
+   */
+  const applySaved = useCallback((
+    text: string,
+    res: { size: number; contentHash: string },
+    opts: { live?: boolean } = {},
+  ) => {
+    // Advance the lock token WITHOUT remounting the editor (baseHash stays): a
+    // remount reseeds the doc and yanks the caret/scroll to the top, which made
+    // every ⌘S mid-document a jump-to-line-1. markClean re-baselines dirty
+    // tracking in place instead.
+    conflictHashRef.current = undefined;
+    lockHashRef.current = res.contentHash;
+    baseContentRef.current = text;
+    setData((prev) => (prev ? { ...prev, content: text, size: res.size, contentHash: res.contentHash } : prev));
+    setStaleDraft(null);
+    setDraftRestored(false);
+    // History refetches per version; a live burst is one coalesced version on the
+    // server, so refetching (two git spawns) per typing pause would be noise.
+    if (!opts.live) setVersionsSeen((n) => n + 1);
+    // What is on disk is `text`. If the buffer has ALREADY moved on (a keystroke
+    // landed while the write was in flight — routine in live mode, where every
+    // pause is a write), the file is still dirty by exactly that much, and the
+    // draft record holding the newer text is the only backup of it. markClean
+    // here would re-baseline the editor onto the NEWER text (dirty dot off, Save
+    // disabled, beforeunload guard off) and dropDraft would delete that backup —
+    // the characters would then exist only in the buffer, invisibly unsaved.
+    const buffer = editorRef.current?.getValue();
+    if (buffer != null && buffer !== text) return;
+    editorRef.current?.markClean();
+    draftRef.current = null;
+    // The bytes are on disk now, so the side record is obsolete. Cancelling the
+    // pending capture matters as much as the delete: a timer that fired after
+    // this would resurrect the draft for text that is no longer unsaved.
+    dropDraft(filePath, host);
+    setDraftDirty(false);
+    setEditorDirty(false);
+  }, [dropDraft, filePath, host]);
+
+  /** New disk bytes were read while the buffer stays dirty (a merge, or a
+   *  collision we could not fold in). The pane's idea of "what is on disk" must
+   *  follow, but the editor is NOT remounted — baseHash deliberately stays. */
+  const applyDiskContent = useCallback((content: string, contentHash: string, size: number) => {
+    diskContentRef.current = content;
+    setData((prev) => (prev ? { ...prev, content, size, contentHash } : prev));
+  }, []);
+
+  /** Another writer's bytes are now in the editor and nothing is unsaved. */
+  const applyAdopted = useCallback((content: string, contentHash: string, size: number) => {
+    applyDiskContent(content, contentHash, size);
+    editorRef.current?.markClean();
+    draftRef.current = null;
+    dropDraft(filePath, host);
+    setDraftDirty(false);
+    setEditorDirty(false);
+    setStaleDraft(null);
+    setDraftRestored(false);
+    // The pull that brought these bytes recorded them as an `agent` version.
+    setVersionsSeen((n) => n + 1);
+  }, [applyDiskContent, dropDraft, filePath, host]);
+
+  /**
+   * Put a version from the History panel into the editor as UNSAVED work. Same
+   * remount-with-draft pattern as restoreStaleDraft: the editor re-seeds from the
+   * chosen text and reports dirty, so Save is armed and Discard still means "back
+   * to disk". The lock is NOT touched — it still names the bytes on disk, which is
+   * exactly the base a later merge or conflict check needs. Nothing is written
+   * here; the user saves when they are happy (or live mode does on the next edit).
+   */
+  const restoreHistoryVersion = useCallback((content: string, label: string) => {
+    liveRef.current?.cancelPending();
+    draftRef.current = content;
+    setDraftDirty(true);
+    setSaveError(null);
+    setSeedNonce((n) => n + 1);
+    // Persist it as a draft right away: a restore followed by leaving the panel
+    // must come back, exactly like typing would.
+    pendingDraftRef.current = {
+      host, path: filePath, text: content, baseHash: lockHashRef.current ?? '', disk: diskContentRef.current,
+    };
+    void flushDraft();
+    log.info('file-editor', 'restored a version into the editor', { path: filePath, host, version: label });
+  }, [filePath, host, flushDraft]);
+
+  const live = useLiveEdit({
+    path: filePath,
+    host,
+    sessionId,
+    canEdit,
+    getText: () => editorRef.current?.getValue() ?? null,
+    applyText: applyEditorText,
+    lockHashRef,
+    baseContentRef,
+    isDirtyRef: dirtyRef,
+    onWrote: (text, res) => {
+      applySaved(text, res, { live: true });
+      log.info('file-editor', 'live write saved', { path: filePath, host, size: res.size });
+      onSaved?.(filePath);
+    },
+    onAdopted: applyAdopted,
+    onDiskContent: applyDiskContent,
+    onConflict: (message, overwriteHash) => {
+      // Same contract as handleSave's 409 branch: the buffer is left alone and
+      // the editor is NOT remounted (that would replace the user's unsaved work
+      // with the pre-edit text). `overwriteHash` is only set when a write was
+      // actually attempted, so the warn-once gate is never skipped.
+      if (overwriteHash) conflictHashRef.current = overwriteHash;
+      setSaveError(message);
+    },
+    onError: setSaveError,
+  });
+  liveRef.current = live;
+
   const handleSave = useCallback(async () => {
     const text = editorRef.current?.getValue();
     if (text == null) return;
+    // An explicit Save IS the flush — a queued auto-write would otherwise fire
+    // right behind it against a lock token this save has already spent.
+    liveRef.current?.cancelPending();
     setSaving(true);
     setSaveError(null);
     try {
@@ -553,18 +871,8 @@ export function FileContentView({
       // just told us is current rather than the stale seed hash (which would
       // 409 forever).
       const expectedHash = conflictHashRef.current ?? lockHashRef.current;
-      const res = await saveFileContent(filePath, text, { host, expectedHash });
-      // Advance the lock token WITHOUT remounting the editor (baseHash stays):
-      // a remount reseeds the doc and yanks the caret/scroll to the top, which
-      // made every ⌘S mid-document a jump-to-line-1. markClean re-baselines
-      // dirty-tracking in place instead.
-      conflictHashRef.current = undefined;
-      lockHashRef.current = res.contentHash;
-      setData((prev) => (prev ? { ...prev, content: text, size: res.size, contentHash: res.contentHash } : prev));
-      editorRef.current?.markClean();
-      draftRef.current = null;
-      setDraftDirty(false);
-      setEditorDirty(false);
+      const res = await saveFileContent(filePath, text, { host, expectedHash, writer: 'user' });
+      applySaved(text, res);
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1800);
       log.info('file-editor', 'file saved', { path: filePath, host, size: res.size });
@@ -592,7 +900,7 @@ export function FileContentView({
     } finally {
       setSaving(false);
     }
-  }, [filePath, host, onSaved]);
+  }, [filePath, host, onSaved, applySaved]);
 
   // Throw away the unsaved buffer and remount the editor on the on-disk bytes.
   // The only deliberate-loss path — hence the confirm.
@@ -609,12 +917,44 @@ export function FileContentView({
     });
     if (!ok) return;
     draftRef.current = null;
+    // Discard is the ONLY path that deliberately throws typed text away, so it
+    // is also the only one that deletes the persisted copy.
+    dropDraft(filePath, host);
     setDraftDirty(false);
     setEditorDirty(false);
     setSaveError(null);
+    setStaleDraft(null);
+    setDraftRestored(false);
     conflictHashRef.current = undefined;
     setSeedNonce((n) => n + 1);
-  }, [confirm]);
+  }, [confirm, dropDraft, filePath, host]);
+
+  // Stale-draft banner, "Restore my changes": seed the editor from the draft and
+  // remount — and RE-ARM the lock at the draft's own baseHash (planStaleDraftRestore).
+  // Leaving the lock on the CURRENT disk hash made the next ⌘S a silent overwrite
+  // of bytes the user has never seen: type, the session's agent rewrites the file,
+  // Refresh, "Restore my changes", ⌘S — and the agent's work was gone with no 409
+  // and no warning. Now that Save takes the existing conflict path, which spells
+  // out the overwrite and needs a second press.
+  const restoreStaleDraft = useCallback(() => {
+    if (staleDraft == null) return;
+    const { seed, lockHash } = planStaleDraftRestore(staleDraft);
+    draftRef.current = seed;
+    lockHashRef.current = lockHash;
+    // The lock now points at bytes we no longer hold, so there is no trustworthy
+    // merge BASE any more. Live Edit reads null as "don't merge, ask the human"
+    // — merging against the wrong base is how the other writer's work vanishes.
+    baseContentRef.current = null;
+    conflictHashRef.current = undefined;
+    setDraftDirty(true);
+    setSeedNonce((n) => n + 1);
+    setStaleDraft(null);
+  }, [staleDraft]);
+
+  const discardStaleDraft = useCallback(() => {
+    dropDraft(filePath, host);
+    setStaleDraft(null);
+  }, [dropDraft, filePath, host]);
 
   // Preview⇄Source both EDIT the same file in different representations, so an
   // unsaved buffer must survive the switch: capture the live editor's value as
@@ -1100,10 +1440,47 @@ export function FileContentView({
     </a>
   );
 
+  /** Live Edit toggle. A pill with a dot rather than a labelled checkbox: it sits
+   *  in a dense toolbar, and the dot is what makes its state readable at a
+   *  glance. Preference is global; a conflict pauses it per FILE, which is why
+   *  the paused title says "click to resume" instead of "turn on". */
+  const liveToggle = !canEdit || !editing ? null : (
+    <button
+      type="button"
+      className={`fv-html-tab fv-live-toggle${live.on ? ' active' : ''}${live.suspended ? ' fv-live-suspended' : ''}`}
+      onClick={live.toggle}
+      aria-pressed={live.on}
+      title={live.suspended
+        ? 'Live edit paused for this file after a conflict — click to resume'
+        : live.on
+          ? 'Live edit is ON — your changes are written to disk shortly after you stop typing. Click to turn it off.'
+          : 'Live edit is off — changes are written only when you press Save. Click to write as you type.'}
+    >
+      <span className="fv-live-dot" aria-hidden="true">●</span>
+      Live
+    </button>
+  );
+
+  /** Versions of THIS file. Sits with the edit controls because restoring one is
+   *  an edit (it lands in the buffer unsaved), not a navigation. */
+  const historyBtn = !canEdit || !editing ? null : (
+    <button
+      type="button"
+      className={`fv-html-tab fv-history-btn${historyOpen ? ' active' : ''}`}
+      onClick={() => setHistoryOpen((o) => !o)}
+      aria-pressed={historyOpen}
+      title="Versions of this file — Walnut's snapshots of your opens and saves, plus git commits"
+    >
+      History
+    </button>
+  );
+
   /** Save / Discard cluster. The editor is always live for editable files, so
    *  these are always present there — Save disabled until something changed. */
   const editBtns = !canEdit || !editing ? null : (
     <>
+      {liveToggle}
+      {historyBtn}
       <button
         type="button"
         className="fv-html-tab fv-save-btn"
@@ -1111,7 +1488,9 @@ export function FileContentView({
         disabled={saving || !dirty}
         title={dirty ? 'Save changes (⌘S)' : 'No changes to save'}
       >
-        {saving ? 'Saving…' : savedFlash ? '✓ Saved' : 'Save'}
+        {/* An auto-write borrows this slot: the user should see that a write is
+            happening in the place they already look for save state. */}
+        {saving || live.writing ? 'Saving…' : savedFlash ? '✓ Saved' : 'Save'}
       </button>
       {dirty && (
         <button
@@ -1124,6 +1503,20 @@ export function FileContentView({
         </button>
       )}
       {dirty && <span className="fv-dirty-dot" title="Unsaved changes">●</span>}
+      {draftRestored && (
+        <span
+          className="fv-draft-note"
+          role="status"
+          title="Your unsaved changes were restored from this browser's draft store. They are still unsaved."
+        >
+          Draft restored
+        </span>
+      )}
+      {/* Live Edit receipt: something arrived from another writer and was folded
+          in. Transient (4s) and one line — it reports, it doesn't ask. */}
+      {live.receipt && (
+        <span className="fv-draft-note fv-live-receipt" role="status">{live.receipt}</span>
+      )}
     </>
   );
 
@@ -1237,6 +1630,14 @@ export function FileContentView({
       }}
       // Cmd/Ctrl+click identifier → references (DOM surfaces; CM self-detects).
       onMouseDown={onSymbolLookup ? handleContainerMouseDown : undefined}
+      // Focus leaving an EDITOR lands a pending Live Edit write now instead of
+      // waiting out the debounce. React's onBlur is focusout, so it hears the
+      // editors' inner contenteditable; the closest() check keeps a hop between
+      // toolbar buttons from counting as leaving the buffer.
+      onBlur={(e) => {
+        const from = e.target as HTMLElement | null;
+        if (from?.closest?.('.fv-source-editor, .fv-wysiwyg-editor')) live.flushNow();
+      }}
       // Right-click → our code menu (Copy / Ask / Find references / Find in file).
       // raw/binary keep the browser menu on purpose: images and PDFs need
       // "Save image as…" / the PDF viewer's own items, which ours can't offer.
@@ -1438,6 +1839,25 @@ export function FileContentView({
           {saveError}
         </div>
       )}
+      {/* A draft written against OLDER bytes. Non-transient on purpose: both the
+          user's text and whatever landed on disk are real work, so this waits
+          for a decision instead of picking a winner. */}
+      {staleDraft != null && (
+        <div className="fv-draft-banner" role="status">
+          <span>You have unsaved changes to this file from an older version of it on disk.</span>
+          <button
+            type="button"
+            className="fv-html-tab"
+            onClick={restoreStaleDraft}
+            title="Put your unsaved text back in the editor. The copy on disk is newer, so Save will warn you before it replaces that version."
+          >
+            Restore my changes
+          </button>
+          <button type="button" className="fv-html-tab" onClick={discardStaleDraft}>
+            Discard draft
+          </button>
+        </div>
+      )}
       {searchOpen && (
         <FileSearchBar
           query={searchQuery}
@@ -1486,7 +1906,10 @@ export function FileContentView({
             key={`wys:${filePath}:${baseHash ?? ''}:${seedNonce}`}
             ref={editorRef}
             initialValue={draftRef.current ?? data.content}
+            path={filePath}
+            host={host}
             onDirtyChange={setEditorDirty}
+            onDocChange={handleDocChange}
             onSave={() => { void handleSave(); }}
             onAskSelection={onSelectCode ? handleAskSelection : undefined}
           />
@@ -1497,6 +1920,7 @@ export function FileContentView({
             initialValue={draftRef.current ?? data.content}
             path={filePath}
             onDirtyChange={setEditorDirty}
+            onDocChange={handleDocChange}
             onSave={() => { void handleSave(); }}
             initialLine={line}
             initialFlashTerm={lineTerm}
@@ -1520,6 +1944,21 @@ export function FileContentView({
       {revealError && (
         <div className="file-viewer-error fv-reveal-error" role="alert" onClick={clearRevealError} title="Click to dismiss">
           {revealError}
+        </div>
+      )}
+      {/* History flyout: overlays part of the pane (bottom drawer; side panel in
+          fullscreen) rather than joining the flex column, so the editor keeps its
+          size and scroll position while versions are compared. ✕ or the toolbar button closes it. */}
+      {historyOpen && canEdit && editing && !loading && (
+        <div className="fv-history-flyout" data-testid="file-history-flyout">
+          <FileHistoryPanel
+            path={filePath}
+            host={host}
+            currentText={() => editorRef.current?.getValue() ?? data?.content ?? ''}
+            onRestore={restoreHistoryVersion}
+            onClose={() => setHistoryOpen(false)}
+            refreshToken={versionsSeen}
+          />
         </div>
       )}
       {selection && (

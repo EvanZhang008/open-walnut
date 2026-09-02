@@ -48,6 +48,9 @@ import { permissionsRouter } from './routes/permissions.js'
 import { warmLauncherDetection } from '../core/permissions/darwin.js'
 import { getCalendarService } from '../core/calendar/index.js'
 import { filesRouter } from './routes/files.js'
+import { fileOpsRouter } from './routes/file-ops.js'
+import { fileRawRouter } from './routes/file-raw.js'
+import { fileHistoryRouter } from './routes/file-history.js'
 import { createCronRouter, setCronService } from './routes/cron.js'
 import { createAgentsRouter } from './routes/agents.js'
 import { createConversationsRouter } from './routes/conversations.js'
@@ -1388,9 +1391,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/images', imagesRouter)
   app.use('/api/local-image', localImageRouter)
   app.use('/api/file-content', fileContentRouter)
+  // Path-shaped raw bytes: an HTML preview's relative <img>/<link> URLs resolve
+  // against this URL's PATH, which the query-shaped route above cannot offer.
+  app.use('/api/file-raw', fileRawRouter)
+  // Per-file version timeline (Walnut snapshots + git) for the file the editor has open.
+  app.use('/api/file-history', fileHistoryRouter)
   app.use('/api/calendar', calendarRouter)
   app.use('/api/permissions', permissionsRouter)
   app.use('/api/files', filesRouter)
+  // Mutations (mkdir/create/rename/duplicate/delete) share the /api/files
+  // prefix; no path collides with the read-only router above.
+  app.use('/api/files', fileOpsRouter)
   app.use('/api/agents', createAgentsRouter())
   // Conversations share the /api/agents prefix. Registered AFTER the agents
   // router; the agents router only matches single-segment ids (/:id), so the
