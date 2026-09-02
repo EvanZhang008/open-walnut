@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express'
+import { log } from '../logging/index.js'
 
 // ─── Generic SSE channel: per-key ring buffer + replay ─────────────────────
 //
@@ -148,6 +149,16 @@ export function attachSse(
     }, PING_INTERVAL_MS),
   }
   ch.conns.add(conn)
+
+  // The OPEN belongs in the log too, and only this function can say it. The
+  // request logger can name a stream when it ends (its response is never
+  // "finished", so that line arrives on the abort path), but a feed that is
+  // healthy and open for hours would otherwise leave the server with no record
+  // that anything is subscribed at all. Paired with `reqId`, the two lines
+  // bracket one stream's whole life.
+  log.web.info(`SSE open ${req.method} ${req.originalUrl}`, {
+    reqId: req.reqId, channel: key, conns: ch.conns.size,
+  })
 
   req.on('close', () => {
     clearInterval(conn.ping)

@@ -294,7 +294,15 @@ struct CalendarQuickAddRow: View {
                 Image(systemName: "plus.circle.fill")
                     .font(.body)
                     .foregroundStyle(Theme.tint)
-                TextField("Add task \(dayLabel == "today" ? "for today" : "on \(dayLabel)")…", text: $text)
+                // Same placeholder-contrast fix as `QuickAddRow`: this string is
+                // the only statement of WHICH DAY the task lands on, so it is
+                // held to the text bar rather than the platform's 30%-alpha
+                // placeholder (`FieldPlaceholder`).
+                TextField("", text: $text)
+                    .fieldPlaceholder(
+                        "Add task \(dayLabel == "today" ? "for today" : "on \(dayLabel)")…",
+                        showing: text.isEmpty
+                    )
                     .focused($focused)
                     .submitLabel(.done)
                     .onSubmit(submit)

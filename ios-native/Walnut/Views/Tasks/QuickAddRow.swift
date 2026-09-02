@@ -74,7 +74,14 @@ struct QuickAddRow: View {
                 Image(systemName: leadingIcon)
                     .font(.body)
                     .foregroundStyle(Theme.tint)
-                TextField(placeholder, text: $text)
+                // Empty label + our own placeholder ink: the platform's is
+                // `label` at 30% alpha, which measured 2.48:1 over this card in
+                // dark mode and about 1.7:1 in light. This placeholder is not
+                // decoration — it is the only thing that says where the task
+                // will be filed — so it is held to the 4.5:1 text bar
+                // (`FieldPlaceholder`).
+                TextField("", text: $text)
+                    .fieldPlaceholder(placeholder, showing: text.isEmpty)
                     .focused($focused)
                     .submitLabel(.done)
                     .onSubmit(submit)

@@ -458,6 +458,11 @@ final class TasksStore {
            isActive, taskFolders.isEmpty {
             taskFolders = cachedFolders
         }
+        // The tier split, for the same reason and with a sharper failure without it:
+        // the folders decide how bands NEST, the split decides that there are bands at
+        // all. Offline without it, every pinned task fell into Satellite (measured: All
+        // 96, Satellite 96, no Focus/Backlog/Wait).
+        await adoptCachedFocusSplit()
         // Live feed + one REST refresh in parallel: the feed's snapshot frame
         // usually lands first, and the REST answers are then no-ops.
         connectFeed()

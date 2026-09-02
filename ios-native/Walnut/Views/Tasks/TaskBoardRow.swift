@@ -328,19 +328,57 @@ struct TaskBoardRow: View {
     /// type sizes are all text styles, which the OS scales without being asked.
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    // MARK: - The leading column's arithmetic
+    //
+    // Five numbers that only make sense together, so they are stated together and the
+    // one thing anybody downstream reads (`separatorLeadingInset`) is DERIVED from them
+    // rather than restated. The ring's hit area and its layout width are deliberately
+    // DIFFERENT numbers, which is the part a single literal could not express.
+
+    /// The glyph's own box: 21pt circle centred in it, and this is the geometry that
+    /// decides where the ring is DRAWN. Unchanged since the row shipped.
+    static let ringGlyphSize = CGSize(width: 34, height: 30)
+
+    /// Width of the ring's TAP AREA, which is not its drawn size.
+    ///
+    /// It was the glyph box, 34x30 — under the platform's 44pt minimum in both axes, and
+    /// top-aligned, so on a two-line row the lower half of the ring's own column hit
+    /// nothing at all. That matters more here than on an ordinary control because the
+    /// ring's neighbour is not empty space: everything to its right opens the session, so
+    /// a thumb that misses the ring does not do nothing, it goes somewhere else.
+    static let ringTargetWidth: CGFloat = 44
+
+    /// Negative leading padding that puts the CIRCLE flush with the row's leading edge
+    /// (the glyph box is wider than the glyph).
+    static let ringLeadingBleed: CGFloat = 6
+
+    /// How much of the widened hit box is given back to the layout, so growing the target
+    /// moves nothing: the title, the hairline and the band headings all stay where they
+    /// were. The 11pt HStack gap absorbs it, and giving back 10 rather than 11 leaves a
+    /// 1pt strip so the two tap targets never actually touch.
+    static let ringTrailingBleed: CGFloat = 10
+
+    /// Horizontal space the ring occupies in the row's layout: 28pt, exactly what the
+    /// 34pt glyph box with `-6` leading padding occupied before the target grew.
+    static var ringLayoutWidth: CGFloat {
+        ringTargetWidth - ringLeadingBleed - ringTrailingBleed
+    }
+
+    /// The HStack's gap between the ring column and the text column.
+    static let rowSpacing: CGFloat = 11
+
     /// Where the V1 hairline starts: at the TITLE, so the done-ring's gutter stays
     /// clear (mockup V1: `.row + .row::before { left: 48px }` against a 16px page
     /// margin, i.e. 32pt into the row's own content).
     ///
-    /// Derived from the arithmetic below rather than eyeballed, because the two
-    /// numbers it is made of live in this file and a separator that drifts off the
-    /// title reads as a mistake: the ring's frame is 34pt wide with `-6` leading
-    /// padding, so it occupies 28pt of layout, and the HStack spacing is 11pt.
-    /// 28 + 11 = the title's leading edge. Change either and change this.
-    static let separatorLeadingInset: CGFloat = 39
+    /// COMPUTED, not written down: it used to be the literal 39 with a comment
+    /// explaining that it was 28 + 11, which is a rule that holds only as long as
+    /// someone re-does the arithmetic by hand after touching either number. Widening
+    /// the ring's hit area was exactly that kind of change.
+    static var separatorLeadingInset: CGFloat { ringLayoutWidth + rowSpacing }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 11) {
+        HStack(alignment: .top, spacing: Self.rowSpacing) {
             ring
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.title)
@@ -432,15 +470,26 @@ struct TaskBoardRow: View {
                         .foregroundStyle(BoardBandCard.surface)
                 }
             }
-            .frame(width: 34, height: 30)
+            .frame(width: Self.ringGlyphSize.width, height: Self.ringGlyphSize.height)
+            // The TARGET, which is not the glyph box: 44pt wide (the platform minimum)
+            // and the full height of the row, with the glyph still pinned top-leading so
+            // nothing moves on screen. `maxHeight` rather than a fixed 44 on purpose —
+            // a fixed height would set a floor the SHORT rows do not have today, and
+            // filling the row is both taller and honest about what the column is.
+            .frame(width: Self.ringTargetWidth, alignment: .leading)
+            .frame(maxHeight: .infinity, alignment: .top)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        // The 34pt hit frame is wider than the 21pt glyph, so this pulls the frame
-        // back until the CIRCLE lands flush with the row's leading edge. It was the
-        // reason the old accent capsule overlapped the ring; with the mark moved to the
-        // row's background there is nothing in this space to share it with.
-        .padding(.leading, -6)
+        // The glyph box is wider than the 21pt circle, so this pulls the column back
+        // until the CIRCLE lands flush with the row's leading edge. It was the reason
+        // the old accent capsule overlapped the ring; with the mark moved to the row's
+        // background there is nothing in this space to share it with.
+        .padding(.leading, -Self.ringLeadingBleed)
+        // …and this gives the widened target's extra width back to the LAYOUT, so the
+        // bigger tap area costs no pixels: the title's leading edge and the hairline are
+        // where they were (`separatorLeadingInset` is derived from these two numbers).
+        .padding(.trailing, -Self.ringTrailingBleed)
         .accessibilityIdentifier("board.ring.\(row.id)")
         .accessibilityLabel(row.isDone ? "Reopen" : "Mark done")
     }

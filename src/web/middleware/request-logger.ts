@@ -19,6 +19,15 @@
  * One 5xx is exempt: 501 is this codebase's `not_supported_cloud` degradation, a
  * deliberate answer rather than a failure, so it logs at warn and never becomes a
  * card (see the 501 block below).
+ *
+ * A RESPONSE THAT IS NEVER ENDED USED TO LOG NOTHING AT ALL. `finish` fires when
+ * `res.end()` has been called; an SSE stream is ended by the client going away, so
+ * `attachSse` cleans up on `req`'s close and never ends the response. The effect
+ * was that every streaming endpoint in this app — `/api/v1/events`, the session
+ * and conversation streams — produced ZERO request-log lines over its whole life,
+ * so a feed that opened and died every two seconds was invisible on the server
+ * while being plainly visible on the phone. Both `finish` and `close` are hooked
+ * now, once-guarded, and the abort path says so (`aborted`).
  */
 
 import type { Request, Response, NextFunction } from 'express'
@@ -139,14 +148,29 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
 
   const start = Date.now()
 
-  // Hook into response finish to log after the response is sent
-  res.on('finish', () => {
+  // Exactly one line per request, whichever way the response ends. `finish` is
+  // the ordinary path; `close` also fires for a response nobody ever ended (an
+  // SSE stream) or one the client abandoned mid-flight, and it fires AFTER
+  // `finish` for a normal response — hence the guard rather than one listener.
+  let logged = false
+
+  const record = (aborted: boolean) => {
+    if (logged) return
+    logged = true
     const duration = Date.now() - start
     const status = res.statusCode
     const method = req.method
     const url = req.originalUrl
 
     const meta: Record<string, unknown> = { reqId }
+    if (aborted) {
+      // The connection went away instead of the response ending. For a stream
+      // that is the NORMAL end (the client closed the feed) and `ms` is the
+      // stream's lifetime; for an ordinary request it means the client hung up
+      // before we answered, and `sent` says whether it got any of it.
+      meta.aborted = true
+      meta.sent = res.headersSent
+    }
 
     // Include query params for GET requests (helps debug "wrong data" issues)
     const q = safeQuery(req.query as Record<string, unknown>)
@@ -183,7 +207,13 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
       .map((seg) => (ID_SEGMENT_RE.test(seg) ? ':id' : seg))
       .slice(0, 4) // '', 'api', '<subsystem>', '<action-or-:id>'
       .join('/') || fullPath
-    observe('http.request', duration, {
+    // A STREAM'S DURATION IS NOT A LATENCY. An SSE feed held open for four hours
+    // would land a 14,400,000ms sample in the histogram every dashboard reads as
+    // "this route is slow", so a stream's lifetime gets its own series and the
+    // latency series keeps meaning what it says.
+    const isStream = String(res.getHeader('content-type') ?? '').startsWith('text/event-stream')
+    if (isStream) meta.stream = true
+    observe(isStream ? 'http.sse' : 'http.request', duration, {
       route: routeGroup,
       method,
       status: String(Math.floor(status / 100) * 100), // 200/300/400/500 buckets
@@ -234,13 +264,23 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
       // reachable and reasoning about its input again.
       // isFailing() first so a healthy box never allocates: the tracker only
       // holds routes that have actually failed (see routeHealth above).
+      //
+      // `answered` is the guard the abort path needs: a client that hung up before
+      // we sent anything did NOT prove the endpoint works, and `statusCode` cannot
+      // say so on its own — it reads 200 by default whether or not we ever used it.
+      // Retiring a route's error card on that would clear a red card for a route
+      // that is still broken, which is worse than leaving it up.
+      const answered = !aborted || res.headersSent
       const key = routeRecoveryKey(method, url)
-      if (publishRouteRecovery && routeHealth.isFailing(key)) {
+      if (answered && publishRouteRecovery && routeHealth.isFailing(key)) {
         routeHealth.forget(key)
         publishRouteRecovery([key])
       }
     }
-  })
+  }
+
+  res.on('finish', () => record(false))
+  res.on('close', () => record(true))
 
   next()
 }

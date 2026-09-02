@@ -11,6 +11,29 @@ import Foundation
 // `PUT /v1/focus/tasks/:id/tier`, optimistic with rollback.
 
 extension TasksStore {
+    /// DiskCache key for the authoritative tier split.
+    ///
+    /// # Why the split is cached at all (it was the one board input that was not)
+    ///
+    /// The board renders from cache before any request finishes, and every OTHER input
+    /// it needs is on disk: the tasks, the sessions, the folder tree. The split was not,
+    /// so an offline launch drew every pinned task in ONE band: `tierId(for:)` answers
+    /// nil without the map, and `tierBadge` then reads the server default, `satellite`.
+    /// Measured on a real vault with the phone offline: All 96, Satellite 96, and no
+    /// Focus, Backlog or Wait band at all. The BOARD'S ORGANISATION disappeared at
+    /// exactly the moment the user could do least about it.
+    ///
+    /// The RAW split is what gets cached, not the two maps derived from it, so the cold
+    /// path and the live path both go through `adoptSplit` and cannot disagree about
+    /// ordering — the order is the load-bearing half (`tierOrder`), and a cache of a
+    /// derived value is a second place for that rule to live.
+    static let focusSplitCacheKey = "focus-split"
+
+    /// DiskCache key for the custom-tier registry (`ct_*` id → label). A second file
+    /// because it is a second endpoint with its own failure: the split can arrive while
+    /// the registry does not, and `loadFocusTiers` already treats them that way.
+    static let focusTiersCacheKey = "focus-tiers"
+
     /// Built-in tier order + labels — mirrors the desktop reading order.
     static let builtinTiers: [(id: String, label: String)] = [
         ("focus", "Focus"), ("satellite", "Satellite"),
@@ -94,7 +117,14 @@ extension TasksStore {
             let tiers = await tiersReq
             guard isActive else { return }
             adoptSplit(split)
-            if let tiers, tiers != customTiers { customTiers = tiers }
+            if let tiers, tiers != customTiers {
+                customTiers = tiers
+                // Cached for the same reason the split is: a ct_* band whose LABEL is
+                // missing renders as "Satellite" (`tierLabel`'s fallback), so an offline
+                // board with the split but not the registry would name a custom band
+                // after a built-in one — worse than not knowing.
+                DiskCache.save(tiers, key: Self.focusTiersCacheKey)
+            }
         } catch {
             AppLog.debug("tasks", "focus tier load failed", [
                 "error": error.localizedDescription,
@@ -116,11 +146,41 @@ extension TasksStore {
     /// Adopt an authoritative split into BOTH the map and the order. One place,
     /// because a split that updated the map while leaving a stale order would
     /// render a task under the right heading in the wrong position.
+    ///
+    /// Also the ONE place the split is written to disk, which is why a tier MOVE
+    /// survives a relaunch: `setTier` adopts its response through here too, so the
+    /// cache never lags a change the user made and then went offline with.
     func adoptSplit(_ split: FocusTierResult) {
         let map = Self.tierMap(from: split)
         if map != taskTiers { taskTiers = map }
         let order = Self.tierOrder(from: split)
         if order != taskTierOrder { taskTierOrder = order }
+        // UNCONDITIONAL, unlike the two adoptions above, and the asymmetry is the point.
+        // Their guards protect the OBSERVED properties: adopting an identical value would
+        // bump `tiersGen` and throw away the board's band memo for nothing. A file has no
+        // such cost — this is one small encode on a utility queue every 30-120s — and a
+        // change-only write has a hole in it: an unchanged split is the common case, so
+        // after `DiskCache.clearAll()` wipes the cache on a disconnect, nothing would ever
+        // re-create the file while the store's own copy still matched the server's.
+        DiskCache.save(split, key: Self.focusSplitCacheKey)
+    }
+
+    /// Hydrate the split + custom-tier labels from disk. Called on the startup path
+    /// only, and guarded the way every other adoption in `initialize()` is: a network
+    /// answer that already landed WINS, because it is newer by construction.
+    func adoptCachedFocusSplit() async {
+        if let cached = await DiskCache.loadAsync(FocusTierResult.self, key: Self.focusSplitCacheKey),
+           isActive, taskTiers.isEmpty {
+            // Through `adoptSplit` and not through its own derivation: the map and the
+            // ORDER have to come out of the cached split exactly as they come out of a
+            // live one, or an offline board would be a second, subtly different reading
+            // of the same bytes. (Its write-back is a no-op here — we just read the file.)
+            adoptSplit(cached)
+        }
+        if let cachedTiers = await DiskCache.loadAsync([FocusTierInfo].self, key: Self.focusTiersCacheKey),
+           isActive, customTiers.isEmpty {
+            customTiers = cachedTiers
+        }
     }
 
     /// Move a pinned task to a tier — optimistic map write, PUT in the
