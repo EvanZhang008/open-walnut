@@ -22,6 +22,7 @@ import { useNavigate } from 'react-router-dom';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { fetchDirList, downloadFileUrl, fetchReferences, type DirEntry, type ReferencesResponse } from '@/api/files';
 import { fetchSessionChangedPaths } from '@/api/session-changes';
+import { useFileContentPrefetch } from '@/hooks/useFileContentPrefetch';
 import { FileContentView } from '@/components/common/FileContentView';
 import { ReferencePanel } from '@/components/common/ReferencePanel';
 import { FileTreeContextMenu, type FileTreeContextTarget } from './FileTreeContextMenu';
@@ -782,6 +783,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   const { canReveal, reveal, error: revealError, clearError: clearRevealError } = useRevealFile(host);
   // Files with unsaved edits parked in the draft store (survives closing the pane).
   const draftPaths = useFileDraftPaths(host);
+  // Hovering a file row reads it ahead of the click, into the same content cache
+  // the viewer paints from.
+  const prefetch = useFileContentPrefetch(host);
   const [ctxMenu, setCtxMenu] = useState<FileTreeContextTarget | null>(null);
 
   const openContextMenu = useCallback((
@@ -1200,6 +1204,14 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                           else selectFile(node.path);
                         }}
                         onContextMenu={(e) => openContextMenu(e, { ...node, relativeRoot: section.path })}
+                        // Resting on a file row is the earliest signal it is about
+                        // to be opened; the read finishes before the click lands.
+                        // Bounded in useFileContentPrefetch (dwell, one in flight,
+                        // raw kinds and big files skipped, once per path).
+                        onMouseEnter={node.type === 'file'
+                          ? () => prefetch.hover(node.path, node.size)
+                          : undefined}
+                        onMouseLeave={node.type === 'file' ? prefetch.cancel : undefined}
                         title={node.path}
                       >
                         <span className="sfe-arrow">

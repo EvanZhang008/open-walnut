@@ -23,8 +23,10 @@ function extSet(source: string, name: string): string[] {
 }
 
 describe('office preview MIME parity', () => {
+  // The sets moved out of FileContentView when the tree's hover prefetch needed
+  // the same "is this served as raw bytes" answer (web/src/utils/file-kind.ts).
   const client = fs.readFileSync(
-    path.join(ROOT, 'web/src/components/common/FileContentView.tsx'), 'utf-8',
+    path.join(ROOT, 'web/src/utils/file-kind.ts'), 'utf-8',
   )
   const server = fs.readFileSync(
     path.join(ROOT, 'src/web/routes/file-content.ts'), 'utf-8',

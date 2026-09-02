@@ -26,11 +26,23 @@ describe('rawFileContentUrl reload buster', () => {
     expect(new URL(second, 'http://x').searchParams.get('r')).toBe('2')
   })
 
-  it('keeps path/raw/host params intact alongside the buster', () => {
-    const params = new URL(rawFileContentUrl('/tmp/a b/c.png', 'devbox', 3), 'http://x').searchParams
-    expect(params.get('path')).toBe('/tmp/a b/c.png')
-    expect(params.get('raw')).toBe('1')
-    expect(params.get('host')).toBe('devbox')
-    expect(params.get('r')).toBe('3')
+  // The URL is PATH-shaped, not query-shaped, and that is load-bearing: a
+  // previewed HTML document resolves its relative `<img src="diagram.png">`
+  // against its own URL's path, and the query string is dropped. From
+  // `?path=…&raw=1` every relative image in every previewed file resolved to
+  // `/api/diagram.png` and broke. So the assertion is that the buster rides
+  // ALONGSIDE an intact path, host segment and per-component encoding.
+  it('keeps the encoded path and host segments intact alongside the buster', () => {
+    const url = new URL(rawFileContentUrl('/tmp/a b/c.png', 'devbox', 3), 'http://x')
+    expect(url.pathname).toBe('/api/file-raw/devbox/tmp/a%20b/c.png')
+    expect(url.searchParams.get('r')).toBe('3')
+    // A sibling of the file resolves to a sibling of the route — the whole point.
+    expect(new URL('other.png', url).pathname).toBe('/api/file-raw/devbox/tmp/a%20b/other.png')
+  })
+
+  it('encodes each path component, so #, ? and spaces in a filename survive', () => {
+    const url = new URL(rawFileContentUrl('/tmp/w s/a#b?c.md', undefined, 1), 'http://x')
+    expect(url.pathname).toBe('/api/file-raw/local/tmp/w%20s/a%23b%3Fc.md')
+    expect(url.searchParams.get('r')).toBe('1')
   })
 })

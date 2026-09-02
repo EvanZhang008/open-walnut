@@ -224,6 +224,49 @@ describe('file drafts: a rename carries the draft', () => {
     expect(await listFileDraftPaths(null)).toEqual(new Set(['/a/moved/one.ts', '/a/bc/two.ts']));
   });
 
+  it('a read issued DURING the move still sees the draft — a rename is one operation', async () => {
+    // The regression this pins: re-keying a draft is get → put(new) → delete(old)
+    // per record, and a `loadFileDraft` for the new path landing mid-walk found
+    // the draft at neither key, reported "nothing unsaved", and released the
+    // redirect rule the move still needed. It was invisible while the only caller
+    // read its draft after a network round trip; once the viewer started reading
+    // the draft together with its cached file bytes (before the network, so a
+    // re-open paints immediately) the read won the race and a rename silently
+    // dropped the text it was supposed to carry.
+    class SlowStore extends MemoryAdapter {
+      override async put(key: string, record: FileDraft): Promise<void> {
+        // Long enough that a read issued right after the move MUST have been
+        // ordered behind it rather than merely losing a coin flip.
+        await new Promise((r) => setTimeout(r, 30));
+        await super.put(key, record);
+      }
+    }
+    setFileDraftAdapter(new SlowStore());
+    await saveFileDraft(null, '/marina/src/a.ts', { text: 'mid-move text', baseHash: 'h1' });
+
+    // NOT awaited: exactly how the rename path issues it.
+    const moving = moveFileDraftsUnder(null, '/marina/src/a.ts', '/marina/src/b.ts');
+    const read = loadFileDraft(null, '/marina/src/b.ts');
+    const [, seen] = await Promise.all([moving, read]);
+    expect(seen?.text).toBe('mid-move text');
+  });
+
+  it('a read issued during a subtree DELETE sees it finished, not half-done', async () => {
+    class SlowStore extends MemoryAdapter {
+      override async delete(key: string): Promise<void> {
+        await new Promise((r) => setTimeout(r, 30));
+        await super.delete(key);
+      }
+    }
+    setFileDraftAdapter(new SlowStore());
+    await saveFileDraft(null, '/marina/gone/a.ts', { text: 'doomed', baseHash: 'h1' });
+
+    const deleting = deleteFileDraftsUnder(null, '/marina/gone');
+    const read = loadFileDraft(null, '/marina/gone/a.ts');
+    const [, seen] = await Promise.all([deleting, read]);
+    expect(seen).toBeNull();
+  });
+
   it('only touches the requested host', async () => {
     await saveFileDraft(null, '/repo/a.ts', { text: 'mine', baseHash: 'h1' });
     await saveFileDraft('devbox', '/repo/a.ts', { text: 'theirs', baseHash: 'h2' });

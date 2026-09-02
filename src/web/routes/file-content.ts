@@ -28,7 +28,12 @@ import type { DaemonFileReader } from '../../core/daemon-file-reader.js'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { computeContentHash } from '../../utils/file-ops.js'
 import { withFileLock } from '../../utils/file-lock.js'
-import { recordSnapshot, type SnapshotWriter } from '../../core/file-history.js'
+import { listSnapshots, recordSnapshot, type SnapshotWriter } from '../../core/file-history.js'
+import {
+  conditionalFileHit,
+  parseIfNoneMatch,
+  rememberFileValidator,
+} from './file-content-validator.js'
 import { log } from '../../logging/index.js'
 
 /**
@@ -347,6 +352,20 @@ export function assertPathAllowed(
 }
 
 /**
+ * Out-parameter for a caller that wants the stat this read already took —
+ * today the conditional-GET validator cache (file-content-validator.ts).
+ *
+ * Deliberately NOT a field on FileContentPayload: that JSON shape is a wire
+ * contract the iOS app reads. Passing this object is also what OPTS IN to the
+ * extra remote stat, so GET /api/v1/file-content (which passes nothing) costs
+ * exactly what it cost before.
+ */
+export interface FileReadMeta {
+  mtimeMs?: number
+  size?: number
+}
+
+/**
  * Read a file's text content as the FileViewer JSON payload — the ONE
  * implementation shared by the internal route and GET /api/v1/file-content.
  * ALL the security guards live here so every edge gets the identical sandbox:
@@ -360,6 +379,7 @@ export function assertPathAllowed(
 export async function readFileContentPayload(
   rawPath: unknown,
   host: string | undefined,
+  meta?: FileReadMeta,
 ): Promise<FileContentPayload> {
   const { filePath, isRemote } = assertPathAllowed(rawPath, host, 'read')
 
@@ -369,6 +389,17 @@ export async function readFileContentPayload(
     // Remote file via SSH daemon
     try {
       const reader = await createFileReader(host as string)
+      // Stat BEFORE the read, never after. Pairing a FRESH (mtimeMs, size) with a
+      // hash taken from OLDER bytes is the one combination that could serve a
+      // wrong 304; taken first, a change mid-read only costs a cache miss later.
+      // Failure here (old daemon without fs.stat, unreachable host) just leaves
+      // meta empty → no validator → the next read is a normal full one.
+      if (meta) {
+        try {
+          const st = await (reader as DaemonFileReader).stat(filePath)
+          if (st) { meta.mtimeMs = st.mtimeMs; meta.size = st.size }
+        } catch { /* no validator for this read */ }
+      }
       const content = await reader.readFile(filePath)
       if (content === null) {
         return { content: null, size: 0, truncated: false, binary: false, error: 'File not found', extension: ext }
@@ -405,6 +436,9 @@ export async function readFileContentPayload(
   if (!stat.isFile()) {
     return { content: null, size: 0, truncated: false, binary: false, error: 'Not a regular file', extension: ext }
   }
+  // Free for the local path: the read already stats, so the validator cache
+  // costs no extra syscall (see FileReadMeta).
+  if (meta) { meta.mtimeMs = stat.mtimeMs; meta.size = stat.size }
 
   // Binary detection
   const fd = await fsp.open(filePath, 'r')
@@ -655,6 +689,32 @@ export async function serveRawFileContent(
   res.type(ctype).send(content)
 }
 
+/**
+ * A 304 may only stand in for a 200 when `?track=` recording would do exactly
+ * what it does on a 200 — and with no bytes in hand, the only recording we can
+ * prove identical is a NO-OP. recordSnapshot returns early when the hash it is
+ * handed already sits at the head of the timeline, so "history's newest entry IS
+ * this hash" means a 200 would have recorded nothing either.
+ *
+ * Anything else (a file with no history yet, someone else's newer version on
+ * top) needs the content, so the caller falls back to a real 200 read, which
+ * records it exactly as before. Either way the timeline after the request is the
+ * same as it would have been — and the very next re-open then qualifies for 304,
+ * so the steady state is still zero bytes.
+ *
+ * Cost: one small LOCAL index.json read (the history store lives on the walnut
+ * host for remote files too), and only on a request that already matched the
+ * validator cache.
+ */
+async function trackedRecordWouldBeNoop(
+  host: string | undefined,
+  filePath: string,
+  hash: string,
+): Promise<boolean> {
+  const entries = await listSnapshots({ host, path: filePath })
+  return entries.length > 0 && entries[entries.length - 1].hash === hash
+}
+
 fileContentRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const rawPath = req.query.path
@@ -675,24 +735,78 @@ fileContentRouter.get('/', async (req: Request, res: Response, next: NextFunctio
     // (Remote `host=` reads run on the target daemon and keep their own scope.
     // The Mac/trusted-LAN FileViewer is intentionally unconfined — it's the
     // owner's own machine.)
-    const payload = await readFileContentPayload(rawPath, host)
-
+    //
+    // Run the sandbox HERE, before the conditional branch below: a conditional
+    // request must never be able to stat a path a plain read isn't allowed to
+    // touch. readFileContentPayload re-runs it (pure, cheap) for the other edges.
+    const { filePath, isRemote } = assertPathAllowed(rawPath, host, 'read')
+    const validatorHost = isRemote ? (host as string) : undefined
     // History baseline: `?track=baseline` (the viewer opening a file) or
-    // `?track=agent` (a re-read after an agent wrote it) records what the user
-    // is looking at, so "Opened" is the floor of every timeline even on a file
-    // git has never seen. Only a WHOLE text read qualifies — a truncated or
-    // binary payload isn't a version anything could be restored from. Any other
-    // value of `track` is ignored.
+    // `?track=agent` (a re-read after an agent wrote it). Any other value is
+    // ignored.
+    const track = req.query.track === 'baseline' || req.query.track === 'agent'
+      ? req.query.track
+      : undefined
+
+    // ── Conditional GET ────────────────────────────────────────────────────
+    // `If-None-Match: "<contentHash>"` → answer "the bytes you have are current"
+    // from a stat plus the validator cache, without reading (or tunnelling) a
+    // single byte. Everything that isn't a provable match falls through to the
+    // normal 200 below: a malformed header, an unknown file, a changed file, a
+    // read that would have been truncated or binary (those never got an ETag to
+    // quote back), or a `?track=` recording we can't prove is a no-op.
+    if (req.headers['if-none-match'] !== undefined) {
+      const cond = parseIfNoneMatch(req.headers['if-none-match'])
+      if (cond) {
+        const hit = await conditionalFileHit({ filePath, host: validatorHost, cond })
+        if (hit && (!track || await trackedRecordWouldBeNoop(host, filePath, hit.hash))) {
+          res.set({ ETag: `"${hit.hash}"`, 'Cache-Control': 'no-cache' })
+          res.status(304).end()
+          return
+        }
+      }
+      // Past this line the answer IS a 200. Take the conditional decision away
+      // from Express: setting an ETag arms its own freshness check inside
+      // res.send (`if (req.fresh) 304`), which would happily turn a deliberate
+      // 200 into an empty-body 304 — a tracked read we had to perform, or a bare
+      // `*` against a file this process never validated (the `fresh` module
+      // treats `*` as fresh even with no ETag at all). The rules above are the
+      // only thing allowed to answer 304 here: a 304 from this route must be
+      // provable, per the API-caching incident recorded in server.ts.
+      delete req.headers['if-none-match']
+    }
+
+    const meta: FileReadMeta = {}
+    const payload = await readFileContentPayload(rawPath, host, meta)
+
+    // History baseline records what the user is looking at, so "Opened" is the
+    // floor of every timeline even on a file git has never seen. Only a WHOLE
+    // text read qualifies — a truncated or binary payload isn't a version
+    // anything could be restored from.
     //
     // Fire-and-forget on purpose: the read must not wait for (or fail with) the
     // store. recordSnapshot swallows its own errors.
-    const track = req.query.track
-    if ((track === 'baseline' || track === 'agent')
-      && payload.content !== null && !payload.truncated && !payload.binary) {
-      // Same sandboxed path the history route keys on (assertPathAllowed already
-      // succeeded inside readFileContentPayload, so this cannot throw here).
-      const { filePath } = assertPathAllowed(rawPath, host, 'read')
+    if (track && payload.content !== null && !payload.truncated && !payload.binary) {
       void recordSnapshot({ host, path: filePath, content: payload.content, writer: track })
+    }
+
+    // Publish the validator. `contentHash` is present for exactly one kind of
+    // payload — a COMPLETE, non-binary text read — which is also the only kind a
+    // later 304 could stand in for, so truncated/binary/error payloads
+    // deliberately advertise no ETag at all.
+    //
+    // `no-cache` = "you may keep it, but always revalidate". Note this overrides
+    // the blanket `Cache-Control: no-store` the /api middleware sets, so the
+    // browser's own HTTP cache may now revalidate this route on its own; the
+    // client must handle a 304 (see the etag/no-store notes in server.ts for the
+    // incident that made blind API caching a hard no).
+    if (payload.contentHash && !payload.truncated && !payload.binary) {
+      res.set({ ETag: `"${payload.contentHash}"`, 'Cache-Control': 'no-cache' })
+      if (meta.mtimeMs !== undefined && meta.size !== undefined) {
+        rememberFileValidator(validatorHost, filePath, {
+          mtimeMs: meta.mtimeMs, size: meta.size, hash: payload.contentHash,
+        })
+      }
     }
     res.json(payload)
   } catch (err) {

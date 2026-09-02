@@ -215,6 +215,10 @@ export function gitSafe(args: string, options?: { cwd?: string; timeout?: number
 // loop, and ALL HTTP requests stalled behind it. The tick path now uses these
 // async variants; the sync `git()`/`gitSafe()` stay for one-shot callers
 // (init, compaction, CLI) where blocking is acceptable.
+//
+// The precondition probes (is git installed / is it a repo / has a remote) were
+// the leftover: they kept using gitSafe() and so kept freezing the loop on every
+// tick and every session result. See "Cached async preconditions" below.
 
 /**
  * Run git in its own process GROUP and kill the whole group on timeout.
@@ -368,6 +372,166 @@ function hasRemote(): boolean {
 
 function getBranch(): string {
   return gitSafe('rev-parse --abbrev-ref HEAD') ?? 'main';
+}
+
+// ── Cached async preconditions for the tick / event paths ────────────────────
+// autoSync() (the ~30s git tick) and gitPullWalnut() (EVERY session:result /
+// session:error, i.e. constantly with several live sessions) both open with the
+// same precondition triple — is git installed, is WALNUT_HOME a repo, does it
+// have a remote — and all three ran through the SYNCHRONOUS gitSafe(). That is
+// three blocking child-process spawns per tick AND per finished turn; a
+// production CPU profile caught the trio as ONE 175ms burst of frozen event
+// loop, which stalls every HTTP route (CLAUDE.md "Never block the web server").
+//
+// All three answers are near-constant for a process lifetime, so they are probed
+// asynchronously and reused. Freshness comes from EXPLICIT invalidation at the
+// only two places that can change them (initSync creates the repo, setRemote
+// adds/rewrites the remote); the TTL is just a backstop for a change made
+// outside this process (a human running `git remote add` in the data dir).
+
+/**
+ * Backstop TTL for the repo/remote answers. Deliberately longer than the 30s
+ * tick — every in-process mutation invalidates the cache directly, so the TTL
+ * only has to cover an out-of-process edit, where a minute of lag is invisible.
+ */
+export const SYNC_PROBE_TTL_MS = 60_000;
+
+interface ProbeState<T> {
+  value: T | undefined;
+  at: number;
+  inflight: Promise<T> | null;
+}
+
+function newProbeState<T>(): ProbeState<T> {
+  return { value: undefined, at: 0, inflight: null };
+}
+
+/**
+ * TTL + single-flight around one async probe. N concurrent callers share ONE
+ * child process — the entire point is to stop spawning per caller, and both hot
+ * callers can genuinely fire together (several sessions finishing at once).
+ *
+ * `ttlFor` receives the resolved answer, so a probe can cache one outcome
+ * forever and re-probe the other on the short TTL.
+ *
+ * `run` must never reject (each probe below swallows its own errors); the
+ * single-flight slot is released on rejection anyway so one failure can't latch.
+ */
+async function cachedProbe<T>(
+  state: ProbeState<T>,
+  run: () => Promise<T>,
+  ttlFor: (value: T) => number,
+): Promise<T> {
+  if (state.value !== undefined && Date.now() - state.at < ttlFor(state.value)) {
+    return state.value;
+  }
+  if (state.inflight) return state.inflight;
+  const inflight: Promise<T> = run().then((value) => {
+    // An invalidation while this probe was in flight nulls the slot (and any
+    // later caller started a fresh probe). Either way the answer in hand
+    // predates the mutation, so it must NOT be written to the cache.
+    if (state.inflight === inflight) {
+      state.value = value;
+      state.at = Date.now();
+      state.inflight = null;
+    }
+    return value;
+  });
+  state.inflight = inflight;
+  // Release the single-flight slot even on a rejection, so one failure can never
+  // latch every future caller onto a dead promise. (The catch also keeps a
+  // rejection from being reported as unhandled; each probe swallows its own.)
+  inflight.catch(() => { /* intentionally ignored */ })
+    .finally(() => { if (state.inflight === inflight) state.inflight = null; });
+  return inflight;
+}
+
+const gitAvailableProbe = newProbeState<boolean>();
+const repoProbe = newProbeState<boolean>();
+const remoteProbe = newProbeState<boolean>();
+
+/**
+ * Async twin of isGitAvailable(), cached.
+ *
+ * A POSITIVE answer is cached forever: a git binary that resolved once does not
+ * leave PATH for the life of a server process. A NEGATIVE answer is re-probed on
+ * SYNC_PROBE_TTL_MS on purpose — git can be installed while the server runs, and
+ * latching "no git" permanently would silently disable sync until a restart,
+ * which is a worse failure than one cheap probe a minute.
+ */
+export async function isGitAvailableAsync(): Promise<boolean> {
+  return cachedProbe(
+    gitAvailableProbe,
+    async () => {
+      try {
+        // process.cwd() matches the sync version, which passes no cwd at all.
+        await execGitGroup('git --version', { cwd: process.cwd(), timeout: LOCAL_TIMEOUT });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    (available) => (available ? Infinity : SYNC_PROBE_TTL_MS),
+  );
+}
+
+/** Async twin of isRepo(), cached. Invalidated by initSync()'s `git init`. */
+export async function isRepoAsync(): Promise<boolean> {
+  return cachedProbe(
+    repoProbe,
+    async () => (await gitSafeAsync('rev-parse --is-inside-work-tree')) === 'true',
+    () => SYNC_PROBE_TTL_MS,
+  );
+}
+
+/** Async twin of hasRemote(), cached. Invalidated by setRemote(). */
+export async function hasRemoteAsync(): Promise<boolean> {
+  return cachedProbe(
+    remoteProbe,
+    async () => {
+      const remotes = await gitSafeAsync('remote');
+      return remotes !== null && remotes.length > 0;
+    },
+    () => SYNC_PROBE_TTL_MS,
+  );
+}
+
+/**
+ * Async twin of getBranch(). NOT cached: a checkout changes it at any time and
+ * the tick must act on the branch it is actually on (a stale name would push the
+ * wrong ref). Async purely to keep the tick off execSync.
+ */
+async function getBranchAsync(): Promise<string> {
+  return (await gitSafeAsync('rev-parse --abbrev-ref HEAD')) ?? 'main';
+}
+
+/**
+ * Drop the cached "is a repo" / "has a remote" answers.
+ *
+ * MUST be called by every path that creates the repo or adds/rewrites the
+ * remote, otherwise a cached `false` keeps the tick standing down after setup
+ * and sync silently never starts until the TTL expires or the server restarts.
+ * In-file callers: initSync() (git init) and setRemote() (remote add/set-url) —
+ * the only two places in the codebase that mutate either fact.
+ *
+ * Also clears any IN-FLIGHT probe: a probe that started before the mutation
+ * carries a pre-mutation answer, so a caller arriving after must not join it.
+ */
+export function invalidateSyncProbeCache(): void {
+  repoProbe.value = undefined;
+  repoProbe.at = 0;
+  repoProbe.inflight = null;
+  remoteProbe.value = undefined;
+  remoteProbe.at = 0;
+  remoteProbe.inflight = null;
+}
+
+/** Test hook: forget every probe answer, including git-availability. */
+export function resetSyncProbeCacheForTest(): void {
+  invalidateSyncProbeCache();
+  gitAvailableProbe.value = undefined;
+  gitAvailableProbe.at = 0;
+  gitAvailableProbe.inflight = null;
 }
 
 const GITIGNORE_CONTENT = `# Binary / large / ephemeral
@@ -844,8 +1008,16 @@ function ensureGitIdentity(): void {
 
 export function initSync(remoteUrl?: string): void {
   if (!isRepo()) {
-    git('init');
-    git('checkout -b main');
+    try {
+      git('init');
+      git('checkout -b main');
+    } finally {
+      // A repo now exists where the cached probe answer says it does not, and the
+      // tick/event paths read that cache — a stale `false` here is sync silently
+      // never starting after setup. In a finally because `git init` can land even
+      // if the checkout throws.
+      invalidateSyncProbeCache();
+    }
   }
 
   ensureGitIdentity();
@@ -883,6 +1055,10 @@ export function setRemote(url: string): void {
   // The async guard caches per-cwd; changing the remote is the one thing that
   // invalidates it (e.g. swapping a credentialed HTTPS URL for SSH).
   invalidateCredentialGuardCache();
+  // `remote add` flips hasRemote() false → true. The tick and gitPullWalnut read
+  // the CACHED answer, so without this they keep standing down after the user
+  // just configured a remote.
+  invalidateSyncProbeCache();
 }
 
 /**
@@ -1119,6 +1295,9 @@ export function resetSyncGuardForTest(): void {
   // the fixture repo between cases, so a carried-over count would size the
   // breaker against the previous repo.
   resetTrackedCountCacheForTest();
+  // Same reason for the precondition probes: a case that ran against a repo with
+  // a remote must not leave "has a remote" cached for the next fixture.
+  resetSyncProbeCacheForTest();
 }
 
 /**
@@ -1609,8 +1788,10 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
     return { pulled: 0, pushed: 0, conflicts: 0 };
   }
 
-  const remote = hasRemote();
-  const branch = remote ? getBranch() : 'main';
+  // Cached/async on purpose: this runs on the ~30s tick, and the sync twins are
+  // execSync — two blocking spawns per tick before any real work started.
+  const remote = await hasRemoteAsync();
+  const branch = remote ? await getBranchAsync() : 'main';
 
   // Never let a machine-local file stay tracked: any pull below could apply a
   // remote deletion of it straight to disk. Runs unconditionally every cycle
@@ -2036,7 +2217,10 @@ async function lwwMerge(branch: string): Promise<{ merged: boolean; conflicts: n
 
 export async function autoSync(): Promise<void> {
   try {
-    if (!isGitAvailable() || !isRepo() || !hasRemote()) return;
+    // Cached async probes — same three decisions, same short-circuit order, but
+    // off the event loop (this runs on the ~30s tick; the sync twins are three
+    // blocking spawns, profiled at 175ms of frozen loop in one burst).
+    if (!(await isGitAvailableAsync()) || !(await isRepoAsync()) || !(await hasRemoteAsync())) return;
     await sync();
   } catch {
     // Never throw from autoSync
@@ -2059,7 +2243,9 @@ export async function gitPullWalnut(): Promise<void> {
   pullInflight = (async () => {
     const endSection = markCriticalSection('git-pull-walnut');
     try {
-      if (!isGitAvailable() || !isRepo() || !hasRemote()) return;
+      // Cached async probes: this runs on EVERY session:result / session:error,
+      // so the old execSync triple froze the event loop once per finished turn.
+      if (!(await isGitAvailableAsync()) || !(await isRepoAsync()) || !(await hasRemoteAsync())) return;
       clearStaleLock();
       // gitSafeAsync applies the credential-helper guard itself (pull is a
       // network subcommand) and swallows errors — same best-effort semantics
@@ -2366,6 +2552,31 @@ export function getLastSyncAt(): string | null {
   const value = isRepo() ? gitSafe('log -1 --format=%aI') : null;
   lastSyncCache = { value, at: now };
   return value;
+}
+
+/**
+ * Async twin of getLastSyncAt, sharing the same 30s cache.
+ *
+ * `GET /api/v1/status` (polled by the phone) calls the SYNC version, which pays
+ * two execSync spawns whenever the cache is cold — on the one event loop every
+ * route shares. The handler is already async, so its call site becomes
+ * `await getLastSyncAtAsync()`; that edit lives in src/web/routes/api-v1.ts and
+ * is deliberately left to the caller. The sync version stays for the CLI
+ * (src/commands/sync.ts), which has no event loop to protect.
+ */
+export async function getLastSyncAtAsync(): Promise<string | null> {
+  const now = Date.now();
+  if (lastSyncCache && now - lastSyncCache.at < LAST_SYNC_CACHE_MS) {
+    return lastSyncCache.value;
+  }
+  const value = (await isRepoAsync()) ? await gitSafeAsync('log -1 --format=%aI') : null;
+  lastSyncCache = { value, at: Date.now() };
+  return value;
+}
+
+/** Test hook: drop the shared last-sync answer. */
+export function resetLastSyncCacheForTest(): void {
+  lastSyncCache = null;
 }
 
 export function getSyncStatus(): SyncStatus {

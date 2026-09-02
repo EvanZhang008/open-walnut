@@ -18,6 +18,18 @@ const h = vi.hoisted(() => ({
   resolvers: [] as Array<() => void>,
   /** `detached` flag each spawn was given — must be true for group-kill to work. */
   detachedFlags: [] as boolean[],
+  /** Precondition probes (git available / is a repo / has a remote). */
+  probeCalls: [] as string[],
+  /**
+   * Canned stdout for the probes, keyed by a substring of the git command.
+   * Probes auto-resolve; only the pull itself is held open by a resolver, so
+   * `asyncCalls` keeps meaning "the real git work this call did".
+   */
+  probeAnswers: [
+    ['--version', 'git version 2.99.0\n'],
+    ['rev-parse --is-inside-work-tree', 'true\n'],
+    ['config --get-regexp', ''],
+  ] as Array<[string, string]>,
 }));
 
 vi.mock('node:child_process', async (importOriginal) => {
@@ -28,8 +40,7 @@ vi.mock('node:child_process', async (importOriginal) => {
   // process GROUP (see execGitGroup) — mock spawn, not exec. Each fake child stays
   // open until its resolver fires, which is what holds a pull "in flight".
   const spawn: any = vi.fn((_file: string, args: readonly string[], opts: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
-    h.asyncCalls.push(args[1] ?? '');
-    h.detachedFlags.push(Boolean(opts?.detached));
+    const cmd = args[1] ?? '';
 
     const child: any = new EventEmitter(); // eslint-disable-line @typescript-eslint/no-explicit-any
     child.pid = 4242;
@@ -41,6 +52,22 @@ vi.mock('node:child_process', async (importOriginal) => {
     child.stdout = mkStream();
     child.stderr = mkStream();
 
+    // Preconditions run through the async probes now (they used to be execSync,
+    // which is the event-loop block this file exists to keep out) — answer them
+    // immediately so only the pull is manually held open.
+    const answer = h.probeAnswers.find(([needle]) => cmd.includes(needle))
+      ?? (/\bgit remote$/.test(cmd.trim()) ? ['remote', 'origin\n'] as [string, string] : undefined);
+    if (answer) {
+      h.probeCalls.push(cmd);
+      setImmediate(() => {
+        child.stdout.emit('data', answer[1]);
+        child.emit('close', 0);
+      });
+      return child;
+    }
+
+    h.asyncCalls.push(cmd);
+    h.detachedFlags.push(Boolean(opts?.detached));
     h.resolvers.push(() => {
       child.stdout.emit('data', 'Already up to date.\n');
       child.emit('close', 0);
@@ -51,7 +78,8 @@ vi.mock('node:child_process', async (importOriginal) => {
   return {
     ...actual,
     spawn,
-    // Sync preflight checks (isGitAvailable / isRepo / hasRemote / credential guard).
+    // Still mocked: the sync helpers stay in the file for one-shot/CLI callers,
+    // and nothing in a test may shell out to the real git.
     execSync: vi.fn((cmd: string) => {
       if (cmd.includes('--version')) return 'git version 2.99.0\n';
       if (cmd.includes('rev-parse --is-inside-work-tree')) return 'true\n';
@@ -62,12 +90,14 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-import { gitPullWalnut } from '../../src/integrations/git-sync.js';
+import { gitPullWalnut, resetSyncProbeCacheForTest } from '../../src/integrations/git-sync.js';
 
 beforeEach(() => {
   h.asyncCalls.length = 0;
   h.resolvers.length = 0;
   h.detachedFlags.length = 0;
+  h.probeCalls.length = 0;
+  resetSyncProbeCacheForTest();
 });
 
 describe('gitPullWalnut single-flight', () => {

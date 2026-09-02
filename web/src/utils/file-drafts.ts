@@ -98,6 +98,51 @@ function housekeep(): Promise<void> {
   return store.housekeep();
 }
 
+/**
+ * Subtree re-keying is a MULTI-STEP operation, and a read in the middle of one
+ * sees a draft at neither its old key nor its new one.
+ *
+ * `moveFileDraftsUnder` walks the keys, then per draft does get → put(new) →
+ * delete(old). A `loadFileDraft` for the NEW path that lands mid-walk finds
+ * nothing, reports "no unsaved work", and (worse) its `releasePathRules` drops
+ * the redirect rule the move is still relying on, so a late flush from the
+ * outgoing editor writes back to the path that no longer exists.
+ *
+ * That window used to be hidden: the only caller read its draft after a network
+ * round trip, which the move always won. Once the viewer started reading the
+ * draft and the cached file bytes together — before the network, so a re-open can
+ * paint immediately — the read got there first and a rename lost the draft it was
+ * supposed to carry (caught by the "a rename carries the unsaved draft to the new
+ * name" e2e test). Timing must not be the thing that makes this work, so subtree
+ * mutations are serialised and reads queue behind whichever one is in flight.
+ */
+let subtreeTail: Promise<unknown> = Promise.resolve();
+
+/** Run a subtree mutation with exclusive access, after any already queued. */
+function queueSubtree<T>(run: () => Promise<T>): Promise<T> {
+  const next = subtreeTail.then(run, run);
+  // Never let a rejection poison the chain for everyone behind it.
+  subtreeTail = next.catch(() => undefined);
+  return next;
+}
+
+/**
+ * Wait out any in-flight subtree mutation, so a read observes it whole — but
+ * never longer than this. A read used to be independent of every mutation, and
+ * making it wait means a wedged IndexedDB transaction could otherwise hold the
+ * viewer's open path forever. On timeout we fall back to the old, racy behaviour:
+ * the draft may be missed, which is what happened before this queue existed.
+ */
+const SUBTREE_WAIT_MS = 2_000;
+
+function subtreeSettled(): Promise<unknown> {
+  const tail = subtreeTail;
+  return Promise.race([
+    tail,
+    new Promise((resolve) => setTimeout(resolve, SUBTREE_WAIT_MS)),
+  ]);
+}
+
 // ── Change notification (this tab + other tabs) ─────────────────────────────
 
 const listeners = new Set<() => void>();
@@ -238,23 +283,27 @@ export async function moveFileDraftsUnder(
   from: string,
   to: string,
 ): Promise<void> {
+  // Armed OUTSIDE the queue, synchronously: a flush racing this rename must be
+  // redirected from the moment the rename is issued, not once its turn comes up.
   armPathRule(host, from, to);
-  try {
-    await housekeep();
-    const found = await draftKeysUnder(host, from);
-    for (const { key, path } of found) {
-      const rec = await store.get(key);
-      if (!rec) continue;
-      const nextPath = remapUnder(path, from, to);
-      await store.put(fileDraftKey(host, nextPath), { ...rec, path: nextPath });
-      await store.delete(key);
+  return queueSubtree(async () => {
+    try {
+      await housekeep();
+      const found = await draftKeysUnder(host, from);
+      for (const { key, path } of found) {
+        const rec = await store.get(key);
+        if (!rec) continue;
+        const nextPath = remapUnder(path, from, to);
+        await store.put(fileDraftKey(host, nextPath), { ...rec, path: nextPath });
+        await store.delete(key);
+      }
+      if (found.length > 0) notify();
+    } catch (err) {
+      log.warn('file-drafts', 'moving drafts across a rename failed', {
+        from, to, host: host ?? null, error: String(err),
+      });
     }
-    if (found.length > 0) notify();
-  } catch (err) {
-    log.warn('file-drafts', 'moving drafts across a rename failed', {
-      from, to, host: host ?? null, error: String(err),
-    });
-  }
+  });
 }
 
 /** Forget every draft at `path` and under it — the file/folder is gone. */
@@ -263,12 +312,14 @@ export async function deleteFileDraftsUnder(
   path: string,
 ): Promise<void> {
   armPathRule(host, path, null);
-  try {
-    await housekeep();
-    const found = await draftKeysUnder(host, path);
-    for (const { key } of found) await store.delete(key);
-    if (found.length > 0) notify();
-  } catch { /* best effort */ }
+  return queueSubtree(async () => {
+    try {
+      await housekeep();
+      const found = await draftKeysUnder(host, path);
+      for (const { key } of found) await store.delete(key);
+      if (found.length > 0) notify();
+    } catch { /* best effort */ }
+  });
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -306,6 +357,10 @@ export async function loadFileDraft(
   path: string,
 ): Promise<FileDraft | null> {
   try {
+    // Whole-operation ordering: a rename's draft move must be finished before this
+    // read decides there is nothing here (and before releasePathRules below tears
+    // down the redirect that move depends on). See queueSubtree.
+    await subtreeSettled();
     // A read proves the path exists: any move/delete rule over it is history.
     releasePathRules(host, path);
     await housekeep();

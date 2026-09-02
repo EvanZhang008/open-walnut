@@ -34,7 +34,7 @@ import { triggerBackgroundCompaction } from '../background-compaction.js'
 import { broadcastEvent } from '../ws/handler.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { usageTracker } from '../../core/usage/index.js'
-import { getLastSyncAt } from '../../integrations/git-sync.js'
+import { getLastSyncAtAsync } from '../../integrations/git-sync.js'
 import { setDeviceInfo } from '../../core/device-auth.js'
 import { computeContentHash } from '../../utils/file-ops.js'
 import { parseFrontmatter, readId, generateNoteId, stampId } from '../../core/parse-frontmatter.js'
@@ -149,7 +149,10 @@ apiV1Router.get('/status', async (_req: Request, res: Response) => {
   // bridgeHosts (additive) — daemons dial the cloud box directly, so a REPLICA
   // can still relay sends/streams for hosts listed there.
   let lastSyncAt: string | null = null
-  try { lastSyncAt = getLastSyncAt() } catch { /* git unavailable — omit */ }
+  // The ASYNC twin: the phone polls this route, and the sync variant spawns two
+  // blocking `git` children whenever its 30s cache is cold — one of those freezes
+  // every other route with it.
+  try { lastSyncAt = await getLastSyncAtAsync() } catch { /* git unavailable — omit */ }
   let bridgeHostsList: Array<{ hostAlias: string; since: number }> | undefined
   if (CLOUD_MODE) {
     try {

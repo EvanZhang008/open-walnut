@@ -24,9 +24,13 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  fetchFileContent, rawFileContentUrl, downloadFileUrl, saveFileContent,
+  fetchFileContentConditional, rawFileContentUrl, downloadFileUrl, saveFileContent,
   FileSaveConflictError, type FileContentResponse,
 } from '@/api/files';
+import {
+  getCachedFileContent, setCachedFileContent, storable,
+} from '@/cache/filecontent-idb';
+import { rawKind, isPlayable, isMarkdownExt } from '@/utils/file-kind';
 import { formatSize } from '@/utils/format';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { loadFileScroll, saveFileScroll } from '@/utils/file-view-state';
@@ -122,27 +126,6 @@ function isHtmlExt(ext: string | undefined, path: string): boolean {
 }
 
 /** Whether a file extension is Markdown and thus previewable as rendered markup. */
-function isMarkdownExt(ext: string | undefined, path: string): boolean {
-  const e = (ext || path.split('.').pop() || '').toLowerCase();
-  return e === 'md' || e === 'markdown' || e === 'mdx';
-}
-
-const VIDEO_EXTS = new Set(['mp4', 'm4v', 'webm', 'mov']);
-const AUDIO_EXTS = new Set(['mp3', 'wav', 'm4a', 'ogg']);
-// PDFs and rasters are rendered by the BROWSER's own viewer (PDF.js / image
-// decoder) from the raw-bytes URL — we deliberately don't bundle a PDF renderer
-// or build a zoom/rotate UI. Chrome and Firefox already have a better one.
-const DOC_EXTS = new Set(['pdf']);
-// svg is NOT here: it's text, so the source/preview toggle is more useful (and
-// the markdown/HTML path already renders it when embedded).
-const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'avif', 'heic', 'tiff', 'tif']);
-// Office documents — read-only preview rendered CLIENT-SIDE by lazy-loaded
-// open-source libs (docx-preview / SheetJS / pptx-preview) from the raw-bytes
-// URL. Legacy binary formats (.doc/.ppt) have no browser renderer and stay on
-// the binary-download fallback.
-const WORD_EXTS = new Set(['docx']);
-const SHEET_EXTS = new Set(['xlsx', 'xls', 'xlsm', 'xlsb', 'ods']);
-const SLIDES_EXTS = new Set(['pptx']);
 
 /**
  * The office renderers are heavyweight (SheetJS alone ~1MB), so they live in
@@ -166,30 +149,6 @@ const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
  *  burst is one write. */
 const DRAFT_DEBOUNCE_MS = 400;
 
-/**
- * Files served as RAW BYTES and rendered by a native browser control, never
- * through the JSON content fetch — a whole-file text read would corrupt them
- * (and a remote 100MB video would kill the tunnel).
- *   video/audio → <video>/<audio> (+ our speed/skip toolbar)
- *   doc         → <iframe> → the browser's built-in PDF viewer
- *   image       → <img>
- */
-function rawKind(path: string): 'video' | 'audio' | 'doc' | 'image' | 'word' | 'sheet' | 'slides' | null {
-  const e = (path.split('.').pop() || '').toLowerCase();
-  if (VIDEO_EXTS.has(e)) return 'video';
-  if (AUDIO_EXTS.has(e)) return 'audio';
-  if (DOC_EXTS.has(e)) return 'doc';
-  if (IMAGE_EXTS.has(e)) return 'image';
-  if (WORD_EXTS.has(e)) return 'word';
-  if (SHEET_EXTS.has(e)) return 'sheet';
-  if (SLIDES_EXTS.has(e)) return 'slides';
-  return null;
-}
-
-/** The subset of rawKind that owns the playback toolbar (speed / skip keys). */
-function isPlayable(kind: ReturnType<typeof rawKind>): kind is 'video' | 'audio' {
-  return kind === 'video' || kind === 'audio';
-}
 
 /**
  * The element that actually scrolls the file body.
@@ -501,48 +460,115 @@ export function FileContentView({
     // Refresh with a pending write would otherwise restore the previous draft
     // and silently drop the newest characters.
     const flushed = flushDraft();
-    // A reload must bypass the HTTP cache, else a 200-from-cache hands back the
-    // stale bytes and Refresh looks like a no-op.
-    // `track: 'baseline'` records what this open found as the file's "Opened"
-    // version, so History can always get back to the bytes the session started
-    // from — an edit is only undoable if the pre-edit state was kept. The server
-    // dedupes by hash, so re-opens of an unchanged file add nothing.
-    fetchFileContent(filePath, host, { noCache: isReload, track: 'baseline' })
-      .then(async (d) => {
-        if (cancelled) return;
-        await flushed;
-        const draft = await loadFileDraft(host, filePath);
+
+    /**
+     * Everything the pane must become once a read's bytes are known.
+     *
+     * Runs TWICE for an open that had a cached copy: once `provisional` on the
+     * cached bytes (so the pane paints immediately), then once authoritatively
+     * when the server has confirmed or replaced them. `provisional` gates only
+     * the decisions that DESTROY something — dropping the user's unsaved draft on
+     * bytes nobody has confirmed yet would be data loss, and the confirmation is
+     * one round trip away.
+     */
+    const apply = (
+      d: FileContentResponse,
+      draft: Awaited<ReturnType<typeof loadFileDraft>>,
+      opts: { provisional: boolean },
+    ) => {
+      // ── Replay an unsaved draft ────────────────────────────────────────
+      // Refresh no longer means "throw my typing away" (it did, and that was
+      // the reported data loss). Discard is the only path that does. A draft
+      // written against OLDER bytes is held back for the banner instead:
+      // silently replaying over new bytes hides the other writer's work,
+      // silently dropping the draft hides the user's.
+      // ORDERING: draftRef must hold the seed BEFORE setBaseHash remounts the
+      // editor, because the editor seeds from `draftRef.current ?? data.content`
+      // at mount. Everything stays in this one continuation so React batches
+      // the state changes into a single render.
+      const plan = planDraftReplay(draft, { content: d.content, contentHash: d.contentHash });
+      // A fresh read supersedes any pending conflict hash, and the lock follows
+      // whatever the editor is seeded from. baseHash moves too, remounting any
+      // open editor onto the new bytes.
+      conflictHashRef.current = undefined;
+      lockHashRef.current = plan.lockHash;
+      // The lock follows the seed, and the merge base follows the LOCK — which
+      // for a replayed draft is still the disk bytes (its baseHash matched), so
+      // `d.content` is right in both branches.
+      baseContentRef.current = d.content;
+      draftRef.current = plan.seed;
+      // Edited back to the original ⇒ nothing unsaved left to remember.
+      if (plan.drop && !opts.provisional) void deleteFileDraft(host, filePath);
+      // Passing the SAME payload object on the confirming pass is deliberate:
+      // React bails out on an identical value, so a 304 costs no re-render.
+      setData(d);
+      setDraftDirty(plan.seed != null);
+      setEditorDirty(false);
+      setStaleDraft(plan.stale);
+      setDraftRestored(plan.seed != null);
+      setBaseHash(d.contentHash);
+      setLoading(false);
+      if (!opts.provisional) setReloading(false);
+    };
+
+    void (async () => {
+      try {
+        // The cached copy and the unsaved draft are both IndexedDB reads and both
+        // needed before anything can be painted, so they go together. The draft
+        // read still waits for the flush above — that flush is what puts the last
+        // keystrokes INTO the record this is about to read.
+        const [cached, draft] = await Promise.all([
+          getCachedFileContent(host, filePath),
+          (async () => { await flushed; return loadFileDraft(host, filePath); })(),
+        ]);
         if (cancelled) return;
 
-        // ── Replay an unsaved draft ────────────────────────────────────────
-        // Refresh no longer means "throw my typing away" (it did, and that was
-        // the reported data loss). Discard is the only path that does. A draft
-        // written against OLDER bytes is held back for the banner instead:
-        // silently replaying over new bytes hides the other writer's work,
-        // silently dropping the draft hides the user's.
-        // ORDERING: draftRef must hold the seed BEFORE setBaseHash remounts the
-        // editor, because the editor seeds from `draftRef.current ?? data.content`
-        // at mount. Everything stays in this one continuation so React batches
-        // the state changes into a single render.
-        const plan = planDraftReplay(draft, { content: d.content, contentHash: d.contentHash });
-        // A fresh read supersedes any pending conflict hash, and the lock follows
-        // whatever the editor is seeded from. baseHash moves too, remounting any
-        // open editor onto the new bytes.
-        conflictHashRef.current = undefined;
-        lockHashRef.current = plan.lockHash;
-        // The lock follows the seed, and the merge base follows the LOCK — which
-        // for a replayed draft is still the disk bytes (its baseHash matched), so
-        // `d.content` is right in both branches.
-        baseContentRef.current = d.content;
-        draftRef.current = plan.seed;
-        // Edited back to the original ⇒ nothing unsaved left to remember.
-        if (plan.drop) void deleteFileDraft(host, filePath);
-        setData(d);
-        setDraftDirty(plan.seed != null);
-        setEditorDirty(false);
-        setStaleDraft(plan.stale);
-        setDraftRestored(plan.seed != null);
-        setBaseHash(d.contentHash);
+        // A copy we already have paints NOW, before the network is consulted.
+        // Skipped on a Refresh: the pane is already showing content, so there is
+        // no blank to fill, and re-seeding the editor from cache would be a
+        // remount the user did not ask for.
+        const cachedPayload: FileContentResponse | null = cached
+          ? {
+            content: cached.content,
+            size: cached.size,
+            truncated: false,
+            binary: false,
+            extension: cached.extension,
+            contentHash: cached.contentHash,
+          }
+          : null;
+        if (cachedPayload && !isReload) apply(cachedPayload, draft, { provisional: true });
+
+        // `If-None-Match` is what turns "re-open an unchanged file" into a header
+        // exchange: 304 means the bytes we just painted ARE the bytes on disk, so
+        // nothing is transferred (for a remote file, nothing crosses the tunnel).
+        // `track: 'baseline'` still records what this open found as the file's
+        // "Opened" version — an edit is only undoable if the pre-edit state was
+        // kept — and the server dedupes by hash, so re-opens add nothing.
+        const res = await fetchFileContentConditional(filePath, host, {
+          ...(cached ? { ifNoneMatch: cached.contentHash } : {}),
+          track: 'baseline',
+        });
+        if (cancelled) return;
+
+        if (res.notModified && cachedPayload) {
+          // The cached bytes were right. Re-run with the same object so the draft
+          // bookkeeping becomes authoritative without costing a render.
+          apply(cachedPayload, draft, { provisional: false });
+          if (isReload) void imageFreshnessRef.current?.checkNow();
+          return;
+        }
+
+        // A 304 we have no bytes for is nobody's contract (a proxy, a stale tab
+        // whose cache entry was evicted between the two steps). Ask again without
+        // the validator rather than showing an error for a file that exists.
+        const d = res.notModified
+          ? (await fetchFileContentConditional(filePath, host, { track: 'baseline' })).payload
+          : res.payload;
+        if (cancelled) return;
+        if (!d) throw new Error('Empty response from file-content');
+        apply(d, draft, { provisional: false });
+        if (storable(d)) void setCachedFileContent(host, filePath, d);
         if (isReload) {
           if (d.contentHash !== lockBefore) {
             // New bytes remount the editor; give the repaint fresh image URLs.
@@ -555,16 +581,17 @@ export function FileContentView({
             void imageFreshnessRef.current?.checkNow();
           }
         }
-      })
-      .catch((err) => {
+      } catch (err) {
         if (cancelled) return;
         setData({
           content: null, size: 0, truncated: false, binary: false,
           error: err instanceof Error ? err.message : String(err),
           extension: '',
         });
-      })
-      .finally(() => { if (!cancelled) { setLoading(false); setReloading(false); } });
+      } finally {
+        if (!cancelled) { setLoading(false); setReloading(false); }
+      }
+    })();
     return () => { cancelled = true; };
   }, [filePath, host, reloadToken, flushDraft]);
 
@@ -776,6 +803,23 @@ export function FileContentView({
    * the bytes there, so a divergence here would mean one of the two paths
    * leaving a stale lock, a stale draft or a stuck dirty dot behind.
    */
+  /**
+   * Remember bytes we KNOW are on disk, so the next open of this file paints from
+   * disk-truthful cache and its conditional read answers 304. Called from every
+   * path that learns the file's current bytes: our own writes (explicit Save and
+   * Live Edit alike) and another writer's bytes once we have read them. Without
+   * this, every write would leave the cached copy stale and the next open would
+   * flash the pre-write text before correcting itself.
+   */
+  const noteBytesOnDisk = useCallback((content: string, contentHash: string, size: number) => {
+    const base = filePath.slice(filePath.lastIndexOf('/') + 1);
+    const dot = base.lastIndexOf('.');
+    void setCachedFileContent(host, filePath, {
+      content, size, contentHash, truncated: false, binary: false,
+      extension: dot > 0 ? base.slice(dot + 1).toLowerCase() : '',
+    });
+  }, [filePath, host]);
+
   const applySaved = useCallback((
     text: string,
     res: { size: number; contentHash: string },
@@ -788,6 +832,9 @@ export function FileContentView({
     conflictHashRef.current = undefined;
     lockHashRef.current = res.contentHash;
     baseContentRef.current = text;
+    // Before the early return below: whatever the buffer does next, `text` IS
+    // what the server just accepted onto disk.
+    noteBytesOnDisk(text, res.contentHash, res.size);
     setData((prev) => (prev ? { ...prev, content: text, size: res.size, contentHash: res.contentHash } : prev));
     setStaleDraft(null);
     setDraftRestored(false);
@@ -811,15 +858,16 @@ export function FileContentView({
     dropDraft(filePath, host);
     setDraftDirty(false);
     setEditorDirty(false);
-  }, [dropDraft, filePath, host]);
+  }, [dropDraft, filePath, host, noteBytesOnDisk]);
 
   /** New disk bytes were read while the buffer stays dirty (a merge, or a
    *  collision we could not fold in). The pane's idea of "what is on disk" must
    *  follow, but the editor is NOT remounted — baseHash deliberately stays. */
   const applyDiskContent = useCallback((content: string, contentHash: string, size: number) => {
     diskContentRef.current = content;
+    noteBytesOnDisk(content, contentHash, size);
     setData((prev) => (prev ? { ...prev, content, size, contentHash } : prev));
-  }, []);
+  }, [noteBytesOnDisk]);
 
   /** Another writer's bytes are now in the editor and nothing is unsaved. */
   const applyAdopted = useCallback((content: string, contentHash: string, size: number) => {

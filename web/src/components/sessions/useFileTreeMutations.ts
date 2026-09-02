@@ -40,6 +40,7 @@ import {
 } from '@/utils/file-view-state';
 import { moveFileDraftsUnder, deleteFileDraftsUnder } from '@/utils/file-drafts';
 import { noteFileDeleted } from '@/hooks/useLiveEdit';
+import { deleteCachedFileContentsUnder } from '@/cache/filecontent-idb';
 import { log } from '@/utils/log';
 import { parentPath } from './reveal-ancestors';
 import { validateEntryName, nextCopyName, remapPathPrefix } from './file-tree-edit';
@@ -389,6 +390,10 @@ export function useFileTreeMutations({
     // whatever file is later created at the old name, which opens a brand-new file
     // at a stranger's reading position.
     moveFileViewState(host, from, to);
+    // Cached BYTES are dropped rather than moved: the new path's first open fetches
+    // them and re-caches under the right key, and a record left at the old name
+    // would be served to whatever file is created there next.
+    void deleteCachedFileContentsUnder(host, from);
     const sel = selectedFileRef.current;
     if (sel && isUnder(sel, from)) {
       // push:false — a rename is not a navigation; it must not truncate the
@@ -454,6 +459,9 @@ export function useFileTreeMutations({
     // Same for LIVE mode's armed write: the server's PUT creates a missing file,
     // so the unmount flush would resurrect what was just deleted.
     noteFileDeleted(host, gone);
+    // And the cached BYTES: a re-created file of the same name would otherwise
+    // paint the deleted file's body for one frame, under a hash matching nothing.
+    void deleteCachedFileContentsUnder(host, gone);
     deleteFileViewStateUnder(host, gone);
     setExpanded((prev) => {
       const next = new Set([...prev].filter((p) => !under(p)));

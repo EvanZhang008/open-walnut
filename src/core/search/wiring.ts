@@ -21,6 +21,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createSearchIndex,
+  MISSING_VEC_SCAN_LIMIT,
+  type Doc,
   type EmbedderConfig,
   type MissingVecCursor,
   type ScoredHit,
@@ -125,6 +127,7 @@ export function getSearchV2Index(): SearchIndex {
 export function resetSearchV2IndexForTests(): void {
   try { handle?.close(); } catch { /* already closed */ }
   handle = null;
+  vectorPass = createVectorPassPlanner();
 }
 
 export interface SearchV2Hit extends ScoredHit {
@@ -168,7 +171,7 @@ export async function upsertSearchV2File(
   const index = getSearchV2Index();
   try {
     const [raw, stat] = await Promise.all([fsp.readFile(absPath, 'utf8'), fsp.stat(absPath)]);
-    index.upsert(markdownToDoc(kind, absPath, raw, stat.mtimeMs));
+    upsertDoc(index, markdownToDoc(kind, absPath, raw, stat.mtimeMs));
   } catch {
     index.remove(kind, absPath);
   }
@@ -206,6 +209,114 @@ export function getSearchIndexStatus(): SearchIndexStatus {
 /** Module-level backfill visibility for getSearchIndexStatus(). */
 const backfillState: { running: boolean; error: string | null } = { running: false, error: null };
 
+// ── vector backfill pass planning ──
+
+/**
+ * How often a pass ignores its floor and walks the whole table. This is the
+ * safety net: it re-embeds a doc whose vectors went missing WITHOUT its
+ * updated_at moving — which only the paths that bypass upsert can do (a model
+ * swap clears doc_vec at open, rebuildAll re-feeds docs with their original
+ * timestamps, and a second process may rebuild the file under us). Hourly, not
+ * every cycle: the walk is the expensive half of the backfill.
+ */
+const VEC_FULL_PASS_INTERVAL_MS = 60 * 60_000;
+/**
+ * Slack subtracted from the floor a drained pass leaves behind. Every upsert
+ * this process makes is reported exactly (observeUpsert), so this only covers
+ * clock skew and writers outside the wiring; it costs nothing, because the floor
+ * lands in a range seek either way.
+ */
+const VEC_FLOOR_MARGIN_MS = 5 * 60_000;
+
+export interface VectorPassPlanner {
+  /** Floor for the pass about to start; null = walk everything (self-heal). */
+  beginPass(): number | null;
+  /** The pass finished its whole range: everything at or above its floor now
+   *  has vectors, so the next pass may start from here. */
+  passDrained(): void;
+  /** The pass stopped early (error / shutdown): its range was NOT cleared, so
+   *  put its floor observations back for the retry. */
+  passAborted(): void;
+  /** A doc was written to the index. Its updated_at may be older than the wall
+   *  clock (a note whose mtime predates the pass, a restored file), so the floor
+   *  has to follow the DOC, not the clock. */
+  observeUpsert(updatedAt: number): void;
+  /** Every vector may have just gone away with timestamps untouched (rebuild,
+   *  model swap): the next pass must be full, and no in-flight pass may re-arm
+   *  the floor behind us. */
+  requireFullPass(): void;
+  /** Test/telemetry view. */
+  state(): { floor: number | null; full: boolean; lastFullPassAt: number };
+}
+
+const lowerOf = (a: number | null, b: number | null): number | null =>
+  a === null ? b : b === null ? a : Math.min(a, b);
+
+export function createVectorPassPlanner(
+  now: () => number = Date.now,
+  fullPassIntervalMs: number = VEC_FULL_PASS_INTERVAL_MS,
+): VectorPassPlanner {
+  // null = "no floor can be trusted yet" → the next pass walks everything.
+  let floorBase: number | null = null;
+  /** Lowest updated_at written since the running pass began — belongs to the
+   *  NEXT pass, because this walk may already be past that row. */
+  let pendingLow: number | null = null;
+  /** The same, folded into the RUNNING pass's floor. Dropped when it drains,
+   *  handed back to pendingLow when it aborts. */
+  let carriedLow: number | null = null;
+  let lastFullPassAt = 0;
+  let passStartedAt = 0;
+  let full = true;
+  let forceFull = true;
+  let floor: number | null = null;
+  return {
+    beginPass() {
+      passStartedAt = now();
+      full = forceFull || floorBase === null
+        || passStartedAt - lastFullPassAt >= fullPassIntervalMs;
+      forceFull = false;
+      carriedLow = lowerOf(carriedLow, pendingLow);
+      pendingLow = null;
+      floor = full ? null : lowerOf(floorBase, carriedLow);
+      return floor;
+    },
+    passDrained() {
+      // A rebuild landed mid-pass: this walk's verdict covers a state that no
+      // longer exists, so it may not arm a floor.
+      if (forceFull) return;
+      if (full) lastFullPassAt = passStartedAt;
+      carriedLow = null;
+      floorBase = passStartedAt - VEC_FLOOR_MARGIN_MS;
+    },
+    passAborted() {
+      pendingLow = lowerOf(pendingLow, carriedLow);
+      carriedLow = null;
+    },
+    observeUpsert(updatedAt) {
+      pendingLow = lowerOf(pendingLow, updatedAt);
+    },
+    requireFullPass() {
+      forceFull = true;
+      floorBase = null;
+      pendingLow = null;
+      carriedLow = null;
+    },
+    state() { return { floor, full, lastFullPassAt }; },
+  };
+}
+
+/** One planner per process, beside the one index handle. Module scope so the
+ *  manual re-index route can invalidate the floor it left behind. */
+let vectorPass: VectorPassPlanner = createVectorPassPlanner();
+
+/** Index a doc AND tell the vector pass planner about its timestamp. Every
+ *  upsert in this file goes through here: a doc the planner never saw is a doc
+ *  whose vectors only the hourly full pass would notice were missing. */
+function upsertDoc(index: SearchIndex, doc: Doc): void {
+  index.upsert(doc);
+  vectorPass.observeUpsert(doc.updatedAt);
+}
+
 // ── incremental sync ──
 
 async function syncTasks(taskIds: string[]): Promise<void> {
@@ -218,7 +329,7 @@ async function syncTasks(taskIds: string[]): Promise<void> {
     const task = present.get(taskId);
     const doc = task ? taskToDoc(task) : null;
     // Deleted AND junk-classified tasks both leave the index.
-    if (doc) index.upsert(doc);
+    if (doc) upsertDoc(index, doc);
     else index.remove('task', taskId);
   }
 }
@@ -240,7 +351,7 @@ async function syncSessions(sessionIds: string[]): Promise<void> {
       body: content.body,
       commitShas: content.commitShas,
     });
-    if (doc) index.upsert(doc);
+    if (doc) upsertDoc(index, doc);
     else index.remove('session', session.claudeSessionId);
   }
   for (const sessionId of sessionIds) {
@@ -270,7 +381,7 @@ export async function sweepSearchV2Files(): Promise<{ changed: number; removed: 
       if (prev !== undefined && Math.abs(prev - file.mtimeMs) < 1) continue;
       try {
         const raw = await fsp.readFile(file.absPath, 'utf8');
-        index.upsert(markdownToDoc(kind, file.absPath, raw, file.mtimeMs));
+        upsertDoc(index, markdownToDoc(kind, file.absPath, raw, file.mtimeMs));
         changed++;
       } catch { /* deleted mid-sweep — the leftover branch below removes it */ }
     }
@@ -311,6 +422,11 @@ export async function rebuildSearchIndex(): Promise<{ inserted: number }> {
   if (backfillState.running) throw new Error('a rebuild is already in progress');
   backfillState.running = true;
   backfillState.error = null;
+  // rebuildAll drops EVERY vector and re-feeds docs with their ORIGINAL
+  // timestamps, so an incremental floor would step right over them. Invalidate
+  // before (so a pass draining mid-rebuild cannot arm one) and after (so the
+  // next pass is the full walk this needs).
+  vectorPass.requireFullPass();
   try {
     const index = getSearchV2Index();
     const result = await index.rebuildAll(iterateAllDocs({}));
@@ -321,6 +437,7 @@ export async function rebuildSearchIndex(): Promise<{ inserted: number }> {
     throw err;
   } finally {
     backfillState.running = false;
+    vectorPass.requireFullPass();
   }
 }
 
@@ -403,6 +520,16 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
   // — the batches run on the production server's one event loop). A fresh
   // pass (cursor null) starts after each drain: upsert() drops a changed
   // doc's vectors, so the periodic pass re-embeds whatever went missing.
+  //
+  // Which docs a pass asks about is the planner's call (createVectorPassPlanner
+  // above). Steady state — everything already vectorized — used to cost a full
+  // anti-join scan of `doc` per batch: 590-1006 ms of blocked event loop on the
+  // real 11,894-doc index, twice per cycle, and growing with the doc count. The
+  // planner hands the walk a floor an earlier drained pass already cleared, so
+  // the same question becomes a range seek over the tail of doc_updated_id
+  // (measured 0.05 ms). The whole table is still walked once an hour, chunked
+  // into scanLimit-bounded steps, because that is the only thing that catches a
+  // doc whose vectors vanished without its timestamp moving.
   // Load-aware pacing (2026-08-27, user request): the fixed 100ms pause had
   // two failure modes — an idle machine still dawdled through the ~12k-doc
   // backfill for hours, and a busy one still had CPU stolen from live work.
@@ -449,17 +576,28 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
     .filter(([, cfg]) => (cfg as { chunkVectors?: boolean }).chunkVectors)
     .map(([kind]) => kind);
   let vecPhase: 'light' | 'all' = 'light';
+  /** Floor for the pass in flight. Both phases of one pass share it. */
+  let vecFloor: number | null = null;
+  let vecScanned = 0;
   const scheduleVectorBackfill = (delayMs: number) => {
     if (stopped) return;
     vecTimer = setTimeout(() => {
       void (async () => {
         try {
-          const { embedded, drained, cursor } = await index.backfillVectors({
+          // A fresh light phase with no cursor IS the start of a pass.
+          if (vecPhase === 'light' && vecCursor === null) {
+            vecFloor = vectorPass.beginPass();
+            vecScanned = 0;
+          }
+          const { embedded, drained, cursor, scanned } = await index.backfillVectors({
             batchDocs: 16, cursor: vecCursor,
             excludeKinds: vecPhase === 'light' ? chunkedKinds : undefined,
+            minUpdatedAt: vecFloor ?? undefined,
+            scanLimit: MISSING_VEC_SCAN_LIMIT,
           });
           vecCursor = cursor;
           vecTotal += embedded;
+          vecScanned += scanned ?? 0;
           if (drained) {
             if (vecPhase === 'light') {
               // Light kinds done — move straight on to the chunked ones.
@@ -468,9 +606,15 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
               scheduleVectorBackfill(vecBatchPauseMs());
               return;
             }
-            if (vecTotal > 0) log.memory.info('search-v2 vector backfill drained', { embedded: vecTotal });
+            const full = vecFloor === null;
+            vectorPass.passDrained();
+            if (vecTotal > 0 || full) {
+              log.memory.info('search-v2 vector backfill drained', {
+                embedded: vecTotal, docsScanned: vecScanned, fullPass: full,
+              });
+            }
             vecTotal = 0;
-            vecCursor = null; // next pass rescans from the top (self-heal)
+            vecCursor = null; // next pass starts fresh (floor decided by the planner)
             vecPhase = 'light';
             scheduleVectorBackfill(FILE_SWEEP_INTERVAL_MS);
             return;
@@ -483,7 +627,11 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
           log.memory.warn('search-v2 vector backfill failed — retrying next sweep interval', {
             error: err instanceof Error ? err.message : String(err),
           });
+          // The pass never finished its range, so its floor stays unearned and
+          // the docs it was told about go back on the next pass's account.
+          vectorPass.passAborted();
           vecCursor = null;
+          vecPhase = 'light';
           scheduleVectorBackfill(FILE_SWEEP_INTERVAL_MS);
         }
       })();
@@ -500,6 +648,9 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
           log.memory.info('search-v2 backfill starting (empty index)');
           const t0 = Date.now();
           const { inserted } = await index.rebuildAll(iterateAllDocs({}));
+          // Same reason as rebuildSearchIndex: docs came back with their own
+          // timestamps and zero vectors, so the first pass must walk everything.
+          vectorPass.requireFullPass();
           log.memory.info('search-v2 backfill complete', { inserted, ms: Date.now() - t0 });
         } else {
           const swept = await sweepSearchV2Files();
@@ -531,6 +682,7 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
   return {
     async stop() {
       stopped = true;
+      vectorPass.passAborted(); // a half-walked pass earns no floor
       clearTimeout(backfillTimer);
       if (vecTimer) clearTimeout(vecTimer);
       if (sweepTimer) clearInterval(sweepTimer);

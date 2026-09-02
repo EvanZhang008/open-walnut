@@ -13,9 +13,18 @@
  *
  * A content hash (fields + identifiers, NOT updatedAt) skips unchanged docs;
  * a pure timestamp change costs one UPDATE and no FTS work.
+ *
+ * Step 5 is why the vector backfill can be cheap: the ONLY in-process way a doc
+ * loses its vectors is this transaction, which writes `updated_at` in the same
+ * breath. So "which docs need embedding?" can be asked about a timestamp range
+ * instead of the whole table (listDocsMissingVectors + minUpdatedAt). The
+ * exceptions all wipe doc_vec wholesale at a moment the caller knows about —
+ * rebuildAll here, and the schema/embed-model gates in db.ts — so the caller
+ * arms a full walk after them rather than trusting a floor.
  */
 
 import { createHash } from 'node:crypto';
+import type { Statement } from 'better-sqlite3';
 import { tokenize } from './tokenizer.js';
 import { FTS_DDL, type SearchDb } from './db.js';
 
@@ -53,20 +62,22 @@ export interface Writer {
   /** Replace a doc's vectors (seq = array index). No-op if the doc vanished. */
   writeVectors(docId: number, vectors: Int8Array[]): void;
   /** Docs with no vectors yet — the backfill work queue. upsert() drops a
-   *  changed doc's vectors, so this scan also self-heals staleness.
+   *  changed doc's vectors, so this walk also self-heals staleness.
    *
-   *  Pass the previous batch's `cursor` back in to resume the walk where it
-   *  stopped: the ids-only keyset query rides the doc_updated_id index, so a
-   *  full drain costs one index walk TOTAL instead of a full table scan (with
-   *  every note body dragged through a sort) per batch — the batches run on
-   *  the host thread of a live web server. Note bodies are fetched by id for
-   *  just the returned batch. */
-  listDocsMissingVectors(limit: number, cursor?: MissingVecCursor | null, excludeKinds?: string[]): {
-    docs: Array<{
-      id: number; kind: string; ref: string; title: string; summary: string; note: string;
-    }>;
-    cursor: MissingVecCursor | null;
-  };
+   *  Cost is bounded by `scanLimit` doc rows per call, NEVER by the table size:
+   *  the batches run on the host thread of a live web server, and this used to
+   *  be a full anti-join scan (measured on a 493MB / 11,894-doc index: 590-1006
+   *  ms of BLOCKED event loop per call, twice per cycle, growing with the doc
+   *  count). Pass `minUpdatedAt` to skip the docs an earlier drained pass
+   *  already verified — that turns the steady-state walk into a range seek over
+   *  the tail of doc_updated_id (measured: 0.05 ms). Note bodies are fetched by
+   *  id for just the returned batch. */
+  listDocsMissingVectors(
+    limit: number,
+    cursor?: MissingVecCursor | null,
+    excludeKinds?: string[],
+    options?: MissingVecOptions,
+  ): MissingVecPage;
 }
 
 /** Keyset position in the missing-vectors walk (updated_at DESC, id DESC). */
@@ -74,6 +85,42 @@ export interface MissingVecCursor {
   updatedAt: number;
   id: number;
 }
+
+export interface MissingVecOptions {
+  /** Floor on updated_at: the walk never looks below it. Omitted = the whole
+   *  table (the periodic self-heal pass). */
+  minUpdatedAt?: number;
+  /** Hard cap on doc rows ONE call may examine. Default MISSING_VEC_SCAN_LIMIT. */
+  scanLimit?: number;
+}
+
+export interface MissingVecPage {
+  docs: Array<{
+    id: number; kind: string; ref: string; title: string; summary: string; note: string;
+  }>;
+  cursor: MissingVecCursor | null;
+  /** True when the walk reached the end of its range (the floor, or the oldest
+   *  doc) with nothing left over — i.e. this pass is complete. */
+  drained: boolean;
+  /** Doc rows examined by this call. Bounded by scanLimit by construction; a
+   *  test asserting this stays small is what keeps the full-table anti-join
+   *  from creeping back. */
+  scanned: number;
+}
+
+/**
+ * Doc rows one call may examine.
+ *
+ * Measured on the real 493MB / 11,894-doc index: total cost of a whole two-phase
+ * walk is FLAT across 64-512 (190-210 ms warm), so this knob buys nothing on
+ * throughput and everything on the length of a single blocked stretch — the
+ * per-row cost is a PK seek into doc_vec, i.e. page reads. Warm max per call:
+ * 1.1 ms at 64, 1.7 ms at 128, 2.9 ms at 256, 6.1 ms at 512. COLD (a fresh
+ * process, which is what a CPU profile catches) 256 measured a 179 ms worst
+ * call, and that scales with the window, so 128 halves the worst case for 186
+ * paced calls per hourly self-heal pass instead of 94.
+ */
+export const MISSING_VEC_SCAN_LIMIT = 128;
 
 function contentHash(doc: Doc): string {
   const h = createHash('sha1');
@@ -103,6 +150,10 @@ function buildFtsColumns(doc: Pick<Doc, 'title' | 'summary' | 'note' | 'meta'>):
   }
   return [...origCols, ...subCols];
 }
+
+/** Prepared statement with the default loose bind signature — ReturnType of
+ *  the generic prepare() cannot be spread into. */
+type Stmt = Statement<unknown[]>;
 
 export function createWriter(db: SearchDb): Writer {
   const selectExisting = db.prepare(
@@ -225,60 +276,108 @@ export function createWriter(db: SearchDb): Writer {
     }
   });
 
-  // One prepared pair per exclude-set (in practice: none, and "the chunked
-  // kinds") — the caller uses excludeKinds to vectorize cheap single-vector
-  // kinds before multi-chunk whales, so a few thousand notes are not starved
-  // for hours behind ten thousand chunked sessions.
-  type PreparedPair = { first: ReturnType<SearchDb['prepare']>; after: ReturnType<SearchDb['prepare']> };
-  const missingVecStmts = new Map<string, PreparedPair>();
-  function missingStmtsFor(excludeKinds: string[]): PreparedPair {
-    const key = excludeKinds.join('\u0000');
-    let pair = missingVecStmts.get(key);
-    if (!pair) {
-      const excl = excludeKinds.length
-        ? ` AND d.kind NOT IN (${excludeKinds.map(() => '?').join(',')})`
-        : '';
-      pair = {
-        first: db.prepare(
-          `SELECT d.id, d.updated_at FROM doc d
-           WHERE NOT EXISTS (SELECT 1 FROM doc_vec v WHERE v.doc_id = d.id)${excl}
-           ORDER BY d.updated_at DESC, d.id DESC
-           LIMIT ?`,
-        ),
-        after: db.prepare(
-          `SELECT d.id, d.updated_at FROM doc d
-           WHERE (d.updated_at < ? OR (d.updated_at = ? AND d.id < ?))
-             AND NOT EXISTS (SELECT 1 FROM doc_vec v WHERE v.doc_id = d.id)${excl}
-           ORDER BY d.updated_at DESC, d.id DESC
-           LIMIT ?`,
-        ),
-      };
-      missingVecStmts.set(key, pair);
+  // The missing-vectors walk, in two bounded statements.
+  //
+  // Step 1 takes the next <= scanLimit ids in walk order. It is a COVERING read
+  // of doc_updated_id (an index on a rowid table already carries `id`), so it
+  // never touches a doc row — note/session bodies stay on disk. `updated_at <=
+  // ?` is what makes the keyset resume a SEEK rather than a scan down from the
+  // newest row; the OR pair breaks the id tie at that timestamp.
+  //
+  // Step 2 asks which of those ids already have vectors. seq 0 always exists
+  // when a doc has any vectors (writeVectors rewrites from 0, and the recall
+  // lane in embed-worker.ts already relies on the same invariant), so `seq = 0`
+  // makes each probe an exact PK seek instead of a range walk across the doc's
+  // chunk blobs.
+  //
+  // What this deliberately does NOT do is filter `kind` in SQL. `kind` is not in
+  // the walk index, so a SQL kind filter costs one doc-row lookup per SCANNED
+  // row — that lookup is why the old light-phase query was the slower of the
+  // two. The caller uses excludeKinds to vectorize cheap single-vector kinds
+  // before multi-chunk whales, so a few thousand notes are not starved for hours
+  // behind ten thousand chunked sessions; that filter now runs in JS, over the
+  // handful of rows actually handed out.
+  const missingSliceFirst = db.prepare(
+    `SELECT id, updated_at FROM doc WHERE updated_at >= ?
+     ORDER BY updated_at DESC, id DESC LIMIT ?`,
+  );
+  const missingSliceAfter = db.prepare(
+    `SELECT id, updated_at FROM doc
+     WHERE updated_at <= ? AND (updated_at < ? OR id < ?) AND updated_at >= ?
+     ORDER BY updated_at DESC, id DESC LIMIT ?`,
+  );
+  /** One prepared probe per window width (in practice: one). The id list is
+   *  padded to a fixed width with 0 (a value no rowid can take) so the statement
+   *  shape — and with it the prepared plan — never churns. */
+  const vecProbeStmts = new Map<number, Stmt>();
+  function vecProbeFor(width: number): Stmt {
+    let stmt = vecProbeStmts.get(width);
+    if (!stmt) {
+      stmt = db.prepare(
+        `SELECT doc_id FROM doc_vec WHERE seq = 0
+         AND doc_id IN (${Array.from({ length: width }, () => '?').join(',')})`,
+      );
+      vecProbeStmts.set(width, stmt);
     }
-    return pair;
+    return stmt;
+  }
+  const missingBodyStmts = new Map<number, Stmt>();
+  function missingBodiesFor(count: number): Stmt {
+    let stmt = missingBodyStmts.get(count);
+    if (!stmt) {
+      stmt = db.prepare(
+        `SELECT id, kind, ref, title, summary, note FROM doc
+         WHERE id IN (${Array.from({ length: count }, () => '?').join(',')})`,
+      );
+      missingBodyStmts.set(count, stmt);
+    }
+    return stmt;
   }
 
   function listDocsMissingVectors(
     limit: number,
     cursor?: MissingVecCursor | null,
     excludeKinds?: string[],
-  ): ReturnType<Writer['listDocsMissingVectors']> {
-    const stmts = missingStmtsFor(excludeKinds ?? []);
-    const kindParams: Array<string | number> = excludeKinds ?? [];
-    const args: Array<string | number> = cursor
-      ? [cursor.updatedAt, cursor.updatedAt, cursor.id, ...kindParams, limit]
-      : [...kindParams, limit];
-    const idRows = (cursor ? stmts.after : stmts.first)
-      .all(...args) as Array<{ id: number; updated_at: number }>;
-    if (idRows.length === 0) return { docs: [], cursor: cursor ?? null };
-    const last = idRows[idRows.length - 1];
-    const docs = db.prepare(
-      `SELECT id, kind, ref, title, summary, note FROM doc
-       WHERE id IN (${idRows.map(() => '?').join(',')})`,
-    ).all(...idRows.map((r) => r.id)) as Array<{
-      id: number; kind: string; ref: string; title: string; summary: string; note: string;
-    }>;
-    return { docs, cursor: { updatedAt: last.updated_at, id: last.id } };
+    options?: MissingVecOptions,
+  ): MissingVecPage {
+    const scanLimit = Math.max(limit, options?.scanLimit ?? MISSING_VEC_SCAN_LIMIT);
+    const floor = options?.minUpdatedAt ?? Number.MIN_SAFE_INTEGER;
+    const rows = (cursor
+      ? missingSliceAfter.all(cursor.updatedAt, cursor.updatedAt, cursor.id, floor, scanLimit)
+      : missingSliceFirst.all(floor, scanLimit)) as Array<{ id: number; updated_at: number }>;
+    if (rows.length === 0) {
+      return { docs: [], cursor: cursor ?? null, drained: true, scanned: 0 };
+    }
+    const probeIds: number[] = rows.map((r) => r.id);
+    while (probeIds.length < scanLimit) probeIds.push(0);
+    const vectored = new Set(
+      (vecProbeFor(scanLimit).all(...probeIds) as Array<{ doc_id: number }>)
+        .map((r) => r.doc_id),
+    );
+    const missing = rows.filter((r) => !vectored.has(r.id));
+    // Only the first `limit` missing docs are handed out, so the cursor stops at
+    // the last row this call actually consumed — never past unprocessed work.
+    const head = missing.slice(0, limit);
+    const consumed = missing.length > limit ? missing[limit - 1] : rows[rows.length - 1];
+    const drained = missing.length <= limit && rows.length < scanLimit;
+    const docs: MissingVecPage['docs'] = [];
+    if (head.length > 0) {
+      const byId = new Map(
+        (missingBodiesFor(head.length).all(...head.map((r) => r.id)) as MissingVecPage['docs'])
+          .map((row) => [row.id, row] as const),
+      );
+      const excluded = excludeKinds?.length ? new Set(excludeKinds) : null;
+      for (const row of head) { // walk order, not the rowid order of the IN fetch
+        const body = byId.get(row.id);
+        if (body && !excluded?.has(body.kind)) docs.push(body);
+      }
+    }
+    return {
+      docs,
+      cursor: { updatedAt: consumed.updated_at, id: consumed.id },
+      drained,
+      scanned: rows.length,
+    };
   }
 
   function reindexFtsFromDocs(): { reindexed: number } {

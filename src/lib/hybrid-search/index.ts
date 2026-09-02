@@ -20,7 +20,14 @@ import {
   type SearchDb,
   type IndexStats,
 } from './db.js';
-import { createWriter, type Doc, type MissingVecCursor, type UpsertResult, type Writer } from './writer.js';
+import {
+  createWriter,
+  MISSING_VEC_SCAN_LIMIT,
+  type Doc,
+  type MissingVecCursor,
+  type UpsertResult,
+  type Writer,
+} from './writer.js';
 import { TOKENIZER_VERSION, tokenize, type TokenStreams } from './tokenizer.js';
 import {
   searchKeyword,
@@ -33,7 +40,7 @@ import { cosineInt8, createEmbedder, type Embedder } from './embedder.js';
 import { passagesForDoc } from './chunk.js';
 
 export type { Doc, MissingVecCursor, UpsertResult, IndexStats, TokenStreams };
-export { tokenize, TOKENIZER_VERSION, DEFAULT_DF_THRESHOLD };
+export { tokenize, TOKENIZER_VERSION, DEFAULT_DF_THRESHOLD, MISSING_VEC_SCAN_LIMIT };
 export { cosineInt8, createEmbedder } from './embedder.js';
 export { passagesForDoc } from './chunk.js';
 
@@ -96,6 +103,21 @@ export interface BackfillVectorsResult {
   /** Pass back into the next call to resume the walk without re-scanning
    *  already-visited docs. Start a fresh pass with null/undefined. */
   cursor: MissingVecCursor | null;
+  /** Doc rows the walk examined. Absent on the paths that never scanned (no
+   *  embedder, yielded to a live query). */
+  scanned?: number;
+}
+
+export interface BackfillVectorsOptions {
+  batchDocs?: number;
+  cursor?: MissingVecCursor | null;
+  excludeKinds?: string[];
+  /** Skip docs older than this — set it to a floor an earlier drained pass
+   *  already cleared, so the steady-state walk is a range seek instead of a
+   *  whole-table sweep. Omit for the periodic full self-heal pass. */
+  minUpdatedAt?: number;
+  /** Doc rows ONE call may examine (see MISSING_VEC_SCAN_LIMIT). */
+  scanLimit?: number;
 }
 
 export interface StoredDoc {
@@ -208,7 +230,7 @@ export interface SearchIndex {
    *  back in; safe to interleave with writes. A doc whose embed fails twice
    *  is quarantined with a zero vector (upsert clears it, so the next content
    *  change retries). */
-  backfillVectors(options?: { batchDocs?: number; cursor?: MissingVecCursor | null; excludeKinds?: string[] }): Promise<BackfillVectorsResult>;
+  backfillVectors(options?: BackfillVectorsOptions): Promise<BackfillVectorsResult>;
   /** Stored raw text of a doc (snippet extraction, rescoring). */
   getDoc(kind: string, ref: string): StoredDoc | null;
   rebuildAll(docs: Iterable<Doc> | AsyncIterable<Doc>): Promise<{ inserted: number }>;
@@ -565,13 +587,17 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     backfillVectors: async (backfillOptions = {}) => {
       if (!embedder || closed) return { embedded: 0, drained: true, cursor: null };
       const batchDocs = backfillOptions.batchDocs ?? 16;
-      const { docs, cursor } = writer.listDocsMissingVectors(
+      const { docs, cursor, drained, scanned } = writer.listDocsMissingVectors(
         batchDocs, backfillOptions.cursor, backfillOptions.excludeKinds,
+        { minUpdatedAt: backfillOptions.minUpdatedAt, scanLimit: backfillOptions.scanLimit },
       );
-      if (docs.length === 0) return { embedded: 0, drained: true, cursor };
+      // No docs does NOT mean done: a bounded window may hold only already-
+      // vectorized docs (or only excluded kinds) while the walk still has range
+      // left. Only the writer's `drained` ends a pass.
+      if (docs.length === 0) return { embedded: 0, drained, cursor, scanned };
       let embedded = 0;
       for (const doc of docs) {
-        if (closed) return { embedded, drained: true, cursor };
+        if (closed) return { embedded, drained: true, cursor, scanned };
         const passages = passagesForDoc(doc, chunkedKinds.has(doc.kind));
         if (passages.length === 0) {
           // Mark empty docs done with one zero vector (cosine 0 = no boost);
@@ -595,7 +621,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
             }
             vectors.push(...await embedder.embedPassages([passage]));
           }
-          if (closed) return { embedded, drained: true, cursor };
+          if (closed) return { embedded, drained: true, cursor, scanned };
           writer.writeVectors(doc.id, vectors);
           vecFailures.delete(doc.id);
           embedded++;
@@ -621,7 +647,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
           }
         }
       }
-      return { embedded, drained: docs.length < batchDocs, cursor };
+      return { embedded, drained, cursor, scanned };
     },
     getDoc: (kind, ref) => {
       const row = db.prepare(

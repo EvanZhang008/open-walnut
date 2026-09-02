@@ -17,6 +17,7 @@ export async function fetchFileContent(
   filePath: string,
   host?: string,
   opts: {
+    /** Retained for callers that document their intent; every read is uncached. */
     noCache?: boolean;
     /**
      * Record what this read found as a version in the file's history. Only the
@@ -31,11 +32,60 @@ export async function fetchFileContent(
   if (host) params.set('host', host);
   if (opts.track) params.set('track', opts.track);
 
-  // An explicit Refresh must reach disk — a cached 200 would silently serve the
-  // pre-edit bytes and make the button look broken.
-  const res = await fetch(`/api/file-content?${params}`, opts.noCache ? { cache: 'no-store' } : undefined);
+  // `no-store` UNCONDITIONALLY, not just for an explicit Refresh. This route now
+  // answers with `ETag` + `Cache-Control: no-cache`, which overrides the blanket
+  // `no-store` the /api middleware sets — so the browser's own HTTP cache may
+  // store and revalidate it, and a revalidation this function does not know about
+  // can surface as a 304 that `res.json()` reads as an empty body. That is the
+  // failure the server disables Express ETags for (see server.ts). Callers that
+  // WANT the conditional exchange use fetchFileContentConditional, which handles
+  // 304 explicitly.
+  const res = await fetch(`/api/file-content?${params}`, { cache: 'no-store' });
   if (!res.ok) throw new Error(`Failed to fetch file content: ${res.status}`);
   return res.json();
+}
+
+/** The answer to a conditional open: either "you already have it" or the bytes. */
+export interface ConditionalFileContent {
+  /**
+   * The server confirmed (304) that the `ifNoneMatch` bytes the caller already
+   * holds are the bytes on disk. Nothing crossed the wire — for a remote file,
+   * nothing crossed the tunnel either.
+   */
+  notModified: boolean;
+  /** The fresh payload. Absent exactly when `notModified` is true. */
+  payload?: FileContentResponse;
+}
+
+/**
+ * Open a file, telling the server which bytes we already have.
+ *
+ * This is the editor's read path (`fetchFileContent` stays for the lookups: the
+ * mention popup, the diff view, the pop-out). Passing `ifNoneMatch` — the
+ * `contentHash` of a cached copy — lets the server answer 304 instead of
+ * re-shipping an unchanged file, which is the whole cost of re-opening something
+ * over an SSH tunnel. The pane paints its cached copy first and this call is what
+ * confirms or replaces it (see cache/filecontent-idb.ts).
+ *
+ * `cache: 'no-store'` on purpose: we supply the validator ourselves and want the
+ * raw 304, not the browser silently completing it from its own HTTP cache.
+ */
+export async function fetchFileContentConditional(
+  filePath: string,
+  host?: string,
+  opts: { ifNoneMatch?: string; track?: 'baseline' | 'agent' } = {},
+): Promise<ConditionalFileContent> {
+  const params = new URLSearchParams({ path: filePath });
+  if (host) params.set('host', host);
+  if (opts.track) params.set('track', opts.track);
+
+  const res = await fetch(`/api/file-content?${params}`, {
+    cache: 'no-store',
+    ...(opts.ifNoneMatch ? { headers: { 'If-None-Match': `"${opts.ifNoneMatch}"` } } : {}),
+  });
+  if (res.status === 304) return { notModified: true };
+  if (!res.ok) throw new Error(`Failed to fetch file content: ${res.status}`);
+  return { notModified: false, payload: await res.json() };
 }
 
 /** A save rejected because the file changed on disk under the editor. */
