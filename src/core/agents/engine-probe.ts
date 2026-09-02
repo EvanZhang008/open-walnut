@@ -79,11 +79,15 @@ interface CacheEntry {
 
 const cache = new Map<SessionEngine, CacheEntry>();
 const inFlight = new Map<SessionEngine, Promise<EngineAvailability>>();
+/** Resolves the moment an engine's PRESENCE verdict is cached — before the
+ *  cosmetic `--version` spawn — so a batch caller never waits on that spawn. */
+const presenceInFlight = new Map<SessionEngine, Promise<EngineAvailability>>();
 
 /** Test hook: forget every cached/in-flight probe. */
 export function _resetEngineProbeCache(): void {
   cache.clear();
   inFlight.clear();
+  presenceInFlight.clear();
 }
 
 /** Test hook: pin an engine's availability so a probe never spawns anything. */
@@ -380,15 +384,22 @@ export function probeEngine(engineId: SessionEngine, options: EngineProbeOptions
   const existing = inFlight.get(engineId);
   if (existing) return existing;
 
+  let settlePresence: (value: EngineAvailability) => void = () => {};
+  presenceInFlight.set(engineId, new Promise<EngineAvailability>((resolve) => { settlePresence = resolve; }));
+
   const started = runProbe(caps, options)
     .catch((err: unknown): ProbeResult => ({ availability: unavailable(err instanceof Error ? err.message : String(err)) }))
     .then(async (result) => {
       const { availability, fillVersion } = result;
       // Cache the presence verdict NOW, before the version spawn — a batch
-      // probeEngines() reads the cache at its deadline and must see `installed`
-      // the instant the (synchronous) binary/adapter checks are done, never wait
-      // out a loaded host's `--version` (which is purely cosmetic).
+      // probeEngines() waits on THIS moment (probeEnginePresence), never on the
+      // `--version` child. Coupling them made GET /api/engines sit out its whole
+      // 2.5s deadline on every cache miss: on a loaded host five `--version`
+      // spawns (one per engine) routinely outlive the batch budget, and the
+      // route held one of the browser's six connections the entire time.
       cache.set(engineId, { at: now(), value: availability });
+      settlePresence(availability);
+      presenceInFlight.delete(engineId);
       if (!fillVersion || !availability.installed) return availability;
       // The direct caller (and a within-TTL cache read) still gets the version:
       // fill it, then update the cache — but only while our presence verdict is
@@ -401,16 +412,34 @@ export function probeEngine(engineId: SessionEngine, options: EngineProbeOptions
     })
     .finally(() => {
       inFlight.delete(engineId);
+      presenceInFlight.delete(engineId);
     });
   inFlight.set(engineId, started);
   return started;
 }
 
 /**
+ * Resolves once the engine's presence verdict is known (cached or freshly
+ * decided), WITHOUT waiting for the version spawn. Starts the full probe as a
+ * side effect, so the version still lands in the cache for the next reader.
+ */
+export function probeEnginePresence(engineId: SessionEngine, options: EngineProbeOptions = {}): Promise<EngineAvailability> {
+  const full = probeEngine(engineId, options);
+  const presence = presenceInFlight.get(engineId);
+  if (presence) return presence;
+  // In flight with the presence already cached: only the version is pending.
+  const cached = cache.get(engineId);
+  if (cached && inFlight.has(engineId)) return Promise.resolve(cached.value);
+  return full;
+}
+
+/**
  * Availability for every registered engine, bounded by `deadlineMs`.
  *
- * On deadline the answer degrades instead of hanging: a stale cache entry if
- * there is one, otherwise a "still checking" entry. The probe promise is NOT
+ * Waits only for PRESENCE verdicts (synchronous file checks, milliseconds); the
+ * `--version` spawns keep running in the background and fill the cache. On
+ * deadline the answer degrades instead of hanging: a stale cache entry if there
+ * is one, otherwise a "still checking" entry. The probe promise is NOT
  * cancelled, so it lands in the cache and the next call is exact. This is the
  * whole reason a route may call it on the request path.
  */
@@ -421,7 +450,7 @@ export async function probeEngines(options: EngineProbeOptions = {}): Promise<Ma
     return new Map(ids.map((id) => [id, { installed: true, version: null, reason: null }] as const));
   }
 
-  const pending = ids.map((id) => probeEngine(id, options));
+  const pending = ids.map((id) => probeEnginePresence(id, options));
   const deadlineMs = options.deadlineMs ?? ENGINE_PROBE_DEADLINE_MS;
   await Promise.race([
     Promise.allSettled(pending),

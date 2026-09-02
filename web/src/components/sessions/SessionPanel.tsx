@@ -82,6 +82,10 @@ import { useConfirm } from '@/hooks/useConfirm';
  * letter is worse than one click on "show chat".
  */
 const SPLIT_MIN_WIDTH = 900;
+/** Pointer dwell on the Code chip before the VS Code ensure is prefetched. */
+const CODE_PREFETCH_DWELL_MS = 400;
+/** How long a hidden (kept-alive) VS Code view survives before it is unmounted. */
+const CODE_VIEW_HIDDEN_TTL_MS = 10 * 60_000;
 
 interface SessionPanelErrorBoundaryProps {
   sessionId: string;
@@ -755,6 +759,24 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   useEffect(() => {
     if (activeView === 'code') setCodeViewMounted(true);
   }, [activeView]);
+  // ...but not FOREVER. display:none drops the iframe's renderer, not the VS
+  // Code document inside it: its editor/terminal scrollers keep their tiled
+  // compositing layers (measured in the system WKWebView at 2500×1400@2x:
+  // +180MB of IOSurfaces per hidden workbench that never came back). A day of
+  // columns that each once opened Code is how the Mac app's WebContent reached
+  // 2.7GB of layer memory and 17s main-thread freezes on a swapping machine.
+  // Keep the fast switch-back for a working session; release a workbench
+  // nobody has looked at for a while (reopening reboots it, seconds).
+  useEffect(() => {
+    if (!codeViewMounted || activeView === 'code') return;
+    const timer = setTimeout(() => {
+      setCodeViewMounted(false);
+      log.info('session-panel', 'code view released after idle', { sessionId, idleMs: CODE_VIEW_HIDDEN_TTL_MS });
+    }, CODE_VIEW_HIDDEN_TTL_MS);
+    return () => clearTimeout(timer);
+  }, [codeViewMounted, activeView, sessionId]);
+  const codeHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (codeHoverTimer.current) clearTimeout(codeHoverTimer.current); }, []);
   // Clicking a file path in the chat opens it in the SAME split layout as
   // Changed/Files/Terminal — file explorer + preview on the left, the live chat
   // in the resizable right column (replaces the old full-screen FileViewer modal).
@@ -1530,7 +1552,19 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               onClick={() => toggleView('code')}
               // Hover = intent: warm the ensure (spawn/adopt + tunnel) so the
               // click usually finds it already resolved. install=false inside.
-              onMouseEnter={() => sessionId && prefetchVscodeEmbed(sessionId)}
+              // DWELL first: the chip sits at the end of the tab strip, so the
+              // pointer crosses it on the way to Files/Terminal. Each crossing
+              // used to fire a POST that the server answered in ~5s (remote
+              // host probe) and that, as a write, jumped the browser's 6-slot
+              // fetch queue — the Files tree the user actually clicked waited
+              // behind it (2026-09-02: "open Files, ~5s until it shows").
+              onMouseEnter={() => {
+                if (!sessionId) return;
+                codeHoverTimer.current = setTimeout(() => prefetchVscodeEmbed(sessionId), CODE_PREFETCH_DWELL_MS);
+              }}
+              onMouseLeave={() => {
+                if (codeHoverTimer.current) { clearTimeout(codeHoverTimer.current); codeHoverTimer.current = null; }
+              }}
               title="Embedded VS Code in the session working directory — full-screen alongside the chat"
             >
               Code

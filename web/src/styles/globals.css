@@ -3667,7 +3667,7 @@ select {
 .wf-card.open-walnut-fullscreen {
   display: flex;
   flex-direction: column;
-  margin: 0;
+  margin: 0 auto; /* keeps the inset centering of .open-walnut-fullscreen */
 }
 .wf-card.open-walnut-fullscreen .wf-card-tasks {
   flex: 1;
@@ -9076,21 +9076,33 @@ body.walnut-dragging {
    to .main-page-sessions-area — no CSS needed for that. */
 
 /* --- CSS-promotion fullscreen (used by SessionPanel + DockTaskCard) --- */
+/* Compositor cost of this pair, measured in the system WKWebView (the Mac app)
+   by opening the Files split in a fresh process and counting the WebContent
+   process's IOSurfaces (scripts/local/wk-harness.swift):
+     · backdrop-filter: blur(4px) on the backdrop re-blurred everything under
+       it (streaming session columns) every frame, for a 2.5% rim — gone.
+     · `transform: translate(-50%,-50%)` centering made the panel its own
+       tiled layer: +37 tiles vs +23 with inset centering — gone.
+     · a spread box-shadow as the dim was tried and is the WORST option
+       (+56 tiles: the shadow extent becomes the layer's bounds) — not this.
+     · the plain-colour backdrop is one full-viewport surface; that is the
+       price of the dim and stays.
+   Context: the Mac app reached 2.7GB of layer memory and 17s main-thread
+   freezes when opening Files (2026-09-02). Chromium tiers cannot see any of
+   this; the CSS ratchet is tests/web/fullscreen-backdrop-layer-cost.test.ts. */
 .open-walnut-fullscreen-backdrop {
   position: fixed;
   inset: 0;
   z-index: 9000;
   background: var(--overlay-bg);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-  animation: fullscreen-fade-in 0.15s ease-out;
 }
 
 .open-walnut-fullscreen {
   position: fixed !important;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
+  top: 2.5vh;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
   width: 95vw;
   height: 95vh;
   max-width: 1400px;
@@ -9111,14 +9123,17 @@ body.walnut-dragging {
    two-column layout fills the display (the default fullscreen leaves big side
    gutters on wide monitors). ~96vw/96vh, no max-width. */
 .open-walnut-fullscreen.is-changed-open {
+  top: 2vh;
   width: 96vw;
   height: 96vh;
   max-width: none;
 }
 
+/* Opacity only: a transform here would hand the panel its own composited
+   layer for the duration (see the layer-cost note on .open-walnut-fullscreen). */
 @keyframes fullscreen-enter {
-  from { opacity: 0; transform: translate(-50%, -50%) scale(0.97); }
-  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 @keyframes fullscreen-fade-in {

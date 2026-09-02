@@ -273,11 +273,15 @@ describe('probeEngines', () => {
     }
   })
 
-  it('reports installed at the deadline even while a version spawn hangs, then fills the version once it lands', async () => {
+  it('answers as soon as presence is known — a hanging version spawn must not make it sit out the deadline', async () => {
     installFakeBinary(bin, 'gemini')
     let release: ((v: string | null) => void) | undefined
+    // Production deadline on purpose: the regression this pins is the batch
+    // waiting out ALL of it (GET /api/engines took a flat 2.5s on every cache
+    // miss, holding one of the browser's six connections) because the raced
+    // promise included the cosmetic `--version` child.
     const opts = baseOptions({
-      deadlineMs: 20,
+      deadlineMs: 2_500,
       runVersion: (binary) => new Promise<string | null>((resolve) => {
         if (path.basename(binary) === 'gemini') release = resolve
         else resolve('1.2.3')
@@ -286,7 +290,7 @@ describe('probeEngines', () => {
 
     const started = Date.now()
     const first = await probeEngines(opts)
-    expect(Date.now() - started).toBeLessThan(1_500)
+    expect(Date.now() - started).toBeLessThan(500)
     // Installed-ness is decided from binary presence (synchronous), so a hanging
     // `--version` does NOT hold it back: the deadline answer is installed with the
     // version still unknown, never a "still checking" that locks the toggle.
