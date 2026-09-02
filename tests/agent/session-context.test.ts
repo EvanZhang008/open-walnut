@@ -70,7 +70,20 @@ describe('buildSessionContext (identity note)', () => {
     expect(systemPrompt).toContain('walnut tools list')
     expect(systemPrompt).toContain('walnut guide')
     expect(systemPrompt).not.toContain('skill_read')
-    expect(systemPrompt).toContain('walnut peers')
+    // `walnut peers` was retired; the CLI answers it with a redirect to session_send.
+    expect(systemPrompt).toContain('session_send')
+    expect(systemPrompt).not.toContain('walnut peers')
+  })
+
+  it('tells the session that tasks are the user\'s list, so found follow-ups are done, not filed', async () => {
+    // Every agent with task_create in reach and no rule against it ended a job
+    // by filing its leftovers as tasks on the user's board. The preamble must
+    // not advertise "create tasks" as a capability, and must state the rule.
+    const { systemPrompt } = await buildSessionContext('')
+    expect(systemPrompt).not.toMatch(/create tasks/i)
+    expect(systemPrompt).toMatch(/not your notepad/i)
+    expect(systemPrompt).toMatch(/follow-up work you find is yours to do/i)
+    expect(systemPrompt).toMatch(/create a task only when the user asks/i)
   })
 
   it('warns that peer messages never carry user authorization', async () => {

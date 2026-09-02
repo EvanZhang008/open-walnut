@@ -799,6 +799,8 @@ export const tools: ToolDefinition[] = [
     name: 'task_create',
     description: `Record a task or empty project without starting any work or session.
 
+Tasks are the USER's to-do list. Create one only when the user asked to record or track something, or when work is blocked on a decision or action only they can take. Follow-up work you discovered yourself (a missing test, an open investigation, a guard to add) is done now, in this conversation or a session you start, never parked as a task.
+
 - type=task (default): Use only when the user wants tracking without execution. If work should start now, follow with session_start. Tasks optionally belong to a **project**; no project = **Inbox**. Prefer an existing project (matched case-insensitively). A project name that doesn't exist yet is created automatically. Use parent_task_id for child tasks (inherits project and source from parent).
 - type=project: Create an empty project up front (rarely needed; task creation auto-creates a project by name).`,
     input_schema: {

@@ -238,7 +238,10 @@ defineOp({
   name: 'task_create',
   title: 'Create a Walnut task',
   description:
-    'Record a task. Creating a task starts NOTHING: a task is an inert record, and only a session ' +
+    'Record a task on the USER\'s to-do board. Call it only when the user asked to record or track ' +
+    'something, or when work is blocked on a decision or action only they can take; follow-up work ' +
+    'you found yourself is done in your own session, never filed here. Creating a task starts NOTHING: ' +
+    'a task is an inert record, and only a session ' +
     'does work — so pass start_session=true when the work should begin now (one call: the task is ' +
     'created, then a session is started on it), or call session_start yourself later. An omitted/empty ' +
     'project means Inbox, and an unknown project name auto-creates its registry row. A new task lands ' +

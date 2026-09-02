@@ -29,7 +29,7 @@ project lives in the **Inbox**. Two ways in — use whichever is available:
   server is mounted in this session. Prefer these when present: structured
   results, no shell quoting.
 
-## The model in four lines (read this before any write)
+## The model in five lines (read this before any write)
 
 1. **A task is an inert record.** Creating, updating, pinning or re-tiering one
    runs nothing. It is a row the human reads.
@@ -39,6 +39,12 @@ project lives in the **Inbox**. Two ways in — use whichever is available:
    Focus does not start, schedule, or prioritize any execution.
 4. **So "make this happen" is always two nouns:** a task to hang it on, and a
    session started on that task.
+5. **Tasks are the user's to-do list, not an agent notepad.** Follow-up work you
+   find while working (a missing test, a leak to investigate, a guard to add) is
+   yours to do now, in the session you are in. Create a task only when the user
+   asked to record or track something, or when the work is blocked on a decision
+   or action only the human can take (say which in `description`). Never end a
+   job by filing your leftovers as tasks.
 
 ```
 task_create            → a row exists, nothing runs
@@ -255,7 +261,9 @@ Default to plain `task_create` when the user is only recording something: a
 session is a real process with a real cost, so it starts when someone asked for
 work to start, not as a side effect of writing a note to self.
 
-- Quick work with no tracking request: just do it. No op at all.
+- Work the user did not ask to track, including follow-ups you discovered
+  yourself: just do it, however big. No op at all. A task is what the USER
+  wants on their board, never a place to park what you did not finish.
 - `session_start` needs a task first, so `task_create` then `session_start` is the normal pair. It resolves cwd from the task, its parent chain, then the project default, so pass `cwd` only to override that.
 - One task holds one live session. Starting a second one answers `409 session_exists` with `existing_session_id`: that is not a failure, it means the work is already running, so `session_send` to it instead.
 - `to` accepts a session id, a unique id prefix of 4 characters or more, a task id (routed to that task's session), or a unique title substring. A task with no session yet answers `409 task_has_no_session`, which is the signal to call `session_start`.
@@ -347,6 +355,7 @@ walnut tools call human_inbox_reply '{"letter":"<letter-id>","text":"..."}'
 
 - **Read before write.** Search or list first; duplicates are the most common damage an agent does here.
 - **Say where the work stands.** Use `task_update phase=AGENT_COMPLETE` when it is done and ready to look at, and `COMPLETE` when it is finished. A blocked or parked task is just `TODO`. There is no human-vs-agent restriction on any phase.
+- **Never create tasks unprompted.** A task appears on the user's board because they asked for it, or because work is blocked on them. Your own follow-ups are done in your session, not filed.
 - **Never bulk-delete.** Delete a task only when the user explicitly asked for that specific deletion.
 - **Do not reopen or re-prioritize the user's tasks unprompted.** Changing
   `status`, `priority`, or `project` is the user's call unless they asked.
