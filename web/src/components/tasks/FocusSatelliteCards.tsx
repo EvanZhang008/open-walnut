@@ -39,8 +39,11 @@ export { groupSortableId } from './tier-group-sentinels';
  *    gap, which is why dragging a whole group used to open no visible slot at all.
  *    Being a collision target is also correct: dropping on a chip means "land above
  *    this group", and it's the natural target when swapping two groups.
+ *    The ONE exception is `projectCollapsed` (the chip is display:none'd): a hidden
+ *    node measures as 0x0 at the viewport origin, which is a drop target at (0,0)
+ *    rather than a useful rect. See the `disabled` argument below.
  */
-export function GroupChip({ groupId, tier, label, project, showProjectPrefix, count, collapsed, inert, onRename, onDissolve, onHide, onToggleCollapse, onMoveToProject }: {
+export function GroupChip({ groupId, tier, label, project, showProjectPrefix, count, collapsed, projectCollapsed, inert, onRename, onDissolve, onHide, onToggleCollapse, onMoveToProject }: {
   groupId: string;
   tier: FocusTier;
   label: string;
@@ -58,6 +61,12 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
   count?: number;
   /** Collapsed = this folder's member cards are display:none'd by the tier loop. */
   collapsed?: boolean;
+  /** The PROJECT this chip is drawn under is folded shut, so the whole run is
+   *  hidden with .tier-project-collapsed (display:none) rather than unmounted —
+   *  the chip's sortable id must stay in the tier's SortableContext or dnd-kit's
+   *  indices shift. A different reason from `collapsed`, hence a different class:
+   *  this chip is not folded, its container is. */
+  projectCollapsed?: boolean;
   /** A pinned drag is live: the chip stays visually identical (same class, same
    *  title — it still IS a foldable folder) but the collapse GESTURE is refused
    *  while the sentinel handoff owns the pointer. */
@@ -71,6 +80,15 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: groupSortableId(groupId, tier),
     data: { type: 'group', groupId, tier },
+    // Hidden chip → droppable OFF. dnd-kit measures every ENABLED droppable, and a
+    // display:none node's getBoundingClientRect is all zeros, so a hidden chip would
+    // sit in closestCenter's candidate list with its centre at the viewport origin:
+    // drag a card toward the top-left corner and it lands inside the folded project.
+    // Only `projectCollapsed` hides the chip; a chip whose own FOLDER is collapsed is
+    // still on screen and must stay a drop target. The id stays in the tier's
+    // SortableContext either way (that is what keeps dnd-kit's indices stable); this
+    // only stops the measurement.
+    disabled: { draggable: false, droppable: !!projectCollapsed },
   });
   const folderMenu = useFolderContextMenu({
     onRename,
@@ -103,7 +121,7 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
       ref={setNodeRef}
       style={style}
       data-group-id={groupId}
-      className={`task-group-chip${isDragging ? ' task-group-chip-dragging' : ''}${canCollapse ? ' task-group-chip-clickable' : ''}`}
+      className={`task-group-chip${isDragging ? ' task-group-chip-dragging' : ''}${canCollapse ? ' task-group-chip-clickable' : ''}${projectCollapsed ? ' tier-project-collapsed' : ''}`}
       title={canCollapse
         ? `Folder — click to ${collapsed ? 'expand' : 'collapse'}, press and drag to move the whole folder`
         : 'Folder — press and drag to move the whole folder'}
@@ -239,6 +257,11 @@ interface SortableTierCardProps {
    *  the id must stay in the tier's SortableContext or dnd-kit's indices shift
    *  under a live drag. */
   folderCollapsed?: boolean;
+  /** This card's PROJECT run is folded shut in this tier — hidden the same way
+   *  (display:none, id stays in the SortableContext) but for a different reason,
+   *  so it carries its own class: .tier-project-collapsed. Independent of
+   *  `folderCollapsed`; either one is enough to hide the card. */
+  projectCollapsed?: boolean;
   /** Multi-select (shared with the main list): in select mode a click toggles
    *  selection instead of opening the card; a leading checkbox + highlight show state. */
   selectMode?: boolean;
@@ -250,7 +273,7 @@ interface SortableTierCardProps {
   isGroupTarget?: boolean;
 }
 
-export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onSetStartDate, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, groupInfo, folderCollapsed, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
+export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onSetStartDate, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, groupInfo, folderCollapsed, projectCollapsed, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
   // Live circle: error red / waiting red-pulse / running green-pulse.
   const circleClass = useTaskCircle(task);
   const {
@@ -260,9 +283,21 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
     transform,
     transition,
     isDragging,
-    // Disable drag in select mode so a press toggles selection instead of starting a
-    // drag (mirrors the main list — drag + multi-select gestures otherwise conflict).
-  } = useSortable({ id: task.id, disabled: selectMode });
+  } = useSortable({
+    id: task.id,
+    disabled: {
+      // Drag off in select mode so a press toggles selection instead of starting a
+      // drag (mirrors the main list: drag + multi-select gestures otherwise conflict).
+      draggable: !!selectMode,
+      // Drop off while hidden. dnd-kit measures every ENABLED droppable, and a
+      // display:none node's getBoundingClientRect is all zeros, so a hidden card would
+      // stay in closestCenter's candidate list with its centre at the viewport origin:
+      // dragging toward the top-left corner would drop the card INSIDE the folded
+      // folder / project run and it would vanish. The id still stays in the tier's
+      // SortableContext, which is what keeps dnd-kit's indices from shifting.
+      droppable: !!(folderCollapsed || projectCollapsed),
+    },
+  });
 
   // Editable title state
   const [isEditing, setIsEditing] = useState(false);
@@ -365,7 +400,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       style={style}
       data-task-id={task.id}
       data-group-id={groupInfo?.groupId}
-      className={`${cardClass}${groupClass}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isSelected ? ' task-multi-selected' : ''}${isGroupTarget ? ' todo-panel-item-group-target' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
+      className={`${cardClass}${groupClass}${projectCollapsed ? ' tier-project-collapsed' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isSelected ? ' task-multi-selected' : ''}${isGroupTarget ? ' todo-panel-item-group-target' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
       onClick={(e) => {
         if (isEditing) return;
         // Select mode: a click anywhere toggles selection (no navigation/edit).

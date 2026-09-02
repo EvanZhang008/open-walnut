@@ -76,10 +76,21 @@ export function resolveMoveMigration(
 /**
  * Which project run did the dragged card land in, within a project-clustered tier?
  *
- * The tier's final id order is all we have: folder labels are plain DOM, not
- * sortable items, so the only evidence of "which folder is this slot inside" is
- * the neighbours. Walk outward from the dragged card to the nearest ids that map
- * to a project, skipping ids with no project (group chip sentinels, unknown ids).
+ * PRECONDITION, and the only thing that makes this function mean anything: the
+ * caller must pass an array the drop ACTUALLY MOVED THE CARD IN — a cross-tier
+ * array dragOver spliced it into, or a reorder array built from the drop target.
+ * It answers from the card's NEIGHBOURS, so handing it the tier's AT-REST order
+ * makes it re-read where the card already lived rather than where it landed, and
+ * `prev` winning then reports "the run ABOVE you" for the first card of any run.
+ * That is a silent reprojection with no visible gesture, and it shipped twice (a
+ * 12px twitch, then a 40px sideways slip); TodoPanel's maybeMoveProject now calls
+ * this only for the spliced cases and reads dnd-kit's own aim record otherwise.
+ *
+ * Given that array, the tier's id order is all there is: folder labels are plain
+ * DOM, not sortable items, so the only evidence of "which folder is this slot
+ * inside" is the neighbours. Walk outward from the dragged card to the nearest ids
+ * that map to a project, skipping ids with no project (group chip sentinels,
+ * unknown ids).
  *
  * When the two neighbours disagree the card sits at a run boundary, and `prev`
  * wins: visually the card is at the BOTTOM of the previous folder because the

@@ -11165,7 +11165,11 @@ body.walnut-dragging {
   opacity: 0.65;
   user-select: none;
 }
-.task-group-chip-count {
+/* Row counts on BOTH levels: a folder chip's member count and a pinned tier's
+   project label. One rule rather than two identical ones, so "they read as one
+   system" is structural and cannot drift. */
+.task-group-chip-count,
+.tier-project-label-count {
   font-size: 10px;
   font-weight: 500;
   color: var(--fg-muted, #8a8f98);
@@ -11356,7 +11360,10 @@ body.walnut-dragging {
 .todo-pinned-card.task-group-last::before {
   bottom: 2px;
 }
-/* Rows hidden by a collapsed folder — the folder header row stays, members go. */
+/* Rows hidden by a collapsed folder — the folder header row stays, members go.
+   Twin rule: .tier-project-collapsed (a folded PROJECT run in a pinned tier) hides
+   rows the same way for a different reason. This panel has used `visibility` and
+   `content-visibility` here before, so if the mechanism changes again, change both. */
 .task-folder-collapsed {
   display: none;
 }
@@ -12985,6 +12992,10 @@ body.walnut-dragging {
   margin-bottom: 4px;
 }
 
+/* The header row BODY folds the project on click, the same gesture a folder row
+   uses, so the cursor says "clickable" instead of "grab only". The row is still the
+   project-reorder drag handle (dnd-kit, 5px activation): a press-and-move drags, a
+   plain click folds. Mirrors .task-group-chip-clickable. */
 .todo-group-project-header {
   display: flex;
   align-items: center;
@@ -12995,7 +13006,21 @@ body.walnut-dragging {
   color: var(--fg-secondary);
   width: 100%;
   touch-action: none;
-  cursor: grab;
+  cursor: pointer;
+  /* Rounds the hover tint below and the drop highlight (.header-drop-active sets
+     the same radius for its own fill). */
+  border-radius: 6px;
+}
+.todo-group-project-header:active {
+  cursor: grabbing;
+}
+/* Row hover tint, the same affordance .task-group-chip-clickable and
+   .tier-project-label-draggable already carry. This row is the panel's PRIMARY fold
+   target, so it has to look clickable before the click. Skipped while a card drag
+   hovers the row: .header-drop-active's accent fill is the more urgent signal, and
+   a plain `:hover` would outrank it on specificity. */
+.todo-group-project-header:not(.header-drop-active):hover {
+  background: var(--bg-hover);
 }
 
 .todo-group-project-header-toggle {
@@ -13025,11 +13050,18 @@ body.walnut-dragging {
   min-width: 0;
 }
 
+/* The project NAME button (its one consumer is the TODO panel's project header). It
+   is exactly as wide as the name: `flex: 1` made it the whole row, so the row's own
+   gesture (fold) had no target left, and the name opens the project pane, so the two
+   need separate targets. The kind tag, source badge and count sit OUTSIDE the button
+   (see ProjectHeaderRow), so what follows the name is the fold strip. Capping the
+   button with a max-width was tried first and was worse: the reservation ellipsised
+   names that fit perfectly well. */
 .todo-group-name-btn {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   text-align: left;
   padding: 2px 4px;
@@ -13041,6 +13073,19 @@ body.walnut-dragging {
   color: var(--fg-secondary);
   font-weight: 600;
   font-size: 13px;
+}
+
+/* A name too long for the row ellipsizes instead of overflowing into the star. */
+.todo-group-project-header .todo-group-project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The row-level count keeps its width under that pressure — it is part of the fold
+   strip, and a strip that can shrink to nothing is not a target. (.project-kind-tag
+   already declares `flex: none`.) */
+.todo-group-project-header .todo-group-count {
+  flex: none;
 }
 
 .todo-group-name-btn:hover {
@@ -13335,27 +13380,34 @@ body.walnut-dragging {
   padding: 3px 0;
 }
 
-/* Minimal project folder labels inside Pinned tiers — slim, non-interactive,
-   deliberately NOT a sortable/droppable element (DnD must ignore them). */
+/* Minimal project labels inside Pinned tiers: slim, and deliberately NOT a dnd-kit
+   sortable/droppable (the card DnD must ignore them). They ARE interactive, though:
+   a click folds the run, a native HTML5 drag reorders projects, a right-click opens
+   the project menu. */
 .tier-project-label {
   display: flex;
   align-items: center;
   gap: 5px;
-  /* Flush left: the project header is the top of the hierarchy, so its icon
-     anchors the panel's left edge (loose cards 8, folder icons 16, members 32). */
+  /* Flush left: this row is the top of the hierarchy, so it starts at the panel's
+     left edge. The chevron is the leftmost element now (13px wide, pulled 2px
+     further out by its own margin-left), and the 5px gap after it puts the project
+     icon at x=16. */
   padding: 6px 8px 2px 0;
   font-size: 11px;
   font-weight: 600;
   color: var(--fg-muted);
   letter-spacing: 0.01em;
-  pointer-events: none;
+  /* The row's own gestures (fold, reorder, right-click) own this hit area, instead
+     of borrowing it from the -draggable modifier: fold would otherwise die the day
+     anyone stopped applying that class. The -inert variant below turns it back off
+     for the duration of a card drag, which is the one state that refuses input. */
+  pointer-events: auto;
   user-select: none;
 }
 
-/* Draggable variant (named projects): re-enable pointer events for HTML5 DnD.
-   Inbox labels stay inert — Inbox never enters ordering.projects. */
+/* Draggable variant: applied whenever no card drag is live, Inbox included (Inbox
+   reorders like any other project, riding ordering.projects as the empty string). */
 .tier-project-label-draggable {
-  pointer-events: auto;
   cursor: grab;
   border-radius: 6px;
 }
@@ -13425,10 +13477,43 @@ body.walnut-dragging {
   white-space: nowrap;
 }
 
-/* Project "+" on a by-project tier label — right-edge slot, same rest-visible
-   control as the All-view project header. `pointer-events: auto` is required: the
-   label itself is inert (`pointer-events: none`) so it never eats card clicks, and
-   the Inbox variant never re-enables them at all. */
+/* A tier project label whose whole body folds/unfolds on click. Same reasoning as
+   .task-group-chip-clickable: the chevron is the discoverable affordance and the
+   pointer cursor says the rest of the row does the same thing. Declared after the
+   -draggable rule on purpose — this row is BOTH (native drag handle + fold), and
+   fold is the everyday gesture, so pointer wins at rest and grabbing shows while
+   a drag is actually happening. */
+.tier-project-label-clickable {
+  cursor: pointer;
+}
+.tier-project-label-clickable:active {
+  cursor: grabbing;
+}
+/* Slimmer than the 18px default: this row is an 11px label, and a full-size
+   chevron would make the project line taller than the folder chips under it. */
+.tier-project-label .collapse-chevron {
+  --chevron-size: 13px;
+  font-size: 9px;
+  margin-left: -2px;
+}
+/* .tier-project-label-count (the cards this project has in the tier) is styled up
+   with .task-group-chip-count: one rule serves both levels. */
+
+/* Rows hidden by a COLLAPSED PROJECT inside a pinned tier — the label row stays
+   (it is what you click to unfold), its cards and folder chips go. A separate
+   class from .task-folder-collapsed on purpose: same mechanism, different reason,
+   and a shared class would make either rule's name a lie in devtools. Hidden, not
+   unmounted: the ids must stay in the tier's SortableContext or dnd-kit's indices
+   shift under a live drag. */
+.tier-project-collapsed {
+  display: none;
+}
+
+/* Project "+" on a by-project tier label: right-edge slot, same rest-visible
+   control as the All-view project header. `pointer-events: auto` is stated here on
+   purpose rather than inherited, so the button keeps its hit area whatever the row
+   itself ends up doing with pointer-events (the -inert variant switches the row off
+   entirely, and hides this slot with visibility). */
 .tier-project-label-actions {
   margin-left: auto;
   display: inline-flex;

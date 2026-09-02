@@ -118,6 +118,8 @@ import { GlobalNotesSection } from '../notes/GlobalNotesSection';
 import { useGlobalNotes } from '@/hooks/useGlobalNotes';
 import { SortableTierCard, TierDropZone, GroupChip } from './FocusSatelliteCards';
 import { useFolderContextMenu } from './FolderContextMenu';
+import { useProjectContextMenu } from './ProjectContextMenu';
+import { TierProjectLabelRow } from './TierProjectLabel';
 import {
   groupSortableId, parseGroupSentinelGid, isGroupSentinel, taskIdsOnly, withGroupSentinels,
   pruneOrphanSentinels,
@@ -801,7 +803,19 @@ const SortableTaskItem = memo(function SortableTaskItem({ task, isFocused, isDet
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: task.id, data: { type: 'task' }, animateLayoutChanges: noAnimateAfterDrag });
+  } = useSortable({
+    id: task.id,
+    data: { type: 'task' },
+    animateLayoutChanges: noAnimateAfterDrag,
+    // Drop off while the row is hidden by a collapsed folder. dnd-kit measures every
+    // ENABLED droppable, and a display:none node's getBoundingClientRect is all zeros,
+    // so a hidden row would stay in the collision candidates with its centre at the
+    // viewport origin: dragging toward the top-left corner would file the task into the
+    // collapsed folder. The id still stays in the SortableContext, which is what keeps
+    // dnd-kit's indices from shifting. (A row hidden by a folded PROJECT is unmounted
+    // here, so it never registers at all.)
+    disabled: { draggable: false, droppable: !!folderCollapsed },
+  });
 
   // Combined ref for sortable
   const setNodeRef = useCallback((node: HTMLDivElement | null) => {
@@ -1203,6 +1217,146 @@ function DroppableHeader({ id, project, disabled, children }: DroppableHeaderPro
     disabled,
   });
   return <>{children({ isOver, setNodeRef })}</>;
+}
+
+// ── Project header row (main list) — names one project group, folds it, and
+// carries the project actions ──
+//
+// Its OWN component rather than inline JSX in the grouped list for the reason
+// FolderHeaderRow is: the right-click menu needs hooks, and the menu node has to
+// be a SIBLING of the row (see ProjectContextMenu.tsx) — one hook instance per
+// rendered header is the only shape that gives both without duplicating the node.
+//
+// The row body folds the project, exactly like a folder row. Everything else on
+// the row stops its own click, and that IS the mechanism (no target sniffing):
+// the NAME opens the detail pane, the chevron folds, the star favorites, and the
+// "+"/kebab open their menus.
+function ProjectHeaderRow({
+  project, taskCount, collapsed, source, droppableDisabled, dragHandleProps,
+  isFavorite, onToggleFavorite, onToggleCollapse, onViewDetails, onAddTask, onAddFolder, onAddSession,
+}: {
+  /** '' = Inbox. */
+  project: string;
+  taskCount: number;
+  collapsed: boolean;
+  /** Provider that claims this project ('ms-todo', …), for the badge. */
+  source?: string;
+  /** No task drag in flight — the header is only a drop target during one. */
+  droppableDisabled: boolean;
+  /** dnd-kit activator for PROJECT reordering (SortableGroupItem). */
+  dragHandleProps: Record<string, unknown>;
+  isFavorite?: boolean;
+  onToggleFavorite?: (project: string) => void;
+  onToggleCollapse: (project: string) => void;
+  onViewDetails: (project: string) => void;
+  onAddTask: (project: string) => void;
+  onAddFolder?: (project: string) => void;
+  onAddSession?: (project: string) => void;
+}) {
+  const projectMenu = useProjectContextMenu({
+    onToggleCollapse,
+    onNewTask: onAddTask,
+    onNewFolder: onAddFolder,
+    onNewSession: onAddSession,
+    onToggleFavorite,
+    onViewDetails,
+  });
+  return (
+    <>
+      <DroppableHeader id={`hdr-proj:${project}`} project={project} disabled={droppableDisabled}>
+        {({ isOver: isHeaderOver, setNodeRef: setHeaderRef }) => (
+          <div
+            ref={setHeaderRef}
+            className={`todo-group-project-header${isHeaderOver ? ' header-drop-active' : ''}`}
+            {...dragHandleProps}
+            title={`Project — click to ${collapsed ? 'expand' : 'collapse'}`}
+            // dnd-kit swallows the click once its 5px activation fired, so a real
+            // project drag can never also fold the group.
+            onClick={() => onToggleCollapse(project)}
+            onContextMenu={(e) => projectMenu.open(e, { project, collapsed, favorite: isFavorite })}
+          >
+            <div className="todo-group-header-controls">
+              {/* pointerdown too, not just click: the row carries dragHandleProps and
+                  the PointerSensor arms at 5px, so a slip on this 13px glyph starts a
+                  project reorder and dnd-kit then swallows the click: the user asked
+                  to fold and got a reorder instead. Same guard ProjectPlusMenu and
+                  ProjectKebabMenu already use. */}
+              <button className={`collapse-chevron${!collapsed ? ' expanded' : ''}`} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onToggleCollapse(project); }} title="Collapse/Expand">
+                {CHEVRON_ICON}
+              </button>
+              {/* Inbox is the ABSENCE of a project — no registry row, so no detail pane and no favorite star. */}
+              <button
+                className="todo-group-name-btn"
+                // stopPropagation, or the row's fold would fire on the same click
+                // and the pane would open under a group that just closed.
+                onClick={(e) => { e.stopPropagation(); onViewDetails(project); }}
+                disabled={!project}
+                title={project ? 'View project details' : 'Tasks with no project'}
+              >
+                {/* SOLID icon + kind-tag = project (folders inside use the hollow icon + indent). */}
+                <span className="todo-group-project-icon">{ICONS.ICON_FOLDER_SOLID}</span>
+                <span className="todo-group-project-name">{project || 'Inbox'}</span>
+              </button>
+              {/* Tag / badge / count sit on the ROW, not inside the name button, and
+                  that placement is the feature: the button is the "open the project
+                  pane" target and must stay exactly as wide as the name, while these
+                  three (plus the slack after them) are the strip you click to FOLD.
+                  Capping the button's width instead was tried first and ellipsised
+                  names that fit ("Backend" → "Back…"). PLACEMENT matches the tier's
+                  project label (the same three are plain row spans there); the
+                  SPACING deliberately does not, this row's 2px gap is tighter than
+                  the tier's 5px because the gap also spaces the chevron and name. */}
+              <span className="project-kind-tag">project</span>
+              <ProjectSourceBadge source={source} />
+              <span className="todo-group-count text-xs text-muted">{taskCount}</span>
+            </div>
+            {onToggleFavorite && project && (
+              <button
+                className="todo-group-fav-btn"
+                // See the chevron above: a 5px slip on the star would arm the row's
+                // drag and the click that was meant to favorite gets eaten.
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); onToggleFavorite(project); }}
+                title={isFavorite ? 'Unfavorite project' : 'Favorite project'}
+              >
+                {isFavorite ? '★' : '☆'}
+              </button>
+            )}
+            {/* Both menus portal their popup to <body>, but React events still bubble
+                through the component TREE, so a click on the menu's own chrome (the
+                4px list padding, the 8px divider band) lands on the row's fold. They
+                already stop pointerdown; click has to stop here, where the menus are
+                children. The tier's project label guards the same way. */}
+            <span className="todo-group-header-actions" onClick={(e) => e.stopPropagation()}>
+              {/* "+" → new task (opens this group's ghost row, in place)
+                  or new task with session. The SESSION branch stays
+                  named-projects-only: a launch seeds the project's
+                  default cwd and Inbox has no registry row to carry one.
+                  No separator item here — divider lines live in the
+                  pinned TIER lists, whose two view modes define what a
+                  line's position means. */}
+              <ProjectPlusMenu
+                project={project}
+                onAddSession={project ? onAddSession : undefined}
+                onAddTask={onAddTask}
+                onAddFolder={onAddFolder}
+              />
+              {project && (
+                <ProjectKebabMenu
+                  project={project}
+                  isFavorite={isFavorite}
+                  onToggleFavorite={onToggleFavorite}
+                  onViewDetails={onViewDetails}
+                />
+              )}
+            </span>
+          </div>
+        )}
+      </DroppableHeader>
+      {/* Sibling, not child — see the note in ProjectContextMenu.tsx. */}
+      {projectMenu.node}
+    </>
+  );
 }
 
 // ── Empty folder row — a created-but-unfilled folder inside a project bucket ──
@@ -2476,7 +2630,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // own inline editor — creation stays physically IN the group, so "where does
   // it land" needs no explanation). Nonce so re-clicks re-open after an Escape.
   const [headerAddSignal, setHeaderAddSignal] = useState<{ project: string; nonce: number } | null>(null);
-  const handleHeaderAddTask = useCallback((project: string) => {
+  /** Unfold a project, for callers about to reveal something INSIDE it — a ghost
+   *  row (or any other row) under a folded project is a dead click. Shared by the
+   *  main list's add row and the pinned tiers' per-run add row. */
+  const expandProject = useCallback((project: string) => {
     setCollapsedProjects((prev) => {
       if (!prev.has(project)) return prev;
       const next = new Set(prev);
@@ -2484,8 +2641,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       persistSet(LS_COLLAPSED_PROJS_KEY, next);
       return next;
     });
-    setHeaderAddSignal((prev) => ({ project, nonce: (prev?.nonce ?? 0) + 1 }));
   }, []);
+  const handleHeaderAddTask = useCallback((project: string) => {
+    expandProject(project);
+    setHeaderAddSignal((prev) => ({ project, nonce: (prev?.nonce ?? 0) + 1 }));
+  }, [expandProject]);
   // Consume-once acknowledgment from the target InlineAdd (see its effect).
   const clearHeaderAddSignal = useCallback(() => setHeaderAddSignal(null), []);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_SECTIONS_KEY));
@@ -2811,7 +2971,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const tryScroll = () => {
       const wrapper = document.querySelector('.todo-pinned-wrapper');
       const el = wrapper?.querySelector(`[data-task-id="${window.CSS.escape(taskId)}"]`);
-      if (el) { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); flashCard(el); return true; }
+      // A card hidden by a folded project run (.tier-project-collapsed) or a collapsed
+      // folder is still IN the DOM, so the query finds it while scrollIntoView and the
+      // flash are both no-ops. getClientRects() is empty for display:none, so treat
+      // that as not-found and let the 150ms retry pick the card up once the unfold
+      // (see the focus effect) has committed.
+      if (el && el.getClientRects().length > 0) { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); flashCard(el); return true; }
       return false;
     };
     pinnedScrollRafRef.current = requestAnimationFrame(() => {
@@ -2942,6 +3107,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // scrollToPinnedTask would silently find nothing and never jump there.
     // User-locate only: the refresh restore path must respect collapsed state.
     if (isUserLocate && pinnedTaskIds?.has(focusedTaskId)) {
+      // A tier's project runs FOLD (rows kept in the DOM, display:none) instead of
+      // unmounting, so a folded run is the third way the card can be unreachable, and
+      // the silent one, because the query above still finds the node. Unfold it.
+      // Runs on the pinnedOnly path too (the block at the top of this effect that
+      // unfolds projects is gated on !pinnedOnly, which is exactly the tier quick-add
+      // case); expanding only touches the fold, never the tab, so the "pinnedOnly must
+      // not switch tabs" rule stays intact. The collapse key is shared with the main
+      // list, so this also unfolds that project's header row. Revealing rows is the
+      // acceptable side of a shared key; silently locating nothing is not.
+      expandProject(proj);
       let tierKey = focusTaskIds?.has(focusedTaskId) ? 'focus'
         : backlogTaskIds?.has(focusedTaskId) ? 'backlog'
         : waitTaskIds?.has(focusedTaskId) ? 'wait'
@@ -3386,6 +3561,23 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // One Map keyed by tier (built-in name or custom id) replaces the old three
   // fixed refs — null = not dragging.
   const dragTierIdsRef = useRef<Map<FocusTier, string[]> | null>(null);
+  /**
+   * The AIM RECORD: the last row dnd-kit itself named as `over` during the live
+   * pinned drag, other than the dragged item (a task card id or a group chip
+   * sentinel). null = it never named one.
+   *
+   * Why a record and not just `event.over` at the drop: dnd-kit routinely reports
+   * `over === active` at the END of a real cross-run drag, because the dragged
+   * card's preview follows the pointer and the live layout shift can put the
+   * pointer back on the dragged card itself. Measured, project-clustered tier,
+   * 30px rows: after the gesture task-move-project.spec.ts performs, EVERY row's
+   * transform is back to the identity matrix and the release pointer sits inside
+   * the dragged card's own at-rest rect — the release instant carries no evidence
+   * at all of the run the user aimed at. The row dnd-kit named while they were
+   * aiming is the only surviving record of it, and it is the SAME kind of evidence
+   * the explicit-`over` path already trusts. See maybeMoveProject.
+   */
+  const lastNamedOverRef = useRef<string | null>(null);
   const [, setDragTick] = useState(0);
   const dragRafRef = useRef(0);
   const bumpDragTick = useCallback(() => {
@@ -3702,6 +3894,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // away and an empty slot opens — exactly like dragging a task. Members are
     // hidden for the duration (renderTierItems draws the chip alone) and restored
     // on end.
+    // A fresh gesture aims at nothing yet (see lastNamedOverRef).
+    lastNamedOverRef.current = null;
+
     collapsedGroupRef.current = null;
     if (isGroupSentinel(activeId)) {
       const gid = parseGroupSentinelGid(activeId);
@@ -3794,6 +3989,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (!over) return;
     const activeId = active.id as string;
     const overId = over.id as string;
+
+    // Keep the aim record (lastNamedOverRef) current. FIRST thing in this handler on
+    // purpose: every branch below returns early for some drag kind, and the record has
+    // to describe the whole gesture regardless of what kind it was. Only ROWS count —
+    // a tier drop-zone names a TIER, not a slot inside it, and the dragged item naming
+    // itself is dnd-kit saying it has no row to name (which must not erase the last
+    // row it did name; that erasure is the whole reason the drop had nothing to read).
+    if (overId !== activeId && !DROP_ZONE_TIERS[overId] && !isSeparatorId(overId)) {
+      lastNamedOverRef.current = overId;
+    }
 
     // Whole-group drag (chip grip): the active id is the `group:<gid>:<tier>` sentinel,
     // now a real sortable unit in the tier refs (collapsed at drag start). Same-tier
@@ -3922,6 +4127,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     dragTierIdsRef.current = null;
     dragStartSnapshot.current = null;
     collapsedGroupRef.current = null;
+    // The aim record dies with the gesture. handlePinnedDragEnd captures it BEFORE
+    // calling this, next to liveTiers/collapsed and for the same reason.
+    lastNamedOverRef.current = null;
     setActiveDragPinnedId(null);
     // Tear down the drop-intent highlight + live-pointer listener started in
     // handlePinnedDragStart.
@@ -3967,6 +4175,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // moves, since the dragged card's center follows the pointer).
     const liveTiers = dragTierIdsRef.current;
     const collapsed = collapsedGroupRef.current;
+    // The aim record, captured alongside them and for the same reason: clearDragState
+    // is about to null it, and maybeMoveProject below is its only reader.
+    const lastNamedOver = lastNamedOverRef.current;
 
     clearDragState();
 
@@ -4042,16 +4253,37 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // In a project-clustered tier view, a drop that lands inside ANOTHER project's
     // run means "move to that project" — without this the reorder persists but the
     // project cluster pass snaps the card straight back (the reported no-op).
-    // When the drop displaced a real card (`over` is a task card / group chip),
-    // THAT row's project is the answer — the dragged card took its slot, so it is
-    // in that run even when the slot sits at a run boundary where the neighbour
-    // walk in inferTierDropProject would read the previous folder instead. The
-    // walk stays as the fallback for self-drops (over === active after a dragOver
-    // relocation), where the only evidence is the landing position itself.
-    // allowInference=false for Recent-origin drops: dragOver APPENDS a Recent
-    // card at the tier's end regardless of where the pointer hovers, so the
-    // landing slot is an artifact — only an explicit over-card carries intent.
-    const maybeMoveProject = (tier: FocusTier, tierIds: string[], allowInference = true) => {
+    //
+    // THREE kinds of evidence, in strict precedence order, because they are not
+    // equally trustworthy and mixing them up silently corrupted data twice:
+    //
+    //  1. The row dnd-kit names as `over` at the drop. The dragged card took that
+    //     row's slot, so it is in that run even when the slot sits at a run boundary
+    //     where the neighbour walk would read the previous folder instead.
+    //  2. The AIM RECORD (`lastNamedOver`): the last row dnd-kit named DURING the
+    //     gesture. Needed because `over` collapses back onto the dragged card at the
+    //     end of a real cross-run drag (the preview follows the pointer, the live
+    //     layout shift then puts the pointer back on the dragged card, and dnd-kit
+    //     reports it as its own `over`). Same kind of evidence as 1, just the last
+    //     moment it existed. A gesture that never named another row — a twitch, a
+    //     sideways slip — records nothing, and NOTHING is the correct answer there.
+    //  3. The landing SLOT in `tierIds` (inferTierDropProject). Evidence ONLY when
+    //     dragOver really spliced the card into that array, i.e. a cross-tier drop or
+    //     an explicit-over reorder. For a same-tier self-drop the array is still the
+    //     AT-REST order (invariant #3 above: same-tier drags never mutate it), so the
+    //     walk just re-reads where the card already lived and `prev` wins — which for
+    //     the FIRST card of a run answers "the run ABOVE you". That is how a 12px
+    //     twitch and a 40px sideways slip used to reproject a task with no visible
+    //     gesture at all. Both are ratcheted in project-collapse-menu.spec.ts.
+    //
+    // `evidence: 'none'` for Recent-origin drops: dragOver APPENDS a Recent card at
+    // the tier's end regardless of where the pointer hovers, so its landing position
+    // is an artifact and only an explicit over-card carries intent.
+    const maybeMoveProject = (
+      tier: FocusTier,
+      tierIds: string[],
+      evidence: 'none' | 'aim' | 'aim+slot' = 'aim+slot',
+    ) => {
       if (tierViewMode(tier) !== 'project') return;
       // A tier drop-zone names a TIER, not a slot inside it — dragOver merely
       // appended the card to the tier's end, so the neighbour walk below would
@@ -4075,26 +4307,33 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         if (t) distinct.add(t.project || '');
       }
       if (distinct.size < 2) return;
-      let landed: string | null = null;
-      if (overId !== activeId) {
-        if (isGroupSentinel(overId)) {
-          // A chip stands in for its whole group. Resolve the run from the id
-          // right AFTER the sentinel in this tier (its first member here) — a
-          // global tasks.find could hit a member parked in another tier or a
-          // mixed-project group's far member.
-          const si = tierIds.indexOf(overId);
-          if (si !== -1) {
-            for (let i = si + 1; i < tierIds.length; i++) {
-              if (tierIds[i] === activeId || isGroupSentinel(tierIds[i])) continue;
-              landed = projectOf(tierIds[i]) ?? null;
-              break;
-            }
-          }
-        } else {
-          landed = projectOf(overId) ?? null;
+      // One named ROW → the project of the run it sits in. A chip stands in for its
+      // whole group, so resolve it from the id right AFTER the sentinel in this tier
+      // (its first member here) — a global tasks.find could hit a member parked in
+      // another tier or a mixed-project group's far member. Scoped to `tierIds` on
+      // purpose: a row the tier being dropped into does not hold cannot answer for it,
+      // which is also what keeps a stale aim record from another tier out.
+      const runProjectOfRow = (rowId: string): string | null => {
+        if (!isGroupSentinel(rowId)) {
+          return tierIds.includes(rowId) ? (projectOf(rowId) ?? null) : null;
         }
+        const si = tierIds.indexOf(rowId);
+        if (si === -1) return null;
+        for (let i = si + 1; i < tierIds.length; i++) {
+          if (tierIds[i] === activeId || isGroupSentinel(tierIds[i])) continue;
+          return projectOf(tierIds[i]) ?? null;
+        }
+        return null;
+      };
+      let landed: string | null = null;
+      if (overId !== activeId) landed = runProjectOfRow(overId);
+      // Evidence 2 — the aim record. Reached when dnd-kit had no row to name at the
+      // drop, which is the normal end of a same-tier cross-run drag, not an edge case.
+      if (landed === null && evidence !== 'none' && lastNamedOver !== null) {
+        landed = runProjectOfRow(lastNamedOver);
       }
-      if (landed === null && allowInference) landed = inferTierDropProject(tierIds, activeId, projectOf);
+      // Evidence 3 — the landing slot, only where the array was really spliced.
+      if (landed === null && evidence === 'aim+slot') landed = inferTierDropProject(tierIds, activeId, projectOf);
       if (landed === null || landed === (activeTask.project || '')) return;
       // Fire-and-forget by design: the confirm (if any) resolves after this
       // handler returns, and a CANCEL leaves the already-persisted pin reorder
@@ -4245,7 +4484,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           const order = buildOrderFromRefs();
           onPinTask?.(activeId);
           setTimeout(() => onSetTier?.(activeId, currentTier, order), 100);
-          maybeMoveProject(currentTier, finalArr(currentTier), /* allowInference */ false);
+          maybeMoveProject(currentTier, finalArr(currentTier), /* evidence */ 'none');
         }
       } else {
         const origTier: FocusTier = snapTierOf(activeId) ?? 'satellite';
@@ -4258,9 +4497,38 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           ]);
           onSetTier?.(activeId, currentTier, buildOrderFromRefs());
         }
-        // Independent of a tier change: a self-drop inside the SAME tier still
-        // reports its landing slot, which is where a cross-folder move comes from.
-        if (currentTier) maybeMoveProject(currentTier, finalArr(currentTier));
+        // dnd-kit had no row to name at the drop (`over` is the dragged card, whose
+        // centre follows the pointer). TWO independent questions decide what may be
+        // read here, and conflating them is what shipped the bug twice:
+        //
+        // WHETHER anything at all: the dragged node's net translation. A gesture that
+        // ends where it began is not a request to move anything — that covers the 12px
+        // twitch (TRAVELS 24px, NETS 0) and, just as importantly, an aim at another run
+        // followed by a change of mind, where the aim record below IS populated and must
+        // be vetoed. Half a row is the cutoff: a drop that changed nothing about where
+        // the card sits cannot have been a request to change its project.
+        //
+        // WHAT is read: never the at-rest array for a SAME-tier drop. `finalArr` is
+        // still the order the tier had before the gesture (invariant #3: same-tier drags
+        // never mutate it), so the neighbour walk re-reads where the card already lived,
+        // and for the FIRST card of a run `prev` answers "the run ABOVE you". Net
+        // displacement cannot see that, because it only ever decided WHETHER: 40px of
+        // purely HORIZONTAL slip clears half a row while telling you nothing about which
+        // vertically-stacked run you are in, and the walk then reprojected the task
+        // backwards (ratcheted: "a sideways slip on the first card of a project run").
+        // So a same-tier self-drop gets 'aim' only — the row dnd-kit named while the
+        // user was aiming, or nothing. A CROSS-tier self-drop keeps 'aim+slot': dragOver
+        // really did splice the card into the destination array, so its neighbours are
+        // genuine evidence of the run it landed in.
+        const netDrop = Math.hypot(event.delta?.x ?? 0, event.delta?.y ?? 0);
+        const halfRow = (active.rect.current.initial?.height ?? 40) / 2;
+        if (currentTier) {
+          const retiered = origTier !== currentTier;
+          maybeMoveProject(
+            currentTier, finalArr(currentTier),
+            /* evidence */ !retiered && netDrop < halfRow ? 'none' : (retiered ? 'aim+slot' : 'aim'),
+          );
+        }
       }
       return;
     }
@@ -4275,7 +4543,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const order = buildOrderFromRefs();
       onPinTask?.(activeId);
       setTimeout(() => onSetTier?.(activeId, targetTier, order), 100);
-      maybeMoveProject(targetTier, finalArr(targetTier), /* allowInference */ false);
+      maybeMoveProject(targetTier, finalArr(targetTier), /* evidence */ 'none');
       return;
     }
 
@@ -4856,6 +5124,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     for (const def of customTiers ?? []) map.set(def.id, customTierRender[def.id]?.visibleIds ?? []);
     return map;
   }, [visibleFocusIds, visibleSatelliteIds, visibleBacklogIds, visibleWaitIds, customTiers, customTierRender]);
+  // The same map, frozen for the duration of a pinned drag. renderTierItems derives
+  // the project label set (and its per-project counts) from HERE, never from the
+  // arrays it walks: collapse-on-drag REMOVES a dragged folder's member ids from every
+  // tier array, so a tier whose second project lives entirely inside that folder drops
+  // to ONE distinct project mid-drag → showFolders goes false → every folded run in the
+  // tier un-hides, injecting rows under the pointer after dnd-kit already measured its
+  // rects, and the labels the drag is supposed to keep disappear.
+  // Freezing (the same isPinnedDragActive signal foldersInert reads) is smaller than
+  // rebuilding an at-rest cluster inside the callback, and it also keeps the count
+  // badges still: one gesture, one label set, exactly like the inert labels promise.
+  const tierIdsAtRest = useFrozenWhile(tierIdsByTier, isPinnedDragActive);
   const focusTasksDisplay = useMemo(
     () => visibleFocusIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task),
     [pinnedTaskMap, visibleFocusIds],
@@ -5290,7 +5569,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return m;
   }, [grouped]);
 
-  const toggleProject = (key: string) => {
+  // ONE collapse set for projects, shared by the main list's group headers and the
+  // pinned tiers' project label rows (same contract the folder collapse set has):
+  // folding a project in one surface folds it in the other, and it survives a
+  // reload. useCallback because the tier render pass depends on it.
+  const toggleProject = useCallback((key: string) => {
     setCollapsedProjects((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -5298,7 +5581,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       persistSet(LS_COLLAPSED_PROJS_KEY, next);
       return next;
     });
-  };
+  }, []);
 
   // Toggle child task visibility for a parent task (default: collapsed)
   const toggleParentExpand = useCallback((parentId: string) => {
@@ -5816,8 +6099,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const name = await prompt({ title: 'New folder', placeholder: 'Folder name', confirmLabel: 'Create' });
     const trimmed = name?.trim();
     if (!trimmed) return;
+    // Unfold first, like handleHeaderAddTask: the new folder's row lives inside the
+    // project's rows (the main list unmounts them while folded, the tiers hide them),
+    // so creating into a folded project would produce no visible row at all. After the
+    // prompt, not before: a cancelled prompt must not move the fold.
+    expandProject(project);
     onCreateFolder(trimmed, project);
-  }, [onCreateFolder, prompt]);
+  }, [onCreateFolder, prompt, expandProject]);
 
   // Group chip ⊘ → hide the whole cluster from the Focus area. Unlike dissolve this
   // keeps the group + membership intact — only the pinned rendering collapses it.
@@ -6311,8 +6599,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     setTierAddSignal({ tier, nonce: Date.now() });
   }, []);
   const addTaskToRun = useCallback((tier: string, project: string) => {
+    // The ghost row is rendered INSIDE the project's run, so a folded project
+    // would hide the very row this click asked for. Unfold first.
+    expandProject(project);
     setRunAddSignal({ tier, project, nonce: Date.now() });
-  }, []);
+  }, [expandProject]);
   const tierAddOpenSignal = useCallback((tier: string) =>
     (tierAddSignal?.tier === tier ? tierAddSignal.nonce : undefined), [tierAddSignal]);
   const consumeTierAddSignal = useCallback(() => setTierAddSignal(null), []);
@@ -6349,9 +6640,21 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // than 2 DISTINCT projects — a single label (incl. a lone "Inbox") separates
     // nothing and is pure noise.
     const distinctProjects = new Set<string>();
-    for (const id of ids) {
+    // Cards this project has in this tier (the label's count badge). Tier-local like
+    // the folder chip's badge: counting cards this tier does not hold would make the
+    // number jump for no visible reason. Deliberately NOT "visible rows": a card hidden
+    // by a collapsed FOLDER still counts, and the full count above a FOLDED run is the
+    // point, that number is what tells you what is behind the fold.
+    const projectRowCount = new Map<string, number>();
+    // The AT-REST ids, not the array being walked (see tierIdsAtRest): mid-drag `ids`
+    // is missing a dragged folder's members, which can silently drop this tier under
+    // the 2-project label threshold and pop every folded run open under the pointer.
+    for (const id of tierIdsAtRest.get(tier) ?? ids) {
       const t = pinnedTaskMap.get(id);
-      if (t) distinctProjects.add(t.project || '');
+      if (!t) continue;
+      const p = t.project || '';
+      distinctProjects.add(p);
+      projectRowCount.set(p, (projectRowCount.get(p) ?? 0) + 1);
     }
     // 'custom' view mode = raw pin order: no project runs exist, so no labels.
     // Labels STAY during a card drag (hiding them collapsed the tier into a
@@ -6359,6 +6662,18 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // handle, no "+", no hover — read-only separators until the drop lands.
     const showFolders = distinctProjects.size >= 2 && tierViewMode(tier) === 'project';
     const foldersInert = isPinnedDragActive;
+    /**
+     * Is this project's run folded shut right now?
+     *
+     * A folded run is HIDDEN (display:none via .tier-project-collapsed), never
+     * unmounted: its ids stay in this tier's SortableContext, and dropping them
+     * would shift dnd-kit's indices under a live drag. Gated on `showFolders`
+     * because the label row is the ONLY way back — hiding a run in a tier that
+     * draws no label (single project, or 'custom' view mode) would be a one-way
+     * door, and the collapse set is shared with the main list, where a project
+     * can be folded from a header this tier never renders.
+     */
+    const runHidden = (p: string) => showFolders && isProjectCollapsed(p);
     // Project run sequence (first-seen order) — decides which SIDE of the target
     // the drop indicator draws on. handleLabelDrop's splice means the dragged
     // project takes the target's slot: dragging UP lands before the target
@@ -6434,6 +6749,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             showProjectPrefix={!showFolders}
             count={facts.count}
             collapsed={collapsedFolders.has(gid)}
+            // The RUN's project decides, not the folder's registry project: this
+            // chip is drawn inside the bucket its members cluster into, and that
+            // bucket is what the label row folds. `prevProject` IS that bucket (the
+            // run being walked); facts.member is the first member in ANY tier, so it
+            // used to answer for a run this chip is not in. Null = nothing rendered
+            // above it yet, so there is no run to be folded inside.
+            projectCollapsed={prevProject !== null ? runHidden(prevProject) : false}
             inert={foldersInert}
             onToggleCollapse={toggleFolderCollapse}
             onMoveToProject={handleMoveFolderToProject}
@@ -6448,7 +6770,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // Leaving a project run: its inline "add task" row belongs to the run above,
       // so it goes out BEFORE the next folder label.
       if (sepMode === 'project' && prevProject !== null && proj !== prevProject) {
-        if (runAddSignal?.tier === tier && runAddSignal.project === prevProject) out.push(runAddRow(tier, prevProject));
+        // runHidden gate: the signal is nonce-independent, so folding the project
+        // AFTER opening the row would otherwise leave an "Add to X…" row floating
+        // under a shut label, and typing in it would create a task into a run the
+        // user cannot see.
+        if (runAddSignal?.tier === tier && runAddSignal.project === prevProject && !runHidden(prevProject)) out.push(runAddRow(tier, prevProject));
       }
       // A line placed between folders draws ABOVE this folder's label, outside the
       // folder entirely — a folder is one unit in this mode, and a line between a
@@ -6458,78 +6784,53 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
       if (showFolders && proj !== prevProject) {
         out.push(
-          <div
+          <TierProjectLabelRow
             key={`projlabel:${tier}:${proj}`}
-            // The REAL project name, which the visible text isn't: Inbox renders as
-            // "Inbox" but is stored as ''. Anything matching folders (a separator's
-            // boundary, a test) needs the stored value.
-            data-project={proj}
-            // Inbox ('') drags too — its slot rides ordering.projects as the
-            // empty string. '' is falsy, so every gate below checks against
-            // null (the "no drag" sentinel), never truthiness.
-            className={`tier-project-label${!foldersInert ? ' tier-project-label-draggable' : ''}${foldersInert ? ' tier-project-label-inert' : ''}${labelDropProj === proj && labelDragProj !== proj ? ` tier-project-label-dropover dropover-${dropSide(proj)}` : ''}`}
-            draggable={!foldersInert}
-            onDragStart={(e) => {
-              e.dataTransfer.setData('text/walnut-project', proj);
-              e.dataTransfer.effectAllowed = 'move';
-              setLabelDragProj(proj);
-            }}
-            onDragEnd={() => { setLabelDragProj(null); setLabelDropProj(null); }}
-            onDragOver={(e) => {
-              if (labelDragProj !== null && labelDragProj !== proj) {
+            project={proj}
+            count={projectRowCount.get(proj) ?? 0}
+            collapsed={isProjectCollapsed(proj)}
+            inert={foldersInert}
+            dropIndicator={labelDropProj === proj && labelDragProj !== proj ? dropSide(proj) : null}
+            // The project-reorder drag stays HERE, next to `ordering.projects`.
+            // Inbox ('') drags too — its slot rides that list as the empty string.
+            // '' is falsy, so every gate below checks against null (the "no drag"
+            // sentinel), never truthiness.
+            dragProps={{
+              draggable: !foldersInert,
+              onDragStart: (e) => {
+                e.dataTransfer.setData('text/walnut-project', proj);
+                e.dataTransfer.effectAllowed = 'move';
+                setLabelDragProj(proj);
+              },
+              onDragEnd: () => { setLabelDragProj(null); setLabelDropProj(null); },
+              onDragOver: (e) => {
+                if (labelDragProj !== null && labelDragProj !== proj) {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                  setLabelDropProj(proj);
+                }
+              },
+              onDragLeave: () => { if (labelDropProj === proj) setLabelDropProj(null); },
+              onDrop: (e) => {
                 e.preventDefault();
-                e.dataTransfer.dropEffect = 'move';
-                setLabelDropProj(proj);
-              }
+                // getData returns '' both for "no payload" AND for an Inbox drag —
+                // labelDragProj (state) disambiguates; null means no live drag.
+                const fromData = e.dataTransfer.getData('text/walnut-project');
+                const active = fromData !== '' ? fromData : labelDragProj;
+                if (active !== null) handleLabelDrop(active, proj);
+              },
             }}
-            onDragLeave={() => { if (labelDropProj === proj) setLabelDropProj(null); }}
-            onDrop={(e) => {
-              e.preventDefault();
-              // getData returns '' both for "no payload" AND for an Inbox drag —
-              // labelDragProj (state) disambiguates; null means no live drag.
-              const fromData = e.dataTransfer.getData('text/walnut-project');
-              const active = fromData !== '' ? fromData : labelDragProj;
-              if (active !== null) handleLabelDrop(active, proj);
-            }}
-            title="Drag to reorder projects"
-          >
-            {/* SOLID icon + kind-tag = project; folders inside render with the
-                hollow icon + indent, so the two levels never read the same. */}
-            <span className="tier-project-label-icon">{ICONS.ICON_FOLDER_SOLID}</span>
-            <span className="tier-project-label-name">{proj || 'Inbox'}</span>
-            <span className="project-kind-tag">project</span>
-            {/* Project "+" (GAP-2) — the same control the All-view project header
-                carries, so a by-project tier reads and behaves the same way: new
-                task / new task with session / add separator. The SESSION item is
-                named-projects-only (a launch seeds the project's default folder and
-                Inbox has no registry row to carry one); task + separator work for
-                Inbox too, which is why the wrapper no longer gates on `proj`.
-                The label is an HTML5 drag handle for project reordering, so a
-                dragstart originating on the button is swallowed here — otherwise
-                pressing "+" and twitching would arm a project reorder. */}
-            <span
-                className="tier-project-label-actions"
-                draggable={false}
-                onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                // Disarm the label's OWN draggability while the pointer is over
-                // the "+": `draggable=false` here doesn't stop Chromium's native
-                // drag detection on the draggable ANCESTOR, which silently eats
-                // the click once the pointer slips ≥3px between press and release
-                // (measured; a 16×12 target on a trackpad slips often). Toggled on
-                // the DOM node directly — no re-render happens mid-hover, and a
-                // re-render outside one re-applies React's value harmlessly.
-                onPointerEnter={(e) => { const label = e.currentTarget.parentElement; if (label) label.draggable = false; }}
-                onPointerLeave={(e) => { const label = e.currentTarget.parentElement; if (label) label.draggable = true; }}
-              >
-                <ProjectPlusMenu
-                  project={proj}
-                  onAddSession={proj && onOpenLauncherForProject ? onOpenLauncherForProject : undefined}
-                  onAddTask={(p) => addTaskToRun(tier, p)}
-                  onAddSeparator={(p) => addSeparator(tier, p)}
-                  onAddFolder={onCreateFolder ? handleCreateFolder : undefined}
-                />
-              </span>
-          </div>
+            onToggleCollapse={toggleProject}
+            onAddTask={(p) => addTaskToRun(tier, p)}
+            onAddSeparator={(p) => addSeparator(tier, p)}
+            onAddFolder={onCreateFolder ? handleCreateFolder : undefined}
+            // Named projects only: a launch seeds the project's default folder and
+            // Inbox has no registry row to carry one.
+            onAddSession={proj && onOpenLauncherForProject ? onOpenLauncherForProject : undefined}
+            isFavorite={favorites?.isProjectFavorite(proj)}
+            onToggleFavorite={favorites?.toggleFavoriteProject}
+            onViewDetails={showProjectDetail}
+          />
         );
       }
       prevProject = proj;
@@ -6544,6 +6845,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             showProjectPrefix={!showFolders}
             count={gi.count}
             collapsed={collapsedFolders.has(gi.groupId)}
+            projectCollapsed={runHidden(proj)}
             inert={foldersInert}
             onToggleCollapse={toggleFolderCollapse}
             onMoveToProject={handleMoveFolderToProject}
@@ -6563,6 +6865,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
           onDelete={onDelete} onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
           groupInfo={gi} folderCollapsed={!!(gi && collapsedFolders.has(gi.groupId))}
+          projectCollapsed={runHidden(proj)}
           selectMode={selectMode}
           isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle}
           onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} />
@@ -6573,11 +6876,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // the last run's inline "add task" row.
     if (sepPlacement) for (const sep of sepPlacement.tail) out.push(sepRow(sep));
     const lastScope = prevProject ?? '';
-    if (sepMode === 'project' && runAddSignal?.tier === tier && runAddSignal.project === lastScope) {
+    // Same runHidden gate as the mid-list push above.
+    if (sepMode === 'project' && runAddSignal?.tier === tier && runAddSignal.project === lastScope && !runHidden(lastScope)) {
       out.push(runAddRow(tier, lastScope));
     }
     return out;
-  }, [pinnedTaskMap, taskGroups, folderMeta, collapsedFolders, toggleFolderCollapse, handleMoveFolderToProject, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal]);
+  }, [tierIdsAtRest, pinnedTaskMap, taskGroups, folderMeta, collapsedFolders, toggleFolderCollapse, handleMoveFolderToProject, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal, isProjectCollapsed, toggleProject, favorites, showProjectDetail, onCreateFolder, handleCreateFolder]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
@@ -7443,58 +7747,24 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                 <SortableGroupItem key={`proj:${project}`} id={`proj:${project}`}>
                   {({ dragHandleProps }: { dragHandleProps: Record<string, unknown> }) => (
                     <div className="todo-group-project">
-                      <DroppableHeader id={`hdr-proj:${project}`} project={project} disabled={activeDragType !== 'task'}>
-                        {({ isOver: isHeaderOver, setNodeRef: setHeaderRef }) => (
-                          <div ref={setHeaderRef} className={`todo-group-project-header${isHeaderOver ? ' header-drop-active' : ''}`} {...dragHandleProps}>
-                            <div className="todo-group-header-controls">
-                              <button className={`collapse-chevron${!isProjectCollapsed(project) ? ' expanded' : ''}`} onClick={(e) => { e.stopPropagation(); toggleProject(project); }} title="Collapse/Expand">
-                                {CHEVRON_ICON}
-                              </button>
-                              {/* Inbox is the ABSENCE of a project — no registry row, so no detail pane and no favorite star. */}
-                              <button className="todo-group-name-btn" onClick={() => showProjectDetail(project)} disabled={!project} title={project ? 'View project details' : 'Tasks with no project'}>
-                                {/* SOLID icon + kind-tag = project (folders inside use the hollow icon + indent). */}
-                                <span className="todo-group-project-icon">{ICONS.ICON_FOLDER_SOLID}</span>
-                                <span className="todo-group-project-name">{project || 'Inbox'}</span>
-                                <span className="project-kind-tag">project</span>
-                                <ProjectSourceBadge source={projectRegistry.sourceByName.get(project.toLowerCase())} />
-                                <span className="todo-group-count text-xs text-muted">{projTasks.length}</span>
-                              </button>
-                            </div>
-                            {favorites && project && (
-                              <button
-                                className="todo-group-fav-btn"
-                                onClick={(e) => { e.stopPropagation(); favorites.toggleFavoriteProject(project); }}
-                                title={favorites.isProjectFavorite(project) ? 'Unfavorite project' : 'Favorite project'}
-                              >
-                                {favorites.isProjectFavorite(project) ? '\u2605' : '\u2606'}
-                              </button>
-                            )}
-                            <span className="todo-group-header-actions">
-                              {/* "+" → new task (opens this group's ghost row, in place)
-                                  or new task with session. The SESSION branch stays
-                                  named-projects-only: a launch seeds the project's
-                                  default cwd and Inbox has no registry row to carry one.
-                                  No separator item here — divider lines live in the
-                                  pinned TIER lists, whose two view modes define what a
-                                  line's position means. */}
-                              <ProjectPlusMenu
-                                project={project}
-                                onAddSession={project ? onOpenLauncherForProject : undefined}
-                                onAddTask={(p) => setHeaderAddSignal({ project: p, nonce: Date.now() })}
-                                onAddFolder={onCreateFolder ? handleCreateFolder : undefined}
-                              />
-                              {project && (
-                                <ProjectKebabMenu
-                                  project={project}
-                                  isFavorite={favorites?.isProjectFavorite(project)}
-                                  onToggleFavorite={favorites ? favorites.toggleFavoriteProject : undefined}
-                                  onViewDetails={showProjectDetail}
-                                />
-                              )}
-                            </span>
-                          </div>
-                        )}
-                      </DroppableHeader>
+                      <ProjectHeaderRow
+                        project={project}
+                        taskCount={projTasks.length}
+                        collapsed={isProjectCollapsed(project)}
+                        source={projectRegistry.sourceByName.get(project.toLowerCase())}
+                        droppableDisabled={activeDragType !== 'task'}
+                        dragHandleProps={dragHandleProps}
+                        isFavorite={favorites?.isProjectFavorite(project)}
+                        onToggleFavorite={favorites ? favorites.toggleFavoriteProject : undefined}
+                        onToggleCollapse={toggleProject}
+                        onViewDetails={showProjectDetail}
+                        // handleHeaderAddTask, not a raw signal write: it unfolds the
+                        // project first, so the ghost row can never open inside a group
+                        // whose rows are unmounted.
+                        onAddTask={handleHeaderAddTask}
+                        onAddFolder={onCreateFolder ? handleCreateFolder : undefined}
+                        onAddSession={onOpenLauncherForProject}
+                      />
                       {!isProjectCollapsed(project) && (
                         <SortableContext items={projTasks.filter((t) => !isChildHidden(t.id)).map((t) => t.id)} strategy={verticalListSortingStrategy}>
                           {projTasks.map((task) => {

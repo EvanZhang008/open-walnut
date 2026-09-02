@@ -36,12 +36,69 @@
  * real round trips, so both halves of the feature are covered.
  *
  * All data is unique per run (suffixes), parallel-safe against the shared
- * fixture server.
+ * fixture server, and registered in `litter` so afterEach removes it EVEN AFTER A
+ * FAILED ASSERTION: a leaked pin sits in the shared Focus tier and changes the
+ * geometry other specs' drag tests measure, and a leaked project group changes
+ * what every list spec sees.
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { presetPanelView } from './todo-panel-helpers'
+import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
+
+// The gesture helpers below retry for up to 45s on purpose (two overlays that
+// dismiss themselves on scroll). Under the config's 30s per-test budget none of
+// them could ever exhaust its own loop, so a real failure surfaced as "Test
+// timeout of 30000ms exceeded" instead of the message that says what broke.
+test.setTimeout(180_000)
+
+/**
+ * Sequential inside this file: the fold sets (`walnut-todo-collapsed-folders`,
+ * `walnut-todo-collapsed-projs`) are single localStorage keys that ui-prefs-sync
+ * mirrors to the fixture SERVER and merges back at boot, last-writer-wins per key.
+ * Two tests folding in parallel overwrite each other's whole set, and the test that
+ * reloads to prove the fold PERSISTED comes back with the other one's value.
+ * `default` rather than `serial` so one failure does not abandon the rest of the file.
+ */
+test.describe.configure({ mode: 'default' })
+
+/** Everything this file creates. Module scope is per WORKER; beforeEach resets it. */
+const litter: { tasks: string[]; folders: string[]; projects: string[] } = { tasks: [], folders: [], projects: [] }
+
+function trackProject(name: string): void {
+  if (name && !litter.projects.includes(name)) litter.projects.push(name)
+}
+
+test.beforeEach(() => {
+  litter.tasks = []
+  litter.folders = []
+  litter.projects = []
+})
+
+/**
+ * The fold sets are mirrored to the SHARED fixture server, and a fresh Playwright
+ * context adopts whatever another spec FILE last wrote there (the note on
+ * isolateUiPrefs has the mechanism). Serializing inside this file, as configured
+ * above, does nothing about that: project-collapse-menu.spec.ts drives the same two
+ * keys and runs in PARALLEL with this file. Keep the fold local to each context.
+ */
+test.beforeEach(async ({ page }) => {
+  await isolateUiPrefs(page)
+})
+
+test.afterEach(async () => {
+  for (const id of litter.tasks) {
+    await fetch(`${API}/api/focus/tasks/${id}`, { method: 'DELETE' }).catch(() => undefined)
+    await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' }).catch(() => undefined)
+  }
+  for (const gid of litter.folders) {
+    await fetch(`${API}/api/tasks/folders/${gid}`, { method: 'DELETE' }).catch(() => undefined)
+  }
+  // Registry rows last: deleting a project moves its remaining tasks to the Inbox.
+  for (const name of litter.projects) {
+    await fetch(`${API}/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' }).catch(() => undefined)
+  }
+})
 
 async function createTaskViaApi(title: string, opts: Record<string, unknown> = {}): Promise<{ id: string; title: string }> {
   const uniqueTitle = `${title} ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -52,6 +109,8 @@ async function createTaskViaApi(title: string, opts: Record<string, unknown> = {
   })
   if (!res.ok) throw new Error(`task create failed: ${res.status} ${await res.text()}`)
   const body = (await res.json()) as { task: { id: string; title: string } }
+  litter.tasks.push(body.task.id)
+  if (typeof opts.project === 'string') trackProject(opts.project)
   return body.task
 }
 
@@ -62,7 +121,23 @@ async function createFolderViaApi(taskIds: string[], label: string): Promise<str
     body: JSON.stringify({ task_ids: taskIds, label }),
   })
   if (!res.ok) throw new Error(`folder create failed: ${res.status} ${await res.text()}`)
-  return ((await res.json()) as { group_id: string }).group_id
+  const gid = ((await res.json()) as { group_id: string }).group_id
+  litter.folders.push(gid)
+  return gid
+}
+
+/** An EMPTY folder (no members yet), the row the picker cases start from. */
+async function createEmptyFolderViaApi(label: string, project: string): Promise<string> {
+  const res = await fetch(`${API}/api/tasks/folders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label, project }),
+  })
+  expect(res.status).toBe(201)
+  const gid = ((await res.json()) as { group_id: string }).group_id
+  litter.folders.push(gid)
+  trackProject(project)
+  return gid
 }
 
 /** Registry row for a project with NO tasks (the picker is registry-backed). */
@@ -73,6 +148,7 @@ async function createProjectViaApi(name: string): Promise<void> {
     body: JSON.stringify({ name }),
   })
   if (!res.ok) throw new Error(`project create failed: ${res.status} ${await res.text()}`)
+  trackProject(name)
 }
 
 /** The folder's server-side owning project ('' = Inbox). */
@@ -80,11 +156,6 @@ async function folderProjectViaApi(groupId: string): Promise<string | undefined>
   const res = await fetch(`${API}/api/tasks/groups`)
   const body = (await res.json()) as { groups: Array<{ group_id: string; project?: string }> }
   return body.groups.find((g) => g.group_id === groupId)?.project
-}
-
-/** Unpin, so a finished test stops crowding the SHARED Focus tier. */
-async function unpinViaApi(taskId: string): Promise<void> {
-  await fetch(`${API}/api/focus/tasks/${taskId}`, { method: 'DELETE' })
 }
 
 async function pinToFocusViaApi(taskId: string): Promise<void> {
@@ -251,7 +322,6 @@ test('main list: clicking the folder header row body folds it, and the fold surv
   await clickFolderMenuItem(page, listHeader(page, groupId), 'Expand folder')
   await expect(page.locator(`.todo-group-project .todo-panel-item[data-task-id="${a.id}"]`).first()).toBeVisible()
 
-  await fetch(`${API}/api/tasks/folders/${groupId}`, { method: 'DELETE' })
 })
 
 test('pinned tier: clicking the folder chip folds it, and the main list folds with it', async ({ page }) => {
@@ -289,9 +359,6 @@ test('pinned tier: clicking the folder chip folds it, and the main list folds wi
   await expect(page.locator(`.todo-group-project .todo-panel-item[data-task-id="${a.id}"]`).first()).toBeHidden()
   await expect(listHeader(page, groupId).locator('.collapse-chevron')).not.toHaveClass(/expanded/)
 
-  await unpinViaApi(a.id)
-  await unpinViaApi(b.id)
-  await fetch(`${API}/api/tasks/folders/${groupId}`, { method: 'DELETE' })
 })
 
 test('flat list mode: the folder header still folds (one collapse set, every list mode)', async ({ page }) => {
@@ -325,7 +392,6 @@ test('flat list mode: the folder header still folds (one collapse set, every lis
   await expect(header.locator('.collapse-chevron')).not.toHaveClass(/expanded/)
   await page.screenshot({ path: '/tmp/folder-collapse-menu/flat-folder-collapsed.png' })
 
-  await fetch(`${API}/api/tasks/folders/${groupId}`, { method: 'DELETE' })
 })
 
 test('right-click on a folder chip opens the folder menu; Rename and Delete work from it', async ({ page }) => {
@@ -365,8 +431,6 @@ test('right-click on a folder chip opens the folder menu; Rename and Delete work
   await expect(page.locator(`[data-task-id="${a.id}"]`).first()).toBeVisible()
   await page.screenshot({ path: '/tmp/folder-collapse-menu/folder-deleted-from-menu.png' })
 
-  await unpinViaApi(a.id)
-  await unpinViaApi(b.id)
 })
 
 test('"Move to project…" really moves the folder: header + members land under the destination', async ({ page }) => {
@@ -406,7 +470,6 @@ test('"Move to project…" really moves the folder: header + members land under 
   // Server truth, not just the optimistic view.
   expect(await folderProjectViaApi(groupId)).toBe(target)
 
-  await fetch(`${API}/api/tasks/folders/${groupId}`, { method: 'DELETE' })
 })
 
 test('an EMPTY folder moved to a project with no tasks still renders, in its new home', async ({ page }) => {
@@ -418,13 +481,7 @@ test('an EMPTY folder moved to a project with no tasks still renders, in its new
   // folder itself is the ONLY reason the destination group can exist.
   await createTaskViaApi('Empty move anchor', { project: from })
   await createProjectViaApi(target)
-  const res = await fetch(`${API}/api/tasks/folders`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ label: `EmptyMovable ${stamp}`, project: from }),
-  })
-  expect(res.status).toBe(201)
-  const { group_id: groupId } = (await res.json()) as { group_id: string }
+  const groupId = await createEmptyFolderViaApi(`EmptyMovable ${stamp}`, from)
 
   await presetPanelView(page, { section: 'all', project: '' })
   await page.goto('/')
@@ -440,7 +497,6 @@ test('an EMPTY folder moved to a project with no tasks still renders, in its new
   await page.screenshot({ path: '/tmp/folder-collapse-menu/empty-folder-moved-to-project.png' })
   expect(await folderProjectViaApi(groupId)).toBe(target)
 
-  await fetch(`${API}/api/tasks/folders/${groupId}`, { method: 'DELETE' })
 })
 
 test('"Move to project…" sends exactly one PATCH with { project: <target> }', async ({ page }) => {
@@ -473,9 +529,6 @@ test('"Move to project…" sends exactly one PATCH with { project: <target> }', 
   await expect(page.locator('.task-kebab-project-flyout')).toHaveCount(0)
 
   await page.unroute(`**/api/tasks/folders/${groupId}`)
-  await unpinViaApi(a.id)
-  await unpinViaApi(b.id)
-  await fetch(`${API}/api/tasks/folders/${groupId}`, { method: 'DELETE' })
 })
 
 test('re-picking the folder’s current project is a dismiss, not a move (no PATCH)', async ({ page }) => {
@@ -511,7 +564,6 @@ test('re-picking the folder’s current project is a dismiss, not a move (no PAT
   await expect(projectBucket(page, project).locator(`.task-group-chip[data-group-id="${groupId}"]`)).toBeVisible()
 
   await page.unroute(`**/api/tasks/folders/${groupId}`)
-  await fetch(`${API}/api/tasks/folders/${groupId}`, { method: 'DELETE' })
 })
 
 test('picking Inbox moves the folder out of every project — body { project: "" }', async ({ page }) => {
@@ -536,7 +588,6 @@ test('picking Inbox moves the folder out of every project — body { project: ""
   expect(patches[0]).toEqual({ project: '' })
 
   await page.unroute(`**/api/tasks/folders/${groupId}`)
-  await fetch(`${API}/api/tasks/folders/${groupId}`, { method: 'DELETE' })
 })
 
 test('pressing and dragging inside the folder menu never drags the folder chip', async ({ page }) => {
@@ -587,27 +638,19 @@ test('pressing and dragging inside the folder menu never drags the folder chip',
   expect(orderAfter).toEqual(orderBefore)
   await page.screenshot({ path: '/tmp/folder-collapse-menu/menu-drag-no-folder-drag.png' })
 
-  await unpinViaApi(a.id)
-  await fetch(`${API}/api/tasks/folders/${groupId}`, { method: 'DELETE' })
 })
 
 test('the empty-folder row has the same right-click menu (no collapse row)', async ({ page }) => {
   const project = `FoldEmptyMenu${Date.now().toString(36)}`
   await createTaskViaApi('Empty folder menu anchor', { project })
   const label = `EmptyMenuFolder ${Date.now().toString(36)}`
-  const res = await fetch(`${API}/api/tasks/folders`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ label, project }),
-  })
-  expect(res.status).toBe(201)
-  const folder = (await res.json()) as { group_id: string }
+  const groupId = await createEmptyFolderViaApi(label, project)
 
   await presetPanelView(page, { section: 'all', project: '' })
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  const row = page.locator(`.task-group-chip-empty[data-group-id="${folder.group_id}"]`).first()
+  const row = page.locator(`.task-group-chip-empty[data-group-id="${groupId}"]`).first()
   await expect(row).toBeVisible({ timeout: 15_000 })
   const menu = await openFolderMenu(page, row, 'Rename folder')
   await expect(menu.getByRole('menuitem', { name: 'Move to project…' })).toBeVisible()
@@ -617,5 +660,4 @@ test('the empty-folder row has the same right-click menu (no collapse row)', asy
   await page.screenshot({ path: '/tmp/folder-collapse-menu/empty-folder-context-menu.png' })
 
   await page.keyboard.press('Escape')
-  await fetch(`${API}/api/tasks/folders/${folder.group_id}`, { method: 'DELETE' })
 })

@@ -27,8 +27,7 @@
 import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
-import { useConfirm, useAlert, usePrompt } from '@/hooks/useConfirm';
-import { fetchProjectDetail, renameProject, deleteProject } from '@/api/projects';
+import { useProjectActions } from '@/hooks/useProjectActions';
 import * as ICONS from '../common/Icons';
 
 /** Shared open/close + placement shell for one trigger button and its menu.
@@ -244,10 +243,10 @@ export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onView
   btnClassName?: string;
 }) {
   const { open, setOpen, btnRef, menuRef, menuPos, closeMenu, openAtCursor, setCursorAnchor } = useHeaderMenu();
-  const confirm = useConfirm();
-  const alert = useAlert();
-  const prompt = usePrompt();
-  const [busy, setBusy] = useState(false);
+  // Rename/Delete are SHARED with the project right-click menu (see
+  // hooks/useProjectActions.ts) — the dialog copy and the local-claim vs
+  // provider-claim delete semantics have exactly one definition.
+  const { busy, rename, remove } = useProjectActions({ onChanged });
 
   // Right-click on the owning row opens this kebab menu at the cursor.
   useEffect(() => {
@@ -268,71 +267,10 @@ export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onView
     // btnRef is a stable ref; the row is resolved once per selector.
   }, [rowSelector, openAtCursor, btnRef]);
 
-  const handleRename = useCallback(async () => {
-    closeMenu();
-    const next = await prompt({
-      title: `Rename project “${project}”`,
-      message: 'Renaming onto an existing project merges them (case-insensitive).',
-      defaultValue: project,
-      confirmLabel: 'Rename',
-    });
-    const target = next?.trim();
-    if (!target || target === project) return;
-    setBusy(true);
-    try {
-      await renameProject(project, target);
-      // Task rows refresh via the task:updated broadcast; onChanged covers
-      // registry-driven hosts (rail selection, project list).
-      onChanged?.('rename', project, target);
-    } catch (err) {
-      await alert({ title: 'Rename failed', message: err instanceof Error ? err.message : String(err) });
-    } finally {
-      setBusy(false);
-    }
-  }, [project, prompt, alert, closeMenu, onChanged]);
-
-  // Same semantics + copy as ProjectDetailPane.handleDelete: local claim = row
-  // drop (tasks → Inbox); provider claim = ?remote=1 CASCADE, which deletes the
-  // remote container itself (IRREVERSIBLE), so the confirm spells that out.
-  // Source isn't threaded into the header, so fetch the detail lazily here.
-  const handleDelete = useCallback(async () => {
-    closeMenu();
-    setBusy(true);
-    let source = 'local';
-    let total = 0;
-    try {
-      const detail = await fetchProjectDetail(project);
-      source = detail.source;
-      total = detail.counts.todo + detail.counts.active + detail.counts.done;
-    } catch (err) {
-      // Without the real source we can't pick the right confirm copy — a
-      // provider-claimed project shown the harmless local copy would then hit
-      // the route's 409 anyway. Abort instead of guessing.
-      setBusy(false);
-      await alert({ title: 'Delete unavailable', message: `Could not load project info: ${err instanceof Error ? err.message : String(err)}` });
-      return;
-    }
-    setBusy(false);
-    const isClaimed = source !== 'local';
-    const ok = await confirm({
-      title: `Delete project “${project}”?`,
-      message: isClaimed
-        ? `This project is synced with ${source}. Deleting it ALSO DELETES the remote container (e.g. the MS To-Do list) — this cannot be undone. Local tasks are kept and move to the Inbox.`
-        : `Its ${total} task${total === 1 ? '' : 's'} move to the Inbox (nothing is deleted).`,
-      confirmLabel: isClaimed ? 'Delete here + remote' : 'Delete project',
-      danger: true,
-    });
-    if (!ok) return;
-    setBusy(true);
-    try {
-      await deleteProject(project, isClaimed ? { remote: true } : undefined);
-      onChanged?.('delete', project);
-    } catch (err) {
-      await alert({ title: 'Delete failed', message: err instanceof Error ? err.message : String(err) });
-    } finally {
-      setBusy(false);
-    }
-  }, [project, confirm, alert, closeMenu, onChanged]);
+  // Both flows close the menu FIRST: their dialog owns the screen from here, and
+  // a menu left open behind a modal reads as two competing surfaces.
+  const handleRename = useCallback(() => { closeMenu(); void rename(project); }, [closeMenu, rename, project]);
+  const handleDelete = useCallback(() => { closeMenu(); void remove(project); }, [closeMenu, remove, project]);
 
   return (
     <span className={wrapClassName ?? 'todo-group-action-wrap'} data-menu-open={(open || busy) || undefined}>
@@ -377,14 +315,14 @@ export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onView
               <span>{isFavorite ? 'Unfavorite' : 'Favorite'}</span>
             </button>
           )}
-          <button className="task-kebab-item" onClick={(e) => { e.stopPropagation(); void handleRename(); }}>
+          <button className="task-kebab-item" onClick={(e) => { e.stopPropagation(); handleRename(); }}>
             <span className="task-kebab-icon">✎</span>
             <span>Rename…</span>
           </button>
           <div className="task-kebab-divider" />
           <button
             className="task-kebab-item task-kebab-item-danger"
-            onClick={(e) => { e.stopPropagation(); void handleDelete(); }}
+            onClick={(e) => { e.stopPropagation(); handleDelete(); }}
           >
             <span className="task-kebab-icon">🗑</span>
             <span>Delete…</span>

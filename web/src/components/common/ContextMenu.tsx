@@ -77,11 +77,27 @@ export function ContextMenu({ point, items, onClose, ariaLabel, testId }: Contex
 
   // Dismissal. Scroll closes outright: the anchor is a viewport point, so after
   // a scroll the menu would describe a row that has moved out from under it.
+  //
+  // The scroll dismisser arms ONE FRAME LATE, and that delay is load-bearing: it
+  // is what stops the menu from dismissing ITSELF on its own opening. Opening a
+  // menu re-renders its host row, and when that row lives in a scroll container
+  // the commit can clamp the container's scrollTop, which fires `scroll` — so the
+  // menu vanished a few milliseconds after it appeared. Measured on the main
+  // list's project header (menu mounted at t=4175ms, `scroll` on
+  // `.todo-panel-list` at t=4183, menu gone at t=4186), where it surfaced as a
+  // right-click that intermittently produced no menu at all, and as a menu whose
+  // rows a test could see and then not find. The settle scroll belongs to the
+  // mount commit's own frame, so anything arriving in a LATER frame is a real
+  // scroll and still closes; a user cannot scroll inside the frame in which their
+  // own right-click opened the menu.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
     };
+    let scrollArmed = false;
+    const arm = requestAnimationFrame(() => { scrollArmed = true; });
     const onScroll = (e: Event) => {
+      if (!scrollArmed) return;
       if (menuRef.current?.contains(e.target as Node)) return;
       onClose();
     };
@@ -90,6 +106,7 @@ export function ContextMenu({ point, items, onClose, ariaLabel, testId }: Contex
     window.addEventListener('resize', onClose);
     window.addEventListener('blur', onClose);
     return () => {
+      cancelAnimationFrame(arm);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', onClose);
