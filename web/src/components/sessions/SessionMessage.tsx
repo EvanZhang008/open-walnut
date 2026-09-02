@@ -19,6 +19,8 @@ import { markdownToRichHtml } from '@/utils/markdown';
 import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { BashToolCall } from './BashToolCall';
+import { parseSessionEnvelopes } from './session-envelope';
+import { SessionEnvelopeSegments } from './SessionProvenanceCard';
 import { log } from '@/utils/log';
 
 // ── Edit Diff View ──
@@ -1046,6 +1048,15 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
     return findImagePaths(text);
   }, [text, isUser]);
 
+  // A Walnut session envelope (another session's message / reply / notice)
+  // renders as a provenance card instead of a wall of blue bubble. Parsing is
+  // pure and returns null for anything that is not an envelope, so an ordinary
+  // message takes exactly the path it took before.
+  const envelopeSegments = useMemo(
+    () => (isUser && text ? parseSessionEnvelopes(text) : null),
+    [isUser, text],
+  );
+
   // `<suggest>` action cards in a session's own answer: a session's prose can
   // carry a card just like the Personal AI's — same parser, same invoke endpoint,
   // same persisted receipts. Rendering never depends on how the author learned
@@ -1104,12 +1115,15 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
 
   return (
     <div
-      className={`session-msg ${isUser ? 'session-msg-user' : 'session-msg-assistant'}`}
+      className={`session-msg ${envelopeSegments ? 'session-msg-envelope'
+        : isUser ? 'session-msg-user' : 'session-msg-assistant'}`}
       onContextMenu={(e) => rowMenu.open(e, undefined)}
     >
       <div className="session-msg-content" onClick={handleContentClick}>
         {thinking && <SessionThinking text={thinking} />}
-        {text && (useSegments ? (
+        {text && envelopeSegments ? (
+          <SessionEnvelopeSegments segments={envelopeSegments} sessionCwd={sessionCwd} />
+        ) : text && (useSegments ? (
           <SuggestSegments segments={segments} cwd={sessionCwd} scope={message.msgId} />
         ) : isUser ? (
           // The rich path is for MODEL output only. A person's own text goes

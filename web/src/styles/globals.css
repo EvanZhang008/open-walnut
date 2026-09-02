@@ -2902,6 +2902,279 @@ select {
   background: rgba(255, 255, 255, 0.34);
 }
 
+/* ── Session provenance card (a Walnut session envelope) ───────────────────────
+   A message from ANOTHER session is not the human speaking, so it must not wear
+   the solid-accent "You" bubble: it is a full-width card whose header answers
+   "who / which task" before any prose. Colors come from theme vars in pairs
+   (background + color together) so it reads in both themes. */
+.session-msg-envelope {
+  align-self: stretch;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 2px 0;
+  max-width: 100%;
+}
+
+.provenance-segments {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.provenance-card {
+  background: var(--bg-secondary);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--session-ref);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.provenance-card[data-envelope-kind="notification"] {
+  border-left-color: var(--warning);
+}
+
+/* An unidentified sender is not "a session" — don't paint it in session indigo. */
+.provenance-card[data-anonymous="true"] {
+  border-left-color: var(--fg-muted);
+}
+
+.provenance-card[data-anonymous="true"] .provenance-glyph {
+  color: var(--fg-muted);
+}
+
+.provenance-card-slim {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+}
+
+.provenance-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.provenance-glyph {
+  color: var(--session-ref);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.provenance-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.provenance-rq {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-muted);
+}
+
+/* The full title — the thing the old envelope truncated at 80 chars. */
+.provenance-title {
+  margin-top: 2px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.provenance-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.provenance-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 260px;
+  padding: 1px 7px;
+  border: none;
+  border-radius: 999px;
+  font-size: 11px;
+  font-family: inherit;
+  line-height: 1.6;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.provenance-chip-session {
+  background: var(--session-ref-subtle);
+  color: var(--session-ref);
+  font-family: var(--font-mono);
+}
+
+.provenance-chip-session:hover {
+  background: var(--session-ref-subtle-hover);
+}
+
+.provenance-chip-task {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.provenance-chip-task:hover {
+  background: var(--accent-subtle);
+  text-decoration: underline;
+}
+
+/* Unresolvable / ambiguous short id: still shown, deliberately NOT a link. */
+.provenance-chip-dim {
+  background: var(--bg-tertiary);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  cursor: default;
+}
+
+.provenance-chip-copy {
+  background: transparent;
+  color: var(--fg-muted);
+}
+
+.provenance-chip-copy:hover {
+  background: var(--bg-hover);
+  color: var(--fg-secondary);
+}
+
+.provenance-host {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.provenance-asked {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.provenance-asked-label {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+
+.provenance-asked-text {
+  overflow-wrap: anywhere;
+}
+
+/* The outcome sentence IS a notification's content, so it reads at body weight. */
+.provenance-status {
+  margin-top: 8px;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+/* The other session's own words. */
+.provenance-body.markdown-body {
+  margin: 8px 0 0;
+  padding: 6px 0 6px 10px;
+  border-left: 2px solid var(--border-strong);
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.provenance-body.markdown-body > *:first-child { margin-top: 0; }
+.provenance-body.markdown-body > *:last-child { margin-bottom: 0; }
+
+.provenance-reply-request {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.provenance-reply-request-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--warning);
+}
+
+/* The machine framing: present, never dominant. */
+.provenance-details {
+  margin-top: 8px;
+}
+
+.provenance-details > summary {
+  font-size: 11px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.provenance-details > summary::-webkit-details-marker { display: none; }
+
+/* Same chevron idiom as the collapsed tool-run rows, so a fold reads the same
+   everywhere in the timeline. */
+.provenance-details > summary::before {
+  content: '›';
+  display: inline-block;
+  margin-right: 5px;
+  transition: transform 0.15s ease;
+}
+
+.provenance-details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.provenance-details > summary:hover {
+  color: var(--fg-secondary);
+}
+
+.provenance-followup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.provenance-followup code {
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+
+.provenance-raw {
+  margin: 6px 0 0;
+  padding: 8px;
+  max-height: 260px;
+  overflow: auto;
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .session-msg-assistant {
   align-self: stretch;
   background: transparent;

@@ -203,6 +203,27 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Session-envelope provenance card fixture. Its OWN task, so the spec can
+        // open exactly one session from the kebab (pw-task-001 owns hundreds).
+        id: 'pw-task-provenance',
+        title: 'Envelope inbox fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-provenance-session'],
+        active_session_ids: [],
+        session_id: 'pw-provenance-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         id: 'pw-task-changed',
         title: 'Changed fixture task',
         status: 'in_progress',
@@ -712,6 +733,13 @@ await Promise.all([
   fs.writeFile(codexColdDetailJournalPath, seededCodexJournal),
 ])
 const sessionFixtureNow = Date.now()
+
+/** Peer title for the session-envelope fixture: longer than the 80 chars the
+ *  envelope prints, so the provenance card can be asserted to show it in FULL.
+ *  The spec reads it back from GET /api/sessions/pw-envelope-peer-session rather
+ *  than copying it (importing this module would boot a second server). */
+const ENVELOPE_PEER_TITLE =
+  'Mac side: Fable 5.1 rollout (CLI >= 2.1.255, config pull, proxy restart) then confirm the daemon version on every host'
 const vscodeFixtureRoot = path.join(tmpBase, 'projects', 'editor-fixture')
 await fs.mkdir(vscodeFixtureRoot, { recursive: true })
 // Files-panel Refresh fixture (file-explorer-refresh.spec.ts): a file whose
@@ -1064,6 +1092,88 @@ await fs.writeFile(
       '',
     ].join('\n'),
   )
+
+  // Session-envelope fixture (session-provenance-card.spec.ts): a transcript in
+  // which every user message is a Walnut envelope delivered by another session.
+  //
+  // The envelope text is produced by the PRODUCTION builders, never pasted here:
+  // those strings are a security boundary the renderer must not change, so the
+  // fixture asks the same functions the server asks. A wording drift then breaks
+  // this spec instead of silently un-carding the chat.
+  {
+    const { buildPeerWrapper } = await import('../../../src/core/peers/peer-wrapper.js')
+    const {
+      buildReplyDeliveryText, buildReplyTrailer, buildRequestNotification,
+    } = await import('../../../src/core/session-requests.js')
+    const peerSender = {
+      title: ENVELOPE_PEER_TITLE,
+      shortId: 'pw-envel',
+      host: 'local',
+    }
+    const rq = {
+      id: 'rq-09cd2ef25e57',
+      fromSessionId: 'pw-provenance-session',
+      toSessionId: 'pw-envelope-peer-session',
+      toTaskId: 'pw-task-001',
+      preview: 'Good, and thanks for flagging both blockers',
+      status: 'pending' as const,
+      createdAt: new Date(sessionFixtureNow - 120_000).toISOString(),
+      deadlineAt: sessionFixtureNow + 3_600_000,
+    }
+    const envelopes = [
+      // ① peer note + ② the [Reply requested] trailer that rides on it
+      `${buildPeerWrapper(
+        'Daemon is on 2.1.255 and the proxy restarted clean. ENVELOPE_PEER_BODY',
+        peerSender,
+      )}\n${buildReplyTrailer(rq)}`,
+      // ③ the reply the asker reads
+      buildReplyDeliveryText(rq, peerSender, 'Both blockers cleared. ENVELOPE_REPLY_BODY'),
+      // ④ the Walnut status notice
+      buildRequestNotification(rq, 'completed', {
+        title: ENVELOPE_PEER_TITLE,
+        sessionId: 'pw-envelope-peer-session',
+        taskId: 'pw-task-001',
+      }),
+      // an UNIDENTIFIED sender: no tracked session, so never a clickable chip
+      buildPeerWrapper('cron finished on the box. ENVELOPE_ANON_BODY', {
+        title: 'external', shortId: 'external', host: 'devbox', anonymous: true,
+      }),
+    ]
+    await fs.writeFile(
+      path.join(jsonlDir, 'pw-provenance-session.jsonl'),
+      [
+        JSON.stringify({
+          type: 'user',
+          uuid: '0199bb01-0000-4aaa-8bbb-000000000000',
+          parentUuid: null,
+          sessionId: 'pw-provenance-session',
+          timestamp: new Date(sessionFixtureNow - 130_000).toISOString(),
+          message: { role: 'user', content: 'Coordinate the Fable rollout with the Mac session.' },
+        }),
+        ...envelopes.flatMap((text, i) => [
+          JSON.stringify({
+            type: 'user',
+            uuid: `0199bb02-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+            parentUuid: i === 0
+              ? '0199bb01-0000-4aaa-8bbb-000000000000'
+              : `0199bb03-0000-4aaa-8bbb-${String(i - 1).padStart(12, '0')}`,
+            sessionId: 'pw-provenance-session',
+            timestamp: new Date(sessionFixtureNow - 110_000 + i * 2_000).toISOString(),
+            message: { role: 'user', content: text },
+          }),
+          JSON.stringify({
+            type: 'assistant',
+            uuid: `0199bb03-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+            parentUuid: `0199bb02-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+            sessionId: 'pw-provenance-session',
+            timestamp: new Date(sessionFixtureNow - 109_000 + i * 2_000).toISOString(),
+            message: { role: 'assistant', content: [{ type: 'text', text: `Acknowledged note ${i + 1}.` }] },
+          }),
+        ]),
+        '',
+      ].join('\n'),
+    )
+  }
 }
 const oldExactTargetAt = new Date(sessionFixtureNow - 30 * 24 * 60 * 60 * 1_000).toISOString()
 const scaleSessions = Array.from({ length: 501 }, (_, index) => ({
@@ -1335,6 +1445,37 @@ await fs.writeFile(
           forkSession: false,
           promptImages: true,
         },
+      },
+      {
+        // The PEER in every envelope of pw-provenance-session's transcript. Its
+        // title is deliberately longer than the 80 chars the envelope prints, so
+        // the card can be asserted to show the FULL resolved title.
+        claudeSessionId: 'pw-envelope-peer-session',
+        taskId: 'pw-task-001',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date(sessionFixtureNow - 100_000).toISOString(),
+        startedAt: new Date(sessionFixtureNow - 200_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 100_000).toISOString(),
+        messageCount: 2,
+        cwd: process.cwd(),
+        title: ENVELOPE_PEER_TITLE,
+      },
+      {
+        // Session-envelope provenance card fixture. Its transcript (written above)
+        // is nothing but Walnut envelopes delivered by other sessions.
+        claudeSessionId: 'pw-provenance-session',
+        taskId: 'pw-task-provenance',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date(sessionFixtureNow - 100_000).toISOString(),
+        startedAt: new Date(sessionFixtureNow - 140_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 100_000).toISOString(),
+        messageCount: 5,
+        cwd: vscodeFixtureRoot,
+        title: 'Envelope inbox: cross-session coordination',
       },
       {
         // Used by exec-slot bug test — task has exec_session_id but no session_id

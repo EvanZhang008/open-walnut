@@ -23,6 +23,9 @@ export interface SessionMentionCandidate {
   host: string;
   status: string;
   lastActiveAt: string;
+  /** Owning task id, '' when the session has none. Additive — absent on servers
+   *  older than the session-envelope card, so every reader must tolerate that. */
+  taskId?: string;
 }
 
 /** Where an active "@query" should route. */

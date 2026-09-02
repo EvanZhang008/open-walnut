@@ -1078,7 +1078,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // leading @ + id prefix resolved to another session sends THERE, not here.
   // Resolution is server-side (unique-prefix or nothing — 409 on ambiguity), so
   // an unresolvable ref falls through to a normal send and no text is lost.
-  const [routedNotice, setRoutedNotice] = useState<{ shortId: string; title: string } | null>(null);
+  const [routedNotice, setRoutedNotice] = useState<{ sessionId: string; shortId: string; title: string } | null>(null);
   const routedNoticeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(routedNoticeTimerRef.current), []);
 
@@ -1097,7 +1097,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             ...(await buildImageRefsPayload(images)),
           });
           if (res?.messageId) {
-            setRoutedNotice({ shortId: target.claudeSessionId.slice(0, 8), title: target.title || '(untitled)' });
+            setRoutedNotice({
+              sessionId: target.claudeSessionId,
+              shortId: target.claudeSessionId.slice(0, 8),
+              title: target.title || '(untitled)',
+            });
             clearTimeout(routedNoticeTimerRef.current);
             routedNoticeTimerRef.current = setTimeout(() => setRoutedNotice(null), 6000);
             return true;
@@ -1923,7 +1927,20 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
           {routedNotice && (
             <div className="session-routed-notice" role="status">
               <span aria-hidden="true">↗</span>
-              <span>Sent to <strong>@{routedNotice.shortId}</strong> {routedNotice.title}</span>
+              {/* This is the ONLY outgoing surface for a session→session message
+                  (a routed send leaves no bubble in the sender's timeline), so it
+                  carries the same clickable "which session" chip the incoming
+                  provenance card does — click it to open that column. */}
+              <span>
+                Sent to{' '}
+                <button
+                  type="button"
+                  className="provenance-chip provenance-chip-session"
+                  title={`Open session ${routedNotice.sessionId}`}
+                  onClick={() => onSessionClick?.(routedNotice.sessionId)}
+                >{`@${routedNotice.shortId}`}</button>{' '}
+                {routedNotice.title}
+              </span>
               <button
                 type="button"
                 className="session-routed-notice-dismiss"
