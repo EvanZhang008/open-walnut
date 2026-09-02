@@ -92,6 +92,38 @@ final class PushRegistration {
         "\(server?.absoluteString ?? "unpaired")|\(token)"
     }
 
+    /// Split a stored memo for logging: which server it names, and a token prefix.
+    ///
+    /// The point is to make the three "nothing happened" states tellable apart in a
+    /// log: `none` (never uploaded), `legacy-no-server` (a pre-relay bare-hex memo,
+    /// the state that heals on this launch), or a real server that may or may not be
+    /// the one the app is paired to now. The token itself is logged as a prefix
+    /// because these entries are uploaded to the server, and the server's own push
+    /// logs use the same 12-char prefix, so the two sides still line up.
+    nonisolated static func describeMemo(_ memo: String?) -> (server: String, tokenPrefix: String) {
+        guard let memo, !memo.isEmpty else { return ("none", "none") }
+        guard let separator = memo.lastIndex(of: "|") else {
+            return ("legacy-no-server", String(memo.prefix(12)))
+        }
+        return (
+            String(memo[memo.startIndex..<separator]),
+            String(memo[memo.index(after: separator)...].prefix(12))
+        )
+    }
+
+    /// `UNAuthorizationStatus` has no readable description, and "3" in a log tells
+    /// nobody whether permission was granted.
+    nonisolated static func statusName(_ status: UNAuthorizationStatus) -> String {
+        switch status {
+        case .notDetermined: return "notDetermined"
+        case .denied: return "denied"
+        case .authorized: return "authorized"
+        case .provisional: return "provisional"
+        case .ephemeral: return "ephemeral"
+        @unknown default: return "unknown(\(status.rawValue))"
+        }
+    }
+
     // MARK: - Observable state (what Settings shows)
 
     /// Whether the user has granted notification permission, as far as we know.
@@ -136,14 +168,31 @@ final class PushRegistration {
     // MARK: - Permission + registration
 
     /// Refresh the cached authorization status (cheap; no prompt).
+    ///
+    /// This is the launch-time trigger that heals an install whose token was never
+    /// stored on the box that sends, so it LOGS on every path. Without a line here
+    /// the trigger is invisible unless APNs answers, and "permission not granted",
+    /// "APNs stayed silent" and "the memo already matched" all look identical —
+    /// exactly the silent failure this whole change exists to remove.
     func refreshAuthorization() async {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         authorization = settings.authorizationStatus
         // Already granted from a previous launch: re-register so a rotated token
         // is picked up. Registration itself never prompts.
-        if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
-            UIApplication.shared.registerForRemoteNotifications()
-        }
+        let granted = settings.authorizationStatus == .authorized
+            || settings.authorizationStatus == .provisional
+        if granted { UIApplication.shared.registerForRemoteNotifications() }
+        let memo = Self.describeMemo(UserDefaults.standard.string(forKey: Self.uploadedTokenKey))
+        AppLog.info("push", "registration refresh", [
+            "authorization": Self.statusName(settings.authorizationStatus),
+            // `registering` means APNs was asked; the next line to look for is
+            // `apns token minted`. Its absence is APNs silence, not our decision.
+            "branch": granted ? "registering" : "not-granted",
+            "paired": AppConfig.isConfigured ? "true" : "false",
+            "server": AppConfig.serverURL?.absoluteString ?? "unpaired",
+            "memoServer": memo.server,
+            "memoTokenPrefix": memo.tokenPrefix,
+        ])
     }
 
     /// Ask for notification permission, then register with APNs.
@@ -188,7 +237,15 @@ final class PushRegistration {
             "environment": Self.environment,
         ])
         let alreadyUploaded = UserDefaults.standard.string(forKey: Self.uploadedTokenKey)
-        guard alreadyUploaded != Self.uploadMemo(token: hex) else { return }
+        guard alreadyUploaded != Self.uploadMemo(token: hex) else {
+            // The quiet, correct case — but say so, or a launch that legitimately
+            // sends nothing is indistinguishable from one that failed to.
+            AppLog.info("push", "token already uploaded to this server (no POST)", [
+                "tokenPrefix": String(hex.prefix(12)),
+                "server": AppConfig.serverURL?.absoluteString ?? "unpaired",
+            ])
+            return
+        }
         upload(token: hex)
     }
 
@@ -202,12 +259,39 @@ final class PushRegistration {
         ])
     }
 
+    /// The memo currently being POSTed, if any.
+    ///
+    /// The persisted memo is only written AFTER the upload succeeds, so it cannot
+    /// deduplicate two callbacks inside one launch: both read the stale value and
+    /// both POST. That is the normal case, not a corner — one launch really does
+    /// call `registerForRemoteNotifications()` twice (QuickActionDelegate →
+    /// LaunchGate → refreshAuthorization, and InboxView's `.task` →
+    /// requestPermissionAndRegister), and APNs answers each call. The server upserts
+    /// by token so the row count stayed 1, but a duplicate POST is still a
+    /// contradiction of the documented "exactly one".
+    private var uploadInFlight: String?
+
     /// POST the token, then the mode. Fire-and-forget: push is a courtesy layer
     /// and must never block or fail anything the user is doing.
+    ///
+    /// Idempotent twice over: across launches via the persisted memo, and within a
+    /// launch via `uploadInFlight`. Both live on the main actor, and this method and
+    /// the Task it starts are main-actor isolated, so the check and the set cannot
+    /// interleave.
     private func upload(token: String) {
         guard AppConfig.isConfigured else { return }
+        let memo = Self.uploadMemo(token: token)
+        guard uploadInFlight != memo else {
+            AppLog.info("push", "token upload already in flight — skipping duplicate", [
+                "tokenPrefix": String(token.prefix(12)),
+                "server": AppConfig.serverURL?.absoluteString ?? "unpaired",
+            ])
+            return
+        }
+        uploadInFlight = memo
         let mode = Self.mode
         Task { [api] in
+            defer { uploadInFlight = nil }
             do {
                 let ack = try await api.registerPushToken(
                     token: token,

@@ -221,6 +221,40 @@ final class PushNotificationTests: XCTestCase {
         XCTAssertTrue(unpaired.hasPrefix("unpaired|"))
     }
 
+    // MARK: - Memo logging (telling the three silent states apart)
+
+    /// The launch trigger logs which state it found. These three must not collapse
+    /// into each other, because they need different actions: `none` = never
+    /// uploaded, `legacy-no-server` = a pre-relay memo that heals on this launch,
+    /// a real server = compare it with the paired one.
+    func testDescribeMemoSeparatesTheThreeStates() {
+        XCTAssertEqual(PushRegistration.describeMemo(nil).server, "none")
+        XCTAssertEqual(PushRegistration.describeMemo("").server, "none")
+        XCTAssertEqual(PushRegistration.describeMemo(Self.token).server, "legacy-no-server")
+
+        let composite = PushRegistration.uploadMemo(token: Self.token, server: Self.primary)
+        let described = PushRegistration.describeMemo(composite)
+        XCTAssertEqual(described.server, Self.primary?.absoluteString)
+        XCTAssertEqual(described.tokenPrefix, String(Self.token.prefix(12)))
+    }
+
+    /// A legacy memo is 64 hex chars with no separator; the prefix still has to be
+    /// usable, since it is what lines up with the server's own push log.
+    func testDescribeMemoKeepsATokenPrefixForALegacyValue() {
+        XCTAssertEqual(
+            PushRegistration.describeMemo(Self.token).tokenPrefix,
+            String(Self.token.prefix(12))
+        )
+    }
+
+    /// A raw status number in a log tells nobody whether permission was granted.
+    func testAuthorizationStatusHasAReadableName() {
+        XCTAssertEqual(PushRegistration.statusName(.notDetermined), "notDetermined")
+        XCTAssertEqual(PushRegistration.statusName(.denied), "denied")
+        XCTAssertEqual(PushRegistration.statusName(.authorized), "authorized")
+        XCTAssertEqual(PushRegistration.statusName(.provisional), "provisional")
+    }
+
     // MARK: - "The server has no row for me" (the safety net)
 
     /// `device_not_registered` is the server's machine-readable way of saying the

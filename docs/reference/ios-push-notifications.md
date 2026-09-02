@@ -279,3 +279,14 @@ real device can confirm.
 5. In the app, Settings, Notifications names the two client-side causes: iOS
    permission denied (recoverable only in iOS Settings, since iOS asks once per
    install), and registered-but-undeliverable (the server has no key).
+6. The app's own log, which it uploads to the primary
+   (`/tmp/open-walnut/ios-client/<device>-<date>.log`, subsystem `push`), says what
+   the launch decided. One `registration refresh` line per launch carries
+   `authorization`, `branch` (`registering` or `not-granted`), the paired `server`,
+   and the `memoServer`/`memoTokenPrefix` it found. That is enough to separate the
+   three states that otherwise look identical: permission was never granted, APNs
+   was asked and stayed silent (`branch: registering` with no following
+   `apns token minted`), or the token was already uploaded to this exact server
+   (`token already uploaded to this server (no POST)`). A `memoServer` of
+   `legacy-no-server`, or one naming a different server than `server`, is the state
+   that heals itself on this launch.
