@@ -46,6 +46,7 @@ import { buildInvestigationClip } from '@/utils/investigation-clipboard';
 import { fetchTask } from '@/api/tasks';
 import { EditableSessionTitle } from './EditableSessionTitle';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
+import { useStoreTask } from '@/contexts/TasksContext';
 import type { FocusTier } from '@/api/focus';
 import { timeAgo } from '@/utils/time';
 import { ProcessStatusBadge } from './WorkStatusPicker';
@@ -396,10 +397,22 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     }
   }, []);
 
-  // Task title for the breadcrumb link
-  const [taskTitle, setTaskTitle] = useState<string | null>(null);
-  // Full task object — passed to TaskQuickActions to avoid a duplicate fetch
-  const [sessionTask, setSessionTask] = useState<import('@open-walnut/core').Task | null>(null);
+  // The linked task. The shared task store is the truth inside this browser:
+  // a rename or phase flip made on the board, in this header, or in the detail
+  // pane lands in that store synchronously, so this header changes in the same
+  // frame as every other surface instead of waiting for the REST round-trip
+  // and its WS echo (which, on a stalled server, arrived seconds later while
+  // the board still showed the old title). The private REST copy below is only
+  // the fallback for a task the list does not carry, and the donor of the heavy
+  // fields (`ext`) the minimal list payload drops.
+  const [fetchedTask, setFetchedTask] = useState<import('@open-walnut/core').Task | null>(null);
+  const storeTask = useStoreTask(session?.taskId);
+  const sessionTask = useMemo(() => {
+    if (!storeTask) return fetchedTask;
+    if (!fetchedTask || storeTask.ext !== undefined) return storeTask;
+    return { ...storeTask, ext: fetchedTask.ext };
+  }, [storeTask, fetchedTask]);
+  const taskTitle = sessionTask?.title ?? null;
 
   // Pin state — read from the shared Focus Bar store (single source of truth,
   // same data every other surface renders). Mutations go through the shared
@@ -428,8 +441,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     setSession(null);
     setLoading(true);
     setMissing(false);
-    setTaskTitle(null);
-    setSessionTask(null);
+    setFetchedTask(null);
     const load = (attempt: number) => {
       fetchSession(sessionId).then((s) => {
         if (!cancelled) {
@@ -470,10 +482,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
           // Fetch associated task title + pin state
           if (s?.taskId) {
             fetchTask(s.taskId).then((t) => {
-              if (!cancelled) {
-                setTaskTitle(t.title);
-                setSessionTask(t);
-              }
+              if (!cancelled) setFetchedTask(t);
             }).catch(() => {});
           }
         }
@@ -505,7 +514,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     const d = data as { sessionId?: string; phase?: string };
     if (d.sessionId === sessionId) {
       if (d.phase) {
-        setSessionTask(prev => prev ? { ...prev, phase: d.phase as import('@open-walnut/core').Task['phase'] } : prev);
+        setFetchedTask(prev => prev ? { ...prev, phase: d.phase as import('@open-walnut/core').Task['phase'] } : prev);
       }
       // Model backfill for idle launches (todo-launcher quick start): quick-start
       // pre-seeds the record model-less (Auto) and returns before the CLI's init
@@ -556,20 +565,16 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     }
   });
 
-  // Keep sessionTask in sync with real-time task events (phase changes, completions)
+  // Keep the fallback copy in sync with real-time task events. When the store
+  // carries the row this is redundant (the store applies the same events); it
+  // matters for a task the list does not have.
   useEvent('task:updated', (data) => {
     const d = data as { task?: import('@open-walnut/core').Task };
-    if (d.task && session?.taskId && d.task.id === session.taskId) {
-      setSessionTask(d.task);
-      setTaskTitle(d.task.title);
-    }
+    if (d.task && session?.taskId && d.task.id === session.taskId) setFetchedTask(d.task);
   });
   useEvent('task:completed', (data) => {
     const d = data as { task?: import('@open-walnut/core').Task };
-    if (d.task && session?.taskId && d.task.id === session.taskId) {
-      setSessionTask(d.task);
-      setTaskTitle(d.task.title);
-    }
+    if (d.task && session?.taskId && d.task.id === session.taskId) setFetchedTask(d.task);
   });
 
   useEvent('session:result', (data) => {

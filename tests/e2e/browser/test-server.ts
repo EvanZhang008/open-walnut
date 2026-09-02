@@ -203,6 +203,28 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Same-browser task-store fixture (task-store-same-browser-instant.spec).
+        // Its OWN task: that spec renames and completes it mid-run, which would
+        // break every spec asserting on a shared fixture's title or phase.
+        id: 'pw-task-store-sync',
+        title: 'Store sync fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-store-sync-session'],
+        active_session_ids: [],
+        session_id: 'pw-store-sync-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // Session-envelope provenance card fixture. Its OWN task, so the spec can
         // open exactly one session from the kebab (pw-task-001 owns hundreds).
         id: 'pw-task-provenance',
@@ -1476,6 +1498,20 @@ await fs.writeFile(
         messageCount: 5,
         cwd: vscodeFixtureRoot,
         title: 'Envelope inbox: cross-session coordination',
+      },
+      {
+        // Same-browser task-store fixture — see pw-task-store-sync above.
+        claudeSessionId: 'pw-store-sync-session',
+        taskId: 'pw-task-store-sync',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date(sessionFixtureNow - 100_000).toISOString(),
+        startedAt: new Date(sessionFixtureNow - 140_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 100_000).toISOString(),
+        messageCount: 1,
+        cwd: process.cwd(),
+        title: 'Store sync: same-browser propagation',
       },
       {
         // Used by exec-slot bug test — task has exec_session_id but no session_id

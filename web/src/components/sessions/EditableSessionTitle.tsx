@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, type KeyboardEvent } from 'react';
 import { updateSession } from '@/api/sessions';
 import { updateTask } from '@/api/tasks';
+import { useTasksContextSafe } from '@/contexts/TasksContext';
 
 interface EditableSessionTitleProps {
   sessionId: string;
@@ -23,6 +24,7 @@ export function EditableSessionTitle({ sessionId, taskId, title, className, onSa
   const [value, setValue] = useState(title);
   const [saving, setSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const tasks = useTasksContextSafe();
 
   useEffect(() => { setValue(title); }, [title]);
   useEffect(() => { if (editing) inputRef.current?.select(); }, [editing]);
@@ -32,6 +34,15 @@ export function EditableSessionTitle({ sessionId, taskId, title, className, onSa
     if (!trimmed || trimmed === title) {
       setValue(title);
       setEditing(false);
+      return;
+    }
+    // Store path: the rename lands in the shared task store synchronously, so
+    // the board row and this header change in the same frame; the store owns
+    // the REST call, its retry, and the error banner. Nothing to await.
+    if (taskId && tasks && tasks.tasks.some((t) => t.id === taskId)) {
+      tasks.update(taskId, { title: trimmed });
+      setEditing(false);
+      onSaved?.();
       return;
     }
     setSaving(true);

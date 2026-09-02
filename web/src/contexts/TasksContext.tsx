@@ -83,3 +83,26 @@ export function useTasksContext(): TasksContextValue {
   if (!ctx) throw new Error('useTasksContext must be used within a TasksProvider');
   return ctx;
 }
+
+/**
+ * Same store, but null outside a TasksProvider (pop-out windows mount none).
+ *
+ * The rule this enables: inside one browser the task store is the ONLY truth
+ * for a task row. A surface that shows a task reads it from here and writes
+ * through the store's optimistic mutators, so every other surface (board row,
+ * session header, detail pane) changes in the same frame. The REST round-trip
+ * and its WS echo only confirm. A component may keep a private REST copy only
+ * as the fallback for when this returns null or the row is not in the list.
+ */
+export function useTasksContextSafe(): TasksContextValue | null {
+  return useContext(TasksContext);
+}
+
+/** The store's row for `taskId`, or null when there is no store or no row. */
+export function useStoreTask(taskId: string | null | undefined): Task | null {
+  const tasks = useContext(TasksContext)?.tasks;
+  return useMemo(
+    () => (taskId && tasks ? tasks.find((t) => t.id === taskId) ?? null : null),
+    [tasks, taskId],
+  );
+}

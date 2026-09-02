@@ -25,6 +25,17 @@ still live on the client.
 - Sessions render in ONE surface — the home session columns (`SessionPanel.tsx`). The dedicated
   `/sessions` page was removed; `/sessions?id=…` deep links reroute to the home columns
   (`SessionsRedirect` in `App.tsx` + `utils/open-session.ts`).
+- **One browser, one task store.** `TasksContext` (`useTasks`) is the only in-browser truth for
+  a task row. A surface that shows a task reads it from there (`useStoreTask(id)`) and writes
+  through the store's optimistic mutators (`update` / `setPhase` / `moveTask`), so the board
+  row, the session header and the detail pane change in the SAME frame; the REST round-trip
+  and its WS echo only confirm. Never call `updateTask` from `@/api/tasks` directly and rely on
+  the `task:updated` echo to update the other surfaces: on a stalled server (a PATCH measured
+  7.2s on 2026-09-02) the header showed the new title while the board kept the old one for
+  seconds. A private `fetchTask` copy is allowed only as the fallback for a row the list does
+  not carry or a surface outside the provider (`useTasksContextSafe()` returns null in pop-outs).
+  Ratchet: `tests/e2e/browser/task-store-same-browser-instant.spec.ts` holds the PATCH at the
+  network layer and requires both directions to propagate before the server answers.
 - Use the structured logger `import { log } from '@/utils/log'` — never raw `console.log`;
   never `console.debug` (invisible to the disk forwarder). IDs full, never truncated.
 - **`<suggest>` action cards render in BOTH lanes through one module**

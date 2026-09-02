@@ -20,6 +20,7 @@ import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '@/compone
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { keepNativeContextMenu } from '@/utils/context-menu';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
+import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { TIER_OPTIONS, tierColor, PRIORITY_OPTIONS } from './task-meta-constants';
 import { MoveToProjectSection } from '@/components/tasks/TaskKebabMenu';
 
@@ -87,6 +88,15 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     ...customTiers.map((ct) => ({ value: ct.id, label: ct.label })),
   ];
   const [task, setTask] = useState<Task | null>(externalTask ?? null);
+  // Writes go through the shared task store when it carries this row: the
+  // optimistic change then reaches the board, the detail pane and the parent
+  // session header in the same frame, and the store owns the REST call, the
+  // echo guard and the error banner. The direct REST path below stays for a
+  // task the list does not have (or no store at all: pop-out windows).
+  const store = useTasksContextSafe();
+  const storeFor = useCallback((id: string) => (
+    store && store.tasks.some((t) => t.id === id) ? store : null
+  ), [store]);
   const [kebabOpen, setKebabOpen] = useState(false);
   /** Set only by the right-click path, which anchors the menu at the cursor. */
   const [cursorAnchor, setCursorAnchor] = useState<{ x: number; y: number } | null>(null);
@@ -207,6 +217,8 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       };
     });
     const id = task.id;
+    const shared = storeFor(id);
+    if (shared) { shared.setPhase(id, phase); return; }
     const attempt = (retries: number) => {
       updateTask(id, { phase }).catch((err) => {
         if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
@@ -221,67 +233,72 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       });
     };
     attempt(5);
-  }, [task]);
+  }, [task, storeFor]);
 
   const handleSetPriority = useCallback((priority: TaskPriority) => {
     if (!task) return;
     const id = task.id;
     setTask(prev => prev ? { ...prev, priority } : prev);
-    updateTask(id, { priority }).catch(() => {
+    const shared = storeFor(id);
+    if (shared) shared.update(id, { priority });
+    else updateTask(id, { priority }).catch(() => {
       fetchTask(id).then(setTask).catch(() => {});
     });
     closeKebab();
-  }, [task, closeKebab]);
+  }, [task, closeKebab, storeFor]);
 
   /** Manual read/unread flip — the "mark as unread" escape hatch (you glanced at
    *  a task but want it to keep nagging). */
   const handleToggleUnread = useCallback(() => {
     if (!task) return;
     const id = task.id;
-    let nextUnread = false;
-    setTask(prev => {
-      if (!prev) return prev;
-      nextUnread = !prev.unread;
-      return { ...prev, unread: nextUnread };
-    });
-    updateTask(id, { unread: nextUnread }).catch(() => {
+    const nextUnread = !task.unread;
+    setTask(prev => prev ? { ...prev, unread: nextUnread } : prev);
+    const shared = storeFor(id);
+    if (shared) shared.update(id, { unread: nextUnread });
+    else updateTask(id, { unread: nextUnread }).catch(() => {
       fetchTask(id).then(setTask).catch(() => {});
     });
     closeKebab();
-  }, [task, closeKebab]);
+  }, [task, closeKebab, storeFor]);
 
   const handleSetDate = useCallback((date: string | null) => {
     if (!task) return;
     const id = task.id;
     setTask(prev => prev ? { ...prev, due_date: date ?? undefined } : prev);
-    updateTask(id, { due_date: date ?? '' }).catch(() => {
+    const shared = storeFor(id);
+    if (shared) shared.update(id, { due_date: date ?? '' });
+    else updateTask(id, { due_date: date ?? '' }).catch(() => {
       fetchTask(id).then(setTask).catch(() => {});
     });
     closeKebab();
-  }, [task, closeKebab]);
+  }, [task, closeKebab, storeFor]);
 
   const handleSetStartDate = useCallback((date: string | null) => {
     if (!task) return;
     const id = task.id;
     setTask(prev => prev ? { ...prev, start_date: date ?? undefined } : prev);
-    updateTask(id, { start_date: date ?? '' }).catch(() => {
+    const shared = storeFor(id);
+    if (shared) shared.update(id, { start_date: date ?? '' });
+    else updateTask(id, { start_date: date ?? '' }).catch(() => {
       fetchTask(id).then(setTask).catch(() => {});
     });
     closeKebab();
-  }, [task, closeKebab]);
+  }, [task, closeKebab, storeFor]);
 
-  // Kebab "Project" select — this kebab self-manages via the tasks API (no
-  // TasksContext here), so the move is a plain update; the WS task:updated
-  // echo refreshes every other surface.
+  // Kebab "Project" select. Through the store this is the same move the board
+  // kebab makes (project flip + reorder into the destination group).
   const handleMoveToProject = useCallback((project: string) => {
     if (!task) return;
     const id = task.id;
     setTask(prev => prev ? { ...prev, project } : prev);
-    updateTask(id, { project }).catch(() => {
+    const shared = storeFor(id);
+    if (shared) shared.moveTask(id, project);
+    else updateTask(id, { project }).catch(() => {
       fetchTask(id).then(setTask).catch(() => {});
     });
     closeKebab();
-  }, [task, closeKebab]);
+  }, [task, closeKebab, storeFor]);
 
   const handleKebabToggle = (e: React.MouseEvent) => {
     e.stopPropagation();

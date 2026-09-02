@@ -11,6 +11,7 @@ import { fetchTriageHistory } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useConfirm, usePrompt } from '@/hooks/useConfirm';
 import { useNotifications } from '@/contexts/notifications';
+import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
 import type { ProcessStatus } from '@open-walnut/core';
@@ -1702,11 +1703,17 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
   // Use full task data when available for stripped-field rendering
   const noteContent = task.note ?? fullTask?.note;
   const descriptionContent = task.description ?? fullTask?.description;
+  // Dates write through the shared task store when it has this row, so the
+  // board row's due pill moves in the same frame; the direct REST call is the
+  // fallback for the pop-out window, which mounts no store.
+  const store = useTasksContextSafe();
   const handleDateChange = async (date: string | null) => {
+    if (store?.tasks.some((t) => t.id === task.id)) { store.update(task.id, { due_date: date ?? '' }); return; }
     await apiUpdateTask(task.id, { due_date: date ?? '' });
   };
 
   const handleStartDateChange = async (date: string | null) => {
+    if (store?.tasks.some((t) => t.id === task.id)) { store.update(task.id, { start_date: date ?? '' }); return; }
     await apiUpdateTask(task.id, { start_date: date ?? '' });
   };
 
