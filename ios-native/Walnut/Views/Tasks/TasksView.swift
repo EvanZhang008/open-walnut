@@ -206,7 +206,29 @@ struct TasksView: View {
             // appear is the cheapest place to close that: it runs before the first
             // frame the user sees, and `TasksNavEntry.resolve` is a pure function so
             // the rule itself is unit-tested rather than trusted.
-            .onAppear { activeFilter = TasksNavEntry.resolve(activeFilter) }
+            .onAppear {
+                activeFilter = TasksNavEntry.resolve(activeFilter)
+                // "The Tasks screen is on screen" — the ONE thing that should make
+                // the board reconcile because a person is looking at it.
+                //
+                // `.onAppear`, deliberately, and not the `.task` this used to live in:
+                // a `.task` is tied to the lifetime of a view in the render tree, not
+                // to the screen being visible, and SwiftUI re-arms it whenever the
+                // subtree it sits in is re-evaluated. With a session conversation
+                // pushed over the board that measured 22 re-arms against 2 body
+                // passes, and since the bundle it fired writes the very lists this
+                // screen renders, each fetch bought the next one: five requests every
+                // ~160ms, for as long as the app was open (2026-09-01, 13 minutes,
+                // ~3.7 MB/s of JSON on the production event loop).
+                //
+                // Gated on first activation for the original reason this was a `.task`
+                // (P0-2): a background/prewarm launch must start no network work.
+                // Freshness-gated in the store, so even a chatty appearance signal
+                // cannot become a poll — see `BoardRefreshOrigin.minimumAge`.
+                LaunchGate.shared.whenActive {
+                    await tasks.refreshBoard(origin: .boardAppeared)
+                }
+            }
             // Apple Reminders' actual mechanism: the large title collapses to an
             // inline one as you scroll, and the search field (a nav-bar DRAWER,
             // not a List row) rides up with it. `.automatic` on the drawer is
@@ -975,26 +997,11 @@ struct TasksView: View {
                     runBatch { await tasks.batchDelete(Array(selectedIds)) }
                 }
             }
-            .refreshable {
-                async let t: Void = tasks.loadTasks()
-                async let se: Void = tasks.loadSessions()
-                async let f: Void = tasks.loadFocusTiers()
-                // The folder tree rides the same refresh as the lists it groups —
-                // ONE request per refresh, never per body pass.
-                async let g: Void = tasks.loadTaskFolders()
-                _ = await (t, se, f, g)
-            }
-            // Gated: on a background/prewarm launch the tab's `.task` would fire
-            // network fetches before the app is ever in front of the user (P0-2).
-            .task {
-                LaunchGate.shared.whenActive {
-                    async let t: Void = tasks.loadTasks()
-                    async let se: Void = tasks.loadSessions()
-                    async let f: Void = tasks.loadFocusTiers()
-                    async let g: Void = tasks.loadTaskFolders()
-                    _ = await (t, se, f, g)
-                }
-            }
+            // The folder tree rides the same refresh as the lists it groups —
+            // ONE bundle per refresh, never per body pass. `pull` is the one origin
+            // exempt from the funnel's rate floor: the spinner is the user's own
+            // request and it has to end in a real fetch.
+            .refreshable { await tasks.refreshBoard(origin: .pullToRefresh) }
             // Store-level toast surface (fire-and-forget mutations): a small
             // auto-dismissing line at the bottom — never a modal.
             .overlay(alignment: .bottom) {

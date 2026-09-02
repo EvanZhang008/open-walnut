@@ -230,6 +230,25 @@ final class TasksStore {
     /// silently miss rows; a slow REST reconcile bounds that staleness.
     private static let verifyPollSeconds: Double = 120
 
+    // MARK: - Board refresh funnel state (logic in TasksStoreRefresh.swift)
+    //
+    // All @ObservationIgnored on purpose: a refresh starting or finishing is not
+    // something any view renders, and observing it would make the funnel itself a
+    // source of body passes — in a file whose whole subject is a fetch that caused
+    // the render that caused the fetch.
+    /// Non-nil while a bundle is in flight — a second ask joins it.
+    @ObservationIgnored var boardRefreshTask: Task<Void, Never>?
+    /// When the last bundle STARTED (not finished): the floor spaces out the asks,
+    /// and measuring from completion would let a slow server widen it.
+    @ObservationIgnored var lastBoardRefreshAt: Date?
+    /// Consecutive asks refused by EITHER gate, reset by every bundle that runs.
+    @ObservationIgnored var boardRefreshDropsSinceRun = 0
+    /// When that run of refusals started, so the warning can require a RATE and not
+    /// fire on a person tapping between tabs.
+    @ObservationIgnored var firstRefusalSinceRunAt: Date?
+    /// Lifetime count, for the log line and the tests.
+    @ObservationIgnored var boardRefreshDropsTotal = 0
+
     /// Weak app-wide reference so session-page control objects created by
     /// views can apply optimistic list updates. The app's single store
     /// instance owns its own lifetime; tests overwrite it harmlessly.
@@ -303,13 +322,12 @@ final class TasksStore {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(seconds))
                 guard let self, self.isActive, !Task.isCancelled else { return }
-                async let t: Void = self.loadTasks()
-                async let s: Void = self.loadSessions()
-                // Folders ride the same poll as the lists (one small request, and it
-                // no-ops on an unchanged tree) so a folder created on the console shows
-                // up on the phone without waiting for a foreground cycle.
-                async let g: Void = self.loadTaskFolders()
-                _ = await (t, s, g)
+                // The whole bundle, through the funnel. Folders ride along (one small
+                // request, and it no-ops on an unchanged tree) so a folder created on
+                // the console shows up without waiting for a foreground cycle, and the
+                // focus split rides along because a tier moved on the console is
+                // otherwise invisible here until the next activation.
+                await self.refreshBoard(origin: .poll)
             }
         }
     }
@@ -443,11 +461,7 @@ final class TasksStore {
         // Live feed + one REST refresh in parallel: the feed's snapshot frame
         // usually lands first, and the REST answers are then no-ops.
         connectFeed()
-        async let t: Void = loadTasks()
-        async let s: Void = loadSessions()
-        async let f: Void = loadFocusTiers()
-        async let g: Void = loadTaskFolders()
-        _ = await (t, s, f, g)
+        await refreshBoard(origin: .coldStart)
     }
 
     /// Fetch the folder hierarchy. Best-effort, exactly like `loadFocusTiers`: an old
@@ -1129,12 +1143,7 @@ extension TasksStore: LifecycleSuspendable {
         // The feed snapshot covers tasks+sessions, but reconnect can lag —
         // fire one REST refresh so the lists are fresh immediately.
         Task { [weak self] in
-            guard let self else { return }
-            async let t: Void = self.loadTasks()
-            async let s: Void = self.loadSessions()
-            async let f: Void = self.loadFocusTiers()
-            async let g: Void = self.loadTaskFolders()
-            _ = await (t, s, f, g)
+            await self?.refreshBoard(origin: .foreground)
         }
     }
 }
