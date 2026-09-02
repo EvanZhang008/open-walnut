@@ -7,10 +7,12 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 /**
  * The reference lanes (ids, commit SHAs, external URLs) run in FRONT of the
  * ranked index lane: a pasted identifier is a navigation command, so it must
- * never be displaced by semantically-adjacent noise. An EXACT match answers
- * alone and never wakes the index; a PARTIAL one pins its owner on top and lets
- * the ranked lane fill in below. The index lane is mocked by name here so "was
- * it consulted at all?" is directly assertable.
+ * never be displaced by semantically-adjacent noise. Both an EXACT id and an id
+ * PREFIX answer alone and never wake the index — an opaque token has no prose
+ * for the ranked lane to match, so consulting it only paid for an embedder warm
+ * (search/id-lookup.ts). A commit SHA, an external URL, and a foreign-format id
+ * still travel the reference lanes below. The index lane is mocked by name here
+ * so "was it consulted at all?" is directly assertable.
  */
 const { searchLaneMock, listSessionsMock } = vi.hoisted(() => ({
   searchLaneMock: vi.fn(),
@@ -195,7 +197,7 @@ describe('GET /api/search structured references', () => {
     expect(searchLaneMock).not.toHaveBeenCalled();
   });
 
-  it('pins the authoritative partial session owner and still merges ranked hits', async () => {
+  it('answers a partial session id with its authoritative owner alone, never waking the index', async () => {
     const { task: staleTask } = await addTask({
       title: 'Stale task-side owner',
       project: 'Quick Start',
@@ -226,21 +228,19 @@ describe('GET /api/search structured references', () => {
       .query({ q: SESSION_ID.slice(0, 8), types: 'task' });
 
     expect(res.status).toBe(200);
-    // A PARTIAL id is a strong hint, not a navigation command: the owner is
-    // pinned first (from SessionRecord.taskId, which is authoritative over the
-    // stale task-side session_ids link, scored 0.99 for "prefix, not exact"),
-    // and the ranked lane still contributes below it.
+    // A PREFIX is a lookup too: the owner comes from SessionRecord.taskId (which
+    // is authoritative over the stale task-side session_ids link) and is scored
+    // 0.99 for "prefix, not exact". The ranked lane is not consulted at all — the
+    // companion hit it was ready to serve would have ranked below the owner
+    // anyway, and asking for it cost an embedder warm on every pasted id.
     expect(res.body.results).toEqual([
       expect.objectContaining({
         taskId: authoritativeTask.id,
         sessionId: SESSION_ID,
         score: 0.99,
       }),
-      expect.objectContaining({
-        taskId: 'semantic-task',
-      }),
     ]);
-    expect(searchLaneMock).toHaveBeenCalledOnce();
+    expect(searchLaneMock).not.toHaveBeenCalled();
   });
 
   it('asks the index lane for the task kind on an ordinary interactive query', async () => {

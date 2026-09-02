@@ -11899,7 +11899,52 @@ body.walnut-dragging {
   display: flex;
   gap: 0;
   flex-wrap: wrap;
+  align-items: baseline;
 }
+
+/* ── CopyableId: an id as a quiet reference (theme vars only, no pinned pair) ── */
+.copyable-id {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  /* The row is a flex container, which trims the leading space of the next
+     item's " · " separator — pay it here instead of changing that shared row. */
+  margin-right: 4px;
+}
+
+.copyable-id-label {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.copyable-id-value {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  /* A single click selects the WHOLE id: partial selection of an id is never
+     what anyone wants, and the highlight doubles as copy feedback. Drag-select
+     and Cmd+C keep working, which is the point — people paste ids into
+     terminals, so a copy button alone is not enough. */
+  user-select: all;
+  -webkit-user-select: all;
+  border-radius: 3px;
+  transition: color 0.15s;
+}
+
+.copyable-id-value:hover,
+.copyable-id-value:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
+.copyable-id-status {
+  font-size: 10px;
+  color: var(--success);
+}
+.copyable-id-status:empty { display: none; }
 
 .todo-detail-section {
   margin-bottom: 10px;

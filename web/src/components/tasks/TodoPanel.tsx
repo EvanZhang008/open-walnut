@@ -109,6 +109,7 @@ import {
 import { INBOX_TAB, LS_TAB_KEY } from './task-tabs';
 import { staleDonePinIds } from './pin-search-fold';
 import { DatePicker, formatDateDisplay, formatDateTimeDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
+import { CopyableId } from '../common/CopyableId';
 import { useVerticalSplitter } from '@/hooks/useVerticalSplitter';
 import { useResizableHeight } from '@/hooks/useResizableHeight';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
@@ -1685,7 +1686,11 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
           <PluginFieldPills task={task} />
         </div>
         <div className="todo-detail-dates text-xs text-muted">
-          {task.created_at && <span>Created {timeAgo(task.created_at)}</span>}
+          {/* The id is a reference, so it rides the metadata line rather than
+              the title: an agent or a log line names a task by id, and without
+              this there was no way to tell which card that is. */}
+          <CopyableId id={task.id} label="ID" />
+          {task.created_at && <span> · Created {timeAgo(task.created_at)}</span>}
           {task.updated_at && <span> · Updated {timeAgo(task.updated_at)}</span>}
           {task.start_date && (
             <span> · Starts {formatDateTimeDisplay(task.start_date)}</span>

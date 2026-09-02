@@ -5,6 +5,7 @@ import { contentQueryTerms, termInText } from './cjk.js';
 import { bus, EventNames } from './event-bus.js';
 import { listTasks } from './task-manager.js';
 import { listSessions } from './session-tracker.js';
+import { matchIdQuery, parseIdQuery } from './search/id-lookup.js';
 import type { SessionRecord, Task } from './types.js';
 import type { QuerySegments } from '../lib/hybrid-search/index.js';
 
@@ -803,9 +804,79 @@ async function searchInner(
     return sessions;
   }
 
+  // ── id lane ──
+  // A pasted id is a LOOKUP: answer it from the stores, ahead of every scoring
+  // leg, so no embedder warms and no fuzzy score can displace it. Handles whole
+  // ids AND prefixes, decorated or bare (see search/id-lookup.ts). A miss falls
+  // through to the ranked legs untouched, so a word that merely looks id-shaped
+  // loses nothing.
+  const idQuery = parseIdQuery(normalizedQuery);
+  if (idQuery) {
+    // Tasks first; the session store is read only when the needle could BE a
+    // session id (hex + dashes) and nothing matched — a task-id lookup, or a
+    // long prose word that merely passed the shape gate, must not pay for it.
+    let idMatches = types.includes('task')
+      ? matchIdQuery(idQuery, { tasks: await getTasks() })
+      : [];
+    if (idMatches.length === 0 && idQuery.sessionShaped) {
+      idMatches = matchIdQuery(idQuery, { sessions: await getSessions() });
+    }
+    const idRows: SearchResult[] = [];
+    const seenIdRows = new Set<string>();
+    // Built once, and only when a session match actually needs an owner join.
+    let taskById: Map<string, Task> | null = null;
+    const ownerOf = async (taskId: string): Promise<Task | undefined> => {
+      if (!types.includes('task')) return undefined;
+      taskById ??= new Map((await getTasks()).map((t) => [t.id, t]));
+      return taskById.get(taskId);
+    };
+    for (const match of idMatches) {
+      // A session id answers "which TASK did this?" whenever the record names
+      // an owner — same rule as the reference lanes below.
+      const owner = match.session?.taskId
+        ? await ownerOf(match.session.taskId)
+        : match.task;
+      const row: SearchResult | null =
+        owner && types.includes('task')
+          ? {
+            type: 'task', title: owner.title, snippet: match.value, taskId: owner.id,
+            parentTaskId: owner.parent_task_id,
+            ...(match.session ? { sessionId: match.session.claudeSessionId } : {}),
+            score: match.score, matchField: match.matchField,
+          }
+          : match.session && types.includes('session')
+            ? {
+              type: 'session',
+              title: match.session.title || match.session.claudeSessionId,
+              snippet: match.value, sessionId: match.session.claudeSessionId,
+              score: match.score, matchField: 'session_id',
+            }
+            : null;
+      const key = row?.taskId ?? row?.sessionId;
+      if (!row || !key || seenIdRows.has(key)) continue;
+      seenIdRows.add(key);
+      idRows.push(row);
+    }
+    count('search.id_lane', 1, {
+      result: idRows.length === 0 ? 'miss'
+        : idRows.length > 1 ? 'ambiguous'
+        : idMatches[0].score === 1 ? 'exact' : 'prefix',
+    });
+    if (idRows.length > 0) {
+      log.agent.debug('search id lane resolved', {
+        query: normalizedQuery, needle: idQuery.needle, matches: idRows.length,
+        taskIds: idRows.map((r) => r.taskId).filter(Boolean),
+      });
+      return idRows.slice(0, limit);
+    }
+  }
+
   // Exact copied references are navigation commands, not semantic queries.
   // Resolve them before the index lanes so unrelated high-similarity content
-  // cannot displace or surround the authoritative target.
+  // cannot displace or surround the authoritative target. Still needed beside
+  // the id lane above: this one also resolves exact `external_url` hits and
+  // exact ids in a FOREIGN format (sync-plugin GUIDs, imported ids) that the
+  // id lane's base36 shape check deliberately refuses to guess at.
   if (types.includes('task')) {
     const allTasks = await getTasks();
     const exactTasks = searchTaskAndSessionReferences(
