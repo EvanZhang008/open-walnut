@@ -9,6 +9,7 @@
  */
 
 import { bus, eventData, EventNames } from './event-bus.js'
+import { CLOUD_MODE } from '../constants.js'
 import { getConfig } from './config-manager.js'
 import { clientCount } from '../web/ws/handler.js'
 import { log } from '../logging/index.js'
@@ -98,6 +99,11 @@ async function buildMessages(title: string, body: string, data?: Record<string, 
  * Send a push notification if no WebSocket clients are connected.
  */
 async function maybePush(title: string, body: string, data?: Record<string, unknown>): Promise<void> {
+  // The PRIMARY owns push: it holds the token registry (config.yaml never syncs)
+  // and the APNs key, and a replica relays `/api/push/*` to it (core/push/relay.ts).
+  // A cloud box's own `push_tokens` rows are therefore not its to send from —
+  // any it still carries are orphans from before that relay existed.
+  if (CLOUD_MODE) return
   // Skip if there are active WebSocket clients (user is viewing)
   if (clientCount() > 0) {
     log.web.debug('push: skipped (WS clients connected)', { title, clients: clientCount() })

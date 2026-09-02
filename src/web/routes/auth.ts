@@ -10,6 +10,7 @@ import { Router } from 'express'
 import crypto from 'node:crypto'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { log } from '../../logging/index.js'
+import { revokePushTokensForDevice } from './push.js'
 
 export const authRouter = Router()
 
@@ -85,12 +86,22 @@ authRouter.delete('/keys/:name', async (req, res, next) => {
       return
     }
 
-    // Also remove any push tokens bound to this key
-    const pushTokens = (config.push_tokens ?? []).filter((t) => t.key_name !== name)
-
-    await updateConfig({ api_keys: filtered, push_tokens: pushTokens })
-    log.web.info('auth: API key deleted', { name })
-    res.json({ ok: true })
+    await updateConfig({ api_keys: filtered })
+    // Also drop any push tokens bound to this key — a revoked credential whose
+    // device keeps getting letter subjects on its lock screen is a privacy leak,
+    // not a leftover. Delegated because the rows may live on the PRIMARY (this
+    // box relays registrations when it is a replica), and because the delete has
+    // to be atomic: the read-then-updateConfig this replaced could reinstate or
+    // drop a registration that landed in between.
+    const push = await revokePushTokensForDevice(name)
+    log.web.info('auth: API key deleted', {
+      name, pushTokensRevoked: push.removed, ...(push.pending ? { pushRevokePending: push.pending } : {}),
+    })
+    res.json({
+      ok: true,
+      pushTokensRevoked: push.removed,
+      ...(push.pending ? { pushRevokePending: true } : {}),
+    })
   } catch (err) {
     next(err)
   }

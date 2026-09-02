@@ -16,10 +16,15 @@
  * status on `GET /api/push/status` — and never throws into a caller's event
  * handler. Setup steps: docs/reference/ios-push-notifications.md.
  *
- * Runs on the PRIMARY only. Letters live on the primary (a replica relays every
- * human-inbox route there), so the primary's store is the sole producer of
- * letter events and therefore the sole sender — which is also the box the key
- * sits on. See src/web/routes/push.ts for how a replica forwards registrations.
+ * Runs on the PRIMARY only, and so does the token registry it reads. Letters
+ * live on the primary (a replica relays every human-inbox route there), so the
+ * primary's store is the sole producer of letter events and therefore the sole
+ * sender — which is also the box this key sits on. Device tokens have to be on
+ * the same box for any of that to matter, which is why a replica relays
+ * `/api/push/*` here too: web/routes/push.ts makes the forwarding hop and
+ * core/push/relay.ts + core/push/registry.ts own the rows on this side. Before
+ * that relay existed the two halves sat on different boxes (letters here, tokens
+ * in the replica's own never-synced config.yaml) and no push was possible.
  */
 
 import { createSign } from 'node:crypto'
@@ -27,6 +32,7 @@ import { readFile } from 'node:fs/promises'
 import { connect, constants, type ClientHttp2Session } from 'node:http2'
 import { getConfig } from '../config-manager.js'
 import { log } from '../../logging/index.js'
+import { tokenPrefix } from './send.js'
 
 /** The app's bundle id — the APNs topic, unless overridden. */
 export const DEFAULT_APNS_TOPIC = 'dev.openwalnut.ios'
@@ -388,7 +394,7 @@ export async function sendApns(
     const message = r.error ?? `${r.status ?? '?'} ${r.reason ?? 'unknown'}`
     recordApnsError(message)
     log.notif.warn('apns: send failed', {
-      tokenPrefix: token.slice(0, 12), status: r.status, reason: r.reason, error: r.error,
+      tokenPrefix: tokenPrefix(token), status: r.status, reason: r.reason, error: r.error,
     })
   }
   return { attempted: true, sent, failed, deadTokens }

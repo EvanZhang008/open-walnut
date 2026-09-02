@@ -1396,6 +1396,14 @@ export interface PushTokenEntry {
   environment?: 'production' | 'sandbox';
   /** Name of the API key / device this token is bound to */
   key_name: string;
+  /**
+   * Which box authenticated `key_name`: `local` = paired with this box, `relay` =
+   * paired with a replica that forwarded the registration. Device names are only
+   * unique WITHIN a box, so name alone cannot tell two phones apart once one
+   * store holds both name spaces. Absent = `local` (rows written before the
+   * relay existed). See core/push/registry.ts.
+   */
+  origin?: 'local' | 'relay';
   /** Registration timestamp */
   registered_at: string;
   /**

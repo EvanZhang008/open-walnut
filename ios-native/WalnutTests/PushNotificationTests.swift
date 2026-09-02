@@ -176,4 +176,82 @@ final class PushNotificationTests: XCTestCase {
         XCTAssertEqual(PushRegistration.environment, "production")
         #endif
     }
+
+    // MARK: - The upload memo (why a broken install heals itself)
+
+    private static let token = String(repeating: "ab", count: 32)
+    private static let primary = URL(string: "http://192.168.1.10:3456")
+    private static let replica = URL(string: "https://companion.example.dev")
+
+    /// THE regression test for the reported symptom: letters never notified because
+    /// the phone believed it had already uploaded. The memo used to be the bare
+    /// token, so it meant "some box once took this", and the app never POSTed again
+    /// — not to the box that actually sends. A legacy memo must therefore NEVER
+    /// match, which forces exactly one re-upload after the update.
+    func testLegacyBareTokenMemoForcesOneReUpload() {
+        let legacy = Self.token                                  // what old builds stored
+        let now = PushRegistration.uploadMemo(token: Self.token, server: Self.primary)
+        XCTAssertNotEqual(legacy, now, "a bare-token memo must not satisfy the new check")
+        // ...and having uploaded once, the app goes quiet again (no re-upload loop).
+        XCTAssertEqual(now, PushRegistration.uploadMemo(token: Self.token, server: Self.primary))
+    }
+
+    /// A token accepted by one box says nothing about another. Nothing clears this
+    /// memo on re-pair (`AppConfig.save`/`clear` know nothing about push), so the
+    /// SERVER has to be part of the value or a re-paired phone stays unregistered.
+    func testMemoIsScopedToTheServer() {
+        XCTAssertNotEqual(
+            PushRegistration.uploadMemo(token: Self.token, server: Self.primary),
+            PushRegistration.uploadMemo(token: Self.token, server: Self.replica)
+        )
+    }
+
+    /// A rotated token (reinstall) must upload even against the same server.
+    func testMemoChangesWithTheToken() {
+        XCTAssertNotEqual(
+            PushRegistration.uploadMemo(token: Self.token, server: Self.primary),
+            PushRegistration.uploadMemo(token: String(repeating: "cd", count: 32), server: Self.primary)
+        )
+    }
+
+    /// An unpaired app must not write a memo that a later pairing would match.
+    func testUnpairedMemoNeverMatchesAPairedOne() {
+        let unpaired = PushRegistration.uploadMemo(token: Self.token, server: nil)
+        XCTAssertNotEqual(unpaired, PushRegistration.uploadMemo(token: Self.token, server: Self.primary))
+        XCTAssertTrue(unpaired.hasPrefix("unpaired|"))
+    }
+
+    // MARK: - "The server has no row for me" (the safety net)
+
+    /// `device_not_registered` is the server's machine-readable way of saying the
+    /// box holds no row for this device, and it is what makes the app drop its memo
+    /// and re-register. Keyed on the CODE, with the status as the fallback.
+    func testDeviceNotRegisteredIsRecognised() {
+        let byCode = APIError.server(
+            status: 404, code: "device_not_registered",
+            message: "This device has no registered push token — register it again",
+            serverHash: nil, serverContent: nil
+        )
+        XCTAssertTrue(PushRegistration.isDeviceNotRegistered(byCode))
+
+        // An older server, or a proxy that rewrote the body, still answers 404.
+        let byStatus = APIError.server(
+            status: 404, code: "http_error", message: "Server returned 404",
+            serverHash: nil, serverContent: nil
+        )
+        XCTAssertTrue(PushRegistration.isDeviceNotRegistered(byStatus))
+    }
+
+    /// Everything else must NOT drop the memo: a bridge outage or an offline Mac is
+    /// a "try again later", and re-registering on every 503 would hammer the server.
+    func testTransientFailuresDoNotCountAsForgotten() {
+        let bridgeDown = APIError.server(
+            status: 503, code: "bridge_offline",
+            message: "Your primary box is offline", serverHash: nil, serverContent: nil
+        )
+        XCTAssertFalse(PushRegistration.isDeviceNotRegistered(bridgeDown))
+        XCTAssertFalse(PushRegistration.isDeviceNotRegistered(APIError.unauthorized))
+        XCTAssertFalse(PushRegistration.isDeviceNotRegistered(APIError.rateLimited))
+        XCTAssertFalse(PushRegistration.isDeviceNotRegistered(APIError.notConfigured))
+    }
 }

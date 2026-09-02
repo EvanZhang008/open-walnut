@@ -70,9 +70,27 @@ final class PushRegistration {
         Mode(rawValue: UserDefaults.standard.string(forKey: modeKey) ?? "") ?? .always
     }
 
-    /// The token this install last uploaded successfully, so a relaunch doesn't
-    /// re-POST an unchanged token on every open.
+    /// What this install last uploaded successfully, so a relaunch doesn't re-POST
+    /// an unchanged token on every open.
     nonisolated static let uploadedTokenKey = "walnut.push.uploadedToken"
+
+    /// The memo VALUE: the token AND the server it was accepted by.
+    ///
+    /// Two bugs in one line. The old memo stored the bare token, so it meant "some
+    /// box once took this token" — which is not a fact about the box the app is
+    /// talking to now. Re-pairing to a different server (or the same phone moving
+    /// between the primary and its replica) left the memo saying "done" while the
+    /// new server had no row at all, and `didRegister` short-circuited forever.
+    /// Nothing cleared it: `AppConfig.save`/`clear` do not know about push.
+    ///
+    /// Including the server also gives every EXISTING install exactly one forced
+    /// re-upload: their stored value is a bare 64-char token, which can never equal
+    /// this composite, so the next launch uploads once and then goes quiet again.
+    /// That is the self-heal for phones whose token was accepted by a pre-relay
+    /// build and stored on a box that never sends.
+    nonisolated static func uploadMemo(token: String, server: URL? = AppConfig.serverURL) -> String {
+        "\(server?.absoluteString ?? "unpaired")|\(token)"
+    }
 
     // MARK: - Observable state (what Settings shows)
 
@@ -170,7 +188,7 @@ final class PushRegistration {
             "environment": Self.environment,
         ])
         let alreadyUploaded = UserDefaults.standard.string(forKey: Self.uploadedTokenKey)
-        guard alreadyUploaded != hex else { return }
+        guard alreadyUploaded != Self.uploadMemo(token: hex) else { return }
         upload(token: hex)
     }
 
@@ -196,7 +214,7 @@ final class PushRegistration {
                     environment: Self.environment,
                     mode: mode.rawValue
                 )
-                UserDefaults.standard.set(token, forKey: Self.uploadedTokenKey)
+                UserDefaults.standard.set(Self.uploadMemo(token: token), forKey: Self.uploadedTokenKey)
                 serverDeliverable = ack.deliverable
                 if ack.deliverable == false {
                     // Registered but undeliverable = the server has no APNs key.
@@ -216,6 +234,36 @@ final class PushRegistration {
         }
     }
 
+    /// Forget the memo and register again, because the paired server says it has no
+    /// row for this device.
+    ///
+    /// The server signals that as `404 device_not_registered` (see
+    /// core/push/registry.ts). It is the only cheap way for the app to learn that a
+    /// token it believes it uploaded is not stored anywhere that sends — but it can
+    /// only fire on a call the user triggers (a mode change), so it is a safety net
+    /// rather than the mechanism: the memo format itself is what heals an install
+    /// on launch.
+    private func serverForgotThisDevice() {
+        UserDefaults.standard.removeObject(forKey: Self.uploadedTokenKey)
+        if let deviceToken {
+            upload(token: deviceToken)
+        } else {
+            // No token in hand this launch; ask APNs to deliver it again, which
+            // re-enters didRegister → upload. Never prompts.
+            UIApplication.shared.registerForRemoteNotifications()
+        }
+    }
+
+    /// True when a failed call means "this box holds no row for me".
+    ///
+    /// Matches the code, and falls back to the status: an older server, or a proxy
+    /// that rewrote the body, still answers 404 here. Internal rather than private
+    /// so a test can pin which errors re-register and which must not.
+    nonisolated static func isDeviceNotRegistered(_ error: Error) -> Bool {
+        guard case let APIError.server(status, code, _, _, _) = error else { return false }
+        return code == "device_not_registered" || status == 404
+    }
+
     /// Re-send the token after the mode changes, and push the new mode up.
     func modeChanged(to mode: Mode) {
         UserDefaults.standard.set(mode.rawValue, forKey: Self.modeKey)
@@ -228,6 +276,11 @@ final class PushRegistration {
                 // claim the lease immediately, or the next letter buzzes even
                 // though the user is looking at the app.
                 if mode == .whenInactive { reportActive(true) }
+            } catch where Self.isDeviceNotRegistered(error) {
+                AppLog.warn("push", "server has no row for this device — re-registering", [
+                    "error": String(describing: error),
+                ])
+                serverForgotThisDevice()
             } catch {
                 lastError = String(describing: error)
                 AppLog.warn("push", "mode update failed", ["error": lastError ?? ""])
@@ -273,6 +326,14 @@ final class PushRegistration {
     private func postActive(_ active: Bool) {
         Task { [api] in
             do { try await api.reportPushActive(active) }
+            catch where Self.isDeviceNotRegistered(error) {
+                // The lease is a courtesy, but a 404 here carries real information:
+                // this box has no row for us, so the token needs re-uploading.
+                AppLog.warn("push", "server has no row for this device — re-registering", [
+                    "from": "active report",
+                ])
+                serverForgotThisDevice()
+            }
             catch {
                 // Losing this is safe by design — the lease expires and letters
                 // resume. Log at info, not warn.

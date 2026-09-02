@@ -13,6 +13,18 @@
 
 import type { PushTokenEntry } from '../types.js'
 
+/**
+ * How much of a device token may appear in a log line or an API response.
+ *
+ * A full token is a SEND CAPABILITY for that device, so nothing outside the
+ * registry ever prints one. Lives here (the leaf module both the sender and the
+ * registry already import) so there is one definition rather than a `slice(0, 12)`
+ * repeated at every log site.
+ */
+export function tokenPrefix(token: string): string {
+  return token.slice(0, 12)
+}
+
 /** Expo tokens are `ExponentPushToken[...]` / `ExpoPushToken[...]`; APNs is hex. */
 export function tokenKind(entry: Pick<PushTokenEntry, 'token' | 'kind'>): 'apns' | 'expo' {
   if (entry.kind === 'apns' || entry.kind === 'expo') return entry.kind

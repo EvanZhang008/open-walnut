@@ -80,6 +80,16 @@ final class QuickActionDelegate: NSObject, UIApplicationDelegate {
         // UNUserNotificationCenter drops a cold-launch tap if its delegate isn't
         // set by the time this method returns.
         LetterDeepLink.installNotificationRouting()
+        // Re-check the APNs registration on EVERY launch, not only when the user
+        // happens to open the Inbox or Settings tab. APNs can rotate a token at
+        // any time, and the upload memo now includes the paired server, so a phone
+        // whose token was accepted by a box that never sends re-uploads by itself
+        // here. `refreshAuthorization` never prompts: it registers only if
+        // permission was already granted. Gated on activation so a prewarm launch
+        // does no network.
+        LaunchGate.shared.whenActive {
+            await PushRegistration.shared.refreshAuthorization()
+        }
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains(where: { $0.contains(Self.debugLaunchArgument) }) {
             Self.logDelivery(hook: "debug-arg", shortcutType: VoiceQuickAction.shortcutType)

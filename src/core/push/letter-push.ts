@@ -10,7 +10,15 @@
  * user asked for that (`when-inactive`).
  *
  * Runs on the PRIMARY. Letters live there (a replica relays every human-inbox
- * route to it), so the primary's store is the only producer of letter events.
+ * route to it), so the primary's store is the only producer of letter events —
+ * and device tokens live here too, because a replica relays `/api/push/register`
+ * to this box as well (core/push/relay.ts). Both halves have to be on the same
+ * box for a push to happen at all: for months the letters were here and the
+ * tokens were on the replica's own unsynced config, so every letter took the
+ * `no device registered for push` exit. That exit is now LOGGED — see
+ * `finish()`: every letter emits exactly one `letter push` line, whatever
+ * happened, so "a letter arrived and nothing was sent" can never again be
+ * invisible.
  */
 
 import { bus, eventData, EventNames } from '../event-bus.js'
@@ -78,28 +86,129 @@ function deviceState(entry: PushTokenEntry): DevicePushState {
   }
 }
 
+export interface LetterPushOutcome {
+  attempted: boolean
+  sent: number
+  failed: number
+  suppressed: number
+  reason?: string
+}
+
 /**
- * Push one letter to the devices whose mode says yes. Returns a summary so
- * tests and the status route can see what happened, including the honest
- * "nothing was attempted, here's why".
+ * A configuration gap (no device registered, no APNs key) is PERMANENT until a
+ * human acts, so its remediation text is logged once per process rather than once
+ * per letter. The per-letter `letter push` line still carries the reason, so the
+ * condition stays greppable for every single letter.
+ */
+const warnedOnce = new Set<string>()
+
+function warnOnce(key: string, message: string, fields: Record<string, unknown>): void {
+  if (warnedOnce.has(key)) return
+  warnedOnce.add(key)
+  log.notif.warn(message, fields)
+}
+
+/** Test seam — lets a test observe the once-per-process warnings again. */
+export function resetLetterPushWarningsForTests(): void { warnedOnce.clear() }
+
+/** Fields every `letter push` line carries, whatever happened. */
+function summaryFields(
+  letter: LetterPushInput,
+  outcome: LetterPushOutcome,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    letterId: letter.letterId, letterType: letter.type, kind: letter.kind,
+    attempted: outcome.attempted, sent: outcome.sent, failed: outcome.failed,
+    suppressed: outcome.suppressed,
+    ...extra,
+    ...(outcome.reason ? { reason: outcome.reason } : {}),
+  }
+}
+
+/**
+ * Push one letter to the devices whose mode says yes. Returns a summary so tests
+ * and the status route can see what happened, including the honest "nothing was
+ * attempted, here's why".
+ *
+ * EXACTLY ONE `letter push` log line per call, and that is structural, not a
+ * property of the happy paths: every normal exit goes through `finish()`, a THROW
+ * from anywhere gets its own line before being rethrown, and a `finally` guard
+ * catches the case where even that failed. A letter that produces no push and no
+ * log line is the bug this file exists to prevent — it hid a dead registration
+ * path for weeks.
  */
 export async function pushLetter(
   letter: LetterPushInput,
   now = Date.now(),
-): Promise<{ attempted: boolean; sent: number; failed: number; suppressed: number; reason?: string }> {
+): Promise<LetterPushOutcome> {
+  let logged = false
+  const mark = (): void => { logged = true }
+  try {
+    return await attemptLetterPush(letter, now, mark)
+  } catch (err) {
+    // Rethrown after logging: the caller's handler still records the stack (the
+    // bus subscriber logs `letter push: handler error`), but this letter no
+    // longer passes through without a line of its own.
+    const message = err instanceof Error ? err.message : String(err)
+    log.notif.error('letter push', summaryFields(letter, {
+      attempted: false, sent: 0, failed: 0, suppressed: 0,
+      reason: `push threw: ${message}`,
+    }))
+    mark()
+    throw err
+  } finally {
+    if (!logged) {
+      // Only reachable if the logging itself failed above. Still try: "no line"
+      // is the one outcome this function must never produce.
+      try {
+        log.notif.error('letter push', summaryFields(letter, {
+          attempted: false, sent: 0, failed: 0, suppressed: 0,
+          reason: 'pushLetter exited without a summary — this is a bug',
+        }))
+      } catch { /* nothing left to try with */ }
+    }
+  }
+}
+
+async function attemptLetterPush(
+  letter: LetterPushInput,
+  now: number,
+  mark: () => void,
+): Promise<LetterPushOutcome> {
+  /** One line per letter, always. `warn` whenever nothing reached a device. */
+  const finish = (
+    outcome: LetterPushOutcome,
+    extra: Record<string, unknown> = {},
+  ): LetterPushOutcome => {
+    const fields = summaryFields(letter, outcome, extra)
+    if (outcome.sent === 0) log.notif.warn('letter push', fields)
+    else log.notif.info('letter push', fields)
+    mark()
+    return outcome
+  }
+
   let tokens: PushTokenEntry[] = []
   try {
     tokens = (await getConfig()).push_tokens ?? []
   } catch (err) {
-    const reason = `config unreadable: ${err instanceof Error ? err.message : String(err)}`
-    log.notif.warn('letter push: skipped', { letterId: letter.letterId, reason })
-    return { attempted: false, sent: 0, failed: 0, suppressed: 0, reason }
+    return finish({
+      attempted: false, sent: 0, failed: 0, suppressed: 0,
+      reason: `config unreadable: ${err instanceof Error ? err.message : String(err)}`,
+    })
   }
   if (tokens.length === 0) {
-    return {
+    warnOnce('no-tokens',
+      'letter push: no device is registered for push — no letter will notify until one is',
+      {
+        hint: 'iOS: open the Inbox tab and allow notifications. A phone paired to a cloud '
+          + 'replica registers through it and the replica relays the token here; check '
+          + 'GET /api/push/status on THIS box, which is the only store that counts.',
+      })
+    return finish({
       attempted: false, sent: 0, failed: 0, suppressed: 0,
       reason: 'no device registered for push',
-    }
+    }, { devices: 0 })
   }
 
   const chosen = selectDevices(
@@ -110,13 +219,10 @@ export async function pushLetter(
   )
   const suppressed = tokens.length - chosen.length
   if (chosen.length === 0) {
-    log.notif.info('letter push: every device suppressed it', {
-      letterId: letter.letterId, devices: tokens.length,
-    })
-    return {
+    return finish({
       attempted: false, sent: 0, failed: 0, suppressed,
       reason: 'all devices are foreground-active or muted this letter type',
-    }
+    }, { devices: tokens.length, targeted: 0 })
   }
 
   const content = letterPushContent(letter)
@@ -135,6 +241,7 @@ export async function pushLetter(
   let attempted = false
   let reason: string | undefined
 
+  let pruned = 0
   if (apnsTargets.length > 0) {
     const out = await sendApns(apnsTargets, payload, {
       priority: content.priority,
@@ -145,8 +252,18 @@ export async function pushLetter(
     attempted = attempted || out.attempted
     sent += out.sent
     failed += out.failed
-    if (!out.attempted) reason = out.reason
-    if (out.deadTokens.length > 0) await pruneDead(out.deadTokens)
+    if (!out.attempted) {
+      reason = out.reason
+      // The missing-credential text itself is warned once per process inside
+      // apns.ts; this names the letter that just lost its push.
+      warnOnce('apns-unconfigured',
+        'letter push: APNs is not configured on this box — letters cannot notify',
+        { reason: out.reason })
+    }
+    if (out.deadTokens.length > 0) {
+      pruned = out.deadTokens.length
+      await pruneDead(out.deadTokens)
+    }
   }
   if (expoTokens.length > 0) {
     const out = await sendExpoLetter(expoTokens, content)
@@ -155,12 +272,13 @@ export async function pushLetter(
     failed += out.failed
   }
 
-  log.notif.info('letter push', {
-    letterId: letter.letterId, letterType: letter.type, kind: letter.kind,
-    devices: tokens.length, targeted: chosen.length, suppressed, sent, failed,
-    ...(reason ? { reason } : {}),
-  })
-  return { attempted, sent, failed, suppressed, ...(reason ? { reason } : {}) }
+  return finish(
+    { attempted, sent, failed, suppressed, ...(reason ? { reason } : {}) },
+    {
+      devices: tokens.length, targeted: chosen.length,
+      ...(pruned > 0 ? { deadTokensPruned: pruned } : {}),
+    },
+  )
 }
 
 /** Expo delivery for legacy tokens (kept minimal — nothing new mints these). */

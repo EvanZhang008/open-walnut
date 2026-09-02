@@ -16,6 +16,7 @@ import { createDevice, revokeDevice, listDevices, listDeviceRecords, type Device
 import { getPairingTargets, getCloudPairingEndpoint } from '../../core/pairing-targets.js'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
+import { revokePushTokensForDevice } from './push.js'
 
 export const devicesRouter = Router()
 
@@ -270,8 +271,22 @@ devicesRouter.delete('/:name', async (req: Request, res: Response, next: NextFun
       res.status(404).json({ error: `Device "${name}" not found` })
       return
     }
-    log.web.info('devices: revoked via console', { name })
-    res.json({ ok: true })
+    // Revoking the pairing has to stop the PUSHES too, or a lost phone keeps
+    // showing letter subjects and previews on its lock screen with no way to log
+    // in. The rows usually live on the primary (a replica relays registrations),
+    // so this is delegated rather than done inline. Best-effort by design: the
+    // pairing is already gone, so a bridge outage reports `pushRevokePending`
+    // instead of failing the revoke and leaving the device paired.
+    const push = await revokePushTokensForDevice(name)
+    log.web.info('devices: revoked via console', {
+      name, pushTokensRevoked: push.removed,
+      ...(push.pending ? { pushRevokePending: push.pending } : {}),
+    })
+    res.json({
+      ok: true,
+      pushTokensRevoked: push.removed,
+      ...(push.pending ? { pushRevokePending: true } : {}),
+    })
   } catch (err) {
     next(err)
   }

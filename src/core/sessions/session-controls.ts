@@ -694,6 +694,13 @@ export type SessionControlAction =
   | 'server.human-inbox' | 'server.human-inbox.get' | 'server.human-inbox.body' | 'server.human-inbox.send'
   | 'server.human-inbox.reply' | 'server.human-inbox.read' | 'server.human-inbox.pin'
   | 'server.human-inbox.archive' | 'server.human-inbox.answer' | 'server.human-inbox.human-reply'
+  // Push registration. Box-level, and the reason is the same one that makes the
+  // primary the only sender: the token rows live in `config.yaml` (machine-local,
+  // never synced) and the APNs key sits on the primary, so a replica storing a
+  // phone's token locally put it on the one box that can never push. A replica
+  // relays every /api/push route here — see core/push/relay.ts.
+  | 'server.push.register' | 'server.push.unregister' | 'server.push.preferences'
+  | 'server.push.active' | 'server.push.status' | 'server.push.revoke-device'
   // Wave 2 box-level family: file-explorer metadata (names/types only — file
   // CONTENT never rides the bridge; see files-v1.ts for the threat model).
   | 'server.files.list' | 'server.files.resolve'
@@ -1208,6 +1215,34 @@ export async function handleSessionControlRelay(
           result = await handleHumanInboxRelayAction(sub, p);
         } catch (err) {
           if (err instanceof LetterError) throw new SessionControlError(err.message, err.status);
+          throw err;
+        }
+        break;
+      }
+      // ── Push registration family: the primary owns the token rows ──
+      // A replica cannot keep a token (config.yaml never syncs) and cannot send
+      // one (the APNs key is here), so registration/unregistration/preferences/
+      // the foreground lease/status all land here. `keyName` in the params is the
+      // DEVICE identity the replica authenticated, forwarded as provenance for
+      // row scoping — the authenticated party on this hop is the bridge socket.
+      case 'server.push.register':
+      case 'server.push.unregister':
+      case 'server.push.preferences':
+      case 'server.push.active':
+      case 'server.push.status':
+      case 'server.push.revoke-device': {
+        const { handlePushRelayAction, PushRegistryError } = await import('../push/relay.js');
+        const sub = action.slice('server.push.'.length);
+        try {
+          result = await handlePushRelayAction(sub, p);
+        } catch (err) {
+          // `code` rides in `extra` so the machine-readable reason survives the
+          // bridge: the replica turns `device_not_registered` back into the same
+          // 404 code the local path returns, which is the signal a client uses to
+          // notice its token never landed and register again.
+          if (err instanceof PushRegistryError) {
+            throw new SessionControlError(err.message, err.status, { code: err.code });
+          }
           throw err;
         }
         break;
