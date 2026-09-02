@@ -9835,8 +9835,9 @@ export class SessionRunner {
    * Awaited first, the anchor is pinned to the pre-spawn transcript, where
    * everything past the rewind point is by definition abandoned.
    *
-   * Bounded + display-only + never throws: the transcript read races a short
-   * deadline. On timeout, read failure, or byte-ceiling throw, recording is
+   * Bounded + display-only + never throws: the anchor lookup (the host's daemon
+   * probe, else a transcript read) races a short deadline. On timeout, failure,
+   * or byte-ceiling throw, recording is
    * SKIPPED (warn) and the spawn proceeds — an unrecorded second truncation
    * only leaves an extra visible branch (the safe direction), never hides a
    * live row. Recording is also skipped when nothing was appended since the
@@ -9853,37 +9854,50 @@ export class SessionRunner {
       const record = await getSessionByClaudeId(sessionId)
       // Re-read the flag: it may have been cleared between resolve and here.
       if (!record || record.pendingResumeSessionAt !== resumeSessionAt) return
-      const { readSessionJsonlContent } = await import('../core/session-file-reader.js')
-      // Bounded anchor read: the spawn is blocked on this record-or-skip, and a
-      // whale transcript on a remote host crosses the tunnel — never hold the
-      // resume hostage to it.
-      const raw = await Promise.race([
-        readSessionJsonlContent(sessionId, record.cwd, record.host ?? undefined),
-        new Promise<'timeout'>((resolve) => {
-          readTimer = setTimeout(() => resolve('timeout'), ANCHOR_READ_TIMEOUT_MS)
-        }),
-      ])
-      if (raw === 'timeout') {
+      // ONE bound covers both ways of getting the anchor: the spawn is blocked on
+      // this record-or-skip, so the deadline is armed FIRST and everything below
+      // races it — a slow host can never hold the resume hostage.
+      const deadline = new Promise<'timeout'>((resolve) => {
+        readTimer = setTimeout(() => resolve('timeout'), ANCHOR_READ_TIMEOUT_MS)
+      })
+      const timedOut = () => {
         log.session.warn('death-window resume cut skipped: anchor read timed out (spawn proceeds unrecorded)', {
           sessionId, rewindPoint: resumeSessionAt, timeoutMs: ANCHOR_READ_TIMEOUT_MS,
         })
-        return
       }
-      if (!raw?.content) return
-      const { TRANSCRIPT_TREE_TYPES } = await import('../core/transcript-chain.js')
-      // Last TREE line uuid in the transcript right now.
+      // Last TREE line uuid in the transcript right now. Host-local first: the
+      // daemon walks its own file and returns just the uuid (a transcript past
+      // the reader's byte ceiling has no other answer at all).
       let lastTreeUuid: string | undefined
-      const lines = raw.content.split('\n')
-      for (let i = lines.length - 1; i >= 0 && lastTreeUuid === undefined; i--) {
-        const line = lines[i]
-        if (!line) continue
-        try {
-          const parsed = JSON.parse(line) as { uuid?: string; type?: string }
-          if (parsed && typeof parsed.uuid === 'string' && typeof parsed.type === 'string'
-            && TRANSCRIPT_TREE_TYPES.has(parsed.type)) {
-            lastTreeUuid = parsed.uuid
-          }
-        } catch { /* partial/corrupt line */ }
+      const { probeRewindViaDaemon } = await import('../core/sessions/session-rewind.js')
+      const probe = await Promise.race([
+        probeRewindViaDaemon({ sessionId, cwd: record.cwd, host: record.host }, {}),
+        deadline,
+      ])
+      if (probe === 'timeout') { timedOut(); return }
+      if (probe) {
+        lastTreeUuid = probe.lastUuidAtCommit ?? undefined
+      } else {
+        const { readSessionJsonlContent } = await import('../core/session-file-reader.js')
+        const raw = await Promise.race([
+          readSessionJsonlContent(sessionId, record.cwd, record.host ?? undefined),
+          deadline,
+        ])
+        if (raw === 'timeout') { timedOut(); return }
+        if (!raw?.content) return
+        const { TRANSCRIPT_TREE_TYPES } = await import('../core/transcript-chain.js')
+        const lines = raw.content.split('\n')
+        for (let i = lines.length - 1; i >= 0 && lastTreeUuid === undefined; i--) {
+          const line = lines[i]
+          if (!line) continue
+          try {
+            const parsed = JSON.parse(line) as { uuid?: string; type?: string }
+            if (parsed && typeof parsed.uuid === 'string' && typeof parsed.type === 'string'
+              && TRANSCRIPT_TREE_TYPES.has(parsed.type)) {
+              lastTreeUuid = parsed.uuid
+            }
+          } catch { /* partial/corrupt line */ }
+        }
       }
       // Nothing after the rewind point at all → an empty region, no cut.
       if (!lastTreeUuid || lastTreeUuid === resumeSessionAt) return

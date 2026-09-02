@@ -500,6 +500,75 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     expect(templateSrc).toMatch(/changes\.file: core sidecar not available/)
   })
 
+  // Host-local transcript rewind probe (transcript.rewindProbe): the same
+  // sidecar-gated shape as changes-v1. Without it the server must shuttle a whole
+  // transcript over the tunnel, which DaemonFileReader refuses past its byte
+  // ceiling — so rewind on a long transcript depends entirely on this capability
+  // reaching hosts, i.e. on the version hash + sidecar + deploy list below.
+  it("both twins dispatch transcript.rewindProbe; 'rewind-probe-v1' is sidecar-gated, advertised, NOT required", () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/case 'transcript\.rewindProbe': return cmdTranscriptRewindProbe/)
+      expect(src).toMatch(/function cmdTranscriptRewindProbe/)
+    }
+    // Binary twin imports the core; template twin require()s the sidecar bundle.
+    expect(standaloneSrc).toMatch(/from '\.\/transcript-rewind-core\.js'/)
+    expect(templateSrc).toMatch(/require\(path\.join\(__dirname, 'transcript-rewind-core\.cjs'\)\)/)
+    const gatedStart = templateSrc.indexOf('SIDECAR_GATED_CAPABILITIES = new Set([')
+    expect(gatedStart).toBeGreaterThan(-1)
+    expect(templateSrc.slice(gatedStart, templateSrc.indexOf('])', gatedStart)))
+      .toContain("'rewind-probe-v1'")
+    expect(templateSrc).toMatch(/if \(transcriptRewindCore\) caps\.push\('rewind-probe-v1'\)/)
+    expect(templateSrc).toMatch(/transcript\.rewindProbe: core sidecar not available/)
+    // Advertised, never required — an old daemon stays usable (server falls back).
+    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
+    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')
+    expect(reqStart).toBeGreaterThan(-1)
+    expect(capsSrc.slice(reqStart, capsSrc.indexOf('] as const', reqStart)))
+      .not.toMatch(/'rewind-probe-v1'/)
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
+    expect(capsSrc.slice(advStart, capsSrc.indexOf('] as const', advStart)))
+      .toMatch(/'rewind-probe-v1'/)
+    // Version hash (both lists), sidecar bundle, and the source-deploy list.
+    const build = readFile(path.join(ROOT, 'scripts/build-daemon.sh'))
+    expect(build).toMatch(/src\/providers\/transcript-rewind-core\.ts/)
+    expect(build).toMatch(/src\/core\/transcript-chain\.ts/)
+    expect(build).toMatch(/transcript-rewind-core\.cjs/)
+    const versionCheck = readFile(path.join(ROOT, 'src/providers/daemon-version-check.ts'))
+    expect(versionCheck).toMatch(/transcript-rewind-core\.ts/)
+    expect(versionCheck).toMatch(/transcript-chain\.ts/)
+    expect(readFile(path.join(ROOT, 'src/providers/daemon-connection.ts')))
+      .toMatch(/'transcript-rewind-core\.cjs'/)
+    // The LOCAL daemon copies its own sidecars (no SSH deploy runs for
+    // __local__), so a missing entry here means the capability works on every
+    // remote host and silently not on this Mac.
+    expect(readFile(path.join(ROOT, 'src/providers/local-daemon.ts')))
+      .toMatch(/'transcript-rewind-core\.cjs'/)
+  })
+
+  // Concurrency: the probe streams the same transcripts changes.compute walks, so
+  // it takes the same gate. It matters most on the DISPLAY caller (history reads
+  // poll), where a burst would otherwise stack whole-file parses on the host.
+  it('both twins serialize transcript.rewindProbe and coalesce identical requests', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      // Host-wide serial gate + per-request in-flight map, and the command must
+      // go THROUGH the gate (a direct core call would bypass both).
+      expect(src).toMatch(/rewindProbeInflight(: Promise<void>)? = Promise\.resolve\(\)/)
+      expect(src).toMatch(/rewindProbeInflightByKey = new Map/)
+      expect(src).toMatch(/function probeTranscriptRewindGated/)
+      expect(src).toMatch(/await probeTranscriptRewindGated\(/)
+      // Keyed on the whole request: two callers asking different questions about
+      // one session must not share an answer.
+      expect(src).toMatch(/function rewindProbeKey/)
+      expect(src).toMatch(/c\.uuid \+ '>' \+ c\.lastUuidAtCommit/)
+    }
+    // Still UNCACHED — the gate bounds concurrency, it never serves stale answers.
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).not.toMatch(/rewindProbeCache/)
+    }
+  })
+
   // Host-local symbol search (fs.grep): the binary twin imports
   // search-grep-core.ts, the source twin inlines an equivalent. NOT sidecar-
   // gated — both need only child_process — so 'grep-v1' is unconditional on a

@@ -52,8 +52,10 @@
  *   restore files       → `rewind_files` on the LIVE CLI (skipped, with a reason,
  *                         when the session has no live CLI to ask)
  *   stop the CLI        → the transcript must be quiet before committing
- *   commit              → read the raw JSONL once for the cut's end anchor (the
- *                         last tree line) + any trailing enqueue keys, append
+ *   commit              → get the cut's end anchor (the last tree line) + any
+ *                         trailing enqueue keys — from the host's daemon
+ *                         (transcript.rewindProbe) or, on an old daemon, one raw
+ *                         read of the JSONL here — then append
  *                         the cut to record.inPlaceRewinds + set
  *                         pendingResumeSessionAt, drop every history cache (the
  *                         FILE didn't change, its MEANING did — mtime caches
@@ -180,6 +182,90 @@ interface ResolvedTarget {
   target: SessionHistoryMessage;
 }
 
+// ── Host-local probe (capability 'rewind-probe-v1') ──
+// Design-principle path (AGENTS.md): the daemon streams the session's OWN
+// transcript and answers rewind's questions from it; only the small answer
+// crosses the tunnel. The whole-file read below stays as the fallback for hosts
+// whose daemon predates the capability — same functions, same answers — but it
+// cannot serve a transcript past DaemonFileReader's byte ceiling at all, which
+// is exactly why the probe exists.
+
+// Generous by default because the callers that omit `timeoutMs` are the rewind
+// GATE and the rewind COMMIT: a user-initiated action that must be correct, and
+// whose whole cost is this one RPC. A caller on a latency-sensitive path (the
+// history display read) passes its own, much shorter budget instead.
+const REWIND_PROBE_TIMEOUT_MS = 60_000;
+
+/** What the probe needs to reach the right host's transcript. Not a
+ *  SessionRecord: the record keys the id as `claudeSessionId`, and the history
+ *  read path (session-history.ts) has only the loose (sessionId, cwd, host). */
+export interface RewindProbeTarget {
+  sessionId: string;
+  cwd?: string;
+  host?: string | null;
+}
+
+/**
+ * Ask the session host's daemon. Returns null when it can't answer (no
+ * capability, not connected, transcript not found, RPC failure) — every caller
+ * then falls back to its own read. Never dials: a disconnected host should fall
+ * back, not block.
+ */
+export async function probeRewindViaDaemon(
+  target: RewindProbeTarget,
+  args: {
+    uuid?: string;
+    cuts?: readonly Pick<import('../types.js').InPlaceRewindCut,
+      'uuid' | 'lastUuidAtCommit' | 'trailingQueueKeys'>[];
+    /** Per-call RPC budget. Defaults to REWIND_PROBE_TIMEOUT_MS (gate/commit). */
+    timeoutMs?: number;
+  },
+): Promise<import('../../providers/transcript-rewind-core.js').RewindProbeOutput | null> {
+  let conn: import('../../providers/daemon-connection.js').DaemonConnection | null = null;
+  try {
+    const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js');
+    const found = getConnectedDaemonConnection(target.host ?? '__local__');
+    if (found && found.hasCapability('rewind-probe-v1')) conn = found;
+  } catch { /* provider layer unavailable (tests) */ }
+  if (!conn) return null;
+  try {
+    const res = await conn.send('transcript.rewindProbe', {
+      sid: target.sessionId,
+      ...(target.cwd ? { cwd: target.cwd } : {}),
+      ...(args.uuid ? { uuid: args.uuid } : {}),
+      ...(args.cuts && args.cuts.length > 0
+        ? {
+          cuts: args.cuts.map((c) => ({
+            uuid: c.uuid,
+            lastUuidAtCommit: c.lastUuidAtCommit,
+            ...(c.trailingQueueKeys ? { trailingQueueKeys: c.trailingQueueKeys } : {}),
+          })),
+        }
+        : {}),
+    }, args.timeoutMs ?? REWIND_PROBE_TIMEOUT_MS);
+    if (!res.ok || res.found !== true) return null;
+    return res as unknown as import('../../providers/transcript-rewind-core.js').RewindProbeOutput;
+  } catch (err) {
+    log.session.debug('rewind probe via daemon failed — falling back to the transcript read', {
+      sessionId: target.sessionId, host: target.host ?? '__local__',
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+/** A read the tunnel refused on size is not an errno the human should ever see:
+ *  it means this host's daemon is too old to answer host-locally, and it fixes
+ *  itself on the next auto-deploy. Returns null for any other error. */
+function tooLargeForTheTunnel(err: unknown): SessionControlError | null {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (!msg.includes('byte ceiling')) return null;
+  return new SessionControlError(
+    'This transcript is too large to validate over the tunnel; the session host needs the current daemon (auto-upgrades on the next message you send it)',
+    503,
+  );
+}
+
 /** Parse a raw JSONL string into the line objects the chain machinery reads.
  *  Partial/corrupt lines are skipped — they are not transcript lines. */
 function parseTranscriptLines(content: string): import('../transcript-chain.js').TranscriptChainLine[] {
@@ -201,7 +287,9 @@ function parseTranscriptLines(content: string): import('../transcript-chain.js')
  * nothing.
  *
  * Also the CHAIN gate: the uuid must be ON the chain the CLI itself would load
- * (computeCliLoadedChain — the getLastSessionLog port). `--resume-session-at`
+ * (computeCliLoadedChain — the getLastSessionLog port), computed by the session
+ * HOST's daemon when it speaks `rewind-probe-v1` (a long transcript cannot cross
+ * the tunnel at all). `--resume-session-at`
  * resolves against exactly that chain, so a uuid that merely EXISTS on disk but
  * sits off it (behind the last compact boundary, or on an abandoned branch)
  * makes the CLI exit 1 at respawn. Running the gate HERE — shared by
@@ -246,20 +334,30 @@ async function resolveRewindTarget(sessionId: string, messageUuid: string): Prom
     );
   }
 
-  // ── Chain gate (see the doc above) ── one raw read, validated against the
-  // chain `--resume <sid>` would load.
-  const { readSessionJsonlContent } = await import('../session-file-reader.js');
-  const raw = await readSessionJsonlContent(sessionId, record.cwd, record.host ?? undefined);
-  if (!raw?.content) {
-    throw new SessionControlError('Could not read the session transcript to validate the rewind point', 500);
-  }
-  const { computeCliLoadedChain } = await import('../transcript-chain.js');
-  const loaded = computeCliLoadedChain(parseTranscriptLines(raw.content));
-  if (!loaded.chainUuids.has(messageUuid)) {
-    throw new SessionControlError(
-      'That message is not on the conversation the CLI can resume (behind the last context compaction, or on an abandoned branch)',
-      409,
-    );
+  // ── Chain gate (see the doc above) ── the session HOST answers it if it can
+  // (one small RPC, no bytes over the tunnel); otherwise one raw read here.
+  const OFF_CHAIN = 'That message is not on the conversation the CLI can resume (behind the last context compaction, or on an abandoned branch)';
+  const probe = await probeRewindViaDaemon(
+    { sessionId, cwd: record.cwd, host: record.host }, { uuid: messageUuid },
+  );
+  if (probe && typeof probe.onChain === 'boolean') {
+    if (!probe.onChain) throw new SessionControlError(OFF_CHAIN, 409);
+  } else {
+    const { readSessionJsonlContent } = await import('../session-file-reader.js');
+    let raw: Awaited<ReturnType<typeof readSessionJsonlContent>>;
+    try {
+      raw = await readSessionJsonlContent(sessionId, record.cwd, record.host ?? undefined);
+    } catch (err) {
+      throw tooLargeForTheTunnel(err) ?? err;
+    }
+    if (!raw?.content) {
+      throw new SessionControlError('Could not read the session transcript to validate the rewind point', 500);
+    }
+    const { computeCliLoadedChain } = await import('../transcript-chain.js');
+    const loaded = computeCliLoadedChain(parseTranscriptLines(raw.content));
+    if (!loaded.chainUuids.has(messageUuid)) {
+      throw new SessionControlError(OFF_CHAIN, 409);
+    }
   }
 
   return { record, messages, index, target };
@@ -494,8 +592,9 @@ async function rewindInPlace(
     }
   }
 
-  // ── 3. Commit ── One raw read of the quiet transcript for the cut's end
-  // anchor. The chain gate already ran in resolveRewindTarget, BEFORE the stop
+  // ── 3. Commit ── The cut's end anchor, read off the quiet transcript — from
+  // the host's daemon when it can answer, else one raw read here. The chain gate
+  // already ran in resolveRewindTarget, BEFORE the stop
   // and before any file restore — so a refusal never reaches this point with a
   // stopped CLI behind it. Everything after the stop is wrapped: on ANY throw,
   // best-effort respawn the session and rethrow, because "rewind refused, and
@@ -503,38 +602,35 @@ async function rewindInPlace(
   const { invalidateSessionHistoryCaches } = await import('../session-history.js');
   let lastUuidAtCommit = input.messageUuid; // fallback = empty cut (no-op)
   try {
-    const { readSessionJsonlContent } = await import('../session-file-reader.js');
-    const raw = await readSessionJsonlContent(sessionId, record.cwd, record.host ?? undefined);
-    if (!raw?.content) {
-      throw new SessionControlError('Could not read the session transcript to record the rewind', 500);
-    }
-    const { TRANSCRIPT_TREE_TYPES, queueEnqueueKey } = await import('../transcript-chain.js');
-    const parsedLines = parseTranscriptLines(raw.content);
-    // The cut's end anchor: the LAST tree line in the file right now —
-    // everything between the rewind point and it is the branch being abandoned;
-    // everything the CLI appends later sits past it and can never be swept into
-    // the cut.
-    let lastTreeIdx = -1;
-    for (let i = parsedLines.length - 1; i >= 0; i--) {
-      const l = parsedLines[i];
-      if (l && typeof l.uuid === 'string' && typeof l.type === 'string' && TRANSCRIPT_TREE_TYPES.has(l.type)) {
-        lastUuidAtCommit = l.uuid;
-        lastTreeIdx = i;
-        break;
-      }
-    }
-    // Enqueue lines sitting PAST the anchor (a message the human queued mid-turn
-    // and then rewound before the CLI drained it): uuid-less, so outside the
-    // uuid-anchored region — capture their identity keys on the cut, or the
+    // The anchor is the LAST tree line in the file right now — everything
+    // between the rewind point and it is the branch being abandoned; everything
+    // the CLI appends later sits past it and can never be swept into the cut.
+    // Enqueue lines PAST the anchor (a message the human queued mid-turn and
+    // then rewound before the CLI drained it) are uuid-less, so outside the
+    // uuid-anchored region — their identity keys ride the cut record, or the
     // rewound-away message re-renders as a phantom Pattern-B row forever.
-    const trailingQueueKeys: string[] = [];
-    if (lastTreeIdx >= 0) {
-      for (let i = lastTreeIdx + 1; i < parsedLines.length; i++) {
-        const l = parsedLines[i];
-        if (l && l.type === 'queue-operation' && l.operation === 'enqueue') {
-          trailingQueueKeys.push(queueEnqueueKey(l));
-        }
+    let trailingQueueKeys: string[] = [];
+    const probe = await probeRewindViaDaemon(
+      { sessionId, cwd: record.cwd, host: record.host }, {},
+    );
+    if (probe) {
+      if (probe.lastUuidAtCommit) lastUuidAtCommit = probe.lastUuidAtCommit;
+      trailingQueueKeys = probe.trailingQueueKeys ?? [];
+    } else {
+      const { readSessionJsonlContent } = await import('../session-file-reader.js');
+      let raw: Awaited<ReturnType<typeof readSessionJsonlContent>>;
+      try {
+        raw = await readSessionJsonlContent(sessionId, record.cwd, record.host ?? undefined);
+      } catch (err) {
+        throw tooLargeForTheTunnel(err) ?? err;
       }
+      if (!raw?.content) {
+        throw new SessionControlError('Could not read the session transcript to record the rewind', 500);
+      }
+      const { commitAnchorOf } = await import('../../providers/transcript-rewind-core.js');
+      const anchor = commitAnchorOf(parseTranscriptLines(raw.content));
+      if (anchor.lastUuidAtCommit) lastUuidAtCommit = anchor.lastUuidAtCommit;
+      trailingQueueKeys = anchor.trailingQueueKeys;
     }
     const cutAt = new Date().toISOString();
     const { updateSessionRecord } = await import('../session-tracker.js');

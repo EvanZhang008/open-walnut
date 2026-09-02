@@ -74,6 +74,7 @@ import {
   type HostLocalComputeOutput,
   type FileAccum as ChangesFileAccum,
 } from './session-changes-core.js'
+import { probeTranscriptRewindHostLocal, type RewindProbeInput, type RewindProbeOutput } from './transcript-rewind-core.js'
 import { scanExternalSessions } from './external-session-scan-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { grepReferencesHostLocal } from './search-grep-core.js'
@@ -1457,6 +1458,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'git.diff': return cmdGitDiff(ws, id as number, cmd)
     case 'changes.compute': return cmdChangesCompute(ws, id as number, cmd)
     case 'changes.file': return cmdChangesFile(ws, id as number, cmd)
+    case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id as number, cmd)
     case 'list': return cmdList(ws, id as number)
     case 'sessions.discoverExternal': return cmdDiscoverExternalSessions(ws, id as number, cmd)
     case 'bridge.configure': return cmdBridgeConfigure(ws, id as number, cmd)
@@ -4814,6 +4816,83 @@ async function cmdChangesFile(ws: ServerWebSocket<WsData>, id: number, cmd: Reco
     sendOk(ws, id, { found: false })
   } catch (err) {
     sendError(ws, id, 'changes.file failed: ' + (err as Error).message)
+  }
+}
+
+// ── Transcript rewind probe (host-local — capability 'rewind-probe-v1') ──
+// Rewind's three questions about a session's JSONL (is this uuid resumable, what
+// is the current last tree line, which lines are dead for display) are pure
+// functions of the file, so they run HERE instead of shuttling the whole
+// transcript over the tunnel — which the byte ceiling refuses outright on a long
+// one. Deliberately UNCACHED: every caller asks precisely because the file may
+// have changed, and a host-local read of even a very large transcript is seconds.
+//
+// Concurrency is gated exactly like changes.compute (a streaming read of the same
+// files): one probe at a time daemon-wide, and identical in-flight requests share
+// ONE promise. The coalescing key is the whole request, not the sid: two callers
+// asking DIFFERENT questions about the same session (is uuid X resumable vs. what
+// is dead for these cuts) get different answers, so sharing by sid would hand one
+// of them the other's reply.
+let rewindProbeInflight: Promise<void> = Promise.resolve()
+const rewindProbeInflightByKey = new Map<string, Promise<RewindProbeOutput | null>>()
+
+function rewindProbeKey(input: RewindProbeInput): string {
+  return [
+    input.sessionId,
+    input.cwd ?? '',
+    input.uuid ?? '',
+    (input.cuts ?? []).map((c) => c.uuid + '>' + c.lastUuidAtCommit).join(','),
+  ].join('|')
+}
+
+async function probeTranscriptRewindGated(input: RewindProbeInput): Promise<RewindProbeOutput | null> {
+  const key = rewindProbeKey(input)
+  const existing = rewindProbeInflightByKey.get(key)
+  if (existing) return existing
+  const run = (async (): Promise<RewindProbeOutput | null> => {
+    const prev = rewindProbeInflight
+    let release!: () => void
+    rewindProbeInflight = new Promise<void>((r) => { release = r })
+    await prev.catch(() => { /* prior failure doesn't gate us */ })
+    try {
+      return await probeTranscriptRewindHostLocal(input)
+    } finally {
+      release()
+      rewindProbeInflightByKey.delete(key)
+    }
+  })()
+  rewindProbeInflightByKey.set(key, run)
+  return run
+}
+
+async function cmdTranscriptRewindProbe(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const sid = cmd.sid as string
+  if (!sid) return sendError(ws, id, 'transcript.rewindProbe: missing sid')
+  const cwd = typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined
+  const uuid = typeof cmd.uuid === 'string' && cmd.uuid ? cmd.uuid : undefined
+  const cuts = Array.isArray(cmd.cuts)
+    ? (cmd.cuts as Array<Record<string, unknown>>)
+      .filter((c) => c && typeof c.uuid === 'string' && typeof c.lastUuidAtCommit === 'string')
+      .map((c) => ({
+        uuid: c.uuid as string,
+        lastUuidAtCommit: c.lastUuidAtCommit as string,
+        ...(Array.isArray(c.trailingQueueKeys)
+          ? { trailingQueueKeys: (c.trailingQueueKeys as unknown[]).filter((k): k is string => typeof k === 'string') }
+          : {}),
+      }))
+    : undefined
+  try {
+    const output = await probeTranscriptRewindGated({
+      sessionId: sid,
+      cwd,
+      claudeHome: path.join(HOME_DIR, '.claude'),
+      ...(uuid ? { uuid } : {}),
+      ...(cuts ? { cuts } : {}),
+    })
+    if (!output) return sendOk(ws, id, { found: false })
+    sendOk(ws, id, { found: true, ...output } as unknown as Record<string, unknown>)
+  } catch (err) {
+    sendError(ws, id, 'transcript.rewindProbe failed: ' + (err as Error).message)
   }
 }
 

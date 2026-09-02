@@ -29,7 +29,6 @@ import {
   computeRewindDeadSet,
   queueEnqueueKey,
 } from '../../src/core/transcript-chain.js';
-import { log } from '../../src/logging/index.js';
 import {
   transcript, survivingUuids, cutHere,
   apiErrorEofForkFixture, midTurnCommandForkFixture,
@@ -262,7 +261,7 @@ describe('computeRewindDeadSet — the recorded-cut region', () => {
       .user('u1', 'first').assistant('a1', 'reply one').user('u2', 'second')
       .from('u1').user('fork', 'an innocent fork');
     expect(computeRewindDeadSet(t.lines, [])).toEqual({
-      deadUuids: null, droppedCount: 0, queueDeadKeys: new Set(),
+      deadUuids: null, droppedCount: 0, queueDeadKeys: new Set(), skippedCuts: [],
     });
   });
 
@@ -381,11 +380,14 @@ describe('computeRewindDeadSet — multiple cuts', () => {
 });
 
 describe('computeRewindDeadSet — degrades, never guesses', () => {
-  it('SKIPS a cut whose rewind point is gone from the file, and warns once', () => {
+  it('SKIPS a cut whose rewind point is gone from the file, and REPORTS it once', () => {
     // The file was rewritten under the record (a tombstone, a preserved-segment
     // compact). Serving the whole transcript is the honest answer; cutting a
     // region we can no longer locate would delete live rows.
-    const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {});
+    //
+    // The degrade is REPORTED, not logged: this module is bundled into the
+    // session daemon (transcript-rewind-core.ts), where a logging import cannot
+    // resolve — so the caller that has a logger warns from `skippedCuts`.
     const t = transcript()
       .user('u1', 'first').assistant('a1', 'reply one').user('u2', 'second');
     const res = computeRewindDeadSet(t.lines, [
@@ -394,26 +396,40 @@ describe('computeRewindDeadSet — degrades, never guesses', () => {
     expect(res.deadUuids).toBeNull();
     expect(res.droppedCount).toBe(0);
     expect(res.queueDeadKeys.size).toBe(0);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][1]).toMatchObject({ cutFound: false, anchorFound: true });
+    expect(res.skippedCuts).toEqual([{
+      cutUuid: '0199dead-0000-4000-8000-000000000000',
+      lastUuidAtCommit: 'u2',
+      cutFound: false,
+      anchorFound: true,
+      cutDuplicated: false,
+      anchorDuplicated: false,
+    }]);
   });
 
-  it('SKIPS a cut whose commit-time anchor is gone, and warns once', () => {
-    const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {});
+  it('SKIPS a cut whose commit-time anchor is gone, and REPORTS it once', () => {
     const t = transcript()
       .user('u1', 'first').assistant('a1', 'reply one').user('u2', 'second');
     const res = computeRewindDeadSet(t.lines, [
       { uuid: 'u1', lastUuidAtCommit: '0199dead-0000-4000-8000-000000000000', at: T(9) },
     ]);
     expect(res.deadUuids).toBeNull();
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][1]).toMatchObject({ cutFound: true, anchorFound: false });
+    expect(res.skippedCuts).toHaveLength(1);
+    expect(res.skippedCuts[0]).toMatchObject({ cutFound: true, anchorFound: false });
+  });
+
+  it('reports NO skipped cuts when every cut resolves (always an array, never absent)', () => {
+    const t = transcript()
+      .user('u1', 'first').assistant('a1', 'reply one').assistant('dead', 'ABANDONED');
+    const good = cutHere(t, 'a1');
+    t.from('a1').user('u2', 'second take');
+    expect(computeRewindDeadSet(t.lines, [good]).skippedCuts).toEqual([]);
+    // …including the cut-less fast path, so a caller can always iterate it.
+    expect(computeRewindDeadSet(t.lines, []).skippedCuts).toEqual([]);
   });
 
   it('skips only the unresolvable cut — a good one next to it still applies', () => {
     // Per-cut degrade, not per-session: one lost anchor must not resurrect the
     // branch a different, still-resolvable rewind threw away.
-    vi.spyOn(log.session, 'warn').mockImplementation(() => {});
     const t = transcript()
       .user('u1', 'first').assistant('a1', 'reply one')
       .assistant('dead', 'ABANDONED');
@@ -425,14 +441,15 @@ describe('computeRewindDeadSet — degrades, never guesses', () => {
       good,
     ]);
     expect([...res.deadUuids!]).toEqual(['dead']);
+    expect(res.skippedCuts).toHaveLength(1);
+    expect(res.skippedCuts[0].cutUuid).toBe('gone-uuid');
   });
 
-  it('SKIPS a cut whose rewind-point uuid is DUPLICATED in the file, and warns once', () => {
+  it('SKIPS a cut whose rewind-point uuid is DUPLICATED in the file, and reports it once', () => {
     // indexOfUuid keeps first occurrences, which is safe for the ANCHOR only: a
     // too-early anchor shrinks the region, but a too-early CUT index grows it
     // BACKWARDS — here it would kill the live turns u3/u4 and the rewind point
     // itself. Duplicates make the ground shaky, so the cut is skipped outright.
-    const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {});
     const t = transcript()
       .user('u1', 'first')
       .user('u2', 'rewind point (first copy)')
@@ -441,12 +458,11 @@ describe('computeRewindDeadSet — degrades, never guesses', () => {
       .user('u5', 'would-be region', { parent: 'u2' });
     const res = computeRewindDeadSet(t.lines, [{ uuid: 'u2', lastUuidAtCommit: 'u5', at: T(9) }]);
     expect(res.deadUuids).toBeNull();
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][1]).toMatchObject({ cutDuplicated: true, anchorDuplicated: false });
+    expect(res.skippedCuts).toHaveLength(1);
+    expect(res.skippedCuts[0]).toMatchObject({ cutDuplicated: true, anchorDuplicated: false });
   });
 
   it('SKIPS a cut whose commit-time anchor uuid is DUPLICATED in the file', () => {
-    const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {});
     const t = transcript()
       .user('u1', 'first')
       .assistant('a2', 'would-be region')
@@ -454,8 +470,8 @@ describe('computeRewindDeadSet — degrades, never guesses', () => {
       .raw({ type: 'user', uuid: 'dup', parentUuid: 'a2', timestamp: T(5), message: { role: 'user', content: 'anchor (re-appended)' } });
     const res = computeRewindDeadSet(t.lines, [{ uuid: 'u1', lastUuidAtCommit: 'dup', at: T(9) }]);
     expect(res.deadUuids).toBeNull();
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][1]).toMatchObject({ cutDuplicated: false, anchorDuplicated: true });
+    expect(res.skippedCuts).toHaveLength(1);
+    expect(res.skippedCuts[0]).toMatchObject({ cutDuplicated: false, anchorDuplicated: true });
   });
 });
 

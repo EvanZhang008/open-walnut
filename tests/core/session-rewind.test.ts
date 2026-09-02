@@ -22,7 +22,6 @@ import {
 } from '../../src/core/sessions/session-rewind.js';
 import { normalizePinnedMessages } from '../../src/core/sessions/session-lifecycle.js';
 import { computeRewindDeadSet } from '../../src/core/transcript-chain.js';
-import { log } from '../../src/logging/index.js';
 import { transcript, survivingUuids, cutHere } from '../helpers/transcript-fixtures.js';
 
 describe('isRewindableMessageId', () => {
@@ -220,10 +219,11 @@ describe('in-place rewind cut (recorded, replayed against the file)', () => {
       .user('u1', 'first').assistant('a1', 'reply one').user('u2', 'second')
       .assistant('a2', 'reply two')
       .from('u2').user('u2b', 'second take');
-    vi.spyOn(log.session, 'warn').mockImplementation(() => {});
     const { res, uuids } = live(t, [{ uuid: 'not-in-this-file', lastUuidAtCommit: 'a2', at: '2026-08-30T00:00:00.000Z' }]);
     expect(res.deadUuids).toBeNull();
     expect(res.droppedCount).toBe(0);
+    // Reported for the caller to warn about — the filter itself has no logger.
+    expect(res.skippedCuts).toHaveLength(1);
     expect(uuids).toEqual(['u1', 'a1', 'u2', 'a2', 'u2b']);  // a2 kept, unfiltered
   });
 

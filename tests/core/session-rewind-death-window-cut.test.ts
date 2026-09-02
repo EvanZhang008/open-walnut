@@ -53,6 +53,13 @@ vi.mock('../../src/core/session-file-reader.js', async (importOriginal) => ({
   readSessionJsonlContent: (...args: unknown[]) => readMock(...args),
 }));
 
+/** The host-local probe is the SECOND seam: mocked the same way, and null by
+ *  default so every case below still exercises the transcript-read path. */
+const { probeMock } = vi.hoisted(() => ({ probeMock: vi.fn() }));
+vi.mock('../../src/core/sessions/session-rewind.js', () => ({
+  probeRewindViaDaemon: (...args: unknown[]) => probeMock(...args),
+}));
+
 /** No real config reads (getConfig otherwise scans the machine's ssh config). */
 vi.mock('../../src/core/config-manager.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -89,6 +96,10 @@ beforeEach(() => {
   patches.length = 0;
   readMock.mockReset();
   vi.restoreAllMocks();
+  // Set AFTER restoreAllMocks (which clears implementations): no probe-capable
+  // daemon unless a case installs one.
+  probeMock.mockReset();
+  probeMock.mockResolvedValue(null);
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -159,6 +170,34 @@ describe('recordDeathWindowResumeCut', () => {
     await new Promise((r) => setTimeout(r, 0));
   });
 
+  it('HOST-LOCAL: takes the anchor from the daemon probe and never reads the transcript', async () => {
+    // The anchor is one uuid; shuttling a whole transcript over the tunnel to
+    // find it is what the byte ceiling refuses on a long one. With the probe the
+    // spawn's 5s budget buys an RPC instead of a file transfer.
+    const sid = 'dw-probe';
+    records.set(sid, { sessionId: sid, cwd: CWD, pendingResumeSessionAt: U2 });
+    probeMock.mockResolvedValue({ lastUuidAtCommit: U3, trailingQueueKeys: [] });
+
+    await expect(runnerInternals.recordDeathWindowResumeCut(sid, U2)).resolves.toBeUndefined();
+
+    expect(readMock).not.toHaveBeenCalled();
+    expect(probeMock).toHaveBeenCalledWith({ sessionId: sid, cwd: CWD, host: undefined }, {});
+    expect(patches).toHaveLength(1);
+    expect((patches[0].patch.inPlaceRewinds as InPlaceRewindCut[])[0]).toMatchObject({
+      uuid: U2, lastUuidAtCommit: U3,
+    });
+  });
+
+  it('HOST-LOCAL: an empty region reported by the probe records nothing (same guards)', async () => {
+    const sid = 'dw-probe-empty';
+    records.set(sid, { sessionId: sid, cwd: CWD, pendingResumeSessionAt: U2 });
+    probeMock.mockResolvedValue({ lastUuidAtCommit: U2, trailingQueueKeys: [] });
+
+    await expect(runnerInternals.recordDeathWindowResumeCut(sid, U2)).resolves.toBeUndefined();
+    expect(patches).toEqual([]);
+    expect(readMock).not.toHaveBeenCalled();
+  });
+
   it('BOUNDED (read failure): no cut, a warn, and the record-or-skip resolves so the spawn proceeds', async () => {
     const sid = 'dw-fail';
     records.set(sid, { sessionId: sid, cwd: CWD, pendingResumeSessionAt: U2 });
@@ -198,5 +237,69 @@ describe('recordDeathWindowResumeCut', () => {
       expect.stringContaining('anchor read timed out'),
       expect.objectContaining({ sessionId: sid, rewindPoint: U2 }),
     );
+  });
+
+  it('BOUNDED (hung PROBE): the same deadline covers the RPC, not just the read', async () => {
+    // The probe carries the rewind path's own generous RPC budget, so a wedged
+    // daemon socket would otherwise hold the respawn far past 5s. The deadline is
+    // armed BEFORE the probe is raced for exactly this reason — and the fallback
+    // read must NOT run afterwards, because its own time is already spent.
+    const sid = 'dw-probe-hang';
+    records.set(sid, { sessionId: sid, cwd: CWD, pendingResumeSessionAt: U2 });
+    probeMock.mockImplementation(() => new Promise(() => {})); // never settles
+    readMock.mockResolvedValue({ content: treeContent([U1, U2, U3]), source: 'local' });
+    const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
+    try {
+      const settled = runnerInternals.recordDeathWindowResumeCut(sid, U2);
+      for (let i = 0; i < 100 && vi.getTimerCount() === 0; i++) await Promise.resolve();
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      await vi.advanceTimersByTimeAsync(5_001);
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(patches).toEqual([]);
+    expect(records.get(sid)!.inPlaceRewinds).toBeUndefined();
+    expect(readMock).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('anchor read timed out'),
+      expect.objectContaining({ sessionId: sid, rewindPoint: U2 }),
+    );
+  });
+
+  it('ORDERING (hung PROBE): the spawn still happens, unrecorded, after the deadline', async () => {
+    // The whole point of the bound: a probe that never answers costs the cut row,
+    // never the respawn. Same ordering contract as the happy path — the
+    // record-or-skip settles before send — with zero rows recorded.
+    const sid = 'dw-probe-hang-order';
+    records.set(sid, { sessionId: sid, cwd: CWD, taskId: 'task-hang', pendingResumeSessionAt: U2 });
+    probeMock.mockImplementation(() => new Promise(() => {}));
+    readMock.mockResolvedValue({ content: treeContent([U1, U2, U3]), source: 'local' });
+    vi.spyOn(log.session, 'warn').mockImplementation(() => {});
+    vi.spyOn(ClaudeCodeSession.prototype, 'gracefulStop').mockResolvedValue(undefined);
+    let cutRowsWhenSendInvoked = -1;
+    const send = vi.spyOn(ClaudeCodeSession.prototype, 'send').mockImplementation(((...args: unknown[]) => {
+      cutRowsWhenSendInvoked =
+        ((records.get(sid)!.inPlaceRewinds as InPlaceRewindCut[] | undefined) ?? []).length;
+      const onSpawnSettled = args[13] as ((ok: boolean, err?: Error) => void) | undefined;
+      onSpawnSettled?.(true);
+    }) as unknown as typeof ClaudeCodeSession.prototype.send);
+    vi.useFakeTimers();
+    try {
+      const reinit = sessionRunner.reinitialize(sid);
+      for (let i = 0; i < 200 && vi.getTimerCount() === 0; i++) await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(5_001);
+      await reinit;
+      await vi.advanceTimersByTimeAsync(10);            // drain the ok-callback work
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(cutRowsWhenSendInvoked).toBe(0);            // nothing recorded…
+    const opts = send.mock.calls[0][14] as { resumeSessionAt?: string } | undefined;
+    expect(opts?.resumeSessionAt).toBe(U2);            // …but the spawn still carries the flag
   });
 });

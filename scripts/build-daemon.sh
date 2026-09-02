@@ -57,6 +57,8 @@ SOURCES=(
   src/providers/path-resolve-core.ts
   src/providers/search-grep-core.ts
   src/providers/vscode-server-core.ts
+  src/providers/transcript-rewind-core.ts
+  src/core/transcript-chain.ts
   src/core/bash-file-ops.ts
 )
 
@@ -148,6 +150,13 @@ echo "$VERSION" > "$OUTDIR/acp-worker.js.version"
 "$BUN" build --minify --target=node --format=cjs \
   --outfile "$OUTDIR/vscode-server-core.cjs" \
   src/providers/vscode-server-core.ts
+
+# Transcript rewind probe sidecar — same rationale: the chain walk + dead-set
+# replay can't live in the source template; 'rewind-probe-v1' is advertised only
+# when the sidecar loads.
+"$BUN" build --minify --target=node --format=cjs \
+  --outfile "$OUTDIR/transcript-rewind-core.cjs" \
+  src/providers/transcript-rewind-core.ts
 
 # Invalidate stale .gz caches — DaemonConnection.deployBinary reuses them
 # if present, which would ship an old binary under a new version label.

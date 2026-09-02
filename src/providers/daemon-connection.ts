@@ -226,7 +226,7 @@ export class DaemonConnection {
    * it's open. Everything else (fs.ls, status, sends, events) stays on the
    * main WS. Membership is by response size, not command family.
    */
-  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff', 'changes.compute', 'changes.file'])
+  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff', 'changes.compute', 'changes.file', 'transcript.rewindProbe'])
   /** Delay before re-dialing the bulk channel after it drops (main stays up). */
   private static BULK_REDIAL_DELAY_MS = 10_000
   /** Within this window, refuse a second upgrade toward the same expected version. */
@@ -2099,7 +2099,7 @@ export class DaemonConnection {
       // Best-effort per file — a missing sidecar (npm-package install without
       // dist/daemon-binaries) just means that host keeps the server-side
       // fallback (changes) or reports no external sessions (external-scan).
-      for (const sidecarFile of ['changes-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'vscode-server-core.cjs']) {
+      for (const sidecarFile of ['changes-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs']) {
         try {
           const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, sidecarFile), 'utf-8')
           const scArgs = [...this.baseSshArgs, this.sshHostString, `cat > /tmp/open-walnut/${sidecarFile}`]

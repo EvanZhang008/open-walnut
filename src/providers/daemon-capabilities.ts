@@ -135,6 +135,19 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * advertise this capability only when that load succeeds — otherwise the
  * server uses its reader-based fallback compute (old daemons likewise).
  *
+ * 'rewind-probe-v1' — host-local transcript rewind probe
+ * (transcript.rewindProbe). The daemon streams the session's OWN JSONL and
+ * answers rewind's three questions from it: is this uuid on the chain the CLI
+ * would resume, what is the last tree line right now (the cut anchor), and which
+ * lines are dead for display. Only the small answer crosses the tunnel. Without
+ * it the server shuttles the whole transcript through DaemonFileReader, which
+ * REFUSES anything past its byte ceiling — so on a long transcript rewind used
+ * to fail with the raw limit error and a rewound session's history rendered
+ * unfiltered. Binary daemons bundle the probe; source-deployed daemons require()
+ * a sidecar (transcript-rewind-core.cjs) and advertise this only when that load
+ * succeeds. Optional: without it the server falls back to the whole-file read
+ * (and says "the host needs the current daemon" when that read is refused).
+ *
  * 'external-scan-v1' — host-local discovery of sessions started OUTSIDE
  * Walnut (sessions.discoverExternal). The daemon walks its own
  * ~/.claude/projects + ~/.codex/sessions, classifies each transcript by its
@@ -176,6 +189,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'session.message',
   'hooks-v1',
   'changes-v1',
+  'rewind-probe-v1',
   'external-scan-v1',
   'path-resolve-v1',
   // 'vscode-v1' — host-local embedded VS Code (vscode.ensure / vscode.status):

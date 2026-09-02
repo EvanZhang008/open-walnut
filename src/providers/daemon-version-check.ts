@@ -85,6 +85,13 @@ const DAEMON_SOURCE_FILES = [
   // Embedded VS Code (vscode.ensure) — bundled into the binary AND shipped
   // as the vscode-server-core.cjs sidecar.
   'src/providers/vscode-server-core.ts',
+  // Host-local transcript rewind probe (transcript.rewindProbe) — bundled into
+  // the binary AND shipped as the transcript-rewind-core.cjs sidecar, together
+  // with the chain machinery it computes over. Both files must be hashed: an
+  // edit to either changes what the probe answers, and an unchanged version
+  // means no host self-upgrades.
+  'src/providers/transcript-rewind-core.ts',
+  'src/core/transcript-chain.ts',
   'src/core/bash-file-ops.ts',
 ] as const
 

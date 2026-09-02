@@ -654,7 +654,7 @@ export class LocalDaemon {
     // advertises the matching capability only when the load succeeds.
     // Best-effort per file: an absent bundle (published npm package) just means
     // the server keeps its own fallback for that feature.
-    for (const sidecarFile of ['changes-core.cjs', 'path-resolve-core.cjs']) {
+    for (const sidecarFile of ['changes-core.cjs', 'path-resolve-core.cjs', 'transcript-rewind-core.cjs']) {
       try {
         const sidecarSrc = path.join(DAEMON_BINARIES_DIR, sidecarFile)
         const sidecarDst = path.join(this.daemonDir, sidecarFile)

@@ -47,6 +47,13 @@ vi.mock('../../src/core/session-tracker.js', () => ({
   getSessionByClaudeId: vi.fn(async () => mockRecord),
 }));
 
+/** The host-local rewind probe seam (transcript.rewindProbe). Null by default:
+ *  no probe-capable daemon, so the over-ceiling path takes its old degrade. */
+const { probeMock } = vi.hoisted(() => ({ probeMock: vi.fn() }));
+vi.mock('../../src/core/sessions/session-rewind.js', () => ({
+  probeRewindViaDaemon: (...args: unknown[]) => probeMock(...args),
+}));
+
 import { CLAUDE_HOME } from '../../src/constants.js';
 import {
   encodeProjectPath,
@@ -54,6 +61,7 @@ import {
   readSessionHistory,
   readSessionHistoryTail,
   isWindowedHistory,
+  invalidateSessionHistoryCaches,
   _resetHistoryCacheForTesting,
 } from '../../src/core/session-history.js';
 
@@ -67,6 +75,8 @@ beforeEach(async () => {
   await fsp.mkdir(tmpBase, { recursive: true });
   _resetHistoryCacheForTesting();
   mockRecord = undefined;
+  probeMock.mockReset();
+  probeMock.mockResolvedValue(null);
 });
 afterEach(async () => {
   await fsp.rm(tmpBase, { recursive: true, force: true }).catch(() => {});
@@ -448,17 +458,189 @@ describe('windowed reads are refused for a session with recorded rewinds', () =>
     expect(isWindowedHistory(messages!)).toBe(true);
   });
 
-  it('over the reader byte ceiling, the bounded tail is served UNFILTERED (documented degrade)', async () => {
-    // A transcript past the reader's hard ceiling cannot be read whole, so the cut
-    // anchors are unresolvable. Showing recent history, abandoned lines included,
-    // beats a blank panel — so this pins the degrade deliberately, with the warn
-    // the read path logs.
+  it('over the reader byte ceiling with NO probe-capable daemon, the bounded tail is served UNFILTERED', async () => {
+    // A transcript past the reader's hard ceiling cannot be read whole here, so
+    // the cut anchors are unresolvable on this side. Showing recent history,
+    // abandoned lines included, beats a blank panel — so this pins the degrade
+    // deliberately, with the warn the read path logs.
     const { t, cut } = paddedRewound();
     await write('s-ceiling', t);
     mockRecord = { inPlaceRewinds: [cut] };
     process.env.WALNUT_MAX_FILE_READ_BYTES = '8192';
 
     const messages = await read('s-ceiling');
+    expect(isWindowedHistory(messages)).toBe(true);
+    expect(textsOf(messages).some((x) => x.includes('ABANDONED'))).toBe(true);
+  });
+
+  it('over the ceiling WITH the host probe, the bounded tail is filtered by its dead set', async () => {
+    // The fix: the file is unreadable over the tunnel, but its own host can read
+    // it. The daemon replays the cuts against the WHOLE file and sends back just
+    // the dead uuids, which the bounded tail is then parsed with — so a rewound
+    // long transcript stops showing the branch the human threw away.
+    const { t, cut } = paddedRewound();
+    await write('s-ceiling-probe', t);
+    mockRecord = { inPlaceRewinds: [cut] };
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '8192';
+    probeMock.mockResolvedValue({
+      deadUuids: ['a2', 'u3'], queueDeadKeys: [], skippedCuts: [], lineCount: 200,
+    });
+
+    const messages = await read('s-ceiling-probe');
+    expect(isWindowedHistory(messages)).toBe(true);
+    expect(textsOf(messages).some((x) => x.includes('ABANDONED'))).toBe(false);
+    // Asked with the recorded cuts, for this session, on this session's host —
+    // and on the DISPLAY budget (10s), not the rewind gate/commit's 60s: this
+    // call sits in a route with no deadline of its own.
+    expect(probeMock).toHaveBeenCalledWith(
+      { sessionId: 's-ceiling-probe', cwd: CWD, host: undefined },
+      { cuts: [cut], timeoutMs: 10_000 },
+    );
+  });
+
+  it('a TRUNCATED probe answer falls back to the unfiltered degrade rather than half-filtering', async () => {
+    // The probe's cap (a rewind to line 1 of a very long transcript) means "I did
+    // not send you a dead set" — applying the empty one would look like a filter
+    // that decided nothing was dead.
+    const { t, cut } = paddedRewound();
+    await write('s-ceiling-trunc', t);
+    mockRecord = { inPlaceRewinds: [cut] };
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '8192';
+    probeMock.mockResolvedValue({ truncated: true, deadUuids: [], queueDeadKeys: [], skippedCuts: [] });
+
+    const messages = await read('s-ceiling-trunc');
+    expect(textsOf(messages).some((x) => x.includes('ABANDONED'))).toBe(true);
+  });
+
+  it('a probe that throws never breaks the read (still degrades to the tail)', async () => {
+    const { t, cut } = paddedRewound();
+    await write('s-ceiling-throw', t);
+    mockRecord = { inPlaceRewinds: [cut] };
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '8192';
+    probeMock.mockRejectedValue(new Error('daemon socket closed'));
+
+    const messages = await read('s-ceiling-throw');
+    expect(messages.length).toBeGreaterThan(0);
+    expect(isWindowedHistory(messages)).toBe(true);
+  });
+
+  it('an answer whose EVERY cut was skipped serves UNFILTERED, not "filtered, nothing dead"', async () => {
+    // An empty dead set is ambiguous: it means both "the cuts resolved and no line
+    // is dead" and "no cut could be resolved at all". The second one must degrade,
+    // otherwise an unfilterable transcript renders as if it had been filtered.
+    const { t, cut } = paddedRewound();
+    await write('s-ceiling-allskipped', t);
+    mockRecord = { inPlaceRewinds: [cut] };
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '8192';
+    probeMock.mockResolvedValue({
+      deadUuids: [], queueDeadKeys: [], truncated: false,
+      skippedCuts: [{
+        cutUuid: cut.uuid, lastUuidAtCommit: cut.lastUuidAtCommit,
+        cutFound: false, anchorFound: true, cutDuplicated: false, anchorDuplicated: false,
+      }],
+    });
+
+    const messages = await read('s-ceiling-allskipped');
+    expect(textsOf(messages).some((x) => x.includes('ABANDONED'))).toBe(true);
+  });
+});
+
+// The display probe is the ONE probe caller on a hot, deadline-less path
+// (GET /api/sessions/:id/history). Its branch writes no history cache, so
+// without a memo of its own every poll of a rewound over-ceiling session would
+// make that session's host re-stream and re-parse the whole transcript.
+describe('the over-ceiling display probe is memoized on the file identity', () => {
+  const CEIL = '8192';
+
+  function rewound(pad: number): { t: TranscriptFixture; cut: InPlaceRewindCut } {
+    let t = transcript().user('u1', 'first ask').assistant('a1', 'first reply');
+    for (let i = 0; i < pad; i++) t = t.user(`p${i}`, `padding ${i} ${'x'.repeat(200)}`);
+    t = t.user('u2', 'add a feature')
+      .assistant('a2', 'ABANDONED reply two').user('u3', 'ABANDONED third ask');
+    return { t, cut: cutHere(t, 'u2') };
+  }
+
+  const deadSet = { deadUuids: ['a2', 'u3'], queueDeadKeys: [], skippedCuts: [], truncated: false };
+
+  it('answers a second identical read from the memo — exactly ONE RPC', async () => {
+    const { t, cut } = rewound(60);
+    await write('s-memo', t);
+    mockRecord = { inPlaceRewinds: [cut] };
+    process.env.WALNUT_MAX_FILE_READ_BYTES = CEIL;
+    probeMock.mockResolvedValue(deadSet);
+
+    const first = await read('s-memo');
+    const second = await read('s-memo');
+    // Same filtered answer both times, but the host was asked once.
+    expect(textsOf(first).some((x) => x.includes('ABANDONED'))).toBe(false);
+    expect(textsOf(second).some((x) => x.includes('ABANDONED'))).toBe(false);
+    expect(probeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-probes once the transcript grows (mtime/size are the memo key)', async () => {
+    const { t, cut } = rewound(60);
+    await write('s-memo-grow', t);
+    mockRecord = { inPlaceRewinds: [cut] };
+    process.env.WALNUT_MAX_FILE_READ_BYTES = CEIL;
+    probeMock.mockResolvedValue(deadSet);
+
+    await read('s-memo-grow');
+    expect(probeMock).toHaveBeenCalledTimes(1);
+    // The CLI appended a new turn: the dead set may well have changed, so the
+    // memoized one is no longer an answer about THIS file.
+    const grown = rewound(60).t.user('u4', 'a brand new ask').assistant('a4', 'and its reply');
+    await write('s-memo-grow', grown);
+    await read('s-memo-grow');
+    expect(probeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-probes after invalidateSessionHistoryCaches (a new cut, same bytes)', async () => {
+    const { t, cut } = rewound(60);
+    await write('s-memo-invalidate', t);
+    mockRecord = { inPlaceRewinds: [cut] };
+    process.env.WALNUT_MAX_FILE_READ_BYTES = CEIL;
+    probeMock.mockResolvedValue(deadSet);
+
+    await read('s-memo-invalidate');
+    expect(probeMock).toHaveBeenCalledTimes(1);
+    // A rewind of a rewind changes what the SAME bytes mean — the commit path
+    // calls this, and it has to reach the dead-set memo too.
+    await invalidateSessionHistoryCaches('s-memo-invalidate');
+    await read('s-memo-invalidate');
+    expect(probeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not memoize a no-answer — the next read asks again', async () => {
+    const { t, cut } = rewound(60);
+    await write('s-memo-null', t);
+    mockRecord = { inPlaceRewinds: [cut] };
+    process.env.WALNUT_MAX_FILE_READ_BYTES = CEIL;
+    probeMock.mockResolvedValue(null); // what a timeout/no-capability host produces
+
+    const first = await read('s-memo-null');
+    const second = await read('s-memo-null');
+    // Unfiltered both times (the documented degrade), and it keeps trying: the
+    // daemon may be reconnecting or mid-upgrade.
+    expect(textsOf(first).some((x) => x.includes('ABANDONED'))).toBe(true);
+    expect(textsOf(second).some((x) => x.includes('ABANDONED'))).toBe(true);
+    expect(probeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('a slow probe is bounded by the DISPLAY budget, not the rewind one', async () => {
+    // probeRewindViaDaemon owns the clock (it passes timeoutMs to conn.send and
+    // turns the rejection into null), so what this pins is the budget the display
+    // caller hands it, plus the unfiltered degrade a timeout lands on.
+    const { t, cut } = rewound(60);
+    await write('s-memo-slow', t);
+    mockRecord = { inPlaceRewinds: [cut] };
+    process.env.WALNUT_MAX_FILE_READ_BYTES = CEIL;
+    probeMock.mockResolvedValue(null);
+
+    const messages = await read('s-memo-slow');
+    expect(probeMock).toHaveBeenCalledWith(
+      { sessionId: 's-memo-slow', cwd: CWD, host: undefined },
+      { cuts: [cut], timeoutMs: 10_000 },
+    );
     expect(isWindowedHistory(messages)).toBe(true);
     expect(textsOf(messages).some((x) => x.includes('ABANDONED'))).toBe(true);
   });

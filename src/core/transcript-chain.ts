@@ -31,11 +31,13 @@
  *   buildConversationChain           sessionStorage.ts:2069-2092
  *   recoverOrphanedParallelToolResults sessionStorage.ts:2118-2206
  *
- * Pure computation: no file/network I/O. Input is the array of per-line parsed
- * JSON objects in file order.
+ * Pure computation: no file/network I/O, and NO logging import — this module is
+ * bundled into the session daemon (both twins, via transcript-rewind-core.ts)
+ * where `../logging` cannot resolve. A degrade the server used to warn about
+ * inline is REPORTED instead (`RewindDeadSetResult.skippedCuts`) and logged by
+ * whichever caller owns a logger.
  */
 
-import { log } from '../logging/index.js';
 import type { InPlaceRewindCut } from './types.js';
 
 /** Tree-node line types — port of isTranscriptMessage (sessionStorage.ts:139).
@@ -349,6 +351,21 @@ export interface RewindDeadSetResult {
    *  not a time window: file order is not time order, and a [min,max] window
    *  measurably deleted live pre-cut rows on real transcripts. */
   queueDeadKeys: Set<string>;
+  /** Cuts this replay REFUSED to apply (anchor missing or duplicated), one entry
+   *  each, always present (`[]` when every cut resolved). The caller logs them:
+   *  this module has no logger (it is bundled into the daemon), and the named
+   *  degrade must stay visible — the region is served UNFILTERED. */
+  skippedCuts: SkippedRewindCut[];
+}
+
+/** One cut the replay could not locate, with the facts that decided it. */
+export interface SkippedRewindCut {
+  cutUuid: string;
+  lastUuidAtCommit: string;
+  cutFound: boolean;
+  anchorFound: boolean;
+  cutDuplicated: boolean;
+  anchorDuplicated: boolean;
 }
 
 /**
@@ -365,9 +382,10 @@ export interface RewindDeadSetResult {
  * swallows the first branch and its replacement).
  *
  * Either anchor missing from the file, or either anchor uuid DUPLICATED in it
- * → SKIP that cut with one warn (named degrade — the file was rewritten under
- * the record, e.g. a tombstone or a preserved-segment compact re-append; never
- * cut on shaky ground). Deadness is NEVER computed from chain membership: the
+ * → SKIP that cut and report it in `skippedCuts` for the caller to warn about
+ * (named degrade — the file was rewritten under the record, e.g. a tombstone or
+ * a preserved-segment compact re-append; never cut on shaky ground). Deadness
+ * is NEVER computed from chain membership: the
  * file alone cannot distinguish a rewind branch from an innocent fork (see
  * module doc).
  */
@@ -375,7 +393,9 @@ export function computeRewindDeadSet(
   parsedLines: readonly TranscriptChainLine[],
   cuts: readonly Pick<InPlaceRewindCut, 'uuid' | 'lastUuidAtCommit' | 'trailingQueueKeys'>[],
 ): RewindDeadSetResult {
-  if (cuts.length === 0) return { deadUuids: null, droppedCount: 0, queueDeadKeys: new Set() };
+  if (cuts.length === 0) {
+    return { deadUuids: null, droppedCount: 0, queueDeadKeys: new Set(), skippedCuts: [] };
+  }
 
   // uuid → FIRST line index (+ occurrence count), resolved fresh from this
   // read. First occurrence is safe for the ANCHOR only: a too-early anchor can
@@ -393,13 +413,14 @@ export function computeRewindDeadSet(
 
   const dead = new Set<string>();
   const queueDeadKeys = new Set<string>();
+  const skippedCuts: SkippedRewindCut[] = [];
   for (const cut of cuts) {
     const cutIdx = indexOfUuid.get(cut.uuid);
     const anchorIdx = indexOfUuid.get(cut.lastUuidAtCommit);
     const cutDuplicated = (countOfUuid.get(cut.uuid) ?? 0) > 1;
     const anchorDuplicated = (countOfUuid.get(cut.lastUuidAtCommit) ?? 0) > 1;
     if (cutIdx === undefined || anchorIdx === undefined || cutDuplicated || anchorDuplicated) {
-      log.session.warn('rewind cut anchor missing or duplicated in transcript — cut skipped, region served unfiltered', {
+      skippedCuts.push({
         cutUuid: cut.uuid,
         lastUuidAtCommit: cut.lastUuidAtCommit,
         cutFound: cutIdx !== undefined,
@@ -433,6 +454,6 @@ export function computeRewindDeadSet(
     for (const key of cut.trailingQueueKeys ?? []) queueDeadKeys.add(key);
   }
 
-  if (dead.size === 0) return { deadUuids: null, droppedCount: 0, queueDeadKeys };
-  return { deadUuids: dead, droppedCount: dead.size, queueDeadKeys };
+  if (dead.size === 0) return { deadUuids: null, droppedCount: 0, queueDeadKeys, skippedCuts };
+  return { deadUuids: dead, droppedCount: dead.size, queueDeadKeys, skippedCuts };
 }

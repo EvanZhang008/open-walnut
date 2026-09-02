@@ -54,6 +54,21 @@ vi.mock('../../src/core/session-tracker.js', () => ({
   }),
 }));
 
+/**
+ * The rewind PROBE seam: a connected daemon that speaks 'rewind-probe-v1'.
+ * Null by default, so every case above keeps taking the server-side transcript
+ * read (the fallback for hosts whose daemon predates the capability).
+ */
+interface FakeProbeConn {
+  hasCapability(cap: string): boolean;
+  send(cmd: string, params: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>;
+}
+const { probeConn } = vi.hoisted(() => ({ probeConn: { value: null as FakeProbeConn | null } }));
+vi.mock('../../src/providers/daemon-connection.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getConnectedDaemonConnection: () => probeConn.value,
+}));
+
 /** Only the history lookup of resolveRewindTarget is faked; the rest is real. */
 let historyMessages: Array<{ msgId: string; role: string; text: string }> = [];
 vi.mock('../../src/core/sessions/session-lifecycle.js', async (importOriginal) => ({
@@ -86,6 +101,7 @@ beforeEach(async () => {
   records.clear();
   patches.length = 0;
   historyMessages = [];
+  probeConn.value = null;
   vi.restoreAllMocks();
   // No live CLI to ask, and no real respawn.
   vi.spyOn(sessionRunner, 'getOrAttachLiveSession').mockResolvedValue(undefined);
@@ -313,6 +329,138 @@ describe('in-place rewind commit', () => {
       .rejects.toThrow(/record store unavailable/);
     expect(sessionRunner.reinitialize).toHaveBeenCalledWith(sid);
     expect(records.get(sid)!.inPlaceRewinds).toBeUndefined();  // nothing committed
+  });
+});
+
+describe('the host-local rewind probe (capability rewind-probe-v1)', () => {
+  /** A connected daemon whose transcript.rewindProbe answers with `replies` in
+   *  order (a single reply is reused for every call). */
+  function daemonAnswering(...replies: Array<Record<string, unknown> | Error>) {
+    const send = vi.fn(async (_cmd: string, _params: Record<string, unknown>) => {
+      const reply = replies.length > 1 ? replies.shift()! : replies[0];
+      if (reply instanceof Error) throw reply;
+      return { ok: true, ...reply };
+    });
+    probeConn.value = { hasCapability: (cap: string) => cap === 'rewind-probe-v1', send };
+    return send;
+  }
+
+  const probeReply = (over: Record<string, unknown> = {}) => ({
+    found: true, jsonlPath: '/host/projects/x.jsonl', mtimeMs: 1, size: 66_000_000,
+    lineCount: 3, leafUuid: U3, lastUuidAtCommit: U3, trailingQueueKeys: [], ...over,
+  });
+
+  /** A transcript too big for the reader's ceiling, set below. */
+  async function writeOversized(sid: string): Promise<void> {
+    const t = transcript();
+    for (let i = 0; i < 40; i++) t.user(`0199aa02-0000-4000-8000-${String(i).padStart(12, '0')}`, `padding ${i} ${'x'.repeat(120)}`);
+    t.user(U1, 'first').user(U2, 'second').user(U3, 'third');
+    await writeFixture(sid, t);
+  }
+
+  afterEach(() => { delete process.env.WALNUT_MAX_FILE_READ_BYTES; });
+
+  it('answers BOTH the chain gate and the commit anchor with no transcript read at all', async () => {
+    // The live 500: a 66 MB transcript on a remote host: both stages used to
+    // shuttle the whole file through DaemonFileReader, which refuses it. There is
+    // deliberately NO fixture on disk here, so a server-side read could only
+    // fail — a green commit proves the daemon answered both questions.
+    const sid = 'rw-probe-both';
+    records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude' });
+    historyMessages = [{ msgId: U2, role: 'user', text: 'second' }];
+    const send = daemonAnswering(probeReply({ onChain: true, trailingQueueKeys: ['2026-08-30T00:00:09.000Z queued mid-turn'] }));
+
+    const result = await rewindSessionToMessage(sid, { messageUuid: U2, mode: 'in-place' });
+
+    expect(result.status).toBe('rewound');
+    expect(patches[0].patch.inPlaceRewinds).toEqual([{
+      uuid: U2, lastUuidAtCommit: U3, at: expect.any(String),
+      trailingQueueKeys: ['2026-08-30T00:00:09.000Z queued mid-turn'],
+    }]);
+    // Two RPCs: the gate asks about the uuid, the commit asks only for the anchor.
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[0][0]).toBe('transcript.rewindProbe');
+    expect(send.mock.calls[0][1]).toMatchObject({ sid, cwd: CWD, uuid: U2 });
+    expect(send.mock.calls[1][1].uuid).toBeUndefined();
+    expect(sessionRunner.reinitialize).toHaveBeenCalledWith(sid);
+  });
+
+  it('refuses an off-chain uuid on the probe\'s word alone (409, nothing mutated)', async () => {
+    const sid = 'rw-probe-offchain';
+    records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude' });
+    historyMessages = [{ msgId: U1, role: 'user', text: 'behind a compaction' }];
+    daemonAnswering(probeReply({ onChain: false }));
+
+    await expect(rewindSessionToMessage(sid, { messageUuid: U1, mode: 'in-place' }))
+      .rejects.toThrow(/not on the conversation the CLI can resume/);
+    expect(patches).toEqual([]);
+    expect(sessionRunner.reinitialize).not.toHaveBeenCalled();
+  });
+
+  it('ignores a daemon that lacks the capability and reads the transcript itself', async () => {
+    const sid = 'rw-probe-nocap';
+    records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude' });
+    historyMessages = [{ msgId: U2, role: 'user', text: 'second' }];
+    await writeTranscript(sid, [U1, U2, U3]);
+    const send = vi.fn();
+    probeConn.value = { hasCapability: () => false, send };
+
+    await rewindSessionToMessage(sid, { messageUuid: U2, mode: 'in-place' });
+    expect(send).not.toHaveBeenCalled();
+    expect(patches[0].patch.inPlaceRewinds).toEqual([
+      { uuid: U2, lastUuidAtCommit: U3, at: expect.any(String) },
+    ]);
+  });
+
+  it('falls back to the transcript read when the RPC itself fails', async () => {
+    // A daemon that advertises the capability can still die mid-command; the
+    // answer must come from the file rather than the rewind failing.
+    const sid = 'rw-probe-rpcfail';
+    records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude' });
+    historyMessages = [{ msgId: U2, role: 'user', text: 'second' }];
+    await writeTranscript(sid, [U1, U2, U3]);
+    daemonAnswering(new Error('daemon socket closed'));
+
+    await rewindSessionToMessage(sid, { messageUuid: U2, mode: 'in-place' });
+    expect(patches[0].patch.inPlaceRewinds).toEqual([
+      { uuid: U2, lastUuidAtCommit: U3, at: expect.any(String) },
+    ]);
+  });
+
+  it('turns a byte-ceiling refusal in the GATE into a 503 upgrade hint, never a raw limit error', async () => {
+    // No probe (the host runs an old daemon) + a transcript past the reader's
+    // ceiling: the read throws `file read exceeded the N-byte ceiling`, which used
+    // to reach the human as a 500. It is a daemon-age problem and says so.
+    const sid = 'rw-ceiling-gate';
+    records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude' });
+    historyMessages = [{ msgId: U2, role: 'user', text: 'second' }];
+    await writeOversized(sid);
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '2048';
+
+    await expect(rewindSessionToMessage(sid, { messageUuid: U2, mode: 'in-place' }))
+      .rejects.toMatchObject({
+        statusCode: 503,
+        message: expect.stringContaining('needs the current daemon'),
+      });
+    expect(patches).toEqual([]);
+    expect(sessionRunner.reinitialize).not.toHaveBeenCalled();   // nothing was stopped
+  });
+
+  it('a byte-ceiling refusal at COMMIT still respawns the session before rethrowing', async () => {
+    // The gate passed (the probe answered it), then the daemon dropped — so the
+    // commit fell back to the read and hit the ceiling. By then the CLI has been
+    // stopped: "rewind failed, and your session is now dead" must never happen.
+    const sid = 'rw-ceiling-commit';
+    records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude' });
+    historyMessages = [{ msgId: U2, role: 'user', text: 'second' }];
+    await writeOversized(sid);
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '2048';
+    daemonAnswering(probeReply({ onChain: true }), new Error('daemon socket closed'));
+
+    await expect(rewindSessionToMessage(sid, { messageUuid: U2, mode: 'in-place' }))
+      .rejects.toMatchObject({ statusCode: 503 });
+    expect(patches).toEqual([]);
+    expect(sessionRunner.reinitialize).toHaveBeenCalledWith(sid);
   });
 });
 

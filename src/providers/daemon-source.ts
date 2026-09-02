@@ -140,7 +140,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'path-resolve-v1', 'vscode-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -2098,6 +2098,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'git.diff': return cmdGitDiff(ws, id, cmd);
     case 'changes.compute': return cmdChangesCompute(ws, id, cmd);
     case 'changes.file': return cmdChangesFile(ws, id, cmd);
+    case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id, cmd);
     case 'list': return cmdList(ws, id);
     case 'sessions.discoverExternal': return cmdDiscoverExternalSessions(ws, id, cmd);
     case 'bridge.configure': return cmdBridgeConfigure(ws, id, cmd);
@@ -5744,12 +5745,21 @@ try { pathResolveCore = require(path.join(__dirname, 'path-resolve-core.cjs')); 
 let vscodeServerCore = null;
 try { vscodeServerCore = require(path.join(__dirname, 'vscode-server-core.cjs')); } catch (err) { vscodeServerCore = null; }
 
+// Transcript rewind probe sidecar (transcript-rewind-core.cjs) — same sidecar
+// rationale: the chain walk + dead-set replay can't live in this template.
+// 'rewind-probe-v1' is advertised only when the load succeeds; without it the
+// server reads the whole transcript over the tunnel (and a transcript past the
+// reader's byte ceiling can't be rewound at all until the next auto-deploy).
+let transcriptRewindCore = null;
+try { transcriptRewindCore = require(path.join(__dirname, 'transcript-rewind-core.cjs')); } catch (err) { transcriptRewindCore = null; }
+
 function daemonCapabilities() {
   const caps = __DAEMON_CAPABILITIES__.slice();
   if (changesCore) caps.push('changes-v1');
   if (externalScanCore) caps.push('external-scan-v1');
   if (pathResolveCore) caps.push('path-resolve-v1');
   if (vscodeServerCore) caps.push('vscode-v1');
+  if (transcriptRewindCore) caps.push('rewind-probe-v1');
   // 'grep-v1' is NOT sidecar-gated: cmdFsGrep is inlined above and needs only
   // child_process, so this twin can always answer fs.grep. Stated explicitly
   // here (and deduped) so the capability holds even if the static literal ever
@@ -5947,6 +5957,74 @@ async function cmdChangesFile(ws, id, cmd) {
     sendOk(ws, id, { found: false });
   } catch (err) {
     sendError(ws, id, 'changes.file failed: ' + err.message);
+  }
+}
+
+// ── Transcript rewind probe (host-local — capability 'rewind-probe-v1') ──
+// See cmdTranscriptRewindProbe in daemon-standalone.ts for the design rationale.
+// Deliberately UNCACHED: callers ask precisely because the file may have changed.
+// Concurrency gated like changes.compute: one probe at a time daemon-wide, and
+// identical requests share one promise (key = the whole request, not the sid —
+// two callers asking different questions need different answers).
+let rewindProbeInflight = Promise.resolve();
+const rewindProbeInflightByKey = new Map();
+
+function rewindProbeKey(input) {
+  const cutSig = (input.cuts || []).map(function (c) {
+    return c.uuid + '>' + c.lastUuidAtCommit;
+  }).join(',');
+  return [input.sessionId, input.cwd || '', input.uuid || '', cutSig].join('|');
+}
+
+async function probeTranscriptRewindGated(input) {
+  const key = rewindProbeKey(input);
+  const existing = rewindProbeInflightByKey.get(key);
+  if (existing) return existing;
+  const run = (async () => {
+    const prev = rewindProbeInflight;
+    let release;
+    rewindProbeInflight = new Promise((r) => { release = r; });
+    await prev.catch(() => {});
+    try {
+      return await transcriptRewindCore.probeTranscriptRewindHostLocal(input);
+    } finally {
+      release();
+      rewindProbeInflightByKey.delete(key);
+    }
+  })();
+  rewindProbeInflightByKey.set(key, run);
+  return run;
+}
+
+async function cmdTranscriptRewindProbe(ws, id, cmd) {
+  if (!transcriptRewindCore) {
+    return sendError(ws, id, 'transcript.rewindProbe: core sidecar not available on this host');
+  }
+  const sid = cmd.sid;
+  if (!sid) return sendError(ws, id, 'transcript.rewindProbe: missing sid');
+  const cwd = typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined;
+  const uuid = typeof cmd.uuid === 'string' && cmd.uuid ? cmd.uuid : undefined;
+  let cuts = undefined;
+  if (Array.isArray(cmd.cuts)) {
+    cuts = [];
+    for (const c of cmd.cuts) {
+      if (!c || typeof c.uuid !== 'string' || typeof c.lastUuidAtCommit !== 'string') continue;
+      const cut = { uuid: c.uuid, lastUuidAtCommit: c.lastUuidAtCommit };
+      if (Array.isArray(c.trailingQueueKeys)) {
+        cut.trailingQueueKeys = c.trailingQueueKeys.filter(function (k) { return typeof k === 'string'; });
+      }
+      cuts.push(cut);
+    }
+  }
+  try {
+    const input = { sessionId: sid, cwd: cwd, claudeHome: path.join(HOME_DIR, '.claude') };
+    if (uuid) input.uuid = uuid;
+    if (cuts) input.cuts = cuts;
+    const output = await probeTranscriptRewindGated(input);
+    if (!output) return sendOk(ws, id, { found: false });
+    sendOk(ws, id, Object.assign({ found: true }, output));
+  } catch (err) {
+    sendError(ws, id, 'transcript.rewindProbe failed: ' + err.message);
   }
 }
 

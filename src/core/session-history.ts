@@ -27,7 +27,7 @@ import {
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from './workflow-progress.js';
 import { sessionModeFromCli, type InPlaceRewindCut, type JsonlLineCheck } from './types.js';
 import { stripOutputModeWrappers } from './sessions/output-mode.js';
-import { computeRewindDeadSet, queueEnqueueKey } from './transcript-chain.js';
+import { computeRewindDeadSet, queueEnqueueKey, type SkippedRewindCut } from './transcript-chain.js';
 import type { SessionBackgroundTasksPayload, WorkflowPhaseInfo, WorkflowAgentInfo } from './event-types.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -202,6 +202,10 @@ async function getInPlaceRewinds(sessionId: string): Promise<InPlaceRewindCut[] 
 export async function invalidateSessionHistoryCaches(sessionId: string, host?: string): Promise<void> {
   cacheDelete(cacheKey(sessionId));
   if (host) cacheDelete(cacheKey(sessionId, host));
+  // The over-ceiling dead-set memo is keyed on the FILE's identity, which a new
+  // cut does not change — so it has to be dropped explicitly here, or a rewind
+  // of a rewind would keep serving the previous rewind's dead set.
+  displayProbeMemoDrop(sessionId);
   try {
     const { deleteHistoryCache } = await import('./history-disk-cache.js');
     await deleteHistoryCache(sessionId);
@@ -363,6 +367,120 @@ export function _historyCacheGetForTesting(sessionId: string, host?: string): Pa
 export function _resetHistoryCacheForTesting(): void {
   parsedHistoryCache.clear();
   historyCacheChars = 0;
+  displayProbeMemo.clear();
+}
+
+// ── Over-ceiling DISPLAY dead-set memo ──
+// The byte-ceiling branch below deliberately writes NO history cache entry, so a
+// rewound over-ceiling session would re-ask its host daemon on EVERY read, and
+// each ask makes that host stream and parse the whole transcript (seconds of CPU
+// and hundreds of MB of transient RSS on a very large one) inside a route with no
+// deadline. The answer is a pure function of (recorded cuts, file bytes), so it is
+// memoized on the file's identity: an appended transcript re-probes, a quiet one
+// never does. Bounded, and dropped for a session whenever its history caches are
+// (a new cut changes the answer without changing the file).
+//
+// ONLY the display path memoizes. The rewind gate/commit probes keep fresh-read
+// semantics on purpose — they decide what to persist.
+
+interface DisplayDeadSet {
+  deadUuids: string[];
+  queueDeadKeys: string[];
+  skippedCuts: SkippedRewindCut[];
+  truncated: boolean;
+}
+const displayProbeMemo = new Map<string, DisplayDeadSet>();
+const DISPLAY_PROBE_MEMO_MAX = 32;
+/** A short, dedicated deadline: this call sits in a route with none of its own,
+ *  and a slow answer must degrade to the unfiltered tail rather than pin the
+ *  request. The rewind-path calls keep their own (much longer) budget. */
+const DISPLAY_PROBE_TIMEOUT_MS = 10_000;
+
+const displayProbeKey = (sessionId: string, host: string | undefined, mtimeMs: number, size: number): string =>
+  `${sessionId}|${host ?? '__local__'}|${mtimeMs}|${size}`;
+
+function displayProbeMemoGet(key: string): DisplayDeadSet | undefined {
+  const hit = displayProbeMemo.get(key);
+  if (hit) { // LRU touch
+    displayProbeMemo.delete(key);
+    displayProbeMemo.set(key, hit);
+  }
+  return hit;
+}
+
+function displayProbeMemoSet(key: string, value: DisplayDeadSet): void {
+  displayProbeMemo.delete(key);
+  displayProbeMemo.set(key, value);
+  while (displayProbeMemo.size > DISPLAY_PROBE_MEMO_MAX) {
+    const oldest = displayProbeMemo.keys().next().value;
+    if (oldest === undefined) break;
+    displayProbeMemo.delete(oldest);
+  }
+}
+
+/** Drop every memoized dead set for a session (its cuts changed). */
+function displayProbeMemoDrop(sessionId: string): void {
+  const prefix = `${sessionId}|`;
+  for (const key of [...displayProbeMemo.keys()]) {
+    if (key.startsWith(prefix)) displayProbeMemo.delete(key);
+  }
+}
+
+/**
+ * The dead set for an over-ceiling rewound transcript: memo first, else one
+ * bounded RPC to the session's host. Returns null when no answer is available
+ * (no capable daemon, RPC failure, timeout) — the caller then serves unfiltered.
+ *
+ * `mtimeMs`/`size` are the caller's own stat when it has one; without it the
+ * answer is still memoized under the identity the DAEMON reports (the probe
+ * returns mtimeMs/size for exactly this reason), so a later read that does have
+ * a stat can hit it.
+ */
+async function resolveOverCeilingDeadSet(
+  sessionId: string,
+  cwd: string | undefined,
+  host: string | undefined,
+  rewindCuts: readonly InPlaceRewindCut[],
+  mtimeMs?: number,
+  size?: number,
+): Promise<DisplayDeadSet | null> {
+  const callerKey = mtimeMs !== undefined && size !== undefined
+    ? displayProbeKey(sessionId, host, mtimeMs, size)
+    : null;
+  if (callerKey) {
+    const hit = displayProbeMemoGet(callerKey);
+    if (hit) {
+      log.session.debug('over-ceiling dead set served from the memo (no RPC)', {
+        sessionId, host: host ?? '__local__', deadUuids: hit.deadUuids.length,
+      });
+      return hit;
+    }
+  }
+  try {
+    const { probeRewindViaDaemon } = await import('./sessions/session-rewind.js');
+    const probe = await probeRewindViaDaemon(
+      { sessionId, cwd, host },
+      { cuts: rewindCuts, timeoutMs: DISPLAY_PROBE_TIMEOUT_MS },
+    );
+    if (!probe || !probe.deadUuids) return null;
+    const value: DisplayDeadSet = {
+      deadUuids: probe.deadUuids,
+      queueDeadKeys: probe.queueDeadKeys ?? [],
+      skippedCuts: probe.skippedCuts ?? [],
+      truncated: probe.truncated === true,
+    };
+    displayProbeMemoSet(
+      callerKey ?? displayProbeKey(sessionId, host, probe.mtimeMs, probe.size),
+      value,
+    );
+    return value;
+  } catch (err) {
+    log.session.debug('rewind probe failed on the byte-ceiling path', {
+      sessionId, host: host ?? '__local__',
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
 }
 
 function cacheSet(sessionId: string, entry: ParsedHistoryCacheEntry, host?: string): void {
@@ -667,6 +785,21 @@ export interface ParseSessionMessagesOptions {
 /** Shared empty set — the no-filter path never allocates per parse. */
 const NO_QUEUE_DEAD_KEYS: Set<string> = new Set();
 
+/** Warn once per rewind cut the replay refused to apply (see the type's doc in
+ *  transcript-chain.ts — that module has no logger, so its callers own this). */
+function logSkippedRewindCuts(skipped: readonly SkippedRewindCut[] | undefined): void {
+  for (const cut of skipped ?? []) {
+    log.session.warn('rewind cut anchor missing or duplicated in transcript — cut skipped, region served unfiltered', {
+      cutUuid: cut.cutUuid,
+      lastUuidAtCommit: cut.lastUuidAtCommit,
+      cutFound: cut.cutFound,
+      anchorFound: cut.anchorFound,
+      cutDuplicated: cut.cutDuplicated,
+      anchorDuplicated: cut.anchorDuplicated,
+    });
+  }
+}
+
 /**
  * Core parsing logic: parse raw JSONL content string into SessionHistoryMessage[].
  * Deduplicates by message.id, handles queue-operations. Optionally applies the
@@ -698,6 +831,10 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     deadUuids = deadSet.deadUuids;
     queueDeadKeys = deadSet.queueDeadKeys;
     chainMark = { deadUuids, queueDeadKeys, droppedCount: deadSet.droppedCount };
+    // computeRewindDeadSet has no logger (it is bundled into the daemon), so the
+    // named degrade is reported back and warned about here — one line per cut it
+    // refused to apply, whose region is therefore served UNFILTERED.
+    logSkippedRewindCuts(deadSet.skippedCuts);
   } else if (opts?.chainFilter) {
     deadUuids = opts.chainFilter.deadUuids;
     queueDeadKeys = opts.chainFilter.queueDeadKeys ?? NO_QUEUE_DEAD_KEYS;
@@ -1693,12 +1830,18 @@ function seedIncrementalState(
  *
  * Returns null when the window can't be read (no resolvable path, stat failure,
  * transport error) so the caller picks its own fallback.
+ *
+ * `parseOpts` is normally absent — a window cannot resolve rewind cut anchors on
+ * its own (they may precede its start), so it parses UNFILTERED by design. The
+ * one caller that passes it has a PRECOMPUTED dead set for the whole file (the
+ * daemon's rewind probe), which is exactly the missing piece.
  */
 async function readSessionHistoryTailWindow(
   sessionId: string,
   cwd?: string,
   host?: string,
   maxTailBytes = 4 * 1024 * 1024,
+  parseOpts?: ParseSessionMessagesOptions,
 ): Promise<SessionHistoryMessage[] | null> {
   const daemonHost = host ?? '__local__';
   let statPath = cwd && isSafeForProjectEncoding(cwd)
@@ -1736,7 +1879,7 @@ async function readSessionHistoryTailWindow(
       windowText = nl >= 0 ? res.content.slice(nl + 1) : '';
     }
     const merged = await mergeSyntheticUserEvents(sessionId, windowText);
-    const parsed = parseSessionMessages(merged);
+    const parsed = parseSessionMessages(merged, parseOpts);
     // Echo-claim binding — same as the full-read path (:1572). Its absence here
     // silently killed the STRONGEST absorption evidence on exactly the sessions
     // that need it most: a whale transcript always degrades to this window, so
@@ -2013,15 +2156,40 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     });
     // A byte-ceiling rejection is itself proof the file exists (and is huge).
     sourceFound = true;
+    // Resolving the cut anchors needs the WHOLE file, which this transport just
+    // refused — but the session's HOST can read it. Ask its daemon for the dead
+    // set (transcript.rewindProbe: only uuids cross the tunnel, memoized on the
+    // file's identity, bounded by its own short deadline) and apply it to the
+    // bounded tail. No answer, an answer past the probe's cap, or an answer whose
+    // every cut was skipped → the documented degrade: serve the tail UNFILTERED,
+    // which may include abandoned-branch lines, and say so in the log.
+    let tailParseOpts: ParseSessionMessagesOptions | undefined;
     if (rewindCuts) {
-      // An over-ceiling transcript can't resolve the cut anchors without the
-      // full file — the bounded tail may include abandoned-branch lines.
-      // Serving them beats a blank panel; say so in the log.
-      log.session.warn('rewound transcript over the byte ceiling — bounded tail is served UNFILTERED', {
-        sessionId, host: host ?? '__local__', cuts: rewindCuts.length,
-      });
+      const dead = await resolveOverCeilingDeadSet(sessionId, cwd, host, rewindCuts, mtimeMs, statSize);
+      if (dead) logSkippedRewindCuts(dead.skippedCuts);
+      // "Every cut skipped" is NOT a filter that found nothing dead — it is the
+      // unfilterable case wearing an empty dead set, so it takes the warn.
+      const resolvedAnyCut = !!dead && !dead.truncated && dead.skippedCuts.length < rewindCuts.length;
+      if (dead && resolvedAnyCut) {
+        tailParseOpts = {
+          chainFilter: {
+            deadUuids: dead.deadUuids.length > 0 ? new Set(dead.deadUuids) : null,
+            queueDeadKeys: new Set(dead.queueDeadKeys),
+          },
+        };
+        log.session.info('over-ceiling rewound transcript filtered by the host daemon probe', {
+          sessionId, host: host ?? '__local__', cuts: rewindCuts.length,
+          deadUuids: dead.deadUuids.length, skippedCuts: dead.skippedCuts.length,
+        });
+      } else {
+        log.session.warn('rewound transcript over the byte ceiling — bounded tail is served UNFILTERED', {
+          sessionId, host: host ?? '__local__', cuts: rewindCuts.length,
+          reason: !dead ? 'no_probe_answer' : dead.truncated ? 'dead_set_over_cap' : 'all_cuts_skipped',
+          skippedCuts: dead?.skippedCuts.length ?? 0,
+        });
+      }
     }
-    const tail = await readSessionHistoryTailWindow(sessionId, cwd, host);
+    const tail = await readSessionHistoryTailWindow(sessionId, cwd, host, undefined, tailParseOpts);
     if (tail) return handOff(tail);
     // Tail unavailable too — last resort is the previous parse, else empty.
     return handOff(getCachedSessionHistory(sessionId, host) ?? []);
@@ -2042,8 +2210,10 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
       // Rewind-cut filter, fused into the parse (single per-line JSON.parse).
       // The content STRING is never rewritten — ReadSessionResult.canonicalChars
       // slicing in seedIncrementalState depends on the original string.
-      // (A cut whose anchors are missing from the file is skipped with a warn
-      // inside computeRewindDeadSet — named degrade, serve-all.)
+      // (A cut whose anchors are missing from the file is reported back as a
+      // skippedCuts entry and warned about by logSkippedRewindCuts below —
+      // computeRewindDeadSet itself stays log-free so it can run in the daemon
+      // bundle. Named degrade, serve-all.)
       messages = parseSessionMessages(result.content, {
         chainFilter: 'auto',
         ...(rewindCuts ? { rewindCuts } : {}),
