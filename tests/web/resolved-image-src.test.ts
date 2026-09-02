@@ -167,6 +167,44 @@ describe('resolveImageSrc — relative path against baseDir', () => {
   });
 });
 
+describe('resolveImageSrc — version token', () => {
+  // A regenerated diagram stayed stale through Refresh: the <img src> was
+  // byte-identical each render and WebKit serves a URL it already loaded in the
+  // document from memory, never asking the server. The version is what makes a
+  // Refresh a NEW url — and it must not touch the authored form on the way back.
+  it('folds the version into the proxied url as &r=', () => {
+    expect(resolveImageSrc('a.png', { baseDir: BASE, version: '3.1' }))
+      .toBe(`/api/local-image?path=${encodeURIComponent(`${BASE}/a.png`)}&r=3.1`);
+    expect(resolveImageSrc('a.png', { baseDir: BASE, host: 'devbox', version: 7 }))
+      .toBe(`/api/local-image?path=${encodeURIComponent(`${BASE}/a.png`)}&host=devbox&r=7`);
+  });
+
+  it('two versions of the same image are two different urls', () => {
+    const a = resolveImageSrc('a.png', { baseDir: BASE, version: '1.0' });
+    const b = resolveImageSrc('a.png', { baseDir: BASE, version: '2.0' });
+    expect(a).not.toBe(b);
+  });
+
+  it('omits the token when there is no version (chat surfaces, and older callers)', () => {
+    expect(resolveImageSrc('a.png', { baseDir: BASE })).not.toContain('&r=');
+    expect(resolveImageSrc('a.png', { baseDir: BASE, version: '' })).not.toContain('&r=');
+    expect(resolveImageSrc('a.png', { baseDir: BASE, version: 0 })).not.toContain('&r=');
+  });
+
+  it('never reaches the model: unproxy strips it along with the rest of the proxy url', () => {
+    const ctx = { baseDir: BASE, host: 'devbox', version: '4.2' };
+    for (const authored of ['a.png', 'sub/a.png', '/abs/a.png']) {
+      expect(unproxyImageSrc(resolveImageSrc(authored, ctx), ctx))
+        .toBe(authored === '/abs/a.png' ? '/abs/a.png' : authored);
+    }
+  });
+
+  it('leaves an already-complete reference alone even with a version', () => {
+    expect(resolveImageSrc('https://x/a.png', { baseDir: BASE, version: 1 })).toBe('https://x/a.png');
+    expect(resolveImageSrc('/api/images/a.png', { baseDir: BASE, version: 1 })).toBe('/api/images/a.png');
+  });
+});
+
 describe('resolveImageSrc — no baseDir', () => {
   it('leaves a relative src exactly as authored (the Notes vault surface)', () => {
     expect(resolveImageSrc('a.png')).toBe('a.png');
@@ -297,5 +335,11 @@ describe('ResolvedImage — the saved markdown keeps the authored src', () => {
     expect(render({ options, storage: { baseDir: '/snapshot' } }))
       .toBe('/api/local-image?path=%2Fsnapshot%2Fa.png');
     expect(render({ options })).toBe('/api/local-image?path=%2Fopt%2Fa.png');
+    // The version rides the same channel: a Refresh bumps editor.storage and the
+    // next paint must carry the new token, not the configure-time one.
+    expect(render({
+      options: { ...options, version: 'stale' },
+      editor: { storage: { image: { baseDir: '/live', version: 'fresh' } } },
+    })).toBe('/api/local-image?path=%2Flive%2Fa.png&r=fresh');
   });
 });

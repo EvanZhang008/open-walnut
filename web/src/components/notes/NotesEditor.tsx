@@ -99,6 +99,8 @@ interface NotesEditorProps {
   imageBaseDir?: string;
   /** Remote exec host that owns `imageBaseDir`; forwarded as `&host=`. */
   imageHost?: string;
+  /** Reload generation for image URLs (`&r=`) — see ResolveImageSrcContext.version. */
+  imageVersion?: string | number;
 }
 
 /**
@@ -320,7 +322,7 @@ function detachListItemChildren(editor: Editor): boolean {
   }
 }
 
-export function NotesEditor({ content, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost }: NotesEditorProps) {
+export function NotesEditor({ content, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   /**
@@ -437,6 +439,7 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
             allowBase64: true,
             baseDir: imageBaseDir,
             host: imageHost,
+            version: imageVersion,
           })
         : Image.configure({
             inline: true,
@@ -676,8 +679,9 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
     if (storage && 'baseDir' in storage) {
       storage.baseDir = imageBaseDir;
       storage.host = imageHost;
+      storage.version = imageVersion;
     }
-  }, [editor, imageBaseDir, imageHost]);
+  }, [editor, imageBaseDir, imageHost, imageVersion]);
 
   // Sync external content changes (e.g. initial load, popup↔inline sync).
   // Uses isSourceRef to break the save-sync loop: when THIS editor was the

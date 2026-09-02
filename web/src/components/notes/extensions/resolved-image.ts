@@ -56,6 +56,15 @@ export interface ResolveImageSrcContext {
   baseDir?: string;
   /** Remote exec host the file came from; rides along as `&host=`. */
   host?: string;
+  /**
+   * Pane reload generation, folded into the URL as `&r=`. An `<img src>` that
+   * stays byte-identical is served from the browser's per-document memory cache
+   * without a request — WebKit in particular never re-asks for a URL it has
+   * already loaded in this document, whatever `Cache-Control` said — so a
+   * diagram the agent regenerated kept its OLD pixels through every Refresh.
+   * A token that moves with the reload makes each Refresh a new URL.
+   */
+  version?: string | number;
 }
 
 /**
@@ -104,7 +113,10 @@ export function resolveImageSrc(src: string, ctx: ResolveImageSrcContext = {}): 
   }
 
   const hostParam = ctx.host ? `&host=${encodeURIComponent(ctx.host)}` : '';
-  return `${PROXY_ROUTE}?path=${encodeURIComponent(absPath)}${hostParam}`;
+  const versionParam = ctx.version != null && ctx.version !== '' && ctx.version !== 0
+    ? `&r=${encodeURIComponent(String(ctx.version))}`
+    : '';
+  return `${PROXY_ROUTE}?path=${encodeURIComponent(absPath)}${hostParam}${versionParam}`;
 }
 
 /**
@@ -138,6 +150,7 @@ export function unproxyImageSrc(src: string | null | undefined, ctx: ResolveImag
 export interface ResolvedImageOptions extends ImageOptions {
   baseDir?: string;
   host?: string;
+  version?: string | number;
 }
 
 /**
@@ -151,6 +164,7 @@ export interface ResolvedImageOptions extends ImageOptions {
 export interface ResolvedImageStorage {
   baseDir?: string;
   host?: string;
+  version?: string | number;
 }
 
 declare module '@tiptap/core' {
@@ -185,6 +199,7 @@ function liveSrcContext(ctx: {
   return {
     baseDir: store && 'baseDir' in store ? store.baseDir : ctx.options.baseDir,
     host: store && 'host' in store ? store.host : ctx.options.host,
+    version: store && 'version' in store ? store.version : ctx.options.version,
   };
 }
 
@@ -195,11 +210,12 @@ export const ResolvedImage = Image.extend<ResolvedImageOptions, ResolvedImageSto
       ...this.parent?.(),
       baseDir: undefined,
       host: undefined,
+      version: undefined,
     } as ResolvedImageOptions;
   },
 
   addStorage() {
-    return { baseDir: this.options.baseDir, host: this.options.host };
+    return { baseDir: this.options.baseDir, host: this.options.host, version: this.options.version };
   },
 
   addAttributes() {

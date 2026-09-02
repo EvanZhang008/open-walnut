@@ -1069,7 +1069,15 @@ export function stripLeakedToolCalls(text: string): string {
  * Handles both absolute (/path/to/img.png) and relative (subdir/img.png) paths.
  * Relative paths are resolved against `cwd` (the directory containing the .md file).
  */
-function proxyImageSrcs(html: string, cwd?: string, host?: string): string {
+function proxyImageSrcs(html: string, cwd?: string, host?: string, imageVersion?: string | number): string {
+  // `imageVersion` rides along as `&r=`: a byte-identical <img src> is served
+  // from the browser's per-document memory cache with no request (WebKit never
+  // re-asks for a URL it already loaded in this document), so a regenerated
+  // diagram kept its old pixels through Refresh. The pane's reload token makes
+  // each Refresh a new URL. Absent for chat surfaces, whose images don't change.
+  const versionParam = imageVersion != null && imageVersion !== '' && imageVersion !== 0
+    ? `&r=${encodeURIComponent(String(imageVersion))}`
+    : '';
   return html.replace(/<img\s([^>]*)>/gi, (full, attrs: string) => {
     const srcMatch = attrs.match(/src="([^"]*)"/);
     if (!srcMatch) return full;
@@ -1086,7 +1094,7 @@ function proxyImageSrcs(html: string, cwd?: string, host?: string): string {
     }
 
     const hostParam = host ? `&host=${encodeURIComponent(host)}` : '';
-    const proxied = `/api/local-image?path=${encodeURIComponent(absPath)}${hostParam}`;
+    const proxied = `/api/local-image?path=${encodeURIComponent(absPath)}${hostParam}${versionParam}`;
     const newAttrs = attrs
       .replace(/src="[^"]*"/, `src="${proxied}"`)
       + ` data-lightbox-src="${proxied}" loading="lazy"`;
@@ -1119,6 +1127,12 @@ export interface RenderMarkdownOptions {
    * a `data-rblk` scope on its wrapper and rewrites every rule under it first.
    */
   allowStyle?: boolean;
+  /**
+   * Reload generation for embedded images (Files panel only). Folded into every
+   * proxied `<img src>` as `&r=` and into the render cache key, so a Refresh
+   * produces new image URLs — see proxyImageSrcs for why that is necessary.
+   */
+  imageVersion?: string | number;
 }
 
 export function renderMarkdownWithRefs(
@@ -1135,7 +1149,8 @@ export function renderMarkdownWithRefs(
   }
   // The posture is part of the identity: the same text renders differently with
   // and without style, so it must not share a cache slot.
-  const flags = allowStyle ? 'S\0' : '';
+  const imageVersion = opts?.imageVersion;
+  const flags = (allowStyle ? 'S\0' : '') + (imageVersion != null ? `V${imageVersion}\0` : '');
   const key = host
     ? `${flags}${text}\0${sessionCwd ?? ''}\0${host}`
     : sessionCwd ? `${flags}${text}\0${sessionCwd}` : `${flags}${text}`;
@@ -1182,7 +1197,7 @@ export function renderMarkdownWithRefs(
     html = DOMPurify.sanitize(text);
   }
 
-  html = proxyImageSrcs(html, sessionCwd, host);
+  html = proxyImageSrcs(html, sessionCwd, host, imageVersion);
 
   if (text.length <= MD_CACHE_SKIP_LENGTH) {
     if (mdCache.size >= MD_CACHE_MAX) {

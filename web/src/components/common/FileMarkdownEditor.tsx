@@ -43,6 +43,8 @@ interface FileMarkdownEditorProps {
   path: string;
   /** Exec host the file lives on (undefined = this Mac). */
   host?: string;
+  /** Reload generation for embedded image URLs — the parent's reload token. */
+  imageVersion?: string | number;
   /** Fired once, on the first genuine user edit. */
   onDirtyChange: (dirty: boolean) => void;
   /**
@@ -62,7 +64,7 @@ interface FileMarkdownEditorProps {
 }
 
 export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdownEditorProps>(
-  function FileMarkdownEditor({ initialValue, path, host, onDirtyChange, onDocChange, onSave, onAskSelection }, ref) {
+  function FileMarkdownEditor({ initialValue, path, host, imageVersion, onDirtyChange, onDocChange, onSave, onAskSelection }, ref) {
     // Mount-scoped split: the parent remounts (key) to reseed, mirroring
     // FileSourceEditor. The frontmatter half never enters the editor.
     const seedRef = useRef(splitFrontmatter(initialValue));
@@ -178,6 +180,7 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
           onAskSelection={onAskSelection}
           imageBaseDir={imageBaseDir}
           imageHost={host}
+          imageVersion={imageVersion}
         />
       </div>
     );

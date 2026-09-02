@@ -262,6 +262,18 @@ export function FileContentView({
   // up the version just recorded without a remount.
   const [historyOpen, setHistoryOpen] = useState(false);
   const [versionsSeen, setVersionsSeen] = useState(0);
+  // Bumped when a Refresh has LANDED its read (not when the button is pressed —
+  // that would remount the editor onto the old bytes and again onto the new).
+  // Two jobs: it is part of the editor key, so a Refresh whose bytes did not
+  // change still repaints (the old key kept the editor, and with it every <img>
+  // exactly as painted); and with versionsSeen it forms the image URL version,
+  // so the repainted <img> is a NEW url the browser must actually fetch. A
+  // diagram the agent regenerated stayed stale through Refresh without both.
+  // Seeded per MOUNT (not 0) so re-opening a file is a new URL too: the memory
+  // cache outlives the pane, and "close it, open it again" must also see the
+  // current picture. Unchanged bytes answer 304, so the extra request is cheap.
+  const [imageEpoch, setImageEpoch] = useState(() => Date.now());
+  const imageVersion = `${imageEpoch}.${versionsSeen}`;
   // The hash of the bytes the editor was seeded from. Its ONLY job is the
   // editor remount key: it advances on a fresh READ (so a Refresh that landed
   // new bytes reseeds the editor) — deliberately NOT on save, which would
@@ -525,6 +537,7 @@ export function FileContentView({
         setStaleDraft(plan.stale);
         setDraftRestored(plan.seed != null);
         setBaseHash(d.contentHash);
+        if (isReload) setImageEpoch((n) => n + 1);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -1524,9 +1537,9 @@ export function FileContentView({
   const markdownHtml = useMemo(() => {
     if (!isMarkdown || !data?.content) return '';
     const dir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : undefined;
-    return renderMarkdownWithRefs(data.content, dir, host);
+    return renderMarkdownWithRefs(data.content, dir, host, { imageVersion });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
-  }, [isMarkdown, data, host, filePath, labelsVersion]);
+  }, [isMarkdown, data, host, filePath, labelsVersion, imageVersion]);
 
   // ── "Open in Notes": OPT-IN jump to /notes for a vault note ────────────────
   // A file click used to divert here automatically; that was reverted (the app
@@ -1895,7 +1908,9 @@ export function FileContentView({
           path + baseHash + seedNonce so a fresh READ (Refresh / external
           reload) or a Discard remounts onto new bytes — both editors are
           seed-once by design, which is what keeps the caret still while
-          typing. A SAVE deliberately does NOT remount (markClean re-baselines
+          typing. The WYSIWYG key also carries imageEpoch: a Refresh that found
+          the SAME bytes must still repaint, or its embedded images keep the
+          pixels they were first painted with (see imageEpoch above). A SAVE deliberately does NOT remount (markClean re-baselines
           in place; a remount yanked the caret to line 1 on ⌘S). A tab switch
           remounts (different component) but seeds from the carried draft.
           Preview tab → Notes WYSIWYG (same TipTap as /notes); Source tab and
@@ -1903,11 +1918,12 @@ export function FileContentView({
       {!loading && editing && data?.content != null && (
         editingWysiwyg ? (
           <FileMarkdownEditor
-            key={`wys:${filePath}:${baseHash ?? ''}:${seedNonce}`}
+            key={`wys:${filePath}:${baseHash ?? ''}:${seedNonce}:${imageEpoch}`}
             ref={editorRef}
             initialValue={draftRef.current ?? data.content}
             path={filePath}
             host={host}
+            imageVersion={imageVersion}
             onDirtyChange={setEditorDirty}
             onDocChange={handleDocChange}
             onSave={() => { void handleSave(); }}
