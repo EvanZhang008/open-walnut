@@ -311,7 +311,7 @@ Full details: [Testing pipeline](./docs/reference/testing-pipeline.md).
 | L4 CI | GitHub Actions, automatic | free | every push/PR |
 | L5 live | `npm run test:live:cloud` / `test:live:daemon` | ~25s / ~2min | cross-machine feature sign-off — zero mocks, real cloud→bridge→CLI; asserts the CLI's actual reply. Mock-green ≠ working (2026-08-07: live layer's first run caught a spawn race no mock can reproduce) |
 
-**The suite has a 118-failure baseline on `main`** (stale imports of exports deleted 2026-05, tests needing a real CLI/daemon, some load flakes). So judge your change with `npm run test:baseline` — it fails ONLY on failures absent from `tests/setup/known-failures.json`. Never judge from the raw aggregate count. When you fix some, `npm run test:baseline:record`.
+**The baseline is ONE known failure, not 118** (`d0ae758b` drove it from 121 to 1 by fixing root causes; `tests/setup/known-failures.json` is the record). Judge your change with `npm run test:baseline` — it fails ONLY on failures absent from that file. Never judge from the raw aggregate count, and never wave a pile of red away as "the baseline": at a baseline of 1, extra failures are your regression, another agent's uncommitted `src/` work in this shared worktree, or concurrency noise (fails in a 3-way parallel run, passes alone). Attribute before acting: re-run the file alone, and diff `git show HEAD:<file>` against the worktree to see whose change moved it. When you legitimately fix or add known failures, `npm run test:baseline:record`.
 
 **CI failed?** `scripts/ci-status.sh brief` distils the run into the few real error lines; fix locally (free) rather than running an AI inside CI (paid).
 

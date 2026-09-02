@@ -27,6 +27,12 @@
  * House rules: `page.goto('/')` is the initial load only, every later step is a
  * real click, and the tier used here is scoped to a stamped private project so a
  * parallel spec's cards can't be mistaken for this one's.
+ *
+ * The two drag scenarios use DIFFERENT gestures on purpose, because the line is a
+ * different kind of thing in each mode: in project mode it is a plain HTML5-draggable
+ * row (`locator.dragTo` drives that natively), in custom order it is a dnd-kit
+ * sortable unit that needs a real multi-step pointer drag (`dragLineOnto`, which
+ * explains why).
  */
 
 import { test, expect, type Locator, type Page } from '@playwright/test'
@@ -105,6 +111,37 @@ function cardFor(page: Page, taskId: string): Locator {
   return page.locator(`[data-task-id="${taskId}"]`).first()
 }
 
+/**
+ * Drag a CUSTOM-mode line onto the top edge of a card, i.e. into the slot above it.
+ *
+ * `locator.dragTo()` does NOT work here and must not come back. In custom order the
+ * line is a real dnd-kit sortable unit (`SortableTierSeparatorRow`, since "custom-order
+ * lines become sortable units"), not the plain HTML5-draggable row that project mode
+ * still uses — and dnd-kit's PointerSensor arms on an activation distance of 5px.
+ * `dragTo` sends exactly one mouse move between press and release, so the sensor
+ * activates on the very move that was supposed to carry the line to its target: the
+ * collision pass runs at the grab point, `over` resolves to the line ITSELF, and drag
+ * end is a no-op. The proof it leaves behind is dnd-kit's own live region saying
+ * "Draggable item sep_… was dropped over droppable area sep_…" — the same id twice.
+ *
+ * So: press, ONE short nudge to clear the activation distance, THEN travel to the
+ * target in steps. Same gesture the sibling spec's sortable-line drag uses.
+ */
+async function dragLineOnto(page: Page, line: Locator, target: Locator): Promise<void> {
+  const from = await line.boundingBox()
+  const to = await target.boundingBox()
+  expect(from, 'the line must be laid out to be dragged').not.toBeNull()
+  expect(to, 'the drop target must be laid out').not.toBeNull()
+  await page.mouse.move(from!.x + from!.width / 2, from!.y + from!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(from!.x + from!.width / 2, from!.y + from!.height / 2 + 10)
+  await page.mouse.move(to!.x + to!.width / 2, to!.y + 4, { steps: 12 })
+  // dnd-kit resolves `over` on a rAF after the last move; release before it has and
+  // the drop lands on whatever was under the pointer one frame ago.
+  await page.waitForTimeout(400)
+  await page.mouse.up()
+}
+
 test('the tier "+" is a menu with three verbs, on left click and on right click', async ({ page }) => {
   const stamp = Date.now()
   await clearSeparators(page)
@@ -164,13 +201,14 @@ test('dragging the line re-anchors it above the row it was dropped on', async ({
   const line = separators(page).first()
   await expect(line).toBeVisible({ timeout: 15_000 })
 
-  // Drop on the TOP half of the third card → the line lands directly above it.
-  // Native HTML5 drag: the line is `draggable`, the tier list carries the drop
-  // handlers, and the drop bubbles from the card to that list.
-  const box = await target.boundingBox()
-  expect(box, 'the drop target must be laid out').not.toBeNull()
-  await line.dragTo(target, { targetPosition: { x: Math.min(40, (box!.width) / 2), y: 3 } })
+  // Drop on the TOP of the third card → the line lands directly above it.
+  await dragLineOnto(page, line, target)
 
+  // `before` is the whole contract of this gesture, and the only half that is
+  // stable here: the card ABOVE the line is whatever the shared fixture happens to
+  // render there, so a parallel spec's card landing between mine would fail an
+  // `after` assertion for someone else's reason (measured: `after` came back as a
+  // foreign task id in 2 of 3 runs, with `before` correct every time).
   await expect.poll(async () => (await readSeparators(page))[0]?.before, {
     timeout: 15_000,
     message: 'the drop never re-anchored the line',

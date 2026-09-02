@@ -78,6 +78,15 @@ async function dragCardOnto(page: Page, srcId: string, dstId: string): Promise<v
   if (dbNow) await page.mouse.move(dbNow.x + dbNow.width / 2, dbNow.y + dbNow.height / 2, { steps: 6 })
   await page.waitForTimeout(300)
   await page.mouse.up()
+  // Then let dnd-kit's document listeners go. On mouseup the library keeps a
+  // CAPTURE-phase `click` listener on the document and only removes it on a
+  // setTimeout(..., 50), so any click dispatched inside that window is swallowed
+  // before React's root delegation sees it. This drag opens a confirm dialog on
+  // the same tick, so a caller that clicks Cancel the instant the modal appears
+  // lands inside the window: the button takes focus from mousedown but its
+  // handler never runs, and the dialog just stays open. Same mechanism
+  // project-collapse-menu.spec.ts documents at its live-drag case.
+  await page.waitForTimeout(250)
 }
 
 test('by-project tier drag: local→local moves the task, no dialog', async ({ page }) => {

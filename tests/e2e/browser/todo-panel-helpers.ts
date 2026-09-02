@@ -94,3 +94,42 @@ export async function presetPanelView(
     } catch { /* ignore */ }
   }, [section, project])
 }
+
+/**
+ * Cut this browser context off from the fixture server's SHARED preference mirror,
+ * so the spec's layout / fold state is per-context localStorage and nothing else.
+ * Call BEFORE the first `page.goto()` — a `beforeEach` is the usual home.
+ *
+ * Why a spec that drives collapse state needs this. `web/src/utils/ui-prefs-sync.ts`
+ * mirrors every `open-walnut-*` / `walnut-todo-*` localStorage key to
+ * `GET|PUT /api/ui-prefs` on the ONE fixture server a whole Playwright run shares,
+ * and its boot merge adopts the server's value whenever this browser has nothing of
+ * its own for that key (`localVal === null`). A Playwright context starts with EMPTY
+ * localStorage, so a "fresh" context is NOT fresh for any mirrored key: it inherits
+ * whatever some other spec last wrote. Measured against the fixture: one context
+ * writing `walnut-todo-groupBy = 'project'` comes back in a brand-new context that
+ * never touched it.
+ *
+ * That is invisible inside one file (these files are internally sequential) and
+ * lands between FILES, which still run in parallel with each other —
+ * project-collapse-menu and folder-collapse-menu were handing each other their fold
+ * sets, so a "survives a reload" or a "Collapse project" assertion could read the
+ * other file's value and report as a product bug.
+ *
+ * Stubbing the route is the smallest honest fix and cuts BOTH directions at once:
+ * nothing is adopted from another spec, and nothing this spec writes ever reaches
+ * the server for another spec to adopt. The alternatives are worse — narrowing the
+ * allowlist in ui-prefs-sync.ts would change production sync behaviour to suit a
+ * test, and pinning the two files into one parallel batch would only fix today's
+ * two files while the next spec to touch a mirrored key breaks again. The real
+ * round trip stays covered by tests/web/routes/ui-prefs.test.ts; `/api/ui-prefs`
+ * has exactly one caller in the app, so nothing else is mocked away here.
+ */
+export async function isolateUiPrefs(page: Page): Promise<void> {
+  await page.route('**/api/ui-prefs', async (route) => {
+    // GET → the first-boot shape, so the merge has nothing to adopt.
+    // PUT → accepted and dropped (the real route answers `{ ok: true }`).
+    const body = route.request().method() === 'GET' ? '{"prefs":{}}' : '{"ok":true}'
+    await route.fulfill({ status: 200, contentType: 'application/json', body })
+  })
+}
