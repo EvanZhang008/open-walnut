@@ -7,6 +7,8 @@ description: Implementation details for web/src/ (React SPA) — session chat si
 
 For architecture overview and routes, see project `CLAUDE.md`.
 
+**Rendering model text (markdown, rich HTML, marked extensions, sanitize policy) lives in its own skill: `walnut-markdown-rendering`.** Load that one before changing `web/src/utils/markdown.ts` or `rich-blocks.ts`; it holds the hard rules (never patch marked, register a retune on BOTH `Marked` instances, collapse blank lines at render time only).
+
 ## UX Implementation Details
 
 - **Source-aware message isolation**: Streaming agent responses from different sources (heartbeat, cron, triage, user-chat) render as separate message blocks. `useChat` tracks `currentSourceRef` during streaming and passes it to `upsertLastAssistant` which only merges into the last assistant message if the source matches. The turn-merger in `chatEntriesToMessages` checks `entry.source` boundaries to prevent cross-source merging on history reload.
