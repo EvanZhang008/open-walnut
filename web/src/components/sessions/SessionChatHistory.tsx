@@ -10,6 +10,7 @@ import { SessionMessage, SessionThinking, PlanCard, CollapsedPlanWrite, GenericT
 import { dedupeOptimisticMessages } from './optimistic-dedup';
 import { computeRenderWindow, type RenderWindowAnchor } from './render-window';
 import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-unavailable';
+import { shouldRefetchForTurnPrompt, turnPromptMissing, PROMPT_REFETCH_RETRY_DELAYS_MS } from './turn-prompt-refetch';
 import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence } from '@/stream/render-filter';
 import { getFinishedAgentIds, subscribeFinishedAgentIds } from '@/cache/finished-agents-store';
 import { groupStreamingBlocks, groupLaneChildren, countAgentTree, GROUPABLE_STREAM_TOOLS, type GroupedStreamItem } from '@/stream/group-blocks';
@@ -998,6 +999,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     prevFirstMsgId.current = first;
   }, [messages]);
+  // Turn-start prompt refetch state (see the effect below the isStreaming edge).
+  const promptRefetchFired = useRef(false);
+  const promptRefetchTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const optimisticCountRef = useRef(optimisticMessages?.length ?? 0);
+  optimisticCountRef.current = optimisticMessages?.length ?? 0;
+  const isStreamingRefForPrompt = useRef(isStreaming);
+  isStreamingRefForPrompt.current = isStreaming;
+  const clearPromptRefetchRetries = useCallback(() => {
+    for (const t of promptRefetchTimers.current) clearTimeout(t);
+    promptRefetchTimers.current = [];
+  }, []);
   const prevIsStreaming = useRef(false);
   useLayoutEffect(() => {
     if (isStreaming && !prevIsStreaming.current) {
@@ -1023,9 +1035,48 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // and a redundant refetch can only ADD evidence — it can never remove a bubble.
     if (!isStreaming && prevIsStreaming.current) {
       setHistoryVersion((v) => v + 1);
+      // Turn over: re-arm the turn-start prompt refetch for the next turn and
+      // drop its pending retries (the refetch above already covers them).
+      promptRefetchFired.current = false;
+      clearPromptRefetchRetries();
     }
     prevIsStreaming.current = isStreaming;
   }, [isStreaming]);
+
+  // ── Turn-START refetch: a running turn whose prompt is not on screen ──
+  // The launch prompt reaches the CLI transcript ~3 s after spawn, AFTER the
+  // panel's opening fetches, and no refetch fires until the turn ends — so a
+  // fresh session's first message was invisible for the whole first turn. The
+  // CLI appends the user line before calling the model, so the turn's first
+  // model-output block proves the line is on disk; refetch on that edge when
+  // nothing (persisted row or optimistic bubble) stands for the prompt yet.
+  // System blocks don't count — they stream before the line lands. Details and
+  // the predicate: turn-prompt-refetch.ts.
+  useEffect(() => {
+    if (!shouldRefetchForTurnPrompt({
+      blocks, completedLen, messages,
+      watermark: turnWatermark.current,
+      optimisticCount: optimisticMessages?.length ?? 0,
+      alreadyFiredThisTurn: promptRefetchFired.current,
+    })) return;
+    promptRefetchFired.current = true;
+    log.info('session-history', 'turn prompt missing at first model output — refetching history', {
+      sessionId, messages: messages.length, blocks: blocks.length, completedLen,
+    });
+    setHistoryVersion((v) => v + 1);
+    // Bounded safety net: if the refetch still shows no prompt (remote stat
+    // lag), try again; a finished turn hands over to the turn-end refetch.
+    clearPromptRefetchRetries();
+    for (const delay of PROMPT_REFETCH_RETRY_DELAYS_MS) {
+      promptRefetchTimers.current.push(setTimeout(() => {
+        if (!isStreamingRefForPrompt.current) return;
+        if (!turnPromptMissing(messagesRef.current, turnWatermark.current, optimisticCountRef.current)) return;
+        log.info('session-history', `turn prompt still missing after ${delay}ms — refetching again`, { sessionId });
+        setHistoryVersion((v) => v + 1);
+      }, delay));
+    }
+  }, [blocks, completedLen, messages, optimisticMessages, sessionId, clearPromptRefetchRetries]);
+  useEffect(() => () => clearPromptRefetchRetries(), [clearPromptRefetchRetries]);
 
   // ── Non-destructive absorption (the single-timeline core) ──
   // Which streaming blocks has persisted history already absorbed? Those are
@@ -1373,6 +1424,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     setHistoryVersion(0);
     turnWatermark.current = 0;
     watermarkInitialized.current = false;
+    promptRefetchFired.current = false;
+    clearPromptRefetchRetries();
     setEditingId(null);
     setTruncationOffset(0);
     pendingBottomDistance.current = null;
