@@ -1690,11 +1690,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               >
                 {isFullscreen ? ICON_COLLAPSE : ICON_EXPAND}
               </button>
+              {/* In fullscreen the panel reads as an overlay, so its X dismisses the
+                  overlay (same path as Escape / backdrop click) and never destroys
+                  the column underneath. Closing the column needs the normal view. */}
               <button
                 className="task-action-btn session-panel-close"
-                onClick={() => onClose(sessionId)}
-                title="Close session panel"
-                aria-label="Close session panel"
+                onClick={isFullscreen ? exitFullscreen : () => onClose(sessionId)}
+                title={isFullscreen ? 'Exit full screen' : 'Close session panel'}
+                aria-label={isFullscreen ? 'Exit full screen' : 'Close session panel'}
               >
                 {ICON_CLOSE}
               </button>

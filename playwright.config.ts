@@ -26,6 +26,9 @@ export default defineConfig({
     baseURL: `http://localhost:${testPort}`,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    // PW_VIDEO=1 records every test (demo/verification clips); pair with
+    // `--output <dir>` outside test-results/, which peer runs wipe.
+    video: process.env.PW_VIDEO ? 'on' : 'off',
   },
 
   projects: [

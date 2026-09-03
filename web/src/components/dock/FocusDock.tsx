@@ -152,11 +152,13 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
               )}
             </button>
           )}
+          {/* Fullscreen turns the card into an overlay: its X dismisses the overlay,
+              it does not unpin the task underneath (same rule as SessionPanel). */}
           <button
             className="dock-task-unpin"
-            onClick={handleUnpin}
-            title="Unpin from Focus Dock"
-            aria-label="Unpin task"
+            onClick={isFullscreen ? (e) => { e.stopPropagation(); exitFullscreen(); } : handleUnpin}
+            title={isFullscreen ? 'Exit full screen' : 'Unpin from Focus Dock'}
+            aria-label={isFullscreen ? 'Exit full screen' : 'Unpin task'}
           >
             &times;
           </button>
