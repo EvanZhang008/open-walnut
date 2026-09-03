@@ -109,7 +109,9 @@ case "$TARGET" in
     SWEEP_ALL=0 RELEASE_HOSTS=0 aws_sweep   # expired leftovers only; --all belongs to `sweep`
     TTL=$(( $(now_s) + TTL_HOURS * 3600 ))
     if [ "$TARGET" = linux ]; then
-      OS="${OS:-al2023}"; ITYPE="${ITYPE:-t3.large}"
+      OS="${OS:-al2023}"
+      # The default type follows the AMI's architecture; an arm64 image on t3 is refused.
+      case "$OS" in *-arm) ITYPE="${ITYPE:-c7g.large}" ;; *) ITYPE="${ITYPE:-t3.large}" ;; esac
       case "$OS" in ubuntu) LOGIN=ubuntu ;; *) LOGIN=ec2-user ;; esac
       SSM_WAIT=600
     else
