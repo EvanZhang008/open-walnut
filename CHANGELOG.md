@@ -4,7 +4,41 @@ All notable changes to Open Walnut are documented here. This project follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions may include
 breaking changes).
 
-## [Unreleased]
+## [0.4.1] - 2026-09-03
+
+Onboarding on a machine that is not the maintainer's: every step below was found by installing
+Walnut on fresh EC2 Linux boxes and GitHub's macOS runners, on video.
+
+### Fixed
+
+- **`git clone` + `npm start` no longer needs Bun.** `scripts/build-daemon.sh` treats a missing Bun
+  as a state, not an error; the version check logs it once and moves on; an ACP-based engine
+  (codex, gemini, ...) that needs the worker says so and names the fix instead of failing on a
+  missing file. The npm package ships the prebuilt worker as before.
+- A busy port no longer starts a second server somewhere else. If the port answers as Walnut, the
+  message says "already running, open this address"; if another program holds it, it says so and
+  points to `--port`.
+- Node older than 22 gets one plain sentence with the `nvm` two-liner (`bin/open-walnut.js`,
+  `.npmrc engine-strict`, `prestart`), not a stack trace from an unsupported syntax.
+
+### Changed
+
+- **`sharp` is optional.** Image compression for sessions degrades to sending the picture as-is when
+  sharp is not installed (logged once), so an `npm install` never fails over libvips.
+- **Older Linux (glibc before 2.29)**: better-sqlite3 has to compile there, which needs Python 3.8+
+  and GCC 10+. `npm start` now checks for the built module first and, when it is missing, prints
+  the exact install commands for the box (`gcc10-c++`, `python3.8`, the `CC=/CXX=/PYTHON=` line)
+  instead of letting the compile fail minutes in with an unrelated error. Recipe in
+  `GETTING_STARTED.md`.
+
+### Added
+
+- `scripts/onboarding-test/`: a harness that provisions a throwaway EC2 box (AL2, AL2023, ARM,
+  Ubuntu), runs the README route and the npm route as a new user would, records a video, and
+  tears the machine down. CI gained an `onboarding` job that does the same on Ubuntu and macOS
+  runners with Bun deliberately absent.
+
+## [0.4.0] - 2026-09-02
 
 ### Changed
 
