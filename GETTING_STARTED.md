@@ -118,13 +118,13 @@ Open Walnut uses AI in three places, and by default all three run on the Claude 
 
 | What | How it runs | How to authenticate |
 |---|---|---|
-| **Chat** (the assistant on the home page) | A long-lived `claude` session | Run `claude` once in your terminal and sign in |
+| **Ask Walnut** (the Walnut agent, on the home page) | A long-lived `claude` session | Run `claude` once in your terminal and sign in |
 | **Coding sessions** | Separate `claude` CLI processes | Same login |
-| **Background work** (summaries, titles, subagents) | Short `claude -p` calls | Same login, when Claude Code is installed |
+| **Background helpers** (summaries, titles, subagents) | Short `claude -p` calls | Same login, when Claude Code is installed |
 
 Claude Code brings its own login, whatever kind it is: an Anthropic account, Bedrock (`CLAUDE_CODE_USE_BEDROCK=1` in `~/.claude/settings.json`), or Vertex. Walnut inherits it as-is and never asks for a key of its own. The first-run banner names what it found ("Walnut runs on your Claude Code, signed in with Bedrock (us-west-2)").
 
-Prefer to run background work on a provider directly, without going through the CLI? The paths below set that up; the chat and coding sessions stay on Claude Code either way.
+Settings → AI Provider is the one place this is chosen, and it means exactly one thing: what Ask Walnut runs on. Pick Claude Code (the default) and Ask Walnut is a `claude` session; pick any other provider and Ask Walnut runs in the built-in agent loop calling that provider directly, with the background helpers following along. Coding sessions use your Claude Code either way. The paths below set up such a provider.
 
 ---
 
@@ -142,7 +142,7 @@ This installs both backend and frontend dependencies. The first `npm start` will
 
 ## Provider Configuration (optional)
 
-With Claude Code installed there is nothing to configure: it is the default provider for everything. The paths below are for pointing Walnut's background work at a provider directly instead (Settings → AI Provider, or `agent.main_provider` in `~/.open-walnut/config.yaml`). Choose **one**.
+With Claude Code installed there is nothing to configure: it is the default provider for Ask Walnut and everything behind it. The paths below are for running Ask Walnut on a provider directly instead (Settings → AI Provider, or `agent.main_provider` in `~/.open-walnut/config.yaml`). Choose **one**.
 
 ### Path A: Anthropic API key
 

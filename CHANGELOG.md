@@ -4,11 +4,17 @@ All notable changes to Open Walnut are documented here. This project follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions may include
 breaking changes).
 
+## [0.4.3] - 2026-09-03
+
+### Changed
+
+- **Settings → AI Provider means one thing: what Ask Walnut runs on.** The chat engine (`agent.provider`) now follows the provider instead of being a separate hidden switch: Claude Code → a `claude` session; any other provider → the built-in agent loop calling it directly. The radio writes both fields together; an explicit `agent.provider` in config.yaml is still honored as an advanced override. Before this, picking Bedrock in Settings changed only the background helpers while Ask Walnut kept answering from Claude Code. The banner, the Settings copy, and the engine badge all say "Ask Walnut" now instead of "the chat" or "background work".
+
 ## [0.4.2] - 2026-09-03
 
 ### Changed
 
-- **Claude Code is the default AI provider for everything.** The chat already ran on a `claude` session; background work (summaries, titles, subagents, cheap-model calls) now defaults to the same `claude` CLI whenever it is installed, instead of expecting Bedrock credentials. Pick a provider in Settings → AI Provider (it writes `agent.main_provider`) to override; saved Bedrock credentials alone no longer decide, so a machine with Claude Code on it runs on Claude Code.
+- **Claude Code is the default AI provider for everything.** Ask Walnut already ran on a `claude` session; the background helpers (summaries, titles, subagents, cheap-model calls) now default to the same `claude` CLI whenever it is installed, instead of expecting Bedrock credentials. Saved Bedrock credentials alone no longer decide, so a machine with Claude Code on it runs on Claude Code.
 - The `claude-cli` adapter inherits the CLI's own login as-is (Anthropic account, Bedrock via `CLAUDE_CODE_USE_BEDROCK`, or Vertex). It used to strip the AWS environment and force a subscription-only settings override, which made it unusable on Bedrock-backed machines. Concurrent CLI calls are capped (`WALNUT_CLAUDE_CLI_CONCURRENCY`, default 3).
 - The first-run banner is one card: "Walnut runs on your Claude Code, signed in with Bedrock (us-west-2)" when the CLI is found, or the install command when it is not. Settings → AI Provider lists Claude Code first, as the default, and shows how the CLI signs in instead of asking for a login.
 - `GET /api/system/health` gains `mainProvider`, `mainProviderImplicit`, and `claudeCliAuth`; `GET /api/config/providers` reports `credential_source: cli_<mode>` plus a human `credential_detail` for Claude Code.

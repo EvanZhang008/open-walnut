@@ -3,34 +3,37 @@
  * Personal AI's turns: the in-process loop ('walnut-agent') or a lane-bound Claude
  * Code session ('claude-code', via config.agent.provider).
  *
- * Exists because the two engines are otherwise invisible from the outside — the
- * Settings "AI Provider" section only picks the model credentials the in-process
- * loop calls with, so during an engine A/B the user cannot tell which engine a
- * reply came from. Reads live config and refetches on config:changed (the flag
- * is read per turn on the server; no restart involved).
+ * The engine follows the AI provider (Settings → AI Provider): Claude Code → the
+ * lane session, any other provider → the in-process loop. An explicit
+ * `agent.provider` is an advanced override. Reads live config and refetches on
+ * config:changed (the flag is read per turn on the server; no restart involved).
  */
 import { useCallback, useEffect, useState } from 'react';
 import { fetchConfig } from '@/api/config';
 import { useEvent } from '@/hooks/useWebSocket';
+import { useSystemHealth } from '@/hooks/useSystemHealth';
 
 export type Engine = 'walnut-agent' | 'claude-code';
 
-/** Mirror of the server's resolveAgentEngineProvider: anything but the exact
- *  string 'claude-code' (unset, 'walnut-agent', hand-edited junk) degrades to
- *  the in-process loop. */
-function resolveEngine(provider: unknown): Engine {
-  return provider === 'claude-code' ? 'claude-code' : 'walnut-agent';
+/** Mirror of the server's resolveAgentEngineProvider: an explicit valid engine is
+ *  honored; otherwise the engine follows the effective AI provider (the server
+ *  reports it as health.mainProvider, defaulting rule included). */
+function resolveEngine(provider: unknown, mainProvider: string | undefined): Engine {
+  if (provider === 'claude-code' || provider === 'walnut-agent') return provider;
+  return mainProvider === 'claude_cli' ? 'claude-code' : 'walnut-agent';
 }
 
 /** Live engine flag — refetches on config:changed. null until the first fetch
  *  resolves (callers treat null as "in-process" so the flag-off UI is default). */
 export function useChatEngine(): Engine | null {
   const [engine, setEngine] = useState<Engine | null>(null);
+  const { health } = useSystemHealth();
+  const mainProvider = health.mainProvider;
   const load = useCallback(() => {
     fetchConfig()
-      .then((c) => setEngine(resolveEngine(c.agent?.provider)))
+      .then((c) => setEngine(resolveEngine(c.agent?.provider, mainProvider)))
       .catch(() => { /* keep the last known value */ });
-  }, []);
+  }, [mainProvider]);
   useEffect(load, [load]);
   useEvent('config:changed', load);
   return engine;
@@ -45,8 +48,8 @@ export function EngineBadge() {
     <span
       className={`chat-engine-badge${isLane ? ' lane' : ''}`}
       title={isLane
-        ? 'Main AI turns run in a Claude Code session (agent.provider: claude-code). The claude CLI brings its own auth — the AI Provider in Settings is not what answers these turns.'
-        : 'Main AI turns run in the built-in agent loop, calling the AI Provider configured in Settings.'}
+        ? 'Ask Walnut answers from a Claude Code session, with the claude CLI\'s own login (Settings → AI Provider: Claude Code).'
+        : 'Ask Walnut answers from the built-in agent loop, calling the AI Provider chosen in Settings.'}
     >
       {isLane ? 'Claude Code' : 'Built-in loop'}
     </span>

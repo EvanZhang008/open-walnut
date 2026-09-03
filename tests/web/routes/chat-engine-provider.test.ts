@@ -244,21 +244,38 @@ describe("explicit 'walnut-agent' → in-process loop", () => {
   })
 })
 
-// Both no-explicit-choice cases route to the LANE engine as of 2026-08-28.
-// Previously they routed to the in-process loop, on the theory that the frozen
-// engine was the safe harbour. The 2026-08-28 06:03 incident inverted that: the
-// in-process loop needs Bedrock credentials of its own, which a CLI-only install
-// does not keep, so "degrade to the loop" degraded to an engine that answers
-// "Could not load credentials from any providers" instead of answering at all.
-describe('no explicit engine choice → the lane engine', () => {
-  it('an unset agent section rides the lane, not the in-process loop', async () => {
-    await boot({})
+// With no explicit engine the engine follows the AI provider (Settings → AI
+// Provider): Claude Code → the lane, anything else → the in-process loop that
+// can call it. The unknown-string case still lands on the LANE engine as of
+// 2026-08-28: the 2026-08-28 06:03 incident showed that "degrade to the loop" on
+// a CLI-only install degrades to an engine that answers "Could not load
+// credentials from any providers" instead of answering at all.
+describe('no explicit engine choice → the engine follows the AI provider', () => {
+  it('Claude Code as the provider rides the lane, not the in-process loop', async () => {
+    // Pinned explicitly so the case does not depend on whether this runner has a
+    // `claude` binary (that is what the default rule looks at when nothing is set).
+    await boot({ main_provider: 'claude_cli' })
     const ws = await connectWs()
     try {
       const res = await sendRpc(ws, 'chat', { message: 'hello Personal AI' })
       expect(res.ok).toBe(true)
       expect(runAgentLoop).not.toHaveBeenCalled()
       expect(started).toHaveLength(1)
+    } finally {
+      ws.close()
+    }
+  })
+
+  it('another provider picked in Settings runs Ask Walnut in the in-process loop on it', async () => {
+    // What "AI Provider = Bedrock" must mean: Ask Walnut answers from Bedrock,
+    // not from a claude session that ignores the choice.
+    await boot({ main_provider: 'bedrock' })
+    const ws = await connectWs()
+    try {
+      const res = await sendRpc(ws, 'chat', { message: 'hello Personal AI' })
+      expect(res.ok).toBe(true)
+      expect(runAgentLoop).toHaveBeenCalledTimes(1)
+      expect(started).toHaveLength(0)
     } finally {
       ws.close()
     }

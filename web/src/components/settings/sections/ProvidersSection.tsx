@@ -812,8 +812,9 @@ function ProviderCard({
                 </>
               ) : (
                 <p className="text-sm text-muted">
-                  Background work spawns the local <code style={{ fontSize: 11 }}>claude</code> CLI with the
-                  login it already has{serverInfo?.credential_detail ? <>: <strong>{serverInfo.credential_detail}</strong></> : null}.
+                  Ask Walnut runs as a <code style={{ fontSize: 11 }}>claude</code> session, and its background
+                  helpers spawn the same local CLI, all with the login it already has
+                  {serverInfo?.credential_detail ? <>: <strong>{serverInfo.credential_detail}</strong></> : null}.
                   Nothing to paste here; change how Claude Code signs in (<code style={{ fontSize: 11 }}>~/.claude/settings.json</code>)
                   and Walnut follows.
                 </p>
@@ -872,7 +873,10 @@ export function ProvidersSection({ config, onSave }: Props) {
   // The server applies the default rule (claude_cli when Claude Code is installed,
   // else bedrock); mirror its answer instead of guessing here.
   const { health } = useSystemHealth();
-  const activeProvider = config.agent?.main_provider ?? health.mainProvider ?? 'bedrock';
+  // Explicit choice, else the server's resolved default (health.mainProvider).
+  // Undefined until health has loaded: never guess, a wrong "runs on X" is worse
+  // than a moment with no radio selected.
+  const activeProvider = config.agent?.main_provider ?? health.mainProvider;
   const activeIsDefault = !config.agent?.main_provider;
 
   // Global model selection state (lives in config.agent, not per-provider)
@@ -914,8 +918,12 @@ export function ProvidersSection({ config, onSave }: Props) {
     await loadProviders();
   };
 
+  // One radio, one meaning: what Ask Walnut runs on. The engine is written in step
+  // with the provider (Claude Code → its own `claude` session; anything else → the
+  // in-process loop that can call that provider) so the two never disagree.
   const handleSetActive = async (name: string) => {
-    await onSave({ agent: { ...config.agent, main_provider: name } });
+    const provider = name === 'claude_cli' ? 'claude-code' : 'walnut-agent';
+    await onSave({ agent: { ...config.agent, main_provider: name, provider } });
   };
 
   // Save global agent-level settings (main_model, maxTokens)
@@ -946,37 +954,40 @@ export function ProvidersSection({ config, onSave }: Props) {
     await loadProviders();
   };
 
-  // The engine flag (config.agent.provider) is a separate axis from these
-  // credentials: 'claude-code' routes Personal AI turns into a `claude` CLI session,
-  // which brings its own auth — so this whole section stops being what answers
-  // chat. Users read "Bedrock selected" as "Bedrock is answering"; say otherwise.
-  const laneEngineActive = config.agent?.provider === 'claude-code';
+  const activeLabel = ALL_PROVIDERS.find(p => p.name === activeProvider)?.label ?? activeProvider;
 
   return (
     <SectionCard
       id="providers"
       title="AI Provider"
-      description="Choose your AI provider and model."
+      description="What Ask Walnut (the Walnut agent) runs on. Coding sessions always use your own Claude Code."
       showSave={false}
     >
-      {laneEngineActive && (
-        <p className="text-sm" style={{
-          margin: '0 0 12px',
-          padding: '8px 12px',
-          borderRadius: 8,
-          border: '1px solid color-mix(in srgb, var(--accent) 40%, var(--border))',
-          background: 'color-mix(in srgb, var(--accent) 8%, transparent)',
-          color: 'var(--fg-secondary)',
-        }}>
-          The main chat runs on <strong>Claude Code</strong>, a long-lived{' '}
-          <code style={{ fontSize: 11 }}>claude</code> session with its own login
-          {health.claudeCliAuth ? <> ({health.claudeCliAuth})</> : null}. Background work
-          (subagents, summaries, titles) uses the provider selected below
-          {activeProvider === 'claude_cli'
-            ? <>: also Claude Code{activeIsDefault ? ', by default' : ''}. Nothing else to set up.</>
-            : <>. Pick <strong>Claude Code</strong> to run everything on that one login.</>}
-        </p>
-      )}
+      <p className="text-sm" data-testid="providers-summary" style={{
+        margin: '0 0 12px',
+        padding: '8px 12px',
+        borderRadius: 8,
+        border: '1px solid color-mix(in srgb, var(--accent) 40%, var(--border))',
+        background: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+        color: 'var(--fg-secondary)',
+      }}>
+        {activeProvider === undefined ? (
+          <>Working out what Ask Walnut runs on…</>
+        ) : activeProvider === 'claude_cli' ? (
+          <>
+            <strong>Ask Walnut runs on Claude Code</strong>{activeIsDefault ? ' (the default)' : ''}: a long-lived{' '}
+            <code style={{ fontSize: 11 }}>claude</code> session with its own login
+            {health.claudeCliAuth ? <> ({health.claudeCliAuth})</> : null}. Its background helpers
+            (subagents, summaries, titles) use the same login. Nothing else to set up.
+          </>
+        ) : (
+          <>
+            <strong>Ask Walnut runs on {activeLabel}</strong> through the built-in agent loop, and so do
+            its background helpers (subagents, summaries, titles). Coding sessions still use your Claude Code.
+            Pick <strong>Claude Code</strong> to run everything on that one login.
+          </>
+        )}
+      </p>
       {loading ? (
         <p className="text-sm text-muted">Loading providers...</p>
       ) : (

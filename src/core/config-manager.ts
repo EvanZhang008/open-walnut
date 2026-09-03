@@ -4,7 +4,6 @@ import { log } from '../logging/index.js';
 import { CLOUD_MODE, CONFIG_FILE } from '../constants.js';
 import {
   VALID_PRIORITIES,
-  DEFAULT_AGENT_ENGINE_PROVIDER,
   FALLBACK_AGENT_ENGINE_PROVIDER,
   VALID_AGENT_ENGINE_PROVIDERS,
   type AgentEngineProvider,
@@ -13,6 +12,7 @@ import {
   type TaskPriority,
 } from './types.js';
 import { MODEL_CATALOG } from '../agent/providers/model-catalog.js';
+import { CLAUDE_CLI_PROVIDER, resolveMainProviderName } from '../agent/providers/default-provider.js';
 import { scanSshConfig } from './ssh-config-scanner.js';
 
 const DEFAULT_CONFIG: Config = {
@@ -25,21 +25,34 @@ const DEFAULT_CONFIG: Config = {
   // so this never re-routes an established setup.
   defaults: { priority: 'none', platform: 'local' },
   provider: { type: 'claude-code' },
-  // Which ENGINE answers a Personal AI chat turn. 'walnut-agent' = today's in-process
-  // agent loop; 'claude-code' routes the turn into a lane-bound `claude` session.
-  // NOTE: getConfig() spreads the parsed file OVER these defaults at the TOP
-  // level, so a config.yaml with any `agent:` section replaces this whole object
-  // — resolveAgentEngineProvider() (below) is what actually applies the default.
-  agent: { provider: DEFAULT_AGENT_ENGINE_PROVIDER },
+  // Which ENGINE answers a Personal AI chat turn is NOT defaulted here: it follows
+  // the AI provider (Settings → AI Provider) — see resolveAgentEngineProvider().
+  // getConfig() spreads the parsed file OVER these defaults at the TOP level, so
+  // anything put in this object is dropped by any config.yaml with an `agent:`
+  // section; the resolver is what actually applies the rule.
+  agent: {},
 };
 
 /**
- * The engine that answers a Personal AI chat turn, defaulted + validated.
+ * The engine that answers a Personal AI chat turn (what "Ask Walnut" runs on).
+ *
+ * The AI provider (Settings → AI Provider, `agent.main_provider`, defaulting to
+ * Claude Code when `claude` is installed) is the user's ONE choice; the engine
+ * follows it: Claude Code → 'claude-code' (a lane-bound `claude` session, which
+ * carries the CLI's own login); any other provider → 'walnut-agent' (the
+ * in-process loop calling that provider directly). An explicit `agent.provider`
+ * is an advanced override and is honored verbatim; the Settings radio writes it
+ * in step with the provider so the two never disagree.
  *
  * Read through this rather than `config.agent?.provider` directly: getConfig()
- * merges the parsed YAML over DEFAULT_CONFIG at the top level only, so any user
- * config with an `agent:` section drops the default — and an unknown string from
+ * merges the parsed YAML over DEFAULT_CONFIG at the top level only, so a user
+ * config with an `agent:` section sees no defaults — and an unknown string from
  * a hand-edited file must degrade to a real engine, never to "no engine".
+ *
+ * A config-read hiccup that drops `agent:` (2026-08-28) still lands on the
+ * engine this box can run: with no `main_provider` the provider rule looks at
+ * whether `claude` is installed, so a CLI-only Mac stays on the lane engine and a
+ * key-only box stays on the loop. `claudeInstalled` is injectable for tests.
  *
  * A CLOUD REPLICA always answers 'walnut-agent' regardless of config: it has no
  * session runner and no `claude` CLI, so the lane engine is not something it can
@@ -50,25 +63,28 @@ const DEFAULT_CONFIG: Config = {
  * than at the seven call sites means a replica cannot be pushed onto an engine
  * it can't run by a synced config or a flipped default.
  */
-export function resolveAgentEngineProvider(config: Config): AgentEngineProvider {
+export function resolveAgentEngineProvider(config: Config, claudeInstalled?: boolean): AgentEngineProvider {
   if (CLOUD_MODE) return 'walnut-agent';
   const raw = config.agent?.provider;
   if (typeof raw === 'string' && VALID_AGENT_ENGINE_PROVIDERS.has(raw)) {
     return raw as AgentEngineProvider;
   }
-  // Unset → the default engine, silently: that is the ordinary state of a
+  // Unset → follow the AI provider, silently: that is the ordinary state of a
   // config that never touched the setting. Anything ELSE present but
   // unrecognized is a typo in a file a human edited, and it must be audible —
   // absorbing it is how an engine surprise became a "credential" error report.
-  if (raw !== undefined) {
-    log.session.warn('config-manager: agent.provider is not a known engine — using the default', {
-      value: typeof raw === 'string' ? raw : `<${typeof raw}>`,
-      using: FALLBACK_AGENT_ENGINE_PROVIDER,
-      valid: [...VALID_AGENT_ENGINE_PROVIDERS].join(', '),
-    });
-    return FALLBACK_AGENT_ENGINE_PROVIDER;
+  if (raw === undefined) {
+    const main = claudeInstalled === undefined
+      ? resolveMainProviderName(config)
+      : resolveMainProviderName(config, claudeInstalled);
+    return main === CLAUDE_CLI_PROVIDER ? 'claude-code' : 'walnut-agent';
   }
-  return DEFAULT_AGENT_ENGINE_PROVIDER;
+  log.session.warn('config-manager: agent.provider is not a known engine — using the fallback', {
+    value: typeof raw === 'string' ? raw : `<${typeof raw}>`,
+    using: FALLBACK_AGENT_ENGINE_PROVIDER,
+    valid: [...VALID_AGENT_ENGINE_PROVIDERS].join(', '),
+  });
+  return FALLBACK_AGENT_ENGINE_PROVIDER;
 }
 
 // ── One-time config migration: category removal (project-only model) ────────

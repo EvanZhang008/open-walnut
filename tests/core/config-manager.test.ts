@@ -224,9 +224,24 @@ describe('resolveAgentEngineProvider: default vs fallback are SEPARATE roles', (
   const cfg = (agent?: Record<string, unknown>): Config =>
     ({ version: 1, user: {}, defaults: { priority: 'none' }, agent } as unknown as Config);
 
-  it('unset agent section → the DEFAULT engine', () => {
-    expect(resolveAgentEngineProvider(cfg(undefined))).toBe(DEFAULT_AGENT_ENGINE_PROVIDER);
-    expect(resolveAgentEngineProvider(cfg({}))).toBe(DEFAULT_AGENT_ENGINE_PROVIDER);
+  // The engine follows the AI provider (what Ask Walnut runs on): Claude Code →
+  // the lane session, anything else → the in-process loop on that provider.
+  it('unset engine + Claude Code installed → the DEFAULT (lane) engine', () => {
+    expect(resolveAgentEngineProvider(cfg(undefined), true)).toBe(DEFAULT_AGENT_ENGINE_PROVIDER);
+    expect(resolveAgentEngineProvider(cfg({}), true)).toBe(DEFAULT_AGENT_ENGINE_PROVIDER);
+    expect(resolveAgentEngineProvider(cfg({ main_provider: 'claude_cli' }), false)).toBe('claude-code');
+  });
+
+  it('unset engine + another AI provider → the in-process loop, which is what can call it', () => {
+    expect(resolveAgentEngineProvider(cfg({ main_provider: 'bedrock' }), true)).toBe('walnut-agent');
+    expect(resolveAgentEngineProvider(cfg({ main_provider: 'openai' }), true)).toBe('walnut-agent');
+    // No provider chosen and no `claude` on the box: the lane engine could not answer.
+    expect(resolveAgentEngineProvider(cfg(undefined), false)).toBe('walnut-agent');
+  });
+
+  it('an explicit engine outranks the provider rule (advanced override)', () => {
+    expect(resolveAgentEngineProvider(cfg({ provider: 'claude-code', main_provider: 'bedrock' }), true)).toBe('claude-code');
+    expect(resolveAgentEngineProvider(cfg({ provider: 'walnut-agent', main_provider: 'claude_cli' }), true)).toBe('walnut-agent');
   });
 
   it('a valid explicit value is honored verbatim', () => {
@@ -271,7 +286,8 @@ describe('resolveAgentEngineProvider: default vs fallback are SEPARATE roles', (
  * mocked failure. The engine must survive all of them.
  */
 describe('a config-read hiccup never changes the chat engine', () => {
-  const engineOf = async () => resolveAgentEngineProvider(await getConfig());
+  // `true` = a Mac with Claude Code installed, the machine the incident happened on.
+  const engineOf = async () => resolveAgentEngineProvider(await getConfig(), true);
 
   it('survives a HALF-WRITTEN file that stops before the agent: section', async () => {
     // The real window: fs.writeFile truncates then writes, and `agent:` sits at

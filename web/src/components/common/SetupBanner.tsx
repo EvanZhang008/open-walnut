@@ -97,7 +97,7 @@ export function SetupBanner({ health, loading, onNavigateSettings }: SetupBanner
           <button className="setup-banner-dismiss" onClick={handleAutoNoteDismiss} aria-label="Dismiss">&times;</button>
         </div>
         <p className="text-sm text-muted" style={{ margin: 0 }}>
-          Chat, sessions, and background work all use the <code>claude</code> you already have
+          Ask Walnut, your coding sessions, and the background helpers all use the <code>claude</code> you already have
           {health.claudeCliAuth ? <>, signed in with {health.claudeCliAuth}</> : null}. Nothing to configure.
           {' '}
           <button className="setup-link-btn" onClick={() => onNavigateSettings('#providers')}>Use a different provider</button>
@@ -137,7 +137,7 @@ export function SetupBanner({ health, loading, onNavigateSettings }: SetupBanner
         <button className="setup-banner-dismiss" onClick={handleDismiss} aria-label="Dismiss setup banner">&times;</button>
       </div>
       <p className="setup-lead">
-        Walnut runs on <strong>Claude Code</strong>. Install it, run <code>claude</code> once to sign in, then reload this page:
+        Ask Walnut runs on <strong>Claude Code</strong>. Install it, run <code>claude</code> once to sign in, then reload this page:
       </p>
       <CopyCommand command={CLAUDE_CODE_INSTALL} />
       <div className="setup-alt" style={{ marginTop: 10 }}>

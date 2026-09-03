@@ -824,7 +824,11 @@ export const VALID_AGENT_ENGINE_PROVIDERS: ReadonlySet<string> = new Set<AgentEn
 ]);
 
 /**
- * The default engine when `agent.provider` is unset.
+ * The engine Ask Walnut runs on when the AI provider is Claude Code, which is the
+ * default provider whenever `claude` is installed. When `agent.provider` is unset,
+ * resolveAgentEngineProvider derives the engine from the provider (any other
+ * provider → 'walnut-agent', the loop that can call it), so this constant is the
+ * default in the ordinary case, not an unconditional one.
  *
  * 'claude-code' since 2026-08-28. The in-process loop needs Bedrock credentials
  * of its own, which an install configured for the CLI simply does not keep — so
