@@ -20,6 +20,7 @@ import type { Task } from '@open-walnut/core';
 import { StatusBadge } from '../common/StatusBadge';
 import { MicButton } from '../common/MicButton';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
+import { pasteRichTextAsMarkdown } from '@/utils/html-to-markdown';
 
 const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const MAX_IMAGES = 5;
@@ -939,8 +940,13 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       if (imageFiles.length > 0) {
         e.preventDefault();
         processFiles(imageFiles);
+        return;
       }
     }
+    // Rich text from a wiki/doc editor: its text/plain flavour loses list
+    // markers and nesting, so rebuild markdown from the text/html flavour.
+    // Inserts via execCommand, so React's onChange (handleChange) still runs.
+    pasteRichTextAsMarkdown(e, textareaRef.current);
   };
 
   const handleDragOver = (e: DragEvent) => {
