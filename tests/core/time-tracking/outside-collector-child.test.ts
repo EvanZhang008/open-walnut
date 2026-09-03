@@ -122,7 +122,9 @@ afterEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {});
 });
 
-describe('collector child lifecycle', () => {
+// The collector refuses to start off macOS (the real helper is a Swift binary that
+// samples via Apple APIs), so this spawn → bank → stop path only exists there.
+describe.skipIf(process.platform !== 'darwin')('collector child lifecycle', () => {
   it('spawns, banks samples, and stop() kills the WHOLE tree', async () => {
     await startOutsideCollector();
     expect(isOutsideCollectorRunning()).toBe(true);

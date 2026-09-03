@@ -56,7 +56,9 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
+  // Linux can still be flushing a file the last request wrote when this runs, and its
+  // rmdir then fails with ENOTEMPTY where macOS just succeeds; retry a few times.
+  await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch(() => {})
 })
 
 // ── Tasks ────────────────────────────────────────────────────────────────────

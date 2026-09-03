@@ -232,10 +232,12 @@ else
     # glibc 2.28. The community glibc-2.17 build is the only Node 22 that runs on this OS.
     say "  official Node binaries need glibc 2.28 and this OS has $(glibc_version); trying the community glibc-217 build"
     NODE_UNOFFICIAL_VER=$(curl -fsSL https://unofficial-builds.nodejs.org/download/release/index.tab | awk -F'\t' 'NR>1 && $1 ~ /^v22\./ && $0 ~ /linux-x64-glibc-217/ {print $1; exit}')
-    cmd "curl -fsSL https://unofficial-builds.nodejs.org/download/release/$NODE_UNOFFICIAL_VER/node-$NODE_UNOFFICIAL_VER-linux-x64-glibc-217.tar.gz | tar -xz -C ~/.local --strip-components=1"
-    mkdir -p "$HOME/.local"
-    run_logged bash -c "curl -fsSL https://unofficial-builds.nodejs.org/download/release/$NODE_UNOFFICIAL_VER/node-$NODE_UNOFFICIAL_VER-linux-x64-glibc-217.tar.gz | tar -xz -C \"$HOME/.local\" --strip-components=1"
-    export PATH="$HOME/.local/bin:$PATH"; hash -r 2>/dev/null || true
+    # Its own prefix, like nvm's: unpacking into ~/.local would make ~/.local/bin npm's
+    # global bin dir, where the server's own `walnut` shim already lives.
+    cmd "curl -fsSL https://unofficial-builds.nodejs.org/download/release/$NODE_UNOFFICIAL_VER/node-$NODE_UNOFFICIAL_VER-linux-x64-glibc-217.tar.gz | tar -xz -C ~/.local/node22 --strip-components=1"
+    mkdir -p "$HOME/.local/node22"
+    run_logged bash -c "curl -fsSL https://unofficial-builds.nodejs.org/download/release/$NODE_UNOFFICIAL_VER/node-$NODE_UNOFFICIAL_VER-linux-x64-glibc-217.tar.gz | tar -xz -C \"$HOME/.local/node22\" --strip-components=1"
+    export PATH="$HOME/.local/node22/bin:$PATH"; hash -r 2>/dev/null || true
     if have node && [ "$(node_major)" -ge 22 ] 2>/dev/null; then
       step_end ok "installed $(ver node -v) (community glibc-217 build)" "This OS has glibc $(glibc_version); the official Node 22 binaries need 2.28, so 'nvm install 22' completes and then node cannot start (GLIBC_2.28 not found). The README's Node line does not warn about this; the community glibc-217 build is the way."
     else

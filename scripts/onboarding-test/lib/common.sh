@@ -42,7 +42,10 @@ EOF
   ONB_CLEANUP_STACK=""
   return "$rc"
 }
+# EXIT alone does not fire when the run is killed; a Ctrl-C or a TERM must still tear the machine down.
 trap run_cleanup_stack EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Wait until $1 (a command string) succeeds, polling every $3s for at most $2s.
 wait_for() {

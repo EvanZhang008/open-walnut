@@ -10,7 +10,9 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-ctx-inspe
 
 import express from 'express';
 import request from 'supertest';
-import { WALNUT_HOME } from '../../../src/constants.js';
+import path from 'node:path';
+import yaml from 'js-yaml';
+import { WALNUT_HOME, CONFIG_FILE } from '../../../src/constants.js';
 import { contextInspectorRouter } from '../../../src/web/routes/context-inspector.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { DEFAULT_MODEL } from '../../../src/agent/model.js';
@@ -27,6 +29,11 @@ function createApp() {
 beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
+  // These sections describe the in-process assembly (tools, model config, token
+  // sums). The default engine is the claude-code lane, whose inspector answer is a
+  // different shape, so pin the engine this file is about.
+  await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
+  await fs.writeFile(CONFIG_FILE, yaml.dump({ agent: { provider: 'walnut-agent' } }), 'utf-8');
 });
 
 afterEach(async () => {

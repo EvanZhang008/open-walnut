@@ -249,7 +249,8 @@ describe('GET /api/time/screentime', () => {
   });
 });
 
-describe('POST /api/time/screentime/toggle', () => {
+// Apple Screen Time is read on macOS only; off macOS the toggle answers 501.
+describe.skipIf(process.platform !== 'darwin')('POST /api/time/screentime/toggle', () => {
   it('flips the master switch and persists it', async () => {
     await writeConfig('time: {}\n');
 
@@ -298,6 +299,13 @@ describe('POST /api/time/screentime/toggle', () => {
     // The entire value of this feature is that our copy outlives Apple's. "Stop
     // collecting" must never mean "delete what you collected".
     expect(await fs.readdir(STORE_DIR())).toEqual(before);
+  });
+});
+
+describe.skipIf(process.platform === 'darwin')('POST /api/time/screentime/toggle off macOS', () => {
+  it('answers 501 not_supported_platform', async () => {
+    const res = await request(app()).post('/api/time/screentime/toggle').send({}).expect(501);
+    expect(res.body.error).toBe('not_supported_platform');
   });
 });
 

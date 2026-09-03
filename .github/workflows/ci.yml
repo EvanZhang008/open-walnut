@@ -79,6 +79,9 @@ jobs:
         with:
           bun-version: latest
       - run: npm install
+      # Workspace packages are consumed from their dist/ (demo-plugin-lifecycle loads
+      # @open-walnut/plugin-api/dist/react.js); a fresh clone has not built them.
+      - run: npm run build:plugins
       - name: ${{ matrix.tier }} tests
         run: ${{ matrix.cmd }}
 

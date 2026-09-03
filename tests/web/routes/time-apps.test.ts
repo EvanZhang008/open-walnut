@@ -79,8 +79,13 @@ afterEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {});
 });
 
+// Outside-activity sampling is a macOS feature: off macOS the route answers every
+// GET with `reason: 'not_macos'` and refuses the toggle with 501. The shape tests
+// below assert the macOS answer; the platform gate itself is tested at the end.
+const onMac = process.platform === 'darwin';
+
 describe('GET /api/time/apps', () => {
-  it('answers one day as apps, sites, and inside-Walnut time', async () => {
+  it.skipIf(!onMac)('answers one day as apps, sites, and inside-Walnut time', async () => {
     await writeConfig('time:\n  outside:\n    enabled: true\n');
     await seedDay(TODAY, [
       { app: 'Walnut', bundleId: 'com.local.walnut-desktop', durationMs: 600_000 },
@@ -115,7 +120,7 @@ describe('GET /api/time/apps', () => {
     });
   });
 
-  it('defaults to today and reports the disabled, empty state', async () => {
+  it.skipIf(!onMac)('defaults to today and reports the disabled, empty state', async () => {
     const res = await request(app()).get('/api/time/apps').expect(200);
     expect(res.body).toEqual({
       date: TODAY,
@@ -153,16 +158,17 @@ describe('GET /api/time/apps', () => {
   it('reports WHY sampling cannot run, so the UI can say more than "off"', async () => {
     helper.reason = 'no_compiler';
     const res = await request(app()).get('/api/time/apps').expect(200);
-    expect(res.body.reason).toBe('no_compiler');
+    // The route names the platform before anything else: off macOS the compiler never comes up.
+    expect(res.body.reason).toBe(process.platform === 'darwin' ? 'no_compiler' : 'not_macos');
   });
 
-  it('omits reason when nothing is wrong', async () => {
+  it.skipIf(!onMac)('omits reason when nothing is wrong', async () => {
     const res = await request(app()).get('/api/time/apps').expect(200);
     expect(res.body).not.toHaveProperty('reason');
   });
 });
 
-describe('POST /api/time/apps/toggle', () => {
+describe.skipIf(!onMac)('POST /api/time/apps/toggle', () => {
   it('flips the persisted setting and starts the collector', async () => {
     const res = await request(app()).post('/api/time/apps/toggle').send({}).expect(200);
     expect(res.body).toEqual({ enabled: true, running: false });
@@ -191,6 +197,14 @@ describe('POST /api/time/apps/toggle', () => {
     const text = await fs.readFile(CONFIG_FILE, 'utf-8');
     expect(text).toMatch(/engine: mlx/);
     expect(text).toMatch(/enabled: true/);
+  });
+});
+
+describe.skipIf(onMac)('off macOS', () => {
+  it('the toggle answers 501 not_supported_platform, and never touches the collector', async () => {
+    const res = await request(app()).post('/api/time/apps/toggle').send({}).expect(501);
+    expect(res.body.error).toBe('not_supported_platform');
+    expect(helper.start).not.toHaveBeenCalled();
   });
 });
 

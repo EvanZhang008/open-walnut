@@ -47,7 +47,9 @@ vi.mock('../../../src/agent/loop.js', () => ({
   }),
 }))
 
-import { WALNUT_HOME, IMAGES_DIR, LOG_DIR, conversationFile } from '../../../src/constants.js'
+import path from 'node:path'
+import yaml from 'js-yaml'
+import { WALNUT_HOME, IMAGES_DIR, LOG_DIR, CONFIG_FILE, conversationFile } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { resetIndexBootstrap } from '../../../src/web/routes/notes-v2.js'
 import {
@@ -152,6 +154,11 @@ async function createConversation(): Promise<string> {
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
+  // The turns here run the MOCKED in-process loop (see the loop.js mock above). The
+  // default engine is the claude-code lane, which would try to spawn a real CLI and
+  // never answer the SSE, so pin the engine this file is about.
+  await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true })
+  await fs.writeFile(CONFIG_FILE, yaml.dump({ agent: { provider: 'walnut-agent' } }), 'utf-8')
   server = await startServer({ port: 0, dev: true })
   const addr = server.address()
   if (!addr || typeof addr === 'string') throw new Error('no port')

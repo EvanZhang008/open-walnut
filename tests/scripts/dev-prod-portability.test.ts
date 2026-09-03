@@ -324,7 +324,16 @@ describe('dev-prod.sh listener detection', () => {
   function withStubProbe(name: string, body: string): { status: number; stdout: string; stderr: string } {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), `devprod-${name}-`))
     fs.writeFileSync(path.join(dir, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
-    return runBash(`set -euo pipefail\nPORT=3456\nPATH=${dir}:/usr/bin:/bin\n${listenerPidsSnippet()}\nlistener_pids`)
+    // PATH holds the stub plus only the text tools the snippet pipes through. Nothing
+    // else: with /usr/bin on PATH a Linux box finds its real lsof first (macOS keeps
+    // lsof in /usr/sbin, which is why this passed there), and the stub is never consulted.
+    const tools = path.join(dir, 'tools')
+    fs.mkdirSync(tools)
+    for (const t of ['grep', 'cut', 'sort', 'tr', 'sh']) {
+      const real = execFileSync('sh', ['-c', `command -v ${t}`], { encoding: 'utf-8' }).trim()
+      fs.symlinkSync(real, path.join(tools, t))
+    }
+    return runBash(`set -euo pipefail\nPORT=3456\nPATH=${dir}:${tools}\n${listenerPidsSnippet()}\nlistener_pids`)
   }
 
   it('parses Linux `ss -ltnp` output', () => {
