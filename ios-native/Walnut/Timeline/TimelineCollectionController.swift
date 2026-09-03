@@ -387,6 +387,23 @@ extension TimelineCollectionController: UICollectionViewDataSource, UICollection
         let row = rows[indexPath.item]
         let cell = collectionView.dequeueReusableCell(
             withReuseIdentifier: reuseID(for: row), for: indexPath)
+        // A ROW OWNS ITS PIXELS. Every cell here is laid out at a height the actor
+        // decided, and a cell whose content wants more room cannot scroll or
+        // self-size — so without this it paints straight over the next row, and a
+        // UICollectionViewCell's contentView does not clip by default.
+        //
+        // It is the rich cell that makes this load-bearing rather than defensive:
+        // its document is deliberately laid out at its OWN measured height, never
+        // the row's (a web view's contentSize can never be shorter than its frame,
+        // so a document sized to the row would just confirm whatever the row
+        // guessed), and `report` then grows it immediately instead of waiting for
+        // the rebuild. Measured: a card that reported 312pt inside a 78pt row drew
+        // 240pt over the paragraph BELOW IT IN THE SAME REPLY, and the reader read
+        // that as "the next message overwrote half the text". Clipping keeps the
+        // honest measurement frame and takes away only the dishonest painting: the
+        // worst case becomes a card cut short for the one round trip its row needs
+        // to catch up, instead of two rows of ink on top of each other.
+        cell.contentView.clipsToBounds = true
         configure(cell: cell, row: row)
         return cell
     }

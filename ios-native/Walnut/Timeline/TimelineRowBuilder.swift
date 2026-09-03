@@ -19,6 +19,9 @@ enum TimelineMetrics {
     static let chipVPad: CGFloat = 4
     static let chipHPad: CGFloat = 10
     static let chipRowVMargin: CGFloat = 1
+    /// Vertical padding inside a tool chip's subagent badge (its own capsule,
+    /// nested in the chip's) — the term the chip's height formula used to omit.
+    static let badgeVPad: CGFloat = 2
     static let imageSlotHeight: CGFloat = 220
     static let localImageSide: CGFloat = 120
     static let activityHeight: CGFloat = 28
@@ -51,6 +54,20 @@ enum TimelineMetrics {
     /// Height of the "building interactive block…" placeholder shown while an
     /// island is still arriving.
     static let richIslandBuildingHeight: CGFloat = 34
+
+    /// One line of SwiftUI `Text` at `font`, which is TALLER than `UIFont`'s own
+    /// line height (measured off `UIHostingController.sizeThatFits`: caption 13.67
+    /// against 13.13, subheadline 19.33 against 17.02).
+    ///
+    /// It matters because the SwiftUI-hosted rows get their height from a FORMULA
+    /// on the layout actor while SwiftUI lays their content out for real, and the
+    /// two rounding in opposite directions is not symmetric: a row taller than its
+    /// content adds a hair of space nobody sees, while a row SHORTER than its
+    /// content has its ink shaved off (the cell clips — see
+    /// TimelineCollectionController's dequeue). So a formula modelling another
+    /// layout engine rounds UP, and by how much is measured, not derived —
+    /// TimelineHostedHeightParityTests pins both directions.
+    static func hostedLineHeight(_ font: UIFont) -> CGFloat { font.lineHeight + 2.5 }
 
     /// Width available to assistant text at a given page width.
     static func assistantTextWidth(_ pageWidth: CGFloat) -> CGFloat {
@@ -503,9 +520,21 @@ final class TimelineRowBuilder {
     private func chipRow(id: String, icon: String, text: String, width: CGFloat) -> TimelineRow {
         TimelineRow(
             id: id, revision: 0, content: .chip(icon: icon, text: text),
-            height: TimelineTextStyler.captionFont.lineHeight
-                + TimelineMetrics.chipVPad * 2 + TimelineMetrics.chipRowVMargin * 2
+            height: Self.capsuleRowHeight(badged: false)
         )
+    }
+
+    /// Height of a one-line capsule row (a thinking chip, a tool chip's own
+    /// capsule). `badged` covers the subagent badge, which is a SECOND capsule
+    /// nested inside this one and therefore the tallest thing on the line — the
+    /// formula omitted it entirely, so every delegated tool row was 4pt short of
+    /// what SwiftUI laid out.
+    private static func capsuleRowHeight(badged: Bool) -> CGFloat {
+        let line = TimelineMetrics.hostedLineHeight(TimelineTextStyler.captionFont)
+        let badge = TimelineMetrics.hostedLineHeight(TimelineTextStyler.caption2Font)
+            + TimelineMetrics.badgeVPad * 2
+        return max(line, badged ? badge : 0)
+            + TimelineMetrics.chipVPad * 2 + TimelineMetrics.chipRowVMargin * 2
     }
 
     private func toolChipRow(_ message: ChatMessage, width: CGFloat,
@@ -513,8 +542,7 @@ final class TimelineRowBuilder {
         let id = "\(message.id)#0"
         let expanded = expandedRowIDs.contains(id)
             && message.resultPreview?.isEmpty == false
-        let capsuleHeight = TimelineTextStyler.captionFont.lineHeight
-            + TimelineMetrics.chipVPad * 2 + TimelineMetrics.chipRowVMargin * 2
+        let capsuleHeight = Self.capsuleRowHeight(badged: message.agent?.isEmpty == false)
         var height = capsuleHeight
         if expanded, let preview = message.resultPreview {
             let size = measurer.codeSize(preview, font: TimelineTextStyler.codePreviewFont)
@@ -538,15 +566,17 @@ final class TimelineRowBuilder {
         let expanded = !collapsible || expandedRowIDs.contains(id)
         let bodyWidth = width - TimelineMetrics.hMargin * 2
             - TimelineMetrics.notificationPadding * 2 - 3 - 10 // accent bar + gap
-        let headerHeight = TimelineTextStyler.caption2Font.lineHeight + 6
+        let headerHeight = TimelineMetrics.hostedLineHeight(TimelineTextStyler.caption2Font) + 6
         let body = TimelineTextStyler.inlineText(styled.displayText,
                                                  font: TimelineTextStyler.subheadlineFont)
         let bodyHeight: CGFloat
         if expanded {
             bodyHeight = measurer.height(body, width: max(40, bodyWidth))
         } else {
-            // Two-line collapsed preview.
-            bodyHeight = TimelineTextStyler.subheadlineFont.lineHeight * 2
+            // Two-line collapsed preview, at the height SwiftUI gives a line
+            // (this branch is a `Text(...).lineLimit(2)`, not a TextKit measurement,
+            // so `UIFont.lineHeight` was 4.5pt short across the two lines).
+            bodyHeight = TimelineMetrics.hostedLineHeight(TimelineTextStyler.subheadlineFont) * 2
         }
         return TimelineRow(
             id: id, revision: expanded ? 1 : 0,
@@ -574,6 +604,11 @@ final class TimelineRowBuilder {
         contentH += TimelineMetrics.tableRowSpacing + 1 // divider
         contentH += CGFloat(rendered.count) * (lineH + TimelineMetrics.tableRowSpacing)
         if omitted > 0 { contentH += 1 + TimelineTextStyler.captionFont.lineHeight + TimelineMetrics.tableRowSpacing * 2 }
+        // A Grid's rows come out at the font's own line height (unlike a lone
+        // `Text`), so the shortfall here is not per line — measured at 1.4pt total,
+        // from the divider and the grid's spacing rounding. Rounded UP, because the
+        // cell clips: 2pt of slack beats a shaved bottom row.
+        contentH += 2
         return TimelineRow(
             id: id, revision: revision,
             content: .table(header: header, rows: rendered

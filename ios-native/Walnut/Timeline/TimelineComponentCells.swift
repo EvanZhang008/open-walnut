@@ -20,10 +20,15 @@ enum TimelineHostedCell {
         .margins(.all, 0)
     }
 
+    /// Internal, not private, so the height-parity gate can render exactly this
+    /// content through a UIHostingController and compare it against the height
+    /// the actor computed. A hosted row's height is a FORMULA while its content
+    /// is laid out by SwiftUI, and SwiftUI does not clip — so the two drifting
+    /// apart is not a cosmetic rounding matter, it paints one row over the next.
     @MainActor
     @ViewBuilder
-    private static func content(for row: TimelineRow,
-                                delegate: TimelineCellActionDelegate?) -> some View {
+    static func content(for row: TimelineRow,
+                        delegate: TimelineCellActionDelegate?) -> some View {
         switch row.content {
         case .toolChip(let name, let detail, let resultPreview, let agent, let expanded):
             TimelineToolChipView(
