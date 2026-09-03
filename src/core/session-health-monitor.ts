@@ -1705,24 +1705,37 @@ export class SessionHealthMonitor {
               // reason in neither classifier set) made every armed recovery
               // abort with "cause is no longer infra" while `if (armed)
               // continue` had already skipped the phase advance.
-              const updated = await updateSessionRecord(s.claudeSessionId, {
-                process_status: 'stopped',
-                errorMessage: undefined,
-                errorKind: 'infra',
-                activity: undefined,
-                last_status_change: now,
-                status_reason: 'auto_recovered_dead',
-                status_changed_by: 'health-monitor',
-              } as any)
-              emitSessionStatusChanged(
-                updated,
-                {},
-                ['*'],
-                { source: 'health-monitor', urgency: 'urgent' },
-              )
-              log.session.info('health monitor: auto-recovered connection-lost session (process dead)', {
-                sessionId: s.claudeSessionId, host: s.host, alive: false,
-              })
+              // Don't pay for a write the gate is guaranteed to drop. For a
+              // snapshot-covered session this whole patch dies at the choke
+              // point, so issuing it every 30s bought a DB transaction, an
+              // urgent broadcast and a log line saying "auto-recovered" about a
+              // record that did not change — 2h of that churn is what the
+              // 2026-09-03 wedge looked like in the log. The relabel now belongs
+              // to the pull channel's re-examination class, which is the writer
+              // the gate actually sanctions. Everything below this point (arming
+              // the resume, the phase sync) still runs: those never depended on
+              // the write landing.
+              const { isSnapshotCovered } = await import('./session-snapshot-gate.js')
+              if (!isSnapshotCovered(s.claudeSessionId)) {
+                const updated = await updateSessionRecord(s.claudeSessionId, {
+                  process_status: 'stopped',
+                  errorMessage: undefined,
+                  errorKind: 'infra',
+                  activity: undefined,
+                  last_status_change: now,
+                  status_reason: 'auto_recovered_dead',
+                  status_changed_by: 'health-monitor',
+                } as any)
+                emitSessionStatusChanged(
+                  updated,
+                  {},
+                  ['*'],
+                  { source: 'health-monitor', urgency: 'urgent' },
+                )
+                log.session.info('health monitor: auto-recovered connection-lost session (process dead)', {
+                  sessionId: s.claudeSessionId, host: s.host, alive: false,
+                })
+              }
 
               // AUTO-RECOVER: the host is reachable again but the process is gone —
               // the classic host-reboot shape. If the work is still in flight,

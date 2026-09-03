@@ -53,6 +53,9 @@ vi.mock('../../src/core/task-manager.js', () => ({
 import { SessionHealthMonitor } from '../../src/core/session-health-monitor.js'
 import type { SessionRecord } from '../../src/core/types.js'
 import { bus } from '../../src/core/event-bus.js'
+import {
+  markSnapshotCovered, _clearSnapshotRegistryForTests,
+} from '../../src/core/session-snapshot-gate.js'
 
 type Update = (id: string, up: Record<string, unknown>) => Promise<SessionRecord>
 
@@ -150,6 +153,52 @@ describe('probe-dead branch — auto-recover arming', () => {
   it('a task-less session is left to schedule()\'s own guards', async () => {
     const rec = { ...wedged(), taskId: undefined } as SessionRecord
     await recover(new SessionHealthMonitor(), [rec], fakeUpdate())
+    expect(scheduleMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ── The relabel write is skipped for a snapshot-covered session ──────────────
+// ('health-monitor','auto_recovered_dead') is category-①, so for a covered
+// session the gate drops the whole patch. Issuing it anyway cost a transaction,
+// an urgent broadcast and an "auto-recovered" log line every 30s about a record
+// that did not move — the 2026-09-03 wedge ran that loop for two hours. The
+// relabel is the pull channel's re-examination class's job now; what must NOT
+// change is the arming and the phase sync, which never needed the write.
+describe('probe-dead branch — no write the gate would drop', () => {
+  beforeEach(() => { _clearSnapshotRegistryForTests() })
+
+  it('covered session: no record write, no status broadcast, but STILL arms', async () => {
+    const update = fakeUpdate()
+    const emitted: unknown[] = []
+    bus.subscribe('session:status-changed', (e) => { emitted.push(e) })
+    markSnapshotCovered('arm-1', 100)
+
+    await recover(new SessionHealthMonitor(), [wedged('arm-1')], update)
+
+    expect(update.calls()).toHaveLength(0)
+    expect(emitted).toHaveLength(0)
+    expect(scheduleMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('covered session with a handed-back task: no write, no arm, phase sync still runs', async () => {
+    taskPhase = 'AGENT_COMPLETE'
+    const update = fakeUpdate()
+    markSnapshotCovered('arm-1', 100)
+
+    await recover(new SessionHealthMonitor(), [wedged('arm-1')], update)
+
+    expect(update.calls()).toHaveLength(0)
+    expect(scheduleMock).not.toHaveBeenCalled()
+    expect(applySessionPhaseMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('an UNcovered session keeps the write — the skip is scoped, not a removal', async () => {
+    const update = fakeUpdate()
+    await recover(new SessionHealthMonitor(), [wedged('arm-2')], update)
+
+    expect(update.calls()[0]).toMatchObject({
+      process_status: 'stopped', errorKind: 'infra', status_reason: 'auto_recovered_dead',
+    })
     expect(scheduleMock).toHaveBeenCalledTimes(1)
   })
 })
