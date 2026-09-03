@@ -1,5 +1,5 @@
 /**
- * Settings → Devices QR pairing.
+ * Settings → Phones & Cloud QR pairing.
  *
  * Regression guard for 2026-07-28 ("how do I connect my phone? the QR used to
  * be here"): the QR is only rendered AFTER minting, and it used to embed
@@ -9,7 +9,7 @@
  */
 import { test, expect } from '@playwright/test'
 
-test.describe('Settings → Devices pairing', () => {
+test.describe('Settings → Phones & Cloud pairing', () => {
   test('Devices section is reachable and its QR never points at loopback', async ({ page }) => {
     await page.goto('/')
     await page.waitForLoadState('domcontentloaded')
@@ -20,13 +20,13 @@ test.describe('Settings → Devices pairing', () => {
 
     // The nav entry the user remembered must exist, and clicking it must land
     // on a visible Devices section.
-    const devicesNav = page.locator('.settings-nav-item', { hasText: /^Devices$/ })
+    const devicesNav = page.locator('.settings-nav-item', { hasText: /^Phones & Cloud$/ })
     await expect(devicesNav).toHaveCount(1)
     await devicesNav.click()
 
     const section = page.locator('#devices')
     await expect(section).toBeVisible()
-    await expect(section).toContainText(/Pair one by scanning a QR code/i)
+    await expect(section).toContainText(/Pair a phone by scanning a QR code/i)
 
     // Pair a device through the UI exactly as a user would.
     const name = `pw-iphone-${Date.now()}`

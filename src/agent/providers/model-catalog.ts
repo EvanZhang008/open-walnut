@@ -197,15 +197,17 @@ export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
   ],
   // ── Ollama (local) — empty baseline, user adds their installed models ──
   ollama: [],
-  // ── Claude Code subscription (local `claude -p`, text-only) ──
-  // The CLI picks the actual model from the subscription; these are short
-  // aliases the adapter forwards as --model (a bare alias resolves server-side).
-  // 'default' means "let the subscription decide" (adapter sends no --model).
+  // ── Claude Code (local `claude -p`, text-only) ──
+  // The CLI resolves the actual model through its own login (Anthropic account,
+  // Bedrock, Vertex); these are short aliases the adapter forwards as --model (a
+  // bare alias resolves server-side). 'default' means "let the CLI decide"
+  // (adapter sends no --model). Labels name no login: the same list is shown
+  // on a Bedrock-backed machine, where "subscription" would be wrong.
   claude_cli: [
-    { id: 'default', provider: 'claude_cli', label: 'Subscription default', context_window: 200_000 },
-    { id: 'opus', provider: 'claude_cli', label: 'Opus (subscription)', context_window: 200_000 },
-    { id: 'sonnet', provider: 'claude_cli', label: 'Sonnet (subscription)', context_window: 200_000 },
-    { id: 'haiku', provider: 'claude_cli', label: 'Haiku (subscription)', context_window: 200_000 },
+    { id: 'default', provider: 'claude_cli', label: 'Claude Code default', context_window: 200_000 },
+    { id: 'opus', provider: 'claude_cli', label: 'Opus', context_window: 200_000 },
+    { id: 'sonnet', provider: 'claude_cli', label: 'Sonnet', context_window: 200_000 },
+    { id: 'haiku', provider: 'claude_cli', label: 'Haiku', context_window: 200_000 },
   ],
 };
 

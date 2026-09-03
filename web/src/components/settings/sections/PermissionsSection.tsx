@@ -49,7 +49,7 @@ export function PermissionsSection() {
   return (
     <SectionCard
       id="permissions"
-      title="Permissions"
+      title="macOS Access"
       description="macOS access Walnut needs. Each row names exactly what to grant to, shows the live state, and fixes itself in a click."
     >
       {!report ? (

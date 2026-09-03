@@ -20,6 +20,8 @@ import { ReposSection } from './sections/ReposSection'
 import { SearchSection } from './sections/SearchSection'
 import { SessionsSection } from './sections/SessionsSection'
 import { SttSection } from './sections/SttSection'
+import { SuggestAccuracySection } from './sections/SuggestAccuracySection'
+import { TasksSection } from './sections/TasksSection'
 import { TimelineSection } from './sections/TimelineSection'
 import { UsageSection } from './sections/UsageSection'
 
@@ -34,8 +36,10 @@ export interface CoreSettingsContribution {
   id: string
   label: string
   title: string
-  group: 'manage' | 'plugins' | 'configure'
+  group: 'manage' | 'plugins' | 'configure' | 'diagnostics'
   divider?: boolean
+  /** Rendered on the page (keeps its `#id` deep link) but folded under the entry above it in the nav. */
+  navHidden?: boolean
   render(context: CoreSettingsContext): ReactNode
 }
 
@@ -56,21 +60,33 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   { owner: 'walnut', id: 'plugin-store', label: 'Plugins', title: 'Plugins', group: 'plugins', render: ({ config, saveSection }) => <PluginStoreSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'providers', label: 'Ask Walnut Provider', title: 'Ask Walnut (Walnut Agent) Provider', group: 'configure', render: ({ config, saveSection }) => <ProvidersSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'general', label: 'General', title: 'General', group: 'configure', render: ({ config, saveSection }) => <GeneralSection config={config} onSave={saveSection} /> },
-  { owner: 'walnut', id: 'sessions', label: 'Tasks & Sessions', title: 'Tasks & Sessions', group: 'configure', render: ({ config, saveSection }) => <SessionsSection config={config} onSave={saveSection} /> },
-  { owner: 'walnut', id: 'focus-tiers', label: 'Focus Tiers', title: 'Focus Tiers', group: 'configure', render: () => <FocusTiersSection /> },
-  { owner: 'walnut', id: 'integrations', label: 'Integrations', title: 'Integrations', group: 'configure', render: ({ config, saveSection }) => <IntegrationsSection config={config} onSave={saveSection} /> },
-  { owner: 'walnut', id: 'calendar', label: 'Calendar', title: 'Calendar', group: 'configure', render: () => <CalendarSection /> },
-  { owner: 'walnut', id: 'permissions', label: 'Permissions', title: 'Permissions', group: 'configure', render: () => <PermissionsSection /> },
-  { owner: 'walnut', id: 'search', label: 'Search & Embeddings', title: 'Search', group: 'configure', render: ({ config, saveSection }) => <SearchSection config={config} onSave={saveSection} /> },
-  { owner: 'walnut', id: 'stt', label: 'Speech-to-Text', title: 'Speech-to-Text', group: 'configure', render: ({ config, saveSection, reload }) => <SttSection config={config} onSave={saveSection} onReload={reload} /> },
+  // Tasks = where new tasks land + how a finished session reports back onto its
+  // task. Focus Tiers is part of the same story (the pinned-task tiers), so it
+  // renders right under it and shares the nav entry; `#focus-tiers` still works.
+  { owner: 'walnut', id: 'tasks', label: 'Tasks', title: 'Tasks', group: 'configure', render: ({ config, saveSection }) => <TasksSection config={config} onSave={saveSection} /> },
+  { owner: 'walnut', id: 'focus-tiers', label: 'Focus Tiers', title: 'Focus Tiers', group: 'configure', navHidden: true, render: () => <FocusTiersSection /> },
+  { owner: 'walnut', id: 'sessions', label: 'Sessions', title: 'Sessions', group: 'configure', render: ({ config, saveSection }) => <SessionsSection config={config} onSave={saveSection} /> },
+  // Voice = both directions: dictation in (STT) and read-aloud out (TTS).
+  { owner: 'walnut', id: 'stt', label: 'Voice', title: 'Voice', group: 'configure', render: ({ config, saveSection, reload }) => <SttSection config={config} onSave={saveSection} onReload={reload} /> },
   { owner: 'walnut', id: 'audio-capture', label: 'Audio Capture', title: 'Audio Capture', group: 'configure', render: ({ config, saveSection }) => <AudioCaptureSection config={config} onSave={saveSection} /> },
+  { owner: 'walnut', id: 'integrations', label: 'Integrations', title: 'Integrations', group: 'configure', render: ({ config, saveSection }) => <IntegrationsSection config={config} onSave={saveSection} /> },
+  // "Calendar Accounts" / "macOS Access": the two used to be "Calendar" and
+  // "Permissions", which collided with the Calendar page and with the session
+  // permission-prompt settings.
+  { owner: 'walnut', id: 'calendar', label: 'Calendar Accounts', title: 'Calendar Accounts', group: 'configure', render: () => <CalendarSection /> },
+  { owner: 'walnut', id: 'permissions', label: 'macOS Access', title: 'macOS Access', group: 'configure', render: () => <PermissionsSection /> },
   { owner: 'walnut', id: 'heartbeat', label: 'Heartbeat', title: 'Heartbeat', group: 'configure', render: ({ config, saveSection }) => <HeartbeatSection config={config} onSave={saveSection} /> },
+  { owner: 'walnut', id: 'search', label: 'Search', title: 'Search', group: 'configure', render: ({ config, saveSection }) => <SearchSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'backup', label: 'S3 Backup', title: 'S3 Backup', group: 'configure', render: ({ config, saveSection }) => <BackupSection config={config} onSave={saveSection} /> },
+  // Machines: phones + the cloud companion they reach this Mac through share one
+  // nav entry ("Phones & Cloud"); SSH hosts for remote sessions are their own.
+  { owner: 'walnut', id: 'devices', label: 'Phones & Cloud', title: 'Phones & Cloud', group: 'configure', render: () => <DevicesSection /> },
+  { owner: 'walnut', id: 'cloud', label: 'Cloud Companion', title: 'Cloud Companion', group: 'configure', navHidden: true, render: () => <CloudSection /> },
   { owner: 'walnut', id: 'remote-hosts', label: 'Remote Hosts', title: 'Remote Hosts', group: 'configure', render: ({ config, saveSection }) => <RemoteHostsSection config={config} onSave={saveSection} /> },
-  { owner: 'walnut', id: 'devices', label: 'Devices', title: 'Devices', group: 'configure', render: () => <DevicesSection /> },
-  { owner: 'walnut', id: 'cloud', label: 'Cloud Companion', title: 'Cloud Companion', group: 'configure', render: () => <CloudSection /> },
   { owner: 'walnut', id: 'advanced', label: 'Advanced', title: 'Advanced', group: 'configure', render: ({ config, saveSection }) => <AdvancedSection config={config} onSave={saveSection} /> },
-  { owner: 'walnut', id: 'usage', label: 'Usage & Costs', title: 'Usage & Costs', group: 'configure', divider: true, render: () => <UsageSection /> },
+  // Diagnostics: read-mostly panels about what Walnut did, not knobs.
+  { owner: 'walnut', id: 'usage', label: 'Usage & Costs', title: 'Usage & Costs', group: 'diagnostics', render: () => <UsageSection /> },
+  { owner: 'walnut', id: 'suggest-accuracy', label: 'Suggestion Accuracy', title: 'Suggestion Accuracy', group: 'diagnostics', render: () => <SuggestAccuracySection /> },
   // Time tracking's OWN UI is the walnut-time Plugin App, not a section here. The old
   // `time` section was a second copy of it and was deleted; the server side
   // (/api/time/*, the heartbeat capture) is untouched and is what the app reads.
@@ -78,7 +94,8 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   // This `timeline` row is NOT that feature and did not go with it: it is the
   // screen-activity Life Tracker (/api/timeline/*, screenshot-derived categories, and
   // the only control that enables or disables its cron). Nothing else exposes it, so
-  // deleting it as "the duplicated Timeline" would delete a live feature.
-  { owner: 'walnut', id: 'timeline', label: 'Timeline', title: 'Timeline', group: 'configure', render: () => <TimelineSection /> },
-  { owner: 'walnut', id: 'bug-report', label: 'Bug Report', title: 'Bug Report', group: 'configure', divider: true, render: () => <BugReportSection /> },
+  // deleting it as "the duplicated Timeline" would delete a live feature. Labelled
+  // "Screen Tracking" so it stops reading as a third Time/Timeline thing.
+  { owner: 'walnut', id: 'timeline', label: 'Screen Tracking', title: 'Screen Tracking', group: 'diagnostics', render: () => <TimelineSection /> },
+  { owner: 'walnut', id: 'bug-report', label: 'Bug Report', title: 'Bug Report', group: 'diagnostics', render: () => <BugReportSection /> },
 ]

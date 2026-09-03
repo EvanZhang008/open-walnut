@@ -82,7 +82,7 @@ export function CalendarsPopover({ anchorEl, onClose }: Props) {
           <div className="cal-cals-empty">
             External calendars are off or unavailable — check{' '}
             <Link to="/settings#calendar" onClick={onClose}>
-              Settings → Calendar
+              Settings → Calendar Accounts
             </Link>
             .
           </div>

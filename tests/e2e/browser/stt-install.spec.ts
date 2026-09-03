@@ -13,12 +13,13 @@
 import { test, expect } from '@playwright/test'
 
 test('whisper-server install banner disappears after brew install', async ({ page }) => {
-  // Navigate to settings page
+  // Navigate to settings page. Not `networkidle`: Settings keeps an SSE stream
+  // open (cloud-setup job), so the network never goes idle; wait for the page.
   await page.goto('/settings')
-  await page.waitForLoadState('networkidle')
+  await page.locator('#providers').waitFor({ state: 'attached', timeout: 20_000 })
 
-  // Click the "Speech-to-Text" nav item
-  const sttNav = page.locator('.settings-nav-item', { hasText: 'Speech-to-Text' })
+  // Click the "Voice" nav item (the section id is still `stt`)
+  const sttNav = page.locator('.settings-nav-item', { hasText: /^Voice$/ })
   await sttNav.click()
 
   // Open the transcription service dropdown and select Whisper Server

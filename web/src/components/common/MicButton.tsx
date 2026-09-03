@@ -315,7 +315,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
   const sttUnavailable = !sttStatus.isLoading && (!sttStatus.isConfigured || !sttStatus.isAvailable);
   // Never grey out for "not configured" — a disabled button with a hover-only tooltip is
   // undiscoverable (first-run users think voice input doesn't exist). Keep it clickable
-  // and route the click to Settings → Speech-to-Text instead.
+  // and route the click to Settings → Voice instead.
   const isDisabled = disabled || isTranscribing;
 
   const btnClass = [

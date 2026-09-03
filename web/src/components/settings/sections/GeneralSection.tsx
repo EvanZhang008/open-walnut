@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
-import type { Config, TaskPriority } from '@open-walnut/core';
+import type { Config } from '@open-walnut/core';
 import { useAutoSave } from '@/hooks/useAutoSave';
 import { SectionCard } from '../inputs/SectionCard';
 import { useTheme, type ThemePreference } from '@/hooks/useTheme';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useSessionPanelMode, type SessionPanelMode } from '@/hooks/useSessionPanelMode';
-import { useIntegrations } from '@/hooks/useIntegrations';
+import { UI_ONLY_CATEGORIES, setShowUiOnlyCategory, type UiOnlyCategory } from '@/hooks/useDeveloperSettings';
+import { updateConfig } from '@/api/config';
 
 const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
   { value: 'system', label: 'System' },
@@ -27,45 +28,57 @@ interface Props {
   onSave: (partial: Partial<Config>) => Promise<void>;
 }
 
+// Read dev settings from localStorage directly (no hook).
+// Respects defaultOn — raw localStorage.getItem would treat never-set keys as false.
+const getDevChecked = (key: string) => {
+  const catDef = UI_ONLY_CATEGORIES.find(c => c.key === key);
+  const defaultVal = catDef?.defaultOn ?? false;
+  try {
+    const stored = localStorage.getItem(`open-walnut:show_ui_only_${key}`);
+    if (stored !== null) return stored === 'true';
+    return defaultVal;
+  } catch { return defaultVal; }
+};
+
+const handleToggleUiOnly = async (category: UiOnlyCategory, checked: boolean) => {
+  setShowUiOnlyCategory(category, checked);
+  try {
+    const ds: Record<string, boolean> = {};
+    for (const cat of UI_ONLY_CATEGORIES) {
+      const key = `show_ui_only_${cat.key.replace(/-/g, '_')}`;
+      // Use getDevChecked (respects defaultOn) instead of raw localStorage
+      // to avoid zeroing out defaultOn categories that were never explicitly set
+      ds[key] = cat.key === category ? checked : getDevChecked(cat.key);
+    }
+    await updateConfig({ developer: ds } as Partial<Config>);
+  } catch {
+    setShowUiOnlyCategory(category, !checked);
+  }
+};
+
+/**
+ * Appearance and the person: theme, focus bar, panel count, name, and which
+ * background notifications show up in chat. Task defaults live in Tasks.
+ */
 export function GeneralSection({ config, onSave }: Props) {
   const { theme, setTheme } = useTheme();
   const focusBar = useFocusBarContext();
   const { mode: panelMode, setMode: setPanelMode } = useSessionPanelMode();
-  const integrations = useIntegrations();
   const [userName, setUserName] = useState(config.user?.name ?? '');
-  const [defaultPriority, setDefaultPriority] = useState<TaskPriority>(config.defaults?.priority ?? 'none');
-  const [defaultPlatform, setDefaultPlatform] = useState(config.defaults?.platform ?? 'local');
-  const [defaultProject, setDefaultProject] = useState(config.defaults?.project ?? '');
 
   useEffect(() => {
     setUserName(config.user?.name ?? '');
-    setDefaultPriority(config.defaults?.priority ?? 'none');
-    setDefaultPlatform(config.defaults?.platform ?? 'local');
-    setDefaultProject(config.defaults?.project ?? '');
   }, [config]);
 
   const handleSave = async () => {
-    await onSave({
-      user: { name: userName },
-      defaults: {
-        priority: defaultPriority,
-        platform: defaultPlatform,
-        // Empty = Inbox. Never persist a literal "Inbox" — that would create a real project.
-        ...(defaultProject.trim() ? { project: defaultProject.trim() } : {}),
-      },
-    });
+    await onSave({ user: { name: userName } });
   };
 
   // Auto-save: write when local edits drift from the persisted config. The `baseline` is
   // recomputed from the config prop so a post-save refresh matches `current` and won't echo.
   useAutoSave({
-    current: JSON.stringify({ userName, defaultPriority, defaultPlatform, defaultProject }),
-    baseline: JSON.stringify({
-      userName: config.user?.name ?? '',
-      defaultPriority: config.defaults?.priority ?? 'none',
-      defaultPlatform: config.defaults?.platform ?? 'local',
-      defaultProject: config.defaults?.project ?? '',
-    }),
+    current: JSON.stringify({ userName }),
+    baseline: JSON.stringify({ userName: config.user?.name ?? '' }),
     save: handleSave,
   });
 
@@ -131,52 +144,27 @@ export function GeneralSection({ config, onSave }: Props) {
         />
       </div>
 
-      <div className="form-row">
-        <div className="form-group">
-          <label htmlFor="settings-priority">Default Priority</label>
-          <select
-            id="settings-priority"
-            value={defaultPriority}
-            onChange={(e) => setDefaultPriority(e.target.value as TaskPriority)}
-          >
-            <option value="none">None (untriaged)</option>
-            <option value="backlog">Backlog</option>
-            <option value="important">Important</option>
-            <option value="immediate">Immediate</option>
-          </select>
-        </div>
-
-        <div className="form-group">
-          <label htmlFor="settings-project">Default Project <span className="text-muted">(optional)</span></label>
-          <input
-            id="settings-project"
-            type="text"
-            value={defaultProject}
-            onChange={(e) => setDefaultProject(e.target.value)}
-            placeholder="Leave empty for Inbox"
-          />
-          <p className="text-sm text-muted" style={{ margin: '4px 0 0' }}>
-            Where new tasks land when no project is given. Empty means Inbox.
-          </p>
-        </div>
-      </div>
-
+      {/* Chat Notifications — which background notices show in Ask Walnut. Saves itself
+          through handleToggleUiOnly (the `developer` config key); nothing to fingerprint. */}
       <div className="form-group">
-        <label htmlFor="settings-platform">Default Platform</label>
-        <select
-          id="settings-platform"
-          value={defaultPlatform}
-          onChange={(e) => setDefaultPlatform(e.target.value)}
-        >
-          <option value="local">Local (this device — instant)</option>
-          {integrations.map((i) => (
-            <option key={i.id} value={i.id}>{i.name}</option>
-          ))}
-        </select>
-        <p className="text-sm text-muted" style={{ margin: '4px 0 0' }}>
-          Where new tasks from quick-add (&ldquo;Add to Focus&rdquo;) are created. Local is
-          instant and never synced; pick an external service to sync new captures there.
+        <label>Chat Notifications</label>
+        <p className="text-sm text-muted" style={{ margin: '-4px 0 8px' }}>
+          Which background notifications appear in chat. Checked = visible.
         </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {UI_ONLY_CATEGORIES.map((cat) => (
+            <label key={cat.key} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                defaultChecked={getDevChecked(cat.key)}
+                onChange={(e) => handleToggleUiOnly(cat.key, e.target.checked)}
+                style={{ width: 16, height: 16, accentColor: 'var(--accent)', flexShrink: 0 }}
+              />
+              <span>{cat.label}</span>
+              <span className="text-sm text-muted" style={{ marginLeft: 4 }}>&mdash; {cat.description}</span>
+            </label>
+          ))}
+        </div>
       </div>
     </SectionCard>
   );

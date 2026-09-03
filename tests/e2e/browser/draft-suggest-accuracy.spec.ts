@@ -6,7 +6,7 @@
  * visible if you happen to look before committing. "The auto-suggestion feels
  * inaccurate" was therefore unfalsifiable in both directions. So every commit now
  * records what the parse proposed against what the launch actually carried, and
- * Settings → Tasks & Sessions shows the per-field tally.
+ * Settings → Diagnostics → Suggestion Accuracy shows the per-field tally.
  *
  * Two claims no unit test can make:
  *   1. an OVERRIDDEN suggestion is recorded, not silently dropped — the parse says
@@ -57,7 +57,7 @@ async function openAccuracyCard(page: Page) {
   const settingsLink = page.locator('.sidebar a[href="/settings"]')
   await expect(settingsLink).toBeVisible({ timeout: 30_000 })
   await settingsLink.click()
-  const nav = page.locator('.settings-nav-item', { hasText: 'Tasks & Sessions' }).first()
+  const nav = page.locator('.settings-nav-item', { hasText: 'Suggestion Accuracy' }).first()
   await expect(nav).toBeVisible({ timeout: 20_000 })
   await nav.click()
   const table = page.locator('.suggest-accuracy-table')

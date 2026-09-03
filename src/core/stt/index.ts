@@ -282,7 +282,7 @@ export function stripVocabEcho(text: string, vocabPrompt: string): string {
 export async function transcribeAudio(config: Config, req: SttRequest): Promise<SttResult> {
   const engine = getOrCreateEngine(config);
   if (!engine) {
-    throw new Error('No STT engine configured. Go to Settings → Speech-to-Text to set one up.');
+    throw new Error('No STT engine configured. Go to Settings → Voice to set one up.');
   }
 
   const { available, error } = await engine.isAvailable();

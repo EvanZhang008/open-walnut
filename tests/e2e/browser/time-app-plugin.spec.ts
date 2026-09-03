@@ -287,7 +287,7 @@ test('the App declares its own surface: a Settings → Plugins row, no Sidebar r
   // that door — it is the screen-activity Life Tracker, which nothing else exposes.
   await expect(page.getByTestId('settings-nav-time')).toHaveCount(0)
   await expect(page.locator('.settings-nav-item', { hasText: 'Time Tracking' })).toHaveCount(0)
-  await expect(page.getByTestId('settings-nav-timeline')).toHaveText('Timeline')
+  await expect(page.getByTestId('settings-nav-timeline')).toHaveText('Screen Tracking')
   await shoot(page, 'configure-group-no-time')
 
   await row.click()

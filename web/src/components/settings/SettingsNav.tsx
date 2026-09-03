@@ -23,6 +23,8 @@ interface NavItem {
  *   disappears with the plugin's own lifecycle and needs no separate registration
  *   channel; its badge rides the row), and any settings panel a plugin registered.
  * - Configure: the knobs. Every entry scrolls to a section here.
+ * - Diagnostics: read-mostly panels about what Walnut did (usage, screen tracking,
+ *   bug report). Not knobs, so not mixed in with them.
  *
  * Agents/Skills/Commands/Memory used to live in the app's main sidebar and turned it
  * into an unreadable icon wall; this is their home now. The Tasks table is NOT here:
@@ -47,8 +49,27 @@ const PLUGIN_SECTIONS: NavItem[] = CORE_SETTINGS_CONTRIBUTIONS
   .map(({ id, label, divider }) => ({ id, label, divider }));
 
 const NAV_ITEMS: NavItem[] = CORE_SETTINGS_CONTRIBUTIONS
-  .filter((entry) => entry.group === 'configure')
+  .filter((entry) => entry.group === 'configure' && !entry.navHidden)
   .map(({ id, label, divider }) => ({ id, label, divider }));
+
+const DIAGNOSTICS_ITEMS: NavItem[] = CORE_SETTINGS_CONTRIBUTIONS
+  .filter((entry) => entry.group === 'diagnostics' && !entry.navHidden)
+  .map(({ id, label, divider }) => ({ id, label, divider }));
+
+/**
+ * A `navHidden` section (Focus Tiers under Tasks, Cloud Companion under Phones &
+ * Cloud) has no button of its own, so when the scroll spy lands on it the entry it
+ * folds under lights up instead of nothing.
+ */
+const NAV_OWNER: Record<string, string> = (() => {
+  const owner: Record<string, string> = {};
+  let lastVisible = '';
+  for (const entry of CORE_SETTINGS_CONTRIBUTIONS) {
+    if (!entry.navHidden) lastVisible = entry.id;
+    owner[entry.id] = lastVisible;
+  }
+  return owner;
+})();
 
 interface SettingsNavProps {
   activeSection: string;
@@ -58,12 +79,13 @@ interface SettingsNavProps {
 export function SettingsNav({ activeSection, onNavigate }: SettingsNavProps) {
   const pluginUi = usePluginUi();
   const apps = useAppCatalog();
+  const highlighted = NAV_OWNER[activeSection] ?? activeSection;
   const sectionButton = (item: NavItem) => (
     <span key={item.id}>
       {item.divider && <div className="settings-nav-divider" />}
       <button
         type="button"
-        className={`settings-nav-item${activeSection === item.id ? ' settings-nav-active' : ''}`}
+        className={`settings-nav-item${highlighted === item.id ? ' settings-nav-active' : ''}`}
         data-testid={`settings-nav-${item.id}`}
         onClick={() => onNavigate(item.id)}
       >
@@ -112,6 +134,9 @@ export function SettingsNav({ activeSection, onNavigate }: SettingsNavProps) {
       <div className="settings-nav-divider" />
       <span className="settings-nav-group-label">Configure</span>
       {NAV_ITEMS.map(sectionButton)}
+      <div className="settings-nav-divider" />
+      <span className="settings-nav-group-label">Diagnostics</span>
+      {DIAGNOSTICS_ITEMS.map(sectionButton)}
     </nav>
   );
 }

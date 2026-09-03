@@ -184,7 +184,7 @@ export function SearchSection({ config, onSave }: Props) {
   return (
     <SectionCard
       id="search"
-      title="Search & Embeddings"
+      title="Search"
       description="Hybrid keyword + semantic index over tasks, sessions, notes, memory and skills. Changes save automatically."
       onSave={handleSave}
       showSave={false}

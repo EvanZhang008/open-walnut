@@ -14,7 +14,7 @@ import type { SessionMode } from '@open-walnut/core';
  *
  * Default/Accept/Don't Ask are still fully supported everywhere — spawn, live
  * switch, REST, iOS. They're just off the default cycle; tick them in
- * Settings → Tasks & Sessions → Enabled Session Modes to add them back.
+ * Settings → Sessions → Enabled Session Modes to add them back.
  *
  * This is a UI-cycle default ONLY. Do not narrow any validator to match it, or
  * a session already running in an unlisted mode becomes unrepresentable — that

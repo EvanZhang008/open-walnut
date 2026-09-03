@@ -4,7 +4,7 @@
  * lane composer, which is a session under the hood and takes the same PATCH.
  *
  * It shows the EFFECTIVE mode: the record's own `output_mode` when the human
- * picked one, otherwise the configured default (Settings → Tasks & Sessions →
+ * picked one, otherwise the configured default (Settings → Sessions →
  * Output mode). Clicking always writes an EXPLICIT per-session value — pinning
  * this session's style is the whole point of the pill, so it must not keep
  * drifting with the config afterwards.

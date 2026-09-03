@@ -289,7 +289,7 @@ export function TimelineSection() {
   return (
     <SettingsSection
       id="timeline"
-      title="Timeline"
+      title="Screen Tracking"
       description="Screen-activity tracking: periodic screenshots, categorised into what you were doing."
       actions={(
         <button

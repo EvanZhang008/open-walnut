@@ -25,10 +25,6 @@ export function IntegrationsSection({ config, onSave }: Props) {
   const [searchApiKey, setSearchApiKey] = useState(config.tools?.web_search?.api_key ?? '');
   const [perplexityKey, setPerplexityKey] = useState(config.tools?.web_search?.perplexity_api_key ?? '');
 
-  // TTS
-  const [ttsProvider, setTtsProvider] = useState(config.tools?.tts?.provider ?? '');
-  const [ttsVoice, setTtsVoice] = useState(config.tools?.tts?.voice ?? '');
-
   useEffect(() => {
     const ms = (config.plugins?.['ms-todo'] ?? {}) as Record<string, unknown>;
     setMsTodoEnabled(!!ms.enabled);
@@ -38,8 +34,6 @@ export function IntegrationsSection({ config, onSave }: Props) {
     setSearchProvider(config.tools?.web_search?.provider || 'tavily');
     setSearchApiKey(config.tools?.web_search?.api_key ?? '');
     setPerplexityKey(config.tools?.web_search?.perplexity_api_key ?? '');
-    setTtsProvider(config.tools?.tts?.provider ?? '');
-    setTtsVoice(config.tools?.tts?.voice ?? '');
   }, [config]);
 
   const handleSave = async () => {
@@ -65,11 +59,6 @@ export function IntegrationsSection({ config, onSave }: Props) {
           api_key: searchApiKey || undefined,
           perplexity_api_key: perplexityKey || undefined,
         },
-        tts: {
-          ...config.tools?.tts,
-          provider: ttsProvider || undefined,
-          voice: ttsVoice || undefined,
-        },
       },
     });
   };
@@ -77,7 +66,7 @@ export function IntegrationsSection({ config, onSave }: Props) {
   useAutoSave({
     current: JSON.stringify({
       msTodoEnabled, msTodoClientId, slackToken, slackChannel,
-      searchProvider, searchApiKey, perplexityKey, ttsProvider, ttsVoice,
+      searchProvider, searchApiKey, perplexityKey,
     }),
     baseline: JSON.stringify({
       msTodoEnabled: !!((config.plugins?.['ms-todo'] ?? {}) as Record<string, unknown>).enabled,
@@ -87,8 +76,6 @@ export function IntegrationsSection({ config, onSave }: Props) {
       searchProvider: config.tools?.web_search?.provider || 'tavily',
       searchApiKey: config.tools?.web_search?.api_key ?? '',
       perplexityKey: config.tools?.web_search?.perplexity_api_key ?? '',
-      ttsProvider: config.tools?.tts?.provider ?? '',
-      ttsVoice: config.tools?.tts?.voice ?? '',
     }),
     save: handleSave,
   });
@@ -175,35 +162,7 @@ export function IntegrationsSection({ config, onSave }: Props) {
           )}
         </div>
       </details>
-
-      {/* TTS */}
-      <details className="settings-collapsible">
-        <summary className="settings-collapsible-title">Text-to-Speech</summary>
-        <div className="settings-collapsible-body">
-          <div className="form-row">
-            <div className="form-group">
-              <label htmlFor="tts-provider">Provider</label>
-              <input
-                id="tts-provider"
-                type="text"
-                value={ttsProvider}
-                onChange={(e) => setTtsProvider(e.target.value)}
-                placeholder="e.g., say"
-              />
-            </div>
-            <div className="form-group">
-              <label htmlFor="tts-voice">Voice</label>
-              <input
-                id="tts-voice"
-                type="text"
-                value={ttsVoice}
-                onChange={(e) => setTtsVoice(e.target.value)}
-                placeholder="e.g., Samantha"
-              />
-            </div>
-          </div>
-        </div>
-      </details>
+      {/* Text-to-Speech lives in Voice next to dictation, not here. */}
     </SectionCard>
   );
 }

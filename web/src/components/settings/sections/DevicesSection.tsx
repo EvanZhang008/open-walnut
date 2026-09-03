@@ -168,8 +168,8 @@ export function DevicesSection() {
   return (
     <SectionCard
       id="devices"
-      title="Devices"
-      description="Your phones running the Walnut iOS app. Pair one by scanning a QR code — tokens are shown once and stored hashed."
+      title="Phones & Cloud"
+      description="Your phones running the Walnut iOS app, and the cloud companion they reach this Mac through (next card). Pair a phone by scanning a QR code — tokens are shown once and stored hashed."
     >
       <div className="devices-section">
         {(() => {

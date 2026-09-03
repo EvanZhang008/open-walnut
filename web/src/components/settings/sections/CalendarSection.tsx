@@ -90,7 +90,7 @@ export function CalendarSection() {
   return (
     <SectionCard
       id="calendar"
-      title="Calendar"
+      title="Calendar Accounts"
       description="Show events from the Mac's calendars (iCloud, Google, Exchange — every account added in macOS System Settings → Internet Accounts). Walnut edits write back through macOS; no separate login needed."
     >
       {!status ? (

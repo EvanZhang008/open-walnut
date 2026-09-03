@@ -301,7 +301,7 @@ Then, briefly:
 
 - Costs are running now and are the user's, not Walnut's.
 - **Teardown, if they ever want out: revoke the device tokens FIRST**
-  (Settings → Devices, or `DELETE /api/devices/<name>?target=cloud`), then
+  (Settings → Phones & Cloud, or `DELETE /api/devices/<name>?target=cloud`), then
   destroy the infrastructure — on AWS `cd infra && npx cdk destroy
   WalnutCloudStack`; on Azure `az group delete -n walnut-cloud` (one command,
   because everything Walnut made lives in that group); on Google Cloud

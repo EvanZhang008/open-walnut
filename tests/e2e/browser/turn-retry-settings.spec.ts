@@ -119,12 +119,12 @@ test('turn-retry is configurable from the Hooks page via real UI clicks', async 
  * Sessions; two pages writing the same config key means whichever saved last
  * wins and the user cannot tell which.
  */
-test('Tasks & Sessions does not duplicate the retry editor', async ({ page }) => {
+test('Sessions does not duplicate the retry editor', async ({ page }) => {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   await page.locator('a[href="/settings"]').first().click()
   await page.waitForLoadState('networkidle')
-  await page.getByRole('button', { name: /Tasks & Sessions/i }).first().click()
+  await page.getByTestId('settings-nav-sessions').click()
   await page.waitForTimeout(1200)
 
   await expect(page.locator('#turn-retry-enabled')).toHaveCount(0)

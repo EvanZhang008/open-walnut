@@ -72,7 +72,7 @@ export function HeartbeatSection({ config, onSave }: Props) {
   };
 
   return (
-    <SectionCard id="heartbeat" title="Heartbeat" description="Periodic AI self-check system. Changes save automatically." onSave={handleSave} showSave={false}>
+    <SectionCard id="heartbeat" title="Heartbeat" description="Walnut wakes up on this schedule and works through the checklist below. Changes save automatically." onSave={handleSave} showSave={false}>
       <div className="form-group">
         <ToggleSwitch id="hb-enabled" checked={enabled} onChange={setEnabled} label="Enable Heartbeat" />
       </div>

@@ -1,5 +1,5 @@
 /**
- * Settings → Cloud Companion wizard.
+ * Settings → Phones & Cloud → Cloud Companion wizard.
  *
  * Scope on purpose: everything up to and including a REAL job running through the
  * real state machine, then cancel. It does NOT try to reach 'done' — the last
@@ -27,11 +27,14 @@ async function openCloudSection(page: Page) {
   await page.getByRole('link', { name: /settings/i }).first().click()
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
 
-  const nav = page.locator('.settings-nav-item', { hasText: /^Cloud Companion$/ })
+  // The Cloud Companion card has no nav button of its own: it renders right under
+  // the Phones & Cloud (devices) card and shares that entry.
+  const nav = page.locator('.settings-nav-item', { hasText: /^Phones & Cloud$/ })
   await expect(nav).toHaveCount(1)
   await nav.click()
 
   const section = page.locator('#cloud')
+  await section.scrollIntoViewIfNeeded()
   await expect(section).toBeVisible()
   return section
 }

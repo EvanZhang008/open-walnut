@@ -4,6 +4,17 @@ All notable changes to Open Walnut are documented here. This project follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions may include
 breaking changes).
 
+## [0.4.5] - 2026-09-03
+
+### Changed
+
+- **Settings reorganised so each card is about one thing.** New **Tasks** card (default priority/project, "Quick-add creates tasks in", Task Summary) with Focus Tiers folded under it; **Sessions** is now only the session runtime (idle timeout, permission interception, modes, output mode). Per-host Session Limits moved to **Remote Hosts**, the SDK Session Server switch to **Advanced**, Chat Notifications to **General**, and Text-to-Speech joins dictation under **Voice**. Renamed to stop the collisions: Calendar → **Calendar Accounts**, Permissions → **macOS Access**, Timeline → **Screen Tracking**, Devices → **Phones & Cloud** (Cloud Companion folds under it), Search & Embeddings → **Search**. A **Diagnostics** nav group holds Usage & Costs, Suggestion Accuracy (its own card now), Screen Tracking, and Bug Report. Every section keeps its `#id` deep link.
+- The Claude Code provider card drops the duplicate "Protocol" row, and its model list reads Claude Code default / Opus / Sonnet / Haiku instead of "(subscription)", which was wrong on a Bedrock-backed machine.
+
+### Fixed
+
+- The Settings nav highlight now follows the scroll. It attached its scroll listener while the page was still a loading spinner and never re-attached, so it stayed on the first entry no matter how far you scrolled; the nav also scrolls its own list to keep the highlighted entry in view, and the last card lights up at the bottom of the page.
+
 ## [0.4.4] - 2026-09-03
 
 ### Changed

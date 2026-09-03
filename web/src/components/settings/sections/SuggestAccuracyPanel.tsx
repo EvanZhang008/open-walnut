@@ -53,7 +53,17 @@ function when(iso: string): string {
   });
 }
 
-export function SuggestAccuracyPanel() {
+/**
+ * `standalone`: the panel is the whole card (Settings → Diagnostics → Suggestion
+ * Accuracy), so the SectionCard already carries the title and description and the
+ * inner heading would repeat them.
+ */
+export const SUGGEST_ACCURACY_BLURB =
+  'A new session\u2019s draft guesses its project, folder and pin tier from what you type. ' +
+  'This compares every guess against what the launch actually carried. Only the field names ' +
+  'and values are recorded \u2014 never the text you typed.';
+
+export function SuggestAccuracyPanel({ standalone = false }: { standalone?: boolean } = {}) {
   const [summary, setSummary] = useState<SuggestAccuracySummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -71,11 +81,11 @@ export function SuggestAccuracyPanel() {
     }
   }, []);
 
-  // Fetch once the user is LOOKING at Tasks & Sessions, then stop observing.
+  // Fetch once the user is LOOKING at the card, then stop observing.
   //
   // The observed element is the whole settings CARD, not this panel: the panel is
   // the last thing in a long card, so watching it meant the settings nav could
-  // scroll "Tasks & Sessions" into view with the panel still a screen below the
+  // scroll the card into view with the panel still a screen below the
   // fold — it then sat there unfetched, and (worse) claimed to be reading. Watching
   // the card fires as soon as the section is on screen, while a settings visit that
   // never comes near it still costs no request.
@@ -105,12 +115,14 @@ export function SuggestAccuracyPanel() {
 
   return (
     <div className="form-group" ref={rootRef}>
-      <label style={{ fontWeight: 600 }}>Suggestion Accuracy</label>
-      <p className="text-sm text-muted" style={{ margin: '2px 0 8px' }}>
-        A new session&rsquo;s draft guesses its project, folder and pin tier from what you type.
-        This compares every guess against what the launch actually carried. Only the field names
-        and values are recorded &mdash; never the text you typed.
-      </p>
+      {!standalone && (
+        <>
+          <label style={{ fontWeight: 600 }}>Suggestion Accuracy</label>
+          <p className="text-sm text-muted" style={{ margin: '2px 0 8px' }}>
+            {SUGGEST_ACCURACY_BLURB}
+          </p>
+        </>
+      )}
 
       {/* Only while a read is actually in flight. Before that (never scrolled here)
           the panel shows just its description: "Reading the ledger…" while nothing

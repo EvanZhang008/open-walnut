@@ -121,7 +121,7 @@ export function useSttStatus(): SttStatusState {
   const error = !status
     ? null
     : !isConfigured
-      ? 'No STT engine configured. Go to Settings → Speech-to-Text.'
+      ? 'No STT engine configured. Go to Settings → Voice.'
       : !isAvailable
         ? status.error ?? 'STT engine not available'
         : null;

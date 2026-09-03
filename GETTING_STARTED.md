@@ -436,7 +436,7 @@ export WALNUT_DISABLE_SEARCH=1                 # do not index anything
 npm start
 ```
 
-Switching presets is safe: the index notices the model changed, drops the stored vectors, and re-embeds in the background. Keyword search keeps working the whole time. **Settings → Search & Embeddings** shows index health, per-kind document counts, and a **Rebuild index** button.
+Switching presets is safe: the index notices the model changed, drops the stored vectors, and re-embeds in the background. Keyword search keeps working the whole time. **Settings → Search** shows index health, per-kind document counts, and a **Rebuild index** button.
 
 ---
 
@@ -657,7 +657,7 @@ All commands support `--json` for structured output.
 
 ### Search or embedding model issues
 
-**Symptoms**: results look keyword-only, or **Settings → Search & Embeddings** reports an error.
+**Symptoms**: results look keyword-only, or **Settings → Search** reports an error.
 
 The embedding model is fetched on first use into `~/.open-walnut/models/`. Until it finishes, search answers from the keyword lanes alone, which is a working search, not a failure. If the download was interrupted, delete that folder and restart; it re-fetches.
 

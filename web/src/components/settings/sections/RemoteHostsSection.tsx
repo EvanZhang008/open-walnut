@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { NumberInput } from '../inputs/NumberInput';
+import { KeyValueEditor } from '../inputs/KeyValueEditor';
 import { useAutoSave } from '@/hooks/useAutoSave';
 
 interface HostEntry {
@@ -30,6 +31,9 @@ interface Props {
 export function RemoteHostsSection({ config, onSave }: Props) {
   const [hosts, setHosts] = useState<HostEntry[]>([]);
   const [expanded, setExpanded] = useState<number | null>(null);
+  // Per-host concurrency caps (config.session_limits). Keyed by the same aliases
+  // as the hosts above (plus "local"), so they belong on this card.
+  const [sessionLimits, setSessionLimits] = useState<Record<string, string | number>>(config.session_limits ?? {});
 
   useEffect(() => {
     const entries = Object.entries(config.hosts ?? {}).map(([alias, h]) => ({
@@ -44,6 +48,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
       discovered: h.discovered ?? false,
     }));
     setHosts(entries);
+    setSessionLimits(config.session_limits ?? {});
   }, [config]);
 
   const updateHost = <K extends keyof HostEntry>(idx: number, field: K, value: HostEntry[K]) => {
@@ -79,8 +84,19 @@ export function RemoteHostsSection({ config, onSave }: Props) {
     return hostsConfig;
   };
 
+  // Normalize the per-host limits to numbers. The KeyValueEditor yields strings while a
+  // post-save config round-trip yields numbers; normalizing keeps the auto-save fingerprint
+  // stable so semantically-equal values don't trigger repeated writes.
+  const normalizeLimits = (raw: Record<string, string | number>): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      out[k] = typeof v === 'number' ? v : parseInt(v, 10) || 0;
+    }
+    return out;
+  };
+
   const handleSave = async () => {
-    await onSave({ hosts: buildHostsConfig() });
+    await onSave({ hosts: buildHostsConfig(), session_limits: normalizeLimits(sessionLimits) });
   };
 
   // Re-normalize the persisted hosts through the SAME field order buildHostsConfig produces,
@@ -105,8 +121,8 @@ export function RemoteHostsSection({ config, onSave }: Props) {
   // Fingerprint the VALIDATED hosts map (not raw entries) so typing a partial host — or a row
   // with no alias yet — doesn't trigger a write until it's a complete, savable entry.
   useAutoSave({
-    current: JSON.stringify(buildHostsConfig()),
-    baseline: JSON.stringify(normalizeHosts(config.hosts)),
+    current: JSON.stringify({ hosts: buildHostsConfig(), limits: normalizeLimits(sessionLimits) }),
+    baseline: JSON.stringify({ hosts: normalizeHosts(config.hosts), limits: normalizeLimits(config.session_limits ?? {}) }),
     save: handleSave,
   });
 
@@ -233,6 +249,22 @@ export function RemoteHostsSection({ config, onSave }: Props) {
       <button type="button" className="btn btn-sm" onClick={addHost} style={{ marginTop: 8 }}>
         + Add Host
       </button>
+
+      <div className="settings-divider" />
+
+      <div className="form-group">
+        <label>Session Limits (per host)</label>
+        <p className="text-sm text-muted" style={{ margin: '-4px 0 4px' }}>
+          Max concurrent sessions per host. Use &quot;local&quot; for local sessions.
+        </p>
+        <KeyValueEditor
+          entries={sessionLimits}
+          onChange={setSessionLimits}
+          keyPlaceholder="Host alias (e.g., local)"
+          valuePlaceholder="Max sessions"
+          valueType="number"
+        />
+      </div>
     </SectionCard>
   );
 }

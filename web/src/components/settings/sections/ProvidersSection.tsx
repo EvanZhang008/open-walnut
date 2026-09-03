@@ -746,10 +746,14 @@ function ProviderCard({
 
       {expanded && (
         <div className="provider-card-body">
-          <div className="provider-card-meta">
-            <span>Protocol: {PROTOCOL_LABELS[def.api] ?? def.api}</span>
-            {def.base_url && <span>URL: {def.base_url}</span>}
-          </div>
+          {/* Claude Code's login line below already says how it connects; a
+              "Protocol" row on top of it was the same fact twice. */}
+          {def.api !== 'claude-cli' && (
+            <div className="provider-card-meta">
+              <span>Protocol: {PROTOCOL_LABELS[def.api] ?? def.api}</span>
+              {def.base_url && <span>URL: {def.base_url}</span>}
+            </div>
+          )}
 
           {/* Bedrock: region + credentials */}
           {def.api === 'bedrock' && isActive && (

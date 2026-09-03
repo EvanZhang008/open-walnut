@@ -637,7 +637,7 @@ test.describe('Rich HTML streaming', () => {
     const settingsLink = page.locator('.sidebar a[href="/settings"]').first();
     await expect(settingsLink).toBeVisible({ timeout: 30_000 });
     await settingsLink.click();
-    const nav = page.locator('.settings-nav-item', { hasText: 'Tasks & Sessions' }).first();
+    const nav = page.locator('.settings-nav-item', { hasText: /^Sessions$/ }).first();
     await expect(nav).toBeVisible({ timeout: 15_000 });
     await nav.click();
 

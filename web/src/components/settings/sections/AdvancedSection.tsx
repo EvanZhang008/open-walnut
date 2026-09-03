@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
-import { UI_ONLY_CATEGORIES, setShowUiOnlyCategory, type UiOnlyCategory } from '@/hooks/useDeveloperSettings';
-import { updateConfig } from '@/api/config';
 import { AUTOSAVE_DELAY_MS } from '@/hooks/useAutoSave';
 import { apiGet, apiPost } from '@/api/client';
 
@@ -103,6 +101,11 @@ export function AdvancedSection({ config, onSave }: Props) {
         offline_grace_minutes: num('ka-offline'),
         linger_minutes: num('ka-linger'),
       },
+      session_server: {
+        ...config.session_server,
+        enabled: bool('sdk-enabled'),
+        port: num('sdk-port') ?? 7890,
+      },
     });
     // Re-evaluate immediately so the toggle takes effect without waiting a minute.
     refreshKaStatus();
@@ -111,8 +114,6 @@ export function AdvancedSection({ config, onSave }: Props) {
   // Auto-save: this section uses uncontrolled inputs (defaultValue/defaultChecked + FormData),
   // so there's no React state to fingerprint — and config-prop refreshes don't reset the DOM
   // inputs, so there's no save→reset loop to guard against. Just debounce on form edits.
-  // The "Chat Notifications" checkboxes save themselves via handleToggleUiOnly (developer key,
-  // which handleSave doesn't touch), so re-saving on their change is a harmless no-op.
   const handleSaveRef = useRef(handleSave);
   handleSaveRef.current = handleSave;
   useEffect(() => {
@@ -131,34 +132,6 @@ export function AdvancedSection({ config, onSave }: Props) {
       form.removeEventListener('change', onEdit);
     };
   }, []);
-
-  // Read dev settings from localStorage directly (no hook).
-  // Respects defaultOn — raw localStorage.getItem would treat never-set keys as false.
-  const getDevChecked = (key: string) => {
-    const catDef = UI_ONLY_CATEGORIES.find(c => c.key === key);
-    const defaultVal = catDef?.defaultOn ?? false;
-    try {
-      const stored = localStorage.getItem(`open-walnut:show_ui_only_${key}`);
-      if (stored !== null) return stored === 'true';
-      return defaultVal;
-    } catch { return defaultVal; }
-  };
-
-  const handleToggleUiOnly = async (category: UiOnlyCategory, checked: boolean) => {
-    setShowUiOnlyCategory(category, checked);
-    try {
-      const ds: Record<string, boolean> = {};
-      for (const cat of UI_ONLY_CATEGORIES) {
-        const key = `show_ui_only_${cat.key.replace(/-/g, '_')}`;
-        // Use getDevChecked (respects defaultOn) instead of raw localStorage
-        // to avoid zeroing out defaultOn categories that were never explicitly set
-        ds[key] = cat.key === category ? checked : getDevChecked(cat.key);
-      }
-      await updateConfig({ developer: ds } as Partial<Config>);
-    } catch {
-      setShowUiOnlyCategory(category, !checked);
-    }
-  };
 
   return (
     <SectionCard id="advanced" title="Advanced" description="Git versioning, exec security, subagent defaults, developer options. Changes save automatically." onSave={handleSave} showSave={false}>
@@ -311,26 +284,34 @@ export function AdvancedSection({ config, onSave }: Props) {
           </details>
         )}
 
-        {/* Chat Notifications */}
+        {/* SDK Session Server — a developer switch (Agent SDK server instead of CLI
+            sessions). It used to sit in the Sessions card next to everyday knobs. */}
         <details className="settings-collapsible">
-          <summary className="settings-collapsible-title">Chat Notifications</summary>
+          <summary className="settings-collapsible-title">SDK Session Server</summary>
           <div className="settings-collapsible-body">
-            <p className="text-sm text-muted" style={{ margin: '0 0 12px 0' }}>
-              Choose which background notifications appear in chat. Checked = visible.
-            </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {UI_ONLY_CATEGORIES.map((cat) => (
-                <label key={cat.key} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    defaultChecked={getDevChecked(cat.key)}
-                    onChange={(e) => handleToggleUiOnly(cat.key, e.target.checked)}
-                    style={{ width: 16, height: 16, accentColor: 'var(--accent)', flexShrink: 0 }}
-                  />
-                  <span>{cat.label}</span>
-                  <span className="text-sm text-muted" style={{ marginLeft: 4 }}>&mdash; {cat.description}</span>
-                </label>
-              ))}
+            <div className="form-group">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  name="sdk-enabled"
+                  id="sdk-enabled"
+                  defaultChecked={config.session_server?.enabled ?? false}
+                  style={{ width: 16, height: 16, accentColor: 'var(--accent)' }}
+                />
+                Use the Agent SDK server instead of CLI sessions
+              </label>
+            </div>
+            <div className="form-group">
+              <label htmlFor="sdk-port">SDK Server Port</label>
+              <input
+                type="number"
+                name="sdk-port"
+                id="sdk-port"
+                defaultValue={config.session_server?.port ?? 7890}
+                min={1024}
+                max={65535}
+                style={{ maxWidth: 160 }}
+              />
             </div>
           </div>
         </details>
