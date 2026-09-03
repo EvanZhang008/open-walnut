@@ -691,6 +691,85 @@ filesRouter.get('/list', async (req: Request, res: Response, next: NextFunction)
 })
 
 /**
+ * POST /api/files/list-many { paths: string[], host?, showHidden?, cwd?, sessionId? }
+ *   → { listings: [{ path, entries, selectedFile? } | { path, error }], truncated, timedOut }
+ *
+ * One request for the whole tree restore. Opening a session's Files panel
+ * reopens every directory the user had expanded, and the explorer used to fetch
+ * each one as its own `/api/files/list` (up to 64). A browser only runs 6
+ * connections per origin, so a 7-level remote tree pinned 6 of them for as long
+ * as the SSH round trips took (~1.4s cold, measured) and everything else in the
+ * app — the next keystroke's autosave, a status poll — queued behind it. That is
+ * the app-wide "opening Files makes Walnut slow" report, and no amount of
+ * per-request speed fixes it: the fan-out itself is the bug.
+ *
+ * Three properties this has to keep, each one a rule this repo already learned:
+ * - It must not simply move the fan-out server-side. A per-item RPC loop floods
+ *   the daemon socket and starves its command timeout, so the listings run at
+ *   bounded concurrency.
+ * - It answers within a deadline, degraded, rather than hanging: the tree paints
+ *   from its IndexedDB cache first and treats the network as a correction, so a
+ *   partial answer costs nothing while a pinned connection costs everything.
+ * - It reuses listSessionFiles, so the path guards are the SAME code as the
+ *   single-directory route. A batch endpoint with its own validation is how a
+ *   traversal check gets skipped in one place and not the other.
+ *
+ * Self-healing (resolve-and-retry on a path that will not list) is deliberately
+ * NOT applied here: these paths come from the client's own persisted expand set,
+ * where a path that no longer lists means the directory is gone, not that the
+ * model mistyped it. Each resolve is its own search, and 64 of them is exactly
+ * the cost this endpoint exists to avoid.
+ */
+const LIST_MANY_MAX_PATHS = 64
+const LIST_MANY_CONCURRENCY = 8
+const LIST_MANY_DEADLINE_MS = 8000
+
+filesRouter.post('/list-many', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = req.body ?? {}
+    const raw = Array.isArray(body.paths) ? body.paths : null
+    if (!raw) { res.status(400).json({ error: 'paths (string[]) is required' }); return }
+    const host = typeof body.host === 'string' && body.host ? body.host : undefined
+    const showHidden = body.showHidden === true || body.showHidden === '1'
+    // De-duplicate before capping: a repeated path would otherwise spend one of
+    // the 64 slots twice and push a real directory out of the batch.
+    const paths: string[] = [...new Set<string>(
+      (raw as unknown[]).filter((p): p is string => typeof p === 'string' && !!p),
+    )]
+    const truncated = paths.length > LIST_MANY_MAX_PATHS
+    const wanted = paths.slice(0, LIST_MANY_MAX_PATHS)
+
+    const deadline = Date.now() + LIST_MANY_DEADLINE_MS
+    const listings: Array<FileListResult | { path: string; error: string }> = []
+    let timedOut = false
+    let next_ = 0
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const i = next_++
+        if (i >= wanted.length) return
+        if (Date.now() >= deadline) { timedOut = true; return }
+        const dirPath = wanted[i]
+        try {
+          listings.push(await listSessionFiles(dirPath, host, showHidden))
+        } catch (err) {
+          // One unreadable directory must never fail the batch: the tree shows
+          // the others and leaves that node closed.
+          listings.push({ path: dirPath, error: err instanceof Error ? err.message : String(err) })
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(LIST_MANY_CONCURRENCY, wanted.length) }, worker))
+    res.json({ listings, truncated, timedOut })
+  } catch (err) {
+    if (err instanceof FilesOpError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
+    next(err)
+  }
+})
+
+/**
  * POST /api/files/reveal { path, mode: 'finder' | 'app' }
  *
  * Hand a LOCAL file/folder to the macOS desktop: reveal it in Finder (`open -R`)

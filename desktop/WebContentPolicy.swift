@@ -79,10 +79,25 @@ struct WebContentPolicy {
     static let enabledKey = "walnutWebContentWatchdog"
     static let warnKey = "walnutWebContentWarnMB"
     static let recycleKey = "walnutWebContentRecycleMB"
+    static let reduceGlassKey = "walnutReduceGlass"
 
     /// Whether the watchdog runs at all. Default on; `-bool NO` turns it off.
     static func isEnabled(_ defaults: UserDefaults) -> Bool {
         defaults.object(forKey: enabledKey) == nil || defaults.bool(forKey: enabledKey)
+    }
+
+    /// Whether to strip `backdrop-filter` from the page.
+    ///
+    /// Off by default, because it changes how the app looks and the cost has not
+    /// been proven. It exists because the cost CANNOT be measured from outside:
+    /// WebKit composites a backdrop blur in WindowServer (Chromium does it inside
+    /// its own GPU process), which is why the same page can feel fine in Chrome and
+    /// slow here, and why headless WebKit — no WindowServer — measures no
+    /// difference at all. With ~14 blurred layers covering 41% of the window at
+    /// three session columns, several of them `blur(44px) saturate(1.8)`, the only
+    /// honest way to settle it is to let the user flip it and say which felt better.
+    static func reduceGlass(_ defaults: UserDefaults) -> Bool {
+        defaults.bool(forKey: reduceGlassKey)
     }
 
     /// Thresholds may be tuned per machine (a 16GB Mac wants a lower recycle

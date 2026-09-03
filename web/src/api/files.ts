@@ -413,3 +413,31 @@ export async function fetchDirList(
   }
   return res.json();
 }
+
+/** One listing in a batch: either the directory, or why it could not be read. */
+export type BatchDirListing = (DirListResponse & { error?: undefined }) | { path: string; error: string };
+
+/** List MANY directories in one request (the tree restore).
+ *
+ *  A browser runs 6 connections per origin. Restoring an expanded tree one
+ *  `fetch` per directory therefore stalls everything else in the app for as long
+ *  as the slowest listing takes — on a remote session that is an SSH round trip
+ *  each, ~1.4s cold. This is the same work in one connection.
+ *
+ *  Partial by contract: the server answers within its own deadline and reports
+ *  `timedOut`, because the tree has already painted from cache and every listing
+ *  here is a correction. Callers apply what came back and leave the rest alone. */
+export async function fetchDirListMany(
+  paths: string[],
+  host?: string,
+  showHidden = false,
+): Promise<{ listings: BatchDirListing[]; truncated: boolean; timedOut: boolean }> {
+  if (!paths.length) return { listings: [], truncated: false, timedOut: false };
+  const res = await fetch('/api/files/list-many', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paths, host, showHidden }),
+  });
+  if (!res.ok) throw new Error(`Failed to list directories: ${res.status}`);
+  return res.json();
+}

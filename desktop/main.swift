@@ -1141,6 +1141,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         """
         config.userContentController.addUserScript(WKUserScript(
             source: disableAutocorrect, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+        // Reduce-transparency test switch (View menu / `defaults write
+        // com.local.walnut-desktop walnutReduceGlass -bool YES`). Injected as a
+        // stylesheet rather than a class the web CSS reacts to, so it works against
+        // any bundle version, including one built before this existed. The glass
+        // backgrounds are already 88% opaque, so dropping the blur is a mild visual
+        // change and a large change in what WindowServer is asked to do per frame.
+        if WebContentPolicy.reduceGlass(UserDefaults.standard) {
+            let reduceGlass = """
+            (() => {
+              const s = document.createElement('style');
+              s.id = 'walnut-reduce-glass';
+              s.textContent = '*, *::before, *::after { backdrop-filter: none !important;'
+                + ' -webkit-backdrop-filter: none !important; }';
+              (document.head || document.documentElement).appendChild(s);
+            })();
+            """
+            config.userContentController.addUserScript(WKUserScript(
+                source: reduceGlass, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
+        DesktopLogger.shared.log("webview_appearance", fields: [
+            "reduceGlass": WebContentPolicy.reduceGlass(UserDefaults.standard) ? "yes" : "no",
+        ])
 
         webView = WKWebView(frame: window.contentView!.bounds, configuration: config)
         webView.autoresizingMask = [.width, .height]
@@ -1180,6 +1202,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// watchdog does on its own, for when the app feels slow right now.
     @objc func recycleWebContentManually() {
         recycleWebContent(reason: "manual")
+    }
+
+    /// View → Reduce Transparency: flips the glass off (or back on) and rebuilds
+    /// the web view so it takes effect immediately. A/B it against the same
+    /// interaction that feels slow; whichever wins, the answer is in the log.
+    @objc func toggleReduceGlass(_ sender: NSMenuItem) {
+        let wanted = sender.state != .on
+        UserDefaults.standard.set(wanted, forKey: WebContentPolicy.reduceGlassKey)
+        sender.state = wanted ? .on : .off
+        recycleWebContent(reason: wanted ? "reduce_glass_on" : "reduce_glass_off")
     }
 
     func stopServer() {
@@ -1666,6 +1698,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let recycleItem = NSMenuItem(title: "Restart Page Process", action: #selector(recycleWebContentManually), keyEquivalent: "R")
         recycleItem.keyEquivalentModifierMask = [.command, .shift]
         viewMenu.addItem(recycleItem)
+        let glassItem = NSMenuItem(title: "Reduce Transparency", action: #selector(toggleReduceGlass), keyEquivalent: "")
+        glassItem.state = WebContentPolicy.reduceGlass(UserDefaults.standard) ? .on : .off
+        viewMenu.addItem(glassItem)
         viewMenu.addItem(NSMenuItem(title: "Open in Browser", action: #selector(openInBrowser), keyEquivalent: "b"))
         viewMenu.addItem(NSMenuItem.separator())
         // Browser-style page zoom. "+" is the unshifted "=" key, so bind "="

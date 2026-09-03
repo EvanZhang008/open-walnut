@@ -92,7 +92,13 @@ struct WebContentPolicyTests {
         precondition(tuned.recycleBytes == 1_000 * mb)
         precondition(tuned.warnBytes == 1_000 * mb, "warn can never sit above recycle")
         precondition(tuned.forceBytes >= tuned.recycleBytes)
+        // Reduce-transparency is the opposite default from the watchdog: it changes
+        // how the app LOOKS, so an unset key must mean "leave the design alone".
+        precondition(!WebContentPolicy.reduceGlass(defaults), "glass stays on unless asked")
+        defaults.set(true, forKey: WebContentPolicy.reduceGlassKey)
+        precondition(WebContentPolicy.reduceGlass(defaults))
         defaults.removePersistentDomain(forName: "walnut-webcontent-policy-tests")
+        precondition(!WebContentPolicy.reduceGlass(defaults), "clearing the domain restores the design")
 
         // Bundle id extraction from served HTML.
         precondition(bundleId(inHTML: "<script type=\"module\" crossorigin src=\"/assets/index-SGKAbTQh.js\"></script>") == "SGKAbTQh")

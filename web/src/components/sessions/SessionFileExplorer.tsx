@@ -20,7 +20,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDragGesture } from '@/hooks/useDragGesture';
-import { fetchDirList, downloadFileUrl, fetchReferences, type DirEntry, type ReferencesResponse } from '@/api/files';
+import { fetchDirList, fetchDirListMany, downloadFileUrl, fetchReferences, type DirEntry, type ReferencesResponse } from '@/api/files';
 import { fetchSessionChangedPaths } from '@/api/session-changes';
 import { useFileContentPrefetch } from '@/hooks/useFileContentPrefetch';
 import { FileContentView } from '@/components/common/FileContentView';
@@ -235,6 +235,8 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   const inFlightRef = useRef<Set<string>>(new Set());
   // Self-reference for the restore-expanded eager loads inside loadDir's body.
   const loadDirRef = useRef<((dirPath: string, opts?: { isRoot?: boolean; restoreExpanded?: boolean }) => Promise<void>) | null>(null);
+  // Same self-reference, for the ONE batched restore loadDir's body kicks off.
+  const loadDirsBatchRef = useRef<((dirPaths: string[]) => Promise<void>) | null>(null);
   // A restored selection awaiting existence-check against its parent listing —
   // a file deleted since the last visit must not leave a dead preview pane.
   const pendingValidateRef = useRef<string | null>(null);
@@ -369,9 +371,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
           // NO `childrenMap.has` guard: the reset effect primes exactly these
           // paths from the cache, and skipping them here would turn an instant
           // paint into a tree that never refreshes.
-          for (const p of [...restored].slice(0, MAX_RESTORE_LOADS)) {
-            void loadDirRef.current?.(p);
-          }
+          // ONE request for all of them — see loadDirsBatch for why a fetch per
+          // directory made the whole app wait.
+          void loadDirsBatchRef.current?.([...restored].slice(0, MAX_RESTORE_LOADS));
         }
         // If the user typed a file path (or a click deep-linked one), the backend
         // listed its parent and flagged the file — open it in the preview pane
@@ -421,6 +423,64 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     }
   }, [host, showHidden, root, cwd, sessionId, clearStale]);
   loadDirRef.current = loadDir;
+
+  /** Refresh every remembered-expanded directory in ONE request.
+   *
+   *  This used to be a loop of loadDir calls, i.e. up to 64 parallel fetches on
+   *  every panel open. A browser runs 6 connections per origin, so on a remote
+   *  session (one SSH round trip per listing, ~1.4s cold) the restore held the
+   *  whole pool and every other request in the app waited behind it — which is
+   *  what "opening Files makes Walnut slow" actually was.
+   *
+   *  Deliberately narrower than loadDir: no cache paint (the reset effect already
+   *  primes exactly these paths from one IndexedDB transaction), no root
+   *  canonicalisation, and no self-healing. These paths come from the client's own
+   *  persisted expand set, so a path that will not list means the directory is
+   *  gone; resolving 64 of them would reintroduce the cost this removes. */
+  const loadDirsBatch = useCallback(async (dirPaths: string[]): Promise<void> => {
+    const wanted = dirPaths.filter((p) => !inFlightRef.current.has(p));
+    if (!wanted.length) return;
+    for (const p of wanted) inFlightRef.current.add(p);
+    setLoadingPaths((prev) => { const next = new Set(prev); for (const p of wanted) next.add(p); return next; });
+    try {
+      const { listings, timedOut } = await fetchDirListMany(wanted, host, showHidden);
+      const fresh = listings.filter((l): l is Extract<typeof l, { entries: DirEntry[] }> => !l.error);
+      // One setState for the whole batch: 64 sequential map copies would be 64
+      // renders of a tree whose rows are the expensive part.
+      if (fresh.length) {
+        setChildrenMap((prev) => {
+          const next = new Map(prev);
+          for (const l of fresh) next.set(l.path, l.entries);
+          return next;
+        });
+      }
+      for (const l of fresh) {
+        freshDirsRef.current.add(l.path);
+        clearStale(l.path);
+        if (!showHidden) void setCachedDirList(host, l.path, l);
+      }
+      for (const l of listings) {
+        if (!l.error) continue;
+        // Same rule as loadDir: with rows already on screen a failure is a note
+        // beside them, never a replacement for them.
+        if (stalePathsRef.current.has(l.path)) setStaleErrors((prev) => new Map(prev).set(l.path, l.error));
+        else setErrorPaths((prev) => new Map(prev).set(l.path, l.error));
+      }
+      if (timedOut) {
+        log.info('file-explorer', 'tree restore answered partially', { host, asked: wanted.length, got: fresh.length });
+      }
+    } catch (err) {
+      // The batch is a correction on top of the cache paint, so a total failure
+      // leaves the tree exactly as the cache drew it rather than erroring over it.
+      log.warn('file-explorer', 'batch dir restore failed', {
+        host, count: wanted.length, error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      for (const p of wanted) inFlightRef.current.delete(p);
+      setLoadingPaths((prev) => { const next = new Set(prev); for (const p of wanted) next.delete(p); return next; });
+    }
+  }, [host, showHidden, clearStale]);
+  loadDirsBatchRef.current = loadDirsBatch;
 
   // Full reset + load root only when the session (cwd/host) changes — NOT when
   // showHidden flips (that's handled below without nuking expand/selection state).
