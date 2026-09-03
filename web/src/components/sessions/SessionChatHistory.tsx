@@ -1779,10 +1779,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // lazy row heights, sibling panels): scrollTop stays numerically fixed
   // (overflow-anchor:none) so the view visibly rides UP mid-history for the
   // 170-900ms until the debounced pass catches it. Kill the intermediate
-  // frames: while the initial load hasn't settled and the user is at bottom,
-  // pin scrollTop to bottom EVERY FRAME. Self-terminates when initialLoadDone
-  // flips (checked per-frame — it's a ref); a user scrolling up mid-load flips
-  // isAtBottom=false and the pin yields immediately (user intent wins).
+  // frames: while the initial load hasn't settled and nobody has touched the
+  // scroller, pin scrollTop to bottom EVERY FRAME. Self-terminates when the
+  // load settles, and for good the moment the human scrolls (user intent wins).
   useEffect(() => {
     let raf: number | null = null;
     const started = Date.now();
@@ -1792,18 +1791,36 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // User-INPUT authority: during load, isAtBottom can be corrupted by our
     // own write echoes (a scroll event delivered after content grew reads
     // gap>80 → flips it false with no user action; measured as the parked
-    // 224px gap that IMG-FIX then refused to close). Real reading intent
-    // arrives as wheel/touch — until one occurs, the pin owns the bottom.
-    let userScrolled = false;
+    // 224px gap that IMG-FIX then refused to close). Until real input arrives
+    // the pin owns the bottom; after it, the standard follow-bottom paths do.
+    // The pin must STOP on that input, not keep running gated on isAtBottom:
+    // a wheel-up flips isAtBottom=false, but the same frame's scroll event
+    // lands inside the near-bottom band and flips it back, so the next frame
+    // re-pinned. On a trackpad (tens of px per tick) the reader could never
+    // leave the bottom until the fetch settled — 15s on a slow remote host
+    // ("can't scroll up, it flickers and stays at the bottom until loaded").
     const el0 = containerRef.current;
-    const markUser = () => { userScrolled = true; };
-    el0?.addEventListener('wheel', markUser, { passive: true });
-    el0?.addEventListener('touchmove', markUser, { passive: true });
+    let stopped = false;
+    // Wheel-down at the bottom is not reading intent; only an upward tick is.
+    const onWheel = (e: WheelEvent) => { if (e.deltaY < 0) stop(); };
+    function stop() {
+      stopped = true;
+      if (raf !== null) { cancelAnimationFrame(raf); raf = null; }
+      el0?.removeEventListener('wheel', onWheel);
+      el0?.removeEventListener('touchmove', stop);
+      el0?.removeEventListener('pointerdown', stop);
+      el0?.removeEventListener('keydown', stop);
+    }
+    el0?.addEventListener('wheel', onWheel, { passive: true });
+    el0?.addEventListener('touchmove', stop, { passive: true });
+    el0?.addEventListener('pointerdown', stop, { passive: true }); // scrollbar drag
+    el0?.addEventListener('keydown', stop, { passive: true });
     const pin = () => {
       raf = null;
+      if (stopped) return;
       frame++;
       const el = containerRef.current;
-      if (el && (userScrolled ? isAtBottom.current : true) && !selectionActive()) {
+      if (el && !selectionActive()) {
         const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
         if (gap > 2) {
           el.scrollTop = el.scrollHeight;
@@ -1826,19 +1843,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         }
       }
       const settled = !phase2PendingRef.current && quietFrames >= 60 && !imagesPending;
-      if (settled || Date.now() - started > 15_000) {
-        el0?.removeEventListener('wheel', markUser);
-        el0?.removeEventListener('touchmove', markUser);
-        return;
-      }
+      if (settled || Date.now() - started > 15_000) { stop(); return; }
       raf = requestAnimationFrame(pin);
     };
     raf = requestAnimationFrame(pin);
-    return () => {
-      if (raf !== null) cancelAnimationFrame(raf);
-      el0?.removeEventListener('wheel', markUser);
-      el0?.removeEventListener('touchmove', markUser);
-    };
+    return stop;
   }, [sessionId, selectionActive]);
 
   // Path A-0: User just sent a message — force follow-bottom so the sent message

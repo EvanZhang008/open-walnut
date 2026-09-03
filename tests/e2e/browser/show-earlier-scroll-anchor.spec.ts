@@ -66,7 +66,13 @@ test.describe('Show earlier messages — scroll anchor', () => {
     // scroll away, so it can't yank us back to the bottom mid-test.
     await page.waitForTimeout(700);
 
-    // User scrolls to the very top to reach the "Show earlier" button.
+    // User scrolls to the very top to reach the "Show earlier" button. A real
+    // wheel tick first: the load-window bottom pin keeps following the bottom
+    // until a HUMAN scrolls, and a bare scrollTop write is not human input.
+    const box = (await history.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, -300);
+    await page.waitForTimeout(100);
     await history.evaluate((el) => { el.scrollTop = 0; });
     await page.waitForTimeout(400);
     expect(await history.evaluate((el) => el.scrollTop)).toBe(0);
