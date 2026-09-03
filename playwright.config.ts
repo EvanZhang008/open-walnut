@@ -33,6 +33,9 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
+    // The desktop app is a WKWebView, so a desktop-only scroll/paint bug needs a
+    // WebKit run to count as verified. Opt in: PW_WEBKIT=1 … --project webkit
+    ...(process.env.PW_WEBKIT ? [{ name: 'webkit', use: { ...devices['Desktop Safari'] } }] : []),
   ],
 
   webServer: {
