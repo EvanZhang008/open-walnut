@@ -105,7 +105,8 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | PATCH | `/api/v1/sessions/:id` | Rename/archive/mode/human_note (cloud relays) |
 | POST | `/api/v1/sessions/:id/terminate` | Kill the CLI process (cloud relays) |
 | POST | `/api/v1/sessions/:id/restart` | Respawn a fresh CLI — wakes a dead session (cloud relays) |
-| POST | `/api/v1/sessions/:id/retry` | Retry a failed/stopped session (cloud relays) |
+| POST | `/api/v1/sessions/:id/retry` | Reconnect a failed/stopped session — never sends message text (cloud relays) |
+| POST | `/api/v1/sessions/:id/recheck` | Re-probe the host and reconcile the record; no message, no spawn (cloud relays) |
 | POST | `/api/v1/sessions/:id/permission` | Answer a CLI tool-permission prompt (cloud relays) |
 | POST | `/api/v1/sessions/:id/execute-continue` | Execute a completed plan with bypass (cloud relays) |
 | GET | `/api/v1/sessions/:id/changes` | Changed-files data for the session (cloud relays) |
@@ -885,7 +886,7 @@ BOTH boxes:
     `409 conflict` (target task already has a session — the response carries
     `existing_session_id`; or a Codex source session, which cannot fork).
 
-### Session lifecycle (additive, Wave 1 2026-08) — detail / patch / terminate / restart / retry / permission / execute-continue / changes / history
+### Session lifecycle (additive, Wave 1 2026-08) — detail / patch / terminate / restart / retry / recheck / permission / execute-continue / changes / history
 
 Same shared core as the web console (`src/core/sessions/session-lifecycle.ts`).
 All Class B on a cloud REPLICA: each endpoint relays over the `/bridge` WS as a
@@ -919,11 +920,33 @@ an id outside `[A-Za-z0-9_-]`.
   to pending and re-delivered. Archived session → `400 bad_request`.
 - `POST /api/v1/sessions/:id/retry` → one of
   `200 { "status": "reconnected", "sessionId" }` (process was alive — error
-  state cleared), `200 { "status": "resuming", "sessionId",
-  "restoredMessages"? }` (dead process — resumed via the queue), or
+  state cleared), `200 { "status": "resumable", "sessionId" }` (dead process,
+  conversation on disk, nothing queued — the record is relabelled back to a
+  resumable `stopped` and **nothing is sent**), `200 { "status": "resuming",
+  "sessionId", "restoredMessages"? }` (dead process **and** the queue already
+  held the user's own message — that original text is what gets delivered), or
   `200 { "status": "pending", "taskId", "oldSessionId" }` (never initialized —
   archived + a new session started on the task). Only `error`/`stopped`
   sessions are retryable (`400` otherwise; `400` when no task is linked).
+  Retry NEVER synthesizes message text: it used to enqueue a literal
+  `"continue"` on the empty-queue path, which started a turn the human never
+  asked for. A client that wants work to continue sends a real message.
+- `POST /api/v1/sessions/:id/recheck` (additive 2026-09) →
+  `200 { "sessionId", "checked", "reachable", "alive"?, "processStatus",
+  "infraClaim", "reason"? }` — re-probes ONE session against its execution host
+  and reconciles the record from the host's own snapshot. Read-only with respect
+  to the session: no message, no spawn, never `--resume`. Use it when opening a
+  session that sits in `error`, because a record can freeze on a stale
+  "unable to reach remote host" long after the tunnel came back.
+  `reachable` = the host has a live pooled daemon connection right now (reported
+  even when `checked` is false, since that is exactly the fact a stale banner is
+  lying about). `checked` = the daemon answered and its snapshot was applied.
+  `infraClaim` = the record's cause is structurally infra (from `status_reason`,
+  never a prose match), so a client can drop a stale sentence without pattern
+  matching it. `reason` says why nothing was checked: `terminal_error` |
+  `archived` | `no_pooled_connection` | `timeout` | `rpc_failed` | `no_snapshot`.
+  Bounded to one 5s RPC over an ALREADY-POOLED connection — it never dials, so
+  opening a panel cannot pay SSH connect costs. Cloud relays (Class B).
 - `POST /api/v1/sessions/:id/permission` body `{ "requestId", "allow",
   "message"?, "optionId"?, "answers"? }` → `200 { "status": "resolved",
   "requestId", "allow" }` — answers a live CLI tool prompt (`message` =
@@ -1611,7 +1634,7 @@ Per-family matrix:
 | Task detail readback (`GET /tasks/:id`) | local row; with a live bridge the primary's full row is fetched (5s budget) and served when not older than the local row | local row (description/note may be blank until the bridge returns) | read-only |
 | Session PATCH (title / archived / human_note) | Class B+ fast-accept: synchronous relay first; bridge down → durable `cache/control-queue/` + `200 { session, queued: true }` | accepted and queued | drains on reconnect/60s sweep; primary validates at apply time (e.g. archive requires a stopped session); a rejection is dropped and the next projection push shows the truth |
 | Session PATCH (`mode`) | Class B synchronous only | `503 bridge_offline` | mode reconfigures the live CLI (permission mode swap); only the primary can truthfully accept it |
-| Session lifecycle: terminate / restart / retry / permission / execute-continue, model / effort / fork, session launch, messages into a session | Class B relays (messages ride their own durable `session.message` relay; see Session talk) | honest `503 bridge_offline` (messages: still accepted durably by the daemon lane when the daemon is reachable) | these act on a live process; fabricating acceptance would lie about the session's real state |
+| Session lifecycle: terminate / restart / retry / recheck / permission / execute-continue, model / effort / fork, session launch, messages into a session | Class B relays (messages ride their own durable `session.message` relay; see Session talk) | honest `503 bridge_offline` (messages: still accepted durably by the daemon lane when the daemon is reachable) | these act on a live process; fabricating acceptance would lie about the session's real state |
 | Start a session for a task (`POST /tasks/:id/start`), send by handle (`POST /messages`) | Class C: `501 not_supported_cloud` | n/a | both need the primary's session-runner, daemons, and request ledger; the phone's own lanes are `POST /sessions` and `POST /sessions/:id/messages`, which relay over the bridge |
 | Notes vault writes (create/update/delete, global notes, tag rename, folder/attachment deletes) | Class A-like: the vault is git-synced data; writes land locally | accepted | git-sync merge on reconnect; optimistic-lock hashes (`expectedHash`) protect against cross-box conflicts |
 | Time heartbeats (`POST /time/heartbeats`) | Class B relay: `204` only once the primary persisted the batch | `503 primary_unreachable`, so the client keeps the batch queued and retries | the primary is the single writer AND the only box that may assign a sample's local day; nothing is ever banked on the replica. Retries are safe because the primary dedupes on each sample's `id` (exactly-once in the rollup; a known-failed day-file write is retried, so the disk is at-least-once) |
