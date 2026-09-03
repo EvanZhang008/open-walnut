@@ -1099,24 +1099,25 @@ function reapSession(sid, code, reason) {
   let jsonlAgeMs = null;
   try { jsonlAgeMs = Date.now() - fs.statSync(session.jsonlPath).mtimeMs; } catch {}
   const cleanExit = isTurnCompleteExit(session.jsonlPath);
-  // An INTENTIONAL daemon-initiated reclamation is not a failure, and the JSONL
-  // tail cannot tell us it happened. The idle scanner stamps idleReclaimAt
-  // before it signals; the death then lands here through whichever path notices
-  // it (usually orphan-poll ESRCH → code -1). Verified production case: the last
-  // line was a control_response (the reply to a Walnut-issued control request —
-  // a routine shape), so isTurnCompleteExit said false, exitCode stayed -1, and
-  // the projection painted a red "Error" over a healthy, fully resumable session
-  // we reclaimed on purpose. Checked FIRST and unconditionally: the flag carries
-  // information the tail does not contain, which is why isTurnCompleteExit is
-  // left alone. Keep in sync with daemon-core.ts reapSession.
-  const intentionalReclaim = session.idleReclaimAt != null;
-  if (intentionalReclaim && code !== 0) {
-    logMsg('info', 'reapSession: intentional idle reclamation, normalizing exit code', {
+  // A DELIBERATE stop is not a failure, and the JSONL tail cannot tell us it
+  // happened. Both writers (our idle scanner, and any stop RPC via cmdStop)
+  // stamp intentionalStopAt before signalling; the death then lands here through
+  // whichever path notices it (usually orphan-poll ESRCH → code -1). Verified
+  // production case: the last line was a control_response (the reply to a
+  // Walnut-issued control request — a routine shape), so isTurnCompleteExit said
+  // false, exitCode stayed -1, and the projection painted a red "Error" over a
+  // healthy, fully resumable session that was stopped on purpose. Checked FIRST
+  // and unconditionally: the flag carries information the tail does not contain,
+  // which is why isTurnCompleteExit is left alone.
+  // Keep in sync with daemon-core.ts reapSession.
+  const intentionalStop = session.intentionalStopAt != null;
+  if (intentionalStop && code !== 0) {
+    logMsg('info', 'reapSession: intentional stop, normalizing exit code', {
       sid, pid: session.pid, originalCode: code, originalReason: reason,
-      jsonlAgeMs, cleanExit, idleReclaimAt: session.idleReclaimAt,
+      jsonlAgeMs, cleanExit, intentionalStopAt: session.intentionalStopAt,
     });
     code = 0;
-    reason = reason + '+intentional-idle-reclaim';
+    reason = reason + '+intentional-stop';
   } else if (code !== 0 && cleanExit) {
     logMsg('info', 'reapSession: turn-complete detected, normalizing exit code', {
       sid, pid: session.pid, originalCode: code, originalReason: reason, jsonlAgeMs,
@@ -4770,6 +4771,15 @@ function cmdStop(ws, id, cmd) {
   const pid = session.pid;
   logMsg('info', 'cmdStop: stopping session (process group kill)', { sid, pid });
 
+  // Nobody sends stop by accident, so record the intent BEFORE the first signal:
+  // the death lands asynchronously (orphan poll → ESRCH → code -1) and by then
+  // nothing remembers this was asked for. This path is how the SERVER's idle
+  // reaper kills (mgr.kill() → stop RPC), not the daemon's own scan, so it needs
+  // its own stamp: a LOCAL session auto-stopped after 2h idle surfaced as
+  // "Session ended unexpectedly and no cause was recorded" (2026-09-03).
+  // Keep in sync with daemon-standalone.ts cmdStop.
+  session.intentionalStopAt = Date.now();
+
   // An explicit stop is a human decision — never undone by a pending auto-retry
   // respawning the CLI minutes later. Cancel the timer AND clear the streak so
   // an in-flight result line can't re-arm one either.
@@ -6894,7 +6904,7 @@ function scanIdleSessions() {
       // end" for any session whose last line isn't a type:result — and the
       // projection then shows a red Error for our own routine reclamation.
       // Keep in sync with daemon-standalone.ts scanIdleSessions.
-      session.idleReclaimAt = now;
+      session.intentionalStopAt = now;
       killSessionProcessGroup(pid, sid);
     }
   }

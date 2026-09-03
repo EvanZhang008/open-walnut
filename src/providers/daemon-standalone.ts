@@ -427,12 +427,13 @@ interface SessionData {
   orphanPollTimer: ReturnType<typeof setInterval> | null
   mode: SessionMode
   pendingCtrl: PendingCtrl | null
-  // Epoch ms at which OUR OWN idle scanner decided to reclaim this session.
-  // Stamped before the first signal is sent (the death lands asynchronously,
-  // usually via orphan-poll ESRCH, by which point the reason is gone) so
-  // reapSession can report a clean exit code for our own housekeeping instead
-  // of a red error. See daemon-core.ts CoreSessionData.idleReclaimAt.
-  idleReclaimAt?: number | null
+  // Epoch ms at which somebody DELIBERATELY asked this session to stop — our
+  // own idle scanner, or any `stop` RPC (cmdStop). Stamped before the first
+  // signal is sent (the death lands asynchronously, usually via orphan-poll
+  // ESRCH, by which point the reason is gone) so reapSession can report a clean
+  // exit code for a deliberate stop instead of a red error.
+  // See daemon-core.ts CoreSessionData.intentionalStopAt.
+  intentionalStopAt?: number | null
   // C1: incremental fold of the stream file → authoritative SessionSnapshot
   // (docs/plan/session-snapshot-source-of-truth.md §4). Maintains its own v
   // and bg map — coexists with taskState L2 (retirement is C4's call).
@@ -3844,6 +3845,17 @@ function cmdStop(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, un
   const pid = session.pid
   logMsg('info', 'cmdStop: stopping session (process group kill)', { sid, pid })
 
+  // Nobody sends `stop` by accident, so record the intent BEFORE the first
+  // signal: the death lands asynchronously (orphan poll → ESRCH → code -1) and
+  // by then nothing remembers this was asked for. Without the stamp reapSession
+  // falls back to the JSONL tail, which says "not a clean turn end" for any
+  // session whose last line isn't a type:result, and the projection paints a red
+  // Error. This path is how the SERVER's idle reaper kills (mgr.kill() → stop
+  // RPC), not the daemon's own scan, so it needs its own stamp: a LOCAL session
+  // auto-stopped after 2h idle surfaced as "Session ended unexpectedly and no
+  // cause was recorded" (2026-09-03).
+  session.intentionalStopAt = Date.now()
+
   // An explicit stop is a human decision — it must never be undone by a pending
   // auto-retry respawning the CLI a few minutes later. Cancel the timer AND
   // clear the streak so an in-flight `result` line can't re-arm one either.
@@ -5645,7 +5657,7 @@ function scanIdleSessions() {
       // reapSession can only consult the JSONL tail, which says "not a clean
       // turn end" for any session whose last line isn't a type:result — and the
       // projection then shows a red Error for our own routine reclamation.
-      session.idleReclaimAt = now
+      session.intentionalStopAt = now
       killSessionProcessGroup(pid, sid)
     }
   }

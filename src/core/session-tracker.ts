@@ -1501,7 +1501,14 @@ function applyUpdateToSession(
       // — without it the record lands `errorMessage: null`, which reads as
       // "unexplained user-visible error" and disqualifies the session from BOTH
       // recovery paths forever (2026-08-22, inc-1787439819342).
-      if (updates.process_status === 'error') {
+      // 'stopped' needs the same hand-off, and for the same reason. The idle
+      // reaper writes ('health-monitor','idle_timeout') + "No output for N min",
+      // which is category-① and therefore dropped WHOLE; the projection then
+      // lands a cause-less stop. Stashing only on 'error' silently destroyed the
+      // one sentence that made the calm "Auto-stopped after N min idle" banner
+      // possible, so a routine 2h reclamation surfaced as a bare red row
+      // (2026-09-03, a LOCAL session).
+      if (updates.process_status === 'error' || updates.process_status === 'stopped') {
         noteSuppressedErrorReason(session.claudeSessionId, {
           reason: typeof reason === 'string' ? reason : 'unknown',
           message: typeof (updates as Record<string, unknown>).errorMessage === 'string'

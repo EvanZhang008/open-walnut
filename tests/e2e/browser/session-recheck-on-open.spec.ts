@@ -49,7 +49,12 @@ test.beforeAll(async () => {
  * unversioned detail alone would be overruled (and logged as "rejected
  * unversioned input after versioned snapshot").
  */
-async function freezeSessionInError(page: Page): Promise<void> {
+async function freezeSessionInError(
+  page: Page,
+  /** Overrides merged into the fixture's session record. `host: null` makes it a
+   *  LOCAL session, where every "reconnect / host" word is wrong. */
+  overrides: Record<string, unknown> = {},
+): Promise<void> {
   // Regexes, not globs: the detail path is a PREFIX of /history, /recheck and
   // /retry, and each of those needs its own (or no) handler.
   await page.route(/\/api\/sessions\/pw-vscode-session(\?|$)/, async (route) => {
@@ -64,6 +69,7 @@ async function freezeSessionInError(page: Page): Promise<void> {
           hostname: 'devhost.example',
           process_status: 'error',
           errorMessage: FROZEN_ERROR,
+          ...overrides,
         },
       },
     })
@@ -78,6 +84,7 @@ async function freezeSessionInError(page: Page): Promise<void> {
         ...existing,
         process_status: 'error',
         errorMessage: FROZEN_ERROR,
+        ...overrides,
         // Beat any snapshot the app already holds for this session.
         statusRevision: Number(existing.statusRevision ?? 0) + 1000,
         statusUpdatedAt: new Date().toISOString(),
@@ -117,6 +124,14 @@ async function openSessionPanel(page: Page): Promise<Locator> {
 // This box runs several agent sessions at once; at load >100 the first paint alone
 // can take ~30s, which is a starvation artifact rather than a product timeout.
 test.describe.configure({ timeout: 90_000 })
+
+// The homepage polls /api/sessions/status forever, and these tests intercept it
+// with a handler that itself does a route.fetch(). A poll landing during teardown
+// makes that fetch fail with "Target page… has been closed" and fails a test whose
+// assertions all passed. Drop the handlers first, ignoring anything in flight.
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {})
+})
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/')
@@ -264,4 +279,47 @@ test('the real /recheck route answers a bounded, honest shape', async ({ page })
   // Unknown session → 404, not a 500.
   const missing = await page.request.post('/api/sessions/pw-no-such-session/recheck')
   expect(missing.status()).toBe(404)
+})
+
+
+// ── Local sessions must never be told to "reconnect" ─────────────────────────
+// User report 2026-09-03, looking at a session running on their own Mac: "why is
+// it local, why does it need reconnect?" A local session has no host and nothing
+// to reconnect to, so both the button and the banner have to drop that wording.
+test('a LOCAL session says Recheck, not Reconnect, and its banner names no host', async ({ page }) => {
+  const calls = { n: 0 }
+  await freezeSessionInError(page, { host: null, hostname: null, errorMessage: null })
+  await stubRecheck(page, {
+    checked: true, reachable: true, alive: false, processStatus: 'error', infraClaim: true,
+  }, calls)
+
+  const panel = await openSessionPanel(page)
+  const banner = panel.locator('.session-error-banner')
+  await expect(banner).toBeVisible({ timeout: 30_000 })
+
+  // The action reads Recheck; "Reconnect" must not appear anywhere in the banner.
+  await expect(banner.locator('.session-retry-btn')).toHaveText('Recheck')
+  await expect(banner).not.toContainText('Reconnect')
+  await expect(banner).not.toContainText('host')
+
+  // Once proven reachable, a local session gets only the half of the sentence
+  // that carries information — no "X is reachable" about the machine it is on.
+  await expect(banner).toContainText("process is not running", { timeout: 10_000 })
+  await expect(banner).not.toContainText('is reachable')
+
+  await banner.screenshot({ path: `${SCREENSHOT_DIR}/banner-local-recheck.png` })
+  expect(calls.n, 'a local session still gets exactly one recheck').toBe(1)
+})
+
+test('a REMOTE session keeps the Reconnect wording', async ({ page }) => {
+  const calls = { n: 0 }
+  await freezeSessionInError(page)
+  await stubRecheck(page, {
+    checked: true, reachable: true, alive: false, processStatus: 'error', infraClaim: true,
+  }, calls)
+
+  const panel = await openSessionPanel(page)
+  const banner = panel.locator('.session-error-banner')
+  await expect(banner.locator('.session-retry-btn')).toHaveText('Reconnect', { timeout: 30_000 })
+  await expect(banner).toContainText('is reachable', { timeout: 10_000 })
 })

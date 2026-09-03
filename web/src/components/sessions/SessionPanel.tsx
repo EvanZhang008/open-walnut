@@ -1807,8 +1807,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
           // also hidden, so the session looked permanently bricked
           // (inc-1787439819342). A blank diagnosis is still worth a sentence and
           // a Retry.
+          // Host-neutral on purpose: this same sentence shows for a session on
+          // THIS machine, where "re-checks the host" is meaningless and made a
+          // routine local auto-stop read as a network fault (2026-09-03).
           const errorText = session?.errorMessage
-            || 'Session ended unexpectedly and no cause was recorded. Reconnect re-checks the host; your conversation is kept.';
+            || 'Session ended and no cause was recorded. The button below re-checks whether it is still running; your conversation is kept.';
           // Coupling: 'Connection lost' is set by session-health-monitor when daemon unreachable.
           // 'Reconnecting' activity is set by the same monitor's recovery loop.
           const isReconnecting = !!session?.errorMessage?.includes('Connection lost')
@@ -1827,11 +1830,17 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
           // the spinner variant.
           const spinning = isReconnecting || checking;
           const calm = spinning || provedReachable;
-          const hostLabel = session?.hostname || session?.host || 'The host';
+          // A local session's reachability is trivially true, so saying "X is
+          // reachable" about this machine is noise. Local gets only the half of
+          // the sentence that carries information.
+          const isRemote = !!session?.host;
+          const hostLabel = session?.hostname || session?.host || '';
           const bannerText = checking
             ? 'Checking connection\u2026'
             : provedReachable
-              ? `${hostLabel} is reachable \u2014 this session's process is not running. Send a message to resume it.`
+              ? (isRemote
+                  ? `${hostLabel} is reachable, and this session's process is not running. Send a message to resume it.`
+                  : "This session's process is not running. Send a message to resume it.")
               : isReconnecting ? 'Reconnecting to remote host...' : errorText;
           return (
             <div className={`session-error-banner${spinning ? ' session-error-banner--reconnecting' : provedReachable ? ' session-error-banner--idle' : ''}`}>
@@ -1843,7 +1852,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                   return sug ? <ErrorSuggestionLink {...sug} /> : null;
                 })()}
               </div>
-              <SessionRetryButton sessionId={sessionId} onRetried={handleRetried} onResuming={handleResuming} />
+              <SessionRetryButton sessionId={sessionId} host={session?.host} onRetried={handleRetried} onResuming={handleResuming} />
             </div>
           );
         })()}
@@ -1866,7 +1875,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                   return sug ? <ErrorSuggestionLink {...sug} /> : null;
                 })()}
               </div>
-              <SessionRetryButton sessionId={sessionId} onRetried={handleRetried} onResuming={handleResuming} />
+              <SessionRetryButton sessionId={sessionId} host={session?.host} onRetried={handleRetried} onResuming={handleResuming} />
             </div>
           );
         })()}

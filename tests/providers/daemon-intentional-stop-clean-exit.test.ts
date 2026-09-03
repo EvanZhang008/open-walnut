@@ -1,5 +1,5 @@
 /**
- * Intentional idle reclamation reports a CLEAN exit, not an error.
+ * A DELIBERATE stop reports a CLEAN exit, not an error.
  *
  * The daemon's own idle scanner reclaims a session after the idle threshold
  * (no subscribers, no output). That teardown is deliberate housekeeping, but it
@@ -12,15 +12,23 @@
  * session (verified on a real remote daemon: idleMinutes 121, reason
  * "orphan-poll-dead", cleanExit false).
  *
+ * TWO writers stamp that intent, and both matter. The daemon's own idle scanner
+ * is one. The other is `cmdStop`, i.e. any `stop` RPC: the SERVER has its own
+ * idle reaper that kills through `mgr.kill()` → `conn.send('stop')`, so it never
+ * touched the daemon's scan at all. A LOCAL session auto-stopped after 2h idle
+ * therefore still came back red, reading "Session ended unexpectedly and no
+ * cause was recorded" on a machine where nothing had disconnected (2026-09-03).
+ * Nobody sends `stop` by accident, so an explicit stop is never a crash.
+ *
  * The fix records the INTENT on the session before the first signal
- * (`idleReclaimAt`) and normalizes the code in reapSession. Covered here:
+ * (`intentionalStopAt`) and normalizes the code in reapSession. Covered here:
  *   1. daemon-core behavior (the bun binary reaps through it) — intentional vs.
  *      not, with the real non-result tail.
  *   2. the SOURCE TEMPLATE's own reapSession text, evaluated (the JS fallback
  *      can't import daemon-core, so its copy is hand-synced).
  *   3. the end-to-end MEANING: exitCode → assembleSnapshot →
  *      projectProcessStatus is 'stopped', not 'error'.
- *   4. byte-level parity of the intent stamp across all three twins.
+ *   4. byte-level parity of BOTH intent stamps across all three twins.
  *
  * MACHINE SAFETY: this file signals NOTHING. Every kill primitive is a spy
  * (`killProcessGroupFn` in the injected deps for daemon-core; a `killProcessGroup`
@@ -51,7 +59,7 @@ const RESULT_TAIL = JSON.stringify({
   type: 'result', subtype: 'success', stop_reason: 'end_turn', is_error: false,
 }) + '\n'
 
-describe('daemon-core: intentional idle reclamation normalizes the exit code', () => {
+describe('daemon-core: an intentional stop normalizes the exit code', () => {
   let ctx: Awaited<ReturnType<typeof buildDeps>>
   let killSpy: ReturnType<typeof vi.spyOn>
 
@@ -80,20 +88,20 @@ describe('daemon-core: intentional idle reclamation normalizes the exit code', (
 
   it('reaps to code 0 with an intentional reason when the tail is NOT a result line', () => {
     const core = createDaemonCore(ctx.deps)
-    const session = sessionWithTail('intent', CONTROL_RESPONSE_TAIL, { idleReclaimAt: 1_700_000_000_000 })
+    const session = sessionWithTail('intent', CONTROL_RESPONSE_TAIL, { intentionalStopAt: 1_700_000_000_000 })
     ctx.sessions.set('sid-intent', session)
 
     // Exactly the production call: the orphan poll saw ESRCH.
     core.reapSession('sid-intent', -1, 'orphan-poll-dead')
 
     expect(session.exitCode).toBe(0)
-    expect(session.exitReason).toBe('orphan-poll-dead+intentional-idle-reclaim')
+    expect(session.exitReason).toBe('orphan-poll-dead+intentional-stop')
     const payload = ctx.spies.broadcastSessionStateFn.mock.calls[0][0] as Record<string, unknown>
     expect(payload).toMatchObject({ state: 'dead', exitCode: 0 })
-    expect(payload.reason).toBe('orphan-poll-dead+intentional-idle-reclaim')
+    expect(payload.reason).toBe('orphan-poll-dead+intentional-stop')
     // And it says so in the log, with the flag that carried the information.
     const normalized = ctx.spies.logger.mock.calls.find(
-      (c) => c[1] === 'reapSession: intentional idle reclamation, normalizing exit code',
+      (c) => c[1] === 'reapSession: intentional stop, normalizing exit code',
     )
     expect(normalized, 'the normalization must be logged, not silent').toBeTruthy()
     expect((normalized![2] as Record<string, unknown>).cleanExit).toBe(false)
@@ -110,7 +118,7 @@ describe('daemon-core: intentional idle reclamation normalizes the exit code', (
     expect(session.exitCode).toBe(-1)
     expect(session.exitReason).toBe('orphan-poll-dead')
     expect(ctx.spies.logger.mock.calls.some(
-      (c) => c[1] === 'reapSession: intentional idle reclamation, normalizing exit code',
+      (c) => c[1] === 'reapSession: intentional stop, normalizing exit code',
     )).toBe(false)
   })
 
@@ -127,18 +135,18 @@ describe('daemon-core: intentional idle reclamation normalizes the exit code', (
 
   it('an intentional reclaim on a result tail reports the intentional reason (intent wins)', () => {
     const core = createDaemonCore(ctx.deps)
-    const session = sessionWithTail('both', RESULT_TAIL, { idleReclaimAt: 1_700_000_000_000 })
+    const session = sessionWithTail('both', RESULT_TAIL, { intentionalStopAt: 1_700_000_000_000 })
     ctx.sessions.set('sid-both', session)
 
     core.reapSession('sid-both', -1, 'orphan-poll-dead')
 
     expect(session.exitCode).toBe(0)
-    expect(session.exitReason).toBe('orphan-poll-dead+intentional-idle-reclaim')
+    expect(session.exitReason).toBe('orphan-poll-dead+intentional-stop')
   })
 
   it('does not decorate a reason that already arrived with code 0', () => {
     const core = createDaemonCore(ctx.deps)
-    const session = sessionWithTail('zero', CONTROL_RESPONSE_TAIL, { idleReclaimAt: 1_700_000_000_000 })
+    const session = sessionWithTail('zero', CONTROL_RESPONSE_TAIL, { intentionalStopAt: 1_700_000_000_000 })
     ctx.sessions.set('sid-zero', session)
 
     core.reapSession('sid-zero', 0, 'proc-exit')
@@ -150,7 +158,7 @@ describe('daemon-core: intentional idle reclamation normalizes the exit code', (
   // The point of the whole change: the number has to MEAN 'stopped' downstream.
   it('the reaped exitCode projects to stopped for an intentional reap and error otherwise', () => {
     const core = createDaemonCore(ctx.deps)
-    const reclaimed = sessionWithTail('proj-a', CONTROL_RESPONSE_TAIL, { idleReclaimAt: 1_700_000_000_000 })
+    const reclaimed = sessionWithTail('proj-a', CONTROL_RESPONSE_TAIL, { intentionalStopAt: 1_700_000_000_000 })
     const crashed = sessionWithTail('proj-b', CONTROL_RESPONSE_TAIL)
     ctx.sessions.set('sid-proj-a', reclaimed)
     ctx.sessions.set('sid-proj-b', crashed)
@@ -175,7 +183,7 @@ describe('daemon-core: intentional idle reclamation normalizes the exit code', (
 // daemon-source.ts can't import daemon-core, so its reapSession is hand-synced.
 // Byte checks alone would pass on a copy that kept the comment and dropped the
 // branch, so the template's own function text is EVALUATED here against fakes.
-describe('daemon-source template: reapSession honors the idle-reclaim intent', () => {
+describe('daemon-source template: reapSession honors the intentional-stop intent', () => {
   const deployed = getDaemonSource()
 
   /** Slice a top-level function out of the deployed source (closing `}` is at column 0). */
@@ -243,7 +251,7 @@ describe('daemon-source template: reapSession honors the idle-reclaim intent', (
 
   beforeEach(() => {
     killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true)
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-idle-reclaim-'))
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-intentional-stop-'))
   })
 
   afterEach(() => {
@@ -252,7 +260,7 @@ describe('daemon-source template: reapSession honors the idle-reclaim intent', (
     fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
-  function makeSession(name: string, tail: string, idleReclaimAt: number | null) {
+  function makeSession(name: string, tail: string, intentionalStopAt: number | null) {
     const jsonlPath = path.join(tmpDir, `jsonl-${name}`)
     fs.writeFileSync(jsonlPath, '{"type":"system","subtype":"init"}\n' + tail)
     return {
@@ -267,7 +275,7 @@ describe('daemon-source template: reapSession honors the idle-reclaim intent', (
       cwd: tmpDir,
       orphanPollTimer: null,
       subscribers: new Set(),
-      idleReclaimAt,
+      intentionalStopAt,
     }
   }
 
@@ -279,7 +287,7 @@ describe('daemon-source template: reapSession honors the idle-reclaim intent', (
     h.reapSession('sid-intent', -1, 'orphan-poll-dead')
 
     expect(session.exitCode).toBe(0)
-    expect(session.exitReason).toBe('orphan-poll-dead+intentional-idle-reclaim')
+    expect(session.exitReason).toBe('orphan-poll-dead+intentional-stop')
     // The kill ladder ran against the spy only, with the arguments we expect.
     expect(h.killProcessGroup).toHaveBeenCalledWith(4242, 'SIGTERM')
     expect(h.broadcastSessionState).toHaveBeenCalledWith('sid-intent', 'dead', expect.objectContaining({ exitCode: 0 }))
@@ -300,7 +308,7 @@ describe('daemon-source template: reapSession honors the idle-reclaim intent', (
     // Proves this file can FAIL. Same harness, same input, but the extracted
     // text has the intent test forced false: the pre-fix behavior comes back.
     const h = buildHarness((body) => {
-      const cut = body.replace('session.idleReclaimAt != null', 'false')
+      const cut = body.replace('session.intentionalStopAt != null', 'false')
       expect(cut, 'the intent test is no longer in the deployed text').not.toBe(body)
       return cut
     })
@@ -325,7 +333,7 @@ describe('daemon-source template: reapSession honors the idle-reclaim intent', (
 })
 
 // ── Parity: the intent stamp must exist in all three twins, once, at the scan ──
-describe('idle-reclaim intent parity across the three daemon twins', () => {
+describe('intentional-stop intent parity across the three daemon twins', () => {
   const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf-8')
   const coreSrc = read('src/providers/daemon-core.ts')
   const standaloneSrc = read('src/providers/daemon-standalone.ts')
@@ -363,8 +371,8 @@ describe('idle-reclaim intent parity across the three daemon twins', () => {
   it('both reapSession twins check the intent BEFORE the turn-complete branch', () => {
     for (const [name, src] of [['daemon-core', coreSrc], ['daemon-source', templateSrc]] as const) {
       const body = fnBody(src, 'reapSession', name)
-      const intentIdx = body.indexOf('session.idleReclaimAt != null')
-      const suffixIdx = body.indexOf("'+intentional-idle-reclaim'")
+      const intentIdx = body.indexOf('session.intentionalStopAt != null')
+      const suffixIdx = body.indexOf("'+intentional-stop'")
       const turnCompleteIdx = body.indexOf("'+turn-complete'")
       expect(intentIdx, `${name}: reapSession does not read the intent flag`).toBeGreaterThan(-1)
       expect(suffixIdx, `${name}: reapSession does not record the intentional reason`).toBeGreaterThan(-1)
@@ -381,7 +389,7 @@ describe('idle-reclaim intent parity across the three daemon twins', () => {
         .toMatch(/parsed\.type !== 'result'\) return false/)
       expect(body, `${name}: widening the tail detector would reclassify real crashes`)
         .not.toContain('control_response')
-      expect(body).not.toContain('idleReclaimAt')
+      expect(body).not.toContain('intentionalStopAt')
     }
   })
 
@@ -390,7 +398,7 @@ describe('idle-reclaim intent parity across the three daemon twins', () => {
       const at = src.indexOf("'idle scan: killing idle session (no subscribers, no output)'")
       expect(at, `${name}: the idle-scan kill log is gone`).toBeGreaterThan(-1)
       const block = src.slice(at, at + 1200)
-      const stampIdx = block.search(/session\.idleReclaimAt = now/)
+      const stampIdx = block.search(/session\.intentionalStopAt = now/)
       const killIdx = block.indexOf('killSessionProcessGroup(pid, sid)')
       expect(stampIdx, `${name}: the idle scan does not record the reclaim intent`).toBeGreaterThan(-1)
       expect(killIdx, `${name}: the idle-scan kill call is gone`).toBeGreaterThan(-1)
@@ -399,21 +407,37 @@ describe('idle-reclaim intent parity across the three daemon twins', () => {
     }
   })
 
-  it('nothing else in either twin marks a death as intentional', () => {
-    // Only the idle scanner may set this. A user stop, a crash, ENXIO, or a
-    // pid-recycle must keep reporting a non-zero code.
+  it('each twin stamps the intent in cmdStop, immediately before the kill', () => {
+    // The SERVER's idle reaper kills through the stop RPC (mgr.kill() →
+    // conn.send('stop')), NOT through the daemon's own scan — so without this
+    // second stamp a local session auto-stopped after 2h came back as a red
+    // "Session ended unexpectedly and no cause was recorded" (2026-09-03).
     for (const [name, src] of [['daemon-standalone', standaloneSrc], ['daemon-source', templateSrc]] as const) {
-      const assignments = src.match(/idleReclaimAt\s*=(?!=)/g) ?? []
-      expect(assignments.length, `${name}: exactly one idleReclaimAt assignment (the idle scan)`).toBe(1)
+      const body = fnBody(src, 'cmdStop', name)
+      const stampIdx = body.search(/session\.intentionalStopAt = Date\.now\(\)/)
+      const killIdx = body.indexOf("killProcessGroup(pid, 'SIGINT')")
+      expect(stampIdx, `${name}: cmdStop does not record the stop intent`).toBeGreaterThan(-1)
+      expect(killIdx, `${name}: the cmdStop SIGINT is gone`).toBeGreaterThan(-1)
+      expect(stampIdx, `${name}: the intent must be stamped BEFORE the signal — the reap is async`)
+        .toBeLessThan(killIdx)
+    }
+  })
+
+  it('nothing else in either twin marks a death as intentional', () => {
+    // EXACTLY two writers: the daemon's own idle scan and cmdStop. A crash,
+    // ENXIO, or a pid-recycle must keep reporting a non-zero code.
+    for (const [name, src] of [['daemon-standalone', standaloneSrc], ['daemon-source', templateSrc]] as const) {
+      const assignments = src.match(/intentionalStopAt\s*=(?!=)/g) ?? []
+      expect(assignments.length, `${name}: exactly two intentionalStopAt assignments (idle scan + cmdStop)`).toBe(2)
     }
     // daemon-core only ever READS the flag (the scanners live in the twins).
-    expect((coreSrc.match(/idleReclaimAt\s*=(?!=)/g) ?? []).length).toBe(0)
+    expect((coreSrc.match(/intentionalStopAt\s*=(?!=)/g) ?? []).length).toBe(0)
   })
 
   it('the field is declared on both typed session shapes', () => {
     for (const [name, src] of [['daemon-core', coreSrc], ['daemon-standalone', standaloneSrc]] as const) {
-      expect(src, `${name}: idleReclaimAt is not declared on the session shape`)
-        .toMatch(/idleReclaimAt\?: number \| null/)
+      expect(src, `${name}: intentionalStopAt is not declared on the session shape`)
+        .toMatch(/intentionalStopAt\?: number \| null/)
     }
   })
 })

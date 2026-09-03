@@ -83,15 +83,24 @@ export interface CoreSessionData {
   orphanPollTimer: ReturnType<typeof setInterval> | null
   mode: SessionMode
   pendingCtrl: PendingCtrl | null
-  /** Epoch ms at which the daemon's OWN idle scanner decided to reclaim this
-   *  session (no subscribers, no output past the threshold). Recorded BEFORE
-   *  the first signal is sent, because the death arrives asynchronously: the
-   *  process dies, the orphan poll notices ESRCH, and reapSession is called
-   *  with 'orphan-poll-dead' — by then the reason is gone. Presence means the
-   *  death was OUR deliberate housekeeping, so reapSession reports exit code 0
-   *  (see the normalization block there). Never set by any other path.
-   *  Optional so adapters and test fixtures stay type-compatible. */
-  idleReclaimAt?: number | null
+  /** Epoch ms at which somebody DELIBERATELY asked this session to stop.
+   *
+   *  Two writers, and both must stamp it BEFORE the first signal, because the
+   *  death arrives asynchronously: the process dies, the orphan poll notices
+   *  ESRCH, and reapSession is called with 'orphan-poll-dead' — by then the
+   *  reason is gone.
+   *    - the daemon's own idle scanner (no subscribers, no output past the
+   *      threshold);
+   *    - `cmdStop`, i.e. ANY `stop` RPC. Nobody sends `stop` by accident, so an
+   *      explicit stop is by definition not a crash. This covers the server's
+   *      idle reaper, which kills through the stop RPC rather than through the
+   *      daemon's own scan and therefore left the stamp unset — a local session
+   *      auto-stopped after 2h idle came back as a red "Session ended
+   *      unexpectedly and no cause was recorded" (2026-09-03).
+   *
+   *  Presence means reapSession reports exit code 0 (see the normalization
+   *  block there). Optional so adapters and test fixtures stay type-compatible. */
+  intentionalStopAt?: number | null
   /** Turn-retry streak — see decideTurnRetry. Optional so adapters that don't
    *  implement the retry policy stay type-compatible. */
   turnRetry?: TurnRetryState
@@ -363,10 +372,10 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
    *   - orphan poll ESRCH / pid-recycled (adopted sessions)
    *   - cmdSend ENXIO (FIFO write detected dead reader)
    *   - idle scanner missed-exit fallback
-   *   - the idle scanner's own deliberate reclamation — arrives through one of
-   *     the paths above, recognizable ONLY by the `idleReclaimAt` stamp it left
-   *     before signalling, and reported as a clean exit (see below)
-   *   - cmdStop (explicit user stop)
+   *   - a DELIBERATE stop (our idle scanner, or any `stop` RPC through cmdStop)
+   *     — arrives through one of the paths above, recognizable ONLY by the
+   *     `intentionalStopAt` stamp left before signalling, and reported as a
+   *     clean exit (see below)
    *   - startup reconcile (dead pids, pid-recycled, not-ours)
    *
    * Guard `state === 'dead'` makes concurrent callers safe. Every step is
@@ -392,24 +401,25 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     // mis-normalized deaths instead of silently changing code=-1 → 0.
     let jsonlAgeMs: number | null = null
     try { jsonlAgeMs = clock() - fs.statSync(session.jsonlPath).mtimeMs } catch {}
-    // An INTENTIONAL daemon-initiated reclamation is not a failure, and the
-    // JSONL tail cannot tell us it happened. The idle scanner stamps
-    // `idleReclaimAt` before it signals; the death then lands here through
-    // whichever path notices it (usually orphan-poll ESRCH → code -1). Verified
-    // production case: the last line was a `control_response` (the reply to a
-    // Walnut-issued control request — a routine shape), so isTurnCompleteExit
-    // said false, exitCode stayed -1, and projectProcessStatus painted a red
-    // "Error" over a healthy, fully resumable session we reclaimed on purpose.
+    // A DELIBERATE stop is not a failure, and the JSONL tail cannot tell us it
+    // happened. Both writers (our idle scanner, and any `stop` RPC via cmdStop)
+    // stamp `intentionalStopAt` before signalling; the death then lands here
+    // through whichever path notices it (usually orphan-poll ESRCH → code -1).
+    // Verified production case: the last line was a `control_response` (the
+    // reply to a Walnut-issued control request — a routine shape), so
+    // isTurnCompleteExit said false, exitCode stayed -1, and
+    // projectProcessStatus painted a red "Error" over a healthy, fully
+    // resumable session that was stopped on purpose.
     // Checked FIRST and unconditionally: the flag carries information the tail
     // simply does not contain, which is why isTurnCompleteExit is left alone.
-    const intentionalReclaim = session.idleReclaimAt != null
-    if (intentionalReclaim && code !== 0) {
-      logger('info', 'reapSession: intentional idle reclamation, normalizing exit code', {
+    const intentionalStop = session.intentionalStopAt != null
+    if (intentionalStop && code !== 0) {
+      logger('info', 'reapSession: intentional stop, normalizing exit code', {
         sid, pid: session.pid, originalCode: code, originalReason: reason,
-        jsonlAgeMs, cleanExit, idleReclaimAt: session.idleReclaimAt,
+        jsonlAgeMs, cleanExit, intentionalStopAt: session.intentionalStopAt,
       })
       code = 0
-      reason = reason + '+intentional-idle-reclaim'
+      reason = reason + '+intentional-stop'
     } else if (cleanExit && code !== 0) {
       logger('info', 'reapSession: turn-complete detected, normalizing exit code', {
         sid, pid: session.pid, originalCode: code, originalReason: reason, jsonlAgeMs,

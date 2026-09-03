@@ -428,9 +428,30 @@ export async function applySnapshot(
   // "unexplained user-visible error → leave it alone" — the session then never
   // comes back, even after the host does (inc-1787439819342, 51 sessions).
   if (projected !== 'error') {
+    // Stale text always goes: whatever was there described an older episode.
     updates.errorMessage = undefined
     updates.errorKind = undefined
-    clearSuppressedErrorReason(sessionId)
+    // But a TERMINAL projection still deserves a cause. The writer that knew
+    // why — the idle reaper's ('health-monitor','idle_timeout') + "No output for
+    // N min" — is category-① and was dropped whole, so its explanation is only
+    // in the stash. Adopting it is what makes the calm "Auto-stopped after N min
+    // idle" banner possible; without it a routine reclamation rendered as a
+    // cause-less stop (and, once the exit code was also mis-read, as a red
+    // "Session ended unexpectedly"). A LIVE projection deliberately adopts
+    // nothing: the session is running, so any explanation is by definition past.
+    const stashedStop = projected === 'stopped' ? takeSuppressedErrorReason(sessionId) : null
+    if (stashedStop?.message) {
+      updates.errorMessage = stashedStop.message
+      // Keep the kind too: 'idle_timeout' classifies TERMINAL, which is exactly
+      // what stops the re-examination lane from re-probing a settled stop.
+      if (stashedStop.kind) updates.errorKind = stashedStop.kind
+      log.session.info('snapshot projection adopted suppressed stop reason', {
+        sessionId, suppressedReason: stashedStop.reason,
+        kind: stashedStop.kind ?? null, projected, source,
+      })
+    } else {
+      clearSuppressedErrorReason(sessionId)
+    }
   } else {
     // This snapshot IS proof of contact with the host: the fold reached us over a
     // live daemon connection. So a diagnosis claiming that host is unreachable is
