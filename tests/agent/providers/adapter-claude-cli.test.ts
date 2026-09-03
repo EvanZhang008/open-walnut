@@ -16,7 +16,7 @@ function opts(over: Partial<AdapterCallOptions> = {}): AdapterCallOptions {
   };
 }
 
-describe('buildArgs — text-only, subscription-forced argv', () => {
+describe('buildArgs — text-only argv on the CLI\'s own login', () => {
   it('disables ALL tools via --tools "" (deny-all), NOT a wildcard', () => {
     const args = buildArgs(opts());
     const i = args.indexOf('--tools');
@@ -26,13 +26,10 @@ describe('buildArgs — text-only, subscription-forced argv', () => {
     expect(args).not.toContain('*');
   });
 
-  it('forces subscription: --settings turns Bedrock/Vertex off', () => {
-    const args = buildArgs(opts());
-    const i = args.indexOf('--settings');
-    expect(i).toBeGreaterThanOrEqual(0);
-    const settings = JSON.parse(args[i + 1]);
-    expect(settings.env.CLAUDE_CODE_USE_BEDROCK).toBe('');
-    expect(settings.env.CLAUDE_CODE_USE_VERTEX).toBe('');
+  it('does not override the user\'s settings (their auth, Bedrock or subscription, applies as-is)', () => {
+    // The old --settings '{"env":{"CLAUDE_CODE_USE_BEDROCK":""}}' forced the
+    // subscription and broke the provider for everyone whose Claude Code runs on Bedrock.
+    expect(buildArgs(opts())).not.toContain('--settings');
   });
 
   it('NEVER uses --bare (that would force API-key-only)', () => {
@@ -75,32 +72,29 @@ describe('buildArgs — text-only, subscription-forced argv', () => {
   });
 });
 
-describe('buildSpawnEnv — strips every auth-routing var (COMPLIANCE)', () => {
-  it('removes AWS + Anthropic key/token + Bedrock/Vertex flags', () => {
+describe('buildSpawnEnv — the CLI keeps its own auth', () => {
+  it('passes Bedrock/Anthropic auth through untouched and strips only the nested-session marker', () => {
+    // A Bedrock-backed Claude Code (CLAUDE_CODE_USE_BEDROCK + AWS creds in the env) has to
+    // stay Bedrock-backed inside the spawn, or the provider is unusable for that user.
     const base = {
       PATH: '/usr/bin',
       ANTHROPIC_API_KEY: 'sk-secret',
-      ANTHROPIC_AUTH_TOKEN: 'tok-secret',
-      ANTHROPIC_BASE_URL: 'https://x',
       AWS_BEARER_TOKEN_BEDROCK: 'bearer-secret',
       AWS_ACCESS_KEY_ID: 'AKIA',
       AWS_SECRET_ACCESS_KEY: 'wjalr',
-      AWS_SESSION_TOKEN: 'sess',
       AWS_PROFILE: 'dev',
+      AWS_REGION: 'us-west-2',
       CLAUDE_CODE_USE_BEDROCK: '1',
-      CLAUDE_CODE_USE_VERTEX: '1',
       CLAUDECODE: '1',
     };
     const env = buildSpawnEnv(base);
     for (const k of [
-      'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
-      'AWS_BEARER_TOKEN_BEDROCK', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
-      'AWS_SESSION_TOKEN', 'AWS_PROFILE', 'CLAUDE_CODE_USE_BEDROCK',
-      'CLAUDE_CODE_USE_VERTEX', 'CLAUDECODE',
+      'ANTHROPIC_API_KEY', 'AWS_BEARER_TOKEN_BEDROCK', 'AWS_ACCESS_KEY_ID',
+      'AWS_SECRET_ACCESS_KEY', 'AWS_PROFILE', 'AWS_REGION', 'CLAUDE_CODE_USE_BEDROCK',
     ]) {
-      expect(env[k], `${k} must be stripped`).toBeUndefined();
+      expect(env[k], `${k} must reach the CLI`).toBe(base[k as keyof typeof base]);
     }
-    // Non-auth env survives.
+    expect(env.CLAUDECODE, 'the nested-session marker must not reach the child').toBeUndefined();
     expect(env.PATH).toBe('/usr/bin');
   });
 

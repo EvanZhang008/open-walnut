@@ -107,6 +107,14 @@ export interface ClaudeCliCapabilities {
   subscriptionAuth: boolean;
   /** Both installed AND a subscription credential exists. */
   subscriptionReady: boolean;
+  /**
+   * The `claude_cli` provider can answer: the binary is here. Its auth is the
+   * CLI's own business (subscription, Bedrock, Vertex, an API key — whatever the
+   * user's Claude Code already uses), so nothing beyond the binary gates it.
+   */
+  ready: boolean;
+  /** How that Claude Code appears to be signed in, for display only: see describeClaudeCliAuth. */
+  auth: ClaudeCliAuthHint;
 }
 
 export function detectClaudeCli(): ClaudeCliCapabilities {
@@ -116,7 +124,48 @@ export function detectClaudeCli(): ClaudeCliCapabilities {
     installed,
     subscriptionAuth,
     subscriptionReady: installed && subscriptionAuth,
+    ready: installed,
+    auth: installed ? describeClaudeCliAuth() : { mode: 'unknown', label: 'not installed' },
   };
+}
+
+export interface ClaudeCliAuthHint {
+  mode: 'bedrock' | 'vertex' | 'api-key' | 'subscription' | 'unknown';
+  /** One short phrase for the UI, e.g. "Bedrock (us-west-2)" or "your Claude subscription". */
+  label: string;
+}
+
+/**
+ * Which way the user's Claude Code signs in, read the way the CLI itself decides:
+ * ~/.claude/settings.json's `env` block is assigned over the process env, then
+ * CLAUDE_CODE_USE_BEDROCK / USE_VERTEX / an API key / the OAuth store decide.
+ * Existence and flag values only; no credential value is ever read or returned.
+ */
+export function describeClaudeCliAuth(
+  env: NodeJS.ProcessEnv = process.env,
+  settingsEnv: Record<string, string> = readClaudeSettingsEnv(),
+): ClaudeCliAuthHint {
+  const merged: Record<string, string | undefined> = { ...env, ...settingsEnv };
+  const truthy = (v: string | undefined) => !!v && v !== '0' && v.toLowerCase() !== 'false';
+  if (truthy(merged.CLAUDE_CODE_USE_BEDROCK)) {
+    const region = merged.AWS_REGION || merged.AWS_DEFAULT_REGION;
+    return { mode: 'bedrock', label: region ? `Bedrock (${region})` : 'Bedrock' };
+  }
+  if (truthy(merged.CLAUDE_CODE_USE_VERTEX)) return { mode: 'vertex', label: 'Vertex AI' };
+  if (merged.ANTHROPIC_API_KEY || merged.ANTHROPIC_AUTH_TOKEN) return { mode: 'api-key', label: 'an Anthropic API key' };
+  if (hasClaudeSubscriptionAuth()) return { mode: 'subscription', label: 'your Claude subscription' };
+  return { mode: 'unknown', label: 'its own login' };
+}
+
+/** The `env` block of ~/.claude/settings.json (string values only); {} when absent. */
+function readClaudeSettingsEnv(): Record<string, string> {
+  try {
+    const raw = fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8');
+    const env = (JSON.parse(raw) as { env?: Record<string, unknown> }).env ?? {};
+    return Object.fromEntries(Object.entries(env).filter(([, v]) => typeof v === 'string')) as Record<string, string>;
+  } catch {
+    return {};
+  }
 }
 
 // Re-export the keychain home for tests that need to know which store we probe

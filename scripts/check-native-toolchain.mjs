@@ -120,11 +120,18 @@ if (!oldGlibc) {
   }
   if (!pyOk) {
     const newer = ['python3.12', 'python3.11', 'python3.10', 'python3.9', 'python3.8'].find(have);
-    if (newer) env.push(`PYTHON=${newer}`);
-    else if (have('amazon-linux-extras')) { installs.push('sudo amazon-linux-extras install -y python3.8'); env.push('PYTHON=python3.8'); }
-    else if (have('yum') || have('dnf')) { installs.push(`sudo ${have('dnf') ? 'dnf' : 'yum'} install -y python3.11`); env.push('PYTHON=python3.11'); }
-    else if (have('apt-get')) { installs.push('sudo apt-get install -y python3'); }
-    else installs.push(`# install Python ${MIN_PYTHON.join('.')}+ with your package manager, then set PYTHON= below`);
+    if (newer) {
+      env.push(`PYTHON=${newer}`);
+    } else {
+      // No distro package is assumed: on a glibc 2.26 box the distro's newest Python is
+      // often 3.7 and the extras channel that used to carry 3.8 is not always there
+      // (verified on one such machine). uv's managed Python is a static build that
+      // runs on glibc 2.17+, installs in seconds, and needs no sudo.
+      const uv = have('uv') ? 'uv' : '~/.local/bin/uv';
+      if (!have('uv')) installs.push('curl -LsSf https://astral.sh/uv/install.sh | sh');
+      installs.push(`${uv} python install 3.12`);
+      env.push(`PYTHON="$(${uv} python find 3.12)"`);
+    }
   }
   lines.push(`  Fix, then install again:`, ``);
   for (const i of installs) lines.push(`    ${i}`);

@@ -10,6 +10,7 @@
 #   scripts/onboarding-test/run.sh mac-vm  [--image ghcr.io/cirruslabs/macos-sequoia-vanilla:latest]
 #   scripts/onboarding-test/run.sh linux   [--os al2023|al2|al2023-arm|ubuntu] [--type t3.large]
 #   scripts/onboarding-test/run.sh mac-ec2 [--os sequoia|tahoe] [--type mac2.metal] --yes-mac-host
+#   scripts/onboarding-test/run.sh ssh <[user@]host>   # a box you can already ssh into (not fresh)
 #
 #   common flags: --path readme,npm  --ref <git ref>  --pkg open-walnut@latest
 #                 --keep (leave the machine up)  --record (asciinema + browser video → mp4)
@@ -36,6 +37,11 @@ REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 usage() { awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0"; }
 TARGET="${1:-}"; [ $# -gt 0 ] && shift
 case "$TARGET" in -h|--help|'') usage; exit 0 ;; esac
+# `ssh` takes the host as its first argument; everything after it is ordinary flags.
+SSH_HOST=""
+if [ "$TARGET" = ssh ]; then
+  SSH_HOST="${1:-}"; case "$SSH_HOST" in ''|-*) die "ssh: give the host first: run.sh ssh user@host [flags]" ;; esac; shift
+fi
 PATHS="readme,npm"; REF="main"; PKG="open-walnut@latest"; KEEP=0; RECORD=0; TTL_HOURS=3
 OS=""; ITYPE=""; IMAGE=""; YES_MAC_HOST=0; SWEEP_ALL=0; RELEASE_HOSTS=0; READY_TIMEOUT=900
 ORIG_ARGS=("$@")
@@ -61,11 +67,11 @@ done
 export KEEP YES_MAC_HOST
 
 case "$TARGET" in
-  mac-vm|linux|mac-ec2) ;;
+  mac-vm|linux|mac-ec2|ssh) ;;
   status)       . "$HERE/lib/aws.sh"; aws_require; aws_status; exit 0 ;;
   sweep)        . "$HERE/lib/aws.sh"; aws_require; SWEEP_ALL=$SWEEP_ALL RELEASE_HOSTS=$RELEASE_HOSTS aws_sweep; exit 0 ;;
   release-host) . "$HERE/lib/aws.sh"; aws_require; aws_release_hosts; exit 0 ;;
-  *) die "unknown target '$TARGET': mac-vm | linux | mac-ec2 | status | sweep | release-host  (--help for details)" ;;
+  *) die "unknown target '$TARGET': mac-vm | linux | mac-ec2 | ssh | status | sweep | release-host  (--help for details)" ;;
 esac
 
 # Under --record the outer process already picked the run dir; the inner one inherits it.
@@ -82,7 +88,7 @@ if [ "$RECORD" = 1 ] && [ -z "${ONB_INSIDE_REC:-}" ]; then
   need_cmd asciinema "brew install asciinema"
   export ONB_INSIDE_REC=1 ONB_RUN_DIR="$RUN_DIR"
   asciinema rec --overwrite --cols 120 --rows 36 --title "Open Walnut onboarding · $TARGET" \
-    -c "$0 $TARGET ${ORIG_ARGS[*]}" "$RUN_DIR/terminal.cast"
+    -c "$0 $TARGET${SSH_HOST:+ $SSH_HOST} ${ORIG_ARGS[*]}" "$RUN_DIR/terminal.cast"
   bash "$HERE/render-video.sh" "$RUN_DIR" "$TARGET"
   exit 0
 fi
@@ -101,6 +107,33 @@ case "$TARGET" in
     put_probe()   { tart_scp_to "$HERE/probe.sh" "probe.sh"; }
     fetch_out()   { tart_scp_from "walnut-onb/steps.jsonl" "$RUN_DIR/"; tart_scp_from "walnut-onb/logs" "$RUN_DIR/"; }
     forward()     { tart_forward "$1" "$2"; }
+    PROBE_CMD="bash ~/probe.sh $PROBE_ARGS"
+    ;;
+  ssh)
+    # Any box the operator can already reach: a teammate's dev desktop, a VM, a
+    # container. Nothing is provisioned or torn down, so the findings describe
+    # THAT machine as it stands, not a blank one; the `system` step says what it had.
+    need_cmd ssh "install OpenSSH"
+    SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=30"
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "$SSH_HOST" true 2>/dev/null || die "ssh: cannot reach $SSH_HOST non-interactively (keys/agent must already work)"
+    warn "ssh target: not a fresh machine; whatever $SSH_HOST already has stays in the picture"
+    # shellcheck disable=SC2086
+    exec_stream() { ssh $SSH_OPTS "$SSH_HOST" "$1"; }
+    exec_quiet()  { exec_stream "$1"; }
+    # shellcheck disable=SC2086
+    put_probe()   { scp -q $SSH_OPTS "$HERE/probe.sh" "$SSH_HOST:probe.sh"; }
+    fetch_out()   {
+      # shellcheck disable=SC2086
+      scp -q $SSH_OPTS "$SSH_HOST:walnut-onb/steps.jsonl" "$RUN_DIR/" && scp -q -r $SSH_OPTS "$SSH_HOST:walnut-onb/logs" "$RUN_DIR/"
+    }
+    forward() {
+      # shellcheck disable=SC2086
+      ssh $SSH_OPTS -N -L "127.0.0.1:$2:127.0.0.1:$1" "$SSH_HOST" &
+      FWD_PID=$!
+      on_exit_push "kill $FWD_PID 2>/dev/null || true"
+      wait_for "curl -s -o /dev/null http://127.0.0.1:$2/api/system/health" 30 1 || warn "ssh: port-forward $1→$2 not answering"
+    }
     PROBE_CMD="bash ~/probe.sh $PROBE_ARGS"
     ;;
   linux|mac-ec2)
@@ -173,6 +206,7 @@ fi
 # ── stop the servers the probe started (its own PIDs only), then teardown via trap ──
 case "$TARGET" in
   mac-vm) tart_ssh "bash ~/probe.sh --stop" || true ;;
+  ssh)    exec_quiet "bash ~/probe.sh --stop" || true ;;
   *) exec_quiet "sudo -iu $LOGIN bash -lc 'bash /tmp/probe.sh --stop'" || true ;;
 esac
 
@@ -190,4 +224,5 @@ esac
 } > "$RUN_DIR/report.md"
 ok "report: $RUN_DIR/report.md"
 [ "$KEEP" = 1 ] && warn "--keep: machine left running; clean up with: run.sh sweep --all (aws) or tart delete (mac-vm)"
+[ "$TARGET" = ssh ] && log "ssh: left on $SSH_HOST: ~/walnut-onb (clone + logs), ~/probe.sh, and whatever the probe installed (nvm/Node, the global package); remove by hand if unwanted"
 exit 0

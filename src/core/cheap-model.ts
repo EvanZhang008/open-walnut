@@ -1,4 +1,5 @@
 import { MODEL_CATALOG } from '../agent/providers/model-catalog.js';
+import { resolveMainProviderName } from '../agent/providers/default-provider.js';
 import type { Config } from './types.js';
 
 /**
@@ -8,7 +9,7 @@ import type { Config } from './types.js';
  */
 export function fastModelFor(config: Config): string | undefined {
   if (config.agent?.fast_model) return config.agent.fast_model;
-  const providerName = config.agent?.main_provider ?? 'bedrock';
+  const providerName = resolveMainProviderName(config);
   return MODEL_CATALOG[providerName]?.find((model) =>
     model.id.toLowerCase().includes('haiku')
   )?.id;

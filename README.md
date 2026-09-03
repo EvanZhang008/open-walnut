@@ -44,12 +44,9 @@ local-first, self-hosted, and has no telemetry.
 - Node.js 22 or newer. If you don't have it: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash` then `nvm install 22`.
 - git, only for the checkout route below (macOS: `xcode-select --install`, Ubuntu: `sudo apt install git`)
 - Linux: a C library from 2019 or later (glibc 2.29+: Ubuntu 20.04+, Debian 11+, AL2023, Fedora). Older distros compile one native module and need a newer Python and GCC first; `npm start` prints the exact commands, and [Getting Started](GETTING_STARTED.md#older-linux-glibc-before-229) has them too.
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) for coding sessions
-- An Anthropic API key, AWS Bedrock credentials, or another supported model provider
-  for Walnut
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in once (`npm install -g @anthropic-ai/claude-code`, then run `claude`)
 
-Claude Code and Walnut authenticate separately. Coding sessions use your existing
-Claude Code CLI login, while Walnut uses the model provider selected during setup.
+That is the whole AI setup. Walnut runs on your Claude Code: the chat, coding sessions, and background work (summaries, titles, subagents) all use the `claude` you already have, however it signs in (Anthropic account, Bedrock, or Vertex). An Anthropic API key or AWS Bedrock credentials are optional, for people who would rather point Walnut's background work at a provider directly (Settings → AI Provider).
 
 ### Install
 

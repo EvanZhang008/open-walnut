@@ -10,6 +10,7 @@
 import type { MessageParam, ContentBlock, Tool, TextBlockParam } from '@anthropic-ai/sdk/resources/messages';
 import { getConfig } from '../core/config-manager.js';
 import { resolveProvider, buildProviderMap, synthesizeFromLegacy, resetAllAdapters } from './providers/registry.js';
+import { resolveMainProviderName } from './providers/default-provider.js';
 import {
   DEFAULT_MODEL,
   DEFAULT_MAX_TOKENS,
@@ -95,7 +96,7 @@ export function getContextThreshold(model: string | undefined, percent: number):
  */
 async function resolveForCall(config?: ModelConfig) {
   const fullConfig = await getConfig();
-  const providerName = config?.provider ?? fullConfig.agent?.main_provider ?? 'bedrock';
+  const providerName = config?.provider ?? resolveMainProviderName(fullConfig);
 
   // Build providers map: auto-detected (env) + explicit config.providers overlay
   const hasExplicitProviders = fullConfig.providers && Object.keys(fullConfig.providers).length > 0;

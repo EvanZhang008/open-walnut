@@ -6,6 +6,7 @@ import { StatusIndicator } from '../inputs/StatusIndicator';
 import { NumberInput } from '../inputs/NumberInput';
 import { fetchProviders, fetchAwsProfiles, testProvider, testConnection, fetchCredentialTrace, type ProviderStatus, type TestConnectionResult, type ModelEntry, type CredentialTrace, type CredentialVerify } from '@/api/config';
 import { InstallButton } from '@/components/common/InstallButton';
+import { useSystemHealth } from '@/hooks/useSystemHealth';
 
 // Providers we actively test and support.
 // `api` matches ProviderConfig.api (the ApiProtocol union). Typing the field as the union
@@ -13,9 +14,11 @@ import { InstallButton } from '@/components/common/InstallButton';
 // while keeping `base_url` optional across all entries (an `as const` tuple would drop it).
 type ProviderApi = 'anthropic-messages' | 'openai-chat' | 'bedrock' | 'google-generative-ai' | 'ollama' | 'claude-cli';
 const ALL_PROVIDERS: { name: string; label: string; api: ProviderApi; base_url?: string; needsKey: boolean }[] = [
+  // First because it is the default: when `claude` is installed and nothing else is
+  // configured, this is what answers (with the CLI's own login, Bedrock or subscription).
+  { name: 'claude_cli', label: 'Claude Code', api: 'claude-cli', needsKey: false },
   { name: 'bedrock', label: 'AWS Bedrock', api: 'bedrock', needsKey: false },
   { name: 'anthropic', label: 'Anthropic', api: 'anthropic-messages', needsKey: true },
-  { name: 'claude_cli', label: 'Claude Code Subscription', api: 'claude-cli', needsKey: false },
   { name: 'openai', label: 'OpenAI', api: 'openai-chat', needsKey: true },
   { name: 'openrouter', label: 'OpenRouter', api: 'openai-chat', base_url: 'https://openrouter.ai/api/v1', needsKey: true },
   { name: 'gemini', label: 'Google Gemini', api: 'google-generative-ai', needsKey: true },
@@ -34,7 +37,7 @@ const PROTOCOL_LABELS: Record<string, string> = {
   'bedrock': 'AWS Bedrock',
   'google-generative-ai': 'Google Generative AI',
   'ollama': 'Local Ollama',
-  'claude-cli': 'Local `claude` CLI (subscription, text-only)',
+  'claude-cli': 'Your local `claude` CLI, with its own login (Bedrock or subscription)',
 };
 
 /** Display label for a model entry — use label if available, else truncated ID. */
@@ -705,15 +708,15 @@ function ProviderCard({
     else if (cs === 'aws_config_file') statusLabel = 'Ready (~/.aws/config)';
     else if (cs === 'aws_env') statusLabel = 'Ready (AWS env vars)';
     else if (cs === 'bearer_token' && isEnv) statusLabel = 'Ready (env)';
-    else if (cs === 'subscription') statusLabel = 'Ready (subscription logged in)';
+    else if (cs?.startsWith('cli_') && serverInfo?.credential_detail) statusLabel = `Ready (${serverInfo.credential_detail})`;
     else if (isEnv) statusLabel = 'Ready (env)';
     else statusLabel = 'Ready';
   }
   else if (def.api === 'ollama') { statusDot = 'error'; statusLabel = 'Offline'; }
   else if (def.api === 'claude-cli') {
-    const cs = serverInfo?.credential_source;
+    // The only thing that can be missing is the binary: auth belongs to the CLI itself.
     statusDot = 'error';
-    statusLabel = cs === 'cli_not_installed' ? 'CLI not installed' : 'Not logged in';
+    statusLabel = 'Claude Code not installed';
   }
 
   const envKeyName = `${def.name.toUpperCase().replace(/-/g, '_')}_API_KEY`;
@@ -794,39 +797,33 @@ function ProviderCard({
             </div>
           )}
 
-          {/* Claude Code subscription: text-only, no tool calls — spawns the local `claude` CLI */}
+          {/* Claude Code: spawns the local `claude` CLI, which brings its own login (Bedrock, Vertex, API key, or subscription) */}
           {def.api === 'claude-cli' && (
             <div>
-              {serverInfo?.credential_source === 'cli_not_installed' && (
+              {serverInfo?.credential_source === 'cli_not_installed' ? (
                 <>
                   <p className="text-sm text-muted">
-                    Claude Code CLI is not installed. Install it, then log in with{' '}
-                    <code style={{ fontSize: 11 }}>claude login</code> to use your subscription.
+                    Claude Code is not installed. Install it, run <code style={{ fontSize: 11 }}>claude</code> once
+                    in a terminal to sign in, then reload this page.
                   </p>
                   <div style={{ marginTop: 8 }}>
                     <InstallButton target="claude-cli" label="Copy install command" />
                   </div>
                 </>
-              )}
-              {serverInfo?.credential_source === 'cli_no_subscription' && (
+              ) : (
                 <p className="text-sm text-muted">
-                  Claude Code CLI is installed but not logged in. Run{' '}
-                  <code style={{ fontSize: 11 }}>claude login</code> in a terminal to sign in with
-                  your subscription, then reload this page.
+                  Background work spawns the local <code style={{ fontSize: 11 }}>claude</code> CLI with the
+                  login it already has{serverInfo?.credential_detail ? <>: <strong>{serverInfo.credential_detail}</strong></> : null}.
+                  Nothing to paste here; change how Claude Code signs in (<code style={{ fontSize: 11 }}>~/.claude/settings.json</code>)
+                  and Walnut follows.
                 </p>
               )}
-              {serverInfo?.credential_source === 'subscription' && (
-                <p className="text-sm text-muted">
-                  Detected a logged-in Claude Code subscription (Pro/Max). No API key needed — the
-                  main AI spawns the local <code style={{ fontSize: 11 }}>claude</code> CLI directly,
-                  and its tools work through a structured output protocol.
+              {serverInfo?.credential_source === 'cli_subscription' && (
+                <p className="text-sm text-muted" style={{ marginTop: 8, opacity: 0.8 }}>
+                  Note: this runs your Claude subscription outside the Claude Code app itself, which Anthropic
+                  has at times restricted. Point Claude Code at Bedrock or an API key if that matters to you.
                 </p>
               )}
-              <p className="text-sm text-muted" style={{ marginTop: 8, opacity: 0.8 }}>
-                Note: this uses your Claude subscription outside the Claude Code app itself.
-                Anthropic has previously restricted some subscription usage outside Claude Code —
-                use at your own discretion; an API key or Bedrock is the fully supported path.
-              </p>
             </div>
           )}
 
@@ -872,7 +869,11 @@ function ProviderCard({
 export function ProvidersSection({ config, onSave }: Props) {
   const [providers, setProviders] = useState<Record<string, ProviderStatus>>({});
   const [loading, setLoading] = useState(true);
-  const activeProvider = config.agent?.main_provider ?? 'bedrock';
+  // The server applies the default rule (claude_cli when Claude Code is installed,
+  // else bedrock); mirror its answer instead of guessing here.
+  const { health } = useSystemHealth();
+  const activeProvider = config.agent?.main_provider ?? health.mainProvider ?? 'bedrock';
+  const activeIsDefault = !config.agent?.main_provider;
 
   // Global model selection state (lives in config.agent, not per-provider)
   const [mainModel, setMainModel] = useState(config.agent?.main_model ?? '');
@@ -967,11 +968,13 @@ export function ProvidersSection({ config, onSave }: Props) {
           background: 'color-mix(in srgb, var(--accent) 8%, transparent)',
           color: 'var(--fg-secondary)',
         }}>
-          The main AI chat is currently running on the <strong>Claude Code engine</strong>{' '}
-          (<code style={{ fontSize: 11 }}>agent.provider: claude-code</code>) — a
-          long-lived <code style={{ fontSize: 11 }}>claude</code> session with its own
-          authentication. The provider selected below still powers everything else
-          (subagents, summaries, background analysis), just not the main chat replies.
+          The main chat runs on <strong>Claude Code</strong>, a long-lived{' '}
+          <code style={{ fontSize: 11 }}>claude</code> session with its own login
+          {health.claudeCliAuth ? <> ({health.claudeCliAuth})</> : null}. Background work
+          (subagents, summaries, titles) uses the provider selected below
+          {activeProvider === 'claude_cli'
+            ? <>: also Claude Code{activeIsDefault ? ', by default' : ''}. Nothing else to set up.</>
+            : <>. Pick <strong>Claude Code</strong> to run everything on that one login.</>}
         </p>
       )}
       {loading ? (

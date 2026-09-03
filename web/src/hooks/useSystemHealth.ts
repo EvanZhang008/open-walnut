@@ -33,6 +33,12 @@ export interface SystemHealth {
   credentialSource?: CredentialSource;
   /** Short human-readable provenance, e.g. "AWS_BEARER_TOKEN_BEDROCK" or "profile: dev". */
   credentialDetail?: string;
+  /** The provider background calls actually use (agent.main_provider, or the default rule: claude_cli when Claude Code is installed). */
+  mainProvider?: string;
+  /** True when that provider came from the default rule, not from config. */
+  mainProviderImplicit?: boolean;
+  /** How the local Claude Code signs in, e.g. "Bedrock (us-west-2)" or "your Claude subscription". */
+  claudeCliAuth?: string;
 }
 
 const defaultHealth: SystemHealth = {};

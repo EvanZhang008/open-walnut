@@ -290,6 +290,7 @@ export async function buildProvidersPayload(): Promise<{
     auto_detected: boolean
     models: ModelEntry[]
     credential_source?: string
+    credential_detail?: string
   }>
 }> {
     const config = await getConfig()
@@ -306,6 +307,7 @@ export async function buildProvidersPayload(): Promise<{
       auto_detected: boolean
       models: import('../../agent/providers/types.js').ModelEntry[]
       credential_source?: string  // bedrock: 'bearer_token' | 'api_key' | 'aws_credentials_file'
+      credential_detail?: string  // claude-cli: how the CLI signs in, e.g. "Bedrock (us-west-2)"
     }> = {}
 
     for (const [name, prov] of Object.entries(merged)) {
@@ -332,20 +334,19 @@ export async function buildProvidersPayload(): Promise<{
         continue
       }
 
-      // claude-cli is keyless: "ready" means the local CLI is installed AND a
-      // subscription credential exists (existence probe only, never the value).
+      // claude-cli is keyless: "ready" means the local CLI is installed. Its login
+      // (Bedrock, subscription, a key) is the CLI's own; we only name the mode.
       if (prov.api === 'claude-cli') {
         const { detectClaudeCli } = await import('../../core/claude-cli-detect.js')
         const caps = detectClaudeCli()
         providers[name] = {
           api: prov.api,
           base_url: prov.base_url,
-          status: caps.subscriptionReady ? 'ready' : 'no_key',
+          status: caps.installed ? 'ready' : 'no_key',
           auto_detected: !explicitNames.has(name),
           models: getModelsForProvider(name, prov.models),
-          credential_source: caps.subscriptionReady
-            ? 'subscription'
-            : caps.installed ? 'cli_no_subscription' : 'cli_not_installed',
+          credential_source: caps.installed ? `cli_${caps.auth.mode}` : 'cli_not_installed',
+          credential_detail: caps.installed ? caps.auth.label : undefined,
         }
         continue
       }
@@ -415,18 +416,17 @@ export async function buildProvidersPayload(): Promise<{
     for (const name of Object.keys(KNOWN_PROVIDERS)) {
       if (!providers[name]) {
         const template = KNOWN_PROVIDERS[name]
-        // claude-cli is keyless: probe the local subscription instead of 'no_key'.
+        // claude-cli is keyless: the installed binary is the credential.
         if (template.api === 'claude-cli') {
           const { detectClaudeCli } = await import('../../core/claude-cli-detect.js')
           const caps = detectClaudeCli()
           providers[name] = {
             api: template.api,
-            status: caps.subscriptionReady ? 'ready' : 'no_key',
+            status: caps.installed ? 'ready' : 'no_key',
             auto_detected: false,
             models: getModelsForProvider(name),
-            credential_source: caps.subscriptionReady
-              ? 'subscription'
-              : caps.installed ? 'cli_no_subscription' : 'cli_not_installed',
+            credential_source: caps.installed ? `cli_${caps.auth.mode}` : 'cli_not_installed',
+            credential_detail: caps.installed ? caps.auth.label : undefined,
           }
           continue
         }

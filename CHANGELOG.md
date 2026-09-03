@@ -4,6 +4,20 @@ All notable changes to Open Walnut are documented here. This project follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions may include
 breaking changes).
 
+## [0.4.2] - 2026-09-03
+
+### Changed
+
+- **Claude Code is the default AI provider for everything.** The chat already ran on a `claude` session; background work (summaries, titles, subagents, cheap-model calls) now defaults to the same `claude` CLI whenever it is installed, instead of expecting Bedrock credentials. Pick a provider in Settings → AI Provider (it writes `agent.main_provider`) to override; saved Bedrock credentials alone no longer decide, so a machine with Claude Code on it runs on Claude Code.
+- The `claude-cli` adapter inherits the CLI's own login as-is (Anthropic account, Bedrock via `CLAUDE_CODE_USE_BEDROCK`, or Vertex). It used to strip the AWS environment and force a subscription-only settings override, which made it unusable on Bedrock-backed machines. Concurrent CLI calls are capped (`WALNUT_CLAUDE_CLI_CONCURRENCY`, default 3).
+- The first-run banner is one card: "Walnut runs on your Claude Code, signed in with Bedrock (us-west-2)" when the CLI is found, or the install command when it is not. Settings → AI Provider lists Claude Code first, as the default, and shows how the CLI signs in instead of asking for a login.
+- `GET /api/system/health` gains `mainProvider`, `mainProviderImplicit`, and `claudeCliAuth`; `GET /api/config/providers` reports `credential_source: cli_<mode>` plus a human `credential_detail` for Claude Code.
+
+### Fixed
+
+- Older Linux (glibc before 2.29) recipe: the Python step now uses `uv python install 3.12` (a static build that runs on glibc 2.17+, no sudo) because the distro Python channel is missing on many hosts; `npm start` prints the same commands.
+- The onboarding harness gains an `ssh <host>` target for testing on any machine you can reach, ARM Linux defaults to a Graviton instance type, and CI now runs the `npm install -g open-walnut` route on Linux and macOS next to the checkout route.
+
 ## [0.4.1] - 2026-09-03
 
 Onboarding on a machine that is not the maintainer's: every step below was found by installing

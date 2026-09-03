@@ -87,9 +87,12 @@ Walnut's one required native module, better-sqlite3, ships a prebuilt binary for
 
 ```bash
 sudo yum install -y gcc10-c++ make
-sudo amazon-linux-extras install -y python3.8   # node-gyp needs Python 3.8+; the system python3 is 3.7
-PYTHON=python3.8 CC=gcc10-gcc CXX=gcc10-g++ npm install
+curl -LsSf https://astral.sh/uv/install.sh | sh        # node-gyp needs Python 3.8+; the system python3 is 3.7
+~/.local/bin/uv python install 3.12                    # a static build that runs on glibc 2.17+, no sudo
+PYTHON="$(~/.local/bin/uv python find 3.12)" CC=gcc10-gcc CXX=gcc10-g++ npm install
 ```
+
+The Python step deliberately does not use the distro's package channel: on one such machine the channel had no Python 3.8 at all, while uv's managed Python installed in seconds and the compile went through (verified 2026-09-03).
 
 sharp (image compression for pasted images) is optional and is skipped on such a system: images are sent uncompressed. If `npm_config_build_from_source` is set in your environment, unset it; it forces sharp into a source build that needs libvips.
 
@@ -109,18 +112,19 @@ export PATH="$HOME/.local/node22/bin:$PATH"   # add to your shell profile too
 | **Git** | macOS: `xcode-select --install`, Ubuntu: `sudo apt install git`, or [git-scm.com](https://git-scm.com/) | Cloning the repo, and auto-backup of `~/.open-walnut/` every 30 seconds | The npm install route needs no git. Data is still saved locally, just not version-controlled. |
 | **Bun** | [bun.sh](https://bun.sh/) | Prebuilt session-daemon binaries (faster deploys to remote hosts) and the ACP worker bundle | Claude Code sessions still work: the daemon deploys from source instead, and `npm start` says so and carries on. Non-Claude providers that go over ACP need the worker bundle, so install Bun and re-run `npm run build:daemon` before using those. Not needed at all with the npm install route, which ships the bundle prebuilt. |
 
-### Important: Two Separate AI Connections
+### One AI login: Claude Code
 
-Open Walnut uses AI in **two independent ways**, each with its own authentication:
+Open Walnut uses AI in three places, and by default all three run on the Claude Code you already have:
 
-| Connection | What it powers | How to authenticate |
+| What | How it runs | How to authenticate |
 |---|---|---|
-| **Built-in agent** | The chat assistant on the home page | Set `ANTHROPIC_API_KEY` env var **or** configure AWS Bedrock credentials |
-| **Claude Code sessions** | Coding sessions spawned by the agent | Run `claude` once in your terminal to complete the interactive auth flow |
+| **Chat** (the assistant on the home page) | A long-lived `claude` session | Run `claude` once in your terminal and sign in |
+| **Coding sessions** | Separate `claude` CLI processes | Same login |
+| **Background work** (summaries, titles, subagents) | Short `claude -p` calls | Same login, when Claude Code is installed |
 
-Both need to work for the full experience. The agent works without sessions (chat, tasks, memory, cron — all fine), but coding sessions are where the real power is.
+Claude Code brings its own login, whatever kind it is: an Anthropic account, Bedrock (`CLAUDE_CODE_USE_BEDROCK=1` in `~/.claude/settings.json`), or Vertex. Walnut inherits it as-is and never asks for a key of its own. The first-run banner names what it found ("Walnut runs on your Claude Code, signed in with Bedrock (us-west-2)").
 
-**Why separate?** The built-in agent calls the Anthropic/Bedrock API directly from the server. Claude Code sessions are separate `claude` CLI processes with their own authentication. This means you can use different API keys or providers for each.
+Prefer to run background work on a provider directly, without going through the CLI? The paths below set that up; the chat and coding sessions stay on Claude Code either way.
 
 ---
 
@@ -136,13 +140,13 @@ This installs both backend and frontend dependencies. The first `npm start` will
 
 ---
 
-## Provider Configuration
+## Provider Configuration (optional)
 
-The built-in agent needs an AI provider to respond in chat. Choose **one** of the paths below.
+With Claude Code installed there is nothing to configure: it is the default provider for everything. The paths below are for pointing Walnut's background work at a provider directly instead (Settings → AI Provider, or `agent.main_provider` in `~/.open-walnut/config.yaml`). Choose **one**.
 
-### Path A: Anthropic API (Recommended for New Users)
+### Path A: Anthropic API key
 
-The simplest option — one environment variable and you're done.
+One environment variable and you're done.
 
 1. Get an API key from [console.anthropic.com](https://console.anthropic.com/)
 2. Export it:

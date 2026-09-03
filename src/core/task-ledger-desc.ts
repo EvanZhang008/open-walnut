@@ -13,6 +13,7 @@
  */
 import { sendMessage } from '../agent/model.js';
 import { MODEL_CATALOG } from '../agent/providers/model-catalog.js';
+import { resolveMainProviderName } from '../agent/providers/default-provider.js';
 import { log } from '../logging/index.js';
 import { updateTaskRaw, getTask } from './task-manager.js';
 import type { Task } from './types.js';
@@ -65,7 +66,7 @@ export async function generateLedgerDesc(
   try {
     const { getConfig } = await import('./config-manager.js');
     const config = await getConfig();
-    const providerName = config.agent?.main_provider ?? 'bedrock';
+    const providerName = resolveMainProviderName(config);
     const model = cheapModelFor(providerName);
 
     const detail = (task.description ?? '').trim().slice(0, 800);

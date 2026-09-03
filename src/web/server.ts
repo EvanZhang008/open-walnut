@@ -708,6 +708,12 @@ export interface SystemHealthState {
   credentialSource?: import('../core/credential-resolver.js').CredentialSource;
   /** Short human-readable provenance, e.g. "AWS_BEARER_TOKEN_BEDROCK" or "profile: dev". */
   credentialDetail?: string;
+  /** The provider background calls actually use (agent.main_provider, or the default rule). */
+  mainProvider?: string;
+  /** True when that provider was chosen by the default rule, not by config. */
+  mainProviderImplicit?: boolean;
+  /** How the local Claude Code signs in, for display ("Bedrock (us-west-2)", "your Claude subscription"). */
+  claudeCliAuth?: string;
 }
 
 const systemHealth: SystemHealthState = {
@@ -722,12 +728,22 @@ export function getSystemHealth(): SystemHealthState {
 /** Re-run all health checks, update shared state, and broadcast to clients. */
 export async function refreshSystemHealth(): Promise<SystemHealthState> {
   systemHealth.claudeCliAvailable = checkClaudeCliAvailable()
-  const cred = await resolveCredentialHealth()
+  applyCredentialHealth(await resolveCredentialHealth())
+  broadcastEvent('system:health', systemHealth)
+  return systemHealth
+}
+
+/** Copy one credential-health result into the shared state. Every refresh path
+ *  goes through here so a field added to the result cannot be dropped by one of
+ *  them (the startup and config-change paths once copied only three fields, and
+ *  the banner never saw `mainProvider`). */
+function applyCredentialHealth(cred: Awaited<ReturnType<typeof resolveCredentialHealth>>): void {
   systemHealth.hasReadyProvider = cred.hasReadyProvider
   systemHealth.credentialSource = cred.source
   systemHealth.credentialDetail = cred.detail
-  broadcastEvent('system:health', systemHealth)
-  return systemHealth
+  systemHealth.mainProvider = cred.mainProvider
+  systemHealth.mainProviderImplicit = cred.mainProviderImplicit
+  systemHealth.claudeCliAuth = cred.claudeCliAuth
 }
 
 /** Check if Claude Code CLI is available to Walnut. */
@@ -744,39 +760,55 @@ async function resolveCredentialHealth(): Promise<{
   hasReadyProvider: boolean
   source?: import('../core/credential-resolver.js').CredentialSource
   detail?: string
+  mainProvider?: string
+  mainProviderImplicit?: boolean
+  claudeCliAuth?: string
 }> {
   try {
     const { getConfig } = await import('../core/config-manager.js')
     const { resolveCredentials } = await import('../core/credential-resolver.js')
     const { buildProviderMap } = await import('../agent/providers/registry.js')
+    const { resolveMainProviderName, mainProviderIsImplicit } = await import('../agent/providers/default-provider.js')
+    const { detectClaudeCli } = await import('../core/claude-cli-detect.js')
     const config = await getConfig()
+    const cli = detectClaudeCli()
+    const mainProvider = resolveMainProviderName(config, cli.installed)
+    const base = {
+      mainProvider,
+      mainProviderImplicit: mainProviderIsImplicit(config),
+      claudeCliAuth: cli.installed ? cli.auth.label : undefined,
+    }
 
-    // Bedrock — the primary path for our audience.
+    // Claude Code is the provider (by default when installed, or by choice): it is
+    // ready when the binary is here. Its login is its own (Bedrock, subscription, a
+    // key); we only describe it, never probe a credential value.
+    if (mainProvider === 'claude_cli') {
+      return cli.installed
+        ? { ...base, hasReadyProvider: true, source: 'config', detail: `claude-cli (${cli.auth.label})` }
+        : { ...base, hasReadyProvider: false, source: 'none' }
+    }
+
+    // Bedrock — the credential ladder (settings.json env → process env → ~/.aws).
     const cred = resolveCredentials(config)
     if (cred.source !== 'none') {
-      return { hasReadyProvider: true, source: cred.source, detail: cred.detail }
+      return { ...base, hasReadyProvider: true, source: cred.source, detail: cred.detail }
     }
 
     // Other providers (Anthropic direct, OpenAI, Google) — ready if they have a key.
     const providers = buildProviderMap(config.providers, config)
     for (const [, prov] of Object.entries(providers)) {
       if (prov.api === 'bedrock' || prov.api === 'ollama') continue
-      // claude-cli is keyless: ready when the local CLI is installed AND a
-      // subscription credential exists (existence probe only, never the value).
       if (prov.api === 'claude-cli') {
-        const { detectClaudeCli } = await import('../core/claude-cli-detect.js')
-        if (detectClaudeCli().subscriptionReady) {
-          return { hasReadyProvider: true, source: 'config', detail: 'claude-cli (subscription)' }
-        }
+        if (cli.installed) return { ...base, hasReadyProvider: true, source: 'config', detail: `claude-cli (${cli.auth.label})` }
         continue
       }
       const implemented = prov.api === 'anthropic-messages'
         || prov.api === 'openai-chat' || prov.api === 'google-generative-ai'
       if (implemented && (prov.api_key || prov.bearer_token)) {
-        return { hasReadyProvider: true, source: 'config', detail: prov.api }
+        return { ...base, hasReadyProvider: true, source: 'config', detail: prov.api }
       }
     }
-    return { hasReadyProvider: false, source: 'none' }
+    return { ...base, hasReadyProvider: false, source: 'none' }
   } catch {
     return { hasReadyProvider: false, source: 'none' }
   }
@@ -852,11 +884,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
   {
     const cred = await resolveCredentialHealth()
-    systemHealth.hasReadyProvider = cred.hasReadyProvider
-    systemHealth.credentialSource = cred.source
-    systemHealth.credentialDetail = cred.detail
+    applyCredentialHealth(cred)
     if (!systemHealth.hasReadyProvider) {
       log.web.warn('No AI provider configured — configure one in Settings')
+    } else if (cred.mainProvider === 'claude_cli') {
+      log.web.info('AI provider: Claude Code', { auth: cred.claudeCliAuth, implicit: cred.mainProviderImplicit })
     } else if (cred.source && cred.source !== 'config') {
       log.web.info('Auto-detected Bedrock credential', { source: cred.source, detail: cred.detail })
     }
@@ -2858,10 +2890,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const prev = systemHealth.hasReadyProvider
       const prevSource = systemHealth.credentialSource
       const cred = await resolveCredentialHealth()
-      systemHealth.hasReadyProvider = cred.hasReadyProvider
-      systemHealth.credentialSource = cred.source
-      systemHealth.credentialDetail = cred.detail
-      if (cred.hasReadyProvider !== prev || cred.source !== prevSource) {
+      const prevProvider = systemHealth.mainProvider
+      applyCredentialHealth(cred)
+      if (cred.hasReadyProvider !== prev || cred.source !== prevSource || cred.mainProvider !== prevProvider) {
         broadcastEvent('system:health', systemHealth)
       }
     } catch { /* non-critical */ }

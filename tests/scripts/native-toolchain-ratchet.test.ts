@@ -43,9 +43,12 @@ describe('native toolchain: install-time wiring', () => {
 
   it('the failure message names the fix, not just the problem', () => {
     const src = readFileSync(path.join(root, 'scripts/check-native-toolchain.mjs'), 'utf8');
-    for (const must of ['gcc10-c++', 'CC=gcc10-gcc', 'CXX=gcc10-g++', 'PYTHON=python3.8', 'WALNUT_SKIP_TOOLCHAIN_CHECK=1', 'npm_config_build_from_source']) {
+    for (const must of ['gcc10-c++', 'CC=gcc10-gcc', 'CXX=gcc10-g++', 'python install 3.12', 'astral.sh/uv/install.sh', 'WALNUT_SKIP_TOOLCHAIN_CHECK=1', 'npm_config_build_from_source']) {
       expect(src).toContain(must);
     }
+    // The Python fix must not lean on a distro channel: a glibc 2.26 box was seen with
+    // no python3.8 topic at all, and uv's static Python runs on glibc 2.17+ without sudo.
+    expect(src).not.toContain('amazon-linux-extras install');
   });
 });
 

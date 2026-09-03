@@ -282,13 +282,16 @@ if want_path readme; then
       # The native build failed and Walnut's own check (what `npm start` would run next)
       # printed the recipe. A user would paste it; do the same, and record whether the
       # printed advice actually works. The env it names stays exported for the npm route.
-      fix_installs=$(sed -n '/Fix, then install again/,/npm install$/p' "$STEP_LOG" | grep -E '^\s+sudo ' | sed 's/^ *//')
+      # Every indented line between the header and the final `npm install` is one command
+      # to run as printed (sudo installs, the uv bootstrap, ...); the last line's prefix is
+      # the env the rebuilt install needs, kept for the rest of the run.
+      fix_installs=$(sed -n '/Fix, then install again/,/npm install$/p' "$STEP_LOG" | grep -E '^\s+\S' | grep -vE 'npm install$|^\s+#' | sed 's/^ *//')
       fix_npm=$(sed -n '/Fix, then install again/,/npm install$/p' "$STEP_LOG" | grep -E 'npm install$' | tail -1 | sed 's/^ *//')
       tail_log 14; step_end fail "native build failed (glibc $(glibc_version)); Walnut's check printed the recipe, following it" "This OS has glibc $(glibc_version): prebuilt native modules need 2.29+, so better-sqlite3 compiles and needs Python 3.8+ and GCC 10+, which the stock toolchain lacks. 'npm install' fails in node-gyp; Walnut's check explains and prints the commands."
       step_begin "readme:npm-install-fix"
       while IFS= read -r line; do [ -n "$line" ] && { cmd "$line"; run_logged bash -c "$line"; }; done <<< "$fix_installs"
       fix_env=$(printf '%s' "$fix_npm" | sed 's/ *npm install$//')
-      [ -n "$fix_env" ] && { say "  exporting for the rest of the run: $fix_env"; export $fix_env; }
+      [ -n "$fix_env" ] && { say "  exporting for the rest of the run: $fix_env"; eval "export $fix_env"; }
       cmd "$fix_npm"
       if [ -n "$fix_npm" ] && (cd "$README_DIR" && run_logged npm install); then
         step_end ok "the printed recipe worked; $(du -sh "$README_DIR/node_modules" 2>/dev/null | cut -f1) node_modules"

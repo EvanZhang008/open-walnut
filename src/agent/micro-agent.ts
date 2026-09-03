@@ -38,6 +38,7 @@ import type { AgentCallbacks } from './loop.js';
 import type { MessageParam } from './model.js';
 import type { ToolDefinition } from './tools.js';
 import type { UsageSource } from '../core/usage/types.js';
+import { resolveMainProviderName } from './providers/default-provider.js';
 
 export interface MicroAgentOptions {
   /** Small, caller-owned system prompt. This is ALL the model knows. */
@@ -84,7 +85,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 export async function resolveTierModel(tier: string): Promise<{ model: string; provider: string }> {
   const { getConfig } = await import('../core/config-manager.js');
   const config = await getConfig();
-  const provider = config.agent?.main_provider ?? 'bedrock';
+  const provider = resolveMainProviderName(config);
   const { MODEL_CATALOG } = await import('./providers/model-catalog.js');
   const entry = MODEL_CATALOG[provider]?.find((m) => {
     const id = m.id.toLowerCase();

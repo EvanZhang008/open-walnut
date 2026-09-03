@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   isClaudeCliInstalled, hasClaudeSubscriptionAuth, detectClaudeCli,
-  resolveClaudeCliExecutable,
+  resolveClaudeCliExecutable, describeClaudeCliAuth,
 } from '../../src/core/claude-cli-detect.js';
 
 const tempDirs: string[] = [];
@@ -53,5 +53,38 @@ describe('claude-cli-detect — boolean probes', () => {
     expect(caps.subscriptionReady).toBe(caps.installed && caps.subscriptionAuth);
     // subscriptionAuth can only be true when installed (we short-circuit on install).
     if (caps.subscriptionAuth) expect(caps.installed).toBe(true);
+    // The provider is ready when the binary is here: its login (Bedrock, subscription,
+    // a key) is the CLI's business, so a Bedrock-backed Claude Code must count too.
+    expect(caps.ready).toBe(caps.installed);
+    expect(typeof caps.auth.label).toBe('string');
+    if (!caps.installed) expect(caps.auth.mode).toBe('unknown');
+  });
+});
+
+describe('describeClaudeCliAuth — how the user\'s Claude Code signs in (flags only, no values)', () => {
+  it('reads Bedrock from settings.json env the way the CLI does (settings win over process env)', () => {
+    const hint = describeClaudeCliAuth({ CLAUDE_CODE_USE_BEDROCK: '' }, { CLAUDE_CODE_USE_BEDROCK: '1', AWS_REGION: 'us-west-2' });
+    expect(hint).toEqual({ mode: 'bedrock', label: 'Bedrock (us-west-2)' });
+  });
+
+  it('reads Bedrock from the process env when settings.json has no env block', () => {
+    expect(describeClaudeCliAuth({ CLAUDE_CODE_USE_BEDROCK: '1' }, {}).mode).toBe('bedrock');
+    expect(describeClaudeCliAuth({ CLAUDE_CODE_USE_BEDROCK: '1' }, {}).label).toBe('Bedrock');
+  });
+
+  it('treats "0" and "false" as off', () => {
+    for (const v of ['0', 'false', 'FALSE']) {
+      expect(describeClaudeCliAuth({ CLAUDE_CODE_USE_BEDROCK: v }, {}).mode).not.toBe('bedrock');
+    }
+  });
+
+  it('names an API key without ever returning it', () => {
+    const hint = describeClaudeCliAuth({ ANTHROPIC_API_KEY: 'sk-secret-value' }, {});
+    expect(hint.mode).toBe('api-key');
+    expect(JSON.stringify(hint)).not.toContain('sk-secret');
+  });
+
+  it('prefers Vertex over a stray key when the flag is on', () => {
+    expect(describeClaudeCliAuth({ CLAUDE_CODE_USE_VERTEX: '1', ANTHROPIC_API_KEY: 'x' }, {}).mode).toBe('vertex');
   });
 });

@@ -110,8 +110,10 @@ export interface ProviderStatus {
   auto_detected: boolean;
   models: ModelEntry[];
   // bedrock: 'bearer_token' | 'access_keys' | 'profile' | 'credential_process' | 'aws_env' | 'aws_credentials_file' | 'aws_config_file'
-  // claude-cli: 'subscription' | 'cli_no_subscription' | 'cli_not_installed'
+  // claude-cli: 'cli_bedrock' | 'cli_vertex' | 'cli_api-key' | 'cli_subscription' | 'cli_unknown' | 'cli_not_installed'
   credential_source?: string;
+  // claude-cli: how the CLI signs in, e.g. "Bedrock (us-west-2)" or "your Claude subscription"
+  credential_detail?: string;
 }
 
 export async function fetchProviders(): Promise<Record<string, ProviderStatus>> {

@@ -247,7 +247,7 @@ esac
 // Gated: only runs with WALNUT_LIVE_CLAUDE_CLI=1 AND a detected subscription.
 const liveOptIn = process.env.WALNUT_LIVE_CLAUDE_CLI === '1';
 const caps = detectClaudeCli();
-const runLive = liveOptIn && caps.subscriptionReady;
+const runLive = liveOptIn && caps.ready;
 
 (runLive ? describe : describe.skip)('LIVE: real claude -p text-only', () => {
   it('gets a real text reply from the subscription (no tools, no Bedrock)', async () => {
