@@ -46,7 +46,7 @@ local-first, self-hosted, and has no telemetry.
 - Linux: a C library from 2019 or later (glibc 2.29+: Ubuntu 20.04+, Debian 11+, AL2023, Fedora). Older distros compile one native module and need a newer Python and GCC first; `npm start` prints the exact commands, and [Getting Started](GETTING_STARTED.md#older-linux-glibc-before-229) has them too.
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in once (`npm install -g @anthropic-ai/claude-code`, then run `claude`)
 
-That is the whole AI setup. Walnut runs on your Claude Code: Ask Walnut (the Walnut agent), your coding sessions, and the background helpers (summaries, titles, subagents) all use the `claude` you already have, however it signs in (Anthropic account, Bedrock, or Vertex). An Anthropic API key or AWS Bedrock credentials are optional, for people who would rather run Ask Walnut on a provider directly (Settings → AI Provider); coding sessions stay on Claude Code either way.
+That is the whole AI setup. Walnut runs on your Claude Code: Ask Walnut (the Walnut agent), your coding sessions, and the background helpers (summaries, titles, subagents) all use the `claude` you already have, however it signs in (Anthropic account, Bedrock, or Vertex). An Anthropic API key or AWS Bedrock credentials are optional, for people who would rather run Ask Walnut on a provider directly (Settings → Ask Walnut Provider); coding sessions stay on Claude Code either way.
 
 ### Install
 

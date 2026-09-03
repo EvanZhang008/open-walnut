@@ -3,7 +3,7 @@
  * Personal AI's turns: the in-process loop ('walnut-agent') or a lane-bound Claude
  * Code session ('claude-code', via config.agent.provider).
  *
- * The engine follows the AI provider (Settings → AI Provider): Claude Code → the
+ * The engine follows the AI provider (Settings → Ask Walnut Provider): Claude Code → the
  * lane session, any other provider → the in-process loop. An explicit
  * `agent.provider` is an advanced override. Reads live config and refetches on
  * config:changed (the flag is read per turn on the server; no restart involved).
@@ -48,8 +48,8 @@ export function EngineBadge() {
     <span
       className={`chat-engine-badge${isLane ? ' lane' : ''}`}
       title={isLane
-        ? 'Ask Walnut answers from a Claude Code session, with the claude CLI\'s own login (Settings → AI Provider: Claude Code).'
-        : 'Ask Walnut answers from the built-in agent loop, calling the AI Provider chosen in Settings.'}
+        ? 'Ask Walnut answers from a Claude Code session, with the claude CLI\'s own login (Settings → Ask Walnut Provider: Claude Code).'
+        : 'Ask Walnut answers from the built-in agent loop, calling the provider chosen under Settings → Ask Walnut Provider.'}
     >
       {isLane ? 'Claude Code' : 'Built-in loop'}
     </span>

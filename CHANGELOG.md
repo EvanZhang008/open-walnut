@@ -4,6 +4,12 @@ All notable changes to Open Walnut are documented here. This project follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions may include
 breaking changes).
 
+## [0.4.4] - 2026-09-03
+
+### Changed
+
+- Settings section renamed **Ask Walnut (Walnut Agent) Provider** and reduced to two choices: **Claude Code**, or **Walnut custom agent** with the provider list (Bedrock, Anthropic, OpenAI, OpenRouter, Gemini, Ollama) underneath. The explanatory box is gone.
+
 ## [0.4.3] - 2026-09-03
 
 ### Changed

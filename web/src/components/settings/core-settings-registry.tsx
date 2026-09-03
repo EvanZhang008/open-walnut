@@ -54,7 +54,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   // groups must read in the same top-to-bottom order or a nav click lands somewhere
   // the eye did not expect. Keep this entry directly after the Manage sections.
   { owner: 'walnut', id: 'plugin-store', label: 'Plugins', title: 'Plugins', group: 'plugins', render: ({ config, saveSection }) => <PluginStoreSection config={config} onSave={saveSection} /> },
-  { owner: 'walnut', id: 'providers', label: 'AI Provider', title: 'AI Provider', group: 'configure', render: ({ config, saveSection }) => <ProvidersSection config={config} onSave={saveSection} /> },
+  { owner: 'walnut', id: 'providers', label: 'Ask Walnut Provider', title: 'Ask Walnut (Walnut Agent) Provider', group: 'configure', render: ({ config, saveSection }) => <ProvidersSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'general', label: 'General', title: 'General', group: 'configure', render: ({ config, saveSection }) => <GeneralSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'sessions', label: 'Tasks & Sessions', title: 'Tasks & Sessions', group: 'configure', render: ({ config, saveSection }) => <SessionsSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'focus-tiers', label: 'Focus Tiers', title: 'Focus Tiers', group: 'configure', render: () => <FocusTiersSection /> },

@@ -812,11 +812,9 @@ function ProviderCard({
                 </>
               ) : (
                 <p className="text-sm text-muted">
-                  Ask Walnut runs as a <code style={{ fontSize: 11 }}>claude</code> session, and its background
-                  helpers spawn the same local CLI, all with the login it already has
+                  Uses the login your <code style={{ fontSize: 11 }}>claude</code> CLI already has
                   {serverInfo?.credential_detail ? <>: <strong>{serverInfo.credential_detail}</strong></> : null}.
-                  Nothing to paste here; change how Claude Code signs in (<code style={{ fontSize: 11 }}>~/.claude/settings.json</code>)
-                  and Walnut follows.
+                  Change it in <code style={{ fontSize: 11 }}>~/.claude/settings.json</code>.
                 </p>
               )}
               {serverInfo?.credential_source === 'cli_subscription' && (
@@ -877,7 +875,6 @@ export function ProvidersSection({ config, onSave }: Props) {
   // Undefined until health has loaded: never guess, a wrong "runs on X" is worse
   // than a moment with no radio selected.
   const activeProvider = config.agent?.main_provider ?? health.mainProvider;
-  const activeIsDefault = !config.agent?.main_provider;
 
   // Global model selection state (lives in config.agent, not per-provider)
   const [mainModel, setMainModel] = useState(config.agent?.main_model ?? '');
@@ -954,65 +951,87 @@ export function ProvidersSection({ config, onSave }: Props) {
     await loadProviders();
   };
 
-  const activeLabel = ALL_PROVIDERS.find(p => p.name === activeProvider)?.label ?? activeProvider;
+  // Two ways to run Ask Walnut: Claude Code, or the built-in agent loop ("Walnut
+  // custom agent") on a provider picked underneath. `mode` is derived from the
+  // provider, never stored: claude_cli is Claude Code, anything else is custom.
+  const mode: 'claude' | 'custom' | undefined =
+    activeProvider === undefined ? undefined : activeProvider === 'claude_cli' ? 'claude' : 'custom';
+  const claudeDef = ALL_PROVIDERS.find(p => p.name === 'claude_cli')!;
+  const customDefs = ALL_PROVIDERS.filter(p => p.name !== 'claude_cli');
+  // Re-selecting "custom agent" returns to the provider it last ran on.
+  const lastCustom = (() => { try { return localStorage.getItem(LS_LAST_CUSTOM_PROVIDER); } catch { return null; } })();
+  const handleSelectCustomMode = () => {
+    if (mode === 'custom') return;
+    const fallback = customDefs.some(p => p.name === lastCustom) ? lastCustom! : 'bedrock';
+    void handleSetActive(fallback);
+  };
+  const handleSelectCustomProvider = (name: string) => {
+    try { localStorage.setItem(LS_LAST_CUSTOM_PROVIDER, name); } catch { /* ignore */ }
+    void handleSetActive(name);
+  };
+  const cardProps = (def: typeof ALL_PROVIDERS[number], onSelect: (name: string) => void) => ({
+    def,
+    isActive: def.name === activeProvider,
+    serverInfo: providers[def.name],
+    configApiKey: (config.providers as Record<string, { api_key?: string }> | undefined)?.[def.name]?.api_key,
+    config,
+    mainModel,
+    maxTokens,
+    onSelectActive: onSelect,
+    onSave,
+    onAfterSave: loadProviders,
+    onSaveKey: handleSaveKey,
+    onSaveMainModel: handleSaveMainModel,
+    onSaveMaxTokens: handleSaveMaxTokens,
+    onSaveProviderModels: handleSaveProviderModels,
+  });
 
   return (
     <SectionCard
       id="providers"
-      title="AI Provider"
-      description="What Ask Walnut (the Walnut agent) runs on. Coding sessions always use your own Claude Code."
+      title="Ask Walnut (Walnut Agent) Provider"
+      description="Coding sessions always use your own Claude Code."
       showSave={false}
     >
-      <p className="text-sm" data-testid="providers-summary" style={{
-        margin: '0 0 12px',
-        padding: '8px 12px',
-        borderRadius: 8,
-        border: '1px solid color-mix(in srgb, var(--accent) 40%, var(--border))',
-        background: 'color-mix(in srgb, var(--accent) 8%, transparent)',
-        color: 'var(--fg-secondary)',
-      }}>
-        {activeProvider === undefined ? (
-          <>Working out what Ask Walnut runs on…</>
-        ) : activeProvider === 'claude_cli' ? (
-          <>
-            <strong>Ask Walnut runs on Claude Code</strong>{activeIsDefault ? ' (the default)' : ''}: a long-lived{' '}
-            <code style={{ fontSize: 11 }}>claude</code> session with its own login
-            {health.claudeCliAuth ? <> ({health.claudeCliAuth})</> : null}. Its background helpers
-            (subagents, summaries, titles) use the same login. Nothing else to set up.
-          </>
-        ) : (
-          <>
-            <strong>Ask Walnut runs on {activeLabel}</strong> through the built-in agent loop, and so do
-            its background helpers (subagents, summaries, titles). Coding sessions still use your Claude Code.
-            Pick <strong>Claude Code</strong> to run everything on that one login.
-          </>
-        )}
-      </p>
       {loading ? (
         <p className="text-sm text-muted">Loading providers...</p>
       ) : (
-        <div className="provider-catalog">
-          {ALL_PROVIDERS.map((def) => (
-            <ProviderCard
-              key={def.name}
-              def={def}
-              isActive={def.name === activeProvider}
-              serverInfo={providers[def.name]}
-              configApiKey={(config.providers as Record<string, { api_key?: string }> | undefined)?.[def.name]?.api_key}
-              config={config}
-              mainModel={mainModel}
-              maxTokens={maxTokens}
-              onSelectActive={handleSetActive}
-              onSave={onSave}
-              onAfterSave={loadProviders}
-              onSaveKey={handleSaveKey}
-              onSaveMainModel={handleSaveMainModel}
-              onSaveMaxTokens={handleSaveMaxTokens}
-              onSaveProviderModels={handleSaveProviderModels}
-            />
-          ))}
+        <div className="provider-catalog" data-testid="provider-modes">
+          {/* 1. Claude Code */}
+          <ProviderCard key="claude_cli" {...cardProps(claudeDef, handleSetActive)} />
+
+          {/* 2. Walnut custom agent → a provider underneath */}
+          <div className={`provider-card${mode === 'custom' ? ' provider-card-active' : ''}`} data-testid="provider-mode-custom">
+            <div className="provider-card-header" onClick={handleSelectCustomMode}>
+              <div className="provider-card-left">
+                <span
+                  className={`provider-radio${mode === 'custom' ? ' provider-radio-selected' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); handleSelectCustomMode(); }}
+                />
+                <span className="provider-card-label">Walnut custom agent</span>
+              </div>
+              <div className="provider-card-right">
+                <span className="text-sm text-muted">
+                  {mode === 'custom'
+                    ? (customDefs.find(p => p.name === activeProvider)?.label ?? activeProvider)
+                    : 'Built-in agent loop on a provider below'}
+                </span>
+              </div>
+            </div>
+            {mode === 'custom' && (
+              <div className="provider-card-body" style={{ paddingLeft: 28 }}>
+                <div className="provider-catalog" data-testid="custom-agent-providers">
+                  {customDefs.map((def) => (
+                    <ProviderCard key={def.name} {...cardProps(def, handleSelectCustomProvider)} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </SectionCard>
   );
 }
+
+const LS_LAST_CUSTOM_PROVIDER = 'walnut-custom-agent-provider';
