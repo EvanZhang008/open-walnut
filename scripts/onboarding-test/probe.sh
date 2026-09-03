@@ -239,7 +239,7 @@ else
     run_logged bash -c "curl -fsSL https://unofficial-builds.nodejs.org/download/release/$NODE_UNOFFICIAL_VER/node-$NODE_UNOFFICIAL_VER-linux-x64-glibc-217.tar.gz | tar -xz -C \"$HOME/.local/node22\" --strip-components=1"
     export PATH="$HOME/.local/node22/bin:$PATH"; hash -r 2>/dev/null || true
     if have node && [ "$(node_major)" -ge 22 ] 2>/dev/null; then
-      step_end ok "installed $(ver node -v) (community glibc-217 build)" "This OS has glibc $(glibc_version); the official Node 22 binaries need 2.28, so 'nvm install 22' completes and then node cannot start (GLIBC_2.28 not found). The README's Node line does not warn about this; the community glibc-217 build is the way."
+      step_end ok "installed $(ver node -v) (community glibc-217 build)" "This OS has glibc $(glibc_version); the official Node 22 binaries need 2.28, so 'nvm install 22' completes and then node cannot start (GLIBC_2.28 not found). Getting Started's older-Linux section gives the community glibc-217 build; this is the time it costs."
     else
       tail_log 5
       step_end fail "no Node 22 runs on glibc $(glibc_version): $(first_error_line)" "Official Node 22 needs glibc 2.28 and the community glibc-217 build also failed here."

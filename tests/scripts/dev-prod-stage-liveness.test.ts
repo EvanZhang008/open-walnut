@@ -57,21 +57,27 @@ describe('stage reap guard', () => {
     // and protects nothing. Pin both spellings.
     const doubleSlashed = live.replace(`${tmp}/`, `${tmp}//`)
     const privatePath = live.startsWith('/var/') ? `/private${live}` : live
+    // The stage paths travel as positional parameters, never spelled inside the
+    // script text: the script IS the wrapper bash's command line, and pgrep -f
+    // searches command lines. On Linux the wrapper (a lower PID than the probe)
+    // would be reported as "the live process" and the test would fail against a
+    // correct guard; macOS hid the problem because ps cannot read an argv this
+    // long there and shows the bare executable instead.
     const out = execFileSync('bash', ['-c', `
       set -uo pipefail
       ${stageGuardSource()}
-      /bin/sh ${doubleSlashed}/dist/cli.js web --port 3456 >/dev/null 2>&1 &
+      /bin/sh "$1"/dist/cli.js web --port 3456 >/dev/null 2>&1 &
       probe_pid=$!
       # Generous: under machine load the background shell needs a moment to be
       # visible in the process table, and a premature probe reads as "not live"
       # (which is the pass-vacuously direction, so it must not be tight).
       sleep 1
-      live_hit="$(stage_has_live_process "${live}" || true)"
-      private_hit="$(stage_has_live_process "${privatePath}" || true)"
-      idle_hit="$(stage_has_live_process "${idle}" || true)"
+      live_hit="$(stage_has_live_process "$2" || true)"
+      private_hit="$(stage_has_live_process "$3" || true)"
+      idle_hit="$(stage_has_live_process "$4" || true)"
       kill "$probe_pid" 2>/dev/null || true
       echo "live=[$live_hit] private=[$private_hit] idle=[$idle_hit] probe=[$probe_pid] cmd=[$(ps -o command= -p $probe_pid || true)]"
-    `], { encoding: 'utf-8' }).trim()
+    `, 'stage-guard', doubleSlashed, live, privatePath, idle], { encoding: 'utf-8' }).trim()
 
     const m = /live=\[(\d*)\] private=\[(\d*)\] idle=\[(\d*)\] probe=\[(\d+)\]/.exec(out)
     expect(m, `unexpected guard output: ${out}`).not.toBeNull()

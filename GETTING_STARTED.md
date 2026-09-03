@@ -93,6 +93,15 @@ PYTHON=python3.8 CC=gcc10-gcc CXX=gcc10-g++ npm install
 
 sharp (image compression for pasted images) is optional and is skipped on such a system: images are sent uncompressed. If `npm_config_build_from_source` is set in your environment, unset it; it forces sharp into a source build that needs libvips.
 
+Node itself has the same problem one step earlier: the official Node 22 binaries need glibc 2.28, so `nvm install 22` completes and then `node` dies with `GLIBC_2.28 not found`. Use the [community build for older glibc](https://unofficial-builds.nodejs.org/download/release/) (the `linux-x64-glibc-217` tarball of any v22 release), unpacked anywhere on your `PATH`:
+
+```bash
+v=$(curl -fsSL https://unofficial-builds.nodejs.org/download/release/index.tab | awk -F'\t' 'NR>1 && $1 ~ /^v22\./ && $0 ~ /linux-x64-glibc-217/ {print $1; exit}')
+mkdir -p ~/.local/node22
+curl -fsSL "https://unofficial-builds.nodejs.org/download/release/$v/node-$v-linux-x64-glibc-217.tar.gz" | tar -xz -C ~/.local/node22 --strip-components=1
+export PATH="$HOME/.local/node22/bin:$PATH"   # add to your shell profile too
+```
+
 ### Optional
 
 | Dependency | How to install | Why | Without it |
