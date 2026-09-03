@@ -4,22 +4,7 @@ import { useSessionPinsApi } from '@/contexts/SessionPinsContext';
 import { useSessionRewindApi } from '@/contexts/SessionRewindContext';
 import { timeAgo } from '@/utils/time';
 import { pinLabelFor } from '@/hooks/useSessionPins';
-
-/** Pin glyph, outline when unpinned and filled once pinned (the only state the
- *  row shows — the TOC is the other half of the feedback). */
-const ICON_PIN = (
-  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M9.5 2.5l4 4-1.4 1.4-.7-.7-2.5 2.5.4 2.6-1 1-4.6-4.6 1-1 2.6.4 2.5-2.5-.7-.7z" />
-    <path d="M5.2 10.8L2.5 13.5" />
-  </svg>
-);
-
-const ICON_PIN_FILLED = (
-  <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M9.5 2.5l4 4-1.4 1.4-.7-.7-2.5 2.5.4 2.6-1 1-4.6-4.6 1-1 2.6.4 2.5-2.5-.7-.7z" />
-    <path d="M5.2 10.8L2.5 13.5" fill="none" />
-  </svg>
-);
+import { ICON_PIN, ICON_PIN_FILLED } from './MessageActionIcons';
 
 /** Tape-deck rewind: a bar the tape winds back TO, plus two left triangles.
  *  Deliberately NOT the circular counter-clockwise arrow that was here first —

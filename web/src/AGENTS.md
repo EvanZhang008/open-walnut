@@ -45,6 +45,15 @@ still live on the client.
   SERVER-side per-message id that is byte-identical live and after a reload — chat: `turnId`
   (rides every `agent:*` event AND the stored entry); session: `msgId`. Never scope on anything
   the browser stamps (`key`, `timestamp`): that orphans every receipt on the next reload.
+- **A stored `Range` does NOT survive a re-render, and it does not tell you so.** Anything painting
+  message text without touching the DOM (quote pins via the CSS Custom Highlight API:
+  `utils/pin-highlights.ts`, `hooks/useQuotePinPaint.ts`) holds live Ranges. When React replaces
+  the text node under one, the DOM spec re-points its boundaries onto the parent element, so the
+  Range becomes COLLAPSED while `startContainer.isConnected` stays `true`, `CSS.highlights.size`
+  still counts it, and it paints nothing and hit-tests as a miss. Judge staleness by the boundary
+  SHAPE (`collapsed`, container no longer a text node), never by connectivity, and re-derive from
+  the passage TEXT — one animation frame, not a debounce, or a click on the passage does nothing
+  for as long as the debounce lasts.
 
 ## Files panel — editing & quoting (`components/common/FileContentView.tsx`)
 

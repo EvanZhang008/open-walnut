@@ -1071,6 +1071,26 @@ await fs.writeFile(
           message: { role: 'assistant', content: [{ type: 'text', text: `outline filler reply ${i + 1}` }] },
         }),
       ]).flat(),
+      // A real PARAGRAPH at the tail (session-quote-pin.spec.ts): pinning a passage
+      // needs a sentence long enough to drag a phrase out of the middle of, and one
+      // that renders inside the initial 30-row window. Its wording is load-bearing
+      // for that spec — "rewrites the index in place" appears exactly once in the
+      // whole transcript, so the pin's selector is unambiguous.
+      JSON.stringify({
+        type: 'assistant',
+        uuid: '0199aa04-0000-4aaa-8bbb-000000000001',
+        parentUuid: '0199aa03-0000-4aaa-8bbb-000000000023',
+        sessionId: 'pw-pins-session',
+        timestamp: new Date(sessionFixtureNow - 19_000).toISOString(),
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'text',
+            text: 'The migration runs in three phases. Phase two rewrites the index in place, '
+              + 'which is the part worth watching closely. Phase three only verifies checksums.',
+          }],
+        },
+      }),
       '',
     ].join('\n'),
   )
@@ -1238,7 +1258,7 @@ await fs.writeFile(
         last_status_change: new Date().toISOString(),
         startedAt: new Date(Date.now() - 28_000).toISOString(),
         lastActiveAt: new Date().toISOString(),
-        messageCount: 52,
+        messageCount: 53,
         cwd: vscodeFixtureRoot,
         title: 'Outline fixture session',
       },

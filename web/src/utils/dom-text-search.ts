@@ -45,7 +45,14 @@ export function onSearchOwnerLost(token: string, onLost: () => void): () => void
   return () => window.removeEventListener(SEARCH_OWNER_EVENT, handler);
 }
 
-interface TextIndex {
+/**
+ * The concatenated text of a subtree plus the map back to its text nodes.
+ *
+ * Exported (with the walker below) because quote pins need exactly this walk over
+ * a message body — `utils/text-quote-anchor.ts` builds on it rather than growing a
+ * second walker that would drift from this one's skip rules.
+ */
+export interface DomTextIndex {
   nodes: Text[];
   /** Cumulative start offset of each node's text in the concatenated string. */
   starts: number[];
@@ -54,7 +61,7 @@ interface TextIndex {
 
 const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA']);
 
-function buildTextIndex(root: HTMLElement, skipSelector?: string): TextIndex {
+export function buildDomTextIndex(root: Element, skipSelector?: string): DomTextIndex {
   const doc = root.ownerDocument;
   const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(n) {
@@ -119,7 +126,7 @@ export function findMatchOffsets(
 }
 
 /** Map a global offset to (nodeIndex, localOffset) via binary search. */
-function locate(index: TextIndex, offset: number): { node: Text; off: number } {
+function locate(index: DomTextIndex, offset: number): { node: Text; off: number } {
   const { starts, nodes } = index;
   let lo = 0;
   let hi = starts.length - 1;
@@ -135,7 +142,7 @@ function locate(index: TextIndex, offset: number): { node: Text; off: number } {
 export function collectTextMatches(
   root: HTMLElement, query: string, caseSensitive: boolean, cap = 5000, skipSelector?: string,
 ): Range[] {
-  const index = buildTextIndex(root, skipSelector);
+  const index = buildDomTextIndex(root, skipSelector);
   if (!index.nodes.length) return [];
   const offsets = findMatchOffsets(index.text, query, caseSensitive, cap);
   const doc = root.ownerDocument;
@@ -245,7 +252,7 @@ export class DomSearchController {
     private root: HTMLElement,
     private win: Window,
     private scrollWindow = false,
-    /** Chrome-content opt-out (diff gutters, unfold bars…) — see buildTextIndex. */
+    /** Chrome-content opt-out (diff gutters, unfold bars…) — see buildDomTextIndex. */
     private skipSelector?: string,
   ) {}
 

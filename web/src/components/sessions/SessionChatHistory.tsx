@@ -15,7 +15,12 @@ import { getFinishedAgentIds, subscribeFinishedAgentIds } from '@/cache/finished
 import { groupStreamingBlocks, groupLaneChildren, countAgentTree, GROUPABLE_STREAM_TOOLS, type GroupedStreamItem } from '@/stream/group-blocks';
 import { TeamCard } from './TeamCard';
 import { SessionPinnedToc } from './SessionPinnedToc';
+import { QuotePinSelectionBar } from './QuotePinSelectionBar';
+import { QuotePinPopover } from './QuotePinPopover';
 import { useSessionPinsApi } from '@/contexts/SessionPinsContext';
+import { pinKeyOf, pinLabelFor } from '@/hooks/useSessionPins';
+import { useQuotePinPaint } from '@/hooks/useQuotePinPaint';
+import { flashRange } from '@/utils/pin-highlights';
 import { WorkflowProgress } from './WorkflowProgress';
 import { LoadingSpinner } from '../common/LoadingSpinner';
 import { Lightbox } from '../common/Lightbox';
@@ -847,6 +852,11 @@ function WorkingIndicator({ label, tokens }: { label: string; tokens: number }) 
 // ── Auto-scroll constant ──
 const NEAR_BOTTOM_PX = 80;  // px from bottom to consider "at bottom"
 
+/** Serial for quote-pin highlight slices. Two timelines can show the SAME session
+ *  (a column plus the fullscreen overlay), so the session id alone is not a
+ *  unique key into the shared highlight registry. */
+let nextQuotePanelSeq = 0;
+
 // Divergence-tripwire settle window: the unmatched set must survive this long
 // unchanged (no new turn, no history fetch in flight) before evidence ships.
 // Sized above the observed post-turn delta round-trip (~1.2s on SSH sessions,
@@ -918,6 +928,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Pins live on the session record; the panel provides them through context so
   // the memoized message rows can host the pin button without prop drilling.
   const pinsApi = useSessionPinsApi();
+  // This mounted timeline's slice of the document-global highlight registry — the
+  // home page shows up to three sessions side by side, and they must be able to
+  // paint their own pins without deleting each other's (see pin-highlights.ts).
+  const quotePanelKey = useMemo(() => `${sessionId}:${nextQuotePanelSeq++}`, [sessionId]);
   /** scrollTop the last outline jump left from — armed for one "Back". */
   const jumpReturnTop = useRef<number | null>(null);
   const [canGoBack, setCanGoBack] = useState(false);
@@ -1453,24 +1467,54 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     return pinsApi.pins
       .map((pin) => ({ pin, at: indexOf.get(pin.msgId) ?? Number.MAX_SAFE_INTEGER }))
-      .sort((a, b) => (a.at !== b.at ? a.at - b.at : a.pin.pinnedAt.localeCompare(b.pin.pinnedAt)))
-      .map(({ pin }) => ({
-        msgId: pin.msgId,
-        label: pin.label || (pin.role === 'user' ? 'Your message' : 'Reply'),
-        role: pin.role,
-        ...(pin.timestamp ? { timestamp: pin.timestamp } : {}),
-      }));
+      .sort((a, b) => {
+        if (a.at !== b.at) return a.at - b.at;
+        // Within ONE message: the whole-message pin heads the group, then its
+        // passages in the order they were pinned. (Passage order inside the
+        // message body would be truer, but it is only knowable while the row is
+        // rendered — and the outline must read the same either way.)
+        const aQuote = a.pin.quote ? 1 : 0;
+        const bQuote = b.pin.quote ? 1 : 0;
+        if (aQuote !== bQuote) return aQuote - bQuote;
+        return a.pin.pinnedAt.localeCompare(b.pin.pinnedAt);
+      })
+      .map(({ pin }) => {
+        const fallback = pin.role === 'user' ? 'Your message' : 'Reply';
+        const base = pin.label
+          || (pin.quote ? pinLabelFor(pin.quote.exact, 'Quoted passage') : fallback);
+        return {
+          key: pinKeyOf(pin),
+          msgId: pin.msgId,
+          // The ❝ glyph is what tells the two kinds of row apart at a glance.
+          label: pin.quote ? `❝ ${base}` : base,
+          role: pin.role,
+          ...(pin.timestamp ? { timestamp: pin.timestamp } : {}),
+          ...(pin.quote ? { isQuote: true } : {}),
+        };
+      });
   }, [pinsApi.pins, messages]);
 
-  /** Jump to a pinned message: reveal it (the render window is a tail slice), then
-   *  centre + flash it. The pre-jump scrollTop is remembered so "Back" can undo a
-   *  jump — losing your reading place is the cost of a look at a pin otherwise. */
-  const jumpToMsgId = useCallback((msgId: string) => {
+  // Quote-pin paint. Costs nothing until a session actually has one (the hook
+  // early-returns before installing its observer). The nonce covers the render
+  // window growing/shrinking; the hook's own MutationObserver covers everything
+  // else that re-renders a body (streaming deltas, the MD⇄Rich toggle).
+  const quotePaint = useQuotePinPaint(
+    containerRef, pinsApi.pins, quotePanelKey, messages.length + truncationOffset,
+  );
+
+  /** Jump to a pin: reveal its message (the render window is a tail slice), then
+   *  centre it — the PASSAGE for a quote pin, the row for a whole-message pin —
+   *  and flash it. The pre-jump scrollTop is remembered so "Back" can undo a jump;
+   *  losing your reading place is the cost of a look at a pin otherwise. */
+  const jumpToPin = useCallback((pinKey: string) => {
     const el = containerRef.current;
-    if (!el || !msgId) return;
+    if (!el || !pinKey) return;
+    const pin = pinsApi.pins.find((p) => pinKeyOf(p) === pinKey);
+    const msgId = pin?.msgId;
+    if (!pin || !msgId) return;
     const index = messages.findIndex((m) => (m.msgId ?? m.walnutMessageId) === msgId);
     if (index < 0) {
-      log.warn('session', 'pin jump: message not in the loaded transcript', { sessionId, msgId });
+      log.warn('session', 'pin jump: message not in the loaded transcript', { sessionId, msgId, pinKey });
       return;
     }
     jumpReturnTop.current = el.scrollTop;
@@ -1492,12 +1536,31 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           log.warn('session', 'pin jump: target row did not render', { sessionId, msgId, index });
           return;
         }
+        if (pin.quote) {
+          // The row may have just been revealed by the window expansion above, so
+          // its paint doesn't exist yet — re-derive before asking for the Range.
+          quotePaint.relocate();
+          const range = quotePaint.locatePin(pin);
+          const rect = range?.getBoundingClientRect();
+          if (range && rect && (rect.width || rect.height)) {
+            const box = el.getBoundingClientRect();
+            const delta = (rect.top + rect.height / 2) - (box.top + box.height / 2);
+            el.scrollTo({ top: el.scrollTop + delta, behavior: 'smooth' });
+            flashRange(range);
+            return;
+          }
+          // Passage gone (message edited, /compact rewrote it): the row is still
+          // the right place to land, so fall through to the row flash.
+          log.info('session', 'pin jump: passage did not locate — falling back to the row', {
+            sessionId, msgId, pinKey,
+          });
+        }
         target.scrollIntoView({ behavior: 'smooth', block: 'center' });
         target.classList.add('user-messages-highlight');
         setTimeout(() => target.classList.remove('user-messages-highlight'), 1500);
       });
     });
-  }, [messages, truncationOffset, sessionId]);
+  }, [messages, truncationOffset, sessionId, pinsApi.pins, quotePaint]);
 
   const jumpBack = useCallback(() => {
     const el = containerRef.current;
@@ -2308,11 +2371,32 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             panel header or the composer. */}
         <SessionPinnedToc
           entries={tocEntries}
-          onJump={jumpToMsgId}
+          onJump={jumpToPin}
           onUnpin={pinsApi.unpin}
           canGoBack={canGoBack}
           onBack={jumpBack}
         />
+        {/* Quote pins: the pill offered on a text selection, and the popover a
+            click on a painted passage opens. Both portal to <body>; they live here
+            so ONE listener set covers the whole timeline. Mounted only where pinning
+            can actually persist — a timeline running on a stub pin store (the
+            side-question drawer) must not offer a Pin button that silently does
+            nothing. */}
+        {pinsApi.canPinQuote && (
+          <>
+            <QuotePinSelectionBar
+              containerRef={containerRef}
+              sessionId={sessionId}
+              onPin={pinsApi.pinQuote}
+            />
+            <QuotePinPopover
+              containerRef={containerRef}
+              pins={pinsApi.pins}
+              paintedRanges={quotePaint.paintedRanges}
+              onUnpin={pinsApi.unpin}
+            />
+          </>
+        )}
         {/* Loading / empty / error states rendered INSIDE the scroll container */}
         {loading && messages.length === 0 && blocks.length === 0 && <LoadingSpinner />}
         {/* Gate on the RAW flag: when an unavailable answer is suppressed because
@@ -2438,6 +2522,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               key={m.msgId ?? m.walnutMessageId ?? `${m.role}:${m.timestamp}:${globalIndex}`}
               data-msg-index={globalIndex}
               data-message-id={m.msgId ?? m.walnutMessageId}
+              // Read by the quote-pin selection pill, which only has the DOM row it
+              // found the selection in — cheaper than threading the messages array
+              // into an overlay that needs one row's metadata.
+              data-msg-role={m.role}
+              data-msg-ts={m.timestamp}
             >
               {forkBoundaryIndex != null && globalIndex === forkBoundaryIndex && (
                 <div className="session-fork-divider">

@@ -85,8 +85,11 @@ const INJECT_TAIL = 200;
  * has no pins, no rewind and no plan of its own.
  */
 const NO_REWIND: SessionRewindApi = { available: false, request: () => {} };
+// A side thread has no session record of its own to PATCH, so pinning is off here
+// — `canPinQuote: false` is what keeps the selection pill from offering it.
 const NO_PINS: SessionPinsApi = {
-  pins: [], isPinned: () => false, toggle: () => {}, unpin: () => {},
+  pins: [], isPinned: () => false, toggle: () => {}, pinQuote: () => {}, unpin: () => {},
+  canPinQuote: false,
 };
 
 /** Live dot for one thread session — its own subscription, so a chip updates

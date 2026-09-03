@@ -14,6 +14,7 @@
  * cycle (same convention as session-controls.ts).
  */
 
+import { randomUUID } from 'node:crypto';
 import { SessionControlError } from './session-controls.js';
 import { bus, EventNames } from '../event-bus.js';
 import { safeKillProcessGroup } from '../process-group-kill.js';
@@ -249,6 +250,42 @@ export interface SessionPatchInput {
 const MAX_PINNED_MESSAGES = 200;
 const MAX_PIN_LABEL_CHARS = 300;
 const MAX_PIN_ID_CHARS = 200;
+/** A quote pin's OWN identity (a client-generated uuid today), not a message id. */
+const MAX_PIN_ENTRY_ID_CHARS = 64;
+/** The quoted passage. A paragraph fits; the bound exists because the whole pin
+ *  list rides every session record read. */
+const MAX_PIN_QUOTE_CHARS = 2000;
+/** Disambiguating context either side of the passage (W3C TextQuoteSelector). */
+const MAX_PIN_QUOTE_CONTEXT_CHARS = 64;
+
+/** Validate one `quote` selector. Malformed = 400 for the whole patch, same
+ *  posture as every other field here. */
+function normalizePinQuote(value: unknown): import('../types.js').SessionPinnedQuote {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new SessionControlError('pinned_messages[].quote must be an object', 400);
+  }
+  const quote = value as Record<string, unknown>;
+  const exact = quote.exact;
+  if (typeof exact !== 'string' || !exact.trim() || exact.length > MAX_PIN_QUOTE_CHARS) {
+    throw new SessionControlError(
+      `pinned_messages[].quote.exact must be a non-empty string (max ${MAX_PIN_QUOTE_CHARS} chars)`, 400,
+    );
+  }
+  for (const side of ['prefix', 'suffix'] as const) {
+    const context = quote[side];
+    if (context !== undefined && context !== null
+        && (typeof context !== 'string' || context.length > MAX_PIN_QUOTE_CONTEXT_CHARS)) {
+      throw new SessionControlError(
+        `pinned_messages[].quote.${side} must be a string (max ${MAX_PIN_QUOTE_CONTEXT_CHARS} chars)`, 400,
+      );
+    }
+  }
+  return {
+    exact,
+    ...(typeof quote.prefix === 'string' && quote.prefix ? { prefix: quote.prefix } : {}),
+    ...(typeof quote.suffix === 'string' && quote.suffix ? { suffix: quote.suffix } : {}),
+  };
+}
 
 /**
  * Validate + normalize a `pinned_messages` patch into records we're willing to
@@ -256,8 +293,16 @@ const MAX_PIN_ID_CHARS = 200;
  * entries: a pin the client believes it saved but that vanished on reload is
  * worse than a visible error.
  *
- * Duplicate msgIds collapse to the FIRST occurrence (a double-click on the pin
- * button must not create two TOC rows pointing at one message).
+ * Two kinds of entry share the list, so dedup is per-kind:
+ *  · WHOLE-message pins (no `quote`) collapse by msgId — a double-clicked pin
+ *    button must not create two TOC rows pointing at one message;
+ *  · QUOTE pins collapse by their own `id`, and also by (msgId, exact, prefix,
+ *    suffix): a double-clicked "Pin" on one selection generates two uuids, and
+ *    two identical passages in the outline are indistinguishable to a human.
+ *
+ * One thing is REPAIRED instead of rejected: a quote pin with no `id` is given
+ * one. See the note at the synthesis point for why that asymmetry is the safe
+ * choice for a field the whole list is addressed by.
  */
 export function normalizePinnedMessages(value: unknown): import('../types.js').SessionPinnedMessage[] {
   if (!Array.isArray(value)) {
@@ -267,7 +312,9 @@ export function normalizePinnedMessages(value: unknown): import('../types.js').S
     throw new SessionControlError(`pinned_messages holds at most ${MAX_PINNED_MESSAGES} entries`, 400);
   }
   const out: import('../types.js').SessionPinnedMessage[] = [];
-  const seen = new Set<string>();
+  const seenWholeMessage = new Set<string>();
+  const seenQuoteId = new Set<string>();
+  const seenQuoteShape = new Set<string>();
   for (const raw of value) {
     if (!raw || typeof raw !== 'object') {
       throw new SessionControlError('each pinned_messages entry must be an object', 400);
@@ -277,15 +324,49 @@ export function normalizePinnedMessages(value: unknown): import('../types.js').S
     if (typeof msgId !== 'string' || !msgId.trim() || msgId.length > MAX_PIN_ID_CHARS) {
       throw new SessionControlError('pinned_messages[].msgId must be a non-empty string', 400);
     }
-    if (seen.has(msgId)) continue;
-    seen.add(msgId);
+    const rawId = entry.id;
+    if (rawId !== undefined && rawId !== null
+        && (typeof rawId !== 'string' || !rawId.trim() || rawId.length > MAX_PIN_ENTRY_ID_CHARS)) {
+      throw new SessionControlError(
+        `pinned_messages[].id must be a non-empty string (max ${MAX_PIN_ENTRY_ID_CHARS} chars)`, 400,
+      );
+    }
+    const id = typeof rawId === 'string' ? rawId : undefined;
+    // `null` reads as absent rather than malformed: some JSON serializers emit it
+    // for an optional field, and refusing the whole patch over that would lose
+    // every other pin in the list.
+    const quote = entry.quote === undefined || entry.quote === null
+      ? undefined
+      : normalizePinQuote(entry.quote);
+    let pinId = id;
+    if (quote) {
+      if (id && seenQuoteId.has(id)) continue;
+      // NUL-joined: any separator that can legally appear inside a msgId or a
+      // passage would let two different pins collapse onto one key.
+      const shape = [msgId, quote.exact, quote.prefix ?? '', quote.suffix ?? ''].join('\u0000');
+      if (seenQuoteShape.has(shape)) continue;
+      // A quote pin is ADDRESSED by its id (unpin, popover row, outline row), so one
+      // that arrives without an id is SYNTHESIZED rather than rejected. Rejecting is
+      // worse than it sounds: every pin write PATCHes the WHOLE list, so a single
+      // id-less entry (an older client, a hand-edited record) would 400 every later
+      // write and leave the list impossible to edit or unpin at all.
+      pinId = id ?? randomUUID();
+      seenQuoteId.add(pinId);
+      seenQuoteShape.add(shape);
+    } else {
+      if (seenWholeMessage.has(msgId)) continue;
+      seenWholeMessage.add(msgId);
+    }
     const role = entry.role === 'user' || entry.role === 'assistant' || entry.role === 'system'
       ? entry.role
       : 'assistant';
     const label = typeof entry.label === 'string' ? entry.label.trim().slice(0, MAX_PIN_LABEL_CHARS) : '';
     const timestamp = typeof entry.timestamp === 'string' ? entry.timestamp : undefined;
     const pinnedAt = typeof entry.pinnedAt === 'string' ? entry.pinnedAt : new Date().toISOString();
-    out.push({ msgId, label, role, ...(timestamp ? { timestamp } : {}), pinnedAt });
+    out.push({
+      msgId, label, role, ...(timestamp ? { timestamp } : {}), pinnedAt,
+      ...(pinId ? { id: pinId } : {}), ...(quote ? { quote } : {}),
+    });
   }
   return out;
 }

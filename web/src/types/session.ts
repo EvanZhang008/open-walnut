@@ -14,7 +14,15 @@ import type { SessionEngine } from '@open-walnut/core';
 export type { SessionEngine };
 export { SESSION_ENGINE_IDS } from '@open-walnut/core';
 
-/** One pinned message. Mirrors SessionPinnedMessage in src/core/types.ts. */
+/** A pinned passage inside a message (W3C TextQuoteSelector over the message's
+ *  rendered plain text). Mirrors SessionPinnedQuote in src/core/types.ts. */
+export interface SessionPinnedQuote {
+  exact: string;
+  prefix?: string;
+  suffix?: string;
+}
+
+/** One pin. Mirrors SessionPinnedMessage in src/core/types.ts. */
 export interface SessionPinnedMessage {
   /** Stable message id (SessionHistoryMessage.msgId) — identity, not position. */
   msgId: string;
@@ -22,6 +30,10 @@ export interface SessionPinnedMessage {
   role: 'user' | 'assistant' | 'system';
   timestamp?: string;
   pinnedAt: string;
+  /** Stable pin identity (uuid). Absent on legacy whole-message pins. */
+  id?: string;
+  /** Present = a quote pin; absent = the whole message is pinned. */
+  quote?: SessionPinnedQuote;
 }
 
 export interface SessionRecord {

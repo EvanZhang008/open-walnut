@@ -19,18 +19,25 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
  */
 
 export interface TocEntry {
+  /** Pin identity (`pinKeyOf`) — what a jump/unpin acts on. One message can hold
+   *  a whole-message pin plus any number of quote pins, so the msgId below is an
+   *  anchor, not an identity. */
+  key: string;
   /** Anchor: SessionHistoryMessage.msgId. The special value '' = top of session. */
   msgId: string;
   label: string;
   role: 'user' | 'assistant' | 'system';
   /** Rendered as the row's secondary text when present. */
   timestamp?: string;
+  /** A pinned PASSAGE rather than the whole message (labelled with a ❝ glyph, and
+   *  its tick reads lighter so the rail still says which kind is where). */
+  isQuote?: boolean;
 }
 
 interface SessionPinnedTocProps {
   entries: TocEntry[];
-  onJump: (msgId: string) => void;
-  onUnpin?: (msgId: string) => void;
+  onJump: (pinKey: string) => void;
+  onUnpin?: (pinKey: string) => void;
   /** A jump happened and the previous position is still restorable. */
   canGoBack: boolean;
   onBack: () => void;
@@ -65,9 +72,9 @@ export const SessionPinnedToc = memo(function SessionPinnedToc({
     closeTimer.current = setTimeout(() => setOpen(false), COLLAPSE_DELAY_MS);
   }, []);
 
-  const jump = useCallback((e: React.MouseEvent, msgId: string) => {
+  const jump = useCallback((e: React.MouseEvent, pinKey: string) => {
     e.stopPropagation();
-    onJump(msgId);
+    onJump(pinKey);
     setOpen(false);
   }, [onJump]);
 
@@ -92,35 +99,35 @@ export const SessionPinnedToc = memo(function SessionPinnedToc({
       >
         {entries.map((entry) => (
           <span
-            key={entry.msgId || 'top'}
-            className={`session-toc-tick session-toc-tick--${entry.role}`}
+            key={entry.key || 'top'}
+            className={`session-toc-tick session-toc-tick--${entry.role}${entry.isQuote ? ' session-toc-tick--quote' : ''}`}
           />
         ))}
       </button>
       {open && (
         <div className="session-toc-panel" role="menu">
           {entries.map((entry) => (
-            <div key={entry.msgId || 'top'} className="session-toc-row">
+            <div key={entry.key || 'top'} className="session-toc-row">
               <button
                 type="button"
                 className="session-toc-item"
                 role="menuitem"
-                onClick={(e) => jump(e, entry.msgId)}
+                onClick={(e) => jump(e, entry.key)}
                 title={entry.label}
               >
-                <span className={`session-toc-dash session-toc-dash--${entry.role}`} />
+                <span className={`session-toc-dash session-toc-dash--${entry.role}${entry.isQuote ? ' session-toc-dash--quote' : ''}`} />
                 <span className="session-toc-label">{entry.label}</span>
                 {timeLabel(entry.timestamp) && (
                   <span className="session-toc-time">{timeLabel(entry.timestamp)}</span>
                 )}
               </button>
-              {onUnpin && entry.msgId && (
+              {onUnpin && entry.key && (
                 <button
                   type="button"
                   className="session-toc-unpin"
                   title="Remove from the outline"
                   aria-label={`Unpin ${entry.label}`}
-                  onClick={(e) => { e.stopPropagation(); onUnpin(entry.msgId); }}
+                  onClick={(e) => { e.stopPropagation(); onUnpin(entry.key); }}
                 >
                   ×
                 </button>

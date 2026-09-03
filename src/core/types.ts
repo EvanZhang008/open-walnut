@@ -1742,6 +1742,22 @@ export interface SessionPinnedMessage {
   timestamp?: string;
   /** When the human pinned it (ISO). */
   pinnedAt: string;
+  /** Stable pin identity, client-generated (crypto.randomUUID()). Needed once a
+   *  message can hold SEVERAL pins: msgId no longer identifies one row. Legacy
+   *  entries without an id are whole-message pins, identified by msgId. */
+  id?: string;
+  /** Present = a QUOTE pin: a passage inside the message, addressed as a W3C
+   *  TextQuoteSelector over the message's rendered plain text. Absent = the
+   *  whole message is pinned (the original behaviour). */
+  quote?: SessionPinnedQuote;
+}
+
+/** W3C TextQuoteSelector: the passage plus a little context on either side, so
+ *  a repeated phrase still resolves to the occurrence the human picked. */
+export interface SessionPinnedQuote {
+  exact: string;
+  prefix?: string;
+  suffix?: string;
 }
 
 /** Stable subset of ACP initialize capabilities used by routes and UI guards. */

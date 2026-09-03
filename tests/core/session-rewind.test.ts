@@ -139,6 +139,91 @@ describe('normalizePinnedMessages', () => {
     expect(() => normalizePinnedMessages(many)).toThrow(/at most 200/);
     expect(normalizePinnedMessages(many.slice(0, 200))).toHaveLength(200);
   });
+
+  // ── Quote pins (a passage inside a message, not the whole message) ──
+  const quotePin = (over: Record<string, unknown> = {}) => pin({
+    id: 'aaaaaaaa-1111-4aaa-8bbb-000000000001',
+    label: 'rewrites the index',
+    quote: { exact: 'rewrites the index', prefix: 'Phase two ', suffix: ' in place' },
+    ...over,
+  });
+
+  it('round-trips a quote pin with its selector', () => {
+    const out = normalizePinnedMessages([quotePin()]);
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe('aaaaaaaa-1111-4aaa-8bbb-000000000001');
+    expect(out[0].quote).toEqual({
+      exact: 'rewrites the index', prefix: 'Phase two ', suffix: ' in place',
+    });
+  });
+
+  it('keeps a whole-message pin and several quote pins on ONE message', () => {
+    const out = normalizePinnedMessages([
+      pin(),
+      quotePin(),
+      quotePin({ id: 'aaaaaaaa-2222-4aaa-8bbb-000000000002', quote: { exact: 'verifies checksums' } }),
+    ]);
+    expect(out).toHaveLength(3);
+    expect(out.filter((p) => p.quote)).toHaveLength(2);
+    // The msgId collapse applies to whole-message pins only — a passage is a
+    // separate mark the user made deliberately.
+    expect(out.every((p) => p.msgId === 'm1')).toBe(true);
+  });
+
+  it('collapses a double-clicked quote pin by id AND by identical selector', () => {
+    const byId = normalizePinnedMessages([quotePin(), quotePin({ label: 'second' })]);
+    expect(byId).toHaveLength(1);
+    expect(byId[0].label).toBe('rewrites the index');
+    // Two different uuids for the same passage still collapse: two identical
+    // outline rows are indistinguishable to the person reading them.
+    const bySelector = normalizePinnedMessages([
+      quotePin(),
+      quotePin({ id: 'aaaaaaaa-3333-4aaa-8bbb-000000000003' }),
+    ]);
+    expect(bySelector).toHaveLength(1);
+  });
+
+  it('rejects a malformed quote or id for the whole patch', () => {
+    expect(() => normalizePinnedMessages([quotePin({ quote: { exact: '' } })])).toThrow(/quote\.exact/);
+    expect(() => normalizePinnedMessages([quotePin({ quote: { exact: '  ' } })])).toThrow(/quote\.exact/);
+    expect(() => normalizePinnedMessages([quotePin({ quote: { exact: 42 } })])).toThrow(/quote\.exact/);
+    expect(() => normalizePinnedMessages([quotePin({ quote: 'nope' })])).toThrow(/quote must be an object/);
+    expect(() => normalizePinnedMessages([quotePin({ quote: { exact: 'x'.repeat(2001) } })]))
+      .toThrow(/quote\.exact/);
+    expect(() => normalizePinnedMessages([quotePin({
+      quote: { exact: 'ok', prefix: 'y'.repeat(65) },
+    })])).toThrow(/quote\.prefix/);
+    expect(() => normalizePinnedMessages([quotePin({ id: 'z'.repeat(65) })])).toThrow(/\[\]\.id/);
+    expect(() => normalizePinnedMessages([quotePin({ id: 42 })])).toThrow(/\[\]\.id/);
+  });
+
+  it('SYNTHESIZES an id for a quote pin that arrives without one', () => {
+    // Rejecting it would brick the list: every pin write PATCHes the whole array,
+    // so one id-less entry would 400 each later write and nothing could be unpinned.
+    const out = normalizePinnedMessages([quotePin({ id: undefined })]);
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(out[0].quote?.exact).toBe('rewrites the index');
+    // A whole-message pin still stays id-less: it is addressed by msgId.
+    expect(normalizePinnedMessages([pin()])[0].id).toBeUndefined();
+  });
+
+  it('gives two id-less quote pins on one message distinct ids, and still collapses identical ones', () => {
+    const out = normalizePinnedMessages([
+      quotePin({ id: undefined }),
+      quotePin({ id: undefined, quote: { exact: 'verifies checksums' } }),
+      quotePin({ id: undefined }), // identical selector to the first — collapses
+    ]);
+    expect(out).toHaveLength(2);
+    expect(out[0].id).not.toBe(out[1].id);
+  });
+
+  it('reads a null quote as "no quote" rather than losing the whole list', () => {
+    const out = normalizePinnedMessages([pin({ quote: null, id: null })]);
+    expect(out).toHaveLength(1);
+    expect(out[0].quote).toBeUndefined();
+    expect(out[0].id).toBeUndefined();
+  });
 });
 
 afterEach(() => { vi.restoreAllMocks(); });

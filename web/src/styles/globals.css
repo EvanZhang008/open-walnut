@@ -25090,6 +25090,16 @@ a.file-link:hover {
 ::highlight(walnut-search-active) { background-color: rgba(255, 145, 0, 0.85); color: #1a1a1a; }
 /* Select text → every exact match tints (VS Code). CM twin: .cm-selectionMatch. */
 ::highlight(walnut-selmatch) { background-color: rgba(80, 160, 255, 0.30); }
+/* Quote pins (utils/pin-highlights.ts): a highlighter pen over the pinned
+   passage, and a brighter flash when an outline row jumps to it. Only
+   color / background-color / text-decoration / text-shadow are honoured inside
+   ::highlight — anything else (padding, border-radius) is silently dropped. */
+::highlight(walnut-pin) { background-color: rgba(250, 204, 21, 0.38); }
+::highlight(walnut-pin-flash) { background-color: rgba(250, 204, 21, 0.9); color: #1a1a1a; }
+/* Dark theme: the same yellow at full alpha over a dark bubble reads as a block
+   of colour and swallows the text, so it goes lighter. */
+[data-theme="dark"] ::highlight(walnut-pin) { background-color: rgba(250, 204, 21, 0.26); }
+[data-theme="dark"] ::highlight(walnut-pin-flash) { background-color: rgba(250, 204, 21, 0.7); }
 .cm-selectionMatch { background-color: rgba(80, 160, 255, 0.30); }
 /* "You landed HERE" flash on the jumped-to keyword (reference jumps). */
 .cm-jump-flash {
@@ -31926,6 +31936,71 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   font-size: 12px;
 }
 .session-toc-back:hover { background: var(--bg-hover); }
+
+/* A pinned PASSAGE reads lighter than a pinned message in both the rail and the
+   panel — same place in the outline, visibly a smaller mark. */
+.session-toc-tick--quote,
+.session-toc-dash--quote {
+  width: 8px;
+  background: rgba(250, 204, 21, 0.85);
+}
+
+/* ── Quote pins: the selection pill and the passage popover ───────────────────
+   Both are portalled to <body> and positioned by useMenuPlacement (fixed
+   top/right + a height cap), so they only own their looks here. */
+.quote-pin-pill,
+.quote-pin-popover {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.quote-pin-pill-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.quote-pin-pill-btn:hover { background: var(--bg-hover); }
+
+.quote-pin-popover { max-width: min(360px, 70vw); }
+
+.quote-pin-popover-snippet {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 6px;
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.quote-pin-popover-unpin {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.quote-pin-popover-unpin:hover { background: var(--bg-hover); }
 
 /* ── Per-message hover strip: pin / rewind / time ── */
 /* Sticky variant = the live tail's last reply, whose actions stay on screen. */

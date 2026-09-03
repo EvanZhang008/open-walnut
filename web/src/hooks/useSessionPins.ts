@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { updateSession } from '@/api/sessions';
-import type { SessionPinnedMessage } from '@/types/session';
+import type { SessionPinnedMessage, SessionPinnedQuote } from '@/types/session';
 import type { SessionPinsApi } from '@/contexts/SessionPinsContext';
 import { log } from '@/utils/log';
 
@@ -23,6 +23,46 @@ export function pinLabelFor(text: string | undefined, fallback: string): string 
   return label.length > LABEL_MAX ? `${label.slice(0, LABEL_MAX)}…` : label;
 }
 
+/** NUL, the one separator that cannot appear inside a msgId or a passage. */
+const PIN_KEY_SEP = '\u0000';
+
+/**
+ * The one identity of a pin, everywhere: its own `id` when it has one (quote
+ * pins), else its msgId (whole-message pins, including every record written
+ * before quote pins existed).
+ *
+ * A message can now hold several pins, so msgId alone stopped identifying a row:
+ * keying the TOC or an unpin on it would remove the wrong passage.
+ *
+ * ⚠️ A quote pin with NO `id` still has to get its own key. This client always
+ * mints one, but `pinned_messages` is a plain PATCH field, so anything else that
+ * writes the session record (a script, a plugin, an older or future client) can
+ * store a passage without an id — and the server accepts it. Falling through to
+ * msgId there made every passage on one message share the whole-message pin's
+ * key: measured on the fixture session, two id-less passages produced duplicate
+ * React keys, only ONE of the two got painted, and removing either outline row
+ * deleted BOTH pins. The passage itself is the identity in that case.
+ */
+export function pinKeyOf(pin: SessionPinnedMessage): string {
+  if (pin.id) return pin.id;
+  // NUL-joined, the same key shape the server uses to dedup them
+  // (session-lifecycle.ts): any separator that can legally appear inside a msgId
+  // or a passage would let two different pins collapse onto one key.
+  if (pin.quote?.exact) {
+    return [pin.msgId, pin.quote.exact, pin.quote.prefix ?? '', pin.quote.suffix ?? ''].join(PIN_KEY_SEP);
+  }
+  return pin.msgId;
+}
+
+/** Same passage in the same message = the same pin (a double-clicked "Pin"
+ *  generates two uuids but must not make two identical outline rows). */
+function sameQuote(a: SessionPinnedMessage, msgId: string, quote: SessionPinnedQuote): boolean {
+  return !!a.quote && a.msgId === msgId
+    && a.quote.exact === quote.exact
+    && (a.quote.prefix ?? '') === (quote.prefix ?? '')
+    && (a.quote.suffix ?? '') === (quote.suffix ?? '');
+}
+
 /**
  * Should the record's copy of the pin list replace ours?
  *
@@ -41,8 +81,17 @@ export function shouldAdoptServerPins(
   wroteLocally: boolean,
 ): boolean {
   if (!wroteLocally) return true;
-  const ids = new Set(server.map((p) => p.msgId));
-  return confirmed.every((p) => ids.has(p.msgId));
+  const keys = new Set(server.map(pinKeyOf));
+  return confirmed.every((p) => keys.has(pinKeyOf(p)));
+}
+
+/** Pin identity for a new quote pin. `crypto.randomUUID` needs a secure context
+ *  (localhost counts), so a plain-http host falls back to a random string of the
+ *  same shape rather than losing the whole feature. */
+function newPinId(): string {
+  const c = typeof crypto !== 'undefined' ? crypto : undefined;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  return `qp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /**
@@ -121,7 +170,13 @@ export function useSessionPins(sessionId: string, serverPins?: SessionPinnedMess
       .finally(() => { inFlight.current = Math.max(0, inFlight.current - 1); });
   }, [sessionId, adopt]);
 
-  const pinnedIds = useMemo(() => new Set(pins.map((p) => p.msgId)), [pins]);
+  // WHOLE-message pins only: the meta-row icon must not read as "pinned" because
+  // some phrase inside the message is pinned (pressing it would then unpin a
+  // passage the user never aimed at).
+  const pinnedIds = useMemo(
+    () => new Set(pins.filter((p) => !p.quote).map((p) => p.msgId)),
+    [pins],
+  );
 
   const isPinned = useCallback(
     (msgId: string | undefined) => !!msgId && pinnedIds.has(msgId),
@@ -132,8 +187,10 @@ export function useSessionPins(sessionId: string, serverPins?: SessionPinnedMess
     const msgId = message.msgId;
     if (!msgId) return;
     const current = listRef.current;
-    if (current.some((p) => p.msgId === msgId)) {
-      persist(current.filter((p) => p.msgId !== msgId));
+    if (current.some((p) => !p.quote && p.msgId === msgId)) {
+      // Only the whole-message pin goes: this message's quote pins are separate
+      // marks the user made on purpose.
+      persist(current.filter((p) => !(!p.quote && p.msgId === msgId)));
       return;
     }
     const entry: SessionPinnedMessage = {
@@ -146,11 +203,34 @@ export function useSessionPins(sessionId: string, serverPins?: SessionPinnedMess
     persist([...current, entry]);
   }, [persist]);
 
-  const unpin = useCallback((msgId: string) => {
+  const pinQuote = useCallback<SessionPinsApi['pinQuote']>(({ msgId, role, timestamp, quote }) => {
+    if (!msgId || !quote.exact.trim()) return;
     const current = listRef.current;
-    if (!current.some((p) => p.msgId === msgId)) return;
-    persist(current.filter((p) => p.msgId !== msgId));
+    if (current.some((p) => sameQuote(p, msgId, quote))) return;
+    const entry: SessionPinnedMessage = {
+      id: newPinId(),
+      msgId,
+      label: pinLabelFor(quote.exact, 'Quoted passage'),
+      role,
+      ...(timestamp ? { timestamp } : {}),
+      pinnedAt: new Date().toISOString(),
+      quote,
+    };
+    log.info('session', 'quote pin added', {
+      sessionId, msgId, pinId: entry.id, chars: quote.exact.length,
+    });
+    persist([...current, entry]);
+  }, [persist, sessionId]);
+
+  const unpin = useCallback((pinKey: string) => {
+    const current = listRef.current;
+    if (!current.some((p) => pinKeyOf(p) === pinKey)) return;
+    persist(current.filter((p) => pinKeyOf(p) !== pinKey));
   }, [persist]);
 
-  return useMemo(() => ({ pins, isPinned, toggle, unpin }), [pins, isPinned, toggle, unpin]);
+  return useMemo(
+    // canPinQuote: this hook IS the real store — a session record to PATCH exists.
+    () => ({ pins, isPinned, toggle, pinQuote, unpin, canPinQuote: true }),
+    [pins, isPinned, toggle, pinQuote, unpin],
+  );
 }
