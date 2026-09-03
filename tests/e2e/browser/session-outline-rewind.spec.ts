@@ -269,37 +269,41 @@ test.describe('Session outline, message time, and rewind', () => {
     const dialog = page.locator('.rewind-dialog')
     await expect(dialog).toBeVisible()
     await expect(dialog).toContainText(LATE_ASK)
+    // Same skin as every other confirm in the app: the shared modal classes, not
+    // a bespoke one (the bare-blue unstyled button of 2026-09-03 came from a
+    // class that did not exist).
+    await expect(dialog).toHaveClass(/app-modal/)
+    await expect(dialog.locator('.app-modal-actions .app-modal-btn.primary')).toHaveCount(1)
 
     // The dry run reports the blast radius: how many messages get dropped. The
-    // DEFAULT is an in-place rewind, so the copy says this conversation continues
-    // from here (not that a new session is spawned / this one archived).
-    await expect(dialog.locator('.rewind-dialog-line').first()).toContainText(/\d+ messages? after this point/)
-    await expect(dialog).toContainText(/This conversation continues from here/)
+    // DEFAULT is an in-place rewind, so the copy says they leave THIS conversation
+    // (not that a new session is spawned / this one archived).
+    await expect(dialog.locator('.app-modal-message')).toContainText(/\d+ later messages? will be dropped from this conversation/)
 
     // The fixture session has no live CLI, so the file half is unavailable — the
-    // FILES checkbox (first) must be OFF and disabled, with the reason spelled out.
+    // FILES row (first) must be OFF and disabled, with the reason spelled out.
     // A default-on box here would promise a restore that silently doesn't happen.
-    const filesCheck = dialog.locator('.rewind-dialog-check').first().locator('input[type="checkbox"]')
+    const filesCheck = dialog.locator('.rewind-dialog-option').first().locator('input[type="checkbox"]')
     await expect(filesCheck).toBeDisabled()
     await expect(filesCheck).not.toBeChecked()
-    await expect(dialog.locator('.rewind-dialog-check').first()).toHaveClass(/is-disabled/)
+    await expect(dialog.locator('.rewind-dialog-option').first()).toHaveClass(/is-disabled/)
     await expect(dialog).toContainText(/not running|checkpoint/i)
 
     // The "into a copy" (fork) toggle is present and OFF by default — the default
     // is an in-place rewind of THIS conversation.
     const copyCheck = dialog.getByText('Rewind into a copy instead', { exact: false })
     await expect(copyCheck).toBeVisible()
-    const copyInput = dialog.locator('.rewind-dialog-check', { hasText: 'into a copy' }).locator('input')
+    const copyInput = dialog.locator('.rewind-dialog-option', { hasText: 'into a copy' }).locator('input')
     await expect(copyInput).not.toBeChecked()
 
-    // The primary button says what it will actually do (chat only, in place).
-    await expect(dialog.getByRole('button', { name: 'Rewind chat' })).toBeVisible()
+    // The primary button says what it will actually do (conversation only, in place).
+    await expect(dialog.getByRole('button', { name: 'Rewind', exact: true })).toBeVisible()
 
     // Toggling "into a copy" flips the copy to the fork wording and relabels the
     // button — the two modes must read differently before the user commits.
     await copyInput.check()
-    await expect(dialog).toContainText(/continues as a new session; this one stays exactly as it is/)
-    await expect(dialog.getByRole('button', { name: 'Rewind chat (copy)' })).toBeVisible()
+    await expect(dialog).toContainText(/continues in a new session; this one stays as it is/)
+    await expect(dialog.getByRole('button', { name: 'Rewind into a copy', exact: true })).toBeVisible()
 
     // Cancel leaves the session exactly as it was — nothing was rewound.
     await dialog.getByRole('button', { name: 'Cancel' }).click()

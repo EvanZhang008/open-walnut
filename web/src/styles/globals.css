@@ -32065,73 +32065,84 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 .session-msg-user .msg-pin-btn.is-pinned { color: #fff; }
 
 /* ── Rewind confirm dialog ── */
-.rewind-dialog-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 9500;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--overlay-bg);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
-}
-
-.rewind-dialog {
-  width: min(480px, 92vw);
-  max-height: 82vh;
-  overflow-y: auto;
-  padding: 18px 20px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.28);
-}
-
-.rewind-dialog-title { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+/* Rewind dialog: the app confirm skin (.app-modal-*) plus its option rows. The
+   overlay sits above the session panel's own layers (message menus, pin overlays). */
+.rewind-dialog-overlay { z-index: 9500; }
+.app-modal.rewind-dialog { width: min(460px, calc(100vw - 48px)); }
 .rewind-dialog-target {
-  margin-bottom: 10px;
+  margin-top: 6px;
   color: var(--fg-muted);
   font-size: 12.5px;
+  line-height: 1.45;
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
-.rewind-dialog-line { font-size: 13px; line-height: 1.5; margin-bottom: 10px; }
+.rewind-dialog .app-modal-message { white-space: normal; }
+.rewind-dialog-error-text { color: var(--error, #dc2626); }
+.rewind-dialog-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.rewind-dialog-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg);
+  cursor: pointer;
+}
+.rewind-dialog-option input[type="checkbox"] {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.rewind-dialog-option.is-disabled { cursor: default; color: var(--fg-muted); }
+.rewind-dialog-option.is-disabled input[type="checkbox"] { cursor: default; }
+.rewind-dialog-option-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.rewind-dialog-stats { color: var(--fg-muted); }
+.rewind-dialog-hint { font-size: 12px; color: var(--fg-muted); }
+.rewind-dialog-files {
+  margin: -4px 0 0 24px;
+  max-height: 132px;
+  overflow-y: auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+.rewind-dialog-file { display: flex; min-width: 0; }
+/* The tail of a path is the part worth reading: the directory truncates from
+   the left so the file name always survives. */
+.rewind-dialog-file-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  color: var(--fg-muted);
+}
+.rewind-dialog-file-base { flex: none; color: var(--fg); }
+.rewind-dialog-file-more { color: var(--fg-muted); }
 .rewind-dialog-error {
-  margin: 8px 0;
+  margin-top: 12px;
   padding: 8px 10px;
   border-radius: 8px;
   font-size: 12.5px;
   color: var(--error, #dc2626);
   background: color-mix(in srgb, var(--error, #dc2626) 10%, transparent);
 }
-.rewind-dialog-check {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 13px;
-  line-height: 1.45;
-  cursor: pointer;
-}
-.rewind-dialog-check.is-disabled { cursor: default; color: var(--fg-muted); }
-.rewind-dialog-stats { color: var(--fg-muted); }
-.rewind-dialog-files {
-  margin: 8px 0 0 24px;
-  max-height: 132px;
-  overflow-y: auto;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11.5px;
-  color: var(--fg-muted);
-}
-.rewind-dialog-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rewind-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
-}
+.rewind-dialog .app-modal-btn:disabled { opacity: 0.55; cursor: default; }
+.rewind-dialog .app-modal-btn.primary:disabled:hover { filter: none; }
 
 /* ─── Shared right-click menu (components/common/ContextMenu.tsx) ───────────
    One skin for every surface that replaces the browser's context menu. Looks
