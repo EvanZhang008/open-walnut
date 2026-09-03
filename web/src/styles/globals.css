@@ -12492,6 +12492,23 @@ body.walnut-dragging {
   max-width: 800px;
   margin: 0 auto;
   padding: 24px 54px 80px;
+  /* Bound what WebKit rasterises for this subtree. A real document here is
+     several viewports tall (a 22KB markdown file measured 13,405px), and WebKit
+     was keeping a backing store for the WHOLE scrollable height, then
+     re-rasterising all of it whenever an ancestor's geometry changed. Measured
+     on the Files preview: collapsing the fullscreen panel took 2,130ms with the
+     file open and 107ms with nothing open, 100% of cycles — while the SAME page
+     in Blink took 45ms, which is the entire "smooth in Chrome, frozen in the Mac
+     app" report (the app is a WKWebView).
+     `contain: paint` is what fixes it (2130ms → 85ms). Layout is not the problem:
+     forcing a relayout at six different widths costs 1-4ms, `contain: layout`
+     changes nothing, and `visibility: hidden` — which still lays out but does not
+     paint — is already fast. Contain on the CONTENT element rather than on the
+     `.fv-wysiwyg-editor`/page scroller around it: the bubble menu is a sibling of
+     this element, so nothing floating gets newly clipped, and it measured faster
+     than containing the scroller (85ms vs 139ms).
+     Ratchet: tests/web/editor-paint-containment.test.ts */
+  contain: paint;
 }
 
 .notes-editor .tiptap > *:first-child { margin-top: 0; }

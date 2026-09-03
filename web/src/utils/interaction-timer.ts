@@ -29,8 +29,14 @@
  *  - `frames`  — rAF ticks seen while waiting. Zero means the page never painted.
  *  - `wakeups` — timer ticks seen while waiting. Timers are throttled in the
  *    background (to roughly 1/s) but NOT stopped, while a blocked main thread
- *    runs neither. So frames=0 with wakeups still arriving is a page that was not
- *    being shown; frames=0 AND wakeups=0 is the real thing.
+ *    runs neither.
+ *  - `stalledMs` — the longest stretch where NEITHER heartbeat ran. This, not the
+ *    counters, is the discriminator. Counting zeroes was too crude: the real
+ *    2,130ms block found by benchmarking the Files panel on 2026-09-03 still got 3
+ *    frames and 1 wakeup in (an eternity of) 2.1s, because a block is a contiguous
+ *    stretch of nothing rather than a total absence. An occluded page keeps a
+ *    regular timer cadence, so its longest common gap stays small even when it
+ *    paints nothing for 30s.
  *  - `verdict` — that judgement, spelled out, so nobody has to re-derive it.
  */
 import { startPhase, endPhase } from './main-thread-tracer';
@@ -42,6 +48,10 @@ const MAX_PER_MIN = 30;
 /** Below this, frames vs wakeups cannot say anything useful — it was just fast. */
 const VERDICT_FLOOR_MS = 1_000;
 const TICK_MS = 250;
+/** A stall shorter than this is ordinary scheduling, not a freeze. */
+const STALL_MIN_MS = 500;
+/** …and it has to account for most of the wait, or the page was merely busy. */
+const STALL_SHARE = 0.5;
 
 let windowStart = 0;
 let countThisWindow = 0;
@@ -74,9 +84,16 @@ function defaults(): InteractionDeps {
 }
 
 /** Blocked, background-throttled, or genuinely slow — stated, not implied. */
-function verdictFor(ms: number, frames: number, wakeups: number, everHidden: boolean): string | undefined {
+function verdictFor(
+  ms: number,
+  frames: number,
+  everHidden: boolean,
+  stalledMs: number,
+): string | undefined {
   if (ms < VERDICT_FLOOR_MS) return undefined;
-  if (frames === 0 && wakeups === 0) return 'main-thread-blocked';
+  // A freeze is a CONTIGUOUS stretch where both heartbeats stopped. Occlusion stops
+  // only the painting one, so its longest common gap stays near the timer cadence.
+  if (stalledMs >= STALL_MIN_MS && stalledMs >= ms * STALL_SHARE) return 'main-thread-blocked';
   if (frames === 0) return everHidden ? 'page-hidden' : 'not-painting';
   return 'slow-but-painting';
 }
@@ -106,9 +123,25 @@ export function traceInteraction(
   let everHidden = deps.hidden();
   let done = false;
   let handle: unknown;
-  const beatFrames = () => { if (done) return; frames++; deps.rafTick(beatFrames); };
+  // Not just how MANY beats arrived, but how long the longest silence was: that is
+  // what separates a frozen thread from a page nobody is compositing.
+  let lastFrameAt = t0;
+  let lastWakeAt = t0;
+  let worstFrameGap = 0;
+  let worstWakeGap = 0;
+  const beatFrames = () => {
+    if (done) return;
+    const at = deps.now();
+    worstFrameGap = Math.max(worstFrameGap, at - lastFrameAt);
+    lastFrameAt = at;
+    frames++;
+    deps.rafTick(beatFrames);
+  };
   const beatTimer = () => {
     if (done) return;
+    const at = deps.now();
+    worstWakeGap = Math.max(worstWakeGap, at - lastWakeAt);
+    lastWakeAt = at;
     wakeups++;
     if (deps.hidden()) everHidden = true;
     handle = deps.timer(beatTimer, TICK_MS);
@@ -117,17 +150,23 @@ export function traceInteraction(
   handle = deps.timer(beatTimer, TICK_MS);
 
   deps.raf(() => {
-    const ms = Math.round(deps.now() - t0);
+    const end = deps.now();
+    const ms = Math.round(end - t0);
     done = true;
     deps.clearTimer(handle);
     endPhase(phase);
+    // The tail counts too: a block that never ends until the paint lands leaves its
+    // silence in the trailing segment, with no beat afterwards to close the gap.
+    const frameGap = Math.max(worstFrameGap, end - lastFrameAt);
+    const wakeGap = Math.max(worstWakeGap, end - lastWakeAt);
+    const stalledMs = Math.round(Math.min(frameGap, wakeGap));
     const slow = slowCallbacksSince(t0);
-    const verdict = verdictFor(ms, frames, wakeups, everHidden);
+    const verdict = verdictFor(ms, frames, everHidden, stalledMs);
     deps.report(ms >= FELT_MS ? 'warn' : 'info', {
       name,
       ms,
       ...meta,
-      ...(ms >= VERDICT_FLOOR_MS ? { frames, wakeups, hidden: everHidden } : {}),
+      ...(ms >= VERDICT_FLOOR_MS ? { frames, wakeups, stalledMs, hidden: everHidden } : {}),
       ...(verdict ? { verdict } : {}),
       ...(slow.length ? { slowCallbacks: slow } : {}),
     });

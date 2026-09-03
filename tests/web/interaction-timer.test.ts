@@ -19,8 +19,17 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { traceInteraction, _resetInteractionTimer } from '../../web/src/utils/interaction-timer';
 
-function harness(startAt = 1000, opts: { hidden?: boolean } = {}) {
+/**
+ * `tick`/`wake` ADVANCE THE CLOCK, because the verdict is derived from the longest
+ * silence between beats. Firing 30 wakeups at one instant and then jumping 30s
+ * forward is not an occluded page, it is a page that stalled for 30s — and a
+ * harness that models it that way would test the opposite of what it claims to.
+ */
+function harness(startAt = 1000, opts: { hidden?: boolean; frameMs?: number; wakeMs?: number } = {}) {
   let t = startAt;
+  const frameMs = opts.frameMs ?? 16;
+  // Background timers are throttled to roughly 1/s rather than the 250ms cadence.
+  const wakeMs = opts.wakeMs ?? (opts.hidden ? 1000 : 250);
   const frames: Array<() => void> = [];
   const ticks: Array<() => void> = [];
   const timers: Array<() => void> = [];
@@ -29,9 +38,13 @@ function harness(startAt = 1000, opts: { hidden?: boolean } = {}) {
     setTime: (v: number) => { t = v; },
     paint: () => { while (frames.length) frames.shift()!(); },
     /** One display frame: the page painted once. */
-    tick: (n = 1) => { for (let i = 0; i < n; i++) { const q = ticks.splice(0); q.forEach((f) => f()); } },
+    tick: (n = 1) => {
+      for (let i = 0; i < n; i++) { t += frameMs; const q = ticks.splice(0); q.forEach((f) => f()); }
+    },
     /** One timer wakeup: the page is alive even if it is not painting. */
-    wake: (n = 1) => { for (let i = 0; i < n; i++) { const q = timers.splice(0); q.forEach((f) => f()); } },
+    wake: (n = 1) => {
+      for (let i = 0; i < n; i++) { t += wakeMs; const q = timers.splice(0); q.forEach((f) => f()); }
+    },
     reports,
     deps: {
       now: () => t,
@@ -81,29 +94,48 @@ describe('traceInteraction', () => {
     traceInteraction('fullscreen-exit', {}, h.deps);
     h.setTime(31_000);          // 30s, and nothing ran in between
     h.paint();
-    expect(h.reports[0].payload).toMatchObject({ ms: 30_000, frames: 0, wakeups: 0, verdict: 'main-thread-blocked' });
+    expect(h.reports[0].payload).toMatchObject({
+      ms: 30_000, frames: 0, wakeups: 0, stalledMs: 30_000, verdict: 'main-thread-blocked',
+    });
+  });
+
+  it('a block is still a block when a few beats squeezed through', () => {
+    // The real one, measured 2026-09-03 on the Files panel: 2,130ms in which 3
+    // frames and 1 wakeup arrived. Counting zeroes called this "slow but painting";
+    // it was a genuine freeze, and the user could not close the panel.
+    const h = harness();
+    traceInteraction('fullscreen-exit', {}, h.deps);
+    h.tick(3);
+    h.wake(1);
+    h.setTime(3130);            // one contiguous ~2.8s stretch with nothing in it
+    h.paint();
+    expect(h.reports[0].payload.verdict).toBe('main-thread-blocked');
+    expect(h.reports[0].payload.frames).toBe(3);
+    // Most of the wait was one unbroken silence, which is the whole basis for the
+    // verdict — so assert the proportion rather than a hand-computed millisecond.
+    const { ms, stalledMs } = h.reports[0].payload as { ms: number; stalledMs: number };
+    expect(stalledMs / ms).toBeGreaterThan(0.5);
   });
 
   it('a long wait whose timers kept firing while hidden is called page-hidden, not a block', () => {
     const h = harness(1000, { hidden: true });
     traceInteraction('fullscreen-exit', {}, h.deps);
-    // The window is occluded: rAF is throttled to nothing, timers keep ticking.
+    // The window is occluded: rAF is throttled to nothing, timers keep ticking at
+    // roughly 1/s — a regular cadence, so no long stretch of total silence.
     h.wake(30);
-    h.setTime(31_000);
     h.paint();
-    expect(h.reports[0].payload).toMatchObject({ ms: 30_000, frames: 0, verdict: 'page-hidden', hidden: true });
+    expect(h.reports[0].payload).toMatchObject({ frames: 0, verdict: 'page-hidden', hidden: true });
     expect(h.reports[0].payload.wakeups).toBeGreaterThan(0);
+    expect(h.reports[0].payload.stalledMs as number).toBeLessThan(2000);
   });
 
   it('a long wait that kept painting is slow work, not a stall', () => {
     const h = harness();
     traceInteraction('view-open:files', {}, h.deps);
-    h.tick(20);
-    h.wake(8);
-    h.setTime(4000);
+    for (let i = 0; i < 8; i++) { h.tick(15); h.wake(1); }
     h.paint();
     expect(h.reports[0].payload).toMatchObject({ verdict: 'slow-but-painting' });
-    expect(h.reports[0].payload.frames).toBe(20);
+    expect(h.reports[0].payload.frames).toBe(120);
   });
 
   it('a fast interaction carries no verdict or counters (they would only be noise)', () => {
