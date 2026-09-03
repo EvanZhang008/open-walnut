@@ -44,5 +44,5 @@ export default defineConfig({
   splitting: false,
   sourcemap: true,
   dts: false,
-  external: ['better-sqlite3', '@anthropic-ai/claude-agent-sdk', 'esbuild', 'screencapturekit-audio-capture', '@homebridge/node-pty-prebuilt-multiarch', '@huggingface/transformers'],
+  external: ['better-sqlite3', 'sharp', '@anthropic-ai/claude-agent-sdk', 'esbuild', 'screencapturekit-audio-capture', '@homebridge/node-pty-prebuilt-multiarch', '@huggingface/transformers'],
 });

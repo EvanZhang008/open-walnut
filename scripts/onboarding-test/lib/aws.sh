@@ -63,12 +63,13 @@ aws_default_subnet() {  # $1 = AZ (optional)
 aws_ami() {  # $1 = os key → AMI id via the public SSM parameters (always the current image)
   local p
   case "$1" in
+    al2)     p=/aws/service/ami-amazon-linux-latest/amzn2-ami-kernel-5.10-hvm-x86_64-gp2 ;;  # glibc 2.26: the old-C-library case
     al2023)  p=/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 ;;
     al2023-arm) p=/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64 ;;
     ubuntu)  p=/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id ;;
     sequoia) p=/aws/service/ec2-macos/sequoia/arm64_mac/latest/image_id ;;
     tahoe)   p=/aws/service/ec2-macos/tahoe/arm64_mac/latest/image_id ;;
-    *) die "unknown --os $1 (al2023 | al2023-arm | ubuntu | sequoia | tahoe)" ;;
+    *) die "unknown --os $1 (al2 | al2023 | al2023-arm | ubuntu | sequoia | tahoe)" ;;
   esac
   awsq ssm get-parameter --name "$p" --query Parameter.Value
 }

@@ -8,7 +8,7 @@
 # would have had to stop and figure something out.
 #
 #   scripts/onboarding-test/run.sh mac-vm  [--image ghcr.io/cirruslabs/macos-sequoia-vanilla:latest]
-#   scripts/onboarding-test/run.sh linux   [--os al2023|al2023-arm|ubuntu] [--type t3.large]
+#   scripts/onboarding-test/run.sh linux   [--os al2023|al2|al2023-arm|ubuntu] [--type t3.large]
 #   scripts/onboarding-test/run.sh mac-ec2 [--os sequoia|tahoe] [--type mac2.metal] --yes-mac-host
 #
 #   common flags: --path readme,npm  --ref <git ref>  --pkg open-walnut@latest

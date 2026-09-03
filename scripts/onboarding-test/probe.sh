@@ -199,15 +199,19 @@ elif have git; then
 else
   say "  git is not installed; installing with the OS package manager"
   if have dnf; then cmd "sudo dnf install -y git"; run_logged sudo dnf install -y git
+  elif have yum; then cmd "sudo yum install -y git"; run_logged sudo yum install -y git
   elif have apt-get; then cmd "sudo apt-get install -y git"; run_logged sudo apt-get update; run_logged sudo apt-get install -y git
   fi
-  if have git; then step_end ok "$(ver git --version)" "A fresh Linux box has no git; the README assumes it. One line in Prerequisites would save the first stumble."
+  if have git; then step_end ok "$(ver git --version)" "A fresh Linux box has no git. The README's Requirements now gives the install line; this is the time it costs."
   else tail_log 5; step_end fail "git install failed: $(first_error_line)" "A fresh Linux box has no git and the README does not say how to get it."; fi
 fi
 
 # ── 2. Node 22 (README: nodejs.org or `nvm install 22`) ───────────────────────
 step_begin "prereq:node22"
 node_major() { node -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/'; }
+# glibc helpers (Linux only; empty elsewhere)
+glibc_version() { getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}'; }
+glibc_at_least() { local v; v=$(glibc_version); [ -n "$v" ] || return 1; [ "${v%%.*}" -gt "$1" ] 2>/dev/null || { [ "${v%%.*}" -eq "$1" ] && [ "${v#*.}" -ge "$2" ]; } 2>/dev/null; }
 if have node && [ "$(node_major)" -ge 22 ] 2>/dev/null; then
   step_end ok "already present: $(ver node -v)"
 else
@@ -222,7 +226,22 @@ else
   # shellcheck disable=SC1091
   [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use 22 >/dev/null 2>&1
   if have node && [ "$(node_major)" -ge 22 ] 2>/dev/null; then
-    step_end ok "installed $(ver node -v) via nvm" "Node.js is not preinstalled; the README links to nodejs.org/nvm but gives no single copy-paste command, so the user picks one and waits."
+    step_end ok "installed $(ver node -v) via nvm" "Node.js is not preinstalled. The README's Requirements now gives the nvm two-liner; this is the time it costs."
+  elif [ -n "$(glibc_version)" ] && ! glibc_at_least 2 28; then
+    # nvm "installed" a binary that cannot start here: official Node 20+ builds need
+    # glibc 2.28. The community glibc-2.17 build is the only Node 22 that runs on this OS.
+    say "  official Node binaries need glibc 2.28 and this OS has $(glibc_version); trying the community glibc-217 build"
+    NODE_UNOFFICIAL_VER=$(curl -fsSL https://unofficial-builds.nodejs.org/download/release/index.tab | awk -F'\t' 'NR>1 && $1 ~ /^v22\./ && $0 ~ /linux-x64-glibc-217/ {print $1; exit}')
+    cmd "curl -fsSL https://unofficial-builds.nodejs.org/download/release/$NODE_UNOFFICIAL_VER/node-$NODE_UNOFFICIAL_VER-linux-x64-glibc-217.tar.gz | tar -xz -C ~/.local --strip-components=1"
+    mkdir -p "$HOME/.local"
+    run_logged bash -c "curl -fsSL https://unofficial-builds.nodejs.org/download/release/$NODE_UNOFFICIAL_VER/node-$NODE_UNOFFICIAL_VER-linux-x64-glibc-217.tar.gz | tar -xz -C \"$HOME/.local\" --strip-components=1"
+    export PATH="$HOME/.local/bin:$PATH"; hash -r 2>/dev/null || true
+    if have node && [ "$(node_major)" -ge 22 ] 2>/dev/null; then
+      step_end ok "installed $(ver node -v) (community glibc-217 build)" "This OS has glibc $(glibc_version); the official Node 22 binaries need 2.28, so 'nvm install 22' completes and then node cannot start (GLIBC_2.28 not found). The README's Node line does not warn about this; the community glibc-217 build is the way."
+    else
+      tail_log 5
+      step_end fail "no Node 22 runs on glibc $(glibc_version): $(first_error_line)" "Official Node 22 needs glibc 2.28 and the community glibc-217 build also failed here."
+    fi
   else
     tail_log 5
     step_end fail "node 22 not available after nvm: $(first_error_line)" "Installing Node 22 failed following the README's nvm suggestion."
@@ -236,7 +255,16 @@ if want_path readme; then
   step_begin "readme:git-clone"
   cmd "git clone $REPO"
   rm -rf "$README_DIR"
-  if run_logged git clone --depth 1 --branch "$REF" "$REPO" "$README_DIR"; then
+  clone_ref() {  # `git clone --branch` takes branches and tags only; a commit needs fetch + checkout
+    if echo "$REF" | grep -qE '^[0-9a-f]{7,40}$'; then
+      run_logged git clone --depth 1 "$REPO" "$README_DIR" \
+        && run_logged git -C "$README_DIR" fetch --depth 1 origin "$REF" \
+        && run_logged git -C "$README_DIR" checkout -q FETCH_HEAD
+    else
+      run_logged git clone --depth 1 --branch "$REF" "$REPO" "$README_DIR"
+    fi
+  }
+  if clone_ref; then
     step_end ok "$(du -sh "$README_DIR" 2>/dev/null | cut -f1) checked out ($REF)"
   else
     tail_log 5; step_end fail "clone failed: $(first_error_line)"
@@ -248,6 +276,20 @@ if want_path readme; then
     if (cd "$README_DIR" && run_logged npm install); then
       warns=$(grep -c -E '^npm (warn|WARN)' "$STEP_LOG" || true)
       step_end ok "ok; $warns npm warnings; $(du -sh "$README_DIR/node_modules" 2>/dev/null | cut -f1) node_modules"
+    elif grep -q "needs a newer C++ compiler" "$STEP_LOG"; then
+      # Walnut's preinstall check stopped the install and printed the fix. A user would
+      # paste it; do the same, and record whether the printed advice actually works.
+      fix_install=$(grep -E '^\s+sudo (yum|dnf|apt-get) install' "$STEP_LOG" | head -1 | sed 's/^ *//')
+      fix_npm=$(grep -E '^\s+CC=.* npm install' "$STEP_LOG" | head -1 | sed 's/^ *//')
+      tail_log 8; step_end fail "stopped by the toolchain check (old glibc, old g++); following its printed fix" "This OS has glibc $(glibc_version): prebuilt native modules need 2.29+, so better-sqlite3 compiles and needs GCC 10+. Walnut stops in a second and prints the fix instead of failing minutes into the compile."
+      step_begin "readme:npm-install-fix"
+      [ -n "$fix_install" ] && { cmd "$fix_install"; run_logged bash -c "$fix_install"; }
+      cmd "$fix_npm"
+      if [ -n "$fix_npm" ] && (cd "$README_DIR" && run_logged bash -c "$fix_npm"); then
+        step_end ok "the printed fix worked; $(du -sh "$README_DIR/node_modules" 2>/dev/null | cut -f1) node_modules"
+      else
+        tail_log 12; step_end fail "the printed fix did not work: $(first_error_line)" "The toolchain check's own advice failed on this OS: $(first_error_line)"
+      fi
     else
       tail_log 8; step_end fail "npm install failed: $(first_error_line)" "'npm install' fails on a fresh machine: $(first_error_line)"
     fi

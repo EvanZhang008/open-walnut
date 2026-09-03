@@ -61,12 +61,23 @@ if (!fs.existsSync(reportFile)) {
 
 /** Stable key for one test: file path + full test name. Survives reordering. */
 const failures = new Set();
+// Why each one failed. The JSON reporter is the only output this gate keeps, so
+// without this a CI regression is a bare test name and the cause has to be
+// reproduced elsewhere (impossible for a Linux-only failure from a Mac).
+const reasons = new Map();
+const firstLine = (msgs) => {
+  const m = (Array.isArray(msgs) ? msgs : [msgs]).find((x) => typeof x === 'string' && x.trim());
+  return m ? m.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 3).join(' | ').slice(0, 400) : '';
+};
 const report = JSON.parse(fs.readFileSync(reportFile, 'utf-8'));
 for (const file of report.testResults ?? []) {
   const rel = file.name.replace(/^.*?(tests\/.*)$/, '$1');
   const asserts = file.assertionResults ?? [];
   for (const a of asserts) {
-    if (a.status === 'failed') failures.add(`${rel} :: ${a.fullName}`);
+    if (a.status !== 'failed') continue;
+    const key = `${rel} :: ${a.fullName}`;
+    failures.add(key);
+    reasons.set(key, firstLine(a.failureMessages));
   }
 
   // A file that dies at IMPORT/COLLECTION time reports status:'failed' with an
@@ -78,7 +89,9 @@ for (const file of report.testResults ?? []) {
   //
   // Synthesize a per-file key so those DO surface and can be baselined.
   if (file.status === 'failed' && asserts.length === 0) {
-    failures.add(`${rel} :: <file failed to load or collect>`);
+    const key = `${rel} :: <file failed to load or collect>`;
+    failures.add(key);
+    reasons.set(key, firstLine(file.message));
   }
 }
 const filesRun = (report.testResults ?? []).length;
@@ -138,6 +151,9 @@ if (regressions.length === 0) {
 }
 
 console.log(`\n✗ ${regressions.length} NEW failure(s) — not in the baseline, so this change caused them:\n`);
-regressions.forEach((f) => console.log(`    ${f}`));
+regressions.forEach((f) => {
+  console.log(`    ${f}`);
+  if (reasons.get(f)) console.log(`        ↳ ${reasons.get(f)}`);
+});
 console.log('\nFix them, or if they are genuinely pre-existing, re-record the baseline and explain why.');
 process.exit(1);
