@@ -7,22 +7,40 @@
  * frame after the paint (two rAFs, not one), a felt delay is a warning while a
  * fast one is info, and the per-minute cap holds (a wedged UI must not turn its
  * own logger into the load).
+ *
+ * And, since 2026-09-03, the part that cost hours: a big number is NOT proof of a
+ * freeze. rAF measures "time until the page next painted", and a WKWebView stops
+ * painting when its window is occluded — so clicking something and then switching
+ * to another app reported a 29.9-SECOND close for work the app had already
+ * finished. Every slow report therefore carries `frames`/`wakeups`/`hidden` and a
+ * `verdict`: timers keep firing (throttled) in the background while a blocked main
+ * thread runs nothing, so those two counters separate the cases.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { traceInteraction, _resetInteractionTimer } from '../../web/src/utils/interaction-timer';
 
-function harness(startAt = 1000) {
+function harness(startAt = 1000, opts: { hidden?: boolean } = {}) {
   let t = startAt;
   const frames: Array<() => void> = [];
+  const ticks: Array<() => void> = [];
+  const timers: Array<() => void> = [];
   const reports: Array<{ level: string; payload: Record<string, unknown> }> = [];
   return {
     setTime: (v: number) => { t = v; },
     paint: () => { while (frames.length) frames.shift()!(); },
+    /** One display frame: the page painted once. */
+    tick: (n = 1) => { for (let i = 0; i < n; i++) { const q = ticks.splice(0); q.forEach((f) => f()); } },
+    /** One timer wakeup: the page is alive even if it is not painting. */
+    wake: (n = 1) => { for (let i = 0; i < n; i++) { const q = timers.splice(0); q.forEach((f) => f()); } },
     reports,
     deps: {
       now: () => t,
       // Mirrors the real double-rAF: the callback runs after the paint.
       raf: (cb: () => void) => { frames.push(cb); },
+      rafTick: (cb: () => void) => { ticks.push(cb); },
+      timer: (cb: () => void) => { timers.push(cb); return timers.length; },
+      clearTimer: () => { timers.length = 0; },
+      hidden: () => opts.hidden === true,
       report: (level: 'info' | 'warn', payload: Record<string, unknown>) => { reports.push({ level, payload }); },
     },
   };
@@ -56,6 +74,45 @@ describe('traceInteraction', () => {
     expect(h.reports).toHaveLength(0);
     h.paint();
     expect(h.reports).toHaveLength(1);
+  });
+
+  it('a long wait with no frames and no wakeups is called a real block', () => {
+    const h = harness();
+    traceInteraction('fullscreen-exit', {}, h.deps);
+    h.setTime(31_000);          // 30s, and nothing ran in between
+    h.paint();
+    expect(h.reports[0].payload).toMatchObject({ ms: 30_000, frames: 0, wakeups: 0, verdict: 'main-thread-blocked' });
+  });
+
+  it('a long wait whose timers kept firing while hidden is called page-hidden, not a block', () => {
+    const h = harness(1000, { hidden: true });
+    traceInteraction('fullscreen-exit', {}, h.deps);
+    // The window is occluded: rAF is throttled to nothing, timers keep ticking.
+    h.wake(30);
+    h.setTime(31_000);
+    h.paint();
+    expect(h.reports[0].payload).toMatchObject({ ms: 30_000, frames: 0, verdict: 'page-hidden', hidden: true });
+    expect(h.reports[0].payload.wakeups).toBeGreaterThan(0);
+  });
+
+  it('a long wait that kept painting is slow work, not a stall', () => {
+    const h = harness();
+    traceInteraction('view-open:files', {}, h.deps);
+    h.tick(20);
+    h.wake(8);
+    h.setTime(4000);
+    h.paint();
+    expect(h.reports[0].payload).toMatchObject({ verdict: 'slow-but-painting' });
+    expect(h.reports[0].payload.frames).toBe(20);
+  });
+
+  it('a fast interaction carries no verdict or counters (they would only be noise)', () => {
+    const h = harness();
+    traceInteraction('view-open:files', {}, h.deps);
+    h.setTime(1040);
+    h.paint();
+    expect(h.reports[0].payload.verdict).toBeUndefined();
+    expect(h.reports[0].payload.frames).toBeUndefined();
   });
 
   it('caps the reports per minute, and the window slides', () => {
