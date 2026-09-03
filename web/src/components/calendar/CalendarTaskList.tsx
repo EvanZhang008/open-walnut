@@ -6,7 +6,7 @@
  * Deliberately slim (NOT a TodoPanel embed — that component owns its own
  * DndContexts and nesting them invites sensor conflicts).
  */
-import { memo, useMemo, useState } from 'react';
+import { memo, useDeferredValue, useMemo, useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import type { Task } from '@open-walnut/core';
 import { PIN_TIER_POLICY } from '@open-walnut/core';
@@ -14,6 +14,9 @@ import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { PriorityBadge } from '@/components/common/PriorityBadge';
 
 const DONE_PHASES = new Set(['COMPLETE', 'CANCELLED']);
+
+/** Stable identity, so the deferred first pass doesn't re-trigger itself. */
+const NO_TASKS: Task[] = [];
 
 interface Props {
   tasks: Task[];
@@ -69,9 +72,29 @@ export const CalendarTaskList = memo(function CalendarTaskList({ tasks }: Props)
   const focusBar = useFocusBarContextSafe();
   const customTiers = focusBar?.customTiers ?? [];
 
+  // The rail renders one row per unscheduled task, and on a real dataset that is 2,890
+  // rows / 11,618 elements: measured, building it costs 194-214ms of DOM and layout even
+  // as plain markup with no React and no dnd-kit involved. Paid inside the blocking
+  // render, that was the whole 266ms hitch when opening Calendar — the calendar grid
+  // itself is cheap. So let the page paint first and fill the rail in on a low-priority
+  // pass. React 19's second argument is what makes this work on the FIRST render (a
+  // one-argument useDeferredValue only defers updates, and the first render is the
+  // expensive one here).
+  //
+  // Chosen over the two alternatives on evidence, not taste. `content-visibility: auto`
+  // barely helped the open (266 -> 237ms) and took scrolling from 87-100 fps to 28-40 at
+  // every speed, while quietly changing the rail's own height (141,666 -> 134,318px), so
+  // the scrollbar became a moving lie. Windowing — which is what fixed the tasks table —
+  // does not transfer: rows are 32px or 46px depending on whether the title wraps under
+  // `-webkit-line-clamp: 2`, so offsets cannot be arithmetic, and every row is a dnd-kit
+  // draggable, so unmounting rows under a drag risks the rail's entire purpose.
+  const deferredTasks = useDeferredValue(tasks, NO_TASKS);
+  /** True while the real list has not been rendered yet. */
+  const settling = deferredTasks !== tasks;
+
   const sections = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    const unscheduled = tasks.filter(
+    const unscheduled = deferredTasks.filter(
       (t) => !DONE_PHASES.has(t.phase) && !t.start_date && (!q || t.title.toLowerCase().includes(q))
     );
 
@@ -128,7 +151,7 @@ export const CalendarTaskList = memo(function CalendarTaskList({ tasks }: Props)
       out.push({ key: `p:${project}`, label: project || 'Inbox', kind: 'project', tasks: list });
     }
     return out;
-  }, [tasks, filter, focusBar, customTiers]);
+  }, [deferredTasks, filter, focusBar, customTiers]);
 
   return (
     <div className="cal-rail" data-testid="cal-rail">
@@ -142,7 +165,13 @@ export const CalendarTaskList = memo(function CalendarTaskList({ tasks }: Props)
         />
       </div>
       <div className="cal-rail-scroll">
-        {sections.length === 0 && <div className="cal-rail-empty">No unscheduled tasks</div>}
+        {/* Only claim the rail is empty once we've actually looked: during the deferred
+            first pass `sections` is empty because the list hasn't rendered yet, and
+            flashing "No unscheduled tasks" at someone who has 2,890 of them is worse
+            than showing nothing for a frame. */}
+        {sections.length === 0 && !settling && (
+          <div className="cal-rail-empty">No unscheduled tasks</div>
+        )}
         {sections.map((s) => (
           <div key={s.key} className="cal-rail-group" data-rail-section={s.key}>
             <div className={`cal-rail-group-label${s.kind === 'tier' ? ' cal-rail-tier-label' : ''}`}>
