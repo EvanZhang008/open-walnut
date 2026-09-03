@@ -513,7 +513,12 @@ export async function restartSession(sessionId: string): Promise<RestartResult> 
 // ── Retry ────────────────────────────────────────────────────────────────────
 
 export type RetryResult =
+  /** The CLI was still alive — only the record's error label was wrong. */
   | { status: 'reconnected'; sessionId: string }
+  /** The CLI is gone but the conversation is on disk and nothing was queued:
+   *  the record is back to a resumable state and the next real message spawns
+   *  `--resume`. Retry deliberately runs NO turn on this path. */
+  | { status: 'resumable'; sessionId: string }
   | { status: 'resuming'; sessionId: string; restoredMessages?: number }
   | { status: 'pending'; taskId: string; oldSessionId: string };
 
@@ -562,10 +567,15 @@ async function resumeConversationExists(record: SessionRecord): Promise<boolean>
 }
 
 /**
- * Retry a failed/stopped session. Three paths, identical to the web route:
- * (1) process alive → clear error state; (2) process dead + conversation on
- * disk → --resume via the message queue; (3) never initialized OR conversation
- * never persisted → archive + start a new session.
+ * Retry a failed/stopped session. It RECONNECTS — it never synthesizes message
+ * text, so the only thing that can start a turn is a message the human actually
+ * wrote. Four paths:
+ *   (1) process alive → clear the stale error, return 'reconnected';
+ *   (2) process dead + conversation on disk + queue NON-empty → re-trigger
+ *       processNext so the user's ORIGINAL message is what gets sent;
+ *   (3) process dead + conversation on disk + queue EMPTY → relabel the record
+ *       resumable and clear the error ('resumable'). Nothing is sent.
+ *   (4) never initialized OR conversation never persisted → archive + new session.
  */
 export async function retrySession(sessionId: string): Promise<RetryResult> {
   const { getSessionByClaudeId, updateSessionRecord, emitSessionStatusChanged } = await import('../session-tracker.js');
@@ -601,7 +611,7 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
     if (await resumeConversationExists(record)) {
       // Resume via --resume. If the pending queue already holds the user's
       // original message, re-trigger processNext (sends the ORIGINAL text).
-      const { sendMessageToSession, getQueue, unparkMessage } = await import('../session-message-queue.js');
+      const { getQueue, unparkMessage } = await import('../session-message-queue.js');
       const pendingMsgs = await getQueue(sessionId);
       // Retry is an explicit human action, so it also revives PARKED rows — they
       // are counted below and would otherwise be reported as restored while
@@ -614,9 +624,35 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
         log.session.info('session retry: re-processing pending queue messages', { sessionId, taskId: record.taskId, count: pendingMsgs.length });
         return { status: 'resuming', sessionId, restoredMessages: pendingMsgs.length };
       }
-      await sendMessageToSession(sessionId, 'continue', { source: 'retry', taskId: record.taskId });
-      log.session.info('session retry: resuming via --resume (no pending messages)', { sessionId, taskId: record.taskId });
-      return { status: 'resuming', sessionId };
+      // Nothing queued. Retry used to enqueue the literal word 'continue' here,
+      // which put a prompt the human never wrote into the agent's mouth (user
+      // report 2026-09-03: "I only clicked retry and it sends a continue — I
+      // just wanted to connect"). So this path relabels instead: the record goes
+      // back to its true resumable state, the stale error clears, and the next
+      // real message spawns `--resume` on its own. Same principle the daemon
+      // recovery path already states — "don't inject a message; the user's next
+      // message will trigger --resume naturally".
+      //
+      // The ('user','retry_reconnect') stamp is load-bearing twice: it is
+      // category-② in session-snapshot-gate (never gated, so the write lands
+      // even for a snapshot-covered session), and it makes the record
+      // intentional-terminal in session-snapshot-apply, so the death snapshot
+      // that follows — which only re-labels the same corpse — is skipped
+      // instead of flipping the row back to red.
+      const relabelled = await updateSessionRecord(sessionId, {
+        process_status: 'stopped',
+        errorMessage: undefined,
+        errorKind: undefined,
+        activity: undefined,
+        last_status_change: new Date().toISOString(),
+        status_reason: 'retry_reconnect',
+        status_changed_by: 'user',
+      } as Record<string, unknown> as Partial<SessionRecord>);
+      emitSessionStatusChanged(relabelled, {}, ['*']);
+      log.session.info('session retry: reconnected — conversation preserved, no message sent', {
+        sessionId, taskId: record.taskId, host: record.host ?? '__local__',
+      });
+      return { status: 'resumable', sessionId };
     }
     log.session.warn('session retry: conversation never persisted — starting fresh instead of --resume', {
       sessionId, taskId: record.taskId, host: record.host, cwd: record.cwd,
@@ -675,6 +711,162 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
     oldSessionId: sessionId, taskId: task.id, conversationLost,
   });
   return { status: 'pending', taskId: task.id, oldSessionId: sessionId };
+}
+
+// ── Recheck (connectivity re-probe) ─────────────────────────────────────────
+
+export interface RecheckResult {
+  sessionId: string;
+  /** true = the host's daemon answered and its snapshot was reconciled. */
+  checked: boolean;
+  /**
+   * The host has a live POOLED daemon connection right now. Reported even when
+   * `checked` is false, because "the host is reachable" is exactly the fact a
+   * stale "unable to reach remote host" banner is lying about (the 2026-09-03
+   * report: the user browsed remote files fine while the banner claimed the
+   * host was gone).
+   */
+  reachable: boolean;
+  /** Daemon-reported CLI liveness. Absent when no snapshot was obtained. */
+  alive?: boolean;
+  /** process_status AFTER reconciliation. Unchanged when nothing was checked —
+   *  this function never patches the status itself (see below). */
+  processStatus: import('../types.js').ProcessStatus;
+  /**
+   * The recorded cause is structurally an INFRA claim (session-error-kind), not
+   * a prose match. Lets a client drop a stale unreachability sentence without
+   * pattern-matching its text.
+   */
+  infraClaim: boolean;
+  /** Why nothing was checked. */
+  reason?: 'terminal_error' | 'archived' | 'no_pooled_connection' | 'timeout'
+    | 'rpc_failed' | 'no_snapshot';
+}
+
+/**
+ * Ceiling on the ONE daemon RPC this performs. Matches the health monitor's
+ * per-session probe ceiling: an unreachable host must cost a BOUNDED wait, or
+ * the pinned response starves the browser's 6-connection pool and every route
+ * looks broken.
+ */
+const RECHECK_RPC_TIMEOUT_MS = 5_000;
+
+const RECHECK_TIMED_OUT = Symbol('recheck-timeout');
+
+/** Race a promise against a deadline. The loser is abandoned, not awaited —
+ *  Promise.race has already subscribed, so a late rejection stays handled. */
+async function withDeadline<T>(p: Promise<T>, ms: number): Promise<T | typeof RECHECK_TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p,
+      new Promise<typeof RECHECK_TIMED_OUT>((resolve) => {
+        timer = setTimeout(() => resolve(RECHECK_TIMED_OUT), ms);
+        if (timer && typeof timer === 'object' && 'unref' in timer) timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Re-check ONE session against its execution host, right now. Read-and-reconcile
+ * only: no message, no spawn, never `--resume`.
+ *
+ * Called when a user opens a session whose record sits in 'error' — a record can
+ * freeze on a stale unreachability claim long after the tunnel came back (over
+ * two hours in the 2026-09-03 report), and "at least when I open it, it should
+ * go check whether it's connected" is the whole contract.
+ *
+ * Three deliberate constraints:
+ *  - ALREADY-POOLED connection only, never a dial (same contract as the C2 pull
+ *    channel in SessionHealthMonitor.checkSnapshotPull). Opening a panel must not
+ *    pay SSH connect costs.
+ *  - The daemon's own snapshot converges the record through applySnapshot — the
+ *    sanctioned sole writer in enforce mode. Hand-patching process_status here
+ *    would be a legacy category-① write that the gate drops WHOLE, which is
+ *    precisely how the freeze happened in the first place.
+ *  - Bounded: one RPC with a deadline, then a clear "couldn't check" answer.
+ */
+export async function recheckSession(sessionId: string): Promise<RecheckResult> {
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const record = await getSessionByClaudeId(sessionId);
+  if (!record) throw new SessionControlError('Session not found', 404);
+
+  const hostKey = record.host ?? '__local__';
+  const { classifySessionError } = await import('../session-error-kind.js');
+  const kind = classifySessionError(record);
+  const base = { sessionId, processStatus: record.process_status, infraClaim: kind === 'infra' };
+
+  const { isDaemonConnected, getPooledSnapshotConnection } =
+    await import('../../providers/daemon-connection.js');
+  // Synchronous pool lookup — no dial. A pooled, CONNECTED socket to the host is
+  // reachability evidence on its own, and it is available even when that daemon
+  // is too old to answer getState.
+  const reachable = isDaemonConnected(hostKey);
+
+  // A positively TERMINAL cause (the work's own fault, or a stop the human
+  // asked for) has nothing to re-examine — same bar the recovery loops use.
+  if (kind === 'terminal') return { ...base, checked: false, reachable, reason: 'terminal_error' };
+  if (record.archived) return { ...base, checked: false, reachable, reason: 'archived' };
+
+  const conn = getPooledSnapshotConnection(record.host);
+  if (!conn) {
+    log.session.info('session recheck: no pooled snapshot connection — nothing to ask', {
+      sessionId, host: hostKey, reachable,
+    });
+    return { ...base, checked: false, reachable, reason: 'no_pooled_connection' };
+  }
+
+  // Deadline twice over on purpose: the timeout argument bounds the command
+  // daemon-side, the race guarantees THIS call returns even if send() never
+  // settles (the "connected but no pong yet" window).
+  let raced: Awaited<ReturnType<typeof conn.send>> | typeof RECHECK_TIMED_OUT;
+  try {
+    raced = await withDeadline(
+      conn.send('getState', { sid: sessionId }, RECHECK_RPC_TIMEOUT_MS),
+      RECHECK_RPC_TIMEOUT_MS,
+    );
+  } catch (err) {
+    log.session.info('session recheck: getState failed', {
+      sessionId, host: hostKey, error: err instanceof Error ? err.message : String(err),
+    });
+    return { ...base, checked: false, reachable, reason: 'rpc_failed' };
+  }
+  if (raced === RECHECK_TIMED_OUT) {
+    log.session.warn('session recheck: getState timed out', {
+      sessionId, host: hostKey, timeoutMs: RECHECK_RPC_TIMEOUT_MS,
+    });
+    return { ...base, checked: false, reachable, reason: 'timeout' };
+  }
+
+  const snapshot = raced?.ok
+    ? (raced as { snapshot?: import('../../providers/daemon-fold.js').SessionSnapshot }).snapshot
+    : undefined;
+  if (!snapshot) {
+    return { ...base, checked: false, reachable: true, reason: 'no_snapshot' };
+  }
+
+  const { applySnapshot } = await import('../session-snapshot-apply.js');
+  const outcome = await applySnapshot(sessionId, snapshot, 'recheck-open');
+  const after = await getSessionByClaudeId(sessionId);
+  const processStatus = after?.process_status ?? record.process_status;
+  log.session.info('session recheck: reconciled against host', {
+    sessionId, host: hostKey, previous: record.process_status, processStatus,
+    cliState: snapshot.cliState, applyOutcome: outcome.outcome,
+  });
+  return {
+    sessionId,
+    checked: true,
+    reachable: true,
+    alive: snapshot.cliState !== 'dead',
+    processStatus,
+    // Re-classify against the CURRENT record: a converged row may no longer
+    // carry the claim, and the client uses this to decide whether the sentence
+    // on screen is still true.
+    infraClaim: classifySessionError(after ?? record) === 'infra',
+  };
 }
 
 // ── Permission response ──────────────────────────────────────────────────────

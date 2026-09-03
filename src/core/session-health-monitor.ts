@@ -23,7 +23,11 @@ import { runPeriodic, type PeriodicHandle, type TickContext } from './periodic-t
 import type { SessionRecord, Task, TaskPhase } from './types.js'
 import type { SessionWillReapEvent } from './event-types.js'
 import { emitSessionStatusChanged } from './session-tracker.js'
-import { classifySessionError, isRescuableStoppedRecord } from './session-error-kind.js'
+import {
+  classifySessionError,
+  isRescuableStoppedRecord,
+  RESCUABLE_STOPPED_WINDOW_MS,
+} from './session-error-kind.js'
 import { engineCaps } from './agents/engine-registry.js'
 const HEALTH_CHECK_INTERVAL_MS = 30_000
 /** Adaptive slow-down: with an empty active set there is nothing to watch. */
@@ -308,6 +312,11 @@ export class SessionHealthMonitor {
     }
 
     if (sessions.length === 0) {
+      // The pull channel still has work even with an empty working set: its
+      // re-examination class lives in the WIDER scan set (every 'error' row is
+      // dropped above by isTerminalSession), and a wedged record must not need
+      // some OTHER session to be live before anyone looks at it.
+      if (!ctx.overBudget()) await this.checkSnapshotPull(sessions, ctx, allSessions)
       const total = Date.now() - checkT0
       if (total > 500) log.session.warn('health monitor: check() slow (no active sessions)', { totalMs: total, orphanMs: tOrphan - checkT0, recoverMs: tRecover - tOrphan })
       return
@@ -370,8 +379,12 @@ export class SessionHealthMonitor {
     // C2 snapshot pull channel — 30s PULL of the daemon-authoritative
     // SessionSnapshot for active sessions (contract §5). Complements the push
     // path: a dropped push degrades to "self-heals within one pull cycle".
+    //
+    // `allSessions` (not `sessions`) feeds the re-examination class: the working
+    // set above drops every 'error' row (isTerminalSession counts 'error' as
+    // terminal), and those are exactly the records that get wedged.
     if (ctx.overBudget()) return
-    await this.checkSnapshotPull(sessions, ctx)
+    await this.checkSnapshotPull(sessions, ctx, allSessions)
     endPhase('snapshotPull')
 
     // Authoritative reconcile for stuck sessions — the periodic safety net behind
@@ -1100,15 +1113,39 @@ export class SessionHealthMonitor {
 
 
   /**
-   * C2 snapshot pull channel (contract §5): every 30s tick, for records in
-   * {running, idle} on a native (non-codex, non-embedded/sdk) engine whose
-   * host has a POOLED CONNECTED DaemonConnection advertising 'snapshot-v1',
-   * PULL getState and feed the snapshot to applySnapshot. NEVER dials a new
-   * connection. Sequential, capped at 10 sids/tick, per-sid 25s spacing.
+   * C2 snapshot pull channel (contract §5): every 30s tick, PULL getState from
+   * the host's POOLED CONNECTED DaemonConnection advertising 'snapshot-v1' and
+   * feed the answer to applySnapshot. NEVER dials a new connection, always
+   * sequential. TWO candidate classes with SEPARATE budgets and cadences:
    *
-   * TWO fairness/budget properties this loop must keep (C8/C9/C12/C29):
+   *  - LIVE — {running, idle}: 10 sids/tick, 25s per-sid spacing. The steady
+   *    state channel.
+   *  - RE-EXAMINATION — {error, stopped} whose cause is NOT positively terminal
+   *    (classifySessionError) and whose last_status_change is inside
+   *    RESCUABLE_STOPPED_WINDOW_MS: 5 sids/tick, 5 min per-sid spacing. Same
+   *    engine/provider/awaiting_spawn/archived exclusions as the live class.
    *
-   *  - It honors the TickContext budget INSIDE the loop (same discipline as
+   * WHY RE-EXAMINATION EXISTS — do not "optimize" the error class back out. A
+   * wrongly-'error' record was a two-sided deadlock: this lane is the ONE writer
+   * the enforce-mode gate sanctions for a snapshot-covered session, and while it
+   * looked at live records only it never re-derived status for an 'error' one.
+   * recoverInfraFailedSessions DOES look, but the fix it writes
+   * (('health-monitor','auto_recovered_dead')) is itself category-①, so the gate
+   * drops the whole patch — the lane allowed to write refused to look, and the
+   * lane that looked was not allowed to write. Records froze in 'error' with
+   * "Connection lost — unable to reach remote host" for hours after their host
+   * came back (2026-09-03, a remote dev host whose tunnel flapped: prose still on
+   * the record 2h after the reconnect), burning a 30s log-churn loop the whole
+   * time. Terminality is decided STRUCTURALLY, never by matching errorMessage
+   * prose — see the header of session-error-kind.ts for why that ban exists.
+   *
+   * Re-examination candidates come from a WIDER pool than the live ones: the
+   * tick's own working set drops every 'error' row (isTerminalSession), so the
+   * caller passes the unfiltered health-scan set for this class only.
+   *
+   * THREE fairness/budget properties both classes must keep (C8/C9/C12/C29):
+   *
+   *  - The TickContext budget is honored INSIDE the loop (same discipline as
    *    checkHungSessions). Each iteration is a real daemon RPC with a
    *    probe-timeout ceiling, so 10 slow hosts could burn 10 × the probe
    *    timeout sequentially BEFORE the authoritative reconcile phases that run
@@ -1117,16 +1154,35 @@ export class SessionHealthMonitor {
    *    next tick (see the rotation below).
    *
    *  - Candidates are ordered by lastPullAt ASCENDING (never-pulled first),
-   *    which turns the 10/tick cap into a round-robin. In list order the SAME
-   *    first ten sids were pulled every tick and — because the 25s spacing is
-   *    shorter than the 30s cadence — sids 11+ were never pulled at all: the
-   *    pull channel silently did not exist for them.
+   *    which turns each cap into a round-robin. In list order the SAME first ten
+   *    sids were pulled every tick and — because the 25s spacing is shorter than
+   *    the 30s cadence — sids 11+ were never pulled at all: the pull channel
+   *    silently did not exist for them. Each class rotates on its OWN timestamps.
+   *
+   *  - The classes cannot spend each other's budget. Re-examination is
+   *    speculative ("is this record still true?") and a settled-death cohort
+   *    dwarfs the live set (the live DB measured 100 stopped candidates against
+   *    4 error rows), so it must cost a handful of cheap RPCs per tick and
+   *    nothing more — the same reasoning as MAX_STOPPED_PROBES_PER_TICK below.
    */
   private snapshotPullAt = new Map<string, number>()
 
-  private async checkSnapshotPull(sessions: SessionRecord[], ctx?: TickContext): Promise<void> {
+  /** Separate from snapshotPullAt on purpose: the two classes rotate
+   *  independently, so a live pull can never reset the slow re-examination
+   *  cadence (or vice versa) when a record moves between them. */
+  private snapshotReexamPullAt = new Map<string, number>()
+
+  private async checkSnapshotPull(
+    sessions: SessionRecord[],
+    ctx?: TickContext,
+    /** Pool for the re-examination class. Defaults to `sessions` so a direct
+     *  caller keeps the single-list contract. */
+    reexamPool: SessionRecord[] = sessions,
+  ): Promise<void> {
     const PULL_MIN_GAP_MS = 25_000
     const MAX_PULLS_PER_TICK = 10
+    const REEXAM_MIN_GAP_MS = 5 * 60_000
+    const MAX_REEXAM_PULLS_PER_TICK = 5
     try {
       const { getSnapshotStatusMode } = await import('./session-snapshot-gate.js')
       if (getSnapshotStatusMode() === 'off') return
@@ -1134,63 +1190,108 @@ export class SessionHealthMonitor {
       const { applySnapshot } = await import('./session-snapshot-apply.js')
 
       const now = Date.now()
+      /** Exclusions shared by both classes (contract §5 step 4 shapes). */
+      const pullable = (s: SessionRecord): boolean => {
+        if (s.archived) return false
+        if (!engineCaps(s.engine).snapshotPull) return false
+        if (s.provider === 'embedded' || s.provider === 'sdk') return false
+        return s.status_reason !== 'awaiting_spawn'
+      }
+      const byPullAge = (at: Map<string, number>) => (a: SessionRecord, b: SessionRecord): number =>
+        (at.get(a.claudeSessionId) ?? 0) - (at.get(b.claudeSessionId) ?? 0)
+
       // Eligibility first, then oldest-pull-first ordering. Stable within equal
       // timestamps (Array.sort is stable), so a never-pulled batch keeps list
       // order and the rotation is deterministic.
-      const candidates = sessions
+      const live = sessions
         .filter((s) => {
           if (s.process_status !== 'running' && s.process_status !== 'idle') return false
-          if (!engineCaps(s.engine).snapshotPull) return false
-          if (s.provider === 'embedded' || s.provider === 'sdk') return false
-          if (s.status_reason === 'awaiting_spawn') return false
-          const lastPull = this.snapshotPullAt.get(s.claudeSessionId) ?? 0
-          return now - lastPull >= PULL_MIN_GAP_MS
+          if (!pullable(s)) return false
+          return now - (this.snapshotPullAt.get(s.claudeSessionId) ?? 0) >= PULL_MIN_GAP_MS
         })
-        .sort((a, b) =>
-          (this.snapshotPullAt.get(a.claudeSessionId) ?? 0) - (this.snapshotPullAt.get(b.claudeSessionId) ?? 0))
+        .sort(byPullAge(this.snapshotPullAt))
 
-      let pulled = 0
-      let capped = false
-      for (const s of candidates) {
-        if (ctx?.overBudget()) {
-          log.session.warn('health monitor: checkSnapshotPull abandoned mid-loop (over budget)', {
-            pulled, candidateCount: candidates.length,
-          })
-          break
-        }
-        const conn = getPooledSnapshotConnection(s.host)
-        if (!conn) continue // no pooled snapshot-capable connection — skip (never dial)
-        if (pulled >= MAX_PULLS_PER_TICK) { capped = true; break }
-        pulled++
-        this.snapshotPullAt.set(s.claudeSessionId, now)
-        try {
-          // Sequential on purpose: this is a background safety net; parallel
-          // fan-out to a slow host would stack daemon RPCs on the tick budget.
-          const resp = await probeWithTimeout(
-            conn.send('getState', { sid: s.claudeSessionId }),
-            null as Record<string, unknown> | null,
-            'snapshot-pull-getState', s.claudeSessionId,
-          )
-          const snapshot = resp?.ok ? (resp as { snapshot?: import('../providers/daemon-fold.js').SessionSnapshot }).snapshot : undefined
-          if (snapshot) await applySnapshot(s.claudeSessionId, snapshot, 'pull-30s')
-        } catch (err) {
-          log.session.debug('health monitor: snapshot pull failed', {
-            sessionId: s.claudeSessionId, host: s.host ?? '__local__',
-            error: err instanceof Error ? err.message : String(err),
-          })
-        }
-      }
-      if (capped) {
-        log.session.info('health monitor: snapshot pull capped this tick', {
-          cap: MAX_PULLS_PER_TICK, sessionCount: sessions.length,
-          candidateCount: candidates.length,
+      const reexam = reexamPool
+        .filter((s) => {
+          if (s.process_status !== 'error' && s.process_status !== 'stopped') return false
+          if (!pullable(s)) return false
+          // Structural classifier only: a positively terminal cause is settled
+          // truth, everything else is a claim the daemon's own fold can confirm.
+          if (classifySessionError(s) === 'terminal') return false
+          // Recency bound, same window and key as isRescuableStoppedRecord — an
+          // absent/unparsable stamp is settled history, not a fresh wedge, so
+          // months of finished rows are never probed.
+          const changedAt = s.last_status_change ? Date.parse(s.last_status_change) : NaN
+          if (!Number.isFinite(changedAt)) return false
+          if (now - changedAt > RESCUABLE_STOPPED_WINDOW_MS) return false
+          return now - (this.snapshotReexamPullAt.get(s.claudeSessionId) ?? 0) >= REEXAM_MIN_GAP_MS
         })
+        .sort(byPullAge(this.snapshotReexamPullAt))
+
+      let abandoned = false
+      const runClass = async (
+        candidates: SessionRecord[],
+        cap: number,
+        at: Map<string, number>,
+        candidateClass: 'live' | 'reexam',
+      ): Promise<void> => {
+        let pulled = 0
+        for (const s of candidates) {
+          if (ctx?.overBudget()) {
+            abandoned = true
+            log.session.warn('health monitor: checkSnapshotPull abandoned mid-loop (over budget)', {
+              pulled, candidateCount: candidates.length, candidateClass,
+            })
+            break
+          }
+          const conn = getPooledSnapshotConnection(s.host)
+          if (!conn) continue // no pooled snapshot-capable connection — skip (never dial)
+          if (pulled >= cap) {
+            log.session.info('health monitor: snapshot pull capped this tick', {
+              cap, sessionCount: sessions.length,
+              candidateCount: candidates.length, candidateClass,
+            })
+            break
+          }
+          pulled++
+          at.set(s.claudeSessionId, now)
+          try {
+            // Sequential on purpose: this is a background safety net; parallel
+            // fan-out to a slow host would stack daemon RPCs on the tick budget.
+            const resp = await probeWithTimeout(
+              conn.send('getState', { sid: s.claudeSessionId }),
+              null as Record<string, unknown> | null,
+              'snapshot-pull-getState', s.claudeSessionId,
+            )
+            const snapshot = resp?.ok ? (resp as { snapshot?: import('../providers/daemon-fold.js').SessionSnapshot }).snapshot : undefined
+            if (snapshot) await applySnapshot(s.claudeSessionId, snapshot, 'pull-30s')
+          } catch (err) {
+            log.session.debug('health monitor: snapshot pull failed', {
+              sessionId: s.claudeSessionId, host: s.host ?? '__local__',
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
       }
+
+      await runClass(live, MAX_PULLS_PER_TICK, this.snapshotPullAt, 'live')
+      // A budget already spent belongs to the next tick, not to a second class —
+      // and re-running the loop would only log the same abandonment twice.
+      if (!abandoned) {
+        await runClass(reexam, MAX_REEXAM_PULLS_PER_TICK, this.snapshotReexamPullAt, 'reexam')
+      }
+
       // Bounded memory: drop timestamps for sids no longer in the scan set.
       if (this.snapshotPullAt.size > 200) {
         const liveIds = new Set(sessions.map((s) => s.claudeSessionId))
         for (const sid of this.snapshotPullAt.keys()) {
           if (!liveIds.has(sid)) this.snapshotPullAt.delete(sid)
+        }
+      }
+      if (this.snapshotReexamPullAt.size > 200) {
+        const poolIds = new Set(reexamPool.map((s) => s.claudeSessionId))
+        for (const sid of this.snapshotReexamPullAt.keys()) {
+          if (!poolIds.has(sid)) this.snapshotReexamPullAt.delete(sid)
         }
       }
     } catch (err) {
@@ -1415,6 +1516,32 @@ export class SessionHealthMonitor {
   }
 
   /**
+   * Can a scheduled auto-recovery actually FIRE for this record?
+   *
+   * fire() (session-auto-recover) hard-requires the linked task to still be
+   * IN_PROGRESS — AGENT_COMPLETE means the work was already handed back and
+   * resuming would talk over the human. Arming a recovery that cannot pass that
+   * check is not free: the 30s tick re-armed it forever and each arming logged
+   * an abort 20s later (measured running for 2+ hours on one session), while
+   * `if (armed) continue` also skipped the phase sync that IS appropriate there.
+   *
+   * A lookup that cannot answer (no task id, deleted task, DB error) returns
+   * true: only a KNOWN non-IN_PROGRESS phase blocks arming, so a transient read
+   * failure can never disable recovery. schedule()'s own guards still apply.
+   */
+  private async autoRecoverCanFire(s: SessionRecord): Promise<boolean> {
+    if (!s.taskId) return true
+    try {
+      const { getTask } = await import('./task-manager.js')
+      const task = await getTask(s.taskId)
+      if (!task) return true
+      return task.phase === 'IN_PROGRESS'
+    } catch {
+      return true
+    }
+  }
+
+  /**
    * Auto-recover remote sessions stuck in 'error' with "Connection lost" message.
    *
    * This is the persistent recovery loop that runs every 30s. It complements
@@ -1607,7 +1734,8 @@ export class SessionHealthMonitor {
               // requires the phase to still be IN_PROGRESS. So only advance the
               // phase when no recovery was armed.
               const { scheduleSessionAutoRecover } = await import('./session-auto-recover.js')
-              const armed = scheduleSessionAutoRecover(s, s.status_reason ?? 'daemon_reported_exit')
+              const armed = await this.autoRecoverCanFire(s)
+                && scheduleSessionAutoRecover(s, s.status_reason ?? 'daemon_reported_exit')
               if (armed) continue
 
               // Phase sync: remote process died during connection loss — result may

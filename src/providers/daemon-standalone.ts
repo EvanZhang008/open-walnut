@@ -427,6 +427,12 @@ interface SessionData {
   orphanPollTimer: ReturnType<typeof setInterval> | null
   mode: SessionMode
   pendingCtrl: PendingCtrl | null
+  // Epoch ms at which OUR OWN idle scanner decided to reclaim this session.
+  // Stamped before the first signal is sent (the death lands asynchronously,
+  // usually via orphan-poll ESRCH, by which point the reason is gone) so
+  // reapSession can report a clean exit code for our own housekeeping instead
+  // of a red error. See daemon-core.ts CoreSessionData.idleReclaimAt.
+  idleReclaimAt?: number | null
   // C1: incremental fold of the stream file → authoritative SessionSnapshot
   // (docs/plan/session-snapshot-source-of-truth.md §4). Maintains its own v
   // and bg map — coexists with taskState L2 (retirement is C4's call).
@@ -5628,6 +5634,13 @@ function scanIdleSessions() {
       logMsg('warn', 'idle scan: killing idle session (no subscribers, no output)', {
         sid, pid, idleMinutes, protectedBy: prot.source, thresholdMs: prot.killMs, detail: prot.detail,
       })
+      // Record the intent BEFORE signalling: the reap arrives asynchronously
+      // (the orphan poll sees ESRCH and reports 'orphan-poll-dead', code -1),
+      // so by then nothing remembers that WE asked for this. Without the stamp
+      // reapSession can only consult the JSONL tail, which says "not a clean
+      // turn end" for any session whose last line isn't a type:result — and the
+      // projection then shows a red Error for our own routine reclamation.
+      session.idleReclaimAt = now
       killSessionProcessGroup(pid, sid)
     }
   }

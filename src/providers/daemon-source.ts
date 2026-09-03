@@ -1099,7 +1099,25 @@ function reapSession(sid, code, reason) {
   let jsonlAgeMs = null;
   try { jsonlAgeMs = Date.now() - fs.statSync(session.jsonlPath).mtimeMs; } catch {}
   const cleanExit = isTurnCompleteExit(session.jsonlPath);
-  if (code !== 0 && cleanExit) {
+  // An INTENTIONAL daemon-initiated reclamation is not a failure, and the JSONL
+  // tail cannot tell us it happened. The idle scanner stamps idleReclaimAt
+  // before it signals; the death then lands here through whichever path notices
+  // it (usually orphan-poll ESRCH → code -1). Verified production case: the last
+  // line was a control_response (the reply to a Walnut-issued control request —
+  // a routine shape), so isTurnCompleteExit said false, exitCode stayed -1, and
+  // the projection painted a red "Error" over a healthy, fully resumable session
+  // we reclaimed on purpose. Checked FIRST and unconditionally: the flag carries
+  // information the tail does not contain, which is why isTurnCompleteExit is
+  // left alone. Keep in sync with daemon-core.ts reapSession.
+  const intentionalReclaim = session.idleReclaimAt != null;
+  if (intentionalReclaim && code !== 0) {
+    logMsg('info', 'reapSession: intentional idle reclamation, normalizing exit code', {
+      sid, pid: session.pid, originalCode: code, originalReason: reason,
+      jsonlAgeMs, cleanExit, idleReclaimAt: session.idleReclaimAt,
+    });
+    code = 0;
+    reason = reason + '+intentional-idle-reclaim';
+  } else if (code !== 0 && cleanExit) {
     logMsg('info', 'reapSession: turn-complete detected, normalizing exit code', {
       sid, pid: session.pid, originalCode: code, originalReason: reason, jsonlAgeMs,
     });
@@ -6864,6 +6882,14 @@ function scanIdleSessions() {
       }
       const idleMinutes = Math.round(idleMs / 60000);
       logMsg('warn', 'idle scan: killing idle session (no subscribers, no output)', { sid, pid, idleMinutes, protectedBy: prot.source, thresholdMs: prot.killMs, detail: prot.detail });
+      // Record the intent BEFORE signalling: the reap arrives asynchronously
+      // (the orphan poll sees ESRCH and reports 'orphan-poll-dead', code -1), so
+      // by then nothing remembers that WE asked for this. Without the stamp
+      // reapSession can only consult the JSONL tail, which says "not a clean turn
+      // end" for any session whose last line isn't a type:result — and the
+      // projection then shows a red Error for our own routine reclamation.
+      // Keep in sync with daemon-standalone.ts scanIdleSessions.
+      session.idleReclaimAt = now;
       killSessionProcessGroup(pid, sid);
     }
   }

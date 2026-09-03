@@ -100,6 +100,41 @@ const INFRA_TEXT_SIGNATURES: readonly string[] = [
   'broken pipe',
 ]
 
+/**
+ * Reasons whose diagnosis is a claim about the TRANSPORT itself ("we could not
+ * reach the host"), as opposed to a claim about the session's own fate.
+ *
+ * Such a claim has a validity condition the record cannot express: it is only
+ * true while the host is out of contact. Any first-hand evidence FROM that host
+ * disproves it — you cannot receive a daemon's fold over a connection you do not
+ * have. A consumer holding such evidence must therefore drop the diagnosis
+ * rather than carry it forward (see the 'error' branch of applySnapshot).
+ *
+ * Kept to reachability reasons ONLY. `daemon_reported_exit` deliberately stays
+ * out: "the daemon says the process is gone" survives a reconnect intact, and
+ * discarding it would trade a stale claim for no information at all.
+ */
+const REACHABILITY_CLAIM_REASONS: ReadonlySet<string> = new Set<StatusReason>([
+  'remote_unreachable',
+])
+
+/**
+ * True when this record's current diagnosis asserts its host is unreachable.
+ *
+ * Structural on purpose (`status_reason`, never the message text): the whole
+ * point of this module is that a classification living in a string is not a
+ * classification. The reason is also what pins the claim's lifetime — a
+ * projection that overwrites `status_reason` orphans the prose that belonged to
+ * it, which is exactly how "Connection lost — unable to reach remote host"
+ * outlived its outage by hours on a host that had been answering the whole time.
+ */
+export function assertsHostUnreachable(record: Pick<SessionRecord,
+  'status_reason' | 'errorMessage'>): boolean {
+  if (!record.errorMessage) return false
+  return typeof record.status_reason === 'string'
+    && REACHABILITY_CLAIM_REASONS.has(record.status_reason)
+}
+
 /** Map a status_reason to a cause class. Unknown/absent reasons return undefined. */
 export function classifyStatusReasonKind(reason: unknown): SessionErrorKind | undefined {
   if (typeof reason !== 'string') return undefined

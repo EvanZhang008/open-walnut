@@ -661,7 +661,7 @@ export async function forkSessionToTask(
 export type SessionControlAction =
   | 'model' | 'effort' | 'fork' | 'model-options'
   // Wave 1 lifecycle family (2026-08):
-  | 'patch' | 'terminate' | 'restart' | 'retry' | 'permission'
+  | 'patch' | 'terminate' | 'restart' | 'retry' | 'recheck' | 'permission'
   | 'execute-continue' | 'changes' | 'history' | 'detail'
   // Wave 2 session-extras family (2026-08): provider controls, settings
   // snapshot, side questions, workflow/plan reads, subagent lanes,
@@ -875,6 +875,11 @@ export async function handleSessionControlRelay(
       case 'retry': {
         const { retrySession } = await import('./session-lifecycle.js');
         result = await retrySession(sessionId) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'recheck': {
+        const { recheckSession } = await import('./session-lifecycle.js');
+        result = await recheckSession(sessionId) as unknown as Record<string, unknown>;
         break;
       }
       case 'permission': {

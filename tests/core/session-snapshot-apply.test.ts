@@ -1307,3 +1307,129 @@ describe('projectProcessStatus — detached background work', () => {
     expect((await getTask(task.id)).phase).toBe('IN_PROGRESS')
   })
 })
+
+// ── Disproven unreachability diagnosis (this session's incident) ──────────────
+// A remote host's tunnel dropped, the health monitor recorded
+// ('health-monitor','remote_unreachable') + "Connection lost — unable to reach
+// remote host", and the tunnel came back one minute later. Because the CLI had
+// ALSO been idle-reaped, every later projection was 'error' too, so the
+// non-error clear never ran and the record asserted unreachability for hours on
+// a host that had been answering the whole time (verified 2026-09-03: tunnel up
+// at 01:05:00Z, banner still claiming it at 03:00Z). Receiving a fold at all
+// disproves the claim — you cannot get one over a connection you do not have.
+describe('applySnapshot — a disproven unreachability claim is dropped', () => {
+  const deadSnap = (v: number) => snap({
+    v, cliState: 'dead', turnActive: false, exitCode: 137,
+    lastResult: { isError: false, numTurns: 2, endOffset: v - 10 },
+  })
+
+  it('drops the message when the projection is ALSO error (the frozen shape)', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'unreachable-disproven'
+    await seedSession(sid, {
+      process_status: 'idle',
+      errorMessage: 'Connection lost — unable to reach remote host',
+      errorKind: 'infra',
+      status_reason: 'remote_unreachable',
+      status_changed_by: 'health-monitor',
+    })
+
+    const res = await applySnapshot(sid, deadSnap(600), 'reconnect-pull')
+    expect(res).toMatchObject({ outcome: 'applied', projected: 'error' })
+
+    const after = await getSessionByClaudeId(sid)
+    // Status is still honestly 'error' (the process really did die non-zero),
+    // but the disproven sentence is gone.
+    expect(after?.process_status).toBe('error')
+    expect(after?.errorMessage == null).toBe(true)
+    // Recoverability classification is a separate question — kind is untouched.
+    expect(after?.errorKind).toBe('infra')
+  })
+
+  it('keeps a diagnosis that is NOT a reachability claim', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'exit-msg-kept'
+    await seedSession(sid, {
+      process_status: 'idle',
+      errorMessage: 'Remote session exited with code 1',
+      errorKind: 'infra',
+      // 'daemon_reported_exit' survives a reconnect intact: the process really
+      // is gone, so discarding the text would lose true information.
+      status_reason: 'daemon_reported_exit',
+      status_changed_by: 'daemon',
+    })
+
+    expect(await applySnapshot(sid, deadSnap(600), 'pull-30s'))
+      .toMatchObject({ outcome: 'applied', projected: 'error' })
+
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.errorMessage).toBe('Remote session exited with code 1')
+  })
+
+  it('a non-error projection still clears both fields (unchanged path)', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'unreachable-then-stopped'
+    await seedSession(sid, {
+      process_status: 'idle',
+      errorMessage: 'Connection lost — unable to reach remote host',
+      errorKind: 'infra',
+      status_reason: 'remote_unreachable',
+      status_changed_by: 'health-monitor',
+    })
+
+    // Clean idle reap → 'stopped', which is what the daemon-side fix produces.
+    expect(await applySnapshot(sid, snap({
+      v: 600, cliState: 'dead', turnActive: false, exitCode: 0,
+      lastResult: { isError: false, numTurns: 2, endOffset: 590 },
+    }), 'pull-30s')).toMatchObject({ outcome: 'applied', projected: 'stopped' })
+
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.process_status).toBe('stopped')
+    expect(after?.errorMessage == null).toBe(true)
+    expect(after?.errorKind == null).toBe(true)
+  })
+
+  it('a stash may refill a message that was just dropped as disproven', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'disproven-then-stashed'
+    await seedSession(sid, {
+      process_status: 'idle',
+      errorMessage: 'Connection lost — unable to reach remote host',
+      errorKind: 'infra',
+      status_reason: 'remote_unreachable',
+      status_changed_by: 'health-monitor',
+    })
+    // A gated legacy writer hands over a fresher, first-hand diagnosis.
+    const { noteSuppressedErrorReason } = await import('../../src/core/session-snapshot-gate.js')
+    noteSuppressedErrorReason(sid, {
+      reason: 'process_exited_no_result', message: 'Process exited without result',
+      kind: 'infra', at: Date.now(),
+    })
+
+    expect(await applySnapshot(sid, deadSnap(600), 'pull-30s'))
+      .toMatchObject({ outcome: 'applied', projected: 'error' })
+
+    expect((await getSessionByClaudeId(sid))?.errorMessage).toBe('Process exited without result')
+  })
+
+  it('a stash NEVER overwrites a surviving first-hand message', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'stash-loses-to-firsthand'
+    await seedSession(sid, {
+      process_status: 'idle',
+      errorMessage: 'Error getting AWS credentials',
+      status_reason: 'api_error',
+      status_changed_by: 'session-runner',
+    })
+    const { noteSuppressedErrorReason } = await import('../../src/core/session-snapshot-gate.js')
+    noteSuppressedErrorReason(sid, {
+      reason: 'process_exited_no_result', message: 'Process exited without result',
+      kind: 'infra', at: Date.now(),
+    })
+
+    expect(await applySnapshot(sid, deadSnap(600), 'pull-30s'))
+      .toMatchObject({ outcome: 'applied', projected: 'error' })
+
+    expect((await getSessionByClaudeId(sid))?.errorMessage).toBe('Error getting AWS credentials')
+  })
+})

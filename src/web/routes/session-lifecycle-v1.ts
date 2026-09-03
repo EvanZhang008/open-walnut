@@ -9,7 +9,8 @@
  *   PATCH /sessions/:id { title? | archived? | mode? | human_note? } → { session }
  *   POST  /sessions/:id/terminate { force? } → { status:'terminated', sessionId, tookMs? }
  *   POST  /sessions/:id/restart            → { status:'restarted', sessionId, pendingMessages }
- *   POST  /sessions/:id/retry              → { status:'reconnected'|'resuming'|'pending', … }
+ *   POST  /sessions/:id/retry              → { status:'reconnected'|'resumable'|'resuming'|'pending', … }
+ *   POST  /sessions/:id/recheck            → { checked, reachable, alive?, processStatus, … }
  *   POST  /sessions/:id/permission { requestId, allow, message? } → { status:'resolved', requestId, allow }
  *   POST  /sessions/:id/execute-continue   → { status:'started', sessionId }
  *   GET   /sessions/:id/changes?base&scope&light&refresh → { groups, … }
@@ -290,6 +291,24 @@ sessionLifecycleV1Router.post('/sessions/:id/retry', async (req: Request, res: R
     }
     const { retrySession } = await import('../../core/sessions/session-lifecycle.js')
     await runLocal(res, next, 200, () => retrySession(sessionId))
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/sessions/:id/recheck — re-check the session against its host and
+// reconcile the record from the daemon's snapshot. Read-only for the session
+// itself: no message, no spawn, no --resume.
+sessionLifecycleV1Router.post('/sessions/:id/recheck', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sessionId = validSid(req, res)
+    if (!sessionId) return
+    if (CLOUD_MODE) {
+      await relayControlAction(res, 'recheck', sessionId, undefined, 200)
+      return
+    }
+    const { recheckSession } = await import('../../core/sessions/session-lifecycle.js')
+    await runLocal(res, next, 200, () => recheckSession(sessionId))
   } catch (err) {
     next(err)
   }

@@ -1,9 +1,14 @@
 /**
  * E2E tests for POST /api/sessions/:sessionId/retry
  *
- * Two paths exercised:
- *   Resume path  — session has claudeSessionId → calls sendMessageToSession, returns
- *                  { status: 'resuming', sessionId }, does NOT archive the session.
+ * Paths exercised:
+ *   Reconnect path — process alive → { status: 'reconnected' }, error cleared.
+ *   Resumable path — process dead, conversation on disk, EMPTY queue →
+ *                  { status: 'resumable' }. Sends NOTHING: retry must never put a
+ *                  message in the agent's mouth (user report 2026-09-03), and the
+ *                  record is relabelled resumable + stamped as user intent.
+ *   Queue path    — process dead with pending rows → re-triggers delivery of the
+ *                  user's ORIGINAL message, { status: 'resuming' }.
  *   Fallback path — no claudeSessionId (record written directly to disk to simulate a
  *                  session that failed before the CLI emitted its init event) →
  *                  archives + returns { status: 'pending', taskId, oldSessionId }.
@@ -145,8 +150,8 @@ describe('POST /api/sessions/:sessionId/retry — parked rows', () => {
   });
 });
 
-describe('POST /api/sessions/:sessionId/retry — resume path (has claudeSessionId)', () => {
-  it('returns { status: "resuming", sessionId } for an error session with claudeSessionId', async () => {
+describe('POST /api/sessions/:sessionId/retry — resumable path (dead process, empty queue)', () => {
+  it('returns { status: "resumable", sessionId } for an error session with claudeSessionId', async () => {
     const taskId = await makeTask();
     await createSessionRecord('resume-sess-1', taskId, 'project-a');
     await updateSessionRecord('resume-sess-1', { process_status: 'error', errorMessage: 'Process exited unexpectedly' });
@@ -155,11 +160,11 @@ describe('POST /api/sessions/:sessionId/retry — resume path (has claudeSession
     const res = await request(app).post('/api/sessions/resume-sess-1/retry');
 
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe('resuming');
+    expect(res.body.status).toBe('resumable');
     expect(res.body.sessionId).toBe('resume-sess-1');
   });
 
-  it('calls sendMessageToSession with the correct sessionId', async () => {
+  it('sends NO message — the user asked to connect, not to run a turn', async () => {
     const taskId = await makeTask();
     await createSessionRecord('resume-sess-2', taskId, 'project-a');
     await updateSessionRecord('resume-sess-2', { process_status: 'error' });
@@ -167,21 +172,27 @@ describe('POST /api/sessions/:sessionId/retry — resume path (has claudeSession
     const app = createApp();
     await request(app).post('/api/sessions/resume-sess-2/retry');
 
-    expect(sendMessageToSession).toHaveBeenCalledOnce();
-    const [calledSessionId] = vi.mocked(sendMessageToSession).mock.calls[0];
-    expect(calledSessionId).toBe('resume-sess-2');
+    expect(sendMessageToSession).not.toHaveBeenCalled();
   });
 
-  it('calls sendMessageToSession with source "retry"', async () => {
+  it('clears the stale error and stamps the relabel as user intent', async () => {
     const taskId = await makeTask();
     await createSessionRecord('resume-sess-3', taskId, 'project-a');
-    await updateSessionRecord('resume-sess-3', { process_status: 'error' });
+    await updateSessionRecord('resume-sess-3', {
+      process_status: 'error', errorMessage: 'Connection lost — unable to reach remote host',
+    });
 
     const app = createApp();
     await request(app).post('/api/sessions/resume-sess-3/retry');
 
-    const [, , opts] = vi.mocked(sendMessageToSession).mock.calls[0];
-    expect(opts?.source).toBe('retry');
+    const record = await getSessionByClaudeId('resume-sess-3');
+    expect(record!.process_status).toBe('stopped');
+    expect(record!.errorMessage).toBeFalsy();
+    // ('user','retry_reconnect') is category-② in the snapshot gate (never
+    // dropped) and marks the row intentional-terminal, so the death snapshot
+    // that follows cannot re-redden it.
+    expect(record!.status_changed_by).toBe('user');
+    expect(record!.status_reason).toBe('retry_reconnect');
   });
 });
 
@@ -195,7 +206,7 @@ describe('POST /api/sessions/:sessionId/retry — session NOT archived after res
     const res = await request(app).post('/api/sessions/no-archive-sess/retry');
 
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe('resuming');
+    expect(res.body.status).toBe('resumable');
 
     // The session record must NOT be archived after a resume retry
     const record = await getSessionByClaudeId('no-archive-sess');
@@ -212,7 +223,7 @@ describe('POST /api/sessions/:sessionId/retry — session NOT archived after res
     const res = await request(app).post('/api/sessions/stopped-resume-sess/retry');
 
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe('resuming');
+    expect(res.body.status).toBe('resumable');
 
     const record = await getSessionByClaudeId('stopped-resume-sess');
     expect(record!.archived).toBeFalsy();
@@ -279,17 +290,36 @@ describe('POST /api/sessions/:sessionId/retry — reconnect path (process alive)
 // ── Resume path: process dead → send message to resume ──
 
 describe('POST /api/sessions/:sessionId/retry — resume path (process dead)', () => {
-  it('sends "continue" as the retry message (not verbose text)', async () => {
+  // THE regression this file now guards: retry used to enqueue the literal word
+  // 'continue' on an empty queue, starting a turn with a prompt the human never
+  // wrote ("I only click retry and it will send a `continue`. I just wanted to
+  // connect.").
+  it('never synthesizes a message — not "continue", not anything', async () => {
     const taskId = await makeTask();
     await createSessionRecord('dead-sess-msg', taskId, 'project-resume');
     await updateSessionRecord('dead-sess-msg', { process_status: 'error' });
 
     const app = createApp();
-    await request(app).post('/api/sessions/dead-sess-msg/retry');
+    const res = await request(app).post('/api/sessions/dead-sess-msg/retry');
 
-    expect(sendMessageToSession).toHaveBeenCalledOnce();
-    const [, message] = vi.mocked(sendMessageToSession).mock.calls[0];
-    expect(message).toBe('continue');
+    expect(res.body.status).toBe('resumable');
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+
+  it('a NON-empty queue re-delivers the ORIGINAL message instead', async () => {
+    const taskId = await makeTask();
+    await createSessionRecord('dead-sess-queued', taskId, 'project-resume');
+    await updateSessionRecord('dead-sess-queued', { process_status: 'error' });
+    vi.mocked(getQueue).mockResolvedValueOnce([
+      { id: 'qm-orig-1', sessionId: 'dead-sess-queued', message: 'the original prompt', status: 'pending', enqueuedAt: new Date().toISOString() },
+    ]);
+
+    const app = createApp();
+    const res = await request(app).post('/api/sessions/dead-sess-queued/retry');
+
+    expect(res.body).toMatchObject({ status: 'resuming', restoredMessages: 1 });
+    // Delivery is re-triggered through the queue drain, never a fresh send.
+    expect(sendMessageToSession).not.toHaveBeenCalled();
   });
 });
 

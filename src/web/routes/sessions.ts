@@ -578,6 +578,7 @@ import {
   terminateSession,
   restartSession,
   retrySession,
+  recheckSession,
   respondSessionPermission,
   executeContinueSession,
   getSessionChanges,
@@ -2257,14 +2258,35 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
   }
 })
 
-// POST /api/sessions/:sessionId/retry — retry a failed session
-// Two paths: (1) resume via --resume if claudeSessionId exists (preserves history),
-// (2) fallback to archive+new if no claudeSessionId (session failed before init).
+// POST /api/sessions/:sessionId/retry — RECONNECT a failed session. It never
+// synthesizes message text: with a pending queue it re-sends the user's original
+// message, with an empty queue it just clears the stale error and leaves the
+// conversation resumable ('resumable'), and only a conversation that never
+// reached disk falls back to archive+new.
 // Logic lives in core/sessions/session-lifecycle.ts (shared with /api/v1 + relay).
 sessionsRouter.post('/:sessionId/retry', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sessionId = req.params.sessionId as string
     const result = await retrySession(sessionId)
+    res.json(result)
+  } catch (err) {
+    if (err instanceof SessionControlError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
+    next(err)
+  }
+})
+
+// POST /api/sessions/:sessionId/recheck — ask the session's host, right now,
+// whether it is reachable and whether the CLI is alive, and reconcile the record
+// from the daemon's own snapshot. Sends nothing, spawns nothing, never dials a
+// new connection, and answers within its own RPC deadline (see recheckSession).
+// The panel fires this when it opens a record sitting in 'error'.
+sessionsRouter.post('/:sessionId/recheck', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sessionId = req.params.sessionId as string
+    const result = await recheckSession(sessionId)
     res.json(result)
   } catch (err) {
     if (err instanceof SessionControlError) {

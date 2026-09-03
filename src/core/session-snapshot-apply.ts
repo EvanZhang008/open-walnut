@@ -41,6 +41,7 @@ import {
   clearSuppressedErrorReason,
   _clearSnapshotRegistryForTests,
 } from './session-snapshot-gate.js'
+import { assertsHostUnreachable } from './session-error-kind.js'
 import { engineCaps } from './agents/engine-registry.js'
 
 // Re-export the gate surface so consumers can treat this module as the C2
@@ -431,11 +432,30 @@ export async function applySnapshot(
     updates.errorKind = undefined
     clearSuppressedErrorReason(sessionId)
   } else {
+    // This snapshot IS proof of contact with the host: the fold reached us over a
+    // live daemon connection. So a diagnosis claiming that host is unreachable is
+    // disproven, and must not ride along on the record just because the new
+    // projection also happens to be 'error' (a crashed CLI on a healthy host).
+    // Dropping it is the whole point — a confident wrong answer is worse than
+    // none, and the UI already has a no-cause-recorded fallback. errorKind is
+    // left alone: recoverability is a separate question from what to display.
+    let droppedDisproven = false
+    if (assertsHostUnreachable(record)) {
+      updates.errorMessage = undefined
+      droppedDisproven = true
+      log.session.info('snapshot projection dropped disproven unreachability diagnosis', {
+        sessionId, priorReason: record.status_reason ?? null, projected, source,
+      })
+    }
     const stashed = takeSuppressedErrorReason(sessionId)
     if (stashed) {
       // Only fill a BLANK message — a real message already on the record came
-      // from a writer with first-hand knowledge and outranks a stash.
-      if (!record.errorMessage && stashed.message) updates.errorMessage = stashed.message
+      // from a writer with first-hand knowledge and outranks a stash. A message
+      // just dropped above counts as blank: it was disproven, not merely old.
+      // (`updates.errorMessage === undefined` cannot stand in for that check —
+      // an absent key reads undefined too, which would let a stash overwrite a
+      // perfectly good first-hand message.)
+      if ((!record.errorMessage || droppedDisproven) && stashed.message) updates.errorMessage = stashed.message
       if (!record.errorKind && stashed.kind) updates.errorKind = stashed.kind
       log.session.info('snapshot projection adopted suppressed error reason', {
         sessionId,

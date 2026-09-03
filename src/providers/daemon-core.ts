@@ -83,6 +83,15 @@ export interface CoreSessionData {
   orphanPollTimer: ReturnType<typeof setInterval> | null
   mode: SessionMode
   pendingCtrl: PendingCtrl | null
+  /** Epoch ms at which the daemon's OWN idle scanner decided to reclaim this
+   *  session (no subscribers, no output past the threshold). Recorded BEFORE
+   *  the first signal is sent, because the death arrives asynchronously: the
+   *  process dies, the orphan poll notices ESRCH, and reapSession is called
+   *  with 'orphan-poll-dead' — by then the reason is gone. Presence means the
+   *  death was OUR deliberate housekeeping, so reapSession reports exit code 0
+   *  (see the normalization block there). Never set by any other path.
+   *  Optional so adapters and test fixtures stay type-compatible. */
+  idleReclaimAt?: number | null
   /** Turn-retry streak — see decideTurnRetry. Optional so adapters that don't
    *  implement the retry policy stay type-compatible. */
   turnRetry?: TurnRetryState
@@ -354,6 +363,9 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
    *   - orphan poll ESRCH / pid-recycled (adopted sessions)
    *   - cmdSend ENXIO (FIFO write detected dead reader)
    *   - idle scanner missed-exit fallback
+   *   - the idle scanner's own deliberate reclamation — arrives through one of
+   *     the paths above, recognizable ONLY by the `idleReclaimAt` stamp it left
+   *     before signalling, and reported as a clean exit (see below)
    *   - cmdStop (explicit user stop)
    *   - startup reconcile (dead pids, pid-recycled, not-ours)
    *
@@ -380,7 +392,25 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     // mis-normalized deaths instead of silently changing code=-1 → 0.
     let jsonlAgeMs: number | null = null
     try { jsonlAgeMs = clock() - fs.statSync(session.jsonlPath).mtimeMs } catch {}
-    if (cleanExit && code !== 0) {
+    // An INTENTIONAL daemon-initiated reclamation is not a failure, and the
+    // JSONL tail cannot tell us it happened. The idle scanner stamps
+    // `idleReclaimAt` before it signals; the death then lands here through
+    // whichever path notices it (usually orphan-poll ESRCH → code -1). Verified
+    // production case: the last line was a `control_response` (the reply to a
+    // Walnut-issued control request — a routine shape), so isTurnCompleteExit
+    // said false, exitCode stayed -1, and projectProcessStatus painted a red
+    // "Error" over a healthy, fully resumable session we reclaimed on purpose.
+    // Checked FIRST and unconditionally: the flag carries information the tail
+    // simply does not contain, which is why isTurnCompleteExit is left alone.
+    const intentionalReclaim = session.idleReclaimAt != null
+    if (intentionalReclaim && code !== 0) {
+      logger('info', 'reapSession: intentional idle reclamation, normalizing exit code', {
+        sid, pid: session.pid, originalCode: code, originalReason: reason,
+        jsonlAgeMs, cleanExit, idleReclaimAt: session.idleReclaimAt,
+      })
+      code = 0
+      reason = reason + '+intentional-idle-reclaim'
+    } else if (cleanExit && code !== 0) {
       logger('info', 'reapSession: turn-complete detected, normalizing exit code', {
         sid, pid: session.pid, originalCode: code, originalReason: reason, jsonlAgeMs,
       })

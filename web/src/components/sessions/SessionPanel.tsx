@@ -35,7 +35,7 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
-import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, terminateSession, investigateSession, setSessionEffort, setSessionModel, setCodexSessionModel } from '@/api/sessions';
+import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, terminateSession, investigateSession, setSessionEffort, setSessionModel, setCodexSessionModel } from '@/api/sessions';
 import { parseSessionDirective } from '@/components/chat/session-mention';
 import { buildImageRefsPayload } from '@/api/image-upload';
 import { terminalPrewarm } from '@/api/terminal';
@@ -155,6 +155,29 @@ function PlanPopoverContent({ content, cwd }: { content: string; cwd?: string })
  *  Poll a 404 for ~15s (local ≈1s, remote SSH can be 10s+) before giving up. */
 const MISSING_SESSION_RETRIES = 30;
 const MISSING_SESSION_RETRY_MS = 500;
+
+/**
+ * Connectivity recheck claim — ONE request per session per open, shared by every
+ * panel instance. The same session can be mounted in two columns and React can
+ * remount a panel (StrictMode double-invoke, column reshuffle), so the guard has
+ * to live outside the component; the cooldown is what still allows a genuine
+ * later re-open to ask again.
+ */
+const RECHECK_COOLDOWN_MS = 60_000;
+const recheckClaimedAt = new Map<string, number>();
+
+function claimRecheckSlot(sessionId: string): boolean {
+  const now = Date.now();
+  if (now - (recheckClaimedAt.get(sessionId) ?? 0) < RECHECK_COOLDOWN_MS) return false;
+  // Bounded: a tab left open for days must not keep an entry per session ever seen.
+  if (recheckClaimedAt.size > 200) {
+    for (const [sid, at] of recheckClaimedAt) {
+      if (now - at > RECHECK_COOLDOWN_MS) recheckClaimedAt.delete(sid);
+    }
+  }
+  recheckClaimedAt.set(sessionId, now);
+  return true;
+}
 
 interface SessionPanelProps {
   sessionId: string;
@@ -981,6 +1004,51 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   const handleRetried = useCallback((taskId: string) => {
     retryTaskIdRef.current = taskId;
   }, []);
+
+  // Opening a session that sits in 'error' re-checks its host immediately.
+  // A record can stay frozen on a stale "unable to reach remote host" for hours
+  // after the tunnel came back (2026-09-03: two hours, while that same host's
+  // files opened fine in the Files tab). The server-side recheck sends nothing to
+  // the session and converges the record from the daemon's own snapshot, so the
+  // normal session:status-changed event is what updates this UI — there is no
+  // parallel status path here. Non-blocking: no spinner over the panel, the
+  // content stays interactive, only the banner sentence changes.
+  // `for` stamps which session the answer belongs to: this panel can be handed a
+  // different sessionId without remounting (prefix adoption, fork replacement),
+  // and a previous session's verdict must never label the new one's banner.
+  const [recheck, setRecheck] = useState<{
+    for: string;
+    phase: 'idle' | 'checking' | 'done';
+    reachable?: boolean;
+    infraClaim?: boolean;
+  }>({ for: sessionId, phase: 'idle' });
+  const inErrorState = session?.process_status === 'error';
+  useEffect(() => {
+    if (!inErrorState) return;
+    if (!claimRecheckSlot(sessionId)) return;
+    let cancelled = false;
+    setRecheck({ for: sessionId, phase: 'checking' });
+    log.info('session-panel', 'session opened in error — rechecking host connectivity', { sessionId });
+    recheckSession(sessionId).then((r) => {
+      if (cancelled) return;
+      setRecheck({ for: sessionId, phase: 'done', reachable: r.reachable, infraClaim: r.infraClaim });
+      log.info('session-panel', 'session recheck answered', {
+        sessionId,
+        checked: r.checked,
+        reachable: r.reachable,
+        alive: r.alive ?? null,
+        processStatus: r.processStatus,
+        reason: r.reason ?? null,
+      });
+    }).catch((err) => {
+      if (cancelled) return;
+      setRecheck({ for: sessionId, phase: 'idle' });
+      log.warn('session-panel', 'session recheck failed', {
+        sessionId, error: err instanceof Error ? err.message : String(err),
+      });
+    });
+    return () => { cancelled = true; };
+  }, [sessionId, inErrorState]);
   const [restartBusy, setRestartBusy] = useState(false);
   const handleRestart = useCallback(async () => {
     log.info('session-panel', 'restart button clicked', { sessionId });
@@ -1739,19 +1807,37 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
           // (inc-1787439819342). A blank diagnosis is still worth a sentence and
           // a Retry.
           const errorText = session?.errorMessage
-            || 'Session ended unexpectedly and no cause was recorded \u2014 Retry resumes it.';
+            || 'Session ended unexpectedly and no cause was recorded. Reconnect re-checks the host; your conversation is kept.';
           // Coupling: 'Connection lost' is set by session-health-monitor when daemon unreachable.
           // 'Reconnecting' activity is set by the same monitor's recovery loop.
           const isReconnecting = !!session?.errorMessage?.includes('Connection lost')
             && !!session.activity?.includes('Reconnecting');
+          // Honesty rule: the recorded cause blames the substrate ("unable to
+          // reach remote host") but the recheck just talked to that host, so the
+          // sentence on screen is no longer true. Say what IS true \u2014 the process
+          // is not running and typing resumes it. `infraClaim` is the server's
+          // structural classification (session-error-kind), never a prose match.
+          const mine = recheck.for === sessionId;
+          const checking = mine && recheck.phase === 'checking';
+          const provedReachable = mine && recheck.phase === 'done'
+            && recheck.reachable === true && recheck.infraClaim === true;
+          // Spinning amber = work in flight; neutral grey = a settled, non-alarming
+          // fact. A proved-reachable host is the second kind, so it must NOT reuse
+          // the spinner variant.
+          const spinning = isReconnecting || checking;
+          const calm = spinning || provedReachable;
+          const hostLabel = session?.hostname || session?.host || 'The host';
+          const bannerText = checking
+            ? 'Checking connection\u2026'
+            : provedReachable
+              ? `${hostLabel} is reachable \u2014 this session's process is not running. Send a message to resume it.`
+              : isReconnecting ? 'Reconnecting to remote host...' : errorText;
           return (
-            <div className={`session-error-banner${isReconnecting ? ' session-error-banner--reconnecting' : ''}`}>
-              <span className="session-error-banner-icon">{isReconnecting ? '\u21BB' : '\u26A0\uFE0F'}</span>
+            <div className={`session-error-banner${spinning ? ' session-error-banner--reconnecting' : provedReachable ? ' session-error-banner--idle' : ''}`}>
+              <span className="session-error-banner-icon">{spinning ? '\u21BB' : provedReachable ? '\u2139\uFE0F' : '\u26A0\uFE0F'}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <span className="session-error-banner-text">
-                  {isReconnecting ? 'Reconnecting to remote host...' : errorText}
-                </span>
-                {!isReconnecting && session?.errorMessage && (() => {
+                <span className="session-error-banner-text">{bannerText}</span>
+                {!calm && session?.errorMessage && (() => {
                   const sug = getErrorSuggestion(session.errorMessage, { host: session.host, provider: session.provider });
                   return sug ? <ErrorSuggestionLink {...sug} /> : null;
                 })()}
@@ -1772,7 +1858,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               <span className="session-error-banner-icon">{'⏸'}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <span className="session-error-banner-text">
-                  Auto-stopped after {idle[1]} min idle. The conversation is preserved — send a message or Retry to resume.
+                  Auto-stopped after {idle[1]} min idle. The conversation is preserved — send a message to resume it.
                 </span>
                 {(() => {
                   const sug = getErrorSuggestion(session.errorMessage!, { host: session.host, provider: session.provider });

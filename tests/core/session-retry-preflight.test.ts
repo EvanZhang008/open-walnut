@@ -80,28 +80,28 @@ describe('retrySession conversation pre-flight', () => {
     }
   })
 
-  it('conversation present → keeps the --resume path (enqueues continue)', async () => {
+  it('conversation present → keeps the session resumable and enqueues NOTHING', async () => {
     const sid = 'retry-pf-present'
     findLocalJsonlPath.mockResolvedValue(`/fake/projects/x/${sid}.jsonl`)
     await createSessionRecord(sid, 'task-pf2', 'proj', '/tmp', { initialProcessStatus: 'error' })
 
     const res = await retrySession(sid)
-    expect(res.status).toBe('resuming')
+    expect(res.status).toBe('resumable')
 
-    // Record NOT archived; a 'continue' message is queued for --resume.
+    // Record NOT archived, and no synthesized message: Retry reconnects, the
+    // user's next message is what triggers --resume (see retrySession path 3).
     const rec = await getSessionByClaudeId(sid)
     expect(rec?.archived).not.toBe(true)
-    const queue = await getQueue(sid)
-    expect(queue.some((m) => m.message === 'continue')).toBe(true)
+    expect(await getQueue(sid)).toHaveLength(0)
   })
 
-  it('probe failure → fails open to --resume (daemon down must not force a fresh session)', async () => {
+  it('probe failure → fails open to the resumable path (daemon down must not force a fresh session)', async () => {
     const sid = 'retry-pf-error'
     findLocalJsonlPath.mockRejectedValue(new Error('daemon unreachable'))
     await createSessionRecord(sid, 'task-pf3', 'proj', '/tmp', { initialProcessStatus: 'error' })
 
     const res = await retrySession(sid)
-    expect(res.status).toBe('resuming')
+    expect(res.status).toBe('resumable')
     const rec = await getSessionByClaudeId(sid)
     expect(rec?.archived).not.toBe(true)
   })
@@ -112,7 +112,7 @@ describe('retrySession conversation pre-flight', () => {
     await updateSessionRecord(sid, { engine: 'codex' } as Record<string, unknown>)
 
     const res = await retrySession(sid)
-    expect(res.status).toBe('resuming')
+    expect(res.status).toBe('resumable')
     expect(findLocalJsonlPath).not.toHaveBeenCalled()
   })
 })

@@ -288,9 +288,11 @@ describe('POST /api/sessions/:sessionId/retry', () => {
       .post('/api/sessions/retry-sess-1/retry')
       .send({});
 
-    // With claudeSessionId present and process dead, it takes the resume path
+    // With claudeSessionId present, the process dead and an EMPTY queue, retry
+    // RECONNECTS: the record goes back to a resumable state and nothing is sent
+    // (it used to enqueue the word 'continue' — see session-retry-reconnect).
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe('resuming');
+    expect(res.body.status).toBe('resumable');
     expect(res.body.sessionId).toBe('retry-sess-1');
   });
 

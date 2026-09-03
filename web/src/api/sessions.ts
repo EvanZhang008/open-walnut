@@ -861,12 +861,38 @@ async function reconcileQuickStart(sessionId: string): Promise<{ taskId: string;
   return null;
 }
 
+/** Reconnect a failed session. NEVER sends message text: 'resuming' means the
+ *  user's own queued message was re-sent, 'resumable' means the record was
+ *  cleared and typing is what resumes the work, 'pending' is the archive+new
+ *  fallback for a conversation that never reached disk. */
 export async function retrySession(sessionId: string): Promise<
   { status: 'reconnected'; sessionId: string } |
+  { status: 'resumable'; sessionId: string } |
   { status: 'resuming'; sessionId: string } |
   { status: 'pending'; taskId: string; oldSessionId: string }
 > {
   return apiPost(`/api/sessions/${sessionId}/retry`, {});
+}
+
+/** Mirrors RecheckResult in src/core/sessions/session-lifecycle.ts. */
+export interface SessionRecheck {
+  sessionId: string;
+  checked: boolean;
+  reachable: boolean;
+  alive?: boolean;
+  processStatus: 'running' | 'idle' | 'stopped' | 'error';
+  /** The recorded cause is structurally an infra claim (server-side
+   *  classification — the client never pattern-matches error prose). */
+  infraClaim: boolean;
+  reason?: 'terminal_error' | 'archived' | 'no_pooled_connection' | 'timeout'
+    | 'rpc_failed' | 'no_snapshot';
+}
+
+/** Ask the server to re-check this session against its host NOW and reconcile
+ *  the record from the daemon's snapshot. Sends nothing to the session. The
+ *  server bounds its own daemon RPC, so this is a short request by construction. */
+export async function recheckSession(sessionId: string): Promise<SessionRecheck> {
+  return apiPost(`/api/sessions/${sessionId}/recheck`, {}, { timeoutMs: 10_000 });
 }
 
 export async function restartSession(sessionId: string): Promise<
