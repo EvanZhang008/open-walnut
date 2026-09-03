@@ -186,7 +186,8 @@ describe('GET /api/time/screentime', () => {
     expect(phone.siteMs).toBe(600_000);
   });
 
-  it('shows this Mac only once asked, and the data was there all along', async () => {
+  // Flips the macOS-only toggle, so it runs on macOS only (off macOS the toggle answers 501).
+  it.skipIf(process.platform !== 'darwin')('shows this Mac only once asked, and the data was there all along', async () => {
     await writeConfig('time:\n  screentime:\n    enabled: true\n');
     await request(app()).post('/api/time/screentime/refresh').send({}).expect(200);
 
