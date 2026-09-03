@@ -99,22 +99,45 @@ describe('side-thread system-prompt inheritance (real handleStart)', () => {
     expect((await getSessionByClaudeId(THREAD))?.appliedAppendSystemPrompt).toBe(PARENT_PROMPT)
   })
 
-  it('falls back to the fresh build when the parent has no stored prompt', async () => {
+  it('spawns with NO append prompt when the parent has no stored prompt (never a fresh build)', async () => {
     await createSessionRecord(PARENT, 'task-1', 'proj', '/repo/walnut', {})
     await startSideThread()
 
     expect(sendCalls).toHaveLength(1)
-    // No inheritance possible — whatever rides is NOT the parent constant.
-    expect(sendCalls[0]![5]).not.toBe(PARENT_PROMPT)
+    // A fresh build could never match the parent's prefix; absence at least
+    // matches a parent that was cold-resumed without one.
+    expect(sendCalls[0]![5]).toBeUndefined()
   })
 
-  it('refuses an oversized stored prompt (spawn-argv safety cap) and falls back', async () => {
+  it("an explicit '' (parent launched without a prompt) also spawns with none", async () => {
+    await createSessionRecord(PARENT, 'task-1', 'proj', '/repo/walnut', {})
+    await updateSessionRecord(PARENT, { appliedAppendSystemPrompt: '' })
+    await startSideThread()
+
+    expect(sendCalls[0]![5]).toBeUndefined()
+  })
+
+  it('the exact prompt carried on the start event wins over the record', async () => {
+    await createSessionRecord(PARENT, 'task-1', 'proj', '/repo/walnut', {})
+    await updateSessionRecord(PARENT, { appliedAppendSystemPrompt: 'record copy' })
+    await createSessionRecord(THREAD, '', 'proj', '/repo/walnut', {
+      lane: `side:${PARENT}:sth-1`, forkedFromSessionId: PARENT,
+      initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn',
+    })
+    await runnerInternals.handleStart({
+      preassignedSessionId: THREAD, taskId: '', message: '', cwd: '/repo/walnut', project: 'proj',
+      lane: `side:${PARENT}:sth-1`, forkedFromSessionId: PARENT,
+      appendSystemPromptExact: 'live copy',
+    })
+    expect(sendCalls[0]![5]).toBe('live copy')
+  })
+
+  it('refuses an oversized stored prompt (spawn-argv safety cap) and spawns with none', async () => {
     await createSessionRecord(PARENT, 'task-1', 'proj', '/repo/walnut', {})
     await updateSessionRecord(PARENT, { appliedAppendSystemPrompt: 'x'.repeat(70_000) })
     await startSideThread()
 
     expect(sendCalls).toHaveLength(1)
-    const sent = sendCalls[0]![5] as string | undefined
-    expect(sent?.length ?? 0).toBeLessThan(70_000)
+    expect(sendCalls[0]![5]).toBeUndefined()
   })
 })

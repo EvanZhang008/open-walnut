@@ -20,6 +20,7 @@
  */
 
 import { log } from '../../logging/index.js'
+import { consumeWarmupTurn } from '../sessions/side-thread-warmup.js'
 
 /** Streamed text msgIds that have no persisted twin. */
 export interface ConvergenceDiff {
@@ -65,6 +66,11 @@ const lastIncidentAt = new Map<string, number>()
  */
 export function armStreamConvergenceCheck(sessionId: string, streamedTextMsgIds: string[]): void {
   if (streamedTextMsgIds.length === 0) return
+  // A side-thread cache warm-up reply is hidden from history by design.
+  if (consumeWarmupTurn(sessionId)) {
+    log.obs.debug('stream-convergence: skipped hidden warm-up turn', { sessionId })
+    return
+  }
   const timer = setTimeout(() => {
     void runCheck(sessionId, streamedTextMsgIds).catch((err) => {
       log.obs.warn('stream-convergence check failed', {

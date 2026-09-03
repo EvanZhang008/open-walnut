@@ -26261,7 +26261,10 @@ a.file-link:hover {
 .side-question-error { font-size: 12px; color: var(--error); }
 
 /* Composer — set apart by a top divider + a quiet uppercase label (NOT a loud
-   coloured box). The accent only appears on focus, keeping the resting state calm. */
+   coloured box). The accent only appears on focus, keeping the resting state calm.
+   The control itself is the app's real ChatInput, which brings its own bordered
+   card: this wrapper therefore adds NO border of its own (a second one reads as a
+   double frame) and no padding, only the divider + label. */
 .side-question-composer {
   display: flex;
   flex-direction: column;
@@ -26276,19 +26279,13 @@ a.file-link:hover {
   font-weight: 600;
   color: var(--fg-muted);
 }
-.side-question-composer-row { display: flex; gap: 6px; }
-.side-question-composer-row input {
-  flex: 1;
-  font-size: 13px;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius, 8px);
-  background: var(--bg);
-  color: var(--fg);
-  outline: none;
-  transition: border-color 0.15s ease;
+/* ChatInput is laid out for a panel footer (its own outer padding); inside the
+   popover it must simply be full-width and flush with the label above it. */
+.side-question-composer .chat-input-container {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
 }
-.side-question-composer-row input:focus { border-color: var(--accent); }
 
 /* ── Side THREADS mode (multi-turn mini-chat inside the same popover) ──
    The popover is a BOUNDED flex column: header + chips are pinned, the thread
@@ -26297,8 +26294,23 @@ a.file-link:hover {
    popover can never grow past the top edge — menus/overlays hard rule. */
 .side-question-popover--threads {
   max-height: min(72vh, calc(100vh - 120px));
+  /* Width comes from the left/right insets (panel width), which is what keeps the
+     card inside the viewport on any column layout — this is only a belt. */
+  max-width: calc(100vw - 24px);
   overflow: hidden;
 }
+/* The composer's own overlays (the "@" palette, the recents popup, the "+" menu)
+   grow UPWARD from the composer, so the bounded column above would clip their
+   TOP rows. Let the card overflow while one is open: a SHORT popover then spills
+   into the free viewport space above it, and a TALL popover already has the room
+   inside. The list caps below keep either case off the top of the window. */
+.side-question-popover--threads:has(.mention-palette),
+.side-question-popover--threads:has(.file-mention-popup),
+.side-question-popover--threads:has(.chat-plus-menu) {
+  overflow: visible;
+}
+.side-question-composer .mention-list,
+.side-question-composer .file-mention-list { max-height: 40vh; }
 /* Header + composer are PINNED: the transcript gives up height, never these two
    (a shrunk-away composer is an unusable drawer). */
 .side-question-popover--threads > .side-question-popover-header,

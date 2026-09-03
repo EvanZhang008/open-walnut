@@ -34,6 +34,7 @@ import path from 'node:path';
 import { findImagePaths, findRelativeImageNames } from '../providers/session-io.js';
 import { REMOTE_IMAGES_DIR } from '../constants.js';
 import { backfillMirrorSidecar, resolveSessionMirrorPath } from './remote-image-mirror.js';
+import { isCacheWarmupText } from './sessions/side-thread-warmup.js';
 
 /** Cached homedir — avoids repeated syscall on each history request */
 const LOCAL_HOME = os.homedir();
@@ -1223,6 +1224,9 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
   // Convert to SessionHistoryMessage array
   // Track the last plan content written to ~/.claude/plans/ across messages
   let lastPlanContent: string | null = null;
+  // A side-thread cache warm-up is plumbing: its tagged user line is dropped
+  // below, and so is the one assistant reply that answers it.
+  let dropWarmupReply = false;
 
   // Parallel array tracking which parentToolUseId each result entry belongs to
   const resultParentIds: (string | undefined)[] = [];
@@ -1338,9 +1342,14 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     // readable form. Single choke point — catches the real echo line AND the
     // Pattern-B synthetic from its queue-operation. See transformInjectedUserText.
     if (msg.role === 'user' && text.startsWith('<')) {
+      if (isCacheWarmupText(text)) { dropWarmupReply = true; continue; }
       const transformed = transformInjectedUserText(text);
       if (transformed === null) continue;
       if (transformed !== undefined) text = transformed;
+    }
+    if (msg.role === 'assistant' && dropWarmupReply) {
+      dropWarmupReply = false;
+      if (tools.length === 0) continue;
     }
 
     // Output-mode wrapper (display only). The send path prefixes a one-time

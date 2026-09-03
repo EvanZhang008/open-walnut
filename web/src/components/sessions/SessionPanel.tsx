@@ -1537,6 +1537,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                     engine={session?.engine}
                     cwd={session?.cwd}
                     host={session?.host}
+                    parentMode={session?.mode}
                     onInjectToComposer={handleInjectFromThread}
                   />
                   <SessionNotesPill
@@ -2131,6 +2132,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                     engine={session?.engine}
                     cwd={session?.cwd}
                     host={session?.host}
+                    parentMode={session?.mode}
                     onInjectToComposer={handleInjectFromThread}
                   />
                   <SessionNotesPill

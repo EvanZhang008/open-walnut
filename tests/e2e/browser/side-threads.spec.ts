@@ -79,13 +79,15 @@ interface StubState {
   /** Threads the drawer asked to create, in order. */
   created: string[]
   standbyCalls: number
+  /** Typing-triggered cache warm-ups (POST /standby/warm). */
+  warmCalls: number
   deleted: string[]
   /** When set, POST /side-threads answers 409 fork_unsupported. */
   forkUnsupported: boolean
 }
 
 function freshStub(threads: StubThread[] = []): StubState {
-  return { threads, created: [], standbyCalls: 0, deleted: [], forkUnsupported: false }
+  return { threads, created: [], standbyCalls: 0, warmCalls: 0, deleted: [], forkUnsupported: false }
 }
 
 /**
@@ -124,6 +126,11 @@ async function installSideThreadRoutes(
     if (method === 'POST' && rest === '/standby') {
       stub.standbyCalls++
       await route.fulfill({ json: { ok: true } })
+      return
+    }
+    if (method === 'POST' && rest === '/standby/warm') {
+      stub.warmCalls++
+      await route.fulfill({ json: { warmed: true } })
       return
     }
     if (method === 'POST' && rest === '') {
@@ -199,8 +206,10 @@ async function openDrawer(panel: Locator): Promise<Locator> {
   return popover
 }
 
+/** The drawer's composer is the app's real ChatInput, so its control is the
+ *  ChatInput TEXTAREA (scoped to the popover — the panel also has the main one). */
 const drawerInput = (popover: Locator): Locator =>
-  popover.locator('.side-question-composer input')
+  popover.locator('.side-question-composer textarea.chat-input-textarea')
 
 async function ask(popover: Locator, text: string): Promise<void> {
   const input = drawerInput(popover)
@@ -224,6 +233,26 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   // Empty state, and the only chip is "+ New".
   await expect(popover.locator('.side-thread-chip')).toHaveCount(1)
   await expect(popover.locator('.side-thread-chip-new')).toBeVisible()
+
+  // ── The drawer's composer is the real one: voice + mode pill, like main chat ──
+  const composer = popover.locator('.side-question-composer')
+  await expect(composer.locator('.mic-btn-wrapper button')).toBeVisible()
+  const modePill = composer.locator('.mode-toggle-pill')
+  await expect(modePill).toBeVisible()
+  const modeBefore = await modePill.locator('.mode-toggle-pill-label').innerText()
+  await modePill.click()
+  await expect(modePill.locator('.mode-toggle-pill-label')).not.toHaveText(modeBefore)
+  await modePill.click()
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/drawer-composer.png`, fullPage: true })
+
+  // ── Typing a few characters warms the standby's cache BEFORE Enter ──
+  // (one request per parent, not one per keystroke)
+  await drawerInput(popover).pressSequentially('why does ', { delay: 20 })
+  await expect.poll(() => stub.warmCalls, { timeout: 10_000 }).toBe(1)
+  await drawerInput(popover).pressSequentially('hasPipe', { delay: 20 })
+  await page.waitForTimeout(500)
+  expect(stub.warmCalls).toBe(1)
+  await drawerInput(popover).fill('')
 
   // ── Ask: a chip appears, and the thread's OWN conversation mounts ──
   await ask(popover, FIRST_Q)

@@ -9,7 +9,8 @@
  * and `markExpectedTeardown` are stubbed, so nothing can signal a process.
  *
  * Everything else is real Walnut: routes → manager → fork → session-tracker →
- * side-questions store → task-manager.
+ * side-questions store → task-manager. The model layer is stubbed so promote's
+ * background folder/title labeling stays offline and deterministic.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -24,6 +25,14 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-e2e-side-thr
 vi.mock('../../src/core/sessions/session-lifecycle.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   terminateSession: mocks.terminateSession,
+}))
+// Deterministic, offline model: promote groups the new task with the parent's,
+// and a fresh folder asks the model for a name in the background.
+vi.mock('../../src/agent/model.js', () => ({
+  sendMessage: vi.fn(async () => ({
+    content: [{ type: 'text', text: 'Reaper Work' }],
+    stopReason: 'end_turn',
+  })),
 }))
 
 import { WALNUT_HOME } from '../../src/constants.js'
@@ -96,6 +105,45 @@ describe('side-thread routes', () => {
     expect(await res.json()).toEqual({ ok: true })
   })
 
+  it('warms the standby cache on demand: one tagged send, then already_warm', async () => {
+    const { CACHE_WARMUP_MESSAGE } = await import('../../src/core/sessions/side-thread-warmup.js')
+    const warmParent = '77777777-7777-4777-8777-777777777777'
+    await createSessionRecord(warmParent, '', 'proj', '/repo/walnut', {
+      outputFile: '/tmp/streams/warm.jsonl',
+    })
+    // Subscribers are keyed by name: a second 'session-runner' would REPLACE the
+    // fake runner above, so observe the send as a global listener instead.
+    const sends: Array<{ sessionId: string; message: string }> = []
+    bus.subscribe('warm-send-observer', (event: BusEvent) => {
+      if (event.name !== EventNames.SESSION_SEND) return
+      const d = event.data as { sessionId: string; message: string }
+      sends.push({ sessionId: d.sessionId, message: d.message })
+    }, { global: true, interest: [EventNames.SESSION_SEND] })
+
+    // Nothing to warm before the drawer has prewarmed a standby.
+    let res = await post(`/api/sessions/${warmParent}/side-threads/standby/warm`)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ warmed: false, reason: 'no_standby' })
+
+    // The prewarm route answers before the fork lands (fire-and-forget spawn).
+    await post(`/api/sessions/${warmParent}/side-threads/standby`)
+    let standby: SessionStartEvent | undefined
+    for (let i = 0; i < 100 && !standby; i++) {
+      standby = started.find((s) => s.lane === `side:${warmParent}:standby`)
+      if (!standby) await new Promise((r) => setTimeout(r, 20))
+    }
+    expect(standby?.preassignedSessionId).toBeTruthy()
+
+    res = await post(`/api/sessions/${warmParent}/side-threads/standby/warm`)
+    expect(await res.json()).toEqual({ warmed: true })
+    expect(sends).toEqual([{ sessionId: standby!.preassignedSessionId, message: CACHE_WARMUP_MESSAGE }])
+
+    res = await post(`/api/sessions/${warmParent}/side-threads/standby/warm`)
+    expect(await res.json()).toEqual({ warmed: true, reason: 'already_warm' })
+    expect(sends).toHaveLength(1)
+    bus.unsubscribe('warm-send-observer')
+  })
+
   it('400s an empty question', async () => {
     const res = await post(`/api/sessions/${PARENT}/side-threads`, { question: '   ' })
     expect(res.status).toBe(400)
@@ -137,6 +185,37 @@ describe('side-thread routes', () => {
     expect(body.sessions.map((s) => s.claudeSessionId)).not.toContain(thread.threadSessionId)
   })
 
+  it('sends attached images with the first turn but stores the plain question', async () => {
+    // A real 1x1 PNG — processAndSaveImages decodes every image, so bogus bytes
+    // would be dropped and the assertions below would pass for the wrong reason.
+    const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DAAAADAAEAAQD3AAAAAElFTkSuQmCC'
+    // Its own parent: PARENT may hold a prewarmed standby from the test above, and
+    // a CONSUMED standby delivers the question through the send queue instead of
+    // the spawn, which would make the message assertion order-dependent.
+    const imgParent = '88888888-8888-4888-8888-888888888888'
+    await createSessionRecord(imgParent, '', 'proj', '/repo/walnut', {
+      outputFile: '/tmp/streams/img.jsonl',
+    })
+    const question = 'what is wrong with this screenshot?'
+
+    const res = await post(`/api/sessions/${imgParent}/side-threads`, {
+      question,
+      images: [{ data: PNG_1X1, mediaType: 'image/png' }],
+    })
+    expect(res.status).toBe(200)
+    const { thread } = await res.json() as { thread: { id: string; threadSessionId: string } }
+
+    // The CLI gets the paths to Read, then the user's words.
+    const spawn = started.find((s) => s.preassignedSessionId === thread.threadSessionId)
+    expect(spawn?.message).toContain('Read this file')
+    expect(spawn?.message.endsWith(question)).toBe(true)
+
+    // The stored row does NOT: it is what the chip label and a promoted task read.
+    const view = await (await fetch(apiUrl(`/api/sessions/${imgParent}/side-threads`)))
+      .json() as { threads: Array<{ id: string; question?: string }> }
+    expect(view.threads.find((t) => t.id === thread.id)?.question).toBe(question)
+  })
+
   it('409s fork_unsupported for an engine without --fork-session', async () => {
     const codexSid = '55555555-5555-4555-8555-555555555555'
     await createSessionRecord(codexSid, '', 'proj', '/repo/walnut', {
@@ -147,7 +226,7 @@ describe('side-thread routes', () => {
     expect(await res.json()).toEqual({ error: 'fork_unsupported' })
   })
 
-  it('promotes a thread into a SUBTASK and un-hides the session', async () => {
+  it('promotes a thread into a SIBLING task in the parent task folder, and un-hides the session', async () => {
     const parentTask = await addTask({ title: 'parent task', category: 'Inbox' })
     const taskedParent = '66666666-6666-4666-8666-666666666666'
     await createSessionRecord(taskedParent, parentTask.task.id, 'proj', '/repo/walnut', {
@@ -164,9 +243,13 @@ describe('side-thread routes', () => {
     )
     expect(promoteRes.status).toBe(200)
     const promoted = await promoteRes.json() as {
-      taskId: string; parentTaskId?: string; sessionId: string
+      taskId: string; siblingOfTaskId?: string; groupId?: string; sessionId: string
+      parentTaskId?: string
     }
-    expect(promoted.parentTaskId).toBe(parentTask.task.id)
+    expect(promoted.siblingOfTaskId).toBe(parentTask.task.id)
+    expect(promoted.groupId).toBeTruthy()
+    // parent_task_id semantics are gone from this route entirely.
+    expect(promoted.parentTaskId).toBeUndefined()
     expect(promoted.sessionId).toBe(thread.threadSessionId)
 
     // The fork is now an ordinary session: task linked, lane gone.
@@ -176,17 +259,59 @@ describe('side-thread routes', () => {
 
     const taskRes = await fetch(apiUrl(`/api/tasks/${promoted.taskId}`))
     const { task } = await taskRes.json() as {
-      task: { title: string; parent_task_id?: string; session_ids?: string[]; exec_session_id?: string }
+      task: {
+        title: string; parent_task_id?: string; group_id?: string
+        session_ids?: string[]; exec_session_id?: string
+      }
     }
-    expect(task.title).toBe('Split the reaper')
-    expect(task.parent_task_id).toBe(parentTask.task.id)
+    // Fork naming: the thread's own label, then the origin it split off from.
+    expect(task.title.startsWith('Split the reaper')).toBe(true)
+    expect(task.title).toContain(' - fork of ')
+    // A sibling, NOT a subtask: the two tasks have independent lifecycles.
+    expect(task.parent_task_id).toBeUndefined()
+    const sourceRes = await fetch(apiUrl(`/api/tasks/${parentTask.task.id}`))
+    const { task: sourceTask } = await sourceRes.json() as { task: { group_id?: string } }
+    expect(task.group_id).toBeTruthy()
+    expect(sourceTask.group_id).toBe(task.group_id)
+    expect(task.group_id).toBe(promoted.groupId)
     expect(task.session_ids ?? []).toContain(thread.threadSessionId)
     expect(task.exec_session_id).toBe(thread.threadSessionId)
+    // The session's own title follows the task it now belongs to.
+    expect(record?.title).toBe(task.title)
 
-    // Promoted → the store entry records the task, and it leaves the thread list.
+    // Promoted → the store entry records the task.
     const view = await (await fetch(apiUrl(`/api/sessions/${taskedParent}/side-threads`)))
       .json() as { threads: Array<{ id: string; promotedTaskId?: string }> }
     expect(view.threads.find((t) => t.id === thread.id)?.promotedTaskId).toBe(promoted.taskId)
+  })
+
+  it('promotes a thread on a TASKLESS parent into a top-level task with no folder', async () => {
+    const adHocParent = '88888888-8888-4888-8888-888888888888'
+    await createSessionRecord(adHocParent, '', 'proj', '/repo/walnut', {
+      outputFile: '/tmp/streams/adhoc.jsonl',
+    })
+
+    const { thread } = await (await post(`/api/sessions/${adHocParent}/side-threads`, {
+      question: 'is the pipe ever reopened?',
+    })).json() as { thread: { id: string; threadSessionId: string } }
+
+    const promoteRes = await post(
+      `/api/sessions/${adHocParent}/side-threads/${thread.id}/promote`,
+      { title: 'Pipe reopen check' },
+    )
+    expect(promoteRes.status).toBe(200)
+    const promoted = await promoteRes.json() as {
+      taskId: string; siblingOfTaskId?: string; groupId?: string
+    }
+    // Nothing to be a sibling of, so no fork decoration and no folder.
+    expect(promoted.siblingOfTaskId).toBeUndefined()
+    expect(promoted.groupId).toBeUndefined()
+
+    const { task } = await (await fetch(apiUrl(`/api/tasks/${promoted.taskId}`)))
+      .json() as { task: { title: string; parent_task_id?: string; group_id?: string } }
+    expect(task.title).toBe('Pipe reopen check')
+    expect(task.parent_task_id).toBeUndefined()
+    expect(task.group_id).toBeUndefined()
   })
 
   it('409s a SECOND promote of the same thread (one task, ever)', async () => {

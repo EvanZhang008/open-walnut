@@ -7997,6 +7997,7 @@ export class SessionRunner {
     effort?: import('../core/types.js').SessionEffort
     title?: string
     appendSystemPrompt?: string
+    appendSystemPromptExact?: string | null
     host?: string
     fromPlanSessionId?: string
     forkedFromSessionId?: string
@@ -8693,6 +8694,8 @@ export class SessionRunner {
     effort?: import('../core/types.js').SessionEffort
     title?: string
     appendSystemPrompt?: string
+    /** Fork only: the parent's exact append prompt (null = none). See event-types.ts. */
+    appendSystemPromptExact?: string | null
     host?: string
     fromPlanSessionId?: string
     forkedFromSessionId?: string
@@ -8857,17 +8860,50 @@ export class SessionRunner {
     let appendSystemPrompt: string | undefined
     const isFork = !!data.forkedFromSessionId
 
-    // If caller provided an appendSystemPrompt (e.g. custom context), use it.
-    // Skip for forks — Claude Code's --fork-session handles conversation context natively.
-    // Note: plan content is no longer injected here — it's passed as a file path in the message.
-    if (data.appendSystemPrompt && !isFork) {
-      appendSystemPrompt = data.appendSystemPrompt
-      log.session.info('using caller-provided system prompt', { taskId, promptLength: data.appendSystemPrompt.length })
-    }
+    // Side-thread forks reproduce the PARENT's prefix and build nothing of their
+    // own: the system prompt is the first block of the API prefix, so any byte
+    // that differs from what the parent's live process runs with throws away
+    // the parent's whole prompt cache (measured: 195K tokens re-written, 47s to
+    // first text on a 300K parent). The fork carries the parent's exact prompt
+    // (or its explicit absence) in `appendSystemPromptExact`, resolved by
+    // core/sessions/spawn-prefix.ts from the daemon's live argv; a record-only
+    // fallback covers a start emitted without it. A fresh build is never used.
+    const { parseSideLaneKey } = await import('../core/sessions/side-thread-fork.js')
+    const sideIds = parseSideLaneKey(data.lane)
+    if (sideIds) {
+      let exact: string | null | undefined = data.appendSystemPromptExact
+      let source = 'live-or-record'
+      if (exact === undefined) {
+        try {
+          const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+          const { spawnPrefixFromRecord } = await import('../core/sessions/spawn-prefix.js')
+          const parentRecord = await getSessionByClaudeId(sideIds.parentSid)
+          const prefix = parentRecord ? spawnPrefixFromRecord(parentRecord) : null
+          exact = prefix?.appendSystemPrompt ?? null
+          source = prefix?.source ?? 'no-parent-record'
+        } catch (err) {
+          exact = null
+          source = 'lookup-failed'
+          log.session.warn('side thread: parent prompt lookup failed — spawning without an append prompt', {
+            parentSid: sideIds.parentSid, error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
+      appendSystemPrompt = exact ?? undefined
+      log.session.info('side thread: prefix prompt resolved', {
+        parentSid: sideIds.parentSid, source, promptLength: appendSystemPrompt?.length ?? 0,
+      })
+    } else {
+      // If caller provided an appendSystemPrompt (e.g. custom context), use it.
+      // Skip for forks — Claude Code's --fork-session handles conversation context natively.
+      // Note: plan content is no longer injected here — it's passed as a file path in the message.
+      if (data.appendSystemPrompt && !isFork) {
+        appendSystemPrompt = data.appendSystemPrompt
+        log.session.info('using caller-provided system prompt', { taskId, promptLength: data.appendSystemPrompt.length })
+      }
 
-    // Session context (walnut gateway + walnut skill pointer). Task-independent —
-    // every managed session gets it, taskless ones included.
-    {
+      // Session context (walnut gateway + walnut skill pointer). Task-independent —
+      // every managed session gets it, taskless ones included.
       try {
         const { buildSessionContext } = await import('../agent/session-context.js')
         const ctx = await buildSessionContext(taskId ?? '', cwd, data.host)
@@ -8880,43 +8916,6 @@ export class SessionRunner {
         }
       } catch (err) {
         log.session.warn('failed to build session context', { taskId, error: err instanceof Error ? err.message : String(err) })
-      }
-    }
-
-    // Side-thread forks: the system prompt is the FIRST block of the API prefix,
-    // so to reuse the parent's prompt cache it must match BYTE-FOR-BYTE what the
-    // parent's live process runs with — the freshly built context above cannot
-    // (taskless vs task content, drifting skills index). Replace it with the
-    // parent's stored spawn-time prompt when available; a parent from before
-    // this field existed keeps the fresh build (cache miss, self-heals on its
-    // next respawn).
-    {
-      const { parseSideLaneKey } = await import('../core/sessions/side-thread-fork.js')
-      const sideIds = parseSideLaneKey(data.lane)
-      if (sideIds) {
-        try {
-          const { getSessionByClaudeId } = await import('../core/session-tracker.js')
-          const parentRecord = await getSessionByClaudeId(sideIds.parentSid)
-          // Same byte cap as the profile prompt (MAX_PROFILE_PROMPT_BYTES
-          // rationale): the value rides the spawn argv and gets shell-quoted
-          // into an SSH command line for remote hosts — an unbounded read-back
-          // from disk must not become a spawn-failure lever.
-          const inherited = parentRecord?.appliedAppendSystemPrompt
-          if (inherited && Buffer.byteLength(inherited, 'utf8') <= 65536) {
-            appendSystemPrompt = inherited
-            log.session.info('side thread: inherited parent system prompt verbatim', {
-              parentSid: sideIds.parentSid, promptLength: appendSystemPrompt.length,
-            })
-          } else {
-            log.session.info('side thread: parent has no stored system prompt — fresh build (cache prefix will diverge)', {
-              parentSid: sideIds.parentSid,
-            })
-          }
-        } catch (err) {
-          log.session.warn('side thread: parent prompt lookup failed — fresh build', {
-            error: err instanceof Error ? err.message : String(err),
-          })
-        }
       }
     }
 

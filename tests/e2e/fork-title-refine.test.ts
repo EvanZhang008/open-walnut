@@ -55,7 +55,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await stopServer();
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  // The background group-label refine can still be writing its store file
+  // when teardown starts; a lone rm races it and throws ENOTEMPTY.
+  await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
 });
 
 describe('fork title async refinement', () => {

@@ -21,12 +21,14 @@
 import {
   listSideThreads,
   createSideThread as apiCreateSideThread,
+  warmSideThreadStandby,
   promoteSideThread as apiPromoteSideThread,
   deleteSideThread as apiDeleteSideThread,
   prewarmSideThreadStandby,
   isForkUnsupportedError,
   type SideThread,
 } from '@/api/sideThreads';
+import type { ImageAttachment } from '@/api/chat';
 import type { SideQuestion } from '@/api/sideQuestions';
 import { log } from '@/utils/log';
 
@@ -71,6 +73,9 @@ let pendingSeq = 0;
 let openInstanceId: string | null = null;
 
 const PREWARM_THROTTLE_MS = 1_500;
+/** Keystrokes before a new-thread draft counts as intent to ask (the warm-up
+ *  costs a full prefix write on a big parent, so a stray character must not fire it). */
+const WARM_MIN_CHARS = 8;
 
 function notify(): void {
   for (const l of listeners) l();
@@ -233,6 +238,31 @@ export function prewarmSideThread(parentSessionId: string | undefined): void {
   });
 }
 
+/** parentSids whose current standby already got its warm-up request; cleared by
+ *  create (the standby is consumed) so the next standby can be warmed again. */
+const warmRequested = new Set<string>();
+
+/**
+ * Typing-triggered cache warm-up (see api/sideThreads.ts warmSideThreadStandby).
+ * Once per standby cycle; the server is idempotent too, this only saves a request
+ * per keystroke.
+ */
+export function warmSideThreadOnTyping(parentSessionId: string | undefined, draft: string): void {
+  if (!parentSessionId || draft.trim().length < WARM_MIN_CHARS) return;
+  if (warmRequested.has(parentSessionId)) return;
+  warmRequested.add(parentSessionId);
+  warmSideThreadStandby(parentSessionId).then((r) => {
+    log.info('sideThreads', 'standby warm-up requested', { sessionId: parentSessionId, ...r });
+    // Nothing to warm yet (standby still forking): let a later keystroke retry.
+    if (!r.warmed && r.reason === 'no_standby') warmRequested.delete(parentSessionId);
+  }).catch((err) => {
+    warmRequested.delete(parentSessionId);
+    log.warn('sideThreads', 'standby warm-up failed (ignored)', {
+      sessionId: parentSessionId, error: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
+
 export function setActiveSideThread(parentSessionId: string | undefined, threadId: string | null): void {
   if (!parentSessionId) return;
   if (read(parentSessionId).activeThreadId === threadId) return;
@@ -255,10 +285,15 @@ export function clearSideThreadsError(parentSessionId: string | undefined): void
  * Open a new thread with its first question. Optimistic: the chip + active body
  * appear immediately, then the row is replaced by the server's record (which
  * carries the real threadSessionId the transcript renders from).
+ *
+ * `images` ride the create request; the server saves them and annotates their
+ * paths into the thread's FIRST message, while the stored question (and therefore
+ * the chip label) stays the user's plain text.
  */
 export async function createSideThreadOptimistic(
   parentSessionId: string | undefined,
   question: string,
+  images?: ImageAttachment[],
 ): Promise<SideThread | null> {
   const q = question.trim();
   if (!parentSessionId || !q) return null;
@@ -286,7 +321,7 @@ export async function createSideThreadOptimistic(
     // Send the derived label as `title` so the server row carries it too (the
     // create response returns identity fields only, no `question`), and keep the
     // optimistic label/question if an older server echoes neither back.
-    const { thread } = await apiCreateSideThread(parentSessionId, q, label);
+    const { thread } = await apiCreateSideThread(parentSessionId, q, label, images);
     const adopted: SideThread = {
       ...thread,
       title: thread.title ?? label,
@@ -305,6 +340,7 @@ export async function createSideThreadOptimistic(
     // cold — re-arm one now. Throttle bypassed: this trigger means the standby
     // is definitively gone, unlike a re-clicked "+ New".
     lastPrewarmAt.delete(parentSessionId);
+    warmRequested.delete(parentSessionId);
     prewarmSideThread(parentSessionId);
     return adopted;
   } catch (err) {
@@ -323,29 +359,33 @@ export async function createSideThreadOptimistic(
   }
 }
 
-/** Promote a thread into a task. Optimistic ✓ badge, reconciled in the background. */
+/**
+ * Promote a thread into a task: a SIBLING of the parent session's task, filed in
+ * a shared folder (server-side fork semantics). Optimistic ✓ badge, reconciled in
+ * the background; `groupId` comes back only when a folder is involved.
+ */
 export async function promoteSideThreadOptimistic(
   parentSessionId: string | undefined,
   threadId: string,
 ): Promise<void> {
   if (!parentSessionId) return;
-  const mark = (id: string, promotedTaskId: string | undefined) => {
+  const mark = (id: string, promotedTaskId: string | undefined, promotedGroupId?: string) => {
     const cur = read(parentSessionId);
     patch(parentSessionId, {
-      threads: cur.threads.map((t) => (t.id === id ? { ...t, promotedTaskId } : t)),
+      threads: cur.threads.map((t) => (t.id === id ? { ...t, promotedTaskId, promotedGroupId } : t)),
     });
   };
   mark(threadId, PENDING_PROMOTE);
   try {
-    const { taskId } = await apiPromoteSideThread(parentSessionId, threadId);
-    mark(threadId, taskId);
+    const { taskId, groupId } = await apiPromoteSideThread(parentSessionId, threadId);
+    mark(threadId, taskId, groupId);
   } catch (err) {
     const cur = read(parentSessionId);
     const msg = err instanceof Error ? err.message : String(err);
     patch(parentSessionId, {
       threads: cur.threads.map((t) => (
         t.id === threadId && t.promotedTaskId === PENDING_PROMOTE
-          ? { ...t, promotedTaskId: undefined }
+          ? { ...t, promotedTaskId: undefined, promotedGroupId: undefined }
           : t
       )),
       error: `Promote failed: ${msg}`,
@@ -398,6 +438,7 @@ export function __resetSideThreadsStore(): void {
   byParent.clear();
   inflightList.clear();
   lastPrewarmAt.clear();
+  warmRequested.clear();
   openInstanceId = null;
   pendingSeq = 0;
   notify();

@@ -153,6 +153,60 @@ describe('standby prewarm', () => {
   })
 })
 
+describe('warmStandby (typing-triggered cache warm-up)', () => {
+  it('sends the tagged warm-up ONCE to the standby and extends its TTL', async () => {
+    const { CACHE_WARMUP_MESSAGE, consumeWarmupTurn } = await import('../../src/core/sessions/side-thread-warmup.js')
+    const standby = await sideThreadManager.ensureStandby(PARENT)
+
+    expect(await sideThreadManager.warmStandby(PARENT)).toEqual({ warmed: true })
+    expect(mocks.sendMessageToSession).toHaveBeenCalledTimes(1)
+    expect(mocks.sendMessageToSession).toHaveBeenCalledWith(
+      standby, CACHE_WARMUP_MESSAGE, { source: 'side-thread-warmup' })
+    // The observability sentinel must not file "turn lost" for the hidden reply.
+    expect(consumeWarmupTurn(standby!)).toBe(true)
+
+    // A second keystroke burst is a no-op: the cache is already populated.
+    expect(await sideThreadManager.warmStandby(PARENT)).toEqual({ warmed: true, reason: 'already_warm' })
+    expect(mocks.sendMessageToSession).toHaveBeenCalledTimes(1)
+
+    // Warmed standby outlives the plain 2-min TTL (the user is mid-sentence).
+    await vi.advanceTimersByTimeAsync(120_000)
+    await settle()
+    expect(mocks.terminateSession).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(15 * 60_000)
+    await settle()
+    expect(mocks.terminateSession).toHaveBeenCalledWith(standby, { force: true })
+  })
+
+  it('does nothing without a standby', async () => {
+    expect(await sideThreadManager.warmStandby(PARENT)).toEqual({ warmed: false, reason: 'no_standby' })
+    expect(mocks.sendMessageToSession).not.toHaveBeenCalled()
+    expect(started).toHaveLength(0)
+  })
+
+  it('refuses to warm a standby the parent has moved past', async () => {
+    await sideThreadManager.ensureStandby(PARENT)
+    vi.setSystemTime(new Date('2026-08-31T10:00:05.000Z'))
+    await updateSessionRecord(PARENT, { consumedOffset: 4321 })
+
+    expect(await sideThreadManager.warmStandby(PARENT)).toEqual({ warmed: false, reason: 'stale' })
+    expect(mocks.sendMessageToSession).not.toHaveBeenCalled()
+  })
+
+  it('a consumed warm standby forgets its warmed state so the next one warms again', async () => {
+    const first = await sideThreadManager.ensureStandby(PARENT)
+    await sideThreadManager.warmStandby(PARENT)
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'q' })
+    expect(thread.threadSessionId).toBe(first)
+
+    const second = await sideThreadManager.ensureStandby(PARENT)
+    expect(second).not.toBe(first)
+    expect(await sideThreadManager.warmStandby(PARENT)).toEqual({ warmed: true })
+    // warm-up #1, the question, warm-up #2
+    expect(mocks.sendMessageToSession).toHaveBeenCalledTimes(3)
+  })
+})
+
 describe('createThread', () => {
   it('consumes the standby: lane re-pointed, TTL cancelled, question sent', async () => {
     const standby = await sideThreadManager.ensureStandby(PARENT)

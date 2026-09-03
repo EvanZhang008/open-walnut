@@ -1974,19 +1974,49 @@ sessionsRouter.post('/:sessionId/side-threads/standby', async (req: Request, res
   }
 })
 
+// POST /api/sessions/:sessionId/side-threads/standby/warm — the user started
+// typing a question: run the standby's cache warm-up turn now so the question
+// itself lands as a cached follow-up (see core/sessions/side-thread-warmup.ts).
+sessionsRouter.post('/:sessionId/side-threads/standby/warm', async (req: Request, res: Response) => {
+  if (refuseSideThreadsOnReplica(res)) return
+  const sessionId = String(req.params.sessionId)
+  try {
+    const { sideThreadManager } = await import('../../core/sessions/side-thread-manager.js')
+    res.json(await sideThreadManager.warmStandby(sessionId))
+  } catch (err) {
+    log.web.warn('side thread standby warm-up failed', {
+      sessionId, error: err instanceof Error ? err.message : String(err),
+    })
+    res.json({ warmed: false, reason: 'error' })
+  }
+})
+
 // POST /api/sessions/:sessionId/side-threads — open a thread and ask in it
 sessionsRouter.post('/:sessionId/side-threads', async (req: Request, res: Response, next: NextFunction) => {
   if (refuseSideThreadsOnReplica(res)) return
   try {
-    const { question, title } = (req.body ?? {}) as { question?: unknown; title?: unknown }
+    const { question, title, images } = (req.body ?? {}) as {
+      question?: unknown
+      title?: unknown
+      images?: ImagePayload[]
+    }
     if (!question || typeof question !== 'string' || !question.trim()) {
       res.status(400).json({ error: 'question (non-empty string) is required' })
       return
+    }
+    // Attached images: saved to disk + annotated as paths to Read (same flow as
+    // /fork and quick-start). Rides the MESSAGE only — the thread row keeps the
+    // plain question, so the chip label stays the user's words.
+    let imageContext = ''
+    if (images && images.length > 0) {
+      const processed = await processAndSaveImages(images)
+      if (processed) imageContext = buildSessionImageContext(processed.savedImages)
     }
     const { sideThreadManager } = await import('../../core/sessions/side-thread-manager.js')
     const thread = await sideThreadManager.createThread(String(req.params.sessionId), {
       question,
       ...(typeof title === 'string' && title.trim() ? { title } : {}),
+      ...(imageContext ? { imageContext } : {}),
     })
     res.json({ thread })
   } catch (err) {
@@ -2007,7 +2037,8 @@ sessionsRouter.post('/:sessionId/side-threads/:threadId/promote', async (req: Re
     )
     res.json({
       taskId: result.taskId,
-      ...(result.parentTaskId ? { parentTaskId: result.parentTaskId } : {}),
+      ...(result.siblingOfTaskId ? { siblingOfTaskId: result.siblingOfTaskId } : {}),
+      ...(result.groupId ? { groupId: result.groupId } : {}),
       sessionId: result.sessionId,
     })
   } catch (err) {

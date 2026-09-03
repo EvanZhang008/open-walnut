@@ -164,6 +164,40 @@ describe('readSessionHistory', () => {
     ]);
   });
 
+  it('hides the side-thread cache warm-up exchange (tagged user line + its one-word reply)', async () => {
+    // The drawer warms a standby fork's prompt cache while the user is still
+    // typing; that exchange is plumbing and must never render as a "You: <tag>"
+    // bubble followed by a stray "Ready." from the assistant.
+    const { CACHE_WARMUP_MESSAGE } = await import('../../src/core/sessions/side-thread-warmup.js');
+    await writeJsonl('s-warmup', '/test', [
+      { type: 'user', timestamp: '2025-01-01T00:00:00Z', uuid: 'uuid-warm', message: { role: 'user', content: CACHE_WARMUP_MESSAGE } },
+      msg('a-warm', 'assistant', 'Ready.'),
+      msg('u1', 'user', 'why does hasPipe flip?'),
+      msg('a1', 'assistant', 'Because attach() never set it.'),
+    ]);
+
+    const messages = await readSessionHistory('s-warmup', '/test');
+    expect(messages.map(m => m.text)).toEqual([
+      'why does hasPipe flip?',
+      'Because attach() never set it.',
+    ]);
+  });
+
+  it('keeps a warm-up reply that ran tools (it is real work, not the one-word ack)', async () => {
+    const { CACHE_WARMUP_MESSAGE } = await import('../../src/core/sessions/side-thread-warmup.js');
+    await writeJsonl('s-warmup-tools', '/test', [
+      { type: 'user', timestamp: '2025-01-01T00:00:00Z', uuid: 'uuid-warm', message: { role: 'user', content: CACHE_WARMUP_MESSAGE } },
+      { type: 'assistant', timestamp: '2025-01-01T00:00:01Z', uuid: 'uuid-a', message: { id: 'a-tool', role: 'assistant', content: [
+        { type: 'text', text: 'Checking first.' },
+        { type: 'tool_use', id: 'tu1', name: 'Read', input: { file_path: '/x' } },
+      ] } },
+    ]);
+
+    const messages = await readSessionHistory('s-warmup-tools', '/test');
+    expect(messages.map(m => m.role)).toEqual(['assistant']);
+    expect(messages[0].tools?.length).toBe(1);
+  });
+
   it('stamps bgTaskFinished on the parent Agent tool from its task-notification (and extracts async agentId)', async () => {
     // The hidden <task-notification> carries <tool-use-id> — the ONLY archival
     // proof that a background agent's streamed lane blocks can be cleared

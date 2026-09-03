@@ -65,6 +65,13 @@ export interface SessionStartEvent {
   project?: string;
   title?: string;
   appendSystemPrompt?: string;
+  /**
+   * FORK ONLY (core/sessions/spawn-prefix.ts): the parent's exact
+   * `--append-system-prompt`, or null when the parent runs without one. When
+   * set, the runner passes it verbatim and skips its own context build so the
+   * fork's first API call reuses the parent's prompt cache.
+   */
+  appendSystemPromptExact?: string | null;
   fromPlanSessionId?: string;
   forkedFromSessionId?: string;
   /**

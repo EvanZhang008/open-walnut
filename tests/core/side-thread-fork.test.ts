@@ -21,6 +21,13 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-side-fork'))
 
+/** The daemon's answer to `status {includeArgs}` for the parent: null = no live
+ *  argv (old daemon / dead process / not connected). Set per test. */
+let liveArgs: string[] | null = null
+vi.mock('../../src/providers/daemon-connection.js', () => ({
+  probeDaemonSessionArgs: async () => liveArgs,
+}))
+
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js'
 import { WALNUT_HOME } from '../../src/constants.js'
 import { createSessionRecord, getSessionByClaudeId } from '../../src/core/session-tracker.js'
@@ -37,6 +44,7 @@ let started: SessionStartEvent[] = []
 beforeEach(async () => {
   bus.clear()
   started = []
+  liveArgs = null
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
   await fsp.mkdir(WALNUT_HOME, { recursive: true })
   const [sessionDb, sessionTracker] = await Promise.all([
@@ -133,6 +141,44 @@ describe('forkSideThreadSession', () => {
     await forkSideThreadSession(PARENT, 'sth-bundle')
     expect(started[0]!.effort).toBe('high')
     expect(started[0]!.profile).toEqual({ systemPrompt: 'be terse' })
+  })
+
+  it('copies the parent LIVE argv prefix (append prompt, model, effort) and backfills the record', async () => {
+    await seedParent({ effort: 'high' })
+    liveArgs = [
+      'claude', '-p', '--model', 'global.anthropic.claude-fable-5[1m]', '--effort', 'max',
+      '--append-system-prompt', 'the parent exact bytes', '--resume', PARENT,
+    ]
+    await forkSideThreadSession(PARENT, 'sth-live')
+    const start = started[0]!
+    expect(start.appendSystemPromptExact).toBe('the parent exact bytes')
+    // Live argv wins over the record's cliModel/effort: it IS the running prefix.
+    expect(start.model).toBe('global.anthropic.claude-fable-5[1m]')
+    expect(start.effort).toBe('max')
+    const thread = await getSessionByClaudeId(start.preassignedSessionId!)
+    expect(thread?.appliedAppendSystemPrompt).toBe('the parent exact bytes')
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    expect((await getSessionByClaudeId(PARENT))?.appliedAppendSystemPrompt).toBe('the parent exact bytes')
+  })
+
+  it('spawns WITHOUT an append prompt when the parent live process has none', async () => {
+    // A parent cold-resumed by an older server remembers a prompt its process
+    // no longer runs with; copying the record would bust the cache.
+    await seedParent({ appliedAppendSystemPrompt: 'stale' })
+    await (await import('../../src/core/session-tracker.js')).updateSessionRecord(PARENT, { appliedAppendSystemPrompt: 'stale' })
+    liveArgs = ['claude', '-p', '--model', 'opus[1m]', '--resume', PARENT]
+    await forkSideThreadSession(PARENT, 'sth-none')
+    expect(started[0]!.appendSystemPromptExact).toBeNull()
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    expect((await getSessionByClaudeId(PARENT))?.appliedAppendSystemPrompt).toBe('')
+  })
+
+  it('falls back to the record prompt when the daemon has no live argv', async () => {
+    await seedParent()
+    await (await import('../../src/core/session-tracker.js')).updateSessionRecord(PARENT, { appliedAppendSystemPrompt: 'from record' })
+    await forkSideThreadSession(PARENT, 'sth-record')
+    expect(started[0]!.appendSystemPromptExact).toBe('from record')
+    expect(started[0]!.model).toBe('opus[1m]')
   })
 
   it('walks ONE hop up when the parent never ran a turn', async () => {

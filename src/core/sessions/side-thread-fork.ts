@@ -138,6 +138,14 @@ export async function forkSideThreadSession(
   // Same inheritance rule as forkSessionToTask.
   const mode = parent.mode !== 'default' ? parent.mode : undefined;
 
+  // The rest of the prefix (append prompt, model, effort) is copied from the
+  // parent's LIVE process argv when the daemon can tell us, else from the
+  // record. Never rebuilt: see spawn-prefix.ts for the measured cost.
+  const { readParentSpawnPrefix } = await import('./spawn-prefix.js');
+  const prefix = await readParentSpawnPrefix(parent);
+  const cliModel = prefix.model ?? parent.cliModel;
+  const effort = prefix.effort ?? parent.effort;
+
   // Seed the record BEFORE the spawn — the client gets this id in its HTTP
   // response and its first read must not 404 (same contract as every fork).
   // taskId '' is the repo-wide "no task" sentinel and is LOAD-BEARING here: a
@@ -149,8 +157,10 @@ export async function forkSideThreadSession(
     // The thread inherits the parent's launch bundle verbatim, re-applied from
     // the record on every cold resume.
     ...(parent.profile ? { profile: parent.profile } : {}),
-    ...(parent.effort ? { effort: parent.effort } : {}),
-    ...(parent.cliModel ? { cliModel: parent.cliModel } : {}),
+    ...(effort ? { effort } : {}),
+    ...(cliModel ? { cliModel } : {}),
+    // '' = the parent runs without an append prompt, and so does the thread.
+    appliedAppendSystemPrompt: prefix.appendSystemPrompt ?? '',
     lane,
     forkedFromSessionId: resumeFrom,
     initialProcessStatus: 'idle',
@@ -167,17 +177,19 @@ export async function forkSideThreadSession(
     ...(mode ? { mode } : {}),
     ...(parent.host ? { host: parent.host } : {}),
     ...(parent.profile ? { profile: parent.profile } : {}),
-    ...(parent.effort ? { effort: parent.effort } : {}),
+    ...(effort ? { effort } : {}),
     // Must be `cliModel` (the parent's verbatim --model arg, [1m] marker
     // included): the CLI does NOT inherit a model across --fork-session, and
     // the reported `model` has lost the marker.
-    ...(parent.cliModel ? { model: parent.cliModel } : {}),
+    ...(cliModel ? { model: cliModel } : {}),
+    appendSystemPromptExact: prefix.appendSystemPrompt,
     lane,
     forkedFromSessionId: resumeFrom,
   }, ['session-runner'], { source: 'side-thread-fork' });
 
   log.session.info('side thread: forked', {
     parentSid, threadId, sessionId, resumeFrom, initOnly: !opts?.message,
+    prefixSource: prefix.source, prefixPromptLength: prefix.appendSystemPrompt?.length ?? 0,
   });
 
   return { sessionId, resumeFromSessionId: resumeFrom };

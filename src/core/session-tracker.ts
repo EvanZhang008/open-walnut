@@ -1045,6 +1045,9 @@ export async function createSessionRecord(
     profile?: import('./types.js').SessionProfile;
     /** Marks the session as lane-bound: skipped by capacity + default lists. */
     lane?: string;
+    /** Spawn-time `--append-system-prompt` ('' = launched without one). Seeded
+     *  on creation only; later changes go through updateSessionRecord. */
+    appliedAppendSystemPrompt?: string;
     initialProcessStatus?: SessionRecord['process_status'];
     /** Why the row starts in `initialProcessStatus` (e.g. 'awaiting_spawn' for a
      *  record seeded before its CLI process exists). */
@@ -1174,6 +1177,8 @@ export async function createSessionRecord(
         ...(extra?.effort ? { effort: extra.effort } : {}),
         ...(extra?.profile ? { profile: extra.profile } : {}),
         ...(extra?.lane ? { lane: extra.lane } : {}),
+        ...(extra?.appliedAppendSystemPrompt !== undefined
+          ? { appliedAppendSystemPrompt: extra.appliedAppendSystemPrompt } : {}),
         ...(extra?.engine ? { engine: extra.engine } : {}),
         ...(extra?.acpRuntimeId ? { acpRuntimeId: extra.acpRuntimeId } : {}),
         ...(extra?.acpJournalPath ? { acpJournalPath: extra.acpJournalPath } : {}),

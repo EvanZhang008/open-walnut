@@ -370,6 +370,190 @@ export interface ForkSessionResult {
   host?: string;
 }
 
+export interface ForkSiblingTaskOptions {
+  /** Explicit title (fork's `child_title`). Wins over everything, no refine. */
+  childTitle?: string;
+  /** Specific label already known (a side thread's derived title): title becomes
+   *  `<titlePrefix> - fork of <sourceBaseTitle>` and NO background refine runs. */
+  titlePrefix?: string;
+  /** Text the background title refine summarizes (fork: the fork message;
+   *  promote: the thread's first question). Only used when neither childTitle
+   *  nor titlePrefix is given. */
+  prompt?: string;
+  /** Stored as the task description (promote passes the question). */
+  description?: string;
+  /** Bus `source` tag for TASK_CREATED / TASK_GROUPS_CHANGED emits ('fork' today).
+   *  The background title refine tags its own emits `<source>-title`. */
+  source: string;
+}
+
+/**
+ * Create a SIBLING task of `sourceTaskId` and group the two together: the
+ * shared core of "fork this session" and "promote a side thread". Both are a
+ * person splitting live work off an existing task, so both want the same shape:
+ * an independent task (NOT a subtask, the lifecycles are separate) that the
+ * board shows next to its origin, inside the origin's folder when it has one.
+ *
+ * The new task inherits the source's project, source, pin tier and walnut_agent
+ * flag. Grouping and the two background label refines are best-effort: the task
+ * exists regardless, standalone if grouping failed.
+ */
+export async function createForkSiblingTask(
+  sourceTaskId: string,
+  opts: ForkSiblingTaskOptions,
+): Promise<{ task: Task; groupId?: string }> {
+  const {
+    getTask, addTask, updateTask, groupTasks, addToGroup, renameGroup,
+  } = await import('../task-manager.js');
+
+  let sourceTask: Task;
+  try {
+    sourceTask = await getTask(sourceTaskId);
+  } catch {
+    throw new SessionControlError(`Source task "${sourceTaskId}" not found`, 404);
+  }
+
+  // When the caller didn't supply a title (explicit, or a known label to prefix),
+  // use a plain `Fork of <source>` placeholder now and (below, after addTask)
+  // refine it asynchronously into `<2-4 word summary of the prompt> - fork of <source>`.
+  //
+  // Fork-of-a-fork: strip any existing fork decoration from the source title
+  // first, otherwise titles compound without bound ("X - fork of Y - fork of
+  // Z - …" reached 290+ chars in practice and permanently failed external
+  // sync plugins with title-length limits).
+  const sourceBaseTitle = sourceTask.title
+    .replace(/^Fork of\s+/i, '')
+    .replace(/\s+-\s+fork of\s+.*$/i, '')
+    .trim() || sourceTask.title;
+  const explicitTitle = opts.childTitle
+    || (opts.titlePrefix ? `${opts.titlePrefix} - fork of ${sourceBaseTitle}` : undefined);
+  const autoTitle = !explicitTitle;
+  const newTitle = explicitTitle || `Fork of ${sourceBaseTitle}`;
+  // Inherit the source's TIER in the SAME write as the pin, so a fork of a
+  // Focus task is born in Focus (the old create → setFocusTier pair could
+  // half-land and leave the fork in Satellite). A stored tier the registry no
+  // longer knows is filtered out here rather than failing the fork: replaying
+  // a stale value is exactly the lenient case addTask refuses, and a fork must
+  // never die over the source's leftover tier id.
+  let inheritedTier: string | undefined;
+  if (sourceTask.pinned && sourceTask.focus_tier) {
+    const { getCustomTiers } = await import('../task-manager.js');
+    const known = ['focus', 'backlog', 'wait'].includes(sourceTask.focus_tier)
+      || (await getCustomTiers()).some((t) => t.id === sourceTask.focus_tier);
+    if (known) inheritedTier = sourceTask.focus_tier;
+    else {
+      log.session.warn('fork: source tier is not registered, filing the fork in Satellite', {
+        sourceTaskId: sourceTask.id, tier: sourceTask.focus_tier,
+      });
+    }
+  }
+  // No _skipPluginOps: a fork inherits the source's source (e.g. an external
+  // sync plugin) and must pass the same content validation + push as any
+  // other task. addTask throws on invalid content → surfaced to the caller.
+  const { task: newFork } = await addTask({
+    title: newTitle,
+    project: sourceTask.project || '',
+    source: sourceTask.source,
+    ...(opts.description ? { description: opts.description } : {}),
+    // A fork is a person splitting off live work, so it joins the board like
+    // any other hand-made task (Satellite = pinned, no stored tier).
+    pinned: true,
+    ...(inheritedTier ? { focus_tier: inheritedTier } : {}),
+    // Forking an Ask Walnut conversation yields another Ask Walnut
+    // conversation: without the flag the fork loses the amber marker AND the
+    // persona drift repair (both key on task.walnut_agent, never on project).
+    ...(sourceTask.walnut_agent ? { walnut_agent: true } : {}),
+  });
+  // Visually group the source task + fork. Reuse the source task's existing
+  // group if it already belongs to one. Best-effort: a grouping failure must
+  // not abort the fork — the fork task still exists standalone.
+  let forkGroupId: string | undefined;
+  try {
+    if (sourceTask.group_id) {
+      const r = await addToGroup(sourceTask.group_id, [newFork.id]);
+      forkGroupId = r.group_id;
+    } else {
+      // Seed label with the source title; refined to an AI group name below.
+      const r = await groupTasks([sourceTask.id, newFork.id], sourceTask.title);
+      forkGroupId = r.group_id;
+    }
+  } catch (err) {
+    log.session.warn('fork: failed to group source + fork', {
+      sourceTaskId: sourceTask.id, forkTaskId: newFork.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Emit task:created with the FINAL persisted state, not the stale addTask()
+  // reference: the grouping above mutated a store clone, so `newFork` still
+  // says no group_id. (Pin + tier DO ride the create now, so the re-read is
+  // only about grouping.)
+  let task: Task;
+  try {
+    task = await getTask(newFork.id);
+  } catch {
+    task = newFork; // re-read is best-effort; stale beats no event
+  }
+  bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui', 'main-agent'], { source: opts.source });
+
+  // Refine the auto-generated title in the background: summarize the fork's
+  // new prompt into a few English words → `<words> - fork of <source>`.
+  // Fire-and-forget; failures keep the `Fork of <source>` placeholder.
+  if (autoTitle && opts.prompt?.trim()) {
+    const forkId = newFork.id;
+    const sourceTitle = sourceBaseTitle;
+    const placeholderTitle = newTitle;
+    const prompt = opts.prompt;
+    const titleSource = `${opts.source}-title`;
+    void (async () => {
+      try {
+        const { summarizeForkPrompt } = await import('../fork-title.js');
+        const label = await summarizeForkPrompt(prompt);
+        if (!label) return;
+        // Don't clobber a concurrent user rename: only refine if the title is
+        // still the `Fork of <source>` placeholder we created moments ago.
+        const current = await getTask(forkId);
+        if (current.title !== placeholderTitle) {
+          log.session.info('fork title refine skipped — title changed since fork', { taskId: forkId });
+          return;
+        }
+        const refinedTitle = `${label} - fork of ${sourceTitle}`;
+        const { task: updated } = await updateTask(forkId, { title: refinedTitle }, { source: titleSource });
+        bus.emit(EventNames.TASK_UPDATED, { task: updated }, ['web-ui', 'main-agent'], { source: titleSource });
+        log.session.info('fork title refined', { taskId: forkId, title: refinedTitle });
+      } catch (err) {
+        log.session.warn('fork title refine failed', {
+          taskId: forkId, error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+  }
+
+  // Refine the GROUP name in the background from both task titles (only when
+  // we created a fresh group — an existing group keeps its established name).
+  if (forkGroupId && !sourceTask.group_id) {
+    const gid = forkGroupId;
+    const seedTitles = [sourceTask.title, newTitle];
+    const groupSource = opts.source;
+    void (async () => {
+      try {
+        const { summarizeGroupLabel } = await import('../fork-title.js');
+        const label = await summarizeGroupLabel(seedTitles);
+        if (!label) return;
+        await renameGroup(gid, label);
+        bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: gid, label }, ['web-ui', 'main-agent'], { source: groupSource });
+        log.session.info('fork group label refined', { groupId: gid, label });
+      } catch (err) {
+        log.session.warn('fork group label refine failed', {
+          groupId: gid, error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+  }
+
+  return { task, ...(forkGroupId ? { groupId: forkGroupId } : {}) };
+}
+
 /**
  * Fork a session onto another task (or a freshly-created sibling task).
  * Emits SESSION_START with forkedFromSessionId — session-runner performs the
@@ -391,9 +575,7 @@ export async function forkSessionToTask(
   }
 
   const { getSessionByClaudeId, getSessionsForTask, createSessionRecord } = await import('../session-tracker.js');
-  const {
-    getTask, addTask, updateTask, groupTasks, addToGroup, renameGroup,
-  } = await import('../task-manager.js');
+  const { getTask } = await import('../task-manager.js');
 
   const sourceRecord = await getSessionByClaudeId(sourceSessionId);
   if (!sourceRecord) throw new SessionControlError('Source session not found', 404);
@@ -418,150 +600,18 @@ export async function forkSessionToTask(
 
   if (create_child_task) {
     // Fork = create a SIBLING task and visually group it with the source task
-    // (NOT a parent/subtask — they have independent lifecycles). The new task
-    // inherits the source task's project/source but has NO parent; we then put
-    // both the source task and the fork into a lightweight virtual group
-    // (reusing the source task's existing group if it already has one).
+    // (NOT a parent/subtask — they have independent lifecycles). Shared with
+    // side-thread promote: createForkSiblingTask owns the whole shape.
     if (!sourceRecord.taskId) {
       throw new SessionControlError('Source session has no task — cannot create fork task', 400);
     }
-    let sourceTask: Task;
-    try {
-      sourceTask = await getTask(sourceRecord.taskId);
-    } catch {
-      throw new SessionControlError(`Source task "${sourceRecord.taskId}" not found`, 404);
-    }
-    // When the caller didn't supply an explicit child_title, use a plain
-    // `Fork of <source>` placeholder now and (below, after addTask) refine it
-    // asynchronously into `<2-4 word summary of the fork prompt> - fork of <source>`.
-    //
-    // Fork-of-a-fork: strip any existing fork decoration from the source title
-    // first, otherwise titles compound without bound ("X - fork of Y - fork of
-    // Z - …" reached 290+ chars in practice and permanently failed external
-    // sync plugins with title-length limits).
-    const sourceBaseTitle = sourceTask.title
-      .replace(/^Fork of\s+/i, '')
-      .replace(/\s+-\s+fork of\s+.*$/i, '')
-      .trim() || sourceTask.title;
-    const autoTitle = !child_title;
-    const newTitle = child_title || `Fork of ${sourceBaseTitle}`;
-    // Inherit the source's TIER in the SAME write as the pin, so a fork of a
-    // Focus task is born in Focus (the old create → setFocusTier pair could
-    // half-land and leave the fork in Satellite). A stored tier the registry no
-    // longer knows is filtered out here rather than failing the fork: replaying
-    // a stale value is exactly the lenient case addTask refuses, and a fork must
-    // never die over the source's leftover tier id.
-    let inheritedTier: string | undefined;
-    if (sourceTask.pinned && sourceTask.focus_tier) {
-      const { getCustomTiers } = await import('../task-manager.js');
-      const known = ['focus', 'backlog', 'wait'].includes(sourceTask.focus_tier)
-        || (await getCustomTiers()).some((t) => t.id === sourceTask.focus_tier);
-      if (known) inheritedTier = sourceTask.focus_tier;
-      else {
-        log.session.warn('fork: source tier is not registered, filing the fork in Satellite', {
-          sourceTaskId: sourceTask.id, tier: sourceTask.focus_tier,
-        });
-      }
-    }
-    // No _skipPluginOps: a fork inherits the source's source (e.g. an external
-    // sync plugin) and must pass the same content validation + push as any
-    // other task. addTask throws on invalid content → surfaced to the caller.
-    const { task: newFork } = await addTask({
-      title: newTitle,
-      project: sourceTask.project || '',
-      source: sourceTask.source,
-      // A fork is a person splitting off live work, so it joins the board like
-      // any other hand-made task (Satellite = pinned, no stored tier).
-      pinned: true,
-      ...(inheritedTier ? { focus_tier: inheritedTier } : {}),
-      // Forking an Ask Walnut conversation yields another Ask Walnut
-      // conversation: without the flag the fork loses the amber marker AND the
-      // persona drift repair (both key on task.walnut_agent, never on project).
-      ...(sourceTask.walnut_agent ? { walnut_agent: true } : {}),
+    const created = await createForkSiblingTask(sourceRecord.taskId, {
+      childTitle: child_title,
+      prompt: message,
+      source: 'fork',
     });
-    // Visually group the source task + fork. Reuse the source task's existing
-    // group if it already belongs to one. Best-effort: a grouping failure must
-    // not abort the fork — the fork task still exists standalone.
-    let forkGroupId: string | undefined;
-    try {
-      if (sourceTask.group_id) {
-        const r = await addToGroup(sourceTask.group_id, [newFork.id]);
-        forkGroupId = r.group_id;
-      } else {
-        // Seed label with the source title; refined to an AI group name below.
-        const r = await groupTasks([sourceTask.id, newFork.id], sourceTask.title);
-        forkGroupId = r.group_id;
-      }
-    } catch (err) {
-      log.session.warn('fork: failed to group source + fork', {
-        sourceTaskId: sourceTask.id, forkTaskId: newFork.id,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-
-    // Emit task:created with the FINAL persisted state, not the stale addTask()
-    // reference: the grouping above mutated a store clone, so `newFork` still
-    // says no group_id. (Pin + tier DO ride the create now, so the re-read is
-    // only about grouping.)
-    try {
-      task = await getTask(newFork.id);
-    } catch {
-      task = newFork; // re-read is best-effort; stale beats no event
-    }
-    bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui', 'main-agent'], { source: 'fork' });
+    task = created.task;
     childTaskCreated = true;
-
-    // Refine the auto-generated title in the background: summarize the fork's
-    // new prompt into a few English words → `<words> - fork of <source>`.
-    // Fire-and-forget; failures keep the `Fork of <source>` placeholder.
-    if (autoTitle && message?.trim()) {
-      const forkId = newFork.id;
-      const sourceTitle = sourceBaseTitle;
-      const placeholderTitle = newTitle;
-      void (async () => {
-        try {
-          const { summarizeForkPrompt } = await import('../fork-title.js');
-          const label = await summarizeForkPrompt(message);
-          if (!label) return;
-          // Don't clobber a concurrent user rename: only refine if the title is
-          // still the `Fork of <source>` placeholder we created moments ago.
-          const current = await getTask(forkId);
-          if (current.title !== placeholderTitle) {
-            log.session.info('fork title refine skipped — title changed since fork', { taskId: forkId });
-            return;
-          }
-          const refinedTitle = `${label} - fork of ${sourceTitle}`;
-          const { task: updated } = await updateTask(forkId, { title: refinedTitle }, { source: 'fork-title' });
-          bus.emit(EventNames.TASK_UPDATED, { task: updated }, ['web-ui', 'main-agent'], { source: 'fork-title' });
-          log.session.info('fork title refined', { taskId: forkId, title: refinedTitle });
-        } catch (err) {
-          log.session.warn('fork title refine failed', {
-            taskId: forkId, error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      })();
-    }
-
-    // Refine the GROUP name in the background from both task titles (only when
-    // we created a fresh group — an existing group keeps its established name).
-    if (forkGroupId && !sourceTask.group_id) {
-      const gid = forkGroupId;
-      const seedTitles = [sourceTask.title, newTitle];
-      void (async () => {
-        try {
-          const { summarizeGroupLabel } = await import('../fork-title.js');
-          const label = await summarizeGroupLabel(seedTitles);
-          if (!label) return;
-          await renameGroup(gid, label);
-          bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: gid, label }, ['web-ui', 'main-agent'], { source: 'fork' });
-          log.session.info('fork group label refined', { groupId: gid, label });
-        } catch (err) {
-          log.session.warn('fork group label refine failed', {
-            groupId: gid, error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      })();
-    }
   } else {
     // Look up target task by provided task_id
     try {

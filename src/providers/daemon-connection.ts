@@ -3689,3 +3689,34 @@ export async function probeDaemonSession(
     return null
   }
 }
+
+/**
+ * Read the argv a session's LIVE claude process was launched with, from the
+ * daemon's registry (host-local truth). Returns null when the daemon is not
+ * connected, the session is unknown or dead, or the daemon predates the
+ * `includeArgs` flag (its status reply then simply has no `args`).
+ */
+export async function probeDaemonSessionArgs(
+  hostKey: string,
+  sessionId: string,
+  deadlineMs = 2000,
+): Promise<string[] | null> {
+  const conn = getConnectedDaemonConnection(hostKey)
+  if (!conn) return null
+  try {
+    const result = await Promise.race([
+      conn.send('status', { sid: sessionId, includeArgs: true }),
+      new Promise<never>((_, reject) => setTimeout(
+        () => reject(new Error(`status probe exceeded ${deadlineMs}ms`)), deadlineMs,
+      ).unref?.()),
+    ])
+    if (!result.ok || !result.alive || !Array.isArray(result.args)) return null
+    return (result.args as unknown[]).filter((a): a is string => typeof a === 'string')
+  } catch (err) {
+    log.session.debug('probeDaemonSessionArgs: status probe failed', {
+      hostKey, sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
+}

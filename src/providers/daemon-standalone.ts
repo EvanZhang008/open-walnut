@@ -3881,7 +3881,7 @@ function cmdStop(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, un
 
 // ── Status ──
 function cmdStatus(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
-  const { sid } = cmd as { sid: string }
+  const { sid, includeArgs } = cmd as { sid: string; includeArgs?: boolean }
   if (!sid) return sendError(ws, id, 'status: missing sid')
 
   const session = sessions.get(sid)
@@ -3915,6 +3915,11 @@ function cmdStatus(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
     exitCode: session.exitCode,
     exitReason: session.exitReason,
     pendingCtrl: session.pendingCtrl,
+    // Opt-in: the argv the live process was launched with (a fork copies it to
+    // reproduce the parent's prompt-cache prefix). Off by default because the
+    // health monitor polls status for every session and the argv carries the
+    // multi-KB --append-system-prompt.
+    ...(includeArgs && session.args && session.args.length > 0 ? { args: session.args } : {}),
   })
 }
 

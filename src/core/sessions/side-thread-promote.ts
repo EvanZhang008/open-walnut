@@ -7,17 +7,29 @@
  * do the leak guards (session_list, send targets, frequent dirs, keep-awake, hook
  * dispatch), so a promoted session re-enters all of them for free.
  *
+ * The task it creates is exactly what session Fork creates, because a side thread
+ * IS a fork: a SIBLING of the parent session's task, grouped with it in the parent
+ * task's folder (reusing that folder when it has one). Never a subtask: the two
+ * have independent lifecycles, and the shared shape lives in
+ * session-controls.createForkSiblingTask.
+ *
  * No spawn happens here. The fork's CLI either still runs or cold-`--resume`s on
  * the next send, exactly as any other session does.
  */
 
 import { bus, EventNames } from '../event-bus.js';
-import { SessionControlError } from './session-controls.js';
+import { SessionControlError, createForkSiblingTask } from './session-controls.js';
 import { log } from '../../logging/index.js';
+import type { Task } from '../types.js';
 
 export interface PromoteSideThreadResult {
   taskId: string;
-  parentTaskId?: string;
+  /** The parent session's task the new task was filed NEXT TO (fork semantics).
+   *  Absent when the parent had no task: then it is a top-level Inbox task. */
+  siblingOfTaskId?: string;
+  /** Folder holding both tasks (reused or freshly created). Absent when the
+   *  grouping call failed or there was no sibling to group with. */
+  groupId?: string;
   sessionId: string;
 }
 
@@ -41,21 +53,35 @@ export async function promoteSideThread(
   const threadRecord = await getSessionByClaudeId(sessionId);
   if (!threadRecord) throw new SessionControlError('Side thread session not found', 404);
 
-  // A thread on a session that is working a task becomes that task's SUBTASK
-  // (addTask inherits the parent's project/source); an ad-hoc session's thread
-  // becomes a top-level Inbox task — same rule as the legacy Q&A promote.
+  // A thread on a session that is working a task becomes a SIBLING of that task,
+  // grouped with it (identical to session Fork); an ad-hoc session's thread has
+  // nothing to be a sibling of, so it becomes a top-level Inbox task.
   const parentRecord = await getSessionByClaudeId(parentSid);
-  const parentTaskId = parentRecord?.taskId?.trim() || undefined;
-  const title = opts?.title?.trim() || entry.title?.trim() || entry.question;
+  const siblingOfTaskId = parentRecord?.taskId?.trim() || undefined;
+  const threadLabel = opts?.title?.trim() || entry.title?.trim() || undefined;
 
   const { addTask, linkSession, linkSessionSlot } = await import('../task-manager.js');
-  const { task } = await addTask({
-    title,
-    description: entry.question,
-    ...(parentTaskId ? { parent_task_id: parentTaskId } : {}),
-    // A person clicked "promote" — same board default as any hand-made task.
-    pinned: true,
-  });
+  let groupId: string | undefined;
+  let task: Task;
+  if (siblingOfTaskId) {
+    const created = await createForkSiblingTask(siblingOfTaskId, {
+      // A known label short-circuits the background refine; without one the
+      // thread's first question is what gets summarized (same as a fork's message).
+      titlePrefix: threadLabel,
+      prompt: entry.question,
+      description: entry.question,
+      source: 'side-thread-promote',
+    });
+    task = created.task;
+    groupId = created.groupId;
+  } else {
+    ({ task } = await addTask({
+      title: threadLabel || entry.question,
+      description: entry.question,
+      // A person clicked "promote" — same board default as any hand-made task.
+      pinned: true,
+    }));
+  }
 
   // Stamp BEFORE the record update: the 409 guard above keys off this stamp, so
   // a partial failure below must leave the guard armed — a retry after a failed
@@ -73,7 +99,7 @@ export async function promoteSideThread(
     project: task.project ?? '',
     // Clearing the lane un-hides the session (see the file header).
     lane: undefined,
-    title,
+    title: task.title,
   });
   // Sync the LIVE instance: the runner echoes its in-memory lane on every turn
   // result, so without this a still-running thread re-hides itself the moment
@@ -98,11 +124,14 @@ export async function promoteSideThread(
     });
   }
 
-  log.session.info('side thread: promoted to task', { parentSid, threadId, sessionId, taskId: task.id });
+  log.session.info('side thread: promoted to task', {
+    parentSid, threadId, sessionId, taskId: task.id, siblingOfTaskId, groupId,
+  });
 
   return {
     taskId: task.id,
-    ...(task.parent_task_id ? { parentTaskId: task.parent_task_id } : {}),
+    ...(siblingOfTaskId ? { siblingOfTaskId } : {}),
+    ...(groupId ? { groupId } : {}),
     sessionId,
   };
 }
