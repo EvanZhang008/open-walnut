@@ -26,6 +26,7 @@
 #   scripts/walnut-logs.sh metrics [pfx] [mins] windowed latency histograms (http/llm/tool/search/eventloop; prefix filter, default 60min; live: GET /api/metrics)
 #   scripts/walnut-logs.sh ttft [sid] [mins]    ⭐ time-to-first-text per turn: turn wide-event firstThinking/Text/Tool + per-layer first-emit/arrival lines — attributes "text shows late" to model vs pipeline
 #   scripts/walnut-logs.sh errors [n]           last n ERR/WARN lines (default 40)
+#   scripts/walnut-logs.sh desktop [mins]       ⭐ Mac app page-process memory curve + recycles/crashes (default 24h) — "Mac app laggy?" starts here
 #   scripts/walnut-logs.sh grep <pattern>       raw grep across today's JSON log
 #   scripts/walnut-logs.sh tail [n]             follow the live JSON log (n lines back, default 40)
 #
@@ -487,6 +488,30 @@ PY
         "\(.time[11:23]) [\(.subsystem)] \(.message)\(if .sinceTurnStartMs != null then " +\(.sinceTurnStartMs)ms" else "" end) sid=\(($rowSid // "?")[0:8])"'
     echo ""
     echo "(daemon-side 'ttft:' lines live on the exec host's daemon log — see: $0 daemon <sid>)"
+    ;;
+
+  desktop)
+    # desktop [mins] — what the Mac app shell reports about its page process
+    # (desktop/WebContentWatchdog.swift → POST /api/browser-logs, subsystem=desktop):
+    # a footprint sample every 5 min (every level change at once), every
+    # recycle with its reason, every recycle held back and why, every crash.
+    # Reading: a curve that climbs past 'high' into 'critical' without a
+    # 'recycled' line means the idle gate never opened (user_active) or the
+    # hourly budget ran out (rate_limited) — both are logged as 'held back'.
+    # The shell's own copy lives in ~/Library/Application Support/Walnut/desktop.log.
+    mins="${1:-1440}"
+    if [[ "$mins" == "0" ]]; then since="1970-01-01T00:00:00Z"; else
+      since=$(date -u -v "-${mins}M" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date -u -d "-${mins} minutes" '+%Y-%m-%dT%H:%M:%S')
+    fi
+    logs=$(recent_logs); [[ -n "$logs" ]] || die "no JSON log found in $LOG_DIR"
+    echo "── Mac app page process (subsystem=desktop; last ${mins}min; UTC) ──"
+    # shellcheck disable=SC2086
+    cat $logs | grep -aF '"subsystem":"desktop"' | jq -r --arg since "$since" '
+      select(.time >= $since) |
+      (try (.args | fromjson) catch {}) as $a |
+      "\(.time[11:19]) \(.level[0:4]|ascii_upcase) \(($a.footprintMB // "?")|tostring|.+"MB"|.[0:7]) \(($a.level // "-")|.[0:8]) age=\(($a.processAgeMin // "?")|tostring)m idle=\(($a.idleSec // "?")|tostring)s vis=\(($a.visible // "?")|tostring|.[0:1]) pid=\(($a.pid // "?")|tostring) \(.message|sub("^\\[webcontent\\] ";""))\(if $a.reason then " reason=\($a.reason)" else "" end)\(if $a.why then " why=\($a.why)" else "" end)"'
+    echo ""
+    echo "(shell-side log: ~/Library/Application\\ Support/Walnut/desktop.log — events webcontent_sample / webcontent_recycled / webcontent_recycle_suppressed / webcontent_terminated)"
     ;;
 
   grep)

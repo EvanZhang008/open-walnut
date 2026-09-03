@@ -12,6 +12,7 @@ import { ConfirmProvider } from './hooks/useConfirm';
 import { initAppInfo } from './utils/app-info';
 import { initBrowserLogger } from './utils/browser-logger';
 import { initLongTaskMonitor } from './utils/longtask-monitor';
+import { initInputLatencyMonitor } from './utils/input-latency-monitor';
 import { initMainThreadTracer, startPhase, endPhase, tracePhase } from './utils/main-thread-tracer';
 import { initUiPrefsSync } from './utils/ui-prefs-sync';
 import { selectionIntersects } from './utils/selection-guard';
@@ -19,6 +20,7 @@ import { initSessionStatusStore } from './stores/init-session-status-store';
 import { installGlobalAutofillSuppression } from './utils/no-autofill';
 import { installEscapeBeepGuard } from './utils/escape-beep-guard';
 import { initStaleAssetRecovery } from './utils/stale-assets';
+import { installDesktopBridge } from './utils/desktop-bridge';
 import { initWebPlugins } from './plugins/loader';
 import { installPluginHostRuntime } from './plugins/runtime';
 import './styles/globals.css';
@@ -36,12 +38,18 @@ initLongTaskMonitor();
 // Firefox has no `longtask` observer — the lag-sampler tracer covers it and
 // attributes blocks to the boot/render phases active at the time.
 initMainThreadTracer();
+// Keystroke → paint latency per 30s window, tagged mac-app vs browser, so
+// "typing feels laggy" is a number in the server log, not a description.
+initInputLatencyMonitor();
 // Cache server version/mode for crash reports (survives to server-down crashes).
 initAppInfo();
 // A deploy wipes the hashed assets this tab was built against, so its next
 // code-split import silently dies (that is how a .go file lost its syntax
 // colors mid-session). Reload once the tab has no unsaved text.
 initStaleAssetRecovery();
+// The Mac app shell asks this before it swaps the page process for a fresh one
+// (memory watchdog / newer bundle), so it applies the same unsaved-text rule.
+installDesktopBridge();
 // No login form anywhere in Walnut — suppress password-manager autofill popups
 // (iCloud Passwords etc.) on every input/textarea, present and future.
 installGlobalAutofillSuppression();

@@ -597,8 +597,41 @@ done
 # out of an older stage — safe to reap them all. (Reaping earlier would yank
 # static files out from under the still-running prod server; failed deploys
 # exit before reaching here and leave old stages alone.)
+#
+# "Dead" above is a conclusion drawn from lsof/ss and pgrep. On 2026-09-02 that
+# conclusion was wrong and this loop deleted the stage of the LIVE :3456 server:
+# node had cli.js in memory, so the API kept answering while every web asset
+# 404ed (`ENOENT … /dist/web/static/index.html`) for four hours, which reached
+# the user as "the Mac app is laggy". The static root is per-request state, so
+# nothing recovers it — the only fix is to never delete a directory a running
+# process is executing from. Ask the process table directly, per stage.
+# Matched on the stage's BASENAME, never its full path: TMPDIR here ends in a
+# slash, so a server's own command line reads `…/T//open-walnut-stage.X/dist/cli.js`
+# (double slash) and `/private/var/…` vs `/var/…` differ by a symlink too — a
+# full-path substring test looked correct and matched NOTHING, which is how this
+# guard would have failed silently exactly when it was needed. The basename
+# (`open-walnut-stage.<epoch>.<pid>`) is unique per deploy.
+stage_has_live_process() {
+  local stage="$1" spid cmd base
+  base="$(basename "$stage")"
+  for spid in $(pgrep -f 'dist/cli\.js' 2>/dev/null || true); do
+    [[ -n "$spid" ]] || continue
+    cmd="$(ps -o command= -p "$spid" 2>/dev/null || true)"
+    if [[ "$cmd" == *"$base/dist/cli.js"* ]]; then
+      echo "$spid"
+      return 0
+    fi
+  done
+  return 1
+}
+
 for old_stage in "$STAGE_ROOT"/open-walnut-stage.*; do
   if [[ ! -d "$old_stage" || "$old_stage" == "$STAGE_DIR" ]]; then
+    continue
+  fi
+  live_pid="$(stage_has_live_process "$old_stage" || true)"
+  if [[ -n "$live_pid" ]]; then
+    echo "Keeping stage $old_stage: PID $live_pid is still running from it." >&2
     continue
   fi
   rm -rf "$old_stage" 2>/dev/null || true
@@ -845,6 +878,24 @@ if [[ "$ready" != "1" ]]; then
   rollback_to_lkg
   exit 1
 fi
+
+# /api/config answers out of memory; it says nothing about whether the web app
+# can be LOADED. 2026-09-02: the live server's staged dist was deleted under it,
+# so `/` and every hashed asset 404ed while /api/config stayed green — the app
+# only kept working in already-open windows, and a reload would have shown a raw
+# ENOENT. Prove the SPA entry is servable, and name the static root when it is
+# not (that is the whole diagnosis).
+index_html="$(curl --connect-timeout 1 --max-time 5 -sf "http://localhost:$PORT/" 2>/dev/null || true)"
+case "$index_html" in
+  *"<script"*"assets/index-"*) ;;
+  *)
+    stop_new_server
+    echo "Server answers /api/config but cannot serve the web app from $STAGE_DIR/dist/web/static." >&2
+    echo "First 200 bytes of GET /: ${index_html:0:200}" >&2
+    rollback_to_lkg
+    exit 1
+    ;;
+esac
 
 if ! snapshot_lkg; then
   echo "Warning: last-known-good snapshot failed; rollback will use the previous one." >&2

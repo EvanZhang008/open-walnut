@@ -28,6 +28,23 @@ interface BrowserLogEntry {
   args?: string
   url?: string
   count?: number
+  /** Who is speaking. Default (and anything unknown) is the browser. */
+  subsystem?: string
+  /** 'mac-app' when the page runs inside the desktop shell. */
+  client?: string
+}
+
+/**
+ * The Mac app shell (desktop/WebContentWatchdog.swift) posts its page-process
+ * footprint samples and recycle events through the REST path below, tagged
+ * `desktop` so `walnut-logs.sh desktop` can pull the curve out of the shared
+ * log. An allowlist, not free text: the subsystem is a filter key, and a typo
+ * here would hide entries from everyone.
+ */
+const ENTRY_SUBSYSTEMS = new Set(['browser', 'desktop'])
+
+function entrySubsystem(entry: BrowserLogEntry): string {
+  return entry.subsystem && ENTRY_SUBSYSTEMS.has(entry.subsystem) ? entry.subsystem : 'browser'
 }
 
 // ── Rate limiting ──
@@ -82,11 +99,12 @@ function writeEntries(entries: BrowserLogEntry[]): void {
     if (entry.args) meta.args = truncate(entry.args, 1000)
     if (entry.url) meta.url = entry.url
     if (entry.count && entry.count > 1) meta.count = entry.count
+    if (entry.client === 'mac-app') meta.client = entry.client
 
     writeLogEntry({
       time: entry.time,
       level: mapLevel(entry.level),
-      subsystem: 'browser',
+      subsystem: entrySubsystem(entry),
       message: truncate(entry.message, 2000),
       browserLevel: entry.level, // preserve original level (e.g. 'log' vs 'info')
       ...meta,

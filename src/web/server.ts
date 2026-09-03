@@ -24,7 +24,7 @@ import { sessionsRouter } from './routes/sessions.js'
 import { searchRouter } from './routes/search.js'
 import { searchAgentRouter } from './routes/search-agent.js'
 import { memoryRouter } from './routes/memory.js'
-import { configRouter } from './routes/config.js'
+import { configRouter, setStaticRootReporter } from './routes/config.js'
 import { backupRouter, setBackupScheduler } from './routes/backup.js'
 import { projectsRouter } from './routes/projects.js'
 import { favoritesRouter } from './routes/favorites.js'
@@ -1623,6 +1623,30 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       return path.join(process.cwd(), 'dist', 'web', 'static')
     })()
     app.use(express.static(staticDir))
+    // The static root can DISAPPEAR under a running server: deploys boot from a
+    // staged copy under TMPDIR, and on 2026-09-02 a later deploy's reap loop
+    // deleted the live server's stage. cli.js was already in memory, so the API
+    // stayed green while `/` and every hashed asset answered ENOENT — for four
+    // hours, felt as "the app is laggy" because open windows kept running their
+    // in-memory bundle with every lazy chunk and image gone. Nobody noticed
+    // because nothing SAID it. Check once a minute, log it as an error, and
+    // report it in /api/config (which every client and monitor already reads).
+    const checkStaticRoot = (): boolean => {
+      try { return fs.statSync(path.join(staticDir, 'index.html')).isFile() } catch { return false }
+    }
+    let staticRootOk = checkStaticRoot()
+    if (!staticRootOk) {
+      log.web.error('web assets are NOT servable at startup', { staticDir })
+    }
+    const staticRootTimer = setInterval(() => {
+      const ok = checkStaticRoot()
+      if (ok === staticRootOk) return
+      staticRootOk = ok
+      if (ok) log.web.info('web assets are servable again', { staticDir })
+      else log.web.error('web assets VANISHED from under the running server', { staticDir })
+    }, 60_000)
+    staticRootTimer.unref()
+    setStaticRootReporter(() => ({ staticDir, ok: staticRootOk }))
     // SPA fallback: serve index.html for non-API routes
     app.use((req, res, next) => {
       if (req.method !== 'GET' || req.path.startsWith('/api/')) return next()

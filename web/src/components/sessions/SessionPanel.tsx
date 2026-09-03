@@ -40,6 +40,7 @@ import { parseSessionDirective } from '@/components/chat/session-mention';
 import { buildImageRefsPayload } from '@/api/image-upload';
 import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
+import { traceInteraction } from '@/utils/interaction-timer';
 import { clearSessionCaches } from '@/cache/session-cache';
 import { runWhenVisible } from '@/utils/page-visibility';
 import { buildInvestigationClip } from '@/utils/investigation-clipboard';
@@ -752,6 +753,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     // rather than inside the updater: the side effects below are not pure, and
     // StrictMode double-invokes an updater.
     const next = activeView === view ? null : view;
+    traceInteraction(next ? `view-open:${next}` : `view-close:${view}`, { sessionId });
     setActiveView(next);
     if (next) { enterFullscreen(); applyOpenCollapse(next); } else { exitFullscreen(); collapseChat(false); }
   }, [enterFullscreen, exitFullscreen, fileViewTarget, activeView, applyOpenCollapse, collapseChat]);
@@ -789,6 +791,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // the app away from the session (that jump was reverted 2026-08-09). Notes get
   // an explicit "Open in Notes" button in the preview toolbar / right-click menu.
   const handleFileOpen = useCallback((path: string, line?: number, term?: string) => {
+    traceInteraction('view-open:files-from-path', { sessionId });
     setFileViewTarget({ path, line, term });
     setActiveView('files');
     enterFullscreen();

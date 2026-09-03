@@ -16,6 +16,19 @@ import type { ModelEntry } from '../../agent/providers/types.js'
 
 export const configRouter = Router()
 
+/**
+ * Whether the built web app is still on disk where this server serves it from.
+ * Registered by the server (which owns the resolved static dir) so /api/config
+ * can report it: a deploy boots from a staged copy under TMPDIR, and that copy
+ * has been deleted under a live server before (2026-09-02) — the API stayed
+ * green while every asset 404ed. Undefined in dev / when static serving is off.
+ */
+let staticRootReporter: (() => { staticDir: string; ok: boolean }) | null = null
+
+export function setStaticRootReporter(fn: () => { staticDir: string; ok: boolean }): void {
+  staticRootReporter = fn
+}
+
 // Secret masking lives in core so the bug-report bundler can reuse it.
 // CLOUD-mode rationale: config.yaml is git-synced to the public box, and
 // `GET /api/config` is reachable by ANY paired device — returning plaintext
@@ -73,7 +86,10 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
       const { getExtIndexUniquenessGaps } = await import('../../core/task-db.js')
       remoteIdUniquenessGaps = getExtIndexUniquenessGaps()
     } catch { /* diagnostics only */ }
-    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE })
+    // webAssets: reported only when this process serves them (production), so a
+    // client or monitor can tell "the app is broken" from "the app is slow".
+    const webAssets = staticRootReporter?.() ?? null
+    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, webAssets })
   } catch (err) {
     next(err)
   }

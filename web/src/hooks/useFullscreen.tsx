@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { lockScroll, unlockScroll } from './useModalOverlay';
+import { traceInteraction } from '@/utils/interaction-timer';
 
 /**
  * CSS-promotion fullscreen hook — promotes an existing component to fullscreen
@@ -29,8 +30,18 @@ export function useFullscreen() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const { pathname } = useLocation();
 
-  const enterFullscreen = useCallback(() => setIsFullscreen(true), []);
-  const exitFullscreen = useCallback(() => setIsFullscreen(false), []);
+  // Timed: "I click outside to get out and it takes like 3 seconds" was reported
+  // with no log to point at. Both directions now land in the server log as
+  // `[perf] interaction {name: fullscreen-enter|fullscreen-exit, ms}`, and a
+  // main-thread block during the collapse is attributed to the phase.
+  const enterFullscreen = useCallback(() => {
+    traceInteraction('fullscreen-enter');
+    setIsFullscreen(true);
+  }, []);
+  const exitFullscreen = useCallback(() => {
+    traceInteraction('fullscreen-exit');
+    setIsFullscreen(false);
+  }, []);
 
   // Leaving the route drops fullscreen. Keyed on pathname only: a search-param
   // change (`/?s1=…`, the session columns' own deep-link state) is NOT a

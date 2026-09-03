@@ -21,6 +21,7 @@
  */
 
 import { wsClient } from '../api/ws'
+import { detectInputClient } from './input-latency-monitor'
 
 // ── Types ──
 
@@ -31,7 +32,14 @@ interface BrowserLogEntry {
   args?: string   // remaining args JSON, max 1000 chars
   url?: string    // location.pathname
   count?: number  // dedup count (only present when > 1)
+  client?: string // 'mac-app' when the page runs inside the desktop shell (absent in a browser)
 }
+
+// Decided once: the Mac app's bridges exist from the first script, a browser
+// never grows them. Lets `[perf]` lines be split by client in the server log.
+const CLIENT_TAG: string | undefined = (() => {
+  try { return detectInputClient() === 'mac-app' ? 'mac-app' : undefined } catch { return undefined }
+})()
 
 // ── Config ──
 
@@ -124,6 +132,7 @@ function addEntry(level: BrowserLogEntry['level'], args: unknown[]): void {
       message,
     }
     if (extraArgs) entry.args = extraArgs
+    if (CLIENT_TAG) entry.client = CLIENT_TAG
     try { entry.url = location.pathname } catch { /* SSR safety */ }
 
     // Ring buffer: drop oldest when full

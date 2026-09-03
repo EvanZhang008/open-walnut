@@ -80,6 +80,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // System-wide dictation hotkey. Lives in the app because only a signed bundle
     // gets a microphone permission prompt (see GlobalDictation.swift).
     var dictation: GlobalDictation?
+    // Measures the page process and replaces it when it is bloated and nobody
+    // is looking (see WebContentPolicy.swift for why a long-lived WKWebView
+    // needs this and a browser tab does not).
+    var webContentWatchdog: WebContentWatchdog?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DesktopLogger.shared.log("app_launched", fields: [
@@ -88,6 +92,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
 
         setupMainMenu()
+
+        if WebContentPolicy.isEnabled(UserDefaults.standard) {
+            webContentWatchdog = WebContentWatchdog(
+                policyProvider: { WebContentPolicy.fromDefaults(UserDefaults.standard) },
+                portProvider: { [weak self] in self?.serverPort },
+                recycle: { [weak self] reason, _ in self?.recycleWebContent(reason: reason.rawValue) })
+        } else {
+            DesktopLogger.shared.log("webcontent_watchdog_disabled")
+        }
 
         // Register before the server is up: the hotkey reads the port lazily and
         // tells the user to wait if it is not listening yet.
@@ -1076,9 +1089,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func loadWebUI() {
+    /// Builds the web view and loads the console. `url` defaults to the server
+    /// root; a recycle passes the page the user was on so the swap lands them
+    /// back where they were.
+    func loadWebUI(url initialURL: URL? = nil) {
         guard let port = serverPort else { return }
-        let url = URL(string: "http://localhost:\(port)")!
+        let url = initialURL ?? URL(string: "http://localhost:\(port)")!
 
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
@@ -1136,9 +1152,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         window.contentView = webView
         window.title = "Walnut — localhost:\(port)"
+        webContentWatchdog?.attach(webView: webView, window: window)
 
         let request = URLRequest(url: url)
         webView.load(request)
+    }
+
+    /// Replaces the WKWebView (and with it the WebContent process) at the page
+    /// the user is on. `reload()` would keep the same process, and the whole
+    /// point is a fresh compositor: the old process exits once its view is gone.
+    func recycleWebContent(reason: String) {
+        guard let old = webView, let port = serverPort else { return }
+        let current = old.url ?? URL(string: "http://localhost:\(port)")!
+        DesktopLogger.shared.log("webcontent_recycle_started", fields: [
+            "reason": reason,
+            "path": current.path + (current.query.map { "?\($0)" } ?? ""),
+        ])
+        old.stopLoading()
+        old.navigationDelegate = nil
+        old.uiDelegate = nil
+        old.configuration.userContentController.removeAllScriptMessageHandlers()
+        webView = nil
+        loadWebUI(url: current)
+    }
+
+    /// View → Restart Page Process: the manual path for the same swap the
+    /// watchdog does on its own, for when the app feels slow right now.
+    @objc func recycleWebContentManually() {
+        recycleWebContent(reason: "manual")
     }
 
     func stopServer() {
@@ -1621,6 +1662,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let viewMenuItem = NSMenuItem()
         let viewMenu = NSMenu(title: "View")
         viewMenu.addItem(NSMenuItem(title: "Reload", action: #selector(reloadPage), keyEquivalent: "r"))
+        // ⇧⌘R: Reload keeps the page process; this replaces it (fresh memory).
+        let recycleItem = NSMenuItem(title: "Restart Page Process", action: #selector(recycleWebContentManually), keyEquivalent: "R")
+        recycleItem.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(recycleItem)
         viewMenu.addItem(NSMenuItem(title: "Open in Browser", action: #selector(openInBrowser), keyEquivalent: "b"))
         viewMenu.addItem(NSMenuItem.separator())
         // Browser-style page zoom. "+" is the unshifted "=" key, so bind "="
@@ -1738,6 +1783,22 @@ extension AppDelegate: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         if serverProcess?.isRunning == false {
             showError("The Walnut server has stopped unexpectedly.")
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        webContentWatchdog?.pageDidFinishLoading()
+    }
+
+    /// Without this a killed page process leaves a blank white window that only
+    /// ⌘R fixes; with it the watchdog logs the death (footprint, age, how many
+    /// in the last ten minutes) and reloads with backoff.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        if let watchdog = webContentWatchdog {
+            watchdog.pageProcessDidTerminate()
+        } else {
+            DesktopLogger.shared.log("webcontent_terminated")
+            webView.reload()
         }
     }
 
