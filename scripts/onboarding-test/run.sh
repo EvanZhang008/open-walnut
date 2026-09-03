@@ -137,7 +137,7 @@ case "$TARGET" in
       # All logs in ONE round trip (SSM caps a reply near 24KB): the tail of each file
       # behind a marker line, split back into files here.
       mkdir -p "$RUN_DIR/logs"
-      aws_ssm_exec "$INSTANCE_ID" "for f in $REMOTE_HOME/walnut-onb/logs/*.log; do echo \"@@FILE \$(basename \$f)\"; tail -c 1800 \"\$f\"; echo; done" 60 \
+      aws_ssm_exec "$INSTANCE_ID" "for f in $REMOTE_HOME/walnut-onb/logs/*.log; do echo \"@@FILE \$(basename \$f)\"; tail -c 2400 \"\$f\"; echo; done" 60 \
         | awk -v dir="$RUN_DIR/logs" '/^@@FILE /{ out = dir "/" $2; printf "" > out; next } out { print >> out }'
     }
     forward()     { aws_port_forward "$INSTANCE_ID" "$1" "$2"; }

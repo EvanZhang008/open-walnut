@@ -79,6 +79,20 @@ Open [http://localhost:3456](http://localhost:3456) — type "hello" in the chat
 
 > **Native modules**: Open Walnut uses `better-sqlite3` (for search index) and `sharp` (for image processing). Both ship prebuilt binaries for macOS, Linux, and Windows — no compiler needed in most cases. If prebuilds fail on your platform, you may need Python 3 and a C++ compiler (`xcode-select --install` on macOS, `build-essential` on Ubuntu).
 
+### Older Linux (glibc before 2.29)
+
+Walnut's one required native module, better-sqlite3, ships a prebuilt binary for glibc 2.29 and newer, which every mainstream distro since 2019 has. On an older C library (glibc 2.26 systems are still around) it compiles during `npm install`, and compiling against Node 22 needs Python 3.8+ and a C++20 compiler (GCC 10+), which such a system usually lacks. The stock toolchain fails inside node-gyp with a Python `SyntaxError` or C++ template errors that never mention either requirement.
+
+`npm start` runs `scripts/check-native-toolchain.mjs`, which detects this and prints the commands for your box. On a yum-based glibc 2.26 system they are:
+
+```bash
+sudo yum install -y gcc10-c++ make
+sudo amazon-linux-extras install -y python3.8   # node-gyp needs Python 3.8+; the system python3 is 3.7
+PYTHON=python3.8 CC=gcc10-gcc CXX=gcc10-g++ npm install
+```
+
+sharp (image compression for pasted images) is optional and is skipped on such a system: images are sent uncompressed. If `npm_config_build_from_source` is set in your environment, unset it; it forces sharp into a source build that needs libvips.
+
 ### Optional
 
 | Dependency | How to install | Why | Without it |

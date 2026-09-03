@@ -50,10 +50,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "preinstall": "node scripts/check-native-toolchain.mjs",
     "postinstall": "node scripts/postinstall.mjs",
     "prepublishOnly": "WALNUT_REQUIRE_BUN=1 npm run build && cd web && npx vite build && cd .. && node scripts/check-publish.mjs",
-    "prestart": "node scripts/check-node.mjs",
+    "prestart": "node scripts/check-node.mjs && node scripts/check-native-toolchain.mjs",
     "start": "npm run web:build && node dist/cli.js web --port 3456",
     "build:plugins": "npm run build -w @open-walnut/plugin-api && npm run build -w @open-walnut/plugin-cli",
     "build": "npm run build:plugins && bash scripts/build-daemon.sh && tsup && rm -rf dist/data && cp -r src/data dist/ && for d in src/integrations/*/manifest.json; do cp \"$d\" \"dist/integrations/$(basename $(dirname $d))/\"; done && node scripts/ship-builtin-plugins.mjs",

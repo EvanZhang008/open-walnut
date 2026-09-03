@@ -276,19 +276,22 @@ if want_path readme; then
     if (cd "$README_DIR" && run_logged npm install); then
       warns=$(grep -c -E '^npm (warn|WARN)' "$STEP_LOG" || true)
       step_end ok "ok; $warns npm warnings; $(du -sh "$README_DIR/node_modules" 2>/dev/null | cut -f1) node_modules"
-    elif grep -q "needs a newer C++ compiler" "$STEP_LOG"; then
-      # Walnut's preinstall check stopped the install and printed the fix. A user would
-      # paste it; do the same, and record whether the printed advice actually works.
-      fix_install=$(grep -E '^\s+sudo (yum|dnf|apt-get) install' "$STEP_LOG" | head -1 | sed 's/^ *//')
-      fix_npm=$(grep -E '^\s+CC=.* npm install' "$STEP_LOG" | head -1 | sed 's/^ *//')
-      tail_log 8; step_end fail "stopped by the toolchain check (old glibc, old g++); following its printed fix" "This OS has glibc $(glibc_version): prebuilt native modules need 2.29+, so better-sqlite3 compiles and needs GCC 10+. Walnut stops in a second and prints the fix instead of failing minutes into the compile."
+    elif [ -f "$README_DIR/scripts/check-native-toolchain.mjs" ] && ! (cd "$README_DIR" && node scripts/check-native-toolchain.mjs >> "$STEP_LOG" 2>&1) && grep -q "Fix, then install again" "$STEP_LOG"; then
+      # The native build failed and Walnut's own check (what `npm start` would run next)
+      # printed the recipe. A user would paste it; do the same, and record whether the
+      # printed advice actually works. The env it names stays exported for the npm route.
+      fix_installs=$(sed -n '/Fix, then install again/,/npm install$/p' "$STEP_LOG" | grep -E '^\s+sudo ' | sed 's/^ *//')
+      fix_npm=$(sed -n '/Fix, then install again/,/npm install$/p' "$STEP_LOG" | grep -E 'npm install$' | tail -1 | sed 's/^ *//')
+      tail_log 14; step_end fail "native build failed (glibc $(glibc_version)); Walnut's check printed the recipe, following it" "This OS has glibc $(glibc_version): prebuilt native modules need 2.29+, so better-sqlite3 compiles and needs Python 3.8+ and GCC 10+, which the stock toolchain lacks. 'npm install' fails in node-gyp; Walnut's check explains and prints the commands."
       step_begin "readme:npm-install-fix"
-      [ -n "$fix_install" ] && { cmd "$fix_install"; run_logged bash -c "$fix_install"; }
+      while IFS= read -r line; do [ -n "$line" ] && { cmd "$line"; run_logged bash -c "$line"; }; done <<< "$fix_installs"
+      fix_env=$(printf '%s' "$fix_npm" | sed 's/ *npm install$//')
+      [ -n "$fix_env" ] && { say "  exporting for the rest of the run: $fix_env"; export $fix_env; }
       cmd "$fix_npm"
-      if [ -n "$fix_npm" ] && (cd "$README_DIR" && run_logged bash -c "$fix_npm"); then
-        step_end ok "the printed fix worked; $(du -sh "$README_DIR/node_modules" 2>/dev/null | cut -f1) node_modules"
+      if [ -n "$fix_npm" ] && (cd "$README_DIR" && run_logged npm install); then
+        step_end ok "the printed recipe worked; $(du -sh "$README_DIR/node_modules" 2>/dev/null | cut -f1) node_modules"
       else
-        tail_log 12; step_end fail "the printed fix did not work: $(first_error_line)" "The toolchain check's own advice failed on this OS: $(first_error_line)"
+        tail_log 12; step_end fail "the printed recipe did not work: $(first_error_line)" "The toolchain check's own advice failed on this OS: $(first_error_line)"
       fi
     else
       tail_log 8; step_end fail "npm install failed: $(first_error_line)" "'npm install' fails on a fresh machine: $(first_error_line)"
