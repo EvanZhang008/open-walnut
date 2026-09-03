@@ -580,6 +580,37 @@ struct TaskBoardList: View {
     /// card: `listRowBackground(Color.clear)` here used to be correct over one flat sheet
     /// and would now punch a hole through the bottom of the card, page colour showing
     /// through the rounded corners it is supposed to fill.
+    /// The destination the create row WRITES TO, in the words the row should use.
+    ///
+    /// The words come from the SEED, never from `band.label`, and that swap is the whole
+    /// fix (2026-09-03 review). A lone project heading is relabelled to the TIER it sits in
+    /// (`soleHeadingLabel`: with one project on screen its own name says nothing new), while
+    /// the seed underneath still files into that project — so interpolating the heading
+    /// promised "New task in Focus" over a write into `marina`, and the row that opens
+    /// directly below it said "Add to marina…". One control, two answers, and the one the
+    /// user read first was the wrong one. Unscoped it was worse than wrong: the lone heading
+    /// reads "All", so the row offered a destination that does not exist.
+    ///
+    /// The heading keeps its relabel — a heading names the GROUP, and the group really is
+    /// "the whole of Focus" when only one project is in it. Only the create row makes a
+    /// promise about a write, so only the create row has to name a place you can write to.
+    ///
+    /// Same rule `QuickAddRow.placeholder` already applies to the row this opens, which is
+    /// why the closed button and the open field now say the same thing: a tier seed reads
+    /// its name out of `tierChoices` (the registry behind the tier menu, so a `ct_` id never
+    /// reaches the screen), and a project seed needs no lookup because the name IS the
+    /// write. `band` is still taken as the last-resort fallback for a tier the registry has
+    /// not caught up with, where the heading is that same registry's word for it.
+    static func createDestination(
+        _ band: BoardBand, seed: NewTaskSeed, tierChoices: [(id: String, label: String)]
+    ) -> String {
+        if let tier = seed.pin.wireFocusTier {
+            return tierChoices.first { $0.id == tier }?.label ?? band.label
+        }
+        // "" is Inbox, on the wire and only there: it has a name on screen.
+        return seed.project.isEmpty ? NewTaskSeed.inboxHeader : seed.project
+    }
+
     @ViewBuilder
     private func createFoot(_ band: BoardBand, seed: NewTaskSeed) -> some View {
         if openCreateBand == band.bandId {
@@ -593,7 +624,7 @@ struct TaskBoardList: View {
                     Circle()
                         .strokeBorder(Theme.tint, style: StrokeStyle(lineWidth: 1.4, dash: [3, 2.5]))
                         .frame(width: 21, height: 21)
-                    Text("New task in \(band.label)")
+                    Text("New task in \(Self.createDestination(band, seed: seed, tierChoices: tierChoices))")
                         .font(.subheadline)
                         .foregroundStyle(Theme.tint)
                     Spacer(minLength: 0)

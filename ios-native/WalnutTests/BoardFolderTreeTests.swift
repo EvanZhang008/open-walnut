@@ -140,10 +140,15 @@ final class BoardFolderTreeTests: XCTestCase {
         assertEveryRowIsRendered(built, tasks)
     }
 
-    /// Selecting the subfolder's chip leaves ONE band on screen, and it still carries its
-    /// whole context: the project heading and the parent folder's name. `relead` runs again
-    /// after the filter for exactly this reason.
-    func testAChipThatSelectsASubfolderKeepsItsWholeContext() {
+    /// A subfolder left ALONE on screen still carries its whole context: the project
+    /// heading and the parent folder's name. `relead` exists for exactly this.
+    ///
+    /// The state used to be reached by selecting the subfolder's own CHIP. There is no
+    /// folder chip any more — the rail is always the tier rail — so it is reached the way it
+    /// actually happens now: a TIER scope in which only the subfolder has rows. The project
+    /// band and the parent folder's band are both dropped for being empty, and the survivor
+    /// has to draw both of their names.
+    func testASubfolderAloneOnScreenKeepsItsWholeContext() {
         let tasks = [task("m1"), task("m2"), task("m3")]
         let folders = [
             TaskFolder(groupId: "g_ship", label: "Ship", memberIds: ["m2"], project: "marina"),
@@ -152,7 +157,13 @@ final class BoardFolderTreeTests: XCTestCase {
                 parentId: "g_ship"
             ),
         ]
-        let only = BoardModel.filtered(bands(tasks, folders), selected: "folder:g_docs")
+        let only = BoardModel.assemble(
+            tasks: tasks, sessions: [],
+            tierOf: ["m1": "backlog", "m2": "backlog", "m3": "focus"],
+            tierOrder: ["backlog": ["m1", "m2"], "focus": ["m3"]], customTiers: [],
+            grouping: .project, folders: BoardFolderIndex.build(folders),
+            scope: "focus", now: Self.now
+        ).bands
         XCTAssertEqual(only.map(\.bandId), ["folder:g_docs"])
         XCTAssertEqual(only.first?.nest?.leadsProject, true)
         XCTAssertEqual(only.first?.nest?.leadFolders.map(\.label), ["Ship"])
@@ -477,24 +488,48 @@ final class BoardFolderTreeTests: XCTestCase {
         }
     }
 
-    /// The chips are a view over the bands, so a subfolder gets its own chip in band order —
-    /// the tree cannot leave a rendered band unreachable from the bar.
-    func testEveryNestedBandKeepsItsChip() {
+    /// Every nested band is REACHABLE from the bar, which is a different sentence than it
+    /// used to be and is the point of this round.
+    ///
+    /// It used to say "a subfolder gets its own chip". That was the shape the user rejected:
+    /// switching to `By project` turned the rail into a list of projects and folders, so
+    /// reaching one folder meant several taps and the tier you were in was lost. The rail is
+    /// the TIER rail now, and reachability means what it should: every rendered band's rows
+    /// belong to a tier the rail HAS a chip for, and selecting that chip leaves the band on
+    /// screen with its rows intact — in ONE scrollable list, no extra taps.
+    func testEveryNestedBandIsReachableThroughItsTierChip() {
         let tasks = [task("m1"), task("m2"), task("m3")]
-        let folders = [
+        let folders = BoardFolderIndex.build([
             TaskFolder(groupId: "g_ship", label: "Ship", memberIds: ["m2"], project: "marina"),
             TaskFolder(
                 groupId: "g_docs", label: "Docs", memberIds: ["m3"], project: "marina",
                 parentId: "g_ship"
             ),
-        ]
-        let built = bands(tasks, folders)
-        let chips = BoardModel.chips(built)
-        XCTAssertEqual(chips.first?.bandId, nil, "the All chip still leads")
+        ])
+        let tierOf = ["m1": "focus", "m2": "focus", "m3": "focus"]
+        let tierOrder = ["focus": ["m1", "m2", "m3"]]
+        func assembled(_ scope: String?) -> BoardAssembly {
+            BoardModel.assemble(
+                tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: tierOrder,
+                customTiers: [], grouping: .project, folders: folders, scope: scope,
+                now: Self.now
+            )
+        }
+        let whole = assembled(nil)
+        XCTAssertEqual(whole.bands.map(\.bandId),
+                       ["proj:marina", "folder:g_ship", "folder:g_docs"])
+        // The rail is tiers, `All` first — never one chip per band.
+        XCTAssertEqual(whole.rail.first?.bandId, nil, "the All chip still leads")
+        XCTAssertEqual(whole.rail.compactMap(\.bandId), ["focus"])
+
+        // Selecting the one tier chip keeps every nested band, rows and all.
+        let scoped = assembled("focus")
+        XCTAssertEqual(scoped.bands.map(\.bandId), whole.bands.map(\.bandId),
+            "every folder of the tier is still a heading in one list")
         XCTAssertEqual(
-            chips.dropFirst().map(\.bandId),
-            built.map { $0.bandId },
-            "one chip per rendered band, in band order"
+            Set(scoped.bands.flatMap { $0.rows.map(\.id) }),
+            Set(tasks.map(\.id)),
+            "and no row is unreachable"
         )
     }
 }

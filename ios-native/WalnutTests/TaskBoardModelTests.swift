@@ -842,10 +842,15 @@ final class TaskBoardModelTests: XCTestCase {
     }
 
     /// THE strongest guarantee on this screen: the grouping control changes the
-    /// HEADINGS, never the population. Set equality of row ids across both groupings
-    /// over the same inputs, including the awkward cases (a pin with no tier, a done
-    /// task, an unpinned task with a LIVE session, a session owning nothing, a project
-    /// called like a tier).
+    /// HEADINGS, never the population — **within the same tier scope**. Set equality of row
+    /// ids across both groupings over the same inputs, including the awkward cases (a pin
+    /// with no tier, a done task, an unpinned task with a LIVE session, a session owning
+    /// nothing, a project called like a tier).
+    ///
+    /// The scope qualifier is the new half and it is what makes the guarantee mean
+    /// something: the shipped board satisfied the unscoped statement while getting the
+    /// scoped one badly wrong (`By project` inside Focus drew every tier's projects), so
+    /// this case now runs the whole matrix at every scope the rail can be in.
     ///
     /// It used to have to be stated because the two builders were separate walks over
     /// the store and either could grow its own hole. It is now true by CONSTRUCTION —
@@ -870,7 +875,10 @@ final class TaskBoardModelTests: XCTestCase {
         let tierOf = ["filed": "focus", "done": "backlog"]
         let tierOrder = ["focus": ["filed"], "backlog": ["done"]]
 
-        func rowIds(_ grouping: BoardGrouping, dateFilter: BoardDateFilter, query: String) -> Set<String> {
+        func rowIds(
+            _ grouping: BoardGrouping, dateFilter: BoardDateFilter, query: String,
+            scope: String? = nil
+        ) -> Set<String> {
             BoardModel.rowIds(BoardModel.bands(
                 tasks: tasks, sessions: sessions, tierOf: tierOf, tierOrder: tierOrder,
                 customTiers: [], query: query, grouping: grouping,
@@ -882,21 +890,28 @@ final class TaskBoardModelTests: XCTestCase {
                 // grouping, and a row folded on both would take `done` out of the case
                 // entirely.
                 shownDoneTiers: ["backlog", BoardModel.projectBandPrefix + "marina"],
+                scope: scope,
                 now: Self.now
             ))
         }
 
         // Same inputs, both groupings, across every filter combination the bar can
-        // produce: the populations must be identical every time.
+        // produce AND every scope the rail can be in: the populations must be identical
+        // every time.
         for dateFilter in BoardDateFilter.allCases {
             for query in ["", "marina", "a"] {
-                XCTAssertEqual(
-                    rowIds(.tier, dateFilter: dateFilter, query: query),
-                    rowIds(.project, dateFilter: dateFilter, query: query),
-                    "date=\(dateFilter) query=\"\(query)\": switching grouping changed WHICH rows exist"
-                )
+                for scope in [nil, "focus", "backlog", "satellite"] as [String?] {
+                    XCTAssertEqual(
+                        rowIds(.tier, dateFilter: dateFilter, query: query, scope: scope),
+                        rowIds(.project, dateFilter: dateFilter, query: query, scope: scope),
+                        "date=\(dateFilter) query=\"\(query)\" scope=\(scope ?? "All"): switching grouping changed WHICH rows exist"
+                    )
+                }
             }
         }
+        // And a scope is a SUBSET, not a no-op: `focus` holds `filed` alone, so a grouping
+        // switch inside it agreeing on the whole board would not have proven anything.
+        XCTAssertEqual(rowIds(.project, dateFilter: .all, query: "", scope: "focus"), ["filed"])
         // And the population is the PINNED set, so "identical" is neither two empties
         // nor two copies of the store: `inbox` rides its own pin flag, `filed` and
         // `done` their tiers, while `loose` (live session, unpinned), `tricky`
@@ -1131,28 +1146,48 @@ final class TaskBoardModelTests: XCTestCase {
             "the project heading keeps the id it has always had, so its automation id is unchanged")
     }
 
-    /// Selecting a FOLDER chip leaves that one band on screen — and it must still be
-    /// told which project it belongs to, because the project band that would have drawn
-    /// that heading is exactly what the chip filtered away.
-    func testSelectingAFolderChipKeepsTheProjectHeadingAboveIt() {
-        let bands = folderBands()
-        XCTAssertEqual(bands.first(where: { $0.bandId == "folder:g_beta" })?.nest?.leadsProject, false,
-            "on the whole board `proj:marina` draws that heading")
+    /// A folder band left on screen WITHOUT its project's loose band must still be told
+    /// which project it belongs to — a folder heading with no project above it does not say
+    /// where the work lives.
+    ///
+    /// The case this replaces reached that state by selecting a FOLDER chip. There is no
+    /// folder chip any more (the rail is always the tier rail), so the state is now reached
+    /// the way it actually happens: a TIER scope whose only rows in that project are inside
+    /// a folder. Same invariant, through the mechanism that exists.
+    func testAFolderBandWithoutItsProjectsLooseRowsStillDrawsTheProjectHeading() {
+        // marina's loose row is in BACKLOG; only its folder rows are in Focus.
+        let tasks = [
+            task("loose", project: "marina"), task("in-alpha", project: "marina"),
+            task("in-beta", project: "marina"), task("other", project: "acme"),
+        ]
+        let folders = BoardFolderIndex.build([
+            TaskFolder(groupId: "g_alpha", label: "Alpha", memberIds: ["in-alpha"], project: "marina"),
+            TaskFolder(groupId: "g_beta", label: "Beta", memberIds: ["in-beta"], project: "marina"),
+        ])
+        let whole = BoardModel.assemble(
+            tasks: tasks, sessions: [],
+            tierOf: ["loose": "backlog", "in-alpha": "focus", "in-beta": "focus",
+                     "other": "focus"],
+            tierOrder: ["backlog": ["loose"], "focus": ["in-alpha", "in-beta", "other"]],
+            customTiers: [], grouping: .project, folders: folders, now: Self.now
+        ).bands
+        XCTAssertEqual(whole.first(where: { $0.bandId == "folder:g_beta" })?.nest?.leadsProject,
+                       false, "on the whole board `proj:marina` draws that heading")
 
-        let only = BoardModel.filtered(bands, selected: "folder:g_beta")
-        XCTAssertEqual(only.map(\.bandId), ["folder:g_beta"])
-        XCTAssertEqual(only.first?.nest?.leadsProject, true,
-            "with the project band gone, the surviving folder draws the heading")
-
-        // The chips themselves are still one per rendered band, folders included, with
-        // the band's own visible count — the rule that stops the bar and the board from
-        // ever disagreeing.
-        let chips = BoardModel.chips(bands)
-        XCTAssertEqual(chips.count, bands.count + 1)
-        XCTAssertNil(chips.first?.bandId, "the leading chip is All")
-        XCTAssertEqual(chips.dropFirst().compactMap(\.bandId), bands.map(\.bandId))
-        XCTAssertEqual(chips.first?.count, bands.reduce(0) { $0 + $1.count })
-        XCTAssertEqual(chips.first(where: { $0.bandId == "folder:g_alpha" })?.label, "Alpha")
+        let scoped = BoardModel.assemble(
+            tasks: tasks, sessions: [],
+            tierOf: ["loose": "backlog", "in-alpha": "focus", "in-beta": "focus",
+                     "other": "focus"],
+            tierOrder: ["backlog": ["loose"], "focus": ["in-alpha", "in-beta", "other"]],
+            customTiers: [], grouping: .project, folders: folders, scope: "focus", now: Self.now
+        ).bands
+        XCTAssertEqual(scoped.map(\.bandId),
+                       ["proj:acme", "folder:g_alpha", "folder:g_beta"],
+                       "marina has no loose row in Focus, so it has no loose band")
+        XCTAssertEqual(scoped.first(where: { $0.bandId == "folder:g_alpha" })?.nest?.leadsProject,
+                       true, "with the project band gone, the first folder draws the heading")
+        XCTAssertEqual(scoped.first(where: { $0.bandId == "folder:g_beta" })?.nest?.leadsProject,
+                       false, "and only the FIRST one draws it")
     }
 
     /// The create ring: a PROJECT band still files into that project (unchanged), and a
@@ -1686,6 +1721,8 @@ final class TaskBoardModelTests: XCTestCase {
         ]
         let tierOf = ["f1": "focus", "f2": "focus", "s1": "satellite", "b1": "backlog"]
         let tierOrder = ["focus": ["f1", "f2"], "satellite": ["s1"], "backlog": ["b1"]]
+        // The same map, used below to say "the tier's OWN rows" without re-deriving it.
+        let splitTier = tierOf
 
         for grouping in BoardGrouping.allCases {
             for dateFilter in BoardDateFilter.allCases {
@@ -1713,12 +1750,41 @@ final class TaskBoardModelTests: XCTestCase {
                         )
                         // A chip selection narrows what is DRAWN and never what the
                         // counts say, which is what keeps the bar readable while
-                        // narrowed (`chips` is computed from the UNFILTERED bands).
-                        for chip in BoardModel.chips(bands) {
-                            let narrowed = BoardModel.filtered(bands, selected: chip.bandId)
-                            XCTAssertLessThanOrEqual(
-                                narrowed.flatMap(\.rows).count, rows,
-                                "\(state): selecting \(chip.id) grew the board"
+                        // narrowed (the rail is built from the UNSCOPED tier bands).
+                        //
+                        // Stated as STRICT EQUALITY against the tier's own row set, not as
+                        // `narrowed <= rows`: the shipped defect satisfied `<=` in every
+                        // state (under `By project` a Focus selection matched no band and
+                        // fell back to the whole board, which is `== rows` and therefore
+                        // `<=`), so the inequality was a gate that could not fail.
+                        let rail = BoardModel.assemble(
+                            tasks: tasks, sessions: sessions, tierOf: tierOf,
+                            tierOrder: tierOrder, customTiers: [], query: query,
+                            grouping: grouping, dateFilter: dateFilter,
+                            shownDoneTiers: shown, now: Self.now
+                        ).rail
+                        for chip in rail {
+                            let scoped = BoardModel.assemble(
+                                tasks: tasks, sessions: sessions, tierOf: tierOf,
+                                tierOrder: tierOrder, customTiers: [], query: query,
+                                grouping: grouping, dateFilter: dateFilter,
+                                shownDoneTiers: shown, scope: chip.bandId, now: Self.now
+                            )
+                            guard let tier = chip.bandId else {
+                                XCTAssertEqual(
+                                    Set(scoped.bands.flatMap(\.rows).map(\.id)), ids,
+                                    "\(state): All is not the whole board"
+                                )
+                                continue
+                            }
+                            XCTAssertEqual(
+                                Set(scoped.bands.flatMap(\.rows).map(\.id)),
+                                ids.filter { splitTier[$0] == tier },
+                                "\(state): scoping to \(tier) is not \(tier)'s own rows"
+                            )
+                            XCTAssertEqual(
+                                scoped.bands.reduce(0) { $0 + $1.count }, chip.count,
+                                "\(state): \(tier)'s headings do not add up to its chip"
                             )
                         }
                     }
@@ -1727,56 +1793,91 @@ final class TaskBoardModelTests: XCTestCase {
         }
     }
 
-    /// Tapping a chip narrows the board to that band, and it does so by FILTERING
-    /// the assembled bands — one code path decides membership. The assertion is
-    /// identity of the rows, not just of the count.
-    func testSelectingABandChipNarrowsTheBoardToThatBandOnly() {
-        let bands = BoardModel.bands(
-            tasks: [task("a"), task("b"), task("c")], sessions: [],
-            tierOf: ["a": "focus", "b": "backlog", "c": "backlog"],
-            tierOrder: ["focus": ["a"], "backlog": ["b", "c"]], customTiers: []
-        )
-        let narrowed = BoardModel.filtered(bands, selected: "backlog")
-        XCTAssertEqual(narrowed.map(\.bandId), ["backlog"])
-        XCTAssertEqual(narrowed.first?.rows.map(\.id), ["b", "c"],
-            "the rows are the band's own, untouched — not a re-query")
-        XCTAssertEqual(BoardModel.selectedChip(bands, selected: "backlog"), "backlog")
+    /// Tapping a chip narrows the board to that TIER, and it does so at CONSTRUCTION
+    /// time — one code path decides membership. The assertion is identity of the rows and
+    /// their ORDER, not just the count: the tier's own `pin_order` has to survive scoping.
+    ///
+    /// It used to assert this about `BoardModel.filtered`, a post-filter over the assembled
+    /// bands. That function is gone: under `By project` no band's id is a tier, so it
+    /// matched nothing and fell back to the whole board (the reported defect), and even
+    /// where it matched it left a board-wide `count` over a narrowed row list.
+    func testScopingToATierNarrowsTheBoardToThatTierOnly() {
+        func board(_ scope: String?, _ grouping: BoardGrouping) -> BoardAssembly {
+            BoardModel.assemble(
+                tasks: [task("a"), task("b"), task("c")], sessions: [],
+                tierOf: ["a": "focus", "b": "backlog", "c": "backlog"],
+                tierOrder: ["focus": ["a"], "backlog": ["b", "c"]], customTiers: [],
+                grouping: grouping, scope: scope, now: Self.now
+            )
+        }
+        let narrowed = board("backlog", .tier)
+        XCTAssertEqual(narrowed.bands.map(\.bandId), ["backlog"])
+        XCTAssertEqual(narrowed.bands.first?.rows.map(\.id), ["b", "c"],
+            "the rows are the tier's own, in pin order")
+        XCTAssertEqual(narrowed.bands.first?.count, 2,
+            "and the heading counts what it is showing, not the whole board")
+        XCTAssertEqual(narrowed.scope, "backlog", "the lit chip is the tier that is in force")
+
+        // Same tier, other grouping: the population is identical and the rail is untouched.
+        let byProject = board("backlog", .project)
+        XCTAssertEqual(Set(byProject.bands.flatMap(\.rows).map(\.id)), ["b", "c"])
+        XCTAssertEqual(byProject.scope, "backlog")
+        XCTAssertEqual(byProject.rail.map(\.id), narrowed.rail.map(\.id))
     }
 
     func testTheAllChipShowsTheWholeBoard() {
-        let bands = BoardModel.bands(
-            tasks: [task("a"), task("b")], sessions: [],
-            tierOf: ["a": "focus", "b": "backlog"],
-            tierOrder: ["focus": ["a"], "backlog": ["b"]], customTiers: []
-        )
-        XCTAssertEqual(BoardModel.filtered(bands, selected: nil).map(\.bandId),
-                       bands.map(\.bandId))
-        XCTAssertNil(BoardModel.selectedChip(bands, selected: nil))
+        func board(_ scope: String?) -> BoardAssembly {
+            BoardModel.assemble(
+                tasks: [task("a"), task("b")], sessions: [],
+                tierOf: ["a": "focus", "b": "backlog"],
+                tierOrder: ["focus": ["a"], "backlog": ["b"]], customTiers: [], scope: scope
+            )
+        }
+        XCTAssertEqual(board(nil).bands.map(\.bandId), ["focus", "backlog"])
+        XCTAssertNil(board(nil).scope)
     }
 
-    /// A selected band can vanish under the user: its last row completed, `hide
-    /// done` swallowed it, a query narrowed it away, the grouping replaced every
-    /// band id at once. Answering "no bands" there would show an empty board with
-    /// no explanation, which is the disappearing-task failure mode one level up. So
-    /// an unknown selection falls back to the WHOLE board, and the lit chip falls
-    /// back to All so the bar never disagrees with the rows.
-    func testASelectionThatNoLongerExistsFallsBackToTheWholeBoard() {
-        let bands = BoardModel.bands(
-            tasks: [task("a"), task("b")], sessions: [],
-            tierOf: ["a": "focus", "b": "backlog"],
-            tierOrder: ["focus": ["a"], "backlog": ["b"]], customTiers: []
-        )
-        for stale in ["wait", "ct_gone99", BoardModel.projectBandPrefix + "marina", ""] {
-            XCTAssertEqual(
-                BoardModel.filtered(bands, selected: stale).map(\.bandId),
-                bands.map(\.bandId),
-                "a selection of \(stale) must not empty the board"
+    /// A scoped tier can vanish under the user: its last row completed, `hide done`
+    /// swallowed it, a query narrowed it away, the custom tier was deleted. Answering "no
+    /// bands" there would show an empty board with no explanation, which is the
+    /// disappearing-task failure mode one level up. So an unknown scope falls back to the
+    /// WHOLE board, and the lit chip falls back to All so the bar never disagrees with the
+    /// rows.
+    ///
+    /// Same intent as before, moved with the mechanism: this used to be stated about
+    /// `BoardModel.filtered`, and it is now the `honoured` step of `assemble` — a scope is
+    /// honoured only when the RAIL has a chip for it, and the rail is the answer the bar
+    /// draws from. Both groupings, because falling back on one and not the other would be
+    /// the same class of disagreement.
+    func testAScopeThatNoLongerExistsFallsBackToTheWholeBoard() {
+        for grouping in BoardGrouping.allCases {
+            func board(_ scope: String?) -> BoardAssembly {
+                BoardModel.assemble(
+                    tasks: [task("a"), task("b")], sessions: [],
+                    tierOf: ["a": "focus", "b": "backlog"],
+                    tierOrder: ["focus": ["a"], "backlog": ["b"]], customTiers: [],
+                    grouping: grouping, scope: scope, now: Self.now
+                )
+            }
+            let whole = Set(board(nil).bands.flatMap(\.rows).map(\.id))
+            // `wait` is a real built-in tier with no rows here, so it is the "emptied under
+            // the reader" case; the rest are gone, never-existed, or a band id.
+            for stale in ["wait", "ct_gone99", BoardModel.projectBandPrefix + "marina", ""] {
+                XCTAssertEqual(
+                    Set(board(stale).bands.flatMap(\.rows).map(\.id)), whole,
+                    "\(grouping.rawValue): a scope of \(stale) must not empty the board"
+                )
+                XCTAssertNil(board(stale).scope,
+                    "\(grouping.rawValue): and the All chip is what reads as selected")
+            }
+            // Including when there is no board at all.
+            let empty = BoardModel.assemble(
+                tasks: [], sessions: [], tierOf: [:], tierOrder: [:], customTiers: [],
+                grouping: grouping, scope: "focus", now: Self.now
             )
-            XCTAssertNil(BoardModel.selectedChip(bands, selected: stale),
-                "and the All chip is what reads as selected")
+            XCTAssertTrue(empty.bands.isEmpty)
+            XCTAssertNil(empty.scope)
         }
-        // Including when there is no board at all.
-        XCTAssertTrue(BoardModel.filtered([], selected: "focus").isEmpty)
     }
 
     /// The chips' own identity has to be unique or SwiftUI's `ForEach` drops one.
@@ -2920,11 +3021,12 @@ final class BoardBandsCacheTests: XCTestCase {
 
     private func key(
         gen: UInt64 = 1, query: String = "", grouping: BoardGrouping = .tier,
-        dateFilter: BoardDateFilter = .all, shownDone: Set<String> = [], nowBucket: Int = 0
+        dateFilter: BoardDateFilter = .all, scope: String? = nil,
+        shownDone: Set<String> = [], nowBucket: Int = 0
     ) -> BoardBandsKey {
         BoardBandsKey(
             inputsGen: gen, query: query, grouping: grouping, dateFilter: dateFilter,
-            shownDoneBands: shownDone, nowBucket: nowBucket
+            scope: scope, shownDoneBands: shownDone, nowBucket: nowBucket
         )
     }
 
@@ -2932,16 +3034,26 @@ final class BoardBandsCacheTests: XCTestCase {
         BoardBand(bandId: id, label: id, rows: [], hiddenDone: 0, createSeed: nil)
     }
 
+    /// The memo's payload is the WHOLE assembly now (rail + bands + honoured scope), because
+    /// those three come from one population walk and are only consistent with each other if
+    /// they are cached together.
+    private func assembly(_ ids: [String], scope: String? = nil) -> BoardAssembly {
+        let bands = ids.map(band)
+        return BoardAssembly(rail: BoardModel.chips(bands), bands: bands, scope: scope)
+    }
+
     @MainActor
     func testARepeatPassOverUnchangedInputsDoesNotRebuild() {
         let cache = BoardBandsCache()
         var builds = 0
         for _ in 0..<25 {
-            let bands = cache.bands(for: key()) {
+            let built = cache.assembly(for: key()) {
                 builds += 1
-                return [self.band("focus")]
+                return self.assembly(["focus"])
             }
-            XCTAssertEqual(bands.map(\.bandId), ["focus"])
+            XCTAssertEqual(built.bands.map(\.bandId), ["focus"])
+            XCTAssertEqual(built.rail.compactMap(\.bandId), ["focus"],
+                "a hit has to return the rail it was built with, not a stale one")
         }
         XCTAssertEqual(
             builds, 1,
@@ -2959,6 +3071,10 @@ final class BoardBandsCacheTests: XCTestCase {
             ("a keystroke", key(query: "alpha")),
             ("the grouping control", key(grouping: .project)),
             ("the date filter", key(dateFilter: .now)),
+            // The tier scope narrows the row set at CONSTRUCTION time now, so a chip tap
+            // changes which rows exist: without it in the key the board would keep showing
+            // the previous tier until some unrelated input moved the key.
+            ("the rail's tier scope", key(scope: "focus")),
             // An explicit expand has to survive the memo, or the tap would look like it
             // did nothing until some unrelated input happened to move the key.
             ("a band's done toggle", key(shownDone: ["focus"])),
@@ -2967,8 +3083,8 @@ final class BoardBandsCacheTests: XCTestCase {
         for (what, changed) in variants {
             let cache = BoardBandsCache()
             var builds = 0
-            _ = cache.bands(for: key()) { builds += 1; return [self.band("focus")] }
-            _ = cache.bands(for: changed) { builds += 1; return [self.band("satellite")] }
+            _ = cache.assembly(for: key()) { builds += 1; return self.assembly(["focus"]) }
+            _ = cache.assembly(for: changed) { builds += 1; return self.assembly(["satellite"]) }
             XCTAssertEqual(builds, 2, "\(what) did not invalidate the memo")
         }
     }
@@ -2978,9 +3094,9 @@ final class BoardBandsCacheTests: XCTestCase {
     @MainActor
     func testAHitReturnsTheBandsItBuilt() {
         let cache = BoardBandsCache()
-        let built = [band("focus"), band("backlog")]
-        _ = cache.bands(for: key()) { built }
-        let again = cache.bands(for: key()) { [] }
+        let built = assembly(["focus", "backlog"], scope: "focus")
+        _ = cache.assembly(for: key()) { built }
+        let again = cache.assembly(for: key()) { .empty }
         XCTAssertEqual(again, built)
     }
 
@@ -2991,9 +3107,9 @@ final class BoardBandsCacheTests: XCTestCase {
     func testTheCacheHoldsExactlyOneEntry() {
         let cache = BoardBandsCache()
         var builds = 0
-        _ = cache.bands(for: key()) { builds += 1; return [self.band("focus")] }
-        _ = cache.bands(for: key(query: "a")) { builds += 1; return [self.band("focus")] }
-        _ = cache.bands(for: key()) { builds += 1; return [self.band("focus")] }
+        _ = cache.assembly(for: key()) { builds += 1; return self.assembly(["focus"]) }
+        _ = cache.assembly(for: key(query: "a")) { builds += 1; return self.assembly(["focus"]) }
+        _ = cache.assembly(for: key()) { builds += 1; return self.assembly(["focus"]) }
         XCTAssertEqual(builds, 3)
     }
 }

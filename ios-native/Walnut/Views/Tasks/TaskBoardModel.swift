@@ -186,6 +186,44 @@ enum BoardGrouping: String, CaseIterable, Identifiable {
     }
 }
 
+/// The board's whole answer for one pass: the chip rail, the bands to render, and the
+/// tier scope that was actually honoured.
+///
+/// # Why the rail and the bands are ONE value
+///
+/// The screen asks two different questions of the same data — *which tier am I looking
+/// at* (the rail) and *how are that tier's rows headed* (the bands) — and they have to be
+/// answered from the SAME population walk. Two calls would walk the projection twice, and
+/// (worse) could disagree: a rail whose Focus chip says 12 over a board showing 9 is the
+/// "the bar and the board contradict each other" failure this screen has shipped before.
+///
+/// So the rail is the TIER bands over the whole board and the bands are the scope's rows
+/// under the chosen grouping, both from one walk, and `scope` is the answer both of them
+/// were built against — which is why the lit chip is read off this value rather than
+/// re-derived from the requested id.
+struct BoardAssembly: Equatable {
+    /// The chip rail: the leading `All` plus one chip per non-empty TIER, in tier order.
+    ///
+    /// ALWAYS tiers, under every grouping. It used to be `chips(bands)`, so switching to
+    /// `By project` replaced it with `proj:` / `folder:` chips — the rail became a list of
+    /// folders and the tier selection had nowhere to live. The grouping decides how the
+    /// rows BELOW are headed and ordered; it does not decide what the rail is.
+    let rail: [BoardModel.BandChip]
+    /// The bands to render: the scope's rows, headed and ordered by the grouping.
+    let bands: [BoardBand]
+    /// The tier scope in force, or nil for the whole board.
+    ///
+    /// This is the REQUESTED scope only when the rail has a chip for it. A scope naming a
+    /// tier that is gone (a deleted custom tier) or one that emptied under the reader (its
+    /// last row completed, a query narrowed it away) falls back to nil, which is the
+    /// fallback `BoardModel.filtered` used to perform after the fact: the worst case is
+    /// "you are looking at more than you asked for", which the rail itself makes obvious,
+    /// and never an empty board with no explanation.
+    let scope: String?
+
+    static let empty = BoardAssembly(rail: [], bands: [], scope: nil)
+}
+
 /// The desktop's date filter, in the two values that earn their place on a phone
 /// (`DATE_FILTER_OPTIONS` also has Overdue / This week / No date, which live in a
 /// "More…" dropdown there — a menu inside a filter bar inside a board is three
@@ -896,6 +934,8 @@ enum BoardModel {
     ///     What did NOT change: inside a band that IS showing its done rows, a
     ///     completed task stays EXACTLY where it was, struck through, because the
     ///     position is the memory of where the work happened.
+    ///   - scope: the TIER the reader has narrowed to (a rail chip), or nil for the
+    ///     whole board. Applied at CONSTRUCTION time — see `assemble`.
     ///   - now: injected so the date filter is testable without a clock.
     static func bands(
         tasks: [WalnutTask],
@@ -909,8 +949,46 @@ enum BoardModel {
         shownDoneTiers: Set<String> = [],
         folders: BoardFolderIndex = .empty,
         knownSessionIds: [String: [String]] = [:],
+        scope: String? = nil,
         now: Date = Date()
     ) -> [BoardBand] {
+        assemble(
+            tasks: tasks, sessions: sessions, tierOf: tierOf, tierOrder: tierOrder,
+            customTiers: customTiers, query: query, grouping: grouping,
+            dateFilter: dateFilter, shownDoneTiers: shownDoneTiers, folders: folders,
+            knownSessionIds: knownSessionIds, scope: scope, now: now
+        ).bands
+    }
+
+    /// The board's whole answer: the tier rail, the scope's bands, and the scope that was
+    /// honoured — from ONE walk over the projection (see `BoardAssembly`).
+    ///
+    /// # The tier scope narrows at CONSTRUCTION time, and that is the whole fix
+    ///
+    /// `tierById` below is the ONE answer to "which tier owns this row", and it exists
+    /// before the grouping branch — so the scope filter belongs exactly there, where both
+    /// builders inherit it and cannot disagree. Post-filtering ASSEMBLED project bands
+    /// (what the shipped board did, through `filtered`) is wrong twice over: under `By
+    /// project` there is no band whose id is a tier, so the filter matched nothing and fell
+    /// back to the whole board (the reported defect — `By project` inside Focus showed
+    /// every tier's projects), and even where it matched, a band's COUNT was computed over
+    /// the whole board while its rows were narrowed, i.e. a heading that disagrees with the
+    /// rows under it.
+    static func assemble(
+        tasks: [WalnutTask],
+        sessions: [WalnutSession],
+        tierOf: [String: String],
+        tierOrder: [String: [String]],
+        customTiers: [FocusTierInfo],
+        query: String = "",
+        grouping: BoardGrouping = .tier,
+        dateFilter: BoardDateFilter = .all,
+        shownDoneTiers: Set<String> = [],
+        folders: BoardFolderIndex = .empty,
+        knownSessionIds: [String: [String]] = [:],
+        scope: String? = nil,
+        now: Date = Date()
+    ) -> BoardAssembly {
         let sessionOf = latestSessionByTask(sessions)
         let tiers: [(id: String, label: String)] =
             TasksStore.builtinTiers.map { ($0.id, $0.label) }
@@ -1002,18 +1080,112 @@ enum BoardModel {
             order.append(taskId)
         }
 
-        if grouping == .project {
-            return projectBands(
-                rows: order.compactMap { rowById[$0] }, query: query,
-                dateFilter: dateFilter, shownDoneTiers: shownDoneTiers,
-                folders: folders, now: now
-            )
-        }
-        return tierBands(
+        // THE RAIL, first, and WHICH tiers it holds is the same question under every
+        // grouping: the TIER bands over the WHOLE board. Built here rather than from the
+        // rendered bands, which is what makes "the rail is the tier rail" true by
+        // construction — feeding it the rendered bands is what turned it into a list of
+        // projects and folders under `By project`.
+        let railBands = tierBands(
             rowById: rowById, tierById: tierById, order: order,
             tiers: tiers, tierOrder: tierOrder, query: query,
             dateFilter: dateFilter, shownDoneTiers: shownDoneTiers, now: now
         )
+
+        // …and each chip's COUNT is what the board SHOWS for that tier, which is why it is
+        // recomputed per row here instead of read off `railBands`.
+        //
+        // The done fold is keyed by BAND id, and under `By project` the bands are
+        // `proj:` / `folder:` — so a reader who taps `show done (3)` on a project heading
+        // expands rows that no TIER band knows about. Reading the count off the tier band
+        // would then leave the chip saying `Focus 1` over a board drawing 4 rows, which is
+        // the bar-disagrees-with-the-board defect this screen has shipped before. The
+        // predicate below is the same fold rule the rendering builder applies (`foldKey`),
+        // so the two cannot drift.
+        //
+        // Note what this does NOT reintroduce: the count is still per TIER, still after the
+        // date filter, and still independent of which projects the tier happens to hold —
+        // so the tier counts do not move when the grouping changes unless the reader's own
+        // fold decisions do.
+        var countByTier: [String: Int] = [:]
+        countByTier.reserveCapacity(tiers.count)
+        for id in order {
+            guard let tier = tierById[id], let row = rowById[id] else { continue }
+            guard admits(row, query: query, dateFilter: dateFilter, now: now) else { continue }
+            if row.isDone,
+               !shownDoneTiers.contains(
+                   foldKey(row, tier: tier, grouping: grouping, folders: folders)
+               ) { continue }
+            countByTier[tier, default: 0] += 1
+        }
+        var rail = [BandChip(
+            bandId: nil, label: allChipLabel,
+            count: countByTier.values.reduce(0, +)
+        )]
+        rail.append(contentsOf: railBands.map {
+            BandChip(bandId: $0.bandId, label: $0.label, count: countByTier[$0.bandId] ?? 0)
+        })
+
+        // A scope is honoured only when the rail HAS a chip for it, which is the same
+        // rule `filtered` encoded one step later: a tier that is gone or has emptied under
+        // the reader falls back to the whole board, and the lit chip falls back to `All`,
+        // so the bar can never disagree with the rows.
+        let honoured = scope.flatMap { id in
+            railBands.contains(where: { $0.bandId == id }) ? id : nil
+        }
+
+        // Nothing to narrow and nothing to re-head: the rail bands ARE the board.
+        if honoured == nil && grouping == .tier {
+            return BoardAssembly(rail: rail, bands: railBands, scope: nil)
+        }
+
+        // The scope filter, at construction, over the ONE membership map.
+        var scopedRowById = rowById
+        var scopedTierById = tierById
+        var scopedOrder = order
+        if let honoured {
+            scopedOrder = order.filter { tierById[$0] == honoured }
+            let keep = Set(scopedOrder)
+            scopedRowById = rowById.filter { keep.contains($0.key) }
+            scopedTierById = tierById.filter { keep.contains($0.key) }
+        }
+
+        let bands: [BoardBand]
+        if grouping == .project {
+            bands = projectBands(
+                rows: scopedOrder.compactMap { scopedRowById[$0] }, query: query,
+                dateFilter: dateFilter, shownDoneTiers: shownDoneTiers,
+                folders: folders,
+                // What the ONE remaining heading is called when there is no project worth
+                // naming: the tier you are in, or `All`. See `projectBands`.
+                soleHeadingLabel: honoured.flatMap { id in
+                    tiers.first(where: { $0.id == id })?.label
+                } ?? allChipLabel,
+                now: now
+            )
+        } else {
+            bands = tierBands(
+                rowById: scopedRowById, tierById: scopedTierById, order: scopedOrder,
+                tiers: tiers, tierOrder: tierOrder, query: query,
+                dateFilter: dateFilter, shownDoneTiers: shownDoneTiers, now: now
+            )
+        }
+        return BoardAssembly(rail: rail, bands: bands, scope: honoured)
+    }
+
+    /// Which band's done fold decides whether a row is DRAWN, under one grouping.
+    ///
+    /// One function because two readers need the same answer and a second copy of this rule
+    /// would be a chip count that disagrees with the rows under it: the rendering builders
+    /// apply it structurally (a band folds its own done rows), and the rail applies it per
+    /// row to count what the board shows for a tier.
+    static func foldKey(
+        _ row: BoardRow, tier: String, grouping: BoardGrouping, folders: BoardFolderIndex
+    ) -> String {
+        guard grouping == .project else { return tier }
+        let folderId = folders.folderOf[row.id] ?? ""
+        return folderId.isEmpty
+            ? projectBandPrefix + row.project
+            : folderBandPrefix + folderId
     }
 
     /// The board grouped by pin tier — its native shape.
@@ -1106,12 +1278,35 @@ enum BoardModel {
     /// folders on the OUTSIDE would therefore shatter each project into as many
     /// sections as it has folders — "By project" would stop grouping by project — so
     /// the phone mirrors the console instead: projects outside, folders inside.
+    ///
+    /// # A heading that names something the whole list already is, is not drawn
+    ///
+    /// `soleHeadingLabel` is what the one remaining heading says when the rows being
+    /// grouped span FEWER THAN TWO projects: with one project there is nothing to group
+    /// by, and repeating that project's name over the whole list is noise (the desktop
+    /// console gates its project headers on the same `>= 2` rule). The band itself
+    /// survives — it is what carries `show done (N)`, the visible count and the create
+    /// ring — so what changes is only the WORD on it: the tier you are scoped to, or
+    /// `All`. Its `createSeed` still files into the project its rows are in.
+    ///
+    /// Which is why the create row does NOT print this heading: the ring under a band
+    /// relabelled "Focus" writes into `marina`, so its words come from the seed
+    /// (`TaskBoardList.createDestination`). A heading names the group; a create row makes a
+    /// promise about a write, and this label is not a place you can write to (least of all
+    /// `All`).
+    ///
+    /// The suppression is deliberately narrowed to the FLAT case (one project AND no
+    /// folder band on screen). With a folder on screen the project heading is the root
+    /// that the folder's indent refers to, and dropping it would leave an indented folder
+    /// heading under a name the screen never said — the exact failure `leadsProject` and
+    /// `leadFolders` exist to prevent.
     static func projectBands(
         rows source: [BoardRow],
         query: String,
         dateFilter: BoardDateFilter,
         shownDoneTiers: Set<String>,
         folders: BoardFolderIndex = .empty,
+        soleHeadingLabel: String = allChipLabel,
         now: Date
     ) -> [BoardBand] {
         // Decorate-sort-undecorate: a `BoardRow` payload makes every swap copy two
@@ -1151,6 +1346,14 @@ enum BoardModel {
             return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
         }
 
+        // ONE project across every row AND no folder to indent under it: the project
+        // heading has nothing left to say, so it is replaced by `soleHeadingLabel`.
+        // `folders.folderOf` is consulted through the buckets that actually got rows, so a
+        // folder the server lists but this board has no rows for does not keep a heading
+        // alive that nothing is nested under.
+        let hasFolderBand = buckets.values.contains { $0.keys.contains { !$0.isEmpty } }
+        let noProjectWorthNaming = names.count < 2 && !hasFolderBand
+
         var bands: [BoardBand] = []
         for name in names {
             let projectBandId = projectBandPrefix + name
@@ -1166,7 +1369,12 @@ enum BoardModel {
             for folderId in [""] + folderIds {
                 let isFolder = !folderId.isEmpty
                 let bandId = isFolder ? folderBandPrefix + folderId : projectBandId
-                let label = isFolder ? (folders.labelOf[folderId] ?? folderId) : projectLabel
+                let label: String
+                if isFolder {
+                    label = folders.labelOf[folderId] ?? folderId
+                } else {
+                    label = noProjectWorthNaming ? soleHeadingLabel : projectLabel
+                }
                 // Folded unless expanded, exactly as a tier band is: the default lives
                 // in ONE place per builder and both builders state the same rule.
                 let hidingDone = !shownDoneTiers.contains(bandId)
@@ -1202,7 +1410,12 @@ enum BoardModel {
                     // could only file the task into the project — landing it OUTSIDE
                     // the folder whose heading was tapped. A control that quietly does
                     // something else is the `focus_tier: "proj:marina"` mistake again.
-                    createSeed: isFolder ? nil : NewTaskSeed.project(label),
+                    // `projectLabel`, never the heading's `label`: a heading whose name was
+                    // suppressed as redundant still files into the PROJECT its rows are
+                    // in, and filing into a tier name ("Focus") would create a project
+                    // called Focus. The row's WORDS follow this seed rather than the
+                    // heading (`TaskBoardList.createDestination`), so the two cannot drift.
+                    createSeed: isFolder ? nil : NewTaskSeed.project(projectLabel),
                     nest: isFolder ? BoardBandNest(
                         folderId: folderId,
                         projectBandId: projectBandId,
@@ -1355,12 +1568,20 @@ enum BoardModel {
     // missing from this board, whichever half of the split knows about the pin.
 
 
-    // MARK: - Band chips (the floating bar) — a VIEW over the bands, never a query
+    // MARK: - Band chips (the floating bar) — a VIEW over bands, never a query
     //
-    // The chips ARE the bands: one chip per rendered band, in band order, plus a
+    // The chips ARE bands: one chip per band handed in, in band order, plus a
     // leading `All`. That is deliberate to the point of being the rule this
     // section exists to state: chip selection must not open a second way to
     // decide what a band contains.
+    //
+    // WHICH bands moved (this round) and it is the user's complaint: the RAIL is always
+    // built from the TIER bands over the whole board (`assemble`), never from the bands
+    // being rendered. Feeding it the rendered bands is what made `By project` replace the
+    // tier rail with `proj:` / `folder:` chips — the rail became a list of folders, the
+    // tier selection had nowhere to live, and reaching a folder took several taps. The
+    // rule above is unchanged: a chip still carries a count it read OFF a band, and that
+    // band is still assembled once. It is just always a tier band now.
     //
     // The disappearing-task bug (see `boardTier`) came from two code paths
     // disagreeing about membership, and a chip row is exactly the shape that
@@ -1408,32 +1629,25 @@ enum BoardModel {
         return chips
     }
 
-    /// The bands a chip selection leaves on screen.
-    ///
-    /// An UNKNOWN selection returns the whole board rather than nothing, and that
-    /// is the load-bearing half. A selected band can disappear under the user
-    /// (its last row completed, `hide done` swallowed it, a query narrowed it
-    /// away, the grouping changed) and a filter that answered "no bands" there
-    /// would show an empty board with no explanation — the disappearing-task
-    /// failure mode again, one level up. Falling back to All means the worst case
-    /// is "you are looking at more than you asked for", which the chip row itself
-    /// makes obvious.
-    ///
-    /// The survivors are re-led (`relead`): selecting a single FOLDER band leaves a
-    /// folder heading whose project band is no longer on screen, and a folder with no
-    /// project above it is a heading that does not say where the work lives.
-    static func filtered(_ bands: [BoardBand], selected: String?) -> [BoardBand] {
-        guard let selected, bands.contains(where: { $0.bandId == selected }) else { return bands }
-        return relead(bands.filter { $0.bandId == selected })
-    }
-
-    /// Which chip should read as selected, given a (possibly stale) selection.
-    /// nil = the `All` chip, which is also the answer for a band that has gone
-    /// away — so the highlighted chip always agrees with the rows below it.
-    static func selectedChip(_ bands: [BoardBand], selected: String?) -> String? {
-        guard let selected, bands.contains(where: { $0.bandId == selected }) else { return nil }
-        return selected
-    }
+    // `filtered` and `selectedChip` are GONE (this round), and their absence is the
+    // change rather than a cleanup.
+    //
+    // What they were: a POST-FILTER over the assembled bands (`bands.filter { $0.bandId ==
+    // selected }`, re-`relead`ed) plus the matching "which chip reads as lit". Both were
+    // written when the rail was `chips(bands)`, so a selection was a BAND id and narrowing
+    // was a view over the rendered array.
+    //
+    // Why that could not survive: under `By project` no band's id is a tier, so a Focus
+    // selection matched nothing and the filter fell back to the WHOLE board — the reported
+    // defect. And where it did match, the band's `count` had already been computed over
+    // every tier's rows while the rows it kept were narrowed, i.e. a heading that disagrees
+    // with the rows under it. Narrowing has to happen at CONSTRUCTION time; see `assemble`.
+    //
+    // What SURVIVES, in `assemble`: an unknown or emptied scope still shows the whole board
+    // rather than nothing (a selected tier can disappear under the reader — its last row
+    // completed, a query narrowed it away — and answering "no rows" there is the
+    // disappearing-task failure mode one level up), and `BoardAssembly.scope` is what the
+    // lit chip reads, so the bar can never disagree with the rows.
 
     /// Every row id the bands already render.
     ///
@@ -1545,6 +1759,14 @@ struct BoardBandsKey: Equatable {
     let query: String
     let grouping: BoardGrouping
     let dateFilter: BoardDateFilter
+    /// The TIER the rail has narrowed to (nil = the whole board).
+    ///
+    /// Part of the key because the scope now narrows the row set at CONSTRUCTION time: a
+    /// chip tap changes which rows exist, so a key without it would leave the board
+    /// showing the previous tier until some unrelated input happened to move the key.
+    /// (When the scope was a post-filter over assembled bands it legitimately did not
+    /// belong here — that is exactly what changed.)
+    var scope: String? = nil
     /// The bands the reader expanded to show their done rows (see
     /// `bands(shownDoneTiers:)`). Part of the key because it changes which rows a band
     /// holds — which is also what makes an explicit expand survive every rebuild the
@@ -1556,14 +1778,22 @@ struct BoardBandsKey: Equatable {
 @MainActor
 final class BoardBandsCache {
     private var key: BoardBandsKey?
-    private var value: [BoardBand] = []
+    private var value: BoardAssembly = .empty
 
     /// The memo. `build` runs only when the key moved.
     ///
+    /// It memoizes the WHOLE assembly (rail + bands + honoured scope) and not just the
+    /// bands, because those three come from one population walk and are only consistent
+    /// with each other if they are cached together: two entries keyed the same way could
+    /// be refreshed at different passes, which is a rail whose counts describe a board that
+    /// is no longer on screen.
+    ///
     /// The caller must still read the OBSERVED store properties before calling this
-    /// (`TasksView.boardBands` does), or a cache hit would skip the reads SwiftUI needs
+    /// (`TasksView.boardAssembly` does), or a cache hit would skip the reads SwiftUI needs
     /// to register a dependency on and the board would stop updating.
-    func bands(for key: BoardBandsKey, build: () -> [BoardBand]) -> [BoardBand] {
+    func assembly(
+        for key: BoardBandsKey, build: () -> BoardAssembly
+    ) -> BoardAssembly {
         if let current = self.key, current == key { return value }
         let built = build()
         self.key = key

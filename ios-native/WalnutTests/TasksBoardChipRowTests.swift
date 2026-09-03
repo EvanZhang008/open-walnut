@@ -89,11 +89,17 @@ final class TasksBoardChipRowTests: XCTestCase {
         ]
     }
 
-    /// "By project" grouping, which is the worst case: ~30 bands, all of them named.
-    private var projectChips: [BoardModel.BandChip] {
+    /// The LONG rail, which is the worst case this bar has to lay out: ~30 named chips.
+    ///
+    /// The ids are custom tiers, because that is now the only way the rail gets long — it
+    /// is always the TIER rail, under every grouping, so it can never hold `proj:` or
+    /// `folder:` chips. The LABELS are unchanged ("Project N"), deliberately: every width
+    /// this file pins reads `label.count`, and re-baselining a geometry suite because a
+    /// fixture's ids changed is how a gate stops meaning anything.
+    private var longRailChips: [BoardModel.BandChip] {
         var chips: [BoardModel.BandChip] = [.init(bandId: nil, label: "All", count: 92)]
         for index in 0..<30 {
-            chips.append(.init(bandId: "proj:p\(index)", label: "Project \(index)", count: 3))
+            chips.append(.init(bandId: "ct_p\(index)", label: "Project \(index)", count: 3))
         }
         return chips
     }
@@ -226,7 +232,7 @@ final class TasksBoardChipRowTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(rail.railSpacing, 8, "the detachment is the fix, not a hairline")
         for width in screenWidths {
             for placement in BoardBandBarPlacement.allCases {
-                let l = layout(placement, screen: width, chips: projectChips)
+                let l = layout(placement, screen: width, chips: longRailChips)
                 XCTAssertGreaterThanOrEqual(
                     l.filters.minX - l.rail.maxX, 8 - 0.01,
                     "screen=\(width) \(placement): only \(l.filters.minX - l.rail.maxX)pt of gap"
@@ -255,7 +261,7 @@ final class TasksBoardChipRowTests: XCTestCase {
     /// the platform lets us bound.
     func testNothingTheRailCanShowReachesTheControlAtAnyChipPosition() {
         for width in screenWidths {
-            let l = layout(.pinnedOverlay, screen: width, chips: projectChips)
+            let l = layout(.pinnedOverlay, screen: width, chips: longRailChips)
             for chipMinX in stride(from: CGFloat(0), through: l.card.width, by: 7) {
                 for chipWidth in [CGFloat(40), 102, 157, 209, 400] {
                     // What the viewport can reveal of a chip that starts there.
@@ -319,7 +325,7 @@ final class TasksBoardChipRowTests: XCTestCase {
         for width in screenWidths {
             for placement in BoardBandBarPlacement.allCases {
                 for scale in scales {
-                    for (name, chips) in [("tier", tierChips), ("project", projectChips)] {
+                    for (name, chips) in [("tier", tierChips), ("longRail", longRailChips)] {
                         let l = layout(placement, screen: width, chips: chips, typeScale: scale)
                         XCTAssertGreaterThan(
                             l.fadeWidth, 0,
@@ -373,7 +379,7 @@ final class TasksBoardChipRowTests: XCTestCase {
     /// end, the last chip sits clear of the gradient instead of living under it.
     func testTheTrailingInsetLetsTheLastChipClearTheFade() {
         let l = rail.layout(
-            container: inlineContainer, placement: .inlineRow, chips: projectChips)
+            container: inlineContainer, placement: .inlineRow, chips: longRailChips)
         XCTAssertGreaterThan(l.railTrailingContentInset, l.fadeWidth,
             "the last chip can never leave the gradient")
         XCTAssertEqual(l.railTrailingContentInset, l.fadeWidth + rail.chipSpacing, accuracy: 0.01)
@@ -433,7 +439,7 @@ final class TasksBoardChipRowTests: XCTestCase {
             "the dimmed-readable stretch has to stay the majority of the fade")
 
         let l = rail.layout(
-            container: inlineContainer, placement: .inlineRow, chips: projectChips)
+            container: inlineContainer, placement: .inlineRow, chips: longRailChips)
         XCTAssertGreaterThan(l.fadeWidth, 0, "the fixture has to be a rail that overflows")
         XCTAssertEqual(
             l.fadeFloorLocation,

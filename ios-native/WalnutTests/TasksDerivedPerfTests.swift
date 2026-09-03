@@ -123,20 +123,19 @@ final class TasksDerivedPerfTests: XCTestCase {
     /// both into one number would hide which surface a regression is in.
     private func boardDerivedPass(_ store: TasksStore, query: String) -> Int {
         var sink = 0
-        // ONE bands() call: the view binds the result and hands the same array to
-        // the band bar's chips and the sections builder.
-        let bands = BoardModel.bands(
+        // ONE assemble() call: the view binds the result and hands the SAME value to the
+        // band bar's rail, the rows and the sections builder. It is one call and not two
+        // (rail + bands) precisely so a future "just build the rail separately" shows up as
+        // a second population walk in this measurement rather than only as a rail whose
+        // counts describe a board that is no longer on screen.
+        let assembly = BoardModel.assemble(
             tasks: store.tasks, sessions: store.sessions,
             tierOf: store.taskTiers, tierOrder: store.taskTierOrder,
             customTiers: store.customTiers, query: query
         )
-        sink += bands.count
-        // The floating band bar's chips and the chip-narrowed rows are both views
-        // OVER that one array. They are in this pass so a future "just re-query the
-        // tier for this chip" would show up as a second bands()-shaped cost here
-        // rather than only as a correctness bug.
-        sink += BoardModel.chips(bands).count
-        let visible = BoardModel.filtered(bands, selected: nil)
+        sink += assembly.bands.count
+        sink += assembly.rail.count
+        let visible = assembly.bands
         sink += visible.count
         for f in TaskFilter.allCases { sink += store.count(for: f) }
         // A live query also appends the matching open tasks below the bands

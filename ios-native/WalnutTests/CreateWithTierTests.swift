@@ -405,63 +405,79 @@ final class CreateWithTierTests: XCTestCase {
     /// that created it. That is the "I made it and can't find it" defect the board has already
     /// shipped once, which is why the seed is computed rather than empty.
     func testTheBoardQuickAddAlwaysPinsSomething() {
-        let seed = TasksView.boardQuickAddSeed(bands: [], selected: nil)
+        let seed = TasksView.boardQuickAddSeed(scope: nil)
         XCTAssertEqual(seed.pin, .tier(BoardModel.defaultTierId),
-            "a board create with no band selected still has to land in a visible band")
-        XCTAssertEqual(seed.project, "", "no band selected means no project to inherit")
+            "a board create with the rail on All still has to land in a visible band")
+        XCTAssertEqual(seed.project, "", "All is not a project, so there is none to inherit")
         XCTAssertTrue(seed.pin.namesTier)
         XCTAssertEqual(seed.pin.wireFocusTier, BoardModel.defaultTierId)
     }
 
-    /// With a tier band selected the row files into THAT band, so the task appears where the
-    /// user was looking. This is the band's own `createSeed`, the same value its heading `+`
-    /// uses: one destination per band, named once.
-    func testTheBoardQuickAddFollowsTheSelectedTierBand() {
+    /// With a TIER scoped on the rail the row files into THAT tier, so the task appears
+    /// where the user was looking — and it does so under BOTH groupings, which is the half
+    /// that used to be wrong.
+    ///
+    /// It used to read the tier off the selected BAND's `createSeed`. That agreed with the
+    /// tier band's own `+` under `Custom order` and silently disagreed under `By project`,
+    /// where the selected band is a `proj:` band that names a project and no tier: a create
+    /// made while scoped to Focus landed in the default tier instead. Reading the SCOPE is
+    /// what makes the two groupings answer the same.
+    func testTheBoardQuickAddFollowsTheScopedTierUnderBothGroupings() {
         let tasks = ["t1", "t2"].map(makePinnedTask)
+        for grouping in BoardGrouping.allCases {
+            let assembly = BoardModel.assemble(
+                tasks: tasks,
+                sessions: [makeSession(id: "s1", taskId: "t1", tier: "focus")],
+                tierOf: ["t1": "focus", "t2": "backlog"],
+                tierOrder: ["focus": ["t1"], "backlog": ["t2"]],
+                customTiers: [], grouping: grouping, scope: "focus"
+            )
+            let seed = TasksView.boardQuickAddSeed(scope: assembly.scope)
+            XCTAssertEqual(seed.pin, .tier("focus"), "\(grouping.rawValue)")
+            XCTAssertEqual(seed.pin.wireFocusTier, "focus", "\(grouping.rawValue)")
+        }
+        // And under `Custom order` it still agrees with the band's own `+`, which is the
+        // property the old shape got right and this must not lose.
         let bands = BoardModel.bands(
-            tasks: tasks,
-            sessions: [makeSession(id: "s1", taskId: "t1", tier: "focus")],
-            tierOf: ["t1": "focus", "t2": "backlog"],
-            tierOrder: ["focus": ["t1"], "backlog": ["t2"]],
-            customTiers: []
+            tasks: tasks, sessions: [], tierOf: ["t1": "focus", "t2": "backlog"],
+            tierOrder: ["focus": ["t1"], "backlog": ["t2"]], customTiers: []
         )
         for band in bands {
-            let seed = TasksView.boardQuickAddSeed(bands: bands, selected: band.bandId)
-            XCTAssertEqual(seed.pin, .tier(band.bandId), "selected \(band.bandId)")
-            XCTAssertEqual(seed, band.createSeed,
-                "the top row and the band's own + must file into the same place")
+            XCTAssertEqual(
+                TasksView.boardQuickAddSeed(scope: band.bandId), band.createSeed,
+                "the top row and \(band.bandId)'s own + must file into the same place"
+            )
         }
     }
 
-    /// A PROJECT band names a project and not a tier, and both halves of its seed matter: the
-    /// project is inherited (it is the context the user is looking at) and the pin still has to
-    /// be a tier, because `NewTaskSeed.project` alone leaves the task unpinned and therefore
-    /// off this board. The old shape of this bug was the opposite mistake, sending
-    /// `focus_tier: "proj:<name>"` — so the assertion checks the wire value too.
-    func testAProjectBandLendsItsProjectAndStillPins() {
-        let band = BoardBand(
-            bandId: "proj:Marina", label: "Marina", rows: [], hiddenDone: 0,
-            createSeed: NewTaskSeed.project("Marina")
-        )
-        let seed = TasksView.boardQuickAddSeed(bands: [band], selected: "proj:Marina")
-        XCTAssertEqual(seed.project, "Marina", "the visible context is the project")
-        XCTAssertEqual(seed.pin, .tier(BoardModel.defaultTierId),
-            "a project seed alone is unpinned, and unpinned is invisible here")
-        XCTAssertEqual(seed.pin.wireFocusTier, BoardModel.defaultTierId,
-            "the band id must never reach the wire as a tier")
-    }
-
-    /// A folder band has no create affordance at all (`createSeed == nil`), and a selection
-    /// naming a band that isn't there any more is the same case: neither may produce an
-    /// unpinned seed.
-    func testAFolderBandAndAStaleSelectionBothFallBackToTheDefaultTier() {
-        let folder = BoardBand(
-            bandId: "folder:Home", label: "Home", rows: [], hiddenDone: 0, createSeed: nil
-        )
-        for selected in ["folder:Home", "proj:Deleted", "focus"] {
-            let seed = TasksView.boardQuickAddSeed(bands: [folder], selected: selected)
-            XCTAssertEqual(seed.pin, .tier(BoardModel.defaultTierId), "selected \(selected)")
-            XCTAssertEqual(seed.project, "", "selected \(selected)")
+    /// A PROJECT or FOLDER band id can no longer be a scope at all — the rail is always the
+    /// tier rail — and the board only ever hands over a scope it HONOURED
+    /// (`BoardAssembly.scope`, nil for anything the rail has no chip for). Both halves are
+    /// pinned here because the failure they prevent is the same one twice: a band id
+    /// reaching the wire as `focus_tier`, which the create endpoint 400s on by design.
+    ///
+    /// This replaces `testAProjectBandLendsItsProjectAndStillPins`, whose whole premise
+    /// (selecting a `proj:` chip, then inheriting its project into the quick add) was the
+    /// shape the user rejected: the rail listed projects and folders, so the top-level
+    /// create had to guess a tier for a selection that named none.
+    func testABandIdIsNeverHonouredAsAScopeAndNeverReachesTheWire() {
+        let tasks = ["t1", "t2"].map(makePinnedTask)
+        for grouping in BoardGrouping.allCases {
+            for requested in ["proj:Marina", "folder:Home", "ct_gone99", ""] {
+                let assembly = BoardModel.assemble(
+                    tasks: tasks, sessions: [],
+                    tierOf: ["t1": "focus", "t2": "backlog"],
+                    tierOrder: ["focus": ["t1"], "backlog": ["t2"]],
+                    customTiers: [], grouping: grouping, scope: requested
+                )
+                XCTAssertNil(assembly.scope,
+                    "\(grouping.rawValue): \(requested) is not a tier the rail offers")
+                let seed = TasksView.boardQuickAddSeed(scope: assembly.scope)
+                XCTAssertEqual(seed.pin, .tier(BoardModel.defaultTierId), "\(requested)")
+                XCTAssertEqual(seed.project, "", "\(requested)")
+                XCTAssertEqual(seed.pin.wireFocusTier, BoardModel.defaultTierId,
+                    "a band id must never reach the wire as a tier")
+            }
         }
     }
 
@@ -469,7 +485,7 @@ final class CreateWithTierTests: XCTestCase {
     /// wire tier and not a label.
     func testTheBoardQuickAddSeedIsAlwaysResolvable() {
         let builtins = TasksStore.builtinTiers.map(\.id)
-        let seed = TasksView.boardQuickAddSeed(bands: [], selected: nil)
+        let seed = TasksView.boardQuickAddSeed(scope: nil)
         XCTAssertTrue(
             seed.pin.isResolvable(builtinIds: builtins, customTierIds: []),
             "\(seed.pin) would 400 on every board quick add"

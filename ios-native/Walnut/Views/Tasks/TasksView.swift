@@ -115,37 +115,62 @@ struct TasksView: View {
     /// Which band's foot create row is open, by band id (exactly one: two
     /// keyboards on one list is not a thing).
     @State private var openCreateBand: String?
-    /// Which band the floating bar's chip has narrowed the board to (nil = All).
-    ///
-    /// A BAND id, like the two above, and it is deliberately only ever compared
-    /// against the bands the board already built (`BoardModel.filtered`): a chip is
-    /// a view over the assembled bands, never a second query, because two paths
-    /// deciding what a band contains is how a task went missing from this screen
-    /// once already.
-    @State private var selectedBandId: String?
-
-    // The board's two filters, mirroring the desktop's View dropdown (grouping +
-    // date). Persisted through @AppStorage, which is how this app already keeps a
-    // view preference (SettingsView's mic route, NotesView's pinnedCollapsed) and
-    // the same shape as the desktop's localStorage keys. The RAW string is what
-    // defaults can hold; `BoardFilterPrefs` maps it back and absorbs a value an
-    // older build wrote. See BoardFilterBar.swift for the defaults and why they
+    // The board's three view decisions — WHICH TIER (the chip rail), how its rows are
+    // headed (grouping), and which dates are admitted — all persisted through @AppStorage,
+    // which is how this app already keeps a view preference (SettingsView's mic route,
+    // NotesView's pinnedCollapsed) and the same shape as the desktop's localStorage keys.
+    // The RAW string is what defaults can hold; `BoardFilterPrefs` maps it back and absorbs
+    // a value an older build wrote. See BoardFilterBar.swift for the defaults and why they
     // differ from the desktop's.
-    @AppStorage(BoardFilterPrefs.groupingKey) private var groupingRaw =
+
+    /// LEGACY grouping value, read only so an installed build's setting migrates into the
+    /// per-tier map (`BoardFilterPrefs.grouping(scope:modes:legacy:)`). Never written.
+    @AppStorage(BoardFilterPrefs.groupingKey) private var legacyGroupingRaw =
         BoardFilterPrefs.defaultGrouping.rawValue
+    /// grouping per tier, as JSON. The grouping belongs to the tier you are looking at, so
+    /// each tier remembers its own mode instead of one global value being carried over.
+    @AppStorage(BoardFilterPrefs.groupingModesKey) private var groupingModesRaw = ""
     @AppStorage(BoardFilterPrefs.dateFilterKey) private var dateFilterRaw =
         BoardFilterPrefs.defaultDateFilter.rawValue
+    /// Which TIER the rail's chip has narrowed the board to ("" = All).
+    ///
+    /// A TIER id, and only ever a tier id: the rail is always the tier rail, under every
+    /// grouping. It used to be a BAND id in `@State`, which is why switching grouping had
+    /// to clear it (`focus` and `proj:marina` are different id spaces) — that whole problem
+    /// is gone, so the scope is an ordinary persisted preference and survives a grouping
+    /// switch, a tab switch and a relaunch.
+    ///
+    /// It is still only ever honoured against the rail the board just built
+    /// (`BoardAssembly.scope`): a stale or emptied tier shows the whole board rather than an
+    /// empty one, because two paths deciding what a band contains is how a task went
+    /// missing from this screen once already.
+    @AppStorage(BoardFilterPrefs.tierScopeKey) private var tierScopeRaw = ""
 
     private var isEditing: Bool { editMode == .active }
+
+    /// The tier the rail is narrowed to, as the model speaks it.
+    private var tierScope: String? { BoardFilterPrefs.scope(tierScopeRaw) }
 
     /// The stored grouping/date strings as the typed values the model and the
     /// filter bar speak. Bindings rather than a second `@State` mirror: one source
     /// of truth means a tap writes defaults directly and nothing can drift out of
     /// sync with what was persisted.
+    ///
+    /// The grouping binding is SCOPE-AWARE on both sides: it reads the mode stored for the
+    /// tier currently on screen and writes back into that tier's slot, so the chip always
+    /// shows what this tier is doing and a tap never reaches another tier.
     private var grouping: Binding<BoardGrouping> {
         Binding(
-            get: { BoardFilterPrefs.grouping(groupingRaw) },
-            set: { groupingRaw = $0.rawValue }
+            get: {
+                BoardFilterPrefs.grouping(
+                    scope: tierScope, modes: groupingModesRaw, legacy: legacyGroupingRaw
+                )
+            },
+            set: {
+                groupingModesRaw = BoardFilterPrefs.withGrouping(
+                    $0, scope: tierScope, modes: groupingModesRaw
+                )
+            }
         )
     }
 
@@ -162,27 +187,25 @@ struct TasksView: View {
 
     /// Where the board's TOP-LEVEL quick add files a task.
     ///
-    /// Two rules, and the first one is what keeps the row honest: whatever it creates has
-    /// to be VISIBLE on the board that created it, and the board is the pinned working set.
-    /// So the pin is never left to the server default — it is the selected band's tier when
-    /// a tier band is selected, and `BoardModel.defaultTierId` otherwise, which is the same
-    /// band a pin with no split lands in (so the row does not visibly hop when the
-    /// authoritative split arrives).
+    /// One rule, and it is what keeps the row honest: whatever it creates has to be VISIBLE
+    /// on the board that created it, and the board is the pinned working set. So the pin is
+    /// never left to the server default — it is the TIER the rail is scoped to, and
+    /// `BoardModel.defaultTierId` when the rail says `All` (the same band a pin with no
+    /// split lands in, so the row does not visibly hop when the authoritative split
+    /// arrives).
     ///
-    /// Second rule: a PROJECT band's chip pre-fills its project but cannot supply a tier
-    /// (`NewTaskSeed.project` deliberately leaves the pin unspecified, because adding under
-    /// a project header is about the project). Keeping that seed as-is would create an
-    /// unpinned task, i.e. rule one broken, so the project survives and the pin is filled
-    /// in. That is exactly the assumption the board has broken before by reading a band id
-    /// as if it were a tier id.
+    /// It reads the SCOPE directly, which is the change: it used to derive the tier from
+    /// the selected BAND's `createSeed`, so under `By project` the selected band was a
+    /// `proj:` band that names a project and no tier — and a create made while scoped to
+    /// Focus landed in Satellite. Pass `BoardAssembly.scope`, never the requested id: a
+    /// scope the board did not honour must not reach the wire as a `focus_tier`, which is
+    /// the `focus_tier: "proj:marina"` mistake in its newest disguise.
     ///
-    /// A static function over the bands rather than a lookup inside the body: it is the
-    /// kind of rule that is wrong in one grouping and right in the other, which is what
-    /// `CreateWithTierTests` pins.
-    static func boardQuickAddSeed(bands: [BoardBand], selected: String?) -> NewTaskSeed {
-        let seed = bands.first { $0.bandId == selected }?.createSeed
-        if let seed, seed.pin.namesTier { return seed }
-        return NewTaskSeed(project: seed?.project ?? "", pin: .tier(BoardModel.defaultTierId))
+    /// A static function rather than a lookup inside the body: it is the kind of rule that
+    /// is wrong in one grouping and right in the other, which is what `CreateWithTierTests`
+    /// pins.
+    static func boardQuickAddSeed(scope: String?) -> NewTaskSeed {
+        NewTaskSeed(project: "", pin: .tier(scope ?? BoardModel.defaultTierId))
     }
 
     var body: some View {
@@ -473,14 +496,20 @@ struct TasksView: View {
             // anti-pattern the derived-collection perf gate exists to catch). Only
             // computed on the board — every other filter would pay for a list it
             // doesn't render.
-            let bands = activeFilter == .sessions ? boardBands : []
-            // The chips are derived from those same bands (counts included), and the
-            // rows come from the same array filtered by the chip selection. ONE
-            // assembly, two views of it: a chip can never claim a count the band
-            // below it disagrees with, and a band cannot exist in the bar and not on
-            // the board.
-            let chips = activeFilter == .sessions ? BoardModel.chips(bands) : []
-            let visibleBands = BoardModel.filtered(bands, selected: selectedBandId)
+            let assembly = activeFilter == .sessions ? boardAssembly : .empty
+            // ONE assembly, three views of it, all from the same population walk: the TIER
+            // rail (always tiers, never the rendered bands), the bands the scope leaves on
+            // screen, and the scope the board actually honoured — which is what the lit
+            // chip reads, so the bar can never claim a tier the rows disagree with.
+            //
+            // `visibleBands` is no longer a post-filter: the scope narrows the row set at
+            // CONSTRUCTION time (`BoardModel.assemble`), so a project heading's count and
+            // its rows are both the tier's subset. Filtering assembled project bands here
+            // is exactly the shipped defect — under `By project` no band's id is a tier, so
+            // the filter matched nothing and the board showed every tier's projects.
+            let bands = assembly.bands
+            let chips = assembly.rail
+            let visibleBands = bands
             // …and `sections` only when something actually renders THEM. The board
             // builds its OWN bands (tier or project, per the filter bar) and
             // reaches for `sections` only to append search hits (dogfood R17).
@@ -503,11 +532,11 @@ struct TasksView: View {
             // below.
             //
             // ONE case still moves the lit chip on its own, and it stays truthful
-            // rather than silent: a query that leaves the selected band with no rows
-            // drops that band from `bands` entirely (`BoardModel.bands` keeps no empty
-            // bands), so `selectedChip` reads `All` and the board shows every band. The
-            // bar and the board agree in that state — which is the property that
-            // matters, and the one dimming was standing in for.
+            // rather than silent: a query that leaves the scoped TIER with no rows drops
+            // that tier from the rail entirely (`tierBands` keeps no empty bands), so
+            // `BoardAssembly.scope` comes back nil, the `All` chip lights, and the board
+            // shows every band. The bar and the board agree in that state — which is the
+            // property that matters, and the one dimming was standing in for.
             //
             // Computed only while a query is live, which is the only time anything
             // reads it — on the board at rest this set costs a walk over every
@@ -608,7 +637,7 @@ struct TasksView: View {
                 if activeFilter == .sessions {
                     Section {
                         bandBar(
-                            proxy: proxy, bands: bands, chips: chips,
+                            proxy: proxy, selected: assembly.scope, chips: chips,
                             // The List has ALREADY inset this row (measured
                             // x 16..386 of a 402pt screen), so the card takes
                             // the container it is handed whole.
@@ -667,7 +696,7 @@ struct TasksView: View {
                 Section {
                     QuickAddRow(
                         seed: activeFilter == .sessions
-                            ? Self.boardQuickAddSeed(bands: bands, selected: selectedBandId)
+                            ? Self.boardQuickAddSeed(scope: assembly.scope)
                             : NewTaskSeed(project: "", pin: .unspecified),
                         identifier: "tasks.quickAdd",
                         onExpand: { text, target in
@@ -886,10 +915,13 @@ struct TasksView: View {
                 // the next filter's first sample against it would read the whole difference
                 // in chrome height as an inset step and absorb a real scroll position.
                 travelTracker.reset()
-                // A band selection means nothing off the board, and carrying a
-                // stale one back would narrow the board the next time it opens
-                // without the user having asked for it on THIS visit.
-                selectedBandId = nil
+                // The TIER SCOPE deliberately survives a filter switch now. It used to be
+                // cleared here, on the reasoning that a band selection means nothing off
+                // the board — but it is a tier, it is persisted, and a preference that
+                // resets itself every time you glance at another tab is not a preference.
+                // A stale one cannot narrow the board wrongly either: the scope is honoured
+                // only against the rail the board just built.
+                //
                 // Row 2's pin state is about a scroll position on the BOARD. Coming
                 // back with a stale `true` and no scroll sample yet would draw the
                 // pinned copy over the nav pills — the very defect this rebuild
@@ -904,13 +936,19 @@ struct TasksView: View {
             // band that no longer exists: the ring vanishes with its keyboard
             // still up and the typed text goes nowhere. Same reasoning as the
             // filter switch above, one grouping level down.
-            .onChange(of: groupingRaw) { _, _ in
+            //
+            // What is NOT cleared any more is the TIER SCOPE. The old code cleared it here
+            // because the rail's ids changed with the grouping; the rail is always the tier
+            // rail now, so the scope means the same thing on both sides of the switch and
+            // clearing it would throw away the one thing the user did not ask to change.
+            .onChange(of: groupingModesRaw) { _, _ in
                 openCreateBand = nil
-                // Same reasoning for the chip: `focus` and `proj:marina` are
-                // different id spaces, so a selection made in one is meaningless in
-                // the other. `BoardModel.filtered` would fall back to the whole
-                // board anyway, but clearing it keeps the lit chip honest.
-                selectedBandId = nil
+            }
+            // Switching TIERS can change the grouping with it (each tier remembers its own
+            // mode), so the same anchored-ring hazard applies — and a band id from the tier
+            // you just left is not on screen either way.
+            .onChange(of: tierScopeRaw) { _, _ in
+                openCreateBand = nil
             }
             // The PINNED copy of row 2, and the only floating row on the board.
             //
@@ -954,7 +992,7 @@ struct TasksView: View {
             .overlay(alignment: .top) {
                 if TasksChromeMetrics.hasPinnedChips(activeFilter) {
                     bandBar(
-                        proxy: proxy, bands: bands, chips: chips,
+                        proxy: proxy, selected: assembly.scope, chips: chips,
                         placement: .pinnedOverlay
                     )
                     .padding(.top, TasksChromeMetrics.pinnedChipsTopInset)
@@ -1472,13 +1510,19 @@ struct TasksView: View {
     // clutter and made "which one do I tap" a question; and a scope picker is
     // 44pt of chrome on the screen whose job is showing rows.
     //
-    // The bands are grouped by pin tier by default and by PROJECT when the band
-    // bar's filter menu says so: the desktop's own grouping pair. Both come out of
-    // one `BoardModel.bands` call, which is what keeps this a single derived walk —
-    // and the band bar's chips and the rows on screen are two views OF that one
-    // call, never a second one.
+    // The bands are grouped by pin tier by default and by PROJECT when the view bar's
+    // grouping chip says so: the desktop's own grouping pair, remembered PER TIER. Both come
+    // out of one `BoardModel.assemble` call, which is what keeps this a single derived walk —
+    // and the band bar's rail, the rows on screen and the honoured scope are three views OF
+    // that one call, never a second one.
+    //
+    // Which tier is on screen is the OTHER decision, and the two are deliberately not the
+    // same axis any more: the rail is always the tier rail, and the grouping only changes
+    // how the tier's rows are headed and ordered.
 
-    /// The bands. Bound ONCE per body pass at the call site — every reference here
+    /// The board's whole answer for one pass: the tier rail, the scope's bands, and the
+    /// scope that was honoured. Bound ONCE per body pass at the call site — every reference
+    /// here
     /// would otherwise re-run the whole join+group+filter walk (the derived-
     /// collection discipline the perf gate pins; see `TasksDerivedPerfTests`).
     ///
@@ -1499,7 +1543,7 @@ struct TasksView: View {
     /// (which is deliberately not observable) would register no dependency on the lists
     /// and the board would stop updating. This is the same order `TasksStore`'s slice
     /// getters use, for the same reason.
-    private var boardBands: [BoardBand] {
+    private var boardAssembly: BoardAssembly {
         let rows = tasks.tasks
         let sessions = tasks.sessions
         let tierOf = tasks.taskTiers
@@ -1517,11 +1561,19 @@ struct TasksView: View {
         // know has one.
         let knownSessionIds = tasks.sessionIdsByTask
         let filter = dateFilter.wrappedValue
+        // Read once: BOTH the memo key and the build below need the same answer, and the
+        // grouping's own getter depends on the scope (each tier remembers its own mode).
+        let scope = tierScope
+        let activeGrouping = grouping.wrappedValue
         let key = BoardBandsKey(
             inputsGen: tasks.boardInputsGen,
             query: trimmedQuery,
-            grouping: grouping.wrappedValue,
+            grouping: activeGrouping,
             dateFilter: filter,
+            // In the key because the scope now narrows the row set at CONSTRUCTION time: a
+            // chip tap changes which rows exist, and a key without it would leave the
+            // previous tier on screen until some unrelated input moved the key.
+            scope: scope,
             shownDoneBands: shownDoneBands,
             // `.all` admits every row regardless of the clock, so its bands are
             // time-independent and the bucket is a constant. Under `.now` a start date
@@ -1529,15 +1581,15 @@ struct TasksView: View {
             // rebuild a minute at rest instead of one per body pass.
             nowBucket: filter == .now ? Int(Date().timeIntervalSince1970 / 60) : 0
         )
-        return bandsCache.bands(for: key) {
-            BoardModel.bands(
+        return bandsCache.assembly(for: key) {
+            BoardModel.assemble(
                 tasks: rows,
                 sessions: sessions,
                 tierOf: tierOf,
                 tierOrder: tierOrder,
                 customTiers: customTiers,
                 query: trimmedQuery,
-                grouping: grouping.wrappedValue,
+                grouping: activeGrouping,
                 dateFilter: filter,
                 // The model spells this parameter `shownDoneTiers`; what it matches
                 // against is `bandId`, which is a tier id only under tier grouping.
@@ -1549,7 +1601,10 @@ struct TasksView: View {
                 // A MISSING key is "never asked", not "no sessions" — see
                 // `BoardRow.knownSessionIds`. Empty (a cold board) behaves exactly as
                 // the board did before this existed.
-                knownSessionIds: knownSessionIds
+                knownSessionIds: knownSessionIds,
+                // The tier the rail is narrowed to. Applied INSIDE, before the grouping
+                // branch, so both band builders inherit it (`BoardModel.assemble`).
+                scope: scope
             )
         }
     }
@@ -1581,29 +1636,34 @@ struct TasksView: View {
     /// and the style by `BoardBandRailGeometry.cardCornerRadius` / `BoardBandBar
     /// .cardSurface`, both of which are the same value in both copies by construction.
     private func bandBar(
-        proxy: ScrollViewProxy, bands: [BoardBand], chips: [BoardModel.BandChip],
+        proxy: ScrollViewProxy, selected: String?, chips: [BoardModel.BandChip],
         placement: BoardBandBarPlacement
     ) -> some View {
         BoardBandBar(
             chips: chips,
-            selected: BoardModel.selectedChip(bands, selected: selectedBandId),
+            // The scope the board HONOURED, not the one stored: a tier that emptied under
+            // the reader reads as `All`, which is what the rows below it show.
+            selected: selected,
             grouping: grouping,
             dateFilter: dateFilter,
             onSelect: { bandId in
-                selectedBandId = bandId
-                // Land at the top of what you just asked for. Without this,
-                // narrowing from a position deep inside Focus leaves you at an
-                // arbitrary offset in Backlog — the rows changed under a scroll
-                // position that meant something about the old set.
+                tierScopeRaw = BoardFilterPrefs.rawScope(bandId)
+                // Land at the top of what you just asked for. Without this, narrowing from
+                // a position deep inside Focus leaves you at an arbitrary offset in
+                // Backlog — the rows changed under a scroll position that meant something
+                // about the old set.
                 //
-                // Next runloop: the newly filtered bands have to exist before
-                // `scrollTo` can target one (same hop the locate-me handler needs,
-                // for the same reason).
-                let target = BoardModel.filtered(bands, selected: bandId).first
-                guard let target else { return }
+                // The TOP anchor, not the selected band's: the scope narrows the board at
+                // construction, so the tier you asked for IS the whole board now and its
+                // first band is the top of the list. (Targeting a band read off the
+                // PREVIOUS pass's array, which is what the old code had in hand here, would
+                // aim at a band the next pass may not build at all.)
+                //
+                // Next runloop: the newly scoped bands have to exist before `scrollTo` can
+                // land (same hop the locate-me handler needs, for the same reason).
                 DispatchQueue.main.async {
                     withAnimation(.snappy(duration: 0.25)) {
-                        proxy.scrollTo(TaskBoardList.anchorId(target.bandId), anchor: .top)
+                        proxy.scrollTo(Self.topAnchorId, anchor: .top)
                     }
                 }
             },

@@ -575,8 +575,8 @@ final class ChromeCollapseTracker {
 /// crossing, and that was measured and correct. What it could not bound was the COST
 /// of that one publish: `boardChipsPinned` was `@State` on `TasksView`, both copies
 /// of the bar read it from `TasksView.body`, so a crossing invalidated the entire
-/// body — the board derive, `BoardModel.chips`, `BoardModel.filtered`, and a `List`
-/// diff — to swap a 44pt strip. Both thresholds on this screen land inside the first
+/// body — the board derive (`BoardModel.assemble`, which builds the rail and the bands
+/// together) and a `List` diff — to swap a 44pt strip. Both thresholds on this screen land inside the first
 /// ~57pt of travel, and the search drawer retracts in the same window, so those
 /// passes stacked at the top of the gesture: measured 460-515ms of dropped frames on
 /// a board scroll, against 170ms worst-case on a 762-row Notes list under the same

@@ -951,10 +951,11 @@ struct BoardBandBar: View {
             // `reveal` is the ONLY thing in this file that touches the rail's content
             // position and it was wired exclusively to selection, grouping and appear.
             .onChange(of: layout.rail.width) { _, _ in reveal(in: reader, animated: false) }
-            // A grouping switch replaces every chip at once (`focus` → `proj:marina`)
-            // and resets the selection to nil. When the selection was ALREADY nil,
-            // `onChange(of: selected)` never fires, so without this the row would stay
-            // parked in the old id space with the freshly lit `All` chip off screen.
+            // A grouping switch no longer touches the RAIL at all (it is always the tier
+            // rail, and the selection survives it), so this is not the id-space rescue it
+            // used to be. It stays because the switch can still change the rail's CONTENT
+            // POSITION — the chip labels are unchanged but the row is re-laid-out — and a
+            // lit chip that ends up off screen is the same defect whatever moved it.
             .onChange(of: grouping) { _, _ in reveal(in: reader, animated: false) }
             // Appearing counts too: the board is rebuilt whenever the Tasks tab comes
             // back, and a restored selection deep in the row would be invisible.
