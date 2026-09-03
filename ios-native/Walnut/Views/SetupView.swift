@@ -4,6 +4,10 @@ import SwiftUI
 /// with a live "Test connection" against GET /api/v1/status before saving.
 struct SetupView: View {
     @Environment(ConnectionStore.self) private var connection
+    /// Read for ONE reason: to say out loud that a delivered quick action has no
+    /// consumer while this view is the root (see the modifier at the end of
+    /// `body`).
+    @State private var quickAction = VoiceQuickAction.shared
 
     @State private var serverURL = ""
     @State private var token = ""
@@ -41,6 +45,23 @@ struct SetupView: View {
                 QRScannerSheet { payload in
                     applyPairingText(payload, autoConnect: true)
                 }
+            }
+            // The silence that made an unpaired quick action undiagnosable. A
+            // Home-screen "Voice to Walnut" on an unpaired app arms the mailbox
+            // and then nothing happens: RootView is showing THIS view, so there
+            // is no MainTabView to switch tabs and no composer to consume the
+            // request, and the TTL retires it two minutes later without a word.
+            // `VoiceQuickAction.clear(reason:)` deliberately isn't called for
+            // this state, so setup is the honest owner of the fact — it is the
+            // thing that knows why there is no consumer.
+            // `initial: true` covers both arrival orders with one hook: armed
+            // before setup appeared (cold launch straight from the Home screen)
+            // and armed while setup was already on screen (warm delivery).
+            .onChange(of: quickAction.pending, initial: true) { _, request in
+                guard let request else { return }
+                AppLog.warn("voice", "quick action is pending but the app is unpaired", [
+                    "source": request.source, "screen": "setup",
+                ])
             }
         }
     }

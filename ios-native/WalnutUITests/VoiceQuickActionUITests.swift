@@ -25,6 +25,61 @@ import XCTest
 /// conclusive rather than anecdotal: the uploaded log carries a
 /// `voice: quick action delivery {hook: …}` line for every hook the OS ran, so
 /// `grep 'quick action delivery'` answers it after the fact.
+///
+/// HOW TO RUN — one line, and please use it rather than a bare `xcodebuild`:
+///
+///     ios-native/tests/ui/run-ui-tests.sh \
+///       -only-testing:WalnutUITests/VoiceQuickActionUITests
+///
+/// The script arranges the two preconditions this file cannot arrange for
+/// itself, both of which were silently unmet for its whole life:
+///
+///  1. **A PAIRED app** — needed by the warm test only. Everything it drives
+///     (the tab bar, ChatView, the composer that owns the mic) lives behind
+///     `AppConfig.isConfigured`; an unpaired launch renders `SetupView` and
+///     nothing else. Pairing rides LAUNCH ARGUMENTS, never the Keychain and
+///     never the setup form, from `WALNUT_UITEST_SERVER` +
+///     `WALNUT_UITEST_TOKEN`. With them absent the test SKIPS — a machine with
+///     no paired server is not a regression.
+///
+///     ⚠️ EXPORTING THOSE TWO NAMES IN YOUR SHELL DOES NOT WORK. xcodebuild does
+///     not pass the invoking shell's environment through to the XCUITest RUNNER
+///     process, so the guard below never saw them and every run skipped —
+///     indistinguishable from the tests having been deleted. The runner only
+///     ever sees variables written into the `.xctestrun`'s
+///     `EnvironmentVariables`. `TEST_RUNNER_WALNUT_UITEST_SERVER=…` is the
+///     documented way to put one there, but it is not reliable and must not be
+///     trusted: measured on Xcode 26 / iOS 26.0, given to `build-for-testing`
+///     (the step that generates the file) on a clean derived-data tree, it did
+///     NOT land and the run skipped anyway. xcodebuild echoes the setting back
+///     either way, which is how it has been mis-reported as working twice. The
+///     script therefore verifies the `.xctestrun` with `plutil` and writes the
+///     variables in itself when they are missing — the verification is the part
+///     that keeps this from rotting back into folklore.
+///
+///     The server need not be REACHABLE, which is why the script defaults to a
+///     dead port: a transport error is inconclusive to `ConnectionStore` so the
+///     app stays paired, and the caption assertion below already accepts the
+///     offline caption. An unreachable URL therefore exercises this whole
+///     delivery path without touching anybody's data.
+///  2. **MICROPHONE permission** — the script grants it, the same way the
+///     sibling E2E does (`ios-native/tests/voice/voice-quickaction-e2e.sh`):
+///
+///         xcrun simctl privacy <udid> grant microphone dev.openwalnut.ios
+///
+///     A denied mic produces no recording row, i.e. the warm test fails for a
+///     reason that has nothing to do with the Home-screen shortcut.
+///
+/// History worth keeping, because it is the reason the precondition below is an
+/// assertion instead of a wait: the warm test used to call a bare
+/// `app.launch()`. The app booted UNPAIRED into `SetupView` — no tab bar, no
+/// ChatView, no ComposerBar, nothing in the process that could consume the
+/// pending action — and then spent 194s failing: 30s waiting for a `Settings`
+/// button a tab-less screen will never show, ~128s of long-press retries, and a
+/// 30s caption wait. It read as a product regression in the warm delivery chain,
+/// which field logs had already proven working. A test that burns 160 more
+/// seconds after its precondition has already failed is a bad test even when its
+/// verdict is right.
 final class VoiceQuickActionUITests: XCTestCase {
 
     /// Exactly the Info.plist title. Duplicated as a literal on purpose: this
@@ -101,13 +156,29 @@ final class VoiceQuickActionUITests: XCTestCase {
     /// across the background/foreground round trip. A SpringBoard-launched
     /// process is not attached, which is why the cold test stops at "foreground".
     func testWarmShortcutSwitchesToChatAndOpensTheMicrophone() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = try launchPaired()
+        // PRECONDITION, asserted the moment the app is up rather than implied by
+        // a 30s wait 20 lines further down. `continueAfterFailure = false` means
+        // this ENDS the test: the remaining ~160s of long-press retries and
+        // caption waits cannot discover anything once the surface under test does
+        // not exist.
+        let tabBar = app.tabBars.firstMatch
+        let settingsTab = app.buttons["Settings"].firstMatch
+        XCTAssertTrue(
+            tabBar.waitForExistence(timeout: 15) || settingsTab.waitForExistence(timeout: 5),
+            "no tab bar 15s after launch: the app booted UNPAIRED into SetupView, so there is "
+                + "no ChatView and no ComposerBar in this process to consume a quick action. "
+                + "That is a harness problem (see this file's HOW TO RUN), not a regression in "
+                + "the warm delivery chain."
+        )
         // Land on a NON-Chat tab. If the tab switch is broken, the composer never
         // appears, the mailbox is never consumed, and the mic never opens — which
         // is precisely the failure this asserts against.
-        let settingsTab = app.buttons["Settings"].firstMatch
-        if settingsTab.waitForExistence(timeout: 30) { settingsTab.tap() }
+        XCTAssertTrue(
+            settingsTab.waitForExistence(timeout: 10),
+            "the tab bar is up but carries no Settings tab to park on"
+        )
+        settingsTab.tap()
         // Background it WITHOUT killing it: this is what makes the delivery warm.
         // `terminateFirst: false` is the whole difference from the cold test.
         let menu = try openIconContextMenu(terminateFirst: false)
@@ -124,7 +195,10 @@ final class VoiceQuickActionUITests: XCTestCase {
             .matching(identifier: "chat.voiceRecordingCaption").firstMatch
         XCTAssertTrue(
             caption.waitForExistence(timeout: 30),
-            "a warm shortcut didn't open the microphone — the app came forward with no recording row (tab switch or composer consume is broken)"
+            "a warm shortcut didn't open the microphone — the app came forward with no recording "
+                + "row. Either the tab switch / composer consume is broken, or this simulator has "
+                + "never been granted mic permission: xcrun simctl privacy <udid> grant "
+                + "microphone dev.openwalnut.ios"
         )
         // The caption is a PROMISE about where the transcript goes, and it depends
         // on something this test does not control: whether the simulator is paired
@@ -169,6 +243,43 @@ final class VoiceQuickActionUITests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    /// Launch the app PAIRED, through launch arguments only — nothing is written
+    /// to the Keychain and no credential is written down in this repo.
+    ///
+    /// Same mechanism and same skip policy as `BoardRingTapUITests.launchPaired`,
+    /// deliberately: there is one way to pair a UI test in this repo and adding a
+    /// second one would mean two things to keep working. How to actually get
+    /// these variables to the runner is in this file's HOW TO RUN — the short
+    /// version is `ios-native/tests/ui/run-ui-tests.sh`, because a shell `export`
+    /// does not reach an XCUITest runner.
+    ///
+    /// Only the WARM test needs this. The two SpringBoard tests do not: one reads
+    /// the long-press menu without launching anything, and the other asserts only
+    /// that the tap brought the app to the foreground, which an unpaired app
+    /// sitting on `SetupView` does just as well.
+    private func launchPaired() throws -> XCUIApplication {
+        guard
+            let server = ProcessInfo.processInfo.environment["WALNUT_UITEST_SERVER"],
+            let token = ProcessInfo.processInfo.environment["WALNUT_UITEST_TOKEN"],
+            !server.isEmpty, !token.isEmpty
+        else {
+            throw XCTSkip(
+                "no pairing reached the test runner, so the warm delivery layer cannot run — "
+                    + "unpaired, the app renders SetupView and there is no composer to consume a "
+                    + "quick action. Run this through ios-native/tests/ui/run-ui-tests.sh; "
+                    + "exporting WALNUT_UITEST_SERVER in your shell does NOT reach an XCUITest "
+                    + "runner (it has to be in the .xctestrun)."
+            )
+        }
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-walnut.serverUrl", server,
+            "-walnut.deviceToken", token,
+        ]
+        app.launch()
+        return app
+    }
 
     /// Go Home, find the Walnut icon wherever it lives, and long-press it.
     /// Returns the resulting menu's item titles.

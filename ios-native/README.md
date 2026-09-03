@@ -25,6 +25,39 @@ Or open `Walnut.xcodeproj` in Xcode and run.
 `Walnut.xcodeproj` is **generated output and not committed** (see `.gitignore`);
 `project.yml` is the source of truth — rerun `xcodegen generate` after pulling.
 
+## Tests
+
+```bash
+cd ios-native
+# unit + rendering-perf gates (no pairing needed)
+xcodebuild test -project Walnut.xcodeproj -scheme Walnut \
+  -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+  -only-testing:WalnutTests
+
+# the XCUITest layer — use the script, see the note below
+tests/ui/run-ui-tests.sh
+tests/ui/run-ui-tests.sh -only-testing:WalnutUITests/VoiceQuickActionUITests
+```
+
+Some UI tests need the app PAIRED, which they take from `WALNUT_UITEST_SERVER` /
+`WALNUT_UITEST_TOKEN` and otherwise skip. Run them through
+`tests/ui/run-ui-tests.sh`, and do not reach for a bare `xcodebuild`:
+**xcodebuild does not pass your shell's environment to the XCUITest runner
+process**, so `export WALNUT_UITEST_SERVER=…` skips every test, silently — which
+is what these tests did on every machine until the script existed, and a
+permanently-skipping test is indistinguishable from a deleted one. The runner
+only ever sees variables written into the `.xctestrun`'s `EnvironmentVariables`.
+`TEST_RUNNER_WALNUT_UITEST_SERVER=…` is the documented way to put one there, but
+on Xcode 26 it did not land even when passed to `build-for-testing`, so the
+script checks the `.xctestrun` with `plutil` and writes the variables in itself.
+That check is the point: it fails loudly instead of skipping quietly.
+
+The script pairs at a dead port by default, which touches no real data and is
+enough for all three voice tests plus the three board geometry tests (the board
+renders disk-cached rows offline). Pass a real `WALNUT_UITEST_SERVER` when you
+want live content, and `WALNUT_UITEST_ROW_ID` for the board's tap test, which
+needs a throwaway task the run owns.
+
 ## Architecture
 
 ```

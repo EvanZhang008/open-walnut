@@ -30,13 +30,34 @@ final class BoardRingTapUITests: XCTestCase {
     /// `WALNUT_UITEST_SERVER` / `WALNUT_UITEST_TOKEN` come from the environment so no
     /// credential is ever written down in this repo. Without them the test SKIPS rather
     /// than failing: a machine with no paired server is not a regression.
+    ///
+    /// RUN IT WITH `ios-native/tests/ui/run-ui-tests.sh`, not with a bare `xcodebuild`.
+    /// Exporting these two names in your shell does NOT work, and that dead end is why
+    /// every test in this file skipped on every machine for its whole life — a
+    /// permanently-skipping test being indistinguishable from a deleted one. xcodebuild
+    /// does not pass the invoking shell's environment through to the XCUITest RUNNER
+    /// process; the runner only ever sees variables written into the `.xctestrun`'s
+    /// `EnvironmentVariables`. `TEST_RUNNER_WALNUT_UITEST_SERVER=…` is the documented way
+    /// to put one there and is worth passing, but measured on Xcode 26 / iOS 26.0 it did
+    /// not land even when given to `build-for-testing`, so the script verifies the
+    /// `.xctestrun` and writes the variables in itself.
+    ///
+    /// Measured on the script's offline default (a dead port): the three geometry tests
+    /// here PASS, because the board renders disk-cached rows with no server. The tap test
+    /// still skips until `WALNUT_UITEST_ROW_ID` names a throwaway task the run owns —
+    /// which is the point, since a stray tap there completes somebody's real task.
     private func launchPaired() throws -> XCUIApplication {
         guard
             let server = ProcessInfo.processInfo.environment["WALNUT_UITEST_SERVER"],
             let token = ProcessInfo.processInfo.environment["WALNUT_UITEST_TOKEN"],
             !server.isEmpty, !token.isEmpty
         else {
-            throw XCTSkip("set WALNUT_UITEST_SERVER + WALNUT_UITEST_TOKEN to run the board UI layer")
+            throw XCTSkip(
+                "no pairing reached the test runner — run this through "
+                    + "ios-native/tests/ui/run-ui-tests.sh (exporting WALNUT_UITEST_SERVER in "
+                    + "your shell does not reach an XCUITest runner; it has to be in the "
+                    + ".xctestrun, which the script guarantees)"
+            )
         }
         let app = XCUIApplication()
         app.launchArguments = [
