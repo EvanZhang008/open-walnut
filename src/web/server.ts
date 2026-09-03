@@ -1623,6 +1623,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // tsup inlines this into both dist/web/server.js and dist/cli.js,
     // so import.meta.url varies per bundle — walk up to find dist/web/static/.
     const staticDir = (() => {
+      // Explicit override wins, and is accepted even when it does NOT exist: that
+      // is the only way to exercise the "assets vanished" path (below) in a test
+      // without deleting the repo's own build.
+      if (process.env.WALNUT_WEB_STATIC_DIR) return process.env.WALNUT_WEB_STATIC_DIR
       let dir = path.dirname(fileURLToPath(import.meta.url))
       for (let i = 0; i < 5; i++) {
         const candidate = path.join(dir, 'web', 'static', 'index.html')
@@ -1635,31 +1639,65 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // Fallback: assume dist/web/static relative to cwd
       return path.join(process.cwd(), 'dist', 'web', 'static')
     })()
+    // The static root can DISAPPEAR under a running server, and it has now done
+    // so TWICE in one evening (2026-09-02). Deploys boot from a staged copy under
+    // TMPDIR; anything that cleans that temp space — another deploy's reap, an OS
+    // sweep, a stray rm — takes the web app down while cli.js keeps running from
+    // memory. So /api/config and every route stay green while `/` and each hashed
+    // asset answer ENOENT. The first occurrence lasted four hours and reached the
+    // user as "the Mac app is laggy", never as "the app is broken", because open
+    // windows kept running their in-memory bundle with every lazy chunk and image
+    // gone.
+    //
+    // Two independent answers, because detection alone was not enough: keep a
+    // DURABLE mirror outside the temp volume and serve it as a second root (7.4MB,
+    // 122 files, a clonefile on APFS), and say loudly when the primary breaks.
+    // The mirror is best effort in every failure mode — if it cannot be made,
+    // behaviour is exactly what it was before.
+    const mirrorDir = process.env.WALNUT_WEB_STATIC_MIRROR
+      || path.join(WALNUT_HOME, 'cache', 'web-static')
+    let mirrorReady = false
+    try {
+      // Refresh keyed on index.html's CONTENT: it names the hashed entry bundle,
+      // so identical content means the mirror already holds this exact build.
+      // Reading the primary first is deliberate — when the primary is already gone
+      // this throws and leaves the existing mirror untouched, which is the whole
+      // point of having one.
+      const want = fs.readFileSync(path.join(staticDir, 'index.html'), 'utf-8')
+      let have: string | null = null
+      try { have = fs.readFileSync(path.join(mirrorDir, 'index.html'), 'utf-8') } catch { /* no mirror yet */ }
+      if (have !== want) {
+        fs.rmSync(mirrorDir, { recursive: true, force: true })
+        fs.mkdirSync(path.dirname(mirrorDir), { recursive: true })
+        fs.cpSync(staticDir, mirrorDir, { recursive: true })
+      }
+    } catch (err) {
+      log.web.warn('could not refresh the web-asset mirror', {
+        mirrorDir, error: err instanceof Error ? err.message : String(err),
+      })
+    }
+    try { mirrorReady = fs.statSync(path.join(mirrorDir, 'index.html')).isFile() } catch { mirrorReady = false }
+
     app.use(express.static(staticDir))
-    // The static root can DISAPPEAR under a running server: deploys boot from a
-    // staged copy under TMPDIR, and on 2026-09-02 a later deploy's reap loop
-    // deleted the live server's stage. cli.js was already in memory, so the API
-    // stayed green while `/` and every hashed asset answered ENOENT — for four
-    // hours, felt as "the app is laggy" because open windows kept running their
-    // in-memory bundle with every lazy chunk and image gone. Nobody noticed
-    // because nothing SAID it. Check once a minute, log it as an error, and
-    // report it in /api/config (which every client and monitor already reads).
+    // Second root, consulted only for what the first could not answer: zero cost
+    // while the stage is intact, and the app stays up when it is not.
+    if (mirrorReady) app.use(express.static(mirrorDir))
     const checkStaticRoot = (): boolean => {
       try { return fs.statSync(path.join(staticDir, 'index.html')).isFile() } catch { return false }
     }
     let staticRootOk = checkStaticRoot()
     if (!staticRootOk) {
-      log.web.error('web assets are NOT servable at startup', { staticDir })
+      log.web.error('web assets are NOT servable at startup', { staticDir, mirrorReady })
     }
     const staticRootTimer = setInterval(() => {
       const ok = checkStaticRoot()
       if (ok === staticRootOk) return
       staticRootOk = ok
       if (ok) log.web.info('web assets are servable again', { staticDir })
-      else log.web.error('web assets VANISHED from under the running server', { staticDir })
+      else log.web.error('web assets VANISHED from under the running server', { staticDir, mirrorReady })
     }, 60_000)
     staticRootTimer.unref()
-    setStaticRootReporter(() => ({ staticDir, ok: staticRootOk }))
+    setStaticRootReporter(() => ({ staticDir, ok: staticRootOk, mirrorDir, mirrorReady }))
     // SPA fallback: serve index.html for non-API routes
     app.use((req, res, next) => {
       if (req.method !== 'GET' || req.path.startsWith('/api/')) return next()
@@ -1671,7 +1709,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // for the rest of the tab's life). 404 keeps it loud, and lets the
       // client's vite:preloadError recovery reload onto the current build.
       if (isStaticAssetPath(req.path)) return next()
-      res.sendFile('index.html', { root: staticDir })
+      // Fall back through the send itself rather than stat-ing per request: no
+      // sync fs work on the hot path, and no window where a break that happened
+      // seconds ago is still being answered with an errno.
+      res.sendFile('index.html', { root: staticDir }, (err) => {
+        if (!err) return
+        if (mirrorReady) { res.sendFile('index.html', { root: mirrorDir }, () => { /* nothing left to try */ }); return }
+        next(err)
+      })
     })
   }
 

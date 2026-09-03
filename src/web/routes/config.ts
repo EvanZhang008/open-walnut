@@ -23,9 +23,9 @@ export const configRouter = Router()
  * has been deleted under a live server before (2026-09-02) — the API stayed
  * green while every asset 404ed. Undefined in dev / when static serving is off.
  */
-let staticRootReporter: (() => { staticDir: string; ok: boolean }) | null = null
+let staticRootReporter: (() => { staticDir: string; ok: boolean; mirrorDir?: string; mirrorReady?: boolean }) | null = null
 
-export function setStaticRootReporter(fn: () => { staticDir: string; ok: boolean }): void {
+export function setStaticRootReporter(fn: () => { staticDir: string; ok: boolean; mirrorDir?: string; mirrorReady?: boolean }): void {
   staticRootReporter = fn
 }
 

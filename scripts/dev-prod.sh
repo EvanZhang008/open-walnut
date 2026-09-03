@@ -611,10 +611,27 @@ done
 # full-path substring test looked correct and matched NOTHING, which is how this
 # guard would have failed silently exactly when it was needed. The basename
 # (`open-walnut-stage.<epoch>.<pid>`) is unique per deploy.
+#
+# Fails CLOSED. `pgrep`/`ps` can be missing or unusable (a launchd or `env -i`
+# shell with a minimal PATH), and `|| true` on the probe would then read as "no
+# process is alive" and delete every stage — the guard turning into the bug it
+# exists to prevent. When the process table cannot be READ, keep the directory.
 stage_has_live_process() {
-  local stage="$1" spid cmd base
+  local stage="$1" spid cmd base pids
   base="$(basename "$stage")"
-  for spid in $(pgrep -f 'dist/cli\.js' 2>/dev/null || true); do
+  if ! command -v pgrep >/dev/null 2>&1 || ! command -v ps >/dev/null 2>&1; then
+    echo "unknown"
+    return 0
+  fi
+  local rc=0
+  pids="$(pgrep -f 'dist/cli\.js' 2>/dev/null)" || rc=$?
+  # pgrep exit 1 means "matched nothing", which is a real answer. Anything else
+  # (usage error, no permission, killed) means the probe failed and we know nothing.
+  if (( rc > 1 )); then
+    echo "unknown"
+    return 0
+  fi
+  for spid in $pids; do
     [[ -n "$spid" ]] || continue
     cmd="$(ps -o command= -p "$spid" 2>/dev/null || true)"
     if [[ "$cmd" == *"$base/dist/cli.js"* ]]; then
@@ -630,6 +647,10 @@ for old_stage in "$STAGE_ROOT"/open-walnut-stage.*; do
     continue
   fi
   live_pid="$(stage_has_live_process "$old_stage" || true)"
+  if [[ "$live_pid" == "unknown" ]]; then
+    echo "Keeping stage $old_stage: the process table could not be read, so nothing here is provably dead." >&2
+    continue
+  fi
   if [[ -n "$live_pid" ]]; then
     echo "Keeping stage $old_stage: PID $live_pid is still running from it." >&2
     continue
