@@ -632,6 +632,16 @@ extension Text {
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
             MarkdownParser.linkifyBareURLs(&attributed)
+            // Deliberately NOT linkifyPreviewableFilePaths. Its UIKit twin
+            // (TimelineTextStyler.inlineText) does linkify paths, because the
+            // timeline OWNS the tap: a UITextView link goes through
+            // TimelineCellActionDelegate. The only live consumer of THIS
+            // SwiftUI fast path is the collapsed preview line of a hosted
+            // notification card, which sits inside a UIHostingConfiguration —
+            // no openURL handler reaches it, and presenting a sheet from a cell
+            // configuration is unsupported. Linkifying there would paint a
+            // tappable-looking path that does nothing, which is worse than
+            // plain text.
             self.init(attributed)
         } else {
             self.init(verbatim: source)

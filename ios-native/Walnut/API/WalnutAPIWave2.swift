@@ -186,12 +186,31 @@ extension WalnutAPI {
     }
 
     /// Text file payload for the viewer. A missing file is a 200 with `error`
-    /// set. On a cloud REPLICA a `host=` read answers 501 not_supported_cloud
-    /// (file content never rides the bridge).
+    /// set. On a cloud REPLICA the read RELAYS to the target host's daemon over
+    /// the narrow `fs.readBounded` bridge command (2 MB cap + path sandbox, both
+    /// enforced host-side): oversize → 413, secret path → 403, bridge down →
+    /// 503, and only a daemon predating that command → 501 (which self-heals on
+    /// the primary's next auto-deploy).
     func fileContent(path: String, host: String? = nil) async throws -> SessionFileContent {
         var query = "path=\(escapeQuery(path))"
         if let host, !host.isEmpty { query += "&host=\(escapeQuery(host))" }
         return try await get("/file-content?\(query)")
+    }
+
+    /// Where a path a transcript MENTIONED really lives.
+    ///
+    /// `rel` may be decorated exactly as written (`src/a.ts:42`,
+    /// `a.ts#L10-L20`) — the server owns that parse and hands the position back
+    /// as `line`/`column`/`endLine`. It runs host-local (transcript → walk-up →
+    /// git index), so it can find a file that moved or a path written from a
+    /// different working directory; an unresolvable reference comes back as
+    /// `resolved: false` with a cwd-joined fallback rather than an error.
+    func resolvePath(rel: String, cwd: String, host: String? = nil,
+                     sessionID: String? = nil) async throws -> PathResolution {
+        var query = "rel=\(escapeQuery(rel))&cwd=\(escapeQuery(cwd))"
+        if let host, !host.isEmpty { query += "&host=\(escapeQuery(host))" }
+        if let sessionID, !sessionID.isEmpty { query += "&sessionId=\(escapeQuery(sessionID))" }
+        return try await get("/files/resolve-path?\(query)")
     }
 
     // MARK: - Plumbing

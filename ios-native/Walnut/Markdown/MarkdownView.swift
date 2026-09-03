@@ -12,6 +12,11 @@ struct MarkdownView: View {
                 blockView(block)
             }
         }
+        // Absolute paths inside a note / letter / plan are linkified by
+        // MarkdownParser.inline, and until this line nothing listened: SwiftUI
+        // handed the walnut-file:// scheme to the system opener, which dropped it
+        // silently. Non-file URLs still open the usual way.
+        .handlingFilePathLinks()
     }
 
     @ViewBuilder

@@ -388,7 +388,16 @@ struct SessionFileEntry: Codable, Identifiable, Equatable {
 }
 
 struct SessionFileListResponse: Codable {
+    /// The directory the server ACTUALLY listed. Not always what was asked for:
+    /// ask for a file and the server lists its parent instead (and names the
+    /// file in `selectedFile`), so a caller that keeps using the requested path
+    /// builds every child path off a directory that does not exist.
     let path: String
+    /// Set only when the requested path turned out to be a FILE inside `path`.
+    /// The reason it is here at all: the caller asked about that one thing, and
+    /// a listing of its neighbours with no mention of it is an answer to a
+    /// different question.
+    let selectedFile: String?
     let entries: [SessionFileEntry]
 }
 
@@ -400,4 +409,17 @@ struct SessionFileContent: Codable {
     let truncated: Bool?
     let binary: Bool?
     let error: String?
+}
+
+/// GET /v1/files/resolve-path → where a mentioned path really lives.
+/// `resolved: false` means the server is handing back a cwd-joined GUESS, so a
+/// caller must not present it as the file it asked for. `line`/`column`/
+/// `endLine` come from the server's own parse of the decorated reference.
+struct PathResolution: Codable {
+    let path: String
+    let resolved: Bool
+    let via: String?
+    let line: Int?
+    let column: Int?
+    let endLine: Int?
 }

@@ -232,6 +232,20 @@ final class Wave2ContractTests: XCTestCase {
         XCTAssertEqual(SessionDirectoryList.sizeText(2048), "2.0 KB")
         XCTAssertEqual(SessionDirectoryList.sizeText(500), "500 B")
         XCTAssertEqual(SessionDirectoryList.sizeText(3_145_728), "3.0 MB")
+        XCTAssertNil(list.selectedFile, "a real directory names no file")
+
+        // Ask for a FILE and the server lists its PARENT, naming the file.
+        // Verified live 2026-09-03 against GET /api/v1/files/list?path=/usr/bin/jq:
+        // {"path":"/usr/bin","selectedFile":"jq","entries":[…]}. The client used to
+        // decode this and throw both fields away, which is how a listing of
+        // /usr/bin ended up titled "jq".
+        let redirected = try decode(SessionFileListResponse.self, """
+        { "path": "/usr/bin", "selectedFile": "jq", "entries": [
+            { "name": "aa", "type": "file" }, { "name": "jq", "type": "file" }
+        ] }
+        """)
+        XCTAssertEqual(redirected.path, "/usr/bin")
+        XCTAssertEqual(redirected.selectedFile, "jq")
 
         let ok = try decode(SessionFileContent.self,
             #"{ "content": "hello", "size": 5, "truncated": false, "binary": false, "extension": "txt" }"#)
@@ -246,9 +260,17 @@ final class Wave2ContractTests: XCTestCase {
     // MARK: - Error copy (cloud failure ladder)
 
     func testFriendlyFilesErrorCoversCloud501() {
+        // UPDATED (2026-09): 501 used to be told "open this on your Mac", because
+        // file content could not ride the bridge at all. It can now
+        // (`fs.readBounded`), so a 501 means only that the target host's daemon
+        // is out of date — which fixes itself on the next auto-deploy. Sending
+        // that reader to their Mac forever was the wrong advice, and it also made
+        // 501 indistinguishable from a 403 secret-path refusal.
         let cloud = APIError.server(status: 501, code: "not_supported_cloud",
                                     message: "no bridge read", serverHash: nil, serverContent: nil)
-        XCTAssertTrue(SessionDirectoryList.friendlyFilesError(cloud).contains("Mac"))
+        let cloudCopy = SessionDirectoryList.friendlyFilesError(cloud)
+        XCTAssertTrue(cloudCopy.contains("older Walnut daemon"), cloudCopy)
+        XCTAssertFalse(cloudCopy.contains("Mac"), cloudCopy)
         let offline = APIError.server(status: 503, code: "bridge_offline",
                                       message: "down", serverHash: nil, serverContent: nil)
         XCTAssertTrue(SessionDirectoryList.friendlyFilesError(offline).contains("reachable"))

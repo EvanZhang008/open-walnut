@@ -11,6 +11,10 @@ struct ChatTimelineBody: View {
     var onRefresh: (() async -> Void)? = nil
 
     @State private var previewTarget: FilePreviewTarget?
+    /// Non-HTML file taps: the text viewer, anchored to the referenced line.
+    @State private var textTarget: TextFileTarget?
+    /// Extensionless path taps: the directory browser, rooted there.
+    @State private var dirTarget: DirectoryTarget?
 
     var body: some View {
         // LAYER ORDER IS LOAD-BEARING (DOCK-c, 2026-08-29). The empty state used to be
@@ -46,9 +50,18 @@ struct ChatTimelineBody: View {
                         }
                     case .loadEarlier:
                         Task { await chat.loadOlder() }
-                    case .previewFile(let path):
+                    case .previewFile(let ref):
                         // Personal AI chat always runs on the primary box.
-                        previewTarget = FilePreviewTarget(path: path, host: nil)
+                        // HTML keeps the rendered WKWebView preview (and its dock
+                        // seat); every other extension is text, where a line
+                        // number means something; extensionless is a folder.
+                        if ref.looksLikeDirectory {
+                            dirTarget = DirectoryTarget(path: ref.path, host: nil)
+                        } else if FilePreviewLink.isPreviewablePath(ref.path) {
+                            previewTarget = FilePreviewTarget(path: ref.path, host: nil)
+                        } else {
+                            textTarget = TextFileTarget(ref: ref, host: nil)
+                        }
                     default:
                         break
                     }
@@ -66,6 +79,16 @@ struct ChatTimelineBody: View {
         // from any tab and not just from the page the link was on.
         .sheet(item: $previewTarget) { target in
             HTMLFilePreviewSheet(target: target)
+        }
+        // No cwd/sessionID here: the Personal AI chat has no working directory of
+        // its own, so a stale path can't be re-resolved from this surface. It
+        // still opens honestly, and reports honestly when it can't.
+        .sheet(item: $textTarget) { target in
+            SessionFileViewer(name: target.ref.displayName, path: target.ref.path,
+                              host: target.host ?? "", ref: target.ref)
+        }
+        .sheet(item: $dirTarget) { target in
+            DirectoryPreviewSheet(target: target)
         }
     }
 }

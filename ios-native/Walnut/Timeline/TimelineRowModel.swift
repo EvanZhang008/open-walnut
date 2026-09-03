@@ -147,9 +147,12 @@ enum TimelineRowAction {
     case copyText(String)
     case openURL(URL)
     case tapImage(UIImage)
-    /// Open a server-side file in the in-app preview (HTML → WKWebView).
-    /// Raised when a tapped link is a FilePreviewLink rather than a web URL.
-    case previewFile(path: String)
+    /// Open a server-side file in the in-app preview (HTML → WKWebView,
+    /// anything else → the text viewer, scrolled to `ref.line`). Raised when a
+    /// tapped link is a FilePreviewLink rather than a web URL. Carries the whole
+    /// reference, not just the path: the position the writer named is the
+    /// difference between opening the file and opening the LINE.
+    case previewFile(ref: FilePathRef)
     case toggleExpanded(rowID: String)
     /// A rich cell measured its document: the coordinator banks the height and
     /// rebuilds so the row carries the real number. Handled INSIDE the

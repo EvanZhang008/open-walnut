@@ -14,6 +14,12 @@ struct SessionTimelineBody: View {
     /// Exec host for file-preview links ("" / nil = the primary box) — the
     /// raw file-content fetch must read the SESSION's disk, not the Mac's.
     var previewHost: String? = nil
+    /// The session's working directory + id. Passed so a tapped path that does
+    /// NOT exist can be re-resolved host-side (`files/resolve-path`) and
+    /// retried: a path written from another cwd, or a file that has since moved,
+    /// is the common case, not the exotic one.
+    var previewCwd: String? = nil
+    var previewSessionID: String? = nil
     /// Extra scroll-to-bottom pulses from the page (keyboard repin).
     var repinSignal: Int = 0
     /// Keyboard transition freeze from KeyboardBottomRepin.
@@ -22,6 +28,10 @@ struct SessionTimelineBody: View {
     var onRefresh: (() async -> Void)? = nil
 
     @State private var previewTarget: FilePreviewTarget?
+    /// Non-HTML file taps: the text viewer, anchored to the referenced line.
+    @State private var textTarget: TextFileTarget?
+    /// Extensionless path taps: the directory browser, rooted there.
+    @State private var dirTarget: DirectoryTarget?
 
     var body: some View {
         // LAYER ORDER IS LOAD-BEARING (DOCK-c, 2026-08-29) — same fix as
@@ -50,8 +60,18 @@ struct SessionTimelineBody: View {
                         if let message = store.messages.first(where: { $0.id == messageID }) {
                             store.discardFailed(message)
                         }
-                    case .previewFile(let path):
-                        previewTarget = FilePreviewTarget(path: path, host: previewHost)
+                    case .previewFile(let ref):
+                        // HTML keeps the rendered WKWebView preview (and its dock
+                        // seat); every other extension is text, where a line
+                        // number means something; extensionless is a folder.
+                        if ref.looksLikeDirectory {
+                            dirTarget = DirectoryTarget(path: ref.path, host: previewHost)
+                        } else if FilePreviewLink.isPreviewablePath(ref.path) {
+                            previewTarget = FilePreviewTarget(path: ref.path, host: previewHost)
+                        } else {
+                            textTarget = TextFileTarget(ref: ref, host: previewHost,
+                                                        cwd: previewCwd, sessionID: previewSessionID)
+                        }
                     default:
                         break
                     }
@@ -75,6 +95,14 @@ struct SessionTimelineBody: View {
         // from any tab and not just from the page the link was on.
         .sheet(item: $previewTarget) { target in
             HTMLFilePreviewSheet(target: target)
+        }
+        .sheet(item: $textTarget) { target in
+            SessionFileViewer(name: target.ref.displayName, path: target.ref.path,
+                              host: target.host ?? "", ref: target.ref,
+                              cwd: target.cwd, sessionID: target.sessionID)
+        }
+        .sheet(item: $dirTarget) { target in
+            DirectoryPreviewSheet(target: target)
         }
     }
 }

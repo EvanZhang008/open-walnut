@@ -1,6 +1,22 @@
 import SwiftUI
 import UIKit
 
+/// Installs the timeline's link routing into a hosted SwiftUI subtree.
+///
+/// A named modifier rather than an inline `.environment` call so a test can apply
+/// the REAL thing to a probe and check that a link opened inside it lands on the
+/// delegate. `weak` because the delegate is the collection-view controller that
+/// (transitively) owns the cell holding this modifier.
+struct TimelineHostedLinkRouting: ViewModifier {
+    weak var delegate: (any TimelineCellActionDelegate)?
+
+    func body(content: Content) -> some View {
+        content.environment(\.openURL, OpenURLAction { url in
+            TimelineHostedCell.handleHostedLink(url, delegate: delegate) ? .handled : .systemAction
+        })
+    }
+}
+
 /// Component rows hosted as SwiftUI inside UIKit cells via
 /// UIHostingConfiguration — behavior fidelity (tap targets, shimmer, image
 /// pipeline) with cost bounded by the visible-cell count. Heights are still
@@ -25,10 +41,40 @@ enum TimelineHostedCell {
     /// the actor computed. A hosted row's height is a FORMULA while its content
     /// is laid out by SwiftUI, and SwiftUI does not clip — so the two drifting
     /// apart is not a cosmetic rounding matter, it paints one row over the next.
+    ///
+    /// Every link inside hosted content is routed through the timeline's own
+    /// delegate, exactly like the TextKit cells do. Without this a link in a
+    /// markdown TABLE cell was styled as a link and did nothing at all: hosted
+    /// content gets SwiftUI's default `openURL`, which hands an unknown scheme
+    /// to the system opener, and the system silently drops `walnut-file://`.
+    /// A dead link that LOOKS live is worse than plain text, so this seam is not
+    /// optional for any hosted content that can carry an attributed link.
     @MainActor
-    @ViewBuilder
     static func content(for row: TimelineRow,
                         delegate: TimelineCellActionDelegate?) -> some View {
+        rowContent(for: row, delegate: delegate)
+            .modifier(TimelineHostedLinkRouting(delegate: delegate))
+    }
+
+    /// Route a link tapped inside hosted SwiftUI content.
+    ///
+    /// Separate from the modifier above so it is testable: an `\.openURL`
+    /// installed in an environment cannot be invoked from a unit test, so the
+    /// test covers this decision and the DEVICE covers the one line that
+    /// installs it. Returns false when there is nobody to route to (the
+    /// height-parity gate renders this content with no delegate), and in that
+    /// case SwiftUI keeps its default behaviour.
+    @MainActor
+    static func handleHostedLink(_ url: URL, delegate: TimelineCellActionDelegate?) -> Bool {
+        guard let delegate else { return false }
+        delegate.timelineCell(didRequest: .openURL(url))
+        return true
+    }
+
+    @MainActor
+    @ViewBuilder
+    private static func rowContent(for row: TimelineRow,
+                                   delegate: TimelineCellActionDelegate?) -> some View {
         switch row.content {
         case .toolChip(let name, let detail, let resultPreview, let agent, let expanded):
             TimelineToolChipView(

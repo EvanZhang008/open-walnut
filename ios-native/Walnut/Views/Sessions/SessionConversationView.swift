@@ -388,6 +388,8 @@ struct SessionConversationView: View {
         SessionTimelineBody(
             store: store,
             previewHost: session.host,
+            previewCwd: session.cwd,
+            previewSessionID: session.id,
             repinSignal: repinSignal,
             keyboardGeometryFrozen: { keyboardGeometryFrozen || programmaticGeometryFrozen },
             onRefresh: { await store.open() }

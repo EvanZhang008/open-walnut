@@ -533,16 +533,12 @@ private final class HTMLPreviewNavigator: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
         // Map server refusals onto the file browser's friendly copy instead
-        // of rendering the raw plain-text error body as a page.
+        // of rendering the raw plain-text error body as a page. The mapping
+        // itself lives in FilePathReference.swift (FilePreviewLink
+        // .friendlyMessage) so the TEXT viewer, which sees the same refusals as
+        // APIError rather than as status codes, says the same words.
         if let http = navigationResponse.response as? HTTPURLResponse, http.statusCode >= 400 {
-            let message: String
-            switch http.statusCode {
-            case 404: message = "File not found."
-            case 403, 501: message = "File previews aren't available through the cloud companion — open this on your Mac."
-            case 413: message = "This file is too large to preview on the phone — open it on your Mac."
-            case 502, 503: message = "Can't reach the file's host right now — try again when it reconnects."
-            default: message = "The server couldn't serve this file (HTTP \(http.statusCode))."
-            }
+            let message = FilePreviewLink.friendlyMessage(forHTTPStatus: http.statusCode)
             Task { @MainActor [loader] in loader?.setPhase(.failed(message)) }
             decisionHandler(.cancel)
             return

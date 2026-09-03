@@ -394,39 +394,174 @@ enum MarkdownParser {
         }
     }
 
-    /// Bare absolute `.html`/`.htm` paths become tappable walnut-file:// links
-    /// (the timeline opens them as the in-app WKWebView preview) — the HTML
-    /// counterpart of splitBarePathImages: agents write "report saved to
-    /// /tmp/x/report.html" constantly, and the web console makes those paths
-    /// clickable, so must the phone. Same segment charset and URL-tail
-    /// boundary guard as barePathRegex.
-    private static let bareHTMLPathRegex = try? NSRegularExpression(
-        pattern: #"/[\w.\-]+(?:/[\w.\- ]*[\w.\-])+\.html?\b"#,
+    /// Bare absolute file paths become tappable walnut-file:// links (the
+    /// timeline opens `.html` in the in-app WKWebView, anything else in the text
+    /// viewer) — the counterpart of splitBarePathImages: agents write "report
+    /// saved to /tmp/x/report.html" and "see /Users/me/repo/src/foo.ts:42"
+    /// constantly, and the web console makes both clickable, so must the phone.
+    ///
+    /// Shape set mirrors the web console's ABS_FILE_RE: a leading `/` or `~/`,
+    /// at least one directory segment, a final `.ext`, spaces allowed inside
+    /// segments after the first, and an optional trailing position (`:42`,
+    /// `:42:7`, `#L10`, `#L10-L20`, `(42,7)`) which is part of the LINK but not
+    /// of the path.
+    ///
+    /// Two things in the pattern are load-bearing, both about not swallowing the
+    /// prose after a path:
+    ///  - the segment repetition is LAZY (`+?`). Greedy, `/tmp/demo/notes.md and
+    ///    open /other/file.txt` matched as ONE link: segments may contain
+    ///    spaces, so the engine happily ran across the sentence to reach the
+    ///    LAST `.ext` it could find. Lazy stops at the first reachable one.
+    ///  - the first segment is space-free, so a match can never start by eating
+    ///    the word before a path.
+    private static let barePathLinkRegex = try? NSRegularExpression(
+        pattern: #"(~?/[\w.\-]+(?:/[\w.\- ]*[\w.\-])+?\.[A-Za-z0-9]{1,12})(?::\d{1,7}(?::\d{1,7})?|#L\d{1,7}(?:-L?\d{1,7})?|\(\d{1,7},\s?\d{1,7}\))?"#,
         options: [.caseInsensitive]
     )
 
+    /// Absolute DIRECTORY paths (extensionless) — "the work is under
+    /// /Users/me/repo/src" opens the folder in the file browser. Started from the
+    /// web console's `absDirRe`:
+    ///  - no spaces (a spaced extensionless run is prose, not a path)
+    ///  - the leaf must be dot-free, so files stay with the pass above
+    ///  - the match must END at whitespace/punctuation, so "/a/b/c.ts" can never
+    ///    be half-claimed as the directory "/a/b/c"
+    ///
+    /// The SEGMENT FLOOR differs by root, and that asymmetry is the point.
+    ///
+    /// A `/`-rooted token needs ≥3 segments because at two it is
+    /// indistinguishable from prose that merely looks rooted: an HTTP route
+    /// ("GET /api/v1"), a mount point, a regex. The floor is a stand-in for the
+    /// question "is this really a filesystem path".
+    ///
+    /// A `~/` prefix answers that question outright — no URL, route, flag or
+    /// pattern starts with it — so the stand-in is not needed and the floor drops
+    /// to the same ≥1 directory segment the FILE rule uses. Without this, one
+    /// table of four sibling home paths lit up exactly one of them
+    /// (`~/Library/Containers/com.docker.docker`, claimed by the file rule for
+    /// its dotted leaf) while `~/Library/Caches` and `~/Library/Developer` stayed
+    /// plain, which reads as a rendering bug rather than a rule. Tilde files and
+    /// tilde directories now share one floor.
+    ///
+    /// The TERMINATOR class carries CJK punctuation, and that is load-bearing, not
+    /// decoration. Measured on the live table after the relaxation, 2 of the 4 rows
+    /// lit, not the 3 intended: `~/Library/Developer` was followed by a FULLWIDTH
+    /// `（` (U+FF08) and the class only had `。，、`, so the lookahead failed and the
+    /// whole row stayed plain. Chat here is routinely bilingual, so a path abutting
+    /// CJK punctuation is an ordinary sentence and the class now includes the
+    /// brackets and sentence marks as well. Adding a terminator cannot make a
+    /// non-path match; it only lets a real path end where a sentence ends.
+    ///
+    /// `/opt/homebrew` in that same table is still deliberately plain: it is a
+    /// two-segment `/`-rooted token, i.e. exactly the shape an API route has, and
+    /// widening that would claim prose. So the three HOME rows agree with each
+    /// other and the `/`-rooted one does not; four of four is not available
+    /// without linkifying routes.
+    private static let bareDirLinkRegex = try? NSRegularExpression(
+        pattern: #"((?:~/(?:[\w@.+\-]+/)+[\w@+\-]+|/(?:[\w@.+\-]+/){2,}[\w@+\-]+))/?(?=[\s,;)"'`\]。，、（）：；！？【】《》「」]|$)"#
+    )
+
     static func linkifyPreviewableFilePaths(_ attributed: inout AttributedString) {
-        guard let regex = bareHTMLPathRegex else { return }
+        guard let regex = barePathLinkRegex else { return }
         let plain = String(attributed.characters)
-        guard plain.range(of: ".htm", options: .caseInsensitive) != nil else { return }
+        // O(1)-ish pre-check: no slash, no absolute path.
+        guard plain.contains("/") else { return }
         let ns = plain as NSString
-        for match in regex.matches(in: plain, range: NSRange(location: 0, length: ns.length)) {
+        // Hand-rolled scan (not `matches(in:)`) because a REJECTED candidate must
+        // be able to resume from an interior offset rather than skip the rest of
+        // the line: a URL tail resumes one char in, and a candidate that spans
+        // `" /"` resumes after that space. See the two guards below.
+        var cursor = 0
+        while cursor < ns.length,
+              let match = regex.firstMatch(
+                in: plain, range: NSRange(location: cursor, length: ns.length - cursor)) {
+            let start = match.range.location
+            let pathRange = match.range(at: 1)
             // Reject a match that is really the tail of a URL/longer token
-            // (same boundary rule as splitBarePathImages).
-            if match.range.location > 0 {
-                let prev = ns.character(at: match.range.location - 1)
+            // (same boundary rule as splitBarePathImages) — "https://x.com/a/b.html"
+            // stays one web URL.
+            if start > 0 {
+                let prev = ns.character(at: start - 1)
+                let urlish = Unicode.Scalar(prev).map {
+                    CharacterSet.alphanumerics.contains($0)
+                        || $0 == "/" || $0 == "." || $0 == "-" || $0 == "%"
+                } ?? true
+                // Resume past the whole WHITESPACE-DELIMITED TOKEN, not one
+                // character on. One char at a time is correct but quadratic: a
+                // long URL is a run of slash-separated segments, each of which
+                // produces (and fails) its own candidate, so a line of URLs cost
+                // O(chars x scan) — this row builder runs on every visible row of
+                // every rebuild. A path inside a token is inside that token; the
+                // next candidate worth trying starts after it.
+                if urlish { cursor = tokenEnd(in: ns, from: start); continue }
+            }
+            let pathText = ns.substring(with: pathRange)
+            // A candidate containing " /" bridged two references ("/a/b and
+            // /c.txt", where the first has no extension to stop at). Resume just
+            // after that space so the SECOND one still gets its chance.
+            if let bridge = pathText.range(of: " /") {
+                cursor = pathRange.location + pathText.distance(from: pathText.startIndex,
+                                                                to: bridge.lowerBound) + 1
+                continue
+            }
+            cursor = match.range.location + match.range.length
+            // Image paths belong to the image pipeline (splitBarePathImages
+            // renders them inline, AttachmentImageView zooms them) — linking one
+            // would replace a picture with a blue path.
+            if isImagePath(pathText) { continue }
+            guard let ref = FilePathRef.parse(ns.substring(with: match.range)),
+                  let url = FilePreviewLink.url(for: ref),
+                  let range = Range(match.range, in: plain),
+                  let lower = AttributedString.Index(range.lowerBound, within: attributed),
+                  let upper = AttributedString.Index(range.upperBound, within: attributed) else { continue }
+            // Skip runs already linked ([text](url) or a bare URL above).
+            if attributed[lower..<upper].runs.contains(where: { $0.link != nil }) { continue }
+            attributed[lower..<upper].link = url
+            attributed[lower..<upper].foregroundColor = .accentColor
+            attributed[lower..<upper].underlineStyle = .single
+        }
+        // Second pass, AFTER the file pass: a directory candidate that overlaps a
+        // file link is skipped by the already-linked check, so "/a/b/c.ts" can
+        // never end up double-claimed.
+        linkifyDirectoryPaths(&attributed, plain: plain, ns: ns)
+    }
+
+    /// Index just past the whitespace-delimited token containing `index`
+    /// (always > `index`, so a scan loop using it always makes progress).
+    private static func tokenEnd(in ns: NSString, from index: Int) -> Int {
+        var i = index
+        while i < ns.length {
+            let c = ns.character(at: i)
+            if c == 32 || c == 9 || c == 10 || c == 13 { break }
+            i += 1
+        }
+        return max(i, index + 1)
+    }
+
+    private static func linkifyDirectoryPaths(_ attributed: inout AttributedString,
+                                              plain: String, ns: NSString) {
+        guard let regex = bareDirLinkRegex else { return }
+        for match in regex.matches(in: plain, range: NSRange(location: 0, length: ns.length)) {
+            let pathRange = match.range(at: 1)
+            // Same URL-tail boundary rule as the file pass.
+            if pathRange.location > 0 {
+                let prev = ns.character(at: pathRange.location - 1)
                 let urlish = Unicode.Scalar(prev).map {
                     CharacterSet.alphanumerics.contains($0)
                         || $0 == "/" || $0 == "." || $0 == "-" || $0 == "%"
                 } ?? true
                 if urlish { continue }
             }
-            guard let range = Range(match.range, in: plain),
+            let dirPath = ns.substring(with: pathRange)
+            // The leaf must be dot-free (a dotted leaf is a file, and the pass
+            // above owns those). `[\w@+\-]+` already excludes dots; this also
+            // rejects a match whose leaf came from a dotted DIRECTORY chain.
+            guard !((dirPath as NSString).lastPathComponent.contains(".")) else { continue }
+            guard let url = FilePreviewLink.url(for: FilePathRef(path: dirPath)),
+                  let range = Range(pathRange, in: plain),
                   let lower = AttributedString.Index(range.lowerBound, within: attributed),
                   let upper = AttributedString.Index(range.upperBound, within: attributed) else { continue }
-            // Skip runs already linked ([text](url) or a bare URL above).
             if attributed[lower..<upper].runs.contains(where: { $0.link != nil }) { continue }
-            guard let url = FilePreviewLink.url(for: ns.substring(with: match.range)) else { continue }
             attributed[lower..<upper].link = url
             attributed[lower..<upper].foregroundColor = .accentColor
             attributed[lower..<upper].underlineStyle = .single

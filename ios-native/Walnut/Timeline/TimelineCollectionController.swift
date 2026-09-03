@@ -417,10 +417,10 @@ extension TimelineCollectionController: TimelineCellActionDelegate {
     func timelineCell(didRequest action: TimelineRowAction) {
         switch action {
         case .openURL(let url):
-            // Server-side file links (walnut-file:// or a bare absolute .html
-            // path in a markdown link) open the in-app preview, not Safari.
-            if let path = FilePreviewLink.path(from: url) {
-                onAction(.previewFile(path: path))
+            // Server-side file links (walnut-file:// or a bare absolute path in
+            // a markdown link) open the in-app preview, not Safari.
+            if let ref = FilePreviewLink.reference(from: url) {
+                onAction(.previewFile(ref: ref))
             } else {
                 UIApplication.shared.open(url)
             }
