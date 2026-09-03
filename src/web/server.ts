@@ -783,6 +783,21 @@ async function resolveCredentialHealth(): Promise<{
 }
 
 /**
+ * When the port is taken, is it Walnut itself? Then the right advice is "open that
+ * address", not "pick another port". A short deadline: this runs on the failure path.
+ */
+async function isWalnutAnsweringOn(port: number): Promise<boolean> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/system/health`, { signal: AbortSignal.timeout(1500) })
+    if (!res.ok) return false
+    const body = (await res.json()) as Record<string, unknown> | null
+    return !!body && typeof body === 'object' && 'hasReadyProvider' in body
+  } catch {
+    return false
+  }
+}
+
+/**
  * Create and start the server.
  * Returns the running HTTP server instance.
  */
@@ -932,14 +947,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Don't throw — remote sessions may still work, and user can fix daemon issues
   }
 
-  // Not const: an unrelated process holding this port makes the listen below step to
-  // the next one rather than ending the boot with a raw EADDRINUSE.
-  let port = options.port ?? DEFAULT_PORT
+  const port = options.port ?? DEFAULT_PORT
   const dev = options.dev ?? false
   const isEphemeral = IS_EPHEMERAL
   // Own-server URL for agent-facing skills/tools (e.g. the install-plugin skill curls
   // the REST API). Sandbox/demo servers on other ports inherit the right value.
-  // Set again after listen, since port 0 and the busy-port shift both resolve there.
+  // Set again after listen, where port 0 resolves to a real number.
   process.env.WALNUT_SERVER_URL = `http://localhost:${port}`
 
   // Tripwire: never serve the PRODUCTION port from a test/temp home. A shell with
@@ -1688,36 +1701,36 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   attachWss(httpServer)
 
   // -- Bind port early (before heavy init) so no other process can grab it --
-  // A busy port used to end the boot with a raw EADDRINUSE stack, which tells a new
-  // user nothing about what to do. A second Walnut on this data dir is already refused
-  // by the instance lock above, so a taken port here means some UNRELATED process holds
-  // it: step to the next one and say so, the way dev servers do. Port 0 (tests, probes)
-  // is resolved by the OS and can never collide.
-  const requestedPort = port
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const onError = (err: Error) => reject(err)
-        httpServer!.once('error', onError)
-        httpServer!.listen(port, () => { httpServer!.removeListener('error', onError); resolve() })
-      })
-      break
-    } catch (err) {
-      const busy = (err as NodeJS.ErrnoException)?.code === 'EADDRINUSE'
-      if (!busy || requestedPort === 0 || attempt >= 9) throw err
-      port += 1
-      log.web.warn(`port ${port - 1} is in use by another process, trying ${port}`, { requestedPort, port })
-    }
+  // A busy port must NOT make us step to a neighbouring port: every client (the walnut
+  // CLI, MCP, the Mac app, agent skills) and every prod-safety guard in this repo
+  // identifies the production server by the literal 3456, and the sandbox scripts
+  // kill -9 whatever sits on 3457/3458. So the answer is a plain sentence, not a
+  // stack trace and not a silent move. The usual cause is simply "Walnut is already
+  // running", which we can check and say outright.
+  try {
+    await new Promise<void>((resolve, reject) => {
+      httpServer!.once('error', reject)
+      httpServer!.listen(port, () => resolve())
+    })
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'EADDRINUSE') throw err
+    const already = await isWalnutAnsweringOn(port)
+    throw new Error(
+      already
+        ? `Walnut is already running at http://localhost:${port} (EADDRINUSE). Open that address; there is nothing to start.`
+        : `Port ${port} is in use by another program (EADDRINUSE). Start Walnut on a free one instead, for example:\n`
+          + `    open-walnut web --port ${port + 1}`,
+    )
   }
+  // Once serving, an accept error (EMFILE under load, for one) is emitted on the
+  // server; with no listener it becomes an uncaught exception and ends the process.
+  httpServer.on('error', (err) => {
+    log.web.error('http server error after listen', { error: err instanceof Error ? err.message : String(err) })
+  })
   const label = dev ? 'dev' : 'production'
   log.web.info(`server listening on http://localhost:${port}`, { mode: label, port })
-  if (port !== requestedPort) {
-    // stdout, not just the log file: this is the address the human has to open.
-    process.stdout.write(`\nPort ${requestedPort} was busy. Walnut is at http://localhost:${port}\n\n`)
-  }
-  // Record the REAL port in the instance lock (port 0 resolves at listen time, and a
-  // busy port shifted us above). Everything derived from the port has to be re-derived
-  // here, including WALNUT_SERVER_URL, which agent-facing skills curl.
+  // Record the REAL port in the instance lock (port 0 resolves at listen time), and
+  // re-derive everything computed from the port, including WALNUT_SERVER_URL.
   {
     const bound = httpServer.address()
     if (bound && typeof bound === 'object') {

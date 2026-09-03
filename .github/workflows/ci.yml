@@ -166,10 +166,16 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      - name: Prove Bun is absent
+      - name: Make sure Bun is absent
+        # Neither runner image ships Bun today. If one starts to, remove it rather than
+        # fail every PR: the point is a machine without Bun, not a runner without Bun.
         run: |
+          for b in "$(command -v bun 2>/dev/null)" "$HOME/.bun/bin/bun" /usr/local/bin/bun /opt/homebrew/bin/bun; do
+            [ -n "$b" ] && [ -e "$b" ] && { echo "::warning::runner ships bun at $b; removing it for this job"; sudo rm -f "$b"; }
+          done
+          hash -r
           if command -v bun >/dev/null 2>&1; then
-            echo "::error::bun is on PATH, so this job no longer tests a new user's machine"
+            echo "::error::bun is still on PATH, so this job no longer tests a new user's machine"
             exit 1
           fi
           echo "no bun, as intended"
@@ -183,8 +189,11 @@ jobs:
             if curl -fsS --max-time 2 http://127.0.0.1:3456/api/system/health > /tmp/health.json 2>/dev/null; then
               echo "server answered after ${i}s"; cat /tmp/health.json; echo
               curl -o /dev/null -sS -w 'GET / -> %{http_code}\n' http://127.0.0.1:3456/
-              # Only this process, and never pid <= 1.
-              [ "$start_pid" -gt 1 ] && kill -TERM "$start_pid" 2>/dev/null || true
+              # npm's grandchild holds the port, so stop the listener itself; this VM is
+              # ours alone, and never a pid <= 1.
+              for p in $(lsof -tiTCP:3456 -sTCP:LISTEN 2>/dev/null) "$start_pid"; do
+                [ "$p" -gt 1 ] 2>/dev/null && kill -TERM "$p" 2>/dev/null || true
+              done
               exit 0
             fi
             if ! kill -0 "$start_pid" 2>/dev/null; then

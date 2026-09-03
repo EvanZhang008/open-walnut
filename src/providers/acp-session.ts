@@ -1101,9 +1101,18 @@ export class AcpSession {
 
   private async resolveArtifacts(): Promise<{ workerCmd: string[]; adapterCmd: string[] }> {
     if (this.cfg.artifacts) return this.cfg.artifacts
-    return resolveAcpArtifacts(this.engineId, {
+    const artifacts = resolveAcpArtifacts(this.engineId, {
       configuredAdapterCmd: await this.resolveConfiguredAdapterCmd(),
     })
+    // Without Bun, build-daemon.sh skips the worker bundle (Claude sessions never need
+    // it). Fail here, before the daemon spawns a path that does not exist, and name the fix.
+    if (!fsModule.existsSync(artifacts.workerCmd[1])) {
+      throw new Error(
+        `Engine '${this.engineId}' runs on the ACP worker, which is not built (${artifacts.workerCmd[1]}). `
+        + 'Install Bun (https://bun.sh) and run `npm run build:daemon`, or install Walnut from npm, which ships it.',
+      )
+    }
+    return artifacts
   }
 
   private async establishProviderSession(): Promise<string> {

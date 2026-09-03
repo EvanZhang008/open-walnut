@@ -150,6 +150,18 @@ function findRepoRoot(): string | null {
   return null
 }
 
+/** Same lookup as scripts/build-daemon.sh: PATH, then the usual install prefixes. */
+function bunAvailable(): boolean {
+  const home = process.env.HOME ?? ''
+  const candidates = [
+    ...(process.env.PATH ?? '').split(path.delimiter).filter(Boolean).map((d) => path.join(d, 'bun')),
+    path.join(home, '.bun', 'bin', 'bun'),
+    '/opt/homebrew/bin/bun',
+    '/usr/local/bin/bun',
+  ]
+  return candidates.some((p) => { try { fs.accessSync(p, fs.constants.X_OK); return true } catch { return false } })
+}
+
 function readBuiltVersions(): Map<string, string> {
   const out = new Map<string, string>()
   try {
@@ -191,6 +203,14 @@ export function verifyDaemonBinaryVersion(): boolean {
   }
 
   const built = readBuiltVersions()
+
+  if (built.size === 0 && !bunAvailable()) {
+    // A checkout on a machine without Bun: build-daemon.sh skipped the binaries on
+    // purpose and sessions run the source daemon. Nothing has drifted, and running
+    // the rebuild would just skip again, so say what is happening once and move on.
+    log.session.info('no daemon binaries and no Bun on this machine; sessions use the source daemon', { expected })
+    return true
+  }
 
   if (built.size === 0) {
     // No binaries yet. dev:prod always builds them, so this is only hit if
@@ -276,6 +296,14 @@ function handleMismatch(ctx: {
   // exiting here crash-looped a production server 41 times. Log loudly (so it
   // gets fixed) and continue without the guard.
   const builtAfter = readBuiltVersions()
+  if (builtAfter.size === 0) {
+    // build-daemon.sh exits 0 without Bun, having built nothing; that is a skip, not
+    // a rebuild, and must not be reported as one.
+    log.session.warn('daemon rebuild produced no binaries (no Bun?); continuing with the source daemon', { expected: ctx.expected })
+    // eslint-disable-next-line no-console
+    console.error(`    Daemon binaries were not built (Bun is not installed). Sessions use the source daemon. Continuing startup.\n`)
+    return true
+  }
   const stillOff = [...builtAfter].filter(([, v]) => v !== ctx.expected)
   if (stillOff.length > 0) {
     log.session.error(

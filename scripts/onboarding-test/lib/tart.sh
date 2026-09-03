@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Target: a brand-new macOS virtual machine on this Apple Silicon Mac, via Tart
 # (https://tart.run). The "vanilla" image is a stock macOS install: no Homebrew, no
 # Xcode Command Line Tools, no git, no node — the closest thing to a new laptop.
@@ -9,6 +10,10 @@ TART_IMAGE_DEFAULT="ghcr.io/cirruslabs/macos-sequoia-vanilla:latest"
 TART_USER="admin"      # cirruslabs images: admin/admin with passwordless sudo
 TART_PASS="admin"
 TART_SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5"
+
+# Tart prunes its image cache when disk is low; on a Mac with ~44 GB free it deleted
+# a finished 30 GB pull before the clone could use it. The run needs the image, so no.
+export TART_NO_AUTO_PRUNE=1
 
 tart_require() {
   need_cmd tart "brew install cirruslabs/cli/tart"

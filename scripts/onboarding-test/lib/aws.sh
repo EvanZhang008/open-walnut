@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Target: a brand-new EC2 machine, reached only through SSM Session Manager.
 # No SSH keys, no security-group ingress, no public endpoint: the instance sits in
 # the default VPC's default security group and only talks OUT to the SSM service.

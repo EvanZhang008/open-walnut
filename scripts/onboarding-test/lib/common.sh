@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared helpers for the fresh-machine onboarding harness (operator side).
 # Sourced by run.sh; never executed directly. bash 3.2 compatible (macOS /bin/bash).
 

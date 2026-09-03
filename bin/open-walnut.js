@@ -25,8 +25,8 @@ if (Number.isFinite(nodeMajor) && nodeMajor < 22) {
     `  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash\n` +
     `  nvm install 22\n\n` +
     `Then run the same command again.\n`,
+    () => process.exit(1),
   );
-  process.exit(1);
 }
 
 let wroteStdout = false;

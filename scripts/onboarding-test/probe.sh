@@ -41,6 +41,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+case "$OUT" in /|"$HOME"|"$HOME/") echo "probe: --out must be a dedicated directory, not $OUT (it gets wiped)" >&2; exit 2 ;; esac
 mkdir -p "$OUT/logs"
 STEPS="$OUT/steps.jsonl"
 PIDS="$OUT/pids"
@@ -81,6 +82,9 @@ listeners_on_port() {
   elif have ss; then ss -Hltnp "sport = :$1" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p'
   fi | sort -u
 }
+# Anything already on the port means this is not a fresh machine: the probe would
+# measure (and later stop) a server it did not start.
+port_in_use() { [ -n "$(listeners_on_port "$1")" ] || curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$1/" 2>/dev/null; }
 
 step_begin() {
   STEP_N=$((STEP_N + 1)); STEP_NAME="$1"; STEP_T0=$(date +%s)
@@ -249,12 +253,18 @@ if want_path readme; then
     fi
 
     step_begin "readme:npm-start"
+    if port_in_use "$README_PORT"; then
+      step_end fail "port $README_PORT already has a listener; this is not a fresh machine" "Something already listens on $README_PORT here, so the probe cannot tell its own server from it. Run the probe on a fresh machine."
+      START_PID=""
+    else
     cmd "npm start"
     ( cd "$README_DIR" && exec npm start ) >> "$STEP_LOG" 2>&1 &
     START_PID=$!
     echo "$START_PID" >> "$PIDS"
-    say "  waiting for http://127.0.0.1:$README_PORT/api/system/health (timeout ${READY_TIMEOUT}s)"
-    if wait_ready "http://127.0.0.1:$README_PORT/api/system/health" "$START_PID"; then
+    fi
+    if [ -z "$START_PID" ]; then
+      step_begin "readme:first-run"; step_end skip "port was not free"
+    elif { say "  waiting for http://127.0.0.1:$README_PORT/api/system/health (timeout ${READY_TIMEOUT}s)"; wait_ready "http://127.0.0.1:$README_PORT/api/system/health" "$START_PID"; }; then
       listeners_on_port "$README_PORT" >> "$PIDS"
       step_end ok "server ready in ${READY_SECS}s (build + start)"
       step_begin "readme:first-run"
@@ -289,13 +299,19 @@ if want_path npm; then
 
   if have open-walnut; then
     step_begin "npm:start"
+    if port_in_use "$NPM_PORT"; then
+      step_end fail "port $NPM_PORT already has a listener; this is not a fresh machine" "Something already listens on $NPM_PORT here. Run the probe on a fresh machine."
+      NPM_PID=""
+    else
     cmd "open-walnut web --port $NPM_PORT"
     mkdir -p "$OUT/npm-home" "$OUT/npm-daemon"
     OPEN_WALNUT_HOME="$OUT/npm-home" WALNUT_DAEMON_DIR="$OUT/npm-daemon" open-walnut web --port "$NPM_PORT" >> "$STEP_LOG" 2>&1 &
     NPM_PID=$!
     echo "$NPM_PID" >> "$PIDS"
-    say "  waiting for http://127.0.0.1:$NPM_PORT/api/system/health (timeout ${READY_TIMEOUT}s)"
-    if wait_ready "http://127.0.0.1:$NPM_PORT/api/system/health" "$NPM_PID"; then
+    fi
+    if [ -z "$NPM_PID" ]; then
+      step_begin "npm:first-run"; step_end skip "port was not free"
+    elif { say "  waiting for http://127.0.0.1:$NPM_PORT/api/system/health (timeout ${READY_TIMEOUT}s)"; wait_ready "http://127.0.0.1:$NPM_PORT/api/system/health" "$NPM_PID"; }; then
       listeners_on_port "$NPM_PORT" >> "$PIDS"
       step_end ok "server ready in ${READY_SECS}s"
       step_begin "npm:first-run"
