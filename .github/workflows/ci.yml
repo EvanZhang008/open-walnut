@@ -234,6 +234,18 @@ jobs:
           echo "::error::the published package never answered within 300s"; tail -n 40 /tmp/walnut-npm-start.log
           [ "$start_pid" -gt 1 ] && kill -TERM "$start_pid" 2>/dev/null || true
           exit 1
+      # This runner has no `claude` and no credentials, which is the one first-run
+      # state a developer's own machine can never reproduce (a Mac with Claude Code
+      # in /opt/homebrew/bin is always "ready"). Both routes must report it honestly:
+      # that pair of falses is what makes the SPA show the install card instead of
+      # "Walnut runs on your Claude Code".
+      - name: A machine without Claude Code must say so
+        run: |
+          for f in /tmp/health.json /tmp/npm-health.json; do
+            jq -e '.claudeCliAvailable == false and .hasReadyProvider == false' "$f" > /dev/null \
+              || { echo "::error::$f claims Claude Code or a provider is ready on a bare runner"; cat "$f"; exit 1; }
+          done
+          echo "both routes report: no Claude Code, no provider (install card state)"
       - name: Upload start logs
         if: failure()
         uses: actions/upload-artifact@v4
