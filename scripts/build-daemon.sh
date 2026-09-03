@@ -32,9 +32,19 @@ if [ -z "$BUN" ]; then
   done
 fi
 if [ -z "$BUN" ]; then
+  # Bun only cross-compiles the daemon binaries, and a host without one still gets a
+  # working daemon over the source-deploy fallback (daemon-connection.ts: "no binary
+  # found, falling back to source deploy"). Failing here used to stop `npm start` dead
+  # on any machine that had never installed Bun, which is every new user's machine.
+  # Release flows set WALNUT_REQUIRE_BUN=1 so a published tarball can never miss them.
   echo "build-daemon.sh: bun not found (checked PATH, ~/.bun/bin, /opt/homebrew/bin, /usr/local/bin)." >&2
-  echo "Install Bun: https://bun.sh" >&2
-  exit 1
+  if [ "${WALNUT_REQUIRE_BUN:-0}" = 1 ]; then
+    echo "build-daemon.sh: WALNUT_REQUIRE_BUN=1 is set, so this is fatal. Install Bun: https://bun.sh" >&2
+    exit 1
+  fi
+  echo "build-daemon.sh: skipping the daemon binaries. Walnut still runs: sessions deploy the daemon from source instead." >&2
+  echo "build-daemon.sh: install Bun (https://bun.sh) and re-run \`npm run build:daemon\` to get the faster prebuilt path." >&2
+  exit 0
 fi
 
 SOURCES=(

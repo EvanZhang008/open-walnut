@@ -932,11 +932,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Don't throw — remote sessions may still work, and user can fix daemon issues
   }
 
-  const port = options.port ?? DEFAULT_PORT
+  // Not const: an unrelated process holding this port makes the listen below step to
+  // the next one rather than ending the boot with a raw EADDRINUSE.
+  let port = options.port ?? DEFAULT_PORT
   const dev = options.dev ?? false
   const isEphemeral = IS_EPHEMERAL
   // Own-server URL for agent-facing skills/tools (e.g. the install-plugin skill curls
   // the REST API). Sandbox/demo servers on other ports inherit the right value.
+  // Set again after listen, since port 0 and the busy-port shift both resolve there.
   process.env.WALNUT_SERVER_URL = `http://localhost:${port}`
 
   // Tripwire: never serve the PRODUCTION port from a test/temp home. A shell with
@@ -1661,19 +1664,43 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   attachWss(httpServer)
 
   // -- Bind port early (before heavy init) so no other process can grab it --
-  await new Promise<void>((resolve, reject) => {
-    httpServer!.listen(port, () => resolve())
-    httpServer!.once('error', reject)
-  })
+  // A busy port used to end the boot with a raw EADDRINUSE stack, which tells a new
+  // user nothing about what to do. A second Walnut on this data dir is already refused
+  // by the instance lock above, so a taken port here means some UNRELATED process holds
+  // it: step to the next one and say so, the way dev servers do. Port 0 (tests, probes)
+  // is resolved by the OS and can never collide.
+  const requestedPort = port
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (err: Error) => reject(err)
+        httpServer!.once('error', onError)
+        httpServer!.listen(port, () => { httpServer!.removeListener('error', onError); resolve() })
+      })
+      break
+    } catch (err) {
+      const busy = (err as NodeJS.ErrnoException)?.code === 'EADDRINUSE'
+      if (!busy || requestedPort === 0 || attempt >= 9) throw err
+      port += 1
+      log.web.warn(`port ${port - 1} is in use by another process, trying ${port}`, { requestedPort, port })
+    }
+  }
   const label = dev ? 'dev' : 'production'
   log.web.info(`server listening on http://localhost:${port}`, { mode: label, port })
-  // Record the REAL port in the instance lock (port 0 resolves at listen time).
+  if (port !== requestedPort) {
+    // stdout, not just the log file: this is the address the human has to open.
+    process.stdout.write(`\nPort ${requestedPort} was busy. Walnut is at http://localhost:${port}\n\n`)
+  }
+  // Record the REAL port in the instance lock (port 0 resolves at listen time, and a
+  // busy port shifted us above). Everything derived from the port has to be re-derived
+  // here, including WALNUT_SERVER_URL, which agent-facing skills curl.
   {
     const bound = httpServer.address()
     if (bound && typeof bound === 'object') {
       const { updateInstanceLockPort } = await import('../core/instance-lock.js')
       updateInstanceLockPort(bound.port)
       setPluginApiBase(`http://127.0.0.1:${bound.port}`)
+      process.env.WALNUT_SERVER_URL = `http://localhost:${bound.port}`
     }
   }
 

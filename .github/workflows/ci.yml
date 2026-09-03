@@ -140,6 +140,69 @@ jobs:
           echo "### ${{ matrix.tier }} report contains known failures" >> "$GITHUB_STEP_SUMMARY"
           echo "This tier is informational until it has a stable baseline." >> "$GITHUB_STEP_SUMMARY"
 
+  # ── Does a NEW USER's machine work? ─────────────────────────────────────────
+  # Every other job here installs Bun on purpose, which is exactly why a real
+  # onboarding break hid from CI for weeks: `npm start` called build-daemon.sh,
+  # which exited 1 when Bun was absent, so the very first command in the README
+  # failed on every machine that had never installed Bun. This job is deliberately
+  # BARE: no Bun, no caches, nothing the docs don't tell a person to install. It
+  # runs the documented commands and requires the server to answer.
+  #
+  # macos-latest matters on its own: it is real Mac hardware, free for public
+  # repos, and the only platform where the install can hit Xcode/native-module
+  # problems. Locally the same probe runs against a stock macOS VM or an EC2 box
+  # (scripts/onboarding-test/), which goes further: those machines have no Node
+  # and no git either.
+  onboarding:
+    name: Fresh machine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Prove Bun is absent
+        run: |
+          if command -v bun >/dev/null 2>&1; then
+            echo "::error::bun is on PATH, so this job no longer tests a new user's machine"
+            exit 1
+          fi
+          echo "no bun, as intended"
+      # The two commands the README gives, nothing else.
+      - run: npm install
+      - name: npm start, then require the server to answer
+        run: |
+          npm start > /tmp/walnut-start.log 2>&1 &
+          start_pid=$!
+          for i in $(seq 1 600); do
+            if curl -fsS --max-time 2 http://127.0.0.1:3456/api/system/health > /tmp/health.json 2>/dev/null; then
+              echo "server answered after ${i}s"; cat /tmp/health.json; echo
+              curl -o /dev/null -sS -w 'GET / -> %{http_code}\n' http://127.0.0.1:3456/
+              # Only this process, and never pid <= 1.
+              [ "$start_pid" -gt 1 ] && kill -TERM "$start_pid" 2>/dev/null || true
+              exit 0
+            fi
+            if ! kill -0 "$start_pid" 2>/dev/null; then
+              echo "::error::npm start exited before serving"; tail -n 40 /tmp/walnut-start.log; exit 1
+            fi
+            sleep 1
+          done
+          echo "::error::server never answered within 600s"; tail -n 40 /tmp/walnut-start.log
+          [ "$start_pid" -gt 1 ] && kill -TERM "$start_pid" 2>/dev/null || true
+          exit 1
+      - name: Upload start log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-start-log-${{ matrix.os }}
+          path: /tmp/walnut-start.log
+          if-no-files-found: ignore
+
   # ── The single required check ───────────────────────────────────────────────
   #
   # Point branch protection at THIS job, never at individual matrix legs: leg
@@ -150,17 +213,19 @@ jobs:
   ci-ok:
     name: CI OK
     runs-on: ubuntu-latest
-    needs: [build, test]
+    needs: [build, test, onboarding]
     if: always()
     steps:
       - name: Check gate results
         run: |
-          echo "build: ${{ needs.build.result }}"
-          echo "test:  ${{ needs.test.result }}"
+          echo "build:      ${{ needs.build.result }}"
+          echo "test:       ${{ needs.test.result }}"
+          echo "onboarding: ${{ needs.onboarding.result }}"
           # A matrix job's result is 'success' only when EVERY leg succeeded.
           # Neither job uses continue-on-error, so these values are unambiguous.
           failed=0
           [ "${{ needs.build.result }}" = "success" ] || { echo "::error::build failed"; failed=1; }
           [ "${{ needs.test.result }}" = "success" ] || { echo "::error::a blocking test tier failed"; failed=1; }
+          [ "${{ needs.onboarding.result }}" = "success" ] || { echo "::error::the documented install broke on a fresh machine"; failed=1; }
           [ "$failed" = "0" ] || exit 1
           echo "All blocking checks passed."

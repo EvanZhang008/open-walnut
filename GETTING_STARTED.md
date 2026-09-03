@@ -15,16 +15,24 @@ If you already have Node.js >= 22, here's the quickest path:
 npm install -g @anthropic-ai/claude-code
 claude --version                      # verify it's installed
 
-# 2. Clone and install
-git clone https://github.com/EvanZhang008/open-walnut.git
-cd open-walnut
-npm install
+# 2. Install Walnut from npm (nothing to build)
+npm install -g open-walnut
 
 # 3. Set your API key (Anthropic — simplest option)
 export ANTHROPIC_API_KEY=sk-ant-...   # get one at console.anthropic.com
 
 # 4. Start
-npm start                             # builds everything, starts on port 3456
+open-walnut web                       # starts on port 3456
+```
+
+Working on Walnut itself? Swap step 2 for a checkout, and start with `npm start`, which
+builds the server and the frontend first:
+
+```bash
+git clone https://github.com/EvanZhang008/open-walnut.git
+cd open-walnut
+npm install
+npm start
 ```
 
 Open [http://localhost:3456](http://localhost:3456) — type "hello" in the chat and the agent should reply. You're done!
@@ -75,7 +83,8 @@ Open [http://localhost:3456](http://localhost:3456) — type "hello" in the chat
 
 | Dependency | How to install | Why | Without it |
 |---|---|---|---|
-| **Git** | `brew install git` or [git-scm.com](https://git-scm.com/) | Auto-backup of `~/.open-walnut/` every 30 seconds | Data is still saved locally, just not version-controlled. |
+| **Git** | macOS: `xcode-select --install`, Ubuntu: `sudo apt install git`, or [git-scm.com](https://git-scm.com/) | Cloning the repo, and auto-backup of `~/.open-walnut/` every 30 seconds | The npm install route needs no git. Data is still saved locally, just not version-controlled. |
+| **Bun** | [bun.sh](https://bun.sh/) | Prebuilt session-daemon binaries (faster deploys to remote hosts) and the ACP worker bundle | Claude Code sessions still work: the daemon deploys from source instead, and `npm start` says so and carries on. Non-Claude providers that go over ACP need the worker bundle, so install Bun and re-run `npm run build:daemon` before using those. Not needed at all with the npm install route, which ships the bundle prebuilt. |
 
 ### Important: Two Separate AI Connections
 

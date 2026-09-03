@@ -41,7 +41,8 @@ local-first, self-hosted, and has no telemetry.
 
 ### Requirements
 
-- Node.js 22 or newer
+- Node.js 22 or newer. If you don't have it: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash` then `nvm install 22`.
+- git, only for the checkout route below (macOS: `xcode-select --install`, Ubuntu: `sudo apt install git`)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) for coding sessions
 - An Anthropic API key, AWS Bedrock credentials, or another supported model provider
   for Walnut
@@ -50,6 +51,16 @@ Claude Code and Walnut authenticate separately. Coding sessions use your existin
 Claude Code CLI login, while Walnut uses the model provider selected during setup.
 
 ### Install
+
+The published package is the quickest way in. Nothing to build, and it starts in a few
+seconds:
+
+```bash
+npm install -g open-walnut
+open-walnut web
+```
+
+To work on Walnut itself, run it from a checkout instead:
 
 ```bash
 git clone https://github.com/EvanZhang008/open-walnut.git

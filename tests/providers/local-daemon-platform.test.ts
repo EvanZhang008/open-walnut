@@ -13,6 +13,7 @@
  *      platform's binary sitting in the same directory.
  */
 import { describe, expect, it } from 'vitest'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -50,6 +51,39 @@ describe('getLocalDaemonBinaryName', () => {
       const [, platform, arch] = name.split('-')
       expect(getLocalDaemonBinaryName(platform, arch)).toBe(name)
     }
+  })
+})
+
+/**
+ * The source-daemon degradation above is only reachable if the BUILD tolerates a
+ * machine with no Bun. It used to `exit 1`, which made `npm start` fail outright on
+ * every machine that had never installed Bun, so a new user following the README
+ * stopped at the first command (found by the fresh-machine onboarding harness,
+ * scripts/onboarding-test/). Release flows opt back into strict mode.
+ */
+describe('scripts/build-daemon.sh without Bun', () => {
+  // A PATH with no bun, and a HOME with none of the fallback install prefixes. The
+  // script returns before it creates or writes anything, so this touches no dist/.
+  const noBunEnv = { PATH: '/usr/bin:/bin', HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'no-bun-')) }
+
+  it('skips the binaries and succeeds, so npm start keeps going', () => {
+    const res = spawnSync('bash', [BUILD_SCRIPT], { env: noBunEnv, encoding: 'utf-8' })
+    expect(res.status).toBe(0)
+    expect(res.stderr).toMatch(/skipping the daemon binaries/)
+    expect(res.stderr).toMatch(/deploy the daemon from source/)
+  })
+
+  it('still refuses under WALNUT_REQUIRE_BUN=1, so a release cannot ship without them', () => {
+    const res = spawnSync('bash', [BUILD_SCRIPT], {
+      env: { ...noBunEnv, WALNUT_REQUIRE_BUN: '1' },
+      encoding: 'utf-8',
+    })
+    expect(res.status).toBe(1)
+  })
+
+  it('is the mode the publish pipeline uses', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'package.json'), 'utf-8'))
+    expect(pkg.scripts.prepublishOnly).toContain('WALNUT_REQUIRE_BUN=1')
   })
 })
 

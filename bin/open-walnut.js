@@ -15,6 +15,20 @@ import fs from 'node:fs';
 // a broken pipe means the reader got a TRUNCATED answer, and reporting that as
 // success is how a half-written JSON reply passes for a complete one. 141 is the
 // shell's SIGPIPE convention.
+// Node version: npm only WARNS about an unmet `engines`, so an old Node installs the
+// package happily and then dies inside the bundle with a syntax error that says nothing
+// about versions. Answer the real question here, once, with the command that fixes it.
+const nodeMajor = Number(process.versions.node.split('.')[0]);
+if (Number.isFinite(nodeMajor) && nodeMajor < 22) {
+  process.stderr.write(
+    `Walnut needs Node.js 22 or newer, and this is Node ${process.versions.node}.\n\n` +
+    `  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash\n` +
+    `  nvm install 22\n\n` +
+    `Then run the same command again.\n`,
+  );
+  process.exit(1);
+}
+
 let wroteStdout = false;
 process.stdout.on('error', (e) => {
   if (e && e.code === 'EPIPE') process.exit(wroteStdout ? 141 : 0);
