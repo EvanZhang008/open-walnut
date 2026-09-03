@@ -48,6 +48,7 @@ The old model DELETED streaming blocks at turn boundaries via evidence reconcili
 - **Memory reclamation is all-or-nothing**: `resetIfAbsorbed` in `useSessionStream` drops the whole array only when every block is hidden and no turn is live (`allBlocksAbsorbed`). Because reset is atomic and blocks are append-only, **array indices are stable render identities** — no blockSeq needed; `blockIndexMap` bubble anchors are set-once and clamp to 0 on full reset.
 - `session-cache`'s streaming state is a background accumulator; `gcAbsorbedBlocks` is memory-bound GC only (correctness lives in the render filter, never in the cache).
 - Fault-injection e2e pins the invariants: `tests/e2e/browser/single-timeline-fault-injection.spec.ts` (batch-before-result race, held refetch, /compact shrink).
+- **History refetch triggers** (`historyVersion` bumps in `SessionChatHistory`): `session:batch-completed`, `session:error` (not `delivery_failed`), `_ws:reconnected`, `isStreaming` true→false, and the **turn-START edge** (`turn-prompt-refetch.ts`): the live turn's first MODEL-output block (text/thinking/tool_call/permission) while no user row ≥ watermark and no optimistic bubble exists. That edge exists because the launch prompt has no bubble and the CLI writes it to the transcript ~3 s after spawn, AFTER the panel's opening fetches — without it the first message stayed hidden until turn end (2026-09-03). System blocks never qualify: hook/init notifications land ~20 ms BEFORE the user line.
 
 ### How Claude Code JSONL records user messages
 
