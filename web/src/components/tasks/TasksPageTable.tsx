@@ -13,6 +13,9 @@ import { TaskKebabMenu } from './TaskKebabMenu';
 import { ProjectKebabMenu, ProjectPlusMenu } from './ProjectHeaderMenus';
 import { openSessionOnHome, openDraftSessionOnHome } from '@/utils/open-session';
 import { sortTasks, groupTasksByProject, type TpSort, type TpSortKey } from './tasks-page-sort';
+import {
+  ROW_H, GROUP_H, GHOST_H, WINDOW_MIN_ITEMS, OVERSCAN, visibleRangeFor, offsetsFor,
+} from './tasks-table-window';
 import * as ICONS from '../common/Icons';
 import '@/styles/walnut-agent.css';
 
@@ -42,6 +45,51 @@ interface TasksPageTableProps {
   onToggleGroup: (project: string) => void;
   projectOrder: string[];
   onOpenTask?: (taskId: string) => void;
+}
+
+/** One entry in the flattened render list — the scroller's children, in order. */
+type TableItem =
+  | { kind: 'group'; key: string; h: number; project: string; tasks: Task[]; collapsed: boolean }
+  | { kind: 'row'; key: string; h: number; task: Task }
+  | { kind: 'ghost'; key: string; h: number; project: string | undefined; keySuffix: string };
+
+/**
+ * Which slice of a fixed-height list is on screen.
+ *
+ * Deliberately NOT a scroll-triggered React render per pixel: the listener is passive
+ * and coalesced into one rAF, and it only calls setState when the resulting slice
+ * actually changes. Scrolling within the current window costs nothing.
+ */
+function useVisibleRange(
+  ref: React.RefObject<HTMLDivElement | null>,
+  offsets: number[],
+  enabled: boolean,
+): [number, number] {
+  const [range, setRange] = useState<[number, number]>(
+    () => visibleRangeFor(offsets, 0, 900, OVERSCAN),
+  );
+  const rangeRef = useRef(range);
+  rangeRef.current = range;
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !enabled) return;
+    let queued = false;
+    const compute = () => {
+      queued = false;
+      const [start, stop] = visibleRangeFor(offsets, el.scrollTop, el.clientHeight, OVERSCAN);
+      const [ps, pe] = rangeRef.current;
+      if (ps !== start || pe !== stop) setRange([start, stop]);
+    };
+    const onScroll = () => { if (!queued) { queued = true; requestAnimationFrame(compute); } };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    const ro = new ResizeObserver(onScroll);
+    ro.observe(el);
+    compute();
+    return () => { el.removeEventListener('scroll', onScroll); ro.disconnect(); };
+  }, [ref, offsets, enabled]);
+
+  return range;
 }
 
 const PRIORITY_META: Record<string, { dot: string; labelCls: string; label: string }> = {
@@ -432,10 +480,7 @@ export function TasksPageTable({
     );
   };
 
-  let body: ReactNode;
-  if (groups) {
-    body = groups.map(({ project, tasks: groupTasks }) => {
-      const isCollapsed = collapsed.has(project);
+  const groupHeader = (project: string, groupTasks: Task[], isCollapsed: boolean) => {
       return (
         <Fragment key={`grp:${project || '·inbox·'}`}>
           <div
@@ -474,27 +519,98 @@ export function TasksPageTable({
               />
             )}
           </div>
-          {!isCollapsed && groupTasks.map(row)}
-          {!isCollapsed && ghostRow(project, project || '·inbox·')}
         </Fragment>
       );
-    });
-    if (groups.length === 0) {
-      body = <div className="tp-empty">Nothing here — use "＋ Task" to create one.</div>;
+  };
+
+  // ── flatten to the scroller's actual child sequence ──
+  // Grouped mode already produced a FLAT run of children (header, rows, ghost, next
+  // header, …) because each group was a Fragment. Making that list explicit is what
+  // lets a window be a slice: item heights are known, so offsets are arithmetic.
+  const { items, groupAt } = useMemo(() => {
+    const out: TableItem[] = [];
+    // Which group header each item belongs to. Needed because `.tp-group-header` is
+    // `position: sticky` — see the pinned header in the windowed branch below.
+    const owner: number[] = [];
+    if (groups) {
+      for (const { project, tasks: groupTasks } of groups) {
+        const isCollapsed = collapsed.has(project);
+        const head = out.length;
+        out.push({
+          kind: 'group', key: `grp:${project || '·inbox·'}`, h: GROUP_H,
+          project, tasks: groupTasks, collapsed: isCollapsed,
+        });
+        owner.push(head);
+        if (isCollapsed) continue;
+        for (const t of groupTasks) { out.push({ kind: 'row', key: t.id, h: ROW_H, task: t }); owner.push(head); }
+        out.push({
+          kind: 'ghost', key: `ghost:${project || '·inbox·'}`, h: GHOST_H,
+          project, keySuffix: project || '·inbox·',
+        });
+        owner.push(head);
+      }
+    } else {
+      out.push({ kind: 'ghost', key: 'ghost:top', h: GHOST_H, project: undefined, keySuffix: 'top' });
+      owner.push(-1);
+      for (const t of sorted) { out.push({ kind: 'row', key: t.id, h: ROW_H, task: t }); owner.push(-1); }
     }
-  } else {
+    return { items: out, groupAt: owner };
+  }, [groups, collapsed, sorted]);
+
+  // Prefix sums: offsets[i] is item i's top edge, and the last entry is the total.
+  const offsets = useMemo(() => offsetsFor(items.map((it) => it.h)), [items]);
+
+  const windowed = items.length > WINDOW_MIN_ITEMS;
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [winStart, winEnd] = useVisibleRange(scrollRef, offsets, windowed);
+
+  const renderItem = (it: TableItem): ReactNode => {
+    if (it.kind === 'group') return groupHeader(it.project, it.tasks, it.collapsed);
+    if (it.kind === 'row') return row(it.task);
+    return ghostRow(it.project, it.keySuffix);
+  };
+
+  let body: ReactNode;
+  if (groups && groups.length === 0) {
+    body = <div className="tp-empty">Nothing here — use "＋ Task" to create one.</div>;
+  } else if (!groups && sorted.length === 0) {
     body = (
       <>
         {ghostRow(undefined, 'top')}
-        {sorted.length === 0
-          ? <div className="tp-empty">Nothing here — use the "＋ New task…" row above or "＋ Task".</div>
-          : sorted.map(row)}
+        <div className="tp-empty">Nothing here — use the "＋ New task…" row above or "＋ Task".</div>
+      </>
+    );
+  } else if (!windowed) {
+    body = items.map(renderItem);
+  } else {
+    // Spacers stand in for the items that are not rendered, so the scrollbar and every
+    // scroll offset stay exactly what they would be with the whole list present.
+    const from = Math.max(0, Math.min(winStart, items.length - 1));
+    const to = Math.max(from, Math.min(winEnd, items.length - 1));
+    // A sticky element that isn't in the DOM can't stick. `.tp-group-header` is
+    // `position: sticky; top: 32px`, so once you scroll more than OVERSCAN rows into a
+    // project its header leaves the slice and the pinned project name silently
+    // disappears — measured: at scrollTop 40000 there was no header in the document at
+    // all, so the table told you nothing about which project you were reading. Every
+    // row was still correct, which is exactly why a speed-only check passes this.
+    // Fix: when the covering header is above the window, render it as the FIRST child
+    // (so a real header later in DOM order paints over it, matching how these headers
+    // already replace each other) and take its height out of the leading spacer, which
+    // keeps the total height and every offset unchanged.
+    const headIdx = groupAt[from] ?? -1;
+    const pinned = headIdx >= 0 && headIdx < from ? items[headIdx] : null;
+    body = (
+      <>
+        {pinned && renderItem(pinned)}
+        <div style={{ height: offsets[from] - (pinned ? pinned.h : 0) }} aria-hidden="true" />
+        {items.slice(from, to + 1).map(renderItem)}
+        <div style={{ height: offsets[items.length] - offsets[to + 1] }} aria-hidden="true" />
       </>
     );
   }
 
   return (
-    <div className="tp-table-scroll" data-testid="tasks-table">
+    <div className="tp-table-scroll" data-testid="tasks-table" ref={scrollRef}>
       <div className={`tp-thead ${cols}`}>
         <Th label="Title" k="title" sort={sort} onSortChange={onSortChange} />
         <Th label="Priority" k="priority" sort={sort} onSortChange={onSortChange} />

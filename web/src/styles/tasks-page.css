@@ -296,6 +296,20 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* This table renders EVERY task, so on a real dataset it is enormous: measured
+     2,923 rows, 79,073 elements, 107,240px of content. WebKit was rasterising that
+     whole height and scrolled it at 6-8 fps with frame gaps up to 522ms; Blink does
+     the identical DOM at 108 fps, which is why this only ever looked broken in the
+     Mac app (a WKWebView). Paint containment takes WebKit to 53-59 fps.
+     Semantically a no-op: an overflow scroller already clips to this box, and every
+     menu on this page is portalled (TaskKebabMenu, ProjectHeaderMenus,
+     TaskDetailModal, PluginFieldPicker) so nothing floating gets newly clipped. The
+     sticky `.tp-thead` still pins — verified, header offset 0px while scrolled.
+     Not a React problem: a scroll here causes ZERO DOM mutations, so it was pure
+     paint. And NOT applied to other big scrollers: a 141,766px calendar rail with
+     11,626 elements already runs at 58 fps, so containment there would be
+     cargo-culting. Ratchet: tests/web/tasks-table-scroll-containment.test.ts */
+  contain: paint;
 }
 
 .tp-thead,
