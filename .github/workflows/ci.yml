@@ -207,12 +207,41 @@ jobs:
           echo "::error::server never answered within 600s"; tail -n 40 /tmp/walnut-start.log
           [ "$start_pid" -gt 1 ] && kill -TERM "$start_pid" 2>/dev/null || true
           exit 1
-      - name: Upload start log
+      # The README's other route: the published package, no clone, no build, no Bun.
+      # A fresh HOME so it starts the way a new user's first launch does, not on the
+      # data the clone route just created.
+      - name: npm install -g open-walnut, then require the published package to answer
+        run: |
+          npm install -g open-walnut
+          command -v open-walnut
+          mkdir -p /tmp/walnut-npm-home
+          HOME=/tmp/walnut-npm-home open-walnut web --port 3457 > /tmp/walnut-npm-start.log 2>&1 &
+          start_pid=$!
+          for i in $(seq 1 300); do
+            if curl -fsS --max-time 2 http://127.0.0.1:3457/api/system/health > /tmp/npm-health.json 2>/dev/null; then
+              echo "published package answered after ${i}s"; cat /tmp/npm-health.json; echo
+              curl -o /dev/null -sS -w 'GET / -> %{http_code}\n' http://127.0.0.1:3457/
+              for p in $(lsof -tiTCP:3457 -sTCP:LISTEN 2>/dev/null) "$start_pid"; do
+                [ "$p" -gt 1 ] 2>/dev/null && kill -TERM "$p" 2>/dev/null || true
+              done
+              exit 0
+            fi
+            if ! kill -0 "$start_pid" 2>/dev/null; then
+              echo "::error::open-walnut web exited before serving"; tail -n 40 /tmp/walnut-npm-start.log; exit 1
+            fi
+            sleep 1
+          done
+          echo "::error::the published package never answered within 300s"; tail -n 40 /tmp/walnut-npm-start.log
+          [ "$start_pid" -gt 1 ] && kill -TERM "$start_pid" 2>/dev/null || true
+          exit 1
+      - name: Upload start logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: onboarding-start-log-${{ matrix.os }}
-          path: /tmp/walnut-start.log
+          path: |
+            /tmp/walnut-start.log
+            /tmp/walnut-npm-start.log
           if-no-files-found: ignore
 
   # ── The single required check ───────────────────────────────────────────────
