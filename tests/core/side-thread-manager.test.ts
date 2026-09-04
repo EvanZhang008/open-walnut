@@ -17,7 +17,11 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 const mocks = vi.hoisted(() => ({
   terminateSession: vi.fn(async (sessionId: string) => ({ status: 'terminated' as const, sessionId })),
   markExpectedTeardown: vi.fn(),
-  sendMessageToSession: vi.fn(async () => ({ id: 'qm-test' })),
+  // Typed args (unused): the output-mode assertions below read call[1], which a
+  // zero-arg vi.fn() would type as never.
+  sendMessageToSession: vi.fn(async (
+    _sessionId: string, _message: string, _opts?: { source?: string },
+  ) => ({ id: 'qm-test' })),
 }))
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-side-mgr'))
@@ -37,6 +41,9 @@ import {
   createSessionRecord, getSessionByClaudeId, updateSessionRecord,
 } from '../../src/core/session-tracker.js'
 import { sideThreadManager } from '../../src/core/sessions/side-thread-manager.js'
+import {
+  OUTPUT_MODE_INSTRUCTION_MARKER, stripOutputModeWrappers,
+} from '../../src/core/sessions/output-mode.js'
 import { listSideQuestions } from '../../src/core/side-questions.js'
 import type { SessionStartEvent } from '../../src/core/event-types.js'
 
@@ -217,7 +224,11 @@ describe('createThread', () => {
       .toBe(`side:${PARENT}:${thread.id}`)
     // Consuming means the ordinary send path delivers — no second spawn.
     expect(started).toHaveLength(1)
-    expect(mocks.sendMessageToSession).toHaveBeenCalledWith(standby, 'why hasPipe?', { source: 'side-thread' })
+    const [sentTo, sentText, sentOpts] = mocks.sendMessageToSession.mock.calls.at(-1)!
+    expect(sentTo).toBe(standby)
+    expect(sentOpts).toEqual({ source: 'side-thread' })
+    // The question itself is verbatim; rich mode (the default) rides behind it.
+    expect(stripOutputModeWrappers(sentText)).toBe('why hasPipe?')
 
     await vi.advanceTimersByTimeAsync(120_000)
     await settle()
@@ -227,7 +238,7 @@ describe('createThread', () => {
   it('forks fresh with the question as the first turn when no standby exists', async () => {
     const thread = await sideThreadManager.createThread(PARENT, { question: 'what broke?' })
     expect(started).toHaveLength(1)
-    expect(started[0]!.message).toBe('what broke?')
+    expect(stripOutputModeWrappers(started[0]!.message)).toBe('what broke?')
     expect(started[0]!.lane).toBe(`side:${PARENT}:${thread.id}`)
     // Riding the spawn is the only race-free delivery — no send is issued.
     expect(mocks.sendMessageToSession).not.toHaveBeenCalled()
@@ -256,6 +267,140 @@ describe('createThread', () => {
     expect(started).toHaveLength(2) // standby fork + the loser's fresh fork
     const stored = await listSideQuestions(PARENT)
     expect(stored.map((e) => e.id).sort()).toEqual([t1.id, t2.id].sort())
+  })
+
+  it('does NOT consume the standby when the ask picks a different model', async () => {
+    const standby = await sideThreadManager.ensureStandby(PARENT)
+    const thread = await sideThreadManager.createThread(PARENT, {
+      question: 'answer this one cheaply', model: 'haiku-5',
+    })
+
+    // --model is a SPAWN argument, so a process prewarmed on the parent's model
+    // cannot serve this ask: fork fresh with the override.
+    expect(thread.threadSessionId).not.toBe(standby)
+    expect(started).toHaveLength(2)
+    expect(started[1]!.model).toBe('haiku-5')
+    // …and the standby is left ALONE (not retired): it is still exactly right for
+    // the next ask that doesn't override anything.
+    await settle()
+    expect(mocks.terminateSession).not.toHaveBeenCalled()
+    const parked = await getSessionByClaudeId(standby!)
+    expect(parked?.lane).toBe(`side:${PARENT}:standby`)
+    expect(parked?.archived).toBeFalsy()
+
+    const next = await sideThreadManager.createThread(PARENT, { question: 'and now the default' })
+    expect(next.threadSessionId).toBe(standby)
+    expect(started).toHaveLength(2)
+  })
+
+  it('does NOT consume the standby when the ask picks an effort it was not spawned with', async () => {
+    const standby = await sideThreadManager.ensureStandby(PARENT)
+    const thread = await sideThreadManager.createThread(PARENT, {
+      question: 'think harder', effort: 'max',
+    })
+    expect(thread.threadSessionId).not.toBe(standby)
+    expect(started[1]!.effort).toBe('max')
+    expect((await getSessionByClaudeId(standby!))?.lane).toBe(`side:${PARENT}:standby`)
+  })
+
+  it('still consumes the standby when the ask picks the SAME model', async () => {
+    const standby = await sideThreadManager.ensureStandby(PARENT)
+    const thread = await sideThreadManager.createThread(PARENT, {
+      question: 'same prefix, nothing to re-spawn', model: 'opus[1m]',
+    })
+    expect(thread.threadSessionId).toBe(standby)
+    expect(started).toHaveLength(1)
+  })
+
+  it('a SLASH COMMAND first question is never wrapped, and still owes the instruction', async () => {
+    // inc-1788194545341: a prefixed/appended slash command stops being a command.
+    const thread = await sideThreadManager.createThread(PARENT, { question: '/compact' })
+    expect(started[0]!.message).toBe('/compact')
+    expect(started[0]!.message).not.toContain(OUTPUT_MODE_INSTRUCTION_MARKER)
+    // Edge NOT advanced: the next real message must still carry the instruction.
+    expect((await getSessionByClaudeId(thread.threadSessionId))?.output_mode_injected)
+      .toBeUndefined()
+  })
+
+  it('a consumed standby re-seeds the output mode from the parent\'s CURRENT style', async () => {
+    // The standby froze the parent's mode when it forked; the parent switched after.
+    const standby = await sideThreadManager.ensureStandby(PARENT)
+    await updateSessionRecord(standby!, { output_mode: 'rich' })
+    await updateSessionRecord(PARENT, { output_mode: 'markdown' })
+
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'plain, please' })
+    expect(thread.threadSessionId).toBe(standby)
+    expect((await getSessionByClaudeId(standby!))?.output_mode).toBe('markdown')
+    expect(mocks.sendMessageToSession.mock.calls.at(-1)![1]).toBe('plain, please')
+  })
+
+  it('a differing OUTPUT MODE still consumes the standby (per-record, not a spawn arg)', async () => {
+    const standby = await sideThreadManager.ensureStandby(PARENT)
+    const thread = await sideThreadManager.createThread(PARENT, {
+      question: 'plain please', outputMode: 'markdown',
+    })
+    expect(thread.threadSessionId).toBe(standby)
+    expect(started).toHaveLength(1)
+    expect((await getSessionByClaudeId(standby!))?.output_mode).toBe('markdown')
+    // markdown = the model's native style, so nothing is appended.
+    expect(mocks.sendMessageToSession.mock.calls.at(-1)![1]).toBe('plain please')
+  })
+
+  it('wraps the FIRST question of a FRESH fork while the store keeps the plain text', async () => {
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'what broke?' })
+
+    // Rich is the default effective mode, and a brand-new CLI has never been told
+    // it — so the question that rides the spawn carries the full instruction.
+    const spawned = started[0]!.message
+    expect(spawned.startsWith('what broke?')).toBe(true)
+    expect(spawned).toContain(OUTPUT_MODE_INSTRUCTION_MARKER)
+    expect(stripOutputModeWrappers(spawned)).toBe('what broke?')
+    // Edge marker advanced, so the thread's next send doesn't repeat it.
+    expect((await getSessionByClaudeId(thread.threadSessionId))?.output_mode_injected).toBe('rich')
+    // The stored row is the user's words only (chip label + promoted task read it).
+    const stored = await listSideQuestions(PARENT)
+    expect(stored[0]!.question).toBe('what broke?')
+  })
+
+  it('wraps the FIRST question of a CONSUMED standby and advances its edge', async () => {
+    const standby = await sideThreadManager.ensureStandby(PARENT)
+    const thread = await sideThreadManager.createThread(PARENT, {
+      question: 'why hasPipe?', outputMode: 'rich',
+    })
+    expect(thread.threadSessionId).toBe(standby)
+
+    const sent = mocks.sendMessageToSession.mock.calls.at(-1)![1]
+    expect(sent.startsWith('why hasPipe?')).toBe(true)
+    expect(sent).toContain(OUTPUT_MODE_INSTRUCTION_MARKER)
+    const record = await getSessionByClaudeId(standby!)
+    expect(record?.output_mode).toBe('rich')
+    expect(record?.output_mode_injected).toBe('rich')
+    expect((await listSideQuestions(PARENT))[0]!.question).toBe('why hasPipe?')
+  })
+
+  it('keeps the image preamble first and the mode wrapper last', async () => {
+    await sideThreadManager.createThread(PARENT, {
+      question: 'what is wrong here?', imageContext: 'Read this file: /tmp/shot.png',
+    })
+    const spawned = started[0]!.message
+    expect(spawned.startsWith('Read this file: /tmp/shot.png')).toBe(true)
+    expect(stripOutputModeWrappers(spawned).endsWith('what is wrong here?')).toBe(true)
+  })
+
+  it('never wraps the warm-up send nor lets it advance the output-mode edge', async () => {
+    const { CACHE_WARMUP_MESSAGE } = await import('../../src/core/sessions/side-thread-warmup.js')
+    const standby = await sideThreadManager.ensureStandby(PARENT)
+    await sideThreadManager.warmStandby(PARENT)
+
+    expect(mocks.sendMessageToSession).toHaveBeenCalledWith(
+      standby, CACHE_WARMUP_MESSAGE, { source: 'side-thread-warmup' })
+    expect((await getSessionByClaudeId(standby!))?.output_mode_injected).toBeUndefined()
+
+    // …which is the point: the real question that follows still owes the full
+    // instruction (spending the edge on a hidden turn would lose it).
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'now the real one' })
+    expect(mocks.sendMessageToSession.mock.calls.at(-1)![1]).toContain(OUTPUT_MODE_INSTRUCTION_MARKER)
+    expect((await getSessionByClaudeId(thread.threadSessionId))?.output_mode_injected).toBe('rich')
   })
 
   it('rejects an empty question', async () => {

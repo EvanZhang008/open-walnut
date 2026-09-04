@@ -24,11 +24,20 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
 
 interface OutputModePillProps {
-  sessionId: string;
+  /** Session to PATCH. Omitted only together with `pending` — a subject that does
+   *  not exist yet has nothing to write to. */
+  sessionId?: string;
   /** Mode from the fetched record. Undefined ⇒ follow the configured default. */
   mode: SessionOutputMode | undefined;
   /** Apply a value locally — called again with the previous one if PATCH fails. */
   onOptimistic: (mode: SessionOutputMode) => void;
+  /** PENDING subject (e.g. a side thread the user has not asked yet): the pick is
+   *  only reported through `onOptimistic`, never PATCHed, and the caller carries it
+   *  into creation. Without this a click would 404 against a session id that has
+   *  not been minted. */
+  pending?: boolean;
+  /** Appended to the tooltip — lets a caller say WHAT the pick applies to. */
+  titleSuffix?: string;
 }
 
 const STYLE_LABEL: Record<SessionOutputMode, string> = {
@@ -78,7 +87,9 @@ function useConfiguredOutputMode(): SessionOutputMode {
   return mode;
 }
 
-export function OutputModePill({ sessionId, mode, onOptimistic }: OutputModePillProps) {
+export function OutputModePill({
+  sessionId, mode, onOptimistic, pending, titleSuffix,
+}: OutputModePillProps) {
   const configured = useConfiguredOutputMode();
   // Effective mode. An unrecognized stored value falls back to the default rather
   // than silently reading as markdown.
@@ -88,6 +99,7 @@ export function OutputModePill({ sessionId, mode, onOptimistic }: OutputModePill
 
   const toggle = () => {
     onOptimistic(next);
+    if (pending || !sessionId) return;
     updateSession(sessionId, { output_mode: next }).catch((err: Error) => {
       onOptimistic(current); // revert
       log.warn('session', 'output mode toggle failed', { sessionId, next, error: err.message });
@@ -103,7 +115,8 @@ export function OutputModePill({ sessionId, mode, onOptimistic }: OutputModePill
       // output is a formatting choice, not a permission warning.
       style={current === 'rich' ? { color: 'var(--accent)' } : undefined}
       title={`Output mode: model replies in ${STYLE_LABEL[current]}`
-        + `${inherited ? ' (default from Settings)' : ''}. Click for ${STYLE_LABEL[next]}`}
+        + `${inherited ? ' (default from Settings)' : ''}. Click for ${STYLE_LABEL[next]}`
+        + `${titleSuffix ? `. ${titleSuffix}` : ''}`}
     >
       <span className="mode-toggle-pill-label">{current === 'rich' ? 'Rich' : 'MD'}</span>
     </button>

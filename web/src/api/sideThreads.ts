@@ -11,6 +11,7 @@
  * The old one-shot entries still come back on the GET as `legacy` — rendered
  * read-only by the drawer (see web/src/api/sideQuestions.ts for their client).
  */
+import type { SessionEffort, SessionOutputMode } from '@open-walnut/core';
 import { apiGet, apiPost, apiDelete, ApiError } from './client';
 import type { ImageAttachment } from './chat';
 import type { SideQuestion } from './sideQuestions';
@@ -76,18 +77,34 @@ export function warmSideThreadStandby(
  * 4MB frame cap to dodge). The server saves them and annotates the paths into the
  * thread's first message; the stored question stays the user's plain text.
  */
+export interface CreateSideThreadOptions {
+  title?: string;
+  images?: ImageAttachment[];
+  /** Spawn the thread on THIS model instead of inheriting the parent's. The model
+   *  is part of the prompt-cache key, so an override forfeits the parent's cache
+   *  (and cannot reuse a standby, which was spawned on the inherited model) —
+   *  which is exactly why it is only ever sent when the user picked one. */
+  model?: string;
+  effort?: SessionEffort;
+  /** Rich/plain for the thread, including its FIRST answer. Absent = inherit the
+   *  parent's setting, which itself may be "follow the configured default". */
+  outputMode?: SessionOutputMode;
+}
+
 export function createSideThread(
   sessionId: string,
   question: string,
-  title?: string,
-  images?: ImageAttachment[],
+  opts?: CreateSideThreadOptions,
 ): Promise<{ thread: SideThread }> {
   return apiPost(
     `/api/sessions/${sessionId}/side-threads`,
     {
       question,
-      ...(title ? { title } : {}),
-      ...(images && images.length > 0 ? { images } : {}),
+      ...(opts?.title ? { title: opts.title } : {}),
+      ...(opts?.images && opts.images.length > 0 ? { images: opts.images } : {}),
+      ...(opts?.model ? { model: opts.model } : {}),
+      ...(opts?.effort ? { effort: opts.effort } : {}),
+      ...(opts?.outputMode ? { outputMode: opts.outputMode } : {}),
     },
     { timeoutMs: 40_000 },
   );

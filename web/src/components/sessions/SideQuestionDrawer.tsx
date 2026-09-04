@@ -31,14 +31,20 @@
  */
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
+import type { SessionEffort, SessionOutputMode } from '@open-walnut/core';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { renderMarkdown } from '@/components/chat/ChatMessage';
+import { ComposerModelPill } from '@/components/sessions/ComposerModelPill';
+import { OutputModePill } from '@/components/sessions/OutputModePill';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
+import { SessionNotesBar, SessionNotesPill, useSessionNote } from '@/components/sessions/SessionNotes';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
+import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useEvent } from '@/hooks/useWebSocket';
+import { engineCaps } from '@/utils/engine-capabilities';
 import { log } from '@/utils/log';
 import { PROCESS_COLORS, PROCESS_LABELS } from '@/utils/session-status';
 import type { ImageAttachment } from '@/api/chat';
@@ -48,7 +54,7 @@ import type { SideThread } from '@/api/sideThreads';
 import { PlanContentContext } from '@/contexts/PlanContentContext';
 import { SessionPinsContext, type SessionPinsApi } from '@/contexts/SessionPinsContext';
 import { SessionRewindContext, type SessionRewindApi } from '@/contexts/SessionRewindContext';
-import type { ProcessStatus, SessionEngine } from '@/types/session';
+import type { ProcessStatus, SessionEngine, SessionMode, SessionRecord } from '@/types/session';
 import {
   PENDING_PROMOTE,
   PENDING_THREAD_PREFIX,
@@ -83,6 +89,13 @@ interface SideQuestionDrawerProps {
   /** The PARENT's permission mode — what a thread inherits at fork time, so it is
    *  also the mode pill's value until the thread's own record is read. */
   parentMode?: string;
+  /** The PARENT's model / effort / reply style. A fork inherits all three, so these
+   *  are what the pills must SHOW before the thread exists — anything else would
+   *  invite the user to "fix" a value that is already correct. Picking a different
+   *  one is an explicit override carried into the create request. */
+  parentModel?: string;
+  parentEffort?: SessionEffort;
+  parentOutputMode?: SessionOutputMode;
   /** Drop text into the MAIN composer (SessionPanel's prefill driver). */
   onInjectToComposer?: (text: string) => void;
 }
@@ -125,7 +138,8 @@ function ThreadStatusDot({ threadSessionId }: { threadSessionId: string }) {
 }
 
 export function SideQuestionDrawer({
-  sessionId, engine, cwd, host, parentMode, onInjectToComposer,
+  sessionId, engine, cwd, host, parentMode,
+  parentModel, parentEffort, parentOutputMode, onInjectToComposer,
 }: SideQuestionDrawerProps) {
   const instanceId = useId();
   const getState = useCallback(() => getSideThreadsState(sessionId), [sessionId]);
@@ -138,15 +152,28 @@ export function SideQuestionDrawer({
   const [legacyOpen, setLegacyOpen] = useState(false);
   const [injecting, setInjecting] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-  // Permission mode. null in either slot = "follow the parent" (the fork inherits
-  // the parent's mode, and `parentMode` can still be loading on first render).
-  const [threadMode, setThreadMode] = useState<string | null>(null);
-  const [newThreadMode, setNewThreadMode] = useState<string | null>(null);
+  // The ACTIVE thread's own record — the subject every composer control acts on
+  // (permission mode, output mode, model/effort, note). Null while no thread is
+  // active or its read is still in flight, in which case the controls fall back to
+  // "follow the parent", which is exactly what the fork will do.
+  const [threadRecord, setThreadRecord] = useState<SessionRecord | null>(null);
+  // Values picked BEFORE a thread exists. They ride the create request, so the
+  // very first answer already obeys them (a post-create PATCH would land after
+  // the question was asked).
+  const [newThreadMode, setNewThreadMode] = useState<SessionMode | null>(null);
+  const [newOutputMode, setNewOutputMode] = useState<SessionOutputMode | undefined>(undefined);
+  const [newModel, setNewModel] = useState<string | undefined>(undefined);
+  const [newEffort, setNewEffort] = useState<SessionEffort | undefined>(undefined);
   const enabledModes = useEnabledModes();
-  // A mode picked for a NEW thread is PATCHed onto the fork right after create;
-  // that PATCH races the record read below, so remember what we asked for and let
-  // it win — otherwise the pill snaps back to the inherited value.
-  const appliedModeRef = useRef<Record<string, string>>({});
+  // Everything a control has already applied to a thread, per THREAD SESSION ID.
+  // Two jobs, both load-bearing:
+  //  · a pick made while that thread's record read is still in flight would be
+  //    silently undone when the (pre-pick) read resolves — nothing re-reads
+  //    afterwards, so the pill would show the old value forever;
+  //  · the same PATCH-then-read race happens right after create, for the mode a
+  //    new thread was asked for.
+  // Keyed by sid so one thread's pick can NEVER be replayed onto another.
+  const localPatchRef = useRef<Record<string, Partial<SessionRecord>>>({});
   // Follow-ups go straight to the THREAD session id — the same RPC the main
   // composer uses, just a different sid. Passing null keeps the hook from
   // rehydrating a disk queue we don't render.
@@ -170,21 +197,49 @@ export function SideQuestionDrawer({
   const activeThreadSid = activeThread?.threadSessionId ?? null;
   useEffect(() => { clearOptimistic(); }, [activeThreadSid, clearOptimistic]);
 
-  // The active thread's OWN mode, read once per thread (a pending row has no
-  // session id yet, so there is nothing to read and the pill follows the parent).
+  // The active thread's OWN record, read once per thread (a pending row has no
+  // session id yet, so there is nothing to read and the controls follow the parent).
   useEffect(() => {
-    if (!activeThreadSid) { setThreadMode(null); return; }
+    // Cleared UNCONDITIONALLY, before the read: holding the PREVIOUS thread's
+    // record while this one loads is how one thread's note ended up being saved
+    // onto another (the note editor seeds itself from whatever record is present).
+    setThreadRecord(null);
+    if (!activeThreadSid) return;
     let alive = true;
     fetchSession(activeThreadSid).then((rec) => {
       if (!alive || !rec) return;
-      setThreadMode(appliedModeRef.current[activeThreadSid] ?? rec.mode ?? 'default');
+      // Local picks win over a read that was issued before them.
+      setThreadRecord({ ...rec, ...localPatchRef.current[activeThreadSid] });
     }).catch((err) => {
-      log.warn('sideThreads', 'thread mode read failed', {
+      log.warn('sideThreads', 'thread record read failed', {
         sessionId: activeThreadSid, error: err instanceof Error ? err.message : String(err),
       });
     });
     return () => { alive = false; };
   }, [activeThreadSid]);
+
+  /** Optimistic patch of the active thread's record — every control's local apply
+   *  and its revert both come through here. */
+  const patchThreadRecord = useCallback((patch: Partial<SessionRecord>) => {
+    if (activeThreadSid) {
+      localPatchRef.current[activeThreadSid] = {
+        ...localPatchRef.current[activeThreadSid], ...patch,
+      };
+    }
+    // While the read is in flight there is no record to merge into — the ledger
+    // above is what carries the pick, and the read applies it on arrival.
+    setThreadRecord((prev) => (prev ? { ...prev, ...patch } : prev));
+  }, [activeThreadSid]);
+
+  // Session note — the same control the main composer has, on the THREAD. Before a
+  // thread exists there is nothing to annotate, so the pill is simply absent (an
+  // empty sid is never written: the pill/bar only render with a live thread).
+  const noteState = useSessionNote(activeThreadSid ?? '', threadRecord?.human_note);
+  // A side thread is a FORK, so it always runs the parent's engine — the model
+  // pill and its picker read the same capability view as the main composer.
+  const engineUi = engineCaps(engine, useEngineCatalog());
+  const [notesOpen, setNotesOpen] = useState(false);
+  useEffect(() => { setNotesOpen(false); }, [activeThreadSid]);
 
   // Mid-turn state of the ACTIVE thread only — the composer's stop button and
   // queue wording come from it. Per-chip dots keep their own subscriptions.
@@ -268,14 +323,25 @@ export function SideQuestionDrawer({
       });
       return send(activeThread.threadSessionId, question, images);
     }
-    const created = await createSideThreadOptimistic(sessionId, question, images);
+    // Model / effort / output mode ride the REQUEST: they shape the spawn argv and
+    // the first message, so a post-create PATCH would arrive after the question was
+    // already asked on the inherited settings.
+    const created = await createSideThreadOptimistic(sessionId, question, {
+      ...(images ? { images } : {}),
+      ...(newModel ? { model: newModel } : {}),
+      ...(newEffort ? { effort: newEffort } : {}),
+      ...(newOutputMode ? { outputMode: newOutputMode } : {}),
+    });
     if (!created) return false;
-    // The fork inherits the PARENT's mode, so only a deliberately different pick
-    // needs a PATCH. Fire-and-forget: the thread and its answer are already live,
-    // and a failed mode switch must not read as a failed ask.
+    // Mode is the exception: it is inherited from the PARENT at fork time, so only a
+    // deliberately different pick needs a PATCH. Fire-and-forget — the thread and
+    // its answer are already live, and a failed mode switch must not read as a
+    // failed ask.
     const parentDefault = parentMode ?? 'default';
     if (newThreadMode && newThreadMode !== parentDefault && created.threadSessionId) {
-      appliedModeRef.current[created.threadSessionId] = newThreadMode;
+      localPatchRef.current[created.threadSessionId] = {
+        ...localPatchRef.current[created.threadSessionId], mode: newThreadMode,
+      };
       updateSession(created.threadSessionId, { mode: newThreadMode }).catch((err) => {
         log.warn('sideThreads', 'new thread mode apply failed', {
           sessionId: created.threadSessionId, mode: newThreadMode,
@@ -284,8 +350,14 @@ export function SideQuestionDrawer({
       });
     }
     setNewThreadMode(null);
+    setNewOutputMode(undefined);
+    setNewModel(undefined);
+    setNewEffort(undefined);
     return true;
-  }, [sessionId, activeThread, send, parentMode, newThreadMode]);
+  }, [
+    sessionId, activeThread, send, parentMode,
+    newThreadMode, newOutputMode, newModel, newEffort,
+  ]);
 
   const startNewThread = useCallback(() => {
     setActiveSideThread(sessionId, null);
@@ -297,24 +369,23 @@ export function SideQuestionDrawer({
   // One control, two subjects: with a thread active it switches THAT session's
   // permission mode; before one exists it picks the mode the next thread will be
   // created in. Same cycle as the main composer's pill (useEnabledModes).
-  const pillMode = (activeThreadSid ? threadMode : newThreadMode) ?? parentMode ?? 'default';
+  const pillMode = ((activeThreadSid ? threadRecord?.mode : newThreadMode)
+    ?? parentMode ?? 'default') as SessionMode;
   const nextPillMode = enabledModes[
-    (enabledModes.indexOf(pillMode as typeof enabledModes[number]) + 1) % enabledModes.length
+    (enabledModes.indexOf(pillMode) + 1) % enabledModes.length
   ] ?? pillMode;
 
   const cycleMode = useCallback(() => {
     if (!activeThreadSid) { setNewThreadMode(nextPillMode); return; }
-    setThreadMode(nextPillMode);
-    appliedModeRef.current[activeThreadSid] = nextPillMode;
+    patchThreadRecord({ mode: nextPillMode });
     updateSession(activeThreadSid, { mode: nextPillMode }).catch((err) => {
-      setThreadMode(pillMode);
-      appliedModeRef.current[activeThreadSid] = pillMode;
+      patchThreadRecord({ mode: pillMode });
       log.warn('sideThreads', 'mode toggle failed', {
         sessionId: activeThreadSid, mode: nextPillMode,
         error: err instanceof Error ? err.message : String(err),
       });
     });
-  }, [activeThreadSid, pillMode, nextPillMode]);
+  }, [activeThreadSid, pillMode, nextPillMode, patchThreadRecord]);
 
   // Inject: flatten the thread's Q&A (TEXT parts only — no tool blocks, no
   // thinking) into the main composer through SessionPanel's prefill driver.
@@ -556,9 +627,77 @@ export function SideQuestionDrawer({
                     </span>
                     <span className="mode-toggle-pill-shortcut">{'⇧'}Tab</span>
                   </button>
+                  {/* Reply style. On a live thread it PATCHes that session like the
+                      main composer's pill; before one exists the pick rides the
+                      create request, so even the FIRST answer obeys it. */}
+                  <OutputModePill
+                    {...(activeThreadSid ? { sessionId: activeThreadSid } : { pending: true })}
+                    // Unread record ⇒ fall back to the parent's style, which is
+                    // what a fork inherits. The config default would be a worse
+                    // guess: a thread pinned to markdown under a rich parent
+                    // would read "Rich" for the length of the read.
+                    mode={(activeThreadSid ? threadRecord?.output_mode : newOutputMode)
+                      ?? parentOutputMode}
+                    onOptimistic={(output_mode) => {
+                      if (activeThreadSid) patchThreadRecord({ output_mode });
+                      else setNewOutputMode(output_mode);
+                    }}
+                    titleSuffix={activeThreadSid
+                      ? 'Applies to this side thread'
+                      : 'Applies to the next side thread'}
+                  />
+                  {/* A note annotates something that EXISTS — before the first ask
+                      there is no thread to attach one to, so the pill appears with
+                      the thread rather than pretending to work. */}
+                  {activeThreadSid && (
+                    <SessionNotesPill
+                      noteState={noteState}
+                      expanded={notesOpen}
+                      onToggleExpanded={() => setNotesOpen((o) => !o)}
+                    />
+                  )}
+                  {/* Model + effort. On a live thread this is the main composer's
+                      control, unchanged. Before one exists it runs PENDING: the
+                      pill SHOWS what the fork would inherit from the parent, and a
+                      different pick becomes an explicit override on the create
+                      request (which costs the parent's warm cache — the fork can no
+                      longer reuse the prewarmed standby). NOTE: no "btw" pill here
+                      on purpose; a side thread of a side thread is not a feature. */}
+                  <ComposerModelPill
+                    sessionId={activeThreadSid || undefined}
+                    session={activeThreadSid ? threadRecord : undefined}
+                    engineUi={engineUi}
+                    onOptimistic={patchThreadRecord}
+                    {...(activeThreadSid ? {} : {
+                      pending: {
+                        model: newModel ?? parentModel,
+                        effort: newEffort ?? parentEffort,
+                        onPick: setNewModel,
+                        onPickEffort: setNewEffort,
+                        host,
+                        cwd,
+                        // A fork's "no pick" means INHERIT the parent, which is not
+                        // the same thing as the picker's Auto (spawn with no
+                        // --model). Offering Auto here would report the same
+                        // `undefined` for two different intents, so it is hidden.
+                        allowAuto: false,
+                      },
+                    })}
+                    title={activeThreadSid
+                      ? 'Applies to this side thread.'
+                      : 'Applies to the next side thread (inherited from the parent).'}
+                  />
                 </div>
               )}
             />
+            {activeThreadSid && (
+              <SessionNotesBar
+                noteState={noteState}
+                expanded={notesOpen}
+                onToggleExpanded={() => setNotesOpen((o) => !o)}
+                onCollapse={() => setNotesOpen(false)}
+              />
+            )}
           </div>
 
           {/* Pre-thread one-shot entries — read-only, promote still works. */}

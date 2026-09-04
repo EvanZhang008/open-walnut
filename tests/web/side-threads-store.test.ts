@@ -17,7 +17,7 @@ import type { SideThread, SideThreadsResponse } from '@/api/sideThreads';
 
 const api = vi.hoisted(() => ({
   listSideThreads: vi.fn<(sid: string) => Promise<SideThreadsResponse>>(),
-  createSideThread: vi.fn<(sid: string, q: string, title?: string, images?: unknown[]) => Promise<{ thread: SideThread }>>(),
+  createSideThread: vi.fn<(sid: string, q: string, opts?: Record<string, unknown>) => Promise<{ thread: SideThread }>>(),
   promoteSideThread: vi.fn<(sid: string, tid: string) => Promise<{ taskId: string; parentTaskId?: string }>>(),
   deleteSideThread: vi.fn<(sid: string, tid: string) => Promise<{ ok: true }>>(),
   prewarmSideThreadStandby: vi.fn<(sid: string) => Promise<{ ok: true }>>(),
@@ -175,10 +175,11 @@ describe('side-threads store — optimistic create', () => {
     expect(mid.threads[0].threadSessionId).toBe('');
     expect(mid.activeThreadId).toBe(mid.threads[0].id);
     // The derived label rides along as `title` — the create RESPONSE carries only
-    // identity fields, so without this the chip would go label-less.
-    // 4th arg = image attachments, undefined for a text-only ask.
+    // identity fields, so without this the chip would go label-less. A text-only
+    // ask with no composer picks sends NOTHING else: an inherited model/effort is
+    // what keeps the fork on the parent's prompt cache.
     expect(api.createSideThread).toHaveBeenCalledWith(
-      PARENT, 'why is this test flaky?', 'why is this test flaky?', undefined,
+      PARENT, 'why is this test flaky?', { title: 'why is this test flaky?' },
     );
 
     d.resolve({ thread: thread({ id: 'st-9', threadSessionId: 'fork-9' }) });
@@ -246,6 +247,32 @@ describe('side-threads store — optimistic create', () => {
     expect(await createSideThreadOptimistic(PARENT, '   ')).toBeNull();
     expect(await createSideThreadOptimistic(undefined, 'hi')).toBeNull();
     expect(api.createSideThread).not.toHaveBeenCalled();
+  });
+});
+
+describe('side-threads store — composer picks ride the create request', () => {
+  it('forwards model / effort / output mode, and images, alongside the derived title', async () => {
+    api.createSideThread.mockResolvedValue({ thread: thread() });
+    const images = [{ data: 'AAA', mediaType: 'image/png' }];
+    await createSideThreadOptimistic(PARENT, 'why so slow?', {
+      images: images as never,
+      model: 'global.anthropic.claude-opus-5[1m]',
+      effort: 'high' as never,
+      outputMode: 'rich' as never,
+    });
+    expect(api.createSideThread).toHaveBeenCalledWith(PARENT, 'why so slow?', {
+      title: 'why so slow?',
+      images,
+      model: 'global.anthropic.claude-opus-5[1m]',
+      effort: 'high',
+      outputMode: 'rich',
+    });
+  });
+
+  it('omits every pick the user did not make (inheriting is what keeps the cache)', async () => {
+    api.createSideThread.mockResolvedValue({ thread: thread() });
+    await createSideThreadOptimistic(PARENT, 'plain ask', {});
+    expect(api.createSideThread).toHaveBeenCalledWith(PARENT, 'plain ask', { title: 'plain ask' });
   });
 });
 

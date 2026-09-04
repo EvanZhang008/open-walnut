@@ -1995,13 +1995,30 @@ sessionsRouter.post('/:sessionId/side-threads/standby/warm', async (req: Request
 sessionsRouter.post('/:sessionId/side-threads', async (req: Request, res: Response, next: NextFunction) => {
   if (refuseSideThreadsOnReplica(res)) return
   try {
-    const { question, title, images } = (req.body ?? {}) as {
+    const { question, title, images, model, effort, outputMode } = (req.body ?? {}) as {
       question?: unknown
       title?: unknown
       images?: ImagePayload[]
+      model?: unknown
+      effort?: unknown
+      outputMode?: unknown
     }
     if (!question || typeof question !== 'string' || !question.trim()) {
       res.status(400).json({ error: 'question (non-empty string) is required' })
+      return
+    }
+    // The drawer's control row, for a thread that does not exist yet: these ride
+    // the create instead of a follow-up control call. A blank/garbage `model` is
+    // IGNORED (the thread inherits the parent's, which is the cheap default);
+    // effort and output mode are closed enumerations, so a bad one is a 400
+    // rather than a silent inherit that contradicts what the pill shows.
+    const pickedModel = typeof model === 'string' && model.trim() ? model.trim() : undefined
+    if (effort !== undefined && (typeof effort !== 'string' || !VALID_SESSION_EFFORT_IDS.has(effort))) {
+      res.status(400).json({ error: `effort must be one of: ${[...VALID_SESSION_EFFORT_IDS].join(', ')}` })
+      return
+    }
+    if (outputMode !== undefined && outputMode !== 'markdown' && outputMode !== 'rich') {
+      res.status(400).json({ error: 'outputMode must be one of: markdown, rich' })
       return
     }
     // Attached images: saved to disk + annotated as paths to Read (same flow as
@@ -2017,6 +2034,9 @@ sessionsRouter.post('/:sessionId/side-threads', async (req: Request, res: Respon
       question,
       ...(typeof title === 'string' && title.trim() ? { title } : {}),
       ...(imageContext ? { imageContext } : {}),
+      ...(pickedModel ? { model: pickedModel } : {}),
+      ...(effort ? { effort: effort as import('../../core/types.js').SessionEffort } : {}),
+      ...(outputMode ? { outputMode: outputMode as import('../../core/types.js').SessionOutputMode } : {}),
     })
     res.json({ thread })
   } catch (err) {

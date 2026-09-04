@@ -35,7 +35,7 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
-import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, terminateSession, investigateSession, setSessionEffort, setSessionModel, setCodexSessionModel } from '@/api/sessions';
+import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, terminateSession, investigateSession } from '@/api/sessions';
 import { parseSessionDirective } from '@/components/chat/session-mention';
 import { buildImageRefsPayload } from '@/api/image-upload';
 import { terminalPrewarm } from '@/api/terminal';
@@ -53,13 +53,11 @@ import { timeAgo } from '@/utils/time';
 import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
 import { SessionKebabSection } from './SessionKebabSection';
-import { ModelPicker, acpModelDisplayName } from './ModelPicker';
-import { modelSupportsEffort, SESSION_EFFORTS, SESSION_MODE_LABELS } from '@open-walnut/core';
+import { ComposerModelPill } from './ComposerModelPill';
+import { SESSION_MODE_LABELS } from '@open-walnut/core';
 import { TaskQuickActions } from './TaskQuickActions';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
-import { useSessionUsage, formatModelName, getContextWindowSize, contextBadgeTitle } from '@/hooks/useSessionUsage';
-import { useHostModelCatalog } from '@/hooks/useModelCatalog';
 import { useHeightVar } from '@/hooks/useHeightVar';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
 import { PlanContentContext } from '@/contexts/PlanContentContext';
@@ -235,11 +233,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // get the remote host's skills, not the Mac's local ones.
   const { items: slashCommands, search: searchSlashCommands, refresh: refreshSlashCommands } = useSlashCommands(session?.cwd, session?.host);
 
-  // Model picker state
-  const [modelPickerOpen, setModelPickerOpen] = useState(false);
-  // The clicked model pill — the popout picker anchors here (portal to <body>,
-  // so a narrow session column can't clip the panel).
-  const modelPillRef = useRef<HTMLElement | null>(null);
+  // `/model` from the composer opens the model pill's picker — the pill owns the
+  // open state, so this bumps the nonce it watches.
+  const [modelPickerRequest, setModelPickerRequest] = useState(0);
   // CSS-promotion fullscreen (same instance, no remount)
   const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen();
 
@@ -269,76 +265,15 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
 
   const handleControlCommand = useCallback((command: string) => {
     if (command === 'model') {
-      setModelPickerOpen(true);
+      setModelPickerRequest((n) => n + 1);
     }
   }, []);
 
-  const handleModelSwitch = useCallback((model: string) => {
-    setModelPickerOpen(false);
-    // Live switch via apply_flag_settings (no respawn, no message send) — same
-    // mechanism as effort. Optimistically reflect it, then reconcile from the
-    // get_settings read-back (effectiveModel = the CLI's true runtime model).
-    const prevModel = session?.model;
-    setSession(prev => prev ? { ...prev, model } : prev);
-    setSessionModel(sessionId, model).then((res) => {
-      if (res.effectiveModel) {
-        setSession(prev => prev ? { ...prev, model: res.effectiveModel } : prev);
-      }
-    }).catch((err) => {
-      console.error('Model switch failed:', err);
-      setSession(prev => prev ? { ...prev, model: prevModel } : prev);
-    });
-  }, [sessionId, session?.model]);
-
-  // ACP model switch — optimistic, revert + notify on failure. Same contract
-  // the retired standalone Codex picker had, now driven from the shared
-  // two-pane picker's ACP pane for every ACP engine.
-  const handleAcpModelSwitch = useCallback((modelId: string) => {
-    setModelPickerOpen(false);
-    const previous = session?.acpModel;
-    const previousName = session?.acpModelName;
-    if (modelId === previous) return;
-    // Drop the advertised name with the id: it belongs to the OLD model, and the
-    // pill prefers it, so keeping it would label the new model with the old name
-    // until the server record comes back.
-    setSession(prev => prev ? { ...prev, acpModel: modelId, acpModelName: undefined } : prev);
-    setCodexSessionModel(sessionId, modelId).catch((error) => {
-      setSession(prev => prev ? { ...prev, acpModel: previous, acpModelName: previousName } : prev);
-      log.error('session-panel', 'acp model switch failed', {
-        sessionId,
-        modelId,
-        engine: engineUi.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      notify({
-        kind: 'operation-error',
-        severity: 'error',
-        title: `${engineUi.displayName} model switch failed`,
-        body: error instanceof Error ? error.message : String(error),
-        persistent: false,
-        dedupKey: `acp-model-switch:${sessionId}:${Date.now()}`,
-        sessionId,
-      });
-    });
-  }, [sessionId, session?.acpModel, notify, engineUi.id, engineUi.displayName]);
-
-  const handleEffortSwitch = useCallback((effort: import('@open-walnut/core').SessionEffort) => {
-    setModelPickerOpen(false);
-    // Optimistically reflect the requested effort so the pill/badge updates immediately.
-    // Backend delivers it via apply_flag_settings, then READS BACK the CLI's true effort.
-    // Reconcile effectiveEffort from the response so the badge shows what the CLI actually
-    // uses (and flags an env/model override). Revert on failure (model rejected the level).
-    const prevEffort = session?.effort;
-    const prevEffective = session?.effectiveEffort;
-    setSession(prev => prev ? { ...prev, effort } : prev);
-    setSessionEffort(sessionId, effort).then((res) => {
-      // Trust the CLI read-back: effectiveEffort is what actually took (may differ).
-      setSession(prev => prev ? { ...prev, effort, effectiveEffort: res.effectiveEffort ?? prev.effectiveEffort } : prev);
-    }).catch((err) => {
-      console.error('Effort switch failed:', err);
-      setSession(prev => prev ? { ...prev, effort: prevEffort, effectiveEffort: prevEffective } : prev);
-    });
-  }, [sessionId, session?.effort, session?.effectiveEffort]);
+  // Optimistic / reverted record patches from the composer's model pill (it owns
+  // the switch calls; this panel owns the record copy they reflect into).
+  const applyModelPillPatch = useCallback((patch: Partial<SessionRecord>) => {
+    setSession(prev => prev ? { ...prev, ...patch } : prev);
+  }, []);
 
   // Fetch messages for the UserMessagesSummary
   const {
@@ -368,41 +303,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // a plan-mode session that hasn't produced one yet shows it once the content loads.
   const hasPlanContent = hasPlan || isFromPlan || !!plan?.content;
 
-  // Real-time model + context window usage
-  const liveUsage = useSessionUsage(sessionId);
+  // Last assistant message that carries a model — the composer pill's fallback
+  // for the context percent when no live usage event has landed yet.
   const lastAssistant = !historyLoading && historyMessages.length > 0
     ? [...historyMessages].reverse().find(m => m.role === 'assistant' && m.model)
     : undefined;
-  const rawModel = liveUsage.model || session?.model || lastAssistant?.model;
-  // Auto launch before the CLI reports its model (idle todo-launcher session):
-  // the host catalog's 'default' row already knows what Auto resolves to on
-  // this host — show "Auto (Opus 5 1M)" instead of a bare "Auto" so the user
-  // knows what they're running from second zero.
-  const hostCatalog = useHostModelCatalog(session?.host);
-  const autoResolved = !rawModel
-    ? formatModelName(hostCatalog?.models.find((m) => m.value === 'default')?.resolvedModel)
-    : '';
-  const displayModel = formatModelName(rawModel);
-  let contextPercent = liveUsage.contextPercent;
-  // Fallback for a page loaded with no live usage event yet (server restart, or
-  // a session idle since before this mount): derive it from the last assistant
-  // message's tokens. Both halves come from the SERVER when available — the
-  // model string can't reveal a custom proxy model's window, and guessing 200K
-  // for one was 5x wrong (2026-08-23).
-  let badgeUsage = liveUsage;
-  if (contextPercent == null && lastAssistant?.usage) {
-    const u = lastAssistant.usage as Record<string, number>;
-    const totalInput = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
-    const ctxSize = session?.modelMaxWindow ?? getContextWindowSize(rawModel, totalInput);
-    if (totalInput > 0 && ctxSize != null) {
-      contextPercent = Math.round(totalInput / ctxSize * 100);
-      badgeUsage = {
-        ...liveUsage, inputTokens: totalInput, contextWindow: ctxSize,
-        autoCompactAt: liveUsage.autoCompactAt ?? session?.autoCompactAt,
-      };
-    }
-  }
-
 
   // Scroll-to-message handler for UserMessagesSummary
   const handleMessageClick = useCallback((messageIndex: number) => {
@@ -1244,84 +1149,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
 
   const planContentValue = plan?.content ?? null;
 
-  // Model info pill — moved from the header meta row into the composer's
-  // controls row (rendered inside both ChatInput controlsSlot mode bars).
-  // EVERY engine opens the SAME two-pane picker (provider rail | models) — an
-  // ACP session just opens it on the ACP pane, with the others greyed.
-  const modelInfoPill = engineUi.isAcp ? (
-    <button
-      type="button"
-      className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill"
-      title={`Switch ${engineUi.displayName} model`}
-      onClick={(e) => { modelPillRef.current = e.currentTarget; setModelPickerOpen((v) => !v); }}
-    >
-      {/* 3 tiers: the provider's own name (minus its provider prefix — a pill
-          reading "Amazon Bedrock/Claude…" is all provider, no model), else
-          prettify the id, else the engine. */}
-      {acpModelDisplayName(session?.acpModel, session?.acpModelName) ?? engineUi.displayName}
-      {contextPercent != null && (
-        <span className="session-detail-context-pct"> {contextPercent}%</span>
-      )}
-    </button>
-  ) : (
-    // No rawModel yet ≠ no pill: a todo-launcher quick start (empty first
-    // message) idles with a model-less record until its first real turn, and
-    // hiding the pill hides the ONLY model/effort entry point ("model option
-    // doesn't show"). Render "Auto" — the picker itself live-pulls the truth.
-    <button
-      type="button"
-      className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill"
-      title={`${rawModel || (autoResolved ? `Auto — CLI default resolves to ${autoResolved} on this host` : 'Model not reported yet (Auto)')} — click to switch model / effort`}
-      onClick={(e) => { modelPillRef.current = e.currentTarget; setModelPickerOpen((v) => !v); }}
-    >
-      {displayModel || (autoResolved ? `Auto (${autoResolved})` : 'Auto')}
-      {contextPercent != null && (
-        <span
-          className="session-detail-context-pct"
-          style={{
-            color: contextPercent > 80 ? 'var(--danger, #ff3b30)'
-              : contextPercent > 50 ? 'var(--warning, #ff9500)'
-              : 'var(--fg-muted)',
-          }}
-          title={contextBadgeTitle(badgeUsage, contextPercent)}
-        >
-          {' '}{contextPercent}%
-        </span>
-      )}
-      {modelSupportsEffort(rawModel) && (() => {
-        // Badge shows the CLI's TRUE effort (effectiveEffort, read back via
-        // get_settings) — falling back to the requested level. When the CLI
-        // overrode the request (env / downgrade), flag it.
-        //
-        // NO fabricated default. This used to fall back to DEFAULT_SESSION_EFFORT
-        // ('high') and render it exactly like a confirmed reading — which is how
-        // the pill came to say "High" while the picker said "X-High" for the same
-        // session: the user's level lives in the CLI's OWN settings.json
-        // (effortLevel), which Walnut never requests, so record.effort is
-        // undefined and the guess was simply wrong. An honest gap beats a
-        // confident wrong number: render nothing until a real value exists (the
-        // session-start read-back fills it in ~1.5s via session:settings-applied).
-        const shown = session?.effectiveEffort ?? session?.effort;
-        if (!shown) return null;
-        const overridden = session?.effectiveEffort != null && session?.effort != null
-          && session.effectiveEffort !== session.effort;
-        const title = overridden
-          ? `Reasoning effort: ${session!.effectiveEffort} (requested ${session!.effort}, overridden by env/model)`
-          : session?.effectiveEffort
-          ? `Reasoning effort: ${session.effectiveEffort} (confirmed by CLI)`
-          : `Reasoning effort: ${shown} (requested — not yet confirmed by the CLI)`;
-        // Same label table the picker's segments use, so one truth reads the same
-        // on both surfaces ("X-High", not the raw id "xhigh").
-        const label = SESSION_EFFORTS.find((e) => e.id === shown)?.label ?? shown;
-        return (
-          <span className="session-detail-effort-badge" title={title}>
-            {' · '}{label}{overridden ? ' ⚠' : ''}
-          </span>
-        );
-      })()}
-    </button>
-  );
-
   // The id resolved to nothing after the full retry window. Say so explicitly:
   // the previous behaviour rendered an ordinary empty panel, indistinguishable
   // from a slow load, and the column stayed in sessionStorage so every reload
@@ -1556,6 +1383,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                     cwd={session?.cwd}
                     host={session?.host}
                     parentMode={session?.mode}
+                    parentModel={session?.model}
+                    parentEffort={session?.effectiveEffort ?? session?.effort}
+                    parentOutputMode={session?.output_mode}
                     onInjectToComposer={handleInjectFromThread}
                   />
                   <SessionNotesPill
@@ -1563,7 +1393,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                     expanded={notesOpen}
                     onToggleExpanded={() => setNotesOpen(o => !o)}
                   />
-                  {modelInfoPill}
+                  <ComposerModelPill
+                    sessionId={sessionId}
+                    session={session}
+                    engineUi={engineUi}
+                    onOptimistic={applyModelPillPatch}
+                    fallbackAssistant={lastAssistant}
+                  />
                 </div>
               );
             })() : undefined}
@@ -1665,7 +1501,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               Code
             </button>
             {/* Model pill + turn count moved out of the header (2026-07-25):
-                the pill now lives in the composer controls row (modelInfoPill,
+                the pill now lives in the composer controls row (ComposerModelPill,
                 rendered in both ChatInput controlsSlot mode bars); the turn
                 count was removed entirely. Time-ago stays. */}
             {session?.lastActiveAt && <span className="session-panel-time">{timeAgo(session.lastActiveAt)}</span>}
@@ -2163,6 +1999,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                     cwd={session?.cwd}
                     host={session?.host}
                     parentMode={session?.mode}
+                    parentModel={session?.model}
+                    parentEffort={session?.effectiveEffort ?? session?.effort}
+                    parentOutputMode={session?.output_mode}
                     onInjectToComposer={handleInjectFromThread}
                   />
                   <SessionNotesPill
@@ -2170,7 +2009,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                     expanded={notesOpen}
                     onToggleExpanded={() => setNotesOpen(o => !o)}
                   />
-                  {modelInfoPill}
+                  <ComposerModelPill
+                    sessionId={sessionId}
+                    session={session}
+                    engineUi={engineUi}
+                    onOptimistic={applyModelPillPatch}
+                    fallbackAssistant={lastAssistant}
+                    openNonce={modelPickerRequest}
+                  />
                 </div>
               );
             })() : undefined}
@@ -2207,24 +2053,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               });
             } : undefined}
           />
-          {modelPickerOpen && (
-            <ModelPicker
-              currentModel={rawModel}
-              currentEffort={session?.effectiveEffort ?? session?.effort}
-              sessionId={sessionId}
-              host={session?.host}
-              onSwitch={handleModelSwitch}
-              onEffortSwitch={handleEffortSwitch}
-              onClose={() => setModelPickerOpen(false)}
-              // Live session: engine is a spawn-time fact. The rail shows every
-              // registered provider but the others render greyed + locked (no
-              // onProviderSwitch) — start a new session to change engines.
-              engine={engineUi.id}
-              acpCurrentModelId={session?.acpModel}
-              onAcpSwitch={engineUi.isAcp ? handleAcpModelSwitch : undefined}
-              anchorRef={modelPillRef}
-            />
-          )}
         </div>
           </div>{/* .session-panel-chat-col */}
         </div>{/* .session-panel-split */}

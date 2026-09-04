@@ -181,6 +181,69 @@ describe('forkSideThreadSession', () => {
     expect(started[0]!.model).toBe('opus[1m]')
   })
 
+  it('an explicit model/effort pick OVERRIDES the copied prefix (record + spawn)', async () => {
+    await seedParent({ effort: 'high' })
+    liveArgs = [
+      'claude', '-p', '--model', 'global.anthropic.claude-fable-5[1m]', '--effort', 'max',
+      '--append-system-prompt', 'the parent exact bytes', '--resume', PARENT,
+    ]
+    const { sessionId } = await forkSideThreadSession(PARENT, 'sth-override', {
+      message: 'answer this one cheaply',
+      model: 'global.anthropic.claude-haiku-5',
+      effort: 'low',
+    })
+
+    const start = started[0]!
+    expect(start.model).toBe('global.anthropic.claude-haiku-5')
+    expect(start.effort).toBe('low')
+    // Only the two picked flags move: the append prompt is still the parent's
+    // verbatim bytes (rebuilding it would bust the prefix for no reason).
+    expect(start.appendSystemPromptExact).toBe('the parent exact bytes')
+    const record = await getSessionByClaudeId(sessionId)
+    expect(record?.cliModel).toBe('global.anthropic.claude-haiku-5')
+    expect(record?.effort).toBe('low')
+  })
+
+  it('ignores a blank model pick and keeps inheriting the live argv', async () => {
+    await seedParent({ effort: 'high' })
+    liveArgs = ['claude', '-p', '--model', 'opus[1m]', '--effort', 'max', '--resume', PARENT]
+    await forkSideThreadSession(PARENT, 'sth-blank', { model: '   ' })
+    expect(started[0]!.model).toBe('opus[1m]')
+    expect(started[0]!.effort).toBe('max')
+  })
+
+  it('seeds output_mode from the pick and NEVER inherits the parent\'s injected marker', async () => {
+    const { updateSessionRecord } = await import('../../src/core/session-tracker.js')
+    await seedParent()
+    // The parent's CLI has already been told about rich mode; the fork's has not.
+    await updateSessionRecord(PARENT, { output_mode: 'rich', output_mode_injected: 'rich' })
+
+    const { sessionId } = await forkSideThreadSession(PARENT, 'sth-mode', { outputMode: 'markdown' })
+    const record = await getSessionByClaudeId(sessionId)
+    expect(record?.output_mode).toBe('markdown')
+    // Inheriting the marker would make the thread's first send skip the
+    // instruction — a brand-new CLI process owes the full one.
+    expect(record?.output_mode_injected).toBeUndefined()
+  })
+
+  it('inherits the parent output_mode when no pick rides along', async () => {
+    const { updateSessionRecord } = await import('../../src/core/session-tracker.js')
+    await seedParent()
+    await updateSessionRecord(PARENT, { output_mode: 'rich', output_mode_injected: 'rich' })
+
+    const { sessionId } = await forkSideThreadSession(PARENT, 'sth-inherit')
+    const record = await getSessionByClaudeId(sessionId)
+    expect(record?.output_mode).toBe('rich')
+    expect(record?.output_mode_injected).toBeUndefined()
+  })
+
+  it('leaves output_mode unset when the parent follows the config default', async () => {
+    await seedParent()
+    const { sessionId } = await forkSideThreadSession(PARENT, 'sth-unset')
+    // Unset = follow the LIVE config preference, which is not a value to freeze.
+    expect((await getSessionByClaudeId(sessionId))?.output_mode).toBeUndefined()
+  })
+
   it('walks ONE hop up when the parent never ran a turn', async () => {
     const ancestor = '22222222-2222-4222-8222-222222222222'
     // A seeded-but-never-spawned fork: its own id is in no JSONL yet.

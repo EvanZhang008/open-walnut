@@ -16,11 +16,11 @@
 
 import crypto from 'node:crypto';
 import { bus, EventNames } from '../event-bus.js';
-import { getSessionByClaudeId, createSessionRecord } from '../session-tracker.js';
+import { getSessionByClaudeId, createSessionRecord, updateSessionRecord } from '../session-tracker.js';
 import { engineCaps } from '../agents/engine-registry.js';
 import { SessionControlError } from './session-controls.js';
 import { log } from '../../logging/index.js';
-import type { SessionRecord } from '../types.js';
+import type { SessionEffort, SessionOutputMode, SessionRecord } from '../types.js';
 
 /** Lane namespace for every side-thread session. */
 export const SIDE_LANE_PREFIX = 'side:';
@@ -102,11 +102,24 @@ export interface SideThreadForkResult {
  * is the only race-free way to ask immediately (a send issued right after
  * SESSION_START can lose the race and cold-`--resume` an id that does not exist
  * yet — see the note on LaneSession.created in personal-ai-lane.ts).
+ *
+ * `opts.model` / `opts.effort` / `opts.outputMode` are the drawer's control row
+ * asking for something OTHER than what the parent runs. All three are optional
+ * and absent means inherit (see the override comment below for what a model or
+ * effort override costs).
  */
 export async function forkSideThreadSession(
   parentSid: string,
   threadId: string,
-  opts?: { message?: string; title?: string },
+  opts?: {
+    message?: string;
+    title?: string;
+    /** Verbatim `--model` arg to spawn with instead of the parent's. */
+    model?: string;
+    effort?: SessionEffort;
+    /** Seeds the new record's `output_mode`; absent = inherit the parent's. */
+    outputMode?: SessionOutputMode;
+  },
 ): Promise<SideThreadForkResult> {
   const parent = await getSessionByClaudeId(parentSid);
   if (!parent) throw new SessionControlError('Parent session not found', 404);
@@ -143,8 +156,20 @@ export async function forkSideThreadSession(
   // record. Never rebuilt: see spawn-prefix.ts for the measured cost.
   const { readParentSpawnPrefix } = await import('./spawn-prefix.js');
   const prefix = await readParentSpawnPrefix(parent);
-  const cliModel = prefix.model ?? parent.cliModel;
-  const effort = prefix.effort ?? parent.effort;
+  // An explicit pick OVERRIDES the copied prefix, and the cost is real: the model
+  // and the effort are both part of the prompt-cache key, so an override forfeits
+  // the parent's cache and this thread's FIRST turn pays a full prefix write
+  // (measured in spawn-prefix.ts: 195K tokens re-written, 47s to first text on a
+  // 300K-token parent). That is the caller's deliberate choice — inheriting, the
+  // default, is exactly what makes a side thread cheap.
+  const modelOverride = opts?.model?.trim() || undefined;
+  const effortOverride = opts?.effort || undefined;
+  const cliModel = modelOverride ?? prefix.model ?? parent.cliModel;
+  const effort = effortOverride ?? prefix.effort ?? parent.effort;
+  // Reply style is per-record and applied per send, so it costs the cache nothing.
+  // Absent ⇒ inherit the parent's (undefined included: that means "follow the
+  // config default", which is a live preference, not a value to freeze).
+  const outputMode = opts?.outputMode ?? parent.output_mode;
 
   // Seed the record BEFORE the spawn — the client gets this id in its HTTP
   // response and its first read must not 404 (same contract as every fork).
@@ -166,6 +191,13 @@ export async function forkSideThreadSession(
     initialProcessStatus: 'idle',
     initialStatusReason: 'awaiting_spawn',
   });
+
+  // `createSessionRecord`'s creation bundle has no output_mode field, so the seed
+  // is a follow-up write. Deliberately carries `output_mode` ONLY: the parent's
+  // `output_mode_injected` is NOT inherited, because a brand-new CLI process has
+  // never been told the mode and still owes the full instruction — copying the
+  // marker would silently skip it and the thread would answer in plain markdown.
+  if (outputMode) await updateSessionRecord(sessionId, { output_mode: outputMode });
 
   bus.emit(EventNames.SESSION_START, {
     preassignedSessionId: sessionId,
@@ -190,6 +222,10 @@ export async function forkSideThreadSession(
   log.session.info('side thread: forked', {
     parentSid, threadId, sessionId, resumeFrom, initOnly: !opts?.message,
     prefixSource: prefix.source, prefixPromptLength: prefix.appendSystemPrompt?.length ?? 0,
+    // Overrides are worth a field each: they explain a first turn that paid a
+    // full prefix write instead of hitting the parent's cache.
+    modelOverride: !!modelOverride, effortOverride: !!effortOverride,
+    outputModeOverride: !!opts?.outputMode, ...(outputMode ? { outputMode } : {}),
   });
 
   return { sessionId, resumeFromSessionId: resumeFrom };

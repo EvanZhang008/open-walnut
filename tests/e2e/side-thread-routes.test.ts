@@ -39,6 +39,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js'
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js'
+import { stripOutputModeWrappers } from '../../src/core/sessions/output-mode.js'
 import { addTask } from '../../src/core/task-manager.js'
 import type { SessionStartEvent } from '../../src/core/event-types.js'
 
@@ -205,15 +206,52 @@ describe('side-thread routes', () => {
     expect(res.status).toBe(200)
     const { thread } = await res.json() as { thread: { id: string; threadSessionId: string } }
 
-    // The CLI gets the paths to Read, then the user's words.
+    // The CLI gets the paths to Read, then the user's words. (The output-mode
+    // wrapper, if the effective mode owes one, lands after both — strip it so this
+    // test is about the image preamble, not the reply style.)
     const spawn = started.find((s) => s.preassignedSessionId === thread.threadSessionId)
     expect(spawn?.message).toContain('Read this file')
-    expect(spawn?.message.endsWith(question)).toBe(true)
+    expect(stripOutputModeWrappers(spawn!.message).endsWith(question)).toBe(true)
 
     // The stored row does NOT: it is what the chip label and a promoted task read.
     const view = await (await fetch(apiUrl(`/api/sessions/${imgParent}/side-threads`)))
       .json() as { threads: Array<{ id: string; question?: string }> }
     expect(view.threads.find((t) => t.id === thread.id)?.question).toBe(question)
+  })
+
+  it('passes the picked model, effort and output mode through to the fork', async () => {
+    const pickParent = '99999999-9999-4999-8999-999999999999'
+    await createSessionRecord(pickParent, '', 'proj', '/repo/walnut', {
+      cliModel: 'opus[1m]', outputFile: '/tmp/streams/pick.jsonl',
+    })
+
+    const res = await post(`/api/sessions/${pickParent}/side-threads`, {
+      question: 'answer this one cheaply',
+      model: 'haiku-5', effort: 'low', outputMode: 'markdown',
+    })
+    expect(res.status).toBe(200)
+    const { thread } = await res.json() as { thread: { id: string; threadSessionId: string } }
+
+    const spawn = started.find((s) => s.preassignedSessionId === thread.threadSessionId)
+    expect(spawn?.model).toBe('haiku-5')
+    expect(spawn?.effort).toBe('low')
+    // markdown is the model's native style, so the question reaches it verbatim.
+    expect(spawn?.message).toBe('answer this one cheaply')
+    const record = await getSessionByClaudeId(thread.threadSessionId)
+    expect(record?.output_mode).toBe('markdown')
+    expect(record?.output_mode_injected).toBeUndefined()
+  })
+
+  it('400s an unknown effort or output mode, and ignores a blank model', async () => {
+    let res = await post(`/api/sessions/${PARENT}/side-threads`, { question: 'q', effort: 'turbo' })
+    expect(res.status).toBe(400)
+    res = await post(`/api/sessions/${PARENT}/side-threads`, { question: 'q', outputMode: 'html' })
+    expect(res.status).toBe(400)
+    res = await post(`/api/sessions/${PARENT}/side-threads`, { question: 'q', effort: 7 })
+    expect(res.status).toBe(400)
+    // A blank model is NOT an error: the thread just inherits the parent's.
+    res = await post(`/api/sessions/${PARENT}/side-threads`, { question: 'q', model: '   ' })
+    expect(res.status).toBe(200)
   })
 
   it('409s fork_unsupported for an engine without --fork-session', async () => {

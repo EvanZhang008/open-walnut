@@ -28,6 +28,7 @@ import {
   isForkUnsupportedError,
   type SideThread,
 } from '@/api/sideThreads';
+import type { SessionEffort, SessionOutputMode } from '@open-walnut/core';
 import type { ImageAttachment } from '@/api/chat';
 import type { SideQuestion } from '@/api/sideQuestions';
 import { log } from '@/utils/log';
@@ -293,7 +294,7 @@ export function clearSideThreadsError(parentSessionId: string | undefined): void
 export async function createSideThreadOptimistic(
   parentSessionId: string | undefined,
   question: string,
-  images?: ImageAttachment[],
+  opts?: { images?: ImageAttachment[]; model?: string; effort?: SessionEffort; outputMode?: SessionOutputMode },
 ): Promise<SideThread | null> {
   const q = question.trim();
   if (!parentSessionId || !q) return null;
@@ -321,7 +322,13 @@ export async function createSideThreadOptimistic(
     // Send the derived label as `title` so the server row carries it too (the
     // create response returns identity fields only, no `question`), and keep the
     // optimistic label/question if an older server echoes neither back.
-    const { thread } = await apiCreateSideThread(parentSessionId, q, label, images);
+    const { thread } = await apiCreateSideThread(parentSessionId, q, {
+      title: label,
+      ...(opts?.images ? { images: opts.images } : {}),
+      ...(opts?.model ? { model: opts.model } : {}),
+      ...(opts?.effort ? { effort: opts.effort } : {}),
+      ...(opts?.outputMode ? { outputMode: opts.outputMode } : {}),
+    });
     const adopted: SideThread = {
       ...thread,
       title: thread.title ?? label,

@@ -20,7 +20,7 @@
  */
 
 import { log } from '../../logging/index.js';
-import type { SessionRecord } from '../types.js';
+import type { SessionEffort, SessionOutputMode, SessionRecord } from '../types.js';
 import {
   STANDBY_THREAD_ID, forkSideThreadSession, mintSideThreadId,
   parseSideLaneKey, sideThreadLaneKey,
@@ -203,6 +203,10 @@ class SideThreadManager {
       }
       const { sendMessageToSession } = await import('../session-message-queue.js');
       markWarmupTurnPending(standby.claudeSessionId);
+      // Sent RAW on purpose: the warm-up is CLI plumbing whose reply is hidden on
+      // every surface, so wrapping it would spend the output-mode edge on a turn
+      // the user never sees — and advancing `output_mode_injected` here would make
+      // the real first question skip the instruction entirely.
       await sendMessageToSession(standby.claudeSessionId, CACHE_WARMUP_MESSAGE, { source: 'side-thread-warmup' });
       this.warmedStandbys.set(parentSid, standby.claudeSessionId);
       this.armStandbyTtl(parentSid, standby.claudeSessionId, WARMED_STANDBY_TTL_MS);
@@ -227,11 +231,23 @@ class SideThreadManager {
    *
    * `imageContext` (attachment paths for the CLI to Read) rides the MESSAGE only.
    * The stored entry keeps the plain question, so the chip label, the injected
-   * transcript and a promoted task never carry the machine preamble.
+   * transcript and a promoted task never carry the machine preamble. The
+   * output-mode wrapper is the same deal: machine text on the wire only.
+   *
+   * `model`/`effort`/`outputMode` are the drawer's control row picking something
+   * other than the parent's settings for a thread that does not exist yet (a live
+   * thread is steered through the ordinary session controls instead).
    */
   async createThread(
     parentSid: string,
-    input: { question: string; title?: string; imageContext?: string },
+    input: {
+      question: string;
+      title?: string;
+      imageContext?: string;
+      model?: string;
+      effort?: SessionEffort;
+      outputMode?: SessionOutputMode;
+    },
   ): Promise<SideThread> {
     const question = input.question?.trim();
     if (!question) throw new SessionControlError('question (non-empty string) is required', 400);
@@ -239,10 +255,62 @@ class SideThreadManager {
       const threadId = mintSideThreadId();
       const title = input.title?.trim() || undefined;
       const message = input.imageContext ? `${input.imageContext}\n\n${question}` : question;
+      const model = input.model?.trim() || undefined;
+      const effort = input.effort || undefined;
+      const outputMode = input.outputMode;
 
-      const consumed = await this.consumeStandby(parentSid, threadId, title);
-      const threadSessionId = consumed
-        ?? (await forkSideThreadSession(parentSid, threadId, { message, ...(title ? { title } : {}) })).sessionId;
+      const consumed = await this.consumeStandby(parentSid, threadId, title, { model, effort });
+      let threadSessionId: string;
+      if (consumed) {
+        threadSessionId = consumed;
+      } else {
+        // No record exists yet and the question rides the SPAWN, so this branch
+        // never passes through prepareOutputModeSend. Resolve the directive here
+        // against the mode the new record is about to get — with
+        // `output_mode_injected: undefined`, which is the literal truth for a
+        // process nobody has spoken to, so the first turn carries the FULL
+        // instruction. Without this the first answer ignored rich output while
+        // every follow-up honoured it.
+        const [{ resolveOutputModeDirective, applyOutputModeDirective }, { getConfig }, tracker] =
+          await Promise.all([
+            import('./output-mode.js'),
+            import('../config-manager.js'),
+            import('../session-tracker.js'),
+          ]);
+        const parent = await tracker.getSessionByClaudeId(parentSid).catch(() => null);
+        const config = await getConfig().catch(() => null);
+        const directive = resolveOutputModeDirective(
+          { output_mode: outputMode ?? parent?.output_mode, output_mode_injected: undefined },
+          config,
+        );
+        // A slash command must reach the CLI byte-exact (inc-1788194545341), and
+        // appending is just as bad here — the instruction would ride into the
+        // command's argument string. Skip the wrapper AND the edge advance; the
+        // instruction stays owed and ships with the next real message. Same rule
+        // as output-mode-send.ts, which this branch cannot use (no record yet).
+        const isSlashCommand = message.startsWith('/');
+        const forked = await forkSideThreadSession(parentSid, threadId, {
+          message: isSlashCommand ? message : applyOutputModeDirective(directive, message),
+          ...(title ? { title } : {}),
+          ...(model ? { model } : {}),
+          ...(effort ? { effort } : {}),
+          ...(outputMode ? { outputMode } : {}),
+        });
+        threadSessionId = forked.sessionId;
+        if (directive.instruction && !isSlashCommand) {
+          // The spawn owns the text now, so advance the edge marker — and never let
+          // this bookkeeping write fail the ask: repeating the instruction on the
+          // next send is the correct degradation (same rule as output-mode-send.ts).
+          try {
+            await tracker.updateSessionRecord(threadSessionId, { output_mode_injected: directive.mode });
+          } catch (err) {
+            log.session.warn('side thread: output-mode edge persist failed', {
+              threadSessionId, outputMode: directive.mode,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+      }
 
       // The fork is committed before the store row — if anything below throws,
       // retire the orphan fork so no hidden CLI survives with no row to find it.
@@ -253,8 +321,25 @@ class SideThreadManager {
           id: threadId, question, threadSessionId, ...(title ? { title } : {}),
         });
         if (consumed) {
+          // A consumed standby HAS a record, so the ordinary send choreography
+          // applies: persist the requested mode first (the directive is resolved
+          // from the record), wrap, enqueue, then advance the edge marker.
+          const { getSessionByClaudeId, updateSessionRecord } = await import('../session-tracker.js');
+          // Absent a pick, re-seed from the parent's CURRENT mode: the standby was
+          // forked earlier and froze whatever the parent had then, so a parent that
+          // switched style in between would otherwise answer this thread's first
+          // question in the OLD style while the drawer's pill shows the new one.
+          const parentNow = outputMode
+            ? null
+            : await getSessionByClaudeId(parentSid).catch(() => null);
+          const desiredMode = outputMode ?? parentNow?.output_mode;
+          if (desiredMode) await updateSessionRecord(threadSessionId, { output_mode: desiredMode });
+          const record = await getSessionByClaudeId(threadSessionId).catch(() => null);
+          const { prepareOutputModeSend } = await import('./output-mode-send.js');
+          const prepared = await prepareOutputModeSend(threadSessionId, record, message);
           const { sendMessageToSession } = await import('../session-message-queue.js');
-          await sendMessageToSession(threadSessionId, message, { source: 'side-thread' });
+          await sendMessageToSession(threadSessionId, prepared.enqueueText, { source: 'side-thread' });
+          await prepared.commit();
         }
       } catch (err) {
         void this.retireSession(threadSessionId, 'side_thread_create_failed');
@@ -280,11 +365,19 @@ class SideThreadManager {
   }
 
   /** Re-point a usable standby's lane at the real thread id. Returns its id, or
-   *  null when there was nothing usable to consume. */
+   *  null when there was nothing usable to consume.
+   *
+   *  `overrides` is the ask's requested model/effort: both are SPAWN arguments, so
+   *  a standby prewarmed with the inherited pair simply cannot serve a question
+   *  that asked for a different one. A mismatch therefore declines the standby
+   *  WITHOUT retiring it (it is still perfectly good for the next, override-free
+   *  ask) and the caller forks fresh. Output mode is deliberately not part of this:
+   *  it lives on the record and is applied per send, so any session can serve it. */
   private async consumeStandby(
     parentSid: string,
     threadId: string,
     title?: string,
+    overrides?: { model?: string; effort?: SessionEffort },
   ): Promise<string | null> {
     const standby = await this.findStandby(parentSid);
     if (!standby) return null;
@@ -294,6 +387,15 @@ class SideThreadManager {
       void this.retireSession(standby.claudeSessionId, 'side_thread_standby_stale');
       this.standbyParentOffsets.delete(parentSid);
       this.warmedStandbys.delete(parentSid);
+      return null;
+    }
+    if ((overrides?.model && overrides.model !== standby.cliModel)
+        || (overrides?.effort && overrides.effort !== standby.effort)) {
+      log.session.info('side thread: standby declined (spawn args differ)', {
+        parentSid, standbySid: standby.claudeSessionId,
+        standbyModel: standby.cliModel, wantModel: overrides?.model,
+        standbyEffort: standby.effort, wantEffort: overrides?.effort,
+      });
       return null;
     }
     const timer = this.standbyTimers.get(parentSid);

@@ -234,15 +234,35 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   await expect(popover.locator('.side-thread-chip')).toHaveCount(1)
   await expect(popover.locator('.side-thread-chip-new')).toBeVisible()
 
-  // ── The drawer's composer is the real one: voice + mode pill, like main chat ──
+  // ── The drawer's composer is the real one: every control the main composer has
+  //    EXCEPT "btw" itself — a side thread of a side thread is not a feature. ──
   const composer = popover.locator('.side-question-composer')
   await expect(composer.locator('.mic-btn-wrapper button')).toBeVisible()
-  const modePill = composer.locator('.mode-toggle-pill')
+  // Mode pill (first .mode-toggle-pill; the output-mode pill shares the class).
+  const modePill = composer.locator('.mode-toggle-pill').first()
   await expect(modePill).toBeVisible()
   const modeBefore = await modePill.locator('.mode-toggle-pill-label').innerText()
   await modePill.click()
   await expect(modePill.locator('.mode-toggle-pill-label')).not.toHaveText(modeBefore)
   await modePill.click()
+  // Output-mode (Rich/MD) pill — flips locally before a thread exists; the pick
+  // rides the create request, so nothing is PATCHed against a session id that
+  // has not been minted yet.
+  // Matched by title: the button's TEXT is the mode itself ("MD"/"Rich"), which is
+  // also its accessible name, so a name-based locator would chase the value.
+  const richPill = composer.locator('button[title^="Output mode"]')
+  await expect(richPill).toBeVisible()
+  const richBefore = await richPill.innerText()
+  await richPill.click()
+  await expect(richPill).not.toHaveText(richBefore)
+  await richPill.click()
+  await expect(richPill).toHaveText(richBefore)
+  // Model + effort pill — the same control (and picker) as the main composer.
+  await expect(composer.locator('.composer-model-pill')).toBeVisible()
+  // A note annotates an existing thread, so the pill is absent until one exists.
+  await expect(composer.locator('.session-notes-pill')).toHaveCount(0)
+  // NO recursive "btw": the drawer must never host another side-thread pill.
+  await expect(popover.locator('.side-question-pill', { hasText: 'btw' })).toHaveCount(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/drawer-composer.png`, fullPage: true })
 
   // ── Typing a few characters warms the standby's cache BEFORE Enter ──
@@ -265,6 +285,10 @@ test('a thread streams its answer, follows up, switches, and injects into the co
 
   const body = popover.locator('.side-thread-body')
   await expect(body).toBeVisible({ timeout: 20_000 })
+  // With a live thread the Note pill joins the row (its subject now exists), and
+  // there is STILL no nested "btw".
+  await expect(composer.locator('.session-notes-pill')).toBeVisible({ timeout: 15_000 })
+  await expect(popover.locator('.side-question-pill', { hasText: 'btw' })).toHaveCount(0)
   // THE assertion this spec exists for: the answer streams into the DRAWER.
   await expect(body.getByText(answerFor(FIRST_Q), { exact: false }).first())
     .toBeVisible({ timeout: 60_000 })
@@ -302,7 +326,32 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   // subscriptions for one session id — a documented bug class).
   await expect(popover.locator('.side-thread-body')).toHaveCount(1)
   // Back to thread 1: its answer returns, thread 2's is gone from the DOM.
+  // ── Notes are PER THREAD: B's note must never seed A's editor ──
+  // The note editor seeds itself from the mounted record, so holding the previous
+  // thread's record across a switch made one thread's note save onto the other.
+  const notePill = composer.locator('.session-notes-pill')
+  await notePill.click()
+  const noteBox = popover.locator('.session-notes-textarea')
+  await expect(noteBox).toBeVisible({ timeout: 10_000 })
+  await noteBox.fill('this note belongs to thread two')
+  await expect(popover.locator('.session-notes-status')).toBeVisible({ timeout: 10_000 })
+  // Leave edit mode first: while the editor is open the note card's outside-click
+  // closer eats the next pointerdown, so a chip click would only collapse it.
+  await noteBox.press('Escape')
+  await expect(popover.locator('.session-notes-textarea')).toHaveCount(0)
+
+  // A has no note of its own: its entry point is the PILL again and no note row
+  // renders. B keeps its own. (This pins the SETTLED state. The narrow window while
+  // a thread's record read is in flight is not observable from the browser tier —
+  // the guard for it is that the drawer clears the record unconditionally on switch,
+  // before the read, so the previous thread's note can never seed the new one.)
   await chips.first().click()
+  await expect(notePill).toBeVisible({ timeout: 10_000 })
+  await expect(popover.locator('.session-notes')).toHaveCount(0)
+  await chips.nth(1).click()
+  await expect(popover.locator('.session-notes')).toBeVisible({ timeout: 10_000 })
+  await chips.first().click()
+
   await expect(body.getByText(answerFor(FIRST_Q), { exact: false }).first())
     .toBeVisible({ timeout: 30_000 })
   await expect(body.getByText(answerFor(SECOND_Q), { exact: false })).toHaveCount(0)
