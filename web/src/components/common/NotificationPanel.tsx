@@ -28,7 +28,9 @@ import {
   partitionErrorsByCause, systemIssueCount, letterIdOf,
   type Notification, type NotificationSection,
 } from '@/contexts/notifications';
-import { respondToPermission } from '@/api/sessions';
+import {
+  isSettledPermission, respondToPermissionRequest, usePermissionRequest,
+} from '@/stores/permission-request-store';
 import { PermissionAnswerForm } from './PermissionAnswerForm';
 import { NotificationSystemPane, useSearchIndexStatus, searchIndexUnhealthy } from './NotificationSystemPane';
 import { navigateToTarget } from '@/utils/open-session';
@@ -687,46 +689,36 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
   onNavigate: (to: string) => void;
   onDismiss: () => void;
 }) {
-  // 'sent' stamps the card optimistically instead of waiting for the
-  // session:permission-resolved WS round-trip — a dropped WS would otherwise
-  // leave the buttons pending forever. The WS event later stamps the feed entry
-  // itself (idempotent). 'stale' is the THIRD outcome (see respond below).
-  const [busy, setBusy] = useState(false);
-  const [sent, setSent] = useState<'allowed' | 'denied' | 'stale' | null>(null);
-  const [respondError, setRespondError] = useState(false);
+  // ONE store per request id, shared with the session timeline card and the toast
+  // (web/src/stores/permission-request-store.ts). It stamps the outcome
+  // optimistically, so answering here settles the OTHER two surfaces in the same
+  // frame instead of after the round-trip plus its WS echo — and 'stale' stays a
+  // third outcome, because claiming 'denied' on a 404 read "Denied" for a request
+  // the user had just APPROVED somewhere else.
   const [detailExpanded, setDetailExpanded] = useState(false);
-  const resolved = n.resolved ?? sent;
   const detail = permissionDetail(n);
   const requestId = requestIdOf(n);
+  const stored = usePermissionRequest(requestId ?? undefined);
+  const busy = stored?.inFlight ?? false;
+  const sent = stored && isSettledPermission(stored.status) ? stored.status : null;
+  const respondError = stored?.failed ?? false;
+  // The record's own outcome still wins: it survives a reload, and the store's
+  // entry does not.
+  const resolved = n.resolved ?? sent;
   const target = linkTargetOf(n);
   const acpOptions = validAcpOptions(n);
   const answerable = !resolved && !!n.sessionId && !!requestId;
 
-  const respond = async (
+  const respond = (
     allow: boolean,
     opts?: { optionId?: string; answers?: Record<string, string>; message?: string },
   ) => {
-    if (!n.sessionId || !requestId || busy) return;
-    setBusy(true);
-    setRespondError(false);
-    try {
-      await respondToPermission(n.sessionId, requestId, allow, opts?.message, opts?.optionId, opts?.answers);
-      setSent(allow ? 'allowed' : 'denied');
-    } catch (err) {
-      // 404/409 = the request already settled elsewhere (answered in another
-      // surface, or the turn died). Settle the card instead of re-arming buttons
-      // the user would keep clicking (the zombie-card class of bug) — but as its
-      // OWN state: stamping 'denied' claimed an outcome we never saw, so a request
-      // the user had just APPROVED in the session view read "Denied" here.
-      const status = (err as { status?: number }).status;
-      if (status === 404 || status === 409) setSent('stale');
-      else setRespondError(true);
-      log.warn('notifications', 'inline permission respond failed', {
-        sessionId: n.sessionId, requestId, status: String(status ?? ''), error: String(err),
-      });
-    } finally {
-      setBusy(false);
-    }
+    if (!n.sessionId || !requestId) return;
+    void respondToPermissionRequest(n.sessionId, requestId, allow, {
+      ...(opts?.optionId ? { optionId: opts.optionId } : {}),
+      ...(opts?.answers ? { answers: opts.answers } : {}),
+      ...(opts?.message ? { message: opts.message } : {}),
+    });
   };
 
   // An AskUserQuestion whose questions we couldn't recover must NOT offer a
@@ -831,8 +823,8 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
           questions={detail.questions}
           disabled={!answerable || busy}
           resolved={!!resolved}
-          onSubmit={(answers) => void respond(true, { answers })}
-          onDismissQuestions={() => void respond(false, { message: 'User dismissed the questions' })}
+          onSubmit={(answers) => respond(true, { answers })}
+          onDismissQuestions={() => respond(false, { message: 'User dismissed the questions' })}
         />
       ) : (!answerable || askWithoutInput) ? (
         /* Two reasons the card can't answer, ONE affordance: nothing to answer
@@ -855,7 +847,7 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
                 key={o.optionId}
                 className={`notification-perm-btn${isReject ? '' : ' approve'}`}
                 disabled={busy}
-                onClick={() => void respond(!isReject, { optionId: o.optionId })}
+                onClick={() => respond(!isReject, { optionId: o.optionId })}
               >
                 {o.name ?? o.optionId}
               </button>
@@ -863,7 +855,7 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
           })}
           {/* The adapter's own reject option may be absent — keep a plain Deny. */}
           {!acpOptions.some(isRejectOption) && (
-            <button className="notification-perm-btn" disabled={busy} onClick={() => void respond(false)}>
+            <button className="notification-perm-btn" disabled={busy} onClick={() => respond(false)}>
               Deny
             </button>
           )}
@@ -873,11 +865,11 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
           <button
             className="notification-perm-btn approve"
             disabled={busy}
-            onClick={() => void respond(true)}
+            onClick={() => respond(true)}
           >
             Approve
           </button>
-          <button className="notification-perm-btn" disabled={busy} onClick={() => void respond(false)}>
+          <button className="notification-perm-btn" disabled={busy} onClick={() => respond(false)}>
             Deny
           </button>
         </div>

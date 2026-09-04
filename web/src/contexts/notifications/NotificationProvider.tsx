@@ -21,6 +21,9 @@ import {
   type ReactNode,
 } from 'react';
 import { useEvent } from '@/hooks/useWebSocket';
+import {
+  resolvedStatusOf, seedPermissionRequest, settlePermissionRequest,
+} from '@/stores/permission-request-store';
 import { log } from '@/utils/log';
 import { stripEntityRefsToText, extractFirstRefIds } from '@/utils/markdown';
 import {
@@ -551,11 +554,23 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   // either resolution or the 15s auto-dismiss frees the key.)
   // The feed entry is stamped with the outcome instead — the panel shows it as
   // settled and drops the approve/deny actions (mirrors the server-side stamp).
+  // A pending ask is shown by three surfaces at once (session timeline card,
+  // rail card, toast) and they share ONE store keyed by requestId. This is the
+  // single subscription that feeds it: the provider is mounted once in AppShell,
+  // so a decision taken in another tab or on the phone reaches every surface
+  // without each of them wiring its own listener.
+  useEvent('session:permission-request', (data) => {
+    const { requestId } = (data ?? {}) as { requestId?: string };
+    if (requestId) seedPermissionRequest(requestId);
+  });
+
   useEvent('session:permission-resolved', (data) => {
     const { requestId, allowed, cancelled, expired } = data as {
       requestId?: string; allowed?: boolean; cancelled?: boolean; expired?: boolean;
     };
     if (!requestId) return;
+    const storeStatus = resolvedStatusOf({ allowed, cancelled, expired });
+    if (storeStatus) settlePermissionRequest(requestId, storeStatus);
     dismissToastByDedup(`perm:${requestId}`);
     // Outcome mapping mirrors resolvePermissionNotification in
     // src/core/notifications/store.ts (allowed→success, denied/expired→info),

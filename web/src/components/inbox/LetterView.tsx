@@ -34,6 +34,7 @@ import { LetterBody } from './LetterBody';
 import { LetterThread } from './LetterThread';
 import { senderLabelOf } from './LetterEnvelopeRow';
 import { useLetterEvents } from '@/hooks/useHumanInbox';
+import { useLetterEnvelope } from './letter-store';
 import { sessionInboxLetterHref } from './session-inbox-link';
 import '@/styles/human-inbox.css';
 
@@ -100,7 +101,18 @@ export function LetterView({
   const [replyText, setReplyText] = useState('');
   const [freeText, setFreeText] = useState('');
 
-  const shown: LetterEnvelope | LetterDetail | null = letter ?? envelope ?? null;
+  // Envelope state (read / pinned / archived / answered) comes from the ONE shared
+  // store, layered OVER this reader's own GET: the rail and a session tab can pin
+  // or archive the letter while it is open here, and a stale local copy made the
+  // Pin button toggle the WRONG way (it computes `!shown.pinned`). The document
+  // itself stays local — bodies are up to 100MB and can be deferred, so they are
+  // deliberately not list state. `body` is rendered from `letter`, never `shown`.
+  const stored = useLetterEnvelope(letterId);
+  const shown: LetterEnvelope | LetterDetail | null = useMemo(() => {
+    const base = letter ?? envelope ?? null;
+    if (!base) return stored ?? null;
+    return stored ? { ...base, ...stored } : base;
+  }, [letter, envelope, stored]);
   const host = shown?.sender?.host && shown.sender.host !== 'local' ? shown.sender.host : undefined;
   const senderSid = shown?.sender?.sessionId && shown.sender.sessionId !== 'external'
     ? shown.sender.sessionId : undefined;

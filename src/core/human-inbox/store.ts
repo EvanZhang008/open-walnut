@@ -720,11 +720,24 @@ export async function setRead(id: string, read: boolean): Promise<LetterRecord> 
 
 export async function setPinned(id: string, pinned: boolean): Promise<LetterRecord> {
   requireValidId(id);
-  return withWriteLock(() => withStore((store) => {
+  const record = await withWriteLock(() => withStore((store) => {
     const letter = find(store, id);
     letter.pinned = pinned === true;
     return { ...letter };
   }));
+  // Pinning changes what every surface must show (the glyph AND the sort order:
+  // pinned sorts first), and it was the ONE state toggle with no outbound signal —
+  // so a pin taken in one surface stayed invisible in the others until an
+  // unrelated letter event or a reload. Same mirror the siblings use: the envelope
+  // update broadcasts `notification:updated`, which is the lane every letter list
+  // already refreshes on. Read state is untouched (pinning is not reading), so the
+  // letter's own flag rides through unchanged — and for an ARCHIVED letter that
+  // means the same value setArchived mirrors, or pinning something on the shelf
+  // would re-badge the bell for a letter that has left the live feed.
+  // Fire-and-forget on purpose: the mirror must never make the pin wait on (or
+  // fail with) the notification file lock.
+  void mirrorLetterReadState(record.id, record.archived ? true : record.read);
+  return record;
 }
 
 export async function setArchived(id: string, archived: boolean): Promise<LetterRecord> {

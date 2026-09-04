@@ -25,7 +25,7 @@
  * end for exactly the asks that most needed answering.
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   useNotifications, permissionDetail, requestIdOf,
@@ -33,10 +33,11 @@ import {
   linkTargetOf, resolvedLabelOf,
   type Notification, type NotificationSeverity,
 } from '@/contexts/notifications';
-import { respondToPermission } from '@/api/sessions';
+import {
+  isSettledPermission, respondToPermissionRequest, usePermissionRequest,
+} from '@/stores/permission-request-store';
 import { PermissionAnswerForm } from './PermissionAnswerForm';
 import { navigateToTarget } from '@/utils/open-session';
-import { log } from '@/utils/log';
 
 // Escape-coded so the source bytes are identical across editors/terminals
 // (raw multi-codepoint emoji like ⚠️ can render or copy-paste inconsistently).
@@ -142,45 +143,47 @@ function PermissionToast({ n, onDismiss, onPin, navigate }: {
   onPin: () => void;
   navigate: (to: string) => void;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [sent, setSent] = useState<'allowed' | 'denied' | 'stale' | null>(null);
-  const [failed, setFailed] = useState(false);
-  // The record's own outcome wins over local state (same precedence as the panel
+  const detail = permissionDetail(n);
+  const requestId = requestIdOf(n);
+  // ONE store per request id, shared with the panel card and the session timeline
+  // card (web/src/stores/permission-request-store.ts). The optimistic stamp is
+  // what settles the other two surfaces in the same frame; 'stale' stays a third
+  // outcome so a 404 never claims the user denied something they approved.
+  const stored = usePermissionRequest(requestId ?? undefined);
+  const busy = stored?.inFlight ?? false;
+  const failed = stored?.failed ?? false;
+  // The record's own outcome wins over the store (same precedence as the panel
   // card), so an 'expired' — session died, CLI withdrew the ask — renders as
   // settled rather than as live buttons. Today the toaster only routes UNresolved
   // permissions here and the provider dismisses the toast on resolution, so this
   // is the belt to that braces: if either gate changes, the chip is already right
   // instead of offering Approve/Deny for a dead request.
-  const settled = n.resolved ?? sent;
-  const detail = permissionDetail(n);
-  const requestId = requestIdOf(n);
+  const settled = n.resolved
+    ?? (stored && isSettledPermission(stored.status) ? stored.status : null);
   const acpOptions = validAcpOptions(n);
 
-  const respond = async (
+  // An answered toast leaves on its own after a beat. Armed from the settle, not
+  // from the click, so a transient failure keeps the toast (and its form) up.
+  const dismissRef = useRef(onDismiss);
+  dismissRef.current = onDismiss;
+  const selfDismissed = useRef(false);
+  useEffect(() => {
+    if (!settled || selfDismissed.current) return;
+    selfDismissed.current = true;
+    const timer = setTimeout(() => dismissRef.current(), RESOLVED_DISMISS_MS);
+    return () => clearTimeout(timer);
+  }, [settled]);
+
+  const respond = (
     allow: boolean,
     opts?: { optionId?: string; answers?: Record<string, string>; message?: string },
   ) => {
-    if (!n.sessionId || !requestId || busy) return;
-    setBusy(true);
-    setFailed(false);
-    try {
-      await respondToPermission(n.sessionId, requestId, allow, opts?.message, opts?.optionId, opts?.answers);
-      setSent(allow ? 'allowed' : 'denied');
-      setTimeout(onDismiss, RESOLVED_DISMISS_MS);
-    } catch (err) {
-      const status = (err as { status?: number }).status;
-      if (status === 404 || status === 409) {
-        setSent('stale');
-        setTimeout(onDismiss, RESOLVED_DISMISS_MS);
-      } else {
-        setFailed(true);
-      }
-      log.warn('notifications', 'toast permission respond failed', {
-        sessionId: n.sessionId, requestId, status: String(status ?? ''), error: String(err),
-      });
-    } finally {
-      setBusy(false);
-    }
+    if (!n.sessionId || !requestId) return;
+    void respondToPermissionRequest(n.sessionId, requestId, allow, {
+      ...(opts?.optionId ? { optionId: opts.optionId } : {}),
+      ...(opts?.answers ? { answers: opts.answers } : {}),
+      ...(opts?.message ? { message: opts.message } : {}),
+    });
   };
 
   /** Hand a degraded ask over to the panel (a record we can't answer from here). */
@@ -290,8 +293,8 @@ function PermissionToast({ n, onDismiss, onPin, navigate }: {
           disabled={busy}
           resolved={false}
           scrollable
-          onSubmit={(answers) => void respond(true, { answers })}
-          onDismissQuestions={() => void respond(false, { message: 'User dismissed the questions' })}
+          onSubmit={(answers) => respond(true, { answers })}
+          onDismissQuestions={() => respond(false, { message: 'User dismissed the questions' })}
         />
       ) : (
         <div className="nfc-perm-actions">
@@ -311,7 +314,7 @@ function PermissionToast({ n, onDismiss, onPin, navigate }: {
                     key={o.optionId}
                     className={`nfc-perm-btn${isReject ? '' : ' nfc-perm-primary'}`}
                     disabled={busy}
-                    onClick={() => void respond(!isReject, { optionId: o.optionId })}
+                    onClick={() => respond(!isReject, { optionId: o.optionId })}
                   >
                     {o.name ?? o.optionId}
                   </button>
@@ -319,7 +322,7 @@ function PermissionToast({ n, onDismiss, onPin, navigate }: {
               })}
               {/* The adapter's own reject option may be absent — keep a plain Deny. */}
               {!acpOptions.some(isRejectOption) && (
-                <button className="nfc-perm-btn" disabled={busy} onClick={() => void respond(false)}>
+                <button className="nfc-perm-btn" disabled={busy} onClick={() => respond(false)}>
                   Deny
                 </button>
               )}
@@ -329,11 +332,11 @@ function PermissionToast({ n, onDismiss, onPin, navigate }: {
               <button
                 className="nfc-perm-btn nfc-perm-primary"
                 disabled={busy}
-                onClick={() => void respond(true)}
+                onClick={() => respond(true)}
               >
                 Approve
               </button>
-              <button className="nfc-perm-btn" disabled={busy} onClick={() => void respond(false)}>
+              <button className="nfc-perm-btn" disabled={busy} onClick={() => respond(false)}>
                 Deny
               </button>
             </>

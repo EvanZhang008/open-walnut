@@ -29,7 +29,10 @@ import type { SessionEngine, SessionHistoryMessage } from '@/types/session';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { engineCaps } from '@/utils/engine-capabilities';
 import type { ImageAttachment } from '@/api/chat';
-import { respondToPermission } from '@/api/sessions';
+import {
+  isSettledPermission, respondToPermissionRequest, usePermissionRequest,
+  type PermissionRequestStatus,
+} from '@/stores/permission-request-store';
 import { parseAskUserQuestionInput, buildAskUserAnswers, allAskUserQuestionsAnswered, toggleAskUserSelection, type AskQuestion } from './ask-user-question';
 import { findImagePaths, resolveImagePath } from '@/utils/markdown';
 import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
@@ -240,11 +243,14 @@ function StreamingTextBlock({ content, msgId, sessionCwd, sessionHost, sessionId
  * renders the real options and submits the chosen labels as `answers`
  * (question text → label / free text). Option pills reuse the Personal AI's
  * QuestionPopover `qp-*` styles; the frame keeps the permission-card classes. */
-function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, answered }: {
+function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, answered }: {
   questions: AskQuestion[];
   onSubmit: (answers: Record<string, string>) => void;
   onDismiss: () => void;
-  status: 'pending' | 'loading' | 'allowed' | 'denied';
+  status: PermissionRequestStatus;
+  /** A response is in flight — the controls lock, but the card already shows the
+   *  optimistic outcome (the store settles on click, not on the round-trip). */
+  busy?: boolean;
   answered?: Record<string, string>;
 }) {
   const [selections, setSelections] = useState<Record<string, string[]>>({});
@@ -253,9 +259,9 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, answered 
   const complete = allAskUserQuestionsAnswered(questions, selections, otherText);
   const resolvedAnswers = answered ?? buildAskUserAnswers(questions, selections, otherText);
 
-  if (status === 'allowed' || status === 'denied') {
+  if (isSettledPermission(status)) {
     return (
-      <div className={`permission-request-card permission-request-card--${status}`}>
+      <div className={`permission-request-card${settledCardClass(status)}`}>
         <div className="permission-request-header">
           <span className="permission-request-icon">{status === 'allowed' ? '✓' : '✗'}</span>
           <span className="permission-request-tool">AskUserQuestion</span>
@@ -268,8 +274,12 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, answered 
               ))
               : 'Answered'}
           </div>
-        ) : (
+        ) : status === 'denied' ? (
           <div className="permission-request-resolved permission-request-resolved--denied">Dismissed</div>
+        ) : (
+          /* Settled without this browser seeing the outcome — say that, never
+             "Dismissed" (which claims the user did it). */
+          <div className="permission-request-resolved">{SETTLED_LABEL[status]}</div>
         )}
       </div>
     );
@@ -294,7 +304,7 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, answered 
                     key={opt.label}
                     className={`qp-option ${picked.includes(opt.label) ? 'qp-option-selected' : ''}`}
                     title={opt.description}
-                    disabled={status === 'loading'}
+                    disabled={busy}
                     onClick={() => setSelections(prev => ({
                       ...prev,
                       [q.question]: toggleAskUserSelection(prev[q.question], opt.label, q.multiSelect),
@@ -311,7 +321,7 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, answered 
                 className="qp-input"
                 placeholder={q.options.length > 0 ? 'Other (type your own answer)...' : 'Type your answer...'}
                 value={otherText[q.question] ?? ''}
-                disabled={status === 'loading'}
+                disabled={busy}
                 onChange={(e) => setOtherText(prev => ({ ...prev, [q.question]: e.target.value }))}
                 {...NO_AUTOFILL_PROPS}
               />
@@ -322,14 +332,14 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, answered 
       <div className="permission-request-actions">
         <button
           className="permission-request-btn permission-request-btn--allow"
-          disabled={!complete || status === 'loading'}
+          disabled={!complete || busy}
           onClick={() => onSubmit(buildAskUserAnswers(questions, selections, otherText))}
         >
-          {status === 'loading' ? 'Sending...' : 'Submit'}
+          {busy ? 'Sending...' : 'Submit'}
         </button>
         <button
           className="permission-request-btn permission-request-btn--deny"
-          disabled={status === 'loading'}
+          disabled={busy}
           onClick={onDismiss}
         >
           Dismiss
@@ -350,28 +360,26 @@ function PermissionRequestCard({ sessionId, requestId, toolName, input, reason, 
   initialStatus?: 'pending' | 'allowed' | 'denied';
   acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
 }) {
-  const [status, setStatus] = useState<'pending' | 'loading' | 'allowed' | 'denied'>(initialStatus && initialStatus !== 'pending' ? initialStatus : 'pending');
+  // ONE store per request id, shared with the notification rail card and the
+  // toast (web/src/stores/permission-request-store.ts). This card used to seed a
+  // private useState ONCE from `initialStatus` and never re-read it — blocks
+  // render under index keys, so nothing remounted it — which is why answering
+  // from the rail left Approve/Deny armed here, and clicking them 404'd and
+  // stamped "Denied" on a request the user had just approved.
+  const stored = usePermissionRequest(requestId);
+  // Fallback for a card the store has never seen: a reloaded page, or an entry
+  // trimmed by the store's cap. The stream block's own status is the record.
+  const status: PermissionRequestStatus = stored?.status
+    ?? (initialStatus && initialStatus !== 'pending' ? initialStatus : 'pending');
+  const busy = stored?.inFlight ?? false;
   const [inputExpanded, setInputExpanded] = useState(false);
-  const [submittedAnswers, setSubmittedAnswers] = useState<Record<string, string> | undefined>();
 
-  const handleResponse = async (allow: boolean, optionId?: string, message?: string, answers?: Record<string, string>) => {
-    setStatus('loading');
-    try {
-      await respondToPermission(sessionId, requestId, allow, message, optionId, answers);
-      if (answers) setSubmittedAnswers(answers);
-      setStatus(allow ? 'allowed' : 'denied');
-    } catch (err) {
-      // 404 = the request no longer exists server-side (answered elsewhere,
-      // auto-cancelled, or the turn died). Reverting to 'pending' bred zombie
-      // cards the user clicked forever (2026-08-11: 8 approve→404 loops on 2
-      // cards). Settle the card as denied-stale instead of re-arming it.
-      const status = (err as { status?: number }).status;
-      if (status === 404 || status === 409) {
-        setStatus('denied');
-      } else {
-        setStatus('pending'); // transient (network/5xx): let the user retry
-      }
-    }
+  const handleResponse = (allow: boolean, optionId?: string, message?: string, answers?: Record<string, string>) => {
+    void respondToPermissionRequest(sessionId, requestId, allow, {
+      ...(optionId ? { optionId } : {}),
+      ...(message ? { message } : {}),
+      ...(answers ? { answers } : {}),
+    });
   };
 
   // AskUserQuestion answers ARE the permission response (see AskUserQuestionCard).
@@ -381,9 +389,10 @@ function PermissionRequestCard({ sessionId, requestId, toolName, input, reason, 
       <AskUserQuestionCard
         questions={askQuestions}
         status={status}
-        answered={submittedAnswers}
-        onSubmit={(answers) => void handleResponse(true, undefined, undefined, answers)}
-        onDismiss={() => void handleResponse(false, undefined, 'User dismissed the questions')}
+        busy={busy}
+        {...(stored?.answers ? { answered: stored.answers } : {})}
+        onSubmit={(answers) => handleResponse(true, undefined, undefined, answers)}
+        onDismiss={() => handleResponse(false, undefined, 'User dismissed the questions')}
       />
     );
   }
@@ -394,7 +403,7 @@ function PermissionRequestCard({ sessionId, requestId, toolName, input, reason, 
   );
 
   return (
-    <div className={`permission-request-card permission-request-card--${status}`}>
+    <div className={`permission-request-card${settledCardClass(status)}`}>
       <div className="permission-request-header">
         <span className="permission-request-icon">{status === 'allowed' ? '\u2713' : status === 'denied' ? '\u2717' : '!'}</span>
         <span className="permission-request-tool">{toolName}</span>
@@ -416,6 +425,7 @@ function PermissionRequestCard({ sessionId, requestId, toolName, input, reason, 
               <button
                 key={o.optionId}
                 className={`permission-request-btn ${isReject ? 'permission-request-btn--deny' : 'permission-request-btn--allow'}`}
+                disabled={busy}
                 onClick={() => handleResponse(!isReject, o.optionId)}
               >
                 {o.name ?? o.optionId}
@@ -426,21 +436,48 @@ function PermissionRequestCard({ sessionId, requestId, toolName, input, reason, 
       )}
       {status === 'pending' && validAcpOptions.length === 0 && (
         <div className="permission-request-actions">
-          <button className="permission-request-btn permission-request-btn--allow" onClick={() => handleResponse(true)}>Allow</button>
-          <button className="permission-request-btn permission-request-btn--deny" onClick={() => handleResponse(false)}>Deny</button>
+          <button className="permission-request-btn permission-request-btn--allow" disabled={busy} onClick={() => handleResponse(true)}>Allow</button>
+          <button className="permission-request-btn permission-request-btn--deny" disabled={busy} onClick={() => handleResponse(false)}>Deny</button>
         </div>
       )}
-      {status === 'loading' && (
-        <div className="permission-request-resolved">Sending...</div>
-      )}
       {status === 'allowed' && (
-        <div className="permission-request-resolved permission-request-resolved--allowed">Allowed</div>
+        <div className="permission-request-resolved permission-request-resolved--allowed">{SETTLED_LABEL.allowed}</div>
       )}
-      {status === 'denied' && (
-        <div className="permission-request-resolved permission-request-resolved--denied">Denied</div>
+      {/* 'stale' and 'expired' are NOT the user's Deny: the first means the ask
+          settled somewhere else and we never learned which way, the second that
+          the server withdrew it. Naming them as such is the whole point of the
+          shared store — this card used to print "Denied" for both. */}
+      {(status === 'denied' || status === 'stale' || status === 'expired') && (
+        <div className={`permission-request-resolved permission-request-resolved--${status === 'denied' ? 'denied' : 'stale'}`}>
+          {SETTLED_LABEL[status]}
+        </div>
+      )}
+      {/* A transient failure rolled the status back to pending, so the buttons
+          above are armed again — say why they are still there. */}
+      {status === 'pending' && stored?.failed && (
+        <div className="permission-request-resolved">Could not send that — try again</div>
       )}
     </div>
   );
+}
+
+/** What a settled card says. 'stale'/'expired' deliberately avoid claiming an
+ *  outcome nobody in this browser witnessed. */
+const SETTLED_LABEL: Record<PermissionRequestStatus, string> = {
+  pending: '',
+  allowed: 'Allowed',
+  denied: 'Denied',
+  stale: 'Already answered',
+  expired: 'Session ended',
+};
+
+/** Card tint for a settled request. Only allowed/denied have a colour — a
+ *  stale/expired card keeps the neutral frame rather than borrowing the red one
+ *  and reading as a denial. */
+function settledCardClass(status: PermissionRequestStatus): string {
+  return status === 'allowed' || status === 'denied'
+    ? ` permission-request-card--${status}`
+    : '';
 }
 
 /** Render a single streaming block */

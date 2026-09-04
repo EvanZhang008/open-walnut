@@ -1,23 +1,31 @@
 /**
  * Human Inbox state for the notification center — the letter LIST (envelopes).
  *
- * The letter store is canonical for read/pin/archive/answered, so the rail
- * counts and rows read from here, never from the notification feed. The feed's
- * `letter` envelopes are only the live signal that something changed: every
- * letter WS event refreshes this list (coalesced), which is what makes the rail
- * count and the rows update without a page refresh.
+ * The letter store is canonical for read/pin/archive/answered, so the rail counts
+ * and rows read from here, never from the notification feed. The feed's `letter`
+ * envelopes are only the live signal that something changed: every letter WS
+ * event refreshes the list (coalesced), which is what makes the rail count and
+ * the rows update without a page refresh.
+ *
+ * This hook is a LENS on the one shared store
+ * (`components/inbox/letter-store.ts`), not a store of its own. It used to keep a
+ * private `useState` pair, which made the rail and a session panel's Inbox tab two
+ * independent copies of the same letters: pinning in the rail left the session tab
+ * showing "Pin" with no glyph and the old date order, because `pinned` has no WS
+ * echo and the only thing that reconciled the copies was a debounced full re-GET
+ * fired by some unrelated letter event.
  *
  * Fetching is gated on `enabled` (the panel being open) — the inbox is a panel
  * surface, and a background poll for a feature that may be low-volume would be
- * pure cost.
+ * pure cost. The ARCHIVE shelf is fetched only while it is being shown.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useEvent } from '@/hooks/useWebSocket';
-import { log } from '@/utils/log';
-import { compareLetters, listLetters, type LetterEnvelope } from '@/api/human-inbox';
-
-/** Coalesce a burst of letter events (a send + its bridge update) into one GET. */
-const REFRESH_DEBOUNCE_MS = 350;
+import { compareLetters, type LetterEnvelope } from '@/api/human-inbox';
+import {
+  applyLetterChange, ensureLetters, getLetterSnapshot, patchLetter, refreshLetters,
+  scheduleLetterRefresh, subscribeLetters,
+} from '@/components/inbox/letter-store';
 
 /**
  * The letter id a wire record refers to, or `undefined` when the record is not
@@ -66,14 +74,16 @@ export interface HumanInboxState {
    * badge and Needs Action must count. Same array as `letters` in the live view.
    */
   liveLetters: LetterEnvelope[];
+  /** Every letter this browser knows about, live shelf and archive alike: the
+   *  reader needs an envelope for a row that has just left the current view. */
   byId: Map<string, LetterEnvelope>;
   loaded: boolean;
   error: string | null;
   refresh: () => void;
   /**
-   * Apply a state change: patch locally first (the panel must feel instant),
-   * then call the route; a failure logs and resyncs from the server rather than
-   * leaving a lie on screen.
+   * Apply a state change: patch the shared store first (every surface must feel
+   * it instantly), then call the route; a failure logs and re-reads from the
+   * server rather than leaving a lie on screen.
    */
   applyChange: (
     id: string,
@@ -88,99 +98,59 @@ export interface HumanInboxState {
 export function useHumanInbox(
   { enabled, archived }: { enabled: boolean; archived: boolean },
 ): HumanInboxState {
-  const [letters, setLetters] = useState<LetterEnvelope[]>([]);
-  const [live, setLive] = useState<LetterEnvelope[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Stale-response guard: an archived-filter flip or a burst of refreshes can
-  // land out of order, and the older answer must never overwrite the newer one.
-  const reqSeq = useRef(0);
-  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const abort = useRef<AbortController | null>(null);
-  const enabledRef = useRef(enabled);
-  enabledRef.current = enabled;
-
-  const load = useCallback(async (wantArchived: boolean) => {
-    const seq = ++reqSeq.current;
-    abort.current?.abort();
-    const ac = new AbortController();
-    abort.current = ac;
-    try {
-      // The Archived view still needs the LIVE list: the rail badge and Needs
-      // Action count letters that are NOT archived, so feeding them the archive
-      // read "0 unread" and dropped every unanswered decision while it was open.
-      const [list, liveList] = await Promise.all([
-        listLetters({ archived: wantArchived, signal: ac.signal }),
-        wantArchived ? listLetters({ signal: ac.signal }) : Promise.resolve(null),
-      ]);
-      if (seq !== reqSeq.current) return;
-      setLetters(list);
-      setLive(liveList ?? list);
-      setError(null);
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return;
-      if (seq !== reqSeq.current) return;
-      setError('Could not load the inbox');
-      log.warn('inbox', 'letter list load failed', { archived: String(wantArchived), error: String(err) });
-    } finally {
-      if (seq === reqSeq.current) setLoaded(true);
-    }
-  }, []);
-
-  const refresh = useCallback(() => { void load(archived); }, [load, archived]);
+  const shared = useSyncExternalStore(subscribeLetters, getLetterSnapshot, getLetterSnapshot);
 
   useEffect(() => {
     if (!enabled) return;
-    void load(archived);
-    return () => { abort.current?.abort(); };
-  }, [enabled, archived, load]);
+    ensureLetters({ archived });
+  }, [enabled, archived]);
 
-  // Live updates while the panel is open. Closed panel = no fetch: it will load
-  // fresh on the next open anyway, and the bell badge already moved (the feed
-  // envelope arrived over the same event).
+  // Live updates while the panel is open. Closed panel = no refresh from here:
+  // the list reloads on the next open anyway, and the bell badge already moved
+  // (the feed envelope arrived over the same event). A session panel's own
+  // subscription keeps the store fresh when it is the one on screen.
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
   useLetterEvents(useCallback(() => {
     if (!enabledRef.current) return;
-    if (debounce.current) clearTimeout(debounce.current);
-    debounce.current = setTimeout(() => {
-      debounce.current = null;
-      void load(archived);
-    }, REFRESH_DEBOUNCE_MS);
-  }, [load, archived]));
+    scheduleLetterRefresh();
+  }, []));
 
-  useEffect(() => () => { if (debounce.current) clearTimeout(debounce.current); }, []);
+  const liveSorted = useMemo(
+    () => [...shared.letters].sort(compareLetters),
+    [shared.letters],
+  );
+  const archivedSorted = useMemo(
+    () => [...shared.archived].sort(compareLetters),
+    [shared.archived],
+  );
+  const letters = archived ? archivedSorted : liveSorted;
 
-  const applyChange = useCallback(async (
-    id: string,
-    patch: Partial<LetterEnvelope>,
-    call: () => Promise<unknown>,
-    what: string,
-  ) => {
-    const patchOne = (l: LetterEnvelope) => (l.id === id ? { ...l, ...patch } : l);
-    setLetters(prev => prev.map(patchOne));
-    setLive(prev => prev.map(patchOne));
-    try {
-      await call();
-    } catch (err) {
-      log.warn('inbox', 'letter change failed', { letterId: id, what, error: String(err) });
-      void load(archived);
-    }
-  }, [load, archived]);
+  // Both shelves, so the reader can still render the header for a letter the
+  // current view no longer lists (just archived, or opened from the All feed).
+  const byId = useMemo(() => {
+    const map = new Map<string, LetterEnvelope>();
+    for (const l of archivedSorted) map.set(l.id, l);
+    for (const l of liveSorted) map.set(l.id, l);
+    return map;
+  }, [liveSorted, archivedSorted]);
+
+  const applyChange = useCallback(applyLetterChange, []);
 
   const mergeLetter = useCallback((letter: LetterEnvelope) => {
-    const merge = (prev: LetterEnvelope[]) => (prev.some(l => l.id === letter.id)
-      ? prev.map(l => (l.id === letter.id ? { ...l, ...letter } : l))
-      : prev);
-    setLetters(merge);
-    setLive(merge);
+    patchLetter(letter.id, letter);
   }, []);
 
-  const sorted = useMemo(() => [...letters].sort(compareLetters), [letters]);
-  const liveSorted = useMemo(
-    () => (live === letters ? sorted : [...live].sort(compareLetters)),
-    [live, letters, sorted],
-  );
-  const byId = useMemo(() => new Map(sorted.map(l => [l.id, l])), [sorted]);
-
-  return { letters: sorted, liveLetters: liveSorted, byId, loaded, error, refresh, applyChange, mergeLetter };
+  return {
+    letters,
+    liveLetters: liveSorted,
+    byId,
+    // The Archived view waits on ITS read: reporting the live list's `loaded`
+    // would render "Nothing archived" while the shelf was still in flight.
+    loaded: archived ? shared.archivedLoaded : shared.loaded,
+    error: shared.error,
+    refresh: refreshLetters,
+    applyChange,
+    mergeLetter,
+  };
 }
