@@ -46,6 +46,24 @@ final class LifecycleHygieneTests: XCTestCase {
     // MARK: - IO-6: token Keychain round-trips
 
     func testTokenReadsHitKeychainOncePerProcess() {
+        // The DEBUG injection default (`-walnut.deviceToken` / the UserDefaults key
+        // it lands in) is returned by AppConfig.token BEFORE the Keychain is
+        // consulted, so a simulator container left paired by a launch-args run makes
+        // this gate count 0 reads with nothing regressed. Take it out for the
+        // measurement and put it back afterwards.
+        // An EMPTY string is what neutralizes it: the hook takes only a non-empty
+        // value, and a write wins where a removal does not (a value seeded into a
+        // lower-priority preference source stays visible after `removeObject`).
+        let injectedToken = UserDefaults.standard.object(forKey: "walnut.deviceToken")
+        UserDefaults.standard.set("", forKey: "walnut.deviceToken")
+        addTeardownBlock {
+            if let injectedToken {
+                UserDefaults.standard.set(injectedToken, forKey: "walnut.deviceToken")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "walnut.deviceToken")
+            }
+            AppConfig.resetTokenCacheForTesting()
+        }
         AppConfig.resetTokenCacheForTesting()
         KeychainHelper.keychainReads.withLock { $0 = 0 }
         for _ in 0..<10 {

@@ -502,7 +502,12 @@ final class TasksStore {
         loading = true
         defer { loading = false }
         do {
-            let response = try await api.tasks()
+            // Through `transport`, not `api`: in production they are the same object
+            // (`transport ?? api`), but a hosted test runs INSIDE the app whose
+            // container is paired to a real server, so a read that skips the
+            // injected seam silently answers from live data and the test asserts
+            // against whatever the simulator happens to be paired to.
+            let response = try await transport.tasks()
             guard isActive, !Task.isCancelled, seq == taskLoadSeq else { return }
             // Overlay pending creates: on a REPLICA the projection lags the
             // create, so a raw adoption here would delete the optimistic row.
