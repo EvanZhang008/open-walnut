@@ -67,7 +67,7 @@ describe('listRemoteSkills', () => {
     expect(skills.find((s) => s.dirName === 'my-flat')?.plugin).toBe('__flat__');
   });
 
-  it('discovers flat ~/.claude/skills and dedupes (flat wins over plugin)', async () => {
+  it('discovers flat ~/.claude/skills and plugin skills, keyed the way the CLI names them (flat listed first)', async () => {
     const files: Record<string, string> = {
       '/home/user/.claude/settings.json': JSON.stringify({
         enabledPlugins: { 'p@aim': true },
@@ -89,9 +89,11 @@ describe('listRemoteSkills', () => {
     };
 
     const skills = await listRemoteSkills(fakeConn(files, dirs));
-    const dup = skills.find((s) => s.dirName === 'dup');
-    expect(dup?.description).toBe('flat version'); // flat shadows plugin
-    expect(skills.map((s) => s.dirName).sort()).toEqual(['dup', 'only-plugin']);
+    // The CLI knows `dup` (flat) AND `p:dup` (plugin) as two commands, so both
+    // survive; the flat one is listed first so a fold by bare name shadows the
+    // plugin copy, as the discovery palette does.
+    expect(skills.map((s) => `${s.plugin}:${s.dirName}`)).toEqual(['__flat__:dup', 'p@aim:dup', 'p@aim:only-plugin']);
+    expect(skills.find((s) => s.dirName === 'dup')?.description).toBe('flat version');
   });
 
   it('returns empty when remote has no settings/skills', async () => {

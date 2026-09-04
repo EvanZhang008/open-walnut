@@ -203,7 +203,7 @@ async function scanPluginSkills(
 }
 
 /**
- * Reader-agnostic plugin-skill discovery. Deduplicates by dirName
+ * Reader-agnostic plugin-skill discovery. Deduplicates by `<plugin>:<dirName>`
  * (first writer wins, matching enabledPlugins iteration order).
  */
 export async function discoverPluginSkills(
@@ -237,11 +237,15 @@ export async function discoverPluginSkills(
     return scanPluginSkills(fs, pluginDir, pluginId);
   });
 
+  // Identity is `<plugin>:<dirName>` — the CLI's own name for a plugin skill. Two
+  // plugins shipping a same-named skill are two commands to the CLI, so both stay
+  // (the palette's discovery view still folds duplicates by bare name later).
   const seen = new Set<string>();
   const skills: PluginSkillMeta[] = [];
   for (const skill of perPlugin.flat()) {
-    if (seen.has(skill.dirName)) continue;
-    seen.add(skill.dirName);
+    const key = `${skill.plugin}:${skill.dirName}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     skills.push(skill);
   }
 

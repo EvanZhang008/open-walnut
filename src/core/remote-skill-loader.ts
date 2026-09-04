@@ -15,7 +15,7 @@
 import path from 'node:path';
 import { log } from '../logging/index.js';
 import type { DaemonConnection } from '../providers/daemon-connection.js';
-import { parseFrontmatter } from '../utils/frontmatter.js';
+import { commandDescription } from '../utils/frontmatter.js';
 import {
   discoverPluginSkills,
   parseSkillMeta,
@@ -82,11 +82,11 @@ function daemonSkillFs(conn: DaemonConnection): SkillFs {
 /** Scan the remote flat ~/.claude/skills/ dir (remote equivalent of listAvailableSkills).
  *  Reads are pipelined (each is a daemon RTT) — sequential awaits over a big
  *  skills dir were the bulk of the 12-22s /api/slash-commands?host= scans. */
-async function listRemoteFlatSkills(fs: SkillFs): Promise<PluginSkillMeta[]> {
-  const entries = await fs.list(REMOTE_FLAT_SKILLS_DIR);
+async function listRemoteFlatSkills(fs: SkillFs, dir: string = REMOTE_FLAT_SKILLS_DIR): Promise<PluginSkillMeta[]> {
+  const entries = await fs.list(dir);
   if (entries === null) return [];
   const metas = await mapLimit(entries, 16, async (entry) => {
-    const file = fs.join(REMOTE_FLAT_SKILLS_DIR, entry, 'SKILL.md');
+    const file = fs.join(dir, entry, 'SKILL.md');
     const raw = await fs.readText(file);
     if (raw === null) return null;
     const meta = parseSkillMeta(raw);
@@ -104,8 +104,9 @@ async function listRemoteFlatSkills(fs: SkillFs): Promise<PluginSkillMeta[]> {
 /**
  * Discover all skills (plugin + flat) available on a remote host.
  * Caller supplies an already-connected DaemonConnection.
- * Deduplicates by dirName; flat skills take priority (listed first), matching
- * the local loader where ~/.claude/skills/ shadows plugin copies.
+ * Deduplicates by `<plugin>:<dirName>` (the CLI's identity for a skill); flat
+ * skills are listed first so a bare-name fold shadows plugin copies, matching
+ * the local loader where ~/.claude/skills/ wins.
  */
 export async function listRemoteSkills(conn: DaemonConnection): Promise<RemoteSkillMeta[]> {
   const fs = daemonSkillFs(conn);
@@ -118,11 +119,15 @@ export async function listRemoteSkills(conn: DaemonConnection): Promise<RemoteSk
     }),
   ]);
 
+  // Keyed the way the CLI names them (`<plugin>:<dirName>`, flat skills bare), so
+  // two plugins shipping a same-named skill both survive; the discovery palette
+  // folds duplicates by bare name later, flat first.
   const seen = new Set<string>();
   const out: RemoteSkillMeta[] = [];
   for (const s of [...flat, ...plugin]) {
-    if (seen.has(s.dirName)) continue;
-    seen.add(s.dirName);
+    const key = `${s.plugin}:${s.dirName}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     out.push({ dirName: s.dirName, description: s.description, plugin: s.plugin });
   }
 
@@ -132,6 +137,17 @@ export async function listRemoteSkills(conn: DaemonConnection): Promise<RemoteSk
     total: out.length,
   });
   return out;
+}
+
+/**
+ * A remote session's PROJECT skills ({cwd}/.claude/skills/<name>/SKILL.md). The
+ * CLI lists these alongside the user-level ones; the palette needs them for
+ * descriptions. Same shape as flat skills (plugin `__flat__`).
+ */
+export async function listRemoteProjectSkills(conn: DaemonConnection, cwd: string): Promise<RemoteSkillMeta[]> {
+  const fs = daemonSkillFs(conn);
+  const skills = await listRemoteFlatSkills(fs, fs.join(cwd, '.claude', 'skills'));
+  return skills.map((s) => ({ dirName: s.dirName, description: s.description, plugin: s.plugin }));
 }
 
 /**
@@ -174,8 +190,7 @@ export async function listRemoteProjectCommands(
 function descOf(raw: string | null): string {
   if (raw === null) return '';
   try {
-    const { frontmatter } = parseFrontmatter(raw);
-    return (frontmatter.description as string) ?? '';
+    return commandDescription(raw);
   } catch {
     return '';
   }

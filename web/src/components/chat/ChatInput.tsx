@@ -88,6 +88,12 @@ interface ChatInputProps {
   searchSessionCommands?: (query: string) => SlashCommandItem[];
   /** Session-mode: force a re-scan of skills/commands (e.g. after creating one remotely). */
   onRefreshSessionCommands?: () => void;
+  /** Session-mode: fired each time the "/" palette OPENS — the list owner
+   *  revalidates a stale or degraded list in the background. */
+  onSessionCommandsPaletteOpen?: () => void;
+  /** Session-mode: where the list came from / whether the host was reachable.
+   *  Drives the palette footer note (e.g. "descriptions unavailable, retrying"). */
+  sessionCommandsStatus?: { source: 'cli' | 'discovery'; degraded: boolean };
   /** Session-mode: control commands like /model are intercepted and trigger UI actions */
   onControlCommand?: (command: string) => void;
   /** localStorage key for persisting draft text. When set, input value is saved on change (debounced) and restored on mount. */
@@ -125,7 +131,7 @@ interface ChatInputProps {
   onValueChange?: (text: string) => void;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, enableSessionMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', controlsSlot, onValueChange }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, enableSessionMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', controlsSlot, onValueChange }: ChatInputProps) {
   const [value, setValue] = useState(() => {
     if (!draftKey) return '';
     try { return localStorage.getItem(draftKey) ?? ''; } catch { return ''; }
@@ -340,6 +346,35 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     paletteRef.current = { open: paletteOpen, results: paletteResults, selectedIndex };
   }, [paletteOpen, paletteResults, selectedIndex]);
 
+  // Every OPEN of the session palette tells the list owner, which revalidates a
+  // stale or degraded list in the background (the reflow effect below then
+  // re-renders the open palette when the better list lands). Ref-mirrored so a
+  // fresh arrow from the parent can't fire this on its own.
+  const onPaletteOpenRef = useRef(onSessionCommandsPaletteOpen);
+  onPaletteOpenRef.current = onSessionCommandsPaletteOpen;
+  useEffect(() => {
+    if (paletteOpen && isSessionMode) onPaletteOpenRef.current?.();
+  }, [paletteOpen, isSessionMode]);
+
+  // Session-mode palette rows for a "/query": the session's commands plus the
+  // composer's own control commands, injected only where a handler exists to run
+  // them (a draft composer has none; inserting "/model " as text there is noise).
+  // The CLI advertises its own `/model` too; the control wins (it opens the picker
+  // instead of sending text) and the CLI row is dropped so the name isn't listed
+  // twice. ONE function for both the typing path and the list-refresh reflow —
+  // they used to differ, and a refresh landing on an open palette silently
+  // dropped the control row.
+  const sessionPaletteResults = useCallback((query: string): PaletteItem[] => {
+    const results: PaletteItem[] = searchSessionCommands ? searchSessionCommands(query) : [];
+    if (onControlCommand && 'model'.startsWith(query.toLowerCase())) {
+      return [
+        { name: 'model', description: 'Switch model (opus / sonnet / haiku / fable)', source: 'control' },
+        ...results.filter((r) => r.name !== 'model'),
+      ];
+    }
+    return results;
+  }, [searchSessionCommands, onControlCommand]);
+
   // When a NEW sessionCommands list lands — the initial fetch, a cwd/host change,
   // or a manual refresh — reflow (or OPEN) the palette against the live "/" span.
   // Deliberately NOT gated on the palette already being open: a "/" typed before
@@ -355,7 +390,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     if (!s || s.slashIndex === slashDismissedAtRef.current) return;
     slashIndexRef.current = s.slashIndex;
     slashEndRef.current = caret;
-    const results = searchSessionCommands!(s.query);
+    const results = sessionPaletteResults(s.query);
     const open = results.length > 0;
     setPaletteResults(results);
     setPaletteOpen(open);
@@ -851,17 +886,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       slashIndexRef.current = s.slashIndex;
       slashEndRef.current = slashCaret;
       const query = s.query;
-      let results: PaletteItem[];
-      if (isSessionMode) {
-        results = searchSessionCommands!(query);
-        // Inject control commands — only where a handler exists to run them (a
-        // draft composer has none; inserting "/model " as text there is noise).
-        if (onControlCommand && 'model'.startsWith(query.toLowerCase())) {
-          results = [{ name: 'model', description: 'Switch model (opus / sonnet / haiku / fable)', source: 'control' }, ...results];
-        }
-      } else {
-        results = searchCommands(query);
-      }
+      const results: PaletteItem[] = isSessionMode ? sessionPaletteResults(query) : searchCommands(query);
       const open = results.length > 0;
       setPaletteResults(results);
       setPaletteOpen(open);
@@ -1065,6 +1090,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           showSource={isSessionMode}
           onRefresh={isSessionMode && onRefreshSessionCommands ? handleRefreshCommands : undefined}
           refreshing={refreshing}
+          footerNote={isSessionMode && sessionCommandsStatus?.degraded
+            ? (sessionCommandsStatus.source === 'cli'
+              ? 'Host unreachable: descriptions missing, retrying…'
+              : 'Host unreachable: showing built-in commands only, retrying…')
+            : undefined}
         />
       )}
       {mentionOpen && mentionKind === 'palette' && (mentionEnabled || enableSessionMention) && (

@@ -251,6 +251,7 @@ export function DraftSessionPanel({
   // CLI interprets /commands natively), so this is purely a discovery surface.
   const {
     items: slashCommands, search: searchSlashCommands, refresh: refreshSlashCommands,
+    status: slashCommandsStatus, onPaletteOpen: onSlashPaletteOpen,
   } = useSlashCommands(draft.cwd || undefined, draft.host ?? undefined);
   // Read-only mirror of the composer text (ChatInput stays uncontrolled) — the
   // footer buttons need it to enable/disable and to start with an empty send.
@@ -511,6 +512,8 @@ export function DraftSessionPanel({
           sessionCommands={slashCommands}
           searchSessionCommands={searchSlashCommands}
           onRefreshSessionCommands={refreshSlashCommands}
+          onSessionCommandsPaletteOpen={onSlashPaletteOpen}
+          sessionCommandsStatus={slashCommandsStatus}
           mentionCwd={draft.cwd || undefined}
           mentionHost={draft.host ?? undefined}
           controlsSlot={(

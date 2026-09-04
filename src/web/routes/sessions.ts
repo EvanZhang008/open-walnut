@@ -1868,6 +1868,27 @@ sessionsRouter.get('/:sessionId/settings', async (req: Request, res: Response, n
   }
 })
 
+// GET /api/sessions/:sessionId/slash-commands?fresh=1 — the composer palette for
+// ONE live session: the command set the CLI itself advertised in its init line,
+// decorated with descriptions. `source` tells the client whether it got the CLI
+// list or the discovery fallback; `degraded` means descriptions are missing.
+sessionsRouter.get('/:sessionId/slash-commands', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { buildSessionSlashCommandItems } = await import('./slash-commands.js')
+    res.json(await buildSessionSlashCommandItems({
+      sessionId: String(req.params.sessionId),
+      fresh: req.query.fresh === '1' || req.query.fresh === 'true',
+    }))
+  } catch (err) {
+    if (err instanceof SessionControlError) {
+      if (err.statusCode === 404) { sendSessionNotFound(res); return }
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
+    next(err)
+  }
+})
+
 // GET /api/sessions/:sessionId/side-questions — history list for the drawer
 sessionsRouter.get('/:sessionId/side-questions', async (req: Request, res: Response, next: NextFunction) => {
   try {

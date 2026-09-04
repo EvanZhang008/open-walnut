@@ -125,6 +125,29 @@ interface StreamInitEvent {
    * Verified against CLI 2.1.220: `[{"name":"walnut","status":"failed"}]`.
    */
   mcp_servers?: { name: string; status?: string }[]
+  /**
+   * Every slash command this CLI process accepts, by name — skills, command
+   * templates, plugin skills AND built-ins, already filtered by the CLI to
+   * what works non-interactively (headless mode drops `disableNonInteractive`
+   * prompt commands and keeps only `supportsNonInteractive` local ones). Names
+   * only; descriptions never ride init. Verified against CLI 2.1.240 (255 names).
+   */
+  slash_commands?: string[]
+  /**
+   * Commands that only exist in the terminal REPL (CLI 2.1.240: `doctor`,
+   * `color`). May overlap `slash_commands`; the palette hides them.
+   */
+  terminal_slash_commands?: string[]
+}
+
+/**
+ * The CLI-advertised command set captured from the latest `init` line.
+ * `names` is `slash_commands` minus `terminal_slash_commands`, in the CLI's
+ * order; `at` is when that init arrived (epoch ms).
+ */
+export interface CliSlashCommands {
+  names: string[]
+  at: number
 }
 
 /**
@@ -549,6 +572,11 @@ export class ClaudeCodeSession {
   private _exitStderr: string | undefined
   /** MCP server names passed via `--mcp-config` at the last spawn (see init handler). */
   private _requestedMcpServers: string[] = []
+  /** The slash commands the CLI itself advertised in its latest `init` line —
+   *  already filtered by the CLI to what works in `-p` mode (skills, command
+   *  templates, plugin skills, built-ins). The composer palette lists THIS, so
+   *  it never depends on Walnut re-discovering the host's skill dirs over SSH. */
+  private _cliSlashCommands: CliSlashCommands | null = null
   /** Session-lifetime flag: survives across turns, checked by handleProcessDeath and
    *  server-restart recovery to suppress spurious events from dead/old processes.
    *  Set true on kill/interrupt/respawn; set false when a new turn begins. */
@@ -1484,6 +1512,20 @@ export class ClaudeCodeSession {
   /** MCP servers this session asked the CLI to mount (see the init mount-health check). */
   get requestedMcpServers(): readonly string[] {
     return this._requestedMcpServers
+  }
+
+  /** The slash commands the CLI advertised in its latest `init` line, or null
+   *  when no init has been seen by this instance yet (fresh attach that tails
+   *  from the end, or a session that never spawned). */
+  get cliSlashCommands(): CliSlashCommands | null {
+    return this._cliSlashCommands
+  }
+
+  /** Backfill from the stream tail (post-restart attach). A live init always
+   *  wins: this only fills the gap while no init has been seen yet. */
+  seedCliSlashCommands(names: string[], at: number): void {
+    if (this._cliSlashCommands) return
+    this._cliSlashCommands = { names, at }
   }
 
   get processStatus(): ProcessStatus {
@@ -3793,6 +3835,20 @@ export class ClaudeCodeSession {
               this._resolveSessionReady(newId)
             }
           })()
+        }
+
+        // ── CLI-advertised slash commands (init only) ──
+        // Every init (spawn, --resume, auto-continuation, reattach replay) carries
+        // the CLI's CURRENT command set; the latest one wins. Replayed inits are
+        // fine to take: they replay in order, so the last one seen is still the
+        // newest the CLI ever reported for this session.
+        if (sys.subtype === 'init' && Array.isArray(sys.slash_commands)) {
+          const terminalOnly = new Set(
+            Array.isArray(sys.terminal_slash_commands) ? (sys.terminal_slash_commands as unknown[]) : [],
+          )
+          const names = (sys.slash_commands as unknown[])
+            .filter((n): n is string => typeof n === 'string' && n.length > 0 && !terminalOnly.has(n))
+          this._cliSlashCommands = { names, at: Date.now() }
         }
 
         // ── MCP mount health (init only) ──

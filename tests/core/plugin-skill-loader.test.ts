@@ -147,7 +147,7 @@ describe('listPluginSkills', () => {
     expect(skills.map((s) => s.dirName)).toEqual(['sk']);
   });
 
-  it('dedupes skills with same dirName across plugins (first wins)', async () => {
+  it('keeps a same-named skill from two plugins — the CLI treats them as two commands', async () => {
     const mpRoot = path.join(CLAUDE_PLUGINS_DIR, 'marketplaces', 'mp');
     await writeSkill(path.join(mpRoot, 'plugins', 'p1'), 'dup', 'dup', 'from-p1');
     await writeSkill(path.join(mpRoot, 'plugins', 'p2'), 'dup', 'dup', 'from-p2');
@@ -155,8 +155,7 @@ describe('listPluginSkills', () => {
     await writeSettings({ 'p1@mp': true, 'p2@mp': true });
 
     const skills = await listPluginSkills();
-    expect(skills).toHaveLength(1);
-    expect(skills[0].description).toBe('from-p1');
+    expect(skills.map((s) => [s.plugin, s.description])).toEqual([['p1@mp', 'from-p1'], ['p2@mp', 'from-p2']]);
   });
 
   it('caches results across calls', async () => {

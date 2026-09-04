@@ -249,6 +249,11 @@ if (outputFormat === 'stream-json') {
     tools: ['Read', 'Edit', 'Bash'],
     mcp_servers: [],
     permissionMode: permissionMode || 'default',
+    // Mirrors CLI 2.1.240: the command set THIS process accepts (names only) and
+    // the terminal-only ones the palette must hide. `__internal-thing` stands in
+    // for the CLI's `__remote-workflow`-style internal names.
+    slash_commands: ['compact', 'clear', 'mock-skill-alpha', 'mock-skill-beta', 'doctor', 'color', '__internal-thing'],
+    terminal_slash_commands: ['doctor', 'color'],
   };
   process.stdout.write(JSON.stringify(initEvent) + '\n');
 

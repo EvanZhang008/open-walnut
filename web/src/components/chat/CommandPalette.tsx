@@ -17,12 +17,16 @@ interface CommandPaletteProps<T extends PaletteItem = SlashCommand> {
   onRefresh?: () => void;
   /** True while a refresh is in flight — disables the button + shows a spinning state. */
   refreshing?: boolean;
+  /** Session mode: one-line status shown beside the refresh button (e.g. the host
+   *  could not be reached and the list is being retried). */
+  footerNote?: string;
 }
 
 // Covers multiple type vocabularies: SlashCommandItem (API) + SlashCommand (local registry).
 const SOURCE_LABELS: Record<string, string> = {
   skill: 'Skill',
   walnut: 'Walnut',
+  'open-walnut': 'Walnut',
   'claude-root': 'Claude',
   project: 'Project',
   'built-in': 'Built-in',  // API: Claude Code native commands
@@ -35,7 +39,7 @@ const SOURCE_LABELS: Record<string, string> = {
   session: 'Session',
 };
 
-export function CommandPalette<T extends PaletteItem = SlashCommand>({ commands, selectedIndex, onSelect, showSource, onRefresh, refreshing }: CommandPaletteProps<T>) {
+export function CommandPalette<T extends PaletteItem = SlashCommand>({ commands, selectedIndex, onSelect, showSource, onRefresh, refreshing, footerNote }: CommandPaletteProps<T>) {
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -69,18 +73,25 @@ export function CommandPalette<T extends PaletteItem = SlashCommand>({ commands,
           </div>
         ))}
       </div>
-      {onRefresh && (
-        <button
-          type="button"
-          className="command-palette-refresh"
-          // onMouseDown (not onClick) so it fires before the input's blur closes the palette.
-          onMouseDown={(e) => { e.preventDefault(); if (!refreshing) onRefresh(); }}
-          disabled={refreshing}
-          title="Re-scan skills & commands (e.g. after creating one on the remote host)"
-        >
-          <span className={`command-palette-refresh-icon${refreshing ? ' spinning' : ''}`}>{'↻'}</span>
-          {refreshing ? 'Refreshing…' : 'Refresh list'}
-        </button>
+      {(onRefresh || footerNote) && (
+        <div className="command-palette-footer">
+          {onRefresh && (
+            <button
+              type="button"
+              className="command-palette-refresh"
+              // onMouseDown (not onClick) so it fires before the input's blur closes the palette.
+              onMouseDown={(e) => { e.preventDefault(); if (!refreshing) onRefresh(); }}
+              disabled={refreshing}
+              title="Re-scan skills & commands (e.g. after creating one on the remote host)"
+            >
+              <span className={`command-palette-refresh-icon${refreshing ? ' spinning' : ''}`}>{'↻'}</span>
+              {refreshing ? 'Refreshing…' : 'Refresh list'}
+            </button>
+          )}
+          {footerNote && (
+            <span className="command-palette-note" role="status">{footerNote}</span>
+          )}
+        </div>
       )}
     </div>
   );

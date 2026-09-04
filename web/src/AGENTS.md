@@ -91,7 +91,11 @@ still live on the client.
 - **The session "/" palette lists what the CLI advertised, not what Walnut found.** Every
   `system/init` line carries `slash_commands` (already filtered by the CLI to what works in `-p`
   mode); `ClaudeCodeSession` captures it and `GET /api/sessions/:id/slash-commands` serves it,
-  using the directory scan ONLY for descriptions. Pass the session id to `useSlashCommands`
+  using the directory scan ONLY for descriptions. After a server restart the reattach tails from
+  the end and the capture is gone, so the route recovers the last init from a bounded tail of the
+  session's stream file through the daemon (`src/core/sessions/cli-slash-commands-recover.ts`,
+  1MB then 4MB, memoised by file size) — deploys are frequent here and every live session used
+  to fall back to discovery until its next turn. Pass the session id to `useSlashCommands`
   (`SessionPanel`, `NotesSessionChat`); the cwd/host discovery form is for drafts, where no CLI
   exists yet. A result that is not settled (`degraded`, or `source: 'discovery'` for a live
   session) retries by itself with backoff, and every palette open revalidates a list older than

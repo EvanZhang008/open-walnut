@@ -64,7 +64,9 @@ export function NotesSessionChat({ taskId, sessionId: knownSessionId, onResolved
   const localIdRef = useRef(0);
 
   const { optimisticMsgs, send, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, retryFailed, dismissFailed, handleEditQueued, handleDeleteQueued } = useSessionSend(sessionId);
-  const { items: slashCommands, search: searchSlashCommands } = useSlashCommands(session?.cwd, session?.host);
+  const {
+    items: slashCommands, search: searchSlashCommands, onPaletteOpen: onSlashPaletteOpen, status: slashCommandsStatus,
+  } = useSlashCommands(session?.cwd, session?.host, sessionId ?? undefined);
 
   const onResolvedRef = useRef(onResolved);
   onResolvedRef.current = onResolved;
@@ -245,6 +247,8 @@ export function NotesSessionChat({ taskId, sessionId: knownSessionId, onResolved
             showCommands={false}
             sessionCommands={slashCommands}
             searchSessionCommands={searchSlashCommands}
+            onSessionCommandsPaletteOpen={onSlashPaletteOpen}
+            sessionCommandsStatus={slashCommandsStatus}
             placeholder={pending ? 'Type now — sent when the session is ready…' : 'Message Claude Code… (/ for commands)'}
             draftKey={`draft:notes-cc${sessionId ? `:${sessionId}` : ''}`}
             mentionCwd={session?.cwd}

@@ -225,10 +225,19 @@ function parseFrontmatter(raw: string): { frontmatter: SkillFrontmatter; body: s
   try {
     frontmatter = (yaml.load(fmText) as SkillFrontmatter) ?? {};
   } catch (err) {
-    log.task.warn('skill-loader: failed to parse YAML frontmatter', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    // Strict YAML rejects an unquoted description with ": " inside it (common in
+    // hand-written SKILL.md files) — the CLI's own reader is lenient and still
+    // lists the skill with its description. Recover name/description by line so
+    // the skill neither vanishes nor loses its one-line summary.
     frontmatter = {};
+    for (const line of fmText.split(/\r?\n/)) {
+      const m = line.match(/^(name|description):\s*(.*)$/);
+      if (m) (frontmatter as Record<string, unknown>)[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, '$2');
+    }
+    log.task.warn('skill-loader: frontmatter is not strict YAML; recovered name/description by line', {
+      error: err instanceof Error ? err.message : String(err),
+      recovered: Object.keys(frontmatter),
+    });
   }
   return { frontmatter, body };
 }

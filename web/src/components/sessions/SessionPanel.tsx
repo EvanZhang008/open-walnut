@@ -230,9 +230,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
 
-  // Slash command autocomplete for session input — pass host so REMOTE sessions
-  // get the remote host's skills, not the Mac's local ones.
-  const { items: slashCommands, search: searchSlashCommands, refresh: refreshSlashCommands } = useSlashCommands(session?.cwd, session?.host);
+  // Slash command autocomplete for session input. Keyed on the session id: the
+  // list is what THIS session's CLI advertised in its init line (decorated with
+  // descriptions), so a remote host's skills come from the CLI running there —
+  // never from a Walnut re-discovery over SSH, and never the Mac's local ones.
+  const {
+    items: slashCommands, search: searchSlashCommands, refresh: refreshSlashCommands,
+    status: slashCommandsStatus, onPaletteOpen: onSlashPaletteOpen,
+  } = useSlashCommands(session?.cwd, session?.host, sessionId || undefined);
 
   // `/model` from the composer opens the model pill's picker — the pill owns the
   // open state, so this bumps the nonce it watches.
@@ -2044,6 +2049,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             sessionCommands={slashCommands}
             searchSessionCommands={searchSlashCommands}
             onRefreshSessionCommands={refreshSlashCommands}
+            onSessionCommandsPaletteOpen={onSlashPaletteOpen}
+            sessionCommandsStatus={slashCommandsStatus}
             onControlCommand={handleControlCommand}
             mentionCwd={session?.cwd}
             mentionHost={session?.host}

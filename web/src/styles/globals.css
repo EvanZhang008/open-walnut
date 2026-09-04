@@ -16604,19 +16604,42 @@ a.task-kebab-info:hover {
   padding: 4px;
 }
 
+.command-palette-footer {
+  display: flex;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
 .command-palette-refresh {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
+  flex: 0 0 auto;
   padding: 7px 10px;
   border: none;
-  border-top: 1px solid var(--border);
-  background: var(--bg-secondary);
+  background: transparent;
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
   transition: background 0.1s, color 0.1s;
+}
+
+/* Only the refresh button: full width, as before the status note existed. */
+.command-palette-refresh:only-child {
+  width: 100%;
+}
+
+.command-palette-note {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 10px;
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: 11px;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .command-palette-refresh:hover:not(:disabled) {
