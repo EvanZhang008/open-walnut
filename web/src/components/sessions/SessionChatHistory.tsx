@@ -22,11 +22,13 @@ import { useSessionPinsApi } from '@/contexts/SessionPinsContext';
 import { useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
 import {
   ROOT_THREAD_KEY, buildThreadTree, hueForAnchor, pathToRoot, siblingsOf, threadKeyOf,
-  type ThreadNode, type ThreadRowInfo,
+  withPendingUserRows, type ThreadNode, type ThreadRowInfo, type ThreadTreeMessage,
 } from '@/utils/thread-tree';
 import {
   ThreadAncestorTurn, ThreadBreadcrumb, ThreadChildCard, ThreadChildHint, type ThreadCrumb,
 } from './SessionThreadNav';
+import { SessionThreadMap } from './SessionThreadMap';
+import { hasNewRows } from '@/utils/thread-map-rows';
 import { pinKeyOf, pinLabelFor } from '@/hooks/useSessionPins';
 import { useQuotePinPaint } from '@/hooks/useQuotePinPaint';
 import { flashRange } from '@/utils/pin-highlights';
@@ -195,8 +197,13 @@ interface SessionChatHistoryProps {
    * reveal the composer and focus it. The panel owns both, so the timeline only
    * says WHEN — same shape as the "Ask about this" prefill path, minus the text
    * (the quote rides the composer chip and is composed at send time).
+   *
+   * `keepTimelinePosition` — this focus came WITH a jump somewhere in the
+   * transcript (an outline row), so the panel must not also pull the timeline down
+   * to the composer. Omitted = do pull it down, which is right for the selection
+   * pill: the passage is already on screen and the user is about to type.
    */
-  onRequestComposerFocus?: () => void;
+  onRequestComposerFocus?: (opts?: { keepTimelinePosition?: boolean }) => void;
 }
 
 /** Memoized text block that caches renderMarkdownWithRefs output */
@@ -1598,9 +1605,23 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Derived from the loaded rows + the record's anchors. Memoised on exactly those
   // two: it walks the whole transcript, and this component re-renders on every
   // streaming delta.
+  //
+  // The loaded rows include the user lines this browser has SENT but the transcript
+  // has not caught up with yet. Without them the tree only learns about a new
+  // thread when history refetches — which is turn end — so the outline, the map and
+  // the child cards appeared a whole answer late while the bubble itself already
+  // wore its thread (that decoration reads the anchor directly). A pre-assigned
+  // uuid is the same id at a younger age, so filing the optimistic row under it
+  // makes the structure appear in the frame the question is asked.
+  const threadRows = useMemo(
+    () => (threadsApi.anchors.length === 0
+      ? messages
+      : withPendingUserRows<ThreadTreeMessage>(messages, optimisticMessages)),
+    [messages, optimisticMessages, threadsApi.anchors],
+  );
   const threadTree = useMemo(
-    () => buildThreadTree(messages, threadsApi.anchors),
-    [messages, threadsApi.anchors],
+    () => buildThreadTree(threadRows, threadsApi.anchors),
+    [threadRows, threadsApi.anchors],
   );
   // Publish it to the panel (composer chip + the send path's "is this the newest
   // thread?" question). A session with anchors gets a fresh tree per history
@@ -1983,8 +2004,19 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         label: node.quoteLabel ?? node.label,
       });
     }
-    onRequestComposerFocus?.();
+    // Focus only — never a scroll. This is the outline row's click, and the jump
+    // that runs right after it is the whole point of pressing the row; in tree mode
+    // navigateThread already owns where the view lands.
+    onRequestComposerFocus?.({ keepTimelinePosition: true });
   }, [threadTree, threadsApi, treeMode, navigateThread, onRequestComposerFocus]);
+
+  /** A row click in the node view's map. A thread row behaves exactly like the
+   *  outline's (go there, and ask there); the TOP LEVEL has no passage to hang a
+   *  question off, so `askInThread` refuses it and it only goes. */
+  const navigateFromMap = useCallback((threadKey: string) => {
+    if (threadKey === ROOT_THREAD_KEY) navigateThread(threadKey);
+    else askInThread(threadKey);
+  }, [navigateThread, askInThread]);
 
   // ── Outline (pinned messages + thread heads) ───────────────────────────────
   // Entries are ordered by TRANSCRIPT position, not by when they were pinned: the
@@ -1994,7 +2026,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // dropped — the row still jumps correctly once the message loads, and silently
   // hiding a pin the user made is worse than showing it out of order.
   const pinTocEntries = useMemo(() => {
-    if (pinsApi.pins.length === 0) return [] as Array<TocEntry & { at: number }>;
+    if (pinsApi.pins.length === 0) {
+      return [] as Array<TocEntry & { at: number; quoteExact?: string }>;
+    }
     const indexOf = new Map<string, number>();
     for (let i = 0; i < messages.length; i++) {
       const id = messages[i].msgId ?? messages[i].walnutMessageId;
@@ -2024,19 +2058,34 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           label: pin.quote ? `❝ ${base}` : base,
           role: pin.role,
           ...(pin.timestamp ? { timestamp: pin.timestamp } : {}),
-          ...(pin.quote ? { isQuote: true } : {}),
+          ...(pin.quote ? { isQuote: true, quoteExact: pin.quote.exact } : {}),
           at,
         };
       });
   }, [pinsApi.pins, messages]);
 
-  /** One rail row per thread, anchored at its head message. Threads and pins are
-   *  the same KIND of thing in the outline (a marked place in the transcript), so
-   *  they share its ordering and its jump. */
+  /**
+   * One rail row per thread, anchored at the PASSAGE THE THREAD HANGS OFF — the
+   * place the user selected and pressed Ask, not the question they then typed.
+   *
+   * This is the whole point of the row, and it was wrong once (2026-09-04): a row
+   * pointing at the thread's head message jumped to the question, so clicking
+   * "the part about X" landed on your own follow-up and you still had to scroll up
+   * to find X. A pin jumps to the pinned passage; a thread row is the same kind of
+   * place and jumps the same way, quote flash included.
+   *
+   * It also sets where the row SITS in the outline: a question asked at the bottom
+   * of a long session about paragraph 5 belongs next to paragraph 5, because the
+   * outline reads as a table of contents of the transcript.
+   *
+   * The parent row is always loaded: buildThreadTree treats an anchor whose parent
+   * is outside the window as dangling, so a thread that exists here has one.
+   */
   const threadRailRows = useMemo(() => {
     const rows: Array<{
       threadKey: string; msgId: string; at: number; depth: number; hue: number;
-      label: string; role: 'user'; timestamp?: string;
+      label: string; role: 'user' | 'assistant' | 'system'; timestamp?: string;
+      quote?: SessionPinnedQuote; turns: number;
     }> = [];
     if (threadTree.threads.length < 2) return rows;
     // One index pass for every thread — a whale session times threads × rows
@@ -2047,18 +2096,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       if (id && !indexOf.has(id)) indexOf.set(id, i);
     }
     for (const node of threadTree.threads) {
-      if (node.depth === 0 || !node.headId) continue;
-      const index = indexOf.get(node.headId);
+      if (node.depth === 0 || !node.parent) continue;
+      const index = indexOf.get(node.parent);
       if (index === undefined) continue;
       rows.push({
         threadKey: node.key,
-        msgId: node.headId,
+        msgId: node.parent,
         at: index,
         depth: node.depth,
         hue: node.hue,
         label: node.quoteLabel ?? node.label,
-        role: 'user',
+        role: messages[index].role,
         ...(messages[index].timestamp ? { timestamp: messages[index].timestamp } : {}),
+        ...(node.quote ? { quote: node.quote } : {}),
+        turns: node.turnIds.length,
       });
     }
     return rows;
@@ -2067,17 +2118,33 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   /**
    * The outline: pins and thread heads in ONE list, transcript order.
    *
-   * A thread head that is also pinned stays ONE row — two rows for one message
-   * would read as two places. The PIN's key wins there, so jumping and unpinning
-   * keep working exactly as before and the thread fields just ride along.
+   * A pin and a thread on the SAME PASSAGE stay ONE row — two rows for one place
+   * would read as two. The PIN's key wins there, so jumping and unpinning keep
+   * working exactly as before and the thread fields just ride along. Matching on
+   * the message alone is NOT enough now that a thread row sits on the reply it
+   * hangs off: a pin elsewhere in that same reply is a different place.
+   *
+   * The node view's map reads the same rows, and needs two things the rail does not
+   * show: how big each thread is, and whether it grew since it was last looked at.
+   * Both are filled in tree mode ONLY, so the timeline view's entries are exactly
+   * what they were before the map existed. `hasNew` skips the thread on screen: you
+   * are looking at it, so there is nothing to announce (and the baseline effect is
+   * about to catch it up anyway).
    */
   const tocEntries = useMemo<TocEntry[]>(() => {
     if (pinTocEntries.length === 0 && threadRailRows.length === 0) return [];
-    const merged: Array<TocEntry & { at: number }> = pinTocEntries.map((e) => ({ ...e }));
+    const merged: Array<TocEntry & { at: number; quoteExact?: string }> = pinTocEntries
+      .map((e) => ({ ...e }));
     for (const row of threadRailRows) {
-      const host = merged.find((e) => e.msgId === row.msgId);
+      const host = merged.find((e) => e.msgId === row.msgId
+        && (e.quoteExact ?? '') === (row.quote?.exact ?? ''));
       const threadFields = {
         depth: row.depth, hue: row.hue, threadKey: row.threadKey, isThreadHead: true,
+        ...(treeMode ? {
+          turns: row.turns,
+          hasNew: row.threadKey !== currentKey
+            && hasNewRows(row.threadKey, rowsPerThread, seenRows.current),
+        } : {}),
       };
       if (host) { Object.assign(host, threadFields); continue; }
       merged.push({
@@ -2086,6 +2153,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         label: `↳ ${row.label}`,
         role: row.role,
         ...(row.timestamp ? { timestamp: row.timestamp } : {}),
+        ...(row.quote ? { quoteExact: row.quote.exact } : {}),
         ...threadFields,
         isThreadOnly: true,
         at: row.at,
@@ -2093,12 +2161,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     return merged
       .sort((a, b) => a.at - b.at)
-      .map(({ at: _at, ...entry }) => entry);
-  }, [pinTocEntries, threadRailRows]);
+      .map(({ at: _at, quoteExact: _q, ...entry }) => entry);
+  }, [pinTocEntries, threadRailRows, treeMode, rowsPerThread, currentKey]);
 
-  /** Row a thread-only outline entry jumps to (its head message). */
+  /** Where a thread-only outline entry jumps: the reply it hangs off, and the
+   *  passage inside it, so the jump can centre and flash that passage. */
   const threadEntryTargets = useMemo(
-    () => new Map(threadRailRows.map((row) => [`thread:${row.threadKey}`, row.msgId])),
+    () => new Map(threadRailRows.map((row) => [
+      `thread:${row.threadKey}`,
+      { msgId: row.msgId, ...(row.quote ? { quote: row.quote } : {}) },
+    ])),
     [threadRailRows],
   );
 
@@ -2118,9 +2190,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const el = containerRef.current;
     if (!el || !pinKey) return;
     const pin = pinsApi.pins.find((p) => pinKeyOf(p) === pinKey);
-    // A thread row is a place in the transcript with no pin behind it: same jump,
-    // resolved through the thread's head message instead of a pin.
-    const msgId = pin?.msgId ?? threadEntryTargets.get(pinKey);
+    // A thread row is a place in the transcript with no pin behind it: the SAME
+    // jump, resolved through the passage the thread hangs off instead of a pin's.
+    const threadTarget = pin ? undefined : threadEntryTargets.get(pinKey);
+    const msgId = pin?.msgId ?? threadTarget?.msgId;
+    const quote = pin?.quote ?? threadTarget?.quote;
     if (!msgId) return;
     const index = messages.findIndex((m) => (m.msgId ?? m.walnutMessageId) === msgId);
     if (index < 0) {
@@ -2146,11 +2220,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           log.warn('session', 'pin jump: target row did not render', { sessionId, msgId, index });
           return;
         }
-        if (pin?.quote) {
+        if (quote) {
           // The row may have just been revealed by the window expansion above, so
           // its paint doesn't exist yet — re-derive before asking for the Range.
           quotePaint.relocate();
-          const range = quotePaint.locatePin(pin);
+          const range = quotePaint.locatePin({ msgId, quote });
           const rect = range?.getBoundingClientRect();
           if (range && rect && (rect.width || rect.height)) {
             const box = el.getBoundingClientRect();
@@ -3221,17 +3295,32 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {/* Pinned-message outline — sticky in the top-left corner of the timeline,
             collapsed to ticks until hovered. Self-hides with no pins. Lives INSIDE
             the scroll container (like the ↓ button) so it can't stack over the
-            panel header or the composer. */}
-        <SessionPinnedToc
-          entries={tocEntries}
-          onJump={handleTocJump}
-          onUnpin={pinsApi.unpin}
-          canGoBack={canGoBack}
-          onBack={jumpBack}
-          {...(threadsApi.canAsk ? { onAskThread: askInThread } : {})}
-          onHoverThread={threadsApi.setHoverThreadKey}
-          {...(treeMode ? { currentThreadKey: currentKey } : {})}
-        />
+            panel header or the composer.
+
+            ONE of the two, never both: the node view's map is the same rows in the
+            same corner, always expanded, and two of them would collide. */}
+        {!treeMode ? (
+          <SessionPinnedToc
+            entries={tocEntries}
+            onJump={handleTocJump}
+            onUnpin={pinsApi.unpin}
+            canGoBack={canGoBack}
+            onBack={jumpBack}
+            {...(threadsApi.canAsk ? { onAskThread: askInThread } : {})}
+            onHoverThread={threadsApi.setHoverThreadKey}
+          />
+        ) : (
+          <SessionThreadMap
+            entries={tocEntries}
+            topCount={threadTree.topCount}
+            currentThreadKey={currentKey}
+            rootKey={threadTree.rootKey}
+            containerRef={containerRef}
+            onJump={handleTocJump}
+            onNavigate={navigateFromMap}
+            onHoverThread={threadsApi.setHoverThreadKey}
+          />
+        )}
         {/* Quote pins: the pill offered on a text selection, and the popover a
             click on a painted passage opens. Both portal to <body>; they live here
             so ONE listener set covers the whole timeline. Mounted only where pinning
@@ -3670,16 +3759,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               {childKeys.map((key) => {
                 const child = threadTree.byKey.get(key);
                 if (!child) return null;
-                // Read-only here; the baseline is seeded by the effect above.
-                const rows = rowsPerThread.get(key) ?? 0;
-                const seen = seenRows.current.get(key);
                 return (
                   <ThreadChildCard
                     key={key}
                     label={child.quoteLabel ?? child.label}
                     turns={child.turnIds.length}
                     hue={child.hue}
-                    isNew={seen !== undefined && rows > seen}
+                    // Read-only here; the baseline is seeded by the effect above.
+                    isNew={hasNewRows(key, rowsPerThread, seenRows.current)}
                     onClick={() => navigateThread(key)}
                   />
                 );

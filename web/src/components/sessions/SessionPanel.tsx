@@ -634,8 +634,17 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // prefillNonce on purpose: the quote must NOT be written into the draft — it
   // rides the chip and is composed at send time — so the user's typed text stays.
   const [composerFocusNonce, setComposerFocusNonce] = useState(0);
-  const requestComposerFocus = useCallback(() => {
+  /** Focus requests that should ALSO bring the timeline down to the composer. Split
+   *  from the focus counter above because one caller must not: see the option. */
+  const [composerScrollNonce, setComposerScrollNonce] = useState(0);
+  const requestComposerFocus = useCallback((opts?: { keepTimelinePosition?: boolean }) => {
     setComposerFocusNonce((n) => n + 1);
+    // `keepTimelinePosition` — the caller just TRAVELLED somewhere in the transcript
+    // (an outline row jump) and the composer focus is only the second half of that
+    // click. Without this the focus dragged the timeline to the bottom one frame
+    // after the jump landed, so a map row looked like it always went to the newest
+    // message — the exact symptom reported on 2026-09-04.
+    if (!opts?.keepTimelinePosition) setComposerScrollNonce((n) => n + 1);
     // REVEAL the composer first: while the chat column is collapsed it is
     // `display:none` and focus() lands on <body>, losing every keystroke (same
     // trap as handleSelectCode).
@@ -2133,8 +2142,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             // also SHOW the end of the conversation, or the composer fills in
             // while the timeline still sits wherever the user last scrolled.
             // The thread-anchor path (focus, no prefill) is the same intent, so
-            // both counters feed it — their sum still only ever moves forward.
-            scrollToBottomNonce={prefillNonce + composerFocusNonce}
+            // both counters feed it — their sum still only ever moves forward. An
+            // outline row's focus is deliberately NOT in this sum (see
+            // requestComposerFocus): it just jumped somewhere.
+            scrollToBottomNonce={prefillNonce + composerScrollNonce}
             onRequestComposerFocus={requestComposerFocus}
           />
         </div>

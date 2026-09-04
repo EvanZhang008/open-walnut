@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
 import { clearPanelPinRanges, setPanelPinRanges } from '@/utils/pin-highlights';
 import { buildTextIndex, locateQuote, rangeFromOffsets } from '@/utils/text-quote-anchor';
 import { pinKeyOf } from '@/hooks/useSessionPins';
-import type { SessionPinnedMessage } from '@/types/session';
+import type { SessionPinnedMessage, SessionPinnedQuote } from '@/types/session';
 import { log } from '@/utils/log';
 
 /** Streaming re-renders the body on every delta; re-locating per mutation would
@@ -71,8 +71,11 @@ function isPainting(range: Range): boolean {
 export interface QuotePinPaint {
   /** Re-derive every painted Range now (after a jump expands the render window). */
   relocate: () => void;
-  /** The passage's live Range, freshly located. null = not on screen. */
-  locatePin: (pin: SessionPinnedMessage) => Range | null;
+  /** The passage's live Range, freshly located. null = not on screen. Takes the
+   *  selector STRUCTURALLY, not a `SessionPinnedMessage`: a conversation-thread
+   *  outline row locates its anchored passage through this same path and has no
+   *  pin behind it. */
+  locatePin: (pin: { msgId: string; quote?: SessionPinnedQuote }) => Range | null;
   /** Currently painted passages, for hit-testing a click (`::highlight` receives
    *  no events, so the popover has to ask the geometry itself). */
   paintedRanges: () => Array<{ pinKey: string; range: Range }>;
@@ -99,7 +102,7 @@ export function useQuotePinPaint(
   const quotePins = useMemo(() => pins.filter((p) => p.quote?.exact), [pins]);
   const rangesRef = useRef(new Map<string, Range>());
 
-  const locatePin = useCallback((pin: SessionPinnedMessage): Range | null => {
+  const locatePin = useCallback((pin: { msgId: string; quote?: SessionPinnedQuote }): Range | null => {
     const container = containerRef.current;
     if (!container || !pin.quote?.exact) return null;
     const body = bodyForMsgId(container, pin.msgId);

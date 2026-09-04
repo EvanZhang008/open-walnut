@@ -293,19 +293,21 @@ test.describe('Conversation threads', () => {
     // The dash is the thread-coloured variant, not a pin tick.
     await expect(threadRows.nth(0).locator('.session-toc-dash--thread')).toHaveCount(1)
 
-    // 6. Hovering a thread row offers "Ask here" and tints that thread's turns —
-    //    the rail's answer to "which parts of this conversation are that thread?".
-    //    The action is opacity-gated, so being visible to Playwright is not enough.
-    const ask = threadRows.nth(0).locator('.session-toc-ask')
-    await expect(ask).toBeAttached()
-    await expect
-      .poll(async () => {
-        await threadRows.nth(0).hover()
-        return Number(await ask.evaluate((el) => getComputedStyle(el).opacity))
-      })
-      .toBe(1)
+    // 6. Hovering a thread row tints that thread's turns — the rail's answer to
+    //    "which parts of this conversation are that thread?". There is deliberately
+    //    NO separate "Ask here" button: a map is for navigating, and the row's own
+    //    click both goes there and points the composer at the thread.
+    await threadRows.nth(0).hover()
     await expect(rowWrap(panel, askUuid(21))).toHaveClass(/is-thread-hover/)
+    await expect(threadRows.nth(0).locator('.session-toc-ask')).toHaveCount(0)
     await shot(page, '01-light-view-rail-open')
+
+    // 7. Clicking the row points the composer at that thread, so the next question
+    //    lands in it without another selection.
+    await threadRows.nth(0).click()
+    const chip = panel.locator('[data-testid="thread-anchor-chip"]')
+    await expect(chip).toBeVisible()
+    await expect(chip).toContainText(QUOTE_A)
   })
 
   test('Ask on a selection sets the composer chip, and × clears it', async ({ page }) => {
@@ -362,6 +364,66 @@ test.describe('Conversation threads', () => {
     await expect(pill.getByRole('button', { name: 'Pin' })).toBeVisible()
     await expect(pill.locator('[data-testid="quote-ask-btn"]')).toHaveCount(0)
     await shot(page, '04-user-row-pill-no-ask')
+  })
+
+  /**
+   * The map row's DESTINATION, which was wrong once (2026-09-04): it pointed at the
+   * thread's head — the question you typed — so clicking "the part about X" landed
+   * on your own follow-up and you still had to scroll up to find X. A pin jumps to
+   * the pinned passage; a thread row is the same kind of place.
+   *
+   * Its own anchor set, because the shared ANCHORS hang each thread off the reply
+   * DIRECTLY above the question: adjacent rows can't tell the two targets apart.
+   * Here the passage (reply 5, transcript index 13) sits ~37 rows above the question
+   * (ask 24, index 50), which also drags the jump through the render-window
+   * expansion — reply 5 is outside the initial 30-row tail.
+   */
+  test('a map row jumps to the passage the thread hangs off, not to the question', async ({ page, request }) => {
+    const FAR_QUOTE = 'filler reply 5'
+    await patchAnchors(request, [{
+      msgId: askUuid(24),
+      parent: replyUuid(5),
+      quote: { exact: FAR_QUOTE },
+      source: 'selection',
+      at: new Date(Date.now() - 10_000).toISOString(),
+    }])
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    const panel = await openSession(page)
+    const history = panel.locator('.session-history')
+
+    const toc = panel.locator('.session-toc')
+    await toc.locator('.session-toc-rail').hover()
+    const row = toc.locator('.session-toc-row--thread')
+    await expect(row).toHaveCount(1)
+    // The row is LABELLED by the passage and SORTED at it: an outline is a table of
+    // contents of the transcript, so a question asked at the bottom about paragraph
+    // 5 belongs next to paragraph 5.
+    await expect(row).toContainText(FAR_QUOTE)
+
+    await row.click()
+    // Smooth scroll + the two frames the jump waits for the widened window to mount.
+    await page.waitForTimeout(1200)
+
+    const seen = await history.evaluate((el, ids) => {
+      const box = el.getBoundingClientRect()
+      const centre = box.top + box.height / 2
+      const distance = (id: string): number | null => {
+        const node = el.querySelector(`[data-message-id="${id}"]`)
+        if (!node) return null
+        const r = node.getBoundingClientRect()
+        return Math.abs((r.top + r.height / 2) - centre)
+      }
+      return { parent: distance(ids[0]), question: distance(ids[1]), height: box.height }
+    }, [replyUuid(5), askUuid(24)])
+
+    // The passage's reply is what got centred.
+    expect(seen.parent, 'the anchored reply did not render after the jump').not.toBeNull()
+    expect(seen.parent!).toBeLessThan(seen.height / 2)
+    // …and the question is nowhere near the middle. It may not even be rendered any
+    // more (the window slid), which is just as good an answer.
+    expect(seen.question === null || seen.question > seen.height).toBe(true)
+    await shot(page, '08-map-jump-to-passage')
   })
 
   test('the chip is sticky across a reload', async ({ page }) => {
@@ -446,13 +508,13 @@ test.describe('Conversation threads', () => {
     await expect(chip).toBeVisible()
     await expect(chip).toContainText(QUOTE_A)
 
-    // 8. The rail marks where you are (tree mode only — in the timeline every
-    //    thread is visible at once, so nothing is "current").
-    const toc = panel.locator('.session-toc')
-    await toc.locator('.session-toc-rail').hover()
-    await expect(toc.locator('.session-toc-row.is-current')).toHaveCount(1)
-    await expect(toc.locator('.session-toc-row.is-current')).toContainText(QUOTE_A)
-    await page.mouse.move(4, 4) // un-hover so the panel collapses before the shot
+    // 8. The map marks where you are. In tree mode the map replaces the hover rail
+    //    (same corner, same rows), so "where am I" is answered by the thing that is
+    //    already on screen — the timeline view has no current thread at all.
+    await expect(panel.locator('.session-toc')).toHaveCount(0)
+    const mapCurrent = panel.locator('.thread-map-row.is-current')
+    await expect(mapCurrent).toHaveCount(1)
+    await expect(mapCurrent).toContainText(QUOTE_A)
     await shot(page, '06-tree-thread-a')
 
     // 9. The nested thread is offered from here, and ↓ walks into it.
@@ -500,5 +562,85 @@ test.describe('Conversation threads', () => {
     await expect(panel.locator('.session-msg--threaded')).toHaveCount(0)
     await expect(panel.locator('.session-msg-thread-tag')).toHaveCount(0)
     await expect(panel.locator('.session-history')).toHaveAttribute('data-view-mode', 'linear')
+    await expect(panel.locator('.thread-map')).toHaveCount(0)
+  })
+
+  /**
+   * The node view's permanent Map. It replaces the hover rail there rather than
+   * joining it: both park in the timeline's top-left corner and read the same rows,
+   * so two of them would be the same list drawn twice on top of itself.
+   */
+  test('tree mode shows a permanent map that navigates, and the rail steps aside', async ({ page, request }) => {
+    await patchAnchors(request, ANCHORS)
+    // Wide enough for the map to hold its expanded shape: a ~400px session column
+    // would leave too little for a turn, so under 520px it collapses to ticks.
+    await page.setViewportSize({ width: 1600, height: 900 })
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    const panel = await openSession(page)
+    const history = panel.locator('.session-history')
+
+    // Linear mode: the rail, and NO map. (`.session-toc` is a zero-height sticky
+    // wrapper, so the RAIL is the visible thing to assert on.)
+    await expect(panel.locator('.session-toc-rail')).toBeVisible()
+    await expect(panel.locator('.thread-map')).toHaveCount(0)
+    // The outline is a list of places, not of actions: the old "Ask here" button is
+    // gone, and the row click carries what it used to do.
+    await panel.locator('.session-toc-rail').hover()
+    await expect(panel.locator('.session-toc-ask')).toHaveCount(0)
+    await page.mouse.move(4, 4)
+
+    await panel.locator('.session-view-toggle-btn[data-view="tree"]').click()
+    await expect(history).toHaveAttribute('data-view-mode', 'tree')
+
+    // Tree mode: the map is open without being hovered, and the rail is not there.
+    const map = panel.locator('.thread-map')
+    await expect(map).toHaveClass(/is-wide/)
+    const mapPanel = map.locator('.thread-map-panel')
+    await expect(mapPanel).toBeVisible()
+    await expect(panel.locator('.session-toc')).toHaveCount(0)
+    // The gutter the map sits in is reserved, so no turn hides underneath it.
+    await expect(history).toHaveAttribute('data-thread-map', 'panel')
+
+    // Root row first, counting the branches; then one row per place, indented.
+    const rows = mapPanel.locator('.thread-map-row')
+    await expect(rows.first()).toHaveClass(/thread-map-row--root/)
+    await expect(rows.first()).toContainText('Top level')
+    // ONE top-level branch: thread B is nested inside A, so it is not a branch OF
+    // the top level. The count names the tree's width at this node, not its size.
+    await expect(rows.first()).toContainText('1 branch')
+    await expect(rows.first()).toHaveClass(/is-current/)
+    const threadRows = mapPanel.locator('.thread-map-row--thread')
+    await expect(threadRows).toHaveCount(2)
+    // Thread A holds the sticky follow-up, so it is TWO turns; the nested one is one.
+    await expect(threadRows.first()).toContainText(QUOTE_A)
+    await expect(threadRows.first()).toContainText('2 turns')
+    await expect(threadRows.nth(1)).toContainText('1 turn')
+    // Nesting is visible, not just implied.
+    const indents = await threadRows.evaluateAll((els) =>
+      els.map((el) => parseFloat(getComputedStyle(el).paddingLeft)))
+    expect(indents[1]).toBeGreaterThan(indents[0])
+    await shot(page, '09-tree-map')
+
+    // A map row is a destination: clicking it opens that thread and marks itself.
+    await threadRows.first().click()
+    await expect(panel.locator('.thread-crumb.is-current')).toHaveText(QUOTE_A)
+    await expect(mapPanel.locator('.thread-map-row--thread').first()).toHaveClass(/is-current/)
+    await expect(mapPanel.locator('.thread-map-row--root')).not.toHaveClass(/is-current/)
+    // …and the composer follows, so the next question lands where you are reading.
+    await expect(panel.locator('[data-testid="thread-anchor-chip"]')).toContainText(QUOTE_A)
+    await shot(page, '10-tree-map-inside-thread')
+
+    // Back to the top level through the root row.
+    await mapPanel.locator('.thread-map-row--root').click()
+    await expect(panel.locator('.thread-crumb')).toHaveCount(1)
+    await expect(mapPanel.locator('.thread-map-row--root')).toHaveClass(/is-current/)
+
+    // Leaving tree mode releases the gutter, or the timeline would keep the map's
+    // padding with nothing in it.
+    await panel.locator('.session-view-toggle-btn[data-view="linear"]').click()
+    await expect(history).toHaveAttribute('data-view-mode', 'linear')
+    await expect(history).not.toHaveAttribute('data-thread-map', 'panel')
+    await expect(panel.locator('.session-toc-rail')).toBeVisible()
   })
 })

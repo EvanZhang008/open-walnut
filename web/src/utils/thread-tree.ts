@@ -273,6 +273,35 @@ function computeThreadTree(
   return { threads, byKey, byRow, rootKey: ROOT_THREAD_KEY, latestKey, topCount };
 }
 
+/**
+ * The transcript plus the user lines this browser has SENT but the transcript has
+ * not caught up with yet — what the tree must be built from.
+ *
+ * Without them a new thread only reaches the tree when history refetches, which is
+ * turn END: the outline, the map and the child cards appeared a whole answer after
+ * the question, while the bubble already wore its thread (that decoration reads the
+ * anchor directly, not the tree). A pre-assigned uuid is the SAME id at a younger
+ * age, so filing the optimistic row under it makes the structure appear in the frame
+ * the question is asked.
+ *
+ * Returns `messages` itself when there is nothing to add, so a threadless session
+ * and a quiet one both keep their memo identity.
+ */
+export function withPendingUserRows<T extends ThreadTreeMessage>(
+  messages: T[],
+  optimistic: readonly T[] | undefined,
+): T[] {
+  if (!optimistic || optimistic.length === 0) return messages;
+  const pending = optimistic.filter((m) => m.role === 'user' && !!m.userUuid);
+  if (pending.length === 0) return messages;
+  // An absorbed row is already in `messages` under that same uuid; adding it twice
+  // would open a second turn and double the thread's count.
+  const known = new Set<string>();
+  for (const m of messages) if (m.msgId) known.add(m.msgId);
+  const extra = pending.filter((m) => !known.has(m.userUuid as string));
+  return extra.length === 0 ? messages : [...messages, ...extra];
+}
+
 /** An empty tree — what a surface with no loaded transcript reads. */
 let EMPTY_TREE: ThreadTree | null = null;
 

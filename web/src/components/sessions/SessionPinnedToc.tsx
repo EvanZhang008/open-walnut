@@ -45,6 +45,11 @@ export interface TocEntry {
   /** The row exists ONLY because a thread starts here — there is no pin behind it,
    *  so it has nothing to unpin. */
   isThreadOnly?: boolean;
+  /** Turns in the thread — its size, in the unit the transcript is made of. Filled
+   *  in the node view only: the rail shows places, the map shows sizes too. */
+  turns?: number;
+  /** Rows landed in this thread since it was last looked at (node view only). */
+  hasNew?: boolean;
 }
 
 interface SessionPinnedTocProps {
@@ -150,8 +155,17 @@ export const SessionPinnedToc = memo(function SessionPinnedToc({
                 type="button"
                 className="session-toc-item"
                 role="menuitem"
-                onClick={(e) => jump(e, entry.key)}
-                title={entry.label}
+                onClick={(e) => {
+                  // A thread row is a NODE of the map, so going there means going
+                  // there in both senses: scroll to it, and point the composer at
+                  // it. The outline used to carry a separate "Ask here" button for
+                  // the second half; a map is for navigating, and one click that
+                  // does what tree mode's node click already does beats an action
+                  // button in a list of places.
+                  if (entry.isThreadHead && entry.threadKey) onAskThread?.(entry.threadKey);
+                  jump(e, entry.key);
+                }}
+                title={entry.isThreadHead ? `${entry.label} — go here and ask in this thread` : entry.label}
               >
                 <span className={`session-toc-dash session-toc-dash--${entry.role}${entry.isQuote ? ' session-toc-dash--quote' : ''}${entry.threadKey ? ' session-toc-dash--thread' : ''}`} />
                 <span className="session-toc-label">{entry.label}</span>
@@ -159,22 +173,6 @@ export const SessionPinnedToc = memo(function SessionPinnedToc({
                   <span className="session-toc-time">{timeLabel(entry.timestamp)}</span>
                 )}
               </button>
-              {onAskThread && entry.threadKey && (
-                <button
-                  type="button"
-                  className="session-toc-ask"
-                  title="Ask another question in this thread"
-                  aria-label={`Ask in the thread: ${entry.label}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onAskThread(entry.threadKey!);
-                    onHoverThread?.(null);
-                    setOpen(false);
-                  }}
-                >
-                  ↳ Ask here
-                </button>
-              )}
               {onUnpin && entry.key && !entry.isThreadOnly && (
                 <button
                   type="button"

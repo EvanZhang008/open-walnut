@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   ROOT_THREAD_KEY, THREAD_HUES, buildThreadTree, composeAnchoredText, hueForAnchor,
-  pathToRoot, quoteBlockOf, siblingsOf, threadKeyOf,
+  pathToRoot, quoteBlockOf, siblingsOf, threadKeyOf, withPendingUserRows,
 } from '@/utils/thread-tree';
 import type { SessionThreadAnchor } from '@/types/session';
 import type { ThreadTreeMessage } from '@/utils/thread-tree';
@@ -371,5 +371,50 @@ describe('composeAnchoredText', () => {
 describe('quoteBlockOf', () => {
   it('keeps a multi-paragraph passage inside ONE blockquote', () => {
     expect(quoteBlockOf({ exact: 'a\n\nb' })).toBe('> a\n>\n> b');
+  });
+});
+
+/**
+ * The rows the tree is built from include what this browser has just sent. Getting
+ * this wrong is invisible in the transcript and very visible in the UI: the outline,
+ * the map and the child cards only learn about a new thread a whole answer late (the
+ * bubble's own gutter bar reads the anchor directly, so it looks like only the map is
+ * broken).
+ */
+describe('withPendingUserRows', () => {
+  const pending = (uuid: string): ThreadTreeMessage =>
+    ({ role: 'user', userUuid: uuid, walnutMessageId: `queue-${uuid}`, text: 'just asked' });
+
+  it('returns the SAME array when there is nothing pending (memo identity)', () => {
+    const rows = [user('u1'), reply('r1')];
+    expect(withPendingUserRows(rows, [])).toBe(rows);
+    expect(withPendingUserRows(rows, undefined)).toBe(rows);
+  });
+
+  it('ignores optimistic rows with no pre-assigned uuid — they cannot be anchored', () => {
+    const rows = [user('u1')];
+    expect(withPendingUserRows(rows, [{ role: 'user', walnutMessageId: 'queue-x' }])).toBe(rows);
+  });
+
+  it('appends a sent-but-not-persisted user row, so its thread exists immediately', () => {
+    const rows = [user('u1'), reply('r1')];
+    const merged = withPendingUserRows(rows, [pending('new-uuid')]);
+    expect(merged).toHaveLength(3);
+    expect(merged[2].userUuid).toBe('new-uuid');
+    // The tree files it under that uuid, so the thread is real before the refetch.
+    const tree = buildThreadTree(merged, [
+      { msgId: 'new-uuid', parent: 'r1', source: 'selection', at: 't' } as SessionThreadAnchor,
+    ]);
+    expect(tree.threads).toHaveLength(2);
+    expect(tree.byRow.get('new-uuid')?.depth).toBe(1);
+  });
+
+  it('drops an optimistic row the transcript has ABSORBED (no double-counted turn)', () => {
+    const rows = [user('u1'), reply('r1'), user('new-uuid')];
+    expect(withPendingUserRows(rows, [pending('new-uuid')])).toBe(rows);
+    const tree = buildThreadTree(withPendingUserRows(rows, [pending('new-uuid')]), [
+      { msgId: 'new-uuid', parent: 'r1', source: 'selection', at: 't' } as SessionThreadAnchor,
+    ]);
+    expect(tree.byKey.get(tree.latestKey)?.turnIds).toEqual(['new-uuid']);
   });
 });

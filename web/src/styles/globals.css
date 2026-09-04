@@ -32389,24 +32389,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   background: hsl(var(--thread-hue, 214) 70% 50%);
 }
 
-.session-toc-ask {
-  flex-shrink: 0;
-  padding: 3px 6px;
-  border: none;
-  background: none;
-  border-radius: 5px;
-  color: var(--accent);
-  cursor: pointer;
-  font-size: 11px;
-  line-height: 1;
-  white-space: nowrap;
-  opacity: 0;
-  transition: opacity 0.12s ease;
-}
-.session-toc-row:hover .session-toc-ask,
-.session-toc-ask:focus-visible { opacity: 1; }
-.session-toc-ask:hover { background: var(--bg-hover); }
-
 /* ── The composer's anchor chip ── */
 .thread-anchor-chip-wrap {
   display: flex;
@@ -32701,3 +32683,142 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   color: hsl(var(--thread-hue, 214) 55% var(--thread-ink-l));
   font-weight: 600;
 }
+
+/* ── The map (SessionThreadMap) ──────────────────────────────────────────────
+   The node view's permanent outline, always expanded, in the timeline's left
+   gutter. Same parking trick as .session-toc: a zero-height sticky wrapper whose
+   panel is absolutely positioned, so the map rides the scroll without joining the
+   flex flow or stacking over the panel header and the composer.
+
+   The wide layout needs room the container does not have by default, and the panel
+   cannot widen its own ancestor's padding, so the component publishes its shape as
+   `data-thread-map` on the scroll container (see SessionThreadMap) and the two
+   rules below reserve the gutter for it. Narrow columns get the ticks instead and
+   keep the container's own padding. */
+.session-history[data-view-mode="tree"] { --thread-map-w: 176px; }
+.session-history[data-view-mode="tree"][data-thread-map="panel"] {
+  padding-left: calc(var(--thread-map-w) + 24px);
+}
+
+.thread-map {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  align-self: flex-start;
+  height: 0;
+  /* The flex gap still applies to a zero-height item; without this the first turn
+     starts 4px lower in tree mode than in the timeline view. */
+  margin-bottom: -4px;
+  /* Collapsed: the ticks sit in the container's own left padding, where no message
+     text goes (the outline rail's offset, so the two views park identically). */
+  margin-left: calc(-1 * clamp(16px, 3%, 30px));
+}
+.session-history[data-thread-map="panel"] .thread-map {
+  margin-left: calc(-1 * (var(--thread-map-w, 176px) + 12px));
+}
+
+.thread-map-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: flex-start;
+  padding: 6px 8px 6px 2px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.12s ease;
+}
+.thread-map:hover .thread-map-rail,
+.thread-map.is-open .thread-map-rail { opacity: 0; }
+
+.thread-map-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: var(--thread-map-w, 176px);
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+/* Hovered open over a narrow column it is a menu, so it needs the menu's shadow;
+   held open beside the transcript it is part of the page. */
+.thread-map:not(.is-wide) .thread-map-panel {
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+}
+
+.thread-map-title {
+  padding: 2px 6px 4px;
+  color: var(--fg-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.thread-map-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 6px;
+  padding-left: calc(6px + var(--thread-indent, 0) * 10px);
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  min-width: 0;
+}
+.thread-map-row:hover { background: var(--bg-hover); color: var(--fg); }
+
+.thread-map-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  /* A place with no thread behind it (a pin, the top level) reads hollow: the map's
+     filled dots are the branches. */
+  border: 1.5px solid var(--fg-muted);
+}
+.thread-map-row--thread .thread-map-dot {
+  border-color: hsl(var(--thread-hue, 214) 70% 50%);
+  background: hsl(var(--thread-hue, 214) 70% 50%);
+}
+
+.thread-map-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-map-meta { flex-shrink: 0; color: var(--fg-muted); font-size: 10px; }
+
+/* Replies landed in that branch while you were reading somewhere else. */
+.thread-map-new {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.thread-map-row.is-current {
+  background: hsl(var(--thread-hue, 214) 70% 50% / 0.1);
+  color: hsl(var(--thread-hue, 214) 55% var(--thread-ink-l));
+  font-weight: 600;
+}
+/* The top level owns no branch colour (same rule as the breadcrumb's first crumb),
+   so being on it reads as plain emphasis. */
+.thread-map-row--root.is-current { background: var(--bg-hover); color: var(--fg); }
