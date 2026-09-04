@@ -94,12 +94,22 @@ export async function promoteSideThread(
     });
   }
 
+  // Promoting a FILED thread implies restoring it: "this aside is real work now" is
+  // strictly stronger than "keep it around". Without this, a thread promoted out of
+  // the Archived shelf would hand its task a dead, archived session — a task that
+  // can never be worked. Cheaper and clearer than refusing the promote.
+  if (entry.archivedAt) {
+    const { setSideThreadArchived } = await import('../side-questions.js');
+    await setSideThreadArchived(parentSid, threadId, false);
+  }
   const updated = await updateSessionRecord(sessionId, {
     taskId: task.id,
     project: task.project ?? '',
     // Clearing the lane un-hides the session (see the file header).
     lane: undefined,
     title: task.title,
+    archived: false,
+    archive_reason: '',
   });
   // Sync the LIVE instance: the runner echoes its in-memory lane on every turn
   // result, so without this a still-running thread re-hides itself the moment

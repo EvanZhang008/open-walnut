@@ -527,6 +527,14 @@ export interface SessionSideQuestionDoneEvent {
   createdAt: string;
 }
 
+/** A side thread's auto-generated title landed (see sessions/side-thread-title.ts).
+ *  The drawer only re-lists on open, so the chip needs to be told. */
+export interface SessionSideThreadRenamedEvent {
+  sessionId: string;
+  threadId: string;
+  title: string;
+}
+
 export interface SessionSideQuestionErrorEvent {
   sessionId: string;
   question: string;
@@ -947,6 +955,7 @@ export interface EventPayloadMap {
   'session:model-catalog': SessionModelCatalogEvent;
   'session:side-question-done': SessionSideQuestionDoneEvent;
   'session:side-question-error': SessionSideQuestionErrorEvent;
+  'session:side-thread-renamed': SessionSideThreadRenamedEvent;
   'session:cron-fired': SessionCronFiredEvent;
   'session:will-reap': SessionWillReapEvent;
 

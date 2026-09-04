@@ -35,6 +35,13 @@ export interface SideQuestion {
   title?: string;
   /** Set once promoted into a task, so the UI can show "✓ task created". */
   promotedTaskId?: string;
+  /**
+   * FILED AWAY by the user (the chip's ×). The entry stays here forever — this is
+   * an archive, not a delete: the transcript is still readable and the thread can
+   * be restored. Distinct from the `archived` flag the thread LIST derives, which
+   * is about the session record (its process is gone), not about the user's intent.
+   */
+  archivedAt?: string;
 }
 
 /** Split a stored list into the two shapes the drawer renders. */
@@ -118,9 +125,58 @@ export async function addSideThread(
   });
 }
 
-/** Drop a thread entry (the session record is retired separately). */
+/** Drop a thread entry (the session record is retired separately). PERMANENT — the
+ *  archive path below is what the UI's × uses. */
 export async function removeSideThread(sessionId: string, id: string): Promise<boolean> {
   return deleteSideQuestion(sessionId, id);
+}
+
+/**
+ * File a thread away, or bring it back. Only the stamp moves; the entry, its
+ * question and its thread session id are never touched, which is what makes an
+ * archived aside retrievable. Idempotent: archiving twice keeps the first stamp,
+ * so "when did I file this" stays true.
+ */
+export async function setSideThreadArchived(
+  sessionId: string,
+  id: string,
+  archived: boolean,
+): Promise<SideQuestion | undefined> {
+  return withLock(sessionId, async () => {
+    const list = await readJsonFile<SideQuestion[]>(fileFor(sessionId), []);
+    const entry = list.find((q) => q.id === id);
+    if (!entry) return undefined;
+    if (archived) {
+      if (!entry.archivedAt) entry.archivedAt = new Date().toISOString();
+    } else {
+      delete entry.archivedAt;
+    }
+    await writeJsonFile(fileFor(sessionId), list);
+    log.web.info('side thread archive flag', { sessionId, id, archived });
+    return entry;
+  });
+}
+
+/**
+ * Replace a thread's label with the auto-generated one. Only the title moves; a
+ * missing row returns undefined (deleted while the model was thinking) so the caller
+ * can skip announcing a rename nobody can see.
+ */
+export async function setSideThreadTitle(
+  sessionId: string,
+  id: string,
+  title: string,
+): Promise<SideQuestion | undefined> {
+  const clean = title.trim();
+  if (!clean) return undefined;
+  return withLock(sessionId, async () => {
+    const list = await readJsonFile<SideQuestion[]>(fileFor(sessionId), []);
+    const entry = list.find((q) => q.id === id);
+    if (!entry) return undefined;
+    entry.title = clean;
+    await writeJsonFile(fileFor(sessionId), list);
+    return entry;
+  });
 }
 
 /** Stamp a thread entry with the task it was promoted into. False = the entry

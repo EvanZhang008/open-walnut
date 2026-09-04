@@ -26430,6 +26430,66 @@ a.file-link:hover {
   white-space: nowrap;
 }
 .side-thread-chip-new { font-weight: 600; }
+/* Chip + its archive affordance. A wrapper rather than a nested button (invalid
+   HTML), so the × can be its own control while looking like part of the pill. */
+.side-thread-chip-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.side-thread-chip-archive {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  /* Dim but ALWAYS drawn, never hover-only: filing a thread away is how you keep
+     this row usable, so the affordance has to be findable without hunting. */
+  opacity: 0.4;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.side-thread-chip-wrap:hover .side-thread-chip-archive,
+.side-thread-chip-archive:focus-visible { opacity: 1; }
+.side-thread-chip-archive:hover { color: var(--fg); background: var(--bg-secondary); }
+.side-thread-chip-purge:hover { color: var(--danger, #dc2626); }
+.side-thread-chip.is-archived { opacity: 0.72; border-style: dashed; }
+.side-thread-chip.is-archived:hover { opacity: 1; }
+.side-thread-chip-archived-toggle { color: var(--fg-muted); }
+.side-thread-archived {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 0 2px;
+  border-top: 1px dashed var(--border);
+  margin-top: 2px;
+  /* Bounded like every other stack in this popover (.side-thread-chips, the legacy
+     list). The popover is height-capped with overflow:hidden and the thread body
+     refuses to shrink past 120px, so an unbounded shelf pushes the composer and the
+     actions row straight out of the bottom — measured at 9 filed threads on a
+     1000px window, 4 on an 800px one. */
+  flex: 0 0 auto;
+  max-height: 132px;
+  overflow-y: auto;
+}
+/* Archived rows always show their controls: the shelf exists to act on them. And
+   they get real hit targets — Restore and the irreversible purge are neighbours, so
+   an 18px button on a 2px gap is not a safe place for the only unrecoverable action
+   in the drawer (it also asks for confirmation, see purgeThread). */
+.side-thread-archived .side-thread-chip-archive {
+  opacity: 1;
+  width: 24px;
+  height: 24px;
+}
+.side-thread-archived .side-thread-chip-wrap { gap: 4px; }
+.side-thread-archived .side-thread-chip-purge { margin-left: 4px; }
 .side-thread-chip-spinner { width: 9px; height: 9px; border-width: 1.5px; }
 .side-thread-chip-badge {
   font-size: 10px;
@@ -26487,8 +26547,13 @@ a.file-link:hover {
   display: flex;
   align-items: center;
   gap: 6px;
+  /* Four controls (two inject variants, promote, and archive/restore) in a drawer
+     that is only as wide as a session column: wrap rather than overflow. */
+  flex-wrap: wrap;
 }
-.side-thread-delete { margin-left: auto; }
+/* The "done with this / way back" slot sits apart from the three actions, and must
+   not jump left when the thread is filed and the button becomes Restore. */
+.side-thread-archive-action { margin-left: auto; }
 
 .side-question-notice {
   font-size: 12px;

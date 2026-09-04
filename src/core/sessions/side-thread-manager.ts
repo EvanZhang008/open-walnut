@@ -355,6 +355,15 @@ class SideThreadManager {
       // between the user's ask and the answer starting to stream.
       void this.enforceLiveCap(parentSid, threadSessionId).catch(() => {});
 
+      // Same for the real title: the chip shows the truncated question until the
+      // fast model answers (a second or two), and a failed title is a cosmetic
+      // non-event. Never awaited — the answer is what the user is waiting for.
+      void import('./side-thread-title.js')
+        .then(({ refineSideThreadTitle }) => refineSideThreadTitle(
+          parentSid, threadId, question, entry.title ?? question,
+        ))
+        .catch(() => {});
+
       log.session.info('side thread: created', {
         parentSid, threadId, threadSessionId, fromStandby: !!consumed,
       });
@@ -504,6 +513,97 @@ class SideThreadManager {
       await this.retireSession(entry.threadSessionId, 'side_thread_retired');
     }
     await removeSideThread(parentSid, threadId);
+  }
+
+  /**
+   * File a thread away (the chip's ×) — the row STAYS, the process does not.
+   *
+   * This is the default "I am done with this aside" action, and the reason delete
+   * is no longer it: an aside is often the only place a decision was reasoned out,
+   * and a drawer that can only forget punishes the user for tidying up. So the
+   * entry keeps its question, its thread session id and its transcript (readable
+   * for as long as the JSONL lives), while the CLI process is retired to free one
+   * of the parent's live-thread slots.
+   *
+   * A PROMOTED thread's session belongs to its task now, so only the row is filed;
+   * the same asymmetry retireThread has.
+   */
+  async archiveThread(parentSid: string, threadId: string): Promise<{ archivedAt: string }> {
+    return this.serialize(parentSid, async () => {
+      const { setSideThreadArchived } = await import('../side-questions.js');
+      // Stamp FIRST, and decide from the row the stamp just returned. The old order
+      // (kill, then stamp) read `promotedTaskId` from a snapshot taken before an
+      // ~8s terminate, so a promote landing inside that window was overwritten by
+      // `archived: true` — handing the new task a session it can never work.
+      const updated = await setSideThreadArchived(parentSid, threadId, true);
+      if (!updated?.archivedAt || !updated.threadSessionId) {
+        throw new SessionControlError('Side thread not found', 404);
+      }
+      // A promoted thread's session belongs to its task now (same asymmetry
+      // retireThread has). And a thread whose CLI never wrote a transcript cannot be
+      // cold-resumed, so killing it would strand it — exactly what the idle sweep
+      // refuses to do; leave the process to that sweep and file only the row, so
+      // filing a fresh aside by mistake stays undoable.
+      const { getSessionByClaudeId } = await import('../session-tracker.js');
+      const record = await getSessionByClaudeId(updated.threadSessionId);
+      const strandable = !!record && isLive(record) && !isRevivable(record);
+      if (!updated.promotedTaskId && !strandable) {
+        await this.retireSession(updated.threadSessionId, 'side_thread_archived');
+        // The terminate is bounded at 8s, and promote does not run through this
+        // manager's queue, so a promote can still land INSIDE it — after which our
+        // `archived: true` has overwritten the promote's `archived: false` and the
+        // new task owns a session it can never work. Re-read and undo rather than
+        // narrow the window: the row is the authority on which one won.
+        const { getSideQuestion } = await import('../side-questions.js');
+        const after = await getSideQuestion(parentSid, threadId);
+        if (after?.promotedTaskId) {
+          const { updateSessionRecord } = await import('../session-tracker.js');
+          await updateSessionRecord(updated.threadSessionId, {
+            archived: false, archive_reason: '',
+          }).catch(() => {});
+          log.session.info('side thread: archive un-archived a session promoted mid-retire', {
+            parentSid, threadId, taskId: after.promotedTaskId,
+          });
+        }
+      }
+      log.session.info('side thread: archived', {
+        parentSid, threadId, retiredProcess: !updated.promotedTaskId && !strandable, strandable,
+      });
+      return { archivedAt: updated.archivedAt };
+    });
+  }
+
+  /**
+   * Bring a filed thread back. Clears the stamp AND un-archives the session record,
+   * so the drawer's composer unlocks and the next follow-up cold-resumes the fork:
+   * "restore" has to mean the aside is usable again, not merely visible. The cold
+   * resume is the price of picking it back up, and the user chose it by restoring.
+   */
+  async restoreThread(parentSid: string, threadId: string): Promise<{ recordArchived: boolean }> {
+    return this.serialize(parentSid, async () => {
+      const { setSideThreadArchived } = await import('../side-questions.js');
+      const updated = await setSideThreadArchived(parentSid, threadId, false);
+      if (!updated?.threadSessionId) throw new SessionControlError('Side thread not found', 404);
+      let recordArchived = false;
+      try {
+        const { updateSessionRecord, getSessionByClaudeId } = await import('../session-tracker.js');
+        if (!updated.promotedTaskId) {
+          await updateSessionRecord(updated.threadSessionId, { archived: false, archive_reason: '' });
+        }
+        recordArchived = !!(await getSessionByClaudeId(updated.threadSessionId))?.archived;
+      } catch (err) {
+        // The row is back either way; a record that refuses to un-archive leaves the
+        // thread readable but history-only, which is still better than losing it.
+        // Reported honestly so the drawer keeps the composer locked instead of
+        // offering a follow-up that the send path would refuse as target_archived.
+        recordArchived = true;
+        log.session.warn('side thread: restore could not un-archive the record', {
+          parentSid, threadId, error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      log.session.info('side thread: restored', { parentSid, threadId, recordArchived });
+      return { recordArchived };
+    });
   }
 
   /** Store entries for a parent, enriched with the record's archived flag. */

@@ -91,6 +91,7 @@ export const EventNames = {
   // Side question ("/btw") — native Claude Code side_question round-trip results.
   // The drawer subscribes to these to update without polling.
   SESSION_SIDE_QUESTION_DONE: 'session:side-question-done',
+  SESSION_SIDE_THREAD_RENAMED: 'session:side-thread-renamed',
   SESSION_SIDE_QUESTION_ERROR: 'session:side-question-error',
 
   // Team events (Claude Code Teams — parallel agents)

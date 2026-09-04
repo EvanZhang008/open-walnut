@@ -10,7 +10,9 @@
  *   - chips switch which conversation is mounted, and only ONE is mounted
  *   - "Inject to chat" flattens the thread's Q&A into the MAIN composer via the
  *     prefill driver (and reveals it), which is what makes a side thread useful
- *   - promote shows the ✓task badge, delete removes the chip
+ *   - promote shows the ✓task badge; the chip × and the actions-row button ARCHIVE
+ *     (the row survives, moves to a collapsed shelf, opens read-only, restores),
+ *     and permanent delete exists only inside that shelf
  *   - a 409 `fork_unsupported` degrades to an inline notice, not a dead drawer
  *
  * ── What is REAL here vs stubbed, and why ────────────────────────────────────
@@ -84,6 +86,11 @@ interface StubThread {
   threadSessionId: string
   createdAt: string
   promotedTaskId?: string
+  /** The user filed it away (the row survives — this is not a delete). */
+  archivedAt?: string
+  /** The session RECORD is archived, i.e. its CLI process is gone. Distinct from
+   *  `archivedAt`: the reaper archives records the user never filed. */
+  archived?: boolean
 }
 
 interface StubState {
@@ -94,6 +101,9 @@ interface StubState {
   /** Typing-triggered cache warm-ups (POST /standby/warm). */
   warmCalls: number
   deleted: string[]
+  /** Threads filed away / brought back (POST /:id/archive · /restore), in order. */
+  archived: string[]
+  restored: string[]
   /** Threads asked to summarize themselves (POST /:id/digest), in order. */
   digested: string[]
   /** When set, POST /side-threads answers 409 fork_unsupported. */
@@ -104,7 +114,8 @@ interface StubState {
 
 function freshStub(threads: StubThread[] = []): StubState {
   return {
-    threads, created: [], standbyCalls: 0, warmCalls: 0, deleted: [], digested: [],
+    threads, created: [], standbyCalls: 0, warmCalls: 0, deleted: [],
+    archived: [], restored: [], digested: [],
     forkUnsupported: false, digestMarker: DIGEST_MARKER,
   }
 }
@@ -199,6 +210,35 @@ async function installSideThreadRoutes(
       })
       return
     }
+    // Archive / restore: the row SURVIVES either way — only the stamp moves. The
+    // real server also retires (archive) / un-archives (restore) the thread's
+    // session record, which is what locks and unlocks the follow-up composer.
+    const archive = /^\/([^/]+)\/archive$/.exec(rest)
+    if (method === 'POST' && archive) {
+      const target = stub.threads.find((t) => t.id === archive[1])
+      if (!target) {
+        await route.fulfill({ status: 404, json: { error: 'Side thread not found' } })
+        return
+      }
+      stub.archived.push(target.id)
+      target.archivedAt = target.archivedAt ?? new Date().toISOString()
+      if (!target.promotedTaskId) target.archived = true
+      await route.fulfill({ json: { archived: true, archivedAt: target.archivedAt } })
+      return
+    }
+    const restore = /^\/([^/]+)\/restore$/.exec(rest)
+    if (method === 'POST' && restore) {
+      const target = stub.threads.find((t) => t.id === restore[1])
+      if (!target) {
+        await route.fulfill({ status: 404, json: { error: 'Side thread not found' } })
+        return
+      }
+      stub.restored.push(target.id)
+      delete target.archivedAt
+      target.archived = false
+      await route.fulfill({ json: { archived: false } })
+      return
+    }
     const del = /^\/([^/]+)$/.exec(rest)
     if (method === 'DELETE' && del) {
       stub.deleted.push(del[1])
@@ -246,6 +286,15 @@ async function openDrawer(panel: Locator): Promise<Locator> {
   await expect(popover).toBeVisible({ timeout: 10_000 })
   return popover
 }
+
+/**
+ * Chips for LIVE threads only. Must exclude "+ New" AND the "Archived (n)" toggle,
+ * which shares `.side-thread-chip` — counting it as a thread is exactly how an
+ * archive assertion accidentally passes.
+ */
+const liveChips = (popover: Locator): Locator => popover.locator(
+  '.side-thread-chips .side-thread-chip:not(.side-thread-chip-new):not(.side-thread-chip-archived-toggle)',
+)
 
 /** The drawer's composer is the app's real ChatInput, so its control is the
  *  ChatInput TEXTAREA (scoped to the popover — the panel also has the main one). */
@@ -317,7 +366,7 @@ test('a thread streams its answer, follows up, switches, and injects into the co
 
   // ── Ask: a chip appears, and the thread's OWN conversation mounts ──
   await ask(popover, FIRST_Q)
-  const chips = popover.locator('.side-thread-chip:not(.side-thread-chip-new)')
+  const chips = liveChips(popover)
   // The chip is OPTIMISTIC — it exists before the create call resolves, which is
   // why the server-side assertion is a poll and the chip check is not.
   await expect(chips).toHaveCount(1, { timeout: 15_000 })
@@ -433,7 +482,7 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   stub.digestMarker = 'THREAD-NEVER-WRITES-THIS:'
   await panel.locator('.side-question-pill', { hasText: 'btw' }).first().click()
   await expect(popover).toBeVisible({ timeout: 10_000 })
-  await popover.locator('.side-thread-chip:not(.side-thread-chip-new)').first().click()
+  await liveChips(popover).first().click()
   await popover.getByRole('button', { name: /Inject summary/ }).click()
   // It accepted the click and is polling…
   await expect(popover.getByRole('button', { name: /Summarizing/ })).toBeVisible({ timeout: 15_000 })
@@ -450,7 +499,7 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   stub.digestMarker = DIGEST_MARKER
   // Switching threads ABANDONS a digest in flight: its text belongs to the thread the
   // user left. The spinner clears and the composer stays untouched.
-  await popover.locator('.side-thread-chip:not(.side-thread-chip-new)').nth(1).click()
+  await liveChips(popover).nth(1).click()
   await expect(popover.getByRole('button', { name: /Inject summary/ })).toBeVisible({ timeout: 20_000 })
   await expect(composerBox).toHaveValue('')
   // Leave the drawer closed so the next section opens it from the same state as
@@ -461,7 +510,7 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   // ── Inject full: the thread's whole Q&A lands in the MAIN composer ──
   await panel.locator('.side-question-pill', { hasText: 'btw' }).first().click()
   await expect(popover).toBeVisible({ timeout: 10_000 })
-  await popover.locator('.side-thread-chip:not(.side-thread-chip-new)').first().click()
+  await liveChips(popover).first().click()
   await popover.getByRole('button', { name: /Inject full/ }).click()
   const mainComposer = panel.locator('textarea.chat-input-textarea').first()
   await expect(mainComposer)
@@ -478,7 +527,7 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   await page.screenshot({ path: `${SCREENSHOT_DIR}/injected-into-composer.png`, fullPage: true })
 })
 
-test('promote badges the chip and delete removes it', async ({ page, request }) => {
+test('promote badges the chip, and "done with this" FILES it rather than deleting', async ({ page, request }) => {
   test.setTimeout(120_000)
   const stub = freshStub([{
     id: 'st-seeded',
@@ -491,7 +540,7 @@ test('promote badges the chip and delete removes it', async ({ page, request }) 
   const panel = await openParentColumn(page)
   const popover = await openDrawer(panel)
 
-  const chip = popover.locator('.side-thread-chip:not(.side-thread-chip-new)').first()
+  const chip = liveChips(popover).first()
   await expect(chip).toContainText('seeded side thread')
   await chip.click()
   await expect(popover.locator('.side-thread-body')).toBeVisible({ timeout: 20_000 })
@@ -502,10 +551,201 @@ test('promote badges the chip and delete removes it', async ({ page, request }) 
   await expect(popover.locator('.side-question-promoted')).toContainText('task created', { timeout: 10_000 })
   await page.screenshot({ path: `${SCREENSHOT_DIR}/promoted.png`, fullPage: true })
 
+  // The "done with this" action FILES the thread away — it must not delete it.
   await popover.locator('.side-thread-delete').click()
-  await expect(popover.locator('.side-thread-chip:not(.side-thread-chip-new)')).toHaveCount(0, { timeout: 10_000 })
+  await expect(liveChips(popover)).toHaveCount(0, { timeout: 10_000 })
   await expect(popover.locator('.side-thread-body')).toHaveCount(0)
-  expect(stub.deleted).toEqual(['st-seeded'])
+  expect(stub.archived).toEqual(['st-seeded'])
+  expect(stub.deleted).toEqual([])
+  // …and it is still there, one click away.
+  await expect(popover.locator('.side-thread-chip-archived-toggle')).toContainText('Archived (1)')
+})
+
+test('the chip × files a thread away, and it stays retrievable', async ({ page, request }) => {
+  test.setTimeout(240_000)
+  const stub = freshStub([
+    {
+      id: 'st-keep',
+      title: 'keep me around',
+      threadSessionId: await startThreadSession(request, 'keep me around'),
+      createdAt: '2026-09-01T00:00:00.000Z',
+    },
+    {
+      id: 'st-file',
+      title: 'file me away',
+      threadSessionId: await startThreadSession(request, 'file me away'),
+      createdAt: '2026-09-02T00:00:00.000Z',
+    },
+  ])
+  await installSideThreadRoutes(page, request, stub)
+
+  const panel = await openParentColumn(page)
+  const popover = await openDrawer(panel)
+  await expect(liveChips(popover)).toHaveCount(2)
+  // No shelf while nothing is filed — an empty "Archived (0)" would be noise.
+  await expect(popover.locator('.side-thread-chip-archived-toggle')).toHaveCount(0)
+
+  // Open the one we are about to file, so filing also has to deselect it: leaving
+  // it selected would keep a filed thread's conversation mounted in the drawer.
+  const fileChip = popover.locator('.side-thread-chip', { hasText: 'file me away' }).first()
+  await fileChip.click()
+  await expect(popover.locator('.side-thread-body')).toBeVisible({ timeout: 20_000 })
+
+  await popover.getByRole('button', { name: 'Archive side thread: file me away' }).click()
+
+  // Filed: out of the chip row, into the shelf, and the row still EXISTS server-side.
+  await expect(liveChips(popover)).toHaveCount(1, { timeout: 10_000 })
+  await expect(liveChips(popover).first()).toContainText('keep me around')
+  await expect(popover.locator('.side-thread-body')).toHaveCount(0)
+  expect(stub.archived).toEqual(['st-file'])
+  expect(stub.deleted).toEqual([])
+
+  // The pill's own count has to fall too, or tidying up changes nothing where you
+  // actually look at it.
+  await expect(btwPill(panel).locator('.side-question-count')).toHaveText('1')
+
+  const toggle = popover.locator('.side-thread-chip-archived-toggle')
+  await expect(toggle).toContainText('Archived (1)')
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/archived-collapsed.png`, fullPage: true })
+
+  // The shelf is collapsed by default (it is storage, not part of the working row).
+  await expect(popover.locator('.side-thread-archived')).toHaveCount(0)
+  await toggle.click()
+  const shelf = popover.locator('.side-thread-archived')
+  await expect(shelf).toBeVisible()
+  const shelfChip = shelf.locator('.side-thread-chip.is-archived').first()
+  await expect(shelfChip).toContainText('file me away')
+
+  // Retrievable in BOTH senses. (1) Readable where it is: opening it mounts its
+  // conversation, with the follow-up composer locked to "history only".
+  await shelfChip.click()
+  await expect(popover.locator('.side-thread-body')).toBeVisible({ timeout: 20_000 })
+  await expect(popover.locator('.side-thread-body')).toContainText(answerFor('file me away'), { timeout: 30_000 })
+  await expect(popover.locator('.side-question-composer-label')).toContainText('Archived ·')
+  await expect(popover.locator('.side-question-composer-label')).toContainText('history only')
+  await expect(drawerInput(popover)).toBeDisabled()
+  // The actions row turns into the way BACK — an "Archive" button on an already
+  // filed thread would be the one screen where it does nothing.
+  await expect(popover.getByRole('button', { name: 'Restore this side thread' })).toBeVisible()
+  await expect(popover.getByRole('button', { name: 'Archive this side thread' })).toHaveCount(0)
+  // Summarizing needs a live process to answer; injecting the full aside reads the
+  // transcript, so it stays available. Promote stays available too — it RESTORES.
+  await expect(popover.getByRole('button', { name: /Inject summary/ })).toBeDisabled()
+  await expect(popover.getByRole('button', { name: /Inject full/ })).toBeEnabled()
+  await expect(popover.getByRole('button', { name: /Promote to task/ })).toBeEnabled()
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/archived-open-readonly.png`, fullPage: true })
+
+  // Permanent delete is only reachable from the shelf — one deliberate step further.
+  await expect(shelf.locator('.side-thread-chip-purge')).toHaveCount(1)
+  await expect(popover.locator('.side-thread-chips .side-thread-chip-purge')).toHaveCount(0)
+
+  // Close and REOPEN the drawer before restoring. That is the ordinary thing a user
+  // does, and it is the only way the client sees the server's record-level `archived`
+  // flag — which is exactly where a restore that only cleared the stamp left the chip
+  // back in the row with a permanently locked composer.
+  await btwPill(panel).click()
+  await expect(popover).toHaveCount(0)
+  const reopened = await openDrawer(panel)
+  await expect(reopened.locator('.side-thread-chip-archived-toggle')).toContainText('Archived (1)')
+  // The shelf REMEMBERS that it was open (the drawer component stays mounted when the
+  // popover closes), so drive it by its declared state rather than blind-clicking —
+  // a second click would collapse it again.
+  const reopenedToggle = reopened.locator('.side-thread-chip-archived-toggle')
+  if (await reopenedToggle.getAttribute('aria-expanded') === 'false') await reopenedToggle.click()
+  await expect(reopenedToggle).toHaveAttribute('aria-expanded', 'true')
+  await expect(reopened.locator('.side-thread-archived')).toBeVisible({ timeout: 10_000 })
+
+  // (2) Restorable: back in the chip row, and usable again.
+  await reopened.getByRole('button', { name: 'Restore side thread: file me away' }).click()
+  await expect(liveChips(reopened)).toHaveCount(2, { timeout: 10_000 })
+  await expect(reopened.locator('.side-thread-chip-archived-toggle')).toHaveCount(0)
+  expect(stub.restored).toEqual(['st-file'])
+  await expect(btwPill(panel).locator('.side-question-count')).toHaveText('2')
+  // Usable again: pick it and the follow-up composer unlocks.
+  await reopened.locator('.side-thread-chip', { hasText: 'file me away' }).first().click()
+  await expect(drawerInput(reopened)).toBeEnabled({ timeout: 10_000 })
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/archived-restored.png`, fullPage: true })
+})
+
+test('permanent delete lives in the shelf and asks first', async ({ page, request }) => {
+  test.setTimeout(150_000)
+  const stub = freshStub([{
+    id: 'st-purge',
+    title: 'delete me for real',
+    threadSessionId: await startThreadSession(request, 'delete me for real'),
+    createdAt: '2026-09-01T00:00:00.000Z',
+    archivedAt: '2026-09-02T00:00:00.000Z',
+    archived: true,
+  }])
+  await installSideThreadRoutes(page, request, stub)
+
+  const panel = await openParentColumn(page)
+  const popover = await openDrawer(panel)
+  // A filed thread is not in the chip row, and the pill counts only live ones.
+  await expect(liveChips(popover)).toHaveCount(0)
+  await expect(btwPill(panel).locator('.side-question-count')).toHaveCount(0)
+  await expect(popover.locator('.side-question-empty')).toContainText('reopen one from Archived')
+
+  await popover.locator('.side-thread-chip-archived-toggle').click()
+  const shelf = popover.locator('.side-thread-archived')
+  await shelf.locator('.side-thread-chip-purge').click()
+
+  // The one irreversible action in the drawer asks first — it sits next to Restore.
+  const dialog = page.locator('.app-modal').first()
+  await expect(dialog).toBeVisible({ timeout: 10_000 })
+  await expect(dialog).toContainText('delete me for real')
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/purge-confirm.png`, fullPage: true })
+
+  // Backing out keeps the thread.
+  await dialog.getByRole('button', { name: /Cancel/i }).click()
+  await expect(dialog).toHaveCount(0)
+  expect(stub.deleted).toEqual([])
+  await expect(shelf.locator('.side-thread-chip.is-archived')).toHaveCount(1)
+
+  await shelf.locator('.side-thread-chip-purge').click()
+  await page.locator('.app-modal').first()
+    .getByRole('button', { name: /Delete permanently/i }).click()
+  await expect(popover.locator('.side-thread-chip-archived-toggle')).toHaveCount(0, { timeout: 10_000 })
+  expect(stub.deleted).toEqual(['st-purge'])
+})
+
+test('a full Archived shelf never pushes the composer out of the drawer', async ({ page, request }) => {
+  test.setTimeout(180_000)
+  // One real session backs them all: this test is about LAYOUT, and 14 spawns would
+  // cost minutes for nothing.
+  const backing = await startThreadSession(request, 'filed away')
+  const stub = freshStub(Array.from({ length: 14 }, (_, i) => ({
+    id: `st-${i}`,
+    title: `filed aside number ${i} with a fairly long label`,
+    threadSessionId: backing,
+    createdAt: `2026-09-01T00:00:${String(i).padStart(2, '0')}.000Z`,
+    archivedAt: `2026-09-02T00:00:${String(i).padStart(2, '0')}.000Z`,
+    archived: true,
+  })))
+  await installSideThreadRoutes(page, request, stub)
+
+  const panel = await openParentColumn(page)
+  const popover = await openDrawer(panel)
+  await popover.locator('.side-thread-chip-archived-toggle').click()
+  await expect(popover.locator('.side-thread-archived')).toBeVisible()
+
+  // The popover is height-capped with overflow:hidden, so an unbounded shelf silently
+  // pushes the composer (and the actions row) off the bottom — measured at 9 filed
+  // threads on a 1000px window. The shelf scrolls instead.
+  const fits = await popover.evaluate((el) => {
+    const pop = el.getBoundingClientRect()
+    const composer = el.querySelector('.side-question-composer')?.getBoundingClientRect()
+    const shelf = el.querySelector('.side-thread-archived') as HTMLElement | null
+    return {
+      composerBottom: composer?.bottom ?? Infinity,
+      popoverBottom: pop.bottom,
+      shelfScrolls: !!shelf && shelf.scrollHeight > shelf.clientHeight,
+    }
+  })
+  expect(fits.shelfScrolls).toBe(true)
+  expect(fits.composerBottom).toBeLessThanOrEqual(fits.popoverBottom + 1)
+  await expect(popover.locator('.side-question-composer textarea.chat-input-textarea')).toBeVisible()
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/archived-shelf-full.png`, fullPage: true })
 })
 
 test('an engine that cannot fork shows an inline notice, not a dead drawer', async ({ page, request }) => {
@@ -521,7 +761,7 @@ test('an engine that cannot fork shows an inline notice, not a dead drawer', asy
   await expect(popover.locator('.side-question-notice'))
     .toHaveText("This engine can't fork side threads", { timeout: 15_000 })
   // The optimistic chip rolled back — no phantom thread left behind.
-  await expect(popover.locator('.side-thread-chip:not(.side-thread-chip-new)')).toHaveCount(0)
+  await expect(liveChips(popover)).toHaveCount(0)
   // The composer is still usable (the drawer did not lock up).
   await expect(drawerInput(popover)).toBeEnabled()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/fork-unsupported.png`, fullPage: true })

@@ -20,6 +20,8 @@ const api = vi.hoisted(() => ({
   createSideThread: vi.fn<(sid: string, q: string, opts?: Record<string, unknown>) => Promise<{ thread: SideThread }>>(),
   promoteSideThread: vi.fn<(sid: string, tid: string) => Promise<{ taskId: string; parentTaskId?: string }>>(),
   deleteSideThread: vi.fn<(sid: string, tid: string) => Promise<{ ok: true }>>(),
+  archiveSideThread: vi.fn<(sid: string, tid: string) => Promise<{ archived: true; archivedAt: string }>>(),
+  restoreSideThread: vi.fn<(sid: string, tid: string) => Promise<{ archived: false }>>(),
   prewarmSideThreadStandby: vi.fn<(sid: string) => Promise<{ ok: true }>>(),
   warmSideThreadStandby: vi.fn<(sid: string) => Promise<{ warmed: boolean; reason?: string }>>(),
   isForkUnsupportedError: vi.fn<(err: unknown) => boolean>(),
@@ -34,6 +36,11 @@ const {
   createSideThreadOptimistic,
   deleteSideThreadOptimistic,
   deriveThreadTitle,
+  activeSideThreads,
+  archivedSideThreads,
+  setSideThreadArchivedOptimistic,
+  isSideThreadReadOnly,
+  applySideThreadTitle,
   SIDE_THREAD_DIGEST_MARKER,
   formatSideThreadDigestForComposer,
   formatSideThreadForComposer,
@@ -79,6 +86,8 @@ beforeEach(() => {
   api.prewarmSideThreadStandby.mockResolvedValue({ ok: true });
   api.warmSideThreadStandby.mockResolvedValue({ warmed: true });
   api.isForkUnsupportedError.mockReturnValue(false);
+  api.archiveSideThread.mockResolvedValue({ archived: true, archivedAt: '2026-09-04T00:00:00.000Z' });
+  api.restoreSideThread.mockResolvedValue({ archived: false });
 });
 
 describe('side-threads store — fetch / refresh', () => {
@@ -644,5 +653,281 @@ describe('SIDE_THREAD_DIGEST_MARKER', () => {
       await import('../../src/core/sessions/side-thread-digest.js');
     expect(SIDE_THREAD_DIGEST_MARKER).toBe(SIDE_THREAD_DIGEST_REPLY_MARKER);
     expect(SIDE_THREAD_DIGEST_MESSAGE).toContain(SIDE_THREAD_DIGEST_MARKER);
+  });
+});
+
+describe('side-threads store — archive (file away, never delete)', () => {
+  /**
+   * Archiving is the answer to a chip row that grew past what fits: the row must
+   * SURVIVE (the thread is still retrievable), only its place in the UI changes.
+   * These tests pin exactly that split — the delete path drops the row, this one
+   * moves a stamp — plus the two things a browser spec cannot observe: the
+   * optimistic window and the rollback.
+   */
+  async function seedTwo() {
+    api.listSideThreads.mockResolvedValue({
+      threads: [thread(), thread({ id: 'st-2', threadSessionId: 'fork-def', title: 'Second' })],
+      legacy: [],
+    });
+    await refreshSideThreads(PARENT);
+  }
+
+  it('splits the list: chips show live threads, the shelf shows filed ones', async () => {
+    await seedTwo();
+    await setSideThreadArchivedOptimistic(PARENT, 'st-1', true);
+    const state = getSideThreadsState(PARENT);
+    // The row is still there — that is the whole point.
+    expect(state.threads).toHaveLength(2);
+    expect(activeSideThreads(state).map((t) => t.id)).toEqual(['st-2']);
+    expect(archivedSideThreads(state).map((t) => t.id)).toEqual(['st-1']);
+    expect(api.archiveSideThread).toHaveBeenCalledWith(PARENT, 'st-1');
+    expect(api.deleteSideThread).not.toHaveBeenCalled();
+  });
+
+  it('the shelf reads newest-filed first (you look for what you just tidied away)', async () => {
+    api.listSideThreads.mockResolvedValue({
+      threads: [
+        thread({ id: 'old', archivedAt: '2026-09-01T00:00:00.000Z' }),
+        thread({ id: 'new', archivedAt: '2026-09-03T00:00:00.000Z' }),
+        thread({ id: 'live' }),
+      ],
+      legacy: [],
+    });
+    await refreshSideThreads(PARENT);
+    const state = getSideThreadsState(PARENT);
+    expect(archivedSideThreads(state).map((t) => t.id)).toEqual(['new', 'old']);
+    expect(activeSideThreads(state).map((t) => t.id)).toEqual(['live']);
+  });
+
+  it('filing the thread you are looking at deselects it (a filed thread must not stay mounted)', async () => {
+    await seedTwo();
+    setActiveSideThread(PARENT, 'st-1');
+    await setSideThreadArchivedOptimistic(PARENT, 'st-1', true);
+    expect(getSideThreadsState(PARENT).activeThreadId).toBeNull();
+  });
+
+  it('filing a DIFFERENT thread leaves your selection alone', async () => {
+    await seedTwo();
+    setActiveSideThread(PARENT, 'st-2');
+    await setSideThreadArchivedOptimistic(PARENT, 'st-1', true);
+    expect(getSideThreadsState(PARENT).activeThreadId).toBe('st-2');
+  });
+
+  it('is optimistic: the chip leaves the row before the server answers', async () => {
+    await seedTwo();
+    const d = deferred<{ archived: true; archivedAt: string }>();
+    api.archiveSideThread.mockReturnValue(d.promise);
+    const pending = setSideThreadArchivedOptimistic(PARENT, 'st-1', true);
+    expect(activeSideThreads(getSideThreadsState(PARENT)).map((t) => t.id)).toEqual(['st-2']);
+    d.resolve({ archived: true, archivedAt: '2026-09-04T00:00:00.000Z' });
+    await pending;
+    expect(archivedSideThreads(getSideThreadsState(PARENT))).toHaveLength(1);
+  });
+
+  it('a failed archive puts the chip BACK and surfaces the error', async () => {
+    await seedTwo();
+    api.archiveSideThread.mockRejectedValue(new Error('offline'));
+    await setSideThreadArchivedOptimistic(PARENT, 'st-1', true);
+    const state = getSideThreadsState(PARENT);
+    expect(activeSideThreads(state).map((t) => t.id)).toEqual(['st-1', 'st-2']);
+    expect(archivedSideThreads(state)).toEqual([]);
+    expect(state.error).toContain('Archive failed');
+  });
+
+  it('restore brings it back into the chip row', async () => {
+    api.listSideThreads.mockResolvedValue({
+      threads: [thread({ archivedAt: '2026-09-01T00:00:00.000Z' })],
+      legacy: [],
+    });
+    await refreshSideThreads(PARENT);
+    await setSideThreadArchivedOptimistic(PARENT, 'st-1', false);
+    const state = getSideThreadsState(PARENT);
+    expect(activeSideThreads(state).map((t) => t.id)).toEqual(['st-1']);
+    expect(archivedSideThreads(state)).toEqual([]);
+    expect(api.restoreSideThread).toHaveBeenCalledWith(PARENT, 'st-1');
+  });
+
+  it('a failed restore re-files it (with its ORIGINAL stamp, so shelf order is stable)', async () => {
+    api.listSideThreads.mockResolvedValue({
+      threads: [thread({ archivedAt: '2026-09-01T00:00:00.000Z' })],
+      legacy: [],
+    });
+    await refreshSideThreads(PARENT);
+    api.restoreSideThread.mockRejectedValue(new Error('boom'));
+    await setSideThreadArchivedOptimistic(PARENT, 'st-1', false);
+    const state = getSideThreadsState(PARENT);
+    expect(state.threads[0]?.archivedAt).toBe('2026-09-01T00:00:00.000Z');
+    expect(state.error).toContain('Restore failed');
+  });
+
+  it('re-archiving an already-filed thread keeps the FIRST stamp (idempotent, like the server)', async () => {
+    api.listSideThreads.mockResolvedValue({
+      threads: [thread({ archivedAt: '2026-09-01T00:00:00.000Z' })],
+      legacy: [],
+    });
+    await refreshSideThreads(PARENT);
+    await setSideThreadArchivedOptimistic(PARENT, 'st-1', true);
+    expect(getSideThreadsState(PARENT).threads[0]?.archivedAt).toBe('2026-09-01T00:00:00.000Z');
+  });
+
+  it('a pending (not-yet-created) row cannot be filed — there is nothing to file yet', async () => {
+    const d = deferred<{ thread: SideThread }>();
+    api.createSideThread.mockReturnValue(d.promise);
+    const creating = createSideThreadOptimistic(PARENT, 'brand new question');
+    const pendingId = getSideThreadsState(PARENT).threads[0]!.id;
+    expect(pendingId.startsWith(PENDING_THREAD_PREFIX)).toBe(true);
+    await setSideThreadArchivedOptimistic(PARENT, pendingId, true);
+    expect(api.archiveSideThread).not.toHaveBeenCalled();
+    expect(getSideThreadsState(PARENT).threads[0]?.archivedAt).toBeUndefined();
+    d.resolve({ thread: thread() });
+    await creating;
+  });
+
+  it('a filed thread is read-only the INSTANT it is filed, before any refresh', async () => {
+    // The optimistic path only knows `archivedAt`; the record's `archived` flag
+    // arrives with the next list. Keying the composer lock on the record alone left
+    // a filed thread accepting a follow-up into a process that was just retired.
+    await seedTwo();
+    await setSideThreadArchivedOptimistic(PARENT, 'st-1', true);
+    const filed = getSideThreadsState(PARENT).threads.find((t) => t.id === 'st-1');
+    expect(filed?.archivedAt).toBeTruthy();
+    expect(isSideThreadReadOnly(filed)).toBe(true);
+  });
+
+  it('read-only also covers a record the reaper archived without the user filing it', () => {
+    expect(isSideThreadReadOnly(thread({ archived: true }))).toBe(true);
+    expect(isSideThreadReadOnly(thread())).toBe(false);
+    expect(isSideThreadReadOnly(null)).toBe(false);
+  });
+
+  it('the btw pill count DROPS when you file one away', async () => {
+    await seedTwo();
+    expect(sideThreadsBadgeCount(getSideThreadsState(PARENT))).toBe(2);
+    await setSideThreadArchivedOptimistic(PARENT, 'st-1', true);
+    expect(sideThreadsBadgeCount(getSideThreadsState(PARENT))).toBe(1);
+    await setSideThreadArchivedOptimistic(PARENT, 'st-1', false);
+    expect(sideThreadsBadgeCount(getSideThreadsState(PARENT))).toBe(2);
+  });
+
+  it('files BOTH flags, so a restore is not fought by a stale record flag', async () => {
+    // The list returns a record-level `archived` too. Tracking only the stamp meant a
+    // restore put the chip back while the composer stayed locked and the actions slot
+    // had already flipped to "Archive" — no way out without reopening the drawer.
+    api.listSideThreads.mockResolvedValue({
+      threads: [thread({ archivedAt: '2026-09-01T00:00:00.000Z', archived: true })],
+      legacy: [],
+    });
+    await refreshSideThreads(PARENT);
+    await setSideThreadArchivedOptimistic(PARENT, 'st-1', false);
+    const row = getSideThreadsState(PARENT).threads[0];
+    expect(row?.archivedAt).toBeUndefined();
+    expect(row?.archived).toBe(false);
+    expect(isSideThreadReadOnly(row)).toBe(false);
+  });
+
+  it('believes the SERVER about the session state, not the request it made', async () => {
+    // Un-archiving the record can fail server-side; unlocking the composer over that
+    // would only move the refusal to the send.
+    api.listSideThreads.mockResolvedValue({
+      threads: [thread({ archivedAt: '2026-09-01T00:00:00.000Z', archived: true })],
+      legacy: [],
+    });
+    await refreshSideThreads(PARENT);
+    api.restoreSideThread.mockResolvedValue({ archived: true });
+    await setSideThreadArchivedOptimistic(PARENT, 'st-1', false);
+    const row = getSideThreadsState(PARENT).threads[0];
+    expect(row?.archivedAt).toBeUndefined();
+    expect(isSideThreadReadOnly(row)).toBe(true);
+  });
+
+  it('filing a PROMOTED thread does not claim its process died (the server keeps it)', async () => {
+    api.listSideThreads.mockResolvedValue({
+      threads: [thread({ promotedTaskId: 'task-1' })],
+      legacy: [],
+    });
+    await refreshSideThreads(PARENT);
+    await setSideThreadArchivedOptimistic(PARENT, 'st-1', true);
+    expect(getSideThreadsState(PARENT).threads[0]?.archived).toBeUndefined();
+  });
+
+  it('a refresh landing mid-archive keeps the row filed', async () => {
+    // The archive POST awaits a bounded process terminate, and either drawer mount can
+    // refresh inside that window. Taking the server's pre-request answer put the chip
+    // back in the live row with an unlocked composer.
+    await seedTwo();
+    const d = deferred<{ archived: true; archivedAt: string }>();
+    api.archiveSideThread.mockReturnValue(d.promise);
+    const pending = setSideThreadArchivedOptimistic(PARENT, 'st-1', true);
+    await refreshSideThreads(PARENT);
+    expect(activeSideThreads(getSideThreadsState(PARENT)).map((t) => t.id)).toEqual(['st-2']);
+    d.resolve({ archived: true, archivedAt: '2026-09-04T00:00:00.000Z' });
+    await pending;
+    expect(archivedSideThreads(getSideThreadsState(PARENT)).map((t) => t.id)).toEqual(['st-1']);
+  });
+
+  it('a refresh landing mid-restore keeps the row live', async () => {
+    api.listSideThreads.mockResolvedValue({
+      threads: [thread({ archivedAt: '2026-09-01T00:00:00.000Z', archived: true })],
+      legacy: [],
+    });
+    await refreshSideThreads(PARENT);
+    const d = deferred<{ archived: boolean }>();
+    api.restoreSideThread.mockReturnValue(d.promise);
+    const pending = setSideThreadArchivedOptimistic(PARENT, 'st-1', false);
+    await refreshSideThreads(PARENT);
+    expect(activeSideThreads(getSideThreadsState(PARENT)).map((t) => t.id)).toEqual(['st-1']);
+    d.resolve({ archived: false });
+    await pending;
+    expect(archivedSideThreads(getSideThreadsState(PARENT))).toEqual([]);
+  });
+
+  it('a failed archive puts your SELECTION back, not just the chip', async () => {
+    await seedTwo();
+    setActiveSideThread(PARENT, 'st-1');
+    api.archiveSideThread.mockRejectedValue(new Error('offline'));
+    await setSideThreadArchivedOptimistic(PARENT, 'st-1', true);
+    // A refused archive must not silently close the conversation being read.
+    expect(getSideThreadsState(PARENT).activeThreadId).toBe('st-1');
+  });
+
+  it('promote un-files the row, because the server un-files it too', async () => {
+    api.listSideThreads.mockResolvedValue({
+      threads: [thread({ archivedAt: '2026-09-01T00:00:00.000Z', archived: true })],
+      legacy: [],
+    });
+    await refreshSideThreads(PARENT);
+    api.promoteSideThread.mockResolvedValue({ taskId: 'task-7' });
+    await promoteSideThreadOptimistic(PARENT, 'st-1');
+    const state = getSideThreadsState(PARENT);
+    expect(archivedSideThreads(state)).toEqual([]);
+    expect(activeSideThreads(state).map((t) => t.id)).toEqual(['st-1']);
+    expect(isSideThreadReadOnly(state.threads[0])).toBe(false);
+  });
+
+  it('an unknown thread id is a no-op (a stale second tab must not throw)', async () => {
+    await seedTwo();
+    await setSideThreadArchivedOptimistic(PARENT, 'st-nope', true);
+    expect(api.archiveSideThread).not.toHaveBeenCalled();
+    expect(getSideThreadsState(PARENT).threads).toHaveLength(2);
+  });
+});
+
+describe('side-threads store — auto-generated title', () => {
+  it('patches the chip label when the server announces the generated title', async () => {
+    api.listSideThreads.mockResolvedValue({ threads: [thread({ title: 'why is this fla…' })], legacy: [] });
+    await refreshSideThreads(PARENT);
+    applySideThreadTitle(PARENT, 'st-1', 'Flaky retry timeout');
+    expect(sideThreadLabel(getSideThreadsState(PARENT).threads[0]!)).toBe('Flaky retry timeout');
+  });
+
+  it('ignores an unknown thread, an unchanged title, and a missing parent', async () => {
+    api.listSideThreads.mockResolvedValue({ threads: [thread({ title: 'Kept' })], legacy: [] });
+    await refreshSideThreads(PARENT);
+    const before = getSideThreadsState(PARENT);
+    applySideThreadTitle(PARENT, 'st-nope', 'Other');
+    applySideThreadTitle(PARENT, 'st-1', 'Kept');
+    applySideThreadTitle(undefined, 'st-1', 'Other');
+    // Same object identity: no notify, so no re-render of every drawer mount.
+    expect(getSideThreadsState(PARENT)).toBe(before);
   });
 });

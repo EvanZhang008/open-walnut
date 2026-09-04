@@ -542,6 +542,122 @@ describe('retire + list', () => {
       .rejects.toMatchObject({ statusCode: 404 })
   })
 
+  /** The × in the drawer. The whole point is that the ENTRY survives: an aside is
+   *  often the only place a decision was reasoned out. */
+  it('archiveThread keeps the entry, stamps it, and retires only the process', async () => {
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'q' })
+    await settle()
+    const { archivedAt } = await sideThreadManager.archiveThread(PARENT, thread.id)
+
+    expect(archivedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    expect(mocks.terminateSession).toHaveBeenCalledWith(thread.threadSessionId, { force: true })
+    const entries = await listSideQuestions(PARENT)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]!.archivedAt).toBe(archivedAt)
+    // Still addressable: question + thread session id untouched, so the transcript
+    // (and therefore "inject full") keeps working.
+    expect(entries[0]!.question).toBe('q')
+    expect(entries[0]!.threadSessionId).toBe(thread.threadSessionId)
+    const view = await sideThreadManager.listThreads(PARENT)
+    expect(view.threads[0]!.archivedAt).toBe(archivedAt)
+  })
+
+  it('archiveThread is idempotent — the first stamp is when you filed it', async () => {
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'q' })
+    await settle()
+    const first = await sideThreadManager.archiveThread(PARENT, thread.id)
+    const second = await sideThreadManager.archiveThread(PARENT, thread.id)
+    expect(second.archivedAt).toBe(first.archivedAt)
+  })
+
+  it('archiveThread leaves a PROMOTED thread session alone (it belongs to its task)', async () => {
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'q' })
+    await settle()
+    const { markThreadPromoted } = await import('../../src/core/side-questions.js')
+    await markThreadPromoted(PARENT, thread.id, 'task-1')
+    mocks.terminateSession.mockClear()
+
+    await sideThreadManager.archiveThread(PARENT, thread.id)
+    expect(mocks.terminateSession).not.toHaveBeenCalled()
+    expect((await getSessionByClaudeId(thread.threadSessionId))?.archived).toBeFalsy()
+    expect((await listSideQuestions(PARENT))[0]!.archivedAt).toBeTruthy()
+  })
+
+  /** Restore has to make the aside USABLE again, not merely visible: the record
+   *  un-archives so the composer unlocks and the next follow-up cold-resumes it. */
+  it('restoreThread clears the stamp and un-archives the record', async () => {
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'q' })
+    await settle()
+    await sideThreadManager.archiveThread(PARENT, thread.id)
+    expect((await getSessionByClaudeId(thread.threadSessionId))?.archived).toBe(true)
+
+    await sideThreadManager.restoreThread(PARENT, thread.id)
+    expect((await listSideQuestions(PARENT))[0]!.archivedAt).toBeUndefined()
+    expect((await getSessionByClaudeId(thread.threadSessionId))?.archived).toBe(false)
+  })
+
+  /** Filing must stay UNDOABLE. A fork whose CLI never wrote a transcript cannot be
+   *  cold-resumed, so killing it strands it — the same reason the idle sweep refuses
+   *  to. Hitting × on the aside you just started is exactly when this happens. */
+  it('archiveThread files the row but does NOT kill a thread that has no transcript yet', async () => {
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'q' })
+    await settle()
+    // Never-turned: no outputFile, no consumedOffset, process still live.
+    await updateSessionRecord(thread.threadSessionId, { outputFile: '', process_status: 'running' })
+    mocks.terminateSession.mockClear()
+
+    const { archivedAt } = await sideThreadManager.archiveThread(PARENT, thread.id)
+    expect(archivedAt).toBeTruthy()
+    expect(mocks.terminateSession).not.toHaveBeenCalled()
+    // Record stays live, so restore + follow-up has something to resume; the sweep
+    // still owns this process (it is not archived, so threadRecords sees it).
+    expect((await getSessionByClaudeId(thread.threadSessionId))?.archived).toBeFalsy()
+    expect((await listSideQuestions(PARENT))[0]!.archivedAt).toBe(archivedAt)
+  })
+
+  /** A promote landing INSIDE archive's ~8s terminate used to lose: our
+   *  `archived: true` overwrote the promote's `archived: false`, handing the new task
+   *  a session it can never work. Promote runs outside this manager's queue, so the
+   *  window is real — the fix re-reads the row afterwards and undoes the archive. */
+  it('archiveThread un-archives the record when a promote lands mid-terminate', async () => {
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'q' })
+    await settle()
+    const { markThreadPromoted } = await import('../../src/core/side-questions.js')
+    mocks.terminateSession.mockClear()
+    mocks.terminateSession.mockImplementation(async () => {
+      // The interleave: promote stamps the row and un-archives the record while our
+      // terminate is still running.
+      await markThreadPromoted(PARENT, thread.id, 'task-9')
+      await updateSessionRecord(thread.threadSessionId, { taskId: 'task-9', archived: false })
+    })
+
+    await sideThreadManager.archiveThread(PARENT, thread.id)
+    expect(mocks.terminateSession).toHaveBeenCalledTimes(1)
+    const record = await getSessionByClaudeId(thread.threadSessionId)
+    expect(record?.archived).toBeFalsy()
+    expect(record?.taskId).toBe('task-9')
+    // The row is still filed — the user did ask for that; only the dead-session part
+    // of it is undone.
+    expect((await listSideQuestions(PARENT))[0]!.archivedAt).toBeTruthy()
+  })
+
+  it('restoreThread reports the SESSION state it actually achieved', async () => {
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'q' })
+    await settle()
+    await sideThreadManager.archiveThread(PARENT, thread.id)
+    const { recordArchived } = await sideThreadManager.restoreThread(PARENT, thread.id)
+    // A rubber-stamped `false` would let the drawer unlock a composer whose send the
+    // server refuses; this is read back from the record.
+    expect(recordArchived).toBe(false)
+  })
+
+  it('404s archive/restore for an unknown thread', async () => {
+    await expect(sideThreadManager.archiveThread(PARENT, 'sth-nope'))
+      .rejects.toMatchObject({ statusCode: 404 })
+    await expect(sideThreadManager.restoreThread(PARENT, 'sth-nope'))
+      .rejects.toMatchObject({ statusCode: 404 })
+  })
+
   it('listThreads splits threads from legacy Q&As and flags archived', async () => {
     const { addSideQuestion } = await import('../../src/core/side-questions.js')
     await addSideQuestion(PARENT, 'legacy q', 'legacy a')

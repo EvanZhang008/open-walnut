@@ -46,6 +46,7 @@ import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useEvent } from '@/hooks/useWebSocket';
 import { engineCaps } from '@/utils/engine-capabilities';
 import { log } from '@/utils/log';
+import { useConfirm } from '@/hooks/useConfirm';
 import { PROCESS_COLORS, PROCESS_LABELS } from '@/utils/session-status';
 import type { ImageAttachment } from '@/api/chat';
 import { ApiError } from '@/api/client';
@@ -60,6 +61,9 @@ import type { ProcessStatus, SessionEngine, SessionMode, SessionRecord } from '@
 import {
   PENDING_PROMOTE,
   PENDING_THREAD_PREFIX,
+  activeSideThreads,
+  archivedSideThreads,
+  isSideThreadReadOnly,
   clearSideThreadsError,
   createSideThreadOptimistic,
   formatSideThreadDigestForComposer,
@@ -74,11 +78,13 @@ import {
   refreshSideThreads,
   setActiveSideThread,
   setOpenDrawerInstance,
+  setSideThreadArchivedOptimistic,
   setSideThreadsError,
   sideThreadLabel,
   sideThreadsBadgeCount,
   subscribeSideThreads,
   updateLegacySideQuestions,
+  applySideThreadTitle,
   warmSideThreadOnTyping,
 } from '@/stores/side-threads';
 
@@ -166,11 +172,19 @@ export function SideQuestionDrawer({
   const expanded = openInstance === instanceId;
 
   const [legacyOpen, setLegacyOpen] = useState(false);
+  // The Archived list is collapsed by default — it is a shelf, not part of the
+  // working row. Opened automatically when the thread you are viewing lives there.
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const [injecting, setInjecting] = useState(false);
   // 'digest' while the thread is writing its own summary — the button says so, and
   // both inject actions stay disabled so a second click can't start a second turn.
   const [digesting, setDigesting] = useState(false);
+  const confirmDialog = useConfirm();
   const rootRef = useRef<HTMLDivElement>(null);
+  // Focus lands here after a chip is filed: the button the user just pressed
+  // unmounts, and browsers drop focus to <body>, which strands keyboard users
+  // outside the drawer with no signal that the thread was filed, not deleted.
+  const archivedToggleRef = useRef<HTMLButtonElement>(null);
   // The ACTIVE thread's own record — the subject every composer control acts on
   // (permission mode, output mode, model/effort, note). Null while no thread is
   // active or its read is still in flight, in which case the controls fall back to
@@ -207,6 +221,9 @@ export function SideQuestionDrawer({
     () => findSideThread(state, state.activeThreadId),
     [state],
   );
+  // Filed threads are out of the chip row but never out of reach.
+  const liveThreads = useMemo(() => activeSideThreads(state), [state]);
+  const archivedThreads = useMemo(() => archivedSideThreads(state), [state]);
   const badgeCount = sideThreadsBadgeCount(state);
   const disabled = !sessionId;
 
@@ -219,6 +236,11 @@ export function SideQuestionDrawer({
   // the thread the user left, and prefilling the composer with it now would overwrite
   // whatever they typed after moving on.
   useEffect(() => { digestRunRef.current += 1; }, [activeThreadSid]);
+  // Viewing a filed thread (a refresh, or another tab set it active) must not leave
+  // the shelf collapsed with nothing on screen explaining where the thread came from.
+  useEffect(() => {
+    if (activeThread?.archivedAt) setArchivedOpen(true);
+  }, [activeThread?.archivedAt]);
 
   // The active thread's OWN record, read once per thread (a pending row has no
   // session id yet, so there is nothing to read and the controls follow the parent).
@@ -314,6 +336,14 @@ export function SideQuestionDrawer({
   const digestRunRef = useRef(0);
   useEffect(() => () => { digestRunRef.current += 1; }, []);
 
+  // The thread's real title is generated in the background (fast model, off the
+  // thread's own FIFO), so it lands a second or two after the chip appears.
+  useEvent('session:side-thread-renamed', useCallback((data: unknown) => {
+    const d = data as { sessionId?: string; threadId?: string; title?: string };
+    if (!sessionId || d?.sessionId !== sessionId || !d.threadId || !d.title) return;
+    applySideThreadTitle(sessionId, d.threadId, d.title);
+  }, [sessionId]));
+
   // Legacy one-shot entries can still arrive from another tab/route.
   useEvent('session:side-question-done', useCallback((data: unknown) => {
     const d = data as { sessionId?: string; id?: string };
@@ -358,6 +388,16 @@ export function SideQuestionDrawer({
   const submit = useCallback(async (text: string, images?: ImageAttachment[]): Promise<boolean> => {
     const question = text.trim();
     if (!question || !sessionId) return false;
+    // A filed thread's process was retired, so a follow-up would cold-resume a fork
+    // the user had deliberately put away — invisible in every session list, and past
+    // the reach of the thread reapers. The composer is disabled, but a disabled prop
+    // is not a guarantee (another tab files the thread while this one holds focus).
+    if (isSideThreadReadOnly(activeThread)) {
+      log.info('sideThreads', 'follow-up refused — thread is filed/archived', {
+        sessionId, threadId: activeThread?.id,
+      });
+      return false;
+    }
     if (activeThread?.threadSessionId) {
       log.info('sideThreads', 'follow-up', {
         sessionId, threadId: activeThread.id, threadSessionId: activeThread.threadSessionId,
@@ -405,6 +445,28 @@ export function SideQuestionDrawer({
     clearSideThreadsError(sessionId);
     prewarmSideThread(sessionId);
   }, [sessionId]);
+
+  /** File a thread away, then hand focus to the shelf it went into. */
+  const fileThread = useCallback(async (threadId: string) => {
+    await setSideThreadArchivedOptimistic(sessionId, threadId, true);
+    archivedToggleRef.current?.focus();
+  }, [sessionId]);
+
+  /**
+   * The one irreversible action in the drawer, so it asks first. It sits two pixels
+   * from Restore on an 18px target, and the whole point of this feature is that a
+   * tidy-up click can't destroy the only place a decision was reasoned out.
+   */
+  const purgeThread = useCallback(async (thread: SideThread) => {
+    const ok = await confirmDialog({
+      title: `Delete "${sideThreadLabel(thread)}" permanently?`,
+      message: 'Its conversation goes away for good. Leaving it in Archived costs nothing.',
+      confirmLabel: 'Delete permanently',
+      danger: true,
+    });
+    if (!ok) return;
+    await deleteSideThreadOptimistic(sessionId, thread.id);
+  }, [sessionId, confirmDialog]);
 
   // ── Mode pill ──────────────────────────────────────────────────────────────
   // One control, two subjects: with a thread active it switches THAT session's
@@ -596,31 +658,46 @@ export function SideQuestionDrawer({
             <span className="side-question-popover-hint">multi-turn · kept out of the chat</span>
           </div>
 
-          {/* Thread chips — one per thread, plus "+ New". */}
+          {/* Thread chips — one per LIVE thread, plus "+ New". Filed ones move to
+              the Archived shelf below, which is why the × is an archive and not a
+              delete: an aside is often the only place a decision was reasoned out. */}
           <div className="side-thread-chips">
-            {state.threads.map((t) => {
+            {liveThreads.map((t) => {
               const isActive = t.id === state.activeThreadId;
               const pending = t.id.startsWith(PENDING_THREAD_PREFIX);
               return (
-                <button
-                  key={t.id}
-                  className={`side-thread-chip${isActive ? ' is-active' : ''}`}
-                  onClick={() => setActiveSideThread(sessionId, t.id)}
-                  title={sideThreadLabel(t)}
-                >
-                  {pending
-                    ? <span className="side-question-spinner side-thread-chip-spinner" />
-                    : <ThreadStatusDot threadSessionId={t.threadSessionId} />}
-                  <span className="side-thread-chip-title">{sideThreadLabel(t)}</span>
-                  {t.promotedTaskId && (
-                    <span
-                      className="side-thread-chip-badge"
-                      title={t.promotedTaskId === PENDING_PROMOTE ? 'Creating task…' : 'Task created'}
+                <span key={t.id} className="side-thread-chip-wrap">
+                  <button
+                    className={`side-thread-chip${isActive ? ' is-active' : ''}`}
+                    onClick={() => setActiveSideThread(sessionId, t.id)}
+                    title={sideThreadLabel(t)}
+                  >
+                    {pending
+                      ? <span className="side-question-spinner side-thread-chip-spinner" />
+                      : <ThreadStatusDot threadSessionId={t.threadSessionId} />}
+                    <span className="side-thread-chip-title">{sideThreadLabel(t)}</span>
+                    {t.promotedTaskId && (
+                      <span
+                        className="side-thread-chip-badge"
+                        title={t.promotedTaskId === PENDING_PROMOTE ? 'Creating task…' : 'Task created'}
+                      >
+                        {'✓task'}
+                      </span>
+                    )}
+                  </button>
+                  {/* Not rendered for a pending row: there is no server-side thread to
+                      file yet, and the id would be the optimistic one. */}
+                  {!pending && (
+                    <button
+                      className="side-thread-chip-archive"
+                      onClick={() => void fileThread(t.id)}
+                      title="Archive this side thread (kept, and restorable)"
+                      aria-label={`Archive side thread: ${sideThreadLabel(t)}`}
                     >
-                      {'✓task'}
-                    </span>
+                      {'×'}
+                    </button>
                   )}
-                </button>
+                </span>
               );
             })}
             <button
@@ -630,7 +707,55 @@ export function SideQuestionDrawer({
             >
               {'+ New'}
             </button>
+            {archivedThreads.length > 0 && (
+              <button
+                ref={archivedToggleRef}
+                className={`side-thread-chip side-thread-chip-archived-toggle${archivedOpen ? ' is-active' : ''}`}
+                onClick={() => setArchivedOpen((v) => !v)}
+                title="Side threads you filed away — still readable, and restorable"
+                aria-expanded={archivedOpen}
+                aria-controls={`${instanceId}-archived-shelf`}
+              >
+                {`${archivedOpen ? '▾' : '▸'} Archived (${archivedThreads.length})`}
+              </button>
+            )}
           </div>
+
+          {archivedOpen && archivedThreads.length > 0 && (
+            <div className="side-thread-archived" id={`${instanceId}-archived-shelf`}>
+              {archivedThreads.map((t) => (
+                <span
+                  key={t.id}
+                  className={`side-thread-chip-wrap${t.id === state.activeThreadId ? ' is-active' : ''}`}
+                >
+                  <button
+                    className={`side-thread-chip is-archived${t.id === state.activeThreadId ? ' is-active' : ''}`}
+                    onClick={() => setActiveSideThread(sessionId, t.id)}
+                    title={`${sideThreadLabel(t)} — open (read-only until restored)`}
+                  >
+                    <span className="side-thread-chip-title">{sideThreadLabel(t)}</span>
+                    {t.promotedTaskId && <span className="side-thread-chip-badge">{'✓task'}</span>}
+                  </button>
+                  <button
+                    className="side-thread-chip-archive"
+                    onClick={() => void setSideThreadArchivedOptimistic(sessionId, t.id, false)}
+                    title="Restore this side thread (its process resumes on the next follow-up)"
+                    aria-label={`Restore side thread: ${sideThreadLabel(t)}`}
+                  >
+                    {'↺'}
+                  </button>
+                  <button
+                    className="side-thread-chip-archive side-thread-chip-purge"
+                    onClick={() => void purgeThread(t)}
+                    title="Delete permanently — this one cannot be undone"
+                    aria-label={`Delete side thread permanently: ${sideThreadLabel(t)}`}
+                  >
+                    {'🗑'}
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
 
           {/* Active thread conversation — the ONLY mounted SessionChatHistory. */}
           {activeThread && activeThread.threadSessionId && !activeIsPending ? (
@@ -665,9 +790,13 @@ export function SideQuestionDrawer({
             </div>
           ) : (
             <div className="side-question-empty">
-              {state.threads.length === 0
+              {/* "pick a thread above" has to be true: with every thread filed, the
+                  chip row is empty and the only pickable threads are in the shelf. */}
+              {liveThreads.length === 0 && archivedThreads.length === 0
                 ? 'No side threads yet — ask something below. Each thread is a hidden fork of this session, so the answers never enter the main chat.'
-                : 'New thread — ask below, or pick a thread above to follow up.'}
+                : liveThreads.length === 0
+                  ? 'New thread — ask below, or reopen one from Archived above.'
+                  : 'New thread — ask below, or pick a thread above to follow up.'}
             </div>
           )}
 
@@ -694,10 +823,10 @@ export function SideQuestionDrawer({
                 className="btn btn-sm"
                 onClick={() => void injectDigest(activeThread)}
                 disabled={injecting || digesting || !onInjectToComposer || activeIsPending
-                  || threadStreaming || !!activeThread.archived || !!activeThread.promotedTaskId}
+                  || threadStreaming || isSideThreadReadOnly(activeThread) || !!activeThread.promotedTaskId}
                 title={threadStreaming
                   ? 'Wait for this thread to finish answering, then summarize'
-                  : activeThread.archived
+                  : isSideThreadReadOnly(activeThread)
                     ? 'This thread\'s process is gone — inject the full aside instead'
                     : activeThread.promotedTaskId
                       ? 'This thread is a task now — inject the full aside instead'
@@ -719,14 +848,29 @@ export function SideQuestionDrawer({
                   {'➜ Promote to task'}
                 </button>
               )}
-              <button
-                className="btn btn-sm side-thread-delete"
-                onClick={() => void deleteSideThreadOptimistic(sessionId, activeThread.id)}
-                title="Delete this side thread"
-                aria-label="Delete this side thread"
-              >
-                {'🗑'}
-              </button>
+              {/* The default "done with this" action ARCHIVES; permanent delete lives
+                  in the Archived shelf, one deliberate step further away. On a thread
+                  you already filed, the same slot is the way back — offering "Archive"
+                  there would be a no-op button on the one screen it can't apply to. */}
+              {activeThread.archivedAt ? (
+                <button
+                  className="btn btn-sm side-thread-archive-action side-thread-restore"
+                  onClick={() => void setSideThreadArchivedOptimistic(sessionId, activeThread.id, false)}
+                  title="Restore this side thread so you can follow up again"
+                  aria-label="Restore this side thread"
+                >
+                  {'↺ Restore'}
+                </button>
+              ) : (
+                <button
+                  className="btn btn-sm side-thread-archive-action side-thread-delete"
+                  onClick={() => void setSideThreadArchivedOptimistic(sessionId, activeThread.id, true)}
+                  title="Archive this side thread — kept and restorable, out of the chip row"
+                  aria-label="Archive this side thread"
+                >
+                  {'⌦ Archive'}
+                </button>
+              )}
             </div>
           )}
 
@@ -741,15 +885,15 @@ export function SideQuestionDrawer({
           <div className="side-question-composer">
             <label className="side-question-composer-label">
               {activeThread
-                ? (activeThread.archived
-                  ? `Archived · ${sideThreadLabel(activeThread)} — history only`
+                ? (isSideThreadReadOnly(activeThread)
+                  ? `Archived · ${sideThreadLabel(activeThread)} — history only${activeThread.archivedAt ? ' (restore it to follow up)' : ''}`
                   : `Follow up · ${sideThreadLabel(activeThread)}`)
                 : 'New side thread'}
             </label>
             <ChatInput
               onSend={(text, images) => submit(text, images)}
               placeholder={activeThread ? 'Follow up…' : 'Ask a side question…'}
-              disabled={disabled || state.creating || !!activeThread?.archived}
+              disabled={disabled || state.creating || isSideThreadReadOnly(activeThread)}
               showCommands={false}
               enableEntityMention={false}
               mentionCwd={cwd}

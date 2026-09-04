@@ -456,6 +456,60 @@ describe('side-thread routes', () => {
     expect(res.status).toBe(404)
   })
 
+  it('archives a thread (row survives, list still returns it) and restores it', async () => {
+    const { thread } = await (await post(`/api/sessions/${PARENT}/side-threads`, {
+      question: 'file me away',
+    })).json() as { thread: { id: string; threadSessionId: string } }
+
+    const arch = await post(`/api/sessions/${PARENT}/side-threads/${thread.id}/archive`, {})
+    expect(arch.status).toBe(200)
+    const archBody = await arch.json() as { archived: boolean; archivedAt: string }
+    expect(archBody.archived).toBe(true)
+    expect(archBody.archivedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+
+    // The row is STILL THERE — that is the difference from DELETE — and carries the
+    // stamp the drawer files it by.
+    const listed = await (await fetch(apiUrl(`/api/sessions/${PARENT}/side-threads`))).json() as {
+      threads: Array<{ id: string; question?: string; archivedAt?: string }>
+    }
+    const row = listed.threads.find((t) => t.id === thread.id)
+    expect(row?.question).toBe('file me away')
+    expect(row?.archivedAt).toBe(archBody.archivedAt)
+
+    const restored = await post(`/api/sessions/${PARENT}/side-threads/${thread.id}/restore`, {})
+    expect(restored.status).toBe(200)
+    const after = await (await fetch(apiUrl(`/api/sessions/${PARENT}/side-threads`))).json() as {
+      threads: Array<{ id: string; archivedAt?: string }>
+    }
+    expect(after.threads.find((t) => t.id === thread.id)?.archivedAt).toBeUndefined()
+  })
+
+  it('promoting a FILED thread un-files it (a task must not own a dead session)', async () => {
+    const { thread } = await (await post(`/api/sessions/${PARENT}/side-threads`, {
+      question: 'this aside turned into real work',
+    })).json() as { thread: { id: string; threadSessionId: string } }
+    await post(`/api/sessions/${PARENT}/side-threads/${thread.id}/archive`, {})
+    expect((await getSessionByClaudeId(thread.threadSessionId))?.archived).toBe(true)
+
+    const promoted = await post(`/api/sessions/${PARENT}/side-threads/${thread.id}/promote`, {})
+    expect(promoted.status).toBe(200)
+
+    // Promote is strictly stronger than restore: the stamp is gone and the session
+    // is live again, so the new task has something it can actually work.
+    const listed = await (await fetch(apiUrl(`/api/sessions/${PARENT}/side-threads`))).json() as {
+      threads: Array<{ id: string; archivedAt?: string }>
+    }
+    expect(listed.threads.find((t) => t.id === thread.id)?.archivedAt).toBeUndefined()
+    const record = await getSessionByClaudeId(thread.threadSessionId)
+    expect(record?.archived).toBeFalsy()
+    expect(record?.taskId).toBeTruthy()
+  })
+
+  it('404s archiving or restoring an unknown thread', async () => {
+    expect((await post(`/api/sessions/${PARENT}/side-threads/sth-nope/archive`, {})).status).toBe(404)
+    expect((await post(`/api/sessions/${PARENT}/side-threads/sth-nope/restore`, {})).status).toBe(404)
+  })
+
   it('404s deleting an unknown thread', async () => {
     const res = await fetch(apiUrl(`/api/sessions/${PARENT}/side-threads/sth-nope`), {
       method: 'DELETE',

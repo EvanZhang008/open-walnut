@@ -23,6 +23,7 @@ import { GoogleAdapter } from './adapter-google.js';
 import { OllamaAdapter } from './adapter-ollama.js';
 import { ClaudeCliAdapter } from './adapter-claude-cli.js';
 import { log } from '../../logging/index.js';
+import { CLAUDE_CLI_PROVIDER, claudeCliAvailable } from './default-provider.js';
 
 // ── Adapter factory ──
 
@@ -131,10 +132,17 @@ export function buildProviderMap(
 ): Record<string, ProviderConfig> {
   const result: Record<string, ProviderConfig> = {};
 
-  // 1. Auto-detect from environment
+  // 1. Auto-detect from environment. `claude_cli` is KEYLESS by design (it rides the
+  //    CLI's own login), so an api-key probe can never find it — and since it is also
+  //    the DEFAULT provider whenever the binary is installed, leaving it out made every
+  //    background model call on such a machine die with `Provider "claude_cli" not
+  //    found in config. Available: bedrock, ollama` (observed on prod: side-thread and
+  //    session auto-titles, both retries). Its readiness test is the binary itself.
   for (const [name, template] of Object.entries(KNOWN_PROVIDERS)) {
     const apiKey = autoDetectApiKey(name);
-    if (apiKey || name === 'bedrock' || name === 'ollama') {
+    const keyless = name === 'bedrock' || name === 'ollama'
+      || (name === CLAUDE_CLI_PROVIDER && claudeCliAvailable());
+    if (apiKey || keyless) {
       result[name] = { ...template, ...(apiKey ? { api_key: apiKey } : {}) };
     }
   }

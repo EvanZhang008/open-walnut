@@ -34,6 +34,13 @@ export interface SideThread {
   promotedGroupId?: string;
   /** Its session record is gone or archived — the transcript is history only. */
   archived?: boolean;
+  /**
+   * FILED AWAY by the user (the chip's ×). Set = it belongs in the drawer's Archived
+   * section, not the chip row. Not the same as `archived` above: that one is derived
+   * from the session record (the process is gone), this one is the user's intent, and
+   * a filed thread can be restored.
+   */
+  archivedAt?: string;
 }
 
 export interface SideThreadsResponse {
@@ -141,6 +148,31 @@ export function requestSideThreadDigest(
   threadId: string,
 ): Promise<{ requested: true; threadSessionId: string; replyMarker: string }> {
   return apiPost(`/api/sessions/${sessionId}/side-threads/${threadId}/digest`);
+}
+
+/**
+ * File a thread away: the row survives (this is the × on the chip), only its CLI
+ * process is retired. `deleteSideThread` below is the permanent one and is reachable
+ * only from the Archived section.
+ */
+export function archiveSideThread(
+  sessionId: string,
+  threadId: string,
+): Promise<{ archived: true; archivedAt: string }> {
+  return apiPost(`/api/sessions/${sessionId}/side-threads/${threadId}/archive`);
+}
+
+/**
+ * Bring a filed thread back, usable again (the record un-archives, so a follow-up
+ * cold-resumes the fork). `archived` in the answer is the SESSION's real state, not
+ * an echo: un-archiving the record can fail, and the drawer must keep the composer
+ * locked in that case rather than offering a follow-up the send path would refuse.
+ */
+export function restoreSideThread(
+  sessionId: string,
+  threadId: string,
+): Promise<{ archived: boolean }> {
+  return apiPost(`/api/sessions/${sessionId}/side-threads/${threadId}/restore`);
 }
 
 export function deleteSideThread(sessionId: string, threadId: string): Promise<{ ok: true }> {

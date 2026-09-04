@@ -15,6 +15,7 @@ import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tr
 import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQueued, unparkMessage } from '../../core/session-message-queue.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
 import { prepareOutputModeSend } from '../../core/sessions/output-mode-send.js'
+import { SIDE_LANE_PREFIX } from '../../core/sessions/side-thread-fork.js'
 import { buildReferenceCards, appendReferenceCards, stripReferenceCards } from '../../core/sessions/reference-cards.js'
 import { saveImageToDisk, resolveImageRefs } from './images.js'
 import { log } from '../../logging/index.js'
@@ -121,6 +122,15 @@ export function registerSessionChatRpc(): void {
 
     // Check if this is an embedded session — route to SubagentRunner instead of CLI queue
     const record = await getSessionByClaudeId(data.sessionId)
+
+    // A FILED side thread stays filed. Its process was retired on purpose, so a send
+    // would cold-resume a fork the user put away — and a lane session is hidden from
+    // every session list while `threadRecords()` skips archived rows, so nothing would
+    // ever reap it either. Scoped to `side:` lanes: an ordinary archived session keeps
+    // its existing resume-on-send behaviour.
+    if (record?.archived && record.lane?.startsWith(SIDE_LANE_PREFIX)) {
+      throw new Error('side thread is archived — restore it before following up')
+    }
 
     // Remote image transfer: RemoteSessionManager.prepareOutbound() uploads local images
     // and rewrites paths inside start() and writeMessage(). No manual transfer needed here.

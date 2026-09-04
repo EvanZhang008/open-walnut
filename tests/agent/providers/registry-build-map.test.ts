@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { buildProviderMap } from '../../../src/agent/providers/registry.js';
+import { _resetDefaultProviderCacheForTesting } from '../../../src/agent/providers/default-provider.js';
+import * as cliDetect from '../../../src/core/claude-cli-detect.js';
 import type { ProviderConfig } from '../../../src/agent/providers/types.js';
 
 /**
@@ -45,5 +47,37 @@ describe('buildProviderMap — explicit config merges onto known templates', () 
     };
     const map = buildProviderMap(explicit);
     expect(map.bedrock.api).toBe('anthropic-messages');
+  });
+});
+
+/**
+ * `claude_cli` is the DEFAULT provider whenever the binary is installed, and it is
+ * KEYLESS by design (it rides the CLI's own login). Leaving it out of the map made
+ * every background model call on such a machine die with
+ * `Provider "claude_cli" not found in config. Available: bedrock, ollama` — observed
+ * on prod for both the side-thread title and the session auto-title fallback, on both
+ * retries. Its readiness test is the binary, not an api key.
+ */
+describe('buildProviderMap — the keyless default provider', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    _resetDefaultProviderCacheForTesting();
+  });
+
+  it('includes claude_cli when the binary is installed', () => {
+    vi.spyOn(cliDetect, 'isClaudeCliInstalled').mockReturnValue(true);
+    _resetDefaultProviderCacheForTesting();
+    const map = buildProviderMap();
+    expect(map.claude_cli?.api).toBe('claude-cli');
+  });
+
+  it('leaves it out when there is no binary to ride', () => {
+    vi.spyOn(cliDetect, 'isClaudeCliInstalled').mockReturnValue(false);
+    _resetDefaultProviderCacheForTesting();
+    const map = buildProviderMap();
+    expect(map.claude_cli).toBeUndefined();
+    // The keyless pair that was always there stays there.
+    expect(map.bedrock?.api).toBe('bedrock');
+    expect(map.ollama?.api).toBe('ollama');
   });
 });

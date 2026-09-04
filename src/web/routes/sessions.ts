@@ -2087,7 +2087,10 @@ sessionsRouter.post('/:sessionId/side-threads/:threadId/promote', async (req: Re
   }
 })
 
-// DELETE /api/sessions/:sessionId/side-threads/:threadId — stop + archive + forget
+// POST /api/sessions/:sessionId/side-threads/:threadId/digest — ask the thread to
+// summarize ITSELF for the "inject summary" action. Enqueue-and-return: the reply
+// lands as an ordinary turn on that session's stream, which the drawer already
+// watches, so this route never waits on the model.
 sessionsRouter.post('/:sessionId/side-threads/:threadId/digest', async (req: Request, res: Response, next: NextFunction) => {
   if (refuseSideThreadsOnReplica(res)) return
   try {
@@ -2106,6 +2109,39 @@ sessionsRouter.post('/:sessionId/side-threads/:threadId/digest', async (req: Req
   }
 })
 
+// POST /api/sessions/:sessionId/side-threads/:threadId/archive — file the thread
+// away (the chip's ×). The row survives and stays readable; only the CLI process is
+// retired. DELETE below is the permanent one, and lives behind the Archived shelf.
+sessionsRouter.post('/:sessionId/side-threads/:threadId/archive', async (req, res, next) => {
+  if (refuseSideThreadsOnReplica(res)) return
+  try {
+    const { sideThreadManager } = await import('../../core/sessions/side-thread-manager.js')
+    const { archivedAt } = await sideThreadManager.archiveThread(
+      String(req.params.sessionId), String(req.params.threadId),
+    )
+    res.json({ archived: true, archivedAt })
+  } catch (err) {
+    sendSideThreadError(err, res, next)
+  }
+})
+
+// POST .../restore — bring a filed thread back, usable (not just visible).
+sessionsRouter.post('/:sessionId/side-threads/:threadId/restore', async (req, res, next) => {
+  if (refuseSideThreadsOnReplica(res)) return
+  try {
+    const { sideThreadManager } = await import('../../core/sessions/side-thread-manager.js')
+    const { recordArchived } = await sideThreadManager.restoreThread(
+      String(req.params.sessionId), String(req.params.threadId),
+    )
+    // `archived` is the honest state of the thread's SESSION, not a rubber stamp: if
+    // un-archiving the record failed, the client must keep the composer locked.
+    res.json({ archived: recordArchived })
+  } catch (err) {
+    sendSideThreadError(err, res, next)
+  }
+})
+
+// DELETE /api/sessions/:sessionId/side-threads/:threadId — stop + archive + forget
 sessionsRouter.delete('/:sessionId/side-threads/:threadId', async (req: Request, res: Response, next: NextFunction) => {
   if (refuseSideThreadsOnReplica(res)) return
   try {

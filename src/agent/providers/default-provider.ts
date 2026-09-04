@@ -34,6 +34,12 @@ function claudeCliInstalledCached(): boolean {
   return cliProbe.installed;
 }
 
+/** Is the `claude` binary available? Cached (see CLI_PROBE_TTL_MS) so callers on
+ *  the send path don't each pay a filesystem probe. */
+export function claudeCliAvailable(): boolean {
+  return claudeCliInstalledCached();
+}
+
 /** Test hook: forget the cached binary probe. */
 export function _resetDefaultProviderCacheForTesting(): void {
   cliProbe = undefined;

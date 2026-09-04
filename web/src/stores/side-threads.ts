@@ -24,6 +24,8 @@ import {
   warmSideThreadStandby,
   promoteSideThread as apiPromoteSideThread,
   deleteSideThread as apiDeleteSideThread,
+  archiveSideThread as apiArchiveSideThread,
+  restoreSideThread as apiRestoreSideThread,
   prewarmSideThreadStandby,
   isForkUnsupportedError,
   type SideThread,
@@ -68,6 +70,13 @@ const byParent = new Map<string, SideThreadsState>();
 const listeners = new Set<() => void>();
 const inflightList = new Map<string, Promise<void>>();
 const lastPrewarmAt = new Map<string, number>();
+/**
+ * Archive/restore writes still awaiting their server answer, keyed `<parent>:<thread>`.
+ * A refresh landing inside that window must keep the optimistic flags — the archive
+ * POST waits on a bounded process terminate, so the window is seconds wide.
+ */
+const archiveInFlight = new Map<string, Pick<SideThread, 'archivedAt' | 'archived'>>();
+const archiveKey = (parentSessionId: string, threadId: string) => `${parentSessionId}:${threadId}`;
 let pendingSeq = 0;
 
 /** Only ONE drawer instance may be open app-wide (see file header). */
@@ -117,9 +126,13 @@ export function setOpenDrawerInstance(instanceId: string | null): void {
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
-/** Total shown on the pill: live threads + legacy one-shot entries. */
+/**
+ * Total shown on the pill: live threads + legacy one-shot entries. FILED threads are
+ * excluded on purpose — the number has to fall when you tidy up, or the pill keeps
+ * claiming a pile you already dealt with and archiving stops meaning anything.
+ */
 export function sideThreadsBadgeCount(state: SideThreadsState): number {
-  return state.threads.length + state.legacy.length;
+  return state.threads.filter((t) => !t.archivedAt).length + state.legacy.length;
 }
 
 export function findSideThread(state: SideThreadsState, threadId: string | null): SideThread | null {
@@ -310,7 +323,16 @@ export function refreshSideThreads(parentSessionId: string | undefined): Promise
       const stillPending = cur.threads.filter(
         (t) => t.id.startsWith(PENDING_THREAD_PREFIX) && !serverIds.has(t.id),
       );
-      const threads = [...serverThreads, ...stillPending];
+      // Same protection for a row whose archive/restore is still in flight. The POST
+      // waits on an ~8s-bounded terminate, and either drawer mount can refresh inside
+      // that window; taking the server's (pre-request) answer would put the chip back
+      // in the live row with an unlocked composer, and nothing would re-file it until
+      // the NEXT refresh.
+      const withOptimisticArchive = serverThreads.map((t) => {
+        const local = archiveInFlight.get(archiveKey(parentSessionId, t.id));
+        return local ? { ...t, ...local } : t;
+      });
+      const threads = [...withOptimisticArchive, ...stillPending];
       const activeStillThere = cur.activeThreadId
         && threads.some((t) => t.id === cur.activeThreadId);
       patch(parentSessionId, {
@@ -500,6 +522,14 @@ export async function promoteSideThreadOptimistic(
   try {
     const { taskId, groupId } = await apiPromoteSideThread(parentSessionId, threadId);
     mark(threadId, taskId, groupId);
+    // Promote un-files server-side (a task must not own a dead session), so mirror
+    // it here: otherwise a thread promoted OUT of the Archived shelf stays sitting
+    // in the shelf, dashed and read-only, while its session is live and owns a task.
+    patch(parentSessionId, {
+      threads: read(parentSessionId).threads.map((t) => (
+        t.id === threadId ? { ...t, archivedAt: undefined, archived: false } : t
+      )),
+    });
   } catch (err) {
     const cur = read(parentSessionId);
     const msg = err instanceof Error ? err.message : String(err);
@@ -545,6 +575,132 @@ export async function deleteSideThreadOptimistic(
   }
 }
 
+/**
+ * The chip row shows LIVE threads; filed ones live behind the Archived toggle.
+ * Both selectors keep the store's order (oldest first, the order threads were
+ * created), except the archived list reads newest-filed first — that is the order
+ * you look for something you just tidied away.
+ */
+export function activeSideThreads(state: SideThreadsState): SideThread[] {
+  return state.threads.filter((t) => !t.archivedAt);
+}
+
+export function archivedSideThreads(state: SideThreadsState): SideThread[] {
+  return state.threads.filter((t) => !!t.archivedAt)
+    .sort((a, b) => (b.archivedAt ?? '').localeCompare(a.archivedAt ?? ''));
+}
+
+/**
+ * Can this thread still be talked to? A thread you FILED (`archivedAt`) had its CLI
+ * process retired at that moment, so a follow-up would silently cold-resume a fork
+ * you had put away; restore is the deliberate way back, and the send path refuses
+ * the shortcut. `archived` is the record-level flag: the session was archived, which
+ * the send path rejects outright — the ordinary idle reaper does NOT set it (it only
+ * kills the process, leaving the thread cold-resumable), so in practice this arm
+ * catches a filed thread seen through an older list and the sweep's non-revivable
+ * branch. Two flags, one consequence, and the optimistic path knows only the first.
+ */
+export function isSideThreadReadOnly(t: SideThread | null | undefined): boolean {
+  return !!t && (!!t.archived || !!t.archivedAt);
+}
+
+/**
+ * File a thread away / bring it back. Optimistic like every other drawer action, and
+ * REVERSIBLE on failure: only two flags move, so a rollback is just putting the old
+ * pair back. The row itself is never removed here — that is the whole difference
+ * from deleteSideThreadOptimistic.
+ *
+ * BOTH flags have to move together. The server retires the process on archive and
+ * un-archives the record on restore, so a client that tracked `archivedAt` alone
+ * would keep a stale `archived: true` from the last list after a restore — the chip
+ * comes back but the composer stays locked, with the actions slot already flipped
+ * back to "Archive", i.e. no way out without reopening the drawer.
+ */
+export async function setSideThreadArchivedOptimistic(
+  parentSessionId: string | undefined,
+  threadId: string,
+  archived: boolean,
+): Promise<void> {
+  if (!parentSessionId) return;
+  const cur = read(parentSessionId);
+  const target = cur.threads.find((t) => t.id === threadId);
+  if (!target || threadId.startsWith(PENDING_THREAD_PREFIX)) return;
+  const previousActive = cur.activeThreadId;
+  const previous: Pick<SideThread, 'archivedAt' | 'archived'> = {
+    archivedAt: target.archivedAt, archived: target.archived,
+  };
+  const next: Pick<SideThread, 'archivedAt' | 'archived'> = archived
+    ? {
+      archivedAt: previous.archivedAt ?? new Date().toISOString(),
+      // A promoted thread keeps its live process (the server skips the retire),
+      // so don't claim its record died just because it was filed.
+      archived: target.promotedTaskId ? previous.archived : true,
+    }
+    : { archivedAt: undefined, archived: false };
+  const key = archiveKey(parentSessionId, threadId);
+  const apply = (
+    value: Pick<SideThread, 'archivedAt' | 'archived'>,
+    activeThreadId: string | null,
+  ) => {
+    // Held while the request is in flight so a concurrent refresh re-applies it
+    // instead of taking the server's pre-request answer (see refreshSideThreads).
+    archiveInFlight.set(key, value);
+    patch(parentSessionId, {
+      threads: read(parentSessionId).threads.map(
+        (t) => (t.id === threadId ? { ...t, ...value } : t),
+      ),
+      activeThreadId,
+    });
+  };
+  // Filing the thread you are looking at drops you back on the "+ New" composer;
+  // leaving it selected would keep a filed thread mounted in the drawer body.
+  apply(next, archived && previousActive === threadId ? null : previousActive);
+  try {
+    if (archived) {
+      await apiArchiveSideThread(parentSessionId, threadId);
+      apply(next, read(parentSessionId).activeThreadId);
+    } else {
+      // The server reports the SESSION's real state: un-archiving the record can
+      // fail, and unlocking the composer over a still-archived record would only
+      // move the refusal to the send.
+      const { archived: recordArchived } = await apiRestoreSideThread(parentSessionId, threadId);
+      apply({ archivedAt: undefined, archived: recordArchived },
+        read(parentSessionId).activeThreadId);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn('sideThreads', 'archive toggle failed (restoring row state)', {
+      sessionId: parentSessionId, threadId, archived, error: msg,
+    });
+    // Put the selection back too: a refused archive must not silently close the
+    // conversation the user was reading.
+    apply(previous, previousActive);
+    patch(parentSessionId, {
+      error: `${archived ? 'Archive' : 'Restore'} failed: ${msg}`,
+    });
+  } finally {
+    archiveInFlight.delete(key);
+  }
+}
+
+/**
+ * A thread's auto-generated title landed (server event `session:side-thread-renamed`).
+ * Patch the row in place: the drawer re-lists only when it opens, so without this the
+ * user reads the truncated question for the whole conversation they just started.
+ */
+export function applySideThreadTitle(
+  parentSessionId: string | undefined,
+  threadId: string,
+  title: string,
+): void {
+  if (!parentSessionId || !title) return;
+  const cur = read(parentSessionId);
+  if (!cur.threads.some((t) => t.id === threadId && t.title !== title)) return;
+  patch(parentSessionId, {
+    threads: cur.threads.map((t) => (t.id === threadId ? { ...t, title } : t)),
+  });
+}
+
 /** Apply a legacy (one-shot) entry list update — used after a legacy promote. */
 export function updateLegacySideQuestions(
   parentSessionId: string | undefined,
@@ -558,6 +714,7 @@ export function updateLegacySideQuestions(
 export function __resetSideThreadsStore(): void {
   byParent.clear();
   inflightList.clear();
+  archiveInFlight.clear();
   lastPrewarmAt.clear();
   warmRequested.clear();
   openInstanceId = null;
