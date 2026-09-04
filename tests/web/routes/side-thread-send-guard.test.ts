@@ -47,6 +47,7 @@ import {
   createSessionRecord, updateSessionRecord, _resetSessionTrackerForTesting,
 } from '../../../src/core/session-tracker.js'
 import { sideThreadLaneKey } from '../../../src/core/sessions/side-thread-fork.js'
+import { addSideThread, setSideThreadArchived } from '../../../src/core/side-questions.js'
 
 const PARENT = '11111111-1111-4111-8111-111111111111'
 const fakeClient = {} as never
@@ -98,6 +99,30 @@ describe('session:send — a filed side thread refuses the follow-up', () => {
 
   it('allows the same thread once it is restored', async () => {
     const sid = await newThreadSession({ lane: sideThreadLaneKey(PARENT, 'sth-2') })
+
+    await expect(callSend(sid, 'one more thing')).resolves.toBeTruthy()
+    expect(await getQueue(sid)).toHaveLength(1)
+  })
+
+  /** The one filed state that keeps its process: a thread with no transcript yet is
+   *  filed WITHOUT the kill (killing it would strand it), so the record flag says
+   *  nothing. The row carries the stamp, and the row is what the user acted on. */
+  it('refuses a thread the ROW says was filed, even with the record still un-archived', async () => {
+    const sid = await newThreadSession({ lane: sideThreadLaneKey(PARENT, 'sth-filed') })
+    await addSideThread(PARENT, {
+      id: 'sth-filed', question: 'why does bind() need this', threadSessionId: sid,
+    })
+    await setSideThreadArchived(PARENT, 'sth-filed', true)
+
+    await expect(callSend(sid, 'one more thing')).rejects.toThrow(/archived/i)
+    expect(await getQueue(sid)).toHaveLength(0)
+  })
+
+  it('allows a side thread whose row is present and NOT filed', async () => {
+    const sid = await newThreadSession({ lane: sideThreadLaneKey(PARENT, 'sth-live') })
+    await addSideThread(PARENT, {
+      id: 'sth-live', question: 'still working on this', threadSessionId: sid,
+    })
 
     await expect(callSend(sid, 'one more thing')).resolves.toBeTruthy()
     expect(await getQueue(sid)).toHaveLength(1)

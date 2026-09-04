@@ -664,8 +664,20 @@ export async function setSideThreadArchivedOptimistic(
       // fail, and unlocking the composer over a still-archived record would only
       // move the refusal to the send.
       const { archived: recordArchived } = await apiRestoreSideThread(parentSessionId, threadId);
-      apply({ archivedAt: undefined, archived: recordArchived },
-        read(parentSessionId).activeThreadId);
+      if (recordArchived) {
+        // A restore the server could not complete (the thread's session row is gone)
+        // must stay a restore that FAILED. Clearing the stamp anyway moved the row
+        // into the live chip row with a composer that stays locked, an action slot
+        // offering "Archive" again, and no ↺ anywhere: a dead end that survives a
+        // refresh. Keep it on the shelf, where the affordance and the reason both are.
+        apply(previous, previousActive);
+        patch(parentSessionId, {
+          error: 'Restore failed: this side thread\'s session is gone — its transcript is still readable',
+        });
+      } else {
+        apply({ archivedAt: undefined, archived: false },
+          read(parentSessionId).activeThreadId);
+      }
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

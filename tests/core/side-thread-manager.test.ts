@@ -641,6 +641,41 @@ describe('retire + list', () => {
     expect((await listSideQuestions(PARENT))[0]!.archivedAt).toBeTruthy()
   })
 
+  /** Filing an aside must not make the NEXT ask wait. The terminate is a daemon RPC
+   *  bounded at 8s and `createThread`/`ensureStandby` share this parent's queue, so
+   *  holding it for the kill is felt as "I filed one and the new question hung". Only
+   *  the stamp is serialized; the promote race is closed by the re-read, not the lock. */
+  it('archiveThread does not hold the parent queue while the process is terminating', async () => {
+    const a = await sideThreadManager.createThread(PARENT, { question: 'a' })
+    await settle()
+    const b = await sideThreadManager.createThread(PARENT, { question: 'b' })
+    await settle()
+
+    let releaseKill: () => void = () => {}
+    const killStarted = new Promise<void>((resolveStarted) => {
+      mocks.terminateSession.mockImplementationOnce(async () => {
+        resolveStarted()
+        await new Promise<void>((r) => { releaseKill = r })
+      })
+    })
+
+    const filing = sideThreadManager.archiveThread(PARENT, a.id)
+    await killStarted
+
+    // Another queued op on the SAME parent completes while the kill is still pending.
+    // Raced against a timer so a regression fails as an assertion, not as a 5s hang.
+    const queued = sideThreadManager.restoreThread(PARENT, b.id).then(() => 'ran' as const)
+    const winner = await Promise.race([
+      queued,
+      new Promise<'blocked'>((r) => setTimeout(() => r('blocked'), 300)),
+    ])
+    expect(winner).toBe('ran')
+
+    releaseKill()
+    await Promise.all([filing, queued])
+    expect((await listSideQuestions(PARENT)).find((q) => q.id === a.id)?.archivedAt).toBeTruthy()
+  })
+
   it('restoreThread reports the SESSION state it actually achieved', async () => {
     const thread = await sideThreadManager.createThread(PARENT, { question: 'q' })
     await settle()

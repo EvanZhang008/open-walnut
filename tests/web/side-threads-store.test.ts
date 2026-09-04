@@ -825,9 +825,11 @@ describe('side-threads store — archive (file away, never delete)', () => {
     expect(isSideThreadReadOnly(row)).toBe(false);
   });
 
-  it('believes the SERVER about the session state, not the request it made', async () => {
-    // Un-archiving the record can fail server-side; unlocking the composer over that
-    // would only move the refusal to the send.
+  it('believes the SERVER about the session state, and a restore it refused stays FAILED', async () => {
+    // Un-archiving the record can fail server-side (the session row is gone). Clearing
+    // the stamp anyway moved the row into the live chip row with a locked composer, an
+    // action slot offering "Archive" again and no ↺ anywhere — a dead end that survives
+    // a refresh. It stays on the shelf, where the retry and the reason both live.
     api.listSideThreads.mockResolvedValue({
       threads: [thread({ archivedAt: '2026-09-01T00:00:00.000Z', archived: true })],
       legacy: [],
@@ -835,9 +837,12 @@ describe('side-threads store — archive (file away, never delete)', () => {
     await refreshSideThreads(PARENT);
     api.restoreSideThread.mockResolvedValue({ archived: true });
     await setSideThreadArchivedOptimistic(PARENT, 'st-1', false);
-    const row = getSideThreadsState(PARENT).threads[0];
-    expect(row?.archivedAt).toBeUndefined();
+    const state = getSideThreadsState(PARENT);
+    const row = state.threads[0];
+    expect(row?.archivedAt).toBe('2026-09-01T00:00:00.000Z');
     expect(isSideThreadReadOnly(row)).toBe(true);
+    expect(archivedSideThreads(state).map((t) => t.id)).toEqual(['st-1']);
+    expect(state.error).toMatch(/Restore failed/);
   });
 
   it('filing a PROMOTED thread does not claim its process died (the server keeps it)', async () => {

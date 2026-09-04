@@ -529,7 +529,13 @@ class SideThreadManager {
    * the same asymmetry retireThread has.
    */
   async archiveThread(parentSid: string, threadId: string): Promise<{ archivedAt: string }> {
-    return this.serialize(parentSid, async () => {
+    // Only the STAMP is serialized. The retire below is a daemon RPC bounded at 8s,
+    // and `createThread`/`ensureStandby` share this same per-parent queue — holding it
+    // for the terminate makes "file this aside, then ask a new one" wait out the kill
+    // on a slow host. Cap enforcement is kept off the ask path for exactly this
+    // reason; the promote race is closed by re-reading the row afterwards, not by the
+    // lock, so the retire does not need it.
+    const plan = await this.serialize(parentSid, async () => {
       const { setSideThreadArchived } = await import('../side-questions.js');
       // Stamp FIRST, and decide from the row the stamp just returned. The old order
       // (kill, then stamp) read `promotedTaskId` from a snapshot taken before an
@@ -547,30 +553,37 @@ class SideThreadManager {
       const { getSessionByClaudeId } = await import('../session-tracker.js');
       const record = await getSessionByClaudeId(updated.threadSessionId);
       const strandable = !!record && isLive(record) && !isRevivable(record);
-      if (!updated.promotedTaskId && !strandable) {
-        await this.retireSession(updated.threadSessionId, 'side_thread_archived');
-        // The terminate is bounded at 8s, and promote does not run through this
-        // manager's queue, so a promote can still land INSIDE it — after which our
-        // `archived: true` has overwritten the promote's `archived: false` and the
-        // new task owns a session it can never work. Re-read and undo rather than
-        // narrow the window: the row is the authority on which one won.
-        const { getSideQuestion } = await import('../side-questions.js');
-        const after = await getSideQuestion(parentSid, threadId);
-        if (after?.promotedTaskId) {
-          const { updateSessionRecord } = await import('../session-tracker.js');
-          await updateSessionRecord(updated.threadSessionId, {
-            archived: false, archive_reason: '',
-          }).catch(() => {});
-          log.session.info('side thread: archive un-archived a session promoted mid-retire', {
-            parentSid, threadId, taskId: after.promotedTaskId,
-          });
-        }
-      }
-      log.session.info('side thread: archived', {
-        parentSid, threadId, retiredProcess: !updated.promotedTaskId && !strandable, strandable,
-      });
-      return { archivedAt: updated.archivedAt };
+      return {
+        archivedAt: updated.archivedAt,
+        threadSessionId: updated.threadSessionId,
+        retire: !updated.promotedTaskId && !strandable,
+        strandable,
+      };
     });
+
+    if (plan.retire) {
+      await this.retireSession(plan.threadSessionId, 'side_thread_archived');
+      // The terminate is bounded at 8s, and promote does not run through this
+      // manager's queue, so a promote can still land INSIDE it — after which our
+      // `archived: true` has overwritten the promote's `archived: false` and the
+      // new task owns a session it can never work. Re-read and undo rather than
+      // narrow the window: the row is the authority on which one won.
+      const { getSideQuestion } = await import('../side-questions.js');
+      const after = await getSideQuestion(parentSid, threadId);
+      if (after?.promotedTaskId) {
+        const { updateSessionRecord } = await import('../session-tracker.js');
+        await updateSessionRecord(plan.threadSessionId, {
+          archived: false, archive_reason: '',
+        }).catch(() => {});
+        log.session.info('side thread: archive un-archived a session promoted mid-retire', {
+          parentSid, threadId, taskId: after.promotedTaskId,
+        });
+      }
+    }
+    log.session.info('side thread: archived', {
+      parentSid, threadId, retiredProcess: plan.retire, strandable: plan.strandable,
+    });
+    return { archivedAt: plan.archivedAt };
   }
 
   /**

@@ -15,7 +15,8 @@ import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tr
 import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQueued, unparkMessage } from '../../core/session-message-queue.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
 import { prepareOutputModeSend } from '../../core/sessions/output-mode-send.js'
-import { SIDE_LANE_PREFIX } from '../../core/sessions/side-thread-fork.js'
+import { parseSideLaneKey } from '../../core/sessions/side-thread-fork.js'
+import { getSideQuestion } from '../../core/side-questions.js'
 import { buildReferenceCards, appendReferenceCards, stripReferenceCards } from '../../core/sessions/reference-cards.js'
 import { saveImageToDisk, resolveImageRefs } from './images.js'
 import { log } from '../../logging/index.js'
@@ -128,8 +129,18 @@ export function registerSessionChatRpc(): void {
     // every session list while `threadRecords()` skips archived rows, so nothing would
     // ever reap it either. Scoped to `side:` lanes: an ordinary archived session keeps
     // its existing resume-on-send behaviour.
-    if (record?.archived && record.lane?.startsWith(SIDE_LANE_PREFIX)) {
-      throw new Error('side thread is archived — restore it before following up')
+    //
+    // The ROW is the authority on "the user put this away", not the record flag: a
+    // thread filed within its first seconds keeps its process on purpose (killing a
+    // fork that never wrote a transcript would strand it), so `archived` is still
+    // false there while `archivedAt` is already stamped. Only side lanes pay the
+    // extra read, and only when the record flag has not already answered.
+    const sideLane = parseSideLaneKey(record?.lane)
+    if (sideLane) {
+      const filed = record?.archived || !!(await getSideQuestion(
+        sideLane.parentSid, sideLane.threadId,
+      ).catch(() => undefined))?.archivedAt
+      if (filed) throw new Error('side thread is archived — restore it before following up')
     }
 
     // Remote image transfer: RemoteSessionManager.prepareOutbound() uploads local images
