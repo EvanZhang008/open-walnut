@@ -78,6 +78,30 @@ failure re-launches that snapshot instead of leaving :3456 dark. Knobs:
 `WALNUT_DEVPROD_SMOKE_SECS` (default 120), `WALNUT_DEVPROD_SKIP_SMOKE=1`,
 `WALNUT_DEVPROD_LKG_DIR`. Ratchets: `tests/scripts/dev-prod-smoke-rollback.test.ts`.
 
+**A deploy must not pull the floor out from under an open window.** Every deploy re-hashes and
+WIPES `dist/web/static/assets`, so a window that was open before it still runs the old entry
+bundle and 404s the first time it reaches for a chunk it had not loaded yet. That fetch happens
+inside a click (opening a `.go` file asks for its CodeMirror grammar), `vite:preloadError` fires,
+and `stale-assets.ts` reloads the page ON TOP of the click — the 2026-09-03 Mac app report,
+"I click a path, the page flashes, nothing opens; the second click works". The Mac app is the
+only surface that hits this, because its window is the one that lives across every deploy (its own
+page-process recycle deliberately waits for the user to go idle). Two answers, in
+`src/web/static-mirror.ts` + `web/src/utils/stale-assets.ts`: the durable asset mirror now keeps
+ONE DIRECTORY PER BUILD (`<mirror>/gens/<entryHash>/`, newest served first, all of them mounted as
+fallthrough static roots), so a replaced build's chunks stay fetchable; and a window whose bundle no
+longer matches the server's reloads itself only while HIDDEN for 20s, never with unsaved text, never
+on an unknown. A name no build ever had still 404s — the client's reload recovery needs that to stay
+loud. Two traps the mirror's shape encodes: eviction counts BUILDS (keep the newest 6, floor 2, then
+72h / 512MB), never file mtimes, because `cpSync` stamps copy time and an mtime clock deletes a
+build's chunks in the very refresh that makes them previous; and eviction NEVER consults the primary,
+because the failure this mirror exists for (a deploy stage swept from under a live server) removes
+FILES while the directory still lists, and a pruner diffing against that would delete almost
+everything including the mirror's own `index.html`. Ratchets:
+`tests/web/static-mirror-{retention,previous-build}.test.ts`,
+`tests/web/stale-build-upgrade.test.ts`, `tests/e2e/browser/stale-build-no-flash.spec.ts`.
+Note when testing: the Playwright fixture serves the SPA through Vite in DEV mode, so it has NO
+hashed chunks — the hashed half can only be pinned against a real `startServer({dev:false})`.
+
 **⚠️ Launch dev:prod from a non-niced shell.** A server started from a niced parent (e.g. a
 background agent session) inherits the positive nice and gets scheduler-starved under machine
 load — HTTP latency spikes that look like app bugs. The server logs an error at startup and

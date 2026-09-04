@@ -16,6 +16,7 @@ import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { attachWss, broadcastEvent, sendStreamEvent, closeWss } from './ws/handler.js'
 import { sessionStreamBuffer } from './session-stream-buffer.js'
 import { isStaticAssetPath } from './static-asset-path.js'
+import { refreshStaticMirror, bundleIdInHtml } from './static-mirror.js'
 import { notFoundHandler, errorHandler } from './middleware/error-handler.js'
 import { requestLogger, setRouteRecoveryPublisher } from './middleware/request-logger.js'
 import { tasksRouter } from './routes/tasks.js'
@@ -1682,46 +1683,61 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // gone.
     //
     // Two independent answers, because detection alone was not enough: keep a
-    // DURABLE mirror outside the temp volume and serve it as a second root (7.4MB,
-    // 122 files, a clonefile on APFS), and say loudly when the primary breaks.
-    // The mirror is best effort in every failure mode — if it cannot be made,
-    // behaviour is exactly what it was before.
+    // DURABLE mirror outside the temp volume and serve it behind the primary,
+    // and say loudly when the primary breaks. The mirror is best effort in every
+    // failure mode — if it cannot be made, behaviour is exactly what it was
+    // before.
+    //
+    // The mirror keeps the last few BUILDS, one directory each (static-mirror.ts),
+    // so a window opened before a deploy keeps loading its own build's chunks
+    // instead of 404ing into a page reload under the user's click (2026-09-03).
     const mirrorDir = process.env.WALNUT_WEB_STATIC_MIRROR
       || path.join(WALNUT_HOME, 'cache', 'web-static')
-    let mirrorReady = false
-    try {
-      // Refresh keyed on index.html's CONTENT: it names the hashed entry bundle,
-      // so identical content means the mirror already holds this exact build.
-      // Reading the primary first is deliberate — when the primary is already gone
-      // this throws and leaves the existing mirror untouched, which is the whole
-      // point of having one.
-      const want = fs.readFileSync(path.join(staticDir, 'index.html'), 'utf-8')
-      let have: string | null = null
-      try { have = fs.readFileSync(path.join(mirrorDir, 'index.html'), 'utf-8') } catch { /* no mirror yet */ }
-      if (have !== want) {
-        fs.rmSync(mirrorDir, { recursive: true, force: true })
-        fs.mkdirSync(path.dirname(mirrorDir), { recursive: true })
-        fs.cpSync(staticDir, mirrorDir, { recursive: true })
-      }
-    } catch (err) {
-      log.web.warn('could not refresh the web-asset mirror', {
-        mirrorDir, error: err instanceof Error ? err.message : String(err),
+    const mirror = refreshStaticMirror({ staticDir, mirrorDir })
+    for (const warning of mirror.warnings) {
+      log.web.warn('could not refresh the web-asset mirror', { mirrorDir, error: warning })
+    }
+    if (mirror.copied || mirror.evicted > 0) {
+      log.web.info('web-asset mirror refreshed', {
+        mirrorDir, copied: mirror.copied, generations: mirror.generations,
+        previousMB: Math.round(mirror.previousBytes / 1048576), evicted: mirror.evicted,
       })
     }
-    try { mirrorReady = fs.statSync(path.join(mirrorDir, 'index.html')).isFile() } catch { mirrorReady = false }
+    const mirrorReady = mirror.ready
+    const mirrorIndexRoot = mirror.indexRoot
 
     app.use(express.static(staticDir))
-    // Second root, consulted only for what the first could not answer: zero cost
-    // while the stage is intact, and the app stays up when it is not.
-    if (mirrorReady) app.use(express.static(mirrorDir))
+    // Fallthrough roots, newest build first, consulted only for what the primary
+    // could not answer: zero cost while the stage is intact, and the app stays up
+    // when it is not.
+    for (const root of mirror.roots) app.use(express.static(root))
     const checkStaticRoot = (): boolean => {
       try { return fs.statSync(path.join(staticDir, 'index.html')).isFile() } catch { return false }
     }
+    // The bundle a client should compare itself against. Re-read when index.html
+    // changes rather than captured once: `cd web && npx vite build` against a
+    // RUNNING server is a documented workflow, and a stale answer here tells
+    // every tab it has drifted — which would reload each one to its rate cap and
+    // burn the vite:preloadError backstop with it. Refreshed on the same 60s
+    // timer below, so /api/config still costs no fs work.
+    let bundleMtime = 0
+    let bundle: string | null = null
+    const refreshBundle = () => {
+      try {
+        const file = path.join(staticDir, 'index.html')
+        const mtime = fs.statSync(file).mtimeMs
+        if (mtime === bundleMtime) return
+        bundleMtime = mtime
+        bundle = bundleIdInHtml(fs.readFileSync(file, 'utf-8'))
+      } catch { /* primary gone — keep the last known answer */ }
+    }
+    refreshBundle()
     let staticRootOk = checkStaticRoot()
     if (!staticRootOk) {
       log.web.error('web assets are NOT servable at startup', { staticDir, mirrorReady })
     }
     const staticRootTimer = setInterval(() => {
+      refreshBundle()
       const ok = checkStaticRoot()
       if (ok === staticRootOk) return
       staticRootOk = ok
@@ -1729,13 +1745,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       else log.web.error('web assets VANISHED from under the running server', { staticDir, mirrorReady })
     }, 60_000)
     staticRootTimer.unref()
-    setStaticRootReporter(() => ({ staticDir, ok: staticRootOk, mirrorDir, mirrorReady }))
+    setStaticRootReporter(() => ({ staticDir, ok: staticRootOk, mirrorDir, mirrorReady, bundle }))
     // SPA fallback: serve index.html for non-API routes
     app.use((req, res, next) => {
       if (req.method !== 'GET' || req.path.startsWith('/api/')) return next()
-      // A build artifact express.static could NOT find is a stale chunk: every
-      // deploy re-hashes and wipes /assets, so tabs opened before it still ask
-      // for the old names. Answering those with index.html made the browser
+      // A build artifact NO root could find is a chunk from a build older than
+      // the mirror's retention. Answering it with index.html made the browser
       // parse HTML as a module — a failure the app could only see as "this
       // lazily-loaded feature does nothing" (a .go file with no syntax colors
       // for the rest of the tab's life). 404 keeps it loud, and lets the
@@ -1746,7 +1761,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // seconds ago is still being answered with an errno.
       res.sendFile('index.html', { root: staticDir }, (err) => {
         if (!err) return
-        if (mirrorReady) { res.sendFile('index.html', { root: mirrorDir }, () => { /* nothing left to try */ }); return }
+        if (mirrorIndexRoot) { res.sendFile('index.html', { root: mirrorIndexRoot }, () => { /* nothing left to try */ }); return }
         next(err)
       })
     })

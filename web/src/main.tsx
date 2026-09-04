@@ -19,7 +19,7 @@ import { selectionIntersects } from './utils/selection-guard';
 import { initSessionStatusStore } from './stores/init-session-status-store';
 import { installGlobalAutofillSuppression } from './utils/no-autofill';
 import { installEscapeBeepGuard } from './utils/escape-beep-guard';
-import { initStaleAssetRecovery } from './utils/stale-assets';
+import { initStaleAssetRecovery, initStaleBuildUpgrade } from './utils/stale-assets';
 import { installDesktopBridge } from './utils/desktop-bridge';
 import { initWebPlugins } from './plugins/loader';
 import { installPluginHostRuntime } from './plugins/runtime';
@@ -43,10 +43,13 @@ initMainThreadTracer();
 initInputLatencyMonitor();
 // Cache server version/mode for crash reports (survives to server-down crashes).
 initAppInfo();
-// A deploy wipes the hashed assets this tab was built against, so its next
-// code-split import silently dies (that is how a .go file lost its syntax
-// colors mid-session). Reload once the tab has no unsaved text.
+// A deploy replaces the build this tab runs. The server keeps the old build's
+// chunks servable so nothing breaks under a click; this pair moves the tab onto
+// the new build at a quiet moment (hidden tab after the reconnect a deploy
+// causes) and, as the backstop, reloads if a chunk is genuinely gone — never
+// on top of unsaved text either way.
 initStaleAssetRecovery();
+initStaleBuildUpgrade();
 // The Mac app shell asks this before it swaps the page process for a fresh one
 // (memory watchdog / newer bundle), so it applies the same unsaved-text rule.
 installDesktopBridge();

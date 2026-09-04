@@ -952,6 +952,15 @@ await fs.writeFile(
   path.join(vscodeNestedDir, 'linked-from-chat.md'),
   '# Linked from chat\n\nThis file is only reachable by clicking its path in the session chat. LINKED_FROM_CHAT_MARKER\n',
 )
+// A `.go` file, also linked from the chat. Its language is not in the main
+// bundle: CodeMirror code-splits every grammar, so opening this file is the
+// cheapest real trigger for a LAZY CHUNK FETCH inside a click. That is the
+// interaction that reloaded the whole page on 2026-09-03 when a deploy had
+// wiped the chunk (stale-build-no-flash.spec.ts).
+await fs.writeFile(
+  path.join(vscodeNestedDir, 'lazy-grammar.go'),
+  'package main\n\nimport "fmt"\n\n// LAZY_GRAMMAR_MARKER\nfunc main() {\n\tfmt.Println("hello")\n}\n',
+)
 // Real Claude Code JSONL for pw-vscode-session, so its chat renders an assistant
 // message containing that absolute path — the clickable `a.file-link` the
 // file-view-history spec needs. HOME is the fixture tmpBase (set at the top), so
@@ -961,6 +970,7 @@ await fs.writeFile(
   const jsonlDir = path.join(tmpBase, '.claude', 'projects', encodedCwd)
   await fs.mkdir(jsonlDir, { recursive: true })
   const linkedPath = path.join(vscodeNestedDir, 'linked-from-chat.md')
+  const goPath = path.join(vscodeNestedDir, 'lazy-grammar.go')
   await fs.writeFile(
     path.join(jsonlDir, 'pw-vscode-session.jsonl'),
     [
@@ -997,6 +1007,18 @@ await fs.writeFile(
           message: { role: 'assistant', content: [{ type: 'text', text: `filler answer ${i + 1}` }] },
         }),
       ]).flat(),
+      // LAST turn, deliberately: the timeline renders a WINDOW anchored at the
+      // bottom, so a link buried above the fillers is not in the DOM at all.
+      // stale-build-no-flash.spec.ts needs this one clickable on first paint.
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: 'pw-vscode-session',
+        timestamp: new Date(sessionFixtureNow - 20_000).toISOString(),
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: `The agent lives in ${goPath} if you want the source.` }],
+        },
+      }),
       '',
     ].join('\n'),
   )

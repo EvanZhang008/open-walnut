@@ -11,12 +11,17 @@
  * "the app is broken".
  *
  * Detection was not enough (the second occurrence had the detection), so the
- * server now keeps a durable mirror outside the temp volume and serves it as a
- * second root. What matters, and what this pins:
+ * server now keeps a durable mirror outside the temp volume and serves it behind
+ * the primary. What matters, and what this pins:
  *  - a normal boot still serves the primary,
  *  - deleting the primary AFTER boot still serves the app, from the mirror,
- *  - the mirror is refreshed when the build changes and NOT wiped when the
- *    primary is already missing (wiping it then would destroy the only copy).
+ *  - the mirror holds a usable copy and is NOT wiped when the primary is already
+ *    missing (wiping it then would destroy the only copy).
+ *
+ * The mirror's internal LAYOUT is deliberately not asserted beyond "a usable copy
+ * of this build is in there": it keeps one directory per build now (see
+ * src/web/static-mirror.ts and static-mirror-retention.test.ts), and this file is
+ * about the serving contract, not the storage shape.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
@@ -62,8 +67,14 @@ const get = async (p: string) => {
 
 describe('static root mirror', () => {
   it('mirrors the build at boot and serves the primary', async () => {
-    expect(fs.readFileSync(path.join(mirror, 'index.html'), 'utf-8')).toBe(INDEX);
-    expect(fs.existsSync(path.join(mirror, 'assets', 'index-TESTHASH.js'))).toBe(true);
+    // A usable copy of THIS build is in the mirror, wherever it chose to put it.
+    const copies = fs.readdirSync(path.join(mirror, 'gens'))
+      .map((id) => path.join(mirror, 'gens', id))
+      .filter((dir) => fs.existsSync(path.join(dir, 'index.html')));
+    expect(copies.length).toBeGreaterThan(0);
+    const copy = copies.find((dir) => fs.readFileSync(path.join(dir, 'index.html'), 'utf-8') === INDEX);
+    expect(copy, 'the mirror holds no copy of the running build').toBeDefined();
+    expect(fs.existsSync(path.join(copy!, 'assets', 'index-TESTHASH.js'))).toBe(true);
     const index = await get('/');
     expect(index.status).toBe(200);
     expect(index.body).toContain('index-TESTHASH.js');

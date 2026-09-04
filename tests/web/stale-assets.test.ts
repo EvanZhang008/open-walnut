@@ -108,6 +108,13 @@ describe('stale-assets: readUnsavedSnapshot (real DOM shapes)', () => {
     expect(isUnsaved(readUnsavedSnapshot(document as unknown as Document, null))).toBe(true);
   });
 
+  it('an image pasted into the composer counts, though it has no text', () => {
+    // Attachments live only in React state, so a reload silently drops them and
+    // the user has to go find the screenshot again — with nothing in any
+    // textarea to have warned us.
+    expect(isUnsaved(snap('<textarea class="composer"></textarea><div class="chat-image-previews"><div class="chat-image-preview"><img src="x.png"></div></div>'))).toBe(true);
+  });
+
   it('a task title being edited inline counts', () => {
     expect(isUnsaved(snap('<div class="todo-title" contenteditable="true">renaming this</div>', '.todo-title'))).toBe(true);
   });

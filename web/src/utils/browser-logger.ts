@@ -196,8 +196,14 @@ function flush(): void {
   })
 }
 
-/** sendBeacon fallback for page unload — best-effort, no response expected */
-function beaconFlush(): void {
+/**
+ * sendBeacon fallback for page unload — best-effort, no response expected.
+ * Also the right call immediately BEFORE a deliberate `location.reload()`: the
+ * WS batch would never get its 2s tick, and WKWebView (the Mac app) does not
+ * fire `beforeunload` at all — a self-inflicted reload left zero trace in the
+ * log until the stale-build reload was found from the server side alone.
+ */
+export function beaconFlush(): void {
   if (buffer.length === 0) return
   const entries = buffer.splice(0, buffer.length)
   try {
@@ -251,8 +257,10 @@ export function initBrowserLogger(): void {
   // Periodic flush
   flushTimer = setInterval(flush, FLUSH_INTERVAL_MS)
 
-  // Flush on page unload via sendBeacon
+  // Flush on page unload via sendBeacon. Both events: WKWebView never fires
+  // beforeunload, and pagehide is the one WebKit recommends anyway.
   window.addEventListener('beforeunload', beaconFlush)
+  window.addEventListener('pagehide', beaconFlush)
 
   // Don't log from here — would trigger our own interceptor and buffer a meta-log.
   // DevTools will show the patched console is active via the normal log output.
@@ -287,6 +295,7 @@ export function destroyBrowserLogger(): void {
   }
 
   window.removeEventListener('beforeunload', beaconFlush)
+  window.removeEventListener('pagehide', beaconFlush)
   buffer.length = 0
   history.length = 0
 }
