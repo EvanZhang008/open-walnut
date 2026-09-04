@@ -12,6 +12,10 @@
  *   - a malformed token is refused, never stored.
  *   - preferences / the foreground lease are scoped to the calling device, and
  *     answer 404 rather than a fake success when that device has no row.
+ *   - register and status resolve the CALLER identically, including the null
+ *     identity of a trusted-LAN request: status told such a phone
+ *     `registeredThisDevice:false` forever while its row sat there working, and an
+ *     app that re-registers on that signal re-registered on every launch.
  *   - the status readout never exposes a full token (it is a send capability).
  *
  * Real config file in a temp dir (this IS the store under test); only the APNs
@@ -48,6 +52,13 @@ import type { PushTokenEntry } from '../../src/core/types.js'
 
 const TOKEN_A = 'a'.repeat(64)
 const TOKEN_B = 'b'.repeat(64)
+
+type StatusReadout = {
+  registered: boolean
+  registeredThisDevice: boolean
+  count: number
+  thisDevice?: { mode: string; kind: string; letterTypes?: string[] }
+}
 
 async function rows(): Promise<PushTokenEntry[]> {
   const raw = await fs.readFile(CONFIG_FILE, 'utf-8')
@@ -276,5 +287,45 @@ describe('pushRegistrationStatus', () => {
     expect(status.registered).toBe(true)
     expect(status.registeredThisDevice).toBe(false)
     expect(status.thisDevice).toBeUndefined()
+  })
+
+  it('finds the row a trusted-LAN registration wrote with no identity at all', async () => {
+    // The re-register loop: register stores this under the shared placeholder
+    // name, so status must resolve the same null identity to the same row.
+    await registerPushToken({ token: TOKEN_A, platform: 'ios', keyName: null })
+    const status = await pushRegistrationStatus(null) as StatusReadout
+    expect(status).toMatchObject({ registered: true, registeredThisDevice: true, count: 1 })
+    expect(status.thisDevice).toMatchObject({ mode: 'always', kind: 'apns' })
+  })
+
+  it('a null identity still does not claim a named device\'s row', async () => {
+    await registerPushToken({ token: TOKEN_A, platform: 'ios', keyName: 'phone-a' })
+    const status = await pushRegistrationStatus(null) as StatusReadout
+    expect(status).toMatchObject({ registered: true, registeredThisDevice: false, count: 1 })
+    expect(status.thisDevice).toBeUndefined()
+  })
+
+  it('an anonymous RELAYED caller does not claim this box\'s placeholder row', async () => {
+    // Both boxes coalesce a missing identity to the same name, so only the origin
+    // keeps the two placeholder rows apart.
+    await registerPushToken({ token: TOKEN_A, platform: 'ios', keyName: null, origin: 'local' })
+    const status = await pushRegistrationStatus(null, 'relay') as StatusReadout
+    expect(status).toMatchObject({ registered: true, registeredThisDevice: false })
+  })
+
+  it('a relayed device resolves its OWN row, not a local row of the same name', async () => {
+    await registerPushToken({ token: TOKEN_A, platform: 'ios', keyName: 'phone-a', origin: 'local' })
+    const before = await pushRegistrationStatus('phone-a', 'relay') as StatusReadout
+    expect(before).toMatchObject({ registered: true, registeredThisDevice: false, count: 1 })
+
+    await registerPushToken({
+      token: TOKEN_B, platform: 'ios', keyName: 'phone-a', origin: 'relay', mode: 'when-inactive',
+    })
+    const after = await pushRegistrationStatus('phone-a', 'relay') as StatusReadout
+    expect(after).toMatchObject({ registeredThisDevice: true, count: 2 })
+    expect(after.thisDevice).toMatchObject({ mode: 'when-inactive' })
+    // The local row of the same name keeps its own mode.
+    const local = await pushRegistrationStatus('phone-a', 'local') as StatusReadout
+    expect(local.thisDevice).toMatchObject({ mode: 'always' })
   })
 })

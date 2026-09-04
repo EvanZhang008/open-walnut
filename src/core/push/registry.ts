@@ -77,6 +77,37 @@ function parsePushOrigin(raw: unknown): PushTokenOrigin {
   return raw === 'relay' ? 'relay' : 'local'
 }
 
+const ANON_DEVICE_KEY_NAME = 'localhost'
+
+/**
+ * Which row is "this device's" — the ONE identity rule, shared by every entry
+ * point that takes a caller identity.
+ *
+ * A trusted-LAN request can arrive with no bearer at all, or with one this box
+ * cannot verify (see web/middleware/auth.ts: the localhost bypass identifies the
+ * caller best-effort and lets it through either way), so it has no name and its
+ * row goes under the shared placeholder above.
+ *
+ * REGISTER AND STATUS MUST RESOLVE THAT THE SAME WAY, and they did not: register
+ * filed the row under the placeholder while status read the same null identity as
+ * "no row of yours". A LAN phone whose row existed and pushed fine was told
+ * `registeredThisDevice:false` on every launch, so a client that re-registers on
+ * that signal (the iOS app does) re-registers forever, warning each time that the
+ * server holds nothing for it.
+ *
+ * `authenticated` is what keeps the placeholder from acting like a real device
+ * name: the registration sweep may only delete a DIFFERENT row for a caller that
+ * proved its own identity, or each new anonymous phone would drop the previous
+ * one's row. Origin stays out of this rule — `ownedBy` pairs the name with a box,
+ * so a placeholder row is still only claimable from the box that wrote it.
+ */
+function resolveDeviceIdentity(device: unknown): { keyName: string; authenticated: boolean } {
+  const name = typeof device === 'string' && device ? device : null
+  return name
+    ? { keyName: name, authenticated: true }
+    : { keyName: ANON_DEVICE_KEY_NAME, authenticated: false }
+}
+
 export interface RegisterPushInput {
   token?: unknown
   platform?: unknown
@@ -126,8 +157,7 @@ export async function registerPushToken(input: RegisterPushInput): Promise<Regis
     throw new PushRegistryError('Missing or invalid platform (ios/android)', 'bad_request', 400)
   }
 
-  const identity = typeof input.keyName === 'string' && input.keyName ? input.keyName : null
-  const keyName = identity ?? 'localhost'
+  const { keyName, authenticated } = resolveDeviceIdentity(input.keyName)
   const origin = parsePushOrigin(input.origin)
   const kind = tokenKind({ token })
   const environment = input.environment === 'sandbox' ? 'sandbox' : 'production'
@@ -150,7 +180,7 @@ export async function registerPushToken(input: RegisterPushInput): Promise<Regis
     //    origin = a different phone, so it is left alone.
     const filtered = tokens.filter((t) => {
       if (t.token === token) return false
-      if (identity === null) return true
+      if (!authenticated) return true
       const sameDevice = t.key_name === keyName && parsePushOrigin(t.origin) === origin
       if (sameDevice) swept++
       return !sameDevice
@@ -347,7 +377,8 @@ export async function pushRegistrationStatus(
   const config = await getConfig()
   const tokens = config.push_tokens ?? []
   const apns = await apnsStatus()
-  const mine = device ? tokens.find((t: PushTokenEntry) => ownedBy(t, device, origin)) : undefined
+  const { keyName } = resolveDeviceIdentity(device)
+  const mine = tokens.find((t: PushTokenEntry) => ownedBy(t, keyName, origin))
   return {
     registered: tokens.length > 0,
     // `thisDevice` absent while `registered` is true is the state a client should
