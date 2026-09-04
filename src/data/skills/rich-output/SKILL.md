@@ -9,7 +9,23 @@ The Walnut web console and the iOS app both render raw HTML in an assistant repl
 
 **Do not wrap the whole reply in one container.** Write each block at the top level of the reply, the way you write paragraphs. A single `<div>` around everything is not free: it keeps one element open from the first line to the last, which makes the entire reply one streaming block instead of many, and CommonMark then swallows the line right after the opening tag (a `## Heading` there renders as literal `## Heading`). The client strips a bare wrapper it can prove is ceremony, but a wrapper with attributes is taken at face value.
 
-**Use it for**: comparisons, flows, step-by-step walkthroughs, anything with state or hierarchy, term highlighting, depth-on-demand. **Skip it for**: a short answer, a code diff, a list of three things. A wall of boxes is worse than a clean paragraph.
+## Markdown first, HTML for what markdown cannot express
+
+Rich mode does not mean "answer in HTML". It means HTML is available for the few things markdown has no way to say. **Mixing is the normal case**: write the reply in markdown and drop in HTML exactly where it buys something, separated from the prose by a blank line.
+
+| The content is | Write it as |
+|---|---|
+| headings, lists, bold, links, quotes | markdown |
+| a table of values | markdown table |
+| code, commands, output, a diff | markdown fence |
+| colour carrying meaning: good vs bad, before vs after, severity, a highlighted term | HTML |
+| a diagram: boxes and arrows, a pipeline, a tree, a timeline | inline `<svg>` |
+| a shape markdown has no syntax for: side-by-side panels, a card grid, a labelled callout | HTML |
+| interactivity: collapse, tabs, a stepper, hover reveal | HTML (`<details>`, CSS `:checked`) |
+
+When markdown can express it, HTML makes it worse, not richer. A hand-built `<table>` loses nothing visually and gives up the plain-text fallback that notifications, search snippets and the phone's native text rely on; a hand-built `<pre>` gives up copy-as-code and syntax highlighting. Reach for HTML when the answer has **colour, shape, or state** that markdown cannot carry, and for nothing else.
+
+**Skip it entirely for**: a short answer, a code diff, a list of three things. A wall of boxes is worse than a clean paragraph.
 
 ## The three rules that matter
 

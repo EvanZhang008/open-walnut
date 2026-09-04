@@ -52,14 +52,23 @@ export const OUTPUT_MODE_INSTRUCTION_MARKER = '[Rich output mode: ';
  *  (`background:#fff5f5`) and then leave the text muted or inherited, so the panel
  *  arrives with grey-on-pink body copy that is genuinely hard to read (reported
  *  with a screenshot 2026-08-31). Stating the PAIRING rather than banning hex is
- *  deliberate: hardcoded colours are fine when the model owns both ends. */
+ *  deliberate: hardcoded colours are fine when the model owns both ends.
+ *
+ *  It opens by naming what STAYS markdown, because the failure in practice is
+ *  over-reach, not under-use: told only that HTML renders, models rebuilt tables
+ *  and code blocks by hand (reported 2026-09-03). Markdown is better for those on
+ *  every surface — it keeps copy-as-code, highlighting, and the plain-text
+ *  fallback notifications and search snippets show. So the line draws the border
+ *  first, then invites HTML for the things across it. */
 export const RICH_OUTPUT_MODE_ON_INSTRUCTION =
-  `${OUTPUT_MODE_INSTRUCTION_MARKER}ON] When visual structure helps understanding, write HTML directly in your reply `
-  + '(layout, colors, SVG diagrams, <details>, CSS-only interactivity) — the client renders it natively '
+  `${OUTPUT_MODE_INSTRUCTION_MARKER}ON] Keep writing markdown for what markdown does well `
+  + '(headings, lists, tables, code blocks), and mix raw HTML into the same reply (separated by a blank line) '
+  + 'for what markdown cannot express: colour that carries meaning, diagrams (inline <svg>), '
+  + 'side-by-side or card layout, and interactivity (<details>, CSS :checked). The client renders it natively '
   + 'while streaming. Set text and background colour together or neither: a custom background with '
   + 'inherited or muted text loses contrast (theme vars --fg, --fg-muted, --bg-secondary, --border always fit). '
   + 'For anything needing <script>, emit a ```html-app fenced block '
-  + '(rendered in a sandboxed iframe). Plain answers stay plain markdown. '
+  + '(rendered in a sandboxed iframe). A short answer needs none of this. '
   + 'Component recipes (steppers, SVG diagrams, animations, islands): '
   + `\`walnut tools call skill_read '{"dirName":"rich-output"}'\`.`;
 
@@ -72,9 +81,17 @@ export const RICH_OUTPUT_MODE_OFF_INSTRUCTION =
  *  so a stripper can never mistake one for the other. */
 export const OUTPUT_MODE_REMINDER_MARKER = '[Rich output mode is still on';
 
-/** The standing reminder. ONE short line, appended AFTER the user's text. */
+/** The standing reminder. ONE short line, appended AFTER the user's text.
+ *
+ *  It says MARKDOWN FIRST on purpose. The old wording ("reply in HTML where
+ *  visual structure helps") read as "answer in HTML", and the observed result was
+ *  hand-built `<table>`s and `<pre>` blocks for content markdown expresses better
+ *  — which also costs the plain-text fallback that notifications, search snippets
+ *  and the phone's native text depend on. Naming what HTML is actually FOR
+ *  (colour, diagrams, layout markdown has no shape for) is what makes the line
+ *  steer instead of just remind (reported 2026-09-03). */
 export const RICH_OUTPUT_MODE_REMINDER =
-  `${OUTPUT_MODE_REMINDER_MARKER} — reply in HTML where visual structure helps.]`;
+  `${OUTPUT_MODE_REMINDER_MARKER} — markdown first; add HTML only for colour, diagrams, or layout markdown can't do.]`;
 
 /** The style a model uses when nothing has been said to it. Compared against the
  *  effective mode to decide whether an edge is owed — deliberately NOT

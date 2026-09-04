@@ -40,9 +40,12 @@ interface OutputModePillProps {
   titleSuffix?: string;
 }
 
+// "markdown + HTML" rather than "rich HTML": rich mode never meant answering IN
+// HTML, and describing it that way is what produced hand-built tables and code
+// blocks for content markdown renders better.
 const STYLE_LABEL: Record<SessionOutputMode, string> = {
   markdown: 'plain markdown',
-  rich: 'rich HTML',
+  rich: 'markdown + HTML where it helps',
 };
 
 // ── Configured default (config.session.output_mode) ──

@@ -208,6 +208,27 @@ describe('resolveOutputModeDirective', () => {
     expect(RICH_OUTPUT_MODE_REMINDER).not.toContain('\n')
     expect(RICH_OUTPUT_MODE_REMINDER.length).toBeLessThan(120)
   })
+
+  it('says markdown FIRST, and names what HTML is actually for', () => {
+    // Told only that HTML renders, models rebuilt tables and code blocks by hand
+    // (reported 2026-09-03) — content markdown renders better on every surface,
+    // and hand-built markup gives up copy-as-code, highlighting, and the
+    // plain-text fallback notifications and search snippets show. Both strings
+    // must therefore draw the border before inviting HTML across it.
+    for (const s of [RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER]) {
+      expect(s.toLowerCase()).toMatch(/markdown/)
+      // markdown is named before HTML is offered, in both.
+      expect(s.toLowerCase().indexOf('markdown')).toBeLessThan(s.indexOf('HTML'))
+      // …and the invitation is scoped to what markdown cannot express.
+      expect(s.toLowerCase()).toMatch(/colour|color/)
+      expect(s.toLowerCase()).toMatch(/diagram/)
+    }
+    // The full instruction spells out the whole border, including the two shapes
+    // the short reminder has no room for.
+    expect(RICH_OUTPUT_MODE_ON_INSTRUCTION).toMatch(/tables/)
+    expect(RICH_OUTPUT_MODE_ON_INSTRUCTION).toMatch(/code blocks/)
+    expect(RICH_OUTPUT_MODE_ON_INSTRUCTION).toMatch(/interactivity/)
+  })
 })
 
 describe('session:send — markdown', () => {
