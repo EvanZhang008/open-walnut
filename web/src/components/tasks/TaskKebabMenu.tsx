@@ -18,6 +18,7 @@ import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '../common
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { PluginFieldsSection } from './PluginFieldPicker';
+import { QuoteInSessionItem } from './QuoteInSessionItem';
 
 type TaskListProjection = Task & {
   /** Precomputed by fields=list because that projection intentionally omits ext. */
@@ -568,6 +569,11 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
             <span className="task-kebab-icon">{ICONS.ICON_INFO}</span>
             <span>{isDetailOpen ? 'Close details' : 'Details'}</span>
           </button>
+
+          {/* Quote in session — hand this task to the current session's composer as a
+              reference pill (never sends). Sits next to Details: both are "look at
+              this task", one for the human, one for the session. */}
+          <QuoteInSessionItem task={task} onDone={closeMenu} />
 
           {/* Select — enter multi-select mode with this task picked, to group several together */}
           {onStartSelect && (

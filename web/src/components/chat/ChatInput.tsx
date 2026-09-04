@@ -97,8 +97,10 @@ interface ChatInputProps {
   /** 'keep-draft' puts prefillText BEFORE whatever is already typed instead of
    *  replacing it. For injections the user waits on (a side thread's summary takes a
    *  model turn): they are invited to keep typing meanwhile, and replacing would eat
-   *  both the text and its saved draft. Default 'replace'. */
-  prefillMode?: 'replace' | 'keep-draft';
+   *  both the text and its saved draft. 'append' puts it AFTER the typed text
+   *  (separated by one space) with the caret at the end: a reference pill quoted
+   *  in from elsewhere joins the sentence in progress. Default 'replace'. */
+  prefillMode?: 'replace' | 'keep-draft' | 'append';
   /** Bump this (monotonic, >0) to focus the box and LEAVE THE DRAFT ALONE. The
    *  thread-anchor path needs this: "Ask about this passage" moves the user to the
    *  composer without writing the quote into it (the quote rides the chip and is
@@ -196,8 +198,14 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // 'keep-draft': the injected block goes FIRST and the user's own sentence keeps
     // its place after it (which is what the injected text's trailing blank line is
     // for). Read through the ref, not `value` — this effect is keyed on the nonce.
-    const typed = prefillMode === 'keep-draft' ? valueRef.current.trimStart() : '';
-    const next = typed ? `${prefillText}${typed}` : prefillText;
+    let next: string;
+    if (prefillMode === 'append') {
+      const typed = valueRef.current.replace(/\s+$/, '');
+      next = typed ? `${typed} ${prefillText}` : prefillText;
+    } else {
+      const typed = prefillMode === 'keep-draft' ? valueRef.current.trimStart() : '';
+      next = typed ? `${prefillText}${typed}` : prefillText;
+    }
     setValue(next);
     // Persist immediately (don't rely on the later-declared debounced saveDraft).
     try { if (draftKeyRef.current) localStorage.setItem(draftKeyRef.current, next); } catch { /* unavailable */ }
@@ -214,7 +222,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       if (!el) return;
       if (el.offsetParent === null && frames++ < 20) { raf = requestAnimationFrame(tryFocus); return; }
       el.focus();
-      el.setSelectionRange(prefillText.length, prefillText.length);
+      const caret = prefillMode === 'append' ? next.length : prefillText.length;
+      el.setSelectionRange(caret, caret);
       el.style.height = 'auto';
       el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
       // Still not focused (a competing focus handler won the frame) → one retry.

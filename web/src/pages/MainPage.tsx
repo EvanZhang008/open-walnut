@@ -83,6 +83,7 @@ import {
   toggleLockSlot,
 } from './sessionColumns';
 import { isDraftColumnId, isPendingColumnId, isPlaceholderColumnId, DRAFT_COL_PREFIX } from '@/utils/column-ids';
+import { reconcileActiveSession } from '@/stores/active-session';
 import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 
@@ -589,6 +590,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   });
   // String[] projection for URL sync (doesn't need lock state — URL carries ids only).
   const sessionColumnIds = useMemo(() => sessionColumns.map(c => c.id), [sessionColumns]);
+  // "The current session" (stores/active-session.ts) must stay inside the open
+  // strip: a closed column stops being the target, an empty strip has none.
+  useEffect(() => { reconcileActiveSession(sessionColumnIds); }, [sessionColumnIds]);
   const urlSync = useUrlSync({
     focusedTaskId: focusedTask?.id,
     sessionColumns: sessionColumnIds,

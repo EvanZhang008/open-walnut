@@ -82,6 +82,8 @@ import { taskNeedsAction } from '@/utils/session-status';
 import { nextSessionControlValue, SessionControlPills } from './SessionControlPills';
 import { useNotifications } from '@/contexts/notifications';
 import { useConfirm } from '@/hooks/useConfirm';
+import { setActiveSession } from '@/stores/active-session';
+import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 
 /**
  * Below this viewport width a split view opens with the chat column collapsed:
@@ -787,7 +789,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // existing input (no new chat, no fork; goes to the main agent via normal send).
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined);
   const [prefillNonce, setPrefillNonce] = useState(0);
-  const [prefillMode, setPrefillMode] = useState<'replace' | 'keep-draft'>('replace');
+  const [prefillMode, setPrefillMode] = useState<'replace' | 'keep-draft' | 'append'>('replace');
   const handleSelectCode = useCallback((filePath: string, line: number | undefined, code: string) => {
     // The Changed tab already hands a repo-relative path; the Files tab browses the
     // whole filesystem and hands an absolute one. Shorten against the session cwd so
@@ -818,6 +820,25 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     autoCollapsed.current = false;
     setChatCollapsed(false);
   }, []);
+  // "Quote in session" from a task row elsewhere on the page: append the pill to
+  // whatever is typed (a quote joins the sentence in progress, it does not lead
+  // it), reveal, focus. Marking the event handled tells the sender the text has
+  // a live home; otherwise it parks the text in the persisted draft instead.
+  useEffect(() => {
+    const onInsert = (e: Event) => {
+      const detail = (e as CustomEvent<ComposerInsertDetail>).detail;
+      if (!detail || detail.sessionId !== sessionId || detail.handled) return;
+      detail.handled = true;
+      setPrefillText(detail.text);
+      setPrefillMode('append');
+      setPrefillNonce((n) => n + 1);
+      autoCollapsed.current = false;
+      setChatCollapsed(false);
+      setActiveSession(sessionId);
+    };
+    window.addEventListener(COMPOSER_INSERT_EVENT, onInsert);
+    return () => window.removeEventListener(COMPOSER_INSERT_EVENT, onInsert);
+  }, [sessionId]);
   // A line comment from the diff → send straight to this session's main agent.
   const handleDiffComment = useCallback((message: string) => {
     void send(sessionId, message);
@@ -1450,6 +1471,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
         className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}`}
         data-session-id={sessionId}
         ref={panelRef}
+        // The panel the user last pointed into is "the current session" for
+        // actions taken outside any panel (a task row's "Quote in session").
+        onPointerDownCapture={() => setActiveSession(sessionId)}
+        onFocusCapture={() => setActiveSession(sessionId)}
       >
         {/* needs-action: same red tint + same rule (taskNeedsAction) as the pin
             area's cards, so "the agent handed this back" reads identically on
