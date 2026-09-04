@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { fetchMemoryBrowse, fetchMemory, fetchGlobalMemory, fetchUserMemory } from '@/api/memory';
+import { useEvent } from '@/hooks/useWebSocket';
+import { memoryDocKey, wasSavedHere, isDocSaveInFlight } from '@/stores/file-save-signal';
 import { MemoryTreePanel } from '@/components/memory/MemoryTreePanel';
 import { MemoryContentPanel } from '@/components/memory/MemoryContentPanel';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
@@ -15,6 +17,24 @@ const WIDTH_DEFAULT = 320;
 
 function clampWidth(w: number): number {
   return Math.max(WIDTH_MIN, Math.min(WIDTH_MAX, w));
+}
+
+/**
+ * ONE read path for a memory document, whichever section it lives in. It also
+ * carries the `contentHash` the editor sends back as its optimistic-lock token —
+ * these files are editable from the Files panel too, so a write must be able to
+ * fail rather than clobber a change this page never showed.
+ */
+function readMemoryDoc(
+  path: string,
+): Promise<{ content: string; updatedAt: string; contentHash?: string }> {
+  if (path === 'MEMORY.md') {
+    return fetchGlobalMemory().then((m) => ({ content: m.content, updatedAt: m.updatedAt, contentHash: m.contentHash }));
+  }
+  if (path === 'USER.md') {
+    return fetchUserMemory().then((m) => ({ content: m.content, updatedAt: m.updatedAt, contentHash: m.contentHash }));
+  }
+  return fetchMemory(path).then((m) => ({ content: m.content, updatedAt: m.updated_at, contentHash: m.contentHash }));
 }
 
 function readWidth(): number {
@@ -34,7 +54,11 @@ export function MemoryPage() {
   const [selectedPath, setSelectedPath] = useState<string | null>(() => searchParams.get('path'));
   const [content, setContent] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [contentHash, setContentHash] = useState<string | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
+  // Read from a WS callback that must not re-subscribe on every selection.
+  const selectedPathRef = useRef<string | null>(selectedPath);
+  selectedPathRef.current = selectedPath;
 
   // Resizable left pane. Shared drag primitive: pointer capture (never sticks)
   // + one persist on release instead of a synchronous localStorage write per
@@ -83,49 +107,71 @@ export function MemoryPage() {
       setContentLoading(true);
       setContent(null);
 
-      const fetchContent =
-        path === 'MEMORY.md'
-          ? fetchGlobalMemory().then((m) => ({ content: m.content, updatedAt: m.updatedAt }))
-          : path === 'USER.md'
-            ? fetchUserMemory().then((m) => ({ content: m.content, updatedAt: m.updatedAt }))
-            : fetchMemory(path).then((m) => ({ content: m.content, updatedAt: m.updated_at }));
-
-      fetchContent
-        .then(({ content: c, updatedAt: u }) => {
+      readMemoryDoc(path)
+        .then(({ content: c, updatedAt: u, contentHash: h }) => {
           setContent(c);
           setUpdatedAt(u);
+          setContentHash(h ?? null);
         })
         .catch(() => {
           setContent('*Failed to load file*');
           setUpdatedAt(null);
+          setContentHash(null);
         })
         .finally(() => setContentLoading(false));
     },
     [setSearchParams],
   );
 
+  /** Re-read the open document from disk (post-save, conflict, external write). */
+  const reloadSelected = useCallback((path: string) => {
+    readMemoryDoc(path)
+      .then(({ content: c, updatedAt: u, contentHash: h }) => {
+        if (selectedPathRef.current !== path) return;
+        setContent(c);
+        setUpdatedAt(u);
+        setContentHash(h ?? null);
+      })
+      .catch(() => { /* keep current content */ });
+  }, []);
+
   // Refresh content after a save — re-fetch the file to get updated content
   const handleSaved = useCallback(
     (newUpdatedAt: string) => {
       setUpdatedAt(newUpdatedAt);
-      // Re-fetch to update the rendered content with what was saved
-      if (selectedPath) {
-        const fetchContent =
-          selectedPath === 'MEMORY.md'
-            ? fetchGlobalMemory().then((m) => ({ content: m.content, updatedAt: m.updatedAt }))
-            : selectedPath === 'USER.md'
-              ? fetchUserMemory().then((m) => ({ content: m.content, updatedAt: m.updatedAt }))
-              : fetchMemory(selectedPath).then((m) => ({ content: m.content, updatedAt: m.updated_at }));
-        fetchContent
-          .then(({ content: c, updatedAt: u }) => {
-            setContent(c);
-            setUpdatedAt(u);
-          })
-          .catch(() => { /* keep current content */ });
-      }
+      if (selectedPath) reloadSelected(selectedPath);
     },
-    [selectedPath],
+    [selectedPath, reloadSelected],
   );
+
+  /**
+   * The open document changed on disk. Two ways this reaches us, and neither
+   * used to: the 15s poll only ever refreshed the metadata TREE, so a memory file
+   * saved through the Files panel left this page showing pre-edit text until the
+   * user re-selected it — and its next autosave then wrote that stale text back.
+   *  - `memory:updated`: emitted by every writer of a file under the memory dir
+   *    (this page's own PUT, and PUT /api/file-content for such a path).
+   *  - `onConflict`: our own write was refused because the bytes had moved.
+   *
+   * Our OWN write must never come back as a re-read, and a hash comparison alone
+   * cannot see that: the server emits the event before it answers the PUT, so at
+   * that instant `contentHash` here is still the pre-save token. The shared
+   * doc-save bookkeeping answers it either way round — mid-air, or landed.
+   */
+  useEvent('memory:updated', (data: unknown) => {
+    const d = data as { path?: unknown; contentHash?: unknown };
+    const open = selectedPathRef.current;
+    if (!open || typeof d?.path !== 'string' || d.path !== open) return;
+    if (typeof d.contentHash === 'string' && d.contentHash === contentHash) return;
+    const key = memoryDocKey(open);
+    if (isDocSaveInFlight(key)) return; // our own PUT, echo ahead of its response
+    if (typeof d.contentHash === 'string' && wasSavedHere(key, d.contentHash)) return;
+    reloadSelected(open);
+  });
+
+  const handleConflict = useCallback(() => {
+    if (selectedPath) reloadSelected(selectedPath);
+  }, [selectedPath, reloadSelected]);
 
   // Auto-select from URL on initial load
   useEffect(() => {
@@ -162,7 +208,9 @@ export function MemoryPage() {
             content={content}
             path={selectedPath}
             updatedAt={updatedAt}
+            contentHash={contentHash}
             onSaved={handleSaved}
+            onConflict={handleConflict}
           />
         )}
       </div>

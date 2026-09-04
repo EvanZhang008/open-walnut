@@ -853,6 +853,20 @@ export interface NotesTreeChangedEvent {
   path: string;
 }
 
+/**
+ * A memory document's bytes on disk changed. Emitted by every writer of a file
+ * under MEMORY_DIR — the /memory editor's own PUT, and `PUT /api/file-content`
+ * when the path it saved happens to be a memory file — so the /memory page never
+ * has to wait for its metadata poll to notice, and never saves stale bytes over
+ * a change it never showed.
+ */
+export interface MemoryUpdatedEvent {
+  /** MEMORY_DIR-relative path with forward slashes, e.g. 'MEMORY.md', 'daily/2026-09-03.md'. */
+  path: string;
+  /** SHA256-based content hash after the write. */
+  contentHash: string;
+}
+
 // ── Audio capture events ──
 
 export interface AudioStartedEvent {
@@ -965,6 +979,8 @@ export interface EventPayloadMap {
 
   'notes:updated': NotesUpdatedEvent;
   'notes:tree-changed': NotesTreeChangedEvent;
+
+  'memory:updated': MemoryUpdatedEvent;
 
   'sync:conflict-resolved': SyncConflictResolvedEvent;
 

@@ -1,6 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { fetchNoteContent, saveNoteContent } from '@/api/notes-v2';
 import { useEvent } from '@/hooks/useWebSocket';
+import {
+  noteDocKey, subscribeDocSaved, wasSavedHere, beginDocSave, endDocSave, isDocSaveInFlight,
+  type DocSavedSignal,
+} from '@/stores/file-save-signal';
 import type { Editor } from '@tiptap/core';
 import { log } from '@/utils/log';
 import { splitFrontmatter, joinFrontmatter } from '@/components/notes/frontmatter';
@@ -57,12 +61,21 @@ export function useNoteContent(notePath: string | null) {
    * contentHashRef (or late, after a newer save changed it). Both windows made
    * the handler misread our own write as an external change and pop the
    * "note changed on disk" banner mid-typing (56×/day; the banner push-down is
-   * the "flash while typing"). `recentSaveHashes` = hashes OUR saves produced
-   * (drop matching events outright); `pendingEcho` = an event that arrived
-   * while a save was in flight (re-judged once the save lands).
+   * the "flash while typing").
+   *
+   * The "was this hash ours?" half now lives in ONE module-level registry keyed
+   * by the note itself (stores/file-save-signal.ts), shared with the home Notes
+   * panel and the Files-panel editor: global-notes.md is writable from all
+   * three, and a private per-hook set meant each one only recognized its own
+   * writes. `pendingEcho` stays local — it is an event that arrived while a save
+   * was in flight, re-judged once that save lands.
    */
-  const recentSaveHashesRef = useRef<Set<string>>(new Set());
   const pendingEchoRef = useRef<{ hash: string } | null>(null);
+  /**
+   * Identity of THIS editor instance. It rides every save so the doc-saved
+   * signal can tell our own write from another surface's.
+   */
+  const surfaceIdRef = useRef(`notes-editor-${Math.random().toString(36).slice(2)}`);
   /**
    * A path that was just MOVED/RENAMED away on disk (the file no longer exists
    * there). The path-change effect must NOT flush pending edits to it — the
@@ -148,7 +161,7 @@ export function useNoteContent(notePath: string | null) {
       try {
         const md = joinFrontmatter(frontmatterRef.current, editor.storage.markdown.getMarkdown());
         const hash = contentHashRef.current ?? undefined;
-        const result = await saveNoteContent(oldPath, md, hash);
+        const result = await saveNoteContent(oldPath, md, hash, surfaceIdRef.current);
         if (result.contentHash) contentHashRef.current = result.contentHash;
       } catch { /* best-effort — the move proceeds with last-saved content */ }
     }
@@ -171,15 +184,18 @@ export function useNoteContent(notePath: string | null) {
     const normalizedPath = path.replace(/\.md$/, '');
     if (source !== `notes/${normalizedPath}`) return;
 
-    // Self-echo: this event is the WS broadcast of OUR OWN save. Never treat
-    // it as an external change (the false "note changed on disk" banner was a
-    // major source of the mid-typing flash).
-    if (recentSaveHashesRef.current.has(contentHash)) return;
+    // Self-echo: this event is the WS broadcast of a save made in THIS BROWSER
+    // (ours, or another surface's — same note, one registry). Never treat it as
+    // an external change: the false "note changed on disk" banner was a major
+    // source of the mid-typing flash, and a sibling surface's bytes already
+    // reached us through the local doc-saved signal.
+    if (wasSavedHere(noteDocKey(path), contentHash)) return;
 
-    // A save of ours is in flight: this event might still be our echo (the
-    // server emits the WS event before our PUT response carries the new hash).
-    // Park it; doSave re-judges it the moment the save response lands.
-    if (savingRef.current) {
+    // A save is in flight — ours, or another surface's on this same note. The
+    // server emits the WS event before the PUT response carries the new hash, so
+    // this may still be that save's echo. Park it; doSave re-judges it the
+    // moment the save response lands.
+    if (savingRef.current || isDocSaveInFlight(noteDocKey(path))) {
       pendingEchoRef.current = { hash: contentHash };
       return;
     }
@@ -207,6 +223,47 @@ export function useNoteContent(notePath: string | null) {
       reloadContent(path);
     }
   });
+
+  // ── The same note, saved by another surface of this page ────────────────────
+  // global-notes.md is editable from the home Notes panel, this editor, and the
+  // Files panel; any vault note is editable from this editor AND the Files panel
+  // rooted at the vault. Those surfaces do not share a content store, so the
+  // browser-local doc-saved signal is what keeps them from diverging — it is
+  // synchronous and carries the bytes, so nothing here waits for the server.
+  useEffect(() => {
+    if (!notePath) return;
+    return subscribeDocSaved(noteDocKey(notePath), (sig: DocSavedSignal) => {
+      if (sig.origin === surfaceIdRef.current) return; // our own save
+      if (currentPathRef.current !== notePath) return; // switched away meanwhile
+      if (sig.contentHash === contentHashRef.current) return; // already these bytes
+      // The parked WS echo (if any) belongs to THIS write — this signal is the
+      // authoritative version of it, so drop the parked copy either way.
+      pendingEchoRef.current = null;
+      if (dirtyRef.current) {
+        // Same §6.2 dirty-guard as the WS path: never blow live typing away.
+        log.info('notes', 'Note saved in another view — deferred (editor dirty)', { path: notePath });
+        const pending: PendingExternalChange = { kind: 'external', path: notePath };
+        pendingExternalRef.current = pending;
+        setPendingExternal(pending);
+        return;
+      }
+      if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+      if (sig.content == null) {
+        // The writer could not hand us bytes (the server stamped an id into
+        // them). Re-read rather than guess.
+        reloadContent(notePath);
+        return;
+      }
+      log.info('notes', 'Adopting a note saved in another view', { path: notePath });
+      contentHashRef.current = sig.contentHash;
+      const { frontmatter, body } = splitFrontmatter(sig.content);
+      frontmatterRef.current = frontmatter;
+      setContent(body);
+      setSaveStatus('idle');
+      pendingExternalRef.current = null;
+      setPendingExternal(null);
+    });
+  }, [notePath, reloadContent]);
 
   // ── Visibility / focus reload — catch external edits when tab regains focus ──
   useEffect(() => {
@@ -243,7 +300,6 @@ export function useNoteContent(notePath: string | null) {
     pendingExternalRef.current = null;
     setPendingExternal(null);
     pendingEchoRef.current = null;
-    recentSaveHashesRef.current.clear();
 
     if (!notePath) {
       setContent(null);
@@ -280,7 +336,7 @@ export function useNoteContent(notePath: string | null) {
         const editor = editorRef.current;
         const md = joinFrontmatter(frontmatterRef.current, editor.storage.markdown.getMarkdown());
         const hash = contentHashRef.current ?? undefined;
-        saveNoteContent(prevPath, md, hash).catch(() => {});
+        saveNoteContent(prevPath, md, hash, surfaceIdRef.current).catch(() => {});
       }
     }
 
@@ -328,30 +384,31 @@ export function useNoteContent(notePath: string | null) {
 
     savingRef.current = true;
     setSaveStatus('saving');
+    // Shared "a save is mid-air for this note" flag: another surface holding the
+    // same note parks its echo handling on it, exactly as we park on theirs.
+    const docKey = noteDocKey(pathToSave);
+    beginDocSave(docKey);
 
     try {
       // Re-attach the preserved frontmatter so the saved bytes are
       // `frontmatter + editedBody` — keeps the id stable (no re-stamp) and the
       // round-trip byte-clean.
-      const md = joinFrontmatter(frontmatterRef.current, editor.storage.markdown.getMarkdown());
+      const editorMd = editor.storage.markdown.getMarkdown();
+      const md = joinFrontmatter(frontmatterRef.current, editorMd);
       const hash = contentHashRef.current ?? undefined;
-      const result = await saveNoteContent(pathToSave, md, hash);
-      // Remember the hash OUR save produced so its WS echo is never mistaken
-      // for an external change (bounded: keep the last few).
-      if (result.contentHash) {
-        recentSaveHashesRef.current.add(result.contentHash);
-        if (recentSaveHashesRef.current.size > 8) {
-          const first = recentSaveHashesRef.current.values().next().value;
-          if (first !== undefined) recentSaveHashesRef.current.delete(first);
-        }
-      }
+      // saveNoteContent announces the write on the shared doc-saved signal (and
+      // registers its hash), so every other mounted view of this note converges
+      // without waiting for the server's echo.
+      const result = await saveNoteContent(pathToSave, md, hash, surfaceIdRef.current);
       // An echo parked while this save was in flight: if it matches what we
-      // just wrote it was ours — drop it. Otherwise it's a REAL external write
-      // that raced our save; surface it via the normal deferred affordance.
+      // just wrote — or any other save this browser made meanwhile — it was
+      // ours. Otherwise it's a REAL external write that raced our save; surface
+      // it via the normal deferred affordance.
       if (pendingEchoRef.current) {
         const echo = pendingEchoRef.current;
         pendingEchoRef.current = null;
-        if (echo.hash !== result.contentHash && currentPathRef.current === pathToSave) {
+        if (echo.hash !== result.contentHash && !wasSavedHere(docKey, echo.hash)
+          && currentPathRef.current === pathToSave) {
           const pending: PendingExternalChange = { kind: 'external', path: pathToSave };
           pendingExternalRef.current = pending;
           setPendingExternal(pending);
@@ -370,6 +427,16 @@ export function useNoteContent(notePath: string | null) {
         }
         setSaveStatus('saved');
         dirtyRef.current = false;
+        // Adopt what we just wrote as the content STATE (same as the home Notes
+        // panel does). Two reasons, and the second one is load-bearing: a remount
+        // (pop-out, tab hop) must seed from the saved text rather than the text
+        // this note had when it loaded; and NotesEditor skips ONE external
+        // `content` change after a local edit (its isSourceRef stays set until a
+        // sync effect consumes it), so without a change here the FIRST write from
+        // another surface was applied to this hook's state but never reached the
+        // editor — leaving stale text that the next save wrote back over the other
+        // surface's change.
+        setContent(editorMd);
         // Fade "Saved" indicator after 2s
         if (savedFadeTimerRef.current) clearTimeout(savedFadeTimerRef.current);
         savedFadeTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
@@ -403,6 +470,7 @@ export function useNoteContent(notePath: string | null) {
       }
     } finally {
       savingRef.current = false;
+      endDocSave(docKey);
       // If new dirty content arrived while we were saving, schedule another save.
       if (dirtyRef.current && editorRef.current && currentPathRef.current === pathToSave) {
         const editor = editorRef.current;
@@ -464,7 +532,7 @@ export function useNoteContent(notePath: string | null) {
         if (pathToSave) {
           const md = joinFrontmatter(frontmatterRef.current, editor.storage.markdown.getMarkdown());
           const hash = contentHashRef.current ?? undefined;
-          saveNoteContent(pathToSave, md, hash).catch((e) => {
+          saveNoteContent(pathToSave, md, hash, surfaceIdRef.current).catch((e) => {
             log.warn('notes', 'Unmount flush failed', { error: e instanceof Error ? e.message : String(e) });
           });
         }

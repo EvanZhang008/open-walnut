@@ -56,17 +56,11 @@ function expectHealthyFrontmatter(content: string, name: string) {
 /** Open /memory through the SPA and select a Global store by its tree label. */
 async function openStore(page: Page, label: 'MEMORY.md' | 'USER.md') {
   // The memory page has no sidebar link; Settings → Memory is the real UI route in.
+  // Wait on a LOCATOR, never on `networkidle`: /settings keeps polling, so that state
+  // never arrives and the wait eats the whole test budget.
   await page.goto('/settings')
-  await page.waitForLoadState('networkidle')
-  const openBtn = page.locator('button', { hasText: 'Open Memory Browser' }).first()
-  if (await openBtn.isVisible().catch(() => false)) {
-    await openBtn.click()
-  } else {
-    // Fallback: the settings layout differs by viewport; go directly but still
-    // exercise the same React page + data loading.
-    await page.goto('/memory')
-  }
-  await page.waitForLoadState('networkidle')
+  await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 30000 })
+  await page.locator('[data-testid="settings-nav-memory"]').click()
 
   const tree = page.locator('.memory-tree-panel')
   await expect(tree).toBeVisible({ timeout: 15000 })

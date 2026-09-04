@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchGlobalNotes, saveGlobalNotes } from '@/api/notes';
+import { fetchGlobalNotes, saveGlobalNotes, GLOBAL_NOTES_DOC_KEY } from '@/api/notes';
 import { useEvent } from '@/hooks/useWebSocket';
+import {
+  subscribeDocSaved, wasSavedHere, beginDocSave, endDocSave, isDocSaveInFlight,
+  type DocSavedSignal,
+} from '@/stores/file-save-signal';
 import { log } from '@/utils/log';
 import { splitFrontmatter, joinFrontmatter } from '@/components/notes/frontmatter';
 import type { Editor } from '@tiptap/core';
@@ -51,6 +55,15 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
    * keystrokes rolled back). Defer the comparison until the save settles.
    */
   const deferredWsHashRef = useRef<string | null>(null);
+  /**
+   * Identity of THIS panel instance, stamped on every save so the shared
+   * doc-saved signal can tell our own write from the /notes editor's (or the
+   * Files panel's) write of the SAME file. The "is this hash one of ours?"
+   * question itself is answered by the module-level registry in
+   * stores/file-save-signal.ts, shared by every surface that writes this note —
+   * a private per-hook set only ever recognized its own surface's saves.
+   */
+  const surfaceIdRef = useRef(`global-notes-${Math.random().toString(36).slice(2)}`);
   /**
    * global-notes.md now appears in the vault tree, so the notes-v2 editor/indexer
    * may stamp a frontmatter id into it. Keep that block out of the editing
@@ -103,12 +116,18 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
     const { source, contentHash } = data as { source: string; contentHash: string };
     if (source !== 'notes/global-notes') return;
     if (contentHash === contentHashRef.current) return;
+    // A save made anywhere in THIS browser produced these bytes, so this event
+    // is an echo: the local doc-saved signal already delivered the content (or
+    // we wrote it ourselves). One registry across surfaces is what makes this
+    // true for the /notes editor's saves too, not just our own.
+    if (wasSavedHere(GLOBAL_NOTES_DOC_KEY, contentHash)) return;
 
-    // A save of OUR edit is pending or in flight — this event is almost
-    // certainly its echo racing ahead of the PUT response. Defer the check:
-    // the save's .then() compares against the settled hash. (If a REAL
+    // A save is pending or in flight — ours, or another surface's on this same
+    // file. This event is almost certainly its echo racing ahead of the PUT
+    // response. Defer the check: the save's .then() compares against the settled
+    // hash, and a sibling's save arrives on the local signal. (If a REAL
     // external write raced our save, the PUT 409s and the catch reloads.)
-    if (savingRef.current || dirty.current) {
+    if (savingRef.current || dirty.current || isDocSaveInFlight(GLOBAL_NOTES_DOC_KEY)) {
       deferredWsHashRef.current = contentHash;
       return;
     }
@@ -116,6 +135,35 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
     log.info('notes', 'Global notes updated externally, reloading', { contentHash });
     reloadContent();
   });
+
+  // ── The same file, saved by another surface of this page ────────────────────
+  // global-notes.md is one document with three editors (this panel, the /notes
+  // vault editor, the Files panel). The browser-local doc-saved signal is what
+  // makes a save in any of them land here in the same tick, bytes included —
+  // before this, a /notes-page edit stayed invisible until a lucky window-focus
+  // reload, and typing into the stale panel then 409-rolled the user back.
+  useEffect(() => {
+    return subscribeDocSaved(GLOBAL_NOTES_DOC_KEY, (sig: DocSavedSignal) => {
+      if (sig.origin === surfaceIdRef.current) return; // our own save
+      if (sig.contentHash === contentHashRef.current) return; // already these bytes
+      deferredWsHashRef.current = null; // this signal supersedes the parked echo
+      if (dirty.current || inFlightRef.current) {
+        // Unsaved typing here: leave it alone. Our next save either wins or 409s
+        // into a reload — the same convergence this panel has always used.
+        log.info('notes', 'Global notes changed in another view while dirty — deferring');
+        deferredWsHashRef.current = sig.contentHash;
+        return;
+      }
+      if (sig.content == null) { reloadContent(); return; }
+      log.info('notes', 'Adopting global notes saved in another view');
+      contentHashRef.current = sig.contentHash;
+      dirty.current = false;
+      externalUpdateRef.current = true;
+      const { frontmatter, body } = splitFrontmatter(sig.content);
+      frontmatterRef.current = frontmatter;
+      setContent(body);
+    });
+  }, [reloadContent]);
 
   // ── Visibility / focus reload — catch external edits when tab regains focus ──
   useEffect(() => {
@@ -151,9 +199,13 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
     if (inFlightRef.current) return; // in-flight settle path reschedules if newer edits arrived
     inFlightRef.current = true;
     savingRef.current = true;
+    beginDocSave(GLOBAL_NOTES_DOC_KEY);
     const seqAtSerialize = editSeqRef.current;
     const hash = contentHashRef.current ?? undefined;
-    saveGlobalNotes(joinFrontmatter(frontmatterRef.current, md), hash)
+    // saveGlobalNotes announces the write on the shared doc-saved signal, so the
+    // /notes editor (or a Files-panel view) holding this same file converges
+    // without waiting for the server's echo.
+    saveGlobalNotes(joinFrontmatter(frontmatterRef.current, md), hash, surfaceIdRef.current)
       .then(({ contentHash: newHash }) => {
         contentHashRef.current = newHash;
         lastSaveFailedRef.current = false;
@@ -167,7 +219,7 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
         if (!dirty.current && deferredWsHashRef.current) {
           const deferred = deferredWsHashRef.current;
           deferredWsHashRef.current = null;
-          if (deferred !== newHash) {
+          if (deferred !== newHash && !wasSavedHere(GLOBAL_NOTES_DOC_KEY, deferred)) {
             log.info('notes', 'Global notes updated externally (deferred), reloading', { contentHash: deferred });
             reloadContent();
             return;
@@ -194,6 +246,7 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
       .finally(() => {
         inFlightRef.current = false;
         savingRef.current = false;
+        endDocSave(GLOBAL_NOTES_DOC_KEY);
         // Keystrokes (or a failed save) left us dirty — schedule the next
         // attempt. Back off to 5s after a failure so a persistent 5xx doesn't
         // become a 2-req/s retry storm.
@@ -277,7 +330,7 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
           try {
             const md = ed.storage.markdown.getMarkdown();
             const hash = contentHashRef.current ?? undefined;
-            saveGlobalNotes(joinFrontmatter(frontmatterRef.current, md), hash).catch((e) => {
+            saveGlobalNotes(joinFrontmatter(frontmatterRef.current, md), hash, surfaceIdRef.current).catch((e) => {
               log.warn('notes', 'Unmount flush failed', { error: e instanceof Error ? e.message : String(e) });
             });
           } catch { /* editor already gone */ }

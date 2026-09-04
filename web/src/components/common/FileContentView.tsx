@@ -30,6 +30,10 @@ import {
 import {
   getCachedFileContent, setCachedFileContent, storable,
 } from '@/cache/filecontent-idb';
+import {
+  fileDocKey, noteDocKey, subscribeDocSaved, wasSavedHere, type DocSavedSignal,
+} from '@/stores/file-save-signal';
+import { useEvent } from '@/hooks/useWebSocket';
 import { rawKind, isPlayable, isMarkdownExt } from '@/utils/file-kind';
 import { formatSize } from '@/utils/format';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
@@ -175,6 +179,23 @@ export function FileContentView({
 }: FileContentViewProps) {
   const [data, setData] = useState<FileContentResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  /**
+   * Identity of THIS mount. Several views of one file can be on screen at once
+   * (two session Files panes, a pane plus the "@" mention preview, the /notes
+   * editor plus the pane rooted at the vault), so every write we make is stamped
+   * with this and every doc-saved signal carrying it is our own echo. Comparing
+   * on content hash alone would be wrong: two views can hold byte-identical
+   * buffers, and then nobody would react.
+   */
+  const viewIdRef = useRef(`fv-${Math.random().toString(36).slice(2)}`);
+  /**
+   * Re-read this file because something OTHER than the container asked for it: a
+   * sibling view saved it, or the server said the note/memory doc behind it
+   * moved, and this pane has no editor to fold the bytes into. Added to
+   * `reloadToken` (both only ever increase) so one read path serves both.
+   */
+  const [selfReload, setSelfReload] = useState(0);
+  const readToken = reloadToken + selfReload;
   // Re-fetch of the file already on screen (Refresh): keep the old content
   // visible instead of flashing to blank, and show a small "Reloading…" badge.
   const [reloading, setReloading] = useState(false);
@@ -445,8 +466,8 @@ export function FileContentView({
 
   useEffect(() => {
     let cancelled = false;
-    const isReload = lastTokenRef.current !== null && lastTokenRef.current !== reloadToken;
-    lastTokenRef.current = reloadToken;
+    const isReload = lastTokenRef.current !== null && lastTokenRef.current !== readToken;
+    lastTokenRef.current = readToken;
     // What the pane held before this read — a reload compares against it to
     // tell "new bytes" (remount) from "same bytes" (leave the editor alone).
     const lockBefore = lockHashRef.current;
@@ -593,7 +614,7 @@ export function FileContentView({
       }
     })();
     return () => { cancelled = true; };
-  }, [filePath, host, reloadToken, flushDraft]);
+  }, [filePath, host, readToken, flushDraft]);
 
   // Scroll to highlighted line after content renders
   useEffect(() => {
@@ -779,6 +800,9 @@ export function FileContentView({
    */
   const canEdit = !loading && !raw && data != null && !data.binary && !data.error
     && data.content != null && !data.truncated && data.contentHash != null;
+  // Read from an async continuation (a sibling view's save handler), so a ref.
+  const canEditRef = useRef(canEdit);
+  canEditRef.current = canEdit;
 
   // Editors ARE the default view for editable files. Preview tab: WYSIWYG for
   // plain markdown, read-only render for HTML (iframe) and MDX. Source tab /
@@ -924,6 +948,7 @@ export function FileContentView({
   const live = useLiveEdit({
     path: filePath,
     host,
+    origin: viewIdRef.current,
     sessionId,
     canEdit,
     getText: () => editorRef.current?.getValue() ?? null,
@@ -964,7 +989,9 @@ export function FileContentView({
       // just told us is current rather than the stale seed hash (which would
       // 409 forever).
       const expectedHash = conflictHashRef.current ?? lockHashRef.current;
-      const res = await saveFileContent(filePath, text, { host, expectedHash, writer: 'user' });
+      const res = await saveFileContent(filePath, text, {
+        host, expectedHash, writer: 'user', origin: viewIdRef.current,
+      });
       applySaved(text, res);
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1800);
@@ -1635,6 +1662,67 @@ export function FileContentView({
       .catch(() => { /* not a note */ });
     return () => { cancelled = true; };
   }, [filePath, host]);
+
+  // ── The same file, open in another view of this page ───────────────────────
+  // Every view of a file used to hold a private copy and its own write path, so
+  // a save in one was invisible in the others until they happened to re-read —
+  // and the first thing the other one's own next save learned was a 409 against
+  // the user's own change. Two channels now reach us, both keyed on the DOCUMENT
+  // rather than on the surface:
+  //  - the browser-local doc-saved signal (stores/file-save-signal.ts), which is
+  //    synchronous and carries the bytes, so a clean sibling converges without a
+  //    request and without waiting for the server;
+  //  - the server's `notes:updated`, for the one writer that does not share this
+  //    module state: the /notes editor saving through the notes API. (It also
+  //    publishes locally, which is why the echo check below is not redundant —
+  //    it is what keeps us from re-reading bytes we already hold.)
+  const adoptOtherWriter = useCallback((sig?: DocSavedSignal) => {
+    // Dirty buffer, or bytes we were not handed: Live Edit's pull is the only
+    // path that can fold another writer's work into unsaved typing (three-way
+    // merge, and an honest conflict when it overlaps). A pane with no editor
+    // (truncated/binary read) has nothing to merge — it just re-reads.
+    if (dirtyRef.current || sig?.content == null) {
+      if (canEditRef.current) liveRef.current?.pullNow('other-view');
+      else setSelfReload((n) => n + 1);
+      return;
+    }
+    // Clean, and the writer handed us the exact bytes: converge in this tick.
+    // ORDER: seed the editor first, then applySaved-style bookkeeping — the
+    // second half drops the draft record the first half re-armed.
+    lockHashRef.current = sig.contentHash;
+    baseContentRef.current = sig.content;
+    applyEditorText(sig.content);
+    applyAdopted(sig.content, sig.contentHash, sig.size ?? new TextEncoder().encode(sig.content).length);
+  }, [applyAdopted, applyEditorText]);
+
+  useEffect(() => {
+    const onSaved = (sig: DocSavedSignal) => {
+      if (sig.origin === viewIdRef.current) return; // our own write
+      if (sig.contentHash === lockHashRef.current) return; // already these bytes
+      log.info('file-editor', 'another view saved this file', {
+        path: filePath, host, dirty: dirtyRef.current,
+      });
+      adoptOtherWriter(sig);
+    };
+    const unsubs = [subscribeDocSaved(fileDocKey(host, filePath), onSaved)];
+    // A vault note is ALSO addressable by its vault path, which is the key the
+    // /notes editor and the home Notes panel publish under.
+    if (notePath) unsubs.push(subscribeDocSaved(noteDocKey(notePath), onSaved));
+    return () => { for (const u of unsubs) u(); };
+  }, [filePath, host, notePath, adoptOtherWriter]);
+
+  useEvent('notes:updated', (data: unknown) => {
+    if (!notePath) return;
+    const d = data as { source?: unknown; contentHash?: unknown };
+    if (typeof d?.source !== 'string' || typeof d.contentHash !== 'string') return;
+    if (d.source !== `notes/${notePath.replace(/\.md$/, '')}`) return;
+    if (d.contentHash === lockHashRef.current) return; // our own save, already applied
+    // A save made anywhere in THIS browser already arrived through the local
+    // signal, bytes included; re-reading for its echo would be pure cost.
+    if (wasSavedHere(noteDocKey(notePath), d.contentHash)) return;
+    log.info('file-editor', 'the note behind this file changed on disk', { path: filePath });
+    adoptOtherWriter();
+  });
 
   const openInNotesBtn = notePath ? (
     <button

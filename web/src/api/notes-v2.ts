@@ -1,4 +1,5 @@
 import { apiGet, apiPut, apiPost, apiDelete } from './client';
+import { noteDocKey, publishDocSaved } from '@/stores/file-save-signal';
 
 export interface NoteTreeNode {
   name: string;
@@ -153,10 +154,30 @@ export async function fetchNoteContent(notePath: string): Promise<{ content: str
   return apiGet<{ content: string; updatedAt: string; contentHash: string }>(`/api/notes-v2/content/${notePath}`);
 }
 
-export async function saveNoteContent(notePath: string, content: string, expectedHash?: string): Promise<{ updatedAt: string; contentHash: string; id?: string }> {
+export async function saveNoteContent(
+  notePath: string,
+  content: string,
+  expectedHash?: string,
+  /** Mount id of the surface saving, for the browser-local doc-saved signal. */
+  origin?: string,
+): Promise<{ updatedAt: string; contentHash: string; id?: string }> {
   // `id` is the stamped-at-create-time frontmatter id; returned so the FE can refresh
   // its expected hash without a spurious 409 (§2 identity contract).
-  return apiPut<{ ok: boolean; updatedAt: string; contentHash: string; id?: string }>(`/api/notes-v2/content/${notePath}`, { content, expectedHash });
+  const res = await apiPut<{ ok: boolean; updatedAt: string; contentHash: string; id?: string }>(
+    `/api/notes-v2/content/${notePath}`, { content, expectedHash },
+  );
+  // Every note write goes through here, so this is where the other mounted views
+  // of the SAME note learn about it (see stores/file-save-signal.ts). Note: the
+  // bytes on disk are `content` PLUS any id the server stamped, so the content is
+  // only announced when the hash proves it round-tripped unchanged — a sibling
+  // that can't adopt bytes re-reads instead of adopting the wrong ones.
+  publishDocSaved({
+    key: noteDocKey(notePath),
+    contentHash: res.contentHash,
+    ...(res.id && !content.includes(`id: ${res.id}`) ? {} : { content }),
+    origin: origin ?? 'anonymous',
+  });
+  return res;
 }
 
 export async function deleteNote(notePath: string): Promise<void> {

@@ -1,4 +1,5 @@
 /** Fetch file content for the FileViewer overlay. */
+import { fileDocKey, publishDocSaved } from '@/stores/file-save-signal';
 
 export interface FileContentResponse {
   content: string | null;
@@ -119,6 +120,14 @@ export async function saveFileContent(
      * writer's bytes with the user's. Omitted = `user`.
      */
     writer?: 'user' | 'live' | 'merge';
+    /**
+     * Mount id of the view doing the writing. Every successful save is announced
+     * on the browser-local doc-saved signal so any OTHER view of this same file
+     * converges in the same tick (see stores/file-save-signal.ts); `origin` is
+     * what lets the writer ignore the echo of its own save. Omitted = the signal
+     * still fires, under an anonymous origin.
+     */
+    origin?: string;
   } = {},
 ): Promise<{ size: number; contentHash: string }> {
   const res = await fetch('/api/file-content', {
@@ -137,7 +146,18 @@ export async function saveFileContent(
     throw new FileSaveConflictError(body.currentHash);
   }
   if (!res.ok) throw new Error(typeof body?.error === 'string' ? body.error : `Save failed: ${res.status}`);
-  return { size: body.size as number, contentHash: body.contentHash as string };
+  const result = { size: body.size as number, contentHash: body.contentHash as string };
+  // Announce it HERE, the one choke point every writer of a file goes through
+  // (explicit Save, Live Edit's auto-write, its merge re-write). Carrying the
+  // content means a clean sibling view adopts these exact bytes without a read.
+  publishDocSaved({
+    key: fileDocKey(opts.host, filePath),
+    contentHash: result.contentHash,
+    content,
+    size: result.size,
+    origin: opts.origin ?? 'anonymous',
+  });
+  return result;
 }
 
 /**

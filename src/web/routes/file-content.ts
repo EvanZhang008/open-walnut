@@ -25,7 +25,8 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import { createFileReader } from '../../core/session-file-reader.js'
 import type { DaemonFileReader } from '../../core/daemon-file-reader.js'
-import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { CLOUD_MODE, WALNUT_HOME, NOTES_DIR, MEMORY_DIR } from '../../constants.js'
+import { bus, EventNames } from '../../core/event-bus.js'
 import { computeContentHash } from '../../utils/file-ops.js'
 import { withFileLock } from '../../utils/file-lock.js'
 import { listSnapshots, recordSnapshot, type SnapshotWriter } from '../../core/file-history.js'
@@ -618,6 +619,70 @@ export async function writeFileContentPayload(
   return { ok: true, size: Buffer.byteLength(content, 'utf-8'), contentHash: nextHash }
 }
 
+/**
+ * `dir`-relative path of `filePath`, or null when it isn't inside `dir`.
+ * Segment-wise via path.relative, so a sibling directory whose name merely
+ * starts with `dir` (`…/notes-backup/x.md` vs `…/notes/`) is not a match.
+ */
+/** The host alias that means "this machine, through its own daemon". */
+const LOCAL_HOST_ALIAS = '__local__'
+
+function relativeInside(dir: string, filePath: string): string | null {
+  const rel = path.relative(dir, filePath)
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null
+  return rel.split(path.sep).join('/')
+}
+
+/**
+ * A file this endpoint just wrote may be the SAME DOCUMENT another surface is
+ * showing under a different name: a vault note open in the /notes editor, a
+ * memory file open on /memory. Those surfaces listen for the document's own
+ * event, so a plain file save has to announce itself in their language or they
+ * keep showing pre-edit text until they happen to re-read (and their next save
+ * then 409s on the user's own change).
+ *
+ * LOCAL paths only: a real `host=` write lands on another machine, where the same
+ * absolute path is a different file and this server's vault is not involved.
+ * `__local__` is this machine addressed through its own daemon, so it counts as
+ * local here even though the write itself took the remote branch.
+ * Never throws — an announcement must not turn a successful save into an error.
+ */
+export function announceSavedDoc(
+  filePath: string,
+  host: string | undefined,
+  contentHash: string,
+): void {
+  try {
+    if (host && host !== LOCAL_HOST_ALIAS) return
+    const noteRel = relativeInside(NOTES_DIR, filePath)
+    if (noteRel !== null) {
+      if (!noteRel.endsWith('.md')) return // attachments aren't notes
+      // Canonical `notes/{vault-path-without-.md}` — the ONE name every emitter
+      // uses (notes-v2, the legacy global-notes route, the agent files tool).
+      bus.emit(
+        EventNames.NOTES_UPDATED,
+        { source: `notes/${noteRel.replace(/\.md$/, '')}`, contentHash },
+        ['web-ui'],
+        { source: 'file-content' },
+      )
+      return
+    }
+    const memRel = relativeInside(MEMORY_DIR, filePath)
+    if (memRel !== null) {
+      bus.emit(
+        'memory:updated',
+        { path: memRel, contentHash },
+        ['web-ui'],
+        { source: 'file-content' },
+      )
+    }
+  } catch (err) {
+    log.web.warn('file-content: doc-updated announce skipped', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
 /** Refuse to let a TEXT editor overwrite bytes it could never have displayed. */
 function assertOverwritable(current: string, filePath: string): void {
   if (isBinaryContent(Buffer.from(current.slice(0, 8192), 'utf-8'))) {
@@ -842,6 +907,8 @@ fileContentRouter.put('/', async (req: Request, res: Response, next: NextFunctio
     try {
       const { filePath } = assertPathAllowed(rawPath, hostArg, 'write')
       void recordSnapshot({ host: hostArg, path: filePath, content: content as string, writer: w })
+      // Tell the surfaces that know this file as a NOTE or a MEMORY doc.
+      announceSavedDoc(filePath, hostArg, result.contentHash)
     } catch (histErr) {
       // Must never turn a SUCCESSFUL save into an error response.
       log.web.warn('file-history: post-save record skipped', {

@@ -13,7 +13,12 @@ interface MemoryContentPanelProps {
   content: string | null;
   path: string | null;
   updatedAt: string | null;
+  /** Lock token of `content` — rides every write so a save can 409 instead of
+   *  overwriting a change this editor never showed. */
+  contentHash?: string | null;
   onSaved?: (updatedAt: string) => void;
+  /** The write was refused (409): the page should re-read this file. */
+  onConflict?: () => void;
 }
 
 function formatPath(p: string): string {
@@ -39,7 +44,10 @@ function formatTime(iso: string): string {
 /**
  * MemoryContentPanel — a memory .md file edited with the SHARED rich editor
  * (MarkdownEditorPanel), the same one /notes uses. Always-on autosave (no
- * Edit/Save buttons) via useFieldContent; no contentHash, last-write-wins.
+ * Edit/Save buttons) via useFieldContent, under an optimistic lock: the same file
+ * is also editable through the Files panel (rooted at ~/.open-walnut), so a save
+ * carries the hash of the bytes it loaded and the server refuses the write when
+ * they have moved. MemoryPage re-reads on that refusal and on `memory:updated`.
  *
  * FRONTMATTER IS SPLIT OFF BEFORE THE EDITOR SEES IT (and re-attached verbatim on
  * save) — the same pattern hooks/useNoteContent.ts uses for vault notes. Memory
@@ -51,7 +59,9 @@ function formatTime(iso: string): string {
  * Personal AI's prompt every turn — it eats the char budget and is a legal
  * replace/remove target. See components/memory/memory-file-io.ts.
  */
-export function MemoryContentPanel({ content, path, updatedAt, onSaved }: MemoryContentPanelProps) {
+export function MemoryContentPanel({
+  content, path, updatedAt, contentHash, onSaved, onConflict,
+}: MemoryContentPanelProps) {
   // The frontmatter + boundary whitespace of the file as LOADED. Held in a ref so
   // the debounced save always re-attaches the block that belongs to the bytes the
   // editor was seeded from, even if a re-render is in flight.
@@ -68,7 +78,7 @@ export function MemoryContentPanel({ content, path, updatedAt, onSaved }: Memory
     return escapeUnknownTags(split.body);
   }, [content, path]);
 
-  const save = useCallback(async (body: string) => {
+  const save = useCallback(async (body: string, expectedHash?: string) => {
     if (!path) return;
     // Re-attach the preserved frontmatter (and decode the `&gt;`/`&lt;` the
     // serializer's escapeHTML added) so the bytes on disk stay valid YAML + prose.
@@ -80,17 +90,19 @@ export function MemoryContentPanel({ content, path, updatedAt, onSaved }: Memory
       ? joinMemoryFile(split, body)
       : joinMemoryFile({ frontmatter: '', leadingGap: '', body: '', trailingGap: '' }, body);
     const result = path === 'MEMORY.md'
-      ? await saveGlobalMemory(full)
+      ? await saveGlobalMemory(full, expectedHash)
       : path === 'USER.md'
-        ? await saveUserMemory(full)
-        : await saveMemory(path, full);
+        ? await saveUserMemory(full, expectedHash)
+        : await saveMemory(path, full, expectedHash);
     onSaved?.(result.updatedAt);
+    return result;
   }, [path, onSaved]);
 
   const { content: editorContent, saveStatus, onEditorUpdate } = useFieldContent(
     path,
     editorSeed,
     save,
+    { contentHash, onConflict },
   );
 
   if (!content || !path) {

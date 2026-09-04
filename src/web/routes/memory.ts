@@ -21,9 +21,60 @@ import {
   getEntryEvidence,
 } from '../../core/memory-telemetry.js'
 import { MEMORY_FILE, USER_FILE, DAILY_DIR, MEMORY_DIR, REPOS_MEMORY_DIR } from '../../constants.js'
+import { computeContentHash } from '../../utils/file-ops.js'
+import { bus } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
 
 export const memoryRouter = Router()
+
+/**
+ * A memory file was written. The /memory page and any Files-panel view of the
+ * same path listen for this, so a save on one surface reaches the other without
+ * waiting for the metadata poll (which only ever refreshed the TREE, never the
+ * open document). Emitted for every writer of these bytes; `PUT
+ * /api/file-content` emits the same event for a path under MEMORY_DIR.
+ */
+function emitMemoryUpdated(relPath: string, content: string): void {
+  try {
+    bus.emit(
+      'memory:updated',
+      { path: relPath.split('\\').join('/'), contentHash: computeContentHash(content) },
+      ['web-ui'],
+      { source: 'memory-route' },
+    )
+  } catch { /* an announcement must never fail the save */ }
+}
+
+/**
+ * A memory save rejected because the file changed under the editor. Same
+ * contract as the notes and file-content saves: the client sent the hash of the
+ * bytes it was editing, and they are no longer the bytes on disk.
+ *
+ * `expectedHash` is OPTIONAL on every memory write, so a caller that doesn't
+ * send one keeps the old last-write-wins behaviour (the /api/v1 edge does).
+ */
+export class MemoryConflictError extends Error {
+  constructor(public currentHash: string) {
+    super('Memory file was modified externally')
+    this.name = 'MemoryConflictError'
+  }
+}
+
+/** Throw when `expectedHash` no longer describes what is on disk. */
+function assertMemoryHash(current: string, expectedHash: unknown): void {
+  if (typeof expectedHash !== 'string' || !expectedHash) return
+  const currentHash = computeContentHash(current)
+  if (currentHash !== expectedHash) throw new MemoryConflictError(currentHash)
+}
+
+/** Map a memory write failure onto its response. Shared by all three PUTs. */
+function sendMemoryWriteError(res: Response, err: unknown, next: NextFunction): void {
+  if (err instanceof MemoryConflictError) {
+    res.status(409).json({ error: err.message, code: 'conflict', currentHash: err.currentHash })
+    return
+  }
+  next(err)
+}
 
 /**
  * Bounded-store writes that come from the browser editor are 'human-edit'
@@ -190,6 +241,8 @@ export interface MemoryDoc {
   content: string
   createdAt: string
   updatedAt: string
+  /** Optimistic-lock token: send it back as `expectedHash` on the next write. */
+  contentHash: string
 }
 
 /** Read global MEMORY.md as a doc payload; null when the file doesn't exist. */
@@ -202,6 +255,7 @@ export async function readGlobalMemoryDoc(): Promise<MemoryDoc | null> {
     content: result.content,
     createdAt: stat.birthtime.toISOString(),
     updatedAt: stat.mtime.toISOString(),
+    contentHash: computeContentHash(result.content),
   }
 }
 
@@ -219,6 +273,7 @@ export async function readUserMemoryDoc(): Promise<MemoryDoc | null> {
     content,
     createdAt: stat.birthtime.toISOString(),
     updatedAt: stat.mtime.toISOString(),
+    contentHash: computeContentHash(content),
   }
 }
 
@@ -226,15 +281,22 @@ export async function readUserMemoryDoc(): Promise<MemoryDoc | null> {
  * Write MEMORY.md or USER.md with human-edit telemetry + prompt-snapshot thaw
  * (see recordBoundedStoreEdit). Shared by the web PUT routes and /api/v1.
  */
-export async function writeMemoryDoc(target: 'memory' | 'user', content: string): Promise<{ ok: true; updatedAt: string }> {
+export async function writeMemoryDoc(
+  target: 'memory' | 'user',
+  content: string,
+  expectedHash?: unknown,
+): Promise<{ ok: true; updatedAt: string; contentHash: string }> {
   const file = target === 'memory' ? MEMORY_FILE : USER_FILE
   await fsp.mkdir(path.dirname(file), { recursive: true })
   const previous = await fsp.readFile(file, 'utf-8').catch(() => '')
+  assertMemoryHash(previous, expectedHash)
   await fsp.writeFile(file, content, 'utf-8')
   await recordBoundedStoreEdit(target, previous, content)
   const stat = await fsp.stat(file)
   log.memory.info(`${target === 'memory' ? 'Global MEMORY.md' : 'USER.md'} updated via editor`, { size: content.length })
-  return { ok: true, updatedAt: stat.mtime.toISOString() }
+  const relPath = target === 'memory' ? 'MEMORY.md' : 'USER.md'
+  emitMemoryUpdated(relPath, content)
+  return { ok: true, updatedAt: stat.mtime.toISOString(), contentHash: computeContentHash(content) }
 }
 
 memoryRouter.get('/global', async (_req: Request, res: Response, next: NextFunction) => {
@@ -254,14 +316,14 @@ memoryRouter.get('/global', async (_req: Request, res: Response, next: NextFunct
 
 memoryRouter.put('/global', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { content } = req.body
+    const { content, expectedHash } = req.body
     if (typeof content !== 'string') {
       res.status(400).json({ error: 'content (string) is required' })
       return
     }
-    res.json(await writeMemoryDoc('memory', content))
+    res.json(await writeMemoryDoc('memory', content, expectedHash))
   } catch (err) {
-    next(err)
+    sendMemoryWriteError(res, err, next)
   }
 })
 
@@ -283,14 +345,14 @@ memoryRouter.get('/user', async (_req: Request, res: Response, next: NextFunctio
 
 memoryRouter.put('/user', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { content } = req.body
+    const { content, expectedHash } = req.body
     if (typeof content !== 'string') {
       res.status(400).json({ error: 'content (string) is required' })
       return
     }
-    res.json(await writeMemoryDoc('user', content))
+    res.json(await writeMemoryDoc('user', content, expectedHash))
   } catch (err) {
-    next(err)
+    sendMemoryWriteError(res, err, next)
   }
 })
 
@@ -425,7 +487,7 @@ memoryRouter.use(async (req: Request, res: Response, next: NextFunction) => {
   if (req.method !== 'PUT' || req.path === '/' || req.path === '/global') return next()
   try {
     const memPath = req.path.startsWith('/') ? req.path.slice(1) : req.path
-    const { content } = req.body
+    const { content, expectedHash } = req.body
     if (typeof content !== 'string') {
       res.status(400).json({ error: 'content (string) is required' })
       return
@@ -438,18 +500,23 @@ memoryRouter.use(async (req: Request, res: Response, next: NextFunction) => {
       res.status(403).json({ error: 'Path traversal not allowed' })
       return
     }
+    let previous: string
     try {
-      await fsp.access(resolved)
+      previous = await fsp.readFile(resolved, 'utf-8')
     } catch {
       res.status(404).json({ error: 'Memory file not found' })
       return
     }
+    // Optimistic lock, same contract as the notes and file-content saves — the
+    // /memory editor and the Files panel can both hold this file open.
+    assertMemoryHash(previous, expectedHash)
     await fsp.writeFile(resolved, content, 'utf-8')
     const stat = await fsp.stat(resolved)
     log.memory.info('Memory file updated via browser', { path: memPath, size: content.length })
-    res.json({ ok: true, updatedAt: stat.mtime.toISOString() })
+    emitMemoryUpdated(memPath, content)
+    res.json({ ok: true, updatedAt: stat.mtime.toISOString(), contentHash: computeContentHash(content) })
   } catch (err) {
-    next(err)
+    sendMemoryWriteError(res, err, next)
   }
 })
 
@@ -464,7 +531,10 @@ memoryRouter.use((req: Request, res: Response, next: NextFunction) => {
       res.status(404).json({ error: 'Memory entry not found' })
       return
     }
-    res.json({ memory: entry })
+    // contentHash rides the read so the editor can send it back as expectedHash
+    // (the write above 409s on a mismatch). Computed here rather than in
+    // core/memory.ts: it is an editing concern, not part of the memory model.
+    res.json({ memory: { ...entry, contentHash: computeContentHash(entry.content) } })
   } catch (err) {
     next(err)
   }

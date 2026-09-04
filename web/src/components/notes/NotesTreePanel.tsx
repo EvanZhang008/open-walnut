@@ -240,6 +240,22 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   // path → node, so a path-only row (Bookmarks / Recent / search hit) can open
   // the SAME context menu the tree rows do.
   const fileNodeByPath = useMemo(() => collectFileNodes(tree), [tree]);
+  /**
+   * Bookmarks are pruned server-side when a note is deleted or renamed (the
+   * notes routes rewrite `favorites.notes` and the existing `config:changed`
+   * carries it). This is the BELT: favorites is config and the tree is disk, so
+   * anything that removed a note without going through those routes (an agent's
+   * `rm`, a git checkout, a sync) would still leave a row that opens a blank
+   * editor whose first keystroke RE-CREATES the file. Same self-healing rule the
+   * Recent group already applies.
+   *
+   * Skipped while the tree is empty: that is the pre-load state, not an empty
+   * vault, and filtering against it would blink every bookmark away on mount.
+   */
+  const liveFavoriteNotes = useMemo(() => {
+    if (tree.length === 0) return favoriteNotes;
+    return favoriteNotes.filter((p) => existingNotePaths.has(p));
+  }, [favoriteNotes, existingNotePaths, tree.length]);
   // Recent group is COLLAPSED iff the sentinel is in the expanded-folders set.
   const recentExpanded = !expandedFolders.has(RECENT_GROUP_KEY);
   const toggleRecent = useCallback(() => {
@@ -477,11 +493,43 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     handleContextMenu(e, node);
   }, [fileNodeByPath, handleContextMenu]);
 
+  /**
+   * Drop rows for files that no longer exist from the SEARCH results. The result
+   * list is a private copy that no write invalidated, so deleting from a search
+   * row left the row behind — and clicking it opened a blank editor whose first
+   * keystroke wrote the file back (a 404 read is how a new note starts).
+   * `prefix` covers a folder delete in one pass.
+   */
+  const dropFromSearchResults = useCallback((gone: { path?: string; prefix?: string }) => {
+    const isGone = (p: string) =>
+      (gone.path !== undefined && p === gone.path)
+      || (gone.prefix !== undefined && p.startsWith(gone.prefix));
+    setSearchResults((prev) => (prev ? prev.filter((r) => !isGone(r.path)) : prev));
+    setSearchFolders((prev) => prev.filter((f) => !isGone(f.path) && !isGone(`${f.path}/`)));
+  }, []);
+
   const handleStartRename = useCallback((node: NoteTreeNode) => {
+    // The inline rename input lives in the TREE body, which search results
+    // replace — so Rename from a search row used to arm a state nothing rendered
+    // (a dead menu item). Leave search first and reveal the row in the tree, so
+    // the input the user is waiting for is actually on screen.
+    if (searchResults) {
+      setSearchQuery('');
+      setSearchResults(null);
+      setSearchFolders([]);
+      const folder = node.path.includes('/') ? node.path.slice(0, node.path.lastIndexOf('/')) : '';
+      if (folder) {
+        setExpandedFolders((prev) => {
+          const next = new Set(prev);
+          for (const f of ancestorFolderPaths(folder)) next.add(f);
+          return next;
+        });
+      }
+    }
     setRenaming(node.path);
     setRenameValue(node.name.replace(/\.md$/, ''));
     setContextMenu(null);
-  }, []);
+  }, [searchResults]);
 
   const handleConfirmRename = useCallback(async () => {
     if (!renaming || !renameValue.trim()) { setRenaming(null); return; }
@@ -522,6 +570,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       if (!ok) return;
       try {
         await onDeleteFolder(node.path);
+        dropFromSearchResults({ path: node.path, prefix: `${node.path}/` });
       } catch (e) {
         await alert({ title: 'Delete failed', message: e instanceof Error ? e.message : 'Could not delete the folder.' });
       }
@@ -532,10 +581,13 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     try {
       if (node.kind === 'attachment') await onDeleteAttachment(node.path);
       else await onDeleteNote(node.path);
+      // The tree refetches itself; the search results are a private copy that
+      // nothing else invalidates (see dropFromSearchResults).
+      dropFromSearchResults({ path: node.path });
     } catch (e) {
       await alert({ title: 'Delete failed', message: e instanceof Error ? e.message : 'Could not delete the file.' });
     }
-  }, [contextMenu, onDeleteNote, onDeleteFolder, onDeleteAttachment, confirm, alert]);
+  }, [contextMenu, onDeleteNote, onDeleteFolder, onDeleteAttachment, confirm, alert, dropFromSearchResults]);
 
   // Local-machine actions (context menu): Finder / default app / VS Code /
   // Copy path. Failures (cloud mode 400, clipboard denial) surface via alert —
@@ -807,7 +859,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           searching (search owns the body) and when there are no favorited notes. */}
       {!searchResults && (
         <NotesBookmarksGroup
-          favoriteNotes={favoriteNotes}
+          favoriteNotes={liveFavoriteNotes}
           selectedPath={selectedPath}
           onSelect={onSelect}
           onToggleFavorite={onToggleFavorite}
