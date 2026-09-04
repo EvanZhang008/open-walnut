@@ -5,6 +5,7 @@ import { resolveTaskSessionId, taskCircleClass } from '@/utils/session-status';
 import {
   resolveSessionRecordStatus,
   sessionStatusStore,
+  type SessionSettingsPatch,
   type StoredSessionStatus,
 } from '@/stores/session-status-store';
 
@@ -44,12 +45,31 @@ export function useSessionStatusEpoch(): number {
   );
 }
 
+/** The session's shared settings overlay (mode / model / effort / output_mode /
+ *  ACP model) — one browser, one truth for what the composer pills show. */
+export function useSessionSettings(
+  sessionId: string | null | undefined,
+): SessionSettingsPatch | null {
+  const getSnapshot = useCallback(
+    () => sessionStatusStore.getSettings(sessionId),
+    [sessionId],
+  );
+  return useSyncExternalStore(
+    sessionStatusStore.subscribe,
+    getSnapshot,
+    getSnapshot,
+  );
+}
+
 export function useResolvedSessionRecord<T extends SessionRecord | null>(record: T): T {
   const sessionId = record?.claudeSessionId;
   const status = useSessionStatus(sessionId);
+  // Settings has its own dep: a model/effort write changes no status snapshot,
+  // so `status` identity alone would leave the pill on the old value.
+  const settings = useSessionSettings(sessionId);
   return useMemo(
     () => record ? resolveSessionRecordStatus(record) as T : record,
-    [record, status],
+    [record, status, settings],
   );
 }
 

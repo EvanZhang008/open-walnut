@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type KeyboardEvent } from 'react';
-import { updateSession } from '@/api/sessions';
+import { renameSession } from '@/api/sessions';
 import { updateTask } from '@/api/tasks';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 
@@ -46,9 +46,12 @@ export function EditableSessionTitle({ sessionId, taskId, title, className, onSa
       return;
     }
     setSaving(true);
+    // Session path: renameSession registers the new title with the shared label
+    // store first, so `<session-ref/>` pills and the "@" palette move with this
+    // header instead of waiting for the PATCH response to seed them.
     const req = taskId
       ? updateTask(taskId, { title: trimmed })
-      : updateSession(sessionId, { title: trimmed });
+      : renameSession(sessionId, trimmed, title);
     req
       .then(() => { setEditing(false); onSaved?.(); })
       .catch(() => { setValue(title); setEditing(false); })

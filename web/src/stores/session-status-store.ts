@@ -1,5 +1,5 @@
-import type { Task } from '@open-walnut/core';
 import { VALID_SESSION_MODE_IDS } from '@open-walnut/core';
+import type { SessionEffort, SessionOutputMode, Task } from '@open-walnut/core';
 import type {
   ProcessStatus,
   SessionEngine,
@@ -58,6 +58,57 @@ type LegacyStatusPatch = Partial<Omit<
   LegacySessionStatusSnapshot,
   'sessionId' | 'statusRevision'
 >>;
+
+/**
+ * The session SETTINGS a composer pill writes (permission mode, model, effort,
+ * reply style, ACP model). One browser, one session-settings truth: every
+ * surface showing a session reads this overlay over its own fetched record, so a
+ * click moves the session-column pill, the chat lane pill and the task detail
+ * rows in the SAME frame — the REST round-trip and its WS echo only confirm.
+ * Same rule as the task store; a private `useState` copy per surface is what
+ * made three surfaces disagree for the length of a PATCH.
+ *
+ * Two authorities, hence two retirement rules (see retireModeOverlay /
+ * reconcileSettingsFromRecord):
+ *  - `mode` also rides the authoritative status snapshot, so its entry is a
+ *    PENDING mark: the first accepted snapshot newer than the mark is the
+ *    server's own answer and retires it, agreeing or not.
+ *  - model / effort / output_mode / acpModel exist ONLY on the record (no
+ *    snapshot carries them), so their entry is the newest value this browser
+ *    knows and retires when a fetched record confirms the same value.
+ *
+ * Key PRESENCE decides, never truthiness: `acpModelName: undefined` means "drop
+ * the advertised name, the id changed", which is not "leave it alone".
+ */
+export interface SessionSettingsPatch {
+  mode?: SessionMode;
+  model?: string;
+  effort?: SessionEffort;
+  effectiveEffort?: SessionEffort;
+  output_mode?: SessionOutputMode;
+  acpModel?: string;
+  acpModelName?: string;
+}
+
+export type SessionSettingsKey = keyof SessionSettingsPatch;
+
+const SESSION_SETTINGS_KEYS = [
+  'mode',
+  'model',
+  'effort',
+  'effectiveEffort',
+  'output_mode',
+  'acpModel',
+  'acpModelName',
+] as const satisfies readonly SessionSettingsKey[];
+
+interface SessionSettingsEntry {
+  patch: SessionSettingsPatch;
+  /** statusRevision the store held when `mode` was written here. The first
+   *  ACCEPTED snapshot past this revision is the server's own answer. `null` =
+   *  no versioned status existed yet, so any versioned snapshot retires it. */
+  modeBaseRevision: number | null;
+}
 
 const STATUS_FIELDS = [
   'taskId',
@@ -261,6 +312,15 @@ export class SessionStatusStore {
   /** session+source pairs whose legacy-input rejection was already logged. */
   private legacyRejectWarned = new Set<string>();
   private aliases = new Map<string, string>();
+  /** Settings every surface must show now — see SessionSettingsPatch. */
+  private settings = new Map<string, SessionSettingsEntry>();
+  /** Identity-keyed memo for the status+pending-mode merge: getStatus feeds
+   *  useSyncExternalStore, which loops forever on a fresh object per call. */
+  private mergedStatuses = new Map<string, {
+    base: StoredSessionStatus;
+    mode: SessionMode;
+    value: StoredSessionStatus;
+  }>();
   private listeners = new Set<() => void>();
   private epoch = 0;
 
@@ -284,8 +344,64 @@ export class SessionStatusStore {
 
   getStatus = (sessionId: string | null | undefined): StoredSessionStatus | null => {
     const resolved = this.resolveSessionId(sessionId);
-    return resolved ? this.statuses.get(resolved) ?? null : null;
+    if (!resolved) return null;
+    const base = this.statuses.get(resolved) ?? null;
+    const pendingMode = this.settings.get(resolved)?.patch.mode;
+    if (!base || pendingMode === undefined || base.mode === pendingMode) return base;
+    // Memoized on (base identity, pending mode) so the snapshot stays stable
+    // until one of them actually changes.
+    let merged = this.mergedStatuses.get(resolved);
+    if (!merged || merged.base !== base || merged.mode !== pendingMode) {
+      merged = { base, mode: pendingMode, value: { ...base, mode: pendingMode } };
+      this.mergedStatuses.set(resolved, merged);
+    }
+    return merged.value;
   };
+
+  getSettings = (sessionId: string | null | undefined): SessionSettingsPatch | null => {
+    const resolved = this.resolveSessionId(sessionId);
+    return resolved ? this.settings.get(resolved)?.patch ?? null : null;
+  };
+
+  /**
+   * Show `patch` on every surface NOW. Callers fire this BEFORE the REST write
+   * and call clearSessionSettings on failure, so the two surfaces revert
+   * together instead of drifting apart.
+   */
+  applySessionSettings(sessionId: string, patch: SessionSettingsPatch): void {
+    const canonical = this.resolveSessionId(sessionId);
+    if (!canonical) return;
+    const current = this.settings.get(canonical);
+    const next = { ...(current?.patch ?? {}) } as UnknownRecord;
+    const incoming = patch as UnknownRecord;
+    let changed = false;
+    for (const key of SESSION_SETTINGS_KEYS) {
+      if (!(key in incoming)) continue;
+      if (key in next && next[key] === incoming[key]) continue;
+      next[key] = incoming[key];
+      changed = true;
+    }
+    const modeBaseRevision = 'mode' in incoming
+      ? this.statuses.get(canonical)?.statusRevision ?? null
+      : current?.modeBaseRevision ?? null;
+    if (!changed && modeBaseRevision === (current?.modeBaseRevision ?? null)) return;
+    this.settings.set(canonical, {
+      patch: next as SessionSettingsPatch,
+      modeBaseRevision,
+    });
+    this.epoch++;
+    this.emit();
+  }
+
+  /** The REST write failed: drop these keys so every surface falls back to the
+   *  server's value in the same frame. */
+  clearSessionSettings(sessionId: string, keys: readonly SessionSettingsKey[]): void {
+    const canonical = this.resolveSessionId(sessionId);
+    if (!canonical) return;
+    if (!this.dropSettingsKeys(canonical, keys)) return;
+    this.epoch++;
+    this.emit();
+  }
 
   applyVersioned(
     input: unknown,
@@ -358,6 +474,9 @@ export class SessionStatusStore {
       }
     }
 
+    // Retire BEFORE the accept's emit, so no listener ever sees the new
+    // snapshot next to a pending mode the server has already answered.
+    this.retireModeOverlay(canonicalId, normalized.statusRevision);
     this.statuses.set(canonicalId, normalized);
     this.acceptTransition(current, normalized, source);
     return 'accepted';
@@ -411,16 +530,27 @@ export class SessionStatusStore {
         : null;
     if (!providerId) return;
 
+    // The record is the authority for the settings the status snapshot does not
+    // carry (model / effort / output_mode / acpModel) — retire the pins it
+    // confirms. Runs whether or not the status half is versioned.
+    const canonical = this.resolveSessionId(providerId);
+    const settingsChanged = canonical
+      ? this.reconcileSettingsFromRecord(canonical, record)
+      : false;
+
     const nestedStatus = isRecord(record.status) ? record.status : null;
     const versioned = nestedStatus
       ? normalizeVersionedStatus(nestedStatus, providerId)
       : normalizeVersionedSessionRecord(record, providerId);
-    if (versioned) {
-      this.applyVersioned(versioned, source);
-      return;
-    }
-    if (isProcessStatus(record.process_status)) {
-      this.applyLegacy(providerId, legacyPatchFromRecord(record), source);
+    const applied = versioned
+      ? this.applyVersioned(versioned, source)
+      : isProcessStatus(record.process_status)
+        ? this.applyLegacy(providerId, legacyPatchFromRecord(record), source)
+        : null;
+    // Only the accepted path emits on its own.
+    if (settingsChanged && applied !== 'accepted') {
+      this.epoch++;
+      this.emit();
     }
   }
 
@@ -488,8 +618,63 @@ export class SessionStatusStore {
   clearForTesting(): void {
     this.statuses.clear();
     this.aliases.clear();
+    this.settings.clear();
+    this.mergedStatuses.clear();
     this.epoch++;
     this.emit();
+  }
+
+  /** Silent (no emit) settings-key removal — callers own the notification. */
+  private dropSettingsKeys(canonical: string, keys: readonly SessionSettingsKey[]): boolean {
+    const current = this.settings.get(canonical);
+    if (!current) return false;
+    const next = { ...current.patch } as UnknownRecord;
+    let changed = false;
+    for (const key of keys) {
+      if (!(key in next)) continue;
+      delete next[key];
+      changed = true;
+    }
+    if (!changed) return false;
+    // Nothing reads the merge memo once the pending mode is gone (getStatus
+    // returns the base snapshot directly) — don't leave it behind.
+    if (!('mode' in next)) this.mergedStatuses.delete(canonical);
+    if (Object.keys(next).length === 0) this.settings.delete(canonical);
+    else {
+      this.settings.set(canonical, {
+        patch: next as SessionSettingsPatch,
+        modeBaseRevision: 'mode' in next ? current.modeBaseRevision : null,
+      });
+    }
+    return true;
+  }
+
+  /** An accepted snapshot NEWER than the pending mark is the server's own
+   *  answer about `mode` — right or wrong, it retires the pending value. Silent:
+   *  the accept that triggered it emits. */
+  private retireModeOverlay(canonical: string, revision: number | null): void {
+    if (revision == null) return; // legacy re-seed is not an answer
+    const current = this.settings.get(canonical);
+    if (!current || !('mode' in current.patch)) return;
+    if (current.modeBaseRevision != null && revision <= current.modeBaseRevision) return;
+    this.dropSettingsKeys(canonical, ['mode']);
+  }
+
+  /** A fetched record CONFIRMS a pinned value, so the overlay has nothing left
+   *  to add. Without this an out-of-band change (another tab, the CLI's own
+   *  /model) would stay invisible behind a pin that already came true. A STALE
+   *  record cannot clobber a pending write: only an equal value retires. */
+  private reconcileSettingsFromRecord(canonical: string, record: UnknownRecord): boolean {
+    const current = this.settings.get(canonical);
+    if (!current) return false;
+    const held = current.patch as UnknownRecord;
+    const confirmed: SessionSettingsKey[] = [];
+    for (const key of SESSION_SETTINGS_KEYS) {
+      if (!(key in held)) continue;
+      if (!(key in record)) continue;
+      if (record[key] === held[key]) confirmed.push(key);
+    }
+    return confirmed.length > 0 && this.dropSettingsKeys(canonical, confirmed);
   }
 
   private promoteAlias(previousSessionId: string, nextSessionId: string, source: SessionStatusSource): void {
@@ -512,7 +697,15 @@ export class SessionStatusStore {
       if (target === previousCanonical) this.aliases.set(alias, nextCanonical);
     }
     this.statuses.delete(previousCanonical);
+    this.mergedStatuses.delete(previousCanonical);
     if (promoted) this.statuses.set(nextCanonical, promoted);
+    // A pending pill write made against the pre-promotion id belongs to the same
+    // session — carry it, or the pill snaps back when the id is adopted.
+    const previousSettings = this.settings.get(previousCanonical);
+    if (previousSettings && !this.settings.has(nextCanonical)) {
+      this.settings.set(nextCanonical, previousSettings);
+    }
+    this.settings.delete(previousCanonical);
     this.epoch++;
     log.info('session-status', 'provider session alias promoted', {
       sessionId: nextCanonical,
@@ -570,21 +763,41 @@ export function seedTaskSessionStatuses(task: Task | unknown, source?: SessionSt
   sessionStatusStore.seedTaskRecord(task, source);
 }
 
+/** Show a settings write on every surface at once (see SessionSettingsPatch).
+ *  Pair every call with clearSessionSettings on the REST failure path. */
+export function applySessionSettings(sessionId: string, patch: SessionSettingsPatch): void {
+  sessionStatusStore.applySessionSettings(sessionId, patch);
+}
+
+/** Revert an optimistic settings write — the surfaces fall back together. */
+export function clearSessionSettings(
+  sessionId: string,
+  keys: readonly SessionSettingsKey[],
+): void {
+  sessionStatusStore.clearSessionSettings(sessionId, keys);
+}
+
 export function resolveSessionRecordStatus<T extends SessionRecord>(record: T): T {
   const status = sessionStatusStore.getStatus(record.claudeSessionId);
-  if (!status) return record;
-  return {
-    ...record,
-    taskId: status.taskId ?? '',
-    process_status: status.process_status,
-    activity: status.activity ?? undefined,
-    mode: status.mode ?? 'default',
-    planCompleted: status.planCompleted,
-    archived: status.archived,
-    errorMessage: status.errorMessage ?? undefined,
-    provider: status.provider ?? undefined,
-    engine: status.engine ?? undefined,
-    statusRevision: status.statusRevision ?? undefined,
-    statusUpdatedAt: status.statusUpdatedAt ?? undefined,
-  };
+  // `mode` is already merged into the status snapshot by getStatus; the rest of
+  // the settings overlay has no snapshot to ride and lands here.
+  const settings = sessionStatusStore.getSettings(record.claudeSessionId);
+  if (!status && !settings) return record;
+  const resolved = status
+    ? {
+      ...record,
+      taskId: status.taskId ?? '',
+      process_status: status.process_status,
+      activity: status.activity ?? undefined,
+      mode: status.mode ?? 'default',
+      planCompleted: status.planCompleted,
+      archived: status.archived,
+      errorMessage: status.errorMessage ?? undefined,
+      provider: status.provider ?? undefined,
+      engine: status.engine ?? undefined,
+      statusRevision: status.statusRevision ?? undefined,
+      statusUpdatedAt: status.statusUpdatedAt ?? undefined,
+    }
+    : { ...record };
+  return settings ? Object.assign(resolved, settings) : resolved;
 }

@@ -68,6 +68,7 @@ import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 import { useResolvedSessionRecord } from '@/hooks/useSessionStatus';
+import { applySessionSettings, clearSessionSettings } from '@/stores/session-status-store';
 import { useSessionControls } from '@/hooks/useSessionControls';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { engineCaps } from '@/utils/engine-capabilities';
@@ -269,11 +270,34 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     }
   }, []);
 
+  // The record's own id, not the prop: a deep link may address the session by a
+  // unique PREFIX, and the shared store is keyed by the canonical provider id
+  // every other surface resolves.
+  const settingsSessionId = sessionRecord?.claudeSessionId ?? sessionId;
+
   // Optimistic / reverted record patches from the composer's model pill (it owns
-  // the switch calls; this panel owns the record copy they reflect into).
+  // the switch calls). They land in the SHARED session-settings store, not in
+  // this panel's private copy: the same session can also be showing in the chat
+  // lane composer and in the task detail rows, and a private patch left them on
+  // the old value until each happened to refetch.
   const applyModelPillPatch = useCallback((patch: Partial<SessionRecord>) => {
-    setSession(prev => prev ? { ...prev, ...patch } : prev);
-  }, []);
+    applySessionSettings(settingsSessionId, patch);
+  }, [settingsSessionId]);
+
+  // Permission-mode writes go through the same store. A private optimistic patch
+  // here was doubly wrong: invisible (resolveSessionRecordStatus overwrites
+  // `mode` from the status store, so `setSession({...session, mode})` never
+  // showed) AND unshared, so the pill sat still until the PATCH — which also
+  // reaches the live CLI — came back.
+  const setModeOptimistic = useCallback((nextMode: SessionRecord['mode']) => {
+    applySessionSettings(settingsSessionId, { mode: nextMode });
+    updateSession(settingsSessionId, { mode: nextMode }).catch((err) => {
+      clearSessionSettings(settingsSessionId, ['mode']);
+      log.warn('session-panel', 'mode toggle failed', {
+        sessionId: settingsSessionId, mode: nextMode, error: String(err),
+      });
+    });
+  }, [settingsSessionId]);
 
   // Fetch messages for the UserMessagesSummary
   const {
@@ -1343,13 +1367,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               const isPlan = currentMode === 'plan';
               const currentIdx = enabledModes.indexOf(currentMode);
               const nextMode = enabledModes[(currentIdx + 1) % enabledModes.length]!;
-              const toggleMode = () => {
-                setSession({ ...session, mode: nextMode });
-                updateSession(session.claudeSessionId, { mode: nextMode }).catch(err => {
-                  setSession({ ...session, mode: currentMode }); // revert
-                  console.warn('[session-panel] mode toggle failed', session.claudeSessionId, nextMode, err);
-                });
-              };
+              const toggleMode = () => setModeOptimistic(nextMode);
               const label = MODE_LABELS[currentMode] ?? currentMode;
               return (
                 <div className="session-mode-bar">
@@ -1375,7 +1393,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                   <OutputModePill
                     sessionId={session.claudeSessionId}
                     mode={session.output_mode}
-                    onOptimistic={(output_mode) => setSession(prev => prev ? { ...prev, output_mode } : prev)}
+                    onOptimistic={(output_mode) => applySessionSettings(settingsSessionId, { output_mode })}
                   />
                   <SideQuestionDrawer
                     sessionId={session?.claudeSessionId}
@@ -1417,12 +1435,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                               return;
                             }
                             const cur = session.mode || 'default';
-                            const next = enabledModes[(enabledModes.indexOf(cur) + 1) % enabledModes.length]!;
-                            setSession({ ...session, mode: next });
-                            updateSession(session.claudeSessionId, { mode: next }).catch(err => {
-                              setSession({ ...session, mode: cur }); // revert
-                              console.warn('[session-panel] mode toggle failed', session.claudeSessionId, next, err);
-                            });
+                            setModeOptimistic(
+                              enabledModes[(enabledModes.indexOf(cur) + 1) % enabledModes.length]!,
+                            );
                           } : undefined}
                         />
                       </div>
@@ -1959,13 +1974,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               const isPlan = currentMode === 'plan';
               const currentIdx = enabledModes.indexOf(currentMode);
               const nextMode = enabledModes[(currentIdx + 1) % enabledModes.length]!;
-              const toggleMode = () => {
-                setSession({ ...session, mode: nextMode });
-                updateSession(session.claudeSessionId, { mode: nextMode }).catch(err => {
-                  setSession({ ...session, mode: currentMode }); // revert
-                  console.warn('[session-panel] mode toggle failed', session.claudeSessionId, nextMode, err);
-                });
-              };
+              const toggleMode = () => setModeOptimistic(nextMode);
               const label = MODE_LABELS[currentMode] ?? currentMode;
               return (
                 <div className="session-mode-bar">
@@ -1991,7 +2000,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                   <OutputModePill
                     sessionId={session.claudeSessionId}
                     mode={session.output_mode}
-                    onOptimistic={(output_mode) => setSession(prev => prev ? { ...prev, output_mode } : prev)}
+                    onOptimistic={(output_mode) => applySessionSettings(settingsSessionId, { output_mode })}
                   />
                   <SideQuestionDrawer
                     sessionId={session?.claudeSessionId}
@@ -2045,12 +2054,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                 return;
               }
               const cur = session.mode || 'default';
-              const next = enabledModes[(enabledModes.indexOf(cur) + 1) % enabledModes.length]!;
-              setSession({ ...session, mode: next });
-              updateSession(session.claudeSessionId, { mode: next }).catch(err => {
-                setSession({ ...session, mode: cur }); // revert
-                console.warn('[session-panel] mode toggle failed', session.claudeSessionId, next, err);
-              });
+              setModeOptimistic(
+                enabledModes[(enabledModes.indexOf(cur) + 1) % enabledModes.length]!,
+              );
             } : undefined}
           />
         </div>

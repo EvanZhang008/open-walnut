@@ -58,6 +58,23 @@ export function ensureSessionMentionIndex(): Promise<void> {
   return inflight;
 }
 
+/**
+ * Patch one row's title in place. A rename must not sit behind the TTL: the
+ * palette showed the OLD title for up to 30s after the header renamed the
+ * session, because the only refresh path was the cache expiring.
+ */
+export function patchSessionMentionTitle(sessionId: string, title: string): void {
+  if (!sessionId || !title) return;
+  const index = list.findIndex((candidate) => candidate.id === sessionId);
+  if (index < 0 || list[index]!.title === title) return;
+  // New array + new row: the palette reads this through a store snapshot, so a
+  // mutation in place would not re-render.
+  const next = list.slice();
+  next[index] = { ...list[index]!, title };
+  list = next;
+  notify();
+}
+
 /** Live status wins over the fetched snapshot's status (WS is fresher). */
 export function liveStatusFor(candidate: SessionMentionCandidate): string {
   return sessionStatusStore.getStatus(candidate.id)?.process_status ?? candidate.status;

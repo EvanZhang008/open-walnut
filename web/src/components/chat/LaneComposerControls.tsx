@@ -13,6 +13,14 @@
  * here because MainPage only holds the lane's sessionId. Mutations use the
  * same endpoints the session panel uses (updateSession / setSessionModel /
  * setSessionEffort with get_settings read-back).
+ *
+ * ONE browser, ONE session-settings truth: the same lane session is routinely
+ * ALSO open as a session column (promote-to-task links it to a task, and its
+ * circle opens that sessionId), so every write here goes through the shared
+ * session-settings store and every read comes back through
+ * useResolvedSessionRecord. The private record below is only the fetched
+ * baseline; it used to be the whole truth, which is why a mode/effort/reply-style
+ * change made here never reached the session column at all (no listener).
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -20,6 +28,8 @@ import type { SessionEngine, SessionRecord } from '@/types/session';
 import type { SessionEffort } from '@open-walnut/core';
 import { modelSupportsEffort, SESSION_EFFORTS, SESSION_MODE_LABELS } from '@open-walnut/core';
 import { fetchSession, updateSession, setSessionModel, setSessionEffort, setCodexSessionModel } from '@/api/sessions';
+import { applySessionSettings, clearSessionSettings } from '@/stores/session-status-store';
+import { useResolvedSessionRecord } from '@/hooks/useSessionStatus';
 import { useSessionUsage, formatModelName, getContextWindowSize, contextBadgeTitle } from '@/hooks/useSessionUsage';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
@@ -38,7 +48,10 @@ interface LaneComposerControlsProps {
 }
 
 export function LaneComposerControls({ sessionId, engine = 'claude', onProviderSwitch }: LaneComposerControlsProps) {
-  const [session, setSession] = useState<SessionRecord | null>(null);
+  const [record, setRecord] = useState<SessionRecord | null>(null);
+  // Store-resolved view: mode comes from the status store, the rest from the
+  // shared settings overlay, so a pill moved in the session column moves here too.
+  const session = useResolvedSessionRecord(record);
   const [pickerOpen, setPickerOpen] = useState(false);
   // The clicked pill — anchor for the popout picker (portalled, clip-proof).
   const pillRef = useRef<HTMLElement | null>(null);
@@ -49,11 +62,11 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
 
   // Pull the lane record for mode/model/effort. Refresh on session change.
   useEffect(() => {
-    setSession(null);
+    setRecord(null);
     setPickerOpen(false);
     if (!sessionId) return;
     let cancelled = false;
-    fetchSession(sessionId).then((s) => { if (!cancelled && s) setSession(s); }).catch(() => {});
+    fetchSession(sessionId).then((s) => { if (!cancelled && s) setRecord(s); }).catch(() => {});
     return () => { cancelled = true; };
   }, [sessionId]);
 
@@ -63,9 +76,9 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
     const cur = session.mode || 'bypass';
     const idx = enabledModes.indexOf(cur);
     const next = enabledModes[(idx + 1) % enabledModes.length]!;
-    setSession({ ...session, mode: next });
+    applySessionSettings(sessionId, { mode: next });
     updateSession(sessionId, { mode: next }).catch(() => {
-      setSession({ ...session, mode: cur }); // revert
+      clearSessionSettings(sessionId, ['mode']);
     });
   }, [session, sessionId, enabledModes]);
 
@@ -73,11 +86,12 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
     setPickerOpen(false);
     if (!sessionId) return;
     const prev = session?.model;
-    setSession((s) => s ? { ...s, model } : s);
+    applySessionSettings(sessionId, { model });
     setSessionModel(sessionId, model).then((res) => {
-      if (res.effectiveModel) setSession((s) => s ? { ...s, model: res.effectiveModel } : s);
+      // The get_settings read-back is the CLI's true runtime model.
+      if (res.effectiveModel) applySessionSettings(sessionId, { model: res.effectiveModel });
     }).catch(() => {
-      setSession((s) => s ? { ...s, model: prev } : s);
+      applySessionSettings(sessionId, { model: prev });
     });
   }, [sessionId, session?.model]);
 
@@ -86,11 +100,14 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
     if (!sessionId) return;
     const prevEffort = session?.effort;
     const prevEffective = session?.effectiveEffort;
-    setSession((s) => s ? { ...s, effort } : s);
+    applySessionSettings(sessionId, { effort });
     setSessionEffort(sessionId, effort).then((res) => {
-      setSession((s) => s ? { ...s, effort, effectiveEffort: res.effectiveEffort ?? s.effectiveEffort } : s);
+      applySessionSettings(sessionId, {
+        effort,
+        ...(res.effectiveEffort ? { effectiveEffort: res.effectiveEffort } : {}),
+      });
     }).catch(() => {
-      setSession((s) => s ? { ...s, effort: prevEffort, effectiveEffort: prevEffective } : s);
+      applySessionSettings(sessionId, { effort: prevEffort, effectiveEffort: prevEffective });
     });
   }, [sessionId, session?.effort, session?.effectiveEffort]);
 
@@ -102,9 +119,9 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
     if (modelId === prev) return;
     // The advertised name describes the OLD model and the pill prefers it —
     // clear it so the new id is prettified until the record comes back.
-    setSession((s) => s ? { ...s, acpModel: modelId, acpModelName: undefined } : s);
+    applySessionSettings(sessionId, { acpModel: modelId, acpModelName: undefined });
     setCodexSessionModel(sessionId, modelId).catch(() => {
-      setSession((s) => s ? { ...s, acpModel: prev, acpModelName: prevName } : s);
+      applySessionSettings(sessionId, { acpModel: prev, acpModelName: prevName });
     });
   }, [sessionId, session?.acpModel, session?.acpModelName]);
 
@@ -161,7 +178,7 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
       <OutputModePill
         sessionId={sessionId}
         mode={session?.output_mode}
-        onOptimistic={(output_mode) => setSession((s) => s ? { ...s, output_mode } : s)}
+        onOptimistic={(output_mode) => applySessionSettings(sessionId, { output_mode })}
       />
       <button
         type="button"

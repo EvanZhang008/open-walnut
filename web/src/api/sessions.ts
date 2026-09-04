@@ -11,14 +11,43 @@ import {
   sessionStatusStore,
 } from '@/stores/session-status-store';
 import { registerSessionTitle } from '@/stores/entity-label-store';
+import { patchSessionMentionTitle } from '@/stores/session-mention-index';
 import { getEngineCatalog } from '@/hooks/useEngineCatalog';
 import { engineEntry, type LaunchEngine, type LaunchMemory } from '@/utils/engines';
 
 /** Opportunistic <session-ref/> pill-title seeding: there is no client-side
  *  all-sessions store, so any fetched record's title is registered here and
- *  unresolved pills keep their label fallback. */
+ *  unresolved pills keep their label fallback. The "@" palette's cached index is
+ *  patched from the same choke point — it has a 30s TTL, so a title it holds
+ *  would otherwise stay wrong for up to half a minute after a rename. */
 function seedSessionTitle(session: { claudeSessionId?: string; title?: string } | null | undefined): void {
-  if (session?.claudeSessionId) registerSessionTitle(session.claudeSessionId, session.title);
+  if (!session?.claudeSessionId) return;
+  registerSessionTitle(session.claudeSessionId, session.title);
+  if (session.title) patchSessionMentionTitle(session.claudeSessionId, session.title);
+}
+
+/**
+ * Rename a session (no linked task) OPTIMISTICALLY: the `<session-ref/>` pills
+ * and the "@" palette show the new title in the same frame, and the PATCH only
+ * confirms. Registering just the response meant a stalled server left the
+ * header renamed while every pill kept the old title.
+ */
+export async function renameSession(
+  sessionId: string,
+  title: string,
+  previousTitle?: string,
+): Promise<SessionRecord> {
+  registerSessionTitle(sessionId, title);
+  patchSessionMentionTitle(sessionId, title);
+  try {
+    return await updateSession(sessionId, { title });
+  } catch (err) {
+    if (previousTitle) {
+      registerSessionTitle(sessionId, previousTitle);
+      patchSessionMentionTitle(sessionId, previousTitle);
+    }
+    throw err;
+  }
 }
 
 export async function fetchSessions(): Promise<SessionSummary[]> {
