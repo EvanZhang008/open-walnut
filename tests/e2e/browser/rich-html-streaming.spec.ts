@@ -848,4 +848,74 @@ test.describe('Rich HTML streaming', () => {
     expect(await history.locator('.rich-html-chunk').count()).toBe(0);
     expect(await history.locator('pre', { hasText: 'status: OK' }).count()).toBe(1);
   });
+
+  /**
+   * MIXING, which is what rich mode actually asks for: markdown keeps doing
+   * headings, tables, fences and lists, and raw HTML appears only for what
+   * markdown cannot express (colour, an inline diagram). Both halves must render
+   * as themselves in ONE reply, and the HTML halves must be the only chunks that
+   * carry containment.
+   *
+   * Asserted end to end because the guidance is only worth stating if the
+   * renderer honours it: a mixed reply is the common case, not an edge one.
+   */
+  test('14. markdown and HTML mix in one reply, each rendering as itself', async ({ page }) => {
+    await mockFrozenHistory(page);
+    await mockSessionDetail(page);
+    await openSession(page);
+    const history = page.locator('.session-history');
+
+    await streamDeltas(page, [
+      '## Rollout check',
+      '',
+      '| stage | p95 |',
+      '|---|---|',
+      '| before | 4.2s |',
+      '| after | 0.3s |',
+      '',
+      '<div class="mix-panel" style="background:#fff5f5;color:#7f1d1d;padding:10px">3 checks failed</div>',
+      '',
+      'Run it again with:',
+      '',
+      '```bash',
+      'npm run verify -- --strict',
+      '```',
+      '',
+      '<svg width="120" height="30"><rect class="mix-bar" x="2" y="2" width="60" height="24" fill="#3b5bdb"></rect></svg>',
+      '',
+      '- next: fix A',
+      '- then: re-run',
+      '',
+      'MIX-TAIL-OK',
+    ].join('\n'));
+    await expect(history).toContainText('MIX-TAIL-OK', { timeout: 15_000 });
+
+    // The markdown half stays markdown: real elements, not literal syntax.
+    await expect(history.locator('h2', { hasText: 'Rollout check' })).toHaveCount(1, { timeout: 15_000 });
+    await expect(history.locator('table td', { hasText: '4.2s' })).toHaveCount(1);
+    await expect(history.locator('pre code', { hasText: 'npm run verify' })).toHaveCount(1);
+    await expect(history.locator('li', { hasText: 'next: fix A' })).toHaveCount(1);
+    for (const literal of ['## Rollout', '| stage |', '```bash', '- next:']) {
+      await expect(history).not.toContainText(literal);
+    }
+
+    // The HTML half is real DOM, with the colour the model asked for.
+    const panel = history.locator('.mix-panel');
+    await expect(panel).toHaveCount(1);
+    expect(await panel.evaluate((el) => getComputedStyle(el).color)).toBe('rgb(127, 29, 29)');
+    const bar = history.locator('svg rect.mix-bar');
+    await expect(bar).toHaveCount(1);
+    expect(await bar.evaluate((el) => el.namespaceURI)).toBe('http://www.w3.org/2000/svg');
+    expect((await bar.boundingBox())?.width ?? 0).toBeGreaterThan(0);
+
+    // Containment lands on the HTML chunks ONLY: the markdown blocks must not be
+    // dragged into a paint-contained block just because the reply mixes.
+    const chunks = history.locator('.rich-blocks > .rich-chunk');
+    expect(await chunks.count()).toBeGreaterThanOrEqual(6);
+    expect(await history.locator('.rich-html-chunk').count()).toBe(2);
+    expect(await history.locator('.rich-html-chunk h2, .rich-html-chunk table, .rich-html-chunk pre').count()).toBe(0);
+
+    mkdirSync(SHOT_DIR, { recursive: true });
+    await page.screenshot({ path: `${SHOT_DIR}/mixed-markdown-html.png` });
+  });
 });
