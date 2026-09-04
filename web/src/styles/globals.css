@@ -2737,6 +2737,11 @@ select {
 .session-history {
   flex: 1;
   overflow-y: auto;
+  /* A transcript scrolls one way. overflow-y alone left overflow-x at `auto`,
+     so anything poking past the right edge (a hover tooltip, a nowrap strip in
+     a thin column) turned the list into a sideways scroller. Wide code blocks
+     and tables carry their own inner scrollers. */
+  overflow-x: hidden;
   overflow-anchor: none;  /* Prevent browser scroll shifts during content replacement (Phase 2) */
   /* Claude-app-style gutter: every row (prose, tool runs, bullets) shares one
      left baseline with breathing room that scales with the pane width. */
@@ -32035,24 +32040,29 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   cursor: default;
 }
 
+/* Not rendered until hovered, and anchored to the label's RIGHT edge. The time
+   is the last item of a strip that hugs the message's right edge, so a centred
+   ~140px tooltip pokes ~55px past the history's right edge; and an opacity-0
+   box still counts as scrollable overflow, so every message quietly made the
+   whole .session-history scrollable sideways (a two-finger swipe slid the
+   transcript right). display:none contributes nothing; right-anchoring keeps
+   the visible tooltip inside the scroller too. */
 .msg-time::after {
   content: attr(data-tip);
+  display: none;
   position: absolute;
   bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
+  right: 0;
   padding: 5px 9px;
   border-radius: 8px;
   background: rgba(28, 28, 30, 0.95);
   color: #fff;
   font-size: 11.5px;
   white-space: nowrap;
-  opacity: 0;
   pointer-events: none;
-  transition: opacity 0.1s ease;
   z-index: 20;
 }
-.msg-time:hover::after { opacity: 1; }
+.msg-time:hover::after { display: block; }
 
 /* Inside the blue user bubble the muted greys are unreadable. */
 .session-msg-user .msg-copy-btn,
