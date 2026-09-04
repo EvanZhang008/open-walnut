@@ -38,6 +38,53 @@ extension WalnutAPI {
         )
     }
 
+    /// What `GET /api/push/status` says about the box that SENDS.
+    ///
+    /// Every field is optional on purpose. An older primary answers this route
+    /// without `registeredThisDevice` (and older ones still without `tokens`), and
+    /// a decode failure there would read as "the server disagrees" — the one
+    /// conclusion the app must never draw from a missing field.
+    struct PushStatus: Decodable {
+        /// True/false for the CALLING device by its bearer-key NAME (`ownedBy` in
+        /// core/push/registry.ts); nil means the server never reported it. Only a
+        /// fallback now: a name is not an identity for an anonymous LAN caller.
+        let registeredThisDevice: Bool?
+        /// Whether ANY device is registered on the sending box.
+        let registered: Bool?
+        let count: Int?
+        let apns: APNsStatus?
+        /// The rows the sending box holds. Present since the relay landed; this is
+        /// what lets the phone recognise its OWN row rather than trusting a name.
+        let tokens: [PushTokenRow]?
+    }
+
+    struct APNsStatus: Decodable {
+        /// False = the row can be stored but nothing can be delivered (no key).
+        let configured: Bool?
+    }
+
+    /// One stored row, reduced to the only field that identifies a device.
+    ///
+    /// The server never ships a full token (it is a send capability), so the row
+    /// carries the first 12 characters plus a literal `"..."` (`tokenPrefix()` in
+    /// core/push/send.ts, decorated in `pushRegistrationStatus`). The other fields
+    /// are a human diagnostic and are deliberately left undecoded.
+    struct PushTokenRow: Decodable {
+        let tokenPrefix: String?
+
+        enum CodingKeys: String, CodingKey {
+            case tokenPrefix = "token_prefix"
+        }
+    }
+
+    /// Ask the sending box what it holds for this device.
+    ///
+    /// On a replica the route is relayed to the primary, so the answer describes
+    /// the primary's store, not the replica's.
+    func pushStatus() async throws -> PushStatus {
+        try await sendAbsolute("GET", "/api/push/status", body: nil as [String: String]?)
+    }
+
     /// Set this device's letter-notification mode (`always` / `when-inactive`).
     func setPushPreferences(mode: String, letterTypes: [String]? = nil) async throws {
         struct Body: Encodable {

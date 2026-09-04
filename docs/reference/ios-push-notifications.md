@@ -266,6 +266,21 @@ real device can confirm.
      Note what does NOT work on an older build, so you do not waste the attempt:
      toggling the notification mode only logs the `404`, and unpairing and
      re-pairing never clears the memo either.
+
+     On top of that one-time re-upload, a launch that finds the memo already
+     matching now asks the sending box whether it agrees: one `GET
+     /api/push/status`, and the memo is dropped only when no listed row holds this
+     phone's token (each row's `token_prefix` is compared against the token APNs
+     just minted). The memo alone could never catch any of this, because all it
+     records is that some box returned a 2xx, and a replica on pre-relay code did
+     exactly that while keeping the row in its own config. `registeredThisDevice`
+     is only the fallback for a server too old to list rows: it is keyed on the
+     caller's bearer-key name, and a phone on a trusted LAN with no verifiable
+     bearer is filed under a shared placeholder name, so a second such phone would
+     read `true` without ever having registered. A missing answer (an older
+     server's absent field, a `503`, an offline phone) leaves the memo alone, and
+     the one `launch reconcile` line per launch reports which rule decided in
+     `decidedBy`.
    - **The POST happened and the relay hop failed.** Then the replica logs
      `push: relay to primary failed` (bridge down) or
      `push: relay to primary rejected` (the primary refused it), and the phone got

@@ -288,4 +288,235 @@ final class PushNotificationTests: XCTestCase {
         XCTAssertFalse(PushRegistration.isDeviceNotRegistered(APIError.rateLimited))
         XCTAssertFalse(PushRegistration.isDeviceNotRegistered(APIError.notConfigured))
     }
+
+    // MARK: - Launch reconcile (asking the SENDING box whether it agrees)
+
+    private func pushStatus(_ json: String) throws -> WalnutAPI.PushStatus {
+        try JSONDecoder().decode(WalnutAPI.PushStatus.self, from: Data(json.utf8))
+    }
+
+    /// Defaults to this device's token, since that is what the decision is keyed on.
+    private func shouldReregister(
+        _ status: WalnutAPI.PushStatus?, myToken: String = PushNotificationTests.token
+    ) -> Bool {
+        PushRegistration.shouldReregister(after: status, myToken: myToken)
+    }
+
+    /// One `tokens` row as the server ships it: 12 characters of the stored token
+    /// plus a literal `"..."` (`tokenPrefix()` in core/push/send.ts).
+    private func row(prefixOf token: String, length: Int = 12) -> String {
+        #"{"platform":"ios","kind":"apns","key_name":"phone-a","origin":"local","#
+            + #""registered_at":"2026-09-01T00:00:00.000Z","mode":"always","#
+            + #""token_prefix":"\#(String(token.prefix(length)))..."}"#
+    }
+
+    /// The old-server shape, and the only case the NAME rule still decides: no
+    /// `tokens` array to read, so `registeredThisDevice: false` is all there is.
+    /// `registered: true` beside it is the split-brain shape — some phone is
+    /// registered there, just not this one.
+    func testExplicitFalseFromTheServerForcesReRegistration() throws {
+        let status = try pushStatus("""
+        {"registered":true,"registeredThisDevice":false,"count":2,
+         "apns":{"configured":true,"environment":"production","topic":"dev.openwalnut.ios"}}
+        """)
+        XCTAssertEqual(status.registeredThisDevice, false)
+        XCTAssertEqual(status.count, 2)
+        XCTAssertEqual(status.apns?.configured, true)
+        XCTAssertNil(status.tokens, "no row list, so the name rule is all that is left")
+        XCTAssertEqual(PushRegistration.decisionRule(for: status), .identity)
+        XCTAssertTrue(shouldReregister(status))
+    }
+
+    /// The common case, and it must stay a no-op: re-uploading a token the server
+    /// already holds on every launch would POST forever for nothing.
+    func testServerConfirmationLeavesTheMemoAlone() throws {
+        let status = try pushStatus("""
+        {"registered":true,"registeredThisDevice":true,"count":1,"apns":{"configured":true}}
+        """)
+        XCTAssertEqual(status.registeredThisDevice, true)
+        XCTAssertFalse(shouldReregister(status))
+    }
+
+    /// An older server answers this route without the field at all. Absence is not
+    /// a "no": reading it as one would drop the memo and re-upload on every single
+    /// launch against every server that predates the field.
+    func testOldServerWithoutTheFieldIsNotEvidence() throws {
+        let status = try pushStatus(#"{"registered":true,"count":1}"#)
+        XCTAssertNil(status.registeredThisDevice, "an old server never reported this")
+        XCTAssertNil(status.apns)
+        XCTAssertEqual(PushRegistration.decisionRule(for: status), .identity)
+        XCTAssertFalse(shouldReregister(status))
+    }
+
+    /// No answer at all (a 503 from a down bridge, an offline phone, a 401) is a
+    /// "try again later", never a reason to throw away a memo that is probably fine.
+    func testAFailedStatusCallChangesNothing() {
+        XCTAssertFalse(shouldReregister(nil))
+        XCTAssertEqual(PushRegistration.decisionRule(for: nil), PushRegistration.DecisionRule.none)
+    }
+
+    // MARK: - Deciding by TOKEN, not by the caller's name
+
+    /// My own row is present, so nothing to do. This is the answer the name rule
+    /// gets right too — the next test is where they part company.
+    func testMyOwnRowInTheListIsAConfirmation() throws {
+        let status = try pushStatus(#"{"registered":true,"count":1,"tokens":[\#(row(prefixOf: Self.token))]}"#)
+        XCTAssertEqual(PushRegistration.decisionRule(for: status), .token)
+        XCTAssertFalse(shouldReregister(status))
+    }
+
+    /// THE case identity cannot answer. A bearer-less LAN caller is filed under a
+    /// SHARED placeholder name, so with two such phones the one that never
+    /// registered still reads `registeredThisDevice: true` and would go on believing
+    /// it was registered forever. The rows say otherwise, and the rows win.
+    func testRowsForOtherPhonesOnlyMeanReRegisterEvenWhenTheNameSaysYes() throws {
+        let other = String(repeating: "cd", count: 32)
+        let third = String(repeating: "ef", count: 32)
+        let status = try pushStatus("""
+        {"registered":true,"registeredThisDevice":true,"count":2,
+         "tokens":[\(row(prefixOf: other)),\(row(prefixOf: third))]}
+        """)
+        XCTAssertEqual(status.registeredThisDevice, true, "the name rule would say 'all good'")
+        XCTAssertTrue(shouldReregister(status), "but no row carries MY token")
+    }
+
+    /// An empty list is a definite "this box holds nothing", not a missing answer.
+    func testAnEmptyRowListMeansReRegister() throws {
+        let status = try pushStatus(#"{"registered":false,"count":0,"tokens":[]}"#)
+        XCTAssertEqual(status.tokens?.count, 0)
+        XCTAssertEqual(PushRegistration.decisionRule(for: status), .token)
+        XCTAssertTrue(shouldReregister(status))
+    }
+
+    /// APNs hands the app opaque bytes and the app hex-encodes them; nothing
+    /// guarantees both sides picked the same case, and a case mismatch reading as
+    /// "not my row" would re-upload on every launch forever.
+    func testPrefixComparisonIsCaseInsensitive() throws {
+        let status = try pushStatus(#"{"count":1,"tokens":[\#(row(prefixOf: Self.token.lowercased()))]}"#)
+        XCTAssertFalse(
+            shouldReregister(status, myToken: Self.token.uppercased()),
+            "the same token in a different case is still the same token"
+        )
+    }
+
+    /// A prefix too short to identify anything must be IGNORED, not treated as a
+    /// match. This one WOULD match on a naive comparison (my token starts `abab`),
+    /// which is the point: confirming a row on 3 characters would let another
+    /// phone's row silence this phone forever.
+    func testAnUnusablyShortPrefixIsNotAMatch() throws {
+        let status = try pushStatus(#"{"count":1,"tokens":[\#(row(prefixOf: Self.token, length: 3))]}"#)
+        XCTAssertEqual(status.tokens?.first?.tokenPrefix, "aba...")
+        XCTAssertNil(PushRegistration.comparablePrefix("aba..."), "3 characters decide nothing")
+        XCTAssertTrue(shouldReregister(status))
+    }
+
+    /// The wire shape, byte for byte from `pushRegistrationStatus`. If the server
+    /// renames `token_prefix` the whole token rule silently degrades to "no row
+    /// matches", so pin the key mapping and the `"..."` decoration.
+    func testServerRowShapeDecodes() throws {
+        let status = try pushStatus("""
+        {"registered":true,"registeredThisDevice":true,"count":1,
+         "apns":{"configured":true,"environment":"production","topic":"dev.openwalnut.ios"},
+         "tokens":[{"platform":"ios","kind":"apns","key_name":"phone-a","origin":"local",
+                    "registered_at":"2026-09-01T00:00:00.000Z","mode":"always",
+                    "token_prefix":"aabbccddeeff..."}]}
+        """)
+        XCTAssertEqual(status.tokens?.first?.tokenPrefix, "aabbccddeeff...")
+        XCTAssertEqual(PushRegistration.comparablePrefix("aabbccddeeff..."), "aabbccddeeff")
+        XCTAssertFalse(shouldReregister(status, myToken: "AABBCCDDEEFFaabbccddeeffaabb"))
+        XCTAssertTrue(shouldReregister(status, myToken: String(repeating: "cd", count: 32)))
+    }
+
+    /// Defence in depth, NOT the production path. `WalnutAPI.decode` throws
+    /// `APIError.server` for any non-2xx before a body is ever handed to
+    /// `PushStatus`, so a real 503 arrives as the thrown-error case above. This pins
+    /// the other way in: every field is optional so an older server decodes, which
+    /// means an error body a proxy rewrote to 200, or some future path that decodes
+    /// before checking the status, also decodes. Either must land on nil rather than
+    /// on a false that re-registers during exactly the outage that cannot store it.
+    func testRelayUnavailableBodyDoesNotDecodeIntoAFalse() throws {
+        let bodies = [
+            #"{"error":"primary unreachable","code":"bridge_unavailable","retry":true}"#,
+            // What the route actually emits: the standard nested envelope.
+            #"{"error":{"code":"bridge_offline","message":"Your primary box is offline"},"retry":true}"#,
+        ]
+        for body in bodies {
+            let status = try pushStatus(body)
+            XCTAssertNil(status.registeredThisDevice, "no facts in \(body)")
+            XCTAssertNil(status.tokens, "and no rows either")
+            XCTAssertFalse(shouldReregister(status), "must not act on \(body)")
+        }
+    }
+
+    /// `count: 0` with no field is still not actionable — the count is a diagnostic
+    /// for a human, and the per-device answer is the only thing that decides.
+    func testCountAloneIsNotADecision() throws {
+        let status = try pushStatus(#"{"registered":false,"count":0,"apns":{"configured":false}}"#)
+        XCTAssertEqual(status.apns?.configured, false)
+        XCTAssertFalse(shouldReregister(status))
+    }
+
+    // MARK: - The wiring (which branch of a token callback does what)
+
+    private func launchAction(
+        memoMatches: Bool, reconcileDone: Bool = false,
+        inFlight: Bool = false, paired: Bool = true
+    ) -> PushRegistration.LaunchAction {
+        PushRegistration.launchAction(
+            memoMatches: memoMatches, reconcileDone: reconcileDone,
+            inFlight: inFlight, paired: paired
+        )
+    }
+
+    /// The mismatch branch must POST and must NOT spend a GET first: the upload IS
+    /// the reconcile there, and asking first would only delay it. A rotated token
+    /// still uploads after the launch has already reconciled.
+    func testAMemoMismatchUploadsAndNeverAsks() {
+        XCTAssertEqual(launchAction(memoMatches: false), .upload)
+        XCTAssertEqual(launchAction(memoMatches: false, reconcileDone: true), .upload)
+        XCTAssertEqual(launchAction(memoMatches: false, inFlight: true), .upload)
+    }
+
+    /// The whole point of the change: a matching memo is the branch that asks. This
+    /// is the cell a regression moves — running the reconcile on EVERY callback, or
+    /// on none, both left all the other tests green before this existed.
+    func testAMatchingMemoAsksTheServerOnce() {
+        XCTAssertEqual(launchAction(memoMatches: true), .reconcile)
+        XCTAssertEqual(
+            launchAction(memoMatches: true, reconcileDone: true), PushRegistration.LaunchAction.none,
+            "the server already answered this launch"
+        )
+        XCTAssertEqual(
+            launchAction(memoMatches: true, inFlight: true), PushRegistration.LaunchAction.none,
+            "one launch really does deliver two token callbacks — they must not both GET"
+        )
+    }
+
+    /// Unpaired there is no box to POST to and none to ask, so BOTH branches are
+    /// silent. `upload(token:)` guards on this too; this is the half that is testable.
+    func testAnUnpairedAppDoesNothingOnEitherBranch() {
+        XCTAssertEqual(
+            launchAction(memoMatches: false, paired: false), PushRegistration.LaunchAction.none
+        )
+        XCTAssertEqual(
+            launchAction(memoMatches: true, paired: false), PushRegistration.LaunchAction.none
+        )
+        XCTAssertEqual(
+            launchAction(memoMatches: true, reconcileDone: false, paired: false),
+            PushRegistration.LaunchAction.none
+        )
+    }
+
+    /// A GET that FAILED settled nothing, so it must not burn the launch's only
+    /// chance: a phone launched while the bridge is down would otherwise never
+    /// reconcile again for the life of the process.
+    ///
+    /// Only the pure half is pinned here. `launchReconcileDone` is private state set
+    /// exclusively on a decoded answer (and `reconcileInFlight` is cleared in a
+    /// `defer`), so after a throw the inputs are `reconcileDone: false,
+    /// inFlight: false` — which is exactly the cell below, reachable a second time.
+    /// Pinning the flag itself would need a network seam this class does not have.
+    func testAFailedReconcileLeavesTheLaunchRetryable() {
+        XCTAssertEqual(launchAction(memoMatches: true, reconcileDone: false, inFlight: false), .reconcile)
+    }
 }

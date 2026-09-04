@@ -237,16 +237,23 @@ final class PushRegistration {
             "environment": Self.environment,
         ])
         let alreadyUploaded = UserDefaults.standard.string(forKey: Self.uploadedTokenKey)
-        guard alreadyUploaded != Self.uploadMemo(token: hex) else {
+        let memoMatches = alreadyUploaded == Self.uploadMemo(token: hex)
+        if memoMatches {
             // The quiet, correct case — but say so, or a launch that legitimately
             // sends nothing is indistinguishable from one that failed to.
             AppLog.info("push", "token already uploaded to this server (no POST)", [
                 "tokenPrefix": String(hex.prefix(12)),
                 "server": AppConfig.serverURL?.absoluteString ?? "unpaired",
             ])
-            return
         }
-        upload(token: hex)
+        switch Self.launchAction(
+            memoMatches: memoMatches, reconcileDone: launchReconcileDone,
+            inFlight: reconcileInFlight, paired: AppConfig.isConfigured
+        ) {
+        case .upload: upload(token: hex)
+        case .reconcile: Task { await reconcileWithServer() }
+        case .none: break
+        }
     }
 
     func didFailToRegister(error: Error) {
@@ -335,6 +342,50 @@ final class PushRegistration {
             // No token in hand this launch; ask APNs to deliver it again, which
             // re-enters didRegister → upload. Never prompts.
             UIApplication.shared.registerForRemoteNotifications()
+        }
+    }
+
+    /// Set ONLY by a decoded answer (a failed GET settled nothing, so the next
+    /// callback may ask again); `inFlight` is what stops two callbacks both asking.
+    private var launchReconcileDone = false
+    private var reconcileInFlight = false
+
+    /// Ask the server whether it holds a row for this device, and drop the memo if
+    /// it says no.
+    ///
+    /// A matching memo proves the token was ACCEPTED by whatever answered the POST,
+    /// which is a different fact from "the box that SENDS holds it": a replica on
+    /// pre-relay code answered 2xx and kept the row in its own machine-local config,
+    /// so the memo matches forever while the primary holds nothing, and no
+    /// client-side bookkeeping can tell. Only the server knows, and the token is what
+    /// the answer has to be keyed on (see `shouldReregister`). Silence counts as
+    /// agreement: an older server's missing field, a 503 from a down bridge, or an
+    /// offline phone must not drop a memo that is most likely fine.
+    private func reconcileWithServer() async {
+        guard AppConfig.isConfigured, let myToken = deviceToken,
+              !launchReconcileDone, !reconcileInFlight else { return }
+        // Check-then-set with no `await` between, on the main actor: only one gets past.
+        reconcileInFlight = true
+        defer { reconcileInFlight = false }
+        do {
+            let status = try await api.pushStatus()
+            launchReconcileDone = true
+            let meta = [
+                "server": AppConfig.serverURL?.absoluteString ?? "unpaired",
+                "count": String(status.count ?? 0),
+                "decidedBy": Self.decisionRule(for: status).rawValue,
+            ]
+            guard Self.shouldReregister(after: status, myToken: myToken) else {
+                AppLog.info("push", status.tokens == nil && status.registeredThisDevice == nil
+                    ? "launch reconcile skipped: server did not report registeredThisDevice"
+                    : "launch reconcile: server confirms this device's row", meta)
+                return
+            }
+            AppLog.warn("push", "launch reconcile: server holds no row for this device — re-registering", meta)
+            serverForgotThisDevice()
+        } catch {
+            // Nothing settled: the flag stays false and the next callback retries.
+            AppLog.info("push", "launch reconcile unavailable", ["error": String(describing: error)])
         }
     }
 
