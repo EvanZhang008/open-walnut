@@ -12,9 +12,21 @@ import {
 } from '../../core/agent-registry.js'
 import { getToolSchemas } from '../../agent/tools.js'
 import { getConfig } from '../../core/config-manager.js'
+import { bus } from '../../core/event-bus.js'
 import { listAvailableSkills } from '../../core/skill-loader.js'
 
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]*$/
+
+/**
+ * Tell every open browser the agent list moved. The web-ui subscriber is gated
+ * purely on `destinations`, so this needs no wiring on the server side; the two
+ * surfaces that show agents (the /agents page and the homepage chat switcher)
+ * re-read the list when they hear it. Not in EventPayloadMap on purpose — same
+ * as calendar:updated, this is a "go look again" ping with no payload contract.
+ */
+function announceAgentsChanged(action: 'created' | 'updated' | 'deleted', id: string): void {
+  bus.emit('agents:changed', { action, id }, ['web-ui'], { source: 'agents-route' })
+}
 
 export function createAgentsRouter(): Router {
   const router = Router()
@@ -95,6 +107,7 @@ export function createAgentsRouter(): Router {
         return
       }
       const agent = await createAgent({ id, name, runner: 'embedded', ...rest })
+      announceAgentsChanged('created', agent.id)
       res.status(201).json({ agent })
     } catch (err) {
       if (err instanceof Error && err.message.includes('already exists')) {
@@ -115,6 +128,7 @@ export function createAgentsRouter(): Router {
       const id = req.params.id as string
       const { id: _id, source: _source, ...updates } = req.body
       const agent = await updateAgent(id, updates)
+      announceAgentsChanged('updated', id)
       res.json({ agent })
     } catch (err) {
       if (err instanceof Error && (err.message.includes('not found') || err.message.includes('not in the available models'))) {
@@ -131,6 +145,7 @@ export function createAgentsRouter(): Router {
     try {
       const id = req.params.id as string
       await deleteAgent(id)
+      announceAgentsChanged('deleted', id)
       res.status(204).end()
     } catch (err) {
       if (err instanceof Error && (err.message.includes('cannot be deleted') || err.message.includes('not found'))) {
@@ -162,6 +177,7 @@ export function createAgentsRouter(): Router {
       }
       const { source: _source, id: _oldId, ...rest } = source
       const agent = await createAgent({ ...rest, id: newId, name: req.body.name || `${rest.name} (Copy)` })
+      announceAgentsChanged('created', agent.id)
       res.status(201).json({ agent })
     } catch (err) {
       if (err instanceof Error && err.message.includes('already exists')) {

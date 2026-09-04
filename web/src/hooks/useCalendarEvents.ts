@@ -1,23 +1,32 @@
 /**
  * useCalendarEvents — external calendar events for a [from, to] day range.
  *
- * Fetches on range change, refetches on the `calendar:updated` WS push
- * (server cache refresh / any write — including agent edits), and exposes
- * optimistic move/resize with rollback so event chips track the pointer.
+ * Thin view onto the shared calendar store (`@/stores/calendar-events-store`):
+ * the homepage day agenda and /calendar are mounted at the same time, so the
+ * range list, its single fetch, and every optimistic write live in ONE module
+ * instead of one private copy per mount. Reconciles on the `calendar:updated`
+ * WS push and after a socket gap.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  listCalendarEvents,
-  listCalendarSources,
-  updateCalendarEvent,
-  updateCalendarSource,
-  createCalendarEvent,
-  deleteCalendarEvent,
-  type CalendarEvent,
-  type CalendarSourceStatus,
-} from '@/api/calendar';
+import { useCallback, useEffect, useSyncExternalStore } from 'react';
+import type { CalendarEvent, CalendarInfo, CalendarSourceStatus } from '@/api/calendar';
 import { useEvent } from '@/hooks/useWebSocket';
-import { log } from '@/utils/log';
+import { runWhenVisible } from '@/utils/page-visibility';
+import {
+  calendarRangeKey,
+  createCalendarEventOptimistic,
+  ensureCalendarRange,
+  ensureCalendarsLoaded,
+  getCalendarRange,
+  getCalendarSourcesEntry,
+  loadCalendarRange,
+  moveCalendarEvent,
+  onCalendarUpdated,
+  refetchLiveCalendarRanges,
+  removeCalendarEvent,
+  setCalendarHidden,
+  subscribeCalendarRange,
+  subscribeCalendarSources,
+} from '@/stores/calendar-events-store';
 
 export interface UseCalendarEvents {
   events: CalendarEvent[];
@@ -32,140 +41,64 @@ export interface UseCalendarEvents {
   refetch: () => void;
 }
 
+function hideCalendar(calendarId: string): void {
+  void setCalendarHidden(calendarId, true);
+}
+
 export function useCalendarEvents(from: string, to: string): UseCalendarEvents {
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [sources, setSources] = useState<CalendarSourceStatus[]>([]);
-  const [loading, setLoading] = useState(true);
-  const rangeRef = useRef({ from, to });
-  rangeRef.current = { from, to };
-  // Guard against own-write echoes racing the optimistic state: while a write
-  // is in flight, WS-triggered refetches are deferred until it settles.
-  const writesInFlight = useRef(0);
-  const pendingRefetch = useRef(false);
+  const key = calendarRangeKey(from, to);
+  const subscribe = useCallback((fn: () => void) => subscribeCalendarRange(key, fn), [key]);
+  const readRange = useCallback(() => getCalendarRange(key), [key]);
+  const range = useSyncExternalStore(subscribe, readRange, readRange);
+  const shared = useSyncExternalStore(subscribeCalendarSources, getCalendarSourcesEntry, getCalendarSourcesEntry);
 
-  const fetchNow = useCallback(async () => {
-    const range = rangeRef.current;
-    try {
-      const res = await listCalendarEvents(range.from, range.to);
-      // A slow response for a stale range must not clobber the current one.
-      if (rangeRef.current.from !== range.from || rangeRef.current.to !== range.to) return;
-      setEvents(res.events);
-      setSources(res.sources);
-    } catch (err) {
-      log.warn('calendar', 'events fetch failed', { error: String(err).slice(0, 200) });
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  useEffect(() => { ensureCalendarRange(from, to); }, [from, to]);
 
-  useEffect(() => {
-    setLoading(true);
-    fetchNow();
-  }, [from, to, fetchNow]);
+  useEvent('calendar:updated', () => { onCalendarUpdated(); });
 
-  useEvent('calendar:updated', () => {
-    if (writesInFlight.current > 0) {
-      pendingRefetch.current = true;
-      return;
-    }
-    fetchNow();
+  // A WS gap loses every push in it and this list is not polled, so an event
+  // moved while the socket was down would stay wrong until a reload. Hidden tabs
+  // defer — every open tab reconnects at once and the store shares one request.
+  useEvent('_ws:reconnected', () => {
+    runWhenVisible('calendar-events:reconnect', () => { void refetchLiveCalendarRanges(); });
   });
 
-  const settleWrite = useCallback(() => {
-    writesInFlight.current -= 1;
-    if (writesInFlight.current === 0 && pendingRefetch.current) {
-      pendingRefetch.current = false;
-      fetchNow();
-    }
-  }, [fetchNow]);
-
-  const moveEvent = useCallback(
-    (id: string, patch: { start: string; end: string; title?: string }) => {
-      const prev = events;
-      setEvents((current) =>
-        current.map((e) => (e.id === id ? { ...e, start: patch.start, end: patch.end, ...(patch.title ? { title: patch.title } : {}) } : e))
-      );
-      writesInFlight.current += 1;
-      updateCalendarEvent(id, patch)
-        .then((res) => {
-          // A recurring-occurrence id can change after an edit (detached
-          // occurrence) — swap in the server's canonical event.
-          setEvents((current) => current.map((e) => (e.id === id ? res.event : e)));
-        })
-        .catch((err) => {
-          log.warn('calendar', 'event move failed, rolling back', { id, error: String(err).slice(0, 200) });
-          setEvents(prev);
-        })
-        .finally(settleWrite);
-    },
-    [events, settleWrite]
-  );
-
-  const createEvent = useCallback(
-    async (input: { calendarId: string; title: string; start: string; end: string; allDay?: boolean }) => {
-      writesInFlight.current += 1;
-      try {
-        const res = await createCalendarEvent(input);
-        setEvents((current) => [...current, res.event]);
-        return res.event;
-      } finally {
-        settleWrite();
-      }
-    },
-    [settleWrite]
-  );
-
-  const removeEvent = useCallback(
-    (id: string) => {
-      const prev = events;
-      setEvents((current) => current.filter((e) => e.id !== id));
-      writesInFlight.current += 1;
-      deleteCalendarEvent(id)
-        .catch((err) => {
-          log.warn('calendar', 'event delete failed, rolling back', { id, error: String(err).slice(0, 200) });
-          setEvents(prev);
-        })
-        .finally(settleWrite);
-    },
-    [events, settleWrite]
-  );
-
-  const hideCalendar = useCallback(
-    (calendarId: string) => {
-      // The context-menu action should feel immediate. The canonical refetch
-      // below restores the events if either visibility request fails.
-      setEvents((current) => current.filter((event) => event.calendarId !== calendarId));
-      void listCalendarSources()
-        .then((res) => {
-          const hiddenIds = new Set(
-            res.calendars.filter((calendar) => calendar.hidden).map((calendar) => calendar.id)
-          );
-          hiddenIds.add(calendarId);
-          return updateCalendarSource({
-            hidden_calendar_ids: [...hiddenIds],
-            visible_calendar_ids: null,
-          });
-        })
-        .then(fetchNow)
-        .catch((err) => {
-          log.warn('calendar', 'calendar hide failed, refetching', {
-            calendarId,
-            error: String(err).slice(0, 200),
-          });
-          fetchNow();
-        });
-    },
-    [fetchNow]
-  );
+  const refetch = useCallback(() => { void loadCalendarRange(key, true); }, [key]);
 
   return {
-    events,
-    sources,
-    loading,
-    moveEvent,
-    createEvent,
-    removeEvent,
+    events: range.events,
+    sources: shared.sources,
+    loading: range.loading,
+    moveEvent: moveCalendarEvent,
+    createEvent: createCalendarEventOptimistic,
+    removeEvent: removeCalendarEvent,
     hideCalendar,
-    refetch: fetchNow,
+    refetch,
+  };
+}
+
+export interface UseCalendarVisibility {
+  /** `null` until the list has resolved once — the popover shows "Loading…". */
+  calendars: CalendarInfo[] | null;
+  unavailable: boolean;
+  setHidden: (calendarId: string, hidden: boolean) => void;
+}
+
+/** Calendar visibility, shared so the toolbar popover and the grid always agree. */
+export function useCalendarVisibility(): UseCalendarVisibility {
+  const shared = useSyncExternalStore(subscribeCalendarSources, getCalendarSourcesEntry, getCalendarSourcesEntry);
+
+  // Force a refresh on open (Settings or another client may have moved it) while
+  // the cached list keeps rendering — no "Loading…" flash on a re-open.
+  useEffect(() => { void ensureCalendarsLoaded(true); }, []);
+
+  const setHidden = useCallback((calendarId: string, hidden: boolean) => {
+    void setCalendarHidden(calendarId, hidden);
+  }, []);
+
+  return {
+    calendars: shared.calendarsLoaded ? shared.calendars : null,
+    unavailable: shared.unavailable,
+    setHidden,
   };
 }

@@ -3,10 +3,16 @@
  *
  * Provides: activeAgentId, agent list, switching, unread badge counts.
  * Persists activeAgentId to localStorage so it survives page refresh.
+ *
+ * The agent list comes from the shared agent store, so an agent created or
+ * renamed on /agents shows up here without a page reload (MainPage never
+ * unmounts, so this hook's own mount effect would never run again).
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { AgentDefinition } from '@/api/agents';
+import { useEvent } from './useWebSocket';
+import { getAgentsSnapshot, loadAgents, subscribeAgents } from '@/stores/agents-store';
 
 const STORAGE_KEY = 'walnut:activeAgentId';
 
@@ -23,6 +29,8 @@ export interface AgentConsoleState {
   unreadCounts: Record<string, number>;
 }
 
+const NO_UNREAD: Record<string, number> = {};
+
 export function useAgentConsole(): AgentConsoleState {
   const [activeAgentId, setActiveAgentId] = useState<string>(() => {
     try {
@@ -31,32 +39,19 @@ export function useAgentConsole(): AgentConsoleState {
       return 'general';
     }
   });
-  const [agents, setAgents] = useState<AgentDefinition[]>([]);
-  const [unreadCounts] = useState<Record<string, number>>({});
-  const activeAgentIdRef = useRef(activeAgentId);
-  activeAgentIdRef.current = activeAgentId;
+  const shared = useSyncExternalStore(subscribeAgents, getAgentsSnapshot, getAgentsSnapshot);
 
-  const loadAgents = useCallback(async (signal?: { cancelled: boolean }) => {
-    try {
-      const { fetchAgents } = await import('@/api/agents');
-      const all = await fetchAgents();
-      if (signal?.cancelled) return;
-      // 'general' is the default console agent — its definition predates the
-      // console flag (console=null), so an exact `a.console` filter drops it
-      // and the switcher shows no row for the ACTIVE agent.
-      const consoleAgents = all.filter((a: AgentDefinition) => a.console || a.id === 'general');
-      setAgents(consoleAgents);
-    } catch (err) {
-      console.warn('useAgentConsole: failed to load agents', err);
-    }
-  }, []);
+  useEffect(() => { void loadAgents(); }, []);
 
-  // Fetch console agents on mount
-  useEffect(() => {
-    const signal = { cancelled: false };
-    void loadAgents(signal);
-    return () => { signal.cancelled = true; };
-  }, [loadAgents]);
+  useEvent('agents:changed', () => { void loadAgents(true); });
+
+  // 'general' is the default console agent — its definition predates the
+  // console flag (console=null), so an exact `a.console` filter drops it
+  // and the switcher shows no row for the ACTIVE agent.
+  const agents = useMemo(
+    () => shared.agents.filter((a) => a.console || a.id === 'general'),
+    [shared.agents],
+  );
 
   // TODO: wire up unread tracking using event subscriptions
 
@@ -68,14 +63,14 @@ export function useAgentConsole(): AgentConsoleState {
   }, []);
 
   const refresh = useCallback(() => {
-    void loadAgents();
-  }, [loadAgents]);
+    void loadAgents(true);
+  }, []);
 
   return {
     activeAgentId,
     agents,
     switchAgent,
     refresh,
-    unreadCounts,
+    unreadCounts: NO_UNREAD,
   };
 }

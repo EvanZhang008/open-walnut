@@ -1,7 +1,26 @@
-import { useState, useEffect, useCallback } from 'react';
+/**
+ * useRoutines — the routine list for both surfaces that show it (the homepage
+ * routines panel and /routines).
+ *
+ * Thin view onto `@/stores/routines-store`: one fetch, one shared list, and
+ * optimistic writes with rollback, so the enable/disable switch moves in the same
+ * frame instead of waiting for the round-trip plus a `cron:job-*` broadcast.
+ */
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useEvent } from './useWebSocket';
 import * as api from '@/api/routines';
 import type { Routine, CreateRoutineInput, UpdateRoutineInput, ExecutorInfo, ExecutorOptions } from '@/api/routines';
+import {
+  createRoutine,
+  getRoutinesSnapshot,
+  loadRoutines,
+  onRoutinesChanged,
+  removeRoutine,
+  runRoutineNow,
+  subscribeRoutines,
+  toggleRoutine,
+  updateRoutine,
+} from '@/stores/routines-store';
 
 interface UseRoutinesReturn {
   routines: Routine[];
@@ -16,34 +35,35 @@ interface UseRoutinesReturn {
 }
 
 export function useRoutines(includeDisabled = true): UseRoutinesReturn {
-  const [routines, setRoutines] = useState<Routine[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const shared = useSyncExternalStore(subscribeRoutines, getRoutinesSnapshot, getRoutinesSnapshot);
 
-  const refetch = useCallback(() => {
-    setError(null);
-    api.fetchRoutines(includeDisabled)
-      .then(setRoutines)
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [includeDisabled]);
-
-  useEffect(() => { refetch(); }, [refetch]);
+  useEffect(() => { void loadRoutines(); }, []);
 
   // Engine still emits cron:job-* — event names unchanged by design
-  useEvent('cron:job-added', () => refetch());
-  useEvent('cron:job-updated', () => refetch());
-  useEvent('cron:job-removed', () => refetch());
-  useEvent('cron:job-started', () => refetch());
-  useEvent('cron:job-finished', () => refetch());
+  useEvent('cron:job-added', () => onRoutinesChanged());
+  useEvent('cron:job-updated', () => onRoutinesChanged());
+  useEvent('cron:job-removed', () => onRoutinesChanged());
+  useEvent('cron:job-started', () => onRoutinesChanged());
+  useEvent('cron:job-finished', () => onRoutinesChanged());
 
-  const create = useCallback(async (input: CreateRoutineInput) => api.createRoutine(input), []);
-  const update = useCallback(async (id: string, input: UpdateRoutineInput) => api.updateRoutine(id, input), []);
-  const toggle = useCallback(async (id: string) => api.toggleRoutine(id), []);
-  const remove = useCallback(async (id: string) => { await api.deleteRoutine(id); }, []);
-  const runNow = useCallback(async (id: string) => api.runRoutine(id), []);
+  const routines = useMemo(
+    () => (includeDisabled ? shared.routines : shared.routines.filter((r) => r.enabled)),
+    [shared.routines, includeDisabled],
+  );
 
-  return { routines, loading, error, refetch, create, update, toggle, remove, runNow };
+  const refetch = useCallback(() => { void loadRoutines(true); }, []);
+
+  return {
+    routines,
+    loading: shared.loading,
+    error: shared.error,
+    refetch,
+    create: createRoutine,
+    update: updateRoutine,
+    toggle: toggleRoutine,
+    remove: removeRoutine,
+    runNow: runRoutineNow,
+  };
 }
 
 interface UseExecutorsReturn {
@@ -54,17 +74,35 @@ interface UseExecutorsReturn {
 
 const EMPTY_OPTIONS: ExecutorOptions = { hosts: [], models: [] };
 
+// The executor catalogue is static for the life of the page and both routine
+// surfaces mount at once, so it is fetched once per page load, not once per mount.
+let executorsCache: { executors: ExecutorInfo[]; options: ExecutorOptions } | null = null;
+let executorsInflight: Promise<void> | null = null;
+
+function loadExecutors(): Promise<void> {
+  if (executorsCache) return Promise.resolve();
+  if (executorsInflight) return executorsInflight;
+  executorsInflight = api.fetchExecutors()
+    .then((res) => { executorsCache = { executors: res.executors, options: res.options }; })
+    .catch(() => { executorsCache = { executors: [], options: EMPTY_OPTIONS }; })
+    .finally(() => { executorsInflight = null; });
+  return executorsInflight;
+}
+
 export function useExecutors(): UseExecutorsReturn {
-  const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
-  const [options, setOptions] = useState<ExecutorOptions>(EMPTY_OPTIONS);
-  const [loading, setLoading] = useState(true);
+  const [, bump] = useState(0);
+  const loading = executorsCache === null;
 
   useEffect(() => {
-    api.fetchExecutors()
-      .then((res) => { setExecutors(res.executors); setOptions(res.options); })
-      .catch(() => { /* form falls back to free-text fields */ })
-      .finally(() => setLoading(false));
+    if (executorsCache) return;
+    let alive = true;
+    void loadExecutors().then(() => { if (alive) bump((n) => n + 1); });
+    return () => { alive = false; };
   }, []);
 
-  return { executors, options, loading };
+  return {
+    executors: executorsCache?.executors ?? [],
+    options: executorsCache?.options ?? EMPTY_OPTIONS,
+    loading,
+  };
 }

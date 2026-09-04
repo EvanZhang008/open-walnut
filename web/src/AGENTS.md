@@ -34,8 +34,42 @@ still live on the client.
   7.2s on 2026-09-02) the header showed the new title while the board kept the old one for
   seconds. A private `fetchTask` copy is allowed only as the fallback for a row the list does
   not carry or a surface outside the provider (`useTasksContextSafe()` returns null in pop-outs).
-  Ratchet: `tests/e2e/browser/task-store-same-browser-instant.spec.ts` holds the PATCH at the
-  network layer and requires both directions to propagate before the server answers.
+  Ratchets: `tests/e2e/browser/task-store-same-browser-instant.spec.ts` holds the PATCH at the
+  network layer and requires both directions to propagate before the server answers;
+  `task-store-detail-page-instant.spec.ts` (the `/tasks/:id` page) and
+  `task-store-toast-undo-instant.spec.ts` (toast Undo through `deleteTask`) do the same.
+- **The same rule holds for every shared entity, not just tasks.** The general shape: ONE
+  module store per entity kind (a React context or `useSyncExternalStore` module), optimistic
+  mutators that write the store BEFORE the request and roll back on rejection, and WS events
+  that only confirm. A component that keeps a private `useState` copy of a shared record and
+  POSTs its own write is the anti-pattern; it shows the new value on one surface while every
+  other surface waits for the network. Stores that exist today, each with a network-hold
+  ratchet (`*-same-browser-instant.spec.ts`): project registry (`hooks/useProjectRegistry.ts`,
+  `renameProjectLocal` / `removeProjectLocal` / `patchProjectLocal`; also patches the task
+  store), permission requests (`stores/permission-request-store.ts`: timeline card, rail card
+  and toast are three readers of one `requestId` row; a settled request is never re-armed),
+  letters (`components/inbox/letter-store.ts`: rail, session Inbox tab and reader are lenses
+  over one list), calendar events / routines / agents (`stores/*-store.ts`), and document
+  saves (`stores/file-save-signal.ts`: a save in one editor carries its hash AND bytes to every
+  other view of the same file, note or memory doc in this browser, so a clean sibling adopts
+  without a refetch and an echo of your own write never reads as an external change).
+- **One browser, one session-SETTINGS store.** Same rule for the session record's composer
+  settings (permission mode, model, effort, reply style, ACP model): a surface never patches its
+  own copy. Writes go through `applySessionSettings` / `clearSessionSettings`
+  (`stores/session-status-store.ts`) and reads come back through `useResolvedSessionRecord` /
+  `useSessionStatus`, so the session-column pill, the chat lane composer pill
+  (`components/chat/LaneComposerControls.tsx`) and the task detail session rows change in the
+  SAME frame. `setSession({ ...session, mode })` inside a panel is DEAD CODE:
+  `resolveSessionRecordStatus` overwrites `mode` from the store on every read, which is why the
+  pill read as a dead button until the PATCH (which also reaches the live CLI) came back. Two
+  authorities, two retirement rules: `mode` also rides the authoritative status snapshot, so its
+  overlay is a PENDING mark retired by the first ACCEPTED snapshot newer than the mark (an equal
+  or older re-seed must NOT clobber it); model / effort / output_mode / acpModel have no snapshot,
+  so the overlay is the newest value this browser knows and retires when a fetched record confirms
+  the same value (a stale record cannot). Ratchets:
+  `tests/e2e/browser/session-settings-store-same-browser-instant.spec.ts` (holds the PATCH and
+  requires the pill AND a second surface to move inside 700ms, both directions) and
+  `tests/web/session-settings-store-overlay.test.ts` (the retirement rules).
 - Use the structured logger `import { log } from '@/utils/log'` — never raw `console.log`;
   never `console.debug` (invisible to the disk forwarder). IDs full, never truncated.
 - **`<suggest>` action cards render in BOTH lanes through one module**
@@ -54,6 +88,17 @@ still live on the client.
   SHAPE (`collapsed`, container no longer a text node), never by connectivity, and re-derive from
   the passage TEXT — one animation frame, not a debounce, or a click on the passage does nothing
   for as long as the debounce lasts.
+- **The session "/" palette lists what the CLI advertised, not what Walnut found.** Every
+  `system/init` line carries `slash_commands` (already filtered by the CLI to what works in `-p`
+  mode); `ClaudeCodeSession` captures it and `GET /api/sessions/:id/slash-commands` serves it,
+  using the directory scan ONLY for descriptions. Pass the session id to `useSlashCommands`
+  (`SessionPanel`, `NotesSessionChat`); the cwd/host discovery form is for drafts, where no CLI
+  exists yet. A result that is not settled (`degraded`, or `source: 'discovery'` for a live
+  session) retries by itself with backoff, and every palette open revalidates a list older than
+  a minute (`onSessionCommandsPaletteOpen`), so "press Refresh to see the real list" must never
+  come back (2026-09-04: the SSH scan timed out during a daemon upgrade and the palette sat at
+  "Walnut + 4 built-ins" until the user found the button). Ratchet:
+  `tests/e2e/browser/slash-palette-cli-source.spec.ts`.
 
 ## Files panel — editing & quoting (`components/common/FileContentView.tsx`)
 

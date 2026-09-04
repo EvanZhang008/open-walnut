@@ -3,12 +3,18 @@
  * "Calendars" button). Same data + PUT as Settings → Calendar, scoped to the
  * one thing you tweak while looking at the grid: which calendars show.
  * Footer links into the full Settings section for everything else.
+ *
+ * Visibility is written through the shared calendar store, not a private copy:
+ * this popover used to keep its own optimistic list while the context menu's
+ * "Hide calendar" patched the grid, so the same action felt instant one way and
+ * laggy the other.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
-import { listCalendarSources, updateCalendarSource, type CalendarInfo } from '@/api/calendar';
+import { useCalendarVisibility } from '@/hooks/useCalendarEvents';
+import type { CalendarInfo } from '@/api/calendar';
 
 interface Props {
   anchorEl: HTMLElement;
@@ -19,8 +25,7 @@ export function CalendarsPopover({ anchorEl, onClose }: Props) {
   const anchorRef = useRef<HTMLElement | null>(anchorEl);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const placement = useMenuPlacement(true, anchorRef, menuRef);
-  const [calendars, setCalendars] = useState<CalendarInfo[] | null>(null);
-  const [unavailable, setUnavailable] = useState(false);
+  const { calendars, unavailable, setHidden } = useCalendarVisibility();
 
   // Window-level Escape — the popover contains no autofocused input, so a div
   // onKeyDown never fires (focus stays on the toolbar button / body).
@@ -31,32 +36,6 @@ export function CalendarsPopover({ anchorEl, onClose }: Props) {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
-
-  useEffect(() => {
-    let alive = true;
-    listCalendarSources()
-      .then((res) => {
-        if (!alive) return;
-        setCalendars(res.calendars);
-        setUnavailable(!res.sources[0]?.available || !res.sources[0]?.enabled);
-      })
-      .catch(() => alive && setUnavailable(true));
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  const toggle = (id: string, hidden: boolean) => {
-    if (!calendars) return;
-    const next = calendars.map((c) => (c.id === id ? { ...c, hidden } : c));
-    setCalendars(next); // optimistic — server push refreshes the grid
-    updateCalendarSource({
-      hidden_calendar_ids: next.filter((c) => c.hidden).map((c) => c.id),
-      visible_calendar_ids: null,
-    }).catch(() => {
-      setCalendars(calendars);
-    });
-  };
 
   const byAccount = new Map<string, CalendarInfo[]>();
   for (const c of calendars ?? []) {
@@ -98,7 +77,7 @@ export function CalendarsPopover({ anchorEl, onClose }: Props) {
                 title={c.readonly ? `${c.title} (read-only)` : c.title}
                 role="menuitemcheckbox"
                 aria-checked={!c.hidden}
-                onClick={() => toggle(c.id, !c.hidden)}
+                onClick={() => setHidden(c.id, !c.hidden)}
               >
                 <span className="cal-cals-check" aria-hidden="true" />
                 <span className="cal-settings-dot" style={{ background: c.color }} />

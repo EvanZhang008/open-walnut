@@ -14,9 +14,17 @@ export function ReposSection() {
   const { repos, loading, error, save, remove, refresh } = useRepositories();
   const confirm = useConfirm();
   const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<RepoSummary | null>(null);
+  // The open repo is held by SLUG, never as a captured RepoSummary: a saved
+  // rename updated `repos` but left a stale object here, so the detail heading
+  // and description stayed on the pre-edit values while the body refreshed.
+  const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
+
+  const selected = useMemo(
+    () => (selectedSlug ? repos.find((r) => r.slug === selectedSlug) ?? null : null),
+    [repos, selectedSlug],
+  );
 
   const filtered = useMemo(() => {
     if (!search.trim()) return repos;
@@ -31,7 +39,7 @@ export function ReposSection() {
   }, [repos, search]);
 
   const handleCreate = useCallback(() => {
-    setSelected(null);
+    setSelectedSlug(null);
     setEditingSlug(null);
     setShowForm(true);
   }, []);
@@ -51,21 +59,21 @@ export function ReposSection() {
     if (!(await confirm({ title: `Delete repository “${slug}”?`, confirmLabel: 'Delete', danger: true }))) return;
     try {
       await remove(slug);
-      if (selected?.slug === slug) setSelected(null);
+      setSelectedSlug((current) => (current === slug ? null : current));
     } catch {
       // useRepositories.refresh() handles re-fetching; error is transient
     }
-  }, [remove, selected, confirm]);
+  }, [remove, confirm]);
 
   const handleSelect = useCallback((repo: RepoSummary) => {
-    setSelected(repo);
+    setSelectedSlug(repo.slug);
     setShowForm(false);
   }, []);
 
   const handleBack = useCallback(() => {
     setShowForm(false);
     setEditingSlug(null);
-    setSelected(null);
+    setSelectedSlug(null);
   }, []);
 
   // Every state — loading, error, the add form, one repo's detail, the list —
