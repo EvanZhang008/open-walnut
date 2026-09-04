@@ -11,7 +11,7 @@ import { useConversations, ACTIVE_CONV_KEY } from '@/hooks/useConversations';
 import { createConversation, forkConversation, promoteConversationToTask } from '@/api/conversations';
 import { FileViewer } from '@/components/common/FileViewer';
 import { useWebSocket, useEvent } from '@/hooks/useWebSocket';
-import { useTasksContext } from '@/contexts/TasksContext';
+import { useStoreTask, useTasksContext } from '@/contexts/TasksContext';
 import { useNotifications } from '@/contexts/notifications';
 import { useFavorites } from '@/hooks/useFavorites';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
@@ -47,7 +47,7 @@ import { PromoteTaskPopover, type PromoteToTaskInput } from '@/components/chat/P
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchSession, fetchSessionsForTask, fetchWorkingDirs, forkSessionInWalnut, quickStartSession } from '@/api/sessions';
 import { fetchProjectDetail } from '@/api/projects';
-import { deleteTask as deleteTaskApi, fetchTask, recordSuggestFeedback, type QuickTaskParse } from '@/api/tasks';
+import { fetchTask, recordSuggestFeedback, type QuickTaskParse } from '@/api/tasks';
 import { fetchConfig, fetchInstallDir } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { QuickAccessBar } from '@/components/chat/QuickAccessBar';
@@ -404,7 +404,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       .then((c) => setTaskDefaults({ platform: c.defaults?.platform, project: c.defaults?.project }))
       .catch(() => {});
   });
-  const [focusedTask, setFocusedTask] = useState<Task | null>(null);
+  // WHICH task is focused. The rendered row comes from the shared store below —
+  // this state only remembers the selection (and answers for a row the list does
+  // not carry yet, e.g. a task created a tick ago).
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const storeFocusedTask = useStoreTask(selectedTask?.id);
+  // One truth for the focused row: reading the store directly means an optimistic
+  // mutation reaches the detail modal and the chat task context in the same frame,
+  // whatever the mutator touched. The old code MIRRORED the row into state gated
+  // on `updated_at`, so a mutator that doesn't bump it (moveTask) left the mirror
+  // showing the previous project indefinitely.
+  const focusedTask = storeFocusedTask ?? selectedTask;
+  const setFocusedTask = setSelectedTask;
   // Nonce that increments on every focus action — forces re-scroll even for same task
   const [focusNonce, setFocusNonce] = useState(0);
   // Locate scope for the current focus action. 'pinned' = only scroll/expand the
@@ -843,15 +854,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return draftIdx >= 0 ? draftIdx : sessionColumns.length - 1;
   }, [sessionColumns]);
 
-  // Keep focusedTask in sync with latest data from tasks array (handles WS updates from other sources)
+  // Drop the focus when the task leaves the list (deleted elsewhere). Keeping the
+  // row itself in sync is no longer this effect's job — `focusedTask` reads the
+  // store, so there is nothing to mirror.
   useEffect(() => {
-    if (!focusedTask) return;
-    const fresh = tasks.find((t) => t.id === focusedTask.id);
-    if (!fresh) { setFocusedTask(null); return; }
-    if (fresh !== focusedTask && fresh.updated_at !== focusedTask.updated_at) {
-      setFocusedTask(fresh);
-    }
-  }, [tasks, focusedTask]);
+    if (!selectedTask) return;
+    if (!tasks.some((t) => t.id === selectedTask.id)) setFocusedTask(null);
+  }, [tasks, selectedTask, setFocusedTask]);
 
   // Restore state once tasks have loaded — URL params take priority over sessionStorage.
   // Also handles popstate events (browser back/forward) that arrive after initial load.
@@ -2152,10 +2161,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       dedupKey: created.id,
       persistent: false,
       action: { label: 'Undo', kind: 'callback' },
-      onAction: () => { deleteTaskApi(created.id).catch(() => {}); },
+      // Through the store, so the row, the dock card and every task-ref pill drop
+      // the task in the same frame instead of waiting for the task:deleted echo.
+      onAction: () => { void deleteTask(created.id); },
     });
     return created;
-  }, [handleCreate, handleFocusTask, notify, tierLabel]);
+  }, [handleCreate, handleFocusTask, notify, tierLabel, deleteTask]);
 
   // "Create task from chat" — promotes the WHOLE active conversation. The server
   // creates the task and links the conversation's lane session to it; the chat
@@ -2178,10 +2189,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       dedupKey: task.id,
       persistent: false,
       action: { label: 'Undo', kind: 'callback' },
-      onAction: () => { deleteTaskApi(task.id, { force: true }).catch(() => {}); },
+      onAction: () => { void deleteTask(task.id, { force: true }); },
     });
     return task;
-  }, [agentConsole.activeAgentId, conversations.activeConversationId, handleFocusTask, notify]);
+  }, [agentConsole.activeAgentId, conversations.activeConversationId, handleFocusTask, notify, deleteTask]);
 
   // Core quick-start launcher — creates the pending session column and fires the
   // API call. Deliberately does NOT touch chat state/visibility: the todo-panel

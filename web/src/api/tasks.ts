@@ -323,6 +323,33 @@ export async function fetchDashboard(): Promise<DashboardData> {
 // Options come straight from /api/integrations/task-fields + the plugin's
 // own options route; the GET /api/tasks/meta/sprints fallback had no callers.
 
+// ── Plugin-declared task fields (manifest taskFields) ──
+
+/**
+ * The part of a declared field this module needs to write it: which plugin owns
+ * it, its key, and whether it binds a core column. The full descriptor (label,
+ * options route) lives in PluginFieldPicker.
+ */
+export interface PluginFieldRef {
+  pluginId: string;
+  key: string;
+  /** Set when the value lands on a core column instead of ext.<pluginId>. */
+  coreField?: 'sprint';
+}
+
+/** Write a field value ('' or null clears) through the generic endpoint. */
+export async function setPluginFieldValue(
+  taskId: string,
+  field: PluginFieldRef,
+  value: string | null,
+): Promise<void> {
+  await apiPut(`/api/tasks/${taskId}/plugin-field`, {
+    pluginId: field.pluginId,
+    key: field.key,
+    value,
+  });
+}
+
 // ── Tag helpers ──
 
 export async function fetchTags(): Promise<{ tag: string; count: number }[]> {

@@ -146,21 +146,114 @@ const OPTIMISTIC_FIELDS = new Set([
   'due_date', 'start_date', 'unread', 'parent_task_id',
 ]);
 
+/** Tag INSTRUCTION fields: they carry no value to spread, so the resulting
+ *  `tags` array is computed per row by applyTagInstructions. */
+const TAG_INSTRUCTION_FIELDS = new Set(['add_tags', 'remove_tags', 'set_tags']);
+
+/** The tag instructions an update may carry (see UpdateTaskInput). */
+export interface TagInstructions {
+  add_tags?: string[];
+  remove_tags?: string[];
+  set_tags?: string[];
+}
+
+/** `sprint:<name>` is a convention tag the server redirects into the sprint column. */
+const SPRINT_TAG_PREFIX = 'sprint:';
+
+/**
+ * What a tag-instruction update lands on for ONE row — mirrors task-manager's
+ * applyUpdates step for step: `sprint:<name>` tags are intercepted into the
+ * sprint column (last one wins; removing one clears it) and never reach the tag
+ * list, `set_tags` replaces, otherwise add unions and remove filters, and an
+ * empty result clears `tags` rather than storing [].
+ *
+ * Returns ONLY the fields the instructions touched, so a caller can spread it
+ * over a row without inventing values it never asked to change.
+ */
+export function applyTagInstructions(
+  task: { tags?: string[]; sprint?: string },
+  updates: TagInstructions,
+): { tags?: string[]; sprint?: string } {
+  let sprint = task.sprint;
+  let sprintTouched = false;
+  const splitSprintTags = (
+    list: string[] | undefined,
+    onSprintTag: (name: string) => void,
+  ): string[] | undefined => {
+    if (!list) return undefined;
+    const plain: string[] = [];
+    for (const tag of list) {
+      if (tag.startsWith(SPRINT_TAG_PREFIX)) onSprintTag(tag.slice(SPRINT_TAG_PREFIX.length));
+      else plain.push(tag);
+    }
+    return plain;
+  };
+  const setSprint = (name: string) => { sprint = name || undefined; sprintTouched = true; };
+  const added = splitSprintTags(updates.add_tags, setSprint);
+  const replaced = splitSprintTags(updates.set_tags, setSprint);
+  const removed = splitSprintTags(updates.remove_tags, () => { sprint = undefined; sprintTouched = true; });
+
+  let tags = task.tags;
+  let tagsTouched = false;
+  if (replaced !== undefined) {
+    tags = [...new Set(replaced)];
+    tagsTouched = true;
+  } else {
+    if (added?.length) { tags = [...new Set([...(tags ?? []), ...added])]; tagsTouched = true; }
+    if (removed?.length) {
+      const drop = new Set(removed);
+      tags = (tags ?? []).filter((t) => !drop.has(t));
+      tagsTouched = true;
+    }
+  }
+  const patch: { tags?: string[]; sprint?: string } = {};
+  if (tagsTouched) patch.tags = tags && tags.length > 0 ? tags : undefined;
+  if (sprintTouched) patch.sprint = sprint;
+  return patch;
+}
+
+/**
+ * The optimistic patch for a plugin-declared field write — mirrors the server's
+ * setPluginTaskField: a `coreField` lands on that core column, anything else on
+ * `ext.<pluginId>.<key>`, and a cleared value DELETES the ext key rather than
+ * storing an empty string.
+ *
+ * `base` must be the RICHEST copy of the row the caller has: the home list
+ * payload (`fields=list`) omits `ext` entirely, so patching a list row from
+ * itself would drop every other key that plugin stores.
+ */
+export function applyPluginFieldPatch(
+  base: { sprint?: string; ext?: Record<string, unknown> },
+  field: tasksApi.PluginFieldRef,
+  value: string | null,
+): Partial<Task> {
+  if (field.coreField === 'sprint') return { sprint: value || undefined };
+  const prev = (base.ext?.[field.pluginId] ?? {}) as Record<string, unknown>;
+  const next = { ...prev };
+  if (value === null || value === '') delete next[field.key];
+  else next[field.key] = value;
+  return { ext: { ...base.ext, [field.pluginId]: next } };
+}
+
 function applyFieldUpdate(tasks: Task[], id: string, updates: Record<string, unknown>): Task[] {
   const now = new Date().toISOString();
   const filtered: Record<string, unknown> = {};
   for (const key of Object.keys(updates)) {
     if (OPTIMISTIC_FIELDS.has(key)) filtered[key] = updates[key];
   }
+  const hasTagInstruction = Object.keys(updates).some((k) => TAG_INSTRUCTION_FIELDS.has(k));
   // The read marker (`unread`) is not content. Clearing it on focus must NOT
   // bump updated_at, or the task jumps to the top of an
   // updated_at-sorted list seconds after the user merely selects it. Mirror
   // task-manager.updateTask (same READ_MARKER_KEYS list).
   const changedKeys = Object.keys(updates).filter((k) => updates[k] !== undefined);
   const onlyReadMarker = changedKeys.length > 0 && changedKeys.every((k) => READ_MARKER_KEYS.includes(k));
-  return tasks.map(t => t.id === id
-    ? (onlyReadMarker ? { ...t, ...filtered } : { ...t, ...filtered, updated_at: now })
-    : t);
+  return tasks.map(t => {
+    if (t.id !== id) return t;
+    const tagPatch = hasTagInstruction ? applyTagInstructions(t, updates as TagInstructions) : undefined;
+    const next = { ...t, ...filtered, ...tagPatch };
+    return onlyReadMarker ? next : { ...next, updated_at: now };
+  });
 }
 
 // ── Retry helper ──
@@ -224,7 +317,21 @@ interface UseTasksReturn {
    * Used by manual-sort auto-switch so the display doesn't reshuffle across sort modes.
    */
   bakeOrder: (orderedIds: string[]) => void;
-  deleteTask: (id: string) => void;
+  /** Optimistic remove + DELETE. `force` deletes past the active-session /
+   *  active-children guard. Resolves TRUE when the server accepted it (never
+   *  rejects — a failure shows the banner and refetches server truth). */
+  deleteTask: (id: string, opts?: { force?: boolean }) => Promise<boolean>;
+  /**
+   * Write a plugin-declared task field (manifest `taskFields`) optimistically.
+   * `donor` is the caller's richest copy of the row — the list payload omits
+   * `ext`, so without it a write would drop that plugin's other keys.
+   */
+  setPluginField: (
+    id: string,
+    field: tasksApi.PluginFieldRef,
+    value: string | null,
+    donor?: { sprint?: string; ext?: Record<string, unknown> },
+  ) => void;
   /**
    * Multi-select batch ops — ONE API round-trip + one optimistic setTasks pass for
    * the whole selection (a per-task fan-out would rewrite the store N times and
@@ -666,7 +773,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   const update = useCallback((id: string, updates: tasksApi.UpdateTaskInput) => {
     // Only guard echo + apply optimistic update when the update contains optimistic-safe fields.
     // Non-optimistic fields (description, summary, etc.) need the WS echo to propagate.
-    const hasOptimistic = Object.keys(updates).some(k => OPTIMISTIC_FIELDS.has(k));
+    // Tag instructions count: they carry no value to spread, but the resulting
+    // `tags` array is computable from the row (applyTagInstructions).
+    const hasOptimistic = Object.keys(updates).some(k => OPTIMISTIC_FIELDS.has(k) || TAG_INSTRUCTION_FIELDS.has(k));
     if (hasOptimistic) {
       guardEcho(`update:${id}`);
       setTasks(prev => applyFieldUpdate(prev, id, updates as Record<string, unknown>));
@@ -833,13 +942,42 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     });
   }, []);
 
-  const deleteTask = useCallback((taskId: string) => {
+  // `force` rides through to the API: the "Task created" toast's Undo may have to
+  // delete a task that already holds a live session slot, which a plain delete
+  // correctly 409s on. Resolves rather than rejects so a caller can navigate on
+  // success without owning the error reporting (the banner + refetch do that).
+  const deleteTask = useCallback(async (taskId: string, opts?: { force?: boolean }): Promise<boolean> => {
     setTasks((prev) => prev.filter((t) => t.id !== taskId));
-    withRetry(() => tasksApi.deleteTask(taskId)).catch((err) => {
-      onOpError(err);
+    try {
+      await withRetry(() => tasksApi.deleteTask(taskId, opts));
+      return true;
+    } catch (err) {
+      onOpError(err as Error);
       refetch();
-    });
+      return false;
+    }
   }, [onOpError, refetch]);
+
+  // Plugin-declared field write (manifest taskFields). NO echo guard,
+  // deliberately: the server's task:updated carries the authoritative `ext` plus
+  // the async plugin push's `sync_error`, and it agrees with the value written
+  // here — swallowing it would hide a failed push behind a value that looks saved.
+  const setPluginField = useCallback((
+    id: string,
+    field: tasksApi.PluginFieldRef,
+    value: string | null,
+    donor?: { sprint?: string; ext?: Record<string, unknown> },
+  ) => {
+    const now = new Date().toISOString();
+    setTasks((prev) => prev.map((t) => {
+      if (t.id !== id) return t;
+      // Row over donor for what the row carries (it is the newer state), donor
+      // for `ext` (the list payload has none at all).
+      const base = { sprint: t.sprint ?? donor?.sprint, ext: { ...donor?.ext, ...t.ext } };
+      return { ...t, ...applyPluginFieldPatch(base, field, value), updated_at: now };
+    }));
+    withRetry(() => tasksApi.setPluginFieldValue(id, field, value)).catch(onOpError);
+  }, [onOpError]);
 
   // ── Multi-select batch ops ──
   // One round-trip + one optimistic pass for the whole selection. Partial success:
@@ -1076,5 +1214,5 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       .finally(() => { movingFolders.current.delete(groupId); });
   }, [onOpError, refetchGroups, showOperationError]);
 
-  return { tasks, taskGroups, hiddenGroups, folderMeta, loading, refreshing, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, reorder, moveTask, reparentTask, bakeOrder, deleteTask, batchSetPhase, batchDelete, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb, createFolder: createFolderCb, deleteFolder: deleteFolderCb, setFolderParent: setFolderParentCb, moveFolderToProject: moveFolderToProjectCb };
+  return { tasks, taskGroups, hiddenGroups, folderMeta, loading, refreshing, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, reorder, moveTask, reparentTask, bakeOrder, deleteTask, setPluginField, batchSetPhase, batchDelete, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb, createFolder: createFolderCb, deleteFolder: deleteFolderCb, setFolderParent: setFolderParentCb, moveFolderToProject: moveFolderToProjectCb };
 }

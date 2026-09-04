@@ -6,7 +6,9 @@
  * knowledge: one "Label ▸" row per field in the task kebab menu opening a
  * portalled option flyout, and a pill wherever the task detail shows fields.
  * Values are written through PUT /api/tasks/:id/plugin-field; each plugin's
- * own push logic translates the stored value for its remote API.
+ * own push logic translates the stored value for its remote API. The write goes
+ * through the shared task store when it carries the row, so every surface
+ * showing that field changes in the same frame (see usePluginField below).
  *
  * Follows the menus & overlays hard rules (web/src/AGENTS.md): the option list
  * is its OWN portalled flyout placed by useMenuPlacement (never inline growth
@@ -14,9 +16,11 @@
  * row, and host menus must exempt `.task-kebab-project-flyout` clicks — this
  * flyout reuses that class family so existing outside-click guards cover it.
  */
-import { useState, useEffect, useRef, type RefObject } from 'react';
+import { useCallback, useState, useEffect, useRef, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { apiGet, apiPut } from '@/api/client';
+import { apiGet } from '@/api/client';
+import { setPluginFieldValue } from '@/api/tasks';
+import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 
 // ── Types + declared-fields cache (module-level, same pattern as useIntegrations) ──
@@ -73,17 +77,35 @@ export function readPluginFieldValue(
   return typeof v === 'string' && v ? v : undefined;
 }
 
-/** Write a field value ('' or null clears) through the generic endpoint. */
-export async function setPluginFieldValue(
-  taskId: string,
+/**
+ * One surface's read + write of a declared field, both routed through the shared
+ * task store when it carries this row (web/src/AGENTS.md "One browser, one task
+ * store"): the optimistic value then reaches the board kebab, the detail pane
+ * and the detail page in the same frame instead of waiting for the PUT's echo.
+ *
+ * The read is an OVERLAY, not a replacement, because the home list payload
+ * (`fields=list`) omits `ext`: the store row is trusted for a core column
+ * (`sprint`) and for a plugin whose ext bucket it actually carries (which is the
+ * case right after an optimistic write), and the caller's own copy answers
+ * otherwise. Direct REST stays the path for a row the list does not have and for
+ * a pop-out window, which mounts no provider.
+ */
+function usePluginField(
+  task: { id: string; sprint?: string; ext?: Record<string, unknown> },
   field: PluginTaskField,
-  value: string | null,
-): Promise<void> {
-  await apiPut(`/api/tasks/${taskId}/plugin-field`, {
-    pluginId: field.pluginId,
-    key: field.key,
-    value,
-  });
+) {
+  const store = useTasksContextSafe();
+  const storeTask = useStoreTask(task.id);
+  const own = readPluginFieldValue(task, field);
+  const stored = storeTask ? readPluginFieldValue(storeTask, field) : undefined;
+  const storeKnows = !!storeTask && (
+    field.coreField === 'sprint' || storeTask.ext?.[field.pluginId] !== undefined
+  );
+  const write = useCallback((value: string | null) => {
+    if (store && storeTask) { store.setPluginField(task.id, field, value, task); return; }
+    setPluginFieldValue(task.id, field, value).catch(() => { /* sync_error surfaces via TASK_UPDATED */ });
+  }, [store, storeTask, task, field]);
+  return { current: storeKnows ? stored : own, write };
 }
 
 // ── Option flyout — portalled, useMenuPlacement, lazy options fetch ──
@@ -188,7 +210,7 @@ function PluginFieldRow({ task, field, afterAction }: {
 }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
-  const current = readPluginFieldValue(task, field);
+  const { current, write } = usePluginField(task, field);
   return (
     <>
       <div className="task-kebab-project">
@@ -208,9 +230,7 @@ function PluginFieldRow({ task, field, afterAction }: {
         field={field}
         current={current}
         onPick={(value) => {
-          if (value !== (current ?? null)) {
-            setPluginFieldValue(task.id, field, value).catch(() => { /* sync_error surfaces via TASK_UPDATED */ });
-          }
+          if (value !== (current ?? null)) write(value);
           afterAction();
         }}
         onClose={() => setOpen(false)}
@@ -243,7 +263,7 @@ export function PluginFieldPill({ task, field }: {
 }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
-  const current = readPluginFieldValue(task, field);
+  const { current, write } = usePluginField(task, field);
   return (
     <>
       <button
@@ -260,9 +280,7 @@ export function PluginFieldPill({ task, field }: {
         field={field}
         current={current}
         onPick={(value) => {
-          if (value !== (current ?? null)) {
-            setPluginFieldValue(task.id, field, value).catch(() => { /* sync_error surfaces via TASK_UPDATED */ });
-          }
+          if (value !== (current ?? null)) write(value);
         }}
         onClose={() => setOpen(false)}
       />

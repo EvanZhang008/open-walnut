@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react';
 import { useTasks, type CreateHooks, type FolderMeta } from '@/hooks/useTasks';
 import type { Task } from '@open-walnut/core';
-import type { BatchTaskOutcome, CreateTaskInput, UpdateTaskInput } from '@/api/tasks';
+import type { BatchTaskOutcome, CreateTaskInput, PluginFieldRef, UpdateTaskInput } from '@/api/tasks';
 import { syncTasks as syncEntityLabels } from '@/stores/entity-label-store';
 
 /** The shape exposed by TasksContext — mirrors useTasks() return. */
@@ -23,7 +23,17 @@ export interface TasksContextValue {
   /** Move a task to another project ('' = Inbox), optionally next to a sibling. */
   moveTask: (taskId: string, project: string, insertNearTaskId?: string) => void;
   reparentTask: (taskId: string, newParentId: string | null, opts?: { insertAfterId?: string }) => void;
-  deleteTask: (id: string) => void;
+  /** Optimistic remove + DELETE (`force` gets past the active-session guard).
+   *  Resolves TRUE when the server accepted it; never rejects. */
+  deleteTask: (id: string, opts?: { force?: boolean }) => Promise<boolean>;
+  /** Write a plugin-declared task field optimistically. `donor` = the caller's
+   *  richest copy of the row (the list payload carries no `ext`). */
+  setPluginField: (
+    id: string,
+    field: PluginFieldRef,
+    value: string | null,
+    donor?: { sprint?: string; ext?: Record<string, unknown> },
+  ) => void;
   /** Multi-select batch ops — one round-trip; resolve with the per-task `failed` list. */
   batchSetPhase: (ids: string[], phase: string) => Promise<BatchTaskOutcome[]>;
   batchDelete: (ids: string[], opts?: { force?: boolean }) => Promise<BatchTaskOutcome[]>;

@@ -18,7 +18,7 @@ import { ChatInput } from '@/components/chat/ChatInput';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import type { ImageAttachment } from '@/api/chat';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
-import { useTasksContext } from '@/contexts/TasksContext';
+import { useStoreTask, useTasksContext, useTasksContextSafe } from '@/contexts/TasksContext';
 import { useConfirm, useAlert } from '@/hooks/useConfirm';
 import { openPopout } from '@/popout/openPopout';
 import { openSessionOnHome } from '@/utils/open-session';
@@ -79,7 +79,10 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   const integrations = useIntegrations();
   const confirm = useConfirm();
   const alert = useAlert();
-  const [task, setTask] = useState<TaskDetail | null>(null);
+  // The private detail fetch. It is the DONOR for what only a detail read
+  // carries (note, description, ext, children, parent, resolved dependencies);
+  // the shared store owns every field it carries — see `task` below.
+  const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [newNote, setNewNote] = useState('');
@@ -97,16 +100,67 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   }, [location.key, navigate]);
 
   // Resolved full task ID — use for ALL event matching (URL param `id` may be a prefix)
-  const taskId = task?.id ?? id;
+  const taskId = detail?.id ?? id;
+
+  // The shared task store, when this surface has one. `/tasks/:id` renders while
+  // the home board, the session columns and the dock stay mounted (App.tsx keeps
+  // StableMainPage outside <Routes> and only CSS-hides it), so a write made here
+  // must land on those rows in the same frame. The pop-out entry mounts no
+  // provider, hence the SAFE hook and the direct-REST fallbacks below.
+  const store = useTasksContextSafe();
+  const storeRow = useStoreTask(taskId);
+  /** The store when it actually carries this row (otherwise: write via REST). */
+  const sharedStore = store && storeRow ? store : null;
+
+  /**
+   * The rendered task: store fields over the private detail copy.
+   *
+   * The store is the truth for everything it carries, so its optimistic writes
+   * show here before the server answers. Two fields ride the detail copy instead:
+   * the dependency graph, because the list row's `depends_on` lags the detail
+   * response that just added an edge and only the detail carries the
+   * `resolved_dependencies` / `dependents` needed to render it.
+   */
+  const task = useMemo<TaskDetail | null>(() => {
+    if (!detail) return null;
+    if (!storeRow) return detail;
+    const merged: TaskDetail = { ...detail, ...storeRow };
+    merged.depends_on = detail.depends_on;
+    merged.is_blocked = detail.is_blocked;
+    return merged;
+  }, [detail, storeRow]);
 
   const loadTask = useCallback(() => {
     if (!id) return;
     setLoading(true);
     fetchTask(id)
-      .then(setTask)
+      .then(setDetail)
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
   }, [id]);
+
+  /** Re-read the detail without flipping `loading` (that swaps the whole page for
+   *  a spinner). For writes whose response is a plain Task. */
+  const reloadDetail = useCallback(() => {
+    if (!id) return;
+    fetchTask(id).then(setDetail).catch(() => { /* the rendered copy stays usable */ });
+  }, [id]);
+
+  /**
+   * Apply a plain Task (a write response or a WS payload) onto the detail copy,
+   * KEEPING the detail-only fields it cannot carry. Replacing outright dropped
+   * `children` / `parent` / `resolved_dependencies` on every event, so those
+   * cards vanished until the next full read. `staleDeps` additionally drops the
+   * resolved dependency graph, which a dependency edit invalidates.
+   */
+  const mergeDetail = useCallback((updated: Task, opts?: { staleDeps?: boolean }) => {
+    setDetail((prev) => {
+      if (!prev) return updated as TaskDetail;
+      const next: TaskDetail = { ...prev, ...updated };
+      if (opts?.staleDeps) delete next.resolved_dependencies;
+      return next;
+    });
+  }, []);
 
   useEffect(() => { loadTask(); }, [loadTask]);
 
@@ -147,28 +201,34 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
     }, 300);
   }, [id, task?.depends_on]);
 
+  // Dependency edits stay REST-first: the store row carries `depends_on` but not
+  // the resolved titles/phases this page renders, and only the response knows the
+  // new `resolved_dependencies`. Cheap to keep private — no other surface draws
+  // the dependency graph.
   const handleAddDep = useCallback(async (depId: string) => {
     if (!id) return;
     try {
       const updated = await addDependency(id, depId);
-      setTask(updated);
+      mergeDetail(updated, { staleDeps: true });
+      reloadDetail();
       setShowDepPicker(false);
       setDepSearch('');
       setDepSearchResults([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to add dependency');
     }
-  }, [id]);
+  }, [id, mergeDetail, reloadDetail]);
 
   const handleRemoveDep = useCallback(async (depId: string) => {
     if (!id) return;
     try {
       const updated = await removeDependency(id, depId);
-      setTask(updated);
+      mergeDetail(updated, { staleDeps: true });
+      reloadDetail();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to remove dependency');
     }
-  }, [id]);
+  }, [id, mergeDetail, reloadDetail]);
 
   // Load session records when task is available or session slots change.
   useEffect(() => {
@@ -183,13 +243,13 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   useEvent('task:updated', (data) => {
     const { task: updated } = data as { task?: Task };
     if (!updated) { loadTask(); return; }
-    if (updated.id === taskId) setTask(updated);
+    if (updated.id === taskId) mergeDetail(updated);
     else if (updated.parent_task_id === taskId) loadTask();
   });
   useEvent('task:completed', (data) => {
     const { task: updated } = data as { task?: Task };
     if (!updated) { loadTask(); return; }
-    if (updated.id === taskId) setTask(updated);
+    if (updated.id === taskId) mergeDetail(updated);
     else if (updated.parent_task_id === taskId) loadTask();
   });
   useEvent('task:created', (data) => {
@@ -227,11 +287,19 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
     }
   }, [task?.plan_session_id, task?.exec_session_id, activeSessionId]);
 
+  // ── Writes ──
+  // Anything the shared store carries goes THROUGH it (`sharedStore`), so the
+  // board row, the dock card and any session header showing this task change in
+  // the same frame; the store owns the REST call, the echo guard and the error
+  // banner. The REST branch is the fallback for a row the list does not carry and
+  // for the pop-out window, which mounts no provider.
+
   const handleComplete = async () => {
     if (!id) return;
+    if (sharedStore) { sharedStore.toggleComplete(taskId ?? id); return; }
     try {
       const updated = await toggleCompleteTask(id);
-      setTask(updated);
+      mergeDetail(updated);
     } catch (err) {
       // Surface 4xx errors (e.g. 409 active children guard) as a global toast.
       // Without this, the promise rejection is silently swallowed.
@@ -241,20 +309,27 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
 
   const handleDateChange = async (date: string | null) => {
     if (!id) return;
-    const updated = await updateTask(id, { due_date: date ?? '' });
-    setTask(updated);
+    if (sharedStore) { sharedStore.update(taskId ?? id, { due_date: date ?? '' }); return; }
+    mergeDetail(await updateTask(id, { due_date: date ?? '' }));
   };
 
   const handleStartDateChange = async (date: string | null) => {
     if (!id) return;
-    const updated = await updateTask(id, { start_date: date ?? '' });
-    setTask(updated);
+    if (sharedStore) { sharedStore.update(taskId ?? id, { start_date: date ?? '' }); return; }
+    mergeDetail(await updateTask(id, { start_date: date ?? '' }));
   };
 
   const handleDelete = async () => {
     if (!id) return;
     const confirmed = await confirm({ title: `Delete task “${task?.title}”?`, message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true });
     if (!confirmed) return;
+    if (sharedStore) {
+      // The store removes the row optimistically and reports the outcome, so we
+      // only leave the page once the server accepted it (a 409 active-children
+      // guard keeps the user here, with the store's banner explaining why).
+      if (await sharedStore.deleteTask(taskId ?? id)) navigate('/tasks');
+      return;
+    }
     try {
       await deleteTask(id);
       navigate('/tasks');
@@ -263,10 +338,12 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
     }
   };
 
+  // Note / description text stays REST + echo: the store deliberately does not
+  // carry those fields (the list payload drops them), so there is nothing to
+  // update optimistically.
   const handleAddNote = async () => {
     if (!id || !newNote.trim()) return;
-    const updated = await addNote(id, newNote.trim());
-    setTask(updated);
+    mergeDetail(await addNote(id, newNote.trim()));
     setNewNote('');
   };
 
@@ -741,12 +818,12 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
           <TagEditor
             tags={task.tags ?? []}
             onAdd={async (tag) => {
-              const updated = await addTag(task.id, tag);
-              setTask(updated);
+              if (sharedStore) { sharedStore.update(task.id, { add_tags: [tag] }); return; }
+              mergeDetail(await addTag(task.id, tag));
             }}
             onRemove={async (tag) => {
-              const updated = await removeTag(task.id, tag);
-              setTask(updated);
+              if (sharedStore) { sharedStore.update(task.id, { remove_tags: [tag] }); return; }
+              mergeDetail(await removeTag(task.id, tag));
             }}
           />
         </div>
