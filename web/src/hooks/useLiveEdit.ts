@@ -124,6 +124,12 @@ function saveLiveEditPref(on: boolean): void {
   } catch { /* storage blocked — the toggle still works for this page */ }
 }
 
+/**
+ * Who the bytes we just pulled came from. Receipt WORDING only — the merge and
+ * the lock bookkeeping are identical either way.
+ */
+export type PullReason = 'agent' | 'other-view';
+
 export type ConflictDecision =
   | { action: 'write-merged'; merged: string }
   | { action: 'give-up' };
@@ -182,6 +188,9 @@ interface PendingWrite {
 export interface UseLiveEditOptions {
   path: string;
   host?: string;
+  /** Mount id of the owning view — rides every write so the browser-local
+   *  doc-saved signal can tell our own save from a sibling view's. */
+  origin?: string;
   /** Session whose agent's writes to this file should be pulled in (item 6).
    *  Absent (pop-out, mention preview) → only the 409 path detects other writers. */
   sessionId?: string;
@@ -227,6 +236,15 @@ export interface LiveEdit {
   toggle: () => void;
   /** Call from the editor's per-keystroke change callback. */
   noteUserEdit: () => void;
+  /**
+   * Re-read disk NOW and fold the result in (adopt when the buffer is clean,
+   * three-way-merge when it is dirty, hand an overlap to the explicit-Save
+   * conflict UI). The hook calls this itself when the session's agent writes the
+   * file; the owning view calls it when it learns some OTHER writer did — a
+   * sibling view of the same path, or the server's own notes/memory event.
+   * `reason` only chooses the receipt wording.
+   */
+  pullNow: (reason?: PullReason) => void;
   /** Write the pending buffer now (editor blur). */
   flushNow: () => void;
   /** Drop the pending auto-write — an explicit Save IS the flush. */
@@ -458,7 +476,9 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
       const expectedHash = live
         ? (optsRef.current.lockHashRef.current ?? rec.expectedHash)
         : freshestHash(rec.host, rec.path, rec.expectedHash, rec.capturedAt);
-      const res = await saveFileContent(rec.path, rec.text, { host: rec.host, expectedHash, writer });
+      const res = await saveFileContent(rec.path, rec.text, {
+        host: rec.host, expectedHash, writer, origin: optsRef.current.origin,
+      });
       noteWritten(rec.host, rec.path, res.contentHash);
       // The bytes are on disk, so the unsaved-draft side record is obsolete —
       // even for a file we have already navigated away from, whose parent
@@ -532,7 +552,9 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
   // write to 409 — it also covers a file the user is only READING. It arrives
   // only while the browser is subscribed to that session's stream; the 409 path
   // covers everything else.
-  const pullFromDisk = useCallback(async () => {
+  const pullFromDisk = useCallback(async (reason: PullReason = 'agent') => {
+    const adopted = reason === 'agent' ? 'Updated from agent' : 'Updated from another view';
+    const merged = reason === 'agent' ? 'Merged agent changes' : 'Merged changes from another view';
     const o = optsRef.current;
     if (!o.canEdit || pullInFlightRef.current) return;
     // Our own write is mid-air. Its 409 handler is about to read disk itself
@@ -555,7 +577,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
         cur.baseContentRef.current = disk.content;
         cur.lockHashRef.current = disk.contentHash;
         cur.onAdopted(disk.content, disk.contentHash, disk.size);
-        showReceipt('Updated from agent');
+        showReceipt(adopted);
         return;
       }
 
@@ -571,16 +593,16 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
         // must still hit the warn-once conflict gate.
         if (onRef.current) suspendHere({ ...rec, text: ours ?? '', expectedHash: undefined, capturedAt: Date.now() });
         cur.onConflict(
-          'The agent in this session changed this file, and its changes overlap yours. Your unsaved '
-          + 'version is still in the editor — Save will warn you before it replaces the agent\'s version, '
-          + 'or Discard and reopen the file to get it.',
+          `${reason === 'agent' ? 'The agent in this session' : 'Another view of this file'} changed this `
+          + 'file, and those changes overlap yours. Your unsaved version is still in the editor — Save will '
+          + 'warn you before it replaces the other one, or Discard and reopen the file to get it.',
         );
         return;
       }
       cur.lockHashRef.current = disk.contentHash;
       cur.applyText(merge.merged);
       cur.baseContentRef.current = disk.content;
-      showReceipt('Merged agent changes');
+      showReceipt(merged);
       // With live OFF the merge just lands in the editor and stays dirty — the
       // pull is about not losing either side, not about writing.
       if (onRef.current) {
@@ -635,5 +657,6 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     noteUserEdit,
     flushNow,
     cancelPending,
+    pullNow: (reason?: PullReason) => { void pullFromDisk(reason); },
   };
 }
