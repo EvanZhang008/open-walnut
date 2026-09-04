@@ -16,7 +16,6 @@ import { PermissionsSection } from './sections/PermissionsSection'
 import { PluginStoreSection } from './sections/PluginStoreSection'
 import { ProvidersSection } from './sections/ProvidersSection'
 import { RemoteHostsSection } from './sections/RemoteHostsSection'
-import { ReposSection } from './sections/ReposSection'
 import { SearchSection } from './sections/SearchSection'
 import { SessionsSection } from './sections/SessionsSection'
 import { SttSection } from './sections/SttSection'
@@ -47,7 +46,9 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   // There is deliberately NO "Apps" section: a plugin's app entries are managed on
   // the plugin's own row in the Plugins section (PluginAppControls). One panel is
   // the start point for everything plugin-shaped.
-  { owner: 'walnut', id: 'repositories', label: 'Repositories', title: 'Repositories', group: 'manage', render: () => <ReposSection /> },
+  // Repositories is hidden until the feature is ready: the section component
+  // (ReposSection), the /api/repositories routes and the agent tools stay; only
+  // the Settings entry is gone. Re-add the row here to bring it back.
   { owner: 'walnut', id: 'hooks', label: 'Hooks', title: 'Hooks', group: 'manage', render: () => <HooksSection /> },
   // The id stays `plugin-store` — the nav testid, the `#plugin-store` deep link and
   // several specs address it — while the LABEL is now what the section actually is:

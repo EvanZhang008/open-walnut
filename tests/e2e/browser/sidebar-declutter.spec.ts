@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test'
 
 /**
  * The APP sidebar carries ONLY daily surfaces. Management pages (Agents, Skills,
- * Commands, Memory, Repositories, Hooks) moved into the SETTINGS sidebar's "Manage"
+ * Commands, Memory, Hooks) moved into the SETTINGS sidebar's "Manage"
  * group, audio recording moved into Settings → Audio Capture, and the collapsible
  * "Other" group is gone.
  *
@@ -83,15 +83,17 @@ test('the Settings SIDEBAR carries every management entry, no Tasks table', asyn
     await expect(link).toBeVisible()
     await expect(link).toHaveAttribute('href', /./)
   }
-  // Repositories and Hooks joined the group as page SECTIONS (buttons, not links) —
-  // they are browse-and-edit lists, not knobs.
-  for (const id of ['repositories', 'hooks']) {
+  // Hooks joined the group as a page SECTION (a button, not a link) — it is a
+  // browse-and-edit list, not a knob. (Repositories is hidden until it is ready.)
+  for (const id of ['hooks']) {
     const btn = nav.getByTestId(`settings-nav-${id}`)
     await expect(btn).toBeVisible()
     await expect(btn).toHaveJSProperty('tagName', 'BUTTON')
   }
-  // The Tasks table went back to the app sidebar and must not reappear here.
-  await expect(nav.getByTestId('settings-nav-tasks')).toHaveCount(0)
+  // The Tasks table went back to the app sidebar and must not reappear here as a
+  // page LINK. (Configure → Tasks is a settings section, a button, and is fine.)
+  await expect(nav.locator('a[data-testid="settings-nav-tasks"]')).toHaveCount(0)
+  await expect(nav.getByTestId('settings-nav-repositories')).toHaveCount(0)
 
   // A page link actually navigates (real click, no page.goto).
   await nav.getByTestId('settings-nav-skills').click()
@@ -101,9 +103,9 @@ test('the Settings SIDEBAR carries every management entry, no Tasks table', asyn
   // And a Manage SECTION scrolls to its section on the settings page itself.
   await page.locator('.sidebar a[href="/settings"]').click()
   await expect(nav).toBeVisible({ timeout: 30_000 })
-  await nav.getByTestId('settings-nav-repositories').click()
-  await expect(page).toHaveURL(/\/settings#repositories$/)
-  await expect(page.locator('#repositories')).toBeVisible()
+  await nav.getByTestId('settings-nav-hooks').click()
+  await expect(page).toHaveURL(/\/settings#hooks$/)
+  await expect(page.locator('#hooks')).toBeVisible()
 })
 
 test('recording starts from Settings → Audio Capture, not the sidebar', async ({ page }) => {

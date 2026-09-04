@@ -5,7 +5,9 @@ const EXPECTED_IDS = [
   // No `apps` row either: a plugin's app entries are managed on the plugin's own
   // row in the Plugins section (PluginAppControls) — one panel is the start point
   // for everything plugin-shaped.
-  'repositories', 'hooks',
+  // No `repositories` row for now either: the feature is hidden until ready
+  // (ReposSection and its API stay; only the Settings entry is gone).
+  'hooks',
   // ARRAY ORDER IS PAGE ORDER: plugin-store sits directly after the Manage
   // sections because the nav's Plugins group renders between Manage and
   // Configure — nav order and scroll order must agree or a click lands wrong.
@@ -45,7 +47,7 @@ describe('core settings registry', () => {
   it('keeps the Manage / Plugins / Configure / Diagnostics split', () => {
     expect(CORE_SETTINGS_CONTRIBUTIONS
       .filter((entry) => entry.group === 'manage')
-      .map((entry) => entry.id)).toEqual(['repositories', 'hooks'])
+      .map((entry) => entry.id)).toEqual(['hooks'])
     // The Plugins group holds everything plugin-shaped: this section anchors it,
     // and the nav adds settings-placed plugin Apps + plugin settings panels to it.
     expect(CORE_SETTINGS_CONTRIBUTIONS
@@ -53,7 +55,7 @@ describe('core settings registry', () => {
       .map((entry) => entry.id)).toEqual(['plugin-store'])
     expect(CORE_SETTINGS_CONTRIBUTIONS
       .filter((entry) => entry.group === 'configure')
-      .map((entry) => entry.id)).toEqual(EXPECTED_IDS.slice(3, -DIAGNOSTICS_IDS.length))
+      .map((entry) => entry.id)).toEqual(EXPECTED_IDS.slice(2, -DIAGNOSTICS_IDS.length))
     expect(CORE_SETTINGS_CONTRIBUTIONS
       .filter((entry) => entry.group === 'diagnostics')
       .map((entry) => entry.id)).toEqual(DIAGNOSTICS_IDS)

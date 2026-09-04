@@ -96,7 +96,8 @@ export function App() {
         <Route path="/memory" element={<MemoryPage />} />
         <Route path="/plugins/new" element={<CreatePluginPage />} />
         <Route path="/hooks" element={<Navigate to="/settings#hooks" replace />} />
-        <Route path="/repos" element={<Navigate to="/settings#repositories" replace />} />
+        {/* Repositories has no Settings section for now (feature not ready). */}
+        <Route path="/repos" element={<Navigate to="/settings" replace />} />
         {/* The Time UI is the walnut-time Plugin App; the old Settings section it
             used to point at was deleted with the duplicate views. An uninstalled
             App answers with its own "disabled or uninstalled" card, which is a

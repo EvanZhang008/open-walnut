@@ -263,7 +263,7 @@ See [Cloud sync](docs/reference/cloud-sync.md) for the architecture and setup.
 | `/agents` | Custom agents and their conversations |
 | `/commands` | Claude Code commands |
 | `/skills` | Claude Code and Walnut skills |
-| `/settings` | Providers, integrations, repositories, usage, and app settings |
+| `/settings` | Provider, tasks, sessions, voice, integrations, usage, and app settings |
 | `/apps/<plugin-id>~<app-id>` | A plugin App, mounted by the App Registry |
 
 Sessions open as columns on the home page. Legacy `/sessions?id=...` links redirect
