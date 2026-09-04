@@ -64,6 +64,32 @@ describe('enqueueMessage', () => {
     expect(queue[0].message).toBe('persisted');
     expect(queue[0].status).toBe('pending');
   });
+
+  // The pre-assigned user-line uuid must survive the disk round-trip: the drain
+  // that hands it to the CLI can happen after a server restart, and a uuid that
+  // only lived in memory would leave the client's thread anchor pointing at a
+  // transcript line the CLI minted its own id for.
+  it('persists a pre-assigned userUuid across a cache reset', async () => {
+    const uuid = '9f1d3c2a-5b6e-4a7f-8c9d-0e1f2a3b4c5d';
+    const msg = await enqueueMessage('sess-uuid', 'anchored question', { userUuid: uuid });
+    expect(msg.userUuid).toBe(uuid);
+
+    resetCache();
+
+    const queue = await getQueue('sess-uuid');
+    expect(queue).toHaveLength(1);
+    expect(queue[0].userUuid).toBe(uuid);
+    // markProcessing hands the row (with its uuid) to the delivery path.
+    expect((await markProcessing('sess-uuid'))[0].userUuid).toBe(uuid);
+  });
+
+  it('leaves the key OFF the row when no userUuid is given (byte-identical to before)', async () => {
+    const msg = await enqueueMessage('sess-plain', 'ordinary send');
+    expect('userUuid' in msg).toBe(false);
+
+    resetCache();
+    expect('userUuid' in (await getQueue('sess-plain'))[0]).toBe(false);
+  });
 });
 
 describe('markProcessing', () => {

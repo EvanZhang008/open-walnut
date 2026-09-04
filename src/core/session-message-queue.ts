@@ -50,6 +50,18 @@ export interface QueuedMessage {
    * existed don't have it. See compareEnqueueOrder.
    */
   seq?: number;
+  /**
+   * Pre-assigned v4 uuid for the CLI's own user line. The harness contract: a
+   * stream-json user message may carry `uuid` and the CLI persists the user line
+   * under exactly that uuid, so a client can key metadata (a thread anchor) to a
+   * transcript line BEFORE the line exists — no text matching.
+   *
+   * Optional everywhere. Absent ⇒ the envelope carries no `uuid` key at all and
+   * the CLI mints its own, i.e. byte-identical to the pre-feature behaviour. The
+   * drain sends ONE uuid per batch (the LAST row's — mirrors the CLI's own
+   * `batch.findLast(c => c.uuid)`); see providers/batch-uuid.ts.
+   */
+  userUuid?: string;
 }
 
 interface QueueStore {
@@ -197,7 +209,7 @@ export async function loadQueue(): Promise<void> {
 export async function enqueueMessage(
   sessionId: string,
   message: string,
-  opts?: { id?: string },
+  opts?: { id?: string; userUuid?: string },
 ): Promise<QueuedMessage> {
   const msg: QueuedMessage = {
     id: opts?.id ?? generateId(),
@@ -206,6 +218,9 @@ export async function enqueueMessage(
     status: 'pending',
     enqueuedAt: new Date().toISOString(),
     seq: ++enqueueSeq,
+    // Additive: absent ⇒ the key never lands on the row, so an old-shaped row and
+    // a new-shaped one are byte-identical on disk.
+    ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
   };
   const outcome = await mutateStore((s) => {
     if (!s.queues[sessionId]) {
@@ -242,6 +257,8 @@ export async function enqueueMessage(
  * @param opts.messageId - caller-supplied stable id (cloud relay `qm-mobile-*`).
  *   Idempotent: a duplicate id collapses onto the already-queued row (see
  *   enqueueMessage) so bridge replays / phone retries can't double-deliver.
+ * @param opts.userUuid - pre-assigned v4 uuid for the CLI's user line (see
+ *   QueuedMessage.userUuid). Optional; absent changes nothing.
  */
 export async function sendMessageToSession(
   sessionId: string,
@@ -253,10 +270,14 @@ export async function sendMessageToSession(
     interrupt?: boolean;
     enqueueMessage?: string;
     messageId?: string;
+    userUuid?: string;
   },
 ): Promise<QueuedMessage> {
   const { bus, EventNames } = await import('./event-bus.js');
-  const msg = await enqueueMessage(sessionId, opts?.enqueueMessage ?? message, { id: opts?.messageId });
+  const msg = await enqueueMessage(sessionId, opts?.enqueueMessage ?? message, {
+    id: opts?.messageId,
+    ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
+  });
   const source = opts?.source ?? 'unknown';
 
   // Ask Walnut drift repair — AWAITED before SESSION_SEND is emitted, because

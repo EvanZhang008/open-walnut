@@ -32319,3 +32319,385 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   border: 0;
   display: block;
 }
+
+/* ── Conversation threads (B · light mode over the linear timeline) ────────────
+   ONE session, ONE transcript: threads are a reading aid painted on top of it.
+   Everything here keys off two custom properties set inline by the components —
+   `--thread-hue` (the branch's colour, owned by its top-level ancestor) and
+   `--thread-indent` (outline nesting) — so the recipe lives in one place and the
+   components stay free of colour maps.
+
+   `--thread-ink-l` is the one thing that has to know about the theme: the same hue
+   needs a dark ink on white and a light ink on black. Declared here rather than in
+   :root so the whole feature is one contiguous block. */
+:root { --thread-ink-l: 40%; }
+[data-theme="dark"] { --thread-ink-l: 70%; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) { --thread-ink-l: 70%; }
+}
+
+/* A turn inside a thread: a 3px bar in the gutter. The negative margin puts the
+   bar in the container's left padding, so the message text does NOT shift — the
+   transcript reads identically with and without threads. */
+.session-msg--threaded {
+  /* Sub-threads read lighter: same branch, less weight. */
+  --thread-bar: hsl(var(--thread-hue, 214) 70% 50% / 0.45);
+  border-left: 3px solid var(--thread-bar);
+  border-radius: 2px 0 0 2px;
+  padding-left: 8px;
+  margin-left: -11px;
+}
+.session-msg--threaded[data-thread-depth="1"] {
+  --thread-bar: hsl(var(--thread-hue, 214) 70% 50%);
+}
+
+/* Hovering the thread's row in the outline tints its turns, which is how the rail
+   answers "which parts of this conversation are that thread?". */
+.session-msg--threaded.is-thread-hover {
+  background: hsl(var(--thread-hue, 214) 70% 50% / 0.07);
+}
+
+/* "↳ <thread>" above a user bubble. Same scale as .msg-time: it labels the
+   message, it is not part of it. Right-anchored, because the bubble it labels is
+   (`.session-msg-user` is margin-left:auto) — a left-aligned tag reads as a
+   caption for the assistant reply above instead. */
+.session-msg-thread-tag {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  margin: 0 0 2px;
+  color: hsl(var(--thread-hue, 214) 55% var(--thread-ink-l));
+  font-size: 10.5px;
+  line-height: 1.3;
+  min-width: 0;
+}
+.session-msg-thread-tag-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── The outline's thread rows ── */
+/* Indent by nesting depth, so the rail shows the conversation's shape. */
+.session-toc-row { padding-left: calc(var(--thread-indent, 0) * 12px); }
+.session-toc-tick { margin-left: calc(var(--thread-indent, 0) * 4px); }
+
+.session-toc-dash--thread,
+.session-toc-tick--thread {
+  width: 11px;
+  background: hsl(var(--thread-hue, 214) 70% 50%);
+}
+
+.session-toc-ask {
+  flex-shrink: 0;
+  padding: 3px 6px;
+  border: none;
+  background: none;
+  border-radius: 5px;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.session-toc-row:hover .session-toc-ask,
+.session-toc-ask:focus-visible { opacity: 1; }
+.session-toc-ask:hover { background: var(--bg-hover); }
+
+/* ── The composer's anchor chip ── */
+.thread-anchor-chip-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 4px 12px 0;
+  min-width: 0;
+}
+
+.thread-anchor-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 3px 4px 3px 8px;
+  border: 1px solid hsl(var(--thread-hue, 214) 60% 50% / 0.35);
+  border-left: 3px solid hsl(var(--thread-hue, 214) 70% 50%);
+  border-radius: 6px;
+  background: hsl(var(--thread-hue, 214) 70% 50% / 0.08);
+  color: var(--fg-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  min-width: 0;
+}
+
+.thread-anchor-chip-arrow { flex-shrink: 0; color: hsl(var(--thread-hue, 214) 55% var(--thread-ink-l)); }
+
+.thread-anchor-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.thread-anchor-chip-label { color: hsl(var(--thread-hue, 214) 55% var(--thread-ink-l)); }
+
+.thread-anchor-chip-clear {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: none;
+  border-radius: 4px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.thread-anchor-chip-clear:hover { background: var(--bg-hover); color: var(--fg); }
+
+/* Shown beside the FIRST chip a browser ever renders: sticky anchoring is the one
+   part of this feature that is invisible until it surprises you. */
+.thread-anchor-chip-tip {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 2px;
+  color: var(--fg-muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+  min-width: 0;
+}
+
+.thread-anchor-chip-tip-dismiss {
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 10.5px;
+}
+.thread-anchor-chip-tip-dismiss:hover { text-decoration: underline; }
+
+/* ── Conversation threads (A · node view) ──────────────────────────────────────
+   Tree mode shows ONE thread at a time: breadcrumb, the ancestor turns it hangs
+   off collapsed to a line each, that thread's own turns (rendered by the timeline's
+   own row renderer — nothing here restyles a message), then a card per branch
+   leaving it. Same two custom properties as the light view, so a thread is the same
+   colour whichever view you read it in. */
+
+/* The header's Linear ⇄ Tree switch. Same shape as .session-diff-viewtoggle (the
+   panel's other two-way switch), one step smaller for the meta cluster. */
+.session-view-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.session-view-toggle-btn {
+  border: none;
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.session-view-toggle-btn:hover { color: var(--fg); background: var(--bg-hover); }
+.session-view-toggle-btn.is-active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* ── Breadcrumb ── */
+.thread-breadcrumb {
+  /* Sticky: entering a thread parks the view at its tail, and the breadcrumb is
+     the only "where am I" that is not the composer chip, so it must stay on
+     screen while the thread scrolls under it. Below the outline rail's layer. */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 0 6px;
+  min-width: 0;
+  background: var(--bg, #fff);
+}
+.thread-crumb-slot { display: inline-flex; align-items: center; gap: 2px; min-width: 0; }
+.thread-crumb-sep { color: var(--fg-muted); font-size: 11px; }
+.thread-crumb {
+  max-width: 220px;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 11.5px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-crumb:hover { background: var(--bg-hover); color: var(--fg); }
+/* The last crumb is where you ARE: the branch's colour. Still a button — clicking
+   it points the composer at this thread (the no-selection "ask here"). */
+.thread-crumb.is-current {
+  color: hsl(var(--thread-hue, 214) 55% var(--thread-ink-l));
+  font-weight: 600;
+}
+
+/* ── Collapsed ancestors ── */
+.thread-ancestors {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 6px;
+  border-left: 2px solid hsl(var(--thread-hue, 214) 70% 50% / 0.28);
+}
+.thread-ancestor-slot { display: flex; flex-direction: column; min-width: 0; }
+
+/* One turn, one line: the question, then the reply, both truncated. Muted on
+   purpose — this is the context you are asking ABOUT, not the conversation you are
+   in. */
+.thread-ancestor-turn {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 11.5px;
+  line-height: 1.5;
+  text-align: left;
+  min-width: 0;
+}
+.thread-ancestor-turn:hover { background: var(--bg-hover); }
+.thread-ancestor-caret { flex-shrink: 0; font-size: 9px; opacity: 0.7; }
+.thread-ancestor-q {
+  flex-shrink: 0;
+  max-width: 45%;
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-ancestor-a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.thread-ancestor-turn.is-expanded { color: var(--fg-secondary); }
+
+/* The expanded turn's real rows. Indented so the ancestor stays visibly a quote of
+   the past rather than part of the thread you are reading. */
+.thread-ancestor-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0 6px 10px;
+}
+
+/* The passage a brand-new thread is about, standing in for the question that has
+   not persisted yet. */
+.thread-pending-quote {
+  padding: 4px 8px;
+  border-left: 3px solid hsl(var(--thread-hue, 214) 70% 50%);
+  border-radius: 2px 0 0 2px;
+  background: hsl(var(--thread-hue, 214) 70% 50% / 0.06);
+  color: var(--fg-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+/* ── Child-thread cards ── */
+.thread-child-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 0 4px;
+}
+.thread-child-card {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  max-width: 100%;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+  transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.thread-child-card:hover {
+  transform: translateY(-1px);
+  border-color: hsl(var(--thread-hue, 214) 60% 50% / 0.5);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+.thread-child-card-bar {
+  flex: 0 0 3px;
+  background: hsl(var(--thread-hue, 214) 70% 50%);
+}
+.thread-child-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 4px 5px 0;
+  min-width: 0;
+}
+.thread-child-card-label {
+  max-width: 220px;
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-child-card-meta { color: var(--fg-muted); font-size: 10.5px; line-height: 1.3; }
+/* Replies landed here while you were reading somewhere else. */
+.thread-child-card-new {
+  flex-shrink: 0;
+  align-self: center;
+  padding-right: 8px;
+  color: var(--accent);
+  font-size: 9px;
+  line-height: 1;
+}
+.thread-child-card.has-new { border-color: hsl(var(--thread-hue, 214) 60% 50% / 0.45); }
+
+/* No branches yet: name the gesture, do nothing. The Ask pill on a selection is
+   the action — a button here would be a second, worse way to reach it. */
+.thread-child-hint {
+  align-self: flex-start;
+  margin: 8px 0 4px;
+  padding: 5px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+/* The outline's row for the thread on screen. */
+.session-toc-row.is-current { background: hsl(var(--thread-hue, 214) 70% 50% / 0.1); }
+.session-toc-row.is-current .session-toc-label {
+  color: hsl(var(--thread-hue, 214) 55% var(--thread-ink-l));
+  font-weight: 600;
+}

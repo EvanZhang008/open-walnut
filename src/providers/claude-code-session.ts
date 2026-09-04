@@ -46,6 +46,7 @@ import {
   getAllSessionsWithPending,
 } from '../core/session-message-queue.js'
 import type { QueuedMessage } from '../core/session-message-queue.js'
+import { pickBatchUuid } from './batch-uuid.js'
 import { registerEchoClaims, revokeEchoClaims } from '../core/echo-claims.js'
 import { matchesRetryExhaustion } from '../core/session-auto-continue.js'
 // Image transfer for remote sessions: RemoteSessionManager.prepareOutbound() uploads
@@ -498,14 +499,20 @@ function resumeProfileOpts(
   profile: import('../core/types.js').SessionProfile | undefined,
   lane: string | undefined,
   resumeSessionAt?: string,
-): { profile?: import('../core/types.js').SessionProfile; lane?: string; resumeSessionAt?: string } | undefined {
-  if (!profile && !lane && !resumeSessionAt) return undefined
+  /** Pre-assigned user-line uuid for the batch this cold resume carries. */
+  uuid?: string,
+): {
+  profile?: import('../core/types.js').SessionProfile; lane?: string;
+  resumeSessionAt?: string; uuid?: string;
+} | undefined {
+  if (!profile && !lane && !resumeSessionAt && !uuid) return undefined
   return {
     ...(profile ? { profile } : {}),
     ...(lane ? { lane } : {}),
     // In-place rewind pending window: record.pendingResumeSessionAt rides every
     // cold resume until the first completed turn clears it (see types.ts).
     ...(resumeSessionAt ? { resumeSessionAt } : {}),
+    ...(uuid ? { uuid } : {}),
   }
 }
 
@@ -1699,6 +1706,12 @@ export class ClaudeCodeSession {
        *    re-sending it AFTER new turns exist would cut those turns off too.
        */
       resumeSessionAt?: string
+      /**
+       * Pre-assigned v4 uuid for the INITIAL message's user line, forwarded into
+       * the daemon's start envelope. Set by the cold `--resume` drain when the
+       * batch carries one (pickBatchUuid). Absent ⇒ envelope unchanged.
+       */
+      uuid?: string
     },
   ): void {
     const args = ['-p', '--output-format', 'stream-json', '--verbose']
@@ -1987,6 +2000,8 @@ export class ClaudeCodeSession {
       args,
       cwd: resolvedCwd,
       message,
+      // Spread, so an absent uuid never reaches the daemon as an explicit key.
+      ...(opts?.uuid ? { uuid: opts.uuid } : {}),
       resume: isResume,
       fork: forkSession,
       spillFile,
@@ -2824,10 +2839,13 @@ export class ClaudeCodeSession {
    *
    * Named pipes survive server restarts: the FIFO file persists on disk,
    * and any server instance can open it for writing.
+   *
+   * `opts.uuid` — pre-assigned v4 uuid for this user line (the batch's, picked by
+   * pickBatchUuid). Optional; absent leaves the envelope exactly as it was.
    */
-  async writeMessage(message: string): Promise<boolean> {
+  async writeMessage(message: string, opts?: { uuid?: string }): Promise<boolean> {
     if (!this._transport) return false
-    const ok = await this._transport.writeMessage(message)
+    const ok = await this._transport.writeMessage(message, opts)
     if (!ok) return false
     // Fresh-turn reset ONLY on idle→running (a new turn actually starts).
     //
@@ -9606,8 +9624,11 @@ export class SessionRunner {
     if (newMsgs.length === 0) return
 
     const combined = newMsgs.map((m) => m.message).join('\n\n')
+    // ONE user line per batch ⇒ ONE uuid survives. The CLI's own rule is
+    // findLast, so the LAST pre-assigned uuid in the batch wins (batch-uuid.ts).
+    const uuid = pickBatchUuid(newMsgs)
 
-    if (await targetSession.writeMessage(combined)) {
+    if (await targetSession.writeMessage(combined, { uuid })) {
       // Injection succeeded — increment batch count so SESSION_BATCH_COMPLETED
       // includes these messages when the turn eventually completes
       this.batchCounts.set(sessionId, (this.batchCounts.get(sessionId) ?? 0) + newMsgs.length)
@@ -10189,6 +10210,19 @@ export class SessionRunner {
     this.setActiveProcessing(sessionId, msgs.length, msgs.map((m) => m.id))
 
     let combined = msgs.map((m) => m.message).join('\n\n')
+    // ONE user line per batch ⇒ ONE uuid survives; the CLI's own rule is findLast
+    // (batch-uuid.ts). Rides BOTH delivery paths below: the live FIFO write and
+    // the cold `--resume` spawn's initial-message envelope.
+    const batchUuid = pickBatchUuid(msgs)
+    // Set once a FIFO write has been ATTEMPTED for this batch. The CLI dedups an
+    // inbound uuid against the transcript on disk and silently runs NO turn for a
+    // repeat (print.ts `Skipping duplicate user message`), so a --resume that
+    // re-delivers the same text after a write whose outcome is unknown (ack lost,
+    // command timeout) must NOT carry the uuid again: with it, a message the CLI
+    // had already persisted would be dropped and the bubble would still read
+    // "delivered". Without it the worst case is the old one, a visible duplicate.
+    // The anchor keyed by that uuid then dangles, which is invisible by design.
+    let fifoAttempted = false
 
     try {
       // Find the session that has this Claude session ID
@@ -10320,7 +10354,8 @@ export class SessionRunner {
         // All sessions now go through daemon. The daemon's `cmdSend` does atomic
         // FIFO liveness detection (O_WRONLY|O_NONBLOCK → ENXIO if nobody is reading).
         // No local PID pre-flight check needed.
-        if (await targetSession.writeMessage(combined)) {
+        fifoAttempted = true
+        if (await targetSession.writeMessage(combined, { uuid: batchUuid })) {
           log.session.info('processNext: message sent via stdin (no new process)', { sessionId })
           this.logDeliveryLatency(sessionId, 'stdin', msgs, targetSession)
           // Echo-claim: bind the canonical user-echo uuid to these qm ids at the
@@ -10433,8 +10468,9 @@ export class SessionRunner {
               if (ok) this.settleResumeSuccess(sessionId, session, msgs)
               else this.settleResumeFailure(sessionId, msgs, err ?? new Error('resume spawn failed'))
             },
-            // Cold resume: re-emit the record's profile flags (spawn-time only).
-            resumeProfileOpts(resolvedProfile, resolvedLane, resolvedResumeAt))
+            // Cold resume: re-emit the record's profile flags (spawn-time only),
+            // plus the batch's pre-assigned user-line uuid when it has one.
+            resumeProfileOpts(resolvedProfile, resolvedLane, resolvedResumeAt, batchUuid))
 
           bus.emit(EventNames.SESSION_STARTED, {
             taskId: record.taskId,
@@ -10484,8 +10520,11 @@ export class SessionRunner {
           if (ok) this.settleResumeSuccess(sessionId, settleTarget, msgs)
           else this.settleResumeFailure(sessionId, msgs, err ?? new Error('resume spawn failed'))
         },
-        // Cold resume: re-emit the record's profile flags (spawn-time only).
-        resumeProfileOpts(resolvedProfile, resolvedLane, resolvedResumeAt))
+        // Cold resume: re-emit the record's profile flags (spawn-time only), plus
+        // the batch's pre-assigned user-line uuid ONLY when no FIFO write was ever
+        // attempted for it (see fifoAttempted: a repeat uuid makes the CLI skip the
+        // turn if the first write did land).
+        resumeProfileOpts(resolvedProfile, resolvedLane, resolvedResumeAt, fifoAttempted ? undefined : batchUuid))
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
       // Clean up activeProcessing + batchCounts on any error (send() EMFILE, lookup failure, etc.)

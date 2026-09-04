@@ -46,6 +46,12 @@ interface QuotePinSelectionBarProps {
   containerRef: React.RefObject<HTMLElement | null>;
   sessionId: string;
   onPin: (target: QuotePinTarget) => void;
+  /**
+   * Start a question about this passage (the composer's thread anchor). Omitted =
+   * no Ask button, which is how a surface without a session record to write
+   * anchors to keeps the pill honest.
+   */
+  onAsk?: (target: QuotePinTarget) => void;
 }
 
 interface PillState {
@@ -148,7 +154,7 @@ function focusPoint(selection: Selection, range: Range): { x: number; y: number 
   return { x: Math.round(backward ? r.left : r.right), y: Math.round(r.top) };
 }
 
-export function QuotePinSelectionBar({ containerRef, sessionId, onPin }: QuotePinSelectionBarProps) {
+export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: QuotePinSelectionBarProps) {
   const [state, setState] = useState<PillState | null>(null);
   const pillRef = useRef<HTMLDivElement | null>(null);
   const noTrigger = useRef<HTMLElement | null>(null);
@@ -257,12 +263,37 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin }: QuotePi
     setState(null);
   }, [onPin, sessionId, state]);
 
+  const ask = useCallback(() => {
+    if (!state || !onAsk) return;
+    log.info('session', 'asking about a quoted passage', {
+      sessionId, msgId: state.msgId, chars: state.quote.exact.length,
+    });
+    onAsk({
+      msgId: state.msgId,
+      role: state.role,
+      ...(state.timestamp ? { timestamp: state.timestamp } : {}),
+      quote: state.quote,
+    });
+    // Same gesture-time capture as Pin (the quote is already in `state`); the
+    // selection goes so the only mark left is the composer chip.
+    window.getSelection()?.removeAllRanges();
+    setState(null);
+  }, [onAsk, sessionId, state]);
+
   const copy = useCallback(() => {
     if (state?.text.trim()) void copyTextRobust(state.text);
     setState(null);
   }, [state]);
 
   if (!state) return null;
+
+  // An anchor names its parent by the reply's row id, which only has to be STABLE
+  // across parses: a real reply's msgId is the API message id (`msg_…`), never a
+  // v4 uuid (verified live 2026-09-04), so gating on the uuid shape would hide Ask
+  // on every real transcript. Only a synthetic `queue-…` echo (a user line the
+  // parser re-emitted) can't be a parent. Assistant rows only: "ask about this"
+  // means asking about a REPLY.
+  const canAsk = !!onAsk && state.role === 'assistant' && !!state.msgId && !state.msgId.startsWith('queue-');
 
   return createPortal(
     <div
@@ -285,6 +316,19 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin }: QuotePi
         {ICON_PIN}
         <span>Pin</span>
       </button>
+      {canAsk && (
+        <button
+          type="button"
+          className="quote-pin-pill-btn"
+          data-testid="quote-ask-btn"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={ask}
+          title="Ask about this passage (starts a thread)"
+        >
+          <span aria-hidden="true">↳</span>
+          <span>Ask</span>
+        </button>
+      )}
       <button
         type="button"
         className="quote-pin-pill-btn"

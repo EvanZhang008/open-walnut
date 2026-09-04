@@ -17,15 +17,18 @@
  *  · the whole-message pin button is re-checked at the end: quote pins share the
  *    same list and the same outline, and must not have changed what it means.
  *
- * The fixture (`pw-pins-session`, see test-server.ts) ends with a three-sentence
+ * The fixture (`pw-quote-session`, see test-server.ts) ends with a three-sentence
  * assistant paragraph, which is what gives a phrase worth dragging out of the
  * middle of. "rewrites the index in place" appears exactly once in the transcript.
  */
 import { expect, test, type Page, type Locator } from '@playwright/test'
 import fs from 'node:fs/promises'
 
-const SESSION_ID = 'pw-pins-session'
-const TASK_ID = 'pw-task-pins'
+/** Own fixture record (test-server.ts): the outline transcript under a second
+ *  session id, so this spec's pins never land on the record the outline spec counts
+ *  ticks on (both files run in parallel workers). */
+const SESSION_ID = 'pw-quote-session'
+const TASK_ID = 'pw-task-quote'
 /** The tail paragraph, inside the initial 30-row render window. */
 const PARAGRAPH = 'The migration runs in three phases'
 /** The phrase the drag selects — mid-sentence, so it proves a PASSAGE was pinned

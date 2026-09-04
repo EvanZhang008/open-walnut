@@ -32,6 +32,19 @@ export interface TocEntry {
   /** A pinned PASSAGE rather than the whole message (labelled with a ❝ glyph, and
    *  its tick reads lighter so the rail still says which kind is where). */
   isQuote?: boolean;
+  /** Thread nesting of the row's turn (0 = top level). Indents the row, so the
+   *  outline shows the conversation's SHAPE and not just its marks. */
+  depth?: number;
+  /** hsl hue of the row's thread branch — colours the dash. */
+  hue?: number;
+  /** Set when this row belongs to a thread (the key `onAskThread` acts on). */
+  threadKey?: string;
+  /** This row opens a thread, so it gets the "Ask here" action. A thread head that
+   *  is ALSO pinned is one row: the pin's key wins, these fields ride along. */
+  isThreadHead?: boolean;
+  /** The row exists ONLY because a thread starts here — there is no pin behind it,
+   *  so it has nothing to unpin. */
+  isThreadOnly?: boolean;
 }
 
 interface SessionPinnedTocProps {
@@ -41,6 +54,13 @@ interface SessionPinnedTocProps {
   /** A jump happened and the previous position is still restorable. */
   canGoBack: boolean;
   onBack: () => void;
+  /** Point the composer at this thread (the row's hover action). */
+  onAskThread?: (threadKey: string) => void;
+  /** Pointer entered/left a thread row — tints that thread's timeline rows. */
+  onHoverThread?: (threadKey: string | null) => void;
+  /** Node view only: the thread on screen, marked `is-current`. In the timeline
+   *  view nothing is "current" — every thread is visible at once. */
+  currentThreadKey?: string;
 }
 
 /** Close-out delay: a diagonal mouse path from the rail to a row would otherwise
@@ -54,8 +74,18 @@ function timeLabel(ts: string | undefined): string {
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
+/** Per-row style: the thread's hue for the dash, its depth for the indent. Both
+ *  ride CSS vars so the indent step and the colour recipe live in one place. */
+function rowStyle(entry: TocEntry): React.CSSProperties | undefined {
+  if (!entry.depth && entry.hue === undefined) return undefined;
+  return {
+    ...(entry.depth ? { ['--thread-indent' as string]: entry.depth } : {}),
+    ...(entry.hue !== undefined ? { ['--thread-hue' as string]: entry.hue } : {}),
+  } as React.CSSProperties;
+}
+
 export const SessionPinnedToc = memo(function SessionPinnedToc({
-  entries, onJump, onUnpin, canGoBack, onBack,
+  entries, onJump, onUnpin, canGoBack, onBack, onAskThread, onHoverThread, currentThreadKey,
 }: SessionPinnedTocProps) {
   const [open, setOpen] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -78,8 +108,8 @@ export const SessionPinnedToc = memo(function SessionPinnedToc({
     setOpen(false);
   }, [onJump]);
 
-  // No pins → no outline at all. The feature announces itself by appearing when
-  // the first message is pinned, so an unused session shows nothing.
+  // Nothing pinned and no threads → no outline at all. The feature announces
+  // itself by appearing with the first mark, so an unused session shows nothing.
   if (entries.length === 0) return null;
 
   return (
@@ -94,20 +124,28 @@ export const SessionPinnedToc = memo(function SessionPinnedToc({
         type="button"
         className="session-toc-rail"
         aria-expanded={open}
-        aria-label={`Outline — ${entries.length} pinned ${entries.length === 1 ? 'message' : 'messages'}`}
+        aria-label={`Outline — ${entries.length} marked ${entries.length === 1 ? 'place' : 'places'}`}
         onClick={() => setOpen((p) => !p)}
       >
         {entries.map((entry) => (
           <span
             key={entry.key || 'top'}
-            className={`session-toc-tick session-toc-tick--${entry.role}${entry.isQuote ? ' session-toc-tick--quote' : ''}`}
+            className={`session-toc-tick session-toc-tick--${entry.role}${entry.isQuote ? ' session-toc-tick--quote' : ''}${entry.threadKey ? ' session-toc-tick--thread' : ''}`}
+            style={rowStyle(entry)}
           />
         ))}
       </button>
       {open && (
         <div className="session-toc-panel" role="menu">
           {entries.map((entry) => (
-            <div key={entry.key || 'top'} className="session-toc-row">
+            <div
+              key={entry.key || 'top'}
+              className={`session-toc-row${entry.threadKey ? ' session-toc-row--thread' : ''}${
+                currentThreadKey !== undefined && entry.threadKey === currentThreadKey ? ' is-current' : ''}`}
+              style={rowStyle(entry)}
+              onMouseEnter={() => onHoverThread?.(entry.threadKey ?? null)}
+              onMouseLeave={() => onHoverThread?.(null)}
+            >
               <button
                 type="button"
                 className="session-toc-item"
@@ -115,13 +153,29 @@ export const SessionPinnedToc = memo(function SessionPinnedToc({
                 onClick={(e) => jump(e, entry.key)}
                 title={entry.label}
               >
-                <span className={`session-toc-dash session-toc-dash--${entry.role}${entry.isQuote ? ' session-toc-dash--quote' : ''}`} />
+                <span className={`session-toc-dash session-toc-dash--${entry.role}${entry.isQuote ? ' session-toc-dash--quote' : ''}${entry.threadKey ? ' session-toc-dash--thread' : ''}`} />
                 <span className="session-toc-label">{entry.label}</span>
                 {timeLabel(entry.timestamp) && (
                   <span className="session-toc-time">{timeLabel(entry.timestamp)}</span>
                 )}
               </button>
-              {onUnpin && entry.key && (
+              {onAskThread && entry.threadKey && (
+                <button
+                  type="button"
+                  className="session-toc-ask"
+                  title="Ask another question in this thread"
+                  aria-label={`Ask in the thread: ${entry.label}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAskThread(entry.threadKey!);
+                    onHoverThread?.(null);
+                    setOpen(false);
+                  }}
+                >
+                  ↳ Ask here
+                </button>
+              )}
+              {onUnpin && entry.key && !entry.isThreadOnly && (
                 <button
                   type="button"
                   className="session-toc-unpin"

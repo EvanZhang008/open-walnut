@@ -2934,7 +2934,11 @@ function cmdMobileEvent(ws, id, cmd) {
 
 // ── Start a Claude session ──
 async function cmdStart(ws, id, cmd) {
-  const { sid, args, cwd, message, resume, mode } = cmd;
+  const { sid, args, cwd, message, resume, mode, uuid } = cmd;
+  // uuid (optional): pre-assigned v4 uuid for the INITIAL message's user line.
+  // Absent on every older client, and then the envelope is unchanged.
+  // Keep in sync with daemon-standalone.ts.
+  const initialUuid = typeof uuid === 'string' && uuid ? uuid : null;
   // message is OPTIONAL: empty/absent spawns the CLI without writing a user turn
   // to the FIFO — the process emits its init event (+ SessionStart hook, fresh
   // settings/skills/MCP load) then blocks on stdin, idle. Restart-to-reinitialize
@@ -2956,7 +2960,11 @@ async function cmdStart(ws, id, cmd) {
       let oldAlive = false;
       try { process.kill(existing.pid, 0); oldAlive = true; } catch {}
       if (oldAlive) {
-        const payload = JSON.stringify({ type: 'user', message: { role: 'user', content: message } });
+        // Live-adopt delivers the start's initial message through the FIFO, so it
+        // carries the same optional pre-assigned uuid.
+        const envelope = { type: 'user', message: { role: 'user', content: message } };
+        if (initialUuid) envelope.uuid = initialUuid;
+        const payload = JSON.stringify(envelope);
         let wrote = 'fail';
         try { wrote = await chainFifoWrite(sid, existing, Buffer.from(payload + '\\n')); } catch {}
         if (wrote === 'ok') {
@@ -3126,11 +3134,14 @@ async function cmdStart(ws, id, cmd) {
   // "spawn idle" (restart-to-reinitialize): CLI emits init but runs no turn.
   // Keep in sync with daemon-standalone.ts.
   if (message) {
-    const payload = JSON.stringify({
+    const envelope = {
       type: 'user',
       message: { role: 'user', content: message },
-    });
-    fs.writeSync(pipeFd, Buffer.from(payload + '\\n'));
+    };
+    // Optional pre-assigned user-line uuid — key omitted when absent, so these
+    // bytes are unchanged for every caller that doesn't pass one.
+    if (initialUuid) envelope.uuid = initialUuid;
+    fs.writeSync(pipeFd, Buffer.from(JSON.stringify(envelope) + '\\n'));
   }
   fs.closeSync(pipeFd);
 
@@ -4589,7 +4600,7 @@ function cmdAttach(ws, id, cmd) {
 
 // ── Send message ──
 async function cmdSend(ws, id, cmd) {
-  const { sid, message } = cmd;
+  const { sid, message, uuid } = cmd;
   if (!sid || !message) return sendError(ws, id, 'send: missing sid or message');
 
   // A real send means someone is driving this session now — drop any pending
@@ -4610,10 +4621,15 @@ async function cmdSend(ws, id, cmd) {
     }
   }
 
-  const payload = JSON.stringify({
+  // uuid (optional): pre-assigned v4 uuid for this user line. The key is omitted
+  // when absent, so the payload is byte-identical for older clients.
+  // Keep in sync with daemon-core.ts handleSendCommand.
+  const envelope = {
     type: 'user',
     message: { role: 'user', content: message },
-  });
+  };
+  if (typeof uuid === 'string' && uuid) envelope.uuid = uuid;
+  const payload = JSON.stringify(envelope);
 
   try {
     const buf = Buffer.from(payload + '\\n');

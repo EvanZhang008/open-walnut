@@ -203,6 +203,50 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Quote-pin fixture (session-quote-pin.spec.ts): the outline transcript
+        // again under its own session, so its pins never land on the record the
+        // outline spec counts ticks on.
+        id: 'pw-task-quote',
+        title: 'Quote pin fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-quote-session'],
+        active_session_ids: [],
+        session_id: 'pw-quote-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // Conversation-threads fixture (session-threads.spec.ts): the outline
+        // transcript again under its own session, so thread anchors and pin resets
+        // never touch the record the outline spec asserts on.
+        id: 'pw-task-threads',
+        title: 'Threads fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-threads-session'],
+        active_session_ids: [],
+        session_id: 'pw-threads-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // Same-browser task-store fixture (task-store-same-browser-instant.spec).
         // Its OWN task: that spec renames and completes it mid-run, which would
         // break every spec asserting on a shared fixture's title or phase.
@@ -1029,42 +1073,50 @@ await fs.writeFile(
   //    them the spec would be asserting an absent button;
   //  · every message text is unique, so the outline's row label identifies exactly
   //    one row to jump to.
-  await fs.writeFile(
-    path.join(jsonlDir, 'pw-pins-session.jsonl'),
-    [
+  //
+  // The SAME transcript is written three times, under three session ids with three
+  // uuid prefixes: `pw-pins-session` (0199aa…) for session-outline-rewind.spec.ts,
+  // `pw-quote-session` (0199cc…) for session-quote-pin.spec.ts and
+  // `pw-threads-session` (0199bb…) for session-threads.spec.ts. Pins and thread
+  // anchors are SERVER state on the session record, so two spec files sharing one
+  // session rewrite each other's state under parallel workers (seen 2026-09-04:
+  // the outline spec counted the quote spec's pin as a third tick, and the threads
+  // spec's anchors made a rail exist where the outline spec expects none). One
+  // transcript shape, one record per spec file, no shared mutable state.
+  const pinsTranscript = (sessionId: string, u: string): string => [
       // parentUuid threads every line into ONE chain (root -> leaf), matching a
       // real transcript: the in-place-rewind gate resolves the rewind point
       // against computeCliLoadedChain, so a chain-less fixture would leave every
       // message off the loaded chain and the dry-run would refuse.
       JSON.stringify({
         type: 'user',
-        uuid: '0199aa01-1111-4aaa-8bbb-000000000001',
+        uuid: `${u}01-1111-4aaa-8bbb-000000000001`,
         parentUuid: null,
-        sessionId: 'pw-pins-session',
+        sessionId,
         timestamp: new Date(sessionFixtureNow - 60_000).toISOString(),
         message: { role: 'user', content: 'Set up the release checklist' },
       }),
       JSON.stringify({
         type: 'assistant',
-        uuid: '0199aa01-2222-4aaa-8bbb-000000000002',
-        parentUuid: '0199aa01-1111-4aaa-8bbb-000000000001',
-        sessionId: 'pw-pins-session',
+        uuid: `${u}01-2222-4aaa-8bbb-000000000002`,
+        parentUuid: `${u}01-1111-4aaa-8bbb-000000000001`,
+        sessionId,
         timestamp: new Date(sessionFixtureNow - 58_000).toISOString(),
         message: { role: 'assistant', content: [{ type: 'text', text: 'Checklist drafted with four steps.' }] },
       }),
       JSON.stringify({
         type: 'user',
-        uuid: '0199aa01-3333-4aaa-8bbb-000000000003',
-        parentUuid: '0199aa01-2222-4aaa-8bbb-000000000002',
-        sessionId: 'pw-pins-session',
+        uuid: `${u}01-3333-4aaa-8bbb-000000000003`,
+        parentUuid: `${u}01-2222-4aaa-8bbb-000000000002`,
+        sessionId,
         timestamp: new Date(sessionFixtureNow - 40_000).toISOString(),
         message: { role: 'user', content: 'Now bump the version' },
       }),
       JSON.stringify({
         type: 'assistant',
-        uuid: '0199aa01-4444-4aaa-8bbb-000000000004',
-        parentUuid: '0199aa01-3333-4aaa-8bbb-000000000003',
-        sessionId: 'pw-pins-session',
+        uuid: `${u}01-4444-4aaa-8bbb-000000000004`,
+        parentUuid: `${u}01-3333-4aaa-8bbb-000000000003`,
+        sessionId,
         timestamp: new Date(sessionFixtureNow - 38_000).toISOString(),
         message: { role: 'assistant', content: [{ type: 'text', text: 'Version bumped to 9.9.9.' }] },
       }),
@@ -1075,20 +1127,20 @@ await fs.writeFile(
       ...Array.from({ length: 24 }, (_, i) => [
         JSON.stringify({
           type: 'user',
-          uuid: `0199aa02-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+          uuid: `${u}02-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
           parentUuid:
             i === 0
-              ? '0199aa01-4444-4aaa-8bbb-000000000004'
-              : `0199aa03-0000-4aaa-8bbb-${String(i - 1).padStart(12, '0')}`,
-          sessionId: 'pw-pins-session',
+              ? `${u}01-4444-4aaa-8bbb-000000000004`
+              : `${u}03-0000-4aaa-8bbb-${String(i - 1).padStart(12, '0')}`,
+          sessionId,
           timestamp: new Date(sessionFixtureNow - 30_000 + i * 400).toISOString(),
           message: { role: 'user', content: `outline filler ask ${i + 1}` },
         }),
         JSON.stringify({
           type: 'assistant',
-          uuid: `0199aa03-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
-          parentUuid: `0199aa02-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
-          sessionId: 'pw-pins-session',
+          uuid: `${u}03-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+          parentUuid: `${u}02-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+          sessionId,
           timestamp: new Date(sessionFixtureNow - 29_800 + i * 400).toISOString(),
           message: { role: 'assistant', content: [{ type: 'text', text: `outline filler reply ${i + 1}` }] },
         }),
@@ -1100,9 +1152,9 @@ await fs.writeFile(
       // whole transcript, so the pin's selector is unambiguous.
       JSON.stringify({
         type: 'assistant',
-        uuid: '0199aa04-0000-4aaa-8bbb-000000000001',
-        parentUuid: '0199aa03-0000-4aaa-8bbb-000000000023',
-        sessionId: 'pw-pins-session',
+        uuid: `${u}04-0000-4aaa-8bbb-000000000001`,
+        parentUuid: `${u}03-0000-4aaa-8bbb-000000000023`,
+        sessionId,
         timestamp: new Date(sessionFixtureNow - 19_000).toISOString(),
         message: {
           role: 'assistant',
@@ -1114,8 +1166,10 @@ await fs.writeFile(
         },
       }),
       '',
-    ].join('\n'),
-  )
+    ].join('\n')
+  await fs.writeFile(path.join(jsonlDir, 'pw-pins-session.jsonl'), pinsTranscript('pw-pins-session', '0199aa'))
+  await fs.writeFile(path.join(jsonlDir, 'pw-quote-session.jsonl'), pinsTranscript('pw-quote-session', '0199cc'))
+  await fs.writeFile(path.join(jsonlDir, 'pw-threads-session.jsonl'), pinsTranscript('pw-threads-session', '0199bb'))
   // Changed-tab code-intel fixture (changed-code-intel.spec.ts): a session whose
   // JSONL records a Write of sync-controller.go — the Changed tab reconstructs
   // the diff from exactly these tool_use blocks, and the on-disk twin (written
@@ -1283,6 +1337,32 @@ await fs.writeFile(
         messageCount: 53,
         cwd: vscodeFixtureRoot,
         title: 'Outline fixture session',
+      },
+      {
+        claudeSessionId: 'pw-quote-session',
+        taskId: 'pw-task-quote',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 27_500).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 53,
+        cwd: vscodeFixtureRoot,
+        title: 'Quote pin fixture session',
+      },
+      {
+        claudeSessionId: 'pw-threads-session',
+        taskId: 'pw-task-threads',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 27_000).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 53,
+        cwd: vscodeFixtureRoot,
+        title: 'Threads fixture session',
       },
       {
         claudeSessionId: 'pw-changed-session',

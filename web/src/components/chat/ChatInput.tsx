@@ -120,6 +120,11 @@ interface ChatInputProps {
    *  model turn): they are invited to keep typing meanwhile, and replacing would eat
    *  both the text and its saved draft. Default 'replace'. */
   prefillMode?: 'replace' | 'keep-draft';
+  /** Bump this (monotonic, >0) to focus the box and LEAVE THE DRAFT ALONE. The
+   *  thread-anchor path needs this: "Ask about this passage" moves the user to the
+   *  composer without writing the quote into it (the quote rides the chip and is
+   *  composed at send time), so the prefill path would wipe what they had typed. */
+  focusNonce?: number;
   /** Extra controls rendered in the card's bottom row, between the "+" and the
    *  mic/send cluster (e.g. the session's Bypass / btw / Note text buttons). */
   controlsSlot?: React.ReactNode;
@@ -131,7 +136,7 @@ interface ChatInputProps {
   onValueChange?: (text: string) => void;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, enableSessionMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', controlsSlot, onValueChange }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, enableSessionMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, onValueChange }: ChatInputProps) {
   const [value, setValue] = useState(() => {
     if (!draftKey) return '';
     try { return localStorage.getItem(draftKey) ?? ''; } catch { return ''; }
@@ -240,6 +245,26 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefillNonce]);
+
+  // Focus-only request (thread anchor): same retry loop as the prefill above —
+  // a hidden textarea swallows focus() silently, and the caller reveals the
+  // column in the same state batch — but the draft is never touched. The caret
+  // goes to the END of whatever is already typed.
+  useEffect(() => {
+    if (!focusNonce) return;
+    let frames = 0;
+    let raf = 0;
+    const tryFocus = () => {
+      const el = textareaRef.current;
+      if (!el) return;
+      if (el.offsetParent === null && frames++ < 20) { raf = requestAnimationFrame(tryFocus); return; }
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+      if (document.activeElement !== el && frames++ < 20) raf = requestAnimationFrame(tryFocus);
+    };
+    raf = requestAnimationFrame(tryFocus);
+    return () => cancelAnimationFrame(raf);
+  }, [focusNonce]);
 
   // Close the "+" and send dropdowns on outside click / Escape.
   useEffect(() => {

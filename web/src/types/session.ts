@@ -22,6 +22,31 @@ export interface SessionPinnedQuote {
   suffix?: string;
 }
 
+/**
+ * One conversation thread anchor: "this user message is a question about THAT
+ * reply (or that passage of it)". Mirrors SessionThreadAnchor in
+ * src/core/types.ts.
+ *
+ * The transcript stays ONE linear session — an anchor is pure navigation data
+ * Walnut owns, keyed by the harness's own uuids: `msgId` is the uuid the client
+ * pre-assigns for the send (the CLI persists the user line under exactly that
+ * uuid), so an anchor can be recorded before the line exists, with zero text
+ * matching.
+ */
+export interface SessionThreadAnchor {
+  /** The USER message's transcript uuid (pre-assigned at send time). */
+  msgId: string;
+  /** msgId of the reply this question hangs off. */
+  parent: string;
+  /** The passage inside that reply. Absent = the whole reply. */
+  quote?: SessionPinnedQuote;
+  /** How the anchor was made: a text selection, a carried-over follow-up, or a
+   *  thread picked by hand from the outline. */
+  source: 'selection' | 'sticky' | 'manual';
+  /** ISO timestamp. */
+  at: string;
+}
+
 /** One pin. Mirrors SessionPinnedMessage in src/core/types.ts. */
 export interface SessionPinnedMessage {
   /** Stable message id (SessionHistoryMessage.msgId) — identity, not position. */
@@ -75,6 +100,8 @@ export interface SessionRecord {
   output_mode_injected?: import('@open-walnut/core').SessionOutputMode;
   /** Messages the human pinned — the timeline's table of contents. */
   pinnedMessages?: SessionPinnedMessage[];
+  /** Question→reply anchors — the navigation tree over this linear transcript. */
+  threadAnchors?: SessionThreadAnchor[];
   /** Set on a session born from a rewind: the parent message uuid its spawn
    *  resumed at. Labels the boundary divider as a rewind, not a plain fork. */
   rewoundAtMessageUuid?: string;

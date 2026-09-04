@@ -4,24 +4,10 @@ import type { SessionPinnedMessage, SessionPinnedQuote } from '@/types/session';
 import type { SessionPinsApi } from '@/contexts/SessionPinsContext';
 import { log } from '@/utils/log';
 
-/** TOC row budget. Long enough to name the moment, short enough that the
- *  collapsed rail stays a rail. */
-const LABEL_MAX = 90;
-
-/** First non-empty line of the message, which is what a human recognizes. */
-export function pinLabelFor(text: string | undefined, fallback: string): string {
-  const line = (text ?? '').split('\n').map((l) => l.trim()).find(Boolean);
-  if (!line) return fallback;
-  // Strip the markdown that would render as literal punctuation in a one-line row.
-  const plain = line
-    .replace(/^#{1,6}\s+/, '')
-    .replace(/^[-*+]\s+/, '')
-    .replace(/^>\s+/, '')
-    .replace(/[*_`]/g, '')
-    .trim();
-  const label = plain || fallback;
-  return label.length > LABEL_MAX ? `${label.slice(0, LABEL_MAX)}…` : label;
-}
+// The label rule lives in a plain util so the pure thread model can share it
+// without importing a React hook module; re-exported here for the existing callers.
+export { pinLabelFor } from '@/utils/pin-label';
+import { pinLabelFor } from '@/utils/pin-label';
 
 /** NUL, the one separator that cannot appear inside a msgId or a passage. */
 const PIN_KEY_SEP = '\u0000';

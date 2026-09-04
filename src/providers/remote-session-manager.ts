@@ -213,6 +213,10 @@ export class RemoteSessionManager implements SessionManager {
       message: preparedMessage,
       resume: opts.resume ?? false,
       mode: opts.mode,
+      // Pre-assigned user-line uuid for the INITIAL message (cold --resume with a
+      // queued batch). Spread so an absent uuid leaves the payload byte-identical
+      // to what every older daemon has always received.
+      ...(opts.uuid ? { uuid: opts.uuid } : {}),
     }
 
     let result: Record<string, unknown>
@@ -473,7 +477,7 @@ export class RemoteSessionManager implements SessionManager {
 
   // ── Messaging ──
 
-  async writeMessage(message: string): Promise<boolean> {
+  async writeMessage(message: string, opts?: { uuid?: string }): Promise<boolean> {
     // Strict ack: we await the daemon's `cmdSend` reply and return false on any
     // failure (FIFO write ENXIO/EAGAIN, session not found, transport error).
     // Caller (SessionRunner.processNext) takes the false and falls through to
@@ -491,7 +495,9 @@ export class RemoteSessionManager implements SessionManager {
     try {
       const prepared = await this.prepareOutbound(message)
       this._lastPreparedOutbound = prepared
-      const result = await conn.send('send', { sid, message: prepared })
+      // `uuid` is spread, never passed as an explicit undefined: an old daemon
+      // sees exactly the payload it always saw when no uuid was assigned.
+      const result = await conn.send('send', { sid, message: prepared, ...(opts?.uuid ? { uuid: opts.uuid } : {}) })
       if (result.ok) {
         // Bump lastEventAt on successful delivery. Without this, the
         // SessionHealthMonitor idle-timeout check (default 30 min) uses a

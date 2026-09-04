@@ -211,6 +211,31 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     }
   })
 
+  // Pre-assigned user-line uuid (thread anchors): both twins must read `uuid` off
+  // the `start` and `send` commands, treat an empty string as absent, and put the
+  // key on the envelope ONLY when one was given, so an unanchored send is
+  // byte-identical to the pre-feature payload. The one write site the twins share
+  // (daemon-core.handleSendCommand) is covered by daemon-cmd-send-strict-ack; these
+  // are the sites each twin builds by hand.
+  it('both twins carry an optional pre-assigned uuid on start/send and omit the key when absent', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      // start: destructured off the command and normalised (empty string = absent).
+      expect(src).toMatch(/const \{ sid, args, cwd, message, resume, mode, uuid \} = cmd/)
+      expect(src).toMatch(/const initialUuid = typeof uuid === 'string' && uuid \? uuid : (undefined|null)/)
+      // The initial-message envelope gains the key only when initialUuid is set.
+      expect(src).toMatch(/\.\.\.\(initialUuid \? \{ uuid: initialUuid \} : \{\}\)|if \(initialUuid\) envelope\.uuid = initialUuid/)
+    }
+    // send: the standalone delegates to core with the uuid; the template builds
+    // its own envelope with the same "non-empty string only" gate.
+    expect(standaloneSrc).toMatch(/const \{ sid, message, uuid \} = cmd/)
+    expect(standaloneSrc).toMatch(/core\.handleSendCommand\(sid, message, /)
+    expect(templateSrc).toMatch(/const \{ sid, message, uuid \} = cmd;/)
+    expect(templateSrc).toMatch(/if \(typeof uuid === 'string' && uuid\) envelope\.uuid = uuid;/)
+    // The shared core gates the envelope key the same way.
+    expect(coreSrc).toMatch(/\.\.\.\(uuid \? \{ uuid \} : \{\}\)/)
+  })
+
   it("both spawn the CLI's stdout fd in append mode (marker-clobber defense)", () => {
     const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
     for (const src of [standaloneSrc, templateSrc]) {

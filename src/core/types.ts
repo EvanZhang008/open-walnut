@@ -1768,6 +1768,30 @@ export interface SessionPinnedQuote {
   suffix?: string;
 }
 
+/**
+ * One "ask about this" link: a user message hangs off a passage of an earlier
+ * reply, so the UI can draw a navigation tree over ONE linear transcript.
+ *
+ * `msgId` is the user line's transcript uuid, PRE-ASSIGNED at send time (the
+ * stream-json `uuid` the CLI persists the line under) — that is what lets an
+ * anchor be keyed before the line exists, with zero text matching. Anchors whose
+ * `msgId`/`parent` aren't in the loaded rows are ignored by the client, never an
+ * error: this is Walnut-owned navigation metadata, not transcript truth.
+ */
+export interface SessionThreadAnchor {
+  /** The USER message's transcript uuid (pre-assigned at send). */
+  msgId: string;
+  /** msgId of the reply this question hangs off. */
+  parent: string;
+  /** The passage inside `parent` the question is about. Absent = the whole reply. */
+  quote?: SessionPinnedQuote;
+  /** How the anchor was created: a fresh text selection, the composer's sticky
+   *  carry-over of the previous anchor, or a rail/manual pick. */
+  source: 'selection' | 'sticky' | 'manual';
+  /** When the anchor was recorded (ISO). */
+  at: string;
+}
+
 /** Stable subset of ACP initialize capabilities used by routes and UI guards. */
 export interface AcpSessionCapabilities {
   loadSession: boolean;
@@ -1906,6 +1930,10 @@ export interface SessionRecord {
   appliedAppendSystemPrompt?: string;
   /** Messages the human pinned, in pin order. Drives the timeline's TOC. */
   pinnedMessages?: SessionPinnedMessage[];
+  /** Conversation-thread links over this session's ONE linear transcript, in the
+   *  order they were recorded. Pure navigation metadata: the client builds the
+   *  tree, the server only validates and stores (see SessionThreadAnchor). */
+  threadAnchors?: SessionThreadAnchor[];
   /**
    * Git commit SHAs this session produced (extracted from `git commit` tool
    * results by the session indexer, in commit order). The structured half of

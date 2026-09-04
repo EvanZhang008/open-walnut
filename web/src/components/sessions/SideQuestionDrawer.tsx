@@ -54,6 +54,7 @@ import { promoteSideQuestion, type SideQuestion } from '@/api/sideQuestions';
 import { requestSideThreadDigest, type SideThread } from '@/api/sideThreads';
 import { PlanContentContext } from '@/contexts/PlanContentContext';
 import { SessionPinsContext, type SessionPinsApi } from '@/contexts/SessionPinsContext';
+import { SessionThreadsContext, NO_THREADS } from '@/contexts/SessionThreadsContext';
 import { SessionRewindContext, type SessionRewindApi } from '@/contexts/SessionRewindContext';
 import type { ProcessStatus, SessionEngine, SessionMode, SessionRecord } from '@/types/session';
 import {
@@ -636,6 +637,11 @@ export function SideQuestionDrawer({
             <div className="side-thread-body">
               <SessionRewindContext.Provider value={NO_REWIND}>
                 <SessionPinsContext.Provider value={NO_PINS}>
+                  {/* The drawer sits inside the PARENT session's threads provider.
+                      Left connected, this timeline would read the parent's anchors,
+                      publish its own tree over the parent's, and in tree mode filter
+                      itself by the parent's current thread (writing that key back). */}
+                  <SessionThreadsContext.Provider value={NO_THREADS}>
                   <PlanContentContext.Provider value={null}>
                     <SessionChatHistory
                       key={activeThread.threadSessionId}
@@ -649,6 +655,7 @@ export function SideQuestionDrawer({
                       onBatchFailed={handleBatchFailed}
                     />
                   </PlanContentContext.Provider>
+                  </SessionThreadsContext.Provider>
                 </SessionPinsContext.Provider>
               </SessionRewindContext.Provider>
             </div>

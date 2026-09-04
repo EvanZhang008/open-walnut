@@ -27,6 +27,14 @@ const MAX_SESSION_IMAGES = 5
 const MAX_IMAGE_BASE64_LENGTH = 14_000_000 // ~10MB binary
 
 /**
+ * v4 uuid, and ONLY v4. The value becomes the CLI's own transcript-line uuid
+ * (harness contract: stream-json `uuid` → `createUserMessage`), so anything the
+ * CLI would not have minted itself is rejected rather than quietly passed on:
+ * a malformed id would key a thread anchor to a line nobody can find.
+ */
+const V4_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+/**
  * Register session-chat RPC methods on the WebSocket handler.
  */
 export function registerSessionChatRpc(): void {
@@ -64,6 +72,14 @@ export function registerSessionChatRpc(): void {
     if (typeof data.sessionId !== 'string' || typeof data.message !== 'string') {
       throw new Error('session:send requires sessionId (string) and message (string)')
     }
+
+    // Optional pre-assigned uuid for the CLI's own user line. Validated here (the
+    // one entry point) so a bad value can never reach the queue or the FIFO
+    // envelope; absent is the normal case and changes nothing downstream.
+    if (data.userUuid !== undefined && (typeof data.userUuid !== 'string' || !V4_UUID_RE.test(data.userUuid))) {
+      throw new Error('session:send userUuid must be a v4 UUID string')
+    }
+    const userUuid = typeof data.userUuid === 'string' ? data.userUuid : undefined
 
     // Process images: save to disk and embed file paths in the message.
     //
@@ -238,6 +254,9 @@ export function registerSessionChatRpc(): void {
       mode: typeof data.mode === 'string' ? data.mode : undefined,
       interrupt: data.interrupt === true ? true : undefined,
       enqueueMessage: augmentedMessage,
+      // The queue row carries the uuid; the drain hands it to the CLI (one uuid
+      // per batch — see providers/batch-uuid.ts).
+      ...(userUuid ? { userUuid } : {}),
     })
 
     // Advance the edge only AFTER the text is safely queued: a throw above must

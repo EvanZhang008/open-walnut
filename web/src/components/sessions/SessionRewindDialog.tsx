@@ -28,6 +28,14 @@ interface SessionRewindDialogProps {
   msgId: string;
   /** Label of the target message, for the "back to" line. */
   label?: string;
+  /**
+   * How many of the dropped messages belong to OTHER conversation threads than the
+   * target's. Passed only by the node view, where the screen shows one thread and
+   * "the 12 messages after it" would otherwise read as twelve messages of the
+   * thread you are looking at. Counted over the rows the browser has loaded, so it
+   * is capped by the server's own count below.
+   */
+  otherThreadsDropped?: number;
   onClose: () => void;
   /** The rewound session replaces this one in its column. */
   onRewound: (result: RewindResult) => void;
@@ -45,12 +53,17 @@ function splitPath(p: string): { dir: string; base: string } {
  * everything after it leave the conversation, and its text returns to the input
  * box to edit and resend. `droppedMessages` already counts the target.
  */
-function describeDrop(preview: RewindPreview, intoCopy: boolean): string {
+function describeDrop(preview: RewindPreview, intoCopy: boolean, otherThreads = 0): string {
   // `droppedMessages` counts the target itself plus everything after it.
   const after = Math.max(0, preview.droppedMessages - 1);
+  // A rewind is a TIME operation: it takes every later message, whatever thread it
+  // ended up in. The node view shows one thread, so this is the only place that can
+  // say the rest are going too.
+  const inOthers = Math.min(otherThreads, after);
   const alsoAfter = after === 0
     ? ''
-    : `, dropping it and the ${after} ${after === 1 ? 'message' : 'messages'} after it`;
+    : `, dropping it and the ${after} ${after === 1 ? 'message' : 'messages'} after it`
+      + (inOthers > 0 ? ` (including ${inOthers} in other threads)` : '');
   const back = preview.restoredPrompt
     ? ' Its text goes back to the input box, so you can edit it and send again.'
     : '';
@@ -62,7 +75,9 @@ function describeDrop(preview: RewindPreview, intoCopy: boolean): string {
   return `This conversation goes back to just before this message${alsoAfter}.` + back;
 }
 
-export function SessionRewindDialog({ sessionId, msgId, label, onClose, onRewound }: SessionRewindDialogProps) {
+export function SessionRewindDialog({
+  sessionId, msgId, label, otherThreadsDropped, onClose, onRewound,
+}: SessionRewindDialogProps) {
   const [preview, setPreview] = useState<RewindPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [restoreFiles, setRestoreFiles] = useState(false);
@@ -139,7 +154,7 @@ export function SessionRewindDialog({ sessionId, msgId, label, onClose, onRewoun
               hiccup — so it reads as the answer, not as a failed attempt. The
               confirm button is disabled while there is no preview either way. */}
           {previewError && <span className="rewind-dialog-error-text">Can’t rewind here: {previewError}</span>}
-          {preview && describeDrop(preview, intoCopy)}
+          {preview && describeDrop(preview, intoCopy, otherThreadsDropped)}
         </div>
 
         {preview && (

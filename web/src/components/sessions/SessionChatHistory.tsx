@@ -15,17 +15,27 @@ import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence } from '@/
 import { getFinishedAgentIds, subscribeFinishedAgentIds } from '@/cache/finished-agents-store';
 import { groupStreamingBlocks, groupLaneChildren, countAgentTree, GROUPABLE_STREAM_TOOLS, type GroupedStreamItem } from '@/stream/group-blocks';
 import { TeamCard } from './TeamCard';
-import { SessionPinnedToc } from './SessionPinnedToc';
-import { QuotePinSelectionBar } from './QuotePinSelectionBar';
+import { SessionPinnedToc, type TocEntry } from './SessionPinnedToc';
+import { QuotePinSelectionBar, type QuotePinTarget } from './QuotePinSelectionBar';
 import { QuotePinPopover } from './QuotePinPopover';
 import { useSessionPinsApi } from '@/contexts/SessionPinsContext';
+import { useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
+import {
+  ROOT_THREAD_KEY, buildThreadTree, hueForAnchor, pathToRoot, siblingsOf, threadKeyOf,
+  type ThreadNode, type ThreadRowInfo,
+} from '@/utils/thread-tree';
+import {
+  ThreadAncestorTurn, ThreadBreadcrumb, ThreadChildCard, ThreadChildHint, type ThreadCrumb,
+} from './SessionThreadNav';
 import { pinKeyOf, pinLabelFor } from '@/hooks/useSessionPins';
 import { useQuotePinPaint } from '@/hooks/useQuotePinPaint';
 import { flashRange } from '@/utils/pin-highlights';
 import { WorkflowProgress } from './WorkflowProgress';
 import { LoadingSpinner } from '../common/LoadingSpinner';
 import { Lightbox } from '../common/Lightbox';
-import type { SessionEngine, SessionHistoryMessage } from '@/types/session';
+import type {
+  SessionEngine, SessionHistoryMessage, SessionPinnedQuote, SessionThreadAnchor,
+} from '@/types/session';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { engineCaps } from '@/utils/engine-capabilities';
 import type { ImageAttachment } from '@/api/chat';
@@ -108,6 +118,11 @@ export interface OptimisticMessage extends SessionHistoryMessage {
   queueId: string;
   status: 'pending' | 'received' | 'delivered' | 'failed';
   images?: ImageAttachment[];
+  /** The uuid the CLI was told to persist this user line under (the stream-json
+   *  `uuid` contract), stamped at send time. It is the id the thread anchor was
+   *  recorded against, so the bubble belongs to its thread before any history
+   *  fetch — see thread-tree's `rowIdOf`. Dedup does not read it. */
+  userUuid?: string;
   /** Error message when status is 'failed' */
   failedError?: string;
   /** Server PARKED this row (dead-letter): the failure is permanent, so nothing
@@ -175,6 +190,13 @@ interface SessionChatHistoryProps {
    * follow-bottom paths respect. 0/undefined = no-op (initial mount).
    */
   scrollToBottomNonce?: number;
+  /**
+   * The user asked about something (a passage, or a thread picked in the outline):
+   * reveal the composer and focus it. The panel owns both, so the timeline only
+   * says WHEN — same shape as the "Ask about this" prefill path, minus the text
+   * (the quote rides the composer chip and is composed at send time).
+   */
+  onRequestComposerFocus?: () => void;
 }
 
 /** Memoized text block that caches renderMarkdownWithRefs output */
@@ -749,6 +771,23 @@ type HistoryPart = { kind: 'msg'; m: SessionHistoryMessage; globalIndex: number;
       /** Pre-mapped stable array for the memoized SystemGroupRun (same reason). */
       systemMembers: SystemGroupMember[] };
 
+/** One turn of the rendered transcript, as the node view reads it: a question, its
+ *  reply's first line, and the PARTS that make it up — so an ancestor turn shows as
+ *  one line and expands into the very rows the linear view would draw. */
+interface TreeTurn {
+  /** Row id of the user message opening the turn. */
+  headId: string;
+  /** Thread the turn belongs to. */
+  key: string;
+  /** First line of the question. */
+  question: string;
+  /** First line of the reply, when one has arrived. */
+  reply?: string;
+  parts: HistoryPart[];
+  /** Every identified row in the turn — what `turnOfRow` indexes. */
+  rowIds: string[];
+}
+
 function isTransparentStreamItem(item: TimelineItem): boolean {
   if (item.kind !== 'block') return false;
   const block = item.block;
@@ -904,7 +943,11 @@ let nextQuotePanelSeq = 0;
 const TRIPWIRE_SETTLE_MS = (typeof window !== 'undefined'
   && (window as unknown as { __tripwireSettleMs?: number }).__tripwireSettleMs) || 8_000;
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce }: SessionChatHistoryProps) {
+/** Stable empty list for "the current thread has no branches", so the effect keyed
+ *  on the child keys does not re-run on every render of a leaf thread. */
+const NO_CHILD_KEYS: string[] = [];
+
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus }: SessionChatHistoryProps) {
   // Slow-commit detector: renderT0 is per-render-pass (closure), the layout
   // effect runs after THAT pass commits — the delta is the synchronous
   // render+commit cost of this whole conversation subtree. This is the
@@ -966,6 +1009,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Pins live on the session record; the panel provides them through context so
   // the memoized message rows can host the pin button without prop drilling.
   const pinsApi = useSessionPinsApi();
+  // ── Conversation threads ──
+  // The anchors live on the session record (the panel owns them); the ROWS they
+  // point at live in this component's history hook. So the tree is derived here
+  // and published back up, and everything else (rail, gutter, chip, composer)
+  // reads that one structure.
+  const threadsApi = useSessionThreadsApi();
   // This mounted timeline's slice of the document-global highlight registry — the
   // home page shows up to three sessions side by side, and they must be able to
   // paint their own pins without deleting each other's (see pin-highlights.ts).
@@ -1545,15 +1594,407 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return () => el.removeEventListener('expand-to-message', handler);
   }, [messages.length, truncationOffset]);
 
-  // ── Outline (pinned messages) ──────────────────────────────────────────────
+  // ── Thread tree ────────────────────────────────────────────────────────────
+  // Derived from the loaded rows + the record's anchors. Memoised on exactly those
+  // two: it walks the whole transcript, and this component re-renders on every
+  // streaming delta.
+  const threadTree = useMemo(
+    () => buildThreadTree(messages, threadsApi.anchors),
+    [messages, threadsApi.anchors],
+  );
+  // Publish it to the panel (composer chip + the send path's "is this the newest
+  // thread?" question). A session with anchors gets a fresh tree per history
+  // change, so this costs the panel one extra render per refetch and converges
+  // (the panel never feeds the tree back into `messages`); a session without
+  // anchors gets the shared empty tree, whose stable identity makes this a no-op.
+  const publishTree = threadsApi.setTree;
+  useEffect(() => { publishTree(threadTree); }, [publishTree, threadTree]);
+
+  /** Node view (A) vs the timeline (B). Per session, remembered by the panel. */
+  const treeMode = threadsApi.viewMode === 'tree';
+
+  /** Anchor per user-row id — the one thing that knows a row's thread before the
+   *  transcript does (the id IS the uuid we pre-assigned for that line). */
+  const anchorByRowId = useMemo(() => {
+    const map = new Map<string, SessionThreadAnchor>();
+    for (const a of threadsApi.anchors) {
+      if (a?.msgId && a.parent) map.set(a.msgId, a);
+    }
+    return map;
+  }, [threadsApi.anchors]);
+
+  /**
+   * Thread of ONE row: the tree's answer first, the anchor's second.
+   *
+   * The tree is built from PERSISTED rows, so a just-sent bubble would read as top
+   * level for the second or two before history absorbs it — the gutter bar and the
+   * `↳` tag would appear late, and the node view would render the row outside the
+   * thread the user is looking at. Its anchor is already recorded under the
+   * pre-assigned uuid the row carries, which is enough to place it, and (for a
+   * brand-new thread) to derive the depth and hue the tree is about to give it.
+   */
+  const rowThreadInfo = useCallback((rowId: string | undefined): ThreadRowInfo | undefined => {
+    if (!rowId) return undefined;
+    const known = threadTree.byRow.get(rowId);
+    if (known) return known;
+    const anchor = anchorByRowId.get(rowId);
+    if (!anchor) return undefined;
+    const key = threadKeyOf(anchor);
+    const node = threadTree.byKey.get(key);
+    if (node) return { key, depth: node.depth, hue: node.hue, isHead: node.headId === rowId };
+    const parent = threadTree.byRow.get(anchor.parent);
+    return {
+      key,
+      depth: (parent?.depth ?? 0) + 1,
+      hue: hueForAnchor(threadTree, {
+        parent: anchor.parent,
+        ...(anchor.quote ? { quote: anchor.quote } : {}),
+        source: anchor.source,
+        label: '',
+      }),
+      isHead: true,
+    };
+  }, [threadTree, anchorByRowId]);
+
+  const rowThreadKey = useCallback(
+    (rowId: string | undefined): string => rowThreadInfo(rowId)?.key ?? ROOT_THREAD_KEY,
+    [rowThreadInfo],
+  );
+
+  /**
+   * Gutter-bar props for ONE row wrapper.
+   *
+   * Applied to every wrapper kind (plain rows, merged tool runs, system runs) so a
+   * thread's bar is CONTINUOUS: the timeline groups an assistant turn's tool calls
+   * into their own wrapper, and decorating only the plain rows drew a dashed bar
+   * with gaps wherever the grouping happened to fall.
+   */
+  const threadWrapperProps = useCallback((
+    rowId: string | undefined, baseClass?: string,
+  ): Record<string, unknown> => {
+    const info = rowThreadInfo(rowId);
+    if (!info || info.depth < 1) return baseClass ? { className: baseClass } : {};
+    return {
+      className: `${baseClass ? `${baseClass} ` : ''}session-msg--threaded${threadsApi.hoverThreadKey === info.key ? ' is-thread-hover' : ''}`,
+      'data-thread-depth': info.depth,
+      style: { ['--thread-hue' as string]: info.hue } as React.CSSProperties,
+    };
+  }, [rowThreadInfo, threadsApi.hoverThreadKey]);
+
+  // ── Node view: which thread is on screen ───────────────────────────────────
+  // The KEY lives on the context (the panel owns it) because the composer's anchor
+  // is derived from it — see SessionPanel's `effectiveAnchor`. This component is the
+  // only writer; it is ref-mirrored because the rail, the keyboard and the Ask paths
+  // navigate from callbacks that must never read a stale key.
+  const currentKey = threadsApi.currentThreadKey;
+  const setCurrentKey = threadsApi.setCurrentThreadKey;
+  const currentKeyRef = useRef(currentKey);
+  currentKeyRef.current = currentKey;
+  /** Ancestor turns the user expanded (by turn head id). */
+  const [expandedTurns, setExpandedTurns] = useState<Set<string>>(() => new Set());
+  /** Rows counted per thread the last time it was looked at — what a child card's
+   *  "new" dot compares against. Client-only: "have I seen this branch since it
+   *  grew?" is a property of this window, not of the session. */
+  const seenRows = useRef(new Map<string, number>());
+  /** The user picked a thread, so the view stops following the newest one. */
+  const userNavigated = useRef(false);
+  /** Sends this view has already followed (queueIds), so it follows each once. */
+  const followedSends = useRef(new Set<string>());
+
+  /** Rows per thread — the growth signal behind the "new" dot. Only walked in tree
+   *  mode; `byRow` is one entry per transcript row. */
+  const rowsPerThread = useMemo(() => {
+    const counts = new Map<string, number>();
+    if (!treeMode) return counts;
+    for (const info of threadTree.byRow.values()) {
+      counts.set(info.key, (counts.get(info.key) ?? 0) + 1);
+    }
+    return counts;
+  }, [treeMode, threadTree]);
+
+  /**
+   * Show one thread. That is ALL it does to the composer: in tree mode the anchor is
+   * derived from this key by the panel (`effectiveAnchor`), so writing a stored
+   * anchor here would be a second, independently mutable answer to "where does the
+   * next message go" — and the chip's `×` (which navigates to the top level) would
+   * fight it forever.
+   */
+  const navigateThread = useCallback((key: string) => {
+    userNavigated.current = true;
+    setCurrentKey(key);
+    setExpandedTurns(new Set());
+    // The thread's newest turn is where the reading continues, and the composer
+    // sits right under it. Chased across two frames because the rows this view
+    // shows change completely on a navigation.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const el = containerRef.current;
+      if (!el) return;
+      el.scrollTop = el.scrollHeight;
+      isAtBottom.current = true;
+    }));
+  }, [setCurrentKey]);
+
+  /**
+   * The thread the view is pointed at that the TREE has never heard of: the user
+   * asked about a passage and nothing has persisted under that key yet. Rendering
+   * it (breadcrumb + the passage + the optimistic bubble + the live stream) is what
+   * makes an Ask open a branch immediately; the key does not change when the tree
+   * catches up, so nothing jumps.
+   */
+  const pendingThread = useMemo(() => {
+    if (!treeMode || currentKey === ROOT_THREAD_KEY) return null;
+    if (threadTree.byKey.has(currentKey)) return null;
+    const composer = threadsApi.composerAnchor;
+    let parent: string | undefined;
+    let quote: SessionPinnedQuote | undefined;
+    let label = 'This thread';
+    if (composer && threadKeyOf(composer) === currentKey) {
+      parent = composer.parent;
+      quote = composer.quote;
+      label = composer.label;
+    } else {
+      const recorded = threadsApi.anchors.find(
+        (a) => a?.msgId && a.parent && threadKeyOf(a) === currentKey,
+      );
+      if (recorded) {
+        parent = recorded.parent;
+        quote = recorded.quote;
+        label = pinLabelFor(recorded.quote?.exact, 'This thread');
+      }
+    }
+    if (!parent) return null;
+    const parentInfo = threadTree.byRow.get(parent);
+    return {
+      key: currentKey,
+      parent,
+      ...(quote ? { quote } : {}),
+      label,
+      parentKey: parentInfo?.key ?? ROOT_THREAD_KEY,
+      depth: (parentInfo?.depth ?? 0) + 1,
+      hue: hueForAnchor(threadTree, {
+        parent, ...(quote ? { quote } : {}), source: 'manual', label,
+      }),
+    };
+  }, [treeMode, currentKey, threadTree, threadsApi.composerAnchor, threadsApi.anchors]);
+
+  /**
+   * Root → … → the thread on screen: the breadcrumb, plus which ancestors to
+   * collapse and how much of each is on the path.
+   *
+   * `boundaryRow` is the reply the NEXT thread hangs off. Everything an ancestor
+   * said AFTER that row answers a different question, so it is not context for
+   * where you are — showing it would rebuild the linear transcript one line at a
+   * time.
+   */
+  const treePath = useMemo(() => {
+    const crumbs: ThreadCrumb[] = [];
+    const ancestors: Array<{ node: ThreadNode; boundaryRow: string }> = [];
+    if (!treeMode) return { crumbs, ancestors };
+    const nodes = pathToRoot(threadTree, pendingThread ? pendingThread.parentKey : currentKey);
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      crumbs.push({
+        key: node.key,
+        label: node.depth === 0 ? 'Top level' : (node.quoteLabel ?? node.label),
+        ...(node.depth === 0 ? {} : { hue: node.hue }),
+      });
+      const nextParent = i + 1 < nodes.length
+        ? nodes[i + 1].parent
+        : (pendingThread ? pendingThread.parent : undefined);
+      // No next thread ⇒ this node IS the one being shown, not an ancestor.
+      if (nextParent) ancestors.push({ node, boundaryRow: nextParent });
+    }
+    if (pendingThread) {
+      crumbs.push({ key: pendingThread.key, label: pendingThread.label, hue: pendingThread.hue });
+    }
+    return { crumbs, ancestors };
+  }, [treeMode, threadTree, currentKey, pendingThread]);
+
+  /** Row id → index in `messages`, for the window expansion below. */
+  const rowIndexOf = useMemo(() => {
+    const map = new Map<string, number>();
+    if (!treeMode) return map;
+    for (let i = 0; i < messages.length; i++) {
+      const id = messages[i].msgId ?? messages[i].walnutMessageId;
+      if (id && !map.has(id)) map.set(id, i);
+    }
+    return map;
+  }, [treeMode, messages]);
+
+  // Until the user picks a thread, the node view FOLLOWS the conversation: the
+  // thread the composer is already pointed at (they said what they are asking
+  // about), else the newest one — exactly what the timeline shows. Re-evaluated
+  // rather than armed once, because tree mode is a remembered per-session
+  // preference: on a reload it is on before either the transcript or the record's
+  // anchors have landed, and a one-shot default would freeze at the top level.
+  useEffect(() => {
+    if (!treeMode) { userNavigated.current = false; return; }
+    if (userNavigated.current) return;
+    const anchor = threadsApi.composerAnchor;
+    setCurrentKey(anchor ? threadKeyOf(anchor) : threadTree.latestKey);
+  }, [treeMode, threadTree, threadsApi.composerAnchor, setCurrentKey]);
+
+  /** Thread of the newest message THIS browser sent, keyed by the send itself. */
+  const lastSent = useMemo(() => {
+    const list = optimisticMessages ?? [];
+    for (let i = list.length - 1; i >= 0; i--) {
+      const m = list[i];
+      if (m.role !== 'user') continue;
+      return {
+        queueId: m.queueId,
+        key: rowThreadKey(m.msgId ?? m.userUuid ?? m.walnutMessageId),
+      };
+    }
+    return null;
+  }, [optimisticMessages, rowThreadKey]);
+
+  // Your own send moves the view. A message goes into exactly ONE thread, and
+  // watching it (and the reply) arrive is the point of having sent it — a reader
+  // parked in another thread would otherwise see their message vanish.
+  //
+  // Once per SEND, never per render: navigating away mid-turn has to stay away, and
+  // a followed row that becomes "newest" again (a later one was absorbed first)
+  // must not drag the view backwards.
+  useEffect(() => {
+    if (!treeMode || !lastSent) return;
+    if (followedSends.current.has(lastSent.queueId)) return;
+    followedSends.current.add(lastSent.queueId);
+    setCurrentKey(lastSent.key);
+  }, [treeMode, lastSent, setCurrentKey]);
+
+  // A thread can stop existing under the user (a /compact rewrote the tail, or the
+  // chip that named a brand-new one was cleared before anything was sent). Land at
+  // the top level rather than rendering an empty view.
+  useEffect(() => {
+    if (!treeMode || currentKey === ROOT_THREAD_KEY) return;
+    if (threadTree.byKey.has(currentKey) || pendingThread) return;
+    setCurrentKey(ROOT_THREAD_KEY);
+  }, [treeMode, currentKey, threadTree, pendingThread, setCurrentKey]);
+
+  // Keep the current thread's baseline fresh, so a branch the user is READING
+  // never lights its own "new" dot when they come back to it.
+  useEffect(() => {
+    if (!treeMode) return;
+    seenRows.current.set(currentKey, rowsPerThread.get(currentKey) ?? 0);
+  }, [treeMode, currentKey, rowsPerThread]);
+
+  // The render window is a TAIL slice, but a thread can start anywhere above it —
+  // filtering that tail to one thread would leave an empty view. Reveal back to
+  // the earliest row this path needs (each thread's head, and the reply each child
+  // hangs off), the same way an outline jump reveals its target.
+  useEffect(() => {
+    if (!treeMode) return;
+    const wanted: number[] = [];
+    const want = (rowId: string | undefined) => {
+      const at = rowId ? rowIndexOf.get(rowId) : undefined;
+      if (at !== undefined) wanted.push(at);
+    };
+    for (const { node, boundaryRow } of treePath.ancestors) {
+      want(node.headId);
+      want(boundaryRow);
+    }
+    want(threadTree.byKey.get(currentKey)?.headId);
+    if (pendingThread) want(pendingThread.parent);
+    if (wanted.length === 0) return;
+    const needed = messages.length - Math.min(...wanted);
+    if (needed > INITIAL_RENDER_LIMIT + truncationOffset) {
+      setTruncationOffset(needed - INITIAL_RENDER_LIMIT);
+    }
+  }, [treeMode, currentKey, pendingThread, treePath, threadTree, rowIndexOf, messages.length, truncationOffset]);
+
+  /**
+   * `↑`/`Alt+↑` parent · `↓` first child · `←`/`→` siblings · `⌘/Ctrl+↑` root.
+   *
+   * Bound on the scroll container, so it can only fire when the focus is inside
+   * the transcript — the composer is a sibling, and its arrow keys stay its own.
+   * Fields INSIDE the container (the queued-message editor, the question card) are
+   * excluded explicitly, and a key with nowhere to go is left to the browser so
+   * ↑/↓ keep scrolling.
+   */
+  const handleTreeKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!treeMode) return;
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+      return;
+    }
+    const key = currentKeyRef.current;
+    const node = threadTree.byKey.get(key);
+    // `undefined` means "nowhere to go" — never `!next`: the root thread's key is
+    // the EMPTY STRING, so a falsy check would silently swallow every move to the
+    // top level.
+    const go = (next: string | undefined) => {
+      if (next === undefined || next === key) return;
+      e.preventDefault();
+      navigateThread(next);
+    };
+    if (e.key === 'ArrowUp') {
+      if (e.metaKey || e.ctrlKey) {
+        go(key === ROOT_THREAD_KEY ? undefined : ROOT_THREAD_KEY);
+        return;
+      }
+      go(node?.parentKey ?? pendingThread?.parentKey);
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      go(node?.childKeys[0]);
+      return;
+    }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const sibs = siblingsOf(threadTree, key);
+      const at = sibs.findIndex((s) => s.key === key);
+      if (at < 0) return;
+      go(sibs[at + (e.key === 'ArrowRight' ? 1 : -1)]?.key);
+    }
+  }, [treeMode, threadTree, pendingThread, navigateThread]);
+
+  /** Point the composer at a passage of a reply. The quote was captured at gesture
+   *  time by the pill (the selection is already gone by click — see that file). */
+  const askAboutQuote = useCallback((target: QuotePinTarget) => {
+    const anchor = {
+      parent: target.msgId,
+      quote: target.quote,
+      source: 'selection' as const,
+      label: pinLabelFor(target.quote.exact, 'this passage'),
+    };
+    // In the node view the branch opens NOW: the thread it will become is where the
+    // answer will arrive, so the reader follows the question there instead of
+    // watching it stream in the thread they are leaving. This is the ONE stored
+    // anchor tree mode still keeps — the passage lives in this gesture and nowhere
+    // else, so the panel's derivation lets a pending Ask outrank the current node
+    // (SessionPanel `effectiveAnchor`).
+    if (treeMode) navigateThread(threadKeyOf(anchor));
+    threadsApi.setComposerAnchor(anchor);
+    onRequestComposerFocus?.();
+  }, [threadsApi, treeMode, navigateThread, onRequestComposerFocus]);
+
+  /** Point the composer at an existing thread (the outline's "Ask here"). In tree
+   *  mode that IS the navigation — the anchor is derived from the thread on screen,
+   *  so a stored copy would only be a second answer to the same question. */
+  const askInThread = useCallback((threadKey: string) => {
+    const node = threadTree.byKey.get(threadKey);
+    if (!node || !node.parent) return;
+    if (treeMode) {
+      navigateThread(threadKey);
+    } else {
+      threadsApi.setComposerAnchor({
+        parent: node.parent,
+        ...(node.quote ? { quote: node.quote } : {}),
+        source: 'manual',
+        label: node.quoteLabel ?? node.label,
+      });
+    }
+    onRequestComposerFocus?.();
+  }, [threadTree, threadsApi, treeMode, navigateThread, onRequestComposerFocus]);
+
+  // ── Outline (pinned messages + thread heads) ───────────────────────────────
   // Entries are ordered by TRANSCRIPT position, not by when they were pinned: the
   // outline is a map of the conversation, so it has to read in the conversation's
   // own order. A pin whose message isn't in the loaded array yet (older tail not
   // fetched, /compact rewrote it) sorts last on its pin time rather than being
   // dropped — the row still jumps correctly once the message loads, and silently
   // hiding a pin the user made is worse than showing it out of order.
-  const tocEntries = useMemo(() => {
-    if (pinsApi.pins.length === 0) return [];
+  const pinTocEntries = useMemo(() => {
+    if (pinsApi.pins.length === 0) return [] as Array<TocEntry & { at: number }>;
     const indexOf = new Map<string, number>();
     for (let i = 0; i < messages.length; i++) {
       const id = messages[i].msgId ?? messages[i].walnutMessageId;
@@ -1572,7 +2013,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         if (aQuote !== bQuote) return aQuote - bQuote;
         return a.pin.pinnedAt.localeCompare(b.pin.pinnedAt);
       })
-      .map(({ pin }) => {
+      .map(({ pin, at }) => {
         const fallback = pin.role === 'user' ? 'Your message' : 'Reply';
         const base = pin.label
           || (pin.quote ? pinLabelFor(pin.quote.exact, 'Quoted passage') : fallback);
@@ -1584,9 +2025,82 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           role: pin.role,
           ...(pin.timestamp ? { timestamp: pin.timestamp } : {}),
           ...(pin.quote ? { isQuote: true } : {}),
+          at,
         };
       });
   }, [pinsApi.pins, messages]);
+
+  /** One rail row per thread, anchored at its head message. Threads and pins are
+   *  the same KIND of thing in the outline (a marked place in the transcript), so
+   *  they share its ordering and its jump. */
+  const threadRailRows = useMemo(() => {
+    const rows: Array<{
+      threadKey: string; msgId: string; at: number; depth: number; hue: number;
+      label: string; role: 'user'; timestamp?: string;
+    }> = [];
+    if (threadTree.threads.length < 2) return rows;
+    // One index pass for every thread — a whale session times threads × rows
+    // otherwise, on a memo that recomputes with the transcript.
+    const indexOf = new Map<string, number>();
+    for (let i = 0; i < messages.length; i++) {
+      const id = messages[i].msgId ?? messages[i].walnutMessageId;
+      if (id && !indexOf.has(id)) indexOf.set(id, i);
+    }
+    for (const node of threadTree.threads) {
+      if (node.depth === 0 || !node.headId) continue;
+      const index = indexOf.get(node.headId);
+      if (index === undefined) continue;
+      rows.push({
+        threadKey: node.key,
+        msgId: node.headId,
+        at: index,
+        depth: node.depth,
+        hue: node.hue,
+        label: node.quoteLabel ?? node.label,
+        role: 'user',
+        ...(messages[index].timestamp ? { timestamp: messages[index].timestamp } : {}),
+      });
+    }
+    return rows;
+  }, [threadTree, messages]);
+
+  /**
+   * The outline: pins and thread heads in ONE list, transcript order.
+   *
+   * A thread head that is also pinned stays ONE row — two rows for one message
+   * would read as two places. The PIN's key wins there, so jumping and unpinning
+   * keep working exactly as before and the thread fields just ride along.
+   */
+  const tocEntries = useMemo<TocEntry[]>(() => {
+    if (pinTocEntries.length === 0 && threadRailRows.length === 0) return [];
+    const merged: Array<TocEntry & { at: number }> = pinTocEntries.map((e) => ({ ...e }));
+    for (const row of threadRailRows) {
+      const host = merged.find((e) => e.msgId === row.msgId);
+      const threadFields = {
+        depth: row.depth, hue: row.hue, threadKey: row.threadKey, isThreadHead: true,
+      };
+      if (host) { Object.assign(host, threadFields); continue; }
+      merged.push({
+        key: `thread:${row.threadKey}`,
+        msgId: row.msgId,
+        label: `↳ ${row.label}`,
+        role: row.role,
+        ...(row.timestamp ? { timestamp: row.timestamp } : {}),
+        ...threadFields,
+        isThreadOnly: true,
+        at: row.at,
+      });
+    }
+    return merged
+      .sort((a, b) => a.at - b.at)
+      .map(({ at: _at, ...entry }) => entry);
+  }, [pinTocEntries, threadRailRows]);
+
+  /** Row a thread-only outline entry jumps to (its head message). */
+  const threadEntryTargets = useMemo(
+    () => new Map(threadRailRows.map((row) => [`thread:${row.threadKey}`, row.msgId])),
+    [threadRailRows],
+  );
 
   // Quote-pin paint. Costs nothing until a session actually has one (the hook
   // early-returns before installing its observer). The nonce covers the render
@@ -1604,8 +2118,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const el = containerRef.current;
     if (!el || !pinKey) return;
     const pin = pinsApi.pins.find((p) => pinKeyOf(p) === pinKey);
-    const msgId = pin?.msgId;
-    if (!pin || !msgId) return;
+    // A thread row is a place in the transcript with no pin behind it: same jump,
+    // resolved through the thread's head message instead of a pin.
+    const msgId = pin?.msgId ?? threadEntryTargets.get(pinKey);
+    if (!msgId) return;
     const index = messages.findIndex((m) => (m.msgId ?? m.walnutMessageId) === msgId);
     if (index < 0) {
       log.warn('session', 'pin jump: message not in the loaded transcript', { sessionId, msgId, pinKey });
@@ -1630,7 +2146,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           log.warn('session', 'pin jump: target row did not render', { sessionId, msgId, index });
           return;
         }
-        if (pin.quote) {
+        if (pin?.quote) {
           // The row may have just been revealed by the window expansion above, so
           // its paint doesn't exist yet — re-derive before asking for the Range.
           quotePaint.relocate();
@@ -1654,7 +2170,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         setTimeout(() => target.classList.remove('user-messages-highlight'), 1500);
       });
     });
-  }, [messages, truncationOffset, sessionId, pinsApi.pins, quotePaint]);
+  }, [messages, truncationOffset, sessionId, pinsApi.pins, quotePaint, threadEntryTargets]);
 
   const jumpBack = useCallback(() => {
     const el = containerRef.current;
@@ -1664,6 +2180,28 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     setCanGoBack(false);
     el.scrollTo({ top, behavior: 'smooth' });
   }, []);
+
+  /**
+   * The outline click, read the way the current view reads places.
+   *
+   * In the node view a thread row is a DESTINATION, not a scroll position — the
+   * timeline it would scroll is not on screen. A pin that is not a thread head
+   * still scrolls, but to a row that has to be visible first: navigate to its
+   * thread, then let the jump reveal and centre it (it already chases two frames,
+   * which is what the freshly filtered rows need to mount).
+   */
+  const handleTocJump = useCallback((pinKey: string) => {
+    if (treeMode) {
+      const entry = tocEntries.find((e) => e.key === pinKey);
+      if (entry?.threadKey) {
+        navigateThread(entry.threadKey);
+        return;
+      }
+      const key = rowThreadKey(entry?.msgId);
+      if (key !== currentKeyRef.current) navigateThread(key);
+    }
+    jumpToPin(pinKey);
+  }, [treeMode, tocEntries, navigateThread, rowThreadKey, jumpToPin]);
 
   // Scroll handler: track whether user is near bottom.
   // Ignores scroll events caused by container resizes (which corrupt isAtBottom).
@@ -2267,6 +2805,83 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return { historyParts: parts, hiddenCount: visibleStart };
   }, [messages, truncationOffset, forkBoundaryIndex]);
 
+  // ── Node view: ONE thread's slice of the SAME parts ────────────────────────
+  // Tree mode renders no rows of its own. It filters the parts the linear view
+  // would render and hands them to the same renderer, which is why merged tool
+  // runs, thinking rows, envelopes, optimistic bubbles and the live stream all
+  // behave identically inside a thread. Building a second pipeline here is how
+  // this feature would quietly lose absorption and the working indicator.
+  const partThreadKey = useCallback((part: HistoryPart): string => {
+    const first = part.kind === 'msg' ? part.m : part.members[0].m;
+    return rowThreadKey(first.msgId ?? first.walnutMessageId);
+  }, [rowThreadKey]);
+
+  /** Turns over the render parts: a user part opens one, every part after it
+   *  belongs to it. The same segmentation the tree does, applied to what is
+   *  rendered, so a collapsed ancestor turn expands as a unit. */
+  const treeTurns = useMemo(() => {
+    const turns: TreeTurn[] = [];
+    if (!treeMode) return turns;
+    for (const part of historyParts) {
+      const first = part.kind === 'msg' ? part.m : part.members[0].m;
+      const rowId = first.msgId ?? first.walnutMessageId;
+      if (part.kind === 'msg' && first.role === 'user') {
+        turns.push({
+          headId: rowId ?? `turn:${turns.length}`,
+          key: rowThreadKey(rowId),
+          question: pinLabelFor(first.text, 'Your message'),
+          parts: [part],
+          rowIds: rowId ? [rowId] : [],
+        });
+        continue;
+      }
+      const turn = turns[turns.length - 1];
+      // Rows before the first user row (session init, hook notices) open no turn:
+      // they are nobody's context, and they are never an ancestor line.
+      if (!turn) continue;
+      turn.parts.push(part);
+      if (part.kind === 'msg') {
+        if (rowId) turn.rowIds.push(rowId);
+        if (!turn.reply && first.role === 'assistant' && (first.text ?? '').trim()) {
+          turn.reply = pinLabelFor(first.text, 'Reply');
+        }
+      } else {
+        for (const member of part.members) {
+          const id = member.m.msgId ?? member.m.walnutMessageId;
+          if (id) turn.rowIds.push(id);
+        }
+      }
+    }
+    return turns;
+  }, [treeMode, historyParts, rowThreadKey]);
+
+  /** Turn head holding a row — how an ancestor knows which of its turns the thread
+   *  below it hangs off. */
+  const turnOfRow = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const turn of treeTurns) {
+      for (const id of turn.rowIds) if (!map.has(id)) map.set(id, turn.headId);
+    }
+    return map;
+  }, [treeTurns]);
+
+  /** Each ancestor's turns up to and including the one the next thread hangs off. */
+  const ancestorSections = useMemo(() => {
+    if (!treeMode) return [] as Array<{ node: ThreadNode; turns: TreeTurn[] }>;
+    return treePath.ancestors
+      .map(({ node, boundaryRow }) => {
+        const boundaryHead = turnOfRow.get(boundaryRow);
+        const turns: TreeTurn[] = [];
+        for (const turn of treeTurns) {
+          if (turn.key !== node.key) continue;
+          turns.push(turn);
+          if (boundaryHead && turn.headId === boundaryHead) break;
+        }
+        return { node, turns };
+      })
+      .filter((section) => section.turns.length > 0);
+  }, [treeMode, treePath, treeTurns, turnOfRow]);
+
   // Pre-group once for both boundary detection and streaming rendering.
   const groupedBlocks = groupStreamingBlocks(blocks, hiddenBlocks);
   const groupedByIndex = new Map<number, GroupedStreamItem>();
@@ -2420,6 +3035,132 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Suppressed whenever the session has visible content — see history-unavailable.ts.
   const historyUnavailable = visibleHistoryUnavailable(error, hasContent);
 
+  /** Thread of an optimistic bubble — its pre-assigned uuid, when it has one. */
+  const optimisticThreadKey = (m: OptimisticMessage): string =>
+    rowThreadKey(m.msgId ?? m.userUuid ?? m.walnutMessageId);
+
+  /**
+   * Where the LIVE stream belongs: the turn of the newest user row, optimistic ones
+   * included (the row that started this turn may not have persisted yet). The
+   * blocks and the working indicator therefore show in exactly one thread — the
+   * one the model is answering in — and a reader sitting in another thread learns
+   * about the reply from that thread's card lighting up.
+   */
+  const streamThreadKey = (() => {
+    if (!treeMode) return ROOT_THREAD_KEY;
+    for (let i = deduped.length - 1; i >= 0; i--) {
+      if (deduped[i].role === 'user') return optimisticThreadKey(deduped[i]);
+    }
+    return threadTree.latestKey;
+  })();
+  const streamVisible = !treeMode || streamThreadKey === currentKey;
+
+  // The current thread's own rows — the SAME parts, filtered by row identity.
+  const visibleHistoryParts = treeMode
+    ? renderedHistoryParts.filter((part) => partThreadKey(part) === currentKey)
+    : renderedHistoryParts;
+  const boundaryRunVisible = !treeMode
+    || (!!boundaryHistoryRun && partThreadKey(boundaryHistoryRun) === currentKey);
+
+  /**
+   * ONE row renderer, called from three places: the linear timeline, the current
+   * thread's turns, and an expanded ancestor turn. Extracted from the JSX map for
+   * exactly that reason — a second copy would be a second set of thread bars,
+   * fork dividers and copy-action rules to keep in sync.
+   */
+  const renderHistoryPart = (part: HistoryPart) => {
+    if (part.kind === 'run') {
+      const first = part.members[0];
+      return (
+        <div
+          key={`mrun-${first.m.msgId ?? first.globalIndex}`}
+          data-msg-index={first.globalIndex}
+          {...threadWrapperProps(first.m.msgId ?? first.m.walnutMessageId, 'session-msg-bare')}
+        >
+          {!part.seeded && forkBoundaryIndex != null && first.globalIndex === forkBoundaryIndex && (
+            <div className="session-fork-divider">
+              <span className="session-fork-divider-label">Forked session starts here</span>
+            </div>
+          )}
+          <MergedHistoryToolRun
+            messages={part.memberMsgs}
+            assistantLabel={assistantLabel}
+            sessionId={sessionId}
+            sessionCwd={sessionCwd}
+            sessionHost={sessionHost}
+            onTaskClick={onTaskClick}
+            onSessionClick={onSessionClick}
+            onFileOpen={onFileOpen}
+          />
+        </div>
+      );
+    }
+    if (part.kind === 'system-run') {
+      const first = part.members[0];
+      return (
+        <div
+          data-msg-index={first.globalIndex}
+          key={`sys-${first.m.msgId ?? first.globalIndex}`}
+          {...threadWrapperProps(first.m.msgId ?? first.m.walnutMessageId, 'session-msg-bare')}
+        >
+          <SystemGroupRun members={part.systemMembers} />
+        </div>
+      );
+    }
+    const { m, globalIndex } = part;
+    // Thread decoration: a row inside a thread gets a coloured gutter bar, and a
+    // user row gets the thread's name above the bubble. Top-level rows (depth 0)
+    // stay exactly as they were — no colour, no tag.
+    const rowId = m.msgId ?? m.walnutMessageId;
+    const rowThread = rowThreadInfo(rowId);
+    const threaded = rowThread && rowThread.depth >= 1 ? rowThread : undefined;
+    const threadNode = threaded ? threadTree.byKey.get(threaded.key) : undefined;
+    return (
+      <div
+        key={m.msgId ?? m.walnutMessageId ?? `${m.role}:${m.timestamp}:${globalIndex}`}
+        data-msg-index={globalIndex}
+        data-message-id={m.msgId ?? m.walnutMessageId}
+        // Read by the quote-pin selection pill, which only has the DOM row it
+        // found the selection in — cheaper than threading the messages array
+        // into an overlay that needs one row's metadata.
+        data-msg-role={m.role}
+        data-msg-ts={m.timestamp}
+        {...threadWrapperProps(rowId)}
+      >
+        {forkBoundaryIndex != null && globalIndex === forkBoundaryIndex && (
+          <div className="session-fork-divider">
+            <span className="session-fork-divider-label">Forked session starts here</span>
+          </div>
+        )}
+        {threaded && threadNode && m.role === 'user' && (
+          <div className="session-msg-thread-tag" title={threadNode.quote?.exact ?? threadNode.label}>
+            <span aria-hidden="true">↳</span>
+            <span className="session-msg-thread-tag-label">{threadNode.quoteLabel ?? threadNode.label}</span>
+          </div>
+        )}
+        <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} showCopyActions={globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+      </div>
+    );
+  };
+
+  /** The branches leaving the thread on screen. */
+  const currentThreadNode = threadTree.byKey.get(currentKey);
+  const childKeys = currentThreadNode?.childKeys ?? NO_CHILD_KEYS;
+
+  // Baseline for each child's "new replies" dot, seeded on first sight so a branch
+  // that already existed does not announce itself, and re-seeded downward when a
+  // /compact shrinks it (or the dot would stick forever). An effect, not the render
+  // body: a render that never commits (StrictMode's double pass, an abandoned
+  // concurrent pass) must not set a baseline the committed view then compares to.
+  useEffect(() => {
+    if (!treeMode) return;
+    for (const key of childKeys) {
+      const rows = rowsPerThread.get(key) ?? 0;
+      const seen = seenRows.current.get(key);
+      if (seen === undefined || rows < seen) seenRows.current.set(key, rows);
+    }
+  }, [treeMode, childKeys, rowsPerThread]);
+
   // Always mount the scroll container so containerRef is available for scroll effects.
   // Remote sessions have a gap between Phase 1 (empty, local streams) and Phase 2 (SSH fetch)
   // where containerRef was previously null, breaking auto-scroll.
@@ -2466,18 +3207,30 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           can't leak from one session into the next. */}
       {!activeTeamTab && sessionId && <WorkflowProgress key={sessionId} sessionId={sessionId} />}
 
-      {/* Main conversation — hidden when a team tab is active */}
-      <div className="session-history" ref={containerRef} onClick={handleContainerClick} style={activeTeamTab ? { display: 'none' } : undefined}>
+      {/* Main conversation — hidden when a team tab is active.
+          Tree mode makes the container focusable so ↑/↓/←/→ can navigate threads;
+          in linear mode it stays exactly as it was (no tab stop, no key handler). */}
+      <div
+        className="session-history"
+        ref={containerRef}
+        onClick={handleContainerClick}
+        data-view-mode={treeMode ? 'tree' : 'linear'}
+        {...(treeMode ? { tabIndex: 0, onKeyDown: handleTreeKeyDown } : {})}
+        style={activeTeamTab ? { display: 'none' } : undefined}
+      >
         {/* Pinned-message outline — sticky in the top-left corner of the timeline,
             collapsed to ticks until hovered. Self-hides with no pins. Lives INSIDE
             the scroll container (like the ↓ button) so it can't stack over the
             panel header or the composer. */}
         <SessionPinnedToc
           entries={tocEntries}
-          onJump={jumpToPin}
+          onJump={handleTocJump}
           onUnpin={pinsApi.unpin}
           canGoBack={canGoBack}
           onBack={jumpBack}
+          {...(threadsApi.canAsk ? { onAskThread: askInThread } : {})}
+          onHoverThread={threadsApi.setHoverThreadKey}
+          {...(treeMode ? { currentThreadKey: currentKey } : {})}
         />
         {/* Quote pins: the pill offered on a text selection, and the popover a
             click on a painted passage opens. Both portal to <body>; they live here
@@ -2491,6 +3244,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               containerRef={containerRef}
               sessionId={sessionId}
               onPin={pinsApi.pinQuote}
+              {...(threadsApi.canAsk ? { onAsk: askAboutQuote } : {})}
             />
             <QuotePinPopover
               containerRef={containerRef}
@@ -2580,71 +3334,67 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               : olderHidden > 0 ? `Load ${olderHidden} earlier messages` : 'Load earlier messages'}
           </button>
         )}
-        {renderedHistoryParts.map((part) => {
-          if (part.kind === 'run') {
-            const first = part.members[0];
-            return (
-              <div
-                key={`mrun-${first.m.msgId ?? first.globalIndex}`}
-                data-msg-index={first.globalIndex}
-                className="session-msg-bare"
-              >
-                {!part.seeded && forkBoundaryIndex != null && first.globalIndex === forkBoundaryIndex && (
-                  <div className="session-fork-divider">
-                    <span className="session-fork-divider-label">Forked session starts here</span>
-                  </div>
-                )}
-                <MergedHistoryToolRun
-                  messages={part.memberMsgs}
-                  assistantLabel={assistantLabel}
-                  sessionId={sessionId}
-                  sessionCwd={sessionCwd}
-                  sessionHost={sessionHost}
-                  onTaskClick={onTaskClick}
-                  onSessionClick={onSessionClick}
-                  onFileOpen={onFileOpen}
-                />
-              </div>
-            );
-          }
-          if (part.kind === 'system-run') {
-            const first = part.members[0];
-            return (
-              <div
-                className="session-msg-bare"
-                data-msg-index={first.globalIndex}
-                key={`sys-${first.m.msgId ?? first.globalIndex}`}
-              >
-                <SystemGroupRun members={part.systemMembers} />
-              </div>
-            );
-          }
-          const { m, globalIndex } = part;
-          return (
-            <div
-              key={m.msgId ?? m.walnutMessageId ?? `${m.role}:${m.timestamp}:${globalIndex}`}
-              data-msg-index={globalIndex}
-              data-message-id={m.msgId ?? m.walnutMessageId}
-              // Read by the quote-pin selection pill, which only has the DOM row it
-              // found the selection in — cheaper than threading the messages array
-              // into an overlay that needs one row's metadata.
-              data-msg-role={m.role}
-              data-msg-ts={m.timestamp}
-            >
-              {forkBoundaryIndex != null && globalIndex === forkBoundaryIndex && (
-                <div className="session-fork-divider">
-                  <span className="session-fork-divider-label">Forked session starts here</span>
+        {/* ── Node view (A): breadcrumb → collapsed ancestors → this thread ──
+            Everything below the breadcrumb is rendered by the SAME row renderer
+            the linear view uses; tree mode only decides WHICH parts reach it. */}
+        {treeMode && treePath.crumbs.length > 0 && (
+          <ThreadBreadcrumb crumbs={treePath.crumbs} onNavigate={navigateThread} />
+        )}
+        {treeMode && ancestorSections.map((section) => (
+          <div
+            key={`anc-${section.node.key}`}
+            className="thread-ancestors"
+            style={section.node.depth === 0
+              ? undefined
+              : ({ ['--thread-hue' as string]: section.node.hue } as React.CSSProperties)}
+          >
+            {section.turns.map((turn) => {
+              const expanded = expandedTurns.has(turn.headId);
+              return (
+                <div key={`anc-turn-${turn.headId}`} className="thread-ancestor-slot">
+                  <ThreadAncestorTurn
+                    question={turn.question}
+                    {...(turn.reply ? { reply: turn.reply } : {})}
+                    expanded={expanded}
+                    onToggle={() => setExpandedTurns((prev) => {
+                      const next = new Set(prev);
+                      if (!next.delete(turn.headId)) next.add(turn.headId);
+                      return next;
+                    })}
+                  />
+                  {expanded && (
+                    <div className="thread-ancestor-rows">
+                      {/* The boundary run has its own render below (it merges the
+                          leading stream tools) — never draw it twice. */}
+                      {turn.parts
+                        .filter((part) => !(mergeBoundary && part === boundaryHistoryRun))
+                        .map(renderHistoryPart)}
+                    </div>
+                  )}
                 </div>
-              )}
-              <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} showCopyActions={globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
-            </div>
-          );
-        })}
-        {mergeBoundary && boundaryHistoryRun && (
+              );
+            })}
+          </div>
+        ))}
+        {/* A thread whose first question has not persisted yet: the passage IS the
+            header, so the branch reads as opened the moment Ask was clicked. */}
+        {treeMode && pendingThread?.quote && (
+          <div
+            className="thread-pending-quote"
+            style={{ ['--thread-hue' as string]: pendingThread.hue } as React.CSSProperties}
+          >
+            {pendingThread.quote.exact}
+          </div>
+        )}
+        {visibleHistoryParts.map(renderHistoryPart)}
+        {boundaryRunVisible && mergeBoundary && boundaryHistoryRun && (
           <div
             key={`boundary-run-${boundaryHistoryRun.members[0].m.msgId ?? boundaryHistoryRun.members[0].globalIndex}`}
             data-msg-index={boundaryHistoryRun.members[0].globalIndex}
-            className="session-msg-bare"
+            {...threadWrapperProps(
+              boundaryHistoryRun.members[0].m.msgId ?? boundaryHistoryRun.members[0].m.walnutMessageId,
+              'session-msg-bare',
+            )}
           >
             {!boundaryHistoryRun.seeded && forkBoundaryIndex != null && boundaryHistoryRun.members[0].globalIndex === forkBoundaryIndex && (
               <div className="session-fork-divider">
@@ -2673,6 +3423,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {timeline.length > 0 && (
           <div className="session-streaming-panel">
             {timeline.map((item, i) => {
+              // Tree mode: a queued bubble shows in ITS thread; the live blocks and
+              // the working indicator show in the thread whose turn they belong to,
+              // as a group (they are one turn's output, so splitting them would
+              // scatter a reply across threads).
+              if (treeMode) {
+                if (item.kind === 'user') {
+                  if (optimisticThreadKey(item.msg) !== currentKey) return null;
+                } else if (!streamVisible) {
+                  return null;
+                }
+              }
               if (boundaryStreamIndices.has(i) || isTransparentStreamItem(item)) return null;
               if (systemRunMember.has(i)) return null;
               const systemRunIdx = systemRunStart.get(i);
@@ -2843,9 +3604,27 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 : m.status === 'received' ? 'session-msg-received'
                 : m.status === 'delivered' ? 'session-msg-delivered'
                 : m.status === 'failed' ? 'session-msg-failed' : '';
+              // An anchored send carries the uuid its anchor was recorded under, so
+              // the bubble wears its thread's gutter bar and name IMMEDIATELY —
+              // the same decoration the persisted row will have, no visible flip
+              // when history absorbs it.
+              const optimisticRowId = m.msgId ?? m.userUuid ?? m.walnutMessageId;
+              const optimisticThread = rowThreadInfo(optimisticRowId);
+              const optimisticNode = optimisticThread && optimisticThread.depth >= 1
+                ? threadTree.byKey.get(optimisticThread.key)
+                : undefined;
+              const optimisticLabel = optimisticNode
+                ? (optimisticNode.quoteLabel ?? optimisticNode.label)
+                : pinLabelFor(anchorByRowId.get(optimisticRowId ?? '')?.quote?.exact, 'this thread');
 
               return (
-                <div key={`u-${m.queueId}`} className={wrapperClass}>
+                <div key={`u-${m.queueId}`} {...threadWrapperProps(optimisticRowId, wrapperClass)}>
+                  {optimisticThread && optimisticThread.depth >= 1 && (
+                    <div className="session-msg-thread-tag" title={optimisticLabel}>
+                      <span aria-hidden="true">↳</span>
+                      <span className="session-msg-thread-tag-label">{optimisticLabel}</span>
+                    </div>
+                  )}
                   <SessionMessage message={m} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
                   <OptimisticImagePreviews images={m.images} />
                   {m.status === 'received' && (
@@ -2882,6 +3661,31 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               );
             })}
           </div>
+        )}
+        {/* Node view: the branches leaving this thread, at the end of it — where a
+            reader arrives after reading, and where the next question is asked. */}
+        {treeMode && (
+          childKeys.length > 0 ? (
+            <div className="thread-child-cards">
+              {childKeys.map((key) => {
+                const child = threadTree.byKey.get(key);
+                if (!child) return null;
+                // Read-only here; the baseline is seeded by the effect above.
+                const rows = rowsPerThread.get(key) ?? 0;
+                const seen = seenRows.current.get(key);
+                return (
+                  <ThreadChildCard
+                    key={key}
+                    label={child.quoteLabel ?? child.label}
+                    turns={child.turnIds.length}
+                    hue={child.hue}
+                    isNew={seen !== undefined && rows > seen}
+                    onClick={() => navigateThread(key)}
+                  />
+                );
+              })}
+            </div>
+          ) : <ThreadChildHint />
         )}
         {/* Floating scroll-to-bottom arrow — sticky to bottom of scroll viewport */}
         <button

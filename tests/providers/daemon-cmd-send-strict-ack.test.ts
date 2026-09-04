@@ -200,6 +200,54 @@ describe('L1.5 daemon cmdSend strict-ack', () => {
         type: 'user',
         message: { role: 'user', content: 'payload-shape-test' },
       })
+      // No uuid was asked for, so the key must be ABSENT (not `null`, not
+      // `undefined`): the CLI mints its own, exactly as before this parameter
+      // existed. An extra key here is a wire change every older CLI would see.
+      expect('uuid' in parsed).toBe(false)
+    } finally {
+      fs.closeSync(readerFd)
+    }
+  })
+
+  // S8b — a pre-assigned uuid rides the SAME envelope as a top-level `uuid`.
+  // Harness contract: the CLI persists the user line under exactly this uuid
+  // (`createUserMessage`: uuid || randomUUID()), which is what lets a client key
+  // metadata to a transcript line before the line exists.
+  it('written payload carries top-level uuid when one is given', async () => {
+    const core = createDaemonCore(ctx.deps)
+    const fifo = makeFifo()
+    const readerFd = fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+    try {
+      ctx.sessions.set('sid', makeTestSession({ pid: 601, pipePath: fifo }))
+      const uuid = '3f2b1a09-8c7d-4e6f-9a5b-0c1d2e3f4a5b'
+      const res = await core.handleSendCommand('sid', 'anchored-send', uuid)
+      expect(res).toEqual({ ok: true })
+
+      const buf = Buffer.alloc(4096)
+      const n = fs.readSync(readerFd, buf, 0, buf.length, null)
+      const parsed = JSON.parse(buf.slice(0, n).toString('utf-8').trim())
+      expect(parsed).toEqual({
+        type: 'user',
+        message: { role: 'user', content: 'anchored-send' },
+        uuid,
+      })
+    } finally {
+      fs.closeSync(readerFd)
+    }
+  })
+
+  it('an empty-string uuid is treated as absent (no uuid key)', async () => {
+    const core = createDaemonCore(ctx.deps)
+    const fifo = makeFifo()
+    const readerFd = fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+    try {
+      ctx.sessions.set('sid', makeTestSession({ pid: 602, pipePath: fifo }))
+      await core.handleSendCommand('sid', 'empty-uuid-send', '')
+
+      const buf = Buffer.alloc(4096)
+      const n = fs.readSync(readerFd, buf, 0, buf.length, null)
+      const parsed = JSON.parse(buf.slice(0, n).toString('utf-8').trim())
+      expect('uuid' in parsed).toBe(false)
     } finally {
       fs.closeSync(readerFd)
     }

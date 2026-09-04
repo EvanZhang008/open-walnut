@@ -88,6 +88,20 @@ still live on the client.
   SHAPE (`collapsed`, container no longer a text node), never by connectivity, and re-derive from
   the passage TEXT — one animation frame, not a debounce, or a click on the passage does nothing
   for as long as the debounce lasts.
+- **Conversation threads are a VIEW over the one linear transcript, never a second data path.**
+  A thread anchor (`SessionRecord.threadAnchors`, PATCH `thread_anchors`) keys a user message by
+  the transcript uuid Walnut PRE-ASSIGNS on the send (`userUuid` on `session:send`; the CLI
+  persists the user line under exactly that uuid, its own stream-json contract), and names the
+  reply it hangs off by that row's msgId (an API `msg_…` id on real transcripts, so never gate a
+  parent on the v4 shape). Everything else is derived: `utils/thread-tree.ts` is the only model
+  (thread key = parent + passage; a sticky follow-up copies the anchor verbatim, which is what
+  keeps it in the same thread), the rail / gutter / `↳` tag in linear mode and the node view in
+  tree mode are two renderers of that tree. Tree mode FILTERS the existing timeline items inside
+  `SessionChatHistory` by row thread; it must never grow a second row renderer or history/stream
+  pipeline. Anything the send adds for the model (the quoted passage, the one-line "Back to the
+  earlier thread about …" re-orientation) is composed into the visible message text
+  (`composeAnchoredText`), never a hidden side channel. Ratchets: `tests/web/thread-tree.test.ts`,
+  `tests/e2e/browser/session-threads.spec.ts`.
 - **The session "/" palette lists what the CLI advertised, not what Walnut found.** Every
   `system/init` line carries `slash_commands` (already filtered by the CLI to what works in `-p`
   mode); `ClaudeCodeSession` captures it and `GET /api/sessions/:id/slash-commands` serves it,

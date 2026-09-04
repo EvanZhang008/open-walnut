@@ -242,6 +242,10 @@ export interface SessionPatchInput {
   output_mode?: unknown;
   /** Full replacement list of pinned messages (the client owns the order). */
   pinned_messages?: unknown;
+  /** Full replacement list of conversation-thread anchors (the client owns the
+   *  order). Same handling as `pinned_messages`: validate or 400, never a
+   *  silent drop. */
+  thread_anchors?: unknown;
 }
 
 /** Hard caps for the pin list. A pin is a navigation aid, not storage: the whole
@@ -259,16 +263,20 @@ const MAX_PIN_QUOTE_CHARS = 2000;
 const MAX_PIN_QUOTE_CONTEXT_CHARS = 64;
 
 /** Validate one `quote` selector. Malformed = 400 for the whole patch, same
- *  posture as every other field here. */
-function normalizePinQuote(value: unknown): import('../types.js').SessionPinnedQuote {
+ *  posture as every other field here. `field` only names the patch key in the
+ *  error text — thread anchors carry the same selector shape as pins. */
+function normalizePinQuote(
+  value: unknown,
+  field = 'pinned_messages',
+): import('../types.js').SessionPinnedQuote {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new SessionControlError('pinned_messages[].quote must be an object', 400);
+    throw new SessionControlError(`${field}[].quote must be an object`, 400);
   }
   const quote = value as Record<string, unknown>;
   const exact = quote.exact;
   if (typeof exact !== 'string' || !exact.trim() || exact.length > MAX_PIN_QUOTE_CHARS) {
     throw new SessionControlError(
-      `pinned_messages[].quote.exact must be a non-empty string (max ${MAX_PIN_QUOTE_CHARS} chars)`, 400,
+      `${field}[].quote.exact must be a non-empty string (max ${MAX_PIN_QUOTE_CHARS} chars)`, 400,
     );
   }
   for (const side of ['prefix', 'suffix'] as const) {
@@ -276,7 +284,7 @@ function normalizePinQuote(value: unknown): import('../types.js').SessionPinnedQ
     if (context !== undefined && context !== null
         && (typeof context !== 'string' || context.length > MAX_PIN_QUOTE_CONTEXT_CHARS)) {
       throw new SessionControlError(
-        `pinned_messages[].quote.${side} must be a string (max ${MAX_PIN_QUOTE_CONTEXT_CHARS} chars)`, 400,
+        `${field}[].quote.${side} must be a string (max ${MAX_PIN_QUOTE_CONTEXT_CHARS} chars)`, 400,
       );
     }
   }
@@ -371,6 +379,74 @@ export function normalizePinnedMessages(value: unknown): import('../types.js').S
   return out;
 }
 
+/** Hard cap on the anchor list. One anchor per anchored turn, so the ceiling is
+ *  "a very long session" rather than a storage budget — but the whole list rides
+ *  every session record read and is diffed in the browser on every refetch, so it
+ *  stays in the pin cap's order of magnitude (each entry can carry a 2000-char
+ *  passage). */
+const MAX_THREAD_ANCHORS = 500;
+/** msgId / parent are transcript uuids (36 chars) — 128 leaves room for any id
+ *  shape the history projection mints without inviting blobs. */
+const MAX_THREAD_ANCHOR_ID_CHARS = 128;
+const THREAD_ANCHOR_SOURCES = new Set(['selection', 'sticky', 'manual']);
+
+/**
+ * Validate + normalize a `thread_anchors` patch. Same posture as
+ * `normalizePinnedMessages`: reject the whole patch (400) rather than silently
+ * dropping entries, because every write PATCHes the WHOLE list and an anchor the
+ * client believes it saved but that vanished on reload is worse than an error.
+ *
+ * Deliberately does NOT dedup: two anchors may legitimately share a `parent`
+ * (two questions about one reply) and even a `msgId` is the client's business to
+ * keep unique — collapsing here would be exactly the silent drop above.
+ */
+export function normalizeThreadAnchors(value: unknown): import('../types.js').SessionThreadAnchor[] {
+  if (!Array.isArray(value)) {
+    throw new SessionControlError('thread_anchors must be an array', 400);
+  }
+  if (value.length > MAX_THREAD_ANCHORS) {
+    throw new SessionControlError(`thread_anchors holds at most ${MAX_THREAD_ANCHORS} entries`, 400);
+  }
+  const out: import('../types.js').SessionThreadAnchor[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new SessionControlError('each thread_anchors entry must be an object', 400);
+    }
+    const entry = raw as Record<string, unknown>;
+    for (const key of ['msgId', 'parent'] as const) {
+      const id = entry[key];
+      if (typeof id !== 'string' || !id.trim() || id.length > MAX_THREAD_ANCHOR_ID_CHARS) {
+        throw new SessionControlError(
+          `thread_anchors[].${key} must be a non-empty string (max ${MAX_THREAD_ANCHOR_ID_CHARS} chars)`, 400,
+        );
+      }
+    }
+    if (typeof entry.source !== 'string' || !THREAD_ANCHOR_SOURCES.has(entry.source)) {
+      throw new SessionControlError(
+        `thread_anchors[].source must be one of: ${[...THREAD_ANCHOR_SOURCES].join(', ')}`, 400,
+      );
+    }
+    // `null` reads as absent rather than malformed (same rationale as pins): some
+    // JSON serializers emit it for an optional field.
+    const quote = entry.quote === undefined || entry.quote === null
+      ? undefined
+      : normalizePinQuote(entry.quote, 'thread_anchors');
+    // An unparseable `at` is REPAIRED to now instead of rejected: the timestamp
+    // only orders the rail, and losing the whole list over a clock quirk on one
+    // entry is the worse failure.
+    const rawAt = typeof entry.at === 'string' ? entry.at : '';
+    const at = rawAt && !Number.isNaN(Date.parse(rawAt)) ? rawAt : new Date().toISOString();
+    out.push({
+      msgId: entry.msgId as string,
+      parent: entry.parent as string,
+      ...(quote ? { quote } : {}),
+      source: entry.source as import('../types.js').SessionThreadAnchor['source'],
+      at,
+    });
+  }
+  return out;
+}
+
 /**
  * Update session record fields. Identical semantics to the web PATCH
  * /api/sessions/:sessionId (validation, archive terminal-state guard, live
@@ -378,7 +454,10 @@ export function normalizePinnedMessages(value: unknown): import('../types.js').S
  * all side effects, so callers can't optimistically merge stale fields.
  */
 export async function patchSession(sessionId: string, input: SessionPatchInput): Promise<SessionRecord> {
-  const { title, activity, human_note, archived, archive_reason, mode, output_mode, pinned_messages } = input;
+  const {
+    title, activity, human_note, archived, archive_reason, mode, output_mode,
+    pinned_messages, thread_anchors,
+  } = input;
 
   if (title !== undefined && (typeof title !== 'string' || title.length > 500)) {
     throw new SessionControlError('title must be a string (max 500 chars)', 400);
@@ -420,6 +499,7 @@ export async function patchSession(sessionId: string, input: SessionPatchInput):
   if (human_note !== undefined) updates.human_note = human_note as string;
   if (output_mode !== undefined) updates.output_mode = output_mode as SessionOutputMode;
   if (pinned_messages !== undefined) updates.pinnedMessages = normalizePinnedMessages(pinned_messages);
+  if (thread_anchors !== undefined) updates.threadAnchors = normalizeThreadAnchors(thread_anchors);
   if (archived !== undefined) {
     updates.archived = archived as boolean;
     if (archived && archive_reason) updates.archive_reason = archive_reason as string;

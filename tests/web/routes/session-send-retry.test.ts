@@ -43,6 +43,7 @@ vi.mock('../../../src/web/ws/handler.js', () => ({
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
 import { registerSessionChatRpc } from '../../../src/web/routes/session-chat.js'
+import { updateConfig } from '../../../src/core/config-manager.js'
 import {
   enqueueMessage, getQueue, markProcessing, revertToPending, parkMessages, resetCache,
 } from '../../../src/core/session-message-queue.js'
@@ -66,6 +67,12 @@ beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
   resetCache()
+  // Pin plain-markdown output mode. This file asserts the enqueued text BYTE for
+  // byte (duplication is the bug), and the default output mode is rich — which
+  // legitimately prefixes a one-time HTML instruction to a session's first send
+  // (core/sessions/output-mode.ts). Pinning it here keeps these assertions about
+  // duplication instead of about the global default.
+  await updateConfig({ session: { output_mode: 'markdown' } })
 
   bus.clear()
   sends = []
@@ -201,5 +208,66 @@ describe('session:send retryOf — retry of a PARKED row', () => {
     const nextBatch = await markProcessing(SID)
     expect(nextBatch).toHaveLength(1)
     expect(nextBatch.map((m) => m.message).join('\n\n')).toBe(TEXT)
+  })
+})
+
+// ── Pre-assigned user-message uuid ──
+//
+// `userUuid` becomes the CLI's own transcript-line uuid (harness contract:
+// stream-json `uuid` → createUserMessage), so a client can key a thread anchor to
+// a line BEFORE the line exists. The RPC is the single entry point, so it is
+// where a malformed value has to be stopped: a v1/v7 uuid, a truncated string, or
+// a number would otherwise reach the FIFO envelope and key an anchor to a line
+// nobody can find.
+describe('session:send userUuid', () => {
+  const V4 = '0189d3f4-6b2a-4c8e-9f1d-2a3b4c5d6e7f'
+
+  it('persists a valid v4 uuid on the queue row', async () => {
+    const res = await callSend({ sessionId: SID, message: TEXT, userUuid: V4 })
+    expect(res.messageId).toBeTruthy()
+
+    const queue = await getQueue(SID)
+    expect(queue).toHaveLength(1)
+    expect(queue[0].userUuid).toBe(V4)
+    // And the drain hands it on unchanged.
+    expect((await markProcessing(SID))[0].userUuid).toBe(V4)
+  })
+
+  it('leaves the row without the key when no userUuid is sent', async () => {
+    await callSend({ sessionId: SID, message: TEXT })
+    expect('userUuid' in (await getQueue(SID))[0]).toBe(false)
+  })
+
+  it('rejects anything that is not a v4 uuid, and enqueues nothing', async () => {
+    const bad = [
+      'not-a-uuid',
+      // v1 (time-based) — version nibble 1.
+      'f47ac10b-58cc-1372-a567-0e02b2c3d479',
+      // v7 — version nibble 7.
+      '0189d3f4-6b2a-7c8e-9f1d-2a3b4c5d6e7f',
+      // v4 shape but an out-of-range variant nibble (must be 8/9/a/b).
+      '0189d3f4-6b2a-4c8e-cf1d-2a3b4c5d6e7f',
+      // Truncated / over-long / decorated.
+      '0189d3f4-6b2a-4c8e-9f1d-2a3b4c5d6e7',
+      `${V4}0`,
+      ` ${V4}`,
+      '',
+      42,
+      null,
+      { uuid: V4 },
+    ]
+    for (const value of bad) {
+      await expect(callSend({ sessionId: SID, message: TEXT, userUuid: value }))
+        .rejects.toThrow(/userUuid must be a v4 UUID/)
+    }
+    // The throw happens before any side effect: nothing queued, nothing emitted.
+    expect(await getQueue(SID)).toHaveLength(0)
+    expect(queued).toHaveLength(0)
+    expect(sends).toHaveLength(0)
+  })
+
+  it('accepts an upper-case v4 uuid (hex case is not identity)', async () => {
+    await callSend({ sessionId: SID, message: TEXT, userUuid: V4.toUpperCase() })
+    expect((await getQueue(SID))[0].userUuid).toBe(V4.toUpperCase())
   })
 })

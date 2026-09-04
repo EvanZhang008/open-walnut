@@ -7,12 +7,25 @@ import type { OptimisticMessage } from '@/components/sessions/SessionChatHistory
 import type { ImageAttachment } from '@/api/chat';
 import { removeBatchMessages, markDeliveredMessages } from '@/components/sessions/optimistic-dedup';
 
+/** Per-send extras that ride the `session:send` RPC. */
+export interface SessionSendOptions {
+  /**
+   * v4 uuid the CLI must persist this user line under (`session:send` →
+   * `QueuedMessage.userUuid` → the stream-json envelope's `uuid`). Pre-assigned by
+   * the caller so a thread anchor can name the transcript row BEFORE it exists —
+   * the harness's own contract (`createUserMessage`: `uuid: (uuid) ||
+   * randomUUID()`), not a Walnut invention. Omit it and the payload is
+   * byte-identical to a plain send.
+   */
+  userUuid?: string;
+}
+
 interface UseSessionSendReturn {
   optimisticMsgs: OptimisticMessage[];
   sendError: string | null;
   /** Resolves true once the message is persisted server-side (RPC ok), false if the RPC rejected. */
-  send: (sessionId: string, message: string, images?: ImageAttachment[]) => Promise<boolean>;
-  interruptSend: (sessionId: string, message: string, images?: ImageAttachment[]) => Promise<boolean>;
+  send: (sessionId: string, message: string, images?: ImageAttachment[], opts?: SessionSendOptions) => Promise<boolean>;
+  interruptSend: (sessionId: string, message: string, images?: ImageAttachment[], opts?: SessionSendOptions) => Promise<boolean>;
   /** Bare turn-stop (no message). Resolves true when the server accepted the interrupt. */
   stopTurn: (sessionId: string) => Promise<boolean>;
   retryFailed: (queueId: string, sessionId: string) => void;
@@ -184,7 +197,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     }
   }, [activeSessionId]);
 
-  const send = useCallback(async (sessionId: string, message: string, images?: ImageAttachment[]): Promise<boolean> => {
+  const send = useCallback(async (sessionId: string, message: string, images?: ImageAttachment[], opts?: SessionSendOptions): Promise<boolean> => {
     setSendError(null);
 
     // Oversized paste → spill to disk over HTTP, send a short file-path pointer
@@ -209,6 +222,11 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       queueId: tempId,
       status: 'pending',
       images,
+      // The uuid the CLI will persist this line under: it is also the id the
+      // thread anchor was just recorded against, so the bubble is a member of
+      // its thread NOW rather than after the next history fetch. Dedup never
+      // reads it (it keys on queueId / walnutMessageId / text).
+      ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
     };
     setOptimisticMsgs((prev) => [...prev, optimistic]);
 
@@ -220,6 +238,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         sessionId,
         message,
         ...(await buildImageRefsPayload(images)),
+        ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
       };
       const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string }>('session:send', rpcPayload);
       if (res?.messageId) {
@@ -244,7 +263,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     }
   }, []);
 
-  const interruptSend = useCallback(async (sessionId: string, message: string, images?: ImageAttachment[]): Promise<boolean> => {
+  const interruptSend = useCallback(async (sessionId: string, message: string, images?: ImageAttachment[], opts?: SessionSendOptions): Promise<boolean> => {
     setSendError(null);
 
     try {
@@ -265,6 +284,9 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       queueId: tempId,
       status: 'pending',
       images,
+      // Same as the plain send path: the pre-assigned uuid puts the bubble in its
+      // thread immediately (see the comment there).
+      ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
     };
     setOptimisticMsgs((prev) => [...prev, optimistic]);
 
@@ -274,6 +296,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         message,
         interrupt: true,
         ...(await buildImageRefsPayload(images)),
+        ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
       };
       const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string }>('session:send', rpcPayload);
       if (res?.messageId) {
@@ -320,10 +343,17 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       m.queueId === queueId ? { ...m, status: 'pending' as const, failedError: undefined, parked: undefined } : m
     ));
 
+    // The pre-assigned user-line uuid rides the retry too: the thread anchor recorded
+    // at send time is keyed by it, so a retry that minted (or omitted) a uuid would
+    // land the message at the top level while the chip still promised a thread.
+    // Harmless when the server re-drains the original row (it already carries it).
     buildImageRefsPayload(failedMsg.images)
       .then((imagePayload) => wsClient.sendRpc<{ messageId: string; dedupText?: string }>(
         'session:send',
-        { sessionId, message: failedMsg.text, retryOf: queueId, ...imagePayload },
+        {
+          sessionId, message: failedMsg.text, retryOf: queueId, ...imagePayload,
+          ...(failedMsg.userUuid ? { userUuid: failedMsg.userUuid } : {}),
+        },
       ))
       .then((res) => {
         if (res?.messageId) {

@@ -6,6 +6,15 @@ import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNote
 import { OutputModePill } from './OutputModePill';
 import { useSessionPins } from '@/hooks/useSessionPins';
 import { SessionPinsContext } from '@/contexts/SessionPinsContext';
+import { useComposerThreadAnchor, useSessionThreads, useSessionViewMode } from '@/hooks/useSessionThreads';
+import { SessionThreadsContext, type SessionThreadsApi } from '@/contexts/SessionThreadsContext';
+import {
+  ROOT_THREAD_KEY, composeAnchoredText, emptyThreadTree, hueForAnchor, newUserUuid,
+  threadKeyOf, type ComposerThreadAnchor, type ThreadTree,
+} from '@/utils/thread-tree';
+import { pinLabelFor } from '@/hooks/useSessionPins';
+import { ThreadAnchorChip } from './ThreadAnchorChip';
+import { SessionViewToggle } from './SessionThreadNav';
 import { SessionRewindContext, type SessionRewindApi } from '@/contexts/SessionRewindContext';
 import { SessionRewindDialog } from './SessionRewindDialog';
 import { SessionFileExplorer } from './SessionFileExplorer';
@@ -601,6 +610,120 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // Pinned messages (the timeline outline) + the rewind entry point. Both reach
   // the memoized transcript rows through context, never props.
   const pinsApi = useSessionPins(sessionId, session?.pinnedMessages);
+  // ── Conversation threads ──
+  // The anchors are record state (here); the TREE needs the loaded transcript, so
+  // the timeline derives it and publishes it back through the context. This panel
+  // needs it for the composer chip and for the one question the send path asks:
+  // "is the anchored thread where the model currently is?"
+  const threadsStore = useSessionThreads(sessionId, session?.threadAnchors);
+  const { composerAnchor, setComposerAnchor } = useComposerThreadAnchor(sessionId);
+  const { viewMode, setViewMode } = useSessionViewMode(sessionId);
+  const [hoverThreadKey, setHoverThreadKey] = useState<string | null>(null);
+  const [threadTree, setThreadTree] = useState<ThreadTree>(emptyThreadTree);
+  const threadTreeRef = useRef(threadTree);
+  threadTreeRef.current = threadTree;
+  // The node view's current thread. It lives HERE, not in the timeline that
+  // navigates, because the composer's anchor is derived from it (see
+  // `effectiveAnchor`) — one value read by the chip, the send path and the
+  // back-reference line.
+  const [currentThreadKey, setCurrentThreadKey] = useState<string>(ROOT_THREAD_KEY);
+  // Session switch: never carry a thread key across (its labels belong to another
+  // transcript). The remounted timeline re-derives where to land.
+  useEffect(() => { setCurrentThreadKey(ROOT_THREAD_KEY); }, [sessionId]);
+  // Focus-only composer request (Ask about a passage / Ask here). Separate from
+  // prefillNonce on purpose: the quote must NOT be written into the draft — it
+  // rides the chip and is composed at send time — so the user's typed text stays.
+  const [composerFocusNonce, setComposerFocusNonce] = useState(0);
+  const requestComposerFocus = useCallback(() => {
+    setComposerFocusNonce((n) => n + 1);
+    // REVEAL the composer first: while the chat column is collapsed it is
+    // `display:none` and focus() lands on <body>, losing every keystroke (same
+    // trap as handleSelectCode).
+    autoCollapsed.current = false;
+    setChatCollapsed(false);
+  }, []);
+  /**
+   * The anchor the NEXT send actually uses — and the only anchor any surface reads.
+   *
+   * LINEAR mode: the stored sticky chip, unchanged (it is the user's standing
+   * answer to "what am I asking about", and it survives scrolling anywhere).
+   *
+   * TREE mode: a VIEW of the node on screen. The screen already says which thread
+   * you are in, so storing a second, independently mutable answer is how the chip
+   * and the view come to disagree (2026-09-04: the view was inside a thread and the
+   * composer showed no chip at all, making the send target ambiguous — the one
+   * thing the node view exists to remove). Nothing writes the stored anchor on
+   * entering tree mode or on navigating; `×` on the chip navigates to the top
+   * level, which IS "clear" here.
+   *
+   * The one exception: an Ask that has not been sent yet. Its passage lives in the
+   * gesture, not in the tree, and it is what will CREATE the child thread — so
+   * while it is pending for exactly the thread on screen, it wins.
+   */
+  const effectiveAnchor = useMemo<ComposerThreadAnchor | null>(() => {
+    if (viewMode !== 'tree') return composerAnchor;
+    if (composerAnchor?.source === 'selection'
+      && threadKeyOf(composerAnchor) === currentThreadKey
+      && !threadTree.byKey.has(currentThreadKey)) {
+      return composerAnchor;
+    }
+    if (currentThreadKey === ROOT_THREAD_KEY) return null;
+    const node = threadTree.byKey.get(currentThreadKey);
+    if (node?.parent) {
+      return {
+        parent: node.parent,
+        ...(node.quote ? { quote: node.quote } : {}),
+        source: 'manual',
+        label: node.quoteLabel ?? node.label,
+      };
+    }
+    // A thread whose first question has not persisted yet: the anchor recorded at
+    // send time is still what names it.
+    const recorded = threadsStore.anchors.find(
+      (a) => a?.msgId && a.parent && threadKeyOf(a) === currentThreadKey,
+    );
+    if (!recorded) return null;
+    return {
+      parent: recorded.parent,
+      ...(recorded.quote ? { quote: recorded.quote } : {}),
+      source: 'manual',
+      label: pinLabelFor(recorded.quote?.exact, 'this thread'),
+    };
+  }, [viewMode, composerAnchor, currentThreadKey, threadTree, threadsStore.anchors]);
+  const effectiveAnchorRef = useRef(effectiveAnchor);
+  effectiveAnchorRef.current = effectiveAnchor;
+
+  /** `×` on the chip. In tree mode "no anchor" and "top level" are the same state,
+   *  so clearing navigates there; the stored selection Ask is dropped either way. */
+  const clearComposerAnchor = useCallback(() => {
+    setComposerAnchor(null);
+    if (viewMode === 'tree') setCurrentThreadKey(ROOT_THREAD_KEY);
+  }, [setComposerAnchor, viewMode]);
+
+  const threadsApi = useMemo<SessionThreadsApi>(() => ({
+    anchors: threadsStore.anchors,
+    add: threadsStore.add,
+    remove: threadsStore.remove,
+    tree: threadTree,
+    setTree: setThreadTree,
+    composerAnchor,
+    setComposerAnchor,
+    hoverThreadKey,
+    setHoverThreadKey,
+    viewMode,
+    setViewMode,
+    currentThreadKey,
+    setCurrentThreadKey,
+    // This panel HAS a session record to PATCH — but an anchor is only meaningful
+    // where the engine persists the uuid we pre-assign for the user line (the
+    // stream-json contract). An ACP worker does not, so every anchor there would
+    // point at nothing: no Ask button rather than a button that quietly fails.
+    canAsk: !!sessionId && !engineUi.isAcp,
+  }), [
+    threadsStore.anchors, threadsStore.add, threadsStore.remove, threadTree,
+    composerAnchor, setComposerAnchor, hoverThreadKey, viewMode, setViewMode,
+    currentThreadKey, sessionId, engineUi.isAcp,
+  ]);
   const [rewindTarget, setRewindTarget] = useState<{ msgId: string; label?: string } | null>(null);
   // Bumped after an IN-PLACE rewind: the transcript was truncated under the
   // same session id, so the timeline (SessionChatHistory) is remounted via its
@@ -608,6 +731,30 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // cleared first (see onRewound) so the remount's initial load can't adopt the
   // pre-rewind copy.
   const [rewindEpoch, setRewindEpoch] = useState(0);
+  /**
+   * Rewind is a TIME operation, and in the node view that is easy to forget: the
+   * screen shows one thread, so "drops the 12 messages after it" reads as twelve
+   * messages of THIS thread. Count how many of them are in other threads and let
+   * the dialog say so. Only asked while the node view is on (the timeline already
+   * shows every thread the rewind would touch) and only over rows this browser has
+   * loaded — an approximation of the server's count, which is why the dialog caps
+   * it at that number.
+   */
+  const rewindOtherThreads = useMemo(() => {
+    if (viewMode !== 'tree' || !rewindTarget) return 0;
+    const rowIdOf = (m: { msgId?: string; walnutMessageId?: string }) => m.msgId ?? m.walnutMessageId;
+    const at = historyMessages.findIndex((m) => rowIdOf(m) === rewindTarget.msgId);
+    if (at < 0) return 0;
+    const targetKey = threadTree.byRow.get(rewindTarget.msgId)?.key;
+    if (targetKey === undefined) return 0;
+    let other = 0;
+    for (let i = at + 1; i < historyMessages.length; i++) {
+      const id = rowIdOf(historyMessages[i]);
+      const key = id ? threadTree.byRow.get(id)?.key : undefined;
+      if (key !== undefined && key !== targetKey) other++;
+    }
+    return other;
+  }, [viewMode, rewindTarget, historyMessages, threadTree]);
   const rewindApi = useMemo<SessionRewindApi>(() => ({
     // Rewind needs the engine's own checkpointing (--resume-session-at +
     // rewind_files); engines without it hide the button instead of failing on
@@ -1119,6 +1266,68 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   const routedNoticeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(routedNoticeTimerRef.current), []);
 
+  /**
+   * One send path for the composer, thread anchor included.
+   *
+   * With no chip this is byte-identical to a plain send. With one:
+   *
+   *  1. a v4 uuid is minted for the user line and handed to the CLI through the
+   *     RPC (`userUuid`), so the anchor can name the transcript row before it
+   *     exists — no text matching, ever;
+   *  2. the outbound text gets whatever the MODEL needs to follow along (the
+   *     quoted passage, or one line naming the thread being returned to), all of
+   *     it visible in the bubble;
+   *  3. the anchor is recorded optimistically and KEPT if the send fails: the failed
+   *     bubble still carries the uuid, Retry re-sends under it (useSessionSend), and
+   *     an anchor whose row never materialises is invisible by definition, whereas
+   *     removing it would file the retried message at the top level while the chip
+   *     still promised a thread;
+   *  4. in LINEAR mode the chip flips to 'sticky' and stays, because the next
+   *     message almost always belongs to the same thread; the × is how you leave.
+   *     In TREE mode there is nothing to flip — the anchor is derived from the
+   *     thread on screen (`effectiveAnchor`), and the only thing a send consumes is
+   *     a pending Ask, whose passage must not be quoted a second time.
+   *
+   * The anchor read here is ALWAYS `effectiveAnchor`: the composed text (including
+   * the "(Back to the earlier thread …)" line, which still applies whenever the
+   * anchored thread is not `tree.latestKey`) has to be the one the chip promised.
+   *
+   * Without `crypto.randomUUID` (a plain-http host) we send WITHOUT a uuid and
+   * record no anchor: the message must still go, and a made-up id would only
+   * produce an anchor that points at nothing.
+   */
+  const sendAnchored = useCallback(async (
+    message: string, images: ImageAttachment[] | undefined, interrupt: boolean,
+  ): Promise<boolean> => {
+    const anchor = effectiveAnchorRef.current;
+    const dispatch = interrupt ? interruptSend : send;
+    if (!anchor) return dispatch(sessionId, message, images);
+    const userUuid = newUserUuid();
+    const text = composeAnchoredText(message, anchor, threadTreeRef.current.latestKey);
+    if (userUuid) {
+      threadsStore.add({
+        msgId: userUuid,
+        parent: anchor.parent,
+        ...(anchor.quote ? { quote: anchor.quote } : {}),
+        source: anchor.source,
+        at: new Date().toISOString(),
+      });
+    } else {
+      log.warn('session-panel', 'no crypto.randomUUID — sending without a thread anchor', { sessionId });
+    }
+    // Linear: sticky from here on, so a follow-up with no selection stays in this
+    // thread. Tree: the derived anchor already keeps the composer in the thread on
+    // screen, so the only stored state is the pending Ask — dropped on success, so
+    // the passage is quoted exactly once, and KEPT on failure so Retry still has it.
+    if (viewMode === 'tree') {
+      const ok = await dispatch(sessionId, text, images, userUuid ? { userUuid } : undefined);
+      if (ok && composerAnchor) setComposerAnchor(null);
+      return ok;
+    }
+    if (anchor.source !== 'sticky') setComposerAnchor({ ...anchor, source: 'sticky' });
+    return dispatch(sessionId, text, images, userUuid ? { userUuid } : undefined);
+  }, [composerAnchor, viewMode, interruptSend, send, sessionId, setComposerAnchor, threadsStore]);
+
   const handleSend = useCallback(async (message: string, images?: ImageAttachment[]) => {
     const directive = parseSessionDirective(message);
     if (directive) {
@@ -1149,12 +1358,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
         }
       }
     }
-    return send(sessionId, message, images);
-  }, [sessionId, send]);
+    return sendAnchored(message, images, false);
+  }, [sessionId, sendAnchored]);
 
   const handleInterruptSend = useCallback((message: string, images?: ImageAttachment[]) => {
-    return interruptSend(sessionId, message, images);
-  }, [sessionId, interruptSend]);
+    return sendAnchored(message, images, true);
+  }, [sendAnchored]);
 
   const handleStopTurn = useCallback(() => {
     void stopTurn(sessionId);
@@ -1207,6 +1416,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   return (
     <PlanContentContext.Provider value={planContentValue}>
     <SessionPinsContext.Provider value={pinsApi}>
+    <SessionThreadsContext.Provider value={threadsApi}>
     <SessionRewindContext.Provider value={rewindApi}>
     <SessionPanelErrorBoundary sessionId={sessionId} onClose={onClose}>
       {FullscreenBackdrop}
@@ -1215,6 +1425,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
           sessionId={sessionId}
           msgId={rewindTarget.msgId}
           {...(rewindTarget.label ? { label: rewindTarget.label } : {})}
+          {...(rewindOtherThreads > 0 ? { otherThreadsDropped: rewindOtherThreads } : {})}
           onClose={() => setRewindTarget(null)}
           onRewound={(result) => {
             setRewindTarget(null);
@@ -1608,6 +1819,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               }
             </div>
             <div className="session-panel-title-meta">
+              {/* Linear ⇄ Tree. Only offered once the conversation HAS a branch —
+                  a session with no threads has nothing for the node view to show,
+                  so the control would be a switch to an identical screen. Stays
+                  visible while tree mode is on, or it could not be turned off. */}
+              {!loading && (threadTree.threads.length > 1 || viewMode === 'tree') && (
+                <SessionViewToggle mode={viewMode} onChange={setViewMode} />
+              )}
               {!loading && session?.provider === 'embedded' && (
                 <span
                   className="session-panel-badge"
@@ -1914,7 +2132,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             // Same nonce that drives the prefill: asking about a selection must
             // also SHOW the end of the conversation, or the composer fills in
             // while the timeline still sits wherever the user last scrolled.
-            scrollToBottomNonce={prefillNonce}
+            // The thread-anchor path (focus, no prefill) is the same intent, so
+            // both counters feed it — their sum still only ever moves forward.
+            scrollToBottomNonce={prefillNonce + composerFocusNonce}
+            onRequestComposerFocus={requestComposerFocus}
           />
         </div>
 
@@ -1972,7 +2193,19 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               </button>
             </div>
           )}
+          {/* Thread anchor — the one visible answer to "where will this message
+              go?". Inside the composer overlay (like the notes bar) so the tracked
+              --sp-composer-h includes it; outside ChatInput, which owns only the
+              input card itself. */}
+          {effectiveAnchor && (
+            <ThreadAnchorChip
+              anchor={effectiveAnchor}
+              hue={hueForAnchor(threadTree, effectiveAnchor)}
+              onClear={clearComposerAnchor}
+            />
+          )}
           <ChatInput
+            focusNonce={composerFocusNonce}
             controlsSlot={session ? (() => {
               // Mode toggle uses session.mode only (not planCompleted) — planCompleted
               // is a separate flag meaning "plan was produced", it shouldn't lock the toggle.
@@ -2079,6 +2312,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
       </div>
     </SessionPanelErrorBoundary>
     </SessionRewindContext.Provider>
+    </SessionThreadsContext.Provider>
     </SessionPinsContext.Provider>
     </PlanContentContext.Provider>
   );

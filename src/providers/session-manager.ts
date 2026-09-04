@@ -71,6 +71,13 @@ export interface TransportStartOptions {
   cwd: string
   /** Initial message to send */
   message: string
+  /**
+   * Pre-assigned v4 uuid for the initial message's user line (the stream-json
+   * `uuid` the CLI persists it under). Optional: absent ⇒ the daemon writes the
+   * same envelope it always did and the CLI mints its own uuid. See
+   * core/session-message-queue.ts QueuedMessage.userUuid.
+   */
+  uuid?: string
   /** True when resuming an existing session (--resume) */
   resume?: boolean
   /** True when forking a session (--fork-session) */
@@ -168,8 +175,11 @@ export interface SessionManager {
   /**
    * Write a follow-up message via the FIFO pipe (stream-json format).
    * Returns true if written successfully, false if pipe is broken.
+   *
+   * `opts.uuid` — pre-assigned v4 uuid for this user line, forwarded into the
+   * stream-json envelope. Absent ⇒ envelope unchanged (CLI mints its own).
    */
-  writeMessage(message: string): Promise<boolean> | boolean
+  writeMessage(message: string, opts?: { uuid?: string }): Promise<boolean> | boolean
 
   /**
    * Write raw JSON to the FIFO (no stream-json wrapping).

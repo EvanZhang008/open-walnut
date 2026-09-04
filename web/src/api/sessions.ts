@@ -359,7 +359,7 @@ export interface WorkflowProgressSnapshot {
   }[];
 }
 
-export async function updateSession(sessionId: string, updates: { title?: string; human_note?: string; archived?: boolean; archive_reason?: string; mode?: string; output_mode?: import('@open-walnut/core').SessionOutputMode; pinned_messages?: import('@/types/session').SessionPinnedMessage[] }): Promise<SessionRecord> {
+export async function updateSession(sessionId: string, updates: { title?: string; human_note?: string; archived?: boolean; archive_reason?: string; mode?: string; output_mode?: import('@open-walnut/core').SessionOutputMode; pinned_messages?: import('@/types/session').SessionPinnedMessage[]; thread_anchors?: import('@/types/session').SessionThreadAnchor[] }): Promise<SessionRecord> {
   const res = await apiPatch<{ session: SessionRecord }>(`/api/sessions/${sessionId}`, updates);
   seedSessionStatus(res.session, 'rest:session');
   seedSessionTitle(res.session);

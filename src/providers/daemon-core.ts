@@ -221,8 +221,17 @@ export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
    * takes 2–7s before it starts draining stdin, so a full FIFO must be retried
    * with an async continuation (bounded by fifoWriteDeadlineMs) instead of the
    * old 500ms sync budget that reaped a healthy booting process.
+   *
+   * `uuid` — OPTIONAL pre-assigned v4 uuid the caller wants the CLI to persist
+   * this user line under (harness contract: stream-json `uuid` → the transcript
+   * line's uuid). Absent ⇒ the envelope carries no `uuid` key, byte-identical to
+   * every payload written before this parameter existed.
    */
-  handleSendCommand: (sid: string | undefined, message: string | undefined) => Promise<SendResult>
+  handleSendCommand: (
+    sid: string | undefined,
+    message: string | undefined,
+    uuid?: string,
+  ) => Promise<SendResult>
   /**
    * Same as handleSendCommand but writes `raw` to the FIFO verbatim without
    * the `{type:"user",...}` wrapping. Used for control_response messages from
@@ -677,7 +686,11 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
    * session_dead / precheck-dead / ENXIO / EAGAIN / partial / OK); adapters
    * own the FIFO write path (provided via writeFifoFn) and the wire dispatch.
    */
-  async function handleSendCommand(sid: string | undefined, message: string | undefined): Promise<SendResult> {
+  async function handleSendCommand(
+    sid: string | undefined,
+    message: string | undefined,
+    uuid?: string,
+  ): Promise<SendResult> {
     if (!sid || !message) return { error: 'send: missing sid or message' }
 
     const session = sessions.get(sid)
@@ -699,7 +712,14 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     }
 
     try {
-      const payload = JSON.stringify({ type: 'user', message: { role: 'user', content: message } })
+      // `uuid` is spread, never written as an explicit `undefined`: JSON.stringify
+      // would drop it either way, but keeping the key conditional makes the
+      // "absent ⇒ identical bytes" contract visible at the write site.
+      const payload = JSON.stringify({
+        type: 'user',
+        message: { role: 'user', content: message },
+        ...(uuid ? { uuid } : {}),
+      })
       const buf = Buffer.from(payload + '\n')
       const result = await chainFifoWrite(sid, session, buf)
       if (result === 'ok') {

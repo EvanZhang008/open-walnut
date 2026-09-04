@@ -2363,9 +2363,14 @@ function cmdAcpSubscribe(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
 
 // ── Start a Claude session ──
 async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
-  const { sid, args, cwd, message, resume, mode } = cmd as {
-    sid: string; args: string[]; cwd: string; message?: string; resume?: boolean; mode?: string
+  const { sid, args, cwd, message, resume, mode, uuid } = cmd as {
+    sid: string; args: string[]; cwd: string; message?: string; resume?: boolean
+    mode?: string
+    /** Optional pre-assigned v4 uuid for the INITIAL message's user line. Absent
+     *  on every older client ⇒ envelope unchanged. Keep in sync with daemon-source.ts. */
+    uuid?: string
   }
+  const initialUuid = typeof uuid === 'string' && uuid ? uuid : undefined
   // `message` is OPTIONAL: an empty/absent message spawns the CLI without writing
   // any user turn to the FIFO — the process emits `init` (+ SessionStart hook, fresh
   // settings/skills/MCP load) then blocks on stdin, idle. This is the "restart to
@@ -2400,7 +2405,9 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
       let oldAlive = false
       try { process.kill(existing.pid, 0); oldAlive = true } catch {}
       if (oldAlive) {
-        const sendResult = await core.handleSendCommand(sid, message)
+        // Live-adopt: the start's initial message is delivered through the FIFO
+        // instead of a respawn, so it must carry the same pre-assigned uuid.
+        const sendResult = await core.handleSendCommand(sid, message, initialUuid)
         if (sendResult.ok) {
           if (mode) existing.mode = mode as SessionMode
           // Hand out a COMPLETE-line boundary, never a raw stat().size: this
@@ -2627,6 +2634,9 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
     const payload = JSON.stringify({
       type: 'user',
       message: { role: 'user', content: message },
+      // Optional pre-assigned user-line uuid (see `initialUuid` above). Spread so
+      // an absent uuid leaves these bytes exactly as they were.
+      ...(initialUuid ? { uuid: initialUuid } : {}),
     })
     fs.writeSync(pipeFd, Buffer.from(payload + '\n'))
   }
@@ -3778,13 +3788,16 @@ function cmdAttach(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
 // Logic lives in daemon-core.handleSendCommand (strict-ack). This wrapper
 // only maps the SendResult envelope onto the WS reply format.
 async function cmdSend(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
-  const { sid, message } = cmd as { sid: string; message: string }
+  // `uuid` (optional): the pre-assigned v4 uuid the client wants the CLI to
+  // persist this user line under. Older clients never send it and the envelope is
+  // then unchanged. Keep in sync with daemon-source.ts.
+  const { sid, message, uuid } = cmd as { sid: string; message: string; uuid?: string }
   // A real send means someone (the user, a task hook, the Mac) is driving this
   // session now — drop any pending auto-retry so we never inject behind them.
   // The retry's own delivery does NOT come through here (it writes the FIFO
   // directly / goes via cmdBridgeResume), so this can't cancel itself.
   cancelTurnRetry(sid, 'superseded-by-send')
-  const result = await core.handleSendCommand(sid, message)
+  const result = await core.handleSendCommand(sid, message, typeof uuid === 'string' ? uuid : undefined)
   if ('error' in result) return sendError(ws, id, result.error)
   sendOk(ws, id, result as unknown as Record<string, unknown>)
 }
