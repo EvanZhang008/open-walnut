@@ -951,7 +951,11 @@ export interface RewindPreview {
   deletions?: number;
   messageUuid: string;
   messageLabel?: string;
+  /** Messages leaving the conversation, the target INCLUDED (a rewind goes back
+   *  to just before it was sent, and its text returns to the composer). */
   droppedMessages: number;
+  /** The target's text, which the composer restores for editing. */
+  restoredPrompt?: string;
   filesUnavailableReason?: 'session_not_live' | 'engine_unsupported';
 }
 
@@ -966,6 +970,9 @@ export interface RewindResult {
   title: string;
   host?: string;
   files?: { canRewind: boolean; error?: string; filesChanged?: string[]; insertions?: number; deletions?: number; skippedReason?: string };
+  /** The rewound message's text — the composer restores it so the human can edit
+   *  and resend (mirrors the CLI's own /rewind). */
+  restoredPrompt?: string;
   sourceArchived: boolean;
 }
 

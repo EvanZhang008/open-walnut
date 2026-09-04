@@ -24,8 +24,13 @@ import { encodeProjectPathCore } from '../../src/providers/session-changes-core.
 import {
   probeTranscriptRewindHostLocal,
   commitAnchorOf,
+  resumeAnchorBefore,
+  resumeFactsOf,
+  targetQueueKeys,
   DEFAULT_MAX_DEAD_UUIDS,
+  type RewindTranscriptLine,
 } from '../../src/providers/transcript-rewind-core.js';
+import { computeCliLoadedChain } from '../../src/core/transcript-chain.js';
 
 const CWD = '/proj/rewind-probe';
 let claudeHome: string;
@@ -119,6 +124,161 @@ describe('probeTranscriptRewindHostLocal — chain membership (the 409 gate)', (
   });
 });
 
+describe('probeTranscriptRewindHostLocal — the resume anchor (rewind is EXCLUSIVE)', () => {
+  /** The one-line reason this whole block exists: `--resume-session-at` keeps the
+   *  message it names, and a rewind means "back to before I sent that". The CLI's
+   *  own /rewind slices exclusively and puts the message back in the input box, so
+   *  the flag is handed the message BEFORE the target. Reported live: the rewound
+   *  message stayed in the model's context and the human's edit landed after it. */
+  it('answers with the chain message just BEFORE the target', async () => {
+    const t = transcript()
+      .user('u1', 'first ask').assistant('a1', 'first reply')
+      .user('u2', 'second ask').assistant('a2', 'second reply');
+    await write('s-anchor-basic', t);
+
+    const out = (await probe('s-anchor-basic', { uuid: 'u2' }))!;
+    expect(out.onChain).toBe(true);
+    expect(out.resumeAnchorUuid).toBe('a1');
+  });
+
+  it('reports null when the target is the FIRST message the CLI would load', async () => {
+    // Nothing before it to resume at, so the caller refuses instead of shipping
+    // a flag value the CLI would reject.
+    await write('s-anchor-first', transcript().user('u1', 'first ask').assistant('a1', 'reply'));
+    expect((await probe('s-anchor-first', { uuid: 'u1' }))!.resumeAnchorUuid).toBeNull();
+  });
+
+  it('omits the anchor for an OFF-chain target (that refusal comes first)', async () => {
+    const t = transcript()
+      .user('u1', 'pre-compact').assistant('a1', 'reply')
+      .compactBoundary('cb', { logicalParentUuid: 'a1' })
+      .user('u2', 'post-compact');
+    await write('s-anchor-offchain', t);
+
+    const out = (await probe('s-anchor-offchain', { uuid: 'u1' }))!;
+    expect(out.onChain).toBe(false);
+    expect(out.resumeAnchorUuid).toBeUndefined();
+  });
+
+  it('takes the compact boundary itself as the anchor for the first post-compact ask', async () => {
+    const t = transcript()
+      .user('u1', 'pre-compact')
+      .compactBoundary('cb', { logicalParentUuid: 'u1' })
+      .user('u2', 'post-compact').assistant('a2', 'reply');
+    await write('s-anchor-boundary', t);
+
+    expect((await probe('s-anchor-boundary', { uuid: 'u2' }))!.resumeAnchorUuid).toBe('cb');
+  });
+
+  // ── The dangerous direction ── the CLI resolves the flag against the messages
+  // it has ALREADY deserialized, and deserialization DROPS some assistant
+  // messages. Naming one of those makes the CLI exit 1 at respawn, i.e. a dead
+  // session behind a committed rewind. Each case below is one of the three
+  // filters (utils/messages.ts), and the answer must skip past the casualty.
+  it('skips an assistant message whose only tool_use never got a result', async () => {
+    // filterUnresolvedToolUses — the shape a turn interrupted mid-tool-call leaves.
+    const t = transcript()
+      .user('u1', 'first ask').assistant('a1', 'first reply')
+      .toolUse('x1', 'tool-1', { msgId: 'msg_orphan' })
+      .from('x1').user('u2', 'second ask');
+    await write('s-anchor-unresolved', t);
+
+    expect((await probe('s-anchor-unresolved', { uuid: 'u2' }))!.resumeAnchorUuid).toBe('a1');
+  });
+
+  it('keeps a tool_use assistant whose result DID land', async () => {
+    const t = transcript()
+      .user('u1', 'first ask')
+      .toolUse('x1', 'tool-1', { msgId: 'msg_ok' })
+      .toolResult('r1', 'tool-1', 'output', { parent: 'x1' })
+      .from('r1').user('u2', 'second ask');
+    await write('s-anchor-resolved', t);
+
+    // r1 (the tool_result user line) is itself the nearest survivor.
+    expect((await probe('s-anchor-resolved', { uuid: 'u2' }))!.resumeAnchorUuid).toBe('r1');
+  });
+
+  it('skips an orphaned thinking-only assistant message', async () => {
+    // filterOrphanedThinkingOnlyMessages — a turn cancelled during thinking.
+    const t = transcript()
+      .user('u1', 'first ask').assistant('a1', 'first reply')
+      .meta({
+        type: 'assistant', uuid: 'think1', parentUuid: 'a1',
+        message: { id: 'msg_think', role: 'assistant', content: [{ type: 'thinking', thinking: 'hmm' }] },
+      })
+      .from('think1').user('u2', 'second ask');
+    await write('s-anchor-thinking', t);
+
+    expect((await probe('s-anchor-thinking', { uuid: 'u2' }))!.resumeAnchorUuid).toBe('a1');
+  });
+
+  it('keeps a thinking-only message whose sibling by message.id carries real content', async () => {
+    // The CLI merges those two by message.id, so it does NOT drop this one.
+    const t = transcript()
+      .user('u1', 'first ask')
+      .meta({
+        type: 'assistant', uuid: 'think2', parentUuid: 'u1',
+        message: { id: 'msg_pair', role: 'assistant', content: [{ type: 'thinking', thinking: 'hmm' }] },
+      })
+      .from('think2').assistant('a1', 'the answer', { msgId: 'msg_pair' })
+      .user('u2', 'second ask');
+    await write('s-anchor-thinking-pair', t);
+
+    expect((await probe('s-anchor-thinking-pair', { uuid: 'u2' }))!.resumeAnchorUuid).toBe('a1');
+    // And the thinking line itself is a legal anchor for the message after it.
+    expect((await probe('s-anchor-thinking-pair', { uuid: 'a1' }))!.resumeAnchorUuid).toBe('think2');
+  });
+
+  it('skips a whitespace-only assistant message', async () => {
+    // filterWhitespaceOnlyAssistantMessages — "\n\n" emitted before a cancelled turn.
+    const t = transcript()
+      .user('u1', 'first ask').assistant('a1', 'first reply')
+      .meta({
+        type: 'assistant', uuid: 'blank', parentUuid: 'a1',
+        message: { id: 'msg_blank', role: 'assistant', content: [{ type: 'text', text: '\n\n' }] },
+      })
+      .from('blank').user('u2', 'second ask');
+    await write('s-anchor-blank', t);
+
+    expect((await probe('s-anchor-blank', { uuid: 'u2' }))!.resumeAnchorUuid).toBe('a1');
+  });
+
+  it('skips a candidate whose uuid appears TWICE in the file', async () => {
+    // This uuid becomes the recorded cut's start, and computeRewindDeadSet
+    // refuses a duplicated cut anchor — taking it would leave the abandoned
+    // branch on screen. (Real source: a preserved-segment compact re-appends
+    // earlier lines under their original uuids.)
+    const t = transcript()
+      .user('u1', 'first ask').assistant('a1', 'first reply')
+      .meta({
+        type: 'assistant', uuid: 'a1', parentUuid: 'u1',
+        message: { id: 'msg_dup', role: 'assistant', content: [{ type: 'text', text: 'duplicate line' }] },
+      })
+      .from('a1').user('u2', 'second ask');
+    await write('s-anchor-dup', t);
+
+    expect((await probe('s-anchor-dup', { uuid: 'u2' }))!.resumeAnchorUuid).toBe('u1');
+  });
+
+  it('resumeAnchorBefore is the SAME helper the server fallback calls', async () => {
+    // The server reads the file itself on a host whose daemon predates the
+    // capability; both sides must name the same anchor or a rewind would mean
+    // two different things depending on the daemon's age.
+    const t = transcript()
+      .user('u1', 'first ask').assistant('a1', 'first reply').user('u2', 'second ask');
+    await write('s-anchor-parity', t);
+    const lines = t.text().split('\n').filter(Boolean).map((l) => {
+      const raw = JSON.parse(l) as Record<string, unknown>;
+      const resume = resumeFactsOf(raw);
+      return resume ? { ...raw, resume } : raw;
+    }) as RewindTranscriptLine[];
+
+    const chain = computeCliLoadedChain(lines).chain;
+    expect(resumeAnchorBefore(lines, chain, 'u2').uuid).toBe('a1');
+    expect((await probe('s-anchor-parity', { uuid: 'u2' }))!.resumeAnchorUuid).toBe('a1');
+  });
+});
+
 describe('probeTranscriptRewindHostLocal — the commit anchor', () => {
   it('reports the LAST tree line plus the enqueue keys trailing it', async () => {
     const t = transcript().user('u1', 'first').user('u2', 'second').user('u3', 'third');
@@ -153,6 +313,89 @@ describe('probeTranscriptRewindHostLocal — the commit anchor', () => {
     const local = commitAnchorOf(t.lines);
     expect(out.lastUuidAtCommit).toBe(local.lastUuidAtCommit);
     expect(out.trailingQueueKeys).toEqual(local.trailingQueueKeys);
+  });
+});
+
+describe('the rewound message\'s own enqueue echo (targetQueueKeys)', () => {
+  // Every message Walnut sends reaches the CLI through the FIFO, so the CLI logs
+  // a queue-operation enqueue for it and the real user line a couple of lines
+  // later; the history parser shows ONE row. The enqueue is written when the
+  // message ARRIVES, so it sits BEFORE the user line — and before the cut anchor,
+  // outside the (cut, last] region. Measured live on 2026-09-03: kill the user
+  // line without this and the rewound message is STILL on screen, re-rendered
+  // from its orphaned enqueue.
+  it('claims the enqueue that sits just before the target user line', async () => {
+    const t = transcript().user('u1', 'first').assistant('a1', 'ok');
+    t.meta({ type: 'queue-operation', operation: 'enqueue', sessionId: 's-echo', content: 'second ask' });
+    t.meta({ type: 'queue-operation', operation: 'dequeue', sessionId: 's-echo' });
+    // The CLI writes a system line between the enqueue and the user line, and the
+    // system line is what a rewind resumes AT — which is exactly why the enqueue
+    // ends up on the far side of the cut.
+    t.from('a1').user('u2', 'second ask');
+    await write('s-echo', t);
+
+    const out = (await probe('s-echo', { uuid: 'u2' }))!;
+    expect(out.targetQueueKeys).toHaveLength(1);
+    expect(out.targetQueueKeys![0].endsWith(' second ask')).toBe(true);
+  });
+
+  it('claims the whole RUN when the CLI drained several queued sends into one prompt', async () => {
+    const t = transcript().user('u1', 'first').assistant('a1', 'ok');
+    t.meta({ type: 'queue-operation', operation: 'enqueue', sessionId: 's-batch', content: 'part one' });
+    t.meta({ type: 'queue-operation', operation: 'enqueue', sessionId: 's-batch', content: 'part two' });
+    t.from('a1').user('u2', 'part one\npart two');
+    await write('s-batch', t);
+
+    const out = (await probe('s-batch', { uuid: 'u2' }))!;
+    expect(out.targetQueueKeys).toHaveLength(2);
+    expect(out.targetQueueKeys!.map((k) => k.split(' ').pop())).toEqual(['one', 'two']);
+  });
+
+  it('claims the CLOSEST match, leaving an identical earlier send\'s row alive', async () => {
+    // "continue" twice: the earlier enqueue belongs to a LIVE row, and suppressing
+    // it by text alone would delete a message the human never rewound.
+    const t = transcript();
+    t.meta({ type: 'queue-operation', operation: 'enqueue', sessionId: 's-dup', content: 'continue' });
+    t.from(null).user('u1', 'continue');
+    t.from('u1').assistant('a1', 'ok');
+    t.meta({ type: 'queue-operation', operation: 'enqueue', sessionId: 's-dup', content: 'continue' });
+    t.from('a1').user('u2', 'continue');
+    await write('s-dup', t);
+
+    const out = (await probe('s-dup', { uuid: 'u2' }))!;
+    expect(out.targetQueueKeys).toHaveLength(1);
+    // The SECOND enqueue (the one whose timestamp is later), not the first.
+    const enqueues = t.lines.filter((l) => (l as { type?: string }).type === 'queue-operation');
+    const lastTs = (enqueues[enqueues.length - 1] as { timestamp?: string }).timestamp;
+    expect(out.targetQueueKeys![0].startsWith(lastTs!)).toBe(true);
+  });
+
+  it('claims nothing when the target has no enqueue echo (a message typed into the CLI itself)', async () => {
+    const t = transcript().user('u1', 'first').assistant('a1', 'ok').user('u2', 'second');
+    await write('s-noecho', t);
+    expect((await probe('s-noecho', { uuid: 'u2' }))!.targetQueueKeys).toEqual([]);
+  });
+
+  it('is omitted entirely when no uuid was asked about', async () => {
+    const t = transcript().user('u1', 'first');
+    t.meta({ type: 'queue-operation', operation: 'enqueue', sessionId: 's-nouuid', content: 'first' });
+    await write('s-nouuid', t);
+    expect((await probe('s-nouuid'))!.targetQueueKeys).toBeUndefined();
+  });
+
+  it('targetQueueKeys is the SAME helper the server fallback calls on raw lines', async () => {
+    // The daemon keeps only the ASKED-ABOUT line's text (slimming is what lets a
+    // whale transcript fit in memory); the server parses raw lines and reads the
+    // text off message.content. Both must claim the same key.
+    const t = transcript().user('u1', 'first').assistant('a1', 'ok');
+    t.meta({ type: 'queue-operation', operation: 'enqueue', sessionId: 's-parity', content: 'second ask' });
+    t.from('a1').user('u2', 'second ask');
+    await write('s-parity', t);
+
+    const out = (await probe('s-parity', { uuid: 'u2' }))!;
+    const local = targetQueueKeys(t.lines as RewindTranscriptLine[], 'u2');
+    expect(out.targetQueueKeys).toEqual(local);
+    expect(local).toHaveLength(1);
   });
 });
 

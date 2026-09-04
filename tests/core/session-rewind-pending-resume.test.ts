@@ -5,6 +5,10 @@
  *   inPlaceRewinds        the DISPLAY filter's input — {uuid, lastUuidAtCommit,
  *                         at}, appended per rewind, replayed against the file at
  *                         every read (see tests/core/transcript-chain.test.ts).
+ *                         `uuid` is the RESUME ANCHOR (the chain message just
+ *                         BEFORE the one the human clicked), because a rewind
+ *                         goes back to before that message was sent — so the
+ *                         dead region starts at the anchor and swallows it.
  *   pendingResumeSessionAt  pure SPAWN plumbing — re-sent as --resume-session-at
  *                         on every cold resume until the first completed turn,
  *                         so a CLI death in that window cannot resume the
@@ -45,8 +49,12 @@ vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader());
 /** Session records live in a plain map; every write is captured verbatim. */
 const records = new Map<string, Record<string, unknown>>();
 const patches: Array<{ sessionId: string; patch: Record<string, unknown> }> = [];
+const created: Array<Record<string, unknown>> = [];
 vi.mock('../../src/core/session-tracker.js', () => ({
   getSessionByClaudeId: vi.fn(async (sessionId: string) => records.get(sessionId)),
+  createSessionRecord: vi.fn(async (
+    sessionId: string, taskId: string, project: string, cwd: string, extra: Record<string, unknown>,
+  ) => { created.push({ sessionId, taskId, project, cwd, ...extra }); }),
   updateSessionRecord: vi.fn(async (sessionId: string, patch: Record<string, unknown>) => {
     patches.push({ sessionId, patch });
     const rec = records.get(sessionId);
@@ -71,9 +79,16 @@ vi.mock('../../src/providers/daemon-connection.js', async (importOriginal) => ({
 
 /** Only the history lookup of resolveRewindTarget is faked; the rest is real. */
 let historyMessages: Array<{ msgId: string; role: string; text: string }> = [];
+/** patchSession calls (the archive of a fork's source lands here). */
+const { lifecyclePatches } = vi.hoisted(() => ({
+  lifecyclePatches: [] as Array<{ sessionId: string; patch: Record<string, unknown> }>,
+}));
 vi.mock('../../src/core/sessions/session-lifecycle.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   readProviderSessionHistory: vi.fn(async () => ({ messages: historyMessages })),
+  patchSession: vi.fn(async (sessionId: string, patch: Record<string, unknown>) => {
+    lifecyclePatches.push({ sessionId, patch });
+  }),
 }));
 
 import { CLAUDE_HOME } from '../../src/constants.js';
@@ -85,6 +100,7 @@ import type { InPlaceRewindCut } from '../../src/core/types.js';
 
 const tmpBase = CLAUDE_HOME as string;
 const CWD = '/proj/pending-resume';
+const U0 = '0199aa01-0000-4000-8000-000000000000';
 const U1 = '0199aa01-0000-4000-8000-000000000001';
 const U2 = '0199aa01-0000-4000-8000-000000000002';
 const U3 = '0199aa01-0000-4000-8000-000000000003';
@@ -100,6 +116,8 @@ beforeEach(async () => {
   await fsp.mkdir(tmpBase, { recursive: true });
   records.clear();
   patches.length = 0;
+  lifecyclePatches.length = 0;
+  created.length = 0;
   historyMessages = [];
   probeConn.value = null;
   vi.restoreAllMocks();
@@ -126,6 +144,33 @@ async function writeTranscript(sessionId: string, uuids: string[]): Promise<void
 }
 
 describe('in-place rewind commit', () => {
+  it('captures the rewound message\'s OWN enqueue echo on the cut, reading the file itself', async () => {
+    // Walnut sends every message through the CLI's FIFO, so the CLI logs a
+    // queue-operation enqueue for it and the user line a couple of lines later,
+    // and the history parser shows ONE row. That enqueue sits BEFORE the user
+    // line, hence before the cut anchor, hence outside the (cut, last] region —
+    // so it has to ride the cut record or the rewound message renders forever
+    // from its orphaned echo (measured live 2026-09-03).
+    const sid = 'rw-commit-echo';
+    records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude' });
+    historyMessages = [
+      { msgId: U1, role: 'user', text: 'message 0' },
+      { msgId: U2, role: 'user', text: 'second ask' },
+    ];
+    const t = transcript().user(U1, 'message 0');
+    t.meta({ type: 'queue-operation', operation: 'enqueue', sessionId: sid, content: 'second ask' });
+    t.from(U1).user(U2, 'second ask');
+    await writeFixture(sid, t);
+
+    await rewindSessionToMessage(sid, { messageUuid: U2, mode: 'in-place' });
+
+    const cut = patches[0].patch.inPlaceRewinds![0];
+    expect(cut.uuid).toBe(U1);
+    expect(cut.trailingQueueKeys).toHaveLength(1);
+    expect(cut.trailingQueueKeys![0].endsWith(' second ask')).toBe(true);
+  });
+
+
   it('records the cut (anchor read off the file) AND the spawn flag, then respawns in place', async () => {
     const sid = 'rw-commit';
     records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude', taskId: 'task-1', title: 'A session' });
@@ -147,10 +192,15 @@ describe('in-place rewind commit', () => {
     // never be swept into the cut.
     expect(patches).toHaveLength(1);
     expect(patches[0].sessionId).toBe(sid);
-    expect(patches[0].patch.pendingResumeSessionAt).toBe(U2);
+    // Both anchors are the CLI's own view: the cut STARTS at U1, the message
+    // just before the rewound one, so U2 itself is inside the dead region and
+    // `--resume-session-at U1` gives the CLI a conversation that ends before it.
+    expect(patches[0].patch.pendingResumeSessionAt).toBe(U1);
     expect(patches[0].patch.inPlaceRewinds).toEqual([
-      { uuid: U2, lastUuidAtCommit: U3, at: expect.any(String) },
+      { uuid: U1, lastUuidAtCommit: U3, at: expect.any(String) },
     ]);
+    // The rewound message rides back to the composer to edit and resend.
+    expect(result.restoredPrompt).toBe('second');
     const at = (patches[0].patch.inPlaceRewinds as Array<{ at: string }>)[0].at;
     expect(Number.isNaN(Date.parse(at))).toBe(false);
     // No line offsets and no fingerprints: both anchors are uuids, resolved fresh
@@ -164,18 +214,19 @@ describe('in-place rewind commit', () => {
     // first branch's replacement, but the first cut is what hides the original
     // abandoned turns.
     const sid = 'rw-again';
-    const first = { uuid: U2, lastUuidAtCommit: U3, at: '2026-08-30T00:00:00.000Z' };
+    const first = { uuid: U1, lastUuidAtCommit: U3, at: '2026-08-30T00:00:00.000Z' };
     records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude', inPlaceRewinds: [first] });
     historyMessages = [
+      { msgId: U0, role: 'user', text: 'zeroth' },
       { msgId: U1, role: 'user', text: 'first' },
       { msgId: U2, role: 'user', text: 'second' },
     ];
-    await writeTranscript(sid, [U1, U2, U3]);
+    await writeTranscript(sid, [U0, U1, U2, U3]);
 
     await rewindSessionToMessage(sid, { messageUuid: U1, mode: 'in-place' });
     expect(patches[0].patch.inPlaceRewinds).toEqual([
       first,
-      { uuid: U1, lastUuidAtCommit: U3, at: expect.any(String) },
+      { uuid: U0, lastUuidAtCommit: U3, at: expect.any(String) },
     ]);
   });
 
@@ -227,9 +278,44 @@ describe('in-place rewind commit', () => {
 
     const result = await rewindSessionToMessage(sid, { messageUuid: U2, mode: 'in-place' });
     expect(result.status).toBe('rewound');
+    // The chain's first message here is the compact boundary, so THAT is what
+    // the rewind resumes at — the post-compact ask it precedes is dropped.
     expect(patches[0].patch.inPlaceRewinds).toEqual([
-      { uuid: U2, lastUuidAtCommit: U3, at: expect.any(String) },
+      { uuid: '0199aa01-0000-4000-8000-0000000000cb', lastUuidAtCommit: U3, at: expect.any(String) },
     ]);
+  });
+
+  it('refuses with 409 when there is nothing BEFORE the message to resume from', async () => {
+    // A rewind ends the conversation just before the target, so the CLI needs a
+    // preceding message to resume at. The session's very first ask has none —
+    // refuse with a reason instead of committing a cut and respawning a CLI that
+    // would exit 1 on an unresolvable flag.
+    const sid = 'rw-first-message';
+    records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude' });
+    historyMessages = [{ msgId: U1, role: 'user', text: 'the very first ask' }];
+    await writeTranscript(sid, [U1, U2]);
+
+    await expect(rewindSessionToMessage(sid, { messageUuid: U1, mode: 'in-place' }))
+      .rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('nothing before it to go back to') });
+    expect(patches).toEqual([]);
+    expect(sessionRunner.reinitialize).not.toHaveBeenCalled();
+  });
+
+  it('the PREVIEW counts the target itself and hands its text back for the composer', async () => {
+    // The dialog says what leaves the conversation, and a rewind takes the
+    // message being rewound with it — it returns to the input box to edit.
+    const sid = 'rw-preview-count';
+    records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude' });
+    historyMessages = [
+      { msgId: U1, role: 'user', text: 'first' },
+      { msgId: U2, role: 'user', text: 'the ask being taken back' },
+      { msgId: U3, role: 'user', text: 'third' },
+    ];
+    await writeTranscript(sid, [U1, U2, U3]);
+
+    const preview = await previewSessionRewind(sid, U2);
+    expect(preview.droppedMessages).toBe(2);              // U2 itself + U3
+    expect(preview.restoredPrompt).toBe('the ask being taken back');
   });
 
   it('refuses a message id the CLI could never resolve (no transcript uuid)', async () => {
@@ -290,8 +376,10 @@ describe('in-place rewind commit', () => {
 
     const result = await rewindSessionToMessage(sid, { messageUuid: HEAD, mode: 'in-place' });
     expect(result.status).toBe('rewound');
+    // Relinked, HEAD's chain predecessor is the summary line — resuming there
+    // ends the conversation just before the preserved ask, as it should.
     expect((patches[0].patch.inPlaceRewinds as InPlaceRewindCut[])[0]).toMatchObject({
-      uuid: HEAD, lastUuidAtCommit: U3,
+      uuid: 'sum-1', lastUuidAtCommit: U3,
     });
   });
 
@@ -350,6 +438,10 @@ describe('the host-local rewind probe (capability rewind-probe-v1)', () => {
     lineCount: 3, leafUuid: U3, lastUuidAtCommit: U3, trailingQueueKeys: [], ...over,
   });
 
+  /** A gate reply: on-chain, with the resume anchor the daemon computed. */
+  const gateReply = (anchor: string | null = U1, over: Record<string, unknown> = {}) =>
+    probeReply({ onChain: true, resumeAnchorUuid: anchor, ...over });
+
   /** A transcript too big for the reader's ceiling, set below. */
   async function writeOversized(sid: string): Promise<void> {
     const t = transcript();
@@ -368,21 +460,50 @@ describe('the host-local rewind probe (capability rewind-probe-v1)', () => {
     const sid = 'rw-probe-both';
     records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude' });
     historyMessages = [{ msgId: U2, role: 'user', text: 'second' }];
-    const send = daemonAnswering(probeReply({ onChain: true, trailingQueueKeys: ['2026-08-30T00:00:09.000Z queued mid-turn'] }));
+    const send = daemonAnswering(gateReply(U1, {
+      trailingQueueKeys: ['2026-08-30T00:00:09.000Z queued mid-turn'],
+      // The rewound message's OWN enqueue echo, which sits before the cut.
+      targetQueueKeys: ['2026-08-30T00:00:05.000Z second'],
+    }));
 
     const result = await rewindSessionToMessage(sid, { messageUuid: U2, mode: 'in-place' });
 
     expect(result.status).toBe('rewound');
+    // Both groups of uuid-less enqueues ride the cut record: the ones trailing
+    // the anchor AND the target's own echo. Miss the second and the message the
+    // human just rewound away stays on screen (measured live 2026-09-03).
     expect(patches[0].patch.inPlaceRewinds).toEqual([{
-      uuid: U2, lastUuidAtCommit: U3, at: expect.any(String),
-      trailingQueueKeys: ['2026-08-30T00:00:09.000Z queued mid-turn'],
+      uuid: U1, lastUuidAtCommit: U3, at: expect.any(String),
+      trailingQueueKeys: [
+        '2026-08-30T00:00:09.000Z queued mid-turn',
+        '2026-08-30T00:00:05.000Z second',
+      ],
     }]);
-    // Two RPCs: the gate asks about the uuid, the commit asks only for the anchor.
+    // Two RPCs, both naming the rewind point: the gate needs it for the chain
+    // check, the commit needs it to find that message's enqueue echo.
     expect(send).toHaveBeenCalledTimes(2);
     expect(send.mock.calls[0][0]).toBe('transcript.rewindProbe');
     expect(send.mock.calls[0][1]).toMatchObject({ sid, cwd: CWD, uuid: U2 });
-    expect(send.mock.calls[1][1].uuid).toBeUndefined();
+    expect(send.mock.calls[1][1]).toMatchObject({ sid, cwd: CWD, uuid: U2 });
     expect(sessionRunner.reinitialize).toHaveBeenCalledWith(sid);
+  });
+
+  it('falls back to the read when the daemon answers the GATE but not the anchor', async () => {
+    // The auto-upgrade window: a daemon that speaks rewind-probe-v1 but predates
+    // the anchor half returns onChain with no resumeAnchorUuid FIELD. Reading
+    // that as "no anchor" would 409 every rewind on that host until it upgrades,
+    // so an absent field falls through to the file (an explicit null does not).
+    const sid = 'rw-probe-oldanchor';
+    records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude' });
+    historyMessages = [{ msgId: U2, role: 'user', text: 'second' }];
+    await writeTranscript(sid, [U1, U2, U3]);
+    daemonAnswering(probeReply({ onChain: true }));
+
+    const result = await rewindSessionToMessage(sid, { messageUuid: U2, mode: 'in-place' });
+    expect(result.status).toBe('rewound');
+    expect(patches[0].patch.inPlaceRewinds).toEqual([
+      { uuid: U1, lastUuidAtCommit: U3, at: expect.any(String) },
+    ]);
   });
 
   it('refuses an off-chain uuid on the probe\'s word alone (409, nothing mutated)', async () => {
@@ -408,7 +529,7 @@ describe('the host-local rewind probe (capability rewind-probe-v1)', () => {
     await rewindSessionToMessage(sid, { messageUuid: U2, mode: 'in-place' });
     expect(send).not.toHaveBeenCalled();
     expect(patches[0].patch.inPlaceRewinds).toEqual([
-      { uuid: U2, lastUuidAtCommit: U3, at: expect.any(String) },
+      { uuid: U1, lastUuidAtCommit: U3, at: expect.any(String) },
     ]);
   });
 
@@ -423,7 +544,7 @@ describe('the host-local rewind probe (capability rewind-probe-v1)', () => {
 
     await rewindSessionToMessage(sid, { messageUuid: U2, mode: 'in-place' });
     expect(patches[0].patch.inPlaceRewinds).toEqual([
-      { uuid: U2, lastUuidAtCommit: U3, at: expect.any(String) },
+      { uuid: U1, lastUuidAtCommit: U3, at: expect.any(String) },
     ]);
   });
 
@@ -455,7 +576,7 @@ describe('the host-local rewind probe (capability rewind-probe-v1)', () => {
     historyMessages = [{ msgId: U2, role: 'user', text: 'second' }];
     await writeOversized(sid);
     process.env.WALNUT_MAX_FILE_READ_BYTES = '2048';
-    daemonAnswering(probeReply({ onChain: true }), new Error('daemon socket closed'));
+    daemonAnswering(gateReply(U1), new Error('daemon socket closed'));
 
     await expect(rewindSessionToMessage(sid, { messageUuid: U2, mode: 'in-place' }))
       .rejects.toMatchObject({ statusCode: 503 });
@@ -501,5 +622,59 @@ describe('pendingResumeSessionAt threading', () => {
     runnerInternals.clearPendingResumeSessionAt(sid);
     await new Promise((r) => setTimeout(r, 20));
     expect(patches).toEqual([]);
+  });
+});
+
+describe('fork mode rewinds to the same point as in-place', () => {
+  it('spawns the copy at the ANCHOR and hands the message back for the composer', async () => {
+    // Both modes mean the same thing to the human ("take me back to before I
+    // sent that"), so the copy resumes at the anchor too — and the fork's
+    // inherited-ancestor cut (cutAncestorHistoryAtRewindPoint, inclusive of this
+    // uuid) then drops the rewound message from the copy's history as well.
+    const sid = 'rw-fork';
+    records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude', taskId: 'task-9', title: 'Forkable' });
+    historyMessages = [
+      { msgId: U1, role: 'user', text: 'first' },
+      { msgId: U2, role: 'user', text: 'the ask being taken back' },
+      { msgId: U3, role: 'user', text: 'third' },
+    ];
+    await writeTranscript(sid, [U1, U2, U3]);
+
+    const result = await rewindSessionToMessage(sid, { messageUuid: U2, mode: 'fork' });
+
+    expect(result.mode).toBe('fork');
+    expect(result.sessionId).not.toBe(sid);
+    expect(result.restoredPrompt).toBe('the ask being taken back');
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({ forkedFromSessionId: sid, rewoundAtMessageUuid: U1 });
+    // A fork records no in-place cut: its own transcript starts truncated.
+    expect(patches.some((p) => 'inPlaceRewinds' in p.patch)).toBe(false);
+  });
+
+  it('keepSource leaves the source conversation on the board (what "into a copy" promises)', async () => {
+    // The dialog's copy option says "This conversation stays as it is", and the
+    // fork path archives the source by DEFAULT (it used to BE the rewind, so the
+    // source really was the abandoned branch). The flag is what makes the promise
+    // true — without it the conversation the human chose to keep disappears.
+    const sid = 'rw-fork-keep';
+    records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude', taskId: 'task-10' });
+    historyMessages = [
+      { msgId: U1, role: 'user', text: 'first' },
+      { msgId: U2, role: 'user', text: 'second' },
+    ];
+    await writeTranscript(sid, [U1, U2]);
+
+    const kept = await rewindSessionToMessage(sid, { messageUuid: U2, mode: 'fork', keepSource: true });
+    expect(kept.sourceArchived).toBe(false);
+    expect(lifecyclePatches.some((p) => p.sessionId === sid && p.patch.archived === true)).toBe(false);
+
+    // Without the flag the same fork DOES archive it — so the flag is what the
+    // dialog's promise rests on, not a default it happens to inherit.
+    const sid2 = 'rw-fork-archive';
+    records.set(sid2, { sessionId: sid2, cwd: CWD, engine: 'claude', taskId: 'task-11' });
+    await writeTranscript(sid2, [U1, U2]);
+    const archived = await rewindSessionToMessage(sid2, { messageUuid: U2, mode: 'fork' });
+    expect(archived.sourceArchived).toBe(true);
+    expect(lifecyclePatches.some((p) => p.sessionId === sid2 && p.patch.archived === true)).toBe(true);
   });
 });

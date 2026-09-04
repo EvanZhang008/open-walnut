@@ -1725,11 +1725,15 @@ export interface InPlaceRewindCut {
   lastUuidAtCommit: string;
   /** ISO commit time — for humans/logs only, never for filtering. */
   at: string;
-  /** Identity keys (`queueEnqueueKey`) of queue-operation enqueue lines sitting
-   *  AFTER `lastUuidAtCommit` at commit time. Queue lines carry no uuid, so a
-   *  pending enqueue trailing the last tree line falls outside the uuid-anchored
-   *  region — captured here at commit and unioned into the read-time dead keys,
-   *  or the rewound-away message re-renders as a phantom Pattern-B row. */
+  /** Identity keys (`queueEnqueueKey`) of the queue-operation enqueue lines the
+   *  abandoned branch owns but no uuid-anchored region can reach, captured at
+   *  commit and unioned into the read-time dead keys. Queue lines carry no uuid,
+   *  so both groups fall outside the region: the ones sitting AFTER
+   *  `lastUuidAtCommit` (a message queued mid-turn, rewound before the CLI
+   *  drained it) and the echo of the rewound message ITSELF, which the CLI logged
+   *  when the message arrived and therefore sits BEFORE the cut
+   *  (transcript-rewind-core.ts targetQueueKeys). Without them the rewound-away
+   *  message re-renders as a phantom Pattern-B row. */
   trailingQueueKeys?: string[];
 }
 

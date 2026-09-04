@@ -275,10 +275,13 @@ test.describe('Session outline, message time, and rewind', () => {
     await expect(dialog).toHaveClass(/app-modal/)
     await expect(dialog.locator('.app-modal-actions .app-modal-btn.primary')).toHaveCount(1)
 
-    // The dry run reports the blast radius: how many messages get dropped. The
-    // DEFAULT is an in-place rewind, so the copy says they leave THIS conversation
-    // (not that a new session is spawned / this one archived).
-    await expect(dialog.locator('.app-modal-message')).toContainText(/\d+ later messages? will be dropped from this conversation/)
+    // The dry run reports the blast radius. The DEFAULT is an in-place rewind, so
+    // the copy says the conversation goes back (not that a new session is spawned
+    // / this one archived) — and that the message itself returns to the input box,
+    // which is what a rewind means (the CLI's own /rewind does the same).
+    await expect(dialog.locator('.app-modal-message'))
+      .toContainText(/goes back to just before this message, dropping it and the \d+ messages? after it/)
+    await expect(dialog.locator('.app-modal-message')).toContainText(/text goes back to the input box/)
 
     // The fixture session has no live CLI, so the file half is unavailable — the
     // FILES row (first) must be OFF and disabled, with the reason spelled out.
@@ -302,7 +305,13 @@ test.describe('Session outline, message time, and rewind', () => {
     // Toggling "into a copy" flips the copy to the fork wording and relabels the
     // button — the two modes must read differently before the user commits.
     await copyInput.check()
-    await expect(dialog).toContainText(/continues in a new session; this one stays as it is/)
+    await expect(dialog.locator('.app-modal-message'))
+      .toContainText(/A copy of this conversation picks up just before this message/)
+    // "this one stays as it is" belongs to the checkbox's hint, and ONLY there:
+    // the message repeating it verbatim two lines apart read as filler.
+    await expect(dialog.locator('.app-modal-message')).not.toContainText(/stays as it is/)
+    await expect(dialog.locator('.rewind-dialog-option', { hasText: 'into a copy' }))
+      .toContainText(/This conversation stays as it is/)
     await expect(dialog.getByRole('button', { name: 'Rewind into a copy', exact: true })).toBeVisible()
 
     // Cancel leaves the session exactly as it was — nothing was rewound.

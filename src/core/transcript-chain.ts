@@ -346,7 +346,8 @@ export interface RewindDeadSetResult {
   droppedCount: number;
   /** Identity keys (`queueEnqueueKey`) of the queue-operation enqueue lines
    *  found INSIDE resolved dead regions, plus each resolved cut's commit-time
-   *  `trailingQueueKeys`. Used ONLY to suppress queue-operation enqueue echoes
+   *  `trailingQueueKeys` (which also carries the rewound message's own echo —
+   *  that one sits BEFORE the cut). Used ONLY to suppress enqueue echoes
    *  of rewound-away messages — never to decide tree-line deadness. Identity,
    *  not a time window: file order is not time order, and a [min,max] window
    *  measurably deleted live pre-cut rows on real transcripts. */
@@ -449,8 +450,10 @@ export function computeRewindDeadSet(
         queueDeadKeys.add(queueEnqueueKey(line));
       }
     }
-    // Enqueues that trailed the commit-time anchor (uuid-less, so outside any
-    // uuid-anchored region) — captured at commit, applied here.
+    // Enqueues the branch owns but this region cannot reach (uuid-less, so
+    // outside any uuid-anchored region): the ones that trailed the commit-time
+    // anchor, and the rewound message's own echo, which the CLI wrote BEFORE the
+    // cut. Both captured at commit, applied here.
     for (const key of cut.trailingQueueKeys ?? []) queueDeadKeys.add(key);
   }
 

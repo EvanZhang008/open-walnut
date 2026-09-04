@@ -19,7 +19,8 @@ import { log } from '@/utils/log';
  *    terminal's /rewind calls "restore code"). Only offered when the live CLI has
  *    a checkpoint for this message; otherwise the row is disabled with the reason.
  *  - into a COPY: continue the rewound conversation as a new session and leave
- *    this one untouched.
+ *    this one untouched (so it sends `keepSource` — the fork path archives the
+ *    source by default, which is the opposite of what this option promises).
  */
 
 interface SessionRewindDialogProps {
@@ -39,17 +40,26 @@ function splitPath(p: string): { dir: string; base: string } {
   return i < 0 ? { dir: '', base: p } : { dir: p.slice(0, i + 1), base: p.slice(i + 1) };
 }
 
+/**
+ * A rewind goes back to just BEFORE the message was sent: the message itself and
+ * everything after it leave the conversation, and its text returns to the input
+ * box to edit and resend. `droppedMessages` already counts the target.
+ */
 function describeDrop(preview: RewindPreview, intoCopy: boolean): string {
-  const n = preview.droppedMessages;
-  const noun = n === 1 ? 'message' : 'messages';
+  // `droppedMessages` counts the target itself plus everything after it.
+  const after = Math.max(0, preview.droppedMessages - 1);
+  const alsoAfter = after === 0
+    ? ''
+    : `, dropping it and the ${after} ${after === 1 ? 'message' : 'messages'} after it`;
+  const back = preview.restoredPrompt
+    ? ' Its text goes back to the input box, so you can edit it and send again.'
+    : '';
+  // No "and this one stays as it is" here — the checkbox's own hint says that,
+  // permanently, and repeating it verbatim two lines apart just reads as noise.
   if (intoCopy) {
-    return n === 0
-      ? 'The rewound conversation continues in a new session; this one stays as it is.'
-      : `${n} later ${noun} are left out of the copy. The rewound conversation continues in a new session; this one stays as it is.`;
+    return `A copy of this conversation picks up just before this message${alsoAfter}.` + back;
   }
-  return n === 0
-    ? 'Nothing after this point yet; the conversation continues from here.'
-    : `${n} later ${noun} will be dropped from this conversation.`;
+  return `This conversation goes back to just before this message${alsoAfter}.` + back;
 }
 
 export function SessionRewindDialog({ sessionId, msgId, label, onClose, onRewound }: SessionRewindDialogProps) {
@@ -75,7 +85,14 @@ export function SessionRewindDialog({ sessionId, msgId, label, onClose, onRewoun
   const confirm = useCallback(() => {
     setBusy(true);
     setError(null);
-    rewindSession(sessionId, msgId, { mode: intoCopy ? 'fork' : 'in-place', restoreFiles })
+    rewindSession(sessionId, msgId, {
+      mode: intoCopy ? 'fork' : 'in-place',
+      restoreFiles,
+      // "Into a copy" is the escape hatch for keeping THIS conversation, so it
+      // must not archive it. (The fork path archives by default because it used
+      // to BE the rewind: back then the source really was the abandoned branch.)
+      ...(intoCopy ? { keepSource: true } : {}),
+    })
       .then((result) => {
         log.info('session', 'rewind committed', {
           sessionId, msgId, mode: result.mode, rewoundId: result.sessionId, restoreFiles,
@@ -117,7 +134,11 @@ export function SessionRewindDialog({ sessionId, msgId, label, onClose, onRewoun
 
         <div className="app-modal-message">
           {!preview && !previewError && 'Checking what this would change…'}
-          {previewError && <span className="rewind-dialog-error-text">Couldn’t check: {previewError}</span>}
+          {/* Most dry-run failures are a REFUSAL with a reason (nothing before this
+              message to resume at, the message is behind a compaction), not a
+              hiccup — so it reads as the answer, not as a failed attempt. The
+              confirm button is disabled while there is no preview either way. */}
+          {previewError && <span className="rewind-dialog-error-text">Can’t rewind here: {previewError}</span>}
           {preview && describeDrop(preview, intoCopy)}
         </div>
 

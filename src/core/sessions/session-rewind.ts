@@ -20,18 +20,30 @@
  *
  *  2. **Conversation** — the hidden `--resume-session-at <message uuid>` flag,
  *     which loads a resumed transcript only up to and including that message.
+ *
+ *     ⚠️ The flag is INCLUSIVE, and a rewind is EXCLUSIVE. The CLI's own
+ *     interactive /rewind restores "the point BEFORE you sent this message":
+ *     `messages.slice(0, index)` plus that message's text back in the input box
+ *     (REPL.tsx restoreMessageSync → textForResubmit). So the flag is handed the
+ *     message just BEFORE the target on the CLI-loaded chain (the RESUME ANCHOR,
+ *     resumeAnchorBefore in transcript-rewind-core.ts) and the target's text
+ *     rides back to the composer as `restoredPrompt`. Handing it the target
+ *     itself is the bug this replaced: the message the human was taking back
+ *     stayed in the model's context and their edit landed after it.
+ *
  *     Two modes, both CLI-native:
  *
- *     **in-place** (the default): `--resume <sid> --resume-session-at <uuid>`
+ *     **in-place** (the default): `--resume <sid> --resume-session-at <anchor>`
  *     WITHOUT `--fork-session`. The CLI keeps the SAME session id and appends
- *     the new branch to the SAME transcript, hanging it off the rewind point
- *     via parentUuid. The file alone cannot say which branch was rewound away
+ *     the new branch to the SAME transcript, hanging it off the anchor via
+ *     parentUuid. The file alone cannot say which branch was rewound away
  *     (innocent forks — api_error re-parents, mid-turn slash-command branches
  *     — are topologically identical), so the commit records the cut on the
- *     session record (`inPlaceRewinds: {uuid, lastUuidAtCommit, at}`) and the
- *     history parser replays it against the file at every read
- *     (computeRewindDeadSet, src/core/transcript-chain.ts), hiding exactly
- *     the region between the rewind point and the commit-time last tree line.
+ *     session record (`inPlaceRewinds: {uuid = the ANCHOR, lastUuidAtCommit,
+ *     at}`) and the history parser replays it against the file at every read
+ *     (computeRewindDeadSet, src/core/transcript-chain.ts), hiding exactly the
+ *     region after the anchor up to the commit-time last tree line — which is
+ *     the rewound message itself plus everything that followed it.
  *     `pendingResumeSessionAt` is also set — pure cold-resume spawn plumbing,
  *     no display role. The conversation visibly rewinds inside its own panel.
  *
@@ -45,7 +57,9 @@
  *                         chain the CLI would load (computeCliLoadedChain — the
  *                         CLI exits 1 at respawn on a uuid it can't resume to,
  *                         e.g. one behind the last compact boundary or on an
- *                         abandoned branch). Runs BEFORE anything mutates, and
+ *                         abandoned branch), AND it must have a resume anchor
+ *                         before it that survives the CLI's own resume-time
+ *                         message filters. Runs BEFORE anything mutates, and
  *                         previewSessionRewind shares it, so the dialog's dry
  *                         run already refuses with the reason.
  *   preview (optional)  → dry-run `rewind_files`, so the human sees the blast radius
@@ -63,7 +77,7 @@
  *                         after the stop respawns the session best-effort
  *                         before rethrowing — a refusal never leaves it dead.
  *   respawn in place    → same session id, `--resume <sid> --resume-session-at
- *                         <uuid>`, empty first message (warm draft semantics —
+ *                         <anchor>`, empty first message (warm draft semantics —
  *                         waits for the human's next instruction), then a second
  *                         cache invalidation (barrier against a pre-commit
  *                         in-flight read re-caching the unfiltered parse)
@@ -71,7 +85,7 @@
  * ## What a FORK rewind does, in order
  *
  *   restore files → terminate source → spawn `--resume <source>
- *   --resume-session-at <uuid> --fork-session` under a new id → archive source
+ *   --resume-session-at <anchor> --fork-session` under a new id → archive source
  *   (best-effort, AFTER the spawn so a failed archive can never leave the task
  *   with no session at all; `keepSource` skips it).
  */
@@ -98,8 +112,12 @@ export interface RewindPreview extends RewindFilesReport {
   messageUuid: string;
   /** Label of that message, so a confirm dialog can name it. */
   messageLabel?: string;
-  /** How many transcript messages would be dropped from the conversation. */
+  /** How many transcript messages leave the conversation — the target message
+   *  INCLUDED, because a rewind goes back to just before it was sent. */
   droppedMessages: number;
+  /** The target message's text, which the composer restores for editing (the
+   *  CLI's own /rewind does the same: textForResubmit → setInputValue). */
+  restoredPrompt?: string;
   /** Why files can't be restored, when that's a Walnut-side fact rather than a
    *  CLI answer: 'session_not_live' (nothing to ask) / 'engine_unsupported'. */
   filesUnavailableReason?: 'session_not_live' | 'engine_unsupported';
@@ -118,6 +136,9 @@ export interface RewindResult {
   host?: string;
   /** What actually happened to the files (absent when the caller didn't ask). */
   files?: RewindFilesReport & { skippedReason?: 'session_not_live' | 'engine_unsupported' };
+  /** The rewound message's text, for the composer to restore so the human can
+   *  edit and resend it. Absent when the message had no text (e.g. images only). */
+  restoredPrompt?: string;
   /** True when the source session was archived (fork mode only). */
   sourceArchived: boolean;
 }
@@ -167,6 +188,19 @@ export function isRewindableMessageId(msgId: string | undefined): boolean {
   return !!msgId && UUID_RE.test(msgId);
 }
 
+/**
+ * The text a rewind hands back to the composer, so the human can edit the
+ * message and resend it (the CLI's own /rewind does exactly this —
+ * textForResubmit → setInputValue). The parser has already turned the CLI's
+ * wrapper tags into their readable form (`<command-name>` → `/model sonnet`,
+ * `<bash-input>` → `! cmd`), which is the same normalization textForResubmit
+ * applies, so the displayed text IS the resubmit text.
+ */
+function promptOf(message: SessionHistoryMessage | undefined): string | undefined {
+  const text = message?.text?.trim();
+  return text ? text : undefined;
+}
+
 /** First line of a message, trimmed to a label length. */
 function labelOf(message: SessionHistoryMessage | undefined): string | undefined {
   const line = (message?.text ?? '').split('\n').find((l) => l.trim());
@@ -180,6 +214,10 @@ interface ResolvedTarget {
   messages: SessionHistoryMessage[];
   index: number;
   target: SessionHistoryMessage;
+  /** The uuid handed to `--resume-session-at`: the chain message just BEFORE the
+   *  target, so the conversation resumes without the message being taken back
+   *  (the flag is inclusive; see resumeAnchorBefore). */
+  resumeAnchorUuid: string;
 }
 
 // ── Host-local probe (capability 'rewind-probe-v1') ──
@@ -266,14 +304,24 @@ function tooLargeForTheTunnel(err: unknown): SessionControlError | null {
   );
 }
 
-/** Parse a raw JSONL string into the line objects the chain machinery reads.
+/** Parse a raw JSONL string into the line objects the chain machinery reads,
+ *  each carrying the resume-filter facts a resume anchor needs (the daemon probe
+ *  attaches the same facts while streaming — ONE implementation of both).
  *  Partial/corrupt lines are skipped — they are not transcript lines. */
-function parseTranscriptLines(content: string): import('../transcript-chain.js').TranscriptChainLine[] {
-  const parsedLines: import('../transcript-chain.js').TranscriptChainLine[] = [];
+async function parseTranscriptLines(
+  content: string,
+): Promise<import('../../providers/transcript-rewind-core.js').RewindTranscriptLine[]> {
+  const { resumeFactsOf } = await import('../../providers/transcript-rewind-core.js');
+  const parsedLines: import('../../providers/transcript-rewind-core.js').RewindTranscriptLine[] = [];
   for (const line of content.split('\n')) {
     if (!line) continue;
     try {
-      parsedLines.push(JSON.parse(line));
+      const raw = JSON.parse(line) as Record<string, unknown>;
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+      const parsed = raw as import('../../providers/transcript-rewind-core.js').RewindTranscriptLine;
+      const resume = resumeFactsOf(raw);
+      if (resume) parsed.resume = resume;
+      parsedLines.push(parsed);
     } catch { /* partial/corrupt line — not a transcript line */ }
   }
   return parsedLines;
@@ -334,15 +382,24 @@ async function resolveRewindTarget(sessionId: string, messageUuid: string): Prom
     );
   }
 
-  // ── Chain gate (see the doc above) ── the session HOST answers it if it can
-  // (one small RPC, no bytes over the tunnel); otherwise one raw read here.
+  // ── Chain gate + resume anchor (see the doc above) ── the session HOST answers
+  // both if it can (one small RPC, no bytes over the tunnel); otherwise one raw
+  // read here.
   const OFF_CHAIN = 'That message is not on the conversation the CLI can resume (behind the last context compaction, or on an abandoned branch)';
+  const NO_ANCHOR = 'This is the first message of the conversation, so there is nothing before it to go back to. Start a new session instead.';
+  // `undefined` = nobody has answered yet. A daemon that speaks the capability
+  // but predates the ANCHOR half returns onChain without the field, and treating
+  // that as "no anchor" would refuse every rewind on that host until it
+  // auto-upgrades — so undefined falls through to the read, null does not.
+  let resumeAnchorUuid: string | null | undefined;
   const probe = await probeRewindViaDaemon(
     { sessionId, cwd: record.cwd, host: record.host }, { uuid: messageUuid },
   );
   if (probe && typeof probe.onChain === 'boolean') {
     if (!probe.onChain) throw new SessionControlError(OFF_CHAIN, 409);
-  } else {
+    resumeAnchorUuid = probe.resumeAnchorUuid;
+  }
+  if (resumeAnchorUuid === undefined) {
     const { readSessionJsonlContent } = await import('../session-file-reader.js');
     let raw: Awaited<ReturnType<typeof readSessionJsonlContent>>;
     try {
@@ -354,13 +411,17 @@ async function resolveRewindTarget(sessionId: string, messageUuid: string): Prom
       throw new SessionControlError('Could not read the session transcript to validate the rewind point', 500);
     }
     const { computeCliLoadedChain } = await import('../transcript-chain.js');
-    const loaded = computeCliLoadedChain(parseTranscriptLines(raw.content));
+    const { resumeAnchorBefore } = await import('../../providers/transcript-rewind-core.js');
+    const lines = await parseTranscriptLines(raw.content);
+    const loaded = computeCliLoadedChain(lines);
     if (!loaded.chainUuids.has(messageUuid)) {
       throw new SessionControlError(OFF_CHAIN, 409);
     }
+    resumeAnchorUuid = resumeAnchorBefore(lines, loaded.chain, messageUuid).uuid;
   }
+  if (!resumeAnchorUuid) throw new SessionControlError(NO_ANCHOR, 409);
 
-  return { record, messages, index, target };
+  return { record, messages, index, target, resumeAnchorUuid };
 }
 
 /** Live CLI handle, or null when nothing is attached/attachable. */
@@ -382,12 +443,14 @@ async function liveSession(sessionId: string) {
  */
 export async function previewSessionRewind(sessionId: string, messageUuid: string): Promise<RewindPreview> {
   const { messages, index, target } = await resolveRewindTarget(sessionId, messageUuid);
-  const droppedMessages = Math.max(0, messages.length - (index + 1));
+  // The target leaves the conversation too — it goes back to the input box.
+  const droppedMessages = Math.max(0, messages.length - index);
   const base: RewindPreview = {
     canRewind: false,
     messageUuid,
     ...(labelOf(target) ? { messageLabel: labelOf(target) } : {}),
     droppedMessages,
+    ...(promptOf(target) ? { restoredPrompt: promptOf(target) } : {}),
   };
 
   const session = await liveSession(sessionId);
@@ -430,8 +493,10 @@ export async function rewindSessionToMessage(
   input: RewindInput,
   source = 'web-api',
 ): Promise<RewindResult> {
-  const { record, messages, index, target } = await resolveRewindTarget(sessionId, input.messageUuid);
-  const droppedMessages = Math.max(0, messages.length - (index + 1));
+  const { record, messages, index, target, resumeAnchorUuid } = await resolveRewindTarget(
+    sessionId, input.messageUuid,
+  );
+  const droppedMessages = Math.max(0, messages.length - index);
 
   // ── 1. Files first, while the source CLI is still alive ──
   // It holds the in-memory fileHistory state that `rewind_files` operates on, and
@@ -458,7 +523,7 @@ export async function rewindSessionToMessage(
   }
 
   if ((input.mode ?? 'in-place') === 'in-place') {
-    return rewindInPlace(sessionId, input, record, target, droppedMessages, files);
+    return rewindInPlace(sessionId, input, record, target, resumeAnchorUuid, droppedMessages, files);
   }
 
   // ── FORK MODE ──
@@ -485,7 +550,10 @@ export async function rewindSessionToMessage(
       ...(record.mode && record.mode !== 'default' ? { mode: record.mode } : {}),
       ...(record.host ? { host: record.host } : {}),
       forkedFromSessionId: sessionId,
-      rewoundAtMessageUuid: input.messageUuid,
+      // The ANCHOR, not the target: the history route cuts the inherited
+      // ancestor transcript at this uuid inclusive, which is exactly "everything
+      // up to just before the rewound message".
+      rewoundAtMessageUuid: resumeAnchorUuid,
       ...(record.cliModel ? { cliModel: record.cliModel } : {}),
       ...(record.effort ? { effort: record.effort } : {}),
       ...(record.profile ? { profile: record.profile } : {}),
@@ -517,7 +585,7 @@ export async function rewindSessionToMessage(
     ...(record.host ? { host: record.host } : {}),
     ...(record.lane ? { lane: record.lane } : {}),
     forkedFromSessionId: sessionId,
-    resumeSessionAtMessageUuid: input.messageUuid,
+    resumeSessionAtMessageUuid: resumeAnchorUuid,
   }, ['session-runner'], { source });
 
   // ── 4. Archive the abandoned branch (best-effort, after the spawn) ──
@@ -539,6 +607,7 @@ export async function rewindSessionToMessage(
 
   log.session.info('session rewound', {
     sessionId, rewoundId, taskId: record.taskId, messageUuid: input.messageUuid,
+    resumeAnchorUuid,
     droppedMessages, restoredFiles: files?.canRewind ?? null, sourceArchived,
     targetLabel: labelOf(target)?.slice(0, 60),
   });
@@ -552,6 +621,7 @@ export async function rewindSessionToMessage(
     title,
     ...(record.host ? { host: record.host } : {}),
     ...(files ? { files } : {}),
+    ...(promptOf(target) ? { restoredPrompt: promptOf(target) } : {}),
     sourceArchived,
   };
 }
@@ -574,6 +644,7 @@ async function rewindInPlace(
   input: RewindInput,
   record: import('../types.js').SessionRecord,
   target: SessionHistoryMessage,
+  resumeAnchorUuid: string,
   droppedMessages: number,
   files: RewindResult['files'],
 ): Promise<RewindResult> {
@@ -600,22 +671,25 @@ async function rewindInPlace(
   // best-effort respawn the session and rethrow, because "rewind refused, and
   // your session is now dead" must never be an outcome.
   const { invalidateSessionHistoryCaches } = await import('../session-history.js');
-  let lastUuidAtCommit = input.messageUuid; // fallback = empty cut (no-op)
+  let lastUuidAtCommit = resumeAnchorUuid; // fallback = empty cut (no-op)
   try {
     // The anchor is the LAST tree line in the file right now — everything
     // between the rewind point and it is the branch being abandoned; everything
     // the CLI appends later sits past it and can never be swept into the cut.
-    // Enqueue lines PAST the anchor (a message the human queued mid-turn and
-    // then rewound before the CLI drained it) are uuid-less, so outside the
-    // uuid-anchored region — their identity keys ride the cut record, or the
-    // rewound-away message re-renders as a phantom Pattern-B row forever.
+    // Queue enqueue lines are uuid-less, so no uuid-anchored region reaches
+    // them, and their identity keys have to ride the cut record or a rewound-away
+    // message re-renders as a phantom Pattern-B row forever. TWO groups qualify,
+    // on opposite sides of the region: enqueues PAST the anchor (a message the
+    // human queued mid-turn and then rewound before the CLI drained it), and the
+    // echo of the rewound message ITSELF, which the CLI logged when the message
+    // arrived — i.e. just BEFORE its user line (see targetQueueKeys).
     let trailingQueueKeys: string[] = [];
     const probe = await probeRewindViaDaemon(
-      { sessionId, cwd: record.cwd, host: record.host }, {},
+      { sessionId, cwd: record.cwd, host: record.host }, { uuid: input.messageUuid },
     );
     if (probe) {
       if (probe.lastUuidAtCommit) lastUuidAtCommit = probe.lastUuidAtCommit;
-      trailingQueueKeys = probe.trailingQueueKeys ?? [];
+      trailingQueueKeys = [...(probe.trailingQueueKeys ?? []), ...(probe.targetQueueKeys ?? [])];
     } else {
       const { readSessionJsonlContent } = await import('../session-file-reader.js');
       let raw: Awaited<ReturnType<typeof readSessionJsonlContent>>;
@@ -627,10 +701,11 @@ async function rewindInPlace(
       if (!raw?.content) {
         throw new SessionControlError('Could not read the session transcript to record the rewind', 500);
       }
-      const { commitAnchorOf } = await import('../../providers/transcript-rewind-core.js');
-      const anchor = commitAnchorOf(parseTranscriptLines(raw.content));
+      const { commitAnchorOf, targetQueueKeys } = await import('../../providers/transcript-rewind-core.js');
+      const lines = await parseTranscriptLines(raw.content);
+      const anchor = commitAnchorOf(lines);
       if (anchor.lastUuidAtCommit) lastUuidAtCommit = anchor.lastUuidAtCommit;
-      trailingQueueKeys = anchor.trailingQueueKeys;
+      trailingQueueKeys = [...anchor.trailingQueueKeys, ...targetQueueKeys(lines, input.messageUuid)];
     }
     const cutAt = new Date().toISOString();
     const { updateSessionRecord } = await import('../session-tracker.js');
@@ -641,14 +716,18 @@ async function rewindInPlace(
       inPlaceRewinds: [
         ...(record.inPlaceRewinds ?? []),
         {
-          uuid: input.messageUuid, lastUuidAtCommit, at: cutAt,
+          // The RESUME ANCHOR, not the message the human clicked: the dead
+          // region is everything after it, which is exactly the rewound message
+          // plus the branch that followed. Keeps the display and the CLI's own
+          // context agreeing line for line.
+          uuid: resumeAnchorUuid, lastUuidAtCommit, at: cutAt,
           ...(trailingQueueKeys.length > 0 ? { trailingQueueKeys } : {}),
         },
       ],
       // Spawn plumbing: every cold --resume until the first completed turn must
       // re-send --resume-session-at, or a CLI death in that window would resume
       // the ABANDONED branch tip (see the field's doc in types.ts).
-      pendingResumeSessionAt: input.messageUuid,
+      pendingResumeSessionAt: resumeAnchorUuid,
     });
     await invalidateSessionHistoryCaches(sessionId, record.host ?? undefined);
   } catch (err) {
@@ -688,7 +767,7 @@ async function rewindInPlace(
 
   log.session.info('session rewound in place', {
     sessionId, taskId: record.taskId, messageUuid: input.messageUuid,
-    lastUuidAtCommit, droppedMessages,
+    resumeAnchorUuid, lastUuidAtCommit, droppedMessages,
     restoredFiles: files?.canRewind ?? null,
     targetLabel: labelOf(target)?.slice(0, 60),
   });
@@ -702,6 +781,7 @@ async function rewindInPlace(
     title: record.title ?? sessionId.slice(0, 16),
     ...(record.host ? { host: record.host } : {}),
     ...(files ? { files } : {}),
+    ...(promptOf(target) ? { restoredPrompt: promptOf(target) } : {}),
     sourceArchived: false,
   };
 }

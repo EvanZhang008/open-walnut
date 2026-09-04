@@ -1364,10 +1364,28 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             if (result.mode !== 'fork' && result.sessionId === sessionId) {
               log.info('session-panel', 'session rewound in place — remounting timeline', {
                 sessionId, filesRestored: !!result.files?.canRewind,
+                restoredChars: result.restoredPrompt?.length ?? 0,
               });
               clearSessionCaches(sessionId);
               setRewindEpoch((e) => e + 1);
+              // The rewound message comes BACK to the composer to edit and
+              // resend — the whole point of a rewind, and what the CLI's own
+              // /rewind does. rewindEpoch only remounts the timeline, so the
+              // composer is alive to receive this.
+              if (result.restoredPrompt) {
+                setPrefillText(result.restoredPrompt);
+                setPrefillNonce((n) => n + 1);
+                autoCollapsed.current = false;
+                setChatCollapsed(false);
+              }
               return;
+            }
+            // Fork: the new session's composer has not mounted yet, so hand the
+            // message over through the draft key it reads on mount.
+            if (result.restoredPrompt) {
+              try {
+                localStorage.setItem(`draft:session:${result.sessionId}`, result.restoredPrompt);
+              } catch { /* private browsing — the copy just opens with an empty box */ }
             }
             // Fork: the rewound session is a NEW id continuing the same task, so
             // the column swaps onto it (no second panel for the same work). The
