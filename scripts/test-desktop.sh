@@ -19,3 +19,9 @@ swiftc \
     "$ROOT/tests/desktop/webcontent-policy-tests.swift" \
     -o "$OUT_DIR/walnut-webcontent-policy-tests"
 "$OUT_DIR/walnut-webcontent-policy-tests"
+
+swiftc \
+    "$ROOT/desktop/LinkPolicy.swift" \
+    "$ROOT/tests/desktop/link-policy-tests.swift" \
+    -o "$OUT_DIR/walnut-link-policy-tests"
+"$OUT_DIR/walnut-link-policy-tests"

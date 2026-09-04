@@ -1837,26 +1837,47 @@ extension AppDelegate: WKNavigationDelegate {
         }
     }
 
+    /// Where a navigation goes is decided by LinkPolicy (pure, tested); this only
+    /// translates WebKit's action into that policy's terms and carries out the
+    /// verdict. `targetFrame == nil` is how a `target="_blank"` click arrives.
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        guard let url = navigationAction.request.url else {
+            decisionHandler(.allow)
+            return
+        }
+        let request = LinkRequest(
+            url: url,
+            isLinkClick: navigationAction.navigationType == .linkActivated,
+            targetsNewWindow: navigationAction.targetFrame == nil,
+            isMainFrame: navigationAction.targetFrame?.isMainFrame ?? true)
+        switch linkPolicy.verdict(for: request) {
+        case .inPage:
+            decisionHandler(.allow)
+        case .openExternally:
+            NSWorkspace.shared.open(url)
+            decisionHandler(.cancel)
+        case .ignore:
+            decisionHandler(.cancel)
+        }
+    }
+
+    private var linkPolicy: LinkPolicy {
+        LinkPolicy(appPort: serverPort ?? 3456)
+    }
+
+    /// `window.open(...)` never reaches decidePolicyFor: WebKit asks the UI
+    /// delegate for a web view to load it in, and with no implementation the call
+    /// was a silent dead click. The shell has one window, so the answer is the
+    /// default browser, and nil (no child web view).
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if let url = navigationAction.request.url {
-            // App deep links (vscode:// etc.) set via JS `location.href` arrive as
-            // .other, not .linkActivated — WKWebView can't load them ("unsupported
-            // URL", silent no-op), so hand ANY non-web scheme to macOS regardless
-            // of navigation type. about/blob/data stay in-page.
-            let scheme = url.scheme?.lowercased() ?? ""
-            let inPageSchemes = ["http", "https", "about", "blob", "data", "javascript"]
-            if !inPageSchemes.contains(scheme) {
+            let request = LinkRequest(url: url, isLinkClick: false, targetsNewWindow: true, isMainFrame: true)
+            if linkPolicy.verdict(for: request) == .openExternally {
                 NSWorkspace.shared.open(url)
-                decisionHandler(.cancel)
-                return
-            }
-            if navigationAction.navigationType == .linkActivated, url.host != "localhost" {
-                NSWorkspace.shared.open(url)
-                decisionHandler(.cancel)
-                return
             }
         }
-        decisionHandler(.allow)
+        return nil
     }
 }
 

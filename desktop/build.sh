@@ -22,7 +22,7 @@ mkdir -p "$MACOS" "$RESOURCES"
 # Compile the Swift source
 swiftc -O -o "$MACOS/$APP_NAME" \
     "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" \
-    "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" \
+    "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
     -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon
 
 # Create Info.plist

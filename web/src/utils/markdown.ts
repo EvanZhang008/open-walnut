@@ -501,6 +501,39 @@ export function entityRefsToMarkdownLinks(text: string): string {
 /** DOMPurify attributes preserved for entity ref, image, and file link rendering */
 const SANITIZE_ATTRS = ['data-task-id', 'data-session-id', 'data-lightbox-src', 'data-file-path', 'data-file-line', 'data-rel-path', 'data-cwd', 'loading', 'target', 'rel'];
 
+/**
+ * True for an http(s) href that points OUTSIDE the console's own origin.
+ * Relative hrefs (`/tasks/…`, `#`), same-origin absolutes, and non-web schemes
+ * (mailto:, vscode:) are not external: the first two are in-app navigation, the
+ * last is the OS's to route.
+ */
+export function isExternalHttpHref(href: string): boolean {
+  const h = href.trim();
+  if (!/^(?:https?:)?\/\//i.test(h)) return false;
+  if (typeof window === 'undefined' || !window.location) return true;
+  try {
+    return new URL(h, window.location.href).origin !== window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+// External links open in a new tab. Neither marked's default link renderer nor
+// DOMPurify sets `target`, so a `[docs](https://…)` in a reply navigated the
+// console itself away — SPA state, sockets, and the composer draft with it.
+// Registered on the shared singleton so every sanitize path in the app (chat,
+// tool results, inline summaries, user messages) gets it, not just the one that
+// remembered; DOMPurify runs this after its attribute allowlist, so the
+// attributes stick even where the caller's ADD_ATTR omits them.
+export function markExternalAnchor(node: Element): void {
+  if (node.tagName.toUpperCase() !== 'A') return;
+  const href = node.getAttribute('href');
+  if (!href || !isExternalHttpHref(href)) return;
+  node.setAttribute('target', '_blank');
+  node.setAttribute('rel', 'noopener noreferrer');
+}
+DOMPurify.addHook('afterSanitizeAttributes', markExternalAnchor);
+
 // ── JSON ID pill injection for tool call INPUT/RESULT areas ──
 
 /** Regex for task-ID-bearing keys in JSON: "task_id", "taskId", "parent_task_id" */
