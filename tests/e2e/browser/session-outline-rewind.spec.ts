@@ -153,6 +153,13 @@ test.describe('Session outline, message time, and rewind', () => {
     // interesting one.
     const showEarlier = panel.locator('.session-show-earlier-btn').first()
     while (await showEarlier.count() > 0 && !(await panel.locator('.session-history').textContent())?.includes(EARLY_ASK)) {
+      // Wheel up FIRST. The button sits above the first rendered row, and the
+      // timeline opens parked at the tail — in WebKit that leaves the button
+      // outside the scrollport, so a bare click() waits 30 s for an element that
+      // is attached but never actionable. (Chromium happens to scroll it in
+      // itself, which is why this only ever failed in the engine the desktop app
+      // actually uses.) A real wheel is the only scroll that sticks here.
+      await wheel(page, panel, -600)
       await showEarlier.click()
       await page.waitForTimeout(250)
     }
