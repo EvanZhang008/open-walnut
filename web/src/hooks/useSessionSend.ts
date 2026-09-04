@@ -125,11 +125,49 @@ export function stripOutputModeWrappers(message: string): string {
   return stripped === '' ? message : stripped;
 }
 
+/**
+ * And the reference-card block: when the user's text carries an entity pill,
+ * `session:send` appends a `---walnut-refs---` … `---/walnut-refs---` block
+ * describing each referenced task / session / project
+ * (src/core/sessions/reference-cards.ts). MIRROR of stripReferenceCards() there;
+ * same line-anchored rules, same "never strip to nothing" guard. A block with no
+ * close marker strips to the end (only a truncated delivery looks like that).
+ */
+const REFERENCE_CARDS_OPEN = '---walnut-refs---';
+const REFERENCE_CARDS_CLOSE = '---/walnut-refs---';
+
+export function stripReferenceCards(message: string): string {
+  if (!message.includes(REFERENCE_CARDS_OPEN) && !message.includes(REFERENCE_CARDS_CLOSE)) {
+    return message;
+  }
+  const lines = message.split('\n');
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() !== REFERENCE_CARDS_OPEN) {
+      out.push(lines[i]);
+      continue;
+    }
+    let j = i + 1;
+    while (j < lines.length && lines[j].trim() !== REFERENCE_CARDS_CLOSE) j++;
+    i = j;
+    if (out.length > 0 && out[out.length - 1].trim() === '') out.pop();
+    else if (lines[i + 1]?.trim() === '') i++;
+  }
+  const stripped = out.join('\n').trim();
+  return stripped === '' ? message : stripped;
+}
+
+/** The form HISTORY will show for a delivered user line: both machine wrappers
+ *  gone, the image preamble kept — the server's toDisplayedUserText. */
+export function toDisplayedUserText(message: string): string {
+  return stripReferenceCards(stripOutputModeWrappers(message));
+}
+
 /** Every server-side rewrite `session:send` can wrap around the user's own text,
  *  peeled off in the order it was applied (outermost first). Exported for the
  *  contract test that pins it against the emitter. */
 export function stripSendPrefixes(message: string): string {
-  return stripImageRefPrefix(stripOutputModeWrappers(message));
+  return stripImageRefPrefix(toDisplayedUserText(message));
 }
 
 export function useSessionSend(activeSessionId: string | null): UseSessionSendReturn {
@@ -161,13 +199,14 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
                 // The queue stores the ENQUEUED text, which for an attachment send
                 // carries the server's `[Images attached …]` + paths prefix (and in
                 // rich output mode the `[Rich output mode: …]` instruction and/or
-                // the trailing "still on" reminder). Render the user-facing part,
-                // but dedup against what HISTORY will show once this row is
-                // delivered and echoed: the server strips the output-mode wrapper
-                // from its projection and keeps the image preamble, so that (not
-                // the raw row) is the matching basis — see
-                // OptimisticMessage.dedupText and session-chat.ts's dedupText.
-                const historyBasis = stripOutputModeWrappers(m.message);
+                // the trailing "still on" reminder, and for entity pills the
+                // reference-card block). Render the user-facing part, but dedup
+                // against what HISTORY will show once this row is delivered and
+                // echoed: the server strips both machine wrappers from its
+                // projection and keeps the image preamble, so that (not the raw
+                // row) is the matching basis — see OptimisticMessage.dedupText
+                // and session-chat.ts's dedupText.
+                const historyBasis = toDisplayedUserText(m.message);
                 const display = stripImageRefPrefix(historyBasis);
                 // 'parked' = the server stopped auto-retrying this row (permanent
                 // failure, e.g. the session's working folder was deleted). Reuse the

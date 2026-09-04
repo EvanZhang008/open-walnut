@@ -1,23 +1,16 @@
 /**
- * Session mention ("@<session> message") — pure logic.
+ * "@" mention — routing + the fuzzy matcher shared by every palette group.
  *
- * Mirrors Claude Code's direct-member-message convention: a message whose FIRST
- * character is "@" followed by a name and a space is a direct message to that
- * peer, not to the current session (Claude Code parses `^@([\w-]+)\s+(.+)$` in
- * its input box; verified against the 2.1.240 binary). Walnut inserts the
- * 8-char session id prefix as the name — the server's
- * resolveSessionByIdOrPrefix resolves it back (409 on ambiguity, so a routed
- * send can never silently reach the wrong session).
- *
- * The "@" popup is ONE unified palette with two groups — Sessions and Files —
- * and the query decides which group leads (routeMention). Session rows are
- * filtered here, in memory, with a VS-Code-style subsequence matcher: zero
- * debounce, zero network per keystroke, and the matched characters are
- * returned so the UI can highlight WHY a row matched.
+ * The "@" popup is ONE unified palette: Walnut entities (Tasks / Sessions /
+ * Projects, each pick INSERTS A REFERENCE pill) plus Files (Claude Code's own
+ * `@path` convention). routeMention decides which half leads from the shape of
+ * the query alone: a path-shaped query means the user is typing a path, so
+ * Files lead and directory navigation keeps working; anything else leads with
+ * the entities. Ranking itself lives in mention-entities.ts.
  */
 
 export interface SessionMentionCandidate {
-  /** Full session id (routing key). */
+  /** Full session id. */
   id: string;
   title: string;
   host: string;
@@ -28,26 +21,39 @@ export interface SessionMentionCandidate {
   taskId?: string;
 }
 
+/**
+ * Resolve a short session id against the in-memory index the same way the
+ * server does (unique id-prefix): used by the provenance card to turn a peer's
+ * short id into a clickable chip. Ambiguous or unknown → null.
+ */
+export function resolveRefInIndex(
+  ref: string,
+  candidates: SessionMentionCandidate[],
+): SessionMentionCandidate | null {
+  const matches = candidates.filter((c) => c.id.startsWith(ref));
+  return matches.length === 1 ? matches[0] : null;
+}
+
 /** Where an active "@query" should route. */
 export type MentionRoute =
   | { kind: 'recents' }
-  | { kind: 'palette'; order: 'sessions-first' | 'files-first' };
+  | { kind: 'palette'; order: 'entities-first' | 'files-first' };
 
 /**
- * Routing rule for an active "@" at `atIndex` with `query` typed after it:
- *  - "@?…"           → the recent-folders popup (unchanged legacy mode);
- *  - path-shaped     → unified palette, FILES group first ("/" or "~" means the
- *    user is clearly typing a path — descend into it, don't fight them);
- *  - mid-text "@"    → unified palette, files first (referencing something
- *    inside a sentence is almost always a file);
- *  - line-start "@"  → unified palette, SESSIONS first (the whole message is
- *    about to be routed somewhere — Claude Code's `@name message`).
+ * Routing rule for the text typed after an "@":
+ *  - "@?…"        → the recent-folders popup (unchanged legacy mode);
+ *  - path-shaped  → unified palette, FILES first ("/" or "~" means the user is
+ *    clearly typing a path — descend into it, don't fight them);
+ *  - otherwise    → unified palette, ENTITIES first (tasks / sessions /
+ *    projects are what a bare "@" is most often reaching for; Files stay
+ *    visible right below).
+ * Position in the message deliberately does not matter: a reference is a
+ * reference wherever it sits.
  */
-export function routeMention(atIndex: number, query: string): MentionRoute {
+export function routeMention(query: string): MentionRoute {
   if (query.startsWith('?')) return { kind: 'recents' };
   if (query.includes('/') || query.startsWith('~')) return { kind: 'palette', order: 'files-first' };
-  if (atIndex === 0) return { kind: 'palette', order: 'sessions-first' };
-  return { kind: 'palette', order: 'files-first' };
+  return { kind: 'palette', order: 'entities-first' };
 }
 
 /** Greedy subsequence match of `q` in `h` starting at `from`, or null. */
@@ -105,101 +111,4 @@ export function fuzzyMatch(
     tries++;
   }
   return best;
-}
-
-/** A session row ready to render: which field matched and where. */
-export interface RankedSessionMention {
-  session: SessionMentionCandidate;
-  /** null on an empty query (nothing to highlight). */
-  matchField: 'title' | 'id' | 'host' | null;
-  positions: number[];
-}
-
-/** Active sessions outrank idle ones when scores tie / query is empty. */
-function statusWeight(status: string): number {
-  return status === 'running' ? 0 : 1;
-}
-
-/**
- * Filter + rank the in-memory session list against the typed query.
- * Empty query → most useful first: running sessions, then recency.
- * Non-empty → best fuzzy score wins (title preferred over id over host on
- * ties); the matched field's positions come back for highlighting.
- */
-export function rankSessionMentions(
-  query: string,
-  candidates: SessionMentionCandidate[],
-  opts: { excludeId?: string; limit?: number } = {},
-): RankedSessionMention[] {
-  const limit = opts.limit ?? 8;
-  const pool = opts.excludeId ? candidates.filter((c) => c.id !== opts.excludeId) : candidates;
-
-  if (!query) {
-    return [...pool]
-      .sort(
-        (a, b) =>
-          statusWeight(a.status) - statusWeight(b.status) ||
-          b.lastActiveAt.localeCompare(a.lastActiveAt),
-      )
-      .slice(0, limit)
-      .map((session) => ({ session, matchField: null, positions: [] }));
-  }
-
-  const hits: Array<RankedSessionMention & { score: number }> = [];
-  for (const session of pool) {
-    // Try each searchable field; keep the best (field priority breaks ties).
-    const fields: Array<['title' | 'id' | 'host', string, number]> = [
-      ['title', session.title, 2],
-      ['id', session.id.slice(0, 8), 1],
-      ['host', session.host === '__local__' ? 'local' : session.host, 0],
-    ];
-    let best: (RankedSessionMention & { score: number }) | null = null;
-    for (const [field, text, bias] of fields) {
-      const m = fuzzyMatch(query, text);
-      if (!m) continue;
-      const scored = { session, matchField: field, positions: m.positions, score: m.score * 4 + bias };
-      if (!best || scored.score > best.score) best = scored;
-    }
-    if (best) hits.push(best);
-  }
-  return hits
-    .sort(
-      (a, b) =>
-        b.score - a.score ||
-        statusWeight(a.session.status) - statusWeight(b.session.status) ||
-        b.session.lastActiveAt.localeCompare(a.session.lastActiveAt),
-    )
-    .slice(0, limit)
-    .map(({ session, matchField, positions }) => ({ session, matchField, positions }));
-}
-
-/**
- * Parse a leading session directive: `@<ref> <body>`. Returns null when the
- * text can't be one (no leading @, no space, or a ref that can't be an id
- * prefix). A non-null result still needs server-side prefix resolution.
- */
-export function parseSessionDirective(text: string): { ref: string; body: string } | null {
-  const m = text.match(/^@([\w-]{4,})\s+([\s\S]+)$/);
-  if (!m) return null;
-  const body = m[2].trim();
-  if (!body) return null;
-  return { ref: m[1], body };
-}
-
-/** The token inserted into the composer for a picked session. */
-export function formatSessionRef(id: string): string {
-  return `@${id.slice(0, 8)} `;
-}
-
-/**
- * Resolve a directive ref against the in-memory index the same way the server
- * does (unique id-prefix): used for the pre-send "will send to …" hint strip.
- * Ambiguous or unknown → null (the server stays the routing authority).
- */
-export function resolveRefInIndex(
-  ref: string,
-  candidates: SessionMentionCandidate[],
-): SessionMentionCandidate | null {
-  const matches = candidates.filter((c) => c.id.startsWith(ref));
-  return matches.length === 1 ? matches[0] : null;
 }

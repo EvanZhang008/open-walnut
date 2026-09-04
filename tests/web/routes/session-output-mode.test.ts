@@ -74,6 +74,7 @@ import {
 } from '../../../src/core/echo-claims.js'
 import { dedupeOptimisticMessages } from '../../../web/src/components/sessions/optimistic-dedup'
 import { stripSendPrefixes, stripOutputModeWrappers as stripOutputModeWrappersClient } from '../../../web/src/hooks/useSessionSend'
+import { REFERENCE_CARDS_OPEN, REFERENCE_CARDS_CLOSE, appendReferenceCards, toDisplayedUserText } from '../../../src/core/sessions/reference-cards.js'
 
 const TEXT = 'explain how the daemon adopts an orphaned session'
 
@@ -495,6 +496,15 @@ describe('stripSendPrefixes (client display)', () => {
       + `[Images attached — use the Read tool to view them]\n- /tmp/a.png\n\n${TEXT}`
       + `\n\n${RICH_OUTPUT_MODE_REMINDER}`
     expect(stripSendPrefixes(enqueued)).toBe(TEXT)
+  })
+
+  it('peels the reference-card block in production order (cards, then reminder)', () => {
+    const typed = '<task-ref id="mt1" label="Fix it"/> please look'
+    const cards = `${REFERENCE_CARDS_OPEN}\nReferenced by the user (Walnut context; use task_get / session_send / project_list for more):\n- task mt1 "Fix it" · phase TODO · project Inbox\n${REFERENCE_CARDS_CLOSE}`
+    const enqueued = `${appendReferenceCards(typed, cards)}\n\n${RICH_OUTPUT_MODE_REMINDER}`
+    expect(stripSendPrefixes(enqueued)).toBe(typed)
+    // Client and server agree byte-for-byte on what history will show.
+    expect(stripSendPrefixes(enqueued)).toBe(toDisplayedUserText(enqueued))
   })
 
   it('leaves an ordinary message alone (including one that merely mentions the mode)', () => {

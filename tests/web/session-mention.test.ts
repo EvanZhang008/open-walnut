@@ -1,17 +1,14 @@
 /**
  * Unit tests for the unified "@" mention logic (session-mention.ts): how an
- * active "@query" routes (sessions-first / files-first / recents), the
- * in-memory fuzzy matcher + ranking that make the palette 0ms, directive
- * parsing, and that file refs / literal "@" text can never be mistaken for a
- * routable directive (they must fall through to a normal send).
+ * active "@query" routes (entities-first / files-first / recents), the
+ * in-memory fuzzy matcher that makes the palette 0ms, and the unique-prefix
+ * resolver the provenance card uses. Entity ranking lives in
+ * mention-entities.test.ts.
  */
 import { describe, it, expect } from 'vitest';
 import {
   routeMention,
   fuzzyMatch,
-  rankSessionMentions,
-  parseSessionDirective,
-  formatSessionRef,
   resolveRefInIndex,
   type SessionMentionCandidate,
 } from '../../web/src/components/chat/session-mention';
@@ -26,25 +23,20 @@ const s = (over: Partial<SessionMentionCandidate>): SessionMentionCandidate => (
 });
 
 describe('routeMention', () => {
-  it('line-start "@" leads with sessions', () => {
-    expect(routeMention(0, '')).toEqual({ kind: 'palette', order: 'sessions-first' });
-    expect(routeMention(0, 'auth')).toEqual({ kind: 'palette', order: 'sessions-first' });
+  it('a bare or word-shaped query leads with the entity groups, wherever the "@" sits', () => {
+    expect(routeMention('')).toEqual({ kind: 'palette', order: 'entities-first' });
+    expect(routeMention('auth')).toEqual({ kind: 'palette', order: 'entities-first' });
   });
 
-  it('a path-shaped query leads with files — even at line start', () => {
-    expect(routeMention(0, 'src/foo')).toEqual({ kind: 'palette', order: 'files-first' });
-    expect(routeMention(0, '~/notes')).toEqual({ kind: 'palette', order: 'files-first' });
-    expect(routeMention(0, 'src/')).toEqual({ kind: 'palette', order: 'files-first' });
-  });
-
-  it('mid-text "@" leads with files', () => {
-    expect(routeMention(5, 'auth')).toEqual({ kind: 'palette', order: 'files-first' });
+  it('a path-shaped query leads with files — the user is clearly typing a path', () => {
+    expect(routeMention('src/foo')).toEqual({ kind: 'palette', order: 'files-first' });
+    expect(routeMention('~/notes')).toEqual({ kind: 'palette', order: 'files-first' });
+    expect(routeMention('src/')).toEqual({ kind: 'palette', order: 'files-first' });
   });
 
   it('"@?" keeps the recents popup', () => {
-    expect(routeMention(0, '?')).toEqual({ kind: 'recents' });
-    expect(routeMention(0, '?wal')).toEqual({ kind: 'recents' });
-    expect(routeMention(3, '?wal')).toEqual({ kind: 'recents' });
+    expect(routeMention('?')).toEqual({ kind: 'recents' });
+    expect(routeMention('?wal')).toEqual({ kind: 'recents' });
   });
 });
 
@@ -78,78 +70,7 @@ describe('fuzzyMatch', () => {
   });
 });
 
-describe('rankSessionMentions', () => {
-  const pool: SessionMentionCandidate[] = [
-    s({ id: 'aaaa1111-x', title: 'Notification denoise', status: 'idle', lastActiveAt: '2026-08-26T00:00:00Z' }),
-    s({ id: 'bbbb2222-x', title: 'Auth token refresh', status: 'running', lastActiveAt: '2026-08-25T00:00:00Z' }),
-    s({ id: 'cccc3333-x', title: 'Old idle thing', status: 'idle', lastActiveAt: '2026-08-01T00:00:00Z' }),
-  ];
-
-  it('empty query: running sessions first, then recency', () => {
-    const r = rankSessionMentions('', pool);
-    expect(r.map((x) => x.session.id)).toEqual(['bbbb2222-x', 'aaaa1111-x', 'cccc3333-x']);
-    expect(r[0].matchField).toBeNull();
-  });
-
-  it('fuzzy-matches the title with highlight positions', () => {
-    const r = rankSessionMentions('noti', pool);
-    expect(r[0].session.id).toBe('aaaa1111-x');
-    expect(r[0].matchField).toBe('title');
-    expect(r[0].positions).toEqual([0, 1, 2, 3]);
-  });
-
-  it('matches the short id too (typing a shortId finds the session)', () => {
-    const r = rankSessionMentions('bbbb22', pool);
-    expect(r[0].session.id).toBe('bbbb2222-x');
-    expect(r[0].matchField).toBe('id');
-  });
-
-  it('excludes the current session and respects limit', () => {
-    const r = rankSessionMentions('', pool, { excludeId: 'bbbb2222-x', limit: 1 });
-    expect(r).toHaveLength(1);
-    expect(r[0].session.id).toBe('aaaa1111-x');
-  });
-
-  it('drops non-matching sessions entirely', () => {
-    expect(rankSessionMentions('zzzzzz', pool)).toHaveLength(0);
-  });
-});
-
-describe('parseSessionDirective', () => {
-  it('parses "@<ref> message"', () => {
-    expect(parseSessionDirective('@e77d2af7 check the build')).toEqual({
-      ref: 'e77d2af7',
-      body: 'check the build',
-    });
-  });
-
-  it('keeps multi-line bodies whole', () => {
-    const r = parseSessionDirective('@abcd1234 line one\nline two');
-    expect(r?.body).toBe('line one\nline two');
-  });
-
-  it('rejects non-directives', () => {
-    expect(parseSessionDirective('hello @e77d2af7')).toBeNull(); // not at start
-    expect(parseSessionDirective('@e77d2af7')).toBeNull(); // no message
-    expect(parseSessionDirective('@ab hi')).toBeNull(); // ref too short (< 4)
-    expect(parseSessionDirective('@src/foo.ts fix this')).toBeNull(); // path ref ("/" breaks \w match)
-    expect(parseSessionDirective('@"my file.ts" fix')).toBeNull(); // quoted file ref
-    expect(parseSessionDirective('@e77d2af7    ')).toBeNull(); // whitespace-only body
-  });
-
-  it('parses a name-like ref — resolution decides whether it routes', () => {
-    // "@Makefile fix this" parses, but the server prefix lookup fails and the
-    // caller falls through to a normal send. Pinned so nobody "optimizes" the
-    // regex into rejecting these and nobody routes without resolving.
-    expect(parseSessionDirective('@Makefile fix this')).toEqual({ ref: 'Makefile', body: 'fix this' });
-  });
-});
-
-describe('formatSessionRef / resolveRefInIndex', () => {
-  it('inserts the 8-char id prefix with a trailing space', () => {
-    expect(formatSessionRef('e77d2af7-35fa-4de0-92e6-5a4826b9976f')).toBe('@e77d2af7 ');
-  });
-
+describe('resolveRefInIndex', () => {
   it('resolves a UNIQUE prefix only (ambiguity mirrors the server 409)', () => {
     const pool = [s({ id: 'abcd1111' }), s({ id: 'abcd2222' }), s({ id: 'efgh3333' })];
     expect(resolveRefInIndex('efgh', pool)?.id).toBe('efgh3333');

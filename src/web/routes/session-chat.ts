@@ -15,6 +15,7 @@ import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tr
 import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQueued, unparkMessage } from '../../core/session-message-queue.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
 import { prepareOutputModeSend } from '../../core/sessions/output-mode-send.js'
+import { buildReferenceCards, appendReferenceCards, stripReferenceCards } from '../../core/sessions/reference-cards.js'
 import { saveImageToDisk, resolveImageRefs } from './images.js'
 import { log } from '../../logging/index.js'
 import { sessionRunner } from '../../providers/claude-code-session.js'
@@ -240,6 +241,22 @@ export function registerSessionChatRpc(): void {
     // The wrapping, the slash-command exemption and the edge advance all live in
     // core/sessions/output-mode-send.ts, because the PHONE send paths need the
     // identical three steps and a second copy of them drifted immediately.
+    // Reference cards: a composer pill (`<task-ref/>` / `<session-ref/>` /
+    // `<project-ref/>`) reaches the CLI unchanged, but on its own it is an opaque
+    // id — the model would have to spend a tool call just to learn what the human
+    // pointed at. Append one compact line per referenced entity, resolved from the
+    // local store. Machine text, so the display projection strips it back out
+    // (core/sessions/reference-cards.ts). Slash commands are skipped for the same
+    // reason output-mode skips them: the CLI only treats input as a command when
+    // the RAW string startsWith('/'), and an append lands inside the command's
+    // argument string. Sits here, after the retry / model-switch returns above,
+    // because those never enqueue and the store reads would be wasted. Best-effort
+    // — buildReferenceCards never throws.
+    if (!(data.message as string).startsWith('/')) {
+      const refCards = await buildReferenceCards(data.message as string)
+      if (refCards) augmentedMessage = appendReferenceCards(augmentedMessage, refCards)
+    }
+
     const outputMode = await prepareOutputModeSend(data.sessionId, record, augmentedMessage)
     augmentedMessage = outputMode.enqueueText
 
@@ -313,11 +330,12 @@ export function registerSessionChatRpc(): void {
     // timeline below newer content until a refresh (inc-1785091339102).
     //
     // Not simply `augmentedMessage`: the CLI echoes the augmented text into its
-    // JSONL, but the history projection STRIPS the output-mode wrapper back out
-    // for display (core/session-history.ts), so the basis is the augmented text
-    // minus that wrapper — i.e. the image preamble, if any, plus the user's own
-    // words. Emitter and matcher must agree on one basis; this is it.
-    const displayedByHistory = outputMode.displayText
+    // JSONL, but the history projection STRIPS both machine wrappers back out for
+    // display (core/session-history.ts → toDisplayedUserText), so the basis is the
+    // augmented text minus the output-mode wrapper AND the reference-card block —
+    // i.e. the image preamble, if any, plus the user's own words. Emitter and
+    // matcher must agree on one basis; this is it.
+    const displayedByHistory = stripReferenceCards(outputMode.displayText)
     return {
       messageId: msg.id,
       ...(displayedByHistory !== data.message ? { dedupText: displayedByHistory } : {}),

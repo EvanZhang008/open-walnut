@@ -1,13 +1,14 @@
 /**
  * Shared click-delegation handler for containers that render markdown
- * with .task-link, .session-link, and .file-link anchors.
+ * with .task-link, .session-link, .project-link, and .file-link anchors.
  *
- * EVERY component that renders task-ref / session-ref / file links should use
- * this hook instead of duplicating the event-delegation pattern.
+ * EVERY component that renders task-ref / session-ref / project-ref / file links
+ * should use this hook instead of duplicating the event-delegation pattern.
  *
  * Behavior:
  *  - task-link click → onTaskClick(taskId) → select + scroll + open session (no detail)
  *  - session-link click → onSessionClick(sessionId) → open session panel
+ *  - project-link click → navigate('/tasks') (no per-project route exists yet)
  *  - file-link click → onFileOpen(path, line?) → open FileViewer overlay
  *  - Fallback: navigate to /tasks/:id or /sessions?id=:id when callbacks are absent
  */
@@ -53,6 +54,16 @@ export function useEntityClickHandler(
       if (sessionId) {
         onSessionClick ? onSessionClick(sessionId) : navigate(`/sessions?id=${sessionId}`);
       }
+      return;
+    }
+
+    // Project pills have no per-project route to deep-link to, so every one of
+    // them lands on the task board. No callback parameter: there is nothing for a
+    // caller to override until such a route exists.
+    const projectAnchor = target.closest('a.project-link') as HTMLAnchorElement | null;
+    if (projectAnchor) {
+      e.preventDefault();
+      navigate('/tasks');
       return;
     }
 

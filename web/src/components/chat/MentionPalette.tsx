@@ -1,21 +1,27 @@
 /**
- * MentionPalette — the unified "@" popup: ONE panel, two groups.
+ * MentionPalette — the unified "@" popup: ONE panel, Walnut entities + Files.
  *
- *   Sessions — picked row routes/references another session (in-memory fuzzy
- *              over the session-mention index: zero debounce, zero network).
- *   Files    — picked row inserts a file reference; the query doubles as a
- *              path (the part before the last "/" navigates, the tail filters)
- *              exactly like the old FileMentionPopup.
+ *   Tasks / Sessions / Projects — picking a row INSERTS A REFERENCE pill
+ *              (`<task-ref/>`, `<session-ref/>`, `<project-ref/>`) into the
+ *              message. The message still goes to the CURRENT session; its
+ *              agent gets a compact reference card appended server-side and
+ *              decides what to do (read the task, message that session, …).
+ *              Nothing is routed by the composer.
+ *   Files    — picked row inserts a Claude-Code-native `@path`; the query
+ *              doubles as a path (the part before the last "/" navigates, the
+ *              tail filters), exactly like the old FileMentionPopup.
  *
- * `order` decides which group renders first (routeMention): line-start "@"
- * leads with Sessions, mid-text or path-shaped queries lead with Files. Both
- * groups are always present — no modes, no dead ends. Group captions state
- * what picking a row DOES, which is what keeps one symbol doing two jobs
- * without confusing anyone.
+ * Search is two-layered so it never waits on the network: an in-memory fuzzy
+ * pass over the browser's own task list / session index / project registry
+ * paints on every keystroke, and the hybrid `/api/search` hits (full-text +
+ * vector — the engine behind the task search box) re-rank each group when
+ * they land a beat later. `order` (routeMention) decides whether the entity
+ * groups or Files lead; every non-empty group stays visible at once thanks to
+ * the shared row budget (groupRowBudget).
  *
  * Keyboard is driven by ChatInput through the imperative handle:
  *   move(±1) / jumpGroup() / primary() / selectCurrent() / up()
- * Selection is tracked by row KEY, not index — async file listings append or
+ * Selection is tracked by row KEY, not index — async listings append or
  * reorder rows and must never yank the highlight off the user's choice.
  */
 import {
@@ -28,30 +34,45 @@ import {
   useSyncExternalStore,
   forwardRef,
 } from 'react';
+import type { Task } from '@open-walnut/core';
 import { fetchDirList, type DirEntry } from '@/api/files';
+import type { ProjectSummary } from '@/api/projects';
+import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { formatSize } from '@/utils/format';
 import { timeAgo } from '@/utils/time';
 import { log } from '@/utils/log';
 import { recordRecentFolder } from '@/utils/recentFolders';
+import { projectRefTag, sessionRefTag, taskRefTag } from '@/utils/entity-ref-tags';
 import { joinPath, parentPath, relativeTo, parseQuery } from './mention-path';
+import { fuzzyMatch, type SessionMentionCandidate } from './session-mention';
 import {
-  fuzzyMatch,
-  rankSessionMentions,
-  type RankedSessionMention,
-} from './session-mention';
+  groupRowBudget,
+  mergeServerHits,
+  rankEntities,
+  type MentionEntity,
+  type MentionEntityKind,
+  type RankedEntity,
+} from './mention-entities';
 import {
   ensureSessionMentionIndex,
   getSessionMentionIndex,
   subscribeSessionMentionIndex,
 } from '@/stores/session-mention-index';
+import {
+  ensureProjectsIndex,
+  getProjectsIndex,
+  subscribeProjectsIndex,
+  useEntitySearch,
+  type EntitySearchHit,
+} from '@/stores/mention-search';
 import { sessionStatusStore } from '@/stores/session-status-store';
 
 export interface MentionPaletteHandle {
-  /** Move selection by delta (wraps across both groups). */
+  /** Move selection by delta (wraps across all groups). */
   move: (delta: number) => void;
-  /** Jump to the first row of the other group (Tab). */
+  /** Jump to the first row of the NEXT group (Tab). */
   jumpGroup: () => void;
-  /** Enter: session → pick · dir → descend into it · file → pick. */
+  /** Enter: entity → insert its reference · dir → descend · file → pick. */
   primary: () => void;
   /** Cmd/Ctrl+Enter: pick the highlighted row as-is (a dir becomes the ref). */
   selectCurrent: () => void;
@@ -62,19 +83,17 @@ export interface MentionPaletteHandle {
 interface MentionPaletteProps {
   /** Text typed after the "@". */
   query: string;
-  /** Which group leads (routeMention decides from the query/position). */
-  order: 'sessions-first' | 'files-first';
-  /** True when the "@" sits at line start — picking a session ROUTES the
-   *  message there; false → it merely inserts a session reference. */
-  sessionsRoute: boolean;
-  /** Show the Sessions group at all (the caller has session mentions wired). */
-  sessionsEnabled: boolean;
+  /** Which half leads (routeMention decides from the query's shape). */
+  order: 'entities-first' | 'files-first';
+  /** Show the Tasks / Sessions / Projects groups at all. */
+  entitiesEnabled: boolean;
   /** Never offer the session the user is already talking to. */
   selfSessionId?: string;
   /** Root for the Files group; undefined → files group hidden. */
   cwd?: string;
   host?: string;
-  onPickSession: (sessionId: string) => void;
+  /** An entity was picked: `tag` is the ready-to-insert reference pill. */
+  onPickRef: (tag: string, entity: MentionEntity) => void;
   onPickFile: (absPath: string) => void;
   /** Rewrite the "@query" to browse an absolute dir (descend / go up). */
   onNavigate: (absDir: string) => void;
@@ -82,8 +101,19 @@ interface MentionPaletteProps {
 }
 
 type Row =
-  | { key: string; kind: 'session'; ranked: RankedSessionMention }
-  | { key: string; kind: 'entry'; entry: DirEntry; positions: number[] };
+  | { key: string; kind: 'entity'; group: MentionEntityKind; ranked: RankedEntity }
+  | { key: string; kind: 'entry'; group: 'files'; entry: DirEntry; positions: number[] };
+
+type GroupId = MentionEntityKind | 'files';
+
+const ENTITY_GROUPS: MentionEntityKind[] = ['task', 'session', 'project'];
+const GROUP_LABEL: Record<GroupId, string> = { task: 'Tasks', session: 'Sessions', project: 'Projects', files: 'Files' };
+const GROUP_VERB: Record<GroupId, string> = {
+  task: '⏎ inserts a task reference',
+  session: '⏎ inserts a session reference',
+  project: '⏎ inserts a project reference',
+  files: '⏎ inserts a file ref',
+};
 
 /** Render `text` with the fuzzy-matched positions wrapped in <mark>. */
 function Highlighted({ text, positions }: { text: string; positions: number[] }) {
@@ -104,28 +134,130 @@ function Highlighted({ text, positions }: { text: string; positions: number[] })
   return <>{out}</>;
 }
 
-// Half-half budget: with BOTH groups on screen, neither may fill the panel —
-// the other group must be VISIBLE without scrolling (a full-height Sessions
-// list hid the Files group entirely, so nobody knew files were reachable).
-// A group only gets the whole panel when it is alone or the other group came
-// back empty.
-const SESSION_LIMIT_SOLO = 8;
-const SESSION_LIMIT_SHARED = 4;
-const FILE_LIMIT_SOLO = 12;
-const FILE_LIMIT_SHARED = 5;
+function taskEntity(t: Task): MentionEntity {
+  return {
+    kind: 'task',
+    id: t.id,
+    title: t.title || '(untitled)',
+    meta: `${t.phase} · ${t.project || 'Inbox'}`,
+    pinned: !!t.pinned || t.focus_tier === 'focus',
+    active: t.phase !== 'COMPLETE',
+    recencyKey: t.updated_at ?? '',
+  };
+}
+
+function sessionEntity(s: SessionMentionCandidate): MentionEntity {
+  const live = sessionStatusStore.getStatus(s.id);
+  const status = live?.process_status ?? s.status;
+  const waiting = !!live?.pendingPermissionTool;
+  const hostLabel = s.host && s.host !== '__local__' ? s.host : 'local';
+  return {
+    kind: 'session',
+    id: s.id,
+    title: s.title || '(untitled)',
+    meta: `${hostLabel} · ${waiting ? 'waiting on you' : status}${s.lastActiveAt ? ` · ${timeAgo(s.lastActiveAt)}` : ''}`,
+    active: status === 'running' || waiting,
+    recencyKey: s.lastActiveAt ?? '',
+    status: waiting ? 'waiting' : status,
+  };
+}
+
+function projectEntity(p: ProjectSummary): MentionEntity {
+  const c = p.counts;
+  return {
+    kind: 'project',
+    id: p.name,
+    title: p.name,
+    meta: `${c.active} active · ${c.todo} todo · ${c.done} done`,
+    pinned: p.favorite,
+    active: c.active > 0,
+    // No timestamps on a project row: rank the busier project first.
+    recencyKey: String(c.active + c.todo).padStart(6, '0'),
+  };
+}
+
+/** A server hit as an entity, borrowing live meta from the local row when known. */
+function hitEntity(h: EntitySearchHit, sessions: Map<string, MentionEntity>): MentionEntity | null {
+  if (h.type === 'task') {
+    return {
+      kind: 'task',
+      id: h.id,
+      title: h.title || '(untitled)',
+      meta: `${h.phase ?? 'task'} · ${h.project || 'Inbox'}`,
+      active: h.phase !== 'COMPLETE',
+      summary: h.summary,
+    };
+  }
+  if (h.type === 'session') {
+    const local = sessions.get(h.id);
+    return local
+      ? { ...local, summary: h.summary }
+      : { kind: 'session', id: h.id, title: h.title || '(untitled)', meta: 'session', summary: h.summary };
+  }
+  return null;
+}
+
+function refTagFor(entity: MentionEntity): string {
+  if (entity.kind === 'task') return taskRefTag(entity.id, entity.title);
+  if (entity.kind === 'session') return sessionRefTag(entity.id, entity.title);
+  return projectRefTag(entity.id);
+}
+
+const FILE_SOLO_LIMIT = 12;
 
 export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPaletteProps>(
   function MentionPalette(
-    { query, order, sessionsRoute, sessionsEnabled, selfSessionId, cwd, host, onPickSession, onPickFile, onNavigate, onClose },
+    { query, order, entitiesEnabled, selfSessionId, cwd, host, onPickRef, onPickFile, onNavigate, onClose },
     ref,
   ) {
-    // ---- Sessions group: synchronous, in-memory -------------------------
-    const index = useSyncExternalStore(subscribeSessionMentionIndex, getSessionMentionIndex);
-    useEffect(() => { if (sessionsEnabled) void ensureSessionMentionIndex(); }, [sessionsEnabled]);
-    const sessionRowsAll = useMemo<RankedSessionMention[]>(() => {
-      if (!sessionsEnabled) return [];
-      return rankSessionMentions(query, index, { excludeId: selfSessionId, limit: SESSION_LIMIT_SOLO });
-    }, [sessionsEnabled, query, index, selfSessionId]);
+    // ---- Entity groups: instant local layer -----------------------------
+    const tasksCtx = useTasksContextSafe();
+    const sessionIndex = useSyncExternalStore(subscribeSessionMentionIndex, getSessionMentionIndex);
+    const projectIndex = useSyncExternalStore(subscribeProjectsIndex, getProjectsIndex);
+    useEffect(() => {
+      if (!entitiesEnabled) return;
+      void ensureSessionMentionIndex();
+      void ensureProjectsIndex();
+    }, [entitiesEnabled]);
+
+    const taskEntities = useMemo<MentionEntity[]>(
+      () => (entitiesEnabled && tasksCtx ? tasksCtx.tasks.map(taskEntity) : []),
+      [entitiesEnabled, tasksCtx],
+    );
+    const sessionEntities = useMemo<MentionEntity[]>(
+      () => (entitiesEnabled
+        ? sessionIndex.filter((s) => s.id !== selfSessionId).map(sessionEntity)
+        : []),
+      [entitiesEnabled, sessionIndex, selfSessionId],
+    );
+    const sessionById = useMemo(() => new Map(sessionEntities.map((e) => [e.id, e])), [sessionEntities]);
+    const projectEntities = useMemo<MentionEntity[]>(
+      () => (entitiesEnabled ? projectIndex.map(projectEntity) : []),
+      [entitiesEnabled, projectIndex],
+    );
+
+    // ---- Entity groups: hybrid search layer (debounced, folded in) -------
+    const search = useEntitySearch(query, entitiesEnabled && order === 'entities-first');
+    const searchCurrent = search.forQuery === query.trim() && search.forQuery !== '';
+    const serverByKind = useMemo(() => {
+      const out: Record<MentionEntityKind, MentionEntity[]> = { task: [], session: [], project: [] };
+      if (!searchCurrent) return out;
+      for (const h of search.hits) {
+        const e = hitEntity(h, sessionById);
+        if (e && !(e.kind === 'session' && e.id === selfSessionId)) out[e.kind].push(e);
+      }
+      return out;
+    }, [search.hits, searchCurrent, sessionById, selfSessionId]);
+
+    const rankedAll = useMemo<Record<MentionEntityKind, RankedEntity[]>>(() => {
+      const rank = (items: MentionEntity[], kind: MentionEntityKind) =>
+        mergeServerHits(query, rankEntities(query, items, { limit: 12 }), serverByKind[kind]);
+      return {
+        task: rank(taskEntities, 'task'),
+        session: rank(sessionEntities, 'session'),
+        project: rank(projectEntities, 'project'),
+      };
+    }, [query, taskEntities, sessionEntities, projectEntities, serverByKind]);
 
     // ---- Files group: the query doubles as a path (parseQuery) ----------
     const filesEnabled = !!cwd;
@@ -184,34 +316,36 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     const fileRowsAll = useMemo(() => {
       if (!filesEnabled) return [] as Array<{ entry: DirEntry; positions: number[] }>;
       const q = filterTerm.trim();
-      if (!q) return entries.slice(0, FILE_LIMIT_SOLO).map((entry) => ({ entry, positions: [] as number[] }));
+      if (!q) return entries.slice(0, FILE_SOLO_LIMIT).map((entry) => ({ entry, positions: [] as number[] }));
       const hits: Array<{ entry: DirEntry; positions: number[]; score: number }> = [];
       for (const entry of entries) {
         const m = fuzzyMatch(q, entry.name);
         if (m) hits.push({ entry, positions: m.positions, score: m.score });
       }
-      return hits.sort((a, b) => b.score - a.score).slice(0, FILE_LIMIT_SOLO);
+      return hits.sort((a, b) => b.score - a.score).slice(0, FILE_SOLO_LIMIT);
     }, [filesEnabled, entries, filterTerm]);
 
-    // Apply the half-half budget. Sessions shrink as soon as the files group
-    // occupies screen space (rows OR the loading skeleton — otherwise the list
-    // would snap from 8 to 4 rows when the async listing lands); files shrink
-    // when any session matched. Either group takes the full budget back the
-    // moment the other is empty.
-    const filesTakeSpace = filesEnabled && (filesLoading || fileRowsAll.length > 0);
-    const sessionRows = useMemo(
-      () => (filesTakeSpace ? sessionRowsAll.slice(0, SESSION_LIMIT_SHARED) : sessionRowsAll),
-      [sessionRowsAll, filesTakeSpace],
-    );
-    const fileLimit = sessionRowsAll.length > 0 ? FILE_LIMIT_SHARED : FILE_LIMIT_SOLO;
-    const fileRows = useMemo(() => fileRowsAll.slice(0, fileLimit), [fileRowsAll, fileLimit]);
+    // ---- Shared row budget: every non-empty group stays visible ----------
+    // The Files group always renders when enabled (rows, skeleton, or the
+    // "No matching file" line), so it always counts — otherwise the entity
+    // groups would snap from tall to short when the async listing lands.
+    const nonEmpty = ENTITY_GROUPS.filter((k) => rankedAll[k].length > 0).length + (filesEnabled ? 1 : 0);
+    const budget = groupRowBudget(nonEmpty);
+    const groupRows = useMemo<Record<MentionEntityKind, RankedEntity[]>>(() => ({
+      task: rankedAll.task.slice(0, budget.entity),
+      session: rankedAll.session.slice(0, budget.entity),
+      project: rankedAll.project.slice(0, budget.entity),
+    }), [rankedAll, budget.entity]);
+    const fileRows = useMemo(() => fileRowsAll.slice(0, budget.files), [fileRowsAll, budget.files]);
 
     // ---- Flat row model (selection by key, stable across async loads) ---
     const rows = useMemo<Row[]>(() => {
-      const sess: Row[] = sessionRows.map((ranked) => ({ key: `s:${ranked.session.id}`, kind: 'session', ranked }));
-      const files: Row[] = fileRows.map(({ entry, positions }) => ({ key: `f:${entry.type}:${entry.name}`, kind: 'entry', entry, positions }));
-      return order === 'sessions-first' ? [...sess, ...files] : [...files, ...sess];
-    }, [sessionRows, fileRows, order]);
+      const entityRows: Row[] = ENTITY_GROUPS.flatMap((group) =>
+        groupRows[group].map((ranked) => ({ key: `${group}:${ranked.entity.id}`, kind: 'entity' as const, group, ranked })));
+      const files: Row[] = fileRows.map(({ entry, positions }) =>
+        ({ key: `f:${entry.type}:${entry.name}`, kind: 'entry' as const, group: 'files' as const, entry, positions }));
+      return order === 'entities-first' ? [...entityRows, ...files] : [...files, ...entityRows];
+    }, [groupRows, fileRows, order]);
 
     const [selectedKey, setSelectedKey] = useState<string | null>(null);
     const selectedIndex = Math.max(0, rows.findIndex((r) => r.key === selectedKey));
@@ -226,6 +360,16 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
       el?.scrollIntoView({ block: 'nearest' });
     }, [selectedKey]);
 
+    // A multi-word query that DEFINITIVELY matches nothing (local layer empty,
+    // hybrid search answered for this exact query, files settled) closes the
+    // palette: the trigger only allows spaces while we are open, so this hands
+    // Enter back to "send" instead of swallowing it on an empty list forever.
+    const settledEmpty = rows.length === 0 && !filesLoading
+      && (!entitiesEnabled || (!search.loading && search.forQuery === query.trim()));
+    useEffect(() => {
+      if (settledEmpty && /\s/.test(query)) onClose();
+    }, [settledEmpty, query, onClose]);
+
     // Global Escape (capture) — works after the user clicked into the popup.
     useEffect(() => {
       const handler = (e: KeyboardEvent) => {
@@ -236,11 +380,11 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     }, [onClose]);
 
     const pick = useCallback((row: Row, opts: { forceSelect?: boolean } = {}) => {
-      if (row.kind === 'session') { onPickSession(row.ranked.session.id); return; }
+      if (row.kind === 'entity') { onPickRef(refTagFor(row.ranked.entity), row.ranked.entity); return; }
       const abs = joinPath(browseDir, row.entry.name);
       if (row.entry.type === 'dir' && !opts.forceSelect) onNavigate(abs);
       else onPickFile(abs);
-    }, [browseDir, onPickSession, onPickFile, onNavigate]);
+    }, [browseDir, onPickRef, onPickFile, onNavigate]);
 
     useImperativeHandle(ref, (): MentionPaletteHandle => ({
       move: (delta) => {
@@ -251,8 +395,10 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
       jumpGroup: () => {
         const current = rows[selectedIndex];
         if (!current) return;
-        const other = rows.find((r) => r.kind !== current.kind);
-        if (other) setSelectedKey(other.key);
+        // First row of the next group after the current one, wrapping around.
+        const after = rows.slice(selectedIndex + 1).find((r) => r.group !== current.group)
+          ?? rows.find((r) => r.group !== current.group);
+        if (after) setSelectedKey(after.key);
       },
       primary: () => { const r = rows[selectedIndex]; if (r) pick(r); },
       selectCurrent: () => { const r = rows[selectedIndex]; if (r) pick(r, { forceSelect: true }); },
@@ -264,39 +410,43 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     }), [rows, selectedIndex, pick, filesEnabled, browseDir, onNavigate]);
 
     // ---- Render ----------------------------------------------------------
-    const renderSessionRow = (row: Extract<Row, { kind: 'session' }>) => {
-      const { session, matchField, positions } = row.ranked;
-      const live = sessionStatusStore.getStatus(session.id);
-      const status = live?.process_status ?? session.status;
-      const waiting = !!live?.pendingPermissionTool;
-      const hostLabel = session.host && session.host !== '__local__' ? session.host : 'local';
-      const shortId = session.id.slice(0, 8);
-      const dotClass = waiting ? 'waiting' : status === 'running' ? 'running' : status === 'error' ? 'error' : 'idle';
+    const renderEntityRow = (row: Extract<Row, { kind: 'entity' }>) => {
+      const { entity, positions, matchField, source } = row.ranked;
+      const dotClass = entity.kind === 'session'
+        ? (entity.status === 'waiting' ? 'waiting' : entity.status === 'running' ? 'running' : entity.status === 'error' ? 'error' : 'idle')
+        : null;
+      // A purely semantic hit has nothing to highlight: show the snippet that
+      // matched instead, so the row explains itself.
+      const semanticOnly = source === 'server' && positions.length === 0 && !!entity.summary;
       return (
         <div
           key={row.key}
-          className={`mention-row${row.key === selectedKey ? ' selected' : ''}`}
+          className={`mention-row mention-row-${entity.kind}${row.key === selectedKey ? ' selected' : ''}`}
           data-selected={row.key === selectedKey || undefined}
+          data-kind={entity.kind}
           onMouseEnter={() => setSelectedKey(row.key)}
           onMouseDown={(e) => { e.preventDefault(); pick(row); }}
-          title={`${session.title || '(untitled)'} — ${hostLabel} · ${status}`}
+          title={`${entity.title} — ${entity.meta}`}
         >
-          <span className={`mention-dot ${dotClass}`} />
+          {dotClass
+            ? <span className={`mention-dot ${dotClass}`} />
+            : <span className={`mention-kind mention-kind-${entity.kind}`} aria-hidden="true">{entity.kind === 'task' ? '▢' : '▣'}</span>}
           <span className="mention-main">
             <span className="mention-title">
               {matchField === 'title'
-                ? <Highlighted text={session.title || '(untitled)'} positions={positions} />
-                : (session.title || '(untitled)')}
+                ? <Highlighted text={entity.title} positions={positions} />
+                : entity.title}
             </span>
             <span className="mention-meta">
-              {matchField === 'host' ? <Highlighted text={hostLabel} positions={positions} /> : hostLabel}
-              {' · '}{waiting ? 'waiting on you' : status}
-              {session.lastActiveAt ? <> · {timeAgo(session.lastActiveAt)}</> : null}
+              {entity.meta}
+              {semanticOnly && <span className="mention-summary"> · {entity.summary}</span>}
             </span>
           </span>
-          <span className="mention-id">
-            {matchField === 'id' ? <Highlighted text={shortId} positions={positions} /> : shortId}
-          </span>
+          {entity.kind === 'session' && (
+            <span className="mention-id">
+              {matchField === 'id' ? <Highlighted text={entity.id.slice(0, 8)} positions={positions} /> : entity.id.slice(0, 8)}
+            </span>
+          )}
         </div>
       );
     };
@@ -333,26 +483,38 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
       );
     };
 
-    const sessionsGroup = sessionsEnabled && (sessionRows.length > 0 || !filesEnabled) ? (
-      <div key="g-sessions">
-        <div className="mention-group-head">
-          <span className="mention-group-name">Sessions</span>
-          <span className="mention-group-verb">
-            {sessionsRoute ? '⏎ sends this message to it' : '⏎ inserts a session ref'}
-          </span>
-        </div>
-        {sessionRows.length === 0 && <div className="mention-empty">No matching session</div>}
-        {sessionRows.map((ranked) => renderSessionRow({ key: `s:${ranked.session.id}`, kind: 'session', ranked }))}
+    const anyEntityRows = ENTITY_GROUPS.some((k) => groupRows[k].length > 0);
+    const entityGroups = entitiesEnabled ? (
+      <div key="g-entities">
+        {ENTITY_GROUPS.map((group) => groupRows[group].length > 0 && (
+          <div key={`g-${group}`} data-group={group}>
+            <div className="mention-group-head">
+              <span className="mention-group-name">{GROUP_LABEL[group]}</span>
+              <span className="mention-group-verb">{GROUP_VERB[group]}</span>
+              {search.loading && group !== 'project' && <span className="mention-searching" title="Searching…" />}
+            </div>
+            {groupRows[group].map((ranked) =>
+              renderEntityRow({ key: `${group}:${ranked.entity.id}`, kind: 'entity', group, ranked }))}
+          </div>
+        ))}
+        {!anyEntityRows && (query.trim() || !filesEnabled) && (
+          <div className="mention-group-head">
+            <span className="mention-group-name">Walnut</span>
+            <span className="mention-group-verb">
+              {search.loading ? 'Searching…' : 'No matching task, session or project'}
+            </span>
+          </div>
+        )}
       </div>
     ) : null;
 
     const atRoot = browseDir.replace(/\/+$/, '') === rootPath.replace(/\/+$/, '');
     const filesGroup = filesEnabled ? (
-      <div key="g-files">
+      <div key="g-files" data-group="files">
         <div className="mention-group-head">
-          <span className="mention-group-name">Files</span>
+          <span className="mention-group-name">{GROUP_LABEL.files}</span>
           <span className="mention-group-verb">
-            ⏎ inserts a file ref{atRoot ? '' : ` · in ${relativeTo(rootPath, browseDir)}`}
+            {GROUP_VERB.files}{atRoot ? '' : ` · in ${relativeTo(rootPath, browseDir)}`}
           </span>
         </div>
         {filesError && <div className="mention-empty">{filesError}</div>}
@@ -363,19 +525,19 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
           <div className="mention-empty">No matching file</div>
         )}
         {fileRows.map(({ entry, positions }) =>
-          renderEntryRow({ key: `f:${entry.type}:${entry.name}`, kind: 'entry', entry, positions }))}
+          renderEntryRow({ key: `f:${entry.type}:${entry.name}`, kind: 'entry', group: 'files', entry, positions }))}
       </div>
     ) : null;
 
     return (
       <div className="mention-palette" role="listbox" aria-label="Mention picker">
         <div className="mention-list" ref={listRef}>
-          {order === 'sessions-first' ? <>{sessionsGroup}{filesGroup}</> : <>{filesGroup}{sessionsGroup}</>}
+          {order === 'entities-first' ? <>{entityGroups}{filesGroup}</> : <>{filesGroup}{entityGroups}</>}
         </div>
         <div className="mention-hintbar">
           <span><b>↑↓</b> move</span>
-          {sessionsEnabled && filesEnabled && <span><b>⇥</b> group</span>}
-          <span><b>⏎</b> select</span>
+          {entitiesEnabled && filesEnabled && <span><b>⇥</b> group</span>}
+          <span><b>⏎</b> reference</span>
           {filesEnabled && <span><b>←</b> parent</span>}
           {filesEnabled && <span><b>@?</b> recents</span>}
           <span><b>esc</b> close</span>

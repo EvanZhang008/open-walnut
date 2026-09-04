@@ -45,8 +45,6 @@ import { useSessionHistory } from '@/hooks/useSessionHistory';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, terminateSession, investigateSession } from '@/api/sessions';
-import { parseSessionDirective } from '@/components/chat/session-mention';
-import { buildImageRefsPayload } from '@/api/image-upload';
 import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
 import { traceInteraction } from '@/utils/interaction-timer';
@@ -71,7 +69,6 @@ import { useHeightVar } from '@/hooks/useHeightVar';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
 import { PlanContentContext } from '@/contexts/PlanContentContext';
 import { SessionRetryButton } from './SessionRetryButton';
-import { wsClient } from '@/api/ws';
 import type { SessionRecord, TaskPhase } from '@/types/session';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
@@ -1267,14 +1264,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     }
   });
 
-  // "@<session> message" routing (Claude Code's direct-message convention): a
-  // leading @ + id prefix resolved to another session sends THERE, not here.
-  // Resolution is server-side (unique-prefix or nothing — 409 on ambiguity), so
-  // an unresolvable ref falls through to a normal send and no text is lost.
-  const [routedNotice, setRoutedNotice] = useState<{ sessionId: string; shortId: string; title: string } | null>(null);
-  const routedNoticeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(routedNoticeTimerRef.current), []);
-
   /**
    * One send path for the composer, thread anchor included.
    *
@@ -1337,38 +1326,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     return dispatch(sessionId, text, images, userUuid ? { userUuid } : undefined);
   }, [composerAnchor, viewMode, interruptSend, send, sessionId, setComposerAnchor, threadsStore]);
 
+  // Every send goes to THIS session. An "@" reference in the text is a pill the
+  // agent receives (plus a server-appended reference card); the composer never
+  // routes a message to another session — that is the agent's call.
   const handleSend = useCallback(async (message: string, images?: ImageAttachment[]) => {
-    const directive = parseSessionDirective(message);
-    if (directive) {
-      let target = null;
-      try {
-        target = await fetchSession(directive.ref);
-      } catch { /* ambiguous prefix / transient — treat as unresolved */ }
-      if (target && target.claudeSessionId !== sessionId) {
-        try {
-          const res = await wsClient.sendRpc<{ messageId: string }>('session:send', {
-            sessionId: target.claudeSessionId,
-            message: directive.body,
-            ...(await buildImageRefsPayload(images)),
-          });
-          if (res?.messageId) {
-            setRoutedNotice({
-              sessionId: target.claudeSessionId,
-              shortId: target.claudeSessionId.slice(0, 8),
-              title: target.title || '(untitled)',
-            });
-            clearTimeout(routedNoticeTimerRef.current);
-            routedNoticeTimerRef.current = setTimeout(() => setRoutedNotice(null), 6000);
-            return true;
-          }
-          return false;
-        } catch {
-          return false; // ChatInput restores the draft on false
-        }
-      }
-    }
     return sendAnchored(message, images, false);
-  }, [sessionId, sendAnchored]);
+  }, [sendAnchored]);
 
   const handleInterruptSend = useCallback((message: string, images?: ImageAttachment[]) => {
     return sendAnchored(message, images, true);
@@ -2177,33 +2140,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               <span className="session-recap-tip-text">{session.recap}</span>
             </div>
           )}
-          {routedNotice && (
-            <div className="session-routed-notice" role="status">
-              <span aria-hidden="true">↗</span>
-              {/* This is the ONLY outgoing surface for a session→session message
-                  (a routed send leaves no bubble in the sender's timeline), so it
-                  carries the same clickable "which session" chip the incoming
-                  provenance card does — click it to open that column. */}
-              <span>
-                Sent to{' '}
-                <button
-                  type="button"
-                  className="provenance-chip provenance-chip-session"
-                  title={`Open session ${routedNotice.sessionId}`}
-                  onClick={() => onSessionClick?.(routedNotice.sessionId)}
-                >{`@${routedNotice.shortId}`}</button>{' '}
-                {routedNotice.title}
-              </span>
-              <button
-                type="button"
-                className="session-routed-notice-dismiss"
-                aria-label="Dismiss"
-                onClick={() => setRoutedNotice(null)}
-              >
-                &times;
-              </button>
-            </div>
-          )}
           {/* Thread anchor — the one visible answer to "where will this message
               go?". Inside the composer overlay (like the notes bar) so the tracked
               --sp-composer-h includes it; outside ChatInput, which owns only the
@@ -2298,7 +2234,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             onControlCommand={handleControlCommand}
             mentionCwd={session?.cwd}
             mentionHost={session?.host}
-            enableSessionMention
+            enableEntityMention
             sessionMentionSelfId={sessionId}
             draftKey={`draft:session:${sessionId}`}
             prefillText={prefillText}

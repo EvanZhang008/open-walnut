@@ -477,6 +477,16 @@ describe('splitRichChunks — classification', () => {
     expect(kinds(text)).toEqual(['md']);
     expect(hasRichContent(text)).toBe(false);
   });
+
+  it('does not treat a project pill as HTML either (all three kinds)', () => {
+    // A project ref carries the NAME in id, so its attribute value is prose —
+    // all the more reason it must not open a depth level.
+    const text = 'Filed under <project-ref id="Marina" label="Marina Rebuild"/>, see <session-ref id="s-1"/>.';
+    expect(kinds(text)).toEqual(['md']);
+    expect(hasRichContent(text)).toBe(false);
+    // The non-self-closing form is the one that used to pin depth above 0.
+    expect(hasRichContent('<project-ref id="Marina">')).toBe(false);
+  });
 });
 
 describe('hasRichContent', () => {

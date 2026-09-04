@@ -1170,10 +1170,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // The feed is a plain-text surface: strip <task-ref>/<session-ref> markup
       // down to labels, but first lift the referenced ids onto the record so the
       // notification card can deep-link to the session/task the job produced.
-      const refs = extractFirstRefs(text)
+      // Only the two deep-linkable ids: a project ref has no route to link to.
+      const { sessionId: refSessionId, taskId: refTaskId } = extractFirstRefs(text)
       void addFeedNotification({
         kind: 'cron', severity: 'info', title: jobName, body: stripEntityRefs(text), timestamp: eventTs,
-        dedupKey: `cron:${jobName}:${eventTs}`, ...refs,
+        dedupKey: `cron:${jobName}:${eventTs}`,
+        ...(refSessionId ? { sessionId: refSessionId } : {}), ...(refTaskId ? { taskId: refTaskId } : {}),
       }).catch(err => log.cron.warn('failed to persist cron notification', { jobName, error: err instanceof Error ? err.message : String(err) }))
       // Chat message (for inline display)
       broadcastEvent('cron:chat-message', { content: text, jobName, timestamp, agentWillRespond: opts?.agentWillRespond ?? false, conversationId })

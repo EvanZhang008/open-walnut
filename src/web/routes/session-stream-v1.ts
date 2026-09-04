@@ -37,7 +37,7 @@ import { emitSse, attachSse, sseConnCount } from '../sse-channels.js'
 import { sessionStreamBuffer, budgetSnapshotBlocks } from '../session-stream-buffer.js'
 import { prepareOutputModeSend } from '../../core/sessions/output-mode-send.js'
 import { clipTranscriptText } from '../../core/sessions/transcript-clip.js'
-import { stripOutputModeWrappers } from '../../core/sessions/output-mode.js'
+import { toDisplayedUserText } from '../../core/sessions/reference-cards.js'
 import { log } from '../../logging/index.js'
 
 export const sessionStreamV1Router = Router()
@@ -647,15 +647,16 @@ function clip(text: string): string {
   return clipTranscriptText(text)
 }
 
-/** A USER row, minus the output-mode wrapper the send path appended and the CLI
- *  echoed into its JSONL. The primary path strips it at the history projection
+/** A USER row, minus the machine text the send path appended (output-mode
+ *  wrapper, reference-card block) and the CLI echoed into its JSONL. The
+ *  primary path strips it at the history projection
  *  choke point (core/session-history.ts); this route is a SECOND parser of the
  *  same JSONL, so without the same call the phone shows the machine instruction
  *  as part of what the human typed — on every message, since the reminder rides
  *  every send while rich holds. Strip BEFORE clipping so the budget is spent on
  *  the human's words. */
 function clipUserText(text: string): string {
-  return clipTranscriptText(stripOutputModeWrappers(text))
+  return clipTranscriptText(toDisplayedUserText(text))
 }
 
 /** The CLI's abort echo ("[Request interrupted by user( for tool use)]") —

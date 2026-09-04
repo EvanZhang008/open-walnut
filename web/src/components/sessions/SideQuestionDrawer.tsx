@@ -751,7 +751,7 @@ export function SideQuestionDrawer({
               placeholder={activeThread ? 'Follow up…' : 'Ask a side question…'}
               disabled={disabled || state.creating || !!activeThread?.archived}
               showCommands={false}
-              enableSessionMention={false}
+              enableEntityMention={false}
               mentionCwd={cwd}
               mentionHost={host}
               draftKey={sessionId ? `side-thread-draft:${sessionId}` : undefined}

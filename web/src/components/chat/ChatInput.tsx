@@ -8,14 +8,13 @@ import { CommandPalette, type PaletteItem } from './CommandPalette';
 import { detectSlashCommand } from './slash-trigger';
 import { FileMentionPopup, type FileMentionHandle } from './FileMentionPopup';
 import { MentionPalette, type MentionPaletteHandle } from './MentionPalette';
+import { ComposerRefStrip } from './ComposerRefStrip';
 import { relativeTo } from './mention-path';
-import {
-  formatSessionRef,
-  parseSessionDirective,
-  resolveRefInIndex,
-  routeMention,
-} from './session-mention';
-import { ensureSessionMentionIndex, getSessionMentionIndex } from '@/stores/session-mention-index';
+import { routeMention } from './session-mention';
+import { detectMention } from './mention-trigger';
+import { extractEntityRefs } from '@/utils/entity-ref-tags';
+import { ensureSessionMentionIndex } from '@/stores/session-mention-index';
+import { ensureProjectsIndex } from '@/stores/mention-search';
 import type { Task } from '@open-walnut/core';
 import { StatusBadge } from '../common/StatusBadge';
 import { MicButton } from '../common/MicButton';
@@ -24,26 +23,6 @@ import { pasteRichTextAsMarkdown } from '@/utils/html-to-markdown';
 
 const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const MAX_IMAGES = 5;
-
-/**
- * Detect an active "@" file mention at the caret.
- * Triggers only when the "@" sits at the start of input or right after
- * whitespace (so emails `a@b` and decorators don't false-fire), and there's
- * no whitespace between the "@" and the caret. Returns the "@" index and the
- * query typed after it, or null if no mention is active.
- */
-export function detectMention(
-  text: string,
-  caret: number,
-): { atIndex: number; query: string } | null {
-  const at = text.lastIndexOf('@', caret - 1);
-  if (at === -1) return null;
-  const before = at === 0 ? '' : text[at - 1];
-  if (before && !/\s/.test(before)) return null;
-  const query = text.slice(at + 1, caret);
-  if (/\s/.test(query)) return null;
-  return { atIndex: at, query };
-}
 
 /**
  * Format a selected path as an "@" reference token for insertion into the message.
@@ -104,11 +83,11 @@ interface ChatInputProps {
   mentionCwd?: string;
   /** SSH host for "@" mentions (undefined = local). */
   mentionHost?: string;
-  /** Enables the Sessions group in the "@" mention palette. A line-start "@"
-   *  leads with sessions (Claude Code's `@name message` direct-message
-   *  convention); the candidate list is the in-memory session-mention index. */
-  enableSessionMention?: boolean;
-  /** The session this composer talks to — excluded from the session picker. */
+  /** Enables the Walnut entity groups (Tasks / Sessions / Projects) in the "@"
+   *  palette. Picking one INSERTS a reference pill into the message — nothing
+   *  is routed; the current session's agent decides what to do with it. */
+  enableEntityMention?: boolean;
+  /** The session this composer talks to — excluded from the session group. */
   sessionMentionSelfId?: string;
   /** External prefill: text to drop into the input (e.g. an agent-builder template). */
   prefillText?: string;
@@ -136,7 +115,7 @@ interface ChatInputProps {
   onValueChange?: (text: string) => void;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, enableSessionMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, onValueChange }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, onValueChange }: ChatInputProps) {
   const [value, setValue] = useState(() => {
     if (!draftKey) return '';
     try { return localStorage.getItem(draftKey) ?? ''; } catch { return ''; }
@@ -424,17 +403,17 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionCommands]);
 
-  // "@" mention state — ONE unified palette (Sessions + Files groups; see
-  // MentionPalette) plus the legacy "@?" recents popup. mentionAtIndexRef /
-  // mentionEndRef bracket the "@query" span in `value` so selection can splice
-  // without relying on the live caret (unreliable for mouse-driven picks).
-  // routeMention decides the surface + leading group per keystroke.
+  // "@" mention state — ONE unified palette (Tasks / Sessions / Projects +
+  // Files groups; see MentionPalette) plus the legacy "@?" recents popup.
+  // mentionAtIndexRef / mentionEndRef bracket the "@query" span in `value` so
+  // selection can splice without relying on the live caret (unreliable for
+  // mouse-driven picks). routeMention decides the surface + leading half per
+  // keystroke.
   const mentionEnabled = !!mentionCwd;
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionKind, setMentionKind] = useState<'palette' | 'recents'>('palette');
-  const [mentionOrder, setMentionOrder] = useState<'sessions-first' | 'files-first'>('sessions-first');
-  const [mentionAt, setMentionAt] = useState(-1);
+  const [mentionOrder, setMentionOrder] = useState<'entities-first' | 'files-first'>('entities-first');
   const mentionAtIndexRef = useRef<number>(-1);
   const mentionEndRef = useRef<number>(-1);
   // Index of an "@" the user dismissed with Esc — handleChange won't auto-reopen
@@ -464,18 +443,6 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     mentionDismissedAtRef.current = mentionAtIndexRef.current;
     closeMention();
   }, [closeMention]);
-
-  // Pre-send routing hint: when the composed text IS a session directive
-  // ("@<ref> message") and the ref resolves uniquely in the in-memory index,
-  // show who will receive it. The server stays the routing authority — this is
-  // display only (0ms, no network).
-  const routeTarget = (() => {
-    if (!enableSessionMention) return null;
-    const d = parseSessionDirective(value);
-    if (!d) return null;
-    const target = resolveRefInIndex(d.ref, getSessionMentionIndex());
-    return target && target.id !== sessionMentionSelfId ? target : null;
-  })();
 
   const processFiles = useCallback((files: FileList | File[]) => {
     // Start the FileReader OUTSIDE any setState updater. The reader is a side effect;
@@ -716,37 +683,57 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // A recents jump lands in the unified palette (the query no longer starts
     // with "?"), so keep the routing state in sync with what handleChange
     // would have computed for this text.
-    const route = routeMention(at, query);
+    const route = routeMention(query);
     if (route.kind === 'palette') {
       setMentionKind('palette');
       mentionKindRef.current = 'palette';
-      setMentionOrder(enableSessionMention ? route.order : 'files-first');
+      setMentionOrder(enableEntityMention ? route.order : 'files-first');
     }
     requestAnimationFrame(() => {
       const ta = textareaRef.current;
       if (ta) { ta.focus(); ta.setSelectionRange(newCaret, newCaret); }
     });
-  }, [value, saveDraft, mentionCwd, enableSessionMention]);
+  }, [value, saveDraft, mentionCwd, enableEntityMention]);
 
-  // Session mention pick: splice "@<short8> " over the "@query" span.
-  const handlePickSession = useCallback((sessionId: string) => {
+  // Entity pick: splice the reference pill tag (`<task-ref …/>` etc.) plus a
+  // space over the "@query" span. The tag travels verbatim in the message —
+  // the bubble renders it as a pill and the server appends a reference card.
+  const handlePickRef = useCallback((tag: string) => {
     const at = mentionAtIndexRef.current;
     const end = mentionEndRef.current;
-    if (!sessionId || at < 0 || end < at) { closeMention(); return; }
-    const ref = formatSessionRef(sessionId);
-    const newValue = value.slice(0, at) + ref + value.slice(end);
+    if (!tag || at < 0 || end < at) { closeMention(); return; }
+    const inserted = `${tag} `;
+    const newValue = value.slice(0, at) + inserted + value.slice(end);
     setValue(newValue);
     saveDraft(newValue);
     closeMention();
-    const newCaret = at + ref.length;
+    const newCaret = at + inserted.length;
     requestAnimationFrame(() => {
       const ta = textareaRef.current;
       if (ta) {
+        ta.style.height = 'auto';
+        ta.style.height = Math.min(ta.scrollHeight, getMaxHeight(ta)) + 'px';
         ta.focus();
         ta.setSelectionRange(newCaret, newCaret);
       }
     });
   }, [value, saveDraft, closeMention]);
+
+  // × on a reference pill in the strip above the textarea: cut its span out.
+  const handleRemoveRef = useCallback((start: number, end: number) => {
+    const newValue = value.slice(0, start) + value.slice(end);
+    setValue(newValue);
+    saveDraft(newValue);
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (ta) {
+        ta.style.height = 'auto';
+        ta.style.height = Math.min(ta.scrollHeight, getMaxHeight(ta)) + 'px';
+        ta.focus();
+        ta.setSelectionRange(start, start);
+      }
+    });
+  }, [value, saveDraft]);
 
   const handleKeyDown = (e: KeyboardEvent) => {
     // Shift+Tab: caller-defined mode cycle (sessions: permission mode)
@@ -860,9 +847,20 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // with no whitespace in between. routeMention picks the surface: "@?" → the
     // recents popup; anything else → the unified palette, with the leading group
     // chosen by position/shape (line-start = sessions, path/mid-text = files).
-    if (mentionEnabled || enableSessionMention) {
+    if (mentionEnabled || enableEntityMention) {
       const caret = textareaRef.current?.selectionStart ?? newValue.length;
-      const m = detectMention(newValue, caret);
+      // While the palette is open for this "@", the query may grow across
+      // single spaces (multi-word lookups for the hybrid search); a closed
+      // palette keeps the strict no-whitespace trigger.
+      const openAt = enableEntityMention && mentionOpenRef.current ? mentionAtIndexRef.current : -1;
+      let m = detectMention(newValue, caret, openAt);
+      // An "@" INSIDE an inserted pill tag (a task titled "fix @mentions" puts
+      // one in its label) is markup, not a trigger: picking there would splice
+      // a second tag into the first and corrupt both.
+      if (m && enableEntityMention) {
+        const at = m.atIndex;
+        if (extractEntityRefs(newValue).some((r) => at >= r.start && at < r.end)) m = null;
+      }
       if (m) {
         // Don't reopen a popup the user just dismissed with Esc for this same "@".
         if (m.atIndex === mentionDismissedAtRef.current) {
@@ -875,7 +873,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         mentionEndRef.current = caret; // end of the "@query" span = current caret
         const override = mentionOrderOverrideRef.current;
         if (override && override.at !== m.atIndex) mentionOrderOverrideRef.current = null;
-        const route = routeMention(m.atIndex, m.query);
+        const route = routeMention(m.query);
         if (route.kind === 'recents') {
           if (!mentionEnabled) { if (mentionOpenRef.current) closeMention(); return; }
           setMentionKind('recents');
@@ -885,11 +883,13 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           mentionKindRef.current = 'palette';
           const order = override && override.at === m.atIndex
             ? override.order
-            : enableSessionMention ? route.order : 'files-first';
+            : enableEntityMention ? route.order : 'files-first';
           setMentionOrder(order);
-          if (enableSessionMention) void ensureSessionMentionIndex();
+          if (enableEntityMention) {
+            void ensureSessionMentionIndex();
+            void ensureProjectsIndex();
+          }
         }
-        setMentionAt(m.atIndex);
         setMentionQuery(m.query);
         setMentionOpen(true);
         mentionOpenRef.current = true;
@@ -1040,19 +1040,19 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // "+" menu Shortcuts: insert a special-command trigger and run the same
   // detection typing it would. setRangeText mutates the DOM value + caret
   // first, so handleChange (which reads selectionStart) sees the real caret.
-  const insertShortcut = (trigger: string, opts?: { lineStart?: boolean; fileMention?: boolean }) => {
+  const insertShortcut = (trigger: string, opts?: { fileMention?: boolean }) => {
     setPlusOpen(false);
     const el = textareaRef.current;
     if (!el) return;
     el.focus();
-    const caret = opts?.lineStart ? 0 : (el.selectionStart ?? el.value.length);
+    const caret = el.selectionStart ?? el.value.length;
     const before = el.value.slice(0, caret);
-    const needSpace = !opts?.lineStart && before.length > 0 && !/\s$/.test(before);
+    const needSpace = before.length > 0 && !/\s$/.test(before);
     const inserted = (needSpace ? ' ' : '') + trigger;
     el.setSelectionRange(caret, caret);
     el.setRangeText(inserted, caret, caret, 'end');
-    // "Reference a file" leads with the FILES group even at line start, where
-    // the sessions group would otherwise lead.
+    // "Reference a file" leads with the FILES half, where a bare "@" would
+    // otherwise lead with the entity groups.
     const atIndex = caret + (needSpace ? 1 : 0);
     mentionOrderOverrideRef.current = opts?.fileMention ? { at: atIndex, order: 'files-first' } : null;
     handleChange(el.value);
@@ -1122,17 +1122,16 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             : undefined}
         />
       )}
-      {mentionOpen && mentionKind === 'palette' && (mentionEnabled || enableSessionMention) && (
+      {mentionOpen && mentionKind === 'palette' && (mentionEnabled || enableEntityMention) && (
         <MentionPalette
           ref={mentionPaletteRef}
           query={mentionQuery}
           order={mentionOrder}
-          sessionsRoute={!!enableSessionMention && mentionAt === 0}
-          sessionsEnabled={!!enableSessionMention}
+          entitiesEnabled={!!enableEntityMention}
           selfSessionId={sessionMentionSelfId}
           cwd={mentionCwd}
           host={mentionHost}
-          onPickSession={handlePickSession}
+          onPickRef={handlePickRef}
           onPickFile={handleMentionSelect}
           onNavigate={handleMentionNavigate}
           onClose={dismissMention}
@@ -1187,15 +1186,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
               <span className="pill-title">{focusedTask.title}</span>
             </div>
           )}
-          {/* Pre-send routing hint — the composed text is a session directive
-              and the ref resolves: show WHO will receive it before Send. */}
-          {routeTarget && (
-            <div className="chat-route-hint" title={`This message will be sent to session ${routeTarget.id}`}>
-              <span aria-hidden="true">↗</span>
-              <span>Sends to <strong>{routeTarget.title || '(untitled)'}</strong></span>
-              <span className="chat-route-hint-id">{routeTarget.id.slice(0, 8)}</span>
-            </div>
-          )}
+          {/* Readable view of the reference pills sitting in the text as tags */}
+          {enableEntityMention && <ComposerRefStrip value={value} onRemove={handleRemoveRef} />}
           {/* Image preview area */}
           {images.length > 0 && (
             <div className="chat-image-previews">
@@ -1264,20 +1256,20 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
               </button>
               {/* Shortcuts — the discoverable index of the composer's special
                   commands (each row inserts its trigger and opens its picker). */}
-              {(enableSessionMention || mentionCwd || showCommands || isSessionMode) && (
+              {(enableEntityMention || mentionCwd || showCommands || isSessionMode) && (
                 <>
                   <div className="chat-plus-menu-divider" role="separator" />
                   <div className="chat-plus-menu-label">Shortcuts</div>
-                  {enableSessionMention && (
+                  {enableEntityMention && (
                     <button
                       className="chat-plus-menu-item"
-                      onClick={() => insertShortcut('@', { lineStart: true })}
+                      onClick={() => insertShortcut('@')}
                       type="button"
                       role="menuitem"
-                      title="Type @ at the start of the message to pick a session; the message goes to it instead of this one"
+                      title="Type @ to reference a task, session or project; the agent gets its context and decides what to do"
                     >
                       <span className="chat-plus-menu-key">@</span>
-                      <span>Message another session</span>
+                      <span>Reference a task, session or project</span>
                     </button>
                   )}
                   {mentionCwd && (

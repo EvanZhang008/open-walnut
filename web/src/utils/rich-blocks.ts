@@ -105,8 +105,11 @@ const NO_PARAGRAPH_CHILDREN = new Set([
  * "HTML" is a task pill would be classified `html` and get CSS containment.
  * (They are absent from KNOWN_ELEMENTS too, so this check is belt-and-braces —
  * it is here to say WHY, not because the allowlist would let them through.)
+ *
+ * Every kind entityRefsToHtml rewrites belongs here — add a new pill tag to both
+ * in the same edit, or the pill starts classifying its paragraph as model HTML.
  */
-const REF_TAGS = new Set(['task-ref', 'session-ref']);
+const REF_TAGS = new Set(['task-ref', 'session-ref', 'project-ref']);
 
 /**
  * Every element name that may affect structure — DOMPurify's default html + svg

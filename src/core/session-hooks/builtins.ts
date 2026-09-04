@@ -19,7 +19,7 @@ import type {
   TaskHookContext,
 } from './types.js';
 import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
-import { stripOutputModeWrappers } from '../sessions/output-mode.js';
+import { toDisplayedUserText } from '../sessions/reference-cards.js';
 
 // ── Triage dedup state ──
 // Prevents burst triage dispatches when daemon replays old JSONL events after
@@ -1394,12 +1394,13 @@ export async function autoTitleFromObservedMessage(
 ): Promise<boolean> {
   // Strip what the SEND ROUTE wrapped around the user's own words, since none of
   // it carries titling signal: the "[Images attached …]\n- <path>…" prefix (file
-  // paths), and the output-mode instruction / standing reminder (machine text
+  // paths), the output-mode instruction / standing reminder (machine text
   // that, while rich mode holds, rides EVERY send and would otherwise dominate
-  // the titling prompt — see core/sessions/output-mode.ts). This sees the RAW
-  // observed message, so it cannot rely on the history projection's strip.
-  // An image-only message leaves nothing.
-  const message = stripOutputModeWrappers(
+  // the titling prompt — see core/sessions/output-mode.ts), and the reference
+  // card block appended for entity pills (core/sessions/reference-cards.ts).
+  // This sees the RAW observed message, so it cannot rely on the history
+  // projection's strip. An image-only message leaves nothing.
+  const message = toDisplayedUserText(
     rawMessage.replace(/^\[Images attached[^\]]*\]\n(?:- \S[^\n]*\n)*\n?/, ''),
   ).trim();
   if (!message) return false;

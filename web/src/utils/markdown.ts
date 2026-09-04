@@ -389,6 +389,12 @@ marked.use({
 const TASK_REF_RE = /<task-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g;
 /** Session-ref regex: matches <session-ref id="..." label="..."/> or <session-ref id="..."/> */
 const SESSION_REF_RE = /<session-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g;
+/**
+ * Project-ref regex — same attribute shape as the two above, but `id` carries the
+ * project NAME: a project has no separate identifier (the registry keys on the
+ * name), so one shape means one regex per surface instead of a special case.
+ */
+const PROJECT_REF_RE = /<project-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g;
 
 /** Legacy bracket ref: [mr9i88ys-87a4|Some Label] → Some Label. */
 const LEGACY_REF_RE = /\[([a-z0-9]{7,10}-[a-f0-9]{4})\|([^\]]+)\]/g;
@@ -423,6 +429,15 @@ function resolveSessionRefDisplay(id: string, label?: string): string {
   return label ? decodeRefAttr(label) : id;
 }
 
+/**
+ * A project's display needs no store lookup: `id` already IS the current name, so
+ * there is nothing a registry could resolve it to. The optional label is only an
+ * alias the emitter chose to show instead.
+ */
+function resolveProjectRefDisplay(id: string, label?: string): string {
+  return label ? decodeRefAttr(label) : id;
+}
+
 /** Hover text for a task pill: `Project / Title` when resolved, the id when
  *  not (so a stale/fallback pill tells you which id failed to resolve). */
 function taskRefHover(id: string): string {
@@ -440,6 +455,7 @@ export function stripEntityRefsToText(text: string): string {
   return text
     .replace(TASK_REF_RE, (_m, id: string, label?: string) => resolveTaskRefDisplay(id, label))
     .replace(SESSION_REF_RE, (_m, id: string, label?: string) => resolveSessionRefDisplay(id, label))
+    .replace(PROJECT_REF_RE, (_m, id: string, label?: string) => resolveProjectRefDisplay(id, label))
     .replace(LEGACY_REF_RE, (_m, id: string, label: string) => lookupTaskLabel(id)?.title ?? label);
 }
 
@@ -448,7 +464,8 @@ export function stripEntityRefsToText(text: string): string {
  * for a notification whose body is stripped to plain text. Mirrors the
  * server-side extractFirstRefs (src/utils/entity-refs.ts); legacy `[id|label]`
  * refs are skipped on both sides (the bracket form carries no task/session
- * marker, so a link built from one would be a guess).
+ * marker, so a link built from one would be a guess). Project refs are skipped
+ * too, for the different reason that there is no project route to deep-link to.
  */
 export function extractFirstRefIds(text: string): { sessionId?: string; taskId?: string } {
   const out: { sessionId?: string; taskId?: string } = {};
@@ -476,6 +493,15 @@ export function entityRefsToHtml(text: string): string {
     const escaped = escapeHtmlText(resolveSessionRefDisplay(id, label));
     return `<a href="/sessions?id=${id}" class="session-link" data-session-id="${id}" title="${escapeHtmlText(id)}">${escaped}</a>`;
   });
+  // A project pill lands on /tasks: there is no per-project route yet, and the
+  // name rides `data-project` so the click handler needs no re-parse.
+  result = result.replace(PROJECT_REF_RE, (_match, id: string, label?: string) => {
+    const escaped = escapeHtmlText(resolveProjectRefDisplay(id, label));
+    // `id` IS the project's name and arrives attribute-encoded (`"` → `&quot;`);
+    // decode before re-escaping so data-project carries the real name.
+    const name = decodeRefAttr(id);
+    return `<a href="/tasks" class="project-link" data-project="${escapeHtmlText(name)}" title="${escapeHtmlText(`Project: ${name}`)}">${escaped}</a>`;
+  });
   return result;
 }
 
@@ -484,6 +510,7 @@ export function entityRefsToHtml(text: string): string {
  * Used by NotesEditor to preprocess pasted/loaded content containing raw XML refs.
  * <task-ref id="X" label="Y"/> → [Y](/tasks/X)
  * <session-ref id="X" label="Y"/> → [Y](/sessions?id=X)
+ * <project-ref id="Name"/> → [Name](/tasks)
  */
 export function entityRefsToMarkdownLinks(text: string): string {
   let result = text;
@@ -495,11 +522,15 @@ export function entityRefsToMarkdownLinks(text: string): string {
     const display = resolveSessionRefDisplay(id, label).replace(/[\[\]]/g, '\\$&');
     return `[${display}](/sessions?id=${id})`;
   });
+  result = result.replace(PROJECT_REF_RE, (_match, id: string, label?: string) => {
+    const display = resolveProjectRefDisplay(id, label).replace(/[\[\]]/g, '\\$&');
+    return `[${display}](/tasks)`;
+  });
   return result;
 }
 
 /** DOMPurify attributes preserved for entity ref, image, and file link rendering */
-const SANITIZE_ATTRS = ['data-task-id', 'data-session-id', 'data-lightbox-src', 'data-file-path', 'data-file-line', 'data-rel-path', 'data-cwd', 'loading', 'target', 'rel'];
+const SANITIZE_ATTRS = ['data-task-id', 'data-session-id', 'data-project', 'data-lightbox-src', 'data-file-path', 'data-file-line', 'data-rel-path', 'data-cwd', 'loading', 'target', 'rel'];
 
 /**
  * True for an http(s) href that points OUTSIDE the console's own origin.
