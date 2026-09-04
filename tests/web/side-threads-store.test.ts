@@ -34,7 +34,11 @@ const {
   createSideThreadOptimistic,
   deleteSideThreadOptimistic,
   deriveThreadTitle,
+  SIDE_THREAD_DIGEST_MARKER,
+  formatSideThreadDigestForComposer,
   formatSideThreadForComposer,
+  pickSideThreadDigestReply,
+  readSideThreadDigest,
   getOpenDrawerInstance,
   getSideThreadsState,
   prewarmSideThread,
@@ -439,6 +443,15 @@ describe('side-threads store — single open drawer', () => {
   });
 });
 
+describe('formatSideThreadDigestForComposer', () => {
+  it('labels the text as a SUMMARY, not the aside itself', () => {
+    // The receiving session must be able to tell second-hand text from the real
+    // transcript — it acts on this without ever seeing the thread.
+    expect(formatSideThreadDigestForComposer('why is it flaky', '  RETRY_MS races the clock.  '))
+      .toBe('[Summary of side thread "why is it flaky"]\nRETRY_MS races the clock.\n\n');
+  });
+});
+
 describe('formatSideThreadForComposer', () => {
   /** What the browser tier cannot assert: the mock CLI writes no user lines, so a
    *  fixture thread's history has no Q rows. The format lives here instead. */
@@ -473,6 +486,18 @@ describe('formatSideThreadForComposer', () => {
   it('ends with a blank line so the user types on a fresh paragraph', () => {
     expect(formatSideThreadForComposer('t', [])).toBe('[From side thread "t"]\n\n');
   });
+
+  /** The digest REQUEST is hidden in history but its reply is not, so a thread that
+   *  was summarized once would otherwise paste that summary back as an `A:` row with
+   *  no `Q:` above it — the main session reading the aside as answered twice. */
+  it('skips a summary this thread wrote for the main session earlier', () => {
+    const text = formatSideThreadForComposer('t', [
+      { role: 'user', text: 'why is it flaky' },
+      { role: 'assistant', text: 'the retry races the clock' },
+      { role: 'assistant', text: `${SIDE_THREAD_DIGEST_MARKER} the retry races the clock.` },
+    ]);
+    expect(text).toBe('[From side thread "t"]\nQ: why is it flaky\nA: the retry races the clock\n\n');
+  });
 });
 
 describe('sideThreadLabel', () => {
@@ -506,5 +531,118 @@ describe('deriveThreadTitle', () => {
 
   it('never produces an empty label', () => {
     expect(deriveThreadTitle('   ')).toBe('Side thread');
+  });
+});
+
+/**
+ * The acceptance rule for "inject summary". This is where the feature's safety
+ * lives, so it is pinned here rather than through the browser: the fixture CLI can
+ * only echo, so it cannot produce a marker unique to the digest turn, and the two
+ * live bugs this rule exists for (a read that beat the transcript flush; a turn that
+ * was already running ending first) are both invisible at that level.
+ */
+describe('pickSideThreadDigestReply', () => {
+  const MARKER = 'Summary for the main session:';
+  const before = { id: 'm1', text: 'the previous answer' };
+
+  it('accepts the marked reply and strips the marker line', () => {
+    expect(pickSideThreadDigestReply(MARKER, before, {
+      id: 'm2', text: `${MARKER}\n\n  RETRY_MS races the clock.  `,
+    })).toBe('RETRY_MS races the clock.');
+  });
+
+  it('refuses a reply that does not carry the marker (the wrong-paste bug)', () => {
+    expect(pickSideThreadDigestReply(MARKER, before, {
+      id: 'm2', text: 'FIFOs are unidirectional; sockets are not.',
+    })).toBeUndefined();
+  });
+
+  it('refuses the marked summary of an EARLIER digest (same message as before)', () => {
+    const stale = { id: 'm1', text: `${MARKER} the older summary` };
+    expect(pickSideThreadDigestReply(MARKER, stale, stale)).toBeUndefined();
+  });
+
+  it('tolerates markdown/HTML decoration around the marker', () => {
+    expect(pickSideThreadDigestReply(MARKER, before, {
+      id: 'm2', text: `<p><strong>${MARKER}</strong> it was the retry path.`,
+    })).toBe('</strong> it was the retry path.');
+    expect(pickSideThreadDigestReply(MARKER, before, {
+      id: 'm2', text: `## ${MARKER}\nit was the retry path.`,
+    })).toBe('it was the retry path.');
+  });
+
+  it('refuses a reply that says something of its own before the marker', () => {
+    expect(pickSideThreadDigestReply(MARKER, before, {
+      id: 'm2', text: `I looked into the flake and here is what I found. ${MARKER} the retry path.`,
+    })).toBeUndefined();
+  });
+
+  it('refuses when the server sent no marker, and when the body is empty', () => {
+    expect(pickSideThreadDigestReply('', before, { id: 'm2', text: 'anything' })).toBeUndefined();
+    expect(pickSideThreadDigestReply(MARKER, before, { id: 'm2', text: MARKER })).toBeUndefined();
+  });
+});
+
+describe('readSideThreadDigest', () => {
+  const MARKER = 'Summary for the main session:';
+  const before = { id: 'm1', text: 'previous answer' };
+  /** Injected clock: `waitTick` is what advances it, so no test waits real time. */
+  const fakeClock = (stepMs: number) => {
+    let t = 0;
+    return { now: () => t, tick: async () => { t += stepMs; } };
+  };
+
+  it('returns the summary as soon as a marked reply appears', async () => {
+    const clock = fakeClock(800);
+    const readLast = vi.fn()
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce({ id: 'm2', text: `${MARKER} it was the retry path.` });
+    const res = await readSideThreadDigest(MARKER, before, {
+      readLast, waitTick: clock.tick, now: clock.now, timeoutMs: 90_000,
+    });
+    expect(res).toEqual({ ok: true, summary: 'it was the retry path.' });
+    expect(readLast).toHaveBeenCalledTimes(2);
+  });
+
+  it('survives a failed read instead of ending the whole attempt', async () => {
+    const clock = fakeClock(800);
+    const readLast = vi.fn()
+      .mockRejectedValueOnce(new Error('503 mid-flush'))
+      .mockResolvedValueOnce({ id: 'm2', text: `${MARKER} landed anyway.` });
+    const res = await readSideThreadDigest(MARKER, before, {
+      readLast, waitTick: clock.tick, now: clock.now, timeoutMs: 90_000,
+    });
+    expect(res).toEqual({ ok: true, summary: 'landed anyway.' });
+  });
+
+  it('times out (never guesses) when only the old answer is ever there', async () => {
+    const clock = fakeClock(1_000);
+    const readLast = vi.fn().mockResolvedValue(before);
+    const res = await readSideThreadDigest(MARKER, before, {
+      readLast, waitTick: clock.tick, now: clock.now, timeoutMs: 5_000,
+    });
+    expect(res).toEqual({ ok: false, reason: 'timeout' });
+    expect(readLast).toHaveBeenCalledTimes(5);
+  });
+
+  it('stops the moment the caller moves on (thread switch / unmount)', async () => {
+    const clock = fakeClock(800);
+    let cancelled = false;
+    const readLast = vi.fn().mockImplementation(async () => { cancelled = true; return before; });
+    const res = await readSideThreadDigest(MARKER, before, {
+      readLast, waitTick: clock.tick, now: clock.now, timeoutMs: 90_000,
+      cancelled: () => cancelled,
+    });
+    expect(res).toEqual({ ok: false, reason: 'cancelled' });
+    expect(readLast).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SIDE_THREAD_DIGEST_MARKER', () => {
+  it('is the exact line the SERVER prompt demands (drift would refuse every summary)', async () => {
+    const { SIDE_THREAD_DIGEST_REPLY_MARKER, SIDE_THREAD_DIGEST_MESSAGE } =
+      await import('../../src/core/sessions/side-thread-digest.js');
+    expect(SIDE_THREAD_DIGEST_MARKER).toBe(SIDE_THREAD_DIGEST_REPLY_MARKER);
+    expect(SIDE_THREAD_DIGEST_MESSAGE).toContain(SIDE_THREAD_DIGEST_MARKER);
   });
 });

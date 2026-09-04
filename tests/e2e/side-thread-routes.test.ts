@@ -393,6 +393,69 @@ describe('side-thread routes', () => {
     expect(view.threads.map((t) => t.id)).not.toContain(thread.id)
   })
 
+  it('202s a digest request and enqueues the tagged summary ask on the THREAD', async () => {
+    const { SIDE_THREAD_DIGEST_MESSAGE, SIDE_THREAD_DIGEST_REPLY_MARKER } =
+      await import('../../src/core/sessions/side-thread-digest.js')
+    const { thread } = await (await post(`/api/sessions/${PARENT}/side-threads`, {
+      question: 'summarize me later',
+    })).json() as { thread: { id: string; threadSessionId: string } }
+
+    const sends: Array<{ sessionId: string; message: string }> = []
+    bus.subscribe('digest-send-observer', (event: BusEvent) => {
+      if (event.name !== EventNames.SESSION_SEND) return
+      const d = event.data as { sessionId: string; message: string }
+      sends.push({ sessionId: d.sessionId, message: d.message })
+    }, { global: true, interest: [EventNames.SESSION_SEND] })
+
+    const res = await post(`/api/sessions/${PARENT}/side-threads/${thread.id}/digest`, {})
+    // 202, not 200: the summary itself is still being written when this answers —
+    // the route must never wait on the model.
+    expect(res.status).toBe(202)
+    // The marker rides the response so the client can identify the summary instead
+    // of trusting "the newest message" — and so the prompt stays its only source.
+    expect(await res.json()).toEqual({
+      requested: true,
+      threadSessionId: thread.threadSessionId,
+      replyMarker: SIDE_THREAD_DIGEST_REPLY_MARKER,
+    })
+    expect(SIDE_THREAD_DIGEST_MESSAGE).toContain(SIDE_THREAD_DIGEST_REPLY_MARKER)
+    // Observed as a GLOBAL listener: a second 'session-runner' subscriber would
+    // replace the fake runner (subscribers are keyed by name).
+    await new Promise((r) => setTimeout(r, 50))
+    expect(sends).toEqual([{
+      sessionId: thread.threadSessionId, message: SIDE_THREAD_DIGEST_MESSAGE,
+    }])
+    bus.unsubscribe('digest-send-observer')
+  })
+
+  /** The refusals are the CONTRACT, not the button's disabled prop: this route is
+   *  reachable by anything (a second tab holding a stale status, a script). Each 409
+   *  must also carry a message worth showing the user verbatim. */
+  it('409s a digest for a thread whose process was reaped, without sending', async () => {
+    const { thread } = await (await post(`/api/sessions/${PARENT}/side-threads`, {
+      question: 'reap me',
+    })).json() as { thread: { id: string; threadSessionId: string } }
+    await updateSessionRecord(thread.threadSessionId, { process_status: 'stopped' })
+
+    const sends: string[] = []
+    bus.subscribe('digest-refuse-observer', (event: BusEvent) => {
+      if (event.name !== EventNames.SESSION_SEND) return
+      sends.push((event.data as { message: string }).message)
+    }, { global: true, interest: [EventNames.SESSION_SEND] })
+
+    const res = await post(`/api/sessions/${PARENT}/side-threads/${thread.id}/digest`, {})
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/inject the full aside instead/)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(sends.some((m) => m.includes('walnut-side-thread-digest'))).toBe(false)
+    bus.unsubscribe('digest-refuse-observer')
+  })
+
+  it('404s a digest for an unknown thread', async () => {
+    const res = await post(`/api/sessions/${PARENT}/side-threads/sth-nope/digest`, {})
+    expect(res.status).toBe(404)
+  })
+
   it('404s deleting an unknown thread', async () => {
     const res = await fetch(apiUrl(`/api/sessions/${PARENT}/side-threads/sth-nope`), {
       method: 'DELETE',

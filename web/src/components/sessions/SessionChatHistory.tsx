@@ -1349,10 +1349,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     runWhenVisible(`sch:reconnect:${sessionId}`, () => setHistoryVersion((v) => v + 1));
   });
 
-  // Agent-sent messages: create synthetic optimistic message so it appears in the queue
+  // Agent-sent messages: create synthetic optimistic message so it appears in the queue.
+  // `side-thread-*` sources are TOOL PLUMBING (the cache warm-up, the self-summary
+  // request): history hides those lines on purpose, so minting a "You" bubble for one
+  // would paint a raw machine prompt into the timeline that nothing later removes.
   useEvent('session:message-queued', (data) => {
     const d = data as { sessionId?: string; messageId?: string; message?: string; source?: string };
-    if (d.sessionId === sessionId && d.source !== 'ui' && d.messageId && d.message) {
+    const plumbing = d.source === 'ui' || (d.source ?? '').startsWith('side-thread-');
+    if (d.sessionId === sessionId && !plumbing && d.messageId && d.message) {
       onAgentQueued?.({ queueId: d.messageId, text: d.message });
     }
   });

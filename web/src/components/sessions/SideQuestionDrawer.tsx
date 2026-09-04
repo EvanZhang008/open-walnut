@@ -48,9 +48,10 @@ import { engineCaps } from '@/utils/engine-capabilities';
 import { log } from '@/utils/log';
 import { PROCESS_COLORS, PROCESS_LABELS } from '@/utils/session-status';
 import type { ImageAttachment } from '@/api/chat';
+import { ApiError } from '@/api/client';
 import { fetchSession, fetchSessionHistory, updateSession } from '@/api/sessions';
 import { promoteSideQuestion, type SideQuestion } from '@/api/sideQuestions';
-import type { SideThread } from '@/api/sideThreads';
+import { requestSideThreadDigest, type SideThread } from '@/api/sideThreads';
 import { PlanContentContext } from '@/contexts/PlanContentContext';
 import { SessionPinsContext, type SessionPinsApi } from '@/contexts/SessionPinsContext';
 import { SessionRewindContext, type SessionRewindApi } from '@/contexts/SessionRewindContext';
@@ -60,6 +61,7 @@ import {
   PENDING_THREAD_PREFIX,
   clearSideThreadsError,
   createSideThreadOptimistic,
+  formatSideThreadDigestForComposer,
   deleteSideThreadOptimistic,
   findSideThread,
   formatSideThreadForComposer,
@@ -67,6 +69,7 @@ import {
   getSideThreadsState,
   prewarmSideThread,
   promoteSideThreadOptimistic,
+  readSideThreadDigest,
   refreshSideThreads,
   setActiveSideThread,
   setOpenDrawerInstance,
@@ -100,8 +103,20 @@ interface SideQuestionDrawerProps {
   onInjectToComposer?: (text: string) => void;
 }
 
-/** How much of a thread transcript "Inject to chat" pulls. */
+/** How much of a thread transcript "Inject full" pulls. */
 const INJECT_TAIL = 200;
+
+/** How long "Inject summary" waits for the thread's own summary turn. Generous:
+ *  the thread's cache is warm and the reply is short, but a long aside on a slow
+ *  host still has to be READ before it can be summarized. */
+const DIGEST_TIMEOUT_MS = 90_000;
+
+/** The turn-end event fires BEFORE the transcript flush lands, and it fires for
+ *  ANY turn on that session, so the summary is found by polling until the deadline
+ *  rather than by trusting the first read after the first result. Measured on a
+ *  live session: that first read returned the PREVIOUS answer, which is exactly
+ *  the "confident wrong answer" failure — the wrong text in the main chat. */
+const DIGEST_READ_INTERVAL_MS = 800;
 
 /** Widened to string keys: a mode id that is enabled but not in the registry must
  *  still render (its raw id), never crash the pill. Same read SessionPanel does. */
@@ -151,6 +166,9 @@ export function SideQuestionDrawer({
 
   const [legacyOpen, setLegacyOpen] = useState(false);
   const [injecting, setInjecting] = useState(false);
+  // 'digest' while the thread is writing its own summary — the button says so, and
+  // both inject actions stay disabled so a second click can't start a second turn.
+  const [digesting, setDigesting] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   // The ACTIVE thread's own record — the subject every composer control acts on
   // (permission mode, output mode, model/effort, note). Null while no thread is
@@ -196,6 +214,10 @@ export function SideQuestionDrawer({
   // (the switched-away thread's echo lands in its transcript regardless).
   const activeThreadSid = activeThread?.threadSessionId ?? null;
   useEffect(() => { clearOptimistic(); }, [activeThreadSid, clearOptimistic]);
+  // Switching threads abandons any summary still being written: its text belongs to
+  // the thread the user left, and prefilling the composer with it now would overwrite
+  // whatever they typed after moving on.
+  useEffect(() => { digestRunRef.current += 1; }, [activeThreadSid]);
 
   // The active thread's OWN record, read once per thread (a pending row has no
   // session id yet, so there is nothing to read and the controls follow the parent).
@@ -272,6 +294,24 @@ export function SideQuestionDrawer({
     });
     return () => cancelAnimationFrame(raf);
   }, [expanded]);
+
+  // Turn-end signal for the digest poll. `session:result` is the honest end-of-turn
+  // event (process_status can flap mid-turn) and the drawer already receives it, but
+  // it says "a turn ended", NOT "your turn ended" — a queued follow-up or a self-wake
+  // fires it too. So it only WAKES the poll early; whether the summary has landed is
+  // decided by reading the transcript (see readSideThreadDigest).
+  const digestWaiterRef = useRef<{ sid: string; done: () => void } | null>(null);
+  useEvent('session:result', useCallback((data: unknown) => {
+    const waiter = digestWaiterRef.current;
+    if (!waiter) return;
+    if ((data as { sessionId?: string })?.sessionId !== waiter.sid) return;
+    digestWaiterRef.current = null;
+    waiter.done();
+  }, []));
+  // Bumped whenever the drawer moves on (thread switch, unmount): a digest in flight
+  // must not prefill the composer for a thread the user has left.
+  const digestRunRef = useRef(0);
+  useEffect(() => () => { digestRunRef.current += 1; }, []);
 
   // Legacy one-shot entries can still arrive from another tab/route.
   useEvent('session:side-question-done', useCallback((data: unknown) => {
@@ -420,6 +460,85 @@ export function SideQuestionDrawer({
     }
   }, [onInjectToComposer, sessionId, closeDrawer]);
 
+  /**
+   * Inject a SUMMARY instead of the whole aside. The thread writes it itself: it
+   * already holds the aside in context, so this is one small incremental turn, and
+   * the summary stays visible in the drawer (the request line is hidden server-side)
+   * so the user can read it, re-run it, or fall back to the full inject.
+   *
+   * The composer is prefilled only AFTER the turn ends — a half-streamed summary in
+   * the main composer would be worse than no summary at all.
+   */
+  const injectDigest = useCallback(async (thread: SideThread) => {
+    const sid = thread.threadSessionId;
+    if (!onInjectToComposer || !sid || !sessionId) return;
+    const run = digestRunRef.current + 1;
+    digestRunRef.current = run;
+    setDigesting(true);
+    clearSideThreadsError(sessionId);
+    try {
+      // Which assistant message is newest BEFORE the request. Everything below is
+      // about not confusing it with the summary.
+      const readLast = async (): Promise<{ id?: string; text?: string }> => {
+        const res = await fetchSessionHistory(sid, { tail: 4 });
+        const last = [...(res.messages ?? [])].reverse()
+          .find((m) => m.role === 'assistant' && (m.text ?? '').trim());
+        return { id: last?.msgId, text: last?.text?.trim() };
+      };
+      const before = await readLast().catch(() => ({}));
+      // The server tells us the first line it demanded of the reply; the drawer
+      // accepts nothing else as the summary.
+      const { replyMarker } = await requestSideThreadDigest(sessionId, thread.id);
+      const outcome = await readSideThreadDigest(replyMarker, before, {
+        readLast,
+        // Wake on this session's next turn-end, or on the poll interval, whichever
+        // comes first — a missed event must never stall the poll.
+        waitTick: () => new Promise((resolve) => {
+          digestWaiterRef.current = { sid, done: () => resolve(undefined) };
+          setTimeout(() => resolve(undefined), DIGEST_READ_INTERVAL_MS);
+        }),
+        timeoutMs: DIGEST_TIMEOUT_MS,
+        cancelled: () => digestRunRef.current !== run,
+      });
+      digestWaiterRef.current = null;
+      // The user moved on (switched threads, closed the panel). Say nothing and
+      // touch nothing: prefilling now would overwrite whatever they are doing.
+      if (outcome.ok === false && outcome.reason === 'cancelled') return;
+      if (outcome.ok === false) {
+        setSideThreadsError(sessionId, 'No summary came back — inject the full thread instead');
+        return;
+      }
+      onInjectToComposer(formatSideThreadDigestForComposer(
+        sideThreadLabel(thread), outcome.summary,
+      ));
+      log.info('sideThreads', 'injected summary into composer', {
+        sessionId, threadId: thread.id, threadSessionId: sid, chars: outcome.summary.length,
+      });
+      closeDrawer();
+    } catch (err) {
+      digestWaiterRef.current = null;
+      log.warn('sideThreads', 'digest failed', {
+        sessionId, threadId: thread.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // Prefer the server's own words: its 409s say exactly why this thread can't
+      // summarize itself (promoted, reaped, waiting on a permission prompt) and a
+      // generic "could not summarize" would hide all of it.
+      const detail = err instanceof ApiError
+        ? (err.body as { error?: string } | undefined)?.error
+        : undefined;
+      setSideThreadsError(
+        sessionId,
+        detail || 'Could not summarize this thread — inject the full thread instead',
+      );
+    } finally {
+      // ALWAYS clear it. Guarding this on "still the current run" left the button
+      // stuck on "✦ Summarizing…" forever after the user switched threads (the
+      // switch is what abandons the run, so the guard was false exactly then).
+      setDigesting(false);
+    }
+  }, [onInjectToComposer, sessionId, closeDrawer]);
+
   const promoteLegacy = useCallback(async (id: string) => {
     if (!sessionId) return;
     updateLegacySideQuestions(sessionId, (legacy) => legacy.map(
@@ -548,13 +667,36 @@ export function SideQuestionDrawer({
           {/* Per-thread actions — only meaningful with a real (confirmed) thread. */}
           {activeThread && !activeIsPending && (
             <div className="side-thread-actions">
+              {/* Two ways in, because the right one depends on the aside's LENGTH:
+                  the full Q&A when it is short and every word matters, a summary
+                  when it is ten turns of debugging the main session would have to
+                  re-read. The summary is written by the thread itself. */}
               <button
                 className="btn btn-sm"
                 onClick={() => void injectToComposer(activeThread)}
-                disabled={injecting || !onInjectToComposer}
-                title="Copy this thread's Q&A into the main composer"
+                disabled={injecting || digesting || !onInjectToComposer}
+                title="Copy this thread's whole Q&A into the main composer"
               >
-                {injecting ? '⤴ Injecting…' : '⤴ Inject to chat'}
+                {injecting ? '⤴ Injecting…' : '⤴ Inject full'}
+              </button>
+              {/* Refuses to run MID-TURN. Measured why: clicking while the thread was
+                  still answering caught that turn's end event, read the answer as
+                  if it were the summary, and injected the wrong text — a confident
+                  wrong answer, the worst outcome for a paste-into-chat action. */}
+              <button
+                className="btn btn-sm"
+                onClick={() => void injectDigest(activeThread)}
+                disabled={injecting || digesting || !onInjectToComposer || activeIsPending
+                  || threadStreaming || !!activeThread.archived || !!activeThread.promotedTaskId}
+                title={threadStreaming
+                  ? 'Wait for this thread to finish answering, then summarize'
+                  : activeThread.archived
+                    ? 'This thread\'s process is gone — inject the full aside instead'
+                    : activeThread.promotedTaskId
+                      ? 'This thread is a task now — inject the full aside instead'
+                      : 'Ask this thread to summarize itself, then put the summary in the main composer'}
+              >
+                {digesting ? '✦ Summarizing…' : '✦ Inject summary'}
               </button>
               {activeThread.promotedTaskId === PENDING_PROMOTE ? (
                 <span className="side-question-promoted">{'✓'} creating…</span>

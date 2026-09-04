@@ -35,6 +35,9 @@ import { findImagePaths, findRelativeImageNames } from '../providers/session-io.
 import { REMOTE_IMAGES_DIR } from '../constants.js';
 import { backfillMirrorSidecar, resolveSessionMirrorPath } from './remote-image-mirror.js';
 import { isCacheWarmupText } from './sessions/side-thread-warmup.js';
+import {
+  SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest,
+} from './sessions/side-thread-digest.js';
 
 /** Cached homedir — avoids repeated syscall on each history request */
 const LOCAL_HOME = os.homedir();
@@ -1341,6 +1344,15 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     // the human typed): hide pure plumbing, rewrite human-action echoes to a
     // readable form. Single choke point — catches the real echo line AND the
     // Pattern-B synthetic from its queue-operation. See transformInjectedUserText.
+    // The digest REQUEST is checked before the `<` gate and anywhere in the line:
+    // the CLI joins everything pending into one user line, so a follow-up the user
+    // typed can sit in front of the tag. Its REPLY stays visible — that is what
+    // makes "inject summary" reviewable.
+    if (msg.role === 'user' && text.includes(SIDE_THREAD_DIGEST_TAG)) {
+      const remainder = stripSideThreadDigestRequest(text);
+      if (!remainder) continue;
+      text = remainder;
+    }
     if (msg.role === 'user' && text.startsWith('<')) {
       if (isCacheWarmupText(text)) { dropWarmupReply = true; continue; }
       const transformed = transformInjectedUserText(text);

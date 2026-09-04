@@ -430,6 +430,102 @@ describe('createThread', () => {
   })
 })
 
+describe('requestDigest', () => {
+  it('sends the tagged digest RAW to the thread and returns its session id', async () => {
+    const { SIDE_THREAD_DIGEST_MESSAGE } = await import('../../src/core/sessions/side-thread-digest.js')
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'why hasPipe?' })
+    await settle()
+    mocks.sendMessageToSession.mockClear()
+
+    const res = await sideThreadManager.requestDigest(PARENT, thread.id)
+    expect(res).toEqual({ threadSessionId: thread.threadSessionId })
+    expect(mocks.sendMessageToSession).toHaveBeenCalledWith(
+      thread.threadSessionId, SIDE_THREAD_DIGEST_MESSAGE, { source: 'side-thread-digest' })
+    // RAW: a machine turn must not carry the output-mode instruction (the digest
+    // asks for plain text — its destination is a composer, not a bubble).
+    const [, sentText] = mocks.sendMessageToSession.mock.calls.at(-1)!
+    expect(sentText).not.toContain(OUTPUT_MODE_INSTRUCTION_MARKER)
+  })
+
+  it('404s an unknown thread', async () => {
+    await expect(sideThreadManager.requestDigest(PARENT, 'sth-nope'))
+      .rejects.toMatchObject({ statusCode: 404 })
+  })
+
+  /** Every refusal below must ALSO not send. Asserted as "no digest text was sent",
+   *  never with `toContain(expect.stringContaining(...))` — vitest compares array
+   *  members by identity there, so an asymmetric matcher can never match and the
+   *  negation passes no matter what was sent. */
+  const SIDE_THREAD_DIGEST_TAG = '<walnut-side-thread-digest>'
+  const noDigestSent = () => expect(
+    mocks.sendMessageToSession.mock.calls.some((c) => String(c[1]).includes(SIDE_THREAD_DIGEST_TAG)),
+  ).toBe(false)
+
+  it('409s an archived thread rather than cold-resuming one for a summary', async () => {
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'q' })
+    await settle()
+    await updateSessionRecord(thread.threadSessionId, { archived: true })
+
+    await expect(sideThreadManager.requestDigest(PARENT, thread.id))
+      .rejects.toMatchObject({ statusCode: 409 })
+    noDigestSent()
+  })
+
+  /** The state the reapers in THIS class actually produce: the live-cap eviction and
+   *  the 30-minute idle sweep both terminate WITHOUT archiving. An hour-old aside is
+   *  exactly what a summary is for, so this is the common case, not an edge one. */
+  it('409s a thread whose process was reaped but not archived', async () => {
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'q' })
+    await settle()
+    await updateSessionRecord(thread.threadSessionId, { process_status: 'stopped' })
+    mocks.sendMessageToSession.mockClear()
+
+    await expect(sideThreadManager.requestDigest(PARENT, thread.id))
+      .rejects.toMatchObject({ statusCode: 409 })
+    noDigestSent()
+  })
+
+  it('409s a thread waiting on a permission prompt instead of auto-denying it', async () => {
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'q' })
+    await settle()
+    await updateSessionRecord(thread.threadSessionId, {
+      process_status: 'idle',
+      pendingPermission: { tool: 'Bash', requestId: 'perm-1', requestedAt: new Date().toISOString() },
+    })
+    mocks.sendMessageToSession.mockClear()
+
+    await expect(sideThreadManager.requestDigest(PARENT, thread.id))
+      .rejects.toMatchObject({ statusCode: 409 })
+    noDigestSent()
+  })
+
+  it('409s mid-turn (the caller cannot tell which reply is the summary)', async () => {
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'q' })
+    await settle()
+    await updateSessionRecord(thread.threadSessionId, { process_status: 'running' })
+    mocks.sendMessageToSession.mockClear()
+
+    await expect(sideThreadManager.requestDigest(PARENT, thread.id))
+      .rejects.toMatchObject({ statusCode: 409 })
+    noDigestSent()
+  })
+
+  /** A promoted thread is a real task session: no side-thread lane, so a turn on it
+   *  runs the task machinery (phase → NEED_ACTION, session hooks, the triage's own
+   *  extra model call rewriting the task note). Never for a plumbing summary. */
+  it('409s a promoted thread', async () => {
+    const thread = await sideThreadManager.createThread(PARENT, { question: 'q' })
+    await settle()
+    const { markThreadPromoted } = await import('../../src/core/side-questions.js')
+    await markThreadPromoted(PARENT, thread.id, 'task-1')
+    mocks.sendMessageToSession.mockClear()
+
+    await expect(sideThreadManager.requestDigest(PARENT, thread.id))
+      .rejects.toMatchObject({ statusCode: 409 })
+    noDigestSent()
+  })
+})
+
 describe('retire + list', () => {
   it('retireThread terminates, archives and forgets', async () => {
     const thread = await sideThreadManager.createThread(PARENT, { question: 'q' })

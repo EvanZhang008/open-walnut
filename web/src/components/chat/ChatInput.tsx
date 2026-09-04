@@ -109,6 +109,11 @@ interface ChatInputProps {
   /** Bump this (monotonic, >0) to apply prefillText — replaces the input + focuses,
    *  WITHOUT sending. Keyed on the nonce so the same text can be re-applied. */
   prefillNonce?: number;
+  /** 'keep-draft' puts prefillText BEFORE whatever is already typed instead of
+   *  replacing it. For injections the user waits on (a side thread's summary takes a
+   *  model turn): they are invited to keep typing meanwhile, and replacing would eat
+   *  both the text and its saved draft. Default 'replace'. */
+  prefillMode?: 'replace' | 'keep-draft';
   /** Extra controls rendered in the card's bottom row, between the "+" and the
    *  mic/send cluster (e.g. the session's Bypass / btw / Note text buttons). */
   controlsSlot?: React.ReactNode;
@@ -120,11 +125,15 @@ interface ChatInputProps {
   onValueChange?: (text: string) => void;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, enableSessionMention, sessionMentionSelfId, prefillText, prefillNonce, controlsSlot, onValueChange }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, enableSessionMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', controlsSlot, onValueChange }: ChatInputProps) {
   const [value, setValue] = useState(() => {
     if (!draftKey) return '';
     try { return localStorage.getItem(draftKey) ?? ''; } catch { return ''; }
   });
+  // Mirror of `value` for effects keyed on something else (the prefill effect is
+  // keyed on its nonce, so reading `value` there would read a stale render's text).
+  const valueRef = useRef(value);
+  valueRef.current = value;
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -194,9 +203,14 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // parent can re-apply the same text; nonce 0/undefined = no-op (initial mount).
   useEffect(() => {
     if (!prefillNonce || !prefillText) return;
-    setValue(prefillText);
+    // 'keep-draft': the injected block goes FIRST and the user's own sentence keeps
+    // its place after it (which is what the injected text's trailing blank line is
+    // for). Read through the ref, not `value` — this effect is keyed on the nonce.
+    const typed = prefillMode === 'keep-draft' ? valueRef.current.trimStart() : '';
+    const next = typed ? `${prefillText}${typed}` : prefillText;
+    setValue(next);
     // Persist immediately (don't rely on the later-declared debounced saveDraft).
-    try { if (draftKeyRef.current) localStorage.setItem(draftKeyRef.current, prefillText); } catch { /* unavailable */ }
+    try { if (draftKeyRef.current) localStorage.setItem(draftKeyRef.current, next); } catch { /* unavailable */ }
     // Focus + caret-to-end, RETRIED until the box is actually focusable. A
     // hidden textarea (`display:none` — e.g. the session's chat column is
     // collapsed) silently swallows focus(), so the caret stayed on <body> and

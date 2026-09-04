@@ -629,11 +629,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // existing input (no new chat, no fork; goes to the main agent via normal send).
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined);
   const [prefillNonce, setPrefillNonce] = useState(0);
+  const [prefillMode, setPrefillMode] = useState<'replace' | 'keep-draft'>('replace');
   const handleSelectCode = useCallback((filePath: string, line: number | undefined, code: string) => {
     // The Changed tab already hands a repo-relative path; the Files tab browses the
     // whole filesystem and hands an absolute one. Shorten against the session cwd so
     // a quote reads the same from either surface (a path outside the cwd stays absolute).
     setPrefillText(buildSelectionPrefill(displayPathForPrefill(filePath, session?.cwd), line, code));
+    setPrefillMode('replace');
     setPrefillNonce((n) => n + 1);
     // REVEAL the composer first: while the chat column is collapsed it is
     // `display:none`, so ChatInput's focus() lands on <body> and every keystroke
@@ -644,13 +646,16 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     setChatCollapsed(false);
   }, [session?.cwd]);
   // "Inject to chat" from a side thread → the SAME prefill driver as a code
-  // selection: replace the draft, reveal the composer, focus it. The thread's
-  // Q&A becomes ordinary text the user can edit before sending (nothing is sent
-  // for them). Reveal must happen in this batch — a collapsed chat column is
+  // selection, with one difference: it KEEPS what the user has already typed and
+  // puts the injected block in front of it. The summary variant takes a model turn
+  // to arrive and the user is free to keep typing while it runs, so a replace would
+  // eat both their sentence and its saved draft. Reveal must happen in this batch —
+  // a collapsed chat column is
   // `display:none`, so ChatInput's focus() would land on <body> and eat the
   // user's next keystrokes (same trap as handleSelectCode).
   const handleInjectFromThread = useCallback((text: string) => {
     setPrefillText(text);
+    setPrefillMode('keep-draft');
     setPrefillNonce((n) => n + 1);
     autoCollapsed.current = false;
     setChatCollapsed(false);
@@ -1225,6 +1230,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               // composer is alive to receive this.
               if (result.restoredPrompt) {
                 setPrefillText(result.restoredPrompt);
+                setPrefillMode('replace');
                 setPrefillNonce((n) => n + 1);
                 autoCollapsed.current = false;
                 setChatCollapsed(false);
@@ -2046,6 +2052,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             draftKey={`draft:session:${sessionId}`}
             prefillText={prefillText}
             prefillNonce={prefillNonce}
+            prefillMode={prefillMode}
             onToggleMode={session ? () => {
               if (engineUi.configModes) {
                 const control = sessionControls.find((candidate) => candidate.id === 'mode');

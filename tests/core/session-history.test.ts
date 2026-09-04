@@ -183,6 +183,43 @@ describe('readSessionHistory', () => {
     ]);
   });
 
+  it('hides the digest REQUEST but keeps its reply (the summary is what the user asked for)', async () => {
+    // Opposite of the warm-up on purpose: nobody wants to read "Ready.", but the
+    // summary is the whole product of "Inject summary" and stays in the drawer so
+    // it can be read, re-run, or abandoned for the full inject.
+    const { SIDE_THREAD_DIGEST_MESSAGE } = await import('../../src/core/sessions/side-thread-digest.js');
+    await writeJsonl('s-digest', '/test', [
+      msg('u1', 'user', 'why does hasPipe flip?'),
+      msg('a1', 'assistant', 'Because attach() never set it.'),
+      { type: 'user', timestamp: '2025-01-01T00:00:02Z', uuid: 'uuid-dig', message: { role: 'user', content: SIDE_THREAD_DIGEST_MESSAGE } },
+      msg('a2', 'assistant', 'hasPipe is only set in start(); attach() leaves it false.'),
+    ]);
+
+    const messages = await readSessionHistory('s-digest', '/test');
+    expect(messages.map(m => m.text)).toEqual([
+      'why does hasPipe flip?',
+      'Because attach() never set it.',
+      'hasPipe is only set in start(); attach() leaves it false.',
+    ]);
+  });
+
+  it('strips the digest request out of a BATCHED user line and keeps the human words', async () => {
+    // The CLI drains everything pending into ONE user line, so a follow-up typed a
+    // moment before the summary request sits in front of the tag. Anchoring the hide
+    // at index 0 left the whole machine prompt on screen forever.
+    const { SIDE_THREAD_DIGEST_MESSAGE } = await import('../../src/core/sessions/side-thread-digest.js');
+    await writeJsonl('s-digest-batch', '/test', [
+      { type: 'user', timestamp: '2025-01-01T00:00:00Z', uuid: 'uuid-b', message: { role: 'user', content: `one more thing\n\n${SIDE_THREAD_DIGEST_MESSAGE}` } },
+      msg('a1', 'assistant', 'Summary for the main session: attach() never set hasPipe.'),
+    ]);
+
+    const messages = await readSessionHistory('s-digest-batch', '/test');
+    expect(messages.map(m => m.text)).toEqual([
+      'one more thing',
+      'Summary for the main session: attach() never set hasPipe.',
+    ]);
+  });
+
   it('keeps a warm-up reply that ran tools (it is real work, not the one-word ack)', async () => {
     const { CACHE_WARMUP_MESSAGE } = await import('../../src/core/sessions/side-thread-warmup.js');
     await writeJsonl('s-warmup-tools', '/test', [

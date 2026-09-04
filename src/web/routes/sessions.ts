@@ -2067,6 +2067,24 @@ sessionsRouter.post('/:sessionId/side-threads/:threadId/promote', async (req: Re
 })
 
 // DELETE /api/sessions/:sessionId/side-threads/:threadId — stop + archive + forget
+sessionsRouter.post('/:sessionId/side-threads/:threadId/digest', async (req: Request, res: Response, next: NextFunction) => {
+  if (refuseSideThreadsOnReplica(res)) return
+  try {
+    const { sideThreadManager } = await import('../../core/sessions/side-thread-manager.js')
+    const { threadSessionId } = await sideThreadManager.requestDigest(
+      String(req.params.sessionId), String(req.params.threadId),
+    )
+    // The marker travels in the RESPONSE rather than being duplicated in the web
+    // bundle: the prompt that demands it and the rule that checks it stay one fact.
+    const { SIDE_THREAD_DIGEST_REPLY_MARKER } = await import('../../core/sessions/side-thread-digest.js')
+    res.status(202).json({
+      requested: true, threadSessionId, replyMarker: SIDE_THREAD_DIGEST_REPLY_MARKER,
+    })
+  } catch (err) {
+    sendSideThreadError(err, res, next)
+  }
+})
+
 sessionsRouter.delete('/:sessionId/side-threads/:threadId', async (req: Request, res: Response, next: NextFunction) => {
   if (refuseSideThreadsOnReplica(res)) return
   try {

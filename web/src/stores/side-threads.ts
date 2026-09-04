@@ -168,9 +168,123 @@ export function formatSideThreadForComposer(
     if (m.injected || m.role === 'system') continue;
     const text = (m.text ?? '').trim();
     if (!text) continue;
+    // A summary this thread wrote for the main session earlier. Its REQUEST is
+    // hidden server-side, so pasting the reply here would land as an `A:` row with
+    // no `Q:` above it — the main session would read the thread as having answered
+    // the same question twice, in machine wording.
+    if (text.startsWith(SIDE_THREAD_DIGEST_MARKER)) continue;
     lines.push(`${m.role === 'user' ? 'Q' : 'A'}: ${text}`);
   }
   return `${lines.join('\n')}\n\n`;
+}
+
+/**
+ * The SUMMARY variant. Same provenance header shape as the full inject, so the
+ * receiving session can tell where the text came from either way, plus a word for
+ * WHICH variant it is getting: a summary is second-hand by construction, and the
+ * main session should know that before it acts on it.
+ *
+ * Trailing blank line for the same reason as above: the composer may already hold
+ * the user's own sentence.
+ */
+export function formatSideThreadDigestForComposer(label: string, summary: string): string {
+  return `[Summary of side thread "${label}"]\n${summary.trim()}\n\n`;
+}
+
+/**
+ * The first line the server demands of a digest reply. The SERVER owns this text
+ * (`src/core/sessions/side-thread-digest.ts`) and sends it back on the /digest
+ * response, which is what the acceptance rule below uses — this copy exists only
+ * for the paths that have no response to read (the full inject filtering out an
+ * older summary). A unit test pins the two spellings together so they cannot drift.
+ */
+export const SIDE_THREAD_DIGEST_MARKER = 'Summary for the main session:';
+
+/** How far into the reply the marker may sit. Enough for a heading wrapper, not
+ *  enough for the model to have written a paragraph of its own first. */
+const MARKER_MAX_OFFSET = 120;
+
+/**
+ * Is this transcript message the summary we just asked for — and if so, what is the
+ * summary text?
+ *
+ * This predicate is the whole safety story of "inject summary", so it is pure and
+ * unit-tested rather than living inline in the drawer. Two independent rules:
+ *
+ *  1. The text must carry the marker near its start, preceded by nothing but
+ *     decoration. Before this rule existed, live runs pasted the PREVIOUS answer
+ *     into the main chat labelled as a summary — twice — because the transcript
+ *     flush lags the turn-end event and a turn that was already running ends first.
+ *     Decoration is tolerated (`**Summary…**`, `<p>Summary…`) because a thread in
+ *     rich output mode still carries a standing HTML instruction from an earlier
+ *     turn; prose before the marker is NOT, because that is how an ordinary answer
+ *     that merely mentions the phrase would sneak through.
+ *  2. It must differ from the message that was newest BEFORE the request, so a
+ *     second digest cannot settle for the first one's summary.
+ *
+ * Returns undefined when either rule fails. A refusal is always better than a
+ * confident wrong paste: the caller retries, then tells the user to inject the
+ * full aside.
+ */
+export function pickSideThreadDigestReply(
+  replyMarker: string,
+  before: { id?: string; text?: string },
+  now: { id?: string; text?: string },
+): string | undefined {
+  const text = (now.text ?? '').trim();
+  if (!text || !replyMarker) return undefined;
+  if (now.id === before.id && text === (before.text ?? '').trim()) return undefined;
+  const at = text.indexOf(replyMarker);
+  if (at < 0 || at > MARKER_MAX_OFFSET) return undefined;
+  // Only whitespace, markdown emphasis/heading marks, and HTML tags may precede it.
+  if (!/^(?:\s|[*_#>`~-]|<[^>]{0,120}>)*$/.test(text.slice(0, at))) return undefined;
+  const body = text.slice(at + replyMarker.length).trim();
+  return body || undefined;
+}
+
+export interface DigestReadDeps {
+  /** Newest assistant message in the thread's transcript. May throw; a failed read
+   *  costs one attempt, never the whole operation. */
+  readLast: () => Promise<{ id?: string; text?: string }>;
+  /** Resolves when the thread ends a turn, or after the poll interval — whichever
+   *  comes first. Re-armable: it is called once per attempt. */
+  waitTick: () => Promise<unknown>;
+  /** Injectable clock so tests don't wait out real deadlines. */
+  now?: () => number;
+  timeoutMs: number;
+  /** True once the caller no longer wants the answer (thread switched, unmounted). */
+  cancelled?: () => boolean;
+}
+
+export type DigestReadResult =
+  | { ok: true; summary: string }
+  | { ok: false; reason: 'timeout' | 'cancelled' };
+
+/**
+ * Poll the thread's transcript until its summary shows up.
+ *
+ * Deadline-driven, NOT "wait for one turn-end then read a few times": any turn on
+ * that session ends the wait (a queued follow-up, a self-wake), so treating the
+ * first end-of-turn as ours ended the attempt while the real summary was still
+ * being written. Turn-end is used only to wake the poll early.
+ */
+export async function readSideThreadDigest(
+  replyMarker: string,
+  before: { id?: string; text?: string },
+  deps: DigestReadDeps,
+): Promise<DigestReadResult> {
+  const clock = deps.now ?? (() => Date.now());
+  const deadline = clock() + deps.timeoutMs;
+  while (clock() < deadline) {
+    if (deps.cancelled?.()) return { ok: false, reason: 'cancelled' };
+    try {
+      const summary = pickSideThreadDigestReply(replyMarker, before, await deps.readLast());
+      if (summary) return { ok: true, summary };
+    } catch { /* one bad read (mid-flush 5xx, a tail-read deadline) costs one attempt */ }
+    if (deps.cancelled?.()) return { ok: false, reason: 'cancelled' };
+    await deps.waitTick();
+  }
+  return { ok: false, reason: 'timeout' };
 }
 
 // ── Writes ───────────────────────────────────────────────────────────────────

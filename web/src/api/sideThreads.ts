@@ -123,6 +123,26 @@ export function promoteSideThread(
   return apiPost(`/api/sessions/${sessionId}/side-threads/${threadId}/promote`);
 }
 
+/**
+ * Ask the thread to summarize itself (the "inject summary" action). Returns as soon
+ * as the request is ENQUEUED (202) — the summary arrives as an ordinary turn on
+ * `threadSessionId`, so the caller polls that session's transcript rather than
+ * holding this response open for the model's thinking time.
+ *
+ * `replyMarker` is the first line the server demanded of the reply; the caller MUST
+ * use it to identify the summary instead of trusting "the newest message".
+ *
+ * 409 with a message worth showing verbatim when the thread cannot summarize itself:
+ * promoted to a task, process reaped (a cold resume for one paragraph is a bad
+ * trade), waiting on a permission prompt, or still answering.
+ */
+export function requestSideThreadDigest(
+  sessionId: string,
+  threadId: string,
+): Promise<{ requested: true; threadSessionId: string; replyMarker: string }> {
+  return apiPost(`/api/sessions/${sessionId}/side-threads/${threadId}/digest`);
+}
+
 export function deleteSideThread(sessionId: string, threadId: string): Promise<{ ok: true }> {
   return apiDelete<{ ok: true }>(`/api/sessions/${sessionId}/side-threads/${threadId}`);
 }

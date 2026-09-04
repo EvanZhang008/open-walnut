@@ -422,6 +422,77 @@ class SideThreadManager {
     return standby.claudeSessionId;
   }
 
+  /**
+   * Ask a thread to summarize ITSELF, for the "inject summary" action.
+   *
+   * Enqueue-and-return: the reply arrives as an ordinary turn on that session, so
+   * the caller watches the stream it is already subscribed to instead of holding
+   * an HTTP connection open for the model's thinking time (one pinned response
+   * costs a browser 1 of its 6 sockets).
+   *
+   * Every precondition is enforced HERE, not in the button's `disabled` prop. The
+   * drawer's gating is UX; this method is the contract, and the route is reachable
+   * by anything (a second tab holding a stale status, a script, a future phone
+   * surface). Each 409 below is a case where the summary would either cost far more
+   * than it is worth or damage something the user did not ask us to touch.
+   */
+  async requestDigest(parentSid: string, threadId: string): Promise<{ threadSessionId: string }> {
+    const { getSideQuestion } = await import('../side-questions.js');
+    const entry = await getSideQuestion(parentSid, threadId);
+    if (!entry?.threadSessionId) throw new SessionControlError('Side thread not found', 404);
+    // A PROMOTED thread is a real task session now: it has a taskId and no side-thread
+    // lane, so a turn on it runs the full task machinery (phase → NEED_ACTION, session
+    // hooks, the turn-complete triage's own extra model call, which would overwrite the
+    // task's note with an account of this plumbing turn). retireThread guards the same
+    // case; so does this.
+    if (entry.promotedTaskId) {
+      throw new SessionControlError(
+        'This thread was promoted to a task — inject the full aside instead', 409,
+      );
+    }
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
+    const record = await getSessionByClaudeId(entry.threadSessionId);
+    if (!record || record.archived) {
+      throw new SessionControlError('This side thread is archived — inject the full aside instead', 409);
+    }
+    // A live process is required. THIS class is what produces dead-but-unarchived
+    // threads (the live-cap eviction and the 30-minute idle sweep both terminate
+    // without archiving), so an hour-old aside — exactly the kind worth summarizing —
+    // would otherwise cold `--resume` here: a whole prefix re-write (measured 195K
+    // tokens / 47s on a large parent) for one paragraph, against a 90s client budget.
+    if (!isLive(record)) {
+      throw new SessionControlError(
+        'This side thread\'s process has been reaped — inject the full aside instead', 409,
+      );
+    }
+    // An open permission prompt is auto-denied by any delivery, so a summary request
+    // would silently answer a question the user was still looking at.
+    if (record.pendingPermission) {
+      throw new SessionControlError(
+        'This side thread is waiting on a permission prompt — answer it first', 409,
+      );
+    }
+    // Mid-turn: the reply would be queued behind the running turn, and the caller's
+    // "which message is the summary" reasoning assumes an idle session.
+    if (record.process_status === 'running') {
+      throw new SessionControlError('This side thread is still answering — try again in a moment', 409);
+    }
+    const { SIDE_THREAD_DIGEST_MESSAGE } = await import('./side-thread-digest.js');
+    const { sendMessageToSession } = await import('../session-message-queue.js');
+    // Sent RAW: a machine turn must not carry the output-mode instruction (the
+    // digest asks for plain text on purpose — its destination is a composer), and
+    // it must not consume the one-time edge either.
+    await sendMessageToSession(entry.threadSessionId, SIDE_THREAD_DIGEST_MESSAGE, {
+      source: 'side-thread-digest',
+    });
+    // No activity bookkeeping here: the turn this send starts stamps lastActiveAt
+    // itself, which is exactly what the idle sweep reads.
+    log.session.info('side thread: digest requested', {
+      parentSid, threadId, threadSessionId: entry.threadSessionId,
+    });
+    return { threadSessionId: entry.threadSessionId };
+  }
+
   /** Terminate + archive a thread and drop its store entry. A PROMOTED thread's
    *  session belongs to its task now — only the drawer row is removed, the
    *  session stays alive under the normal session controls. */

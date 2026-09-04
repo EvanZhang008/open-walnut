@@ -57,8 +57,20 @@ const FIRST_Q = 'why is this test flaky'
 const SECOND_Q = 'which env var controls the retry'
 const FOLLOW_UP = 'and what changes it'
 
+/** Stands in for the real digest prompt, which the SERVER owns (the frontend only
+ *  POSTs to /digest). Short so the mock CLI's echo is a readable assertion. */
+const DIGEST_STANDIN = 'summarize this aside'
+
 /** The mock CLI's echo prefix — the answer text every assertion looks for. */
 const answerFor = (prompt: string) => `I processed your message: ${prompt}`
+
+/**
+ * The digest reply's required first line. The real server sends its own wording and
+ * the drawer accepts ONLY a reply starting with whatever the response carried, so a
+ * fixture whose "model" just echoes can still exercise the real marker-gated path:
+ * hand back the echo prefix as the marker.
+ */
+const DIGEST_MARKER = 'Hello! I processed your message:'
 
 let fixtureRoot = ''
 
@@ -82,12 +94,19 @@ interface StubState {
   /** Typing-triggered cache warm-ups (POST /standby/warm). */
   warmCalls: number
   deleted: string[]
+  /** Threads asked to summarize themselves (POST /:id/digest), in order. */
+  digested: string[]
   /** When set, POST /side-threads answers 409 fork_unsupported. */
   forkUnsupported: boolean
+  /** The marker the digest response claims to have demanded of the reply. */
+  digestMarker: string
 }
 
 function freshStub(threads: StubThread[] = []): StubState {
-  return { threads, created: [], standbyCalls: 0, warmCalls: 0, deleted: [], forkUnsupported: false }
+  return {
+    threads, created: [], standbyCalls: 0, warmCalls: 0, deleted: [], digested: [],
+    forkUnsupported: false, digestMarker: DIGEST_MARKER,
+  }
 }
 
 /**
@@ -158,6 +177,28 @@ async function installSideThreadRoutes(
       await route.fulfill({ json: { taskId: 'pw-task-001' } })
       return
     }
+    const digest = /^\/([^/]+)\/digest$/.exec(rest)
+    if (method === 'POST' && digest) {
+      const target = stub.threads.find((t) => t.id === digest[1])
+      if (!target) {
+        await route.fulfill({ status: 404, json: { error: 'Side thread not found' } })
+        return
+      }
+      stub.digested.push(target.id)
+      await route.fulfill({
+        status: 202,
+        json: {
+          requested: true, threadSessionId: target.threadSessionId, replyMarker: stub.digestMarker,
+        },
+      })
+      // Play the server's part: the real route enqueues the tagged summary ask on
+      // the THREAD's session, and the drawer waits for that turn's session:result.
+      // A REST send produces the same real turn (the mock CLI echoes it).
+      await request.post('/api/v1/messages', {
+        data: { to: target.threadSessionId, text: DIGEST_STANDIN },
+      })
+      return
+    }
     const del = /^\/([^/]+)$/.exec(rest)
     if (method === 'DELETE' && del) {
       stub.deleted.push(del[1])
@@ -218,7 +259,7 @@ async function ask(popover: Locator, text: string): Promise<void> {
 }
 
 test('a thread streams its answer, follows up, switches, and injects into the composer', async ({ page, request }) => {
-  test.setTimeout(180_000)
+  test.setTimeout(240_000)
   const stub = freshStub()
   await installSideThreadRoutes(page, request, stub)
 
@@ -357,8 +398,71 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   await expect(body.getByText(answerFor(SECOND_Q), { exact: false })).toHaveCount(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/two-threads.png`, fullPage: true })
 
-  // ── Inject to chat: the thread's Q&A lands in the MAIN composer ──
-  await popover.getByRole('button', { name: /Inject to chat/ }).click()
+  // ── Mid-turn, the summary button REFUSES rather than reading a stale snapshot ──
+  // "Which message is the summary" is decided against the newest message at request
+  // time; asking during a running turn would take that snapshot mid-flight.
+  const summaryButton = popover.getByRole('button', { name: /Inject summary/ })
+  await ask(popover, 'slow:6000 one more thing')
+  await expect(summaryButton).toBeDisabled({ timeout: 20_000 })
+  await expect(summaryButton).toHaveAttribute('title', /Wait for this thread to finish/)
+  await expect(summaryButton).toBeEnabled({ timeout: 90_000 })
+
+  // ── Inject SUMMARY: the thread writes it, and only the summary lands ──
+  // Deliberately first: it must NOT close over the full-inject path, and the
+  // composer must hold the summary alone (not the transcript).
+  await summaryButton.click()
+  const composerBox = panel.locator('textarea.chat-input-textarea').first()
+  await expect(composerBox)
+    .toHaveValue(new RegExp(`\\[Summary of side thread "${FIRST_Q}"\\]`), { timeout: 30_000 })
+  // The marker line is STRIPPED before injecting: the header already says where the
+  // text came from, so the machine first line must not survive into the composer.
+  const injected = await composerBox.inputValue()
+  const summaryBody = injected.slice(injected.indexOf('\n') + 1)
+  expect(summaryBody.startsWith(DIGEST_MARKER)).toBeFalsy()
+  expect(summaryBody).toContain(DIGEST_STANDIN)
+  // The SUMMARY variant, not the transcript one: no Q/A rows, no other header.
+  await expect(composerBox).not.toHaveValue(/From side thread/)
+  expect(stub.digested).toEqual(['st-1'])
+  await composerBox.fill('')
+
+  // ── A reply that does NOT carry the marker is REFUSED, not pasted ──
+  // The whole point of the marker: before it existed, a read that raced the
+  // transcript flush injected the PREVIOUS answer labelled as a summary. Here the
+  // "server" demands a marker the thread never writes, so the drawer must end with
+  // an error and an EMPTY composer rather than a confident wrong paste.
+  stub.digestMarker = 'THREAD-NEVER-WRITES-THIS:'
+  await panel.locator('.side-question-pill', { hasText: 'btw' }).first().click()
+  await expect(popover).toBeVisible({ timeout: 10_000 })
+  await popover.locator('.side-thread-chip:not(.side-thread-chip-new)').first().click()
+  await popover.getByRole('button', { name: /Inject summary/ }).click()
+  // It accepted the click and is polling…
+  await expect(popover.getByRole('button', { name: /Summarizing/ })).toBeVisible({ timeout: 15_000 })
+  // …and the thread's real reply (which does not carry this marker) lands during that
+  // window, yet NOTHING is pasted. That is the rule: refuse, never guess. The "your
+  // budget is spent" message itself is pinned at the unit level instead of waiting out
+  // DIGEST_TIMEOUT_MS here (readSideThreadDigest → reason: 'timeout').
+  await expect.poll(
+    () => historyContains(request, stub.threads[0].threadSessionId, DIGEST_STANDIN),
+    { timeout: 60_000, message: 'the digest request never reached the thread' },
+  ).toBe(true)
+  await page.waitForTimeout(3_000)
+  await expect(composerBox).toHaveValue('')
+  stub.digestMarker = DIGEST_MARKER
+  // Switching threads ABANDONS a digest in flight: its text belongs to the thread the
+  // user left. The spinner clears and the composer stays untouched.
+  await popover.locator('.side-thread-chip:not(.side-thread-chip-new)').nth(1).click()
+  await expect(popover.getByRole('button', { name: /Inject summary/ })).toBeVisible({ timeout: 20_000 })
+  await expect(composerBox).toHaveValue('')
+  // Leave the drawer closed so the next section opens it from the same state as
+  // above (the successful inject closes it itself; a refusal deliberately does not).
+  await page.keyboard.press('Escape')
+  await expect(popover).toBeHidden({ timeout: 10_000 })
+
+  // ── Inject full: the thread's whole Q&A lands in the MAIN composer ──
+  await panel.locator('.side-question-pill', { hasText: 'btw' }).first().click()
+  await expect(popover).toBeVisible({ timeout: 10_000 })
+  await popover.locator('.side-thread-chip:not(.side-thread-chip-new)').first().click()
+  await popover.getByRole('button', { name: /Inject full/ }).click()
   const mainComposer = panel.locator('textarea.chat-input-textarea').first()
   await expect(mainComposer)
     .toHaveValue(new RegExp(`\\[From side thread "${FIRST_Q}"\\]`), { timeout: 20_000 })
