@@ -7,12 +7,21 @@
  *
  * Counts render immediately from the already-loaded `tasks` prop; the registry row
  * (source / settings / AI summary / memory) arrives from GET /api/projects/:name/metadata.
+ *
+ * NAME / CLAIM / Working Dir / Host come from the shared project registry store
+ * whenever it has the row, so an edit here reaches every other surface in the same
+ * frame (the draft column's folder pill, `projectForDir`, the pickers) and a rename
+ * from the group header kebab retitles this pane instead of stranding it on a name
+ * that no longer exists. `project` is the name the HOST captured when it opened the
+ * pane; the store resolves it forward through any rename since.
  */
 
 import { useState, useEffect, useMemo, useCallback, type CSSProperties } from 'react';
 import type { Task } from '@open-walnut/core';
 import { useIntegrations, getIntegrationMeta } from '../../hooks/useIntegrations';
 import { useConfirm } from '@/hooks/useConfirm';
+import { useProjectEntry, patchProjectLocal, removeProjectLocal } from '@/hooks/useProjectRegistry';
+import { useTasksContextSafe } from '@/contexts/TasksContext';
 import {
   fetchProjectDetail,
   saveProjectMetadata,
@@ -34,20 +43,33 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
   const [metadata, setMetadata] = useState<ProjectMetadata>({});
   const [memorySummary, setMemorySummary] = useState<string | null>(null);
   // Canonical spelling + claim come from the registry, which is the authority on
-  // both (a task's `source` can lag a claim change).
-  const [source, setSource] = useState('local');
-  const [displayName, setDisplayName] = useState(project);
+  // both (a task's `source` can lag a claim change). The shared store wins when it
+  // has the row; these two are the pre-load / unregistered fallback.
+  const [detailSource, setDetailSource] = useState('local');
+  const [detailName, setDetailName] = useState(project);
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [summaryRefreshing, setSummaryRefreshing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const confirm = useConfirm();
+  const tasksStore = useTasksContextSafe();
+  const { name: entryName, row } = useProjectEntry(project);
+
+  const displayName = row?.name ?? detailName;
+  const source = row?.source ?? detailSource;
+
+  /** Current value of an editable setting — the store's row when it has one. */
+  const settingValue = useCallback((field: string): string => {
+    if (row && field === 'default_cwd') return row.defaultCwd ?? '';
+    if (row && field === 'default_host') return row.defaultHost ?? '';
+    return (metadata as Record<string, string>)[field] ?? '';
+  }, [row, metadata]);
 
   const refreshSummary = useCallback(async () => {
     setSummaryRefreshing(true);
     try {
-      const data = await regenerateProjectSummary(project);
+      const data = await regenerateProjectSummary(entryName);
       setMetadata((prev) => ({
         ...prev,
         summary: data.summary ?? undefined,
@@ -56,12 +78,12 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
     } catch { /* keep the old summary */ } finally {
       setSummaryRefreshing(false);
     }
-  }, [project]);
+  }, [entryName]);
 
   // Counts from the loaded task list. Project identity is case-insensitive server-side,
   // so compare that way here too or a differently-cased task would go uncounted.
   const counts = useMemo(() => {
-    const key = project.toLowerCase();
+    const key = entryName.toLowerCase();
     const result = { todo: 0, active: 0, done: 0, total: 0 };
     for (const t of tasks) {
       if ((t.project ?? '').toLowerCase() !== key) continue;
@@ -71,22 +93,24 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
       result.total++;
     }
     return result;
-  }, [tasks, project]);
+  }, [tasks, entryName]);
 
+  // Keyed on the RESOLVED name: a rename while the pane is open re-fetches the
+  // summary/memory under the new name instead of 404-ing on the old one.
   useEffect(() => {
     let cancelled = false;
-    setDisplayName(project);
-    fetchProjectDetail(project)
+    setDetailName(entryName);
+    fetchProjectDetail(entryName)
       .then((detail) => {
         if (cancelled) return;
         setMetadata(detail.metadata ?? {});
         setMemorySummary(detail.memorySummary ?? null);
-        setSource(detail.source ?? 'local');
-        if (detail.name) setDisplayName(detail.name);
+        setDetailSource(detail.source ?? 'local');
+        if (detail.name) setDetailName(detail.name);
       })
       .catch(() => { /* non-critical — counts above still render */ });
     return () => { cancelled = true; };
-  }, [project]);
+  }, [entryName]);
 
   const startEdit = useCallback((field: string, currentValue: string) => {
     setEditingField(field);
@@ -110,37 +134,64 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
     if (!ok) return;
     setDeleting(true);
     setDeleteError(null);
+    // Drop the row from the shared registry now — the pickers and badges on the
+    // other surfaces must not keep offering a project that is being deleted.
+    const settleRegistry = removeProjectLocal(displayName);
+    // Only a LOCAL claim has a knowable destination (Inbox); a cascade can land
+    // its tasks in the plugin's fallback project instead, so let the refetch say.
+    const moved = !isClaimed && tasksStore
+      ? tasksStore.tasks.filter((t) => (t.project ?? '').toLowerCase() === entryName.toLowerCase())
+      : [];
+    if (moved.length > 0) {
+      tasksStore?.patchTasksLocal(Object.fromEntries(moved.map((t) => [t.id, { project: '' }])));
+    }
     try {
       await deleteProject(displayName, isClaimed ? { remote: true } : undefined);
+      settleRegistry(true);
       onClose(); // row is gone — the task list refreshes via the task:updated broadcast
     } catch (err) {
+      settleRegistry(false);
+      // Each row goes back to ITS OWN spelling (project identity is case-insensitive,
+      // so two tasks in one project can legitimately differ in case).
+      if (moved.length > 0) {
+        tasksStore?.patchTasksLocal(Object.fromEntries(moved.map((t) => [t.id, { project: t.project }])));
+      }
       // Surface inline: 409 = plugin lacks the cascade hook; 502 = the remote
       // call failed (auth expired…) with local state untouched — retryable.
       setDeleteError(err instanceof Error ? err.message : String(err));
     } finally {
       setDeleting(false);
     }
-  }, [confirm, displayName, source, counts.total, onClose]);
+  }, [confirm, displayName, entryName, source, counts.total, onClose, tasksStore]);
 
   const saveEdit = useCallback(async (field: string) => {
     setEditingField(null);
     const newValue = editValue.trim();
-    const oldValue = (metadata as Record<string, string>)[field] ?? '';
+    const oldValue = settingValue(field);
     if (newValue === oldValue) return;
 
-    // Optimistic update
+    // Optimistic — locally AND in the shared registry store, because the folder a
+    // project runs in is read by surfaces that never see this pane (the draft
+    // column's folder pill, projectForDir). Waiting for the PUT left them on the
+    // old path until a reload.
     setMetadata((prev) => ({ ...prev, [field]: newValue || undefined }));
+    const patch = field === 'default_cwd' ? { defaultCwd: newValue || null }
+      : field === 'default_host' ? { defaultHost: newValue || null }
+        : null;
+    const settleRegistry = patch ? patchProjectLocal(entryName, patch) : null;
     try {
       // Clearing sends null, NOT undefined: JSON.stringify DROPS undefined
       // properties, so the PUT body would be `{}` and the merge a no-op — the
       // old value came straight back and the field appeared to revert itself.
-      const merged = await saveProjectMetadata(project, { [field]: newValue || null });
+      const merged = await saveProjectMetadata(entryName, { [field]: newValue || null });
       setMetadata(merged);
+      settleRegistry?.(true);
     } catch {
       // Revert on failure
       setMetadata((prev) => ({ ...prev, [field]: oldValue || undefined }));
+      settleRegistry?.(false);
     }
-  }, [editValue, metadata, project]);
+  }, [editValue, settingValue, entryName]);
 
   return (
     <div className="todo-detail-pane project-detail-pane" style={style}>
@@ -175,10 +226,10 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
           ) : (
             <span
               className="detail-setting-value"
-              onClick={() => startEdit('default_cwd', metadata.default_cwd ?? '')}
+              onClick={() => startEdit('default_cwd', settingValue('default_cwd'))}
               title="Click to edit"
             >
-              {metadata.default_cwd || <span className="text-muted">not set</span>}
+              {settingValue('default_cwd') || <span className="text-muted">not set</span>}
             </span>
           )}
         </div>
@@ -197,10 +248,10 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
           ) : (
             <span
               className="detail-setting-value"
-              onClick={() => startEdit('default_host', metadata.default_host ?? '')}
+              onClick={() => startEdit('default_host', settingValue('default_host'))}
               title="Click to edit"
             >
-              {metadata.default_host || <span className="text-muted">local</span>}
+              {settingValue('default_host') || <span className="text-muted">local</span>}
             </span>
           )}
         </div>

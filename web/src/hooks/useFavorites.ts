@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useEvent } from './useWebSocket';
+import { subscribeProjectMutations, migrateProjectNameList } from './useProjectRegistry';
 import * as favApi from '@/api/favorites';
 
 export interface UseFavoritesReturn {
@@ -33,6 +34,17 @@ export function useFavorites(): UseFavoritesReturn {
     if (key && key !== 'favorites') return;
     fetchAll();
   });
+
+  // A rename rewrites `favorites.projects` server-side, but this list is keyed by
+  // NAME: the instant a surface shows the new name, isProjectFavorite() would say
+  // false and the star would go hollow until the config:changed refetch landed.
+  // Follow the registry store's local mutation instead, so the star never blinks.
+  useEffect(() => subscribeProjectMutations((m) => {
+    if (m.kind === 'resync') { fetchAll(); return; }
+    setFavoriteProjects((prev) => (m.kind === 'rename'
+      ? migrateProjectNameList(prev, m.from, m.to)
+      : migrateProjectNameList(prev, m.name, null)));
+  }), [fetchAll]);
 
   // Project identity is case-INSENSITIVE server-side (task_projects is NOCASE),
   // so every project comparison here folds case — a favorite stored as "HomeLab"

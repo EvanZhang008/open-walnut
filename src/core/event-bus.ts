@@ -128,6 +128,10 @@ export const EventNames = {
 
   // Project registry events
   PROJECT_CREATED: 'project:created',
+  PROJECT_RENAMED: 'project:renamed',
+  PROJECT_DELETED: 'project:deleted',
+  /** Registry-row metadata changed (default_cwd / default_host / summary / alias). */
+  PROJECT_UPDATED: 'project:updated',
 
   // Notes events
   NOTES_UPDATED: 'notes:updated',

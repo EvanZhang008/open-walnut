@@ -12,10 +12,44 @@
  * The project is a PARAMETER, not a hook option: the kebab knows its project at
  * mount, but a context menu only learns it when the user right-clicks a row, and
  * a per-project hook instance would mean one hook per rendered row.
+ *
+ * Both writes go through the SHARED stores first (project registry + task store),
+ * so every surface showing that project changes in the same frame and the REST
+ * round-trip only confirms. `onChanged` survives as a host-specific extra (the
+ * /tasks rail fixes a now-stale selection with it), never as the propagation
+ * mechanism: the home page never passed it, which is why a rename used to leave
+ * the old name in every picker until a reload.
  */
 import { useCallback, useState } from 'react';
+import type { Task } from '@open-walnut/core';
 import { useConfirm, useAlert, usePrompt } from '@/hooks/useConfirm';
 import { fetchProjectDetail, renameProject, deleteProject } from '@/api/projects';
+import { renameProjectLocal, removeProjectLocal } from '@/hooks/useProjectRegistry';
+import { useTasksContextSafe, type TasksContextValue } from '@/contexts/TasksContext';
+
+/**
+ * Move every loaded task of `from` onto `to` ('' = Inbox) in the shared task
+ * store. The board groups by `task.project`, so this is what renames the group
+ * header the same frame the user confirms. Returns the undo for a failed write.
+ */
+function moveLoadedTasks(
+  store: TasksContextValue | null,
+  from: string,
+  to: string,
+): () => void {
+  if (!store) return () => { /* pop-out window: no store to patch */ };
+  const fromLower = from.trim().toLowerCase();
+  const forward: Record<string, Partial<Task>> = {};
+  const back: Record<string, Partial<Task>> = {};
+  for (const task of store.tasks) {
+    if ((task.project ?? '').toLowerCase() !== fromLower) continue;
+    forward[task.id] = { project: to };
+    back[task.id] = { project: task.project };
+  }
+  if (Object.keys(forward).length === 0) return () => { /* nothing loaded */ };
+  store.patchTasksLocal(forward);
+  return () => store.patchTasksLocal(back);
+}
 
 export interface ProjectActionsOptions {
   /** Fired after a successful rename/delete so hosts without the task:updated
@@ -35,6 +69,7 @@ export function useProjectActions({ onChanged }: ProjectActionsOptions = {}): Pr
   const confirm = useConfirm();
   const alert = useAlert();
   const prompt = usePrompt();
+  const tasksStore = useTasksContextSafe();
   const [busy, setBusy] = useState(false);
 
   const rename = useCallback(async (project: string) => {
@@ -47,17 +82,25 @@ export function useProjectActions({ onChanged }: ProjectActionsOptions = {}): Pr
     const target = next?.trim();
     if (!target || target === project) return;
     setBusy(true);
+    // Optimistic, in this order: registry row (pickers, badges, the detail pane's
+    // title) then the loaded task rows (board group header). Both settle on the
+    // route's verdict.
+    const settleRegistry = renameProjectLocal(project, target);
+    const undoTasks = moveLoadedTasks(tasksStore, project, target);
     try {
       await renameProject(project, target);
-      // Task rows refresh via the task:updated broadcast; onChanged covers
-      // registry-driven hosts (rail selection, project list).
+      settleRegistry(true);
+      // Task rows reconcile via the bulk task:updated broadcast; onChanged covers
+      // host-local state (the /tasks rail's selected project).
       onChanged?.('rename', project, target);
     } catch (err) {
+      settleRegistry(false);
+      undoTasks();
       await alert({ title: 'Rename failed', message: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy(false);
     }
-  }, [prompt, alert, onChanged]);
+  }, [prompt, alert, onChanged, tasksStore]);
 
   // Same semantics + copy as ProjectDetailPane.handleDelete: local claim = row
   // drop (tasks → Inbox); provider claim = ?remote=1 CASCADE, which deletes the
@@ -91,15 +134,23 @@ export function useProjectActions({ onChanged }: ProjectActionsOptions = {}): Pr
     });
     if (!ok) return;
     setBusy(true);
+    const settleRegistry = removeProjectLocal(project);
+    // Only a LOCAL claim has a knowable destination (Inbox). A cascade can land
+    // its tasks in the plugin's fallback project instead ('grouping-removed'), so
+    // guessing here would show the wrong group for a second — let the refetch say.
+    const undoTasks = isClaimed ? () => {} : moveLoadedTasks(tasksStore, project, '');
     try {
       await deleteProject(project, isClaimed ? { remote: true } : undefined);
+      settleRegistry(true);
       onChanged?.('delete', project);
     } catch (err) {
+      settleRegistry(false);
+      undoTasks();
       await alert({ title: 'Delete failed', message: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy(false);
     }
-  }, [confirm, alert, onChanged]);
+  }, [confirm, alert, onChanged, tasksStore]);
 
   return { busy, rename, remove };
 }

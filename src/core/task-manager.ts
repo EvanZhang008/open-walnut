@@ -1304,6 +1304,15 @@ export async function renameProject(
     }
   }
 
+  // The REGISTRY change is its own event, and it fires even when no task moved:
+  // an empty project is invisible in the task list, so TASK_UPDATED alone left
+  // every project list (pickers, badges, the detail pane) on the old name until a
+  // reload. `to` is the canonical spelling, so a consumer holding the old name can
+  // follow it forward without a lookup.
+  bus.emit(EventNames.PROJECT_RENAMED, {
+    from, to: canonical, merged, count, source: renameSource,
+  }, ['web-ui', 'main-agent'], { source: 'task-manager' });
+
   if (renamedTaskIds.length > 0) {
     bus.emit(EventNames.TASK_UPDATED, {
       task: null,
@@ -1363,6 +1372,13 @@ async function migrateProjectInConfigLists(from: string, to: string | null): Pro
         ? { ordering: { ...(config.ordering ?? {}), projects: ordering.next } }
         : {}),
     });
+    // Announce it the way every other writer of these two lists does (the
+    // favorites/ordering routes emit the same keyed event). Without this the
+    // server was right and the UI was not: the favorite star went hollow and the
+    // group left its hand-placed slot until a reload, because both client lists
+    // are keyed by project NAME.
+    if (favorites) bus.emit(EventNames.CONFIG_CHANGED, { key: 'favorites' }, ['web-ui']);
+    if (ordering) bus.emit(EventNames.CONFIG_CHANGED, { key: 'ordering' }, ['web-ui']);
     log.task.info('project config lists updated', {
       from, to,
       favorites: favorites ? favorites.next.length : undefined,
@@ -1388,7 +1404,7 @@ export async function deleteProject(project: string): Promise<{ movedToInbox: nu
   if (!name) throw new Error('Inbox is not a project — nothing to delete.');
 
   await ensureInit();
-  const { movedToInbox, taskIds, canonical } = await withWriteLock(async () => {
+  const { movedToInbox, taskIds, canonical, source } = await withWriteLock(async () => {
     const store = await readStore();
     const now = new Date().toISOString();
     const lower = name.toLowerCase();
@@ -1413,12 +1429,20 @@ export async function deleteProject(project: string): Promise<{ movedToInbox: nu
       movedToInbox: affected.length,
       taskIds: affected.map((t) => t.id),
       canonical: key ?? name,
+      source: (key ? projects[key].source : affected[0]?.source ?? 'local') as TaskSource,
     };
   });
 
   // Drop the deleted project from the config name lists (favorites / ordering) —
   // otherwise a deleted project keeps a phantom star and an ordering slot.
   await migrateProjectInConfigLists(canonical, null);
+
+  // Registry event of its own, for the same reason as PROJECT_RENAMED: deleting an
+  // EMPTY project moves no task, so TASK_UPDATED would announce nothing and every
+  // project list would keep offering a row that no longer exists.
+  bus.emit(EventNames.PROJECT_DELETED, {
+    name: canonical, source, movedToInbox,
+  }, ['web-ui', 'main-agent'], { source: 'task-manager' });
 
   if (taskIds.length > 0) {
     bus.emit(EventNames.TASK_UPDATED, {
@@ -1574,6 +1598,13 @@ export async function deleteProjectCascade(project: string): Promise<{
 
   await migrateProjectInConfigLists(record.name, null);
 
+  bus.emit(EventNames.PROJECT_DELETED, {
+    name: record.name,
+    source: record.source,
+    movedToInbox: newProjectName ? 0 : movedCount,
+    ...(newProjectName ? { movedToProject: newProjectName } : {}),
+  }, ['web-ui', 'main-agent'], { source: 'task-manager' });
+
   if (taskIds.length > 0) {
     bus.emit(EventNames.TASK_UPDATED, {
       task: null,
@@ -1628,20 +1659,27 @@ export async function setProjectMetadata(
   // so a unicode-case variant would otherwise miss its own row.
   const { name } = await ensureProject(raw);
 
-  return withWriteLock(async () => {
+  const merged = await withWriteLock(async () => {
     const db = getDb()!;
     const row = db
       .prepare('SELECT name, metadata FROM task_projects WHERE name = ?')
       .get(name) as { name: string; metadata: string | null } | undefined;
     if (!row) throw new Error(`Project "${name}" not found`);
     const existing = parseProjectMetadataJson(row.metadata, row.name) ?? {};
-    const merged = { ...existing, ...settings };
+    const next = { ...existing, ...settings };
     db.prepare('UPDATE task_projects SET metadata = ? WHERE name = ?').run(
-      Object.keys(merged).length > 0 ? JSON.stringify(merged) : null,
+      Object.keys(next).length > 0 ? JSON.stringify(next) : null,
       row.name,
     );
-    return merged;
+    return next;
   });
+
+  // Settings here are read by surfaces that never opened the detail pane (a
+  // project's default_cwd answers "which project is this folder?" for the draft
+  // column), so the write has to be announced. Carries the merged blob: a
+  // consumer needs no follow-up GET for the common fields.
+  bus.emit(EventNames.PROJECT_UPDATED, { name, metadata: merged }, ['web-ui'], { source: 'task-manager' });
+  return merged;
 }
 
 export interface SyncResult {

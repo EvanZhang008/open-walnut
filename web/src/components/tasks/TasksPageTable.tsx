@@ -170,17 +170,25 @@ function PriorityCell({ task, onUpdate }: { task: Task; onUpdate: TasksPageTable
   );
 }
 
-/** Inline project cell — click opens a portalled project picker (move task). */
-function ProjectCell({ task, sourceByName, onUpdate }: {
+/**
+ * Inline project cell — click opens a portalled project picker (move task).
+ *
+ * `projectNames` is a PROP, read once by the table. This cell renders once per
+ * row and the list is not virtualized, so calling useProjectRegistry() here
+ * subscribed the registry per row (and, before the store existed, issued one
+ * `GET /api/projects` per visible row through the 6-slot fetch gate). Same rule as
+ * TaskKebabMenu: one registry read per surface, not per row.
+ */
+function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
   task: Task;
   sourceByName: Map<string, string>;
+  projectNames: string[];
   onUpdate: TasksPageTableProps['onUpdate'];
 }) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState('');
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const { projectNames } = useProjectRegistry();
   const placement = useMenuPlacement(open, btnRef, menuRef, { minHeight: 160, onAnchorLost: () => setOpen(false) });
   const project = task.project || '';
 
@@ -311,6 +319,8 @@ export function TasksPageTable({
 }: TasksPageTableProps) {
   const navigate = useNavigate();
   const confirm = useConfirm();
+  // ONE registry read for the whole table (see ProjectCell).
+  const { projectNames } = useProjectRegistry();
   const openTask = useCallback((taskId: string) => {
     if (onOpenTask) onOpenTask(taskId);
     else navigate(`/tasks/${taskId}`);
@@ -474,7 +484,7 @@ export function TasksPageTable({
           <TaskSessionPill task={t} onOpenSession={openSession} />
         </span>
         {isAll && (
-          <span><ProjectCell task={t} sourceByName={sourceByName} onUpdate={onUpdate} /></span>
+          <span><ProjectCell task={t} sourceByName={sourceByName} projectNames={projectNames} onUpdate={onUpdate} /></span>
         )}
       </div>
     );

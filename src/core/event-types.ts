@@ -50,6 +50,37 @@ export interface TaskGroupsChangedEvent { group_id?: string; label?: string; dis
 /** Emitted the first time a project registry row is created (ensureProject). */
 export interface ProjectCreatedEvent { name: string; source: string }
 
+/**
+ * A project registry row was renamed. `to` is the CANONICAL spelling the row now
+ * carries (a merge resolves to the target's existing spelling), so a consumer
+ * holding the old name can follow it forward without a lookup.
+ */
+export interface ProjectRenamedEvent {
+  from: string;
+  to: string;
+  /** True when the rename folded into an existing project (case-insensitive). */
+  merged: boolean;
+  /** Tasks that moved with it. */
+  count: number;
+  source: string;
+}
+
+/** A project registry row is gone; its tasks went to Inbox or a fallback project. */
+export interface ProjectDeletedEvent {
+  name: string;
+  source: string;
+  movedToInbox: number;
+  /** 'grouping-removed' cascade: tasks kept their provider binding and moved here. */
+  movedToProject?: string;
+}
+
+/** Registry-row metadata changed (default_cwd / default_host / summary / alias). */
+export interface ProjectUpdatedEvent {
+  name: string;
+  /** The merged blob, so a consumer needs no follow-up GET for the common fields. */
+  metadata: Record<string, unknown>;
+}
+
 // ── Session lifecycle events ──
 
 export interface SessionStartEvent {
@@ -871,6 +902,9 @@ export interface EventPayloadMap {
   'task:groups-changed': TaskGroupsChangedEvent;
 
   'project:created': ProjectCreatedEvent;
+  'project:renamed': ProjectRenamedEvent;
+  'project:deleted': ProjectDeletedEvent;
+  'project:updated': ProjectUpdatedEvent;
 
   'session:start': SessionStartEvent;
   'session:send': SessionSendEvent;
