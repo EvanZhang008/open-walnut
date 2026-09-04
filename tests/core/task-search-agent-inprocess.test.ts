@@ -24,7 +24,8 @@ vi.mock('../../src/core/search.js', () => ({ search: searchMock }));
 vi.mock('../../src/core/usage/index.js', () => ({ usageTracker: { record: recordMock } }));
 
 import fs from 'node:fs/promises';
-import { WALNUT_HOME } from '../../src/constants.js';
+import yaml from 'js-yaml';
+import { WALNUT_HOME, CONFIG_FILE } from '../../src/constants.js';
 import { _resetForTesting } from '../../src/core/task-manager.js';
 import {
   runTaskSearchAgent,
@@ -51,6 +52,12 @@ beforeEach(async () => {
   _resetForTesting();
   _resetAgentSearchStateForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  // Pin the main provider: with no config, resolveMainProviderName falls back to "is the
+  // `claude` binary installed?", so the model assertions below would say bedrock on a CI
+  // runner and claude_cli on a developer machine that has the CLI. What is pinned here is
+  // the tier→catalog resolution, not a bare machine's default provider.
+  await fs.mkdir(WALNUT_HOME, { recursive: true });
+  await fs.writeFile(CONFIG_FILE, yaml.dump({ agent: { main_provider: 'bedrock' } }), 'utf-8');
 });
 
 afterEach(() => {

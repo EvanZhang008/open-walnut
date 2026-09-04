@@ -5,6 +5,8 @@
  * run is usage-accounted under the caller's source.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import yaml from 'js-yaml';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 const { loopMock, recordMock } = vi.hoisted(() => ({
@@ -16,13 +18,21 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-micro-agent'
 vi.mock('../../src/agent/loop.js', () => ({ runAgentLoop: loopMock }));
 vi.mock('../../src/core/usage/index.js', () => ({ usageTracker: { record: recordMock } }));
 
+import { WALNUT_HOME, CONFIG_FILE } from '../../src/constants.js';
 import { runMicroAgent, createMicroSession, resolveTierModel } from '../../src/agent/micro-agent.js';
 
 const DONE = { response: 'ok', messages: [], newMessages: [] };
 
-beforeEach(() => {
+beforeEach(async () => {
   loopMock.mockReset();
   recordMock.mockReset();
+  // Pin the main provider. Without a config, resolveMainProviderName falls back to
+  // "is the `claude` binary installed?" — so these assertions would say bedrock on a
+  // CI runner and claude_cli on a developer machine that has the CLI. The tier→catalog
+  // contract is what is under test here, not which provider a bare machine defaults to
+  // (that one is pinned in providers/default-provider.test.ts, with the probe injected).
+  await fs.mkdir(WALNUT_HOME, { recursive: true });
+  await fs.writeFile(CONFIG_FILE, yaml.dump({ agent: { main_provider: 'bedrock' } }), 'utf-8');
 });
 
 describe('runMicroAgent', () => {
