@@ -44,7 +44,7 @@ import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import {
   splitRichChunks, scopeStyleHtml, hasRichContent, extractAppHtml, isAppComplete,
-  collapseHtmlBlankLines, richScopeId, richChunkKey, type RichChunk,
+  collapseHtmlBlankLines, stripTransparentWrapper, richScopeId, richChunkKey, type RichChunk,
 } from '@/utils/rich-blocks';
 
 /** An island can never be shorter than this or taller than this (px). */
@@ -88,13 +88,18 @@ export function RichMarkdown({ text, cwd, scope, onClick, hostRef }: {
   const labelsVersion = useEntityLabelsVersion();
   const fallbackScope = useId();
   const scopeId = useMemo(() => richScopeId(scope ?? fallbackScope), [scope, fallbackScope]);
+  // A bare whole-reply wrapper is dropped before ANY other question is asked:
+  // left in, it makes the message one never-freezing, paint-contained chunk and
+  // swallows the first heading. Both the precheck and the split must see the same
+  // text, so this is the one place it happens.
+  const body = useMemo(() => stripTransparentWrapper(text), [text]);
   // One pass per text change: the precheck and the split share a memo, and a
   // plain message never pays for the split at all.
-  const split = useMemo(() => (hasRichContent(text) ? splitRichChunks(text) : null), [text]);
+  const split = useMemo(() => (hasRichContent(body) ? splitRichChunks(body) : null), [body]);
   const plainHtml = useMemo(
-    () => (split ? '' : renderMarkdownWithRefs(text, cwd)),
+    () => (split ? '' : renderMarkdownWithRefs(body, cwd)),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
-    [split, text, cwd, labelsVersion],
+    [split, body, cwd, labelsVersion],
   );
 
   if (!split) {

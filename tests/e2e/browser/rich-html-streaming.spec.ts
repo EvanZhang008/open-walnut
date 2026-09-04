@@ -800,4 +800,52 @@ test.describe('Rich HTML streaming', () => {
     await expect(history).not.toContainText('**');
     await expect(history).toContainText('之前那句是我编的');
   });
+
+  /**
+   * A reply the model wrapped ENTIRELY in one bare `<div>` (reported 2026-09-03).
+   * Left in, that single tag made the whole 7KB answer ONE html chunk: nothing
+   * froze, every delta re-rendered all of it, the first heading was swallowed into
+   * the raw-HTML block, and the result was a 4,092px `contain: layout style paint`
+   * block whose code blocks appeared to paint over the headings between them.
+   *
+   * Asserted on the real screen because the wrapper's cost is structural: the
+   * count of paint-contained chunks, and a heading that is an element rather than
+   * literal `##` text.
+   */
+  test('13. a reply wrapped in one bare <div> renders as plain markdown, not one contained block', async ({ page }) => {
+    await mockFrozenHistory(page);
+    await mockSessionDetail(page);
+    await openSession(page);
+    const history = page.locator('.session-history');
+
+    await streamDeltas(page, [
+      '<div>',
+      '',
+      '## Stage 5 · verification',
+      '',
+      '**5a. first request:**',
+      '',
+      '```',
+      'status: OK',
+      '```',
+      '',
+      'Both tables were empty before.',
+      '',
+      '</div>',
+      '',
+      'WRAP-TAIL-OK',
+    ].join('\n'));
+    await expect(history).toContainText('WRAP-TAIL-OK', { timeout: 15_000 });
+
+    // The heading is an ELEMENT: swallowed into the raw-HTML block it rendered as
+    // the literal characters `## Stage 5`.
+    await expect(history.locator('h2', { hasText: 'Stage 5 · verification' })).toHaveCount(1, { timeout: 15_000 });
+    await expect(history).not.toContainText('## Stage 5');
+    // Neither tag reaches the screen, as text or as an element.
+    await expect(history).not.toContainText('<div>');
+    await expect(history).not.toContainText('</div>');
+    // …and no paint-contained chunk was built for a reply that carries no markup.
+    expect(await history.locator('.rich-html-chunk').count()).toBe(0);
+    expect(await history.locator('pre', { hasText: 'status: OK' }).count()).toBe(1);
+  });
 });

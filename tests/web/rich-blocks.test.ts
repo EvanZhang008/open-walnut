@@ -17,7 +17,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   splitRichChunks, scopeStyleHtml, hasRichContent, extractAppHtml, isAppComplete,
-  collapseRawtextBlankLines, collapseHtmlBlankLines, richScopeId, richChunkKey, richChunkKeys,
+  collapseRawtextBlankLines, collapseHtmlBlankLines, stripTransparentWrapper,
+  richScopeId, richChunkKey, richChunkKeys,
   type RichChunk,
 } from '@/utils/rich-blocks';
 
@@ -763,6 +764,122 @@ describe('collapseHtmlBlankLines', () => {
   it('does not touch the chunker, so the streaming boundaries are unchanged', () => {
     const { stable, tail } = splitRichChunks(SVG_TWO_COLUMN);
     expect(stable.map((c) => c.text).join('') + (tail?.text ?? '')).toBe(SVG_TWO_COLUMN);
+  });
+});
+
+// ── A bare whole-reply wrapper ───────────────────────────────────────────────
+
+/**
+ * The reported shape (2026-09-03): asked for rich output, the model wrapped an
+ * otherwise ordinary markdown answer in one attribute-free `<div>`. Measured
+ * consequence in the live app: `splitRichChunks` returned exactly ONE html chunk
+ * for the whole 7KB reply, rendered as a 4,092px-tall `contain: layout style
+ * paint` block holding 26 scrollable `<pre>` children — nothing froze, every
+ * delta re-rendered all of it, and the code blocks appeared to paint over the
+ * headings between them.
+ */
+const WRAPPED_REPLY = [
+  '<div>',
+  '',
+  '## Stage 5 · verification',
+  '',
+  '**5a. first request:**',
+  '',
+  '```',
+  'status: OK',
+  '```',
+  '',
+  'Both tables were empty before; they have rows now.',
+  '',
+  '</div>',
+].join('\n');
+
+describe('stripTransparentWrapper', () => {
+  it('drops a bare whole-reply wrapper, which returns the reply to plain markdown', () => {
+    const out = stripTransparentWrapper(WRAPPED_REPLY);
+    expect(out).not.toContain('<div>');
+    expect(out).not.toContain('</div>');
+    expect(out).toContain('## Stage 5 · verification');
+    // The point of the fix: no HTML left, so the message never becomes a chunked,
+    // paint-contained block at all.
+    expect(hasRichContent(WRAPPED_REPLY)).toBe(true);
+    expect(hasRichContent(out)).toBe(false);
+  });
+
+  it('keeps every other line byte-identical', () => {
+    // The newline that preceded the closer stays: trimming it when the closer
+    // finally arrives would SHRINK the output mid-stream, which is exactly the
+    // prefix violation the property test below forbids.
+    const inner = WRAPPED_REPLY.split('\n').slice(1, -1).join('\n');
+    expect(stripTransparentWrapper(WRAPPED_REPLY)).toBe(`${inner}\n`);
+  });
+
+  it('leaves a wrapper the model gave attributes to', () => {
+    for (const open of ['<div class="card">', '<div style="padding:12px">', '<div id="x">']) {
+      const text = `${open}\n\ncontent\n\n</div>`;
+      expect(stripTransparentWrapper(text)).toBe(text);
+    }
+  });
+
+  it('leaves an element that is not a plain block wrapper', () => {
+    for (const name of ['table', 'ul', 'pre', 'svg', 'details', 'p']) {
+      const text = `<${name}>\n\ncontent\n\n</${name}>`;
+      expect(stripTransparentWrapper(text)).toBe(text);
+    }
+  });
+
+  it('leaves a wrapper that carries content on its own line', () => {
+    expect(stripTransparentWrapper('<div>hello</div>')).toBe('<div>hello</div>');
+    expect(stripTransparentWrapper('<div> <span>x</span>')).toBe('<div> <span>x</span>');
+  });
+
+  it('leaves a wrapper that is not the first thing in the reply', () => {
+    const text = 'Here is the layout:\n\n<div>\n\ncontent\n\n</div>';
+    expect(stripTransparentWrapper(text)).toBe(text);
+  });
+
+  it('strips the open tag while the reply is still arriving, then the closer', () => {
+    // Mid-stream the closer does not exist yet; the decision may not wait for it,
+    // or the whole reply spends the turn as one un-freezing block.
+    expect(stripTransparentWrapper('<div>\n\n# Title\n\nsome text')).toBe('\n# Title\n\nsome text');
+    expect(stripTransparentWrapper('<div>\n\n# Title\n\nsome text\n</div>')).toBe('\n# Title\n\nsome text\n');
+  });
+
+  it('never flips its answer as the text grows, and every prefix nests', () => {
+    // A decision that flips mid-stream re-renders (and un-freezes) the message in
+    // front of the reader, which is the failure this whole file guards.
+    let stripped: boolean | null = null;
+    let flips = 0;
+    let prev = '';
+    for (let n = 1; n <= WRAPPED_REPLY.length; n++) {
+      const prefix = WRAPPED_REPLY.slice(0, n);
+      const out = stripTransparentWrapper(prefix);
+      const now = out !== prefix;
+      // The one legal transition is the first: nothing is stripped until the
+      // wrapper's own line has fully arrived.
+      if (stripped !== null && now !== stripped) flips++;
+      stripped = now;
+      expect(out.startsWith(prev) || prev.startsWith(out)).toBe(true);
+      prev = out;
+    }
+    expect(flips).toBe(1);
+  });
+
+  it('leaves a reply that opens with real markup alone', () => {
+    const text = '<style>\n.card { color: red }\n</style>\n\n<div class="card">x</div>';
+    expect(stripTransparentWrapper(text)).toBe(text);
+  });
+
+  it('is idempotent, and a plain reply is untouched', () => {
+    const once = stripTransparentWrapper(WRAPPED_REPLY);
+    expect(stripTransparentWrapper(once)).toBe(once);
+    const plain = '# Title\n\nJust text.\n\n```\ncode\n```\n';
+    expect(stripTransparentWrapper(plain)).toBe(plain);
+  });
+
+  it('ignores a wrapper-looking line inside a code fence', () => {
+    const text = '```html\n<div>\n</div>\n```\n';
+    expect(stripTransparentWrapper(text)).toBe(text);
   });
 });
 

@@ -755,6 +755,66 @@ export function hasRichContent(text: string): boolean {
   return scanTagNames(text, () => false, true).length > 0;
 }
 
+/** Elements a reply opens out of habit. With no attributes each renders as a
+ *  plain block and offers nothing to target, so as a whole-reply wrapper it is
+ *  ceremony, not markup. */
+const TRANSPARENT_WRAPPERS = new Set(['div', 'section', 'article', 'main']);
+
+/**
+ * Drop an attribute-free wrapper element the reply opens on its FIRST line.
+ *
+ * Asked to write rich output, a model often wraps the whole answer in a bare
+ * `<div>` … `</div>`. That one tag pair costs three separate things, and the
+ * reported symptom (inc 2026-09-03, a reply whose code blocks appeared to sit on
+ * top of the headings between them) came from the third:
+ *   · the element stays open to the last line, so the ENTIRE reply is ONE chunk —
+ *     nothing ever freezes, and every delta re-renders the whole message, which
+ *     is the exact regression chunking exists to prevent;
+ *   · CommonMark ends a raw-HTML block at the first blank line, so a `## Heading`
+ *     on the line right after `<div>` is swallowed into the block and renders as
+ *     literal `## Heading`;
+ *   · that single chunk carries `contain: layout style paint` (see
+ *     `.rich-html-chunk`), and the measured case was 4,092px tall with 26
+ *     horizontally-scrollable `<pre>` children — one paint-contained rasterisation
+ *     unit far taller than the viewport, in the engine the desktop shell uses.
+ * Layout was provably correct there (no two boxes overlapped), so what the user
+ * photographed was that layer painting stale, and the fix is to stop building it.
+ *
+ * Deliberately decided from the FIRST LINE ALONE, so the answer can never flip
+ * mid-stream: strip the open tag, then strip its matching close whenever it
+ * arrives. Anything else is left exactly as written — an attribute (`<div
+ * class="card">`) means the model wants that element, content on the same line
+ * means it is not a wrapper, and a wrapper that is not first is not wrapping the
+ * reply. A `<style>` rule using a bare type selector (`div { … }`) would lose its
+ * target; that is the accepted cost of a decision that stays stable while the
+ * text is still growing.
+ */
+export function stripTransparentWrapper(text: string): string {
+  if (!text.includes('<')) return text;
+  const lines = lineSpans(text);
+  const lineText = (i: number) => text.slice(lines[i].start, lines[i].end).trim();
+
+  let open = 0;
+  while (open < lines.length && lineText(open) === '') open++;
+  if (open >= lines.length) return text;
+  const name = /^<([a-z][a-z0-9]*)>$/i.exec(lineText(open))?.[1]?.toLowerCase();
+  if (!name || !TRANSPARENT_WRAPPERS.has(name)) return text;
+
+  // Its closer is the line where the stack unwinds back past it. depth is the
+  // state at a line's START, so the closing line still reads as depth 1.
+  const { depth } = scanHtmlState(text, lines, makeSkip(text));
+  let close = -1;
+  for (let i = open + 1; i < lines.length; i++) {
+    if (depth[i] < 1) break; // already unwound: whatever closed it was not alone on a line
+    if (lineText(i) === `</${name}>`) { close = i; break; }
+  }
+
+  const head = text.slice(0, lines[open].start);
+  const bodyStart = Math.min(lines[open].end + 1, text.length);
+  if (close < 0) return head + text.slice(bodyStart); // still open: mid-stream
+  return head + text.slice(bodyStart, lines[close].start) + text.slice(Math.min(lines[close].end + 1, text.length));
+}
+
 // ── Identity: one scope per MESSAGE, one key per chunk ────────────────────────
 
 /**
