@@ -1,5 +1,6 @@
 # Notes / PKM Redesign — Backend: Storage, Indexing & Search Design
 
+> **Historical note (2026-09):** the semantic engine described below (QMD, `qmd-store.ts`, `memory-search.ts`, `notes-search.sqlite`) has since been replaced by the in-house hybrid index in `src/lib/hybrid-search/`; the notes semantic leg is now `searchV2Lane({ kinds: ['note'] })` over `~/.open-walnut/search.sqlite`. The `notes-index.sqlite` string leg, watcher, and rename design are still current.
 > **Status:** Design phase. No implementation in this document — architecture, data models, API contracts, and pseudocode only.
 > **Doc series:** `01-product-design.md` (PRD) → **`02-search-and-index-design.md` (this doc)** → later docs for editor extensions.
 > **Scope rule (inherited):** Markdown files on disk are the source of truth. Every index is a **rebuildable sidecar**, never the system of record. The editing experience is the #1 priority; nothing here may regress save/load fidelity.

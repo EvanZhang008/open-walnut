@@ -212,6 +212,7 @@ There is exactly ONE field and one spelling: read `task.unread`, write `{ unread
 ```
 ~/.open-walnut/
 ├── MEMORY.md                          # Global memory (preferences, facts)
+├── search.sqlite                      # Hybrid search index over memory, notes, tasks, sessions, skills (rebuildable)
 └── memory/
     ├── daily/                         # Time-indexed activity
     │   └── YYYY-MM-DD.md             # One file per day, timestamped entries
@@ -221,12 +222,11 @@ There is exactly ONE field and one spelling: read `task.unread`, write `{ unread
     │   └── {slug}/MEMORY.md           # Dynamic learnings (build quirks, conventions)
     ├── sessions/                      # Session summaries (auto-captured)
     │   └── [slug].md
-    ├── knowledge/                     # Knowledge articles
-    │   └── *.md
-    └── memory-index.sqlite            # FTS5 full-text search index
+    └── knowledge/                     # Knowledge articles
+        └── *.md
 ```
 
-**Data flow**: Agent uses `memory` tool → writes to daily log + project memory → memory-watcher detects change → FTS5 reindexed → chunk embeddings reconciled (3s delay) → searchable via hybrid search. Task embeddings update incrementally on `task:created`/`task:updated` events (500ms debounce). On startup, full reconciliation runs in background. On session end, on-stop hook auto-captures session summary + daily log + project memory.
+**Data flow**: Agent uses `memory` tool → writes to daily log + project memory → the memory watcher (`src/core/notes-watcher.ts`) upserts the changed file into the hybrid index (`src/core/search/wiring.ts`) within seconds; a 10-minute mtime sweep is the safety net. Task and session rows update on their event-bus events through a 2s debounce queue, and vectors are backfilled by a background pass in an embed worker thread. On startup an empty index is backfilled in the background. On session end, on-stop hook auto-captures session summary + daily log + project memory.
 
 ### How the agent uses memory
 
@@ -235,7 +235,7 @@ When the agent's system prompt is built (`src/agent/context.ts`), it includes:
 2. **All project summaries** — YAML frontmatter from every project's `MEMORY.md`
 3. **Recent daily logs** — most-recent-first, within a 10k token budget (90-day lookback). Oversized days are truncated by entry boundary (newest entries kept) rather than skipped entirely.
 
-When the agent needs to find something specific, it uses the `search` tool → hybrid search (BM25 keyword + vector similarity via min-max normalized weighted fusion). Three modes: `hybrid` (default), `keyword`, `semantic`. Falls back to keyword-only when Ollama is unavailable.
+When the agent needs to find something specific, it uses `task_search` / `memory_notes_search` → the hybrid index (`src/lib/hybrid-search/`): two FTS5 keyword lanes (strict AND for precision, relaxed OR for recall) with additive, explainable scoring, then a cosine rescore of those keyword candidates using a local embedding model. The semantic leg runs under a deadline and falls back to the keyword ranking when the model is cold or missing; `WALNUT_SEARCH_V2_SEMANTIC=0` turns it off entirely.
 
 ---
 

@@ -1,5 +1,6 @@
 # Notes / PKM Redesign — Product Design (PRD)
 
+> **Historical note (2026-09):** the semantic engine this series names (QMD, `qmd-store.ts`, `memory-search.ts`) has since been replaced by the in-house hybrid index in `src/lib/hybrid-search/` (see its README). The notes-index sidecar and editing design below are still current.
 > **Status:** Design phase. No implementation in this document — architecture, scenarios, data models, API contracts, and pseudocode only.
 > **Doc series:** `01-product-design.md` (this doc) → later docs will cover technical design, data model, and rollout.
 > **Scope rule:** The editing experience is the core of the core. Every tradeoff in this document resolves in favor of editing quality.

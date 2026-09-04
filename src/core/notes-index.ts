@@ -7,7 +7,7 @@
  *
  * Files on disk stay the source of truth; this DB is fully rebuildable
  * (see notes-indexer.ts rebuild path). Construction mirrors task-db.ts /
- * memory-index.ts: better-sqlite3, WAL, schema-version migration.
+ * session-db.ts: better-sqlite3, WAL, schema-version migration.
  *
  * This file is the STORAGE PRIMITIVE only — no fs reads, no frontmatter parsing,
  * no search index. The reconciler (notes-indexer.ts) drives writes; routes

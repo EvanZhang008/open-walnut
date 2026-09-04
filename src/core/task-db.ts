@@ -349,7 +349,7 @@ export function taskToRow(task: Partial<Task>): Record<string, any> {
 export const TASK_COLUMNS: readonly string[] = EXPLICIT_TASK_COLUMNS;
 
 // ── Schema ─────────────────────────────────────────────────────────────────
-// Idempotent. Safe to run on every open — matches the pattern in memory-index.ts.
+// Idempotent. Safe to run on every open — matches the pattern in session-db.ts.
 // Keep comments in-file rather than in separate docs so schema drift is
 // obvious during code review.
 //

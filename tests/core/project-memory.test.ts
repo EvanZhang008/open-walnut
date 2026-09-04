@@ -225,7 +225,7 @@ describe('updateProjectSummary', () => {
     const memFile = path.join(PROJECTS_MEMORY_DIR, 'life/tracker', 'MEMORY.md');
     const backup = await fsp.readFile(`${memFile}.bak.1`, 'utf-8');
     expect(backup).toContain('first state');
-    // Snapshots must NOT end in .md — memory-index.ts globs *.md and would
+    // Snapshots must NOT end in .md — the search index sweep globs *.md and would
     // otherwise index the agent's own history back in as live memory.
     expect(`${memFile}.bak.1`.endsWith('.md')).toBe(false);
   });

@@ -1083,7 +1083,7 @@ const FOLDER_ONLY_CAP = 5
 const ATTACHMENT_CAP = 3
 
 /**
- * Same job for the search-v2 leg (WALNUT_SEARCH_V2=1), different scale: the v2
+ * Same job for the hybrid-index leg, different scale: the v2
  * leg is banded on its COSINE component. qwen3 cosines for genuinely related
  * notes sit ≥0.5; loosely-topical neighbours ~0.4; below 0.35 is noise that
  * only crowds the page.

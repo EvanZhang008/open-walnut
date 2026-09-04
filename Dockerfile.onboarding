@@ -32,7 +32,7 @@ WORKDIR /home/walnut/app
 # Install backend deps first (layer cache). Copy package manifests only.
 COPY --chown=walnut:walnut package.json package-lock.json* ./
 COPY --chown=walnut:walnut web/package.json web/package-lock.json* ./web/
-# postinstall runs patch-package + (cd web && npm install) + patch-qmd; needs the patches/ + scripts/.
+# postinstall runs patch-package + (cd web && npm install); needs the patches/ + scripts/.
 COPY --chown=walnut:walnut patches ./patches
 COPY --chown=walnut:walnut scripts ./scripts
 RUN npm install

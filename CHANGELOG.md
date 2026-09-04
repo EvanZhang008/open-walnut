@@ -109,6 +109,7 @@ again, and nothing recreates them):
 
 ```bash
 rm -f ~/.open-walnut/{memory,notes,task,session}-search.sqlite*   # old index databases
+rm -f ~/.open-walnut/memory-index.sqlite*                        # older memory FTS index, retired with them
 rm -rf ~/.cache/qmd                                              # old GGUF model cache
 ```
 

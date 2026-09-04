@@ -45,7 +45,7 @@
  *
  * The `.bak.<n>` suffix order matters and is not cosmetic: the snapshots must
  * NOT end in `.md`, or every markdown walker over the memory tree (the search
- * index collections, memory-index's `*.md` walk, the daily-log listing) would
+ * index's memory sweep, the daily-log listing) would
  * pick them up and the Personal AI would start reading its own history back as if it
  * were live memory.
  */

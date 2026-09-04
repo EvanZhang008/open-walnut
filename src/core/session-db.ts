@@ -392,7 +392,7 @@ export const SESSION_COLUMNS: readonly string[] = EXPLICIT_SESSION_COLUMNS;
 
 // ── Schema ─────────────────────────────────────────────────────────────────
 // Idempotent. Safe to run on every open — matches the pattern in
-// memory-index.ts and task-db.ts.
+// task-db.ts and notes-index.ts.
 const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS sessions (
     claude_session_id TEXT PRIMARY KEY,
