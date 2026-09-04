@@ -141,6 +141,26 @@ async function dragSelect(page: Page, phrase: string): Promise<string> {
   return selected
 }
 
+/** Drag-select `phrase` from its END back to its START, the way a reader who
+ *  spots the end of a good sentence first does it. Returns where the mouse let go. */
+async function dragSelectBackward(page: Page, phrase: string): Promise<{ x: number; y: number }> {
+  const { rects } = await phraseGeometry(page, phrase)
+  const first = rects[0]
+  const last = rects[rects.length - 1]
+  const startX = last.right - 1
+  const startY = last.top + last.height / 2
+  const endX = first.left + 1
+  const endY = first.top + first.height / 2
+  await page.mouse.move(startX, startY)
+  await page.mouse.down()
+  await page.mouse.move((startX + endX) / 2, (startY + endY) / 2, { steps: 5 })
+  await page.mouse.move(endX, endY, { steps: 5 })
+  await page.mouse.up()
+  const selected = await page.evaluate(() => window.getSelection()?.toString() ?? '')
+  expect(selected.trim().length).toBeGreaterThan(0)
+  return { x: endX, y: endY }
+}
+
 /** How many passages are painted right now (the registry is document-global). */
 function paintedCount(page: Page): Promise<number> {
   return page.evaluate(() => {
@@ -371,5 +391,31 @@ test.describe('Quote pins', () => {
     await button.click()
     await expect(button).not.toHaveClass(/is-pinned/)
     await expect(panel.locator('.session-toc')).toHaveCount(0)
+  })
+
+  test('the pill appears where the mouse let go, also on a backwards drag', async ({ page }) => {
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    const panel = await openSession(page)
+    const paragraph = panel.locator('.session-msg', { hasText: PARAGRAPH }).first()
+    await centreRow(page, panel, paragraph)
+
+    // Select a whole clause end → start. The pill used to sit at the selection's
+    // END in document order, so an upward drag left it a screen away from the hand.
+    const clause = 'Phase two rewrites the index in place, which is the part worth watching closely'
+    const release = await dragSelectBackward(page, clause)
+    const pill = page.locator('[data-testid="quote-pin-pill"]')
+    await expect(pill).toBeVisible()
+    const box = (await pill.boundingBox())!
+    const centreX = box.x + box.width / 2
+    // Horizontally under the release point (the clause is ~600px wide, so the old
+    // end-centred placement would be far to the right of this), and hanging just
+    // above the line that was released on, never below it.
+    expect(Math.abs(centreX - release.x)).toBeLessThanOrEqual(48)
+    expect(box.y + box.height).toBeLessThanOrEqual(release.y)
+    expect(release.y - (box.y + box.height)).toBeLessThanOrEqual(40)
+    await shot(page, '05-backward-drag-pill')
+    await page.keyboard.press('Escape')
+    await expect(pill).toHaveCount(0)
   })
 })

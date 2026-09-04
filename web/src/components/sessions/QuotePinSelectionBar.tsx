@@ -49,7 +49,8 @@ interface QuotePinSelectionBarProps {
 }
 
 interface PillState {
-  /** Viewport point the pill hangs above (the selection's last rect, centred). */
+  /** Viewport point the pill hangs above: the selection's FOCUS caret, i.e. where
+   *  the gesture ended, so the pill is under the hand that just let go. */
   anchor: { x: number; y: number };
   msgId: string;
   role: 'user' | 'assistant' | 'system';
@@ -95,6 +96,58 @@ function selectionBody(container: HTMLElement, selection: Selection): Element | 
   return body;
 }
 
+/** Focus before anchor in document order = the user dragged (or shift-arrowed)
+ *  backwards, so the gesture ended at the selection's START. */
+function selectionIsBackward(selection: Selection): boolean {
+  const { anchorNode, focusNode, anchorOffset, focusOffset } = selection;
+  if (!anchorNode || !focusNode) return false;
+  if (anchorNode === focusNode) return focusOffset < anchorOffset;
+  return !!(anchorNode.compareDocumentPosition(focusNode) & Node.DOCUMENT_POSITION_PRECEDING);
+}
+
+/**
+ * Viewport point where the selection gesture ENDED. A pill placed at the far end
+ * of the selection in document order was wrong whenever the user dragged upwards:
+ * they let go at the top and the pill appeared at the bottom, a screen away.
+ *
+ * A collapsed range at the focus caret gives the exact point in Chromium and
+ * WebKit; when a browser returns no box for it (element boundaries), widen the
+ * range by one character INTO the selection and read the caret-side edge. Last
+ * resort: the selection's end rect on the focus side, which is still the right
+ * line even if not the right column.
+ */
+function focusPoint(selection: Selection, range: Range): { x: number; y: number } | null {
+  const backward = selectionIsBackward(selection);
+  const { focusNode, focusOffset } = selection;
+  if (focusNode) {
+    const caret = document.createRange();
+    try {
+      caret.setStart(focusNode, focusOffset);
+      caret.setEnd(focusNode, focusOffset);
+      let rect = caret.getClientRects()[0];
+      if (!rect || !rect.height) {
+        const len = focusNode.nodeType === Node.TEXT_NODE
+          ? (focusNode as Text).data.length
+          : focusNode.childNodes.length;
+        if (backward && focusOffset < len) caret.setEnd(focusNode, focusOffset + 1);
+        else if (!backward && focusOffset > 0) caret.setStart(focusNode, focusOffset - 1);
+        const rects = caret.getClientRects();
+        const r = rects.length ? rects[backward ? 0 : rects.length - 1] : undefined;
+        if (r && r.height) rect = new DOMRect(backward ? r.left : r.right, r.top, 0, r.height);
+      }
+      if (rect && rect.height) return { x: Math.round(rect.left), y: Math.round(rect.top) };
+    } catch { /* offsets can lag a re-render by a frame; fall through */ }
+  }
+  const rects = range.getClientRects();
+  if (!rects.length) {
+    const r = range.getBoundingClientRect();
+    if (!r || (!r.width && !r.height)) return null;
+    return { x: Math.round(backward ? r.left : r.right), y: Math.round(r.top) };
+  }
+  const r = rects[backward ? 0 : rects.length - 1]!;
+  return { x: Math.round(backward ? r.left : r.right), y: Math.round(r.top) };
+}
+
 export function QuotePinSelectionBar({ containerRef, sessionId, onPin }: QuotePinSelectionBarProps) {
   const [state, setState] = useState<PillState | null>(null);
   const pillRef = useRef<HTMLDivElement | null>(null);
@@ -126,9 +179,8 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin }: QuotePi
     const text = selection.toString();
     if (!text.trim()) { setState(null); return; }
     const range = selection.getRangeAt(selection.rangeCount - 1);
-    const rects = range.getClientRects();
-    const rect = rects.length ? rects[rects.length - 1]! : range.getBoundingClientRect();
-    if (!rect || (!rect.width && !rect.height)) { setState(null); return; }
+    const anchor = focusPoint(selection, range);
+    if (!anchor) { setState(null); return; }
     const row = body.closest('[data-message-id]') as HTMLElement | null;
     const msgId = row?.getAttribute('data-message-id');
     if (!msgId) { setState(null); return; }
@@ -138,7 +190,6 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin }: QuotePi
     // exist in the index and the pin could never locate itself again.
     const quote = quoteFromRange(buildTextIndex(body), range);
     if (!quote) { setState(null); return; }
-    const anchor = { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top) };
     setState((prev) => {
       const sameAnchor = !!prev && prev.anchor.x === anchor.x && prev.anchor.y === anchor.y;
       if (prev && sameAnchor && prev.msgId === msgId && sameQuote(prev.quote, quote)) return prev;
