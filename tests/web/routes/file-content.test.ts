@@ -406,3 +406,67 @@ describe('PUT /api/file-content (the editor save path)', () => {
     await expect(fs.stat(path.join(tmpDir, 'no-such-dir'))).rejects.toThrow();
   });
 });
+
+describe('PUT /api/file-content — an automatic write must carry a lock', () => {
+  // 2026-09-05: the Files panel put a stale copy of a remote design doc back on
+  // disk four times, wiping what other writers had added. `expectedHash` is
+  // OPTIONAL on this route (creating a file has nothing to lock against), and that
+  // option is what makes an automatic write dangerous: with no token the conflict
+  // check is skipped entirely and the bytes land unconditionally. A human save
+  // that loses its token still gets a 409 and a second press; a live/merge write
+  // has no human in the loop, so the server refuses it instead of trusting the
+  // client to have kept its bookkeeping straight.
+  it('refuses a live auto-write with no expectedHash over an existing file', async () => {
+    const target = path.join(tmpDir, 'doc.md')
+    await fs.writeFile(target, '# newer\n\nwritten by somebody else\n')
+    const res = await request(createApp())
+      .put('/api/file-content')
+      .send({ path: target, content: '# stale copy\n', writer: 'live' })
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('conflict')
+    // and the file is untouched
+    expect(await fs.readFile(target, 'utf-8')).toContain('written by somebody else')
+  })
+
+  it('refuses a merge write with no expectedHash too', async () => {
+    const target = path.join(tmpDir, 'doc2.md')
+    await fs.writeFile(target, 'newer\n')
+    const res = await request(createApp())
+      .put('/api/file-content')
+      .send({ path: target, content: 'stale\n', writer: 'merge' })
+    expect(res.status).toBe(409)
+    expect(await fs.readFile(target, 'utf-8')).toBe('newer\n')
+  })
+
+  it('still lets a live write CREATE a file (nothing to lock against)', async () => {
+    const target = path.join(tmpDir, 'brand-new.md')
+    const res = await request(createApp())
+      .put('/api/file-content')
+      .send({ path: target, content: 'first bytes\n', writer: 'live' })
+    expect(res.status).toBe(200)
+    expect(await fs.readFile(target, 'utf-8')).toBe('first bytes\n')
+  })
+
+  it('a live write WITH the right hash still lands', async () => {
+    const target = path.join(tmpDir, 'doc3.md')
+    await fs.writeFile(target, 'base\n')
+    const read = await request(createApp()).get('/api/file-content').query({ path: target })
+    const res = await request(createApp())
+      .put('/api/file-content')
+      .send({ path: target, content: 'edited\n', writer: 'live', expectedHash: read.body.contentHash })
+    expect(res.status).toBe(200)
+    expect(await fs.readFile(target, 'utf-8')).toBe('edited\n')
+  })
+
+  it('an EXPLICIT user save with no hash is still allowed (the human is looking at the 409 dialog)', async () => {
+    // Deliberately unchanged behaviour: the tree's create-then-save flow and the
+    // other editing surfaces rely on it, and a human save is attributable.
+    const target = path.join(tmpDir, 'doc4.md')
+    await fs.writeFile(target, 'newer\n')
+    const res = await request(createApp())
+      .put('/api/file-content')
+      .send({ path: target, content: 'mine\n' })
+    expect(res.status).toBe(200)
+    expect(await fs.readFile(target, 'utf-8')).toBe('mine\n')
+  })
+})

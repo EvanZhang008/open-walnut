@@ -147,6 +147,45 @@ export function decideAfterConflict(merge: MergeResult, attempt: number): Confli
   return { action: 'write-merged', merged: merge.merged };
 }
 
+/**
+ * What an armed auto-write may actually send, once the buffer it was captured
+ * from may no longer be the buffer on screen.
+ *
+ * The rule, and the reason it is a named function rather than an `if` inside the
+ * write: an optimistic lock only protects the file while the token and the bytes
+ * describe the SAME state. `armedText` was captured at `armedGen`; the lock token
+ * the write is about to send belongs to `currentGen`. When those differ, sending
+ * the pair is a write the server cannot refuse — it re-reads and re-hashes the
+ * real file, sees the token match, and accepts bytes from before whatever replaced
+ * the buffer. That is the 2026-09-05 incident: a stale copy of a remote design doc
+ * landed on top of a newer file four times, each write about a second after the
+ * pane had read the newer bytes and moved the lock to them.
+ *
+ * So when the generations diverge the armed text is abandoned and the BUFFER is
+ * used instead: it is what the user is looking at, and it is what the current lock
+ * describes. `null`/unchanged buffer means there is nothing to save at all.
+ */
+export type LiveWritePlan =
+  | { action: 'write'; text: string }
+  | { action: 'skip'; reason: 'buffer-gone' | 'nothing-to-write' }
+
+export function planLiveWrite(input: {
+  armedText: string;
+  armedGen: number;
+  currentGen: number;
+  /** The editor's text right now; null = no editor (unmounted, non-editable). */
+  bufferText: string | null;
+  /** The bytes the current lock refers to. */
+  baseContent: string | null;
+}): LiveWritePlan {
+  if (input.armedGen === input.currentGen) return { action: 'write', text: input.armedText };
+  if (input.bufferText == null) return { action: 'skip', reason: 'buffer-gone' };
+  // The buffer already IS the bytes we believe are on disk: writing it back would
+  // be a no-op that only re-stamps mtime, and on a remote host a tunnel round trip.
+  if (input.bufferText === input.baseContent) return { action: 'skip', reason: 'nothing-to-write' };
+  return { action: 'write', text: input.bufferText };
+}
+
 /** `//a//b/./c` → `/a/b/c`. Not a `..` resolver: a path with `..` in it is left
  *  alone, so it simply fails to match rather than matching the wrong file. */
 function normalizePath(p: string): string {
@@ -183,6 +222,14 @@ interface PendingWrite {
   expectedHash: string | undefined;
   /** When the record was armed — see freshestHash. */
   capturedAt: number;
+  /**
+   * The buffer generation this text came from. The pane bumps its generation
+   * whenever it installs a different buffer (a read applying disk bytes, a merge,
+   * an adopted write, a restored draft), so a record whose generation is behind
+   * describes text that is NO LONGER what the user is looking at, and must never
+   * be written under the lock the newer buffer established. See writeOnce.
+   */
+  bufferGen: number;
 }
 
 export interface UseLiveEditOptions {
@@ -203,8 +250,18 @@ export interface UseLiveEditOptions {
    *  (a programmatic apply must not look like typing, or the pull below would
    *  immediately write back what it just read). */
   applyText: (text: string) => void;
-  /** The optimistic-lock token. The hook advances it on every write and read. */
+  /** The optimistic-lock token. The hook advances it on every write and read.
+   *
+   *  INVARIANT (2026-09-05 data-loss incident): this token describes the bytes
+   *  the EDITOR BUFFER was derived from, so it may only ever move together with
+   *  the buffer. It is not "the newest hash we have seen" — pairing a fresh token
+   *  with older text is a lock the server cannot refuse, which is how a stale
+   *  copy got written over a newer file four times. `bufferGenRef` is what makes
+   *  a violation detectable rather than silent. */
   lockHashRef: MutableRefObject<string | undefined>;
+  /** Bumped by the pane every time it installs a DIFFERENT buffer (see
+   *  PendingWrite.bufferGen). Reads it, never writes it. */
+  bufferGenRef: MutableRefObject<number>;
   /** The bytes the buffer is based on: the last read, or the last successful
    *  write. `null` = unknown (a restored stale draft), which makes a merge
    *  impossible and sends any conflict straight to the explicit-Save path. */
@@ -421,7 +478,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
         path: rec.path, host: rec.host, attempt,
       });
       await writeOnceRef.current?.(
-        { ...rec, text, expectedHash: o.lockHashRef.current, capturedAt: Date.now() },
+        { ...rec, text, expectedHash: o.lockHashRef.current, capturedAt: Date.now(), bufferGen: o.bufferGenRef.current },
         'merge', attempt + 1, true,
       );
       return;
@@ -443,7 +500,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     showReceipt(agentActive() ? 'Merged agent changes' : 'Merged disk changes');
     log.info('file-editor', 'live edit merged a conflict', { path: rec.path, host: rec.host, attempt });
     await writeOnceRef.current?.(
-      { ...rec, text: decision.merged, expectedHash: disk.contentHash, capturedAt: Date.now() },
+      { ...rec, text: decision.merged, expectedHash: disk.contentHash, capturedAt: Date.now(), bufferGen: o.bufferGenRef.current },
       'merge',
       attempt + 1,
       true,
@@ -476,7 +533,38 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
       const expectedHash = live
         ? (optsRef.current.lockHashRef.current ?? rec.expectedHash)
         : freshestHash(rec.host, rec.path, rec.expectedHash, rec.capturedAt);
-      const res = await saveFileContent(rec.path, rec.text, {
+      // …but ONLY while the token still describes the bytes in `rec.text`. When
+      // the pane installed a different buffer after this record was armed, the
+      // ref above belongs to THAT buffer, and sending it with these older bytes
+      // is a lock the server has no way to refuse — the 2026-09-05 incident,
+      // where a stale copy of a remote design doc was written over a newer file
+      // four times, each write ~1s after the pane had just read the newer bytes.
+      // The buffer on screen is the only thing the user has agreed to; re-read it
+      // and write THAT, or nothing.
+      let text = rec.text;
+      if (live) {
+        const currentGen = optsRef.current.bufferGenRef.current;
+        const plan = planLiveWrite({
+          armedText: rec.text,
+          armedGen: rec.bufferGen,
+          currentGen,
+          bufferText: optsRef.current.getText(),
+          baseContent: optsRef.current.baseContentRef.current,
+        });
+        if (plan.action === 'skip') {
+          log.info('file-editor', 'live write dropped: the buffer moved on', {
+            path: rec.path, host: rec.host, armedGen: rec.bufferGen, currentGen, reason: plan.reason,
+          });
+          return;
+        }
+        if (plan.text !== rec.text) {
+          log.info('file-editor', 'live write re-read the buffer: it moved on since the keystroke', {
+            path: rec.path, host: rec.host, armedGen: rec.bufferGen, currentGen,
+          });
+        }
+        text = plan.text;
+      }
+      const res = await saveFileContent(rec.path, text, {
         host: rec.host, expectedHash, writer, origin: optsRef.current.origin,
       });
       noteWritten(rec.host, rec.path, res.contentHash);
@@ -487,8 +575,8 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
       if (!isCurrent(rec)) return;
       const o = optsRef.current;
       o.lockHashRef.current = res.contentHash;
-      o.baseContentRef.current = rec.text;
-      o.onWrote(rec.text, res);
+      o.baseContentRef.current = text;
+      o.onWrote(text, res);
     } catch (err) {
       if (err instanceof FileSaveConflictError) {
         if (!allowMerge || !isCurrent(rec)) return; // no live editor to merge into
@@ -518,6 +606,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
       text,
       expectedHash: optsRef.current.lockHashRef.current,
       capturedAt: Date.now(),
+      bufferGen: optsRef.current.bufferGenRef.current,
     };
     schedule(LIVE_WRITE_DEBOUNCE_MS);
   }, [schedule]);
@@ -591,7 +680,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
         // Both the agent's bytes and the user's typing are real work. Deliberately
         // NO overwrite hash: no write was attempted, so the next explicit Save
         // must still hit the warn-once conflict gate.
-        if (onRef.current) suspendHere({ ...rec, text: ours ?? '', expectedHash: undefined, capturedAt: Date.now() });
+        if (onRef.current) suspendHere({ ...rec, text: ours ?? '', expectedHash: undefined, capturedAt: Date.now(), bufferGen: optsRef.current.bufferGenRef.current });
         cur.onConflict(
           `${reason === 'agent' ? 'The agent in this session' : 'Another view of this file'} changed this `
           + 'file, and those changes overlap yours. Your unsaved version is still in the editor — Save will '
@@ -608,6 +697,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
       if (onRef.current) {
         pendingRef.current = {
           path: rec.path, host: rec.host, text: merge.merged, expectedHash: disk.contentHash, capturedAt: Date.now(),
+          bufferGen: optsRef.current.bufferGenRef.current,
         };
         await flush(true);
       }

@@ -20,6 +20,7 @@ import {
   liveSuspensionKey, isLiveSuspended, suspendLiveEdit, resumeLiveEdit, clearLiveSuspensions,
   noteFileDeleted, isRecentlyDeleted, noteWritten, freshestHash,
   loadLiveEditPref, LIVE_EDIT_PREF_KEY, LIVE_WRITE_DEBOUNCE_MS,
+  planLiveWrite,
 } from '../../web/src/hooks/useLiveEdit';
 import { threeWayMerge } from '../../web/src/utils/three-way-merge';
 
@@ -233,5 +234,67 @@ describe('preference', () => {
 describe('timing constants', () => {
   it('debounces writes rather than writing per keystroke', () => {
     expect(LIVE_WRITE_DEBOUNCE_MS).toBeGreaterThanOrEqual(300);
+  });
+});
+
+describe('planLiveWrite — an armed write may not outlive the buffer it came from', () => {
+  // 2026-09-05: a remote design doc was overwritten with a stale 28 KB copy four
+  // times, each write about a second after the pane had read the newer bytes. The
+  // write sent the text captured earlier together with the lock token the read had
+  // just installed, and the server's optimistic lock cannot refuse that pair: it
+  // re-reads the file, sees the token match, and accepts. So the rule under test
+  // is that a token from one generation is never sent with text from another.
+  const BASE = 'what is on disk\n';
+
+  it('writes the armed text while the buffer is still the one it came from', () => {
+    expect(planLiveWrite({
+      armedText: 'my typing\n', armedGen: 7, currentGen: 7,
+      bufferText: 'my typing\n', baseContent: BASE,
+    })).toEqual({ action: 'write', text: 'my typing\n' });
+  });
+
+  it('NEVER writes text from an older generation — the buffer on screen wins', () => {
+    // The incident's exact shape: armedText is the copy loaded before the read,
+    // the buffer now holds what the read installed plus the user's edit.
+    expect(planLiveWrite({
+      armedText: 'the stale copy\n', armedGen: 3, currentGen: 4,
+      bufferText: 'the newer file, edited\n', baseContent: 'the newer file\n',
+    })).toEqual({ action: 'write', text: 'the newer file, edited\n' });
+  });
+
+  it('writes nothing when the newer buffer is already the bytes on disk', () => {
+    // The pane read the file and replaced the buffer with exactly disk; the write
+    // armed against the previous buffer has nothing left to say. Writing here is
+    // what put the stale copy back.
+    expect(planLiveWrite({
+      armedText: 'the stale copy\n', armedGen: 3, currentGen: 4,
+      bufferText: BASE, baseContent: BASE,
+    })).toEqual({ action: 'skip', reason: 'nothing-to-write' });
+  });
+
+  it('writes nothing when there is no buffer to re-read (editor unmounted)', () => {
+    expect(planLiveWrite({
+      armedText: 'the stale copy\n', armedGen: 3, currentGen: 4,
+      bufferText: null, baseContent: BASE,
+    })).toEqual({ action: 'skip', reason: 'buffer-gone' });
+  });
+
+  it('still writes the buffer when the generation moved and no base is known', () => {
+    // A restored stale draft has no trustworthy base (baseContent null). The
+    // buffer is the user's text and they can still save it; the 409 path is what
+    // protects the other writer, and it needs the write to be attempted.
+    expect(planLiveWrite({
+      armedText: 'older\n', armedGen: 1, currentGen: 2,
+      bufferText: 'restored draft\n', baseContent: null,
+    })).toEqual({ action: 'write', text: 'restored draft\n' });
+  });
+
+  it('an unchanged buffer at the SAME generation is still written (it is a real edit)', () => {
+    // Guard against over-eager skipping: at the same generation the armed text is
+    // authoritative even if it happens to equal baseContent (an edit typed and
+    // undone still clears the dirty state through the normal write path).
+    expect(planLiveWrite({
+      armedText: BASE, armedGen: 5, currentGen: 5, bufferText: BASE, baseContent: BASE,
+    })).toEqual({ action: 'write', text: BASE });
   });
 });

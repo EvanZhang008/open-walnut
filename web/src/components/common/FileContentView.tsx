@@ -331,6 +331,24 @@ export function FileContentView({
   // the lock is re-armed at a hash whose bytes we don't have (a restored stale
   // draft), because a merge against a guessed base is data loss.
   const baseContentRef = useRef<string | null>(null);
+  /**
+   * Which BUFFER the lock above belongs to. Bumped by every path that installs a
+   * different buffer (a read applying disk bytes, a merge, an adopted write, a
+   * restored draft, our own save), and read by anything that armed a write
+   * earlier — a token from generation N+1 must never be sent with text from
+   * generation N.
+   *
+   * The 2026-09-05 incident: the pane read a remote design doc, advancing the lock
+   * to the bytes it had just read, while an older copy still sat in the buffer.
+   * The auto-write took the text from one and the token from the other, so the
+   * server's optimistic lock — which re-reads and re-hashes the real file — had no
+   * way to tell it apart from a legitimate save, and a stale 28 KB copy replaced a
+   * 40 KB file four times. Nothing else in this file may assume the lock and the
+   * buffer are in step; this counter is what makes a divergence detectable.
+   */
+  const bufferGenRef = useRef(0);
+  /** Call whenever the buffer's bytes (or the lock describing them) are replaced. */
+  const noteBufferInstalled = useCallback(() => { bufferGenRef.current += 1; }, []);
   // True for the duration of a programmatic setValue. A merge/pull applies text
   // through the same editor callbacks a keystroke does, and without this the
   // pull would immediately auto-write back exactly what it just read.
@@ -356,6 +374,9 @@ export function FileContentView({
 
   /** Put text in the live editor without a remount and without arming a write. */
   const applyEditorText = useCallback((text: string) => {
+    // A different buffer from here on: any write armed against the previous one
+    // must not go out under the lock this apply belongs to.
+    noteBufferInstalled();
     applyingRef.current = true;
     try {
       editorRef.current?.setValue(text);
@@ -512,6 +533,9 @@ export function FileContentView({
       // whatever the editor is seeded from. baseHash moves too, remounting any
       // open editor onto the new bytes.
       conflictHashRef.current = undefined;
+      // The lock is about to describe DIFFERENT bytes than whatever is in the
+      // editor right now, so anything armed against the old buffer is void.
+      noteBufferInstalled();
       lockHashRef.current = plan.lockHash;
       // The lock follows the seed, and the merge base follows the LOCK — which
       // for a replayed draft is still the disk bytes (its baseHash matched), so
@@ -558,7 +582,14 @@ export function FileContentView({
             contentHash: cached.contentHash,
           }
           : null;
-        if (cachedPayload && !isReload) apply(cachedPayload, draft, { provisional: true });
+        // With an unsaved draft in hand the cached copy is NOT painted, and the
+        // draft is not shown to planDraftReplay yet. That decision ("is this draft
+        // based on what is on disk, or is it stale?") is only answerable against
+        // bytes the server has confirmed: judged against a cached copy, a draft
+        // typed against THAT copy looks current and gets replayed into the editor,
+        // which is a stale buffer sitting in an editor armed to write. Waiting one
+        // round trip costs a blank moment; getting it wrong costs the file.
+        if (cachedPayload && !isReload && !draft) apply(cachedPayload, null, { provisional: true });
 
         // `If-None-Match` is what turns "re-open an unchanged file" into a header
         // exchange: 304 means the bytes we just painted ARE the bytes on disk, so
@@ -854,6 +885,7 @@ export function FileContentView({
     // every ⌘S mid-document a jump-to-line-1. markClean re-baselines dirty
     // tracking in place instead.
     conflictHashRef.current = undefined;
+    noteBufferInstalled();
     lockHashRef.current = res.contentHash;
     baseContentRef.current = text;
     // Before the early return below: whatever the buffer does next, `text` IS
@@ -954,6 +986,7 @@ export function FileContentView({
     getText: () => editorRef.current?.getValue() ?? null,
     applyText: applyEditorText,
     lockHashRef,
+    bufferGenRef,
     baseContentRef,
     isDirtyRef: dirtyRef,
     onWrote: (text, res) => {
@@ -1059,6 +1092,7 @@ export function FileContentView({
   const restoreStaleDraft = useCallback(() => {
     if (staleDraft == null) return;
     const { seed, lockHash } = planStaleDraftRestore(staleDraft);
+    noteBufferInstalled();
     draftRef.current = seed;
     lockHashRef.current = lockHash;
     // The lock now points at bytes we no longer hold, so there is no trustworthy
@@ -1069,7 +1103,7 @@ export function FileContentView({
     setDraftDirty(true);
     setSeedNonce((n) => n + 1);
     setStaleDraft(null);
-  }, [staleDraft]);
+  }, [staleDraft, noteBufferInstalled]);
 
   const discardStaleDraft = useCallback(() => {
     dropDraft(filePath, host);
@@ -1689,6 +1723,7 @@ export function FileContentView({
     // Clean, and the writer handed us the exact bytes: converge in this tick.
     // ORDER: seed the editor first, then applySaved-style bookkeeping — the
     // second half drops the draft record the first half re-armed.
+    noteBufferInstalled();
     lockHashRef.current = sig.contentHash;
     baseContentRef.current = sig.content;
     applyEditorText(sig.content);

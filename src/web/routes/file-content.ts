@@ -476,6 +476,22 @@ export interface FileWriteResult {
   contentHash: string
 }
 
+/**
+ * Out-parameter carrying what the file looked like BEFORE this write.
+ *
+ * Attribution, not contract: after the 2026-09-05 incident (the Files panel put a
+ * stale copy back over a newer file four times) the logs could prove WHEN Walnut
+ * wrote and WHAT SIZE, but not which bytes it replaced or which lock token it
+ * presented — so the root cause took a day of log archaeology instead of one grep.
+ * Kept off FileWriteResult on purpose: that JSON shape is a wire contract the iOS
+ * app reads.
+ */
+export interface FileWriteMeta {
+  /** Hash of the bytes this write replaced; null = the file did not exist. */
+  previousHash?: string | null
+  previousSize?: number
+}
+
 /** A save rejected because the file changed under the editor (HTTP 409). */
 export class FileConflictError extends Error {
   constructor(public currentHash: string) {
@@ -507,6 +523,8 @@ export async function writeFileContentPayload(
   host: string | undefined,
   content: unknown,
   expectedHash?: unknown,
+  meta?: FileWriteMeta,
+  writer?: SnapshotWriter,
 ): Promise<FileWriteResult> {
   const { filePath, isRemote } = assertPathAllowed(rawPath, host, 'write')
   if (typeof content !== 'string') {
@@ -515,6 +533,17 @@ export async function writeFileContentPayload(
   if (expectedHash != null && typeof expectedHash !== 'string') {
     throw new FileContentError('expectedHash must be a string', 400)
   }
+  // A write NOBODY PRESSED must carry a lock. `expectedHash` is optional on this
+  // route because creating a file has nothing to lock against, and that option is
+  // exactly what makes an automatic write dangerous: with no token the checks
+  // below are skipped and the bytes land unconditionally. A human save that loses
+  // its token still gets its 409 dialog and a Save-again; an auto-write has no
+  // human in the loop, so the server refuses it outright rather than trusting the
+  // client to have kept its bookkeeping straight (2026-09-05: a stale copy of a
+  // remote design doc replaced a newer file four times, and the only reason the
+  // lock could be bypassed at all was that the client chose the token).
+  const machineWrite = writer === 'live' || writer === 'merge'
+  const unlockedMachineWrite = machineWrite && (typeof expectedHash !== 'string' || expectedHash.length === 0)
   if (Buffer.byteLength(content, 'utf-8') > MAX_FILE_SIZE) {
     throw new FileContentError(
       `Content too large to save (max ${MAX_FILE_SIZE} bytes) — the editor only loads the first ${MAX_FILE_SIZE} bytes of a file`,
@@ -544,10 +573,16 @@ export async function writeFileContentPayload(
     const current = await reader.readFile(filePath)
     if (current !== null) {
       assertOverwritable(current, filePath)
+      if (unlockedMachineWrite) throw new FileConflictError(computeContentHash(current))
+      if (meta) {
+        meta.previousHash = computeContentHash(current)
+        meta.previousSize = Buffer.byteLength(current, 'utf-8')
+      }
       if (expectedHash && computeContentHash(current) !== expectedHash) {
         throw new FileConflictError(computeContentHash(current))
       }
     } else {
+      if (meta) meta.previousHash = null
       // Creating a remote file: the daemon's fs.write does `mkdir -p`, so refuse
       // here if the parent is missing. Matches the local branch — a save into a
       // directory that doesn't exist is a typo, and silently materializing a tree
@@ -606,9 +641,16 @@ export async function writeFileContentPayload(
       }
       const current = await fsp.readFile(filePath, 'utf-8')
       assertOverwritable(current, filePath)
+      if (unlockedMachineWrite) return computeContentHash(current)
+      if (meta) {
+        meta.previousHash = computeContentHash(current)
+        meta.previousSize = stat.size
+      }
       if (expectedHash && computeContentHash(current) !== expectedHash) {
         return computeContentHash(current)
       }
+    } else if (meta) {
+      meta.previousHash = null
     }
     await fsp.writeFile(filePath, content, 'utf-8')
     return null
@@ -896,14 +938,38 @@ fileContentRouter.get('/', async (req: Request, res: Response, next: NextFunctio
  */
 fileContentRouter.put('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { path: rawPath, host, content, expectedHash, writer } = req.body ?? {}
+    const { path: rawPath, host, content, expectedHash, writer, origin } = req.body ?? {}
     const hostArg = typeof host === 'string' && host.length > 0 ? host : undefined
-    const result = await writeFileContentPayload(rawPath, hostArg, content, expectedHash)
+    const meta: FileWriteMeta = {}
+    const writerArg: SnapshotWriter = writer === 'live' || writer === 'merge' ? writer : 'user'
+    const result = await writeFileContentPayload(rawPath, hostArg, content, expectedHash, meta, writerArg)
+    // ONE line per write with everything needed to attribute it: which bytes it
+    // replaced, which bytes it left, the lock token it presented, and who armed
+    // it. `writer` is the trigger (user save / live auto-write / merge) and
+    // `origin` the view that fired it, so a write nobody remembers making can be
+    // traced to a surface in one grep. Never the content itself.
+    log.web.info('file write', {
+      path: typeof rawPath === 'string' ? rawPath : '(invalid)',
+      host: hostArg,
+      writer: writer === 'live' || writer === 'merge' ? writer : 'user',
+      origin: typeof origin === 'string' ? origin : undefined,
+      hashBefore: meta.previousHash === null ? '(new file)' : meta.previousHash,
+      hashAfter: result.contentHash,
+      expectedHash: typeof expectedHash === 'string' ? expectedHash : '(none)',
+      sizeBefore: meta.previousSize,
+      sizeAfter: result.size,
+      // The tell of the 2026-09-05 incident, and cheap to spot: a write whose
+      // token matched the file it replaced but whose bytes are SMALLER than what
+      // was there is a candidate stale-copy write-back.
+      shrankBy: meta.previousSize != null && meta.previousSize > result.size
+        ? meta.previousSize - result.size
+        : undefined,
+    })
     // History: record what was just saved. `writer` says WHO saved it so the
     // timeline can label it — an explicit allowlist, because an unknown value
     // would otherwise become a pill nobody can read. Anything else is a plain
     // user save.
-    const w: SnapshotWriter = writer === 'live' || writer === 'merge' ? writer : 'user'
+    const w: SnapshotWriter = writerArg
     try {
       const { filePath } = assertPathAllowed(rawPath, hostArg, 'write')
       void recordSnapshot({ host: hostArg, path: filePath, content: content as string, writer: w })
