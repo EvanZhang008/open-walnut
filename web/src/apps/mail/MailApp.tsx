@@ -5,9 +5,12 @@ import { AddAccountDialog } from './AddAccountDialog';
 import { MailAccountsPane } from './MailAccountsPane';
 import { MailMessageList } from './MailMessageList';
 import { MailReader } from './MailReader';
+import { ComposerPanel } from './compose/ComposerPanel';
+import { CANNOT_SEND_TITLE, canSendFrom } from './compose/send-status';
 import { refreshMailAll } from './mail-actions';
 import { useMailConsole } from './useMailConsole';
 import './mail.css';
+import './mail-compose.css';
 
 /**
  * The Mail console: accounts and their mailboxes, the selected mailbox's messages, and a reader.
@@ -70,11 +73,12 @@ export function MailApp(_props: AppComponentProps) {
   const openAdd = useCallback(() => setAdding(true), []);
   const closeAdd = useCallback(() => setAdding(false), []);
 
-  // Which pane a narrow viewport shows. The reader wins, then an explicit request for the
-  // mailbox list, then the list itself; with nothing selected there is only the account list.
+  // Which pane a narrow viewport shows. The reader slot wins (the composer lives in it, and both
+  // carry their own back control), then an explicit request for the mailbox list, then the list
+  // itself; with nothing selected there is only the account list.
   const pane = !narrow
     ? 'all'
-    : mail.open ? 'reader'
+    : (mail.open || mail.composer) ? 'reader'
       : (showMailboxes || !mail.selected) ? 'accounts'
         : 'list';
 
@@ -149,6 +153,8 @@ export function MailApp(_props: AppComponentProps) {
         <MailAccountsPane
           accounts={mail.accounts}
           mailboxes={mail.mailboxes}
+          drafts={mail.drafts}
+          providers={mail.providers}
           selected={mail.selected}
           refreshing={mail.refreshing}
           refreshNote={mail.refreshNote}
@@ -160,7 +166,19 @@ export function MailApp(_props: AppComponentProps) {
           narrow={narrow}
           onShowMailboxes={() => setShowMailboxes(true)}
         />
-        <MailReader open={mail.open} narrow={narrow} />
+        {/* One slot: the composer REPLACES the reader while it is open. Writing a mail is a task
+            you look things up during, so the two panes on its left stay live. */}
+        {mail.composer ? (
+          <ComposerPanel
+            composer={mail.composer}
+            mailboxes={mail.mailboxes[mail.composer.accountId] ?? []}
+            narrow={narrow}
+            canSend={canSendFrom(mail.providers, mail.composer.accountId)}
+            cannotSendTitle={CANNOT_SEND_TITLE}
+          />
+        ) : (
+          <MailReader open={mail.open} narrow={narrow} accounts={mail.accounts} providers={mail.providers} />
+        )}
       </div>
       {dialog}
     </div>

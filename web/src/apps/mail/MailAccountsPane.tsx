@@ -6,14 +6,18 @@
  * to prevent. `auth-required` also says what fixes it, because polling has stopped for that
  * account until a human acts and no amount of waiting or clicking refresh will change that.
  */
-import type { MailAccountDto, MailboxDto } from '@/api/mail';
-import type { MailSelection } from './mail-store';
+import type { MailAccountDto, MailDraftDto, MailProviderSummary, MailboxDto } from '@/api/mail';
+import { DRAFTS_MAILBOX, type MailSelection } from './mail-store';
 import { requestMailRefresh, selectMailbox } from './mail-actions';
-import { MailboxRoleIcon, RefreshIcon } from './mail-icons';
+import { openMailComposer } from './compose/compose-actions';
+import { CANNOT_SEND_TITLE, canSendFrom, isOpenDraft } from './compose/send-status';
+import { ComposeIcon, DraftsIcon, MailboxRoleIcon, RefreshIcon } from './mail-icons';
 
 interface Props {
   accounts: MailAccountDto[];
   mailboxes: Record<string, MailboxDto[]>;
+  drafts: Record<string, MailDraftDto[]>;
+  providers: MailProviderSummary[];
   selected: MailSelection | null;
   refreshing: boolean;
   refreshNote: string | null;
@@ -28,12 +32,28 @@ const STATE_LABEL: Record<string, string> = {
 };
 
 export function MailAccountsPane({
-  accounts, mailboxes, selected, refreshing, refreshNote, onAddAccount, onPicked,
+  accounts, mailboxes, drafts, providers, selected, refreshing, refreshNote, onAddAccount, onPicked,
 }: Props) {
+  // The compose entry point belongs to the SELECTED account, and whether it may send is the
+  // provider's declared capability (there is no per-account capability on any route yet). An
+  // account whose provider cannot send says so on the button rather than failing on the click.
+  const composeAccount = selected?.accountId;
+  const canCompose = canSendFrom(providers, composeAccount);
   return (
     <aside className="mail-accounts-pane" data-testid="mail-accounts-pane">
       <div className="mail-pane-head">
         <span className="mail-pane-title">Mailboxes</span>
+        <button
+          type="button"
+          className="mail-compose-new"
+          data-testid="mail-compose-new"
+          title={canCompose ? 'Write a new message' : CANNOT_SEND_TITLE}
+          disabled={!composeAccount || !canCompose}
+          onClick={() => { if (composeAccount) void openMailComposer(composeAccount); }}
+        >
+          <ComposeIcon />
+          New message
+        </button>
         <button
           type="button"
           className="mail-icon-btn"
@@ -80,11 +100,12 @@ export function MailAccountsPane({
                 </p>
               )}
 
-              {rows.length === 0 ? (
+              {rows.length === 0 && (
                 <p className="mail-account-hint">No folders yet. The first sync lists them.</p>
-              ) : (
-                <ul className="mail-mailboxes">
-                  {rows.map((mailbox) => {
+              )}
+
+              <ul className="mail-mailboxes">
+                {rows.map((mailbox) => {
                     const active = selected?.accountId === account.accountId
                       && selected.mailboxId === mailbox.mailboxId;
                     return (
@@ -112,8 +133,20 @@ export function MailAccountsPane({
                       </li>
                     );
                   })}
-                </ul>
-              )}
+
+                {/* The Drafts row is Walnut's own, not the provider's: these drafts live in the
+                    plugin's database with their approval state, which a provider's own Drafts
+                    folder knows nothing about. */}
+                <li>
+                  <DraftsRow
+                    accountId={account.accountId}
+                    drafts={drafts[account.accountId] ?? []}
+                    active={selected?.accountId === account.accountId
+                      && selected.mailboxId === DRAFTS_MAILBOX}
+                    onPicked={onPicked}
+                  />
+                </li>
+              </ul>
             </section>
           );
         })}
@@ -128,5 +161,44 @@ export function MailAccountsPane({
         + Add account
       </button>
     </aside>
+  );
+}
+
+/**
+ * One account's Drafts row.
+ *
+ * The badge counts what is still WAITING ON A HUMAN (composing, waiting for approval, failed,
+ * unknown) rather than the list length: a row that is mid-send needs nobody's attention, and a
+ * badge that counts it trains the human to ignore the number.
+ */
+function DraftsRow({ accountId, drafts, active, onPicked }: {
+  accountId: string;
+  drafts: MailDraftDto[];
+  active: boolean;
+  onPicked: () => void;
+}) {
+  const waiting = drafts.filter(isOpenDraft).length;
+  return (
+    <button
+      type="button"
+      className={`mail-mailbox${active ? ' active' : ''}`}
+      data-testid="mail-drafts-row"
+      data-mailbox-id={DRAFTS_MAILBOX}
+      data-account-id={accountId}
+      data-count={waiting}
+      aria-current={active ? 'true' : undefined}
+      onClick={() => {
+        selectMailbox(accountId, DRAFTS_MAILBOX);
+        onPicked();
+      }}
+    >
+      <DraftsIcon />
+      <span className="mail-mailbox-name">Drafts</span>
+      {waiting > 0 && (
+        <span className="mail-unread-badge" data-testid="mail-drafts-count">
+          {waiting > 99 ? '99+' : waiting}
+        </span>
+      )}
+    </button>
   );
 }

@@ -17,7 +17,7 @@
  * - Every string in a message is written by whoever sent it. Nothing in this file may be put
  *   into `dangerouslySetInnerHTML` or an href without going through that path first.
  */
-import { ApiError, apiDelete, apiGet, apiPost } from './client';
+import { ApiError, apiDelete, apiGet, apiPatch, apiPost } from './client';
 
 const BASE = '/api/plugins/mail';
 
@@ -83,6 +83,13 @@ export interface MailAccountBase {
 export interface MailAccountDto extends MailAccountBase {
   /** Summed from the account's mailboxes, which report it from the provider. */
   unread: number;
+  /**
+   * Unread in the INBOX-role mailboxes only, which is what a badge means.
+   *
+   * Optional here because a console tab open across the deploy that added it still gets an
+   * account row without it. The pane's badge arithmetic reads the mailbox rows either way.
+   */
+  unreadInbox?: number;
 }
 
 export type MailboxRole = 'inbox' | 'sent' | 'drafts' | 'archive' | 'trash' | 'spam' | 'other';
@@ -313,4 +320,189 @@ export function mailHealth(): Promise<MailHealth> {
 export function providerIdOf(accountId: string): string {
   const at = accountId.indexOf(':');
   return at > 0 ? accountId.slice(0, at) : accountId;
+}
+
+// ── the write path: drafts, the approval ledger, sending ──
+//
+// `revision` is the field that matters in every call below. A send-ish request carries the
+// revision the human was looking at, and a mismatch answers 409 `stale` rather than sending text
+// nobody read. Two designed non-2xx answers ride these routes, so both are quiet: 409 (stale,
+// unsupported, invalid) and 503 (a replica standing aside, the cache still opening).
+
+export type MailDraftState =
+  | 'composing'
+  | 'pending_approval'
+  | 'approved'
+  | 'sending'
+  | 'sent'
+  | 'failed'
+  | 'unknown'
+  | 'discarded';
+
+export type MailSendState = 'approved' | 'sending' | 'sent' | 'failed' | 'unknown';
+
+export interface MailDraftDto {
+  draftId: string;
+  accountId: string;
+  to: MailAddress[];
+  cc: MailAddress[];
+  bcc: MailAddress[];
+  subject: string;
+  bodyMarkdown: string;
+  /** The RFC `Message-ID` this draft answers, when it is a reply. Set by the SERVER. */
+  inReplyTo?: string;
+  references?: string[];
+  revision: number;
+  state: MailDraftState;
+  origin: 'console' | 'agent';
+  createdBySession?: string;
+  /** The outstanding approval letter, while there is one. */
+  letterId?: string;
+  createdAt: number;
+  updatedAt: number;
+  error?: string;
+}
+
+export interface MailSendDto {
+  sendId: string;
+  draftId: string;
+  accountId: string;
+  revision: number;
+  /** `<draftId>:<revision>`, UNIQUE: one approved revision can produce ONE send. */
+  idempotencyKey: string;
+  approvalKind: 'letter' | 'console';
+  /** The letter id for a letter approval, the word `console` for a console one. */
+  approvalRef: string;
+  state: MailSendState;
+  providerMessageId?: string;
+  error?: string;
+  attemptedAt?: number;
+  settledAt?: number;
+}
+
+/**
+ * What a write answers when it ran out of its 10s response budget.
+ *
+ * `completed: false` is a 202 and never a failure: the letter, the ledger row and the SMTP
+ * attempt all outlive the request that started them, and the console hears the outcome on
+ * `plugin:mail:draft-changed` / `plugin:mail:send-settled`.
+ */
+interface MailSlowWrite {
+  ok?: boolean;
+  completed?: boolean;
+  message?: string;
+}
+
+export interface MailDraftApproval extends MailSlowWrite {
+  draft?: MailDraftDto;
+  /** The letter the human was asked with. Absent on a 202: it is still being prepared. */
+  letterId?: string;
+}
+
+export interface MailDraftSend extends MailSlowWrite {
+  send?: MailSendDto;
+  draft?: MailDraftDto;
+}
+
+/** The fields a draft edit may carry. Anything omitted keeps its stored value. */
+export interface MailDraftPatch {
+  to?: MailAddress[];
+  cc?: MailAddress[];
+  bcc?: MailAddress[];
+  subject?: string;
+  bodyMarkdown?: string;
+}
+
+const WRITE_QUIET = { quietStatuses: [409, 503] };
+
+function draftPath(draftId: string): string {
+  return `${BASE}/drafts/${encodeURIComponent(draftId)}`;
+}
+
+export function listMailDrafts(query?: {
+  accountId?: string;
+  state?: MailDraftState;
+  limit?: number;
+}): Promise<{ drafts: MailDraftDto[] }> {
+  const params: Record<string, string> = {};
+  if (query?.accountId) params.account = query.accountId;
+  if (query?.state) params.state = query.state;
+  if (query?.limit) params.limit = String(query.limit);
+  return apiGet(`${BASE}/drafts`, Object.keys(params).length ? params : undefined, QUIET);
+}
+
+export function getMailDraft(draftId: string): Promise<{ draft: MailDraftDto; sends: MailSendDto[] }> {
+  return apiGet(draftPath(draftId), undefined, WRITE_QUIET);
+}
+
+/**
+ * Create a draft.
+ *
+ * `inReplyTo` names the message being answered by its CACHE handle, and the server copies the
+ * threading headers and the `Re:` subject from the row it already holds. The client cannot aim a
+ * reply into a thread it never read, which is why this is a pair of ids and not a header.
+ */
+export function createMailDraft(input: {
+  accountId: string;
+  to: MailAddress[];
+  cc?: MailAddress[];
+  bcc?: MailAddress[];
+  subject: string;
+  bodyMarkdown: string;
+  inReplyTo?: { accountId: string; messageId: string };
+}): Promise<{ draft: MailDraftDto }> {
+  return apiPost(`${BASE}/drafts`, { ...input, origin: 'console' }, WRITE_QUIET);
+}
+
+/**
+ * Edit a draft: `revision + 1`, and back to `composing`.
+ *
+ * A draft that had a letter out is a special case the SERVER owns: it withdraws that letter and
+ * issues a fresh one for the new revision, so the answer carries a `letterId` and the draft comes
+ * back `pending_approval` again. A phone must never show a live Send over text that changed.
+ */
+export function patchMailDraft(draftId: string, patch: MailDraftPatch): Promise<MailDraftApproval> {
+  // No `quietStatuses` here: `apiPatch` takes no options (see the proposal in the slice report),
+  // so a 409 from an edit that raced a send logs at error level. The console handles it.
+  return apiPatch(draftPath(draftId), patch);
+}
+
+export function deleteMailDraft(draftId: string): Promise<{ ok: boolean; draft?: MailDraftDto }> {
+  return apiDelete(draftPath(draftId));
+}
+
+/** Ask the human on their phone. 409 `unsupported` when the account has no outgoing mail. */
+export function requestMailDraftSend(draftId: string, revision: number): Promise<MailDraftApproval> {
+  return apiPost(`${draftPath(draftId)}/request-send`, { revision }, WRITE_QUIET);
+}
+
+/** The console's own Send: the same ledger, with this click as the approval. */
+export function sendMailDraft(draftId: string, revision: number): Promise<MailDraftSend> {
+  return apiPost(`${draftPath(draftId)}/send`, { revision }, {
+    ...WRITE_QUIET,
+    // The route answers within 10s by design, but an SMTP handshake is what it is waiting on.
+    timeoutMs: 20_000,
+  });
+}
+
+export function listMailSends(query?: {
+  accountId?: string;
+  draftId?: string;
+  limit?: number;
+}): Promise<{ sends: MailSendDto[] }> {
+  const params: Record<string, string> = {};
+  if (query?.accountId) params.account = query.accountId;
+  if (query?.draftId) params.draft = query.draftId;
+  if (query?.limit) params.limit = String(query.limit);
+  return apiGet(`${BASE}/sends`, Object.keys(params).length ? params : undefined, QUIET);
+}
+
+/**
+ * Retry a FAILED send: a whole fresh approval round at a new revision, never a second attempt.
+ *
+ * 409 `invalid` for anything else, and that includes `unknown` on purpose: the message may
+ * already be in the recipient's mailbox and only the Sent folder can say.
+ */
+export function retryMailSend(sendId: string): Promise<MailDraftApproval> {
+  return apiPost(`${BASE}/sends/${encodeURIComponent(sendId)}/retry`, {}, WRITE_QUIET);
 }

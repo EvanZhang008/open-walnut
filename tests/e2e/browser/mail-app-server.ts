@@ -10,6 +10,10 @@
  * The mail BASE is provisioned by nobody: it is a builtin, so a stock install already has it
  * active, which is exactly the state the gate spec tests.
  *
+ * `PW_MAIL_INBOUND_PROVIDER=1` makes that provider plugin register a SECOND provider that declares
+ * `send: false`, which is what the write spec needs to see a compose button refuse itself. It is a
+ * flag because the read spec counts the provider options in the add-an-account dialog.
+ *
  * `PW_MAIL_PROVIDER=1` additionally links a canned PROVIDER plugin
  * (`fixtures/mail-fixture-provider/`) the documented author way, so the read-path spec has
  * accounts, mailboxes, envelopes and a hostile HTML body to open. It is a FLAG rather than the
@@ -97,7 +101,14 @@ const viteServer = await createViteServer({
 })
 await viteServer.listen()
 
-const fixture = { port, home: tmpBase, provider: withProvider }
+// `outbox` is where the canned provider writes every message it was handed, so the write spec can
+// assert what went over the wire rather than what the console said about it.
+const fixture = {
+  port,
+  home: tmpBase,
+  provider: withProvider,
+  outbox: path.join(tmpBase, 'mail-fixture-sends.json'),
+}
 await fs.writeFile(path.join(tmpBase, 'fixture.json'), JSON.stringify(fixture, null, 2))
 console.log(`MAIL_FIXTURE_READY ${JSON.stringify(fixture)}`)
 

@@ -16,12 +16,25 @@
  * Deliberately React-free and WS-free: `useMailConsole` adapts it with `useSyncExternalStore` and
  * feeds it bus events. That is also what lets the node test tier drive it.
  */
-import { mailFailure, type MailAccountDto, type MailBodyDto, type MailMessageDto, type MailProviderSummary, type MailboxDto } from '@/api/mail';
+import { mailFailure, type MailAccountDto, type MailBodyDto, type MailDraftDto, type MailMessageDto, type MailProviderSummary, type MailboxDto } from '@/api/mail';
+import type { AddressChip } from './compose/mail-address';
+import type { SendStatus } from './compose/send-status';
 
 /** One page of the list. The plugin caps a request at 200. */
 export const PAGE_SIZE = 50;
 
 export const SEEN = '\\Seen';
+
+/**
+ * The mailbox id of the virtual Drafts row.
+ *
+ * A sentinel inside the existing selection, rather than a second selection concept: the panes, the
+ * narrow-viewport drill and the "which account am I in" question all already read `selected`, and a
+ * parallel `viewingDrafts` flag would have to be threaded through every one of them. No provider
+ * can collide with it (the leading underscores are not an IMAP mailbox name we would ever get, and
+ * `ensureSelection` only ever auto-picks a mailbox it found in a provider's own list).
+ */
+export const DRAFTS_MAILBOX = '__walnut_drafts__';
 
 export interface MailStand {
   title: string;
@@ -58,6 +71,72 @@ export interface MailSearchState {
   error: string | null;
 }
 
+/**
+ * How the footer describes the autosave.
+ *
+ * `retrying` is the only one that asks for patience, and `blocked` is the only one the HUMAN has to
+ * clear (a recipient the server would refuse): a draft is never written with an address that cannot
+ * be sent to, because a saved-and-silently-dropped recipient is how a mail reaches three of the
+ * four people it was addressed to.
+ */
+export type MailSaveState = 'clean' | 'saving' | 'saved' | 'retrying' | 'failed' | 'blocked';
+
+/**
+ * What the human has typed, chip by chip.
+ *
+ * The text lives in the STORE rather than in the panel's own state, and that is deliberate: the
+ * autosave has to be able to flush the current value from outside React (a send button flushes
+ * before it asks anybody to approve anything), and the panel unmounts on a narrow-viewport drill.
+ * One truth means neither of those can save a version of the text nobody was looking at.
+ */
+export interface MailComposerFields {
+  to: AddressChip[];
+  cc: AddressChip[];
+  bcc: AddressChip[];
+  subject: string;
+  /** The typed body only. The reply quote is appended when the draft is saved. */
+  body: string;
+}
+
+export interface MailComposer {
+  /**
+   * Which composer this is, bumped on every open, discard and close.
+   *
+   * A create that is already in flight cannot be aborted (the request may sit in the fetch queue
+   * for seconds), and when it lands the pane may be showing a DIFFERENT message, possibly on
+   * another account. Without an identity to compare, the answer binds to whatever is on screen: the
+   * reply then PATCHes the first draft's row, or sends from the wrong account. Every write that
+   * folds a server answer back checks this first and drops a stale one.
+   */
+  epoch: number;
+  accountId: string;
+  /** Null until the first keystroke creates the row. */
+  draftId: string | null;
+  draft: MailDraftDto | null;
+  fields: MailComposerFields;
+  /** The original, quoted: shown read-only and appended to the body on every save. */
+  quote: string | null;
+  /** The message being answered, by cache handle. The SERVER copies the threading headers. */
+  replyTo: { accountId: string; messageId: string } | null;
+  showCc: boolean;
+  showBcc: boolean;
+  /**
+   * Which half of the pane is on screen, owned by the CLIENT rather than derived from the draft.
+   *
+   * Editing a frozen draft makes the server withdraw the letter and issue a fresh one, so the
+   * draft is `pending_approval` again 800ms after a keystroke. Deriving the mode from that would
+   * yank the form away from somebody who is still typing; the card comes back when they ask for it
+   * or when a send actually starts.
+   */
+  mode: 'edit' | 'status';
+  status: SendStatus;
+  save: MailSaveState;
+  /** A request that must not be double-fired (a send, a discard, a retry) is in flight. */
+  busy: boolean;
+  /** One sentence for the human: a stale draft, a refused account, a save that failed. */
+  notice: string | null;
+}
+
 export interface MailSnapshot {
   loading: boolean;
   /** The first accounts+providers answer landed. `[]` is an answer. */
@@ -79,6 +158,11 @@ export interface MailSnapshot {
   refreshing: boolean;
   /** What a 202 refresh left behind: a sentence, not an error. */
   refreshNote: string | null;
+  /** Drafts per account, newest edit first. Loaded in ONE request for every account. */
+  drafts: Record<string, MailDraftDto[]>;
+  draftsLoading: boolean;
+  /** The open composer, which replaces the reader pane. */
+  composer: MailComposer | null;
 }
 
 export const EMPTY_SEARCH: MailSearchState = {
@@ -104,6 +188,9 @@ function initialState(): MailSnapshot {
     open: null,
     refreshing: false,
     refreshNote: null,
+    drafts: {},
+    draftsLoading: false,
+    composer: null,
   };
 }
 
@@ -269,5 +356,20 @@ export function __resetMailStore(): void {
   inflight.clear();
   wants.clear();
   badge = null;
+  for (const hook of [...resetHooks]) hook();
   for (const listener of [...listeners]) listener();
+}
+
+/**
+ * Module state a reset has to clear that does not live in the snapshot: the composer's autosave timer
+ * and its one in-flight create (`compose/compose-autosave.ts`), and the set of drafts this client has
+ * deleted (`compose/compose-drafts.ts`). Each file registers its own, because each owns its state.
+ *
+ * The store cannot import that file (it imports this one), and a test that forgot the second reset
+ * would carry a pending 800ms save into the next case.
+ */
+const resetHooks = new Set<() => void>();
+
+export function onMailStoreReset(hook: () => void): void {
+  resetHooks.add(hook);
 }

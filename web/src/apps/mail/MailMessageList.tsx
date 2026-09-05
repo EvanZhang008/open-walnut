@@ -16,7 +16,8 @@ import {
   openMailMessage,
   runMailSearch,
 } from './mail-actions';
-import type { MailSnapshot } from './mail-store';
+import { DRAFTS_MAILBOX, type MailSnapshot } from './mail-store';
+import { MailDraftsList } from './compose/MailDraftsList';
 import { AttachmentIcon, BackIcon } from './mail-icons';
 
 interface Props {
@@ -36,6 +37,8 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
   const search = snapshot.search;
   const rows = search.active ? search.messages : snapshot.messages;
   const busy = search.active ? search.loading : snapshot.listLoading;
+  // Walnut's own drafts, not a provider folder: a virtual mailbox id selects them (see the store).
+  const draftsView = !search.active && snapshot.selected?.mailboxId === DRAFTS_MAILBOX;
 
   const clear = () => { setDraft(''); clearMailSearch(); };
 
@@ -94,7 +97,13 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
       {!search.active && snapshot.listError && <p className="mail-inline-error">{snapshot.listError}</p>}
 
       <div className="mail-rows">
-        {!snapshot.selected && !search.active ? (
+        {draftsView ? (
+          <MailDraftsList
+            drafts={snapshot.drafts[snapshot.selected!.accountId] ?? []}
+            openDraftId={snapshot.composer?.draftId ?? null}
+            loading={snapshot.draftsLoading}
+          />
+        ) : !snapshot.selected && !search.active ? (
           <p className="mail-pane-empty" data-testid="mail-no-mailbox">
             Pick a mailbox on the left to read it.
           </p>

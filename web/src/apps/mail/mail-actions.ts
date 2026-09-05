@@ -28,8 +28,11 @@ import {
   searchMail,
 } from '@/api/mail';
 import { log } from '@/utils/log';
+import { closeMailComposer, onMailDraftEvent } from './compose/compose-actions';
+import { loadMailDrafts } from './compose/compose-drafts';
 import { markReadIfAllowed } from './mail-read-flag';
 import {
+  DRAFTS_MAILBOX,
   EMPTY_SEARCH,
   PAGE_SIZE,
   pairKey,
@@ -124,6 +127,9 @@ export function selectMailbox(accountId: string, mailboxId: string): void {
 export function loadMailMessages(force = false): Promise<void> {
   const selection = store.state.selected;
   if (!selection) return Promise.resolve();
+  // The Drafts row is a virtual mailbox: no provider has it, and asking the messages route for it
+  // would be a request for a folder that does not exist. Its rows come from the drafts route.
+  if (selection.mailboxId === DRAFTS_MAILBOX) return loadMailDrafts(force);
   return run(`messages:${selectionKey(selection)}`, async () => {
     patch({ listLoading: true, listError: null });
     try {
@@ -192,6 +198,10 @@ export function openMailMessage(
   opts?: { retry?: boolean },
 ): Promise<void> {
   const retry = opts?.retry === true;
+  // The composer and the reader share ONE pane, so opening a message closes the composer. The draft
+  // is already saved and one click away in Drafts; leaving the composer up would make this click
+  // look like it did nothing at all.
+  if (store.state.composer) void closeMailComposer();
   const seq = ++store.openSeq;
   const known = [...store.state.messages, ...store.state.search.messages]
     .find((one) => one.messageId === messageId && one.accountId === accountId) ?? null;
@@ -366,7 +376,9 @@ export function openMailConsole(): Promise<void> {
   return run('bootstrap', async () => {
     patch({ loading: true });
     try {
-      await Promise.all([loadProviders(), loadAccounts()]);
+      // Drafts ride along with the accounts: the Drafts row's count badge is part of the first
+      // paint of the left pane, and every account's drafts arrive in ONE request.
+      await Promise.all([loadProviders(), loadAccounts(), loadMailDrafts()]);
       await Promise.all(store.state.accounts.map((account) => loadMailboxesFor(account.accountId)));
       ensureSelection();
       await loadMailMessages();
@@ -378,7 +390,7 @@ export function openMailConsole(): Promise<void> {
 
 export function refreshMailAll(): Promise<void> {
   return run('refresh-all', async () => {
-    await loadAccounts(true);
+    await Promise.all([loadAccounts(true), loadMailDrafts(true)]);
     await Promise.all(store.state.accounts.map((account) => loadMailboxesFor(account.accountId, true)));
     ensureSelection();
     await loadMailMessages(true);
@@ -410,6 +422,11 @@ function clearRefreshNoteFor(accountId: string | undefined): void {
 export function onMailEvent(name: string, data: unknown): void {
   const payload = (data ?? {}) as { accountId?: string; mailboxId?: string };
   if (name === 'providers-changed') { void loadProviders(true); return; }
+
+  // The write path's two events, ahead of the loaded gate on purpose: an open composer's status
+  // card is the one screen where staleness reads as "did my mail go or not", and the handler makes
+  // no request unless it is about the draft on screen or the console has already loaded its list.
+  if (name === 'draft-changed' || name === 'send-settled') { onMailDraftEvent(name, data); return; }
 
   if (!store.state.loaded) { void loadAccounts(true); return; }
 

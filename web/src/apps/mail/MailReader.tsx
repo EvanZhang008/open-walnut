@@ -18,6 +18,9 @@
 import { useMemo } from 'react';
 import { LinkifiedText } from '@/components/common/LinkifiedText';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import type { MailAccountDto, MailProviderSummary } from '@/api/mail';
+import { openMailReplyComposer } from './compose/compose-actions';
+import { CANNOT_SEND_TITLE, canSendFrom } from './compose/send-status';
 import {
   attachmentLabel,
   formatMailDate,
@@ -29,10 +32,17 @@ import { allowRemoteImagesForOpenMessage, closeMailMessage, retryOpenMessageBody
 import type { MailOpenMessage } from './mail-store';
 import { buildMailBodyFrame } from './mail-sanitize';
 import { MAIL_IFRAME_SANDBOX } from './mail-html';
-import { AttachmentIcon, BackIcon } from './mail-icons';
+import { AttachmentIcon, BackIcon, ReplyAllIcon, ReplyIcon } from './mail-icons';
 import './mail-reader.css';
 
-export function MailReader({ open, narrow }: { open: MailOpenMessage | null; narrow: boolean }) {
+interface ReaderProps {
+  open: MailOpenMessage | null;
+  narrow: boolean;
+  accounts: MailAccountDto[];
+  providers: MailProviderSummary[];
+}
+
+export function MailReader({ open, narrow, accounts, providers }: ReaderProps) {
   if (!open) {
     return (
       <section className="mail-reader-pane mail-reader-blank" data-testid="mail-reader">
@@ -54,6 +64,12 @@ export function MailReader({ open, narrow }: { open: MailOpenMessage | null; nar
 
       {message && (
         <header className="mail-reader-head">
+          <ReplyActions
+            open={open}
+            message={message}
+            accounts={accounts}
+            providers={providers}
+          />
           <h2 className="mail-reader-subject" data-testid="mail-reader-subject">
             {message.subject || '(no subject)'}
           </h2>
@@ -86,6 +102,57 @@ export function MailReader({ open, narrow }: { open: MailOpenMessage | null; nar
 
       <MailReaderBody open={open} />
     </section>
+  );
+}
+
+/**
+ * Reply and Reply all, gated exactly like the compose button.
+ *
+ * Disabled rather than hidden when the account cannot send: a missing button is a mystery, and the
+ * fix (add SMTP settings) belongs next to the thing it unlocks. Reply all is offered even when the
+ * arithmetic will add nobody, because `MailMessageDto` carries no `cc` today, so "there is nobody
+ * else" is not a claim this console can make.
+ */
+function ReplyActions({ open, message, accounts, providers }: {
+  open: MailOpenMessage;
+  message: NonNullable<MailOpenMessage['message']>;
+  accounts: MailAccountDto[];
+  providers: MailProviderSummary[];
+}) {
+  const account = accounts.find((one) => one.accountId === open.accountId);
+  const canSend = canSendFrom(providers, open.accountId);
+  const start = (all: boolean) => { void openMailReplyComposer({
+    accountId: open.accountId,
+    accountAddress: account?.address ?? '',
+    message,
+    ...(open.body?.text ? { bodyText: open.body.text } : {}),
+    all,
+  }); };
+  return (
+    <div className="mail-reader-actions">
+      <button
+        type="button"
+        className="mail-compose-btn"
+        data-testid="mail-reply"
+        disabled={!canSend}
+        title={canSend ? 'Reply to the sender' : CANNOT_SEND_TITLE}
+        onClick={() => start(false)}
+      >
+        <ReplyIcon />
+        Reply
+      </button>
+      <button
+        type="button"
+        className="mail-compose-btn"
+        data-testid="mail-reply-all"
+        disabled={!canSend}
+        title={canSend ? 'Reply to everyone' : CANNOT_SEND_TITLE}
+        onClick={() => start(true)}
+      >
+        <ReplyAllIcon />
+        Reply all
+      </button>
+    </div>
   );
 }
 

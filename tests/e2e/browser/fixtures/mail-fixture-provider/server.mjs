@@ -14,11 +14,46 @@
  *   plugin's route turns into a 401, which is what the dialog's "app password" sentence keys on.
  * - The HTML body is HOSTILE on purpose (script, an `onerror`, a remote pixel), and it is handed
  *   over RAW. Sanitizing here would test the fixture instead of the console.
+ * - A SEND IS RECORDED, not swallowed. Every `provider.send` appends the exact `OutgoingMail` the
+ *   base built to a json file in the fixture's throwaway home, so the write-path spec can assert
+ *   what went over the wire (one send, both recipients, the html the server rendered, the
+ *   `In-Reply-To` it copied from the cached message) instead of trusting the console's own words.
+ *
+ * With `PW_MAIL_INBOUND_PROVIDER=1` it ALSO registers a second provider that declares `send: false`, which is
+ * the only way the console can see two accounts disagree: `MailAccountDto` carries no capabilities
+ * and the contract's per-account override is on no route, so the console reads the provider's block.
+ * It is a flag rather than the default because the read spec counts the provider options in the
+ * add-an-account dialog.
  *
  * Addresses are `*.invalid` (RFC 2606) and nothing here resolves.
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 const HOUR = 60 * 60 * 1000;
+
+/** Where a send is recorded. The fixture home is thrown away with the run. */
+const OUTBOX = path.join(process.env.OPEN_WALNUT_HOME || os.tmpdir(), 'mail-fixture-sends.json');
+
+/**
+ * Append one send, atomically.
+ *
+ * Written to a temp file and RENAMED over the outbox, because the test polls this file while the
+ * server writes it: a plain `writeFileSync` is observable half-written, and the reader's
+ * `JSON.parse` would throw (or worse, the test would see one fewer send and call it a bug).
+ */
+function recordSend(entry) {
+  let held = [];
+  try { held = JSON.parse(fs.readFileSync(OUTBOX, 'utf8')); }
+  catch { held = []; }
+  held.push(entry);
+  const staging = `${OUTBOX}.${process.pid}.tmp`;
+  fs.writeFileSync(staging, JSON.stringify(held, null, 2));
+  fs.renameSync(staging, OUTBOX);
+  return held.length;
+}
 const now = Date.now();
 
 /** Deep in the text, in the HTML half only: what the cached-search test looks for. */
@@ -154,8 +189,8 @@ const spec = {
     markRead: true,
     flags: false,
     threads: false,
-    send: false,
-    sendAsReply: false,
+    send: true,
+    sendAsReply: true,
     bodies: 'both',
     attachments: 'metadata',
   },
@@ -231,10 +266,28 @@ const spec = {
     if (read) seen.add(messageId);
     else seen.delete(messageId);
   },
-  async send() {
-    const error = new Error('the fixture provider does not send');
-    error.code = 'unsupported';
-    throw error;
+  /**
+   * Accept the message and write down exactly what arrived.
+   *
+   * The `idempotencyKey` is recorded too: it is `<draftId>:<revision>`, so a second send of one
+   * approved revision would show up here as two rows with the same key, which is the failure the
+   * whole ledger exists to prevent.
+   */
+  async send(accountId, mail, options) {
+    const n = recordSend({
+      accountId,
+      to: mail.to,
+      cc: mail.cc ?? [],
+      bcc: mail.bcc ?? [],
+      subject: mail.subject,
+      bodyMarkdown: mail.bodyMarkdown,
+      bodyHtml: mail.bodyHtml ?? '',
+      inReplyTo: mail.inReplyTo ?? null,
+      references: mail.references ?? [],
+      idempotencyKey: options?.idempotencyKey ?? '',
+      at: Date.now(),
+    });
+    return { providerMessageId: `<fixture-send-${n}@example.invalid>`, acceptedAt: Date.now() };
   },
   async removeAccount(accountId) {
     const at = accounts.findIndex((one) => one.accountId === accountId);
@@ -242,10 +295,76 @@ const spec = {
   },
 };
 
+/** Accounts of the read-only provider, kept apart from the sendable one's. */
+const inboundAccounts = [];
+
+/**
+ * A second provider that reads mail and cannot send: an IMAP account with no SMTP settings, which
+ * is the case `capabilities.send` exists for. Everything else about it is deliberately minimal.
+ */
+const inboundSpec = {
+  id: 'inbound',
+  label: 'Fixture Mail (inbound only)',
+  capabilities: {
+    search: false,
+    watch: false,
+    drafts: false,
+    markRead: false,
+    flags: false,
+    threads: false,
+    send: false,
+    sendAsReply: false,
+    bodies: 'text',
+    attachments: 'none',
+  },
+  setup: {
+    fields: [
+      { name: 'address', label: 'Email address', kind: 'text', required: true },
+    ],
+    async submit(values) {
+      const address = values.address || 'read-only@example.invalid';
+      const account = {
+        accountId: `inbound:${address}`,
+        providerId: 'inbound',
+        displayName: 'Fixture Mail (inbound only)',
+        address,
+        state: 'active',
+      };
+      if (!inboundAccounts.some((one) => one.accountId === account.accountId)) inboundAccounts.push(account);
+      return account;
+    },
+  },
+  async listAccounts() {
+    return inboundAccounts.map((one) => ({ ...one }));
+  },
+  async health() {
+    return { state: 'ok', checkedAt: Date.now() };
+  },
+  async listMailboxes() {
+    return [{ mailboxId: 'INBOX', name: 'Inbox', role: 'inbox', total: 0, unread: 0 }];
+  },
+  async poll(_accountId, request) {
+    return { messages: [], cursor: `${request.mailbox}:1:end`, more: false };
+  },
+  async getBody() {
+    throw notFound('the inbound fixture caches no bodies');
+  },
+  async send() {
+    const error = new Error('this account has no outgoing mail configured');
+    error.code = 'unsupported';
+    throw error;
+  },
+  async removeAccount(accountId) {
+    const at = inboundAccounts.findIndex((one) => one.accountId === accountId);
+    if (at >= 0) inboundAccounts.splice(at, 1);
+  },
+};
+
 export function activate(walnut) {
   const base = walnut.services.require('mail:base');
-  const handle = base.registerProvider(spec);
+  const handles = [base.registerProvider(spec)];
+  if (process.env.PW_MAIL_INBOUND_PROVIDER === '1') handles.push(base.registerProvider(inboundSpec));
   // Returning the Disposable is how a provider hands ownership to the loader: turning this
   // plugin off detaches the provider live, with the base never knowing who registered it.
-  return { dispose: () => handle.dispose() };
+  return { dispose: () => { for (const handle of handles) handle.dispose(); } };
 }

@@ -84,6 +84,28 @@ export function RefreshIcon({ size = 14 }: IconProps) {
   </>);
 }
 
+export function ComposeIcon({ size = 14 }: IconProps) {
+  return frame(size, <>
+    <path d="M4 20h16" />
+    <path d="M15.5 4.5a2.1 2.1 0 0 1 3 3L9 17l-4 1 1-4z" />
+  </>);
+}
+
+export function ReplyIcon({ size = 14 }: IconProps) {
+  return frame(size, <>
+    <path d="M9 5L3 11l6 6" />
+    <path d="M3 11h9a8 8 0 0 1 8 8" />
+  </>);
+}
+
+export function ReplyAllIcon({ size = 14 }: IconProps) {
+  return frame(size, <>
+    <path d="M8 5L2 11l6 6" />
+    <path d="M13 5L7 11l6 6" />
+    <path d="M7 11h8a7 7 0 0 1 7 7" />
+  </>);
+}
+
 export function BackIcon({ size = 14 }: IconProps) {
   return frame(size, <path d="M15 5l-7 7 7 7" />);
 }

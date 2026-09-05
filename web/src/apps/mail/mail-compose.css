@@ -1,0 +1,340 @@
+/**
+ * The composer, the send status card, and the drafts rows.
+ *
+ * Its own file rather than more of mail.css: that one is the three-pane reader, this is the write
+ * path, and the write path is the half a reader-only build would not ship.
+ *
+ * The pane SCROLLS ITSELF (the console owns its scroll containers, never the page). The head and the
+ * send footer are both `sticky`, which means they hold their edge only while the content overflows:
+ * a long body cannot push the send buttons out of reach, and a short one leaves the footer directly
+ * under the form, where the eye already is. Neither is `fixed`, so nothing floats over a pane the
+ * human is not looking at.
+ */
+
+.mail-composer-pane {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.mail-composer-pane .mail-pane-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+}
+
+/* ── the entry point in the accounts pane head ── */
+
+.mail-compose-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mail-compose-new:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.mail-compose-new:disabled { opacity: 0.45; cursor: default; background: none; color: var(--fg-muted); }
+
+/* ── the form ── */
+
+.mail-compose-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 0;
+}
+
+.mail-compose-field { display: flex; align-items: flex-start; gap: 8px; }
+
+.mail-compose-label {
+  flex: 0 0 46px;
+  padding-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.mail-compose-chips {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mail-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 4px 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--fg);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* An address the server will refuse is the one thing here that must not be subtle. */
+.mail-chip.invalid {
+  background: rgba(255, 59, 48, 0.12);
+  color: var(--error);
+  box-shadow: inset 0 0 0 1px var(--error);
+}
+
+.mail-chip-x {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.mail-chip-x:hover { opacity: 1; }
+
+.mail-compose-chip-input {
+  flex: 1;
+  min-width: 120px;
+  padding: 4px 2px;
+  border: none;
+  background: none;
+  color: var(--fg);
+  font-size: 13px;
+  outline: none;
+}
+
+.mail-compose-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 2px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  color: var(--fg);
+  font-size: 13px;
+  outline: none;
+}
+
+.mail-compose-input:focus,
+.mail-compose-chips:focus-within { border-bottom-color: var(--accent); }
+
+.mail-compose-toggles { display: flex; gap: 12px; padding-left: 54px; }
+
+.mail-compose-body {
+  margin: 10px 12px 0;
+  padding: 8px 10px;
+  min-height: 150px;
+  max-height: 50vh;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  resize: none;
+  overflow-y: auto;
+  outline: none;
+}
+
+.mail-compose-body:focus { border-color: var(--accent); background: var(--bg); }
+
+/* ── the quote: real body text, and read-only on purpose ── */
+
+.mail-compose-quote {
+  margin: 10px 12px 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--border);
+  background: var(--bg-secondary);
+  border-radius: 0 8px 8px 0;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+.mail-compose-quote-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.mail-compose-quote-text {
+  margin: 6px 0 0;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mail-compose-attachments {
+  margin: 10px 12px 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.mail-compose-notice {
+  margin: 8px 12px 0;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* ── the footer: pinned, so a long mail cannot hide the send buttons ── */
+
+.mail-compose-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.mail-compose-save {
+  flex: 1;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.mail-compose-save[data-state='retrying'],
+.mail-compose-save[data-state='failed'] { color: var(--warning); }
+
+.mail-compose-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: none;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mail-compose-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
+.mail-compose-btn:disabled { opacity: 0.45; cursor: default; }
+
+.mail-compose-btn.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.mail-compose-btn.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); color: #fff; }
+.mail-compose-btn.danger { color: var(--error); }
+.mail-compose-btn.danger:hover:not(:disabled) { background: rgba(255, 59, 48, 0.1); color: var(--error); }
+
+/* ── the reader's reply controls ── */
+
+.mail-reader-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+/* ── the status card ── */
+
+.mail-send-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 28px 20px;
+  text-align: center;
+}
+
+.mail-send-status-icon { color: var(--fg-muted); }
+
+.mail-send-status-headline {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--fg);
+}
+
+.mail-send-status-detail {
+  margin: 0;
+  max-width: 42ch;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-secondary);
+}
+
+.mail-send-status[data-phase='failed'] .mail-send-status-detail,
+.mail-send-status[data-phase='unknown'] .mail-send-status-detail { color: var(--warning); }
+
+.mail-send-status-meta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 10px;
+  margin: 10px 0 0;
+  width: 100%;
+  max-width: 46ch;
+  text-align: left;
+  font-size: 12px;
+}
+
+.mail-send-status-meta dt { color: var(--fg-muted); }
+.mail-send-status-meta dd { margin: 0; color: var(--fg-secondary); overflow-wrap: anywhere; }
+.mail-send-letter-id { font-family: var(--font-mono, monospace); font-size: 11px; }
+
+.mail-send-status-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+
+/* ── drafts rows ── */
+
+.mail-draft-row .mail-row-subject { justify-content: space-between; }
+
+.mail-draft-pill {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.mail-draft-pill.state-pending_approval { background: var(--accent-subtle); color: var(--accent); }
+.mail-draft-pill.state-sending,
+.mail-draft-pill.state-approved { background: var(--accent-subtle); color: var(--accent); }
+.mail-draft-pill.state-failed { background: rgba(255, 59, 48, 0.12); color: var(--error); }
+.mail-draft-pill.state-unknown { background: rgba(255, 149, 0, 0.14); color: var(--warning); }
+
+/* ── one pane at a time ──
+   The composer lives in the reader's slot, so the narrow rules that hide the reader have to hide it
+   too: without this it would render under the account list at 700px. */
+
+.mail-console[data-narrow-pane='accounts'] > .mail-composer-pane,
+.mail-console[data-narrow-pane='list'] > .mail-composer-pane {
+  display: none;
+}
