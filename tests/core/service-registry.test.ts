@@ -13,6 +13,7 @@ import { bus } from '../../src/core/event-bus.js';
 import {
   assertServiceAvailable,
   createServiceHandle,
+  currentServiceCaller,
   getServiceEntry,
   listServiceKeys,
   publishOwnedService,
@@ -263,6 +264,96 @@ describe('live handle', () => {
     expect(Object.keys(g)).toEqual(['greet']);
     expect({ ...g }).toEqual({ greet: expect.any(Function) });
     expect(g.greet()).toBe('hi');
+  });
+});
+
+/**
+ * The current caller, which exists for exactly one job: letting a publisher that hands out
+ * REGISTRATIONS key them by owner, so it can drop a row when that owner goes away. Before it, a
+ * consumer whose `activate` threw right after registering left the publisher with a row it could
+ * not attribute to anybody, and every retry then hit the duplicate-id refusal.
+ */
+describe('current caller', () => {
+  function handleFor(consumerId: string | undefined): Record<string, (...args: any[]) => any> {
+    return createServiceHandle({
+      key: 'alpha:greeter',
+      publisherId: 'alpha',
+      ...(consumerId ? { consumerId } : {}),
+    });
+  }
+
+  it('is the consumer inside a method body, and nothing outside one', () => {
+    let seen: string | undefined = 'not set';
+    publishService('alpha', 'greeter', { greet: () => { seen = currentServiceCaller(); } });
+
+    expect(currentServiceCaller()).toBeUndefined();
+    handleFor('beta').greet();
+
+    expect(seen).toBe('beta');
+    // Restored, not left behind: a leaked value would make the NEXT registration look like it
+    // came from whoever called last.
+    expect(currentServiceCaller()).toBeUndefined();
+  });
+
+  it('is undefined after an await, by design', async () => {
+    const seen: Array<string | undefined> = [];
+    publishService('alpha', 'greeter', {
+      greet: async () => {
+        seen.push(currentServiceCaller());
+        await Promise.resolve();
+        seen.push(currentServiceCaller());
+      },
+    });
+
+    await handleFor('beta').greet();
+
+    // Synchronous prologue sees it; the continuation does not. Making it survive an await would
+    // need AsyncLocalStorage on every service call, and a publisher that needs the caller reads
+    // it on its first line.
+    expect(seen).toEqual(['beta', undefined]);
+  });
+
+  it('restores the outer caller after a nested service call', () => {
+    const seen: Array<string | undefined> = [];
+    // `inner` is published by a different plugin and called from inside `outer`'s body, exactly
+    // like a base standing on another base.
+    publishService('gamma', 'inner', { work: () => { seen.push(currentServiceCaller()); } });
+    const inner = createServiceHandle<Record<string, () => void>>({
+      key: 'gamma:inner',
+      publisherId: 'gamma',
+      consumerId: 'alpha',
+    });
+    publishService('alpha', 'greeter', {
+      greet: () => {
+        seen.push(currentServiceCaller());
+        inner.work();
+        seen.push(currentServiceCaller());
+      },
+    });
+
+    handleFor('beta').greet();
+
+    expect(seen).toEqual(['beta', 'alpha', 'beta']);
+    expect(currentServiceCaller()).toBeUndefined();
+  });
+
+  it('is undefined when the HOST is the caller', () => {
+    // A handle with no consumer id is a host-made handle, and "the host asked" has to be
+    // distinguishable from "a plugin asked": a publisher must not attribute a host call to some
+    // plugin and then sweep the row when that plugin restarts.
+    let seen: string | undefined = 'not set';
+    publishService('alpha', 'greeter', { greet: () => { seen = currentServiceCaller(); } });
+
+    handleFor(undefined).greet();
+
+    expect(seen).toBeUndefined();
+  });
+
+  it('is restored even when the method throws', () => {
+    publishService('alpha', 'greeter', { greet: () => { throw new Error('nope'); } });
+
+    expect(() => handleFor('beta').greet()).toThrow('nope');
+    expect(currentServiceCaller()).toBeUndefined();
   });
 });
 

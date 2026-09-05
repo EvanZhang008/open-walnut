@@ -797,6 +797,25 @@ export interface HumanInboxLetterEvent {
   kind: 'new' | 'reply';
 }
 
+// ── Plugin lifecycle ──
+
+/**
+ * A plugin moved to a new lifecycle state. Raised by the plugin loader's `onStateChange`
+ * hook for EVERY transition, including the ones nobody asked for (a failed activation, a
+ * dependency cascade, a teardown).
+ *
+ * Who needs it: a capability plugin that hands out registrations to other plugins. The
+ * service handle carries no caller identity in an async continuation, so a base that keyed
+ * its rows by owner (`walnut.services.caller()`) needs a signal for "that owner just left a
+ * live state" to drop them. `state` is the loader's `PluginLifecycleState` as a plain
+ * string, deliberately not a union here: a new state must not have to be added in two files
+ * before a subscriber can be told about it.
+ */
+export interface PluginLifecycleChangedEvent {
+  pluginId: string;
+  state: string;
+}
+
 export interface SystemHealthEvent {
   embedding: {
     total: number;
@@ -1012,6 +1031,8 @@ export interface EventPayloadMap {
   'client:incident': ClientIncidentEvent;
 
   'human-inbox:letter': HumanInboxLetterEvent;
+
+  'plugin:lifecycle-changed': PluginLifecycleChangedEvent;
 
   'audio:started': AudioStartedEvent;
   'audio:stopped': AudioStoppedEvent;

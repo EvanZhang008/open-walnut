@@ -1,0 +1,47 @@
+{
+  "id": "mail-imap",
+  "name": "IMAP Mail",
+  "description": "Reads mail over IMAP with an app password, and attaches to the mail base as a provider",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "engines": {
+    "walnut": ">=0.4.5"
+  },
+  "server": "index.js",
+  "dependencies": {
+    "mail": "^1.0.0"
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "accounts": {
+        "type": "object",
+        "description": "One entry per account, keyed by the account's local id. Written by the account setup form; the password lives in the plugin secret store, never here.",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "address": { "type": "string", "description": "The email address, which is also the IMAP username" },
+            "imap_host": { "type": "string", "description": "IMAP server hostname" },
+            "imap_port": { "type": "integer", "default": 993, "description": "IMAP port (993 for TLS, 143 for STARTTLS)" },
+            "imap_tls": { "type": "string", "enum": ["tls", "starttls"], "default": "tls", "description": "TLS from the first byte, or an upgrade after connecting" },
+            "display_name": { "type": "string", "description": "What the console shows for this account" },
+            "roles": {
+              "type": "object",
+              "description": "Mailbox path to role, for a server whose folder names Walnut cannot guess",
+              "additionalProperties": {
+                "type": "string",
+                "enum": ["inbox", "sent", "drafts", "archive", "trash", "spam", "other"]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "accounts": {
+      "label": "IMAP accounts",
+      "help": "Add an account from the Mail app rather than by hand: the setup form proves the credential before storing it"
+    }
+  }
+}

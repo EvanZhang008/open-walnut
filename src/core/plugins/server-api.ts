@@ -18,6 +18,7 @@ import { registerOwnedSkillDir, type PluginSkillDefinition } from './skill-regis
 import {
   assertServiceAvailable,
   createServiceHandle,
+  currentServiceCaller,
   publishService,
   resolveServiceAccess,
   SERVICE_CHANGED_EVENT,
@@ -29,7 +30,7 @@ import { toDisposable, type Disposable } from './disposable.js'
 import { bus, EventNames, type BusEvent } from '../event-bus.js'
 import { getConfig, updatePluginConfig } from '../config-manager.js'
 import { getVersion } from '../version.js'
-import { WALNUT_HOME } from '../../constants.js'
+import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { getDb } from '../task-db.js'
 import type { AgentDefinition, Task, TaskPhase, TaskPriority } from '../types.js'
 import type { SlimTask } from '../task-manager.js'
@@ -296,6 +297,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
     return createServiceHandle<T>({
       key,
       publisherId,
+      consumerId: pluginId,
       ...(options.lookupPluginState ? { lookupState: options.lookupPluginState } : {}),
     })
   }
@@ -324,6 +326,9 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
     pluginId,
     pluginName: options.pluginName,
     walnutVersion: getVersion(),
+    // A plugin that owns an outside account has to know which box it is on: two Walnuts
+    // polling one mailbox double every fetch and every write.
+    replica: CLOUD_MODE,
     signal: context.signal,
     log: context.logger,
 
@@ -496,6 +501,11 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       // caller's activate where the stack still names it, not at some later call.
       require<T = ServiceApi>(key: string): T {
         return serviceHandle<T>(key, true)
+      },
+      // Meaningful only inside the synchronous body of one of THIS plugin's published
+      // methods; `undefined` when the host called, or outside a service call entirely.
+      caller(): string | undefined {
+        return currentServiceCaller()
       },
       onChange(handler: (change: ServiceChange) => void | Promise<void>) {
         const subscriber = `plugin:${pluginId}:services:${++subscriberSequence}`

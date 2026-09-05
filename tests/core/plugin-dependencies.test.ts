@@ -115,6 +115,7 @@ function record(registry: IntegrationRegistry, id: string): PluginLifecycleRecor
 }
 
 const dependencyEvents: Array<{ pluginId: string; dependencyId: string; action: string }> = [];
+const lifecycleEvents: Array<{ pluginId: string; state: string }> = [];
 
 beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
@@ -124,9 +125,13 @@ beforeEach(async () => {
   (globalThis as unknown as { __p01: Markers }).__p01 = { evaluated: [], activated: [], deactivated: [] };
   captured.warnings.length = 0;
   dependencyEvents.length = 0;
+  lifecycleEvents.length = 0;
   bus.subscribe('p01-observer', (event) => {
     if (event.name === 'plugin:dependency-changed') {
       dependencyEvents.push(event.data as { pluginId: string; dependencyId: string; action: string });
+    }
+    if (event.name === 'plugin:lifecycle-changed') {
+      lifecycleEvents.push(event.data as { pluginId: string; state: string });
     }
   }, { global: true });
 });
@@ -483,6 +488,42 @@ describe('lifecycle cascade', () => {
     await reloadLoadedPlugin(registry, 'alpha');
     expect(['alpha', 'beta'].map((id) => record(registry, id)?.state)).toEqual(['active', 'active']);
     expect(getUnmetDependencyPlugins()).toEqual([]);
+  });
+
+  /**
+   * The lifecycle announcement. It exists for a capability plugin that hands out registrations
+   * to other plugins: the base keys each row by the plugin that made it (the host's
+   * `walnut.services.caller()`) and needs a signal for "that owner just left a live state" to
+   * drop it. The case it is FOR is the one nobody else can cover, an `activate` that throws
+   * after it registered, so the event has to fire on `failed` and not only on a tidy disable.
+   */
+  it('announces every lifecycle transition on the bus, including a failed activation', async () => {
+    const registry = await loadPair();
+    const states = (id: string) => lifecycleEvents.filter((event) => event.pluginId === id).map((event) => event.state);
+
+    // The load itself: discovered, then the activation pair, for both plugins.
+    expect(states('alpha')).toEqual(expect.arrayContaining(['discovered', 'activating', 'active']));
+    expect(states('beta')).toEqual(expect.arrayContaining(['activating', 'active']));
+
+    lifecycleEvents.length = 0;
+    await disableLoadedPlugin(registry, 'alpha', { cascade: true });
+
+    // Beta is parked, not disabled, and both endings are announced. `needs-dependency` and
+    // `disabled` are the two non-live states a sweep has to react to.
+    expect(states('beta')).toContain('needs-dependency');
+    expect(states('alpha')).toContain('disabled');
+
+    lifecycleEvents.length = 0;
+    await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '1.2.0' }, 'throw new Error("alpha is broken");');
+    await reloadLoadedPlugin(registry, 'alpha');
+
+    expect(record(registry, 'alpha')?.state).toBe('failed');
+    expect(states('alpha')).toContain('failed');
+    // Every event names a plugin and a state, and nothing else: a subscriber must not have to
+    // know the loader's record shape to react.
+    for (const event of lifecycleEvents) {
+      expect(Object.keys(event).sort()).toEqual(['pluginId', 'state']);
+    }
   });
 
   it('cascades through a chain, naming each plugin its own direct dependency', async () => {

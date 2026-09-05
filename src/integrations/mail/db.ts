@@ -22,6 +22,9 @@ import type { WalnutServerPluginApi } from '../../core/plugins/server-api.js'
  * - A worker can wedge. Every call carries one shared deadline covering the open AND the
  *   statement, so a route answers `db_unavailable` instead of pinning a connection: one
  *   pinned response starves the browser's six-connection pool.
+ *
+ * The schema, the migrations and that deadline machinery live here; the statements and the row
+ * shapes live in `store.ts`. Those two files are the only ones in this directory that write SQL.
  */
 
 const SCHEMA_V1 = `
@@ -105,7 +108,36 @@ CREATE TABLE IF NOT EXISTS sends (
 );
 `
 
-const MIGRATIONS: Array<{ version: number; sql: string }> = [{ version: 1, sql: SCHEMA_V1 }]
+/**
+ * v2 exists so a re-poll of an unchanged page is provably a no-op.
+ *
+ * `envelope_hash` is what the upsert compares: equal hash means the row is not touched at
+ * all, so `updated_at` stays where it was and the sync's "updated" count stays honest. Doing
+ * it the obvious way (always UPDATE, then look at `changes`) reports every re-poll as an
+ * update, which then rides the bus as a change event and refreshes a console for nothing.
+ */
+const SCHEMA_V2 = `
+ALTER TABLE messages ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE messages ADD COLUMN envelope_hash TEXT;
+`
+
+/**
+ * A body this message will never have, and why.
+ *
+ * Without it the prefetch re-downloads the same unfetchable bodies on every single tick:
+ * `bodylessMessages` selects on `body_ref IS NULL`, and a message that is over the cap or gone
+ * from the server never gets a `body_ref`. On a photo-heavy inbox that is tens of megabytes an
+ * hour against the user's own mail server, forever.
+ */
+const SCHEMA_V3 = `
+ALTER TABLE messages ADD COLUMN body_error TEXT;
+`
+
+const MIGRATIONS: Array<{ version: number; sql: string }> = [
+  { version: 1, sql: SCHEMA_V1 },
+  { version: 2, sql: SCHEMA_V2 },
+  { version: 3, sql: SCHEMA_V3 },
+]
 
 /** One budget per call, shared by the open and the statement. */
 const CALL_DEADLINE_MS = 5_000
@@ -259,3 +291,4 @@ export function openMailDatabase(walnut: WalnutServerPluginApi): MailDatabase {
 export function mailDatabaseForTesting(): MailDatabase | null {
   return activeDatabase
 }
+

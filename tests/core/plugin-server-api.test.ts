@@ -64,7 +64,11 @@ function publishMockCalendarSource(): void {
   })
 }
 
-function setup(pluginId = 'sample-plugin', pluginName = 'Sample Plugin') {
+function setup(
+  pluginId = 'sample-plugin',
+  pluginName = 'Sample Plugin',
+  dependencies?: Record<string, string>,
+) {
   const context = new PluginContext({
     id: pluginId,
     dataDir: path.join(WALNUT_HOME, 'plugin-data', pluginId),
@@ -79,6 +83,7 @@ function setup(pluginId = 'sample-plugin', pluginName = 'Sample Plugin') {
     legacyApi,
     contributions: collected,
     integrationRegistry: registry,
+    ...(dependencies ? { dependencies } : {}),
   })
   return { api, context, collected, registry }
 }
@@ -267,6 +272,28 @@ describe('createServerPluginApi', () => {
     expect(vi.mocked(logger.warn).mock.calls.length).toBe(warningsBefore + 1)
     await registration.dispose()
     await context.dispose()
+  })
+
+  it('tells a plugin which box it is on, and who called its service', () => {
+    // `replica` exists so a plugin that owns an OUTSIDE account (a mailbox, a chat workspace)
+    // can refuse to poll from two boxes. It mirrors the host's cloud-mode flag, which the test
+    // constants pin to false, so the assertion here is that the field is wired at all: a
+    // missing one reads as `undefined`, which is falsy, so every replica would quietly poll.
+    const { api } = setup()
+    expect(api.replica).toBe(false)
+    expect(typeof api.replica).toBe('boolean')
+
+    // `caller()` is only meaningful inside a service method body. Outside one it is undefined,
+    // never a stale value from the last call.
+    expect(api.services.caller()).toBeUndefined()
+
+    const consumer = setup('consumer-plugin', 'Consumer Plugin', { 'sample-plugin': '^1' })
+    const seen: Array<string | undefined> = []
+    api.services.publish('greeter', { greet: () => { seen.push(api.services.caller()) } })
+    consumer.api.services.get<{ greet(): void }>('sample-plugin:greeter').greet()
+
+    expect(seen).toEqual(['consumer-plugin'])
+    expect(api.services.caller()).toBeUndefined()
   })
 
   it('logs unsafe access once', () => {

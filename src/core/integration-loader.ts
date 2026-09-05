@@ -54,6 +54,8 @@ import {
 } from './plugins/dependency-gate.js';
 import { validatePluginId } from './plugins/ids.js';
 import { CORE_SERVICE_OWNER, removeServicesOf } from './plugins/service-registry.js';
+// Only for the lifecycle announcement inside createPluginManager's onStateChange hook.
+import { bus } from './event-bus.js';
 import { createServerPluginApi } from './plugins/server-api.js';
 import type {
   PluginManifest,
@@ -332,6 +334,16 @@ async function createPluginManager(registry: IntegrationRegistry): Promise<Plugi
     }),
     onStateChange: (record) => {
       log.debug('Plugin lifecycle changed', { id: record.id, state: record.state });
+      // Announced for EVERY transition, not just the interesting ones. A capability plugin
+      // that keyed a registration by the plugin that made it (walnut.services.caller())
+      // needs "that owner just left a live state" to drop the row, and it cannot get that
+      // from the owner itself: the case it exists for is an activate that threw.
+      bus.emit(
+        'plugin:lifecycle-changed',
+        { pluginId: record.id, state: record.state },
+        ['web-ui'],
+        { source: 'plugin-loader' },
+      );
     },
     onActivationStart: async (pluginId) => {
       try { await bootSentinel.begin(pluginId); }

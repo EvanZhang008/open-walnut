@@ -273,6 +273,32 @@ export interface ServiceHandleOptions {
   publisherId: string
   /** Current lifecycle state of the publisher, so an unavailable service says WHY. */
   lookupState?: (pluginId: string) => string | undefined
+  /**
+   * The plugin this handle was created FOR, reported to the publisher as
+   * `currentServiceCaller()` while one of its methods runs. Absent for a host-made handle,
+   * which is exactly how a publisher tells "the host asked" from "a plugin asked".
+   */
+  consumerId?: string
+}
+
+/**
+ * Who is inside a service method call right now.
+ *
+ * A published api is a bag of closures, so a publisher has no argument that says who called
+ * it, and the whole reason it wants to know is ownership: a capability plugin handing out
+ * registrations has to be able to drop a row when the plugin that made it goes away, and a
+ * row it cannot attribute is a row that survives its owner forever.
+ *
+ * Deliberately synchronous-only. It is set immediately before `method.apply` and restored in
+ * a `finally`, so nesting works (a service calling another service) and an async continuation
+ * does NOT see it: after an `await`, the caller may be anybody. Making it survive an await
+ * would need AsyncLocalStorage on every service call, which is a real per-call cost for a
+ * guarantee no honest publisher needs. Read it on the first line and keep the value.
+ */
+let currentCaller: string | undefined
+
+export function currentServiceCaller(): string | undefined {
+  return currentCaller
 }
 
 /**
@@ -293,7 +319,7 @@ export interface ServiceHandleOptions {
  * later `Object.keys(svc)` would throw a TypeError instead of answering.
  */
 export function createServiceHandle<T = ServiceApi>(options: ServiceHandleOptions): T {
-  const { key, publisherId, lookupState } = options
+  const { key, publisherId, lookupState, consumerId } = options
   const describe = (): ServiceApi => services.get(key)?.api ?? {}
   const current = (): ServiceApi => {
     const entry = services.get(key)
@@ -311,7 +337,15 @@ export function createServiceHandle<T = ServiceApi>(options: ServiceHandleOption
         if (typeof method !== 'function') {
           throw new Error(`Service "${key}" no longer provides "${property}"`)
         }
-        return method.apply(api, args)
+        // Saved and restored rather than cleared: a service method that calls another
+        // service must find its OWN caller again when the inner call returns.
+        const previous = currentCaller
+        currentCaller = consumerId
+        try {
+          return method.apply(api, args)
+        } finally {
+          currentCaller = previous
+        }
       }
     },
     has(_target, property) {

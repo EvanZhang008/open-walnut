@@ -34,6 +34,7 @@ import {
   disableLoadedPlugin,
   getPluginLifecycleRecords,
   getPluginToolSpecs,
+  loadNewPlugins,
   reloadLoadedPlugin,
 } from '../../src/core/integration-loader.js';
 import { MailDatabase, mailDatabaseForTesting } from '../../src/integrations/mail/db.js';
@@ -64,6 +65,12 @@ function marks(): FixtureMarks {
 async function getJson<T>(routePath: string): Promise<{ status: number; body: T }> {
   const response = await fetch(apiUrl(routePath));
   return { status: response.status, body: await response.json() as T };
+}
+
+/** Only the providers the FIXTURE plugin owns, so the builtin IMAP one is not in the way. */
+async function fixtureProviderIds(): Promise<string[]> {
+  const { body } = await getJson<{ providers: Array<{ id: string }> }>('/providers');
+  return body.providers.map((one) => one.id).filter((id) => id === 'fake');
 }
 
 async function writeConfig(plugins: Record<string, Record<string, unknown>> = {}): Promise<void> {
@@ -177,14 +184,28 @@ describe('a provider plugin attaches through the service, with no kernel change'
   it('lists the provider it registered and refuses a second registration of the same id', async () => {
     expect(getPluginLifecycleRecords(registry).find((entry) => entry.id === FIXTURE_ID)?.state).toBe('active');
     expect(marks().activated).toBe(1);
-    expect(marks().version).toBe('1.0.0');
+    // The CONTRACT version, not the manifest's. It has to move when methods arrive, or a
+    // provider written against a later base has no way to gate on one being there.
+    expect(marks().version).toBe('1.1.0');
 
-    const providers = await getJson<{ providers: Array<{ id: string; label: string; capabilities: { bodies: string } }> }>('/providers');
+    const providers = await getJson<{ providers: Array<{ id: string; label: string; capabilities: { bodies: string }; setupFields: unknown[] }> }>('/providers');
     expect(providers.status).toBe(200);
-    expect(providers.body.providers).toEqual([
-      expect.objectContaining({ id: 'fake', label: 'Fake' }),
-    ]);
+    // `imap` is the first-party provider plugin, a builtin like the base itself, so it is here
+    // too. Its presence is the point of the assertion below: two provider plugins coexist.
+    expect(providers.body.providers.map((one) => one.id)).toEqual(['fake', 'imap']);
+    expect(providers.body.providers[0]).toMatchObject({ id: 'fake', label: 'Fake' });
     expect(providers.body.providers[0]!.capabilities.bodies).toBe('text');
+    // The declared setup fields ride the row, so a console can render the add-an-account form
+    // from this response alone and never has to know what an IMAP server is.
+    expect(providers.body.providers[0]!.setupFields).toEqual([]);
+    expect(providers.body.providers[1]!.setupFields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'address', kind: 'text', required: true }),
+      expect.objectContaining({ name: 'password', kind: 'password', required: true }),
+      expect.objectContaining({ name: 'imap_host', kind: 'text', required: true }),
+      expect.objectContaining({ name: 'imap_tls', kind: 'select', options: expect.any(Array) }),
+    ]));
+    // And `submit` stays behind: it is a function, and the row is data.
+    expect(JSON.stringify(providers.body.providers)).not.toContain('submit');
 
     // The duplicate has to say WHY it is refused, in terms of the rule, not "already exists".
     expect(marks().errors).toHaveLength(1);
@@ -192,29 +213,106 @@ describe('a provider plugin attaches through the service, with no kernel change'
     expect(marks().errors[0]).toMatch(/unique/i);
 
     const health = await getJson<{ providers: number }>('/health');
-    expect(health.body.providers).toBe(1);
+    expect(health.body.providers).toBe(2);
   });
 
   it('drops the provider when the plugin that registered it is turned off', async () => {
     await disableLoadedPlugin(registry, FIXTURE_ID);
     expect(getPluginLifecycleRecords(registry).find((entry) => entry.id === FIXTURE_ID)?.state).toBe('disabled');
-    expect((await getJson<{ providers: unknown[] }>('/providers')).body.providers).toEqual([]);
+    expect(await fixtureProviderIds()).toEqual([]);
 
     // Back on, so the next test has something to dispose by hand.
     await reloadLoadedPlugin(registry, FIXTURE_ID);
     expect(marks().activated).toBe(2);
-    expect((await getJson<{ providers: unknown[] }>('/providers')).body.providers).toHaveLength(1);
+    expect(await fixtureProviderIds()).toEqual(['fake']);
   });
 
   it('drops the provider when the returned Disposable is disposed, with no reload', async () => {
     const handle = marks().handles[marks().handles.length - 1]!;
     await handle.dispose();
 
-    expect((await getJson<{ providers: unknown[] }>('/providers')).body.providers).toEqual([]);
+    expect(await fixtureProviderIds()).toEqual([]);
     // The plugin itself is untouched: only its registration went away.
     expect(getPluginLifecycleRecords(registry).find((entry) => entry.id === FIXTURE_ID)?.state).toBe('active');
-    expect((await getJson<{ providers: number }>('/health')).body.providers).toBe(0);
+    // The builtin IMAP provider is still there, which is what "owned per plugin" means.
+    expect((await getJson<{ providers: number }>('/health')).body.providers).toBe(1);
   });
+});
+
+/**
+ * The phantom-provider hole, closed.
+ *
+ * A provider plugin whose `activate` throws AFTER `registerProvider` returned never disposes the
+ * handle it was given. The base used to be left with a row it could not attribute to anybody,
+ * and every retry then hit the duplicate-id refusal, so the provider was un-installable until
+ * the server restarted. The fix is two host seams plus one subscription: `registerProvider`
+ * records the caller (`walnut.services.caller()`), and one `plugin:lifecycle-changed` for that
+ * plugin leaving a live state sweeps the row.
+ */
+describe('a provider whose activate throws after registering', () => {
+  const BROKEN_ID = 'mail-broken-provider';
+
+  async function writeBrokenProvider(body: string): Promise<void> {
+    const dir = path.join(WALNUT_HOME, 'plugins', BROKEN_ID);
+    await fsp.mkdir(path.join(dir, 'dist'), { recursive: true });
+    await fsp.writeFile(path.join(dir, 'manifest.json'), JSON.stringify({
+      id: BROKEN_ID,
+      name: 'Broken Mail Provider',
+      description: 'Registers a provider and then throws, on purpose',
+      version: '1.0.0',
+      apiVersion: 1,
+      engines: { walnut: '>=0.0.0' },
+      server: 'dist/server.mjs',
+      dependencies: { mail: '^1.0.0' },
+    }));
+    await fsp.writeFile(path.join(dir, 'dist', 'server.mjs'), `
+export function activate(walnut) {
+  const base = walnut.services.require('mail:base');
+  const handle = base.registerProvider({
+    id: 'brittle',
+    label: 'Brittle',
+    capabilities: {
+      search: false, watch: false, drafts: false, markRead: false, flags: false,
+      threads: false, send: false, sendAsReply: false, bodies: 'text', attachments: 'none',
+    },
+    setup: { fields: [], submit: async () => { throw new Error('no setup'); } },
+    listAccounts: async () => [],
+    health: async () => ({ state: 'ok', checkedAt: Date.now() }),
+    listMailboxes: async () => [],
+    poll: async () => ({ messages: [], cursor: 'c0', more: false }),
+    getBody: async () => ({ format: 'text', text: '', bytes: 0 }),
+    send: async () => ({ acceptedAt: Date.now() }),
+  });
+  ${body}
+  return { dispose: () => handle.dispose() };
+}
+`);
+  }
+
+  it('leaves no row behind, and a fixed second activation registers cleanly', async () => {
+    await writeBrokenProvider('throw new Error("boom after registering");');
+    await loadNewPlugins(registry);
+
+    expect(getPluginLifecycleRecords(registry).find((entry) => entry.id === BROKEN_ID)?.state).toBe('failed');
+    // The sweep rides the bus, so it lands a tick after the loader gave up.
+    await expect.poll(
+      async () => (await getJson<{ providers: Array<{ id: string }> }>('/providers')).body.providers.map((one) => one.id),
+      { timeout: 10_000 },
+    ).not.toContain('brittle');
+
+    // The whole point: the retry is not blocked by the corpse of the first attempt.
+    await writeBrokenProvider('');
+    await reloadLoadedPlugin(registry, BROKEN_ID);
+
+    expect(getPluginLifecycleRecords(registry).find((entry) => entry.id === BROKEN_ID)?.state).toBe('active');
+    expect((await getJson<{ providers: Array<{ id: string }> }>('/providers')).body.providers.map((one) => one.id))
+      .toContain('brittle');
+
+    // And a clean teardown still works through the returned Disposable.
+    await disableLoadedPlugin(registry, BROKEN_ID);
+    expect((await getJson<{ providers: Array<{ id: string }> }>('/providers')).body.providers.map((one) => one.id))
+      .not.toContain('brittle');
+  }, 60_000);
 });
 
 describe('the plugin database', () => {

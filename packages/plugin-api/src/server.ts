@@ -184,6 +184,20 @@ export interface ServicesService {
    * point is "I declared this dependency, hand it over".
    */
   require<T = ServiceApi>(key: string): T
+  /**
+   * The plugin id of whoever is calling the service method you are running RIGHT NOW, or
+   * `undefined` when the host called you or when nobody is inside a service call.
+   *
+   * Only meaningful inside the SYNCHRONOUS body of one of your own published methods. The
+   * host sets it for the duration of `method.apply` and restores the previous value straight
+   * after, so a nested service call sees its own caller and an `await` inside your method
+   * loses it: read it on the first line and keep the value.
+   *
+   * What it is for: a capability plugin that hands out registrations (a provider, a source, a
+   * transport) can record WHO registered each one, so it can drop them when that plugin goes
+   * away instead of keeping a row it cannot attribute to anybody.
+   */
+  caller(): string | undefined
   /** Told when any service is published, replaced or removed, including your own. */
   onChange(handler: (change: ServiceChange) => void | Promise<void>): Disposable
 }
@@ -582,6 +596,15 @@ export interface WalnutServerApi {
   readonly pluginId: string
   readonly pluginName: string
   readonly walnutVersion: string
+  /**
+   * True on a cloud replica, false on the primary box.
+   *
+   * A plugin that owns an outside account (a mailbox, a chat workspace, any polled service)
+   * must not poll from two boxes: the second one double-fetches, double-writes and doubles
+   * the load the other end sees. Read this and step aside, rather than assuming there is only
+   * ever one Walnut.
+   */
+  readonly replica: boolean
   readonly signal: AbortSignal
   readonly log: PluginLogger
   readonly tasks: TaskService

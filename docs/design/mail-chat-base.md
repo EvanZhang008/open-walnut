@@ -86,8 +86,12 @@ agent mail_draft --> drafts row --> mail_request_send
 ```
 src/integrations/mail/  manifest.json, index.ts, api.ts (the published service
                         plus the provider contract types: what a provider imports),
-                        types.ts, provider-registry.ts, db.ts, bodies.ts,
-                        service.ts, sync.ts, approvals.ts, routes.ts, tools.ts,
+                        types.ts, contract.ts (the DTOs and pure helpers every
+                        layer above the cache shares), provider-registry.ts,
+                        db.ts (schema, migrations, deadlines) + store.ts (every
+                        statement), bodies.ts, service.ts (reads and upserts) +
+                        retention.ts (everything that deletes), sync.ts,
+                        approvals.ts, routes.ts, tools.ts,
                         ops.ts (registered through walnut.registry.op),
                         skills/walnut-mail/
 src/integrations/messaging/              the same files, plus mentions.ts
@@ -98,7 +102,7 @@ web/src/apps/           MailApp.tsx, ChatApp.tsx, plus two core-app registry row
                         carrying requiresPlugin
 ```
 
-Each file stays under the repo's ~500-line guidance, which is why sync, bodies, and approvals are separate files instead of one large service. The base registers its own agent tools, still gated on an account existing, so a zero-account install keeps its prompt-cache prefix byte-identical.
+Each file stays close to the repo's ~500-line guidance, which is why sync, bodies and approvals are separate files instead of one large service, and why the cache is split along the two seams that carry a rule: SQL below `store.ts`, deletes inside `retention.ts`. The base registers its own agent tools, still gated on an account existing, so a zero-account install keeps its prompt-cache prefix byte-identical.
 
 ## Why two bases and not one message abstraction
 
@@ -106,7 +110,7 @@ Mail and chat look alike from a distance (threads, messages, send) but their rea
 
 ## Provider contract
 
-One provider instance serves many accounts. Registration goes through the base's own service, not through the kernel: a provider plugin declares `dependencies: { "mail": "^1.0.0" }` and calls `walnut.services.require('mail:base').registerProvider(spec)` (or `messaging:base`) inside its activate, which returns a Disposable the PROVIDER plugin owns. Ownership matters because the service handle carries no caller identity, so returning that Disposable from activate (the loader disposes whatever activate returns) is what makes "turn the provider off and its accounts detach" true. The contract types arrive as `import type` from the base plugin's `api.ts`, by relative path while both live in this repo and from a sibling types package once the contract is published. Keys are `<spec.id>` within the base's registry and account ids are `<providerId>:<providerAccountId>`, which is why a provider id must be unique across every provider plugin. The base mirrors accounts into its cache so the UI and foreign keys stay stable while a provider is detached.
+One provider instance serves many accounts. Registration goes through the base's own service, not through the kernel: a provider plugin declares `dependencies: { "mail": "^1.0.0" }` and calls `walnut.services.require('mail:base').registerProvider(spec)` (or `messaging:base`) inside its activate, which returns a Disposable the PROVIDER plugin owns. Ownership matters: returning that Disposable from activate (the loader disposes whatever activate returns) is what makes "turn the provider off and its accounts detach" true, and it happens the instant the plugin goes. The base also records who called, from `walnut.services.caller()`, and sweeps that owner's rows on a lifecycle change, which covers the one case a provider cannot cover itself (see Risks). The contract types arrive as `import type` from the base plugin's `api.ts`, by relative path while both live in this repo and from a sibling types package once the contract is published. Keys are `<spec.id>` within the base's registry and account ids are `<providerId>:<providerAccountId>`, which is why a provider id must be unique across every provider plugin. The base mirrors accounts into its cache so the UI and foreign keys stay stable while a provider is detached.
 
 ```
 MailCapabilities {
@@ -123,12 +127,14 @@ MailProviderSpec {
   listMailboxes(accountId): Mailbox[]
   poll(accountId, { mailbox, cursor?, limit }):
       { messages: MailEnvelope[], cursor, more, reset? }
-  getBody(accountId, messageId): { format, text?, html?, bytes }
+  getBody(accountId, messageId):
+      { format: 'text'|'html'|'both', text?, html?, bytes, attachments? }
   search?(accountId, query, limit)
   watch?(accountId, onHint): Disposable    // hint = { mailbox }; no I/O in the callback
   markRead?(...), setFlag?(...)
   send(accountId, OutgoingMail, { idempotencyKey }): { providerMessageId?, acceptedAt }
   saveDraft?(accountId, OutgoingMail)
+  removeAccount?(accountId)                // the provider's own copy of the account
 }
 
 ChatProviderSpec {
@@ -154,6 +160,8 @@ Contract rules that matter:
 - **Errors are typed, health is separate**: `ProviderError { code: 'auth' | 'rate-limit' | 'not-found' | 'unsupported' | 'invalid' | 'unreachable' | 'too-large', retryAfterMs? }`. A per-item failure (one unfetchable message) must not flip account health; only account-level failures do. The calendar service already encodes this rule and the bases copy it.
 - **Mail identity is two-part**: the provider handle (`mailbox:uidvalidity:uid`) is only a fetch coordinate. The RFC `Message-ID` header is the durable key that survives folder moves and is what reply threading and task backlinks use. Chat identity is `channelId:ts`.
 - **Mail threads are cache-derived**: there is deliberately no thread method on the mail contract; the base groups messages by the References/In-Reply-To headers it already stores, so `mail_thread` and the console thread view work identically for every provider. Chat threads are provider-native, hence `getThread`.
+- **A body may return both representations, and the base derives its own stored format.** `getBody` answers `'both'` when a multipart message carried a text part and an HTML part, which is the common case, and the base decides from what actually landed on disk rather than trusting the label. `attachments` on a body is optional and additive: the poll already reported the metadata from the structure, so a provider that repeats it after parsing is refining, not introducing.
+- **Deleting an account tells the provider, and cannot be blocked by it.** `removeAccount` is optional and best effort: the base calls it first, then purges its own rows, mailboxes, body files and mirror whatever happened. The user asked for the account to go away, and a cache row nobody can reach is worse than a provider that still holds a config block.
 
 ## Data model
 
@@ -259,7 +267,7 @@ Both consoles are core apps rather than shipped web plugins for two practical re
 
 ## Events, notifications, digests
 
-Event families: `mail:*` and `messaging:*` (sync lifecycle, coalesced `messages-received` batches with a count plus up to five headlines, mailbox/channel updates, draft/send lifecycle, account health, `messaging:mention`). Hygiene rules: never one event per message; suppress no-op ticks with a content hash; the initial backfill emits only a sync-completed event; global subscribers declare interest prefixes.
+Event families: `mail:*` and `messaging:*` (sync lifecycle, coalesced `messages-received` batches with a count plus up to five headlines, mailbox/channel updates, draft/send lifecycle, account health, `messaging:mention`). Hygiene rules: never one event per message; suppress a no-op tick, which means nothing added, nothing updated, and the same cursor the container reported last time (keyed on the cursor alone, since including the counts makes the first quiet tick after a productive one always look different and always emit); the initial backfill emits only a sync-completed event; global subscribers declare interest prefixes.
 
 Notifications are deliberately restrained: individual mails never notify (the app badge plus a daily digest letter cover them); mentions and DMs get the badge plus an optional rolled-up "N unanswered mentions" letter; failures use recoverable error notifications keyed per account. v1 adds no new notification kind: the kind set is a closed union with a frontend twin, so a new kind is a deliberate two-sided change, not a side effect of this feature.
 
@@ -267,9 +275,11 @@ Notifications are deliberately restrained: individual mails never notify (the ap
 
 Non-secret account config lives in the provider plugin's own config block (host, port, TLS, address, folder mapping). Credentials live only in the plugin secret store (0600 file per plugin), written by the provider itself.
 
+Both are keyed by the LOCAL half of the account id, not the whole thing. An account id is `<providerId>:<localId>`, a plugin secret key may not contain a colon (`[a-zA-Z0-9._-]{1,128}`), and a colon in a YAML mapping key is a needless quoting question, so the IMAP provider stores `plugins.mail-imap.accounts.<localId>` and the secret `password.<localId>` and re-attaches its own prefix on the way out. `localId` is a short hash of the address rather than the address itself, because an account id travels into log lines, event payloads and cache directory names, and it has to stay stable across a re-add so the cached messages still hang off it.
+
 The console renders one generic account form for every provider: the provider declares `setup.fields` (text, password, select, with help strings), the console posts the values to the base, and the base passes them straight to `provider.setup.submit(values)` **without persisting them**. The provider stores its own config and secrets and returns the account record. Reads never return secret values, only `configured: true`.
 
-Provider dependencies stay pure JS (an SMTP client, an IMAP client, a MIME parser), each license-checked before adding. The IMAP client choice is a slice-1 decision with a written comparison; the contract is transport-free precisely so that choice stays swappable.
+Provider dependencies stay pure JS (an SMTP client, an IMAP client, a MIME parser), each license-checked before adding. Slice 1 added two, `imapflow` and `mailparser`, both MIT; the comparison that picked them is in Open questions below. The contract is transport-free precisely so that choice stays swappable.
 
 ## Security and privacy
 
@@ -303,13 +313,20 @@ Eight slices, each with its end-to-end scenario defined before code:
 - **Activation has a 20 second deadline.** A plugin's `activate` registers and returns: it publishes the service, mounts the routes, and gets out of the way. The database is not opened there at all: it opens on the FIRST REQUEST that needs it, so a slow migration delays that one read instead of failing the whole plugin, and a process that never asks about mail (a CLI invocation, a loader unit test) never pays for a worker thread or a cache file. Every read carries its own deadline, a stuck worker answers 503 `db_unavailable` rather than hanging, and a failed open is retried after a short cooldown instead of being remembered as broken for the life of the process.
 - **The plugin database costs a worker thread.** Each open is a thread with its own SQLite handle and page cache, so measure resident memory with a realistic mailbox before choosing the retention and body-cache defaults, rather than picking round numbers now.
 - **Ops are invisible out of process, and that is documented, not a gap.** A standalone CLI or stdio MCP server cannot see plugin-declared ops until the out-of-process slice lands. Nothing about the send gate depends on that reach, because the approval ledger is server-side.
-- **A provider registration cannot be swept by its owner's failure.** The service handle carries no caller identity, so if a provider plugin's `activate` throws AFTER `registerProvider` returned, the base is left with a phantom row it has no way to attribute, and every retry then hits the duplicate-id refusal. The fix is host-side, not a workaround in the base: the service proxy needs to expose the CURRENT CALLER synchronously, so the base can key its rows by owner and drop them when that owner goes away. Scheduled for P2-1; until then a provider must return its Disposable from `activate` and do nothing after that line that can throw.
+- **A provider registration is swept by its owner's failure. Closed in slice 1.** The hole was this: a provider plugin whose `activate` throws AFTER `registerProvider` returned never disposes the handle it was given, so the base kept a row it could not attribute to anybody, and every retry then hit the duplicate-id refusal, leaving the provider un-installable until the server restarted. Two host seams close it, both small and both generally useful. `walnut.services.caller()` returns the plugin id of whoever is inside the service method running right now (a module-level current-caller set around the synchronous body of each call through a per-key handle, undefined when the host called and undefined after an await), so `registerProvider` records an owner without the caller passing one. And the loader now announces `plugin:lifecycle-changed` on EVERY transition, so the base drops every row an owner held the moment that owner leaves a live state. Consequence for a provider author: nothing. Returning the Disposable from `activate` is still the right thing to do and is still what handles the ordinary case; the sweep is only for the case where the plugin cannot.
+- **One connection per account means memoizing the CREATION, not the connection.** Building an IMAP connection reads the account's settings, which is an await, so two callers arriving during that await both miss the cache and both build their own: two logins, two command gates, and the serialization that keeps a SELECT from landing inside another caller's FETCH is gone. The base does exactly this on a first sync, where arming the IDLE watch and polling the inbox start in the same tick. The pool keeps the in-flight promise, not just the finished object.
+- **v1 notices new mail, not vanished mail.** The IMAP cursor is a UID high-water mark, which is what makes an incremental poll one command instead of a full listing, and it has no way to observe a DELETION: a message the user moves to another folder or deletes from their phone stays in Walnut's copy of its old mailbox until the retention age cutoff sweeps it, and a message moved INTO a folder appears there only if its UID is above that folder's mark. Consequences to expect while this stands: a mailbox total that drifts above the server's, a deleted message still openable from cache (the body fetch then answers `not-found`, which is recorded and never re-asked), and a filed message showing in two places. The shape of the fix, for the slice that takes it: reconcile the newest N UIDs per container on a slow cadence (a `UID SEARCH ALL` over that window, or `VANISHED` where QRESYNC is offered) and drop the local rows the server no longer lists, which is a bounded command whatever the mailbox size, unlike re-listing everything. UIDVALIDITY changes are already handled and are a different thing: the provider answers `reset` and the container is rebuilt from scratch.
+- **Clicking refresh is not what fixes a parked account; a poll that succeeds is.** A human-driven refresh bypasses the backoff and the auth park by asking for a forced tick, and it must NOT clear the park flag on the way in: that flag is the signal the good-poll path reads to know it has something to retire, so clearing it early leaves the account mirrored as `auth-required` with a working password behind it. The good-poll path also consults the MIRROR and not only in-memory state, because a restart wipes the in-memory park while the row still says `auth-required`, and nothing would ever clear it again.
 
 ## Non-goals and open questions
 
 Non-goals for v1: a unified message abstraction; embedding provider web UIs; attachment caching or attachments in agent context; OAuth flows in the base (a provider may implement its own); per-message push notifications; replica-side polling. Also explicitly not in v1: capability-keyed dependencies. A provider declares the plugin it needs by id (`dependencies: { "mail": "^1.0.0" }`), not by the capability it wants (`dependencies: { "capability:mail-base": "^1" }`), so two competing mail bases cannot yet be interchangeable to the same provider. The keyed form is the natural next step once a second implementation of any base actually exists.
 
-Open questions: the IMAP client library (slice 1, written comparison); a dedicated notification kind for mentions (deliberate v2 decision, not a side effect).
+Open questions: a dedicated notification kind for mentions (deliberate v2 decision, not a side effect).
+
+**Resolved in slice 1: the IMAP client library is `imapflow`.** Three candidates, all MIT, so the choice came down to maintenance and to how much of the protocol each one leaves to the caller. `node-imap` is the oldest and most widely copied, but it is callback-only and its last publish was 2022, so every call would need hand-wrapping and the abandoned parser would be ours to own. `emailjs-imap-client` is promise-based and also last published in 2022, and it was written for the browser, which brings a socket abstraction this process does not want. `imapflow` is promise-based, actively published (1.7.8, September 2026), ships its own TypeScript declarations, and gives the three things this provider would otherwise have to implement itself: SPECIAL-USE parsed out of `list()`, `BODYSTRUCTURE` as a walkable tree (which is what makes attachment metadata free at poll time, with no download), and a `source: { maxLength }` option on fetch, so a message over the cap never lands in this process's heap even for the instant it takes to reject it. Its own logger is disabled at construction, because a command trace includes the LOGIN line. The second dependency is `mailparser` (3.9.20, MIT, same maintainer), used for exactly one call: turning a raw RFC 822 message into text, HTML and attachment metadata. It ships no types and the published `@types/mailparser` lags the installed line, so the provider declares the small surface it uses in a local ambient declaration rather than adding a third dependency for a stale one.
+
+**Measured, because it is what justifies the byte cap**: a 2 MB multipart message parses in **435-550 ms** when the bulk is text, and **368-407 ms** across runs when the bulk is one base64 attachment (see the ratchet in `tests/integrations/mail-imap.test.ts`). Those are wall-clock totals, not stall times: `mailparser` is a stream pipeline that yields per chunk, and a 1 ms event-loop lag probe over the same parse recorded a worst single block of 1-7 ms with nothing above 16 ms, so half a second of parse INTERLEAVES with every other route rather than freezing them. The cap is therefore about total CPU and heap for one read, not about a freeze: it is the argument for refusing above the cap from the size the server already reported, before a byte is parsed, and it is the number to revisit the 2 MB figure against if body reads ever feel slow. The one place a single uninterrupted block does show up is the base's own `htmlToText` regex chain at **32 ms**, which is small enough to leave alone and the first thing to look at if that ever stops being true.
 
 ## Appendix
 

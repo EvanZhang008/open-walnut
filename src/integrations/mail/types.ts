@@ -168,10 +168,23 @@ export interface MailPollResult {
 }
 
 export interface MailBody {
-  format: 'text' | 'html'
+  /**
+   * `'both'` when the message carried a plain-text part AND an HTML part, which is what most
+   * real mail looks like. The base derives its own stored format from which halves actually
+   * arrived, so this is a statement of intent rather than the last word.
+   */
+  format: 'text' | 'html' | 'both'
   text?: string
+  /** RAW, exactly as it arrived. The console sanitizes; a provider must not pre-clean it. */
   html?: string
   bytes: number
+  /**
+   * Attachment metadata, when the parse produced better information than the envelope's
+   * BODYSTRUCTURE did. The base reads attachments from the ENVELOPE, because that is free at
+   * poll time; this field exists so a provider whose transport only reveals them here has
+   * somewhere to put them. Never the attachment CONTENT: v1 does not cache that at all.
+   */
+  attachments?: MailAttachmentMeta[]
 }
 
 export interface MailSendResult {
@@ -194,11 +207,29 @@ export interface MailProviderSpec {
   health(accountId: string): Promise<ProviderHealth>
   listMailboxes(accountId: string): Promise<Mailbox[]>
   poll(accountId: string, request: MailPollRequest): Promise<MailPollResult>
-  getBody(accountId: string, messageId: string): Promise<MailBody>
+  /**
+   * The body bytes.
+   *
+   * `sizeHint` is the size the poll already reported for this message, when the base has one. A
+   * provider SHOULD refuse an over-cap message from the hint before issuing any fetch: without
+   * it a transport can only discover the size after downloading up to the cap, which is the exact
+   * cost the cap exists to avoid. Treat it as advisory, never as authoritative.
+   */
+  getBody(accountId: string, messageId: string, sizeHint?: number): Promise<MailBody>
   search?(accountId: string, query: string, limit: number): Promise<MailEnvelope[]>
   watch?(accountId: string, onHint: (hint: MailWatchHint) => void): Disposable
   markRead?(accountId: string, messageId: string, read: boolean): Promise<void>
   setFlag?(accountId: string, messageId: string, flag: string, value: boolean): Promise<void>
+  /**
+   * Forget this account: drop its config block, delete its secret, close its connection.
+   *
+   * Optional, and the base does not wait on it being reliable. When the human deletes an
+   * account, the base removes its own mirror and cache whatever happens here, because a
+   * cached account nobody can route is worse than a provider that still holds a config block.
+   * Implement it, though: without it the provider's `listAccounts` keeps offering an account
+   * the user deleted.
+   */
+  removeAccount?(accountId: string): Promise<void>
   send(
     accountId: string,
     mail: OutgoingMail,
@@ -207,9 +238,17 @@ export interface MailProviderSpec {
   saveDraft?(accountId: string, mail: OutgoingMail): Promise<void>
 }
 
-/** One row of `GET /api/plugins/mail/providers`, and of `MailBaseApi.listProviders()`. */
+/**
+ * One row of `GET /api/plugins/mail/providers`, and of `MailBaseApi.listProviders()`.
+ *
+ * `setupFields` is the provider's `setup.fields` verbatim, and it is here because the console
+ * renders the add-an-account form from data alone: without the fields on this row the console
+ * would have to know each provider's form, which is exactly the coupling the declarative setup
+ * spec removes. It carries no `submit` and no secret, only what a form needs to draw itself.
+ */
 export interface MailProviderSummary {
   id: string
   label: string
   capabilities: MailCapabilities
+  setupFields: AccountSetupField[]
 }
