@@ -7,7 +7,13 @@
  * cycle is reported rather than guessed at.
  */
 import { describe, it, expect } from 'vitest';
-import { buildDepGraph, topoSortStable, dependentsOf, type DepGraphNode } from '../../src/core/plugins/dep-graph.js';
+import {
+  buildDepGraph,
+  topoSortStable,
+  dependentsOf,
+  dependentsTeardownOrder,
+  type DepGraphNode,
+} from '../../src/core/plugins/dep-graph.js';
 
 /** Nodes in the given order, indexed by position (what the loader passes). */
 function nodes(...specs: Array<[string, string[]]>): DepGraphNode[] {
@@ -87,5 +93,25 @@ describe('dependentsOf', () => {
     expect(dependentsOf(graph, 'b')).toEqual(['c']);
     expect(dependentsOf(graph, 'c')).toEqual([]);
     expect(dependentsOf(graph, 'not-installed')).toEqual([]);
+  });
+});
+
+describe('dependentsTeardownOrder', () => {
+  it('lists dependents deepest first, which is the reverse of the load order', () => {
+    const graph = buildDepGraph(nodes(['a', []], ['b', ['a']], ['c', ['b']], ['d', ['a']]));
+
+    // Load order is a, b, c, d, so teardown is d, c, b: the only hard rule is that
+    // nothing goes down after something that depends on it (c before b here).
+    expect(dependentsTeardownOrder(graph, 'a')).toEqual(['d', 'c', 'b']);
+    expect(dependentsTeardownOrder(graph, 'b')).toEqual(['c']);
+    expect(dependentsTeardownOrder(graph, 'c')).toEqual([]);
+    expect(dependentsTeardownOrder(graph, 'not-installed')).toEqual([]);
+  });
+
+  it('never includes the plugin itself, even when a cycle leads back to it', () => {
+    const graph = buildDepGraph(nodes(['x', ['y']], ['y', ['x']], ['z', ['y']]));
+
+    expect(dependentsTeardownOrder(graph, 'x')).toEqual(['z', 'y']);
+    expect(dependentsTeardownOrder(graph, 'y')).toEqual(['z', 'x']);
   });
 });

@@ -30,9 +30,28 @@ import { setExtIndexes } from './ext-index-registry.js';
 import type { IntegrationRegistry } from './integration-registry.js';
 import { PluginBootSentinel, pluginSafeModeEnabled } from './plugins/boot-sentinel.js';
 import { PluginContext } from './plugins/plugin-context.js';
-import { PluginManager, type PluginDefinition, type PluginLifecycleRecord } from './plugins/plugin-manager.js';
-import { satisfiesSemVer } from './plugins/semver.js';
+import {
+  PluginManager,
+  describeMissingDependency,
+  type PluginDefinition,
+  type PluginLifecycleRecord,
+} from './plugins/plugin-manager.js';
+import { isValidRange, satisfiesSemVer } from './plugins/semver.js';
+import { removePluginOps } from '../ops/registry.js';
 import { buildDepGraph, topoSortStable } from './plugins/dep-graph.js';
+import {
+  PluginDependentsError,
+  blockDependents,
+  dependentsToTearDown,
+  forgetUnmetDependencies,
+  getUnmetDependencyPlugins,
+  recordUnmetDependencies,
+  resetUnmetDependencies,
+  resolveMissingDependencies,
+  retryUnmetDependents,
+  type DependencyGate,
+  type DependencyRestore,
+} from './plugins/dependency-gate.js';
 import { validatePluginId } from './plugins/ids.js';
 import { createServerPluginApi } from './plugins/server-api.js';
 import type {
@@ -98,6 +117,43 @@ export function setPluginCodeTimeoutForTesting(timeoutMs: number | null): void {
 const pluginManagers = new WeakMap<IntegrationRegistry, PluginManager>();
 const pluginSources = new WeakMap<IntegrationRegistry, Map<string, { dir: string; isBuiltin: boolean }>>();
 const pluginOperationTails = new WeakMap<IntegrationRegistry, Promise<unknown>>();
+/**
+ * Every manifest this registry has seen, in load order.
+ *
+ * Kept because dependency resolution needs the VERSION and the declared dependencies
+ * of plugins that are not loaded — a disabled dependency, or one held back by its own
+ * missing config, still has to answer "which version are you?" for a later single-plugin
+ * reload that happens long after the boot walk read the file.
+ */
+const pluginManifests = new WeakMap<IntegrationRegistry, Map<string, PluginManifest>>();
+
+function manifestMap(registry: IntegrationRegistry): Map<string, PluginManifest> {
+  let map = pluginManifests.get(registry);
+  if (!map) {
+    map = new Map();
+    pluginManifests.set(registry, map);
+  }
+  return map;
+}
+
+/** The dependency gate's view of one registry. Rebuilt per operation on purpose: a stale
+ *  gate would cascade against a plugin set that no longer exists. */
+function dependencyGate(registry: IntegrationRegistry, manager: PluginManager): DependencyGate {
+  return { registry, manager, manifests: manifestMap(registry) };
+}
+
+/** The gate cannot load a plugin itself, so it calls back into this single-node load. */
+function restoreOptions(
+  registry: IntegrationRegistry,
+  manager: PluginManager,
+  pluginConfigs: Record<string, Record<string, unknown> & { enabled?: boolean }>,
+): DependencyRestore {
+  return {
+    sources: pluginSources.get(registry) ?? new Map(),
+    loadOne: (source, manifest) =>
+      loadPlugin(source.dir, source.isBuiltin, pluginConfigs, registry, manager, false, manifest),
+  };
+}
 
 function runPluginOperation<T>(
   registry: IntegrationRegistry,
@@ -134,7 +190,13 @@ export function disposeLoadedPlugins(registry: IntegrationRegistry): Promise<voi
     if (!manager) return;
     pluginManagers.delete(registry);
     pluginSources.delete(registry);
+    pluginManifests.delete(registry);
+    const ids = manager.list().map(record => record.id);
     await manager.dispose();
+    // Every plugin op is registered through context.own(), so a clean dispose already
+    // withdrew it. A dispose that threw partway did not, and a surviving op would answer
+    // with a handler whose plugin is gone.
+    for (const id of ids) removePluginOps(id);
     await refreshPluginDerivedState(registry);
   });
 }
@@ -142,12 +204,27 @@ export function disposeLoadedPlugins(registry: IntegrationRegistry): Promise<voi
 export function disableLoadedPlugin(
   registry: IntegrationRegistry,
   pluginId: string,
+  opts: { cascade?: boolean } = {},
 ): Promise<PluginLifecycleRecord> {
   return runPluginOperation(registry, async () => {
     if (pluginId === 'local') throw new Error('The local fallback plugin cannot be disabled.');
     const manager = pluginManagers.get(registry);
     if (!manager?.get(pluginId)) throw new Error(`Plugin "${pluginId}" is not discovered`);
+
+    // Dependents are resolved BEFORE any mutation: a refusal has to leave the target
+    // running and config untouched, so there is nothing to undo.
+    const gate = dependencyGate(registry, manager);
+    const { all, live } = dependentsToTearDown(gate, pluginId);
+    if (live.length > 0 && !opts.cascade) throw new PluginDependentsError(pluginId, live);
+
+    // Config first, teardown second. The config write is the only reversible half of this
+    // operation and the only one that can fail on its own (a full disk, a locked file); if
+    // it goes down after the dependents do, they are parked with nothing on disk that will
+    // ever bring them back.
     await updatePluginConfig(pluginId, { enabled: false });
+    if ((await blockDependents(gate, pluginId, all, live, 'disabled')).length > 0) {
+      await refreshPluginDerivedState(registry);
+    }
     registry.unregister(pluginId, 'disabled');
     try {
       return await manager.disable(pluginId);
@@ -177,12 +254,29 @@ export function reloadLoadedPlugin(
     if (!manifest || manifest.id !== pluginId) {
       throw new Error(`Plugin "${pluginId}" manifest is invalid or changed identity`);
     }
+    // The manifest on disk may declare different dependencies than the loaded copy, and
+    // the graph below has to be the new one.
+    manifestMap(registry).set(pluginId, manifest);
+
+    // A dependent holds handles from the instance about to be thrown away, so it goes
+    // down first and is brought back at the end. That is what keeps reload a
+    // single-node operation from the caller's point of view.
+    const gate = dependencyGate(registry, manager);
+    const { all, live } = dependentsToTearDown(gate, pluginId);
+    if ((await blockDependents(gate, pluginId, all, live, 'reloading')).length > 0) {
+      await refreshPluginDerivedState(registry);
+    }
 
     await updatePluginConfig(pluginId, { enabled: true });
     await manager.forget(pluginId);
     registry.unregister(pluginId, 'unloaded');
     const config = await getConfig();
-    await loadPlugin(source.dir, source.isBuiltin, config.plugins ?? {}, registry, manager);
+    const pluginConfigs = config.plugins ?? {};
+    await loadPlugin(source.dir, source.isBuiltin, pluginConfigs, registry, manager, false, manifest);
+    // Runs even when the reload FAILED: a dependent that stays blocked still needs its
+    // reason rewritten from "is reloading" to whatever is now true.
+    const restored = await retryUnmetDependents(gate, pluginId, restoreOptions(registry, manager, pluginConfigs));
+    if (restored > 0) log.info('Dependents restored after reload', { id: pluginId, restored });
     await refreshPluginDerivedState(registry);
 
     const record = manager.get(pluginId);
@@ -191,6 +285,13 @@ export function reloadLoadedPlugin(
   });
 }
 
+/**
+ * Clear the quarantine flag, on disk and in the manager, inside the loader's lane.
+ *
+ * Leaves the plugin `disabled`, which is exactly the state the caller's follow-up
+ * `reloadLoadedPlugin` expects: that path re-reads the manifest and re-runs the
+ * dependency check from scratch, so nothing extra is needed here.
+ */
 export function clearPluginQuarantine(
   registry: IntegrationRegistry,
   pluginId: string,
@@ -398,11 +499,17 @@ function removePluginDiagnostics(pluginId: string): void {
       if (diagnostics[index].id === pluginId) diagnostics.splice(index, 1);
     }
   }
+  // The unmet-dependency list lives with the gate that produces it.
+  forgetUnmetDependencies(pluginId);
 }
 
 export function getUnsupportedPlugins(): UnsupportedPluginDiagnostic[] {
   return unsupportedPlugins;
 }
+
+// The dependency gate owns these; re-exported here so every caller keeps one import.
+export { PluginDependentsError, getUnmetDependencyPlugins };
+export type { UnmetDependencyPlugin } from './plugins/dependency-gate.js';
 
 /** Plugin ids skipped because another plugin with the same id loaded first
  *  (built-in > ~/.open-walnut/plugins/ > store clones). */
@@ -866,6 +973,37 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
     if (taskFields.length === 0) taskFields = undefined;
   }
 
+  // `dependencies`: { "<pluginId>": "<semver range>" }. Parsed as leniently as
+  // taskFields above — a bad entry costs that entry, never the plugin — because an
+  // unloadable plugin tells the author far less than a warning that names the typo.
+  // `local` is the fallback task source and is never gated on anything, so a
+  // dependency block there is dropped outright rather than honoured.
+  let dependencies: Record<string, string> | undefined;
+  if (obj.dependencies !== undefined) {
+    const dropAll = (reason: string) => log.warn('Manifest dependencies dropped', { filePath, reason });
+    if (!obj.dependencies || typeof obj.dependencies !== 'object' || Array.isArray(obj.dependencies)) {
+      dropAll('must be an object of plugin id → semver range');
+    } else if (obj.id === 'local') {
+      dropAll('the local fallback plugin is never gated on a dependency');
+    } else {
+      const parsed: Record<string, string> = {};
+      for (const [depId, range] of Object.entries(obj.dependencies as Record<string, unknown>)) {
+        const drop = (reason: string) =>
+          log.warn('Manifest dependencies entry dropped', { filePath, dependency: depId, reason });
+        if (typeof range !== 'string' || !range.trim()) { drop('range must be a non-empty string'); continue; }
+        if (depId === obj.id) { drop('a plugin cannot depend on itself'); continue; }
+        // `local` is always present and always active, so an edge to it can only ever be
+        // satisfied. Keeping it would put the fallback task source into a cascade.
+        if (depId === 'local') { drop('the local fallback plugin is not a dependency anyone declares'); continue; }
+        try { validatePluginId(depId); }
+        catch (error) { drop(error instanceof Error ? error.message : String(error)); continue; }
+        if (!isValidRange(range)) { drop(`"${range}" is not a semver range`); continue; }
+        parsed[depId] = range.trim();
+      }
+      if (Object.keys(parsed).length > 0) dependencies = parsed;
+    }
+  }
+
   let invalidEntry = false;
   const parseEntry = (field: 'server' | 'web'): string | undefined => {
     if (obj[field] === undefined) return undefined;
@@ -893,6 +1031,7 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
     engines: obj.engines && typeof obj.engines === 'object'
       ? obj.engines as { walnut?: string }
       : undefined,
+    dependencies,
     server,
     web,
     webview,
@@ -966,6 +1105,9 @@ async function loadPlugin(
   additive = false,
   // Supplied by the pre-scan so the manifest is read once per load, not twice.
   prereadManifest?: PluginManifest,
+  // Ids the topological sort could not order. A member is loaded anyway so it lands as
+  // a visible `needs-dependency` row instead of vanishing from the list.
+  cycleMembers?: ReadonlySet<string>,
 ): Promise<void> {
   const manifest = prereadManifest ?? (await readPluginEntry(pluginDir, isBuiltin))?.manifest;
   if (!manifest) return;
@@ -1044,6 +1186,30 @@ async function loadPlugin(
         name: manifest.name,
         builtin: isBuiltin,
         unsupportedReason: reason,
+        activate: () => undefined,
+      });
+      return;
+    }
+  }
+
+  // Dependency gate. Before the enabled check so a single-plugin reload honours
+  // dependencies too, and before any import so a plugin whose dependency is not running
+  // never evaluates its module (same rule as `unsupported`). `local` is exempt twice
+  // over — validateManifest drops its dependencies, and losing it would leave the
+  // machine with no task source at all.
+  if (!isLocal) {
+    const missing = resolveMissingDependencies(manifest, dependencyGate(registry, manager), cycleMembers);
+    if (missing.length > 0) {
+      log.warn('Plugin not loaded — unmet dependencies', {
+        id: pluginId,
+        missing: missing.map(describeMissingDependency),
+      });
+      recordUnmetDependencies(pluginId, manifest.name, missing);
+      await discoverManagedPlugin(manager, {
+        id: pluginId,
+        name: manifest.name,
+        builtin: isBuiltin,
+        missingDependencies: missing,
         activate: () => undefined,
       });
       return;
@@ -1369,8 +1535,10 @@ async function loadPluginsUnlocked(registry: IntegrationRegistry, additive = fal
     : await createPluginManager(registry);
   if (!additive) {
     pluginSources.set(registry, new Map());
+    pluginManifests.set(registry, new Map());
     unconfiguredPlugins.length = 0;
     unsupportedPlugins.length = 0;
+    resetUnmetDependencies();
     duplicatePluginIds.length = 0;
   } else if (!pluginSources.has(registry)) {
     pluginSources.set(registry, new Map());
@@ -1401,9 +1569,9 @@ async function loadPluginsUnlocked(registry: IntegrationRegistry, additive = fal
     if (entry) entries.push(entry);
   }
 
-  // Pass 2: first-wins on duplicate ids (earlier candidate keeps the id), then
-  // order by dependency. Manifest `dependencies` are not parsed yet, so every node
-  // is edge-free and the stable sort hands back exactly the candidate order.
+  // Pass 2: first-wins on duplicate ids (earlier candidate keeps the id), then order by
+  // dependency. A plugin that declares nothing is edge-free, and the stable sort hands
+  // those back in exactly the candidate order.
   const winners: PluginEntry[] = [];
   const claimedIds = new Map<string, PluginEntry>();
   for (const entry of entries) {
@@ -1415,17 +1583,49 @@ async function loadPluginsUnlocked(registry: IntegrationRegistry, additive = fal
     claimedIds.set(entry.manifest.id, entry);
     winners.push(entry);
   }
-  const graph = buildDepGraph(winners.map((entry, index) => ({ id: entry.manifest.id, index, deps: [] })));
-  // A cycle can't exist without edges; loading the residue anyway keeps an
-  // unsatisfiable future graph from silently dropping plugins.
+  // The manifest map is filled BEFORE any load, so the first plugin in the walk can
+  // already be told the version of a dependency that has not been reached yet — the
+  // difference between "not installed" and "wrong version" is decided from the manifests,
+  // never from load progress. First-wins here too: in an additive scan the copy already
+  // running keeps the entry, matching the duplicate-id rule.
+  const manifests = manifestMap(registry);
+  for (const entry of winners) {
+    if (!manifests.has(entry.manifest.id)) manifests.set(entry.manifest.id, entry.manifest);
+  }
+
+  const graph = buildDepGraph(winners.map((entry, index) => ({
+    id: entry.manifest.id,
+    index,
+    deps: Object.keys(entry.manifest.dependencies ?? {}),
+  })));
   const { order, residue } = topoSortStable(graph);
-  if (residue.length > 0) log.warn('Plugin dependency cycle; loading in discovery order', { ids: residue });
+  // No order satisfies a cycle, so its members are loaded anyway and land as
+  // `needs-dependency` rows: a plugin that silently disappeared from the list would be
+  // the one failure nobody could diagnose.
+  const cycleMembers = new Set(residue);
+  if (residue.length > 0) log.warn('Plugin dependency cycle; members blocked as needs-dependency', { ids: residue });
 
   // Pass 3: load in sorted order, reusing the manifest read in pass 1.
   for (const id of [...order, ...residue]) {
     const entry = claimedIds.get(id);
     if (!entry) continue;
-    await loadPlugin(entry.dir, entry.isBuiltin, pluginConfigs, registry, manager, additive, entry.manifest);
+    await loadPlugin(
+      entry.dir, entry.isBuiltin, pluginConfigs, registry, manager, additive, entry.manifest, cycleMembers,
+    );
+  }
+
+  // An additive load is how a newly INSTALLED dependency arrives, and the plugin that
+  // was waiting for it is already discovered, so pass 3 skips it as a duplicate. One
+  // bounded restore pass per plugin is what keeps "install the missing dependency" from
+  // needing a restart to take effect — and it also rewrites the reason on a dependent
+  // that is still blocked, so a wrong-version install stops claiming "not installed".
+  // A non-additive load rebuilds every record from scratch and needs none of this.
+  if (additive) {
+    const gate = dependencyGate(registry, manager);
+    const restore = restoreOptions(registry, manager, pluginConfigs);
+    let restored = 0;
+    for (const id of order) restored += await retryUnmetDependents(gate, id, restore);
+    if (restored > 0) log.info('Dependents restored after additive load', { restored });
   }
 
   const loaded = registry.getAll();

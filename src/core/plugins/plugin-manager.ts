@@ -5,6 +5,7 @@ export type PluginLifecycleState =
   | 'discovered'
   | 'disabled'
   | 'needs-config'
+  | 'needs-dependency'
   | 'unsupported'
   | 'activating'
   | 'active'
@@ -12,12 +13,38 @@ export type PluginLifecycleState =
   | 'disposing'
   | 'quarantined'
 
+/** Why one declared dependency of a plugin is not usable right now. */
+export interface MissingDependency {
+  /** The dependency's plugin id. */
+  id: string
+  /** The semver range the dependent asked for. */
+  range: string
+  /** The version actually on disk, when there is one. */
+  found?: string
+  reason: 'absent' | 'version' | 'inactive' | 'cycle' | 'unversioned'
+  /** One sentence a human can act on. */
+  note: string
+}
+
+/** `alpha@^2 (found 1.2.0)` — the compact form that goes into a lifecycle reason. */
+export function describeMissingDependency(missing: MissingDependency): string {
+  const head = missing.range ? `${missing.id}@${missing.range}` : missing.id
+  switch (missing.reason) {
+    case 'cycle': return `${head} (cycle)`
+    case 'version': return `${head} (found ${missing.found ?? 'unknown'})`
+    case 'unversioned': return `${head} (no version in its manifest)`
+    case 'inactive': return `${head} (installed, not active)`
+    default: return `${head} (not installed)`
+  }
+}
+
 export interface PluginDefinition {
   id: string
   name: string
   builtin?: boolean
   enabled?: boolean
   missingConfig?: string[]
+  missingDependencies?: MissingDependency[]
   unsupportedReason?: string
   quarantined?: boolean
   failureCount?: number
@@ -32,6 +59,7 @@ export interface PluginLifecycleRecord {
   builtin: boolean
   failureCount: number
   missingConfig?: string[]
+  missingDependencies?: MissingDependency[]
   reason?: string
   error?: string
 }
@@ -44,6 +72,8 @@ interface ManagedPlugin {
   deactivateInvoked: boolean
   reason?: string
   error?: string
+  /** Live, because `block()` can add these long after discover(). */
+  missingDependencies?: MissingDependency[]
 }
 
 class PluginActivationCancelledError extends Error {
@@ -107,6 +137,12 @@ export class PluginManager implements Disposable {
     } else if ((definition.missingConfig?.length ?? 0) > 0) {
       state = 'needs-config'
       reason = `Missing configuration: ${definition.missingConfig!.join(', ')}`
+    } else if ((definition.missingDependencies?.length ?? 0) > 0) {
+      // Above quarantined/disabled on purpose: an unmet dependency is the reason the
+      // plugin is not running, and it is the only one of the three the user cannot fix
+      // from this row.
+      state = 'needs-dependency'
+      reason = `Missing dependencies: ${definition.missingDependencies!.map(describeMissingDependency).join(', ')}`
     } else if (definition.quarantined) {
       state = 'quarantined'
       reason = 'Quarantined after repeated activation failures'
@@ -122,6 +158,9 @@ export class PluginManager implements Disposable {
       failureCount: definition.failureCount ?? 0,
       deactivateInvoked: false,
       reason,
+      ...(definition.missingDependencies?.length
+        ? { missingDependencies: definition.missingDependencies.map((entry) => ({ ...entry })) }
+        : {}),
     }
     this.plugins.set(definition.id, plugin)
     this.notify(plugin)
@@ -145,6 +184,18 @@ export class PluginManager implements Disposable {
     return this.runExclusive(id, () => this.disableManaged(this.require(id)))
   }
 
+  /**
+   * Tear a plugin down and park it in `needs-dependency`.
+   *
+   * The difference from `disable` is the whole point of the state: nothing here records
+   * a human decision, so whoever owns config must NOT write `enabled: false`. A plugin
+   * blocked because its dependency went away has to come back when the dependency
+   * does, and an off-switch on disk would leave it lying down forever.
+   */
+  block(id: string, missing: readonly MissingDependency[]): Promise<PluginLifecycleRecord> {
+    return this.runExclusive(id, () => this.blockManaged(this.require(id), missing))
+  }
+
   reload(id: string): Promise<PluginLifecycleRecord> {
     return this.runExclusive(id, async () => {
       const plugin = this.require(id)
@@ -166,6 +217,11 @@ export class PluginManager implements Disposable {
     })
   }
 
+  /**
+   * Leaves the plugin `disabled` on purpose: the caller's next step is a reload, and
+   * `disabled` is the one state the load path treats as "discover me again from
+   * scratch", dependency re-check included.
+   */
   clearQuarantine(id: string): PluginLifecycleRecord {
     const plugin = this.require(id)
     if (plugin.state !== 'quarantined') return this.toRecord(plugin)
@@ -277,6 +333,9 @@ export class PluginManager implements Disposable {
     }
     if ((plugin.definition.missingConfig?.length ?? 0) > 0 || plugin.state === 'needs-config') {
       throw new Error(`Plugin "${plugin.definition.id}" cannot activate while needs-config`)
+    }
+    if ((plugin.missingDependencies?.length ?? 0) > 0 || plugin.state === 'needs-dependency') {
+      throw new Error(`Plugin "${plugin.definition.id}" cannot activate while needs-dependency`)
     }
     if (plugin.state === 'quarantined') {
       throw new Error(`Plugin "${plugin.definition.id}" cannot activate while quarantined`)
@@ -509,8 +568,36 @@ export class PluginManager implements Disposable {
     return timeoutReported || timedOut
   }
 
+  private async blockManaged(
+    plugin: ManagedPlugin,
+    missing: readonly MissingDependency[],
+  ): Promise<PluginLifecycleRecord> {
+    this.assertUsable()
+    const entries = missing.map((entry) => ({ ...entry }))
+    if (plugin.state === 'active' || plugin.state === 'activating') {
+      this.setState(plugin, 'disposing')
+      const errors = await this.teardownManaged(plugin, plugin.context)
+      plugin.context = null
+      this.forgetActivation(plugin.definition.id)
+      plugin.error = errors.length > 0
+        ? errors.map((error) => error instanceof Error ? error.message : String(error)).join('; ')
+        : undefined
+    }
+    plugin.missingDependencies = entries
+    plugin.reason = entries.length > 0
+      ? `Missing dependencies: ${entries.map(describeMissingDependency).join(', ')}`
+      : 'A dependency is no longer available'
+    this.setState(plugin, 'needs-dependency')
+    return this.toRecord(plugin)
+  }
+
   private async disableManaged(plugin: ManagedPlugin): Promise<PluginLifecycleRecord> {
-    if (plugin.state === 'unsupported' || plugin.state === 'needs-config' || plugin.state === 'quarantined') {
+    if (
+      plugin.state === 'unsupported'
+      || plugin.state === 'needs-config'
+      || plugin.state === 'needs-dependency'
+      || plugin.state === 'quarantined'
+    ) {
       return this.toRecord(plugin)
     }
     if (plugin.state !== 'active' && plugin.state !== 'activating') {
@@ -580,6 +667,9 @@ export class PluginManager implements Disposable {
       builtin: plugin.definition.builtin ?? false,
       failureCount: plugin.failureCount,
       ...(plugin.definition.missingConfig?.length ? { missingConfig: [...plugin.definition.missingConfig] } : {}),
+      ...(plugin.missingDependencies?.length
+        ? { missingDependencies: plugin.missingDependencies.map((entry) => ({ ...entry })) }
+        : {}),
       ...(plugin.reason ? { reason: plugin.reason } : {}),
       ...(plugin.error ? { error: plugin.error } : {}),
     }

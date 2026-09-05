@@ -172,6 +172,7 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
             ? { capabilities: live?.capabilities ?? tombstone?.capabilities }
             : {}),
           ...(record.missingConfig?.length ? { missingConfig: record.missingConfig } : {}),
+          ...(record.missingDependencies?.length ? { missingDependencies: record.missingDependencies } : {}),
           ...(record.reason ? { reason: record.reason } : {}),
           ...(record.error ? { error: record.error } : {}),
           // "Configure" must open something. A manifest can declare a configSchema

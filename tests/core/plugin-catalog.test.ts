@@ -44,6 +44,8 @@ describe('storeStatusFor', () => {
     expect(storeStatusFor('disposing')).toBe('active')
     expect(storeStatusFor('disabled')).toBe('disabled')
     expect(storeStatusFor('needs-config')).toBe('needs-config')
+    // Blocked by another plugin, not by its own setup — a different sentence to show.
+    expect(storeStatusFor('needs-dependency')).toBe('needs-dependency')
     expect(storeStatusFor('unsupported')).toBe('unsupported')
     expect(storeStatusFor('failed')).toBe('failed')
     expect(storeStatusFor('quarantined')).toBe('quarantined')
@@ -66,8 +68,9 @@ describe('isToggleable', () => {
   })
 
   it('withholds the switch where the plugin manager would refuse to activate', () => {
-    // activateManaged() throws for all three, so a switch would flip back on its own.
+    // activateManaged() throws for all four, so a switch would flip back on its own.
     expect(isToggleable('needs-config')).toBe(false)
+    expect(isToggleable('needs-dependency')).toBe(false)
     expect(isToggleable('unsupported')).toBe(false)
     expect(isToggleable('quarantined')).toBe(false)
     expect(isToggleable('available')).toBe(false)
@@ -136,6 +139,30 @@ describe('mergePluginRegistry', () => {
     expect(row.missingConfig).toEqual(['base_url'])
     expect(row.reason).toBe('Missing configuration: base_url')
     expect(row.toggleable).toBe(false)
+  })
+
+  it('carries which dependencies hold a row back, so the store can name them', () => {
+    const { rows } = mergePluginRegistry([], [installed({
+      id: 'mail-imap',
+      name: 'Mail IMAP',
+      state: 'needs-dependency',
+      reason: 'Missing dependencies: mail@^1 (not installed)',
+      missingDependencies: [
+        { id: 'mail', range: '^1', reason: 'absent', note: '"mail" is not installed' },
+      ],
+    })])
+    const row = rows[0]!
+    expect(row.status).toBe('needs-dependency')
+    expect(row.missingDependencies).toEqual([
+      { id: 'mail', range: '^1', reason: 'absent', note: '"mail" is not installed' },
+    ])
+    // No switch: PluginManager would refuse the activation, so a toggle would flip back.
+    expect(row.toggleable).toBe(false)
+  })
+
+  it('leaves missingDependencies off a row that has none', () => {
+    const { rows } = mergePluginRegistry([], [installed({ id: 'plain', state: 'active' })])
+    expect('missingDependencies' in rows[0]!).toBe(false)
   })
 
   it('prefers the installed source kind over the catalog claim', () => {

@@ -83,3 +83,26 @@ export function dependentsOf(graph: DepGraph, id: string): string[] {
   if (!set) return [];
   return [...graph.nodes.keys()].filter((candidate) => set.has(candidate));
 }
+
+/**
+ * Every dependent of `id`, direct and indirect, in the order they must be torn down:
+ * the reverse of the load order, so a plugin always goes down before the plugin it
+ * depends on. Excludes `id` itself even when a cycle leads back to it.
+ *
+ * Cycle members sort first (they are the tail of `topoSortStable`, reversed), which is
+ * harmless: nothing in a cycle is ever running.
+ */
+export function dependentsTeardownOrder(graph: DepGraph, id: string): string[] {
+  const collected = new Set<string>();
+  const queue = [id];
+  while (queue.length > 0) {
+    for (const dependent of graph.dependents.get(queue.shift()!) ?? []) {
+      if (dependent === id || collected.has(dependent)) continue;
+      collected.add(dependent);
+      queue.push(dependent);
+    }
+  }
+  if (collected.size === 0) return [];
+  const { order, residue } = topoSortStable(graph);
+  return [...order, ...residue].filter((candidate) => collected.has(candidate)).reverse();
+}

@@ -480,6 +480,66 @@ describe('PluginManager', () => {
     expect(activate).not.toHaveBeenCalled()
   })
 
+  it('refuses to activate a plugin whose dependency is missing, and keeps refusing', async () => {
+    const activate = vi.fn()
+    const manager = createManager()
+
+    const record = manager.discover(definition({
+      id: 'blocked',
+      activate,
+      missingDependencies: [
+        { id: 'alpha', range: '^2', found: '1.2.0', reason: 'version', note: 'alpha is at 1.2.0' },
+      ],
+    }))
+
+    expect(record.state).toBe('needs-dependency')
+    // The reason is what a user reads on the row, so it has to name the dependency, the
+    // range asked for, and the version actually there.
+    expect(record.reason).toBe('Missing dependencies: alpha@^2 (found 1.2.0)')
+    expect(record.missingDependencies).toEqual([
+      { id: 'alpha', range: '^2', found: '1.2.0', reason: 'version', note: 'alpha is at 1.2.0' },
+    ])
+    await expect(manager.activate('blocked')).rejects.toThrow('while needs-dependency')
+    // Same refusal shape as unsupported/needs-config: disable is a no-op, not a downgrade.
+    expect((await manager.disable('blocked')).state).toBe('needs-dependency')
+    expect(activate).not.toHaveBeenCalled()
+  })
+
+  it('ranks an unmet dependency above quarantine and the off-switch', async () => {
+    const manager = createManager()
+    const missing = [{ id: 'alpha', range: '^1', reason: 'absent' as const, note: 'alpha is not installed' }]
+
+    expect(manager.discover(definition({
+      id: 'off', enabled: false, quarantined: true, missingDependencies: missing,
+    })).state).toBe('needs-dependency')
+    // needs-config still wins: the user can fix that one from this row.
+    expect(manager.discover(definition({
+      id: 'unconfigured', missingConfig: ['token'], missingDependencies: missing,
+    })).state).toBe('needs-config')
+  })
+
+  it('blocks a running plugin without recording a human decision', async () => {
+    const order: string[] = []
+    const plugin = definition({
+      activate: (context) => context.onDispose(() => { order.push('registration') }),
+      deactivate: () => { order.push('module') },
+    })
+    const manager = createManager()
+    manager.discover(plugin)
+    await manager.activate(plugin.id)
+
+    const record = await manager.block(plugin.id, [
+      { id: 'alpha', range: '^1', reason: 'inactive', note: '"alpha" was turned off' },
+    ])
+
+    // A full teardown, exactly like disable — the difference is the state it lands in,
+    // which is what tells the loader to bring it back when alpha returns.
+    expect(order).toEqual(['module', 'registration'])
+    expect(record.state).toBe('needs-dependency')
+    expect(record.missingDependencies?.[0].note).toContain('turned off')
+    await expect(manager.activate(plugin.id)).rejects.toThrow('while needs-dependency')
+  })
+
   it('serializes concurrent reloads without duplicating live resources', async () => {
     let active = 0
     let peak = 0

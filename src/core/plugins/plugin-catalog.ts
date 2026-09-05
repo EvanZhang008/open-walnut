@@ -25,6 +25,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { MissingDependency } from './plugin-manager.js'
 
 /** Where a catalog entry comes from. */
 export type PluginCatalogSourceKind = 'builtin' | 'git' | 'npm' | 'example'
@@ -58,6 +59,7 @@ export type PluginStoreStatus =
   | 'active'
   | 'disabled'
   | 'needs-config'
+  | 'needs-dependency'
   | 'unsupported'
   | 'failed'
   | 'quarantined'
@@ -76,6 +78,8 @@ export interface InstalledPluginFacts {
   description?: string
   capabilities?: string[]
   missingConfig?: string[]
+  /** Present when the plugin is held back by another plugin, not by its own config. */
+  missingDependencies?: MissingDependency[]
   reason?: string
   error?: string
   /** True when the manifest declares a configSchema the Configure form can render. */
@@ -102,6 +106,8 @@ export interface PluginRegistryRow {
   builtin: boolean
   capabilities?: string[]
   missingConfig?: string[]
+  /** Which dependencies hold this row back, so the store can name them. */
+  missingDependencies?: MissingDependency[]
   /** Why it is not active, in the server's own words. */
   reason?: string
   error?: string
@@ -139,6 +145,8 @@ export function storeStatusFor(state: string): PluginStoreStatus {
       return 'disabled'
     case 'needs-config':
       return 'needs-config'
+    case 'needs-dependency':
+      return 'needs-dependency'
     case 'unsupported':
       return 'unsupported'
     case 'quarantined':
@@ -155,10 +163,11 @@ export function storeStatusFor(state: string): PluginStoreStatus {
 /**
  * Only a plugin whose OFF/ON actually persists gets a toggle.
  *
- * needs-config, unsupported and quarantined are refused by PluginManager itself
- * (`activateManaged` throws for all three), so offering a switch there would produce
- * a control that flips back — worse than no control. Those rows point at Configure,
- * at the version requirement, or at Clear quarantine instead.
+ * needs-config, needs-dependency, unsupported and quarantined are refused by
+ * PluginManager itself (`activateManaged` throws for all four), so offering a switch
+ * there would produce a control that flips back — worse than no control. Those rows
+ * point at Configure, at the dependency that is missing, at the version requirement,
+ * or at Clear quarantine instead.
  */
 export function isToggleable(status: PluginStoreStatus): boolean {
   return status === 'active' || status === 'disabled' || status === 'failed' || status === 'pending-restart'
@@ -210,6 +219,7 @@ export function mergePluginRegistry(
       builtin: plugin.builtin,
       ...(plugin.capabilities?.length ? { capabilities: plugin.capabilities } : {}),
       ...(plugin.missingConfig?.length ? { missingConfig: plugin.missingConfig } : {}),
+      ...(plugin.missingDependencies?.length ? { missingDependencies: plugin.missingDependencies } : {}),
       ...(plugin.reason ? { reason: plugin.reason } : {}),
       ...(plugin.error ? { error: plugin.error } : {}),
       configurable: plugin.configurable ?? false,

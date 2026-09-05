@@ -22,6 +22,7 @@ vi.mock('../../../src/core/integration-loader.js', () => ({
   getUnconfiguredPlugins: vi.fn(() => []),
   getUnsupportedPlugins: vi.fn(() => []),
   getDuplicatePluginIds: vi.fn(() => []),
+  getUnmetDependencyPlugins: vi.fn(() => []),
 }))
 
 import { createPluginSourcesRouter } from '../../../src/web/routes/plugin-sources.js'
@@ -96,6 +97,33 @@ describe('Plugin sources route boundaries', () => {
       restartRequired: false,
     })
     expect(sourceMocks.removeSource).toHaveBeenCalledWith('demo')
+  })
+
+  it('says needs-dependency for a plugin that is also recorded as unsupported', async () => {
+    // Both can be true of one row: a plugin held back by a missing dependency was never
+    // imported, so "needs a newer Walnut" is a guess while the dependency is a fact. The
+    // order of the checks in statusFor is what decides, so it is pinned here.
+    const loader = await import('../../../src/core/integration-loader.js')
+    vi.mocked(loader.getUnmetDependencyPlugins).mockReturnValue([
+      { id: 'mail-imap', name: 'Mail IMAP', missing: [{ id: 'mail', range: '^1', reason: 'absent', note: 'not installed' }] },
+    ])
+    vi.mocked(loader.getUnsupportedPlugins).mockReturnValue([
+      { id: 'mail-imap', name: 'Mail IMAP', capabilities: [], reason: 'Requires Walnut >=9.0.0' },
+    ])
+    sourceMocks.listSources.mockResolvedValue([{
+      ...source('mail'),
+      plugins: [{ dir: '/tmp/mail-imap', id: 'mail-imap', name: 'Mail IMAP', version: '1.0.0' }],
+    }])
+
+    try {
+      const response = await request(app()).get('/api/plugin-sources').expect(200)
+      expect(response.body[0].plugins[0].status).toBe('needs-dependency')
+    } finally {
+      // vitest is configured without mockReset, so an implementation set here would
+      // otherwise leak into every later test in this file.
+      vi.mocked(loader.getUnmetDependencyPlugins).mockReturnValue([])
+      vi.mocked(loader.getUnsupportedPlugins).mockReturnValue([])
+    }
   })
 
   it('returns JSON when list, update, or check fails', async () => {

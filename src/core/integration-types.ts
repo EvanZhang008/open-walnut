@@ -420,6 +420,11 @@ export interface PluginManifest {
   apiVersion?: number;
   /** Enforced for apiVersion 1 before any Plugin code is imported. */
   engines?: { walnut?: string };
+  /** Other Plugins this one needs: `{ "<pluginId>": "<semver range>" }`, matched
+   *  against the dependency's own manifest `version`. Enforced before any Plugin code
+   *  is imported; an unmet entry leaves this Plugin in `needs-dependency`. The `local`
+   *  fallback is never gated, so a dependency block there is dropped with a warning. */
+  dependencies?: Record<string, string>;
   /** Server and native Web entrypoints, relative to the Plugin root. */
   server?: string;
   web?: string;

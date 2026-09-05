@@ -42,11 +42,21 @@ function compare(left: SemVer, right: SemVer): number {
   return 0
 }
 
+// Token grammars, named so the range VALIDATOR and the range TEST agree by
+// construction. A second copy of these patterns would drift, and `isValidRange`
+// saying yes to something `satisfiesSemVer` cannot evaluate is the one failure
+// mode that would matter (a dependency silently unsatisfiable).
+const ANY_TOKEN = /^x$/i
+const WILDCARD_TOKEN = /^v?(\d+|x|\*)?(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?$/i
+const COMPARATOR_TOKEN = /^(>=|<=|>|<|=|\^|~)?\s*(v?\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?)$/
+const PARTIAL_VERSION = /^(v?\d+)(?:\.(\d+))?(?:\.(\d+))?(-[0-9A-Za-z.-]+)?$/
+const HYPHEN_RANGE = /^(v?\d+\.\d+\.\d+)\s+-\s+(v?\d+\.\d+\.\d+)$/
+
 function testComparator(version: SemVer, raw: string): boolean {
   const token = raw.trim()
-  if (!token || token === '*' || /^x$/i.test(token)) return true
+  if (!token || token === '*' || ANY_TOKEN.test(token)) return true
 
-  const wildcard = token.match(/^v?(\d+|x|\*)?(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?$/i)
+  const wildcard = token.match(WILDCARD_TOKEN)
   if (wildcard && /[x*]/i.test(token)) {
     const [, major, minor, patch] = wildcard
     if (major && !/[x*]/i.test(major) && version.major !== Number(major)) return false
@@ -55,10 +65,10 @@ function testComparator(version: SemVer, raw: string): boolean {
     return true
   }
 
-  const match = token.match(/^(>=|<=|>|<|=|\^|~)?\s*(v?\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?)$/)
+  const match = token.match(COMPARATOR_TOKEN)
   if (!match) return false
   const operator = match[1] ?? '='
-  const partial = match[2].match(/^(v?\d+)(?:\.(\d+))?(?:\.(\d+))?(-[0-9A-Za-z.-]+)?$/)
+  const partial = match[2].match(PARTIAL_VERSION)
   if (!partial) return false
   if (!match[1] && partial[2] === undefined) return version.major === Number(partial[1].replace(/^v/, ''))
   if (!match[1] && partial[3] === undefined) {
@@ -90,10 +100,71 @@ export function satisfiesSemVer(versionInput: string, rangeInput: string): boole
   const alternatives = rangeInput.split('||').map((part) => part.trim()).filter(Boolean)
   if (alternatives.length === 0) return false
   return alternatives.some((alternative) => {
-    const hyphen = alternative.match(/^(v?\d+\.\d+\.\d+)\s+-\s+(v?\d+\.\d+\.\d+)$/)
+    const hyphen = alternative.match(HYPHEN_RANGE)
     if (hyphen) {
       return testComparator(version, `>=${hyphen[1]}`) && testComparator(version, `<=${hyphen[2]}`)
     }
     return alternative.split(/\s+/).every((token) => testComparator(version, token))
   })
+}
+
+/**
+ * Is this a complete x.y.z version, the only thing a range can be matched against?
+ *
+ * `1.0` and `dev` are not: every range fails against them, which reads as "the range is
+ * wrong" when the fix belongs in the version.
+ */
+export function isFullVersion(version: string): boolean {
+  return typeof version === 'string' && parseVersion(version) !== null
+}
+
+function isValidToken(raw: string): boolean {
+  const token = raw.trim()
+  if (!token || token === '*' || ANY_TOKEN.test(token)) return true
+  if (WILDCARD_TOKEN.test(token) && /[x*]/i.test(token)) return true
+  const match = token.match(COMPARATOR_TOKEN)
+  return !!match && PARTIAL_VERSION.test(match[2])
+}
+
+/**
+ * Can `satisfiesSemVer` actually evaluate this range?
+ *
+ * A malformed range makes every version fail, which reads to a plugin author as "my
+ * dependency is broken" instead of "I typed the range wrong". Manifest validation uses
+ * this to drop the entry and say so at load time.
+ */
+export function isValidRange(rangeInput: string): boolean {
+  if (typeof rangeInput !== 'string') return false
+  const alternatives = rangeInput.split('||').map((part) => part.trim()).filter(Boolean)
+  if (alternatives.length === 0) return false
+  return alternatives.every((alternative) =>
+    HYPHEN_RANGE.test(alternative) || alternative.split(/\s+/).every(isValidToken))
+}
+
+/**
+ * Range test for an inter-plugin DEPENDENCY, where a prerelease must be asked for.
+ *
+ * `^1.0.0` must not adopt `2.0.0-beta.1`: the plain comparator says 2.0.0-beta.1 < 2.0.0
+ * so it falls inside `^1`, which is exactly the trap this exists to close. The rule: a
+ * prerelease version satisfies a range only when the range itself names a prerelease of
+ * the SAME x.y.z, so depending on `>=2.0.0-beta.1` is an explicit opt-in and no ordinary
+ * range can drift onto an unfinished build.
+ *
+ * Deliberately NOT applied to `engines.walnut` (see satisfiesSemVer's callers): a Walnut
+ * beta should keep running the plugins the release before it ran.
+ */
+export function satisfiesDependencyRange(versionInput: string, rangeInput: string): boolean {
+  const version = parseVersion(versionInput)
+  if (!version) return false
+  if (version.prerelease.length > 0) {
+    const named = [...rangeInput.matchAll(/\d+\.\d+\.\d+-[0-9A-Za-z.-]+/g)].some((match) => {
+      const target = parseVersion(match[0])
+      return !!target
+        && target.major === version.major
+        && target.minor === version.minor
+        && target.patch === version.patch
+    })
+    if (!named) return false
+  }
+  return satisfiesSemVer(versionInput, rangeInput)
 }

@@ -22,13 +22,13 @@ import {
 } from '../../core/plugin-sources.js';
 import { isValidNpmSpec } from '../../core/plugin-npm-install.js';
 import {
-  getUnconfiguredPlugins, getUnsupportedPlugins, getDuplicatePluginIds,
+  getUnconfiguredPlugins, getUnsupportedPlugins, getDuplicatePluginIds, getUnmetDependencyPlugins,
 } from '../../core/integration-loader.js';
 import { createSubsystemLogger } from '../../logging/index.js';
 
 const log = createSubsystemLogger('plugin-sources');
 
-export type PluginStatus = 'loaded' | 'needs-config' | 'unsupported' | 'duplicate' | 'error' | 'pending-restart';
+export type PluginStatus = 'loaded' | 'needs-config' | 'needs-dependency' | 'unsupported' | 'duplicate' | 'error' | 'pending-restart';
 
 /**
  * A LOADED plugin is 'loaded' whatever its capability mix — the registry check
@@ -37,11 +37,16 @@ export type PluginStatus = 'loaded' | 'needs-config' | 'unsupported' | 'duplicat
  * `routines`), which is the only case the loader records there; a plugin that is
  * ui-, tools- or skills-only loads normally and must never be labelled as
  * needing a newer Walnut.
+ *
+ * `needs-dependency` is checked ahead of `unsupported` because the two can both be
+ * true of one row: a plugin held back by a missing dependency was never imported, so
+ * "needs a newer Walnut" would be a guess, while the dependency is a fact.
  */
 function statusFor(pluginId: string | null, error?: string): PluginStatus {
   if (error || !pluginId) return 'error';
   if (registry.has(pluginId)) return 'loaded';
   if (getUnconfiguredPlugins().some(p => p.id === pluginId)) return 'needs-config';
+  if (getUnmetDependencyPlugins().some(p => p.id === pluginId)) return 'needs-dependency';
   if (getUnsupportedPlugins().some(p => p.id === pluginId)) return 'unsupported';
   if (getDuplicatePluginIds().includes(pluginId)) return 'duplicate';
   // Discovered on disk but absent from every loader outcome — code changed

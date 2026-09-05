@@ -61,7 +61,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
 
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js';
 import { IntegrationRegistry } from '../../src/core/integration-registry.js';
-import { disableLoadedPlugin, loadNewPlugins, loadPlugins, reloadLoadedPlugin, getPluginLifecycleRecords, getUnconfiguredPlugins, getUnsupportedPlugins, setPluginCodeTimeoutForTesting } from '../../src/core/integration-loader.js';
+import { clearPluginQuarantine, disableLoadedPlugin, loadNewPlugins, loadPlugins, reloadLoadedPlugin, getPluginLifecycleRecords, getUnconfiguredPlugins, getUnsupportedPlugins, setPluginCodeTimeoutForTesting } from '../../src/core/integration-loader.js';
 import { getConfig, updatePluginConfig } from '../../src/core/config-manager.js';
 import { createPluginRouteDispatcher } from '../../src/web/plugin-route-dispatcher.js';
 
@@ -424,6 +424,45 @@ export default function register(api) {
       expect.objectContaining({ id: 'preflight', state: 'active' }),
     ]));
     expect(await readActivationCount('preflight')).toBe(1);
+  });
+
+  it('recovers a quarantined Plugin through clearQuarantine then reload', async () => {
+    // The exact sequence the server runs for the store's "Clear quarantine" button.
+    // Reload ALONE must not be enough: the quarantine is persisted, so re-discovery
+    // reads it back and the plugin stays parked. Clearing it first is what makes the
+    // follow-up reload land on `disabled` → activate.
+    const pluginDir = path.join(tmpDir, 'plugins', 'quarantined');
+    await writeManifest(pluginDir, {
+      id: 'quarantined',
+      name: 'Quarantined',
+      apiVersion: 1,
+      engines: { walnut: '>=0.0.0' },
+      server: 'dist/server.mjs',
+    });
+    await fsp.mkdir(path.join(pluginDir, 'dist'), { recursive: true });
+    const serverFile = path.join(pluginDir, 'dist', 'server.mjs');
+    await fsp.writeFile(serverFile, 'export function activate() { throw new Error("broken"); }\n');
+
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+    expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'quarantined', state: 'failed' }),
+    ]));
+    // Second failure trips the quarantine (quarantineAfter defaults to 2).
+    await reloadLoadedPlugin(registry, 'quarantined');
+    expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'quarantined', state: 'quarantined' }),
+    ]));
+
+    await fsp.writeFile(serverFile, 'export function activate() {}\n');
+    await reloadLoadedPlugin(registry, 'quarantined');
+    expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'quarantined', state: 'quarantined' }),
+    ]));
+
+    expect((await clearPluginQuarantine(registry, 'quarantined'))?.state).toBe('disabled');
+    expect((await reloadLoadedPlugin(registry, 'quarantined')).state).toBe('active');
+    expect(registry.has('quarantined')).toBe(true);
   });
 
   it('reflects mid-life disposal of a singleton contribution', async () => {

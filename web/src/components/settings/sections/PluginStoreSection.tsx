@@ -48,7 +48,7 @@ interface StorePlugin {
   name: string | null;
   version: string | null;
   error?: string;
-  status: 'loaded' | 'needs-config' | 'unsupported' | 'duplicate' | 'error' | 'pending-restart';
+  status: 'loaded' | 'needs-config' | 'needs-dependency' | 'unsupported' | 'duplicate' | 'error' | 'pending-restart';
 }
 
 interface PluginSource {
@@ -81,7 +81,7 @@ interface RegistryRow {
   docs?: string;
   source: { kind: 'builtin' | 'git' | 'npm' | 'example'; url?: string; ref?: string; spec?: string; path?: string };
   installed: boolean;
-  status: 'active' | 'disabled' | 'needs-config' | 'unsupported' | 'failed' | 'quarantined' | 'pending-restart' | 'available';
+  status: 'active' | 'disabled' | 'needs-config' | 'needs-dependency' | 'unsupported' | 'failed' | 'quarantined' | 'pending-restart' | 'available';
   state?: string;
   version?: string;
   builtin: boolean;
@@ -122,6 +122,7 @@ function shortIntegrity(integrity: string): string {
 const STATUS_LABELS: Record<StorePlugin['status'], { label: string; className: string }> = {
   loaded: { label: 'active', className: 'badge badge-done' },
   'needs-config': { label: 'needs setup', className: 'badge badge-important' },
+  'needs-dependency': { label: 'needs another plugin', className: 'badge badge-important' },
   unsupported: { label: 'needs newer Walnut', className: 'badge badge-none' },
   duplicate: { label: 'shadowed', className: 'badge badge-none' },
   error: { label: 'invalid', className: 'badge badge-immediate' },
@@ -133,12 +134,15 @@ const ROW_STATUS: Record<RegistryRow['status'], { label: string; className: stri
   active: { label: 'on', className: 'badge badge-done' },
   disabled: { label: 'off', className: 'badge badge-none' },
   'needs-config': { label: 'needs setup', className: 'badge badge-important' },
+  'needs-dependency': { label: 'needs another plugin', className: 'badge badge-important' },
   unsupported: { label: 'needs newer Walnut', className: 'badge badge-none' },
   failed: { label: 'failed', className: 'badge badge-immediate' },
   quarantined: { label: 'quarantined', className: 'badge badge-immediate' },
   'pending-restart': { label: 'restart to activate', className: 'badge badge-important' },
   available: { label: 'not installed', className: 'badge badge-none' },
 };
+/** A state this build has no word for: say so, never assert "off" about it. */
+const UNKNOWN_ROW_STATUS = { label: 'unknown', className: 'badge badge-none' };
 
 /** Where an installed plugin came from, in the user's terms. */
 function originLabel(row: RegistryRow): string {
@@ -353,7 +357,7 @@ export function PluginStoreSection({ config, onSave }: Props) {
         ) : (
           <div className="settings-row-list">
             {installed.map((row) => {
-              const status = ROW_STATUS[row.status];
+              const status = ROW_STATUS[row.status] ?? UNKNOWN_ROW_STATUS;
               const isOn = row.status === 'active';
               // Never auto-open. In a LIST, expanding an eight-field form on mount
               // buries every row under it — the row already says NEEDS SETUP, names
@@ -406,8 +410,8 @@ export function PluginStoreSection({ config, onSave }: Props) {
                             </button>
                           </>
                         )}
-                        {/* needs-config, unsupported and quarantined are refused by the
-                            plugin manager itself, so a switch would flip straight back.
+                        {/* needs-config, needs-dependency, unsupported and quarantined are
+                            refused by the plugin manager itself, so a switch would flip straight back.
                             Those rows carry their reason in the copy on the left and
                             whatever action can actually help on the right, so nothing
                             is repeated here. */}
