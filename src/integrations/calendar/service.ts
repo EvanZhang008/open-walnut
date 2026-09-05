@@ -1,26 +1,37 @@
 /**
  * CalendarService — the single owner of external calendar data.
  *
- * All consumers (REST routes, Personal AI calendar_* tools) go through this
- * service: a month-window TTL cache over the EventKit source, a periodic
- * refresh, and write-through edits that refresh the touched window and emit
- * `calendar:updated` so the web UI reflects agent/API edits live.
+ * All consumers (the plugin's REST routes, the Personal AI calendar_* tools) go through
+ * this service: a month-window TTL cache over a CalendarSource, a periodic refresh, and
+ * write-through edits that refresh the touched window and announce the change so the web
+ * UI reflects agent/API edits live.
+ *
+ * The SOURCE is not ours. It arrives from `core:calendar-source`, because the signed
+ * EventKit helper carries the macOS calendar grant and a TCC identity cannot move into a
+ * plugin. This file owns the cache, the clocks, the visibility rules and the config; the
+ * host owns the door to the platform.
  *
  * Two separate clocks, deliberately:
- *   - READ_TTL (`calendar.read_ttl_seconds`, default 60s) bounds how stale a
- *     served read may be. It used to be the same knob as the poll interval,
- *     which meant a read could be a full 15 minutes behind reality — a meeting
- *     cancelled or moved in Exchange kept showing up long after macOS knew
- *     better. Re-fetching a month window costs ~0.25s, so a short TTL is cheap.
- *   - refresh_minutes (default 15) is the BACKGROUND poll: it exists to notice
- *     changes nobody asked about and push `calendar:updated` to open views.
+ *   - READ_TTL (`read_ttl_seconds`, default 60s) bounds how stale a served read may be. It
+ *     used to be the same knob as the poll interval, which meant a read could be a full 15
+ *     minutes behind reality — a meeting cancelled or moved in Exchange kept showing up
+ *     long after macOS knew better. Re-fetching a month window costs ~0.25s, so a short
+ *     TTL is cheap.
+ *   - refresh_minutes (default 15) is the BACKGROUND poll: it exists to notice changes
+ *     nobody asked about and push an update to open views.
  * Callers that must not be fooled at all pass `{ force: true }`.
  */
 import { createHash } from 'node:crypto';
-import { bus, EventNames } from '../event-bus.js';
-import { getConfig } from '../config-manager.js';
+import { bus, EventNames } from '../../core/event-bus.js';
+import { getConfig } from '../../core/config-manager.js';
 import { log } from '../../logging/index.js';
-import { createEventKitSource, CalendarHelperError } from './sources/eventkit.js';
+// The error CLASS only, from its own leaf module: importing it from sources/eventkit.js
+// dragged the helper client and helper-build.js (Swift compile + codesign) into this
+// bundle. The source itself arrives through `core:calendar-source`, and classification goes
+// through `calendarErrorCode` (name-based), because a builtin plugin is its own bundle and
+// `instanceof` does not cross that seam.
+import { CalendarHelperError } from '../../core/calendar/helper-error.js';
+import { calendarErrorCode } from './api.js';
 import type {
   CalendarEvent,
   CalendarEventCreate,
@@ -29,9 +40,6 @@ import type {
   CalendarSource,
   CalendarSourceStatus,
 } from './types.js';
-
-export { CalendarHelperError } from './sources/eventkit.js';
-export type * from './types.js';
 
 const DEFAULT_REFRESH_MINUTES = 15;
 const DEFAULT_READ_TTL_SECONDS = 60;
@@ -42,12 +50,110 @@ interface CacheEntry {
   hash: string;
 }
 
-interface CalendarConfigShape {
-  enabled?: boolean;
+/**
+ * `plugins.calendar` in config.yaml.
+ *
+ * `source_enabled`, not `enabled`: `plugins.<id>.enabled` is the plugin LIFECYCLE switch
+ * the store writes, so putting the calendar's own on/off flag there would mean a user
+ * turning the calendar off in Settings also unregisters its routes, and the toggle that
+ * would turn it back on goes with them.
+ */
+export interface CalendarPluginConfig {
+  source_enabled?: boolean;
   hidden_calendar_ids?: string[];
-  visible_calendar_ids?: string[];
+  /**
+   * Allowlist. `null` means CLEARED and is not the same as absent: absent falls back to the
+   * legacy top-level `calendar.visible_calendar_ids` (which the migration deliberately keeps),
+   * so a cleared allowlist written as `undefined` would be dropped by `yaml.dump` and the old
+   * one would come back on the next read. See {@link mergeCalendarConfig}.
+   */
+  visible_calendar_ids?: string[] | null;
   refresh_minutes?: number;
   read_ttl_seconds?: number;
+}
+
+/** The legacy top-level `config.calendar`, read for one release. */
+interface LegacyCalendarConfig extends Omit<CalendarPluginConfig, 'source_enabled'> {
+  enabled?: boolean;
+}
+
+/**
+ * Plugin config wins; the legacy top-level section fills the gaps.
+ *
+ * Both halves are read because `migrateConfigToPlugins` COPIES rather than moves: a config
+ * that already had `plugins.calendar` (the store wrote `enabled` there when the user
+ * toggled the plugin) never receives the copy, so the visibility lists can still only
+ * exist at the top level. Delete this function, the legacy branch and the top-level
+ * `calendar` key (`Config.calendar`, src/core/types.ts) and the copy block in
+ * src/core/integration-loader.ts together once 0.4.6 has shipped.
+ *
+ * `visible_calendar_ids` is merged by PRESENCE, not by nullishness: every hide/unhide the web
+ * UI performs sends `visible_calendar_ids: null` to mean "no allowlist", and a `??` here read
+ * that as "nothing to say" and resurrected the legacy allowlist, so clearing it silently did
+ * nothing. A present `null` therefore wins over the legacy value. `hidden_calendar_ids: []`
+ * and `source_enabled: false` need no such care: neither is nullish.
+ */
+export function mergeCalendarConfig(
+  pluginConfig: CalendarPluginConfig | undefined,
+  legacy: LegacyCalendarConfig | undefined,
+): CalendarPluginConfig {
+  const plugin = pluginConfig ?? {};
+  const old = legacy ?? {};
+  return {
+    source_enabled: plugin.source_enabled ?? old.enabled,
+    hidden_calendar_ids: plugin.hidden_calendar_ids ?? old.hidden_calendar_ids,
+    visible_calendar_ids:
+      plugin.visible_calendar_ids !== undefined ? plugin.visible_calendar_ids : old.visible_calendar_ids,
+    refresh_minutes: plugin.refresh_minutes ?? old.refresh_minutes,
+    read_ttl_seconds: plugin.read_ttl_seconds ?? old.read_ttl_seconds,
+  };
+}
+
+/**
+ * Read this plugin's config straight off `getConfig()` rather than through
+ * `walnut.config.get()`, which can only see `plugins.calendar`: the legacy fallback above
+ * needs the top-level section too. This is a read of a file with no cache in front of it,
+ * so a builtin plugin's own copy of config-manager answers the same bytes as the host's.
+ * WRITES still go through `walnut.config.patch`, so there stays exactly one writer.
+ */
+async function readCalendarConfig(): Promise<CalendarPluginConfig> {
+  const config = (await getConfig()) as {
+    plugins?: Record<string, Record<string, unknown>>;
+    calendar?: LegacyCalendarConfig;
+  };
+  return mergeCalendarConfig(
+    config.plugins?.calendar as CalendarPluginConfig | undefined,
+    config.calendar,
+  );
+}
+
+/** What the service announces after a change. See {@link setCalendarAnnouncer}. */
+export interface CalendarUpdatePayload {
+  status: CalendarSourceStatus;
+}
+
+/**
+ * How the service tells the world a window changed.
+ *
+ * Installed by the plugin's `activate` so the event rides the HOST's bus as
+ * `plugin:calendar:updated` (which core forwards to the legacy `calendar:updated`). That
+ * indirection is not ceremony: a builtin plugin is its own bundle, so a `bus` imported
+ * here is a DIFFERENT EventBus instance from the server's in a built install, and an event
+ * emitted on it would reach nobody. The direct fallback below keeps a service built
+ * outside the plugin lifecycle (a unit test) observable.
+ */
+let announcer: ((payload: CalendarUpdatePayload) => void) | null = null;
+
+export function setCalendarAnnouncer(fn: ((payload: CalendarUpdatePayload) => void) | null): void {
+  announcer = fn;
+}
+
+function announce(payload: CalendarUpdatePayload): void {
+  if (announcer) {
+    announcer(payload);
+    return;
+  }
+  bus.emit(EventNames.CALENDAR_UPDATED, payload, ['web-ui'], { source: 'calendar' });
 }
 
 function eventsHash(events: CalendarEvent[]): string {
@@ -90,12 +196,15 @@ export class CalendarService {
   private lastRefresh: string | undefined;
   private lastError: { reason: CalendarSourceStatus['reason']; message: string } | null = null;
 
-  constructor(source?: CalendarSource) {
-    this.source = source ?? createEventKitSource();
+  constructor(source: CalendarSource) {
+    this.source = source;
   }
 
-  /** Load config + start the periodic refresh loop. Call once at boot. */
+  /** Load config + start the periodic refresh loop. Called by activate. */
   async init(): Promise<void> {
+    // A second init on the same instance would otherwise overwrite the handle and orphan
+    // the first interval, which is the exact shape of the leak this slice exists to fix.
+    this.stop();
     await this.reloadConfig();
     if (!this.source.available().ok) return; // nothing to poll
     this.refreshTimer = setInterval(
@@ -114,13 +223,22 @@ export class CalendarService {
     this.refreshTimer = null;
   }
 
+  /**
+   * Is the background poll armed?
+   *
+   * Exists because nothing could observe the timer, which is how it went unstopped for as
+   * long as it did: `stopServer` tore the process down and left this interval polling.
+   */
+  refreshLoopActive(): boolean {
+    return this.refreshTimer !== null;
+  }
+
   async reloadConfig(): Promise<void> {
-    const config = (await getConfig()) as { calendar?: CalendarConfigShape };
-    const cal = config.calendar ?? {};
+    const cal = await readCalendarConfig();
     const prevEnabled = this.enabled;
     const prevHidden = this.hiddenIds;
     const prevVisible = this.visibleIds;
-    this.enabled = cal.enabled !== false;
+    this.enabled = cal.source_enabled !== false;
     this.hiddenIds = new Set(cal.hidden_calendar_ids ?? []);
     this.visibleIds = cal.visible_calendar_ids ? new Set(cal.visible_calendar_ids) : null;
     this.refreshMinutes = Math.max(1, cal.refresh_minutes ?? DEFAULT_REFRESH_MINUTES);
@@ -195,7 +313,7 @@ export class CalendarService {
   }
 
   /** Fetch + cache one month window, collapsing concurrent callers onto a single
-   *  helper invocation. Emits `calendar:updated` when the window really changed. */
+   *  helper invocation. Announces an update when the window really changed. */
   private async fetchWindow(key: string, from: string, to: string): Promise<CalendarEvent[]> {
     const pending = this.inFlight.get(key);
     if (pending) return pending;
@@ -289,7 +407,7 @@ export class CalendarService {
   }
 
   private emitUpdated(): void {
-    bus.emit(EventNames.CALENDAR_UPDATED, { status: this.status() }, ['web-ui'], { source: 'calendar' });
+    announce({ status: this.status() });
   }
 
   private assertUsable(): void {
@@ -305,15 +423,16 @@ export class CalendarService {
       this.lastError = null;
       return result;
     } catch (err) {
-      if (err instanceof CalendarHelperError) {
+      const code = calendarErrorCode(err);
+      if (code) {
         // Per-EVENT failures (deleting an already-deleted event, editing a
         // readonly one) say nothing about the SOURCE's health — latching them
         // into lastError flipped available:false and silently removed the
         // Event tab + "New event…" everywhere until a manual refresh.
-        if (err.code === 'not-found' || err.code === 'readonly') throw err;
+        if (code === 'not-found' || code === 'readonly') throw err;
         this.lastError = {
-          reason: err.code === 'permission-denied' ? 'permission-denied' : err.code === 'not-configured' ? 'not-configured' : 'fetch-error',
-          message: err.message,
+          reason: code === 'permission-denied' ? 'permission-denied' : code === 'not-configured' ? 'not-configured' : 'fetch-error',
+          message: err instanceof Error ? err.message : String(err),
         };
       }
       throw err;
@@ -329,17 +448,52 @@ function filterRange(events: CalendarEvent[], from: string, to: string): Calenda
   });
 }
 
-// ── singleton ────────────────────────────────────────────────────────────────
+// ── the plugin's one instance ────────────────────────────────────────────────
+//
+// A module-level slot, not a field on the activation closure, for two reasons: the routes
+// and tools resolve it PER CALL (a test may swap the instance between requests while the
+// server stays up), and the fixture seam below has to be able to put an instance in place
+// before the plugin activates so activate never builds one over the real EventKit helper.
 
 let service: CalendarService | null = null;
 
-export function getCalendarService(): CalendarService {
-  if (!service) service = new CalendarService();
+/**
+ * activate's entry: adopt whatever is already in the slot, else build one over the host's
+ * source. `createSource` is a factory, not a value, so the EventKit helper is never
+ * constructed when a fixture already supplied a mock.
+ */
+export function adoptCalendarService(createSource: () => CalendarSource): CalendarService {
+  if (!service) service = new CalendarService(createSource());
   return service;
 }
 
-/** Test hook: swap in a mock source. */
+/**
+ * The live instance, resolved per request and per tool call.
+ *
+ * A helper error rather than a plain throw: a request already in flight when the plugin is
+ * torn down (the Disposable runs before the route registrations are withdrawn) then answers
+ * 503 "not configured" like any other unavailable source, instead of a bare 500.
+ */
+export function getCalendarService(): CalendarService {
+  if (!service) throw new CalendarHelperError('the calendar plugin is not active', 'not-configured');
+  return service;
+}
+
+/**
+ * deactivate's exit: stop the loop and clear the slot, so a reload builds a fresh service
+ * and re-runs init() instead of adopting one whose timer is already stopped.
+ *
+ * Consequence worth knowing before you test a reload: the fresh service is built over the
+ * HOST's real EventKit source, so a fixture that injected a mock before boot has to inject
+ * again after a reload or the next read compiles the Swift helper and reads real calendars.
+ */
+export function releaseCalendarService(instance: CalendarService): void {
+  instance.stop();
+  if (service === instance) service = null;
+}
+
+/** Test hook: swap in a service over a mock source, before or after activate. */
 export function _setCalendarServiceForTest(s: CalendarService | null): void {
-  service?.stop();
+  if (service !== s) service?.stop();
   service = s;
 }

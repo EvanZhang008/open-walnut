@@ -15,6 +15,7 @@ import { promisify } from 'node:util';
 import { CLOUD_MODE } from '../../../constants.js';
 import { log } from '../../../logging/index.js';
 import { ensureHelper, olderHelperGenerations, type HelperSpec } from '../../helper-build.js';
+import { CalendarHelperError } from '../helper-error.js';
 import type {
   CalendarEvent,
   CalendarEventCreate,
@@ -24,7 +25,10 @@ import type {
   CalendarSelfStatus,
   CalendarSource,
   CalendarSourceReason,
-} from '../types.js';
+  // Type-only, and pointed at the plugin on purpose: the event shape is the calendar
+  // plugin's contract now, and this file is one implementation of its `CalendarSource`.
+  // Erased at build time, so core keeps no runtime dependency on a plugin.
+} from '../../../integrations/calendar/types.js';
 
 const execFileAsync = promisify(execFile);
 // v2: helper re-execs with TCC responsibility disclaimed and carries its own
@@ -85,16 +89,10 @@ interface HelperError {
   code: string;
 }
 
-/** Thrown for helper-reported failures so routes can map codes → HTTP. */
-export class CalendarHelperError extends Error {
-  constructor(
-    message: string,
-    public readonly code: string
-  ) {
-    super(message);
-    this.name = 'CalendarHelperError';
-  }
-}
+// Re-exported, not declared here: the class moved to ../helper-error.js so a consumer that
+// only throws it (the calendar plugin) does not drag this module and helper-build.js into
+// its bundle. Existing importers of this path keep working.
+export { CalendarHelperError };
 
 const HELPER_SPEC: HelperSpec = {
   name: 'walnut-calendar',

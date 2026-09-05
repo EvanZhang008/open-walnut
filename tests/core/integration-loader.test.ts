@@ -284,7 +284,7 @@ describe('migrateConfigToPlugins', () => {
     expect(result.plugins).toBeUndefined();
   });
 
-  it('keeps top-level calendar config when the Calendar Plugin is installed', async () => {
+  it('copies top-level calendar config into plugins.calendar and keeps the original', async () => {
     const config = {
       version: 1,
       calendar: {
@@ -295,11 +295,20 @@ describe('migrateConfigToPlugins', () => {
     };
     await fsp.writeFile(CONFIG_FILE, yaml.dump(config));
 
-    expect(await migrateConfigToPlugins()).toBe(false);
+    expect(await migrateConfigToPlugins()).toBe(true);
 
     const result = yaml.load(await fsp.readFile(CONFIG_FILE, 'utf-8')) as Record<string, unknown>;
+    // COPY, not move: the calendar is a plugin now, but a rollback to a Walnut that
+    // still read the top-level key has to find it there.
     expect(result.calendar).toEqual(config.calendar);
-    expect((result.plugins as Record<string, unknown> | undefined)?.calendar).toBeUndefined();
+    // `enabled` becomes `source_enabled`, because `plugins.<id>.enabled` is the plugin
+    // lifecycle switch — writing the calendar's own on/off flag there would turn the
+    // whole plugin off and take its routes with it.
+    expect((result.plugins as Record<string, unknown>).calendar).toEqual({
+      source_enabled: false,
+      hidden_calendar_ids: ['private-calendar'],
+      visible_calendar_ids: ['work-calendar'],
+    });
   });
 
   it('self-heals a mis-migrated plugins.ui back to top-level ui', async () => {

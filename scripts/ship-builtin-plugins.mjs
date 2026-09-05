@@ -14,7 +14,8 @@
  * with a `web` entry, regardless of where it was discovered
  * (src/core/integration-loader.ts, src/core/plugins/plugin-web-module.ts). All that
  * was missing is the artifact: `tsup` only picks up `src/integrations/<id>/index.ts`,
- * and the manifest copy loop in package.json copies manifest.json and nothing else.
+ * and the manifest copy loop in package.json copies only manifest.json plus a plugin's own
+ * `skills/` dir (added when the calendar became a plugin and brought its skill along).
  *
  * Two traps this file encodes:
  *

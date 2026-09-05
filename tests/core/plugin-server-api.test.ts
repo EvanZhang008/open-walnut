@@ -24,6 +24,8 @@ import { HookDispatcher, setSessionHookDispatcher } from '../../src/core/session
 import { activate as activateCalendar } from '../../src/integrations/calendar/index.js'
 import { activate as activateMsTodo } from '../../src/integrations/ms-todo/index.js'
 import { activate as activateJira } from '../../src/integrations/jira/index.js'
+import { disposeCoreServices, publishCoreService } from '../../src/core/platform-services.js'
+import { createMockCalendarSource } from '../helpers/mock-calendar-source.js'
 import { createMockPlugin, createTestPluginApi } from './plugin-test-utils.js'
 
 const logger: PluginLogger = {
@@ -46,7 +48,21 @@ afterEach(async () => {
   removeOwnedMethods('sample-plugin')
   setSessionHookDispatcher(null)
   bus.unsubscribe('test-observer')
+  disposeCoreServices()
 })
+
+/**
+ * The host half of `core:calendar-source`, over a mock source. The real one reaches the
+ * signed EventKit helper, which compiles Swift and reads the developer's own calendars.
+ */
+function publishMockCalendarSource(): void {
+  publishCoreService('calendar-source', {
+    createSource: () => createMockCalendarSource().source,
+    authStatus: async () => 'granted',
+    requestAccess: async () => 'granted',
+    helperFallback: () => null,
+  })
+}
 
 function setup(pluginId = 'sample-plugin', pluginName = 'Sample Plugin') {
   const context = new PluginContext({
@@ -88,7 +104,10 @@ describe('createServerPluginApi', () => {
     expect(jira.collected.migrations).toHaveLength(1)
 
     const calendar = setup('calendar', 'Calendar')
-    await activateCalendar(calendar.api)
+    publishMockCalendarSource()
+    // The calendar is a plugin now, so its activate hands back the lifetime that owns the
+    // adopted service and its refresh poll. Dispose it or the poll outlives the test.
+    const calendarLifetime = await activateCalendar(calendar.api)
     expect(calendar.collected.tools.map((tool) => tool.name)).toEqual([
       'calendar_query',
       'calendar_event_create',
@@ -99,6 +118,7 @@ describe('createServerPluginApi', () => {
 
     await msTodo.context.dispose()
     await jira.context.dispose()
+    await calendarLifetime.dispose()
     await calendar.context.dispose()
     expect(msTodo.collected).toMatchObject({
       sync: null,

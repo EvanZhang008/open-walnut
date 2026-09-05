@@ -44,10 +44,10 @@ import { timeRouter, startTimeTracking, stopTimeTracking } from './routes/time.j
 import { imagesRouter } from './routes/images.js'
 import { localImageRouter } from './routes/local-image.js'
 import { fileContentRouter } from './routes/file-content.js'
-import { calendarRouter } from './routes/calendar.js'
+import { createCalendarAliasRouter } from './routes/calendar-alias.js'
 import { permissionsRouter } from './routes/permissions.js'
 import { warmLauncherDetection } from '../core/permissions/darwin.js'
-import { getCalendarService } from '../core/calendar/index.js'
+import { installCalendarEventForwarder, removeCalendarEventForwarder } from '../core/calendar-events-shim.js'
 import { filesRouter } from './routes/files.js'
 import { fileOpsRouter } from './routes/file-ops.js'
 import { fileRawRouter } from './routes/file-raw.js'
@@ -75,7 +75,7 @@ import * as chatHistory from '../core/chat-history.js'
 import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
 import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, getPluginLifecycleRecords, loadNewPlugins, loadPlugins, migrateConfigToPlugins, reloadLoadedPlugin, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
-import { disposeCoreServices } from '../core/platform-services.js'
+import { disposeCoreServices, publishCalendarSource } from '../core/platform-services.js'
 import type { SyncPollContext } from '../core/integration-types.js'
 import { syncReconciler } from '../core/sync-reconciler.js'
 import { integrationsRouter } from './routes/integrations.js'
@@ -1448,7 +1448,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/file-raw', fileRawRouter)
   // Per-file version timeline (Walnut snapshots + git) for the file the editor has open.
   app.use('/api/file-history', fileHistoryRouter)
-  app.use('/api/calendar', calendarRouter)
+  // /api/calendar is a compatibility alias mounted beside the plugin dispatcher below,
+  // because it hands off to that same instance.
   app.use('/api/permissions', permissionsRouter)
   app.use('/api/files', filesRouter)
   // Mutations (mkdir/create/rename/duplicate/delete) share the /api/files
@@ -1520,9 +1521,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // Live dispatcher: each request resolves the current owner from the registry, so
   // disable/reload removes old handlers without mutating Express's private stack.
-  app.use('/api/plugins', createPluginRouteDispatcher(registry, {
+  const pluginRouteDispatcher = createPluginRouteDispatcher(registry, {
     ...(CLOUD_MODE ? { relay: relayPrimaryPluginHttpRequest } : {}),
-  }))
+  })
+  // Legacy path for the calendar, which is a plugin now. Shares the dispatcher instance
+  // above so relay behaviour cannot drift between the two spellings; delete both the mount
+  // and routes/calendar-alias.ts once web/src calls /api/plugins/calendar/*.
+  app.use('/api/calendar', createCalendarAliasRouter(registry, CLOUD_MODE, pluginRouteDispatcher))
+  app.use('/api/plugins', pluginRouteDispatcher)
 
   // Plugin apps: the catalogue (under /api, so it inherits auth) and the static
   // file surface for a plugin's own HTML. Both read the registry live per request,
@@ -4141,6 +4147,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.web.error('config migration failed', { error: err instanceof Error ? err.message : String(err) })
   }
 
+  // -- Core capabilities the plugins consume (must precede loadPlugins) --
+  // The calendar plugin `require`s core:calendar-source inside its activate, so publishing
+  // after this line would fail its activation. The forwarder keeps the legacy
+  // `calendar:updated` name alive for the web stores that still listen for it.
+  publishCalendarSource()
+  installCalendarEventForwarder()
+
   // -- Load integration plugins --
   try {
     await loadPlugins(registry)
@@ -4160,10 +4173,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   startPluginSyncPolling()
   startupPhase('plugin sync polling started')
 
-  // -- Calendar service (EventKit cache + periodic refresh; no-op off-macOS/cloud) --
-  getCalendarService()
-    .init()
-    .catch((err) => log.web.warn('calendar service init failed', { error: String(err).slice(0, 200) }))
+  // The calendar cache + periodic refresh belong to the calendar plugin's activate now, so
+  // the loop above started them and disposeLoadedPlugins stops them. Nothing used to.
 
   // Permission Doctor: snapshot the launcher chain NOW — deploy-script parents
   // exit within seconds and the chain reparents to launchd, after which the
@@ -5037,6 +5048,7 @@ export async function stopServer(): Promise<void> {
   await stopPluginSyncPolling()
   try { await disposeLoadedPlugins(registry) } catch { /* best-effort shutdown */ }
   disposeCoreServices() // after the plugins, so a deactivate may still use a core service
+  removeCalendarEventForwarder()
   pluginSoftReload = async () => {}
   pluginMutationTail = Promise.resolve()
   registry.clear()

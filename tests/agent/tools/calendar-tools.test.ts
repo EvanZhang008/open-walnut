@@ -7,11 +7,19 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants());
 
-import { CalendarService, _setCalendarServiceForTest } from '../../../src/core/calendar/index.js';
-import { CalendarHelperError } from '../../../src/core/calendar/index.js';
+import {
+  CalendarService,
+  getCalendarService,
+  _setCalendarServiceForTest,
+} from '../../../src/integrations/calendar/service.js';
+import { CalendarHelperError } from '../../../src/core/calendar/sources/eventkit.js';
 import { createMockCalendarSource, type MockCalendarState } from '../../helpers/mock-calendar-source.js';
-import { calendarTools } from '../../../src/agent/tools/calendar-tools.js';
+import { createCalendarTools } from '../../../src/integrations/calendar/tools.js';
 import type { ToolDefinition } from '../../../src/agent/tools.js';
+
+// The tools resolve the plugin's service per call, so one array built here sees whichever
+// instance beforeEach installed.
+const calendarTools = createCalendarTools(getCalendarService);
 
 let state: MockCalendarState;
 

@@ -19,7 +19,8 @@ import { Router } from 'express';
 import { execFile } from 'node:child_process';
 import { getPermissionsReport } from '../../core/permissions/darwin.js';
 import { requestCalendarAccess } from '../../core/calendar/sources/eventkit.js';
-import { getCalendarService } from '../../core/calendar/index.js';
+import { bus } from '../../core/event-bus.js';
+import type { PermissionGrantedEvent } from '../../core/event-types.js';
 import { log } from '../../logging/index.js';
 
 export const permissionsRouter = Router();
@@ -77,13 +78,12 @@ permissionsRouter.post('/:id/request', async (req, res) => {
   }
   const state = await requestCalendarAccess();
   if (state === 'granted') {
-    // The user just granted mid-session: refresh so the calendar view fills
-    // in without them hunting for a refresh button.
-    getCalendarService()
-      .refreshAll()
-      .catch((err: unknown) =>
-        log.calendar.warn('post-grant refresh failed', { error: String(err).slice(0, 200) })
-      );
+    // The user just granted mid-session: announce it so whoever owns the calendar refreshes
+    // and the view fills in without them hunting for a refresh button. An event rather than
+    // a direct call, because the calendar is a plugin now and this route must not hold a
+    // reference into one; the calendar plugin subscribes and refreshes itself.
+    const granted: PermissionGrantedEvent = { id: 'calendar' };
+    bus.emit('permission:granted', granted, ['web-ui'], { source: 'permissions' });
   }
   res.json({ state });
 });

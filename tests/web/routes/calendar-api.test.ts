@@ -13,8 +13,8 @@ vi.mock('../../../src/constants.js', () => createMockConstants());
 
 import { WALNUT_HOME } from '../../../src/constants.js';
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js';
-import { CalendarService, _setCalendarServiceForTest } from '../../../src/core/calendar/index.js';
-import { CalendarHelperError } from '../../../src/core/calendar/index.js';
+import { CalendarService, _setCalendarServiceForTest } from '../../../src/integrations/calendar/service.js';
+import { CalendarHelperError } from '../../../src/core/calendar/sources/eventkit.js';
 import { createMockCalendarSource, type MockCalendarState } from '../../helpers/mock-calendar-source.js';
 import { startServer, stopServer } from '../../../src/web/server.js';
 

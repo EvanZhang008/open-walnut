@@ -10,20 +10,45 @@ export interface PluginRouteDispatcherOptions {
   relay?(request: PluginHttpRelayRequest): Promise<PluginHttpRelayResponse>
 }
 
-export function createPluginBodyParser(
+function pluginBodyParser(
   registry: IntegrationRegistry,
   cloudMode: boolean,
+  pluginIdOf: (request: Request) => string | undefined,
 ): RequestHandler {
   const raw = express.raw({ type: '*/*', limit: '15mb' })
   return (request, response, next) => {
-    const rawPluginId = request.params.pluginId
-    const pluginId = Array.isArray(rawPluginId) ? rawPluginId[0] : rawPluginId
-    if (cloudMode || registry.get(pluginId)?.apiVersion === 1) {
+    const pluginId = pluginIdOf(request)
+    if (cloudMode || (pluginId !== undefined && registry.get(pluginId)?.apiVersion === 1)) {
       raw(request, response, next)
       return
     }
     next()
   }
+}
+
+export function createPluginBodyParser(
+  registry: IntegrationRegistry,
+  cloudMode: boolean,
+): RequestHandler {
+  return pluginBodyParser(registry, cloudMode, (request) => {
+    const rawPluginId = request.params.pluginId
+    return Array.isArray(rawPluginId) ? rawPluginId[0] : rawPluginId
+  })
+}
+
+/**
+ * The same body parsing for a mount whose plugin id is fixed rather than a path parameter.
+ *
+ * A legacy alias route (`/api/calendar` → `/api/plugins/calendar`) needs this: the parser
+ * above is mounted at `/api/plugins/:pluginId`, so an alias that only rewrites the URL and
+ * hands off to the dispatcher would deliver an EMPTY body on every POST/PATCH/PUT.
+ */
+export function createPluginBodyParserFor(
+  registry: IntegrationRegistry,
+  cloudMode: boolean,
+  pluginId: string,
+): RequestHandler {
+  return pluginBodyParser(registry, cloudMode, () => pluginId)
 }
 
 function requestHeaders(request: Request): Record<string, string> {

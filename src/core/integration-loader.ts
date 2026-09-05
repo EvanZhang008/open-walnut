@@ -1779,8 +1779,15 @@ async function getInstalledPluginIds(): Promise<Set<string>> {
  */
 const MIS_MIGRATED_CONFIG_KEYS = ['providers', 'ui', 'audio', 'developer'] as const;
 
-// The Calendar Plugin owns tools, while CalendarService still owns this top-level config.
-const CORE_CONFIG_KEYS = new Set(['calendar']);
+/**
+ * Sections the generic MOVE loop below must not touch.
+ *
+ * `calendar` is here even though the calendar IS a plugin, because its config is COPIED
+ * rather than moved for one release (see the copy block inside migrateConfigToPlugins): a
+ * rollback to a Walnut whose calendar still read the top-level key has to find it there.
+ * Drop the entry, the copy block and the plugin's legacy fallback together.
+ */
+const COPIED_NOT_MOVED_CONFIG_KEYS = new Set(['calendar']);
 
 /**
  * One-time migration: move legacy top-level integration config keys
@@ -1834,7 +1841,7 @@ export async function migrateConfigToPlugins(): Promise<boolean> {
   for (const [key, val] of Object.entries(raw)) {
     // `plugins` is the destination, not a candidate: a plugin dir literally named
     // "plugins" would otherwise fold the whole section into itself.
-    if (key === 'plugins' || CORE_CONFIG_KEYS.has(key)) continue;
+    if (key === 'plugins' || COPIED_NOT_MOVED_CONFIG_KEYS.has(key)) continue;
     const pluginId = key.replace(/_/g, '-'); // ms_todo → ms-todo
     // Positive evidence only: a plugin dir of that name exists, or the plugin is
     // gone but the key is known-legacy. Everything else is a config section.
@@ -1848,6 +1855,30 @@ export async function migrateConfigToPlugins(): Promise<boolean> {
       delete raw[key];
       changed = true;
     }
+  }
+
+  // One-time COPY of the legacy top-level `calendar` section into the calendar plugin's own
+  // namespace. A copy, not a move (which is why the key is in
+  // COPIED_NOT_MOVED_CONFIG_KEYS): for one release, rolling back to a Walnut whose
+  // CalendarService read `config.calendar` still has to work.
+  //
+  // The source toggle is RENAMED on the way in. `plugins.<id>.enabled` is the plugin
+  // lifecycle switch the store writes, so copying the calendar's own on/off flag straight
+  // across would turn the whole plugin off and take its routes with it — including the
+  // route the Settings toggle would need to turn it back on.
+  //
+  // Delete this block, the entry above, the top-level `calendar` key (`Config.calendar` in
+  // src/core/types.ts) and the plugin's mergeCalendarConfig fallback
+  // (src/integrations/calendar/service.ts) together once 0.4.6 has shipped.
+  const legacyCalendar = raw.calendar;
+  if (!plugins.calendar && legacyCalendar && typeof legacyCalendar === 'object' && !Array.isArray(legacyCalendar)) {
+    const { enabled, ...rest } = legacyCalendar as Record<string, unknown>;
+    plugins.calendar = {
+      ...rest,
+      ...(enabled !== undefined ? { source_enabled: !!enabled } : {}),
+    };
+    log.info('config migration: copied calendar → plugins.calendar (top-level key kept for one release)');
+    changed = true;
   }
 
   if (changed) {

@@ -2029,7 +2029,7 @@ const { startServer, stopServer } = await import('../../../src/web/server.js')
 // calendars (TCC prompt on the node process). Fixture events are stable and
 // writable, so event-chip specs can drag/resize/create against them.
 {
-  const { CalendarService, _setCalendarServiceForTest } = await import('../../../src/core/calendar/index.js')
+  const { CalendarService, _setCalendarServiceForTest } = await import('../../../src/integrations/calendar/service.js')
   const { createMockCalendarSource, fixtureCalendars } = await import('../../helpers/mock-calendar-source.js')
   // Events anchor to TODAY (specs navigate by local date, not a fixed one).
   const pad2 = (n: number) => String(n).padStart(2, '0')

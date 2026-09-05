@@ -299,6 +299,8 @@ Rules to know before you design a service:
 - **Ask only for what you declared.** `get` on a plugin absent from your `dependencies` throws and names the manifest line you are missing. The exception is `core:<name>`, a capability the host itself publishes (`walnut.services.require('core:calendar-source')`): a plugin cannot declare a dependency on the host, so those keys are gated by `engines.walnut` instead. Never list `core` in `dependencies`: the id is reserved for the host, no plugin may use it, and your plugin would wait forever for something that can never be installed.
 - **`onChange`** reports every publish, replace and removal, including your own, and the subscription is owned by your plugin.
 
+The calendar is the reference for the `core:*` half of this seam. It ships as a built-in plugin in `src/integrations/calendar/`, and everything the macOS calendar grant needs stays in the host: the plugin asks for `core:calendar-source` in its `activate`, and the host publishes that method bag from `src/core/platform-services.ts` before it loads any plugin. Read it when you are designing a plugin around a resource the user cannot be asked to re-authorize: the signed helper that carries the permission stays host side, the plugin owns the polling, the tools, the routes and the config, and its `deactivate` gives all of that back.
+
 ### Hooks
 
 `onSessionWillReap` runs once per idle episode, shortly before Walnut reaps an idle session. It is not a turn-complete event.

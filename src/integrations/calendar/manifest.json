@@ -1,15 +1,43 @@
 {
   "id": "calendar",
   "name": "Calendar",
-  "description": "Calendar tools backed by the Walnut calendar service",
-  "version": "1.0.0",
+  "description": "Reads and edits the Mac's calendars (every macOS system account: iCloud, Google, Exchange) and serves them to the calendar views and the Personal AI",
+  "version": "2.0.0",
   "apiVersion": 1,
   "engines": {
-    "walnut": ">=0.3.2"
+    "walnut": ">=0.4.5"
   },
   "server": "index.js",
   "configSchema": {
     "type": "object",
-    "properties": {}
+    "properties": {
+      "source_enabled": { "type": "boolean", "default": true },
+      "hidden_calendar_ids": { "type": "array", "items": { "type": "string" } },
+      "visible_calendar_ids": { "type": "array", "items": { "type": "string" } },
+      "refresh_minutes": { "type": "integer", "default": 15 },
+      "read_ttl_seconds": { "type": "integer", "default": 60 }
+    }
+  },
+  "uiHints": {
+    "source_enabled": {
+      "label": "Show Mac calendars",
+      "help": "Off keeps the plugin loaded but serves no events. Settings → Calendar writes this."
+    },
+    "hidden_calendar_ids": {
+      "label": "Hidden calendars",
+      "help": "Calendar ids to leave out of every view."
+    },
+    "visible_calendar_ids": {
+      "label": "Visible calendars",
+      "help": "When set, ONLY these calendar ids show, including calendars added to the Mac later."
+    },
+    "refresh_minutes": {
+      "label": "Background poll (minutes)",
+      "help": "How often cached windows are re-read so open views hear about changes nobody asked for."
+    },
+    "read_ttl_seconds": {
+      "label": "Read staleness (seconds)",
+      "help": "How stale a served read may be before it re-reads the Mac. 0 never serves from cache."
+    }
   }
 }

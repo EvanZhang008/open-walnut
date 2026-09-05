@@ -940,7 +940,13 @@ export interface Config {
   agent?: AgentConfig;
   /** Plugin configurations. Keys are plugin IDs (e.g. 'ms-todo'). Each plugin defines its own config schema. */
   plugins?: Record<string, Record<string, unknown> & { enabled?: boolean }>;
-  /** External calendar display (EventKit — all macOS system-account calendars). */
+  /** External calendar display (EventKit — all macOS system-account calendars).
+   *
+   *  LEGACY as of the calendar becoming a plugin: the live section is `plugins.calendar`
+   *  (`CalendarPluginConfig` in src/integrations/calendar/service.ts, where `enabled` is
+   *  spelled `source_enabled`). `migrateConfigToPlugins` COPIES this key rather than moving
+   *  it so a rollback still finds it; delete this whole block, that copy block and the
+   *  plugin's `mergeCalendarConfig` fallback together once 0.4.6 has shipped. */
   calendar?: {
     /** Master toggle. Default: true (source still reports unavailable off-macOS). */
     enabled?: boolean;

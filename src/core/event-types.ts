@@ -746,6 +746,16 @@ export interface ConversationUpdatedEvent { agentId: string; conversation?: Conv
 
 export interface ConfigChangedEvent { key?: string; config?: Record<string, unknown> }
 
+/**
+ * The user just granted a macOS permission through Settings → Permissions.
+ *
+ * Raised by src/web/routes/permissions.ts after a successful grant so whoever owns that
+ * capability can act on it without core holding a reference into them. `id` is the
+ * permission id the route uses ('calendar', …); today's only consumer is the calendar
+ * plugin, which re-reads the calendars the grant just made visible.
+ */
+export interface PermissionGrantedEvent { id: string }
+
 // ── System health events ──
 
 // ── Mobile client incidents ──
@@ -994,6 +1004,8 @@ export interface EventPayloadMap {
   'sync:conflict-resolved': SyncConflictResolvedEvent;
 
   'config:changed': ConfigChangedEvent;
+
+  'permission:granted': PermissionGrantedEvent;
 
   'system:health': SystemHealthEvent;
 

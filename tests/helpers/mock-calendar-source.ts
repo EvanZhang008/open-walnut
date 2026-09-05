@@ -11,8 +11,8 @@ import type {
   CalendarEventPatch,
   CalendarInfo,
   CalendarSource,
-} from '../../src/core/calendar/types.js';
-import { CalendarHelperError } from '../../src/core/calendar/index.js';
+} from '../../src/integrations/calendar/types.js';
+import { CalendarHelperError } from '../../src/core/calendar/sources/eventkit.js';
 
 export interface MockCalendarState {
   calendars: CalendarInfo[];
