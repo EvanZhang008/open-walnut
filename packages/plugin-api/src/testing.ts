@@ -1,5 +1,8 @@
 import type { Disposable, PluginLogger, WalnutTask, WalnutTaskSummary } from './shared.js'
 import type {
+  LetterAnsweredEvent,
+  LetterSendInput,
+  LetterState,
   PluginEvent,
   PluginNotice,
   PluginOpDefinition,
@@ -64,6 +67,13 @@ export interface FakeWalnutResult {
    * assert what your own plugin published.
    */
   services: Map<string, ServiceApi>
+  /** Every letter the plugin sent, in order, with its current state. */
+  letters: LetterState[]
+  /**
+   * Stand in for the human: records the answer on the letter and fires the plugin's
+   * `onAnswered` handlers, the way the real inbox does. A letter can be answered once.
+   */
+  answerLetter(letterId: string, actionId: string, freeText?: string): Promise<void>
 }
 
 export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutResult {
@@ -73,6 +83,19 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const emitted: PluginEvent[] = []
   const registeredOps: PluginOpDefinition[] = []
   const services = new Map<string, ServiceApi>()
+  const letters: LetterState[] = []
+  const letterWatchers = new Set<(event: LetterAnsweredEvent) => void | Promise<void>>()
+  const answerLetter = async (letterId: string, actionId: string, freeText?: string, source: LetterAnsweredEvent['source'] = 'web') => {
+    const letter = letters.find((one) => one.letterId === letterId)
+    if (!letter) throw new Error(`Letter "${letterId}" not found`)
+    if (letter.answered) throw new Error(`Letter "${letterId}" was already answered`)
+    const action = letter.actions.find((one) => one.id === actionId)
+    const label = action?.label ?? actionId
+    const answeredAt = Date.now()
+    letter.answered = { actionId, label, freeText, at: answeredAt }
+    const event: LetterAnsweredEvent = { letterId, actionId, label, freeText, answeredAt, source, pluginId: options.pluginId ?? 'test-plugin' }
+    for (const handler of letterWatchers) await handler(event)
+  }
   const serviceWatchers = new Set<(change: ServiceChange) => void | Promise<void>>()
   const subscriptions = new Set<{ names: string[]; handler: (event: PluginEvent) => void | Promise<void> }>()
   const files = new Map<string, unknown>()
@@ -154,6 +177,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     pluginId: options.pluginId ?? 'test-plugin',
     pluginName: options.pluginName ?? 'Test Plugin',
     walnutVersion: options.walnutVersion ?? '0.0.0-test',
+    replica: false,
     signal: controller.signal,
     log: logger(),
     tasks: {
@@ -249,6 +273,30 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
         serviceWatchers.add(handler)
         return disposable(() => serviceWatchers.delete(handler))
       },
+      // The fake never runs a service method on another plugin's behalf, so there is no caller.
+      caller() { return undefined },
+    },
+    // In-memory inbox: `send` records the letter, `answerLetter` on the result plays the human.
+    letters: {
+      async send(input: LetterSendInput) {
+        const letterId = `letter-${letters.length + 1}`
+        letters.push({ letterId, subject: input.subject, actions: structuredClone(input.actions ?? []) })
+        return { letterId }
+      },
+      async reply() { return undefined },
+      async withdraw(letterId, input) {
+        const letter = letters.find((one) => one.letterId === letterId)
+        if (!letter || letter.answered) return
+        await answerLetter(letterId, 'withdrawn', input.note, 'plugin')
+      },
+      async get(letterId) {
+        const letter = letters.find((one) => one.letterId === letterId)
+        return letter ? structuredClone(letter) : null
+      },
+      onAnswered(handler) {
+        letterWatchers.add(handler)
+        return disposable(() => letterWatchers.delete(handler))
+      },
     },
     events,
     http: {
@@ -319,5 +367,5 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     ...options.overrides,
   }
 
-  return { api, notices, errors, emitted, registeredOps, services }
+  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter }
 }
