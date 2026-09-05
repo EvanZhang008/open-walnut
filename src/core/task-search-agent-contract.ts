@@ -12,13 +12,19 @@
 import type { Task } from './types.js';
 
 /** Bump to invalidate cached agent answers when the prompt contract changes. */
-export const AGENT_SEARCH_PROMPT_V = 'v4';
+export const AGENT_SEARCH_PROMPT_V = 'v5';
 
 export const AGENT_SEARCH_MAX_RESULTS = 5;
 const EVIDENCE_MAX_CHARS = 200;
 const SUMMARY_MAX_CHARS = 300;
 
-const PROMPT_HEADER = `You find WHICH of the user's Walnut tasks matches a search phrase. You are a search tool, not a chat assistant. Reply with JSON only.
+// v5 (2026-09-05): the answer is a RESULTS LIST, not one pick. A live query
+// ("side quesiton ask walnut") had two genuine matches in the seed; v4's
+// "Usually ONE result" made the model return only the one whose title shared
+// the user's misspelling, and the IN_PROGRESS task the user actually wanted
+// (a plain "side question" in its title) never showed. Rows now carry
+// phase + updated so recency is a real signal instead of a wish.
+const PROMPT_HEADER = `You produce the ranked results list of the user's Walnut task search: WHICH tasks match a search phrase. You are a search tool, not a chat assistant. Reply with JSON only.
 
 ## The failure you exist to prevent
 A task's own title/note are often WRONG or EMPTY (tasks auto-created for a coding session start as "Session: <folder>" with a blank note); the real intent lives ONLY in the session transcript. Task-lane-only search misses these.`;
@@ -27,14 +33,18 @@ const PROMPT_FOOTER = `## Owner rule
 - A result with type:"task": its taskId is a candidate answer.
 - A result with type:"session": its taskId is the task that OWNS that transcript — return THAT task. A session hit with a placeholder title but a matching snippet is a STRONG hit, not a weak one.
 - The same task reached via both lanes is ONE result. Never list a session as a result.
-- Prefer recently-active tasks over old loosely-related ones.
+
+## Judging rows
+- Judge MEANING, not string identity. The phrase is typed fast and often misspelled ("quesiton" = "question"); a row that repeats the user's exact typo is NOT more relevant than a row with the correct spelling, and a row's numeric score measures string similarity, not relevance.
+- Rows carry phase and updated (YYYY-MM-DD). When two tasks fit comparably, the active one (not COMPLETE) and the recently-updated one ranks FIRST; an old COMPLETE task on the same topic still belongs in the list, below it.
+- confidence: high = the phrase's meaning is plainly this task's topic; medium = same topic, looser wording; low = shares a word or two.
 
 ## Output — your ENTIRE final reply is this JSON object. No prose before it, no quoted rows, no code fence. Every extra output token is user-visible latency: keep it SHORT.
 {"summary":"<at most 8 words, or omit>",
  "results":[{"task_id":"<EXACT id copied from tool output>",
              "evidence":"<ONE short phrase (max 12 words) from a snippet you actually saw>",
              "confidence":"high"|"medium"|"low"}]}
-Usually ONE result; at most 3 when genuinely ambiguous, best first. Zero matches -> {"results":[]} — that is a correct answer.
+List EVERY distinct task that plausibly matches, best first, up to 5 — this is a results list, and the user frequently wants the SECOND match. Returning one task when another row also fits the phrase is a wrong answer. Zero matches -> {"results":[]} — that is a correct answer.
 NEVER invent or reconstruct a task_id; an id not present in a tool result is discarded and counts as a wrong answer.
 Do NOT output titles, phases, or projects — those are attached from the database.`;
 
@@ -62,13 +72,13 @@ export function buildCliSystemPrompt(apiBase?: string): string {
     ? `for q in 'variant one' 'variant two' '变体三'; do curl -sGm15 "${apiBase}/api/search" --data-urlencode "q=$q" -d "types=task,session" -d "limit=5" -d "slim=1" & done; wait`
     : `for q in 'variant one' 'variant two' '变体三'; do walnut tools call search "{\\"q\\":\\"$q\\",\\"types\\":\\"task,session\\",\\"limit\\":15}" & done; wait`;
   const rowNote = apiBase
-    ? `\n   Rows are compact {type,id,title,summary}: a task row's id IS the task_id; a session row's id is ALREADY the owning task's id — copy id exactly.`
+    ? `\n   Rows are compact {type,id,title,summary,phase,updated}: a task row's id IS the task_id; a session row's id is ALREADY the owning task's id — copy id exactly.`
     : '';
   return `${PROMPT_HEADER}
 
 ## Method — search via Bash. Every extra Bash call costs seconds; fewest calls wins.
   ${single}${rowNote}
-0. The user message already contains SEED RESULTS: the raw query was searched for you. If they clearly identify the owning task, answer IMMEDIATELY — run nothing.
+0. The user message already contains SEED RESULTS: the raw query was searched for you. If they already show the plausible matches, answer IMMEDIATELY with ALL of them — run nothing.
 1. Otherwise run your query variants in ONE Bash command, concurrently — AT MOST 4 variants (more overflows the tool output and you see NOTHING):
   ${batched}
    Use DIFFERENT vocabulary — the literal strings a transcript would contain (package names, file extensions, commands, API names) plus an English <-> Chinese translation. The seed query counts as already used.
@@ -92,7 +102,7 @@ export const SYSTEM_PROMPT = buildCliSystemPrompt();
 export const SYSTEM_PROMPT_TOOL_LOOP = `${PROMPT_HEADER}
 
 ## Method — every model round costs the user seconds. Fewest rounds wins.
-0. The user message already contains SEED RESULTS: the raw query was searched for you. If they clearly identify the owning task, answer IMMEDIATELY — no tool calls at all.
+0. The user message already contains SEED RESULTS: the raw query was searched for you. If they already show the plausible matches, answer IMMEDIATELY with ALL of them — no tool calls at all.
 1. Otherwise: issue SEVERAL search calls AT ONCE (parallel tool calls in one reply): variants with DIFFERENT vocabulary — the literal strings a transcript would contain (package names, file extensions, commands, API names) — plus an English <-> Chinese translation when the query could be phrased in the other language.
 2. Only if still nothing convincing: ONE more batched round with new vocabulary. Never repeat a query (the seed query counts as used).
 Then answer. Do not deliberate between rounds — a wide batch of searches beats thinking. Keep the answer terse: short evidence quotes, one-line summary.
@@ -104,7 +114,7 @@ ${PROMPT_FOOTER}`;
  *  search results, pre-fetched server-side so the common case needs ONE model
  *  round instead of two (search round + answer round). */
 export function buildSeedResultsBlock(rowsJson: string): string {
-  return `\n\nSEED RESULTS — the raw query was already searched for you (search tool, same format):\n${rowsJson}\nIf these identify the owning task, answer now without any tool calls.`;
+  return `\n\nSEED RESULTS — the raw query was already searched for you (search tool, same format):\n${rowsJson}\nIf these already show the plausible matches, answer now with ALL of them, without any tool calls.`;
 }
 
 export function buildUserPrompt(query: string): string {

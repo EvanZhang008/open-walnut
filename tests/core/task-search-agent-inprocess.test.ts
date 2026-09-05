@@ -103,6 +103,31 @@ describe('in-process default engine wiring', () => {
     expect(rows[0]).toMatchObject({ type: 'session', taskId: 'mt65k8x5-8c2d', sessionId: 's1' });
   });
 
+  it('rows carry the owning task\'s phase + updated date (both lanes), so recency is judgeable', async () => {
+    const { addTask, updateTask } = await import('../../src/core/task-manager.js');
+    const { task: active } = await addTask({ title: 'Ask-question thread forking design' });
+    await updateTask(active.id, { phase: 'IN_PROGRESS' });
+    const { task: old } = await addTask({ title: 'side quesiton jsonstream' });
+    await updateTask(old.id, { phase: 'COMPLETE' });
+    // Seed rows: a task row and a session row whose owner is the active task.
+    searchMock.mockResolvedValue([
+      { type: 'task', title: old.title, snippet: 'side quesiton', taskId: old.id, score: 0.97263, matchField: 'title' },
+      { type: 'session', title: 'Ask-question thread forking design', snippet: 'btw side question', taskId: active.id, sessionId: 's-active', score: 0.42, matchField: 'description' },
+      { type: 'task', title: 'ghost', snippet: '', taskId: 'mtnotreal-0000', score: 0.1, matchField: 'title' },
+    ]);
+    loopMock.mockResolvedValue(EMPTY_ANSWER);
+    await runTaskSearchAgent('side quesiton ask walnut');
+    const [userPrompt] = loopMock.mock.calls[0];
+    const seed = JSON.parse(userPrompt.slice(userPrompt.indexOf('[{'), userPrompt.lastIndexOf(']') + 1));
+    const today = new Date().toISOString().slice(0, 10);
+    expect(seed[0]).toMatchObject({ type: 'task', taskId: old.id, phase: 'COMPLETE', updated: today, score: 0.97 });
+    // The session row is enriched from its OWNER — that is the whole point.
+    expect(seed[1]).toMatchObject({ type: 'session', taskId: active.id, phase: 'IN_PROGRESS', updated: today });
+    // An id the task table doesn't know stays a bare row (best-effort, never a throw).
+    expect(seed[2].phase).toBeUndefined();
+    expect(seed[2].updated).toBeUndefined();
+  });
+
   it('WALNUT_AGENT_SEARCH_MODEL overrides the catalog pick', async () => {
     process.env.WALNUT_AGENT_SEARCH_MODEL = 'global.anthropic.claude-opus-5';
     loopMock.mockResolvedValue(EMPTY_ANSWER);

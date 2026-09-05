@@ -27,7 +27,12 @@ interface SlimSearchResult {
   id: string
   title: string
   summary: string
+  /** Lifecycle of the task (for a session row: of the task that OWNS the
+   * transcript). Both lanes carry it so a caller can prefer the active,
+   * recently-touched task over an old finished one on the same topic. */
   phase?: string
+  /** `updated_at` as YYYY-MM-DD. */
+  updated?: string
   project?: string
   ref?: string
   /** True when this row was injected as a child of a matching parent task,
@@ -45,13 +50,14 @@ function oneLineSummary(snippet: string): string {
 }
 
 async function toSlimResults(results: SearchResult[]): Promise<SlimSearchResult[]> {
-  // Batch-resolve phase/project for task hits (score/snippet come from the
-  // search index, which deliberately doesn't carry task lifecycle fields).
-  // Enrichment is best-effort: if the task DB is unavailable, degrade to rows
-  // without phase/project rather than turning already-computed search results
-  // into a 500 (the verbose path never touches the task DB).
+  // Batch-resolve phase/project for task hits AND session hits via their
+  // owning task (score/snippet come from the search index, which
+  // deliberately doesn't carry task lifecycle fields). Enrichment is
+  // best-effort: if the task DB is unavailable, degrade to rows without
+  // phase/project rather than turning already-computed search results into
+  // a 500 (the verbose path never touches the task DB).
   const taskIds = [...new Set(
-    results.filter((r) => r.type === 'task' && r.taskId).map((r) => r.taskId!),
+    results.filter((r) => r.type !== 'memory' && r.taskId).map((r) => r.taskId!),
   )]
   let tasksById = new Map<string, Awaited<ReturnType<typeof listTasksByIds>>[number]>()
   try {
@@ -72,12 +78,13 @@ async function toSlimResults(results: SearchResult[]): Promise<SlimSearchResult[
       summary: oneLineSummary(r.snippet),
     }
     if (r.isAutoExpanded) base.isAutoExpanded = true
+    const task = r.type !== 'memory' && r.taskId ? tasksById.get(r.taskId) : undefined
+    if (task) {
+      base.phase = task.phase
+      base.updated = task.updated_at.slice(0, 10)
+      if (task.project) base.project = task.project
+    }
     if (r.type === 'task' && r.taskId) {
-      const task = tasksById.get(r.taskId)
-      if (task) {
-        base.phase = task.phase
-        if (task.project) base.project = task.project
-      }
       // ref is emitted even when enrichment missed (task deleted mid-flight
       // or DB down) — the pill still renders from id + title.
       base.ref = taskRefTag(r.taskId, r.title)

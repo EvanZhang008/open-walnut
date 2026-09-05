@@ -129,7 +129,7 @@ async function appendSeedResults(
     const { buildSeedResultsBlock } = await import('./task-search-agent-contract.js');
     const seed = await search(query, { types: ['task', 'session'], limit: SEARCH_ROW_LIMIT });
     progress({ kind: 'seed', q: query, count: seed.length });
-    return prompt + buildSeedResultsBlock(serializeRows(seed));
+    return prompt + buildSeedResultsBlock(await serializeRows(seed));
   } catch {
     return prompt; // seeding is an optimization — the engine can still search
   }
@@ -219,15 +219,32 @@ const ANSWER_MAX_TOKENS = 2000;
 
 type SearchRows = Awaited<ReturnType<typeof import('./search.js')['search']>>;
 
-function serializeRows(rows: SearchRows): string {
-  return JSON.stringify(rows.map((r) => ({
-    type: r.type,
-    title: r.title,
-    snippet: [...(r.snippet ?? '')].slice(0, SNIPPET_CAP).join(''),
-    ...(r.taskId ? { taskId: r.taskId } : {}),
-    ...(r.sessionId ? { sessionId: r.sessionId } : {}),
-    score: r.score,
-  })));
+/**
+ * Rows the model judges. The search index carries no lifecycle fields, so
+ * phase + updated (date only) are attached from the task table — for a
+ * session row via its OWNING task — otherwise "prefer the active, recent
+ * task" has nothing to stand on (2026-09-05: a months-old COMPLETE task
+ * outranked the IN_PROGRESS one the user meant). Enrichment is best-effort.
+ */
+async function serializeRows(rows: SearchRows): Promise<string> {
+  const ids = [...new Set(rows.map((r) => r.taskId).filter((id): id is string => !!id))];
+  let byId = new Map<string, { phase: string; updated_at: string }>();
+  try {
+    const { listTasksByIds } = await import('./task-manager.js');
+    byId = new Map((await listTasksByIds(ids)).map((t) => [t.id, t]));
+  } catch { /* rows still carry title + snippet + owner id */ }
+  return JSON.stringify(rows.map((r) => {
+    const task = r.taskId ? byId.get(r.taskId) : undefined;
+    return {
+      type: r.type,
+      title: r.title,
+      snippet: [...(r.snippet ?? '')].slice(0, SNIPPET_CAP).join(''),
+      ...(r.taskId ? { taskId: r.taskId } : {}),
+      ...(r.sessionId ? { sessionId: r.sessionId } : {}),
+      ...(task ? { phase: task.phase, updated: task.updated_at.slice(0, 10) } : {}),
+      score: Math.round(r.score * 100) / 100,
+    };
+  }));
 }
 
 async function inProcessEngine(
@@ -245,7 +262,7 @@ async function inProcessEngine(
     // loop (one search latency instead of N; the prompt tells the model to
     // batch its variants in one reply).
     parallelSafe: true,
-    description: 'Search the user\'s Walnut tasks and session transcripts. Returns JSON rows; a row with type "session" carries taskId = the task that OWNS that transcript. Batch query variants as parallel calls in one reply.',
+    description: 'Search the user\'s Walnut tasks and session transcripts. Returns JSON rows with phase + updated date; a row with type "session" carries taskId = the task that OWNS that transcript. Batch query variants as parallel calls in one reply.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -257,7 +274,7 @@ async function inProcessEngine(
       const q = String(params.q ?? '').trim();
       if (!q) return 'Error: empty query';
       const rows = await search(q, { types: ['task', 'session'], limit: SEARCH_ROW_LIMIT });
-      return serializeRows(rows);
+      return await serializeRows(rows);
     },
   };
 

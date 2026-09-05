@@ -8,7 +8,12 @@ import {
   validateAndEnrich,
   rankAgentResults,
   normalizeQueryKey,
+  buildCliSystemPrompt,
+  buildSeedResultsBlock,
   AGENT_SEARCH_MAX_RESULTS,
+  AGENT_SEARCH_PROMPT_V,
+  SYSTEM_PROMPT,
+  SYSTEM_PROMPT_TOOL_LOOP,
 } from '../../src/core/task-search-agent-contract.js';
 import type { Task } from '../../src/core/types.js';
 
@@ -69,7 +74,7 @@ describe('parseAgentAnswer', () => {
 
 describe('validateAndEnrich', () => {
   const tasks = [
-    task({ id: 'mt65k8x5-8c2d', title: 'Session: walnut', phase: 'AGENT_COMPLETE', project: 'walnut', updated_at: '2026-08-23T10:00:00.000Z' }),
+    task({ id: 'mt65k8x5-8c2d', title: 'Session: walnut', phase: 'NEED_ACTION', project: 'walnut', updated_at: '2026-08-23T10:00:00.000Z' }),
     task({ id: 'mtoldold-1111', title: 'Old viewer work', updated_at: '2025-01-01T00:00:00.000Z' }),
   ];
 
@@ -102,7 +107,7 @@ describe('validateAndEnrich', () => {
       tasks,
     );
     expect(results[0].title).toBe('Session: walnut');
-    expect(results[0].phase).toBe('AGENT_COMPLETE');
+    expect(results[0].phase).toBe('NEED_ACTION');
     expect(results[0].project).toBe('walnut');
     expect(results[0].updatedAt).toBe('2026-08-23T10:00:00.000Z');
   });
@@ -149,5 +154,40 @@ describe('rankAgentResults', () => {
 describe('normalizeQueryKey', () => {
   it('lowercases and collapses whitespace', () => {
     expect(normalizeQueryKey('  Docx   Preview \n Task ')).toBe('docx preview task');
+  });
+});
+
+/**
+ * v5 prompt contract (2026-09-05). Live failure: "side quesiton ask walnut"
+ * had TWO genuine matches in the seed rows; "Usually ONE result" made the
+ * model return only the task whose title shared the user's typo, and the
+ * IN_PROGRESS task the user meant never showed. The prompt is now a
+ * results-list contract with explicit typo + recency rules, and rows carry
+ * phase/updated so recency is judgeable. Pin the load-bearing sentences.
+ */
+describe('prompt contract v5: a results list, not one pick', () => {
+  it.each([
+    ['cli (walnut CLI fallback)', SYSTEM_PROMPT],
+    ['cli (local API)', buildCliSystemPrompt('http://127.0.0.1:1')],
+    ['in-process tool loop', SYSTEM_PROMPT_TOOL_LOOP],
+  ])('%s prompt asks for every plausible match and never "usually one"', (_name, prompt) => {
+    expect(prompt).toContain('List EVERY distinct task that plausibly matches, best first, up to 5');
+    expect(prompt).not.toContain('Usually ONE result');
+    // Seed shortcut must not collapse the list back to one pick.
+    expect(prompt).toContain('answer IMMEDIATELY with ALL of them');
+    // A shared misspelling is not relevance; the numeric score is string similarity.
+    expect(prompt).toContain('a row that repeats the user\'s exact typo is NOT more relevant');
+    // Recency/phase is a ranking signal the rows actually carry.
+    expect(prompt).toContain('Rows carry phase and updated (YYYY-MM-DD)');
+    expect(prompt).toContain('the active one (not COMPLETE) and the recently-updated one ranks FIRST');
+  });
+
+  it('the local-API row note documents the phase/updated fields the slim route emits', () => {
+    expect(buildCliSystemPrompt('http://127.0.0.1:1')).toContain('{type,id,title,summary,phase,updated}');
+  });
+
+  it('the seed block asks for ALL matches, and bumps the cache key past v4', () => {
+    expect(buildSeedResultsBlock('[]')).toContain('answer now with ALL of them');
+    expect(AGENT_SEARCH_PROMPT_V).not.toBe('v4');
   });
 });

@@ -121,6 +121,7 @@ describe('GET /api/search?slim=1', () => {
     expect(row.type).toBe('task');
     expect(row.title).toBe('Fix authentication bug');
     expect(row.phase).toBe(task.phase);
+    expect(row.updated).toBe(task.updated_at.slice(0, 10));
     expect(row.project).toBe('walnut');
     expect(row.ref).toBe(`<task-ref id="${task.id}" label="Fix authentication bug"/>`);
     // one-line summary, hard-bounded
