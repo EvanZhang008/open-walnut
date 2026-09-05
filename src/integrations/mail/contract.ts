@@ -34,6 +34,17 @@ export interface MailMessageDto {
   rfcMessageId: string
   from: MailAddress
   to: MailAddress[]
+  /**
+   * The other two recipient questions a reader and a reply both need.
+   *
+   * Both were in the stored payload from the first slice and neither reached the DTO, so the
+   * console's reader showed a mail addressed to eight people as if it were addressed to one, and
+   * `mail_read` had a commented-out `Cc:` line waiting for exactly this. Optional rather than
+   * defaulted to `[]` because the cache holds rows written before the field existed, and "the
+   * message had no Cc" and "this row predates the field" are different facts.
+   */
+  cc?: MailAddress[]
+  replyTo?: MailAddress[]
   subject: string
   snippet: string
   /** Epoch milliseconds. The header string rides `sentAtHeader`, never wall time. */
@@ -46,6 +57,14 @@ export interface MailMessageDto {
   /** Set when the provider will never hand this body over (over the cap, gone from the server). */
   bodyError?: ProviderErrorCode
   threadId?: string
+  /**
+   * The task this message was turned into, when it was.
+   *
+   * DERIVED on every read from the plugin's own ledger, never stored on the message row: the task
+   * can be deleted, renamed or reopened by anything in Walnut, and a copy here would be a second
+   * truth that goes stale silently. Absent means nobody has made a task from this message yet.
+   */
+  taskId?: string
 }
 
 export interface MailAccountDto extends MailAccount {
@@ -58,6 +77,16 @@ export interface MailAccountDto extends MailAccount {
    * open. Both are kept: the total is still the honest cache statistic.
    */
   unreadInbox: number
+  /**
+   * What THIS account can do, when its provider answers that question per account.
+   *
+   * The provider-level block is a union or an intersection, and for IMAP it is genuinely wrong for
+   * one of the two accounts behind it: reading needs a host and a password, sending needs SMTP
+   * settings the human may never have filled in. The console showed a Send button per PROVIDER, so
+   * an account with no SMTP offered one that could only ever fail. Absent means the provider has no
+   * per-account answer and the provider-level block is the truth.
+   */
+  capabilities?: { send: boolean }
 }
 
 export interface MailboxDto {

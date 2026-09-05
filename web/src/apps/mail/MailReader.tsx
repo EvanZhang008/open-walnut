@@ -29,6 +29,7 @@ import {
   truncatedNotice,
 } from './mail-format';
 import { allowRemoteImagesForOpenMessage, closeMailMessage, retryOpenMessageBody } from './mail-actions';
+import { MailTaskButton } from './MailTaskButton';
 import type { MailOpenMessage } from './mail-store';
 import { buildMailBodyFrame } from './mail-sanitize';
 import { MAIL_IFRAME_SANDBOX } from './mail-html';
@@ -87,6 +88,9 @@ export function MailReader({ open, narrow, accounts, providers }: ReaderProps) {
           {message.to.length > 0 && (
             <p className="mail-reader-to">To: {recipientLabel(message.to)}</p>
           )}
+          {message.cc && message.cc.length > 0 && (
+            <p className="mail-reader-to" data-testid="mail-reader-cc">Cc: {recipientLabel(message.cc)}</p>
+          )}
           {message.attachments.length > 0 && (
             <ul className="mail-attachments" data-testid="mail-attachments">
               {message.attachments.map((attachment, index) => (
@@ -106,12 +110,15 @@ export function MailReader({ open, narrow, accounts, providers }: ReaderProps) {
 }
 
 /**
- * Reply and Reply all, gated exactly like the compose button.
+ * Make a task, Reply, and Reply all, the last two gated exactly like the compose button.
  *
  * Disabled rather than hidden when the account cannot send: a missing button is a mystery, and the
  * fix (add SMTP settings) belongs next to the thing it unlocks. Reply all is offered even when the
- * arithmetic will add nobody, because `MailMessageDto` carries no `cc` today, so "there is nobody
- * else" is not a claim this console can make.
+ * arithmetic will add nobody: the DTO now carries `cc`, but the recipient arithmetic behind these
+ * two buttons is unchanged, so "there is nobody else" is still not a claim made here.
+ *
+ * Make a task is NOT gated on anything: it writes a Walnut task and touches no mail server, so an
+ * account with no outgoing settings can still turn a message into work.
  */
 function ReplyActions({ open, message, accounts, providers }: {
   open: MailOpenMessage;
@@ -120,7 +127,7 @@ function ReplyActions({ open, message, accounts, providers }: {
   providers: MailProviderSummary[];
 }) {
   const account = accounts.find((one) => one.accountId === open.accountId);
-  const canSend = canSendFrom(providers, open.accountId);
+  const canSend = canSendFrom(providers, open.accountId, accounts);
   const start = (all: boolean) => { void openMailReplyComposer({
     accountId: open.accountId,
     accountAddress: account?.address ?? '',
@@ -130,6 +137,7 @@ function ReplyActions({ open, message, accounts, providers }: {
   }); };
   return (
     <div className="mail-reader-actions">
+      <MailTaskButton open={open} />
       <button
         type="button"
         className="mail-compose-btn"

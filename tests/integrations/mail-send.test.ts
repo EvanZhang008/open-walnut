@@ -417,6 +417,38 @@ describe('drafts are versioned rows', () => {
     ]));
   });
 
+  /**
+   * What an unqualified `GET /drafts` means.
+   *
+   * `sent` and `discarded` are terminal and accumulate forever, so an unfiltered newest-first page
+   * eventually holds nothing but history: the console had always dropped them on arrival, which made
+   * the default wrong for every OTHER caller (an agent asking what is in flight was handed a hundred
+   * mails that already went). An explicit `state=` still reaches a terminal one, because "show me
+   * what I threw away" is a real question.
+   */
+  it('lists the open drafts by default, and a terminal state only when asked for it', async () => {
+    const open = await newDraft({ subject: 'Still being written' });
+    const thrown = await newDraft({ subject: 'Thrown away' });
+    expect((await api('DELETE', `/drafts/${thrown.draftId}`)).status).toBe(200);
+
+    const listed = await api<{ drafts: DraftShape[] }>('GET', `/drafts?account=${encodeURIComponent(SENDER)}`);
+    expect(listed.status).toBe(200);
+    const ids = listed.body.drafts.map((one) => one.draftId);
+    expect(ids).toContain(open.draftId);
+    expect(ids).not.toContain(thrown.draftId);
+    expect(listed.body.drafts.map((one) => one.state)).not.toContain('discarded');
+    // Newest first, whichever state each row came from: the answer is several indexed queries
+    // merged, and an unsorted merge would show the console its drafts in state order.
+    const stamps = listed.body.drafts.map((one) => (one as unknown as { updatedAt: number }).updatedAt);
+    expect([...stamps].sort((left, right) => right - left)).toEqual(stamps);
+
+    const discarded = await api<{ drafts: DraftShape[] }>(
+      'GET',
+      `/drafts?account=${encodeURIComponent(SENDER)}&state=discarded`,
+    );
+    expect(discarded.body.drafts.map((one) => one.draftId)).toContain(thrown.draftId);
+  });
+
   it('refuses an address that is not one, and a header break hidden in a display name', async () => {
     const bad = await api<{ error: string }>('POST', '/drafts', {
       accountId: SENDER, to: [{ address: 'not-an-address' }], subject: 'x', bodyMarkdown: 'x',

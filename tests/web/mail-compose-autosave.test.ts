@@ -264,6 +264,34 @@ describe('the first keystroke', () => {
     expect(String(created?.body?.bodyMarkdown)).toContain('> Attendance held up.');
     expect(composer().quote).toContain('Keeper <keeper@example.invalid> wrote:');
   });
+
+  /**
+   * Reply all had nowhere to get Cc from until the DTO carried it: the arithmetic in
+   * `replyPrefill` was already right (see mail-compose-address.test.ts) and was being handed a
+   * message with the field stripped, so replying to all of a thread quietly dropped everyone who
+   * was only in Cc. This grades the whole path: DTO to prefill to chips to the row on the server.
+   */
+  it('reply all seeds Cc from the message, minus this account, and saves it', async () => {
+    void reply({
+      all: true,
+      message: {
+        ...MESSAGE,
+        to: [{ address: 'me@example.invalid' }, { address: 'team@example.invalid' }],
+        cc: [{ address: 'WATCHER@example.invalid' }, { address: 'me@example.invalid' }],
+      },
+    });
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(composer().fields.to.map((one) => one.address)).toEqual(['keeper@example.invalid']);
+    expect(composer().fields.cc.map((one) => one.address))
+      .toEqual(['team@example.invalid', 'WATCHER@example.invalid']);
+    // The Cc row is REVEALED, or the human sends to four people while looking at one.
+    expect(composer().showCc).toBe(true);
+    const created = calls.find((one) => one.method === 'POST');
+    expect(created?.body?.cc).toEqual([
+      { address: 'team@example.invalid' }, { address: 'WATCHER@example.invalid' },
+    ]);
+  });
 });
 
 describe('the debounce', () => {

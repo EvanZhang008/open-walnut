@@ -179,13 +179,64 @@ const SCHEMA_V5 = `
 CREATE INDEX IF NOT EXISTS messages_by_thread ON messages (account_id, thread_id, sent_at);
 `
 
+/**
+ * v6 is this slice's two small tables: which message became which task, and one key/value row.
+ *
+ * The ledger lives HERE rather than in the framework's `task_remote_links`, and that is a
+ * deliberate call. That table is the sync sources' ledger: a row there says an outside system owns
+ * this task and a two-way sync may write back to it. A mail message is not a task's other half, it
+ * is where a task came from once, so a link there would enrol every mail-made task in a sync
+ * contract nothing implements. Keeping it in the plugin's own file also keeps the kernel mail-free,
+ * and it means uninstalling the plugin drops the ledger with the cache while the tasks stay.
+ *
+ * The key is the RFC Message-ID when there is one, so the same mail found again in another mailbox
+ * (or re-synced after eviction, with a different provider handle) still maps to the one task. The
+ * `cache:[...]` fallback exists because `rfc_message_id` defaults to '': without it, every
+ * Message-ID-less message in the install would collide on one primary key and share one task.
+ */
+const SCHEMA_V6 = `
+CREATE TABLE IF NOT EXISTS message_tasks (
+  rfc_message_id TEXT PRIMARY KEY,
+  account_id     TEXT NOT NULL,
+  message_id     TEXT NOT NULL,
+  task_id        TEXT NOT NULL,
+  created_at     INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS message_tasks_by_account ON message_tasks (account_id);
+
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT ''
+);
+
+-- "Every open draft, whatever the account", which is what GET /drafts now defaults to. The v4
+-- index leads with account_id, so a query that names only the state could not use it and scanned.
+CREATE INDEX IF NOT EXISTS drafts_by_state_updated ON drafts (state, updated_at DESC);
+`
+
 const MIGRATIONS: Array<{ version: number; sql: string }> = [
   { version: 1, sql: SCHEMA_V1 },
   { version: 2, sql: SCHEMA_V2 },
   { version: 3, sql: SCHEMA_V3 },
   { version: 4, sql: SCHEMA_V4 },
   { version: 5, sql: SCHEMA_V5 },
+  { version: 6, sql: SCHEMA_V6 },
 ]
+
+/**
+ * Every column of `messages` a row read selects, named next to the schema that declares them.
+ *
+ * Here rather than in store.ts because two query files now need it (`store.ts` for the mailbox
+ * reads, `store-tasks.ts` for the digest's unread listing), and a list of columns that has to agree
+ * with a CREATE TABLE belongs beside that CREATE TABLE. `SELECT *` is not the alternative: the row
+ * shape is a typed interface, and a column added by a later migration would then silently arrive in
+ * objects nothing declared.
+ */
+export const MESSAGE_COLUMNS =
+  'rowid, account_id, message_id, rfc_message_id, mailbox_id, thread_id, from_addr, subject,'
+  + ' snippet, sent_at, received_at, flags_json, attachments_json, body_ref, body_bytes,'
+  + ' payload, updated_at, envelope_hash, body_error'
 
 /** One budget per call, shared by the open and the statement. */
 const CALL_DEADLINE_MS = 5_000

@@ -107,13 +107,17 @@ function envelopeLine(message: MailMessageDto, snippetChars: number): string {
     isoOf(message.sentAt),
     flagSummary(message.flags),
     clipChars(message.messageId, MESSAGE_ID_CHARS),
+    // Walnut's own id from Walnut's own ledger, so it needs no shape check and no block: it is the
+    // one column here that did not come from outside. A dash rather than an empty cell, so a
+    // tab-separated row keeps its shape when nothing has been made from this message.
+    message.taskId ? clipChars(message.taskId, MESSAGE_ID_CHARS) : '-',
     clipChars(message.from.address, ADDRESS_CHARS) || '(no address)',
     clipChars(message.subject, SUBJECT_CHARS) || '(no subject)',
     clipChars(message.snippet, snippetChars),
   ].join('\t')
 }
 
-const TABLE_HEADER = 'sent\tflags\tmessage\tfrom\tsubject\tpreview'
+const TABLE_HEADER = 'sent\tflags\tmessage\ttask\tfrom\tsubject\tpreview'
 
 /**
  * A table of envelopes, all of it inside ONE block. Never one block per row.

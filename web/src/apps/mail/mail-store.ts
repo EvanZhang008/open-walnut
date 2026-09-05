@@ -59,6 +59,16 @@ export interface MailOpenMessage {
   error: string | null;
   /** Per MESSAGE, never remembered: the human opted this one body into remote images. */
   allowRemoteImages: boolean;
+  /** A "make a task" request is in flight for this message. */
+  taskBusy: boolean;
+  /**
+   * Why the last "make a task" did not work, in words, next to the button that failed.
+   *
+   * Kept on the OPEN MESSAGE rather than in a global notice, because that is where the human is
+   * looking, and because it has to disappear when they move to another message: a failure about a
+   * mail they have left is noise on the one they are reading now.
+   */
+  taskError: string | null;
 }
 
 export interface MailSearchState {
@@ -316,9 +326,16 @@ export function sameSelection(selection: MailSelection | null): boolean {
  *
  * An account's `unread` is the sum over all its mailboxes, so it counts Spam, Trash and Archive.
  * A badge fed from that says "12" for a mailbox whose inbox is empty, which trains the human to
- * ignore it. Per-mailbox numbers are what the pane already loads, so the inbox rows are the
- * source; an account whose mailboxes are not loaded yet falls back to its own total, because
- * counting it as zero would blank a badge that is genuinely not zero.
+ * ignore it.
+ *
+ * Three sources, and the ORDER is load bearing. The mailbox rows come first because they are the
+ * only one the optimistic read flag can move: opening a message decrements that row locally and puts
+ * it back if the provider refuses, and a badge fed from a server-sent total would sit still while
+ * the human watched the message turn read. `unreadInbox` is the server's own inbox-only sum and is
+ * the fallback for an account whose mailboxes have not loaded yet, which is the whole first paint of
+ * a fresh tab: before it existed that window fell through to the account TOTAL and counted Spam and
+ * Trash. `unread` stays as the last resort, because counting an account as zero would blank a badge
+ * that is genuinely not zero.
  *
  * Rounded because these are provider-declared numbers: one non-integer would render as "3.0001".
  */
@@ -327,9 +344,11 @@ export function publishBadge(): void {
   let total = 0;
   for (const account of state.accounts) {
     const mailboxes = state.mailboxes[account.accountId];
-    total += mailboxes
-      ? mailboxes.reduce((sum, mailbox) => sum + (mailbox.role === 'inbox' ? mailbox.unread || 0 : 0), 0)
-      : account.unread || 0;
+    if (mailboxes) {
+      total += mailboxes.reduce((sum, mailbox) => sum + (mailbox.role === 'inbox' ? mailbox.unread || 0 : 0), 0);
+      continue;
+    }
+    total += typeof account.unreadInbox === 'number' ? account.unreadInbox : account.unread || 0;
   }
   const unread = Math.round(total);
   badge?.setBadge(unread > 0 ? unread : null);

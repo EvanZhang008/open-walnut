@@ -6,12 +6,17 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('plugin-server-api-test'))
 vi.mock('../../src/core/config-manager.js', () => ({
-  getConfig: vi.fn(async () => ({ plugins: { 'sample-plugin': { color: 'blue' } } })),
+  // `defaults` is here because the real task manager reads it when a plugin creates a task
+  // (project and priority both fall back to it), and this mock replaces the whole module.
+  getConfig: vi.fn(async () => ({ plugins: { 'sample-plugin': { color: 'blue' } }, defaults: {} })),
   updatePluginConfig: vi.fn(async (_id: string, patch: Record<string, unknown>) => patch),
+  // Reached only through the real task manager, which `tasks.create` opens. A no-op, because the
+  // config this file cares about is the mocked pair above.
+  seedConfigDefaults: vi.fn(async () => undefined),
 }))
 
 import { WALNUT_HOME } from '../../src/constants.js'
-import { bus } from '../../src/core/event-bus.js'
+import { bus, EventNames } from '../../src/core/event-bus.js'
 import { getAgent } from '../../src/core/agent-registry.js'
 import { resolveProvider } from '../../src/agent/providers/registry.js'
 import { IntegrationRegistry } from '../../src/core/integration-registry.js'
@@ -224,6 +229,31 @@ describe('createServerPluginApi', () => {
 
     expect(await api.storage.readJson('state.json', {})).toEqual({ ready: true })
     expect(custom).toHaveBeenCalledWith({ ready: true })
+  })
+
+  /**
+   * A task a plugin makes has to announce itself like every other created task.
+   *
+   * `addTask` emits nothing by design, so every create path in Walnut emits at its own call site.
+   * This one did not, and the symptom was a task nobody could see: an open browser's list only
+   * refetches on the event, and the search index is fed from the same event, so a task a plugin made
+   * was invisible and unfindable until something unrelated forced a full reload.
+   */
+  it('emits task:created for a task a plugin makes', async () => {
+    const { api } = setup()
+    const seen: Array<{ data: unknown; source: string }> = []
+    bus.subscribe('test-observer', (event) => {
+      if (event.name === EventNames.TASK_CREATED) seen.push({ data: event.data, source: event.source })
+    }, { global: true, interest: [EventNames.TASK_CREATED] })
+
+    const task = await api.tasks.create({ title: 'From a plugin', tags: ['mail'] })
+    await new Promise((resolve) => setImmediate(resolve))
+
+    expect(seen).toHaveLength(1)
+    expect((seen[0]!.data as { task: { id: string; title: string } }).task)
+      .toMatchObject({ id: task.id, title: 'From a plugin' })
+    // Attributed to the plugin, so a subscriber can tell a plugin's task from the user's own.
+    expect(seen[0]!.source).toBe('plugin/sample-plugin')
   })
 
   it('registers typed multi-point hooks with filters and timeouts', async () => {

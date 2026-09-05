@@ -48,6 +48,7 @@ import {
   messageIdList,
   parseHeaders,
   parseMime,
+  replyToList,
   setMimeParserForTesting,
 } from '../../src/integrations/mail-imap/mime.js';
 import { createImapProvider } from '../../src/integrations/mail-imap/provider.js';
@@ -1296,6 +1297,32 @@ describe('MIME helpers', () => {
     expect(headers.references).toBe('<a@example.invalid> <b@example.invalid>');
     expect(messageIdList(headers.references)).toEqual(['<a@example.invalid>', '<b@example.invalid>']);
     expect(messageIdList(undefined)).toEqual([]);
+  });
+
+  /**
+   * `Reply-To` decides where a reply GOES (the base prefers it over `From`), and the draft route
+   * refuses a recipient that is not an address. So a header that parses to something address-shaped
+   * has to be kept, and one that does not has to vanish rather than travel: both headers below are
+   * real and legal, and passing either one through turned Reply into a 400 the human never saw a
+   * reason for, on a message whose `From` would have worked.
+   */
+  it('keep only address-shaped Reply-To values, so Reply can fall back to From', () => {
+    expect(replyToList('"Doe, Jane" <jane@example.invalid>, desk@example.invalid')).toEqual([
+      { name: 'Doe, Jane', address: 'jane@example.invalid' },
+      { address: 'desk@example.invalid' },
+    ]);
+    // A group syntax with no members, and an empty path. Neither is an address.
+    expect(replyToList('undisclosed-recipients:;')).toEqual([]);
+    expect(replyToList('<>')).toEqual([]);
+    expect(replyToList('Some Name')).toEqual([]);
+    expect(replyToList(undefined)).toEqual([]);
+    // One usable address among the noise still comes through: the fallback is for having none.
+    expect(replyToList('undisclosed-recipients:;, desk@example.invalid')).toEqual([
+      { address: 'desk@example.invalid' },
+    ]);
+    // Bounded, because a header is whatever the sender typed.
+    const many = Array.from({ length: 30 }, (_, at) => `a${at}@example.invalid`).join(', ');
+    expect(replyToList(many)).toHaveLength(10);
   });
 
   it('never call a multipart node an attachment', () => {

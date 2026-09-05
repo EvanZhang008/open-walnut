@@ -15,8 +15,16 @@
  *   through the tick's bounded prefetch, so adding an account costs one page of headers rather
  *   than a mailbox-sized download.
  */
-import type { MailBodyStore, StoredBodyFormat } from './bodies.js'
-import { MailBodyTooLargeError, MAX_BODY_BYTES, snippetOf } from './bodies.js'
+import type { MailBodyStore } from './bodies.js'
+import { MailBodyTooLargeError, MAX_BODY_BYTES, plainTextOf, snippetOf } from './bodies.js'
+import { keyOfMessage } from './message-tasks.js'
+import {
+  envelopeToDto,
+  parseJson,
+  sizeHintOf,
+  toDto,
+  type MessagePayload,
+} from './service-dto.js'
 import {
   callProvider,
   encodeMessageCursor,
@@ -38,7 +46,6 @@ import type { MailStore, MessageRow, MessageWrite } from './store.js'
 import type {
   MailAccount,
   MailAddress,
-  MailAttachmentMeta,
   MailBody,
   MailCapabilities,
   MailEnvelope,
@@ -48,41 +55,19 @@ import type {
 } from './types.js'
 
 /**
- * The size the poll already reported for this message, when it reported one.
+ * How long one per-account capability lookup may take, and how long its answer is trusted.
  *
- * Passed to `getBody` so a provider can refuse an over-cap message BEFORE issuing the fetch. The
- * IMAP path could only check after downloading up to 2 MB, which is the whole cost the cap exists
- * to avoid, repeated on every read.
+ * Far shorter than `PROVIDER_DEADLINE_MS`: this is a question asked on a polled route, and the
+ * cost of a stale-by-a-minute answer is a Send button that is briefly wrong, while the cost of an
+ * unbounded one is the console's account list stalling behind a wedged mail server.
  */
-function sizeHintOf(row: MessageRow): number | undefined {
-  // From the PAYLOAD blob, not a column: it is a field no query filters on, which is exactly
-  // what the blob is for, and it needs no migration. `body_bytes` cannot serve here because it
-  // is the size of what was STORED, and nothing is stored yet when the hint is wanted.
-  const hint = parseJson<MessagePayload>(row.payload, {}).bodyBytesHint
-  return typeof hint === 'number' && hint > 0 ? hint : undefined
-}
-
-function parseJson<T>(raw: string | null | undefined, fallback: T): T {
-  if (!raw) return fallback
-  try { return JSON.parse(raw) as T }
-  catch { return fallback }
-}
-
-/** What rides the payload blob: everything no query filters on. */
-interface MessagePayload {
-  from?: MailAddress
-  to?: MailAddress[]
-  cc?: MailAddress[]
-  sentAtHeader?: string
-  inReplyTo?: string
-  references?: string[]
-  bodyFormat?: StoredBodyFormat
-  bodyTruncated?: boolean
-  /** The size the POLL reported, so a body fetch can be refused before it is issued. */
-  bodyBytesHint?: number
-}
+const CAPABILITY_DEADLINE_MS = 2_000
+const CAPABILITY_TTL_MS = 60_000
 
 export class MailService {
+  /** Per account: the last `send` verdict and when it was learned. See `sendCapabilityOf`. */
+  private readonly sendCache = new Map<string, { send: boolean; at: number }>()
+
   constructor(private readonly deps: {
     store: MailStore
     bodies: MailBodyStore
@@ -109,14 +94,30 @@ export class MailService {
 
   // ── reads ──
 
-  async listAccounts(): Promise<MailAccountDto[]> {
+  /**
+   * Every account, with the numbers a console needs.
+   *
+   * `capabilities: false` is the SHAPE WITHOUT A PROVIDER CALL, and it exists because this is the
+   * most-polled route in the plugin. The per-account `send` verdict can reach the provider, so it is
+   * cached, bounded (see `sendCapabilityOf`) and skippable: a caller that only wants names and
+   * counts (the agent's context line, the digest, a route whose budget has run out) asks for the
+   * cheap shape and touches nothing outside the database.
+   */
+  async listAccounts(options: { capabilities?: boolean } = {}): Promise<MailAccountDto[]> {
     const rows = await this.deps.store.listAccounts()
     // ONE grouped query for every account's unread count. It used to be one query per account,
     // which is a worker round trip per row on a route the console polls.
     const unread = await this.deps.store.unreadByAccount()
+    // Every account's `send` verdict at once. Each one may be a provider call (cheap by contract,
+    // but a call), and awaiting them one after another inside the loop would make the console's
+    // most-polled route as slow as the sum of them.
+    const sends = options.capabilities === false
+      ? rows.map(() => undefined)
+      : await Promise.all(rows.map((row) => this.sendCapabilityOf(row.account_id, row.provider_id)))
     const out: MailAccountDto[] = []
-    for (const row of rows) {
+    for (const [at, row] of rows.entries()) {
       const counts = unread.get(row.account_id)
+      const send = sends[at]
       out.push({
         ...parseJson<Partial<MailAccount>>(row.payload, {}),
         accountId: row.account_id,
@@ -127,9 +128,66 @@ export class MailService {
         ...(row.health_json ? { health: parseJson<MailAccount['health']>(row.health_json, undefined) } : {}),
         unread: counts?.total ?? 0,
         unreadInbox: counts?.inbox ?? 0,
+        ...(send === undefined ? {} : { capabilities: { send } }),
       })
     }
     return out
+  }
+
+  /**
+   * Can THIS account send, as far as anything can tell without opening a connection.
+   *
+   * Gentle on purpose, at four points, and every one of them is about the same thing: `GET /accounts`
+   * is polled by every open tab and it must not be as slow as the slowest mail server behind it.
+   *
+   * - A provider that is off or reloading answers `undefined`, so a cached account whose plugin is
+   *   not loaded does not turn the accounts list into a 503.
+   * - A provider with no per-account answer contributes its static block, with no call at all.
+   * - A provider that THROWS falls back to that static block: it answered, just not usefully.
+   * - A provider that does not answer inside `CAPABILITY_DEADLINE_MS` answers `undefined`, which
+   *   means "no per-account view" and sends the client to the provider block on its own. The
+   *   deadline is two seconds rather than the 15 a provider call normally gets, because N accounts
+   *   used to make N calls at 15s with nothing bounding the route: one wedged IMAP server held the
+   *   console's accounts request open for a quarter of a minute, and `GET /accounts` is what the
+   *   sidebar badge, the agent surface gate and the digest all wait on.
+   *
+   * The answer is CACHED per account, invalidated by `forgetCapabilities` on an account or provider
+   * change and expired by a short TTL as a backstop, so the steady state of a polling console is
+   * zero provider calls.
+   */
+  private async sendCapabilityOf(accountId: string, providerId: string): Promise<boolean | undefined> {
+    const spec = this.deps.providers.get(providerId)
+    if (!spec) return undefined
+    if (!spec.accountCapabilities) return spec.capabilities.send
+    const cached = this.sendCache.get(accountId)
+    if (cached && cached.at + CAPABILITY_TTL_MS > this.now) return cached.send
+    try {
+      const caps = await callProvider(
+        `capabilities for ${accountId}`,
+        async () => spec.accountCapabilities!(accountId),
+        CAPABILITY_DEADLINE_MS,
+      )
+      this.sendCache.set(accountId, { send: caps.send, at: this.now })
+      return caps.send
+    } catch (error) {
+      // A deadline is NOT an answer, so it is neither cached nor turned into the provider's static
+      // block: the honest report is "unknown", and an unknown is retried on the next poll.
+      if ((error as { code?: string } | null)?.code === 'unreachable') return undefined
+      this.sendCache.set(accountId, { send: spec.capabilities.send, at: this.now })
+      return spec.capabilities.send
+    }
+  }
+
+  /**
+   * Forget a cached `send` verdict, or all of them.
+   *
+   * Called on `account-changed` (an account whose SMTP settings were just filled in must not be
+   * told for a minute that it cannot send) and on a provider registration change. Everything else
+   * relies on the TTL.
+   */
+  forgetCapabilities(accountId?: string): void {
+    if (accountId) this.sendCache.delete(accountId)
+    else this.sendCache.clear()
   }
 
   /**
@@ -161,6 +219,31 @@ export class MailService {
     }))
   }
 
+  /**
+   * The task backlink for a page of messages, in ONE query, added on the way out.
+   *
+   * Derived on every read rather than stored on the message row: the task can be deleted or
+   * repointed by anything in Walnut, and a copy on the row would be a second truth that goes stale
+   * without anybody noticing. Batched because the alternative is a lookup per row, and a 50-row
+   * list would then cost 50 worker round trips to decorate an answer it already had.
+   */
+  private async withTaskIds(messages: MailMessageDto[]): Promise<MailMessageDto[]> {
+    if (messages.length === 0) return messages
+    const keys = messages.map((message) => keyOfMessage(message))
+    const links = await this.deps.store.tasks.messageTasks([...new Set(keys)])
+    if (links.size === 0) return messages
+    return messages.map((message, index) => {
+      const taskId = links.get(keys[index]!)
+      return taskId ? { ...message, taskId } : message
+    })
+  }
+
+  /** One row, decorated. The single-message read paths all go through this. */
+  private async oneWithTaskId(row: MessageRow): Promise<MailMessageDto> {
+    const [message] = await this.withTaskIds([toDto(row)])
+    return message!
+  }
+
   async listMessages(query: {
     accountId?: string
     mailboxId?: string
@@ -168,7 +251,7 @@ export class MailService {
     before?: MessagePageCursor
   }): Promise<{ messages: MailMessageDto[]; nextBefore?: string }> {
     const rows = await this.deps.store.listMessages(query)
-    const messages = rows.map((row) => this.toDto(row))
+    const messages = await this.withTaskIds(rows.map((row) => toDto(row)))
     // `nextBefore` is only offered when the page filled: handing one back on a short page
     // makes a console ask for an empty page every time it reaches the end. It carries the
     // whole sort key, so the next page resumes exactly where this one stopped even when
@@ -189,7 +272,7 @@ export class MailService {
    */
   async threadMessages(accountId: string, threadId: string, limit: number): Promise<MailMessageDto[]> {
     const rows = await this.deps.store.threadMessages(accountId, threadId, limit)
-    return rows.map((row) => this.toDto(row))
+    return this.withTaskIds(rows.map((row) => toDto(row)))
   }
 
   /**
@@ -207,11 +290,11 @@ export class MailService {
     bodyError?: ProviderErrorCode | 'unknown'
   }> {
     const row = await this.requireMessage(accountId, messageId)
-    if (row.body_ref) return { message: this.toDto(row), body: await this.readStoredBody(row) }
+    if (row.body_ref) return { message: await this.oneWithTaskId(row), body: await this.readStoredBody(row) }
     // A body the provider already refused (over the cap, gone from the server) is answered from
     // the marker. Re-asking on every open is how one 40 MB message becomes a download per click.
     if (row.body_error && !options.retry) {
-      return { message: this.toDto(row), body: null, bodyError: row.body_error as ProviderErrorCode }
+      return { message: await this.oneWithTaskId(row), body: null, bodyError: row.body_error as ProviderErrorCode }
     }
 
     try {
@@ -222,7 +305,8 @@ export class MailService {
         () => this.provider(accountId).getBody(accountId, messageId, sizeHintOf(row)),
       )
       const stored = await this.storeBody(row, body)
-      return { message: { ...this.toDto(row), hasBody: true, snippet: stored.snippet }, body: stored.body }
+      const message = await this.oneWithTaskId(row)
+      return { message: { ...message, hasBody: true, snippet: stored.snippet }, body: stored.body }
     } catch (error) {
       if (error instanceof MailServiceError) throw error
       const code = error instanceof MailBodyTooLargeError
@@ -234,13 +318,27 @@ export class MailService {
       if (code === 'too-large' || code === 'not-found') {
         await this.deps.store.setMessageBodyError(row.rowid, code).catch(() => undefined)
       }
-      return { message: this.toDto(row), body: null, bodyError: code }
+      return { message: await this.oneWithTaskId(row), body: null, bodyError: code }
     }
   }
 
   /** The cached envelope alone, with no provider call. What a timed-out read degrades to. */
   async readEnvelope(accountId: string, messageId: string): Promise<MailMessageDto> {
-    return this.toDto(await this.requireMessage(accountId, messageId))
+    return this.oneWithTaskId(await this.requireMessage(accountId, messageId))
+  }
+
+  /**
+   * The body as plain text, fetching it when the cache has none.
+   *
+   * One caller: the note a mail-made task can carry. It goes through `readMessage`, so an
+   * unfetchable body is reported the same way it is everywhere else (a `bodyError` and no bytes)
+   * rather than as a throw, and the html half is folded to text with the base's OWN extractor, the
+   * one that feeds the FTS index, so a note reads like the search hit that found it.
+   */
+  async bodyTextFor(accountId: string, messageId: string): Promise<string> {
+    const read = await this.readMessage(accountId, messageId)
+    if (!read.body) return ''
+    return plainTextOf({ text: read.body.text ?? '', html: read.body.html ?? '' })
   }
 
   /**
@@ -286,13 +384,15 @@ export class MailService {
       const known = await this.deps.store.knownMessages(accountId, envelopes.map((one) => one.messageId))
       return {
         source: 'provider',
-        messages: envelopes.map((envelope) => this.envelopeToDto(accountId, envelope, !!known.get(envelope.messageId)?.body_ref)),
+        messages: await this.withTaskIds(envelopes.map(
+          (envelope) => envelopeToDto(accountId, envelope, !!known.get(envelope.messageId)?.body_ref),
+        )),
       }
     }
     const match = ftsMatchFor(query.q)
     if (!match) return { source: 'cache', messages: [] }
     const rows = await this.deps.store.searchMessages(match, query.accountId ?? '', query.limit)
-    return { source: 'cache', messages: rows.map((row) => this.toDto(row)) }
+    return { source: 'cache', messages: await this.withTaskIds(rows.map((row) => toDto(row))) }
   }
 
   /** `unsupported` is a 409, not a silent local-only flip: the mailbox would drift. */
@@ -308,10 +408,17 @@ export class MailService {
     }
     await callProvider('a read flag', () => spec.markRead!(accountId, messageId, read))
     const flags = new Set(parseJson<string[]>(row.flags_json, []))
+    const wasRead = flags.has('\\Seen')
     if (read) flags.add('\\Seen')
     else flags.delete('\\Seen')
     await this.deps.store.setMessageFlags(row.rowid, JSON.stringify([...flags]), this.now)
-    return { ...this.toDto(row), flags: [...flags] }
+    // The mailbox counter follows the flag, and only when the flag actually moved: it is what the
+    // badge and the digest count, and leaving it at the provider's last figure made both of them
+    // report a mailbox as it was before this very call.
+    if (wasRead !== read) {
+      await this.deps.store.bumpMailboxUnread(accountId, row.mailbox_id, read ? -1 : 1)
+    }
+    return { ...(await this.oneWithTaskId(row)), flags: [...flags] }
   }
 
   // ── writes the poller drives ──
@@ -473,6 +580,7 @@ export class MailService {
       from: envelope.from,
       ...(envelope.to ? { to: envelope.to } : {}),
       ...(envelope.cc ? { cc: envelope.cc } : {}),
+      ...(envelope.replyTo ? { replyTo: envelope.replyTo } : {}),
       ...(envelope.sentAtHeader ? { sentAtHeader: envelope.sentAtHeader } : {}),
       ...(envelope.inReplyTo ? { inReplyTo: envelope.inReplyTo } : {}),
       ...(envelope.references ? { references: envelope.references } : {}),
@@ -497,48 +605,6 @@ export class MailService {
       attachmentsJson: JSON.stringify(envelope.attachments ?? []),
       payload: JSON.stringify(payload),
       envelopeHash: hash,
-    }
-  }
-
-  private toDto(row: MessageRow): MailMessageDto {
-    const payload = parseJson<MessagePayload>(row.payload, {})
-    return {
-      messageId: row.message_id,
-      accountId: row.account_id,
-      mailboxId: row.mailbox_id,
-      rfcMessageId: row.rfc_message_id,
-      from: payload.from ?? { address: row.from_addr },
-      to: payload.to ?? [],
-      subject: row.subject,
-      snippet: row.snippet,
-      sentAt: row.sent_at,
-      ...(payload.sentAtHeader ? { sentAtHeader: payload.sentAtHeader } : {}),
-      ...(row.received_at ? { receivedAt: row.received_at } : {}),
-      flags: parseJson<string[]>(row.flags_json, []),
-      attachments: parseJson<MailAttachmentMeta[]>(row.attachments_json, []),
-      hasBody: !!row.body_ref,
-      ...(row.body_error ? { bodyError: row.body_error as ProviderErrorCode } : {}),
-      ...(row.thread_id ? { threadId: row.thread_id } : {}),
-    }
-  }
-
-  private envelopeToDto(accountId: string, envelope: MailEnvelope, hasBody: boolean): MailMessageDto {
-    return {
-      messageId: envelope.messageId,
-      accountId,
-      mailboxId: envelope.mailboxId,
-      rfcMessageId: envelope.rfcMessageId ?? '',
-      from: envelope.from,
-      to: envelope.to ?? [],
-      subject: envelope.subject ?? '',
-      snippet: envelope.snippet ? snippetOf(envelope.snippet) : '',
-      sentAt: envelope.sentAt,
-      ...(envelope.sentAtHeader ? { sentAtHeader: envelope.sentAtHeader } : {}),
-      ...(envelope.receivedAt ? { receivedAt: envelope.receivedAt } : {}),
-      flags: envelope.flags ?? [],
-      attachments: envelope.attachments ?? [],
-      hasBody,
-      threadId: threadIdOf(envelope),
     }
   }
 }

@@ -107,6 +107,16 @@ export class MailSync {
     sends?: { reap(deadlineAt?: number): Promise<number> }
     /** The frozen-draft reconciler: crashes in the approval window, and lost answers. */
     approvals?: { reconcile(deadlineAt?: number): Promise<{ unfrozen: number; resumed: number }> }
+    /**
+     * The daily digest. Optional for the same reason the two above are: a test can drive the poll
+     * loop without the letter path.
+     *
+     * It rides the tick because "is today's digest due" is a clock question, and this is the one
+     * timer the plugin owns. It runs AFTER the poll and BEFORE retention: after, so the digest
+     * describes the mail this tick just fetched rather than the previous tick's; before, because
+     * retention is what the budget is allowed to eat and this is not.
+     */
+    digest?: { maybeSend(deadlineAt?: number): Promise<unknown> }
   }) {}
 
   get polling(): boolean {
@@ -283,6 +293,16 @@ export class MailSync {
       report.updated += outcome.updated
     }
     this.rotation = accounts.length > 0 ? (offset + processed) % accounts.length : 0
+
+    // Never on a partial pass: `only` is one account's refresh and `force` is a human clicking it,
+    // and a digest built from one account would report the others as having no unread mail at all.
+    if (this.deps.digest && !options.only && Date.now() < deadlineAt) {
+      try {
+        await this.deps.digest.maybeSend(deadlineAt)
+      } catch (error) {
+        this.deps.walnut.log.warn('mail digest failed', { error: reasonOf(error).slice(0, 200) })
+      }
+    }
 
     // LAST, on whatever budget is left. A skipped sweep costs some disk; a sweep that eats the
     // tick costs every account its poll.

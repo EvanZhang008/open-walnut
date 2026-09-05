@@ -58,6 +58,7 @@ const MESSAGE_COUNT = 7;
 /** Every mail tool and op this slice registers, sorted. The catalogue, as a ratchet. */
 const TOOL_NAMES = [
   'mail_draft', 'mail_list', 'mail_read', 'mail_request_send', 'mail_search', 'mail_thread',
+  'mail_to_task',
 ];
 
 interface SendCall {
@@ -445,7 +446,7 @@ describe('a zero-account install has no agent surface at all', () => {
 });
 
 describe('adding the first account arms the surface', () => {
-  it('registers six tools, six ops and one context line naming the account', async () => {
+  it('registers seven tools, seven ops and one context line naming the account', async () => {
     marks().accounts = [ONE];
     const created = await api<{ account: { accountId: string } }>('POST', '/accounts', {
       providerId: 'agentmail', values: { which: 'one' },
@@ -835,19 +836,19 @@ describe('the write surface ends at a letter', () => {
   });
 });
 
-describe('the ops are the same six, with the same answers', () => {
+describe('the ops are the same seven, with the same answers', () => {
   it('answers a read through the op catalogue with the identical wrapped text', async () => {
     const viaTool = await tool('mail_read', { message: 'INBOX:900:1' });
     const viaOp = await op('mail_read', { message: 'INBOX:900:1' });
     expect(viaOp).toBe(viaTool);
   });
 
-  it('flags the reads readonly and the two writes as writes that are not destructive', async () => {
+  it('flags the reads readonly and the three writes as writes that are not destructive', async () => {
     const ops = (await listPluginOps()).filter((one) => one.owner === 'mail');
     expect(ops.filter((one) => one.readonly).map((one) => one.name).sort())
       .toEqual(['mail_list', 'mail_read', 'mail_search', 'mail_thread']);
     expect(ops.filter((one) => !one.readonly).map((one) => one.name).sort())
-      .toEqual(['mail_draft', 'mail_request_send']);
+      .toEqual(['mail_draft', 'mail_request_send', 'mail_to_task']);
   });
 
   it('drafts and asks through the ops, and still sends nothing', async () => {
@@ -890,13 +891,17 @@ describe('no agent path reaches the transport', () => {
       const code = strip(await fsp.readFile(path.join(dir, name), 'utf-8'));
       if (/\.send\(/.test(code)) callers.push(name);
     }
-    // `sends.ts` owns the one call, and `approvals.ts` is allowed ONLY `letters.send(` (the human
-    // inbox, not a mail transport). Spelled out rather than skipped: an exemption for the whole
-    // file would hide the NEXT `.send(` added to it, which is the one that would matter.
-    expect(callers.filter((name) => name !== 'approvals.ts')).toEqual(['sends.ts']);
-    const approvals = strip(await fsp.readFile(path.join(dir, 'approvals.ts'), 'utf-8'));
-    const approvalSends = [...approvals.matchAll(/[\w.]*\.send\(/g)].map((match) => match[0]);
-    expect(new Set(approvalSends)).toEqual(new Set(['this.deps.letters.send(']));
+    // `sends.ts` owns the one call. `approvals.ts` and `digest.ts` are allowed ONLY `letters.send(`
+    // (the human inbox, not a mail transport). Spelled out per file rather than skipped: an
+    // exemption for a whole file would hide the NEXT `.send(` added to it, which is the one that
+    // would matter.
+    const letterSenders = ['approvals.ts', 'digest.ts'];
+    expect(callers.filter((name) => !letterSenders.includes(name))).toEqual(['sends.ts']);
+    for (const name of letterSenders) {
+      const source = strip(await fsp.readFile(path.join(dir, name), 'utf-8'));
+      const found = [...source.matchAll(/[\w.]*\.send\(/g)].map((match) => match[0]);
+      expect(new Set(found), name).toEqual(new Set(['this.deps.letters.send(']));
+    }
     // And the agent surface reaches nothing at all, judged on CODE the same way.
     const surface = strip(await fsp.readFile(path.join(dir, 'agent-surface.ts'), 'utf-8'));
     expect(surface).not.toContain('.send(');

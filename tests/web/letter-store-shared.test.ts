@@ -27,7 +27,7 @@ vi.mock('@/api/human-inbox', async (importOriginal) => {
 
 import {
   applyLetterChange, ensureLetters, getLetterSnapshot, loadArchivedLetters, loadLetters,
-  patchLetter, resetLetterStore, subscribeLetters,
+  markLettersStale, patchLetter, resetLetterStore, subscribeLetters,
 } from '../../web/src/components/inbox/letter-store';
 import { lettersForSession } from '../../web/src/components/inbox/session-letters';
 
@@ -107,6 +107,42 @@ describe('the archive shelf is its own list', () => {
     await loadLetters();
     expect(listLetters).toHaveBeenCalledWith();
     expect(getLetterSnapshot().archivedLoaded).toBe(false);
+  });
+});
+
+/**
+ * A letter event that lands while NOTHING is on screen.
+ *
+ * The rail's own handler only runs while the bell is mounted, and plugin subscriptions (the mail
+ * digest's, for one) run whatever is open. So an event can arrive with no surface wanting a request
+ * at all, and the 15s freshness window then serves the stale list to whoever opens next. Fifteen
+ * seconds is exactly how long a human takes to reach for the bell after a letter lands, so the
+ * letter they came to read was missing from the list.
+ */
+describe('an event with nobody watching invalidates the cache without fetching', () => {
+  it('forgets how fresh the list is and costs no request', async () => {
+    await loadLetters();
+    expect(listLetters).toHaveBeenCalledTimes(1);
+    // Still fresh: `ensureLetters` serves what it has.
+    ensureLetters();
+    expect(listLetters).toHaveBeenCalledTimes(1);
+
+    markLettersStale();
+    // No request of its own, which is what makes it safe to call on every event.
+    expect(listLetters).toHaveBeenCalledTimes(1);
+    // And the list is still on screen while it is being re-read: marking it stale is not clearing it.
+    expect(getLetterSnapshot().letters.map(l => l.id)).toEqual(['lt-1', 'lt-2']);
+
+    ensureLetters();
+    expect(listLetters).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-reads the archive shelf too, but only once a surface has one', async () => {
+    await loadLetters();
+    markLettersStale();
+    ensureLetters({ archived: true });
+    // Both lists, because the caller asked for the shelf and neither is trusted any more.
+    expect(listLetters).toHaveBeenCalledTimes(3);
   });
 });
 

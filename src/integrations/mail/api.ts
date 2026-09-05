@@ -30,6 +30,15 @@ import type { Disposable, MailProviderSpec, MailProviderSummary } from './types.
 
 export type { MailAccountChangedEvent } from './events.js'
 
+/**
+ * The one shape check for an email address, shared rather than re-invented per file.
+ *
+ * A provider needs it because a HEADER is whatever the sender typed: `Reply-To:
+ * undisclosed-recipients:;` is a real header, and a provider that passes it through as an address
+ * makes Reply fail at the draft route with a 400 in a place the human cannot see.
+ */
+export { ADDRESS_SHAPE } from './agent-format.js'
+
 export type {
   AccountSetupField,
   AccountSetupFieldKind,
@@ -68,8 +77,12 @@ export type {
  * additive: `MailProviderSpec.accountCapabilities` (per-account `send`), `OutgoingMail.bodyHtml`
  * (the base renders the html half now, so a provider must not), and `ProviderError.stage` (how far
  * a failed send got, which is the field that decides whether a retry is allowed).
+ *
+ * 1.3.0 is the DTO gaining fields, which is the other kind of thing a provider gates on: an
+ * envelope may now carry `replyTo`, `MailMessageDto` carries `cc`, `replyTo` and `taskId`, and
+ * `MailAccountDto` carries a per-account `capabilities.send`. All additive, all optional.
  */
-export const MAIL_BASE_API_VERSION = '1.2.0'
+export const MAIL_BASE_API_VERSION = '1.3.0'
 
 /**
  * The method bag published as `mail:base`.

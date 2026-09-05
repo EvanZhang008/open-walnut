@@ -36,23 +36,20 @@ import {
   ImapPool,
   providerError,
   toProviderError,
-  type ImapFetchedMessage,
 } from './client.js'
 import { accountIdFor, ImapAccountStore, PROVIDER_ID } from './config.js'
-import { decodeCursor, decodeMessageId, encodeCursor, encodeMessageId, mailboxRole } from './coords.js'
+import { decodeCursor, decodeMessageId, encodeCursor, mailboxRole } from './coords.js'
 import {
-  attachmentsFromStructure,
   hasTextPart,
   MAX_SOURCE_BYTES,
-  messageIdList,
-  parseHeaders,
   parseMime,
+  toEnvelope,
 } from './mime.js'
 import { createImapSender } from './provider-send.js'
 import { verifySmtp, type SmtpSecurity } from './smtp.js'
 
 /** Headers the ENVELOPE does not carry, or carries in a lossy form. */
-const WANTED_HEADERS = ['message-id', 'references', 'in-reply-to', 'date']
+const WANTED_HEADERS = ['message-id', 'references', 'in-reply-to', 'date', 'reply-to']
 
 interface ProviderLog {
   debug(message: string, meta?: Record<string, unknown>): void
@@ -60,58 +57,11 @@ interface ProviderLog {
   warn(message: string, meta?: Record<string, unknown>): void
 }
 
-function firstAddress(list: Array<{ name?: string; address?: string }> | undefined) {
-  const first = list?.[0]
-  return {
-    ...(first?.name ? { name: first.name } : {}),
-    address: first?.address ?? '',
-  }
-}
-
-function addressList(list: Array<{ name?: string; address?: string }> | undefined) {
-  return (list ?? [])
-    .filter((one) => !!one.address)
-    .map((one) => ({ ...(one.name ? { name: one.name } : {}), address: one.address! }))
-}
-
 function tooLarge(bytes: number) {
   return providerError(
     'too-large',
     `That message is ${Math.round(bytes / 1024)} KB, over the ${MAX_SOURCE_BYTES / 1024} KB cap Walnut will parse.`,
   )
-}
-
-function millis(value: Date | string | undefined): number | undefined {
-  if (!value) return undefined
-  const at = value instanceof Date ? value.getTime() : Date.parse(value)
-  return Number.isFinite(at) ? at : undefined
-}
-
-function toEnvelope(mailbox: string, uidValidity: string, message: ImapFetchedMessage): MailEnvelope {
-  const headers = parseHeaders(message.headers)
-  const received = millis(message.internalDate)
-  const sentAt = millis(message.envelope?.date) ?? received ?? 0
-  const references = messageIdList(headers.references)
-  const inReplyTo = messageIdList(headers['in-reply-to'])[0] ?? message.envelope?.inReplyTo
-  return {
-    messageId: encodeMessageId(mailbox, uidValidity, message.uid),
-    rfcMessageId: message.envelope?.messageId ?? headers['message-id'] ?? '',
-    mailboxId: mailbox,
-    from: firstAddress(message.envelope?.from),
-    to: addressList(message.envelope?.to),
-    ...(message.envelope?.cc?.length ? { cc: addressList(message.envelope.cc) } : {}),
-    subject: message.envelope?.subject ?? '',
-    // Epoch milliseconds plus the header verbatim: mail dates are instants, and the header is
-    // the only record of what the sender's clock and offset actually said.
-    sentAt,
-    ...(headers.date ? { sentAtHeader: headers.date } : {}),
-    ...(received !== undefined ? { receivedAt: received } : {}),
-    flags: [...(message.flags ?? [])],
-    ...(inReplyTo ? { inReplyTo } : {}),
-    ...(references.length ? { references } : {}),
-    attachments: attachmentsFromStructure(message.bodyStructure),
-    ...(typeof message.size === 'number' ? { bodyBytes: message.size } : {}),
-  }
 }
 
 /**

@@ -11,7 +11,9 @@ import {
   segmentsAfter,
   withBudget,
 } from './contract.js'
+import type { MailDigest } from './digest.js'
 import type { MailDrafts } from './drafts.js'
+import type { MailMessageTasks } from './message-tasks.js'
 import type { MailProviderRegistry } from './provider-registry.js'
 import { registerMailWriteRoutes } from './routes-write.js'
 import type { MailSends } from './sends.js'
@@ -51,7 +53,10 @@ import type { MailSync } from './sync.js'
  * GET    /messages?account=&mailbox=&limit=&before=    -> { messages: MailMessageDto[], nextBefore? }
  * GET    /messages/:accountId/:messageId               -> { message, body, bodyError? }
  * POST   /messages/:accountId/:messageId/read { read } -> { ok: true, message } | 409 unsupported
+ * POST   /messages/:accountId/:messageId/task {...}    -> 201 { taskId, created: true }
+ *        { title?, project?, note? }                      | 200 { taskId, created: false }
  * GET    /search?account=&q=&limit=                    -> { messages, source: 'provider'|'cache' }
+ * POST   /digest/send-now                              -> { letterId | null, unread, accounts }
  * POST   /refresh         { accountId? }               -> { ok: true, completed, ...counts }
  * GET    /health                                       -> { ok, providers, accounts, db, polling, lastTickAt, replica }
  *
@@ -88,6 +93,24 @@ const CONSOLE_SEND_DEADLINE_MS = 10_000
 
 const DRAFT_LIST_LIMIT = 200
 
+/**
+ * Making a task, and building a digest, get their own budgets.
+ *
+ * The task route is a WRITE and is idempotent by construction (the ledger answers the second ask
+ * with the same id), so when it runs out of budget the honest answer is 202: the task may well
+ * exist, and asking again is safe and returns it. The digest is a read plus one letter write.
+ */
+const TASK_DEADLINE_MS = 10_000
+const DIGEST_DEADLINE_MS = 8_000
+
+/**
+ * The accounts list is the most-polled route here, so it gets the tightest budget.
+ *
+ * Under the per-account capability deadline (2s, see `MailService.sendCapabilityOf`) plus room for the
+ * cache read, and deliberately well inside the few seconds a human waits for a sidebar badge.
+ */
+const ACCOUNTS_DEADLINE_MS = 2_500
+
 export function registerMailRoutes(
   walnut: WalnutServerPluginApi,
   deps: {
@@ -99,9 +122,11 @@ export function registerMailRoutes(
     drafts: MailDrafts
     approvals: MailApprovals
     sends: MailSends
+    messageTasks: MailMessageTasks
+    digest: MailDigest
   },
 ): void {
-  const { store, service, accounts, providers, sync, drafts, approvals, sends } = deps
+  const { store, service, accounts, providers, sync, drafts, approvals, sends, messageTasks, digest } = deps
   const primaryOnly = (): boolean => walnut.replica
 
   walnut.http.route('get', '/providers', () => {
@@ -109,10 +134,25 @@ export function registerMailRoutes(
     return { json: { providers: providers.list() } }
   })
 
+  /**
+   * The accounts list, which every open tab polls.
+   *
+   * Bounded, and the degraded answer is the same list WITHOUT `capabilities`. The full shape asks
+   * each provider what that one account can do, so a wedged mail server used to be able to hold this
+   * request open: N accounts, no route budget, and the console's badge, the agent surface gate and
+   * the digest all waiting behind it. `capabilities` absent is a shape the console already handles
+   * (it falls back to the provider-level block), which is what makes it a safe thing to drop.
+   */
   walnut.http.route('get', '/accounts', async () => {
     if (primaryOnly()) return PRIMARY_ONLY
     try {
-      return { json: { accounts: await service.listAccounts() } }
+      const answered = await withBudget(service.listAccounts(), ACCOUNTS_DEADLINE_MS, ({ error }) => {
+        if (error) walnut.log.warn('mail account list failed after the route answered', {
+          error: String(error).slice(0, 200),
+        })
+      })
+      if (answered) return { json: { accounts: answered } }
+      return { json: { accounts: await service.listAccounts({ capabilities: false }) } }
     } catch (error) {
       return errorReply(walnut, error)
     }
@@ -177,6 +217,52 @@ export function registerMailRoutes(
     const read = body.read === undefined ? true : body.read === true
     try {
       return { json: { ok: true, message: await service.markRead(accountId, messageId, read) } }
+    } catch (error) {
+      return errorReply(walnut, error)
+    }
+  })
+
+  // Also before the collection route, and before `/read` cannot matter: the two suffixes differ.
+  walnut.http.route('post', '/messages/:accountId/:messageId/task', async (request) => {
+    if (primaryOnly()) return PRIMARY_ONLY
+    const [accountId, messageId] = segmentsAfter(request, '/messages/')
+    if (!accountId || !messageId) {
+      return { status: 400, json: { error: 'invalid', message: 'an account id and a message id are required' } }
+    }
+    const body = await readBody(request)
+    if (body === null) return { status: 400, json: { error: 'invalid', message: 'body must be JSON' } }
+    const title = typeof body.title === 'string' ? body.title : undefined
+    const project = typeof body.project === 'string' ? body.project : undefined
+    try {
+      const answered = await withBudget(
+        messageTasks.link({
+          accountId,
+          messageId,
+          ...(title ? { title } : {}),
+          ...(project !== undefined ? { project } : {}),
+          ...(body.note === true ? { note: true } : {}),
+        }),
+        TASK_DEADLINE_MS,
+        // The work keeps running and still writes its ledger row, so this is reported and not lost.
+        ({ error }) => {
+          if (error) walnut.log.warn('mail task creation failed after the route answered', {
+            accountId, error: String(error).slice(0, 200),
+          })
+        },
+      )
+      if (!answered) {
+        return {
+          status: 202,
+          json: {
+            ok: true,
+            pending: true,
+            message: 'The task is still being created. Asking again returns it rather than making a second one.',
+          },
+        }
+      }
+      // 201 only when something was created. A second press is a 200 with the same id, which is
+      // what lets a double click, a retry and an agent re-reading its transcript all be safe.
+      return { status: answered.created ? 201 : 200, json: answered }
     } catch (error) {
       return errorReply(walnut, error)
     }
@@ -268,6 +354,31 @@ export function registerMailRoutes(
     } catch (error) {
       // A tick reaches the database, so this can fail with `db_unavailable`, which every other
       // route answers as a 503. Without the try it escaped as an unexplained 500.
+      return errorReply(walnut, error)
+    }
+  })
+
+  /**
+   * "Send the digest now", from the console's menu.
+   *
+   * It does NOT mark the day (see `MailDigest.sendNow`), so the scheduled one still goes out. Zero
+   * unread answers `letterId: null` rather than sending a letter that says there is no news.
+   */
+  walnut.http.route('post', '/digest/send-now', async () => {
+    if (primaryOnly()) return PRIMARY_ONLY
+    try {
+      const answered = await withBudget(
+        digest.sendNow(Date.now() + DIGEST_DEADLINE_MS),
+        DIGEST_DEADLINE_MS,
+        ({ error }) => {
+          if (error) walnut.log.warn('mail digest failed after the route answered', {
+            error: String(error).slice(0, 200),
+          })
+        },
+      )
+      if (!answered) return { status: 202, json: { ok: true, pending: true } }
+      return { json: answered }
+    } catch (error) {
       return errorReply(walnut, error)
     }
   })

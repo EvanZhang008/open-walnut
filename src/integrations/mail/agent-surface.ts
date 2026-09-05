@@ -1,8 +1,8 @@
 /**
- * The six mail operations an agent can perform, as ONE implementation.
+ * The seven mail operations an agent can perform, as ONE implementation.
  *
  * `tools.ts` registers these for the Personal AI's tool list and `ops.ts` registers the same
- * six for the op catalogue. Neither of them holds any logic: two registrations, one behaviour,
+ * seven for the op catalogue. Neither of them holds any logic: two registrations, one behaviour,
  * so a rule fixed for a tool is fixed for the op in the same edit.
  *
  * Three contracts this file keeps, and each one is the reason a line here looks the way it does:
@@ -15,6 +15,10 @@
  * - Nothing here can send. The write surface is a draft and a request, and the request produces
  *   a letter for the human. The send is executed by the approval path itself, so there is no
  *   entry point on this side of the wall for a body's text to reach.
+ * - The one thing here that WRITES outside mail is `mail_to_task`, and everything it writes into
+ *   the task is escaped first (see `message-tasks.ts`). A task is read later by an agent that can
+ *   act, so a subject able to plant an instruction in a task description would be the same
+ *   injection as one in a tool result, just with a longer fuse.
  *
  * What an answer LOOKS like lives next door in `agent-format.ts`: the shape checks for fields
  * printed outside the block, the per-field caps, and the table. Kept apart because they answer a
@@ -50,6 +54,7 @@ import {
 import { replyHeaders } from './drafts.js'
 import type { MailApprovals } from './approvals.js'
 import type { MailDrafts } from './drafts.js'
+import type { MailMessageTasks } from './message-tasks.js'
 import type { MailService } from './service.js'
 import {
   AGENT_READ_MAX_BYTES,
@@ -71,6 +76,8 @@ export interface MailAgentDeps {
   service: MailService
   drafts: MailDrafts
   approvals: MailApprovals
+  /** The message-to-task ledger, so the tool and the console cannot disagree about a duplicate. */
+  tasks: MailMessageTasks
   /** Read per call, not captured: a plugin instance outlives any one request. */
   replica: () => boolean
 }
@@ -124,7 +131,10 @@ async function resolveAccount(
   deps: MailAgentDeps,
   requested: string,
 ): Promise<MailAccountDto> {
-  const accounts = await deps.service.listAccounts()
+  // The CHEAP shape: this resolves a NAME, and the full one asks every provider what each of its
+  // accounts can do. The one tool that needs a real verdict asks `capabilitiesFor` for the one
+  // account it is about to send from (see `mailSendDraft`).
+  const accounts = await deps.service.listAccounts({ capabilities: false })
   if (accounts.length === 0) {
     refuse('This Walnut has no mail account set up, so there is no mail to read. The user adds one in the Mail app.')
   }
@@ -236,13 +246,18 @@ export async function mailRead(deps: MailAgentDeps, input: Record<string, unknow
     `Message: ${isCacheKey(message.messageId) ? message.messageId : NOT_A_USABLE_ID}`,
     `RFC id: ${rfcId}`,
     `From: ${from}`,
-    // `To` only, and not because Cc does not matter: `MailMessageDto` has no `cc` field, the
-    // payload column does. Adding it needs one line in contract.ts and one in service.ts's
-    // `toDto`, both outside this slice's reach; see the proposal in the report.
     `To: ${addressList(message.to)}`,
+    // Cc and Reply-To are printed only when the message HAS them: two more "(none)" lines on every
+    // read is a per-turn cost for the absence of information. Reply-To matters for a reply the
+    // agent may draft next, since a mailing list or a ticket system routes answers with it.
+    ...(message.cc?.length ? [`Cc: ${addressList(message.cc)}`] : []),
+    ...(message.replyTo?.length ? [`Reply-To: ${addressList(message.replyTo)}`] : []),
     `Sent: ${isoOf(message.sentAt)}`,
     `Mailbox: ${isCacheKey(message.mailboxId) ? message.mailboxId : NOT_A_USABLE_ID}   Flags: ${flagSummary(message.flags)}`,
     `Attachments: ${message.attachments.length}`,
+    // Walnut's own id, from Walnut's own ledger, so it belongs outside the block with the other
+    // things the agent may act on. Absent when nobody has made a task from this message.
+    ...(message.taskId ? [`Task: ${message.taskId}`] : []),
   ].join('\n')
 
   const authored: string[] = [`Subject: ${clipChars(message.subject, SUBJECT_CHARS) || '(no subject)'}`]
@@ -458,6 +473,43 @@ async function patchDraft(
   return `${draftJson(again.draft)}\n`
     + `The user was already looking at a letter for the old text, so that one was withdrawn and a `
     + `fresh letter (${again.letterId}) went out for this revision. Do not ask again for it.`
+}
+
+/**
+ * Turn a message into a task, or say which task it already is.
+ *
+ * A WRITE, but not a destructive one, and idempotent by construction: the ledger answers a second
+ * call with the same id and `created: false`, so an agent that loses track of what it has already
+ * done cannot produce two tasks for one mail.
+ *
+ * The answer deliberately carries NO text from the message: the ids and one sentence of Walnut's
+ * own. A subject in this result would have to be wrapped, and there is nothing here the agent
+ * needs it for, since it either just read the message or can read it now.
+ */
+export async function mailToTask(deps: MailAgentDeps, input: Record<string, unknown>): Promise<string> {
+  assertPrimary(deps)
+  const account = await resolveAccount(deps, str(input, 'account'))
+  const messageId = str(input, 'message')
+  if (!messageId) {
+    refuse('mail_to_task needs a message id in "message", as listed by mail_list or mail_search.')
+  }
+  const title = str(input, 'title')
+  const project = str(input, 'project')
+  const result = await deps.tasks.link({
+    accountId: account.accountId,
+    messageId,
+    ...(title ? { title } : {}),
+    ...(project ? { project } : {}),
+    ...(input.note === true ? { note: true } : {}),
+  })
+  const sentence = result.created
+    ? 'The task holds where the mail came from, a link back to it, and the preview. '
+      + 'It is in TODO for the user to pick up.'
+    : 'This message already had a task, so nothing new was made and nothing was changed.'
+  const noteNote = result.noteSkipped
+    ? ' The body could not be added as a note (Walnut has no readable body for this message yet).'
+    : ''
+  return `${JSON.stringify({ taskId: result.taskId, created: result.created })}\n${sentence}${noteNote}`
 }
 
 export async function mailRequestSend(deps: MailAgentDeps, input: Record<string, unknown>): Promise<string> {

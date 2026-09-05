@@ -1,5 +1,5 @@
 /**
- * The same six operations, registered in the host's op catalogue.
+ * The same seven operations, registered in the host's op catalogue.
  *
  * One implementation, two registrations. The tool list is the Personal AI's audience; the op
  * catalogue is everything that calls a capability by name: `walnut.ops.call` from another plugin,
@@ -14,14 +14,16 @@
  *   dev host reaches these through `walnut tools call`, and reading your own mail from the machine
  *   you are coding on is the point of the capability. Spelled out, a future change to the default
  *   cannot quietly take it away.
- * - The two writes keep the default (`remote: 'deny'`), so a remote session can read mail but
- *   cannot open a draft. That is the conservative half of a decision worth revisiting: neither
- *   write can send, so allowing them would not widen what an agent can DO, only where it can ask
+ * - The three writes keep the default (`remote: 'deny'`), so a remote session can read mail but
+ *   cannot open a draft. That is the conservative half of a decision worth revisiting: none of the
+ *   writes can send, so allowing them would not widen what an agent can DO, only where it can ask
  *   from. Left as it is because this slice's mandate was the reads.
- * - `mail_draft` and `mail_request_send` are WRITES but NOT destructive. Asking is reversible: a
- *   draft is a row the human can edit or throw away, and a request is a letter they can answer
- *   Discard. Marking them destructive would put a confirmation in front of the one path whose
- *   whole purpose is to produce a human confirmation.
+ * - `mail_draft`, `mail_request_send` and `mail_to_task` are WRITES but NOT destructive. Asking is
+ *   reversible: a draft is a row the human can edit or throw away, a request is a letter they can
+ *   answer Discard, and a task is a row they can delete. Marking them destructive would put a
+ *   confirmation in front of the one path whose whole purpose is to produce a human confirmation.
+ * - `mail_to_task` is additionally IDEMPOTENT, which is what makes it safe to leave unconfirmed: a
+ *   second call cannot produce a second task.
  * - There is no `mail_send`. Sending is executed by the approval path itself (the letter answer,
  *   or the console's own Send under the device credential), so there is no entry point here for a
  *   caller to reach and no token to leak or replay.
@@ -40,6 +42,7 @@ import {
   mailRequestSend,
   mailSearch,
   mailThread,
+  mailToTask,
   type MailAgentDeps,
 } from './agent-surface.js'
 
@@ -137,6 +140,27 @@ export function createMailOps(deps: MailAgentDeps): MailOpSpec[] {
       readonly: true,
       remote: 'allow',
       handler: (args) => asText(() => mailThread(deps, args)),
+    },
+    {
+      name: 'to_task',
+      title: 'Make a task from a message',
+      description:
+        'Turn one message into a Walnut task, recording who sent it, when, and a link back to it. '
+        + 'Calling it twice hands back the same task rather than making a second one.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          account: ACCOUNT_FIELD,
+          message: MESSAGE_FIELD,
+          title: { type: 'string', description: 'The task title. Omit to use the subject.' },
+          project: { type: 'string', description: 'Put it in this project. Omit for the Inbox.' },
+          note: { type: 'boolean', description: 'Also append the start of the body as a note.' },
+        },
+        required: ['message'],
+      },
+      readonly: false,
+      destructive: false,
+      handler: (args) => asText(() => mailToTask(deps, args)),
     },
     {
       name: 'draft',

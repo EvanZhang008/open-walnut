@@ -2,7 +2,7 @@
   "id": "mail",
   "name": "Mail",
   "description": "The mail base: domain model, local cache and routes that every mail provider plugin attaches to",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "apiVersion": 1,
   "engines": {
     "walnut": ">=0.4.5"
@@ -30,6 +30,21 @@
         "type": "integer",
         "default": 120,
         "description": "Seconds between poll ticks; a provider watch hint can kick a tick sooner"
+      },
+      "digest_enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Send one letter a day listing what is unread across every account. Send digest now in the Mail app works whether this is on or off"
+      },
+      "digest_time": {
+        "type": "string",
+        "default": "08:00",
+        "description": "Local time of day the digest goes out, as HH:MM"
+      },
+      "digest_max_items": {
+        "type": "integer",
+        "default": 10,
+        "description": "Messages listed per account in the digest; the rest are counted"
       }
     }
   },
@@ -37,6 +52,9 @@
     "retention_days": { "label": "Retention (days)", "help": "Cached mail older than this is dropped" },
     "max_rows_per_account": { "label": "Max messages per account", "help": "Cache size ceiling per account" },
     "body_cache_mb": { "label": "Body cache (MB)", "help": "Disk budget for cached message bodies" },
-    "poll_interval_seconds": { "label": "Poll interval (seconds)", "help": "How often accounts are polled" }
+    "poll_interval_seconds": { "label": "Poll interval (seconds)", "help": "How often accounts are polled" },
+    "digest_enabled": { "label": "Daily digest", "help": "One letter a day with your unread mail. Send digest now still works when this is off" },
+    "digest_time": { "label": "Digest time", "help": "Local time the digest is sent, as HH:MM" },
+    "digest_max_items": { "label": "Digest items per account", "help": "Longer lists are counted instead" }
   }
 }

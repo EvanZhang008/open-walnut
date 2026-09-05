@@ -130,6 +130,21 @@ export function scheduleLetterRefresh(): void {
 }
 
 /**
+ * Forget how fresh the list is, WITHOUT fetching it.
+ *
+ * For an event that arrives while nothing is subscribed to the letter list: no surface wants a
+ * request right now, but the cached list is now known to be wrong, and `ensureLetters` would
+ * otherwise serve it for up to 15 more seconds. That is exactly the window a human takes to open
+ * the bell after a letter lands, so the letter they came to read was missing from the list.
+ *
+ * Cheap on purpose (one number), so a closed-panel handler can call it on every event.
+ */
+export function markLettersStale(): void {
+  lastLoadedAt = 0;
+  lastArchivedAt = 0;
+}
+
+/**
  * Patch one letter locally so a click feels instant before the route answers.
  *
  * Patches whichever list holds it: a row can be in the live feed or on the

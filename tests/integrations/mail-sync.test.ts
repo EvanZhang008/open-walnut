@@ -1251,6 +1251,11 @@ describe('on a replica', () => {
         retry: explode('a retry'), withdrawFor: explode('a withdrawal'),
       } as never,
       sends: { list: explode('the send ledger'), require: explode('the send ledger') } as never,
+      // The two exits mail has: one message becoming a task, and the day's unread becoming a
+      // letter. A replica that took either would write the primary's tasks or send the human a
+      // second copy of the same digest.
+      messageTasks: { link: explode('the task ledger') } as never,
+      digest: { sendNow: explode('the letter path') } as never,
     });
 
     expect(handlers.length).toBeGreaterThanOrEqual(20);

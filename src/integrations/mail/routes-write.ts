@@ -51,6 +51,24 @@ const CONSOLE_SEND_DEADLINE_MS = 10_000
 const DRAFT_LIST_LIMIT = 200
 const DEFAULT_PAGE = 50
 
+/**
+ * What `GET /drafts` means when nobody says otherwise: the drafts that are still open.
+ *
+ * `sent` and `discarded` are terminal and they accumulate forever, so an unfiltered list is
+ * eventually almost entirely history. The console has always dropped them on arrival, which made
+ * the default wrong for every OTHER caller: an agent asking what is in flight was handed a hundred
+ * mails that already went. An explicit `state=` still selects any single state, terminal ones
+ * included, because "show me what I sent" is a real question.
+ *
+ * Six states means six queries rather than one filtered read, because filtering a newest-200 page
+ * has a real hole: a page full of terminal rows hides every open draft older than it. With an
+ * `account` they use `drafts_by_account_state`; without one (the console's own call) they use
+ * `drafts_by_state_updated`, added in migration v6 for exactly this.
+ */
+const OPEN_DRAFT_STATES = [
+  'composing', 'pending_approval', 'approved', 'sending', 'failed', 'unknown',
+] as const
+
 /** The one degraded answer shape every write here uses when its budget runs out. */
 function slowReply(message: string, draft?: unknown) {
   return {
@@ -223,16 +241,23 @@ export function registerMailWriteRoutes(
 
   walnut.http.route('get', '/drafts', async (request) => {
     if (primaryOnly()) return PRIMARY_ONLY
+    const account = firstQuery(request.query.account)
+    const state = firstQuery(request.query.state)
+    const limit = intQuery(request.query.limit, DRAFT_LIST_LIMIT, DRAFT_LIST_LIMIT)
+    const common = { ...(account ? { accountId: account } : {}), limit }
     try {
-      return {
-        json: {
-          drafts: await drafts.list({
-            ...(firstQuery(request.query.account) ? { accountId: firstQuery(request.query.account)! } : {}),
-            ...(firstQuery(request.query.state) ? { state: firstQuery(request.query.state)! } : {}),
-            limit: intQuery(request.query.limit, DRAFT_LIST_LIMIT, DRAFT_LIST_LIMIT),
-          }),
-        },
-      }
+      if (state) return { json: { drafts: await drafts.list({ ...common, state }) } }
+      // One indexed query per open state, in parallel, rather than one unfiltered read that is
+      // filtered afterwards. The filtered-afterwards shape has a hole this does not: a mailbox with
+      // two hundred sent drafts fills the newest-first page with terminal rows, so an open draft
+      // older than any of them is simply missing from the answer.
+      const pages = await Promise.all(
+        OPEN_DRAFT_STATES.map((one) => drafts.list({ ...common, state: one })),
+      )
+      const merged = pages.flat().sort(
+        (left, right) => right.updatedAt - left.updatedAt || right.draftId.localeCompare(left.draftId),
+      )
+      return { json: { drafts: merged.slice(0, limit) } }
     } catch (error) {
       return errorReply(walnut, error)
     }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import type { AppComponentProps } from '../registry';
 import { AddAccountDialog } from './AddAccountDialog';
@@ -7,7 +7,7 @@ import { MailMessageList } from './MailMessageList';
 import { MailReader } from './MailReader';
 import { ComposerPanel } from './compose/ComposerPanel';
 import { CANNOT_SEND_TITLE, canSendFrom } from './compose/send-status';
-import { refreshMailAll } from './mail-actions';
+import { openMailDeepLink, refreshMailAll } from './mail-actions';
 import { useMailConsole } from './useMailConsole';
 import './mail.css';
 import './mail-compose.css';
@@ -64,11 +64,39 @@ function useNarrowViewport(): boolean {
   return narrow;
 }
 
-export function MailApp(_props: AppComponentProps) {
+/**
+ * `?account=&message=`, which is what a task's backlink and a digest letter point at.
+ *
+ * Applied ONCE per pair rather than on every render: `openMailDeepLink` selects a mailbox, which
+ * loads a page, which re-renders this component, and a naive effect would then open the same message
+ * again forever. The pair is remembered in a ref (not in state) so noticing it costs no render, and
+ * the query is deliberately left in the URL: it is what the human copied, and rewriting it would
+ * break the back button on the way in.
+ */
+function useMailDeepLink(search: string, ready: boolean): void {
+  const applied = useRef('');
+  useEffect(() => {
+    if (!ready) return;
+    const params = new URLSearchParams(search);
+    const accountId = params.get('account');
+    const messageId = params.get('message');
+    if (!accountId || !messageId) return;
+    const key = JSON.stringify([accountId, messageId]);
+    if (applied.current === key) return;
+    applied.current = key;
+    void openMailDeepLink(accountId, messageId);
+  }, [search, ready]);
+}
+
+export function MailApp(props: AppComponentProps) {
   const mail = useMailConsole();
   const narrow = useNarrowViewport();
   const [adding, setAdding] = useState(false);
   const [showMailboxes, setShowMailboxes] = useState(false);
+  // Only once the accounts are in: the deep link reads one message and then selects its mailbox, and
+  // doing that before the console has its account list would race `ensureSelection`, which would then
+  // move the human off the message they followed a link to.
+  useMailDeepLink(props.search, mail.loaded && mail.accounts.length > 0);
 
   const openAdd = useCallback(() => setAdding(true), []);
   const closeAdd = useCallback(() => setAdding(false), []);
@@ -173,7 +201,7 @@ export function MailApp(_props: AppComponentProps) {
             composer={mail.composer}
             mailboxes={mail.mailboxes[mail.composer.accountId] ?? []}
             narrow={narrow}
-            canSend={canSendFrom(mail.providers, mail.composer.accountId)}
+            canSend={canSendFrom(mail.providers, mail.composer.accountId, mail.accounts)}
             cannotSendTitle={CANNOT_SEND_TITLE}
           />
         ) : (

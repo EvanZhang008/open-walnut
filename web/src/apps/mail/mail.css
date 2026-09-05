@@ -90,6 +90,62 @@
   cursor: pointer;
 }
 
+/* The overflow button's glyph. Three periods rather than an ellipsis character, tightened, so it
+   reads as a menu affordance at 26px instead of as clipped text. */
+.mail-overflow-glyph {
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: -1px;
+  transform: translateY(-2px);
+}
+
+/* ── make a task, and the pill it becomes ── */
+
+.mail-task-slot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  /* The error text can be a whole sentence from the server, and this row is a flex line of
+     buttons: without a bound it pushes Reply and Reply all off the pane. */
+  max-width: 320px;
+}
+
+.mail-task-error {
+  font-size: 11px;
+  color: var(--error);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+/* The task chip, as the rest of Walnut draws it.
+
+   The shared `.task-link` rules are scoped to `.markdown-body a.task-link` (globals.css), and the
+   mail reader is not a markdown container: inheriting the class alone gave a bare undecorated link,
+   which is the one thing this control must not be, since the whole point is that it reads as a
+   Walnut task. So the chip's own properties are restated here, and the vertical rhythm is matched to
+   the buttons it sits beside so the head does not jump when the button becomes the pill. */
+.mail-task-pill {
+  display: inline-flex;
+  align-items: center;
+  max-width: 240px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--accent-subtle, rgba(0, 122, 255, 0.08));
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.mail-task-pill:hover {
+  background: var(--accent-subtle-hover, rgba(0, 122, 255, 0.16));
+  text-decoration: none;
+}
+
 .mail-text-btn:hover { text-decoration: underline; }
 
 .mail-pane-empty {

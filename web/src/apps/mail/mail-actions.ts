@@ -26,11 +26,13 @@ import {
   readMailMessage,
   refreshMail,
   searchMail,
+  type MailMessageDto,
 } from '@/api/mail';
 import { log } from '@/utils/log';
 import { closeMailComposer, onMailDraftEvent } from './compose/compose-actions';
 import { loadMailDrafts } from './compose/compose-drafts';
 import { markReadIfAllowed } from './mail-read-flag';
+import { applyMessageTask, invalidateLetterList } from './mail-task-actions';
 import {
   DRAFTS_MAILBOX,
   EMPTY_SEARCH,
@@ -215,6 +217,8 @@ export function openMailMessage(
       loading: true,
       error: null,
       allowRemoteImages: false,
+      taskBusy: false,
+      taskError: null,
     },
   });
   return run(`message:${pairKey(accountId, messageId)}${retry ? ':retry' : ''}`, async () => {
@@ -231,6 +235,8 @@ export function openMailMessage(
           loading: false,
           error: null,
           allowRemoteImages: store.state.open?.allowRemoteImages ?? false,
+          taskBusy: false,
+          taskError: null,
         },
       });
       await markReadIfAllowed(answer.message);
@@ -263,6 +269,52 @@ export function retryOpenMessageBody(): Promise<void> {
   return openMailMessage(open.accountId, open.messageId, { retry: !!open.bodyError });
 }
 
+
+// ── deep links ──
+
+/**
+ * Open one message from a link somewhere else in Walnut (a task's backlink, a digest letter).
+ *
+ * ONE read, not two: the message is fetched first because its `mailboxId` is what decides which
+ * mailbox the middle pane should be showing, and the same answer is then placed as the open message
+ * rather than read again. An id that no longer resolves leaves the console on whatever it was
+ * showing and says so in one line, because a link from a task made months ago is allowed to point
+ * at a message the cache has since dropped.
+ */
+export function openMailDeepLink(accountId: string, messageId: string): Promise<void> {
+  return run(`deep-link:${pairKey(accountId, messageId)}`, async () => {
+    const seq = ++store.openSeq;
+    try {
+      const answer = await readMailMessage(accountId, messageId);
+      // `selectMailbox` clears the open message, so it goes FIRST and the reader is filled after.
+      selectMailbox(accountId, answer.message.mailboxId);
+      if (seq !== store.openSeq) return;
+      patch({
+        open: {
+          accountId,
+          messageId,
+          message: answer.message,
+          body: answer.body ?? null,
+          bodyError: answer.bodyError ?? null,
+          loading: false,
+          error: null,
+          allowRemoteImages: false,
+          taskBusy: false,
+          taskError: null,
+        },
+      });
+      await markReadIfAllowed(answer.message);
+    } catch (error) {
+      const failure = mailFailure(error);
+      log.warn('mail', 'deep link could not be opened', { accountId, messageId, error: failure.message });
+      patch({
+        refreshNote: failure.status === 404
+          ? 'That message is not in the cache any more, so Mail opened without it.'
+          : `That link could not be opened: ${failure.message}`,
+      });
+    }
+  }, true);
+}
 
 // ── search ──
 
@@ -420,8 +472,24 @@ function clearRefreshNoteFor(accountId: string | undefined): void {
  * badge moving, and it is why nothing here pulls a page unless a pane is showing that mailbox.
  */
 export function onMailEvent(name: string, data: unknown): void {
-  const payload = (data ?? {}) as { accountId?: string; mailboxId?: string };
+  const payload = (data ?? {}) as { accountId?: string; mailboxId?: string; messageId?: string; taskId?: string };
   if (name === 'providers-changed') { void loadProviders(true); return; }
+
+  // A task made anywhere (this tab, another tab, an agent). Ahead of the loaded gate and it makes no
+  // request at all: it stamps the rows this console is already holding, and a console holding none
+  // has nothing to do, since the backlink is derived on every read anyway.
+  if (name === 'message-tasked') {
+    if (payload.accountId && payload.messageId && payload.taskId) {
+      applyMessageTask(payload.accountId, payload.messageId, payload.taskId);
+    }
+    return;
+  }
+  // The digest is a LETTER, so nothing in this console changes. What DOES need saying is that the
+  // letter list is now out of date: this subscription is session-scoped and runs with the bell shut,
+  // and the letter store serves a cached list for 15s to whoever opens next. That is exactly how long
+  // it takes to reach for the bell after a digest lands, so the letter it was sent for would be
+  // missing from the list. Marking it stale costs one number and no request.
+  if (name === 'digest-sent') { invalidateLetterList(); return; }
 
   // The write path's two events, ahead of the loaded gate on purpose: an open composer's status
   // card is the one screen where staleness reads as "did my mail go or not", and the handler makes

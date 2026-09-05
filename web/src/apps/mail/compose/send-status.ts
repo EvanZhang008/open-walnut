@@ -11,7 +11,14 @@
  *
  * Pure and DOM-free: `tests/web/mail-compose-status.test.ts` drives event sequences through it.
  */
-import type { MailDraftDto, MailDraftState, MailProviderSummary, MailSendDto, MailSendState } from '@/api/mail';
+import type {
+  MailAccountDto,
+  MailDraftDto,
+  MailDraftState,
+  MailProviderSummary,
+  MailSendDto,
+  MailSendState,
+} from '@/api/mail';
 import { providerIdOf } from '@/api/mail';
 
 /** What the composer pane shows. `composing` means the form, everything else means the card. */
@@ -251,14 +258,23 @@ export function isOpenDraft(draft: MailDraftDto): boolean {
 /**
  * Whether this account may be offered a compose button.
  *
- * Read from the PROVIDER's declared capabilities, because that is the only place the console can
- * see it: `MailAccountDto` carries no capabilities, and the provider contract's per-account
- * override (`accountCapabilities`, which exists precisely because an IMAP account may have no SMTP
- * settings) is not on any route. So this is the coarse answer, and the fine one arrives as a 409
+ * The ACCOUNT's own answer wins when the server sent one. `MailAccountDto.capabilities` carries the
+ * provider's per-account verdict (`accountCapabilities`, which exists precisely because one IMAP
+ * account may have SMTP settings and another may not), so an account that cannot send no longer
+ * gets a Send button that was only ever going to fail.
+ *
+ * The provider-level flag stays as the fallback, for a provider with no per-account answer and for a
+ * tab that was open across the deploy which added the field. The fine answer still arrives as a 409
  * `unsupported` from the send itself, which the composer shows verbatim.
  */
-export function canSendFrom(providers: MailProviderSummary[], accountId: string | undefined): boolean {
+export function canSendFrom(
+  providers: MailProviderSummary[],
+  accountId: string | undefined,
+  accounts?: MailAccountDto[],
+): boolean {
   if (!accountId) return false;
+  const account = accounts?.find((one) => one.accountId === accountId);
+  if (account?.capabilities) return account.capabilities.send;
   const provider = providers.find((one) => one.id === providerIdOf(accountId));
   return !!provider?.capabilities.send;
 }

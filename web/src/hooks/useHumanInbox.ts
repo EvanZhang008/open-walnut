@@ -23,7 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'r
 import { useEvent } from '@/hooks/useWebSocket';
 import { compareLetters, type LetterEnvelope } from '@/api/human-inbox';
 import {
-  applyLetterChange, ensureLetters, getLetterSnapshot, patchLetter, refreshLetters,
+  applyLetterChange, ensureLetters, getLetterSnapshot, markLettersStale, patchLetter, refreshLetters,
   scheduleLetterRefresh, subscribeLetters,
 } from '@/components/inbox/letter-store';
 
@@ -105,14 +105,18 @@ export function useHumanInbox(
     ensureLetters({ archived });
   }, [enabled, archived]);
 
-  // Live updates while the panel is open. Closed panel = no refresh from here:
-  // the list reloads on the next open anyway, and the bell badge already moved
-  // (the feed envelope arrived over the same event). A session panel's own
-  // subscription keeps the store fresh when it is the one on screen.
+  // Live updates while the panel is open. Closed panel = no REFRESH from here: the list reloads on
+  // the next open anyway, and the bell badge already moved (the feed envelope arrived over the same
+  // event). A session panel's own subscription keeps the store fresh when it is the one on screen.
+  //
+  // It does mark the list STALE, which is a different thing and costs no request. `ensureLetters`
+  // serves a cached list for 15s, and reaching for the bell after a notification takes about that
+  // long, so the letter the event was about was routinely missing from the list it opened. Marking
+  // it stale is what makes the next open a real read.
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
   useLetterEvents(useCallback(() => {
-    if (!enabledRef.current) return;
+    if (!enabledRef.current) { markLettersStale(); return; }
     scheduleLetterRefresh();
   }, []));
 

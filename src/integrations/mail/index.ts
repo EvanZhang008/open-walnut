@@ -9,8 +9,10 @@ import { MailApprovals } from './approvals.js'
 import { MailBodyStore } from './bodies.js'
 import type { MailAccountDto } from './contract.js'
 import { openMailDatabase } from './db.js'
+import { MailDigest } from './digest.js'
 import { MailDrafts } from './drafts.js'
 import { MailEvents } from './events.js'
+import { MailMessageTasks } from './message-tasks.js'
 import { createMailOps } from './ops.js'
 import { MailProviderRegistry, PROVIDERS_CHANGED_EVENT } from './provider-registry.js'
 import { MailRetention } from './retention.js'
@@ -100,7 +102,12 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     // The host namespaces these to `plugin:mail:<name>`.
     walnut.events.emit(name, data)
   })
+  // Late-bound on purpose: the service is BUILT from `providers`, so this callback cannot close over
+  // it. A provider appearing or going away changes what its accounts can do, and the service caches
+  // that answer per account.
+  let forgetCapabilities: (accountId?: string) => void = () => undefined
   const providers = new MailProviderRegistry((event) => {
+    forgetCapabilities()
     walnut.events.emit(PROVIDERS_CHANGED_EVENT, event)
   })
 
@@ -108,6 +115,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   const store = new MailStore(db)
   const bodies = new MailBodyStore(walnut.storage.dataDir)
   const service = new MailService({ store, bodies, providers })
+  forgetCapabilities = (accountId) => service.forgetCapabilities(accountId)
   // The write path. `letters` is the host's, and it is the ONLY way this plugin asks the human
   // for anything: a letter renders on the console and on the phone, and its answer comes back
   // through the bus filtered to this plugin's own letters.
@@ -118,6 +126,36 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   })
   // Everything that deletes, in one place, so a read path cannot reach a delete by accident.
   const retention = new MailRetention({ store, bodies, events })
+  // Mail leaving the plugin, in the two directions it can: one message becomes one task, and the
+  // day's unread becomes one letter. Both go through the host's own services (`walnut.tasks`,
+  // `walnut.letters`), so the kernel never learns the word "mail" for either of them.
+  const messageTasks = new MailMessageTasks({
+    store,
+    events,
+    tasks: walnut.tasks,
+    read: {
+      message: (accountId, messageId) => service.readEnvelope(accountId, messageId),
+      // From the MIRROR ROW, not from `listAccounts()`. The decorated list asks every provider what
+      // each of its accounts can do, and one mail becoming one task has no business reaching a mail
+      // server for a display name it can read from a column.
+      accountLabel: async (accountId: string) => {
+        const row = await store.getAccount(accountId)
+        return row?.display_name || row?.address || accountId
+      },
+      bodyText: (accountId, messageId) => service.bodyTextFor(accountId, messageId),
+    },
+    log: walnut.log,
+  })
+  const digest = new MailDigest({
+    store,
+    events,
+    letters: walnut.letters,
+    // The CHEAP shape: the digest wants names and counts, and the capability half of the full shape
+    // is a provider call per account.
+    accounts: () => service.listAccounts({ capabilities: false }),
+    config: walnut.config,
+    log: walnut.log,
+  })
   // One direction only: `accounts` reaches the loop (setup kicks a poll, a delete forgets the
   // account's backoff), and the loop no longer reaches back, because health writes now go
   // straight to the store as a bare UPDATE rather than through the mirror's upsert. The late
@@ -131,7 +169,10 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     kick: (accountId) => { void sync.refresh(accountId).catch(() => undefined) },
     forget: (accountId) => sync.forget(accountId),
   })
-  sync = new MailSync({ walnut, store, service, retention, events, sends, approvals })
+  // The digest rides the tick rather than a timer of its own: "is today's due" is a clock question,
+  // and this plugin already owns exactly one timer. A replica arms no tick at all, which is also how
+  // the digest stays off there without a second replica check.
+  sync = new MailSync({ walnut, store, service, retention, events, sends, approvals, digest })
   setActiveMailSync(sync)
 
   // The letter answers. Owned by the loader through `walnut.letters`, and filtered host-side to
@@ -172,7 +213,9 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     accounts: () => service.listAccounts(),
     caller: () => walnut.services.caller(),
   }))
-  registerMailRoutes(walnut, { store, service, accounts, providers, sync, drafts, approvals, sends })
+  registerMailRoutes(walnut, {
+    store, service, accounts, providers, sync, drafts, approvals, sends, messageTasks, digest,
+  })
 
   // The phantom-provider sweep. A provider plugin normally disposes its own registration, and
   // the case this exists for is the one where it cannot: an `activate` that threw after
@@ -196,7 +239,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // nobody can reach. Every handle here is also owned by the loader, so a plugin teardown that
   // never reaches `dispose` below still releases them.
   const agentDeps: MailAgentDeps = {
-    service, drafts, approvals, replica: () => walnut.replica,
+    service, drafts, approvals, tasks: messageTasks, replica: () => walnut.replica,
   }
   let registered: Array<{ dispose(): void | Promise<void> }> = []
   let currentLine = ''
@@ -205,7 +248,9 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   let queue: Promise<void> = Promise.resolve()
 
   async function syncAgentSurface(): Promise<void> {
-    const accounts = await service.listAccounts()
+    // The CHEAP shape: the gate counts accounts and the context line names them. Asking for the full
+    // one would make a provider call per account every time an account changes.
+    const accounts = await service.listAccounts({ capabilities: false })
     const line = accounts.length === 0 ? '' : mailContextLine(accounts)
     // The line IS the signature: it moves when the count moves and when a display name changes,
     // and nothing else about the surface depends on the accounts. Equal means nothing to do, which
@@ -280,7 +325,12 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // plugin's data directory after the loader deleted it. A timer is cancelled by dispose.
   const firstSyncTimer = walnut.timers.timeout(() => { scheduleAgentSurfaceSync() }, 0)
   // The base's OWN account signal, in process, so this does not have to know the host's bus naming.
-  const accountsWatch = events.onAccountsChanged(() => scheduleAgentSurfaceSync())
+  // An account whose SMTP settings were just filled in must not be told for a minute that it cannot
+  // send, so the cached verdict goes before the surface is re-read.
+  const accountsWatch = events.onAccountsChanged((event) => {
+    service.forgetCapabilities(event.accountId)
+    scheduleAgentSurfaceSync()
+  })
 
   sync.start()
   walnut.log.info('Mail base ready', { providers: providers.size, replica: walnut.replica })

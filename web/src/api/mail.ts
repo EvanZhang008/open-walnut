@@ -90,6 +90,15 @@ export interface MailAccountDto extends MailAccountBase {
    * account row without it. The pane's badge arithmetic reads the mailbox rows either way.
    */
   unreadInbox?: number;
+  /**
+   * What THIS account can do, when the provider answers per account.
+   *
+   * Preferred over the provider-level `capabilities.send` everywhere the console decides whether to
+   * offer a Send: two IMAP accounts behind one provider genuinely differ, because reading needs a
+   * password and sending needs SMTP settings the human may never have filled in. Absent means the
+   * provider has no per-account answer, or the tab predates the field.
+   */
+  capabilities?: { send: boolean };
 }
 
 export type MailboxRole = 'inbox' | 'sent' | 'drafts' | 'archive' | 'trash' | 'spam' | 'other';
@@ -123,6 +132,9 @@ export interface MailMessageDto {
   rfcMessageId: string;
   from: MailAddress;
   to: MailAddress[];
+  /** The rest of the recipients, and where the sender asked answers to go. */
+  cc?: MailAddress[];
+  replyTo?: MailAddress[];
   subject: string;
   snippet: string;
   /** Epoch milliseconds. Mail dates are instants, never wall time. */
@@ -134,6 +146,14 @@ export interface MailMessageDto {
   attachments: MailAttachmentMeta[];
   hasBody: boolean;
   threadId?: string;
+  /**
+   * The task this message was turned into, when it was.
+   *
+   * Derived by the server on every read from its own ledger, so it is never stale: a task the human
+   * deletes stops appearing here. The reader shows the task pill instead of the button when it is
+   * set, and `plugin:mail:message-tasked` is what fills it in without a refetch.
+   */
+  taskId?: string;
 }
 
 export interface MailBodyDto {
@@ -284,6 +304,52 @@ export function markMailMessageRead(
 ): Promise<{ ok: boolean; message: MailMessageDto }> {
   // 409 is a capability answer the console handles by rolling back, not a failure.
   return apiPost(`${messagePath(accountId, messageId)}/read`, { read }, { quietStatuses: [409] });
+}
+
+/** What `POST /messages/:a/:m/task` answers with. `created: false` means it already had one. */
+export interface MailMessageTask {
+  taskId?: string;
+  created?: boolean;
+  /** True on a 202: the write is still running, and asking again returns the task. */
+  pending?: boolean;
+  message?: string;
+}
+
+/**
+ * Make a task out of one message, or learn which task it already is.
+ *
+ * Idempotent on the SERVER, which is what makes a double click harmless: the second call answers
+ * 200 with the same `taskId` and `created: false`. The console still guards the button, but it does
+ * not have to be right for the data to stay right.
+ */
+export function createMailMessageTask(
+  accountId: string,
+  messageId: string,
+  input?: { title?: string; project?: string; note?: boolean },
+): Promise<MailMessageTask> {
+  return apiPost(`${messagePath(accountId, messageId)}/task`, input ?? {}, QUIET);
+}
+
+export interface MailDigestResult {
+  /** Null when nothing was unread, so no letter was sent. */
+  letterId?: string | null;
+  unread?: number;
+  accounts?: number;
+  pending?: boolean;
+  /**
+   * The server could not read enough of the cache to answer, so every number here is a floor.
+   *
+   * It exists because "nothing is unread" and "nothing was looked at" are the same zero. Telling
+   * somebody with a full mailbox that nothing is unread is a lie they cannot act on.
+   */
+  incomplete?: boolean;
+  /** The server's own sentence about the outcome, when it has one. Preferred over anything local. */
+  message?: string;
+}
+
+/** Send the digest letter now. It does not consume today's scheduled one. */
+export function sendMailDigestNow(): Promise<MailDigestResult> {
+  return apiPost(`${BASE}/digest/send-now`, {}, { ...QUIET, timeoutMs: 20_000 });
 }
 
 export function searchMail(query: {
@@ -462,9 +528,9 @@ export function createMailDraft(input: {
  * back `pending_approval` again. A phone must never show a live Send over text that changed.
  */
 export function patchMailDraft(draftId: string, patch: MailDraftPatch): Promise<MailDraftApproval> {
-  // No `quietStatuses` here: `apiPatch` takes no options (see the proposal in the slice report),
-  // so a 409 from an edit that raced a send logs at error level. The console handles it.
-  return apiPatch(draftPath(draftId), patch);
+  // 409 is a DESIGNED answer here (an edit that raced a send), so it is quiet: the console handles
+  // it in words, and an expected outcome in the error-log audit is how a real fault gets lost.
+  return apiPatch(draftPath(draftId), patch, WRITE_QUIET);
 }
 
 export function deleteMailDraft(draftId: string): Promise<{ ok: boolean; draft?: MailDraftDto }> {

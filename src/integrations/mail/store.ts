@@ -1,15 +1,17 @@
-import type { MailDatabase, MailDbStatus } from './db.js'
+import { MESSAGE_COLUMNS, type MailDatabase, type MailDbStatus } from './db.js'
+import { MailTaskStore } from './store-tasks.js'
 import { MailWriteStore } from './store-write.js'
 
 /**
  * Every statement the mail base runs over accounts, mailboxes, messages and the FTS index, plus
- * the row shapes they answer with. The `drafts` and `sends` tables live in store-write.ts and are
- * reachable as `store.write`.
+ * the row shapes they answer with. The `drafts` and `sends` tables live in store-write.ts
+ * (`store.write`); the task ledger, the digest's unread listing and the `meta` rows live in
+ * store-tasks.ts (`store.tasks`).
  *
  * Split out of `db.ts` only for size: that file owns the schema, the migrations and the
- * deadline machinery, this one owns the queries. Together with store-write.ts they are the ONLY
- * modules in `src/integrations/mail/` that write SQL, which is what keeps a schema change to one
- * place and stops a query being smuggled into a route handler.
+ * deadline machinery, this one owns the queries. Together with store-write.ts and store-tasks.ts
+ * they are the ONLY modules in `src/integrations/mail/` that write SQL, which is what keeps a
+ * schema change to one place and stops a query being smuggled into a route handler.
  */
 
 // ── Rows, exactly as the tables spell them ──
@@ -123,8 +125,15 @@ export interface SendRow extends Record<string, unknown> {
   settled_at: number | null
 }
 
+/**
+ * `account_id` and `message_id` ride along because the retention pass has to be able to name a row
+ * the way the task ledger names it, and a message with no RFC Message-ID is keyed by that pair.
+ * Without them, an evicted row is one whose body the task's backlink can no longer open.
+ */
 export interface EvictableRow extends Record<string, unknown> {
   rowid: number
+  account_id: string
+  message_id: string
   rfc_message_id: string
   body_ref: string | null
   sent_at: number
@@ -132,15 +141,21 @@ export interface EvictableRow extends Record<string, unknown> {
 
 export interface BodiedRow extends Record<string, unknown> {
   rowid: number
+  account_id: string
+  message_id: string
   rfc_message_id: string
   body_ref: string
   body_bytes: number | null
 }
 
-const MESSAGE_COLUMNS =
-  'rowid, account_id, message_id, rfc_message_id, mailbox_id, thread_id, from_addr, subject,'
-  + ' snippet, sent_at, received_at, flags_json, attachments_json, body_ref, body_bytes,'
-  + ' payload, updated_at, envelope_hash, body_error'
+/** One row of the message-to-task ledger. See SCHEMA_V6 for why it lives in the plugin's file. */
+export interface MessageTaskRow extends Record<string, unknown> {
+  rfc_message_id: string
+  account_id: string
+  message_id: string
+  task_id: string
+  created_at: number
+}
 
 function placeholders(count: number): string {
   return new Array(count).fill('?').join(', ')
@@ -156,8 +171,17 @@ export class MailStore {
    */
   readonly write: MailWriteStore
 
+  /**
+   * The task ledger, the digest's unread listing and the `meta` rows, in store-tasks.ts.
+   *
+   * Same shape as `write` and for the same reason: one `store` reaches everything, while each
+   * table's statements still live in exactly one file.
+   */
+  readonly tasks: MailTaskStore
+
   constructor(private readonly db: MailDatabase) {
     this.write = new MailWriteStore(db)
+    this.tasks = new MailTaskStore(db)
   }
 
   get status(): MailDbStatus {
@@ -252,6 +276,24 @@ export class MailStore {
     await this.db.run(
       'UPDATE mailboxes SET cursor = ?, last_sync_at = ? WHERE account_id = ? AND mailbox_id = ?',
       [cursor, lastSyncAt, accountId, mailboxId],
+    )
+  }
+
+  /**
+   * Move one mailbox's unread counter by a read flag Walnut itself changed.
+   *
+   * The counter is the PROVIDER's number, refreshed on a mailbox re-list, so between two polls it
+   * described a mailbox as it was before the human opened anything. Everything that reports unread
+   * reads it (the accounts DTO the badge uses, the daily digest), which meant a digest could say
+   * "2 unread" over a list of one message: the count was two minutes old and the list was current.
+   * A re-list overwrites this adjustment with the provider's own figure, which is the right
+   * precedence: this only keeps the number honest until then.
+   */
+  async bumpMailboxUnread(accountId: string, mailboxId: string, delta: number): Promise<void> {
+    if (!delta) return
+    await this.db.run(
+      'UPDATE mailboxes SET unread = MAX(0, unread + ?) WHERE account_id = ? AND mailbox_id = ?',
+      [delta, accountId, mailboxId],
     )
   }
 
@@ -441,7 +483,7 @@ export class MailStore {
    */
   evictable(accountId: string, mailboxId?: string): Promise<EvictableRow[]> {
     return this.db.all<EvictableRow>(
-      'SELECT rowid, rfc_message_id, body_ref, sent_at FROM messages WHERE account_id = ?'
+      'SELECT rowid, account_id, message_id, rfc_message_id, body_ref, sent_at FROM messages WHERE account_id = ?'
       + (mailboxId ? ' AND mailbox_id = ?' : '')
       + ' ORDER BY sent_at DESC, rowid DESC',
       mailboxId ? [accountId, mailboxId] : [accountId],
@@ -457,7 +499,7 @@ export class MailStore {
    */
   doomedRows(accountId: string, keep: number, cutoff: number): Promise<EvictableRow[]> {
     return this.db.all<EvictableRow>(
-      'SELECT rowid, rfc_message_id, body_ref, sent_at FROM messages'
+      'SELECT rowid, account_id, message_id, rfc_message_id, body_ref, sent_at FROM messages'
       + ' WHERE account_id = ? AND (sent_at < ? OR rowid IN ('
       + '   SELECT rowid FROM messages WHERE account_id = ?'
       + '   ORDER BY sent_at DESC, rowid DESC LIMIT -1 OFFSET ?'
@@ -477,7 +519,7 @@ export class MailStore {
   /** Cached bodies across every account, oldest first: the body cache's eviction order. */
   bodiedOldestFirst(limit: number): Promise<BodiedRow[]> {
     return this.db.all<BodiedRow>(
-      'SELECT rowid, rfc_message_id, body_ref, body_bytes FROM messages'
+      'SELECT rowid, account_id, message_id, rfc_message_id, body_ref, body_bytes FROM messages'
       + ' WHERE body_ref IS NOT NULL ORDER BY sent_at ASC, rowid ASC LIMIT ?',
       [limit],
     )

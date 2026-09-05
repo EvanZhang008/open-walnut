@@ -100,6 +100,15 @@ export interface MailEnvelope {
   from: MailAddress
   to?: MailAddress[]
   cc?: MailAddress[]
+  /**
+   * The `Reply-To` header, when the message carried one.
+   *
+   * Kept as its own field rather than folded into `from`, because the two answer different
+   * questions: `from` is who wrote it, `replyTo` is where the sender asked answers to go. A reply
+   * aimed at `from` when a `Reply-To` was set goes to a mailbox nobody reads, which for a mailing
+   * list or a ticket system means the answer is simply lost.
+   */
+  replyTo?: MailAddress[]
   subject: string
   snippet?: string
   /** Epoch milliseconds. */

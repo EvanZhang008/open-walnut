@@ -431,8 +431,16 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           start_date: input.startDate,
           end_date: input.endDate,
         })
-        if (input.phase && input.phase !== task.phase) return publicTask((await updateTask(task.id, { phase: input.phase })).task)
-        return publicTask(task)
+        const created = input.phase && input.phase !== task.phase
+          ? (await updateTask(task.id, { phase: input.phase })).task
+          : task
+        // `addTask` emits NOTHING, so every create path emits at its own call site. This one did
+        // not, and the symptom was a task nobody could see: no open browser learned the row existed
+        // (its list only refetches on the event), and the search index never picked it up, so a task
+        // a plugin made was unfindable until something unrelated triggered a full reload. Emitted
+        // AFTER the optional phase update so the payload is the task as it was persisted.
+        bus.emit(EventNames.TASK_CREATED, { task: created }, ['web-ui'], { source: `plugin/${pluginId}` })
+        return publicTask(created)
       },
       async update(id: string, patch: Record<string, unknown>) {
         const { updateTask, updateDescription, updateNote, getTask } = await import('../task-manager.js')

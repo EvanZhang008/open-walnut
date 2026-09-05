@@ -154,32 +154,23 @@ async function openLetters(page: Page, section: 'Needs Action' | 'Inbox'): Promi
 }
 
 /**
- * Open the letters and keep reopening until `wanted` is on screen.
+ * Open the letters ONCE and wait for `wanted` there.
  *
- * The letters list is CACHED for 15s (`web/src/components/inbox/letter-store.ts`), and a letter
- * event that lands while the panel is closed does not invalidate that cache, so the first open
- * after a letter was issued legitimately shows the previous list and "Nothing waiting on you". A
- * human's answer to that is to close it and look again, which re-runs the staleness check, so that
- * is what this does rather than pretending the mail console is at fault. The cache is reported as
- * drift; nothing in this slice's files can fix it.
+ * It used to close and reopen the panel in a loop, because the letters list is cached for 15s
+ * (`web/src/components/inbox/letter-store.ts`) and a letter event that landed while the panel was
+ * shut left that cache in place: the first open after a letter was issued showed the previous list.
+ * `useHumanInbox` now marks the list stale on any letter event with no subscriber open, so both
+ * orderings are covered without reopening: an event before the open makes the open a real read, and
+ * an event after it refreshes the open panel. The reopen loop is gone on purpose, because it hid
+ * exactly the regression this waits for.
  */
 async function openLettersUntil(
   page: Page,
   section: 'Needs Action' | 'Inbox',
   wanted: Locator,
 ): Promise<void> {
-  const deadline = Date.now() + 90_000
-  for (;;) {
-    await openLetters(page, section)
-    try {
-      await expect(wanted).toHaveCount(1, { timeout: 8_000 })
-      return
-    } catch (error) {
-      if (Date.now() > deadline) throw error
-      await closeLetters(page)
-      await page.waitForTimeout(5_000)
-    }
-  }
+  await openLetters(page, section)
+  await expect(wanted).toHaveCount(1, { timeout: 60_000 })
 }
 
 async function closeLetters(page: Page): Promise<void> {

@@ -53,6 +53,16 @@ await fs.rm(tmpBase, { recursive: true, force: true })
 await fs.mkdir(path.join(tmpBase, 'tasks'), { recursive: true })
 await fs.mkdir(path.join(tmpBase, 'plugins'), { recursive: true })
 
+/**
+ * `PW_MAIL_DIGEST_OFF=1` parks the SCHEDULED digest.
+ *
+ * A spec that drives "Send digest now" has to see exactly the letter it asked for, and the poll
+ * tick fires every two minutes: after 08:00 local, a run would otherwise race an unasked-for
+ * digest into the inbox. `sendNow` deliberately does not consult this switch (the menu item is the
+ * human asking, not the schedule running), which is what lets the two be tested apart.
+ */
+const digestOff = process.env.PW_MAIL_DIGEST_OFF === '1'
+
 // No live model calls from a fixture: the main agent points at the repo's mock CLI.
 const mockMainAgent = path.join(repoRoot, 'tests/providers/mock-main-agent.mjs')
 await fs.writeFile(path.join(tmpBase, 'config.yaml'), JSON.stringify({
@@ -65,6 +75,7 @@ await fs.writeFile(path.join(tmpBase, 'config.yaml'), JSON.stringify({
     triage: { debounce_minutes: 0 },
   },
   providers: { 'mail-cli': { api: 'claude-cli', claude_cli_command: mockMainAgent } },
+  ...(digestOff ? { plugins: { mail: { digest_enabled: false } } } : {}),
 }, null, 2))
 
 await fs.writeFile(path.join(tmpBase, 'tasks', 'tasks.json'), JSON.stringify({ version: 1, tasks: [] }, null, 2))
@@ -107,6 +118,7 @@ const fixture = {
   port,
   home: tmpBase,
   provider: withProvider,
+  digestOff,
   outbox: path.join(tmpBase, 'mail-fixture-sends.json'),
 }
 await fs.writeFile(path.join(tmpBase, 'fixture.json'), JSON.stringify(fixture, null, 2))

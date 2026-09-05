@@ -16,10 +16,10 @@ import { addressKey } from './mail-address';
 /**
  * The parts of a message a reply needs.
  *
- * `cc` and `replyTo` are optional because `MailMessageDto` carries NEITHER today (the server's
- * envelope has `cc`, the DTO drops it, and no layer keeps `Reply-To` at all). They are read here
- * so the arithmetic is already right the day the DTO grows them, and so this file states what a
- * correct reply-all needs.
+ * `cc` and `replyTo` are optional because the cache holds rows written before `MailMessageDto`
+ * carried either field, and "this message had no Cc" and "this row predates the field" are
+ * different facts. Both are read here, which is what makes reply-all keep the people who were only
+ * ever in Cc, and what makes an answer go to the address the sender asked for.
  */
 export interface ReplyTargetMessage {
   from?: MailAddress;

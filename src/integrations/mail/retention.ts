@@ -1,7 +1,8 @@
 import type { MailBodyStore } from './bodies.js'
 import type { RetentionLimits, RetentionResult } from './contract.js'
 import type { MailEvents } from './events.js'
-import type { MailStore } from './store.js'
+import { messageTaskKey } from './message-tasks.js'
+import type { EvictableRow, MailStore } from './store.js'
 
 /**
  * Everything that DELETES: the per-tick sweep, an account purge, and a voided container.
@@ -30,11 +31,17 @@ export class MailRetention {
    *
    * Ordered by how surprising a loss would be: row caps and the age cutoff drop whole
    * messages, then the body cache gives its bytes back while keeping the envelope. A message
-   * an in-flight draft is replying to is never evicted, whichever rule selected it.
+   * an in-flight draft is replying to, or one a TASK points at, is never evicted, whichever rule
+   * selected it: a task whose provenance block links back to a message the cache threw away is a
+   * task that has lost the thing it is about, and the task can outlive the mailbox by months.
    */
   async retain(limits: RetentionLimits, deadlineAt: number): Promise<RetentionResult> {
     const result: RetentionResult = { messagesDeleted: 0, bodiesDropped: 0, incomplete: false }
     const protectedIds = await this.deps.store.draftReplyTargets()
+    const linked = await this.deps.store.tasks.taskLinkedKeys()
+    const keep = (row: EvictableRow | { account_id: string; message_id: string; rfc_message_id: string }) =>
+      protectedIds.has(row.rfc_message_id)
+      || linked.has(messageTaskKey(row.account_id, row.rfc_message_id, row.message_id))
     const cutoff = this.now - limits.retentionDays * 24 * 60 * 60 * 1_000
 
     for (const account of await this.deps.store.listAccounts()) {
@@ -42,7 +49,7 @@ export class MailRetention {
       // Selected in SQL rather than filtered in JS: the old shape read every row an account owns
       // out of the worker on every tick to discard almost all of it.
       const rows = await this.deps.store.doomedRows(account.account_id, limits.maxRowsPerAccount, cutoff)
-      const doomed = rows.filter((row) => !protectedIds.has(row.rfc_message_id))
+      const doomed = rows.filter((row) => !keep(row))
       if (doomed.length === 0) continue
       result.messagesDeleted += await this.dropRows(doomed, deadlineAt)
     }
@@ -55,7 +62,7 @@ export class MailRetention {
     for (const row of await this.deps.store.bodiedOldestFirst(500)) {
       if (used <= cap) break
       if (Date.now() >= deadlineAt) { result.incomplete = true; break }
-      if (protectedIds.has(row.rfc_message_id)) continue
+      if (keep(row)) continue
       await this.deps.bodies.remove(row.body_ref)
       await this.deps.store.clearMessageBody(row.rowid)
       used -= row.body_bytes ?? 0
@@ -70,6 +77,11 @@ export class MailRetention {
     // tick stops writing new rows the moment this line lands rather than racing the delete.
     await this.deps.store.deleteAccount(accountId)
     await this.deps.store.deleteMailboxes(accountId)
+    // The LEDGER goes too, and the tasks it named do not: those are the human's, and a task about a
+    // mail keeps its provenance block whatever happens to the mailbox. Keeping the rows instead
+    // would protect evicted-account messages from retention forever, and would hand a stale
+    // backlink to a re-added account that happens to mint the same provider handles.
+    await this.deps.store.tasks.deleteMessageTasks(accountId)
     const rows = await this.deps.store.evictable(accountId)
     const deleted = await this.dropRows(rows, deadlineAt)
     this.deps.events.forgetAccount(accountId)

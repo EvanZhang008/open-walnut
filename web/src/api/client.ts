@@ -289,8 +289,11 @@ export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: nu
   return request<T>('POST', path, body, opts);
 }
 
-export function apiPatch<T>(path: string, body?: unknown): Promise<T> {
-  return request<T>('PATCH', path, body);
+// Same options as apiPost, and for the same reason: a PATCH has designed non-2xx outcomes too. A
+// draft edit that races a send answers 409 by contract, and without this that expected answer was
+// logged at error level in the audit, which is how a real fault gets lost in the noise.
+export function apiPatch<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; quietStatuses?: number[] }): Promise<T> {
+  return request<T>('PATCH', path, body, opts);
 }
 
 export function apiPut<T>(path: string, body?: unknown): Promise<T> {

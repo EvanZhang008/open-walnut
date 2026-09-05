@@ -6,9 +6,12 @@
  * to prevent. `auth-required` also says what fixes it, because polling has stopped for that
  * account until a human acts and no amount of waiting or clicking refresh will change that.
  */
+import { useState, type MouseEvent as ReactMouseEvent } from 'react';
 import type { MailAccountDto, MailDraftDto, MailProviderSummary, MailboxDto } from '@/api/mail';
+import { ContextMenu } from '@/components/common/ContextMenu';
 import { DRAFTS_MAILBOX, type MailSelection } from './mail-store';
 import { requestMailRefresh, selectMailbox } from './mail-actions';
+import { sendMailDigest } from './mail-task-actions';
 import { openMailComposer } from './compose/compose-actions';
 import { CANNOT_SEND_TITLE, canSendFrom, isOpenDraft } from './compose/send-status';
 import { ComposeIcon, DraftsIcon, MailboxRoleIcon, RefreshIcon } from './mail-icons';
@@ -26,6 +29,20 @@ interface Props {
   onPicked: () => void;
 }
 
+/**
+ * Where a menu opened from a BUTTON belongs.
+ *
+ * The cursor when there was one, and the button's own bottom-left corner when there was not. A click
+ * synthesized by the keyboard (Enter or Space on a focused button) carries `clientX`/`clientY` of
+ * zero, and a menu anchored on that lands in the corner of the window, nowhere near the control that
+ * opened it.
+ */
+function menuPointFor(event: ReactMouseEvent<HTMLElement>): { x: number; y: number } {
+  if (event.clientX > 0 || event.clientY > 0) return { x: event.clientX, y: event.clientY };
+  const box = event.currentTarget.getBoundingClientRect();
+  return { x: box.left, y: box.bottom };
+}
+
 const STATE_LABEL: Record<string, string> = {
   'auth-required': 'Sign-in needed',
   disabled: 'Paused',
@@ -34,11 +51,21 @@ const STATE_LABEL: Record<string, string> = {
 export function MailAccountsPane({
   accounts, mailboxes, drafts, providers, selected, refreshing, refreshNote, onAddAccount, onPicked,
 }: Props) {
-  // The compose entry point belongs to the SELECTED account, and whether it may send is the
-  // provider's declared capability (there is no per-account capability on any route yet). An
-  // account whose provider cannot send says so on the button rather than failing on the click.
+  // The compose entry point belongs to the SELECTED account, and whether it may send is that
+  // ACCOUNT's own capability when the server sent one, the provider's otherwise. An account that
+  // cannot send says so on the button rather than failing on the click.
   const composeAccount = selected?.accountId;
-  const canCompose = canSendFrom(providers, composeAccount);
+  const canCompose = canSendFrom(providers, composeAccount, accounts);
+  // A portalled menu, so one more pane action costs no width in a head that already holds two
+  // controls. See web/src/AGENTS.md: placement, portalling and dismissal are the shared component's,
+  // never hand-rolled here.
+  //
+  // The point is held here rather than taken from `useContextMenu`, which reads it straight off the
+  // event: keyboard activation of a button reports the pointer at 0,0, so the menu opened in the
+  // top-left corner of the window for anyone who reached the control with Enter or Space. See
+  // `menuPointFor`. In state, not a ref, because `useMenuPlacement` takes the point as a dependency
+  // and needs it to be referentially stable across renders.
+  const [menuPoint, setMenuPoint] = useState<{ x: number; y: number } | null>(null);
   return (
     <aside className="mail-accounts-pane" data-testid="mail-accounts-pane">
       <div className="mail-pane-head">
@@ -65,7 +92,35 @@ export function MailAccountsPane({
         >
           <RefreshIcon />
         </button>
+        <button
+          type="button"
+          className="mail-icon-btn"
+          data-testid="mail-pane-menu"
+          title="More mail actions"
+          aria-label="More mail actions"
+          aria-haspopup="menu"
+          onClick={(event) => { setMenuPoint(menuPointFor(event)); }}
+        >
+          <span className="mail-overflow-glyph" aria-hidden="true">···</span>
+        </button>
       </div>
+
+      {menuPoint && (
+        <ContextMenu
+          point={menuPoint}
+          ariaLabel="Mail actions"
+          testId="mail-pane-menu-popup"
+          onClose={() => setMenuPoint(null)}
+          items={[
+            {
+              key: 'digest',
+              label: 'Send digest now',
+              title: 'One letter listing what is unread, sent now as well as at its usual time',
+              onSelect: () => { void sendMailDigest(); },
+            },
+          ]}
+        />
+      )}
 
       {refreshNote && (
         <p className="mail-refresh-note" data-testid="mail-refresh-note">{refreshNote}</p>
