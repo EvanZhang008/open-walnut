@@ -181,7 +181,7 @@ export function createWebPluginApi(
         return result.result
       },
       async list() {
-        const response = await apiGet<{ ops: Array<{ name: string; title: string; readonly: boolean }> }>(
+        const response = await apiGet<{ ops: Array<{ name: string; title: string; readonly: boolean; owner?: string }> }>(
           `/api/plugin-runtime/${encodeURIComponent(pluginId)}/ops`,
         )
         return response.ops

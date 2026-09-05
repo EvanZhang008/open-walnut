@@ -12,7 +12,7 @@ import type { IntegrationRegistry } from '../integration-registry.js'
 import type { PluginContext } from './plugin-context.js'
 import { PluginStorage, PluginSecretStore } from './plugin-storage.js'
 import { createPluginHttpRoute, type PluginRouteHandler } from './plugin-route-adapter.js'
-import { namespacePluginId } from './ids.js'
+import { namespacePluginId, pluginOpName } from './ids.js'
 import { registerOwnedCommand, type PluginCommandDefinition } from './command-registry.js'
 import { registerOwnedSkillDir, type PluginSkillDefinition } from './skill-registry.js'
 import { clearSkillsCache } from '../skill-loader.js'
@@ -28,8 +28,15 @@ import type { TaskQuery } from '../task-query.js'
 import { registerOwnedAction, type ActionResult } from '../cron/actions.js'
 import { getSessionHookDispatcher } from '../session-hooks/index.js'
 import { HOOK_POINT_DOMAIN, type HookFilter, type HookPoint } from '../session-hooks/types.js'
+// EAGER on purpose, not the lazy import the call sites below also do. Plugins
+// activate long before anything first needs an op, so without this the core ops
+// are absent while a plugin registers, `definePluginOp` cannot see the name it
+// would shadow, and the first later `import('../../ops/index.js')` throws on the
+// duplicate — a failure ESM caches for the life of the process.
+import '../../ops/index.js'
 import { executeOp } from '../../ops/executor.js'
-import { listOps } from '../../ops/registry.js'
+import { countOwnerOps, definePluginOp, listOpEntries, type HttpBinding, type WalnutOp } from '../../ops/registry.js'
+import { jsonSchemaToZodShape } from '../../ops/schema-to-zod.js'
 import { registerOwnedMethod } from '../../web/ws/handler.js'
 import { registerOwnedAgent } from '../agent-registry.js'
 import { registerOwnedProviderAdapter } from '../../agent/providers/registry.js'
@@ -99,6 +106,33 @@ interface PluginProviderResult {
   aborted?: boolean
 }
 
+interface PluginOpSpec {
+  name: string
+  title: string
+  description: string
+  inputSchema?: Record<string, unknown>
+  readonly: boolean
+  remote?: 'allow' | 'deny'
+  destructive?: boolean
+  /** Deadline for EACH `ctx.call`, not for the handler as a whole. */
+  timeoutMs?: number
+  handler(
+    args: Record<string, unknown>,
+    ctx: { call(method: HttpBinding['method'], path: string, body?: unknown): Promise<unknown> },
+  ): Promise<unknown>
+}
+
+/**
+ * Same 1024-char number the loader uses for tool descriptions, but a different
+ * answer: the loader TRUNCATES a long tool description, this REFUSES the op. An op
+ * description is its documented contract on every surface, so silently publishing
+ * a sentence cut in half is worse than making the author shorten it.
+ */
+const MAX_OP_DESCRIPTION = 1024
+
+/** A plugin curating the agent-facing surface is fine; a plugin flooding it is not. */
+const MAX_OPS_PER_PLUGIN = 24
+
 interface PluginProviderAdapter {
   sendMessage(options: PluginProviderCallOptions): Promise<PluginProviderResult>
   sendMessageStream(
@@ -132,12 +166,13 @@ export async function callPluginOp<T = unknown>(
   }) as { ok: true; result: T } | { ok: false; message: string }
 }
 
-export async function listPluginOps(): Promise<Array<{ name: string; title: string; readonly: boolean }>> {
+export async function listPluginOps(): Promise<Array<{ name: string; title: string; readonly: boolean; owner: string }>> {
   await import('../../ops/index.js')
-  return listOps().map((op) => ({
+  return listOpEntries().map(({ owner, op }) => ({
     name: op.name,
     title: op.title,
     readonly: op.tags.readonly,
+    owner,
   }))
 }
 
@@ -539,6 +574,39 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         })
         const tool = contributions.tools[before]
         return own(toDisposable(() => { if (tool) removeIdentity(contributions.tools, tool) }))
+      },
+      op(spec: PluginOpSpec) {
+        const name = pluginOpName(pluginId, spec.name)
+        const title = spec.title?.trim()
+        const description = spec.description?.trim()
+        if (!title) throw new Error(`Plugin op "${name}" requires a title`)
+        if (!description) throw new Error(`Plugin op "${name}" requires a description`)
+        if (description.length > MAX_OP_DESCRIPTION) {
+          throw new Error(`Plugin op "${name}" description exceeds ${MAX_OP_DESCRIPTION} characters`)
+        }
+        if (countOwnerOps(pluginId) >= MAX_OPS_PER_PLUGIN) {
+          throw new Error(`Plugin "${pluginId}" may register at most ${MAX_OPS_PER_PLUGIN} ops`)
+        }
+        // `=== true`, not the raw value: a plain-JS plugin that omits `readonly`
+        // would otherwise land `undefined` in the tags, which the cloud relay's
+        // validator rejects, silently dropping the op from a replica's catalogue.
+        const readonly = spec.readonly === true
+        const op: WalnutOp = {
+          name,
+          title,
+          description,
+          input: jsonSchemaToZodShape(spec.inputSchema),
+          // A plugin op is in-process by construction: it never gets an HTTP `bind`,
+          // so `call` is the only way it can reach a route, exactly like a core handler.
+          handler: (args, call) => spec.handler(args, { call }),
+          ...(spec.timeoutMs !== undefined ? { timeoutMs: spec.timeoutMs } : {}),
+          tags: {
+            readonly,
+            remote: spec.remote ?? (readonly ? 'allow' : 'deny'),
+            ...(spec.destructive !== undefined ? { destructive: spec.destructive } : {}),
+          },
+        }
+        return own(definePluginOp(pluginId, op))
       },
       wsMethod(id: string, handler: (payload: unknown) => unknown | Promise<unknown>) {
         const name = namespacePluginId(pluginId, id)

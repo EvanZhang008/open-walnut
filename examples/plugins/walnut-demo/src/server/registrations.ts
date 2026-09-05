@@ -100,6 +100,22 @@ export function registerCapabilities(options: RegisterOptions): RegistrationProb
   })
   state.register('tool', 'walnut_demo_snapshot', 'Read-only; the host namespaces the name')
 
+  walnut.registry.op({
+    name: 'ping',
+    title: 'Ping the Plugin Demo',
+    description: 'Answer with the greeting it was asked for, to prove a plugin op runs in the host process.',
+    inputSchema: {
+      type: 'object',
+      properties: { who: { type: 'string', description: 'Who to greet' } },
+      required: ['who'],
+    },
+    readonly: true,
+    async handler(args) {
+      return { greeting: `hello ${String(args.who)}`, pluginId: walnut.pluginId }
+    },
+  })
+  state.register('op', 'walnut_demo_ping', 'Read-only; callable by name from any in-process caller')
+
   walnut.registry.agent({
     id: 'observer',
     name: 'Plugin Demo Observer',

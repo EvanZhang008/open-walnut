@@ -165,7 +165,7 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 | `walnut.storage` | Files in the plugin data directory, plus a private SQLite database. |
 | `walnut.secrets` | Credentials, stored outside synced config. |
 | `walnut.timers` | Timeouts and intervals that stop on disposal. |
-| `walnut.registry` | Tools, Hooks, Cron actions, Agents, Providers, Commands, Skills, task sync, and their metadata. |
+| `walnut.registry` | Tools, Ops, Hooks, Cron actions, Agents, Providers, Commands, Skills, task sync, and their metadata. |
 | `walnut.log` | The plugin's structured logger, with `child(name)` for subsystems. |
 | `walnut.unsafe` | Unstable raw host objects, for when no stable API exists. First access logs a warning. |
 
@@ -176,6 +176,7 @@ There is no supported way to import Walnut's private `src/**` modules. Those pat
 Every local id is validated and namespaced by the host. Register a Tool with a local name matching `/^[a-z0-9_]+$/`, such as `status`; Walnut exposes it to the model as `<normalized_plugin_id>_<local_name>`, such as `my_plugin_status`. The host folds punctuation in the Plugin id to underscores and does not add the prefix twice. Other ids surface as `<pluginId>:<localId>`.
 
 - `tool`: a Personal AI tool with a JSON input schema.
+- `op`: a named operation other code can call by name. See Ops below.
 - `hook`: one or more typed session or task hook points.
 - `cronAction`: an action a routine can invoke.
 - `wsMethod`: a namespaced browser RPC method.
@@ -187,6 +188,37 @@ Every local id is validated and namespaced by the host. Register a Tool with a l
 - `sync`, `sourceClaim`, `display`, `migration`, `extIndex`: task integration registration.
 
 A plugin can also ship a conventional `skills/` directory with no `registry.skill` call at all. Those skills join discovery below workspace, user, and shipped Walnut skills, so a local copy of the same name still wins.
+
+### Ops
+
+An op is a named operation in the host's one catalogue, the same catalogue `walnut.ops.call` reads. Register one when another plugin, your own web App, or an HTTP client should be able to invoke a capability by name; register a Tool instead when the audience is the Personal AI's tool list. Ops are named `<normalized_plugin_id>_<local_name>` with an underscore, not a colon, and a final name that already belongs to a built-in op is refused rather than allowed to shadow it.
+
+```ts compile=ops
+import type { WalnutServerApi } from '@open-walnut/plugin-api/server'
+
+export function activate(walnut: WalnutServerApi) {
+  walnut.registry.op({
+    name: 'ping',
+    title: 'Ping the plugin',
+    description: 'Answer with the greeting this plugin was asked for. Read-only.',
+    inputSchema: {
+      type: 'object',
+      properties: { who: { type: 'string', description: 'Who to greet' } },
+      required: ['who'],
+    },
+    readonly: true,
+    async handler(args) {
+      return { greeting: `hello ${String(args.who)}` }
+    },
+  })
+}
+```
+
+`inputSchema` is a JSON Schema object. The host honours `type` (`string`, `number`, `integer`, `boolean`, `array`, `object`), string `enum`, nested `properties`/`required`, and `description`, and ignores `default`. A nested object keeps keys you did not declare, matching JSON Schema rather than dropping them. Invalid arguments never reach the handler: the caller gets `{ ok: false, message }` naming the field. Handlers get a `ctx.call(method, path, body)` for reaching a Walnut API route, because a plugin op has no HTTP binding of its own, and `timeoutMs` is the deadline for each of those calls, not for the handler.
+
+**Know how far an op reaches before you declare one.** A read-only op defaults to `remote: 'allow'`, and `'allow'` means `walnut tools call <op>` inside **every** Walnut-managed session, on every host, can invoke it the moment the plugin activates: those calls arrive through the gateway, which resolves against this server process's own catalogue. `remote: 'deny'` (the default for a write op) keeps the op to in-process callers: `walnut.ops.call`, `GET /api/plugin-runtime/<pluginId>/ops`, `POST /api/plugin-runtime/<pluginId>/ops/<opName>`, and action cards. Set `remote` explicitly whenever the default is not what you want.
+
+Two surfaces are still blind to plugin ops, because they are separate processes with their own registry: a standalone `walnut …` command, and the stdio MCP server. `docs/reference/ops.md` is generated from the repo's core ops only, for the same reason.
 
 ### Hooks
 

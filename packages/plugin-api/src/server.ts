@@ -114,6 +114,12 @@ export interface OpSummary {
   name: string
   title: string
   readonly: boolean
+  /**
+   * `'core'` for a built-in op, otherwise the id of the plugin that declared it.
+   * Always present from a server-side `walnut.ops.list()`; absent only when a web
+   * App's list came through the cloud relay from a primary too old to send it.
+   */
+  owner?: string
 }
 
 export interface OpsService {
@@ -309,6 +315,58 @@ export interface PluginToolSpec {
   execute(input: Record<string, unknown>): unknown | Promise<unknown>
 }
 
+/**
+ * An operation ("op") this plugin adds to the host's op catalogue, so anything that calls
+ * ops by name can call this one: another plugin's `walnut.ops.call`, this plugin's own web
+ * App, and `POST /api/plugin-runtime/<pluginId>/ops/<opName>`. Use it for a stable named
+ * capability other code should be able to invoke; use `tool` when the audience is the
+ * Personal AI's tool list.
+ *
+ * `name` is local and lowercase; the host names the op `<normalized_plugin_id>_<name>`, so
+ * a plugin called `mail` declaring `search` becomes `mail_search`. A final name that
+ * collides with a built-in op is refused rather than allowed to shadow it. `inputSchema` is
+ * a JSON Schema object: `type`, `enum`, `array`, nested `object`, `required`, and
+ * `description` are honoured, `default` is ignored. There is no HTTP binding, because a
+ * plugin op runs in the host process; `ctx.call` reaches a Walnut API route when you need one.
+ *
+ * Know the reach before you declare one. As soon as the plugin activates, the op is callable
+ * from `walnut.ops.call`, the plugin runtime HTTP routes, an action card, and, when `remote`
+ * is `'allow'`, from `walnut tools call` inside EVERY Walnut-managed session on every host
+ * (those run through the gateway, which resolves against this process's catalogue). Only two
+ * surfaces are blind to plugin ops: a standalone `walnut …` command that talks HTTP from its
+ * own process, and the stdio MCP server. So a read-only op, which defaults to
+ * `remote: 'allow'`, is reachable by any agent in any session — pass `remote: 'deny'` when
+ * that is not what you want.
+ */
+export interface PluginOpDefinition {
+  name: string
+  title: string
+  description: string
+  /** JSON Schema object. Default `{ type: 'object', properties: {} }`. */
+  inputSchema?: Record<string, unknown>
+  readonly: boolean
+  /**
+   * `'allow'` lets `walnut tools call <op>` inside any Walnut-managed session, local or
+   * remote, reach this op through the gateway. `'deny'` keeps it to in-process callers:
+   * `walnut.ops.call`, the plugin runtime routes, and action cards. Default:
+   * `readonly ? 'allow' : 'deny'`.
+   */
+  remote?: 'allow' | 'deny'
+  destructive?: boolean
+  /** Deadline for EACH `ctx.call` request, not for the handler as a whole. */
+  timeoutMs?: number
+  handler(
+    args: Record<string, unknown>,
+    ctx: {
+      call(
+        method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+        path: string,
+        body?: unknown,
+      ): Promise<unknown>
+    },
+  ): Promise<unknown>
+}
+
 export interface CronActionResult {
   status: 'ok' | 'error'
   summary?: string
@@ -438,6 +496,7 @@ export interface RegistryService {
   migration(migrate: PluginMigration): Disposable
   extIndex(spec: PluginExtIndexSpec): Disposable
   tool(spec: PluginToolSpec): Disposable
+  op(definition: PluginOpDefinition): Disposable
   wsMethod(id: string, handler: (payload: unknown) => unknown | Promise<unknown>): Disposable
   agent(definition: PluginAgentDefinition): Disposable
   provider(id: string, adapter: PluginProviderAdapter): Disposable

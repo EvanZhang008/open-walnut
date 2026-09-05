@@ -48,6 +48,7 @@ Registry categories, all registered for real in `src/server/registrations.ts`:
 | `migration` | Identity: returns the tasks unchanged |
 | `extIndex` | One `json_extract` path inside the demo's own `ext` block |
 | `tool` | `walnut_demo_snapshot`, read only |
+| `op` | `walnut_demo_ping`, read only, callable by name from any in-process caller |
 | `wsMethod` | `walnut-demo:run`, the one entry point the app uses |
 | `agent` | `walnut-demo:observer`, the agent the demo's `ChatView` talks to |
 | `provider` | `walnut-demo:echo`, a local echo with no credentials and no network |

@@ -208,7 +208,8 @@ export interface WalnutWebApiHost {
   readonly ops: {
     call<T = unknown>(name: string, args?: Record<string, unknown>): Promise<PluginOpResult<T>>
     unwrap<T>(result: PluginOpResult<T>): T
-    list(): Promise<Array<{ name: string; title: string; readonly: boolean }>>
+    // `owner` is optional: the cloud relay omits it when an older primary answered.
+    list(): Promise<Array<{ name: string; title: string; readonly: boolean; owner?: string }>>
   }
   readonly ws: {
     call<T = unknown>(id: string, payload?: unknown): Promise<T>

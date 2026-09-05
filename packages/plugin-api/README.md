@@ -64,7 +64,7 @@ Walnut exposes that local `ping` registration to the model as `my_plugin_ping`. 
 | `walnut.storage` | JSON and text files in the plugin data directory, plus a private SQLite `database` |
 | `walnut.secrets` | credentials, kept out of synced config |
 | `walnut.timers` | timeouts and intervals that stop on disposal |
-| `walnut.registry` | `tool`, `hook`, `cronAction`, `wsMethod`, `agent`, `provider`, `command`, `skill`, `agentContext`, `sync`, `sourceClaim`, `display`, `migration`, `extIndex` |
+| `walnut.registry` | `tool`, `op`, `hook`, `cronAction`, `wsMethod`, `agent`, `provider`, `command`, `skill`, `agentContext`, `sync`, `sourceClaim`, `display`, `migration`, `extIndex` |
 | `walnut.log` | structured logger, with `child(name)` |
 | `walnut.unsafe` | unstable raw host objects; first access logs a warning |
 

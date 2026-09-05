@@ -1,5 +1,5 @@
 import type { Disposable, PluginLogger, WalnutTask, WalnutTaskSummary } from './shared.js'
-import type { PluginEvent, PluginNotice, WalnutServerApi } from './server.js'
+import type { PluginEvent, PluginNotice, PluginOpDefinition, WalnutServerApi } from './server.js'
 
 function disposable(dispose: () => void = () => undefined): Disposable {
   let active = true
@@ -49,6 +49,8 @@ export interface FakeWalnutResult {
   notices: PluginNotice[]
   errors: PluginNotice[]
   emitted: PluginEvent[]
+  /** Ops the plugin registered and has not disposed, in registration order. */
+  registeredOps: PluginOpDefinition[]
 }
 
 export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutResult {
@@ -56,6 +58,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const notices: PluginNotice[] = []
   const errors: PluginNotice[] = []
   const emitted: PluginEvent[] = []
+  const registeredOps: PluginOpDefinition[] = []
   const subscriptions = new Set<{ names: string[]; handler: (event: PluginEvent) => void | Promise<void> }>()
   const files = new Map<string, unknown>()
   const secrets = new Map<string, string>()
@@ -201,6 +204,15 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       migration: () => disposable(),
       extIndex: () => disposable(),
       tool: () => disposable(),
+      // Recorded, not just accepted: a plugin test's whole question is usually
+      // "which ops did activate() declare, with which schema".
+      op: (definition) => {
+        registeredOps.push(definition)
+        return disposable(() => {
+          const index = registeredOps.indexOf(definition)
+          if (index >= 0) registeredOps.splice(index, 1)
+        })
+      },
       wsMethod: () => disposable(),
       agent: () => disposable(),
       provider: () => disposable(),
@@ -214,5 +226,5 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     ...options.overrides,
   }
 
-  return { api, notices, errors, emitted }
+  return { api, notices, errors, emitted, registeredOps }
 }

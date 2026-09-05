@@ -21,7 +21,7 @@ const CAPABILITIES = [
   'secrets.get', 'secrets.set', 'secrets.delete', 'secrets.keys',
   'timers.timeout', 'timers.interval',
   'registry.sync', 'registry.sourceClaim', 'registry.display', 'registry.migration',
-  'registry.extIndex', 'registry.tool', 'registry.wsMethod', 'registry.agent',
+  'registry.extIndex', 'registry.tool', 'registry.op', 'registry.wsMethod', 'registry.agent',
   'registry.provider', 'registry.cronAction', 'registry.hook',
   'registry.agentContext', 'registry.command', 'registry.skill',
   'unsafe',

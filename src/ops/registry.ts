@@ -97,26 +97,69 @@ function validateOp(op: WalnutOp): void {
   if (!op.bind && !op.handler) throw new Error(`op ${op.name} needs bind or handler`)
 }
 
-/** Declare one core op. Throws on duplicate names — names are the public contract. */
+/**
+ * Declare one core op. Throws on a core-vs-core duplicate — names are the public
+ * contract, and two core declarations of one name is a programmer error.
+ *
+ * A name a PLUGIN holds is EVICTED instead, because core must win that name and
+ * throwing here would take the whole process down with it: the op modules are
+ * imported lazily on first use, and plugins load long before that, so a plugin
+ * squatting `task_get` gets here FIRST. ESM caches a failed module evaluation, so
+ * one throw at import time permanently breaks every later
+ * `import('./index.js')` — the actions route, the gateway `walnut tools` path,
+ * and the plugin op routes would all stay dead until restart.
+ */
 export function defineOp(op: WalnutOp): WalnutOp {
   validateOp(op)
-  if (ops.has(op.name)) throw new Error(`duplicate op name: ${op.name}`)
+  const existing = ops.getEntry(op.name)
+  if (existing) {
+    if (existing.owner === 'core') throw new Error(`duplicate op name: ${op.name}`)
+    ops.remove(existing.owner, op.name)
+    // Plain console on purpose: the structured logger would drag constants + the
+    // log writer onto the CLI's and the MCP server's op-registry import path, and
+    // both route every console channel to stderr anyway.
+    console.warn(`walnut: evicted op "${op.name}" registered by plugin "${existing.owner}" — core owns that name`)
+  }
   ops.register('core', op.name, op)
   return op
 }
 
+/**
+ * Declare one op on behalf of a plugin. Dispose the handle to withdraw it.
+ *
+ * Refuses ANY name already taken, whatever the owner: an op name is the public
+ * contract for every surface, so a plugin must never shadow `task_get` (nor a
+ * second plugin's op) and quietly change what it means.
+ */
 export function definePluginOp(owner: string, op: WalnutOp): Disposable {
   validateOp(op)
+  const existing = ops.getEntry(op.name)
+  if (existing) throw new Error(`op "${op.name}" is already defined by ${existing.owner}`)
   return ops.register(owner, op.name, op)
 }
 
+/** Bulk withdrawal for one owner. The loader calls this when it tears a plugin down. */
 export function removePluginOps(owner: string): number {
   return ops.removeOwner(owner)
+}
+
+/**
+ * How many ops one owner currently holds. DERIVED, never a tally a caller keeps:
+ * an owner sweep or a core eviction removes entries without telling the caller,
+ * and a stale counter would refuse a legitimate registration forever.
+ */
+export function countOwnerOps(owner: string): number {
+  return ops.ownedBy(owner).length
 }
 
 /** All ops, in declaration order. */
 export function listOps(): WalnutOp[] {
   return ops.values()
+}
+
+/** Ops with their owner ('core', or the plugin id), in declaration order. */
+export function listOpEntries(): Array<{ owner: string; op: WalnutOp }> {
+  return ops.entries().map((entry) => ({ owner: entry.owner, op: entry.value }))
 }
 
 export function getOp(name: string): WalnutOp | undefined {

@@ -67,6 +67,8 @@ export interface PluginOpInfo {
   name: string
   title: string
   readonly: boolean
+  /** 'core' or the plugin id. Absent when an older primary answered the relay. */
+  owner?: string
 }
 
 export type PluginManagementAction = 'discover' | 'reload' | 'disable' | 'clear-quarantine'
@@ -394,7 +396,12 @@ export async function listPrimaryPluginOps(pluginIdInput: string): Promise<Plugi
       || typeof item.title !== 'string'
       || typeof item.readonly !== 'boolean'
     ) return []
-    return [{ name: item.name, title: item.title, readonly: item.readonly }]
+    return [{
+      name: item.name,
+      title: item.title,
+      readonly: item.readonly,
+      ...(typeof item.owner === 'string' ? { owner: item.owner } : {}),
+    }]
   })
   return [...new Map(ops.map((op) => [op.name, op])).values()]
 }

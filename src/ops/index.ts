@@ -12,5 +12,18 @@ import './core.js'
 import './work.js'
 import './human-inbox.js'
 
-export { defineOp, listOps, getOp, opNames, opInputJsonSchema, type WalnutOp, type HttpBinding } from './registry.js'
+export {
+  defineOp,
+  definePluginOp,
+  removePluginOps,
+  countOwnerOps,
+  listOps,
+  listOpEntries,
+  getOp,
+  opNames,
+  opInputJsonSchema,
+  type WalnutOp,
+  type HttpBinding,
+} from './registry.js'
+export { jsonSchemaToZodShape, jsonSchemaToZodType } from './schema-to-zod.js'
 export { executeOp, resolveApiBase, materializeBinding, CALLER_SID_HEADER, type OpOutcome } from './executor.js'
