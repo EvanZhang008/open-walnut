@@ -36,6 +36,18 @@ vi.mock('esbuild', async (importOriginal) => {
   };
 });
 
+// Real version by default; one test flips `known` to exercise the "Walnut cannot
+// read its own version" gate without turning every built-in unsupported.
+const versionControl = vi.hoisted(() => ({ known: true }));
+vi.mock('../../src/core/version.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/core/version.js')>();
+  return {
+    ...actual,
+    getVersion: () => (versionControl.known ? actual.getVersion() : '0.0.0'),
+    isVersionKnown: () => versionControl.known && actual.isVersionKnown(),
+  };
+});
+
 vi.mock('../../src/core/config-manager.js', () => ({
   getConfig: vi.fn(async () => ({
     version: 1,
@@ -130,6 +142,7 @@ beforeEach(async () => {
 afterEach(async () => {
   delete (globalThis as any).__walnutLiveSyncRegistration;
   esbuildControl.delayMs = 0;
+  versionControl.known = true;
   setPluginCodeTimeoutForTesting(null);
   await fsp.rm(tmpDir, { recursive: true, force: true });
 });
@@ -808,6 +821,41 @@ export default function register(api) {
     ]));
   });
 
+  it('blames itself for an external plugin, and still loads built-ins, when Walnut cannot determine its own version', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'unknown-host');
+    await writeManifest(pluginDir, {
+      id: 'unknown-host',
+      name: 'Unknown Host',
+      apiVersion: 1,
+      engines: { walnut: '>=0.0.0' },
+      server: 'dist/server.mjs',
+    });
+    await fsp.mkdir(path.join(pluginDir, 'dist'), { recursive: true });
+    await fsp.writeFile(path.join(pluginDir, 'dist', 'server.mjs'), 'throw new Error("must not import")');
+    versionControl.known = false;
+
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+
+    expect(registry.has('unknown-host')).toBe(false);
+    const entry = getUnsupportedPlugins().find((plugin) => plugin.id === 'unknown-host');
+    expect(entry?.reason).toContain('Walnut bug');
+    expect(entry?.reason).toContain('>=0.0.0');
+    // '>=0.0.0' is satisfied by a literal '0.0.0', so the refusal proves the gate
+    // fired on "version unknown", and the module was never evaluated (it throws).
+    expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'unknown-host', state: 'unsupported' }),
+    ]));
+    expect(getPluginLifecycleRecords(registry).some((record) => record.state === 'failed')).toBe(false);
+    // A built-in ships inside the host, so an unknown version is not a mismatch it
+    // can have. Refusing built-ins here would drop `local` and leave no task source.
+    expect(registry.has('local')).toBe(true);
+    expect(getUnsupportedPlugins().some((plugin) => plugin.id === 'local')).toBe(false);
+    expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'local', state: 'active' }),
+    ]));
+  });
+
   it('loads a sync plugin that also declares unknown capabilities (warn + ignore)', async () => {
     const pluginDir = path.join(tmpDir, 'plugins', 'mixed-caps');
     await writeManifest(pluginDir, {
@@ -825,5 +873,54 @@ export default function register(api) {
     await loadPlugins(registry);
     expect(registry.has('mixed-caps')).toBe(true);
     expect(getUnsupportedPlugins().some(p => p.id === 'mixed-caps')).toBe(false);
+  });
+});
+
+describe('plugin load order', () => {
+  /** A minimal apiVersion 1 external plugin whose activate does nothing. */
+  async function writeInertUnifiedPlugin(pluginDir: string, id: string): Promise<void> {
+    await writeManifest(pluginDir, {
+      id,
+      name: id,
+      apiVersion: 1,
+      engines: { walnut: '>=0.0.0' },
+      server: 'dist/server.mjs',
+    });
+    await fsp.mkdir(path.join(pluginDir, 'dist'), { recursive: true });
+    await fsp.writeFile(path.join(pluginDir, 'dist', 'server.mjs'), 'export function activate() {}\n');
+  }
+
+  it('loads local first, then built-ins, then externals, all in discovery order', async () => {
+    // Ids chosen to sort alphabetically BEFORE every built-in id, so any sort by
+    // name (or by dependency with a name tie-break) would hoist them to the front.
+    for (const id of ['aaa-order-ext', 'aab-order-ext', 'aac-order-ext']) {
+      await writeInertUnifiedPlugin(path.join(tmpDir, 'plugins', id), id);
+    }
+
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+
+    // Discovery order is readdir order, which is not alphabetical on every
+    // filesystem, so the expectation is derived from the same reads the loader
+    // does. Ids come from each manifest, never from the directory name.
+    const builtinDir = path.join(import.meta.dirname, '..', '..', 'src', 'integrations');
+    const builtinIds: string[] = [];
+    for (const entry of await fsp.readdir(builtinDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const manifest = await fsp.readFile(path.join(builtinDir, entry.name, 'manifest.json'), 'utf8').then(
+        (text) => JSON.parse(text) as { id?: string },
+        () => null,
+      );
+      if (manifest?.id) builtinIds.push(manifest.id);
+    }
+    const externalIds = (await fsp.readdir(path.join(tmpDir, 'plugins'), { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    const expected = ['local', ...builtinIds.filter((id) => id !== 'local'), ...externalIds];
+
+    expect(getPluginLifecycleRecords(registry).map((record) => record.id)).toEqual(expected);
+    // Guards the guard: once the pinned order equals the alphabetical one, this
+    // test can no longer tell a preserved discovery order from a sorted one.
+    expect(expected).not.toEqual([...expected].sort());
   });
 });

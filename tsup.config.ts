@@ -2,6 +2,11 @@ import { defineConfig } from 'tsup';
 import fs from 'node:fs';
 import path from 'node:path';
 
+// Bake the version in. Walking up for package.json at runtime returns '0.0.0'
+// whenever the bundle lands somewhere that walk can't reach, and a host that
+// reports '0.0.0' fails every plugin's engines.walnut range.
+const pkgVersion = (JSON.parse(fs.readFileSync('package.json', 'utf-8')) as { version: string }).version;
+
 // Discover all integration plugin entry points (each dir with index.ts)
 const integrationsDir = 'src/integrations';
 const pluginEntries = fs.readdirSync(integrationsDir, { withFileTypes: true })
@@ -36,6 +41,7 @@ export default defineConfig({
   format: ['esm'],
   target: 'node22',
   outDir: 'dist',
+  define: { __WALNUT_VERSION__: JSON.stringify(pkgVersion) },
   clean: false,
   // splitting stays OFF: tried `splitting: true` (2026-08-20) hoping to make
   // the CLI boot lazily — it produced 205 chunks and made `tools call` SLOWER

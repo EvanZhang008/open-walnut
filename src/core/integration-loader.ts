@@ -21,7 +21,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import yaml from 'js-yaml';
 import { WALNUT_HOME, CONFIG_FILE } from '../constants.js';
-import { getVersion } from './version.js';
+import { getVersion, isVersionKnown } from './version.js';
 import { createSubsystemLogger } from '../logging/index.js';
 import { getConfig, updatePluginConfig } from './config-manager.js';
 import { bulkMigrateTasks } from './task-manager.js';
@@ -32,6 +32,7 @@ import { PluginBootSentinel, pluginSafeModeEnabled } from './plugins/boot-sentin
 import { PluginContext } from './plugins/plugin-context.js';
 import { PluginManager, type PluginDefinition, type PluginLifecycleRecord } from './plugins/plugin-manager.js';
 import { satisfiesSemVer } from './plugins/semver.js';
+import { buildDepGraph, topoSortStable } from './plugins/dep-graph.js';
 import { validatePluginId } from './plugins/ids.js';
 import { createServerPluginApi } from './plugins/server-api.js';
 import type {
@@ -53,6 +54,15 @@ import type {
 const log = createSubsystemLogger('plugin-loader');
 const bootSentinel = new PluginBootSentinel();
 let pluginCodeTimeoutMs = 20_000;
+
+// One line per process: an unknown host version refuses every apiVersion 1 plugin,
+// so repeating it once per plugin would bury the single fact that matters.
+let unknownHostVersionLogged = false;
+function logUnknownHostVersionOnce(): void {
+  if (unknownHostVersionLogged) return;
+  unknownHostVersionLogged = true;
+  log.error('Walnut could not determine its own version, so every apiVersion 1 plugin will be refused (Walnut bug, not a plugin problem)');
+}
 
 class PluginCodeTimeoutError extends Error {
   constructor(pluginId: string, phase: string, timeoutMs: number) {
@@ -926,6 +936,27 @@ function pluginModuleFunctions(
   return { activate, deactivate }
 }
 
+/** A discovered plugin dir whose manifest reads and validates. No plugin code is imported. */
+interface PluginEntry {
+  dir: string;
+  isBuiltin: boolean;
+  manifest: PluginManifest;
+}
+
+/** Read + validate one plugin's manifest. null when unreadable or invalid (already warned). */
+async function readPluginEntry(dir: string, isBuiltin: boolean): Promise<PluginEntry | null> {
+  const manifestPath = path.join(dir, 'manifest.json');
+  let manifestRaw: unknown;
+  try {
+    manifestRaw = JSON.parse(await fsp.readFile(manifestPath, 'utf-8'));
+  } catch (err) {
+    log.warn('Failed to read manifest.json', { dir, error: String(err) });
+    return null;
+  }
+  const manifest = validateManifest(manifestRaw, manifestPath);
+  return manifest ? { dir, isBuiltin, manifest } : null;
+}
+
 async function loadPlugin(
   pluginDir: string,
   isBuiltin: boolean,
@@ -933,20 +964,10 @@ async function loadPlugin(
   registry: IntegrationRegistry,
   manager: PluginManager,
   additive = false,
+  // Supplied by the pre-scan so the manifest is read once per load, not twice.
+  prereadManifest?: PluginManifest,
 ): Promise<void> {
-  const manifestPath = path.join(pluginDir, 'manifest.json');
-
-  // Read and validate manifest
-  let manifestRaw: unknown;
-  try {
-    const content = await fsp.readFile(manifestPath, 'utf-8');
-    manifestRaw = JSON.parse(content);
-  } catch (err) {
-    log.warn('Failed to read manifest.json', { dir: pluginDir, error: String(err) });
-    return;
-  }
-
-  const manifest = validateManifest(manifestRaw, manifestPath);
+  const manifest = prereadManifest ?? (await readPluginEntry(pluginDir, isBuiltin))?.manifest;
   if (!manifest) return;
 
   const pluginId = manifest.id;
@@ -993,11 +1014,23 @@ async function loadPlugin(
   if (manifest.apiVersion === 1) {
     const requiredRange = manifest.engines?.walnut;
     const currentVersion = getVersion();
-    const reason = !requiredRange
-      ? 'apiVersion 1 requires engines.walnut'
-      : satisfiesSemVer(currentVersion, requiredRange)
-        ? undefined
-        : `Requires Walnut ${requiredRange}; current version is ${currentVersion}`;
+    const hostVersionKnown = isVersionKnown();
+    let reason: string | undefined;
+    if (!requiredRange) {
+      reason = 'apiVersion 1 requires engines.walnut';
+    } else if (!hostVersionKnown) {
+      logUnknownHostVersionOnce();
+      // An external plugin is refused (never load one against a host you can't
+      // identify), but the message must not blame it: '0.0.0' fails every range, so
+      // a Walnut bug would otherwise read as a plugin bug. A BUILT-IN ships inside
+      // the host, so it can never be a genuine mismatch, and refusing it turns an
+      // unknown version into a total outage (`local` gone means zero task sources).
+      if (!isBuiltin) {
+        reason = `Walnut could not determine its own version (this is a Walnut bug, not a problem with this plugin); this plugin requires Walnut ${requiredRange}`;
+      }
+    } else if (!satisfiesSemVer(currentVersion, requiredRange)) {
+      reason = `Requires Walnut ${requiredRange}; current version is ${currentVersion}`;
+    }
     if (reason) {
       unsupportedPlugins.push({
         id: pluginId,
@@ -1351,27 +1384,48 @@ async function loadPluginsUnlocked(registry: IntegrationRegistry, additive = fal
   const pluginDirs = await discoverPluginDirs();
   log.debug('Discovered plugin dirs', { count: pluginDirs.length, dirs: pluginDirs.map(d => d.dir) });
 
-  // Load built-in plugins first (they take precedence), then external
+  // Built-in plugins take precedence over external, and `local` must always come
+  // first. That candidate order is the tie-break the dependency sort falls back on.
   const builtins = pluginDirs.filter(d => d.isBuiltin);
   const externals = pluginDirs.filter(d => !d.isBuiltin);
-
-  // Load local plugin first (must always be present)
   const localIdx = builtins.findIndex(d => path.basename(d.dir) === 'local');
-  if (localIdx >= 0) {
-    const [localDir] = builtins.splice(localIdx, 1);
-    await loadPlugin(localDir.dir, true, pluginConfigs, registry, manager, additive);
-  } else {
-    log.error('Local plugin not found in built-in integrations directory', { dir: BUILTIN_DIR });
+  if (localIdx < 0) log.error('Local plugin not found in built-in integrations directory', { dir: BUILTIN_DIR });
+  const candidates = localIdx >= 0
+    ? [builtins[localIdx], ...builtins.filter((_, index) => index !== localIdx), ...externals]
+    : [...builtins, ...externals];
+
+  // Pass 1: read every manifest, in candidate order. No plugin code is imported.
+  const entries: PluginEntry[] = [];
+  for (const candidate of candidates) {
+    const entry = await readPluginEntry(candidate.dir, candidate.isBuiltin);
+    if (entry) entries.push(entry);
   }
 
-  // Load remaining built-ins
-  for (const { dir } of builtins) {
-    await loadPlugin(dir, true, pluginConfigs, registry, manager, additive);
+  // Pass 2: first-wins on duplicate ids (earlier candidate keeps the id), then
+  // order by dependency. Manifest `dependencies` are not parsed yet, so every node
+  // is edge-free and the stable sort hands back exactly the candidate order.
+  const winners: PluginEntry[] = [];
+  const claimedIds = new Map<string, PluginEntry>();
+  for (const entry of entries) {
+    if (claimedIds.has(entry.manifest.id)) {
+      log.debug('Skipping duplicate plugin', { id: entry.manifest.id, dir: entry.dir });
+      if (!duplicatePluginIds.includes(entry.manifest.id)) duplicatePluginIds.push(entry.manifest.id);
+      continue;
+    }
+    claimedIds.set(entry.manifest.id, entry);
+    winners.push(entry);
   }
+  const graph = buildDepGraph(winners.map((entry, index) => ({ id: entry.manifest.id, index, deps: [] })));
+  // A cycle can't exist without edges; loading the residue anyway keeps an
+  // unsatisfiable future graph from silently dropping plugins.
+  const { order, residue } = topoSortStable(graph);
+  if (residue.length > 0) log.warn('Plugin dependency cycle; loading in discovery order', { ids: residue });
 
-  // Load external plugins (esbuild bundles .ts plugins on-the-fly)
-  for (const { dir } of externals) {
-    await loadPlugin(dir, false, pluginConfigs, registry, manager, additive);
+  // Pass 3: load in sorted order, reusing the manifest read in pass 1.
+  for (const id of [...order, ...residue]) {
+    const entry = claimedIds.get(id);
+    if (!entry) continue;
+    await loadPlugin(entry.dir, entry.isBuiltin, pluginConfigs, registry, manager, additive, entry.manifest);
   }
 
   const loaded = registry.getAll();
