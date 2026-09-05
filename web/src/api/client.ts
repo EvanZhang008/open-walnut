@@ -282,7 +282,10 @@ export async function apiGetText(path: string, params?: Record<string, string>, 
   }
 }
 
-export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: number }): Promise<T> {
+// quietStatuses is offered here for the same reason apiGet offers it: a POST can have a DESIGNED
+// non-2xx outcome (a refused credential, a capability the provider does not have), and those must
+// not land in the error-log audit as if something broke.
+export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; quietStatuses?: number[] }): Promise<T> {
   return request<T>('POST', path, body, opts);
 }
 

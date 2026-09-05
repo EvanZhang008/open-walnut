@@ -1,0 +1,458 @@
+/**
+ * The Mail console's styles.
+ *
+ * Kept next to the components rather than appended to globals.css: the console is one screen
+ * with a lot of its own furniture, and it is a core app whose row only exists while the mail
+ * plugin is on. Vite lifts this into the same bundle either way.
+ *
+ * The row is `fullBleed`, which means the shell removed its own padding and the console owns
+ * everything from the sidebar to the window edge, including its own scroll containers. Nothing
+ * here may scroll the PAGE: three panes each scroll on their own or the header leaves the screen.
+ */
+
+.mail-app {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The states that are not the three panes (loading, stand-in, empty) still need page padding,
+   which fullBleed took away. */
+.mail-app > .page-header,
+.mail-app > .empty-state {
+  padding-left: 24px;
+  padding-right: 24px;
+}
+
+.mail-app > .page-header { padding-top: 20px; }
+
+.mail-console {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 232px 336px minmax(0, 1fr);
+}
+
+.mail-console > * {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+}
+
+.mail-console > :last-child { border-right: none; }
+
+/* ── shared pane furniture ── */
+
+.mail-pane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  min-height: 44px;
+}
+
+.mail-pane-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  flex: 1;
+}
+
+.mail-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+
+.mail-icon-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
+.mail-icon-btn:disabled { opacity: 0.5; cursor: default; }
+
+.mail-text-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mail-text-btn:hover { text-decoration: underline; }
+
+.mail-pane-empty {
+  margin: 0;
+  padding: 24px 16px;
+  color: var(--fg-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.mail-inline-error {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--error);
+}
+
+/* ── accounts pane ── */
+
+.mail-accounts-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.mail-refresh-note {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  background: var(--bg-secondary);
+}
+
+.mail-account { padding: 4px 8px 12px; }
+
+.mail-account-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 6px;
+}
+
+.mail-account-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.mail-account-address {
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.mail-account-state {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--warning);
+}
+
+.mail-account-state[data-state='disabled'] { background: var(--fg-muted); }
+
+.mail-account-hint {
+  margin: 2px 6px 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+}
+
+.mail-mailboxes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mail-mailbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--fg-secondary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mail-mailbox:hover { background: var(--bg-hover); }
+
+.mail-mailbox.active {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.mail-mailbox-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mail-unread-badge {
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.mail-add-account {
+  margin: 0;
+  padding: 12px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mail-add-account:hover { background: var(--bg-hover); }
+
+/* The empty state offers the same control, centred with the copy above it. */
+.mail-app > .empty-state .mail-add-account {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-top: 12px;
+  padding: 8px 14px;
+  text-align: center;
+}
+
+/* ── message list ── */
+
+.mail-search { flex: 1; display: flex; }
+
+.mail-search-input {
+  width: 100%;
+  padding: 5px 9px;
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--bg-secondary);
+  border: 1px solid transparent;
+  border-radius: 7px;
+  outline: none;
+}
+
+.mail-search-input:focus { border-color: var(--accent); background: var(--bg); }
+
+.mail-search-meta {
+  margin: 0;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mail-source-tag {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.mail-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.mail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mail-row:hover { background: var(--bg-hover); }
+.mail-row.selected { background: var(--accent-subtle); }
+
+.mail-row-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.mail-row-from {
+  flex: 1;
+  font-size: 13px;
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mail-row-time {
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.mail-row-subject {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mail-row-clip { color: var(--fg-muted); display: inline-flex; }
+
+.mail-row-snippet {
+  font-size: 12px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mail-row-mailbox {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  font-size: 10px;
+}
+
+/* Unread is the one thing a list must never be subtle about. */
+.mail-row.unread .mail-row-from,
+.mail-row.unread .mail-row-subject { font-weight: 700; color: var(--fg); }
+
+.mail-load-older {
+  padding: 10px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* ── add-account dialog ── */
+
+.mail-add-dialog {
+  width: min(460px, calc(100vw - 48px));
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+}
+
+.mail-provider-picker { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+
+.mail-provider-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mail-provider-option:hover { border-color: var(--accent); background: var(--accent-subtle); }
+.mail-provider-label { font-size: 13px; font-weight: 600; color: var(--fg); }
+.mail-provider-note { font-size: 11px; color: var(--fg-muted); }
+
+.mail-setup-form { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
+.mail-provider-back { align-self: flex-start; }
+
+.mail-setup-field { display: flex; flex-direction: column; gap: 4px; }
+
+.mail-setup-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+.mail-setup-required { color: var(--error); margin-left: 3px; }
+
+.mail-setup-input { margin-top: 0; }
+.mail-setup-input::placeholder { color: var(--fg-muted); }
+.mail-setup-help { font-size: 11px; color: var(--fg-muted); line-height: 1.4; }
+
+.mail-setup-options { display: flex; flex-wrap: wrap; gap: 6px; max-height: 132px; overflow-y: auto; }
+
+.mail-setup-option {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: none;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mail-setup-option.active { border-color: var(--accent); background: var(--accent-subtle); color: var(--accent); }
+
+.mail-setup-error {
+  padding: 10px 12px;
+  border: 1px solid var(--error);
+  border-radius: 8px;
+  background: rgba(255, 59, 48, 0.08);
+}
+
+.mail-setup-error-lead { margin: 0; font-size: 12px; font-weight: 600; color: var(--fg); line-height: 1.45; }
+.mail-setup-error-detail { margin: 6px 0 0; font-size: 12px; color: var(--fg-secondary); line-height: 1.45; overflow-wrap: anywhere; }
+
+/* ── one pane at a time ──
+   The panes stay MOUNTED and are hidden with display, so drilling in and back does not refetch
+   the page or forget that this body's images were loaded. */
+
+.mail-console[data-narrow-pane='accounts'],
+.mail-console[data-narrow-pane='list'],
+.mail-console[data-narrow-pane='reader'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mail-console[data-narrow-pane='accounts'] > .mail-list-pane,
+.mail-console[data-narrow-pane='accounts'] > .mail-reader-pane,
+.mail-console[data-narrow-pane='list'] > .mail-accounts-pane,
+.mail-console[data-narrow-pane='list'] > .mail-reader-pane,
+.mail-console[data-narrow-pane='reader'] > .mail-accounts-pane,
+.mail-console[data-narrow-pane='reader'] > .mail-list-pane {
+  display: none;
+}
+
+/* The shell's mobile hamburger is `position: fixed` at top 12px and is about 36px tall, so its
+   bottom edge is near 48px: the pane head has to start below THAT, not below 44px, or the back
+   chevron sits directly under it (seen in the narrow verification screenshot). */
+@media (max-width: 768px) {
+  .mail-console { padding-top: 56px; }
+}

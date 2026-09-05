@@ -14,8 +14,9 @@ import { expect, test, type Page } from '@playwright/test'
  *   2. Turning the mail plugin off in Settings takes the sidebar row away LIVE, with no page
  *      reload. That is the whole reason `requiresPlugin` exists: the console is core code,
  *      but it is useless without the plugin's routes, so it must not be reachable while the
- *      plugin is off.
- *   3. Turning it back on brings the row back, also live.
+ *      plugin is off. A stock install ships the IMAP provider, which DEPENDS on the base, so
+ *      the switch goes through the cascade ask on the way.
+ *   3. Turning it back on brings the row back and revives the dependent, also live.
  *
  * Runs against its OWN server (tests/e2e/browser/mail-app-server.ts), not the shared :3457
  * fixture, because the switch under test PERSISTS: a failure between the off and the on
@@ -140,27 +141,46 @@ test('the Mail row opens an empty console, and the plugin switch takes it away a
   await expect(empty).toBeVisible({ timeout: 30_000 })
   await expect(empty).toContainText('No mail accounts yet')
   // The empty state has to name what would change it. "Nothing here" with no next step is
-  // indistinguishable from a broken screen.
+  // indistinguishable from a broken screen, and telling a machine that HAS a provider to go
+  // install one is worse than that: the stock IMAP provider is named, and its Add account is here.
   await expect(empty).toContainText('provider plugin')
+  // "Ready to use: IMAP" is the provider's own label (the PLUGIN is "IMAP Mail"), and it only
+  // appears when the console actually knows its providers.
+  await expect(empty).toContainText('Ready to use: IMAP')
+  await expect(page.getByTestId('mail-add-account')).toBeVisible()
   await page.locator('.mail-app').screenshot({ path: `${SCREENSHOT_DIR}/mail-empty-state.png` })
 
   // 2. Off, and the row goes away without a reload.
   await openPlugins(page)
   const row = page.getByTestId('plugin-row-mail')
+  const imapRow = page.getByTestId('plugin-row-mail-imap')
   await expect(row).toBeVisible({ timeout: 30_000 })
   await expect(row).toHaveAttribute('data-plugin-status', 'active')
+  await expect(imapRow).toHaveAttribute('data-plugin-status', 'active')
 
   const toggle = page.locator('#plugin-toggle-mail')
   await expect(toggle).toHaveAttribute('aria-checked', 'true')
   await toggle.click()
 
+  // A stock install has a DEPENDENT: the IMAP provider declares `dependencies: { mail }`, so the
+  // server refuses to disable the base while it is running and the console asks first. The ask
+  // has to name the dependent, or "turn it off anyway" is a blind choice.
+  const ask = page.getByTestId('plugin-cascade-ask')
+  await expect(ask).toBeVisible({ timeout: 60_000 })
+  await expect(ask).toContainText('IMAP Mail')
+  await page.getByTestId('plugin-cascade-confirm').click()
+
   await expect(row).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 60_000 })
+  // The dependent is not disabled, it is UNSATISFIED: turning mail back on has to revive it, and
+  // that is a different row state from the one the human switched.
+  await expect(imapRow).toHaveAttribute('data-plugin-status', 'needs-dependency', { timeout: 60_000 })
   await expect(page.getByTestId('sidebar-core-app-mail')).toHaveCount(0, { timeout: 60_000 })
   await page.locator('.sidebar').screenshot({ path: `${SCREENSHOT_DIR}/mail-sidebar-without-row.png` })
 
-  // 3. On again, and it comes back.
+  // 3. On again, and both come back.
   await page.locator('#plugin-toggle-mail').click()
   await expect(row).toHaveAttribute('data-plugin-status', 'active', { timeout: 60_000 })
+  await expect(imapRow).toHaveAttribute('data-plugin-status', 'active', { timeout: 60_000 })
   await expect(page.getByTestId('sidebar-core-app-mail')).toBeVisible({ timeout: 60_000 })
   await page.locator('.sidebar').screenshot({ path: `${SCREENSHOT_DIR}/mail-sidebar-with-row.png` })
 

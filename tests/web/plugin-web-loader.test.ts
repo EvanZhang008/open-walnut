@@ -340,3 +340,74 @@ describe('native Web Plugin loader', () => {
     })
   })
 })
+
+/**
+ * The FIRST refresh is the one failure the snapshot cannot absorb.
+ *
+ * Every later failure keeps the last authoritative answer (the test above). The first has nothing
+ * to keep, so publishing `ready: true` with an empty list announces "no plugins are installed" on
+ * the strength of one failed fetch, and since nothing retried, every plugin-gated app stayed
+ * hidden for the life of the page. It has to retry; it also has to STOP retrying, because `ready`
+ * gates the app shell and never getting there is an indefinite spinner.
+ */
+describe('the first refresh retries before it gives up', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('holds ready until a retry lands, then flips it once', async () => {
+    vi.useFakeTimers()
+    vi.mocked(apiGet)
+      .mockRejectedValueOnce(new Error('FAILED after 15000ms'))
+      .mockResolvedValue(response(null))
+
+    await refreshWebPlugins()
+
+    // Not ready, and honest about being mid-attempt rather than claiming an empty install.
+    expect(getWebPluginRuntimeSnapshot()).toMatchObject({ ready: false, loading: true })
+
+    await vi.advanceTimersByTimeAsync(500)
+
+    const snapshot = getWebPluginRuntimeSnapshot()
+    expect(snapshot).toMatchObject({ ready: true, loading: false })
+    expect(snapshot.errors).toEqual([])
+    expect(vi.mocked(apiGet)).toHaveBeenCalledTimes(2)
+  })
+
+  it('gives up after five retries and publishes the error', async () => {
+    vi.useFakeTimers()
+    vi.mocked(apiGet).mockRejectedValue(new Error('FAILED after 15000ms'))
+
+    await refreshWebPlugins()
+    expect(getWebPluginRuntimeSnapshot().ready).toBe(false)
+
+    // 0.5 + 1 + 2 + 4 + 8 seconds of backoff, one attempt behind each.
+    await vi.advanceTimersByTimeAsync(16_000)
+
+    const snapshot = getWebPluginRuntimeSnapshot()
+    expect(vi.mocked(apiGet)).toHaveBeenCalledTimes(6)
+    // Ready, so the shell renders and the UI can say what is wrong, with the reason attached.
+    expect(snapshot).toMatchObject({ ready: true, loading: false })
+    expect(snapshot.errors).toEqual([{ id: 'runtime', error: 'FAILED after 15000ms' }])
+
+    // And it is not still retrying in the background.
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(vi.mocked(apiGet)).toHaveBeenCalledTimes(6)
+  })
+
+  it('stops retrying when another trigger got a good answer first', async () => {
+    vi.useFakeTimers()
+    vi.mocked(apiGet).mockRejectedValueOnce(new Error('FAILED after 15000ms'))
+    await refreshWebPlugins()
+    expect(getWebPluginRuntimeSnapshot().ready).toBe(false)
+
+    // A WS reconnect, a plugin-changed event: something else refreshes before the timer fires.
+    vi.mocked(apiGet).mockResolvedValue(response(null))
+    await refreshWebPlugins()
+    expect(getWebPluginRuntimeSnapshot()).toMatchObject({ ready: true, loading: false })
+
+    await vi.advanceTimersByTimeAsync(16_000)
+    // Two calls: the failure and the one that succeeded. The scheduled retry was cancelled.
+    expect(vi.mocked(apiGet)).toHaveBeenCalledTimes(2)
+  })
+})

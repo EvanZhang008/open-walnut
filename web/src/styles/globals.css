@@ -26455,7 +26455,7 @@ a.file-link:hover {
   margin-top: 14px;
   padding: 8px 11px;
   font-size: 14px;
-  color: var(--fg-primary, #e8eaed);
+  color: var(--fg);
   background: var(--bg-input, var(--bg-secondary, #1c1e24));
   border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
   border-radius: 8px;

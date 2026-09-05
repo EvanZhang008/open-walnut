@@ -52,6 +52,45 @@ let initialized = false
 let operationTail: Promise<void> = Promise.resolve()
 let activationTimeoutMs = 10_000
 
+/**
+ * Backoff for the FIRST refresh only, and why it exists.
+ *
+ * Every other refresh can fail safely: the snapshot keeps the last authoritative answer. The first
+ * one has nothing to keep, so publishing `ready: true` with an empty plugin list tells the whole
+ * app "no plugins are installed" on the strength of one failed fetch, and every `requiresPlugin`
+ * app stays hidden for the life of the page because nothing retries. A boot on a loaded machine
+ * really does hit this (a 15 s timeout is reachable).
+ *
+ * Bounded on purpose: `ready` gates the app shell, so staying unready forever is an indefinite
+ * spinner, which is a worse failure than a wrong empty list. Five tries, then publish whatever we
+ * have plus the error and let the UI say so.
+ */
+const FIRST_REFRESH_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 8_000]
+let firstRefreshSettled = false
+let retriesUsed = 0
+let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+function cancelFirstRefreshRetry(): void {
+  if (retryTimer === null) return
+  clearTimeout(retryTimer)
+  retryTimer = null
+}
+
+/**
+ * Re-enter through `refreshWebPlugins`, never by awaiting `refreshNow` from inside itself:
+ * `refreshWebPlugins` appends to `operationTail`, and a refresh that awaited its own retry would
+ * be waiting on a promise queued behind itself.
+ */
+function scheduleFirstRefreshRetry(): void {
+  const delay = FIRST_REFRESH_BACKOFF_MS[retriesUsed] ?? FIRST_REFRESH_BACKOFF_MS[FIRST_REFRESH_BACKOFF_MS.length - 1]!
+  retriesUsed += 1
+  cancelFirstRefreshRetry()
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    void refreshWebPlugins()
+  }, delay)
+}
+
 const browserImporter: ModuleImporter = async (source, descriptor) => {
   const blob = new Blob([
     source,
@@ -162,6 +201,7 @@ async function refreshNow(): Promise<void> {
   let plugins: Array<{ id: string; state: string }> = previous.plugins
   let tombstones: Array<{ id: string; reason: string }> = previous.tombstones
   let modules: PluginWebModuleDescriptor[] = previous.modules
+  let runtimeFailed = false
   try {
     const response = await apiGet<PluginRuntimeResponse>('/api/plugin-runtime', undefined, { timeoutMs: 15_000 })
     plugins = response.plugins ?? []
@@ -203,10 +243,29 @@ async function refreshNow(): Promise<void> {
       }
     }
   } catch (error) {
+    runtimeFailed = true
     errors.push({ id: 'runtime', error: error instanceof Error ? error.message : String(error) })
     log.warn('plugins', 'failed to refresh native Web Plugins', { error: errors[0].error })
   } finally {
-    publish({ ready: true, loading: false, plugins, tombstones, modules, errors })
+    if (!runtimeFailed) {
+      // Any successful refresh, from any trigger, ends the retry loop.
+      firstRefreshSettled = true
+      retriesUsed = 0
+      cancelFirstRefreshRetry()
+    }
+    const retrying = runtimeFailed
+      && !firstRefreshSettled
+      && retriesUsed < FIRST_REFRESH_BACKOFF_MS.length
+    // `ready` never goes back to false once it has been true: consumers evict on an empty list.
+    publish({
+      ready: firstRefreshSettled || !retrying,
+      loading: retrying,
+      plugins,
+      tombstones,
+      modules,
+      errors,
+    })
+    if (retrying) scheduleFirstRefreshRetry()
   }
 }
 
@@ -268,6 +327,9 @@ export async function disposeWebPluginsForTesting(): Promise<void> {
   initialized = false
   moduleImporter = browserImporter
   activationTimeoutMs = 10_000
+  cancelFirstRefreshRetry()
+  firstRefreshSettled = false
+  retriesUsed = 0
   resetWebPluginRuntime()
 }
 

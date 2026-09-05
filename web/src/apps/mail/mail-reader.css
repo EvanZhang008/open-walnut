@@ -1,0 +1,120 @@
+/**
+ * The reader pane's styles, split out of `mail.css` so neither file grows past what a person
+ * reads in one pass. Imported by `MailReader.tsx`: the component that owns these rules is what
+ * pulls them in, so deleting the component would take its stylesheet with it.
+ *
+ * The frame's own inner styles are NOT here. Those live in `mail-html.ts`, because they are
+ * serialized into the sandboxed document and this stylesheet cannot reach inside it.
+ */
+
+.mail-reader-pane { overflow: hidden; }
+
+/* Nothing selected: the invitation sits in the middle of the pane, like every other empty state
+   in the app, rather than clinging to the top edge of a tall blank column. */
+.mail-reader-pane.mail-reader-blank {
+  display: grid;
+  place-items: center;
+}
+
+.mail-reader-head {
+  padding: 14px 18px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mail-reader-subject {
+  margin: 0 0 6px;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.mail-reader-people {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.mail-reader-from { font-weight: 600; color: var(--fg-secondary); }
+.mail-reader-address { color: var(--fg-muted); overflow-wrap: anywhere; }
+.mail-reader-date { margin-left: auto; color: var(--fg-muted); white-space: nowrap; }
+
+.mail-reader-to {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.mail-attachments {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.mail-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--fg-secondary);
+}
+
+.mail-reader-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.mail-blocked-images {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 18px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.mail-html-frame {
+  flex: 1;
+  min-height: 320px;
+  width: 100%;
+  border: none;
+  background: transparent;
+}
+
+.mail-body-text {
+  flex: 1;
+  margin: 0;
+  padding: 14px 18px;
+  font: 13px/1.6 var(--font-mono);
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mail-body-notice {
+  padding: 18px;
+  font-size: 13px;
+  color: var(--fg-secondary);
+}
+
+.mail-body-footnote {
+  margin: 0;
+  padding: 8px 18px 14px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
