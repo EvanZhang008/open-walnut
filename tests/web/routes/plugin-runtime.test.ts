@@ -6,6 +6,7 @@ import express from 'express'
 import request from 'supertest'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IntegrationRegistry } from '../../../src/core/integration-registry.js'
+import { PluginDependentsError } from '../../../src/core/plugins/dependency-gate.js'
 import type { PluginLifecycleRecord } from '../../../src/core/plugins/plugin-manager.js'
 import { MAX_PLUGIN_WEB_MODULE_BYTES } from '../../../src/core/plugins/plugin-web-module.js'
 import { createPluginRuntimeRouter } from '../../../src/web/routes/plugin-runtime.js'
@@ -206,8 +207,91 @@ describe('plugin runtime routes', () => {
     await request(app).post('/api/plugin-runtime/sample/clear-quarantine').expect(200, { ok: true })
 
     expect(disabled.body.plugin.state).toBe('disabled')
-    expect(deps.disable).toHaveBeenCalledWith('sample')
+    expect(deps.disable).toHaveBeenCalledWith('sample', { cascade: false })
     expect(deps.clearQuarantine).toHaveBeenCalledWith('sample')
+  })
+
+  it('refuses to turn off a plugin others run on, and names them in a shape the UI reads', async () => {
+    // The body shape is the contract: the store's confirmation lists `dependents` and
+    // branches on `code`, so it never has to parse the sentence.
+    const { app } = setup({
+      disable: vi.fn(async () => { throw new PluginDependentsError('sample', ['beta', 'gamma']) }),
+    })
+
+    const refused = await request(app).post('/api/plugin-runtime/sample/disable').expect(409)
+
+    expect(refused.body).toEqual({
+      error: expect.stringContaining('cannot be turned off'),
+      code: 'has-dependents',
+      dependents: ['beta', 'gamma'],
+    })
+  })
+
+  it('passes the cascade through once the user has seen the list', async () => {
+    const { app, deps } = setup()
+
+    const response = await request(app)
+      .post('/api/plugin-runtime/sample/disable')
+      .send({ cascade: true })
+      .expect(200)
+
+    expect(deps.disable).toHaveBeenCalledWith('sample', { cascade: true })
+    expect(response.body.plugin.state).toBe('disabled')
+  })
+
+  it('keeps every other disable failure on today mapping', async () => {
+    const missing = setup({
+      disable: vi.fn(async () => { throw new Error('Plugin "sample" is not discovered') }),
+    })
+    await request(missing.app).post('/api/plugin-runtime/sample/disable').expect(404)
+
+    const broken = setup({ disable: vi.fn(async () => { throw new Error('config is read-only') }) })
+    await request(broken.app)
+      .post('/api/plugin-runtime/sample/disable')
+      .expect(400, { error: 'config is read-only' })
+  })
+
+  it('only honours a cascade that arrives as true', async () => {
+    // A JSON body is user input: `"true"` is a string, and a truthy check there would let
+    // a stray query-string-ish value tear down plugins nobody agreed to.
+    const { app, deps } = setup()
+
+    await request(app).post('/api/plugin-runtime/sample/disable').send({ cascade: 'true' }).expect(200)
+
+    expect(deps.disable).toHaveBeenCalledWith('sample', { cascade: false })
+  })
+
+  it('carries the cascade to the Mac, and relays the refusal back with its list', async () => {
+    const managePrimary = vi.fn(async () => ({ plugin: record({ state: 'disabled' }) }))
+    const { app } = setup({ cloudMode: true, managePrimary })
+
+    await request(app).post('/api/plugin-runtime/sample/disable').send({ cascade: true }).expect(200)
+    expect(managePrimary).toHaveBeenCalledWith('sample', 'disable', { cascade: true })
+    // A plain OFF sends no payload at all, so an older primary sees today's request.
+    await request(app).post('/api/plugin-runtime/sample/disable').expect(200)
+    expect(managePrimary).toHaveBeenLastCalledWith('sample', 'disable', undefined)
+  })
+
+  it('gives a replica the same 409 body the Mac would have given it', async () => {
+    // The dependents survive the bridge inside the relay error, so the store's
+    // confirmation reads one shape whether it is talking to the Mac or to a replica.
+    const { app } = setup({
+      cloudMode: true,
+      managePrimary: vi.fn(async () => {
+        throw new PluginRuntimeRelayError('Plugin "sample" cannot be turned off', 409, {
+          code: 'has-dependents',
+          dependents: ['beta'],
+        })
+      }),
+    })
+
+    const refused = await request(app).post('/api/plugin-runtime/sample/disable').expect(409)
+
+    expect(refused.body).toEqual({
+      error: 'Plugin "sample" cannot be turned off',
+      code: 'has-dependents',
+      dependents: ['beta'],
+    })
   })
 
   it('rejects unsafe ids before invoking callbacks', async () => {

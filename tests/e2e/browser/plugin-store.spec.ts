@@ -21,6 +21,18 @@ import { expect, test, type Page } from '@playwright/test'
  *   4. Installing still requires the explicit trust acknowledgement. Prefilling from
  *      the catalog fills the URL and NOTHING else: Add stays disabled until the box is
  *      ticked. A curated listing is not consent.
+ *   5. Dependencies are visible and reversible. `beta` and `delta` both run on `alpha`:
+ *      turning alpha off is REFUSED until a confirmation names them, cancel changes
+ *      nothing, and the cascade parks both ("needs another plugin") without ever writing
+ *      an off-switch for them — asserted against config.yaml, because that is the
+ *      difference between "waiting for alpha" and "the user turned it off". Each blocked
+ *      row carries its OWN action (test ids are keyed by row and dependency, so two rows
+ *      waiting on the same plugin stay separately clickable), and using one of them
+ *      brings both dependents back with no page reload.
+ *   6. Installing a dependency ASKS. `epsilon` (from a source clone) waits on `zeta`,
+ *      which only the catalog can supply: its button opens a consent list naming the exact
+ *      source URL, and nothing is installed until a second, explicit yes. A curated
+ *      catalog file is a suggestion, not permission to run someone's code.
  *
  * Runs against its own server (tests/e2e/browser/plugin-store-server.ts) because the
  * shared :3457 fixture installs no plugins by design.
@@ -32,6 +44,9 @@ interface Fixture {
   port: number
   home: string
   overlayEntryId: string
+  requiresEntryId: string
+  dependencySourceSlug: string
+  dependencySourceUrl: string
 }
 
 let child: ChildProcessWithoutNullStreams | null = null
@@ -103,13 +118,33 @@ async function openPlugins(page: Page): Promise<void> {
 }
 
 /** What config.yaml says about a plugin — the durable half of the switch. */
-async function configEnabled(pluginId: string): Promise<unknown> {
+async function configPlugins(): Promise<Record<string, { enabled?: unknown }>> {
   const raw = await fs.readFile(`${fixture!.home}/config.yaml`, 'utf-8')
   // The fixture writes JSON (valid YAML) and the server rewrites it as YAML, so read
   // the flag with a shape-agnostic probe rather than assuming either syntax.
   const yaml = await import('js-yaml')
   const doc = yaml.load(raw) as { plugins?: Record<string, { enabled?: unknown }> }
-  return doc.plugins?.[pluginId]?.enabled
+  return doc.plugins ?? {}
+}
+
+async function configEnabled(pluginId: string): Promise<unknown> {
+  return (await configPlugins())[pluginId]?.enabled
+}
+
+/** Which plugins config.yaml has an opinion about at all. A blocked dependent must NOT
+ *  appear here: an off-switch on disk would leave it lying down after its dependency
+ *  came back. */
+async function configPluginKeys(): Promise<string[]> {
+  return Object.keys(await configPlugins()).sort()
+}
+
+/** The sources config.yaml knows about. Installing a dependency adds one here, so this is
+ *  how "the panel only ASKED" is proved rather than assumed. */
+async function configSourceUrls(): Promise<string[]> {
+  const raw = await fs.readFile(`${fixture!.home}/config.yaml`, 'utf-8')
+  const yaml = await import('js-yaml')
+  const doc = yaml.load(raw) as { plugin_sources?: Array<{ url?: string; spec?: string }> }
+  return (doc.plugin_sources ?? []).map((source) => source.url ?? source.spec ?? '')
 }
 
 test.beforeAll(async () => {
@@ -257,4 +292,135 @@ test('the switch turns a plugin off and on, and off survives a restart', async (
   await shoot(page, 'store-1680-toggled-on')
 
   expect(pageErrors, 'toggling a plugin must not throw in the browser').toEqual([])
+})
+
+/* ── Dependencies. These act on alpha/beta/gamma only, never on walnut-time. ── */
+
+test('a plugin that runs on another comes up with it, and the catalog stays quiet', async ({ page }) => {
+  await openPlugins(page)
+
+  // beta and delta declare `dependencies: { alpha: '^1' }` and are on, which means the
+  // load order put alpha first and the gate let both through.
+  for (const id of ['beta', 'delta']) {
+    const row = page.getByTestId(`plugin-row-${id}`)
+    await expect(row).toBeVisible({ timeout: 30_000 })
+    await expect(row).toHaveAttribute('data-plugin-status', 'active')
+    await expect(row).toContainText('on')
+  }
+  await expect(page.getByTestId('plugin-row-alpha')).toHaveAttribute('data-plugin-status', 'active')
+
+  // The catalog entry that `requires` alpha says nothing while alpha is running: there is
+  // nothing extra to install, and a permanent "also needs" line would be noise.
+  const gamma = page.getByTestId(`plugin-row-${fixture!.requiresEntryId}`)
+  await expect(gamma).toHaveAttribute('data-plugin-status', 'available')
+  await expect(gamma).not.toContainText('Also needs')
+  await expect(page.getByTestId(`plugin-also-needs-${fixture!.requiresEntryId}`)).toHaveCount(0)
+})
+
+test('installing a dependency asks before it clones anything', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+
+  await openPlugins(page)
+
+  // epsilon came from a source and waits on zeta, which is only in the catalog.
+  const epsilon = page.getByTestId('plugin-row-epsilon')
+  await expect(epsilon).toBeVisible({ timeout: 30_000 })
+  await expect(epsilon).toHaveAttribute('data-plugin-status', 'needs-dependency')
+  await expect(page.getByTestId('plugin-dependency-needs-epsilon')).toContainText('Needs Zeta ^1')
+
+  // The action on a blocked row is an ASK, not an install.
+  const install = page.getByTestId('plugin-dependency-install-epsilon-zeta')
+  await expect(install).toHaveText('Install Zeta…')
+  await expect(page.getByTestId('plugin-pending-dependencies')).toHaveCount(0)
+
+  await install.click()
+  const consent = page.getByTestId('plugin-pending-dependencies')
+  await expect(consent).toBeVisible({ timeout: 30_000 })
+  // Every URL that would be added, before any of them is: that is the consent.
+  await expect(consent).toContainText('Also install: Zeta')
+  await expect(consent).toContainText('https://example.invalid/zeta.git')
+  await expect(page.getByTestId('plugin-pending-dependencies-install')).toBeVisible()
+  await shoot(page, 'store-1680-dependency-consent')
+
+  // Still one source: the click asked, and asking installs nothing.
+  expect(await configSourceUrls()).toEqual([fixture!.dependencySourceUrl])
+
+  await page.getByTestId('plugin-pending-dependencies-dismiss').click()
+  await expect(consent).toHaveCount(0)
+  await expect(epsilon).toHaveAttribute('data-plugin-status', 'needs-dependency')
+  expect(await configSourceUrls()).toEqual([fixture!.dependencySourceUrl])
+
+  expect(pageErrors, 'the consent panel must not throw in the browser').toEqual([])
+})
+
+test('turning off a plugin others run on asks first, and never writes them off', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+
+  await openPlugins(page)
+  const alphaToggle = page.locator('#plugin-toggle-alpha')
+  await expect(alphaToggle).toHaveAttribute('aria-checked', 'true')
+
+  // ── Refused, with the list ──
+  await alphaToggle.click()
+  const confirm = page.getByTestId('plugin-cascade-confirm')
+  await expect(confirm).toBeVisible({ timeout: 30_000 })
+  // Both dependents are named, by display name, before anything happens.
+  await expect(page.getByTestId('plugin-cascade-ask')).toContainText(/Beta/)
+  await expect(page.getByTestId('plugin-cascade-ask')).toContainText(/Delta/)
+  await shoot(page, 'store-1680-cascade-confirm')
+
+  // ── Cancel changes nothing, on screen or on disk ──
+  await page.getByTestId('plugin-cascade-cancel').click()
+  await expect(confirm).toHaveCount(0)
+  await expect(page.getByTestId('plugin-row-alpha')).toHaveAttribute('data-plugin-status', 'active')
+  await expect(page.getByTestId('plugin-row-beta')).toHaveAttribute('data-plugin-status', 'active')
+  await expect(page.getByTestId('plugin-row-delta')).toHaveAttribute('data-plugin-status', 'active')
+  expect(await configPluginKeys()).not.toContain('alpha')
+
+  // ── Agree, and the cascade parks the dependent instead of switching it off ──
+  await alphaToggle.click()
+  await expect(page.getByTestId('plugin-cascade-confirm')).toBeVisible({ timeout: 30_000 })
+  await page.getByTestId('plugin-cascade-confirm').click()
+
+  await expect(page.getByTestId('plugin-row-alpha')).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 60_000 })
+  await expect(page.getByTestId('plugin-row-alpha')).toContainText('off')
+  const beta = page.getByTestId('plugin-row-beta')
+  const delta = page.getByTestId('plugin-row-delta')
+  for (const row of [beta, delta]) {
+    await expect(row).toHaveAttribute('data-plugin-status', 'needs-dependency', { timeout: 60_000 })
+    await expect(row).toContainText('needs another plugin')
+  }
+  // Each row names what IT waits for, by display name, in the server's own words — and
+  // owns its own action, keyed by row + dependency so neither shadows the other.
+  for (const id of ['beta', 'delta']) {
+    await expect(page.getByTestId(`plugin-dependency-needs-${id}`)).toContainText('Needs Alpha ^1')
+    await expect(page.getByTestId(`plugin-dependency-needs-${id}`)).toContainText('was turned off')
+    await expect(page.getByTestId(`plugin-dependency-turn-on-${id}-alpha`)).toHaveText('Turn on Alpha')
+  }
+  await shoot(page, 'store-1680-needs-dependency')
+
+  // Only the target got an off-switch. A dependent with `enabled: false` on disk would
+  // stay down after alpha came back, which is the whole point of blocking instead.
+  await expect.poll(() => configEnabled('alpha'), { timeout: 15_000 }).toBe(false)
+  expect(await configPluginKeys()).not.toContain('beta')
+  expect(await configPluginKeys()).not.toContain('delta')
+
+  // And the catalog row that needs alpha now says so, since alpha is not running.
+  await expect(page.getByTestId(`plugin-also-needs-${fixture!.requiresEntryId}`)).toContainText('Also needs: Alpha')
+  await page.getByTestId('plugin-store-available').screenshot({ path: `${SCREENSHOT_DIR}/store-1680-also-needs.png` })
+
+  // ── Back on, from ONE blocked row, with no page reload ──
+  await page.getByTestId('plugin-dependency-turn-on-beta-alpha').click()
+  await expect(page.getByTestId('plugin-row-alpha')).toHaveAttribute('data-plugin-status', 'active', { timeout: 60_000 })
+  // Both dependents return, because neither was ever written off.
+  for (const row of [beta, delta]) {
+    await expect(row).toHaveAttribute('data-plugin-status', 'active', { timeout: 60_000 })
+    await expect(row).toContainText('on')
+  }
+  await expect.poll(() => configEnabled('alpha'), { timeout: 15_000 }).toBe(true)
+  await shoot(page, 'store-1680-dependency-restored')
+
+  expect(pageErrors, 'the dependency flow must not throw in the browser').toEqual([])
 })

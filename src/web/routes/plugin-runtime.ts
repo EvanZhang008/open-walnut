@@ -2,6 +2,7 @@ import { Router, type RequestHandler } from 'express'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { bus } from '../../core/event-bus.js'
 import type { IntegrationRegistry } from '../../core/integration-registry.js'
+import { PluginDependentsError } from '../../core/plugins/dependency-gate.js'
 import { validatePluginId } from '../../core/plugins/ids.js'
 import {
   loadPluginCatalog,
@@ -32,14 +33,19 @@ export interface PluginRuntimeRouterDeps {
   list(): PluginLifecycleRecord[]
   discover?(pluginId: string): Promise<PluginLifecycleRecord>
   reload(pluginId: string): Promise<PluginLifecycleRecord>
-  disable(pluginId: string): Promise<PluginLifecycleRecord>
+  /** `cascade` blocks the plugins that depend on this one instead of refusing. */
+  disable(pluginId: string, opts?: { cascade?: boolean }): Promise<PluginLifecycleRecord>
   clearQuarantine(pluginId: string): Promise<void>
   cloudMode?: boolean
   listPrimaryModules?(): Promise<PrimaryPluginRuntimeCatalogue>
   readPrimaryModule?(pluginId: string, expectedHash?: string): Promise<PluginWebModule>
   listPrimaryOps?(pluginId: string): ReturnType<typeof listPrimaryPluginOps>
   callPrimaryOp?(pluginId: string, opName: string, args: Record<string, unknown>): ReturnType<typeof callPrimaryPluginOp>
-  managePrimary?(pluginId: string, operation: PluginManagementAction): ReturnType<typeof managePrimaryPlugin>
+  managePrimary?(
+    pluginId: string,
+    operation: PluginManagementAction,
+    payload?: { cascade?: boolean },
+  ): ReturnType<typeof managePrimaryPlugin>
   /** Which external source installed each plugin id — for the store's Update/Remove. */
   pluginSourceOwners?(): Promise<Map<string, { slug: string; kind: 'git' | 'npm' }>>
   /** Config schemas for plugins that did NOT load because config is missing. */
@@ -331,16 +337,38 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
     }
   })
 
+  /**
+   * POST /:pluginId/disable — turn a plugin off.
+   *
+   * Refused with 409 `has-dependents` while other plugins run on this one; the caller
+   * re-sends `{ cascade: true }` once the user has seen the list. The 409 body shape
+   * (`code` + `dependents`) is a contract the store's confirmation reads, so a caller
+   * never has to parse the message.
+   *
+   * Both halves also work through the cloud bridge: `cascade` rides the plugin-manage
+   * relay, and a refusal comes back with its dependents decoded, so a replica opens the
+   * same confirmation the Mac does.
+   */
   router.post('/:pluginId/disable', async (req, res) => {
     try {
       const pluginId = routePluginId(req.params.pluginId)
+      const cascade = (req.body as { cascade?: unknown } | undefined)?.cascade === true
       const plugin = cloudMode
-        ? (await managePrimary(pluginId, 'disable')).plugin
-        : await deps.disable(pluginId)
+        ? (await managePrimary(pluginId, 'disable', cascade ? { cascade: true } : undefined)).plugin
+        : await deps.disable(pluginId, { cascade })
       if (!plugin) throw new PluginRuntimeRelayError('Primary did not return the disabled Plugin', 502)
       publishCloudChange(pluginId, 'disabled')
       res.json({ plugin })
     } catch (error) {
+      if (error instanceof PluginDependentsError) {
+        res.status(409).json({ error: error.message, code: error.code, dependents: error.dependents })
+        return
+      }
+      // The relayed twin of the same refusal, so a replica's store gets the same body.
+      if (error instanceof PluginRuntimeRelayError && error.code === 'has-dependents') {
+        res.status(409).json({ error: error.message, code: error.code, dependents: error.dependents ?? [] })
+        return
+      }
       const message = error instanceof Error ? error.message : String(error)
       const status = error instanceof PluginRuntimeRelayError
         ? error.status

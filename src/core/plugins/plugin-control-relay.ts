@@ -25,6 +25,15 @@ const MAX_HTTP_HEADERS_BYTES = 64 * 1024
 const HTTP_TIMEOUT_MS = 12_000
 const MANAGEMENT_TIMEOUT_MS = 25_000
 
+/**
+ * Envelope for the one structured refusal that has to survive the control relay: the
+ * `has-dependents` list. Shared with plugin-runtime-bridge.ts, which decodes it back into
+ * `code` + `dependents` so a replica's store can open the same confirmation the Mac does.
+ * The generic hops in between (session-controls, v1-control-relay) carry a message and a
+ * status only, and widening them for one plugin refusal would be the wrong trade.
+ */
+export const DEPENDENTS_ENVELOPE_PREFIX = 'has-dependents'
+
 class PluginControlFailure extends Error {
   constructor(message: string, readonly status: number) {
     super(message)
@@ -207,11 +216,19 @@ async function managePlugin(params: Record<string, unknown>): Promise<Record<str
   const target = operation === 'discover'
     ? loopbackUrl('/api/plugin-runtime/discover')
     : loopbackUrl(`/api/plugin-runtime/${encodeURIComponent(pluginId)}/${operation}`)
-  const init: RequestInit = operation === 'discover'
+  // `cascade` is the one management flag that needs a body: the disable route reads it to
+  // choose between refusing (409, with the dependents) and blocking them. Without it the
+  // replica's request would arrive as a plain disable and come back refused forever.
+  const payload = operation === 'discover'
+    ? { pluginId }
+    : operation === 'disable' && params.cascade === true
+      ? { cascade: true }
+      : null
+  const init: RequestInit = payload
     ? {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ pluginId }),
+        body: JSON.stringify(payload),
       }
     : { method: 'POST' }
   const { response, body } = await fetchLoopback(target, init, MANAGEMENT_TIMEOUT_MS, 512 * 1024)
@@ -222,9 +239,26 @@ async function managePlugin(params: Record<string, unknown>): Promise<Record<str
     throw new PluginControlFailure('Plugin runtime returned an invalid response', 502)
   }
   if (!response.ok) {
-    const message = parsed && typeof parsed === 'object' && typeof (parsed as Record<string, unknown>).error === 'string'
-      ? (parsed as Record<string, unknown>).error as string
+    const body = (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, unknown>
+    const message = typeof body.error === 'string'
+      ? body.error
       : `Plugin management failed with HTTP ${response.status}`
+    // A "cannot turn this off" refusal is not just a sentence: the store's confirmation
+    // needs the DEPENDENT LIST, and the control channel between the boxes carries only a
+    // message plus a status. Rather than widen every hop, the two ends of THIS relay
+    // agree on one envelope, decoded in plugin-runtime-bridge.relayError. Keep the two in
+    // step: the prefix is parsed there, and the human sentence follows it unchanged.
+    if (
+      response.status === 409
+      && body.code === 'has-dependents'
+      && Array.isArray(body.dependents)
+      && body.dependents.every((entry) => typeof entry === 'string')
+    ) {
+      throw new PluginControlFailure(
+        `${DEPENDENTS_ENVELOPE_PREFIX}[${(body.dependents as string[]).join(',')}] ${message}`,
+        409,
+      )
+    }
     throw new PluginControlFailure(message, response.status)
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {

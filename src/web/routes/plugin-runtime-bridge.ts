@@ -5,7 +5,7 @@ import path from 'node:path'
 import { WALNUT_HOME } from '../../constants.js'
 import type { PluginTombstone } from '../../core/integration-registry.js'
 import { validatePluginId } from '../../core/plugins/ids.js'
-import type { PluginLifecycleRecord } from '../../core/plugins/plugin-manager.js'
+import type { MissingDependency, PluginLifecycleRecord } from '../../core/plugins/plugin-manager.js'
 import {
   MAX_PLUGIN_WEB_MODULE_BYTES,
   type PluginWebModule,
@@ -20,6 +20,9 @@ const PLUGIN_LIFECYCLE_STATES = new Set([
   'discovered',
   'disabled',
   'needs-config',
+  // A state this list omits is not "rejected", it is INVISIBLE: the record is dropped and
+  // the plugin disappears from a replica's store, or a management call answers 502.
+  'needs-dependency',
   'unsupported',
   'activating',
   'active',
@@ -27,6 +30,7 @@ const PLUGIN_LIFECYCLE_STATES = new Set([
   'disposing',
   'quarantined',
 ])
+const MISSING_DEPENDENCY_REASONS = new Set(['absent', 'version', 'inactive', 'cycle', 'unversioned'])
 const TOMBSTONE_REASONS = new Set(['disabled', 'unloaded', 'failed', 'stale-code'])
 const HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const HOP_BY_HOP_HEADERS = new Set([
@@ -50,9 +54,16 @@ const CACHE_STALE_MS = 7 * 24 * 60 * 60 * 1_000
 const CACHE_PRUNE_INTERVAL_MS = 60 * 60 * 1_000
 
 export class PluginRuntimeRelayError extends Error {
-  constructor(message: string, readonly status: number) {
+  /** A domain code the primary attached, when one survived the relay. */
+  readonly code?: string
+  /** For `has-dependents`: the plugins that would break, so a replica can offer the same
+   *  confirmation the Mac does instead of a dead-end error. */
+  readonly dependents?: string[]
+  constructor(message: string, readonly status: number, extra?: { code?: string; dependents?: string[] }) {
     super(message)
     this.name = 'PluginRuntimeRelayError'
+    if (extra?.code) this.code = extra.code
+    if (extra?.dependents) this.dependents = extra.dependents
   }
 }
 
@@ -87,9 +98,23 @@ export interface PluginHttpRelayResponse {
   body: Buffer
 }
 
+/** The primary's `has-dependents` envelope (see plugin-control-relay.DEPENDENTS_ENVELOPE_PREFIX). */
+const DEPENDENTS_ENVELOPE = /^has-dependents\[([^\]]*)\]\s*/
+
 function relayError(failure: RelayFailure): PluginRuntimeRelayError {
   if (failure.kind === 'needs_upgrade') return new PluginRuntimeRelayError(failure.message, 501)
   if (failure.kind === 'bridge_offline') return new PluginRuntimeRelayError(failure.message, 503)
+  // A refusal that names the dependents arrives inside the message, because the hops in
+  // between carry nothing else. Decode it here so the route can answer the same 409 body
+  // the primary produced; the status is forced rather than trusted, since the generic
+  // classifier derives it from an errorKind and this contract is a fixed 409.
+  const envelope = DEPENDENTS_ENVELOPE.exec(failure.message)
+  if (envelope) {
+    return new PluginRuntimeRelayError(failure.message.slice(envelope[0].length), 409, {
+      code: 'has-dependents',
+      dependents: envelope[1] ? envelope[1].split(',').filter(Boolean) : [],
+    })
+  }
   return new PluginRuntimeRelayError(failure.message, failure.status)
 }
 
@@ -144,6 +169,29 @@ function parseLifecycleRecord(value: unknown): PluginLifecycleRecord | null {
     && item.missingConfig.every((entry) => typeof entry === 'string')
     ? item.missingConfig as string[]
     : undefined
+  // The blocked row's whole point is the sentence per dependency, so it has to cross the
+  // bridge with the record; dropping it leaves a replica saying "needs-dependency" and
+  // nothing else.
+  const missingDependencies = Array.isArray(item.missingDependencies)
+    ? item.missingDependencies.flatMap((value) => {
+        if (!value || typeof value !== 'object') return []
+        const dependency = value as Record<string, unknown>
+        if (
+          typeof dependency.id !== 'string'
+          || typeof dependency.range !== 'string'
+          || typeof dependency.reason !== 'string'
+          || !MISSING_DEPENDENCY_REASONS.has(dependency.reason)
+          || typeof dependency.note !== 'string'
+        ) return []
+        return [{
+          id: dependency.id,
+          range: dependency.range,
+          ...(typeof dependency.found === 'string' ? { found: dependency.found } : {}),
+          reason: dependency.reason as MissingDependency['reason'],
+          note: dependency.note,
+        }]
+      })
+    : []
   return {
     id,
     name: item.name,
@@ -151,6 +199,7 @@ function parseLifecycleRecord(value: unknown): PluginLifecycleRecord | null {
     builtin: item.builtin,
     failureCount: item.failureCount,
     ...(missingConfig ? { missingConfig } : {}),
+    ...(missingDependencies.length ? { missingDependencies } : {}),
     ...(typeof item.reason === 'string' ? { reason: item.reason } : {}),
     ...(typeof item.error === 'string' ? { error: item.error } : {}),
   }
@@ -435,12 +484,13 @@ export async function callPrimaryPluginOp(
 export async function managePrimaryPlugin(
   pluginIdInput: string,
   operation: PluginManagementAction,
+  payload?: { cascade?: boolean },
 ): Promise<{ plugin?: PluginLifecycleRecord; ok?: true }> {
   const pluginId = validPluginId(pluginIdInput)
   const outcome = await callPrimaryControl(
     'server.plugin-manage',
     SERVER_RELAY_SID,
-    { pluginId, operation },
+    { pluginId, operation, ...(payload?.cascade ? { cascade: true } : {}) },
     30_000,
   )
   if (!outcome.ok) throw relayError(outcome.failure)

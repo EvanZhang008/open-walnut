@@ -326,4 +326,87 @@ describe('cloud Plugin runtime relay', () => {
     const error = new PluginRuntimeRelayError('conflict', 409)
     expect(error).toMatchObject({ name: 'PluginRuntimeRelayError', status: 409 })
   })
+
+  it('carries a cascade to the primary only when it was asked for', async () => {
+    const disabled = { id: 'sample', name: 'Sample', state: 'disabled', builtin: false, failureCount: 0 }
+    callPrimaryControlMock.mockResolvedValue({ ok: true, result: { plugin: disabled } })
+
+    await managePrimaryPlugin('sample', 'disable', { cascade: true })
+    expect(callPrimaryControlMock).toHaveBeenLastCalledWith(
+      'server.plugin-manage',
+      '__server__',
+      { pluginId: 'sample', operation: 'disable', cascade: true },
+      30_000,
+    )
+
+    // An ordinary OFF must look byte-identical to what an older primary already answers.
+    await managePrimaryPlugin('sample', 'disable')
+    expect(callPrimaryControlMock).toHaveBeenLastCalledWith(
+      'server.plugin-manage',
+      '__server__',
+      { pluginId: 'sample', operation: 'disable' },
+      30_000,
+    )
+  })
+
+  it('decodes the primary refusal into the 409 the store already understands', async () => {
+    // Nothing but the message and a status cross the bridge, so the dependents ride in an
+    // envelope on the front of the message and are unpacked here.
+    callPrimaryControlMock.mockResolvedValueOnce({
+      ok: false,
+      failure: {
+        kind: 'error',
+        // What the generic classifier makes of it: no errorKind survives the hops, so it
+        // lands on bad_request. The envelope is what pins the status back to 409.
+        status: 400,
+        code: 'bad_request',
+        message: 'has-dependents[beta,delta] Plugin "alpha" cannot be turned off',
+      },
+    })
+
+    await expect(managePrimaryPlugin('alpha', 'disable')).rejects.toMatchObject({
+      status: 409,
+      code: 'has-dependents',
+      dependents: ['beta', 'delta'],
+      message: 'Plugin "alpha" cannot be turned off',
+    })
+  })
+
+  it('keeps a blocked plugin visible on a replica, with the reason per dependency', async () => {
+    // needs-dependency is exactly the state a replica most needs to render, and an
+    // unlisted state does not degrade — it deletes the row.
+    callPrimaryControlMock.mockResolvedValueOnce({
+      ok: true,
+      result: {
+        plugin: {
+          id: 'beta',
+          name: 'Beta',
+          state: 'needs-dependency',
+          builtin: false,
+          failureCount: 0,
+          reason: 'Missing dependencies: alpha@^1 (not installed)',
+          missingDependencies: [
+            { id: 'alpha', range: '^1', reason: 'absent', note: '"alpha" is not installed' },
+            { id: 'gamma', range: '^2', found: '1.0.0', reason: 'version', note: 'wrong version' },
+            { id: 'junk', range: '^1', reason: 'made-up', note: 'dropped' },
+          ],
+        },
+      },
+    })
+
+    await expect(managePrimaryPlugin('beta', 'reload')).resolves.toEqual({
+      plugin: {
+        id: 'beta',
+        name: 'Beta',
+        state: 'needs-dependency',
+        builtin: false,
+        failureCount: 0,
+        reason: 'Missing dependencies: alpha@^1 (not installed)',
+        missingDependencies: [
+          { id: 'alpha', range: '^1', reason: 'absent', note: '"alpha" is not installed' },
+          { id: 'gamma', range: '^2', found: '1.0.0', reason: 'version', note: 'wrong version' },
+        ],
+      },
+    })
+  })
 })

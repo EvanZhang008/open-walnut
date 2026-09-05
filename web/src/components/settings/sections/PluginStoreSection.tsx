@@ -32,6 +32,15 @@ import type { Config } from '@open-walnut/core';
 import { SettingsSection, SettingsRow, SettingsSubCard, SettingsEmpty, SettingsNotice } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { PluginConfigCards } from './PluginConfigCards';
+import {
+  dependencyBusyKey,
+  PluginAlsoNeeds,
+  PluginCascadeConfirm,
+  PluginDependencyNeeds,
+  PluginPendingDependencies,
+  type DependencyPlanItem,
+  type MissingDependencyView,
+} from './PluginDependencyRows';
 import { PluginAppControls } from '../PluginAppControls';
 import { BuildPluginCard } from '../BuildPluginCard';
 // Deliberately NOT '@/plugins/hooks': that module reaches the plugin loader, which
@@ -87,6 +96,10 @@ interface RegistryRow {
   builtin: boolean;
   capabilities?: string[];
   missingConfig?: string[];
+  /** Which other plugins hold this row back, and what could be done about each. */
+  missingDependencies?: MissingDependencyView[];
+  dependencyPlan?: DependencyPlanItem[];
+  blockedBy?: string[];
   reason?: string;
   error?: string;
   configurable: boolean;
@@ -162,6 +175,13 @@ export function PluginStoreSection({ config, onSave }: Props) {
   const [restartNeeded, setRestartNeeded] = useState(false);
   const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
   const [configuring, setConfiguring] = useState<string | null>(null);
+  // Turning off a plugin others run on is refused (409) until the user has seen the list.
+  const [cascadeAsk, setCascadeAsk] = useState<{ target: { id: string; name: string }; dependents: string[] } | null>(null);
+  // What an install (or a blocked row's "Install…") turned out to need, and where to ask.
+  // Nothing has been installed for it yet: this list IS the question.
+  const [pending, setPending] = useState<
+    { slug: string; plan: DependencyPlanItem[]; rowId?: string } | null
+  >(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
@@ -191,6 +211,10 @@ export function PluginStoreSection({ config, onSave }: Props) {
   // install — arrives as this event, so the list is never stale-but-confident.
   useEvent('plugin:runtime-changed', () => { void refresh(); });
 
+  /** A plugin's display name. Ids belong in URLs, not in sentences a person reads. */
+  const nameOf = (pluginId: string) =>
+    registry?.rows.find((row) => row.id === pluginId)?.name ?? pluginId;
+
   const handleAdd = async () => {
     const value = url.trim();
     if (!value || !trusted) return;
@@ -213,6 +237,9 @@ export function PluginStoreSection({ config, onSave }: Props) {
       setTrusted(false); // trust is granted per install, never sticky
       const count = body.plugins?.length ?? 0;
       const what = body.resolved ? ` (${body.resolved})` : '';
+      // Only this source was installed. Anything its plugins need is a second question.
+      const plan = (body.pendingDependencies ?? []) as DependencyPlanItem[];
+      setPending(plan.length > 0 && body.slug ? { slug: body.slug as string, plan } : null);
       setNotice(count > 0
         ? `Added${what}: found ${count} plugin${count === 1 ? '' : 's'}. New plugins are active now; use Configure on a row that needs setup.`
         : `Added${what}, but no plugins found (no manifest.json at the root or in top-level folders).`);
@@ -268,21 +295,40 @@ export function PluginStoreSection({ config, onSave }: Props) {
   /**
    * ON goes through `reload` and OFF through `disable` — both write the `enabled`
    * flag to config.yaml first, which is what makes the switch survive a restart.
+   *
+   * OFF can be refused with 409 `has-dependents` while other plugins run on this one.
+   * That is not an error to show: it is a question, so it opens the confirmation under
+   * the row and the same call is repeated with `cascade` once the user agrees.
    */
-  const handleToggle = async (row: RegistryRow, next: boolean) => {
-    setBusy(row.id);
+  const handleToggle = async (
+    row: { id: string; name: string },
+    next: boolean,
+    { cascade = false, busyKey }: { cascade?: boolean; busyKey?: string } = {},
+  ) => {
+    // A dependency's "Turn on" lives on ANOTHER row, so it owns its own busy key and only
+    // that button goes disabled for the round trip.
+    setBusy(busyKey ?? row.id);
     setError(null);
     setNotice(null);
     try {
       const res = await fetch(
         `/api/plugin-runtime/${encodeURIComponent(row.id)}/${next ? 'reload' : 'disable'}`,
-        { method: 'POST' },
+        cascade
+          ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cascade: true }) }
+          : { method: 'POST' },
       );
-      const body = await res.json().catch(() => ({} as { error?: string }));
+      const body = await res.json().catch(() => ({} as { error?: string; code?: string; dependents?: string[] }));
+      if (res.status === 409 && body.code === 'has-dependents') {
+        setCascadeAsk({ target: row, dependents: body.dependents ?? [] });
+        return;
+      }
       if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+      setCascadeAsk(null);
       setNotice(next
         ? `${row.name} is on.`
-        : `${row.name} is off. It stays off until you turn it back on.`);
+        : cascade
+          ? `${row.name} is off, and everything that runs on it is waiting for it. Turn it back on and they come back.`
+          : `${row.name} is off. It stays off until you turn it back on.`);
       await refresh();
       emitPluginsChanged();
     } catch (err) {
@@ -291,6 +337,48 @@ export function PluginStoreSection({ config, onSave }: Props) {
       setBusy(null);
     }
   };
+
+  /**
+   * Install the dependencies of one source, AFTER the consent list was shown. Never
+   * called straight from a row's button: the panel that lists the source URLs is the only
+   * caller, because a catalog entry is not the user's consent to run its code.
+   */
+  const installDependencies = async (slug: string, busyKey: string) => {
+    setBusy(busyKey);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/plugin-sources/${encodeURIComponent(slug)}/dependencies`, { method: 'POST' });
+      const body = await res.json().catch(() => ({} as { error?: string }));
+      if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+      const added = (body.installed ?? []) as Array<{ id: string; action?: string }>;
+      const skipped = (body.skipped ?? []) as Array<
+        { id: string; reason: string; command?: string; state?: string; error?: string }
+      >;
+      setPending(null);
+      setNotice([
+        added.length > 0
+          ? `Installed ${added.map((entry) => nameOf(entry.id)).join(', ')}.`
+          : 'Nothing was installed.',
+        ...skipped.map((entry) => entry.command
+          ? `${nameOf(entry.id)} has to be linked by hand: ${entry.command}`
+          : `${nameOf(entry.id)} was skipped (${entry.error ?? entry.state ?? entry.reason}).`),
+      ].join(' '));
+      await refresh();
+      emitPluginsChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** Turn on a dependency that is already on this machine: the same path as its switch. */
+  const turnOnDependency = (rowId: string, item: DependencyPlanItem) => handleToggle(
+    { id: item.id, name: nameOf(item.id) },
+    true,
+    { busyKey: dependencyBusyKey(rowId, item.id) },
+  );
 
   const handleClearQuarantine = async (row: RegistryRow) => {
     setBusy(row.id);
@@ -309,14 +397,15 @@ export function PluginStoreSection({ config, onSave }: Props) {
   };
 
   /** Catalog → the existing install form. Trust is deliberately NOT pre-ticked. */
-  const prefillInstall = (row: RegistryRow) => {
-    const value = row.source.kind === 'npm' ? row.source.spec ?? row.id : row.source.url ?? '';
-    setUrl(value);
+  const prefillSource = (source: RegistryRow['source'] | undefined, label: string) => {
+    setUrl(source?.kind === 'npm' ? source.spec ?? label : source?.url ?? '');
     setError(null);
-    setNotice(`Ready to install ${row.name}. Tick the trust box, then press Add.`);
+    setNotice(`Ready to install ${label}. Tick the trust box, then press Add.`);
     urlInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     urlInputRef.current?.focus();
   };
+
+  const prefillInstall = (row: RegistryRow) => prefillSource(row.source, row.name);
 
   const copy = (text: string, key: string) => {
     void navigator.clipboard.writeText(text);
@@ -436,10 +525,59 @@ export function PluginStoreSection({ config, onSave }: Props) {
                       {row.adds?.length ? ` · adds ${row.adds.join(', ')}` : ''}
                       {!row.adds?.length && row.capabilities?.length ? ` · ${row.capabilities.join(', ')}` : ''}
                     </span>
-                    {row.status !== 'active' && (row.reason || row.error) && (
+                    {/* A blocked row says which plugin it waits for and offers the one
+                        thing that can fix it; every other non-active row keeps the
+                        server's own sentence. */}
+                    {row.status === 'needs-dependency' ? (
+                      <PluginDependencyNeeds
+                        rowId={row.id}
+                        missing={row.missingDependencies}
+                        plan={row.dependencyPlan}
+                        busyKey={busy}
+                        copiedKey={copiedSlug}
+                        nameFor={nameOf}
+                        // "Install…" ASKS: it opens the consent list for this source (every
+                        // URL it would add) instead of cloning on one click. Without a
+                        // source of its own, the row falls back to the ordinary install
+                        // form, which still has its own trust tick.
+                        onInstall={(item) => {
+                          if (row.sourceSlug) {
+                            setError(null);
+                            setNotice(null);
+                            setPending({ slug: row.sourceSlug, plan: row.dependencyPlan ?? [], rowId: row.id });
+                          } else prefillSource(item.source as RegistryRow['source'], nameOf(item.id));
+                        }}
+                        onTurnOn={(item) => void turnOnDependency(row.id, item)}
+                        onCopy={copy}
+                      />
+                    ) : row.status !== 'active' && (row.reason || row.error) ? (
                       <span className="plugin-store-why">{row.error ?? row.reason}</span>
-                    )}
+                    ) : null}
                   </SettingsRow>
+                  {/* Names sorted for reading: the server returns teardown order, which is
+                      the reverse of the order a list of names wants to be in. */}
+                  {cascadeAsk?.target.id === row.id && (
+                    <PluginCascadeConfirm
+                      name={row.name}
+                      dependents={cascadeAsk.dependents.map(nameOf).sort((a, b) => a.localeCompare(b))}
+                      busy={busy === row.id}
+                      onConfirm={() => void handleToggle(row, false, { cascade: true })}
+                      onCancel={() => setCascadeAsk(null)}
+                    />
+                  )}
+                  {/* The consent list for THIS row's dependencies, where the question was
+                      asked. Same component the install form uses. */}
+                  {pending?.rowId === row.id && (
+                    <div className="plugin-store-config">
+                      <PluginPendingDependencies
+                        plan={pending.plan}
+                        busy={busy === `pending:${pending.slug}`}
+                        nameFor={nameOf}
+                        onInstall={() => void installDependencies(pending.slug, `pending:${pending.slug}`)}
+                        onDismiss={() => setPending(null)}
+                      />
+                    </div>
+                  )}
                   {/* The plugin's app entries live HERE, on the plugin itself —
                       an app is not a separate thing to manage on another panel. */}
                   <PluginAppControls pluginId={row.id} />
@@ -517,6 +655,13 @@ export function PluginStoreSection({ config, onSave }: Props) {
                         : `git · ${row.source.url ?? ''}`}
                   {row.adds?.length ? ` · adds ${row.adds.join(', ')}` : ''}
                 </span>
+                {/* What installing it would ALSO pull in, before anything is added. */}
+                <PluginAlsoNeeds
+                  rowId={row.id}
+                  plan={row.dependencyPlan}
+                  blockedBy={row.blockedBy}
+                  nameFor={nameOf}
+                />
               </SettingsRow>
             ))}
           </div>
@@ -575,6 +720,20 @@ export function PluginStoreSection({ config, onSave }: Props) {
               credentials and this machine.
             </span>
           </label>
+          {/* Phase two of the install: the plugin that just arrived needs another one.
+              This list names every source it would add, and it is the consent for them —
+              nothing is installed until the button below is pressed. */}
+          {pending && !pending.rowId && (
+            <div style={{ marginTop: 10 }}>
+              <PluginPendingDependencies
+                plan={pending.plan}
+                busy={busy === `pending:${pending.slug}`}
+                nameFor={nameOf}
+                onInstall={() => void installDependencies(pending.slug, `pending:${pending.slug}`)}
+                onDismiss={() => setPending(null)}
+              />
+            </div>
+          )}
         </div>
       </SettingsSubCard>
 

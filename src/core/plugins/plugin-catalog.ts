@@ -26,6 +26,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { MissingDependency } from './plugin-manager.js'
+import { satisfiesDependencyRange } from './semver.js'
 
 /** Where a catalog entry comes from. */
 export type PluginCatalogSourceKind = 'builtin' | 'git' | 'npm' | 'example'
@@ -52,6 +53,49 @@ export interface PluginCatalogEntry {
   homepage?: string
   /** Repo-relative docs path. */
   docs?: string
+  /**
+   * Other plugins this one needs, mirroring the manifest `dependencies`
+   * (`{ "<pluginId>": "<semver range>" }`).
+   *
+   * DESCRIPTIVE ONLY. The catalog never installs anything by itself, so this exists to
+   * say "also needs alpha" before the user commits, not to pull alpha in. What actually
+   * installs is the two-phase consent in the store.
+   */
+  requires?: Record<string, string>
+}
+
+/**
+ * How a missing dependency could be brought in, from the store's point of view.
+ *
+ * `installed` means "it is here, turn it on"; `catalog` means "it can be added from the
+ * catalog" (an `example` source still needs a hand-run link command, which is why
+ * blockedBy counts those); `none` means the store has nothing to offer and the row may
+ * only explain itself.
+ *
+ * There is deliberately NO `builtin`: a builtin catalog entry that is absent from the
+ * lifecycle records is not on this machine, and turning it on throws "not discovered".
+ * A resolvable this code cannot make good on is worse than saying nothing.
+ */
+export type PluginDependencyResolvable = 'installed' | 'catalog' | 'none'
+
+export interface PluginDependencyPlanItem {
+  id: string
+  range: string
+  resolvable: PluginDependencyResolvable
+  /** Where it would come from, when the catalog knows. */
+  source?: PluginCatalogSource
+  /** The version that IS here and does not fit the range. Present only then, so the
+   *  store can say "(have 1.0.0)" without implying it for a plugin that is merely off. */
+  found?: string
+}
+
+/** One unmet requirement to plan for. `reason` is present when the loader already
+ *  resolved it for an installed plugin; a catalog `requires` entry has none. */
+export interface PluginDependencyNeed {
+  id: string
+  range: string
+  reason?: MissingDependency['reason']
+  found?: string
 }
 
 /** What the row says, in one word, to whoever is looking at the store. */
@@ -108,6 +152,10 @@ export interface PluginRegistryRow {
   missingConfig?: string[]
   /** Which dependencies hold this row back, so the store can name them. */
   missingDependencies?: MissingDependency[]
+  /** What could be done about each unmet dependency. Absent when there is nothing unmet. */
+  dependencyPlan?: PluginDependencyPlanItem[]
+  /** The unmet ids the store cannot act on, so a row can say why it is stuck. */
+  blockedBy?: string[]
   /** Why it is not active, in the server's own words. */
   reason?: string
   error?: string
@@ -174,6 +222,96 @@ export function isToggleable(status: PluginStoreStatus): boolean {
 }
 
 /**
+ * Running code AT A VERSION THE RANGE ACCEPTS, so the requirement is already met and
+ * never enters a plan.
+ *
+ * The version half matters: an active dependency at 1.0.0 does not satisfy `^2`, and
+ * calling that satisfied would let the store install a dependent that lands straight in
+ * needs-dependency the moment it loaded. A dependency with no version satisfies nothing
+ * (the same rule the loader applies), so it is reported rather than assumed.
+ */
+function isSatisfiedBy(facts: InstalledPluginFacts | undefined, range: string): boolean {
+  if (!facts || storeStatusFor(facts.state) !== 'active') return false
+  return !!facts.version && satisfiesDependencyRange(facts.version, range)
+}
+
+/**
+ * What the store could do about ONE unmet dependency.
+ *
+ * A wrong version, an unusable version string or a cycle all come back `none` on
+ * purpose: installing from the catalog or flipping a switch fixes none of them (the
+ * catalog carries no version, so claiming otherwise would be a confident wrong answer),
+ * and the honest answer is copy that names the problem.
+ */
+function resolveDependencyNeed(
+  need: PluginDependencyNeed,
+  catalogById: ReadonlyMap<string, PluginCatalogEntry>,
+  installedById: ReadonlyMap<string, InstalledPluginFacts>,
+): PluginDependencyPlanItem {
+  const base = { id: need.id, range: need.range }
+  if (need.reason === 'version' || need.reason === 'unversioned') {
+    return { ...base, ...(need.found ? { found: need.found } : {}), resolvable: 'none' }
+  }
+  if (need.reason === 'cycle') return { ...base, resolvable: 'none' }
+  const facts = installedById.get(need.id)
+  // Installed: a switch only helps where the plugin manager would accept the
+  // activation. needs-config, unsupported and quarantined are refused by it, so a
+  // "Turn on" there would write `enabled: true`, land the plugin back where it was,
+  // and let the caller report a turn-on that never happened.
+  if (facts) {
+    return { ...base, resolvable: isToggleable(storeStatusFor(facts.state)) ? 'installed' : 'none' }
+  }
+  const entry = catalogById.get(need.id)
+  // A builtin entry that is not in the lifecycle records is not on this machine at all:
+  // there is nothing to switch on, and nothing to install either.
+  if (!entry || entry.source.kind === 'builtin') return { ...base, resolvable: 'none' }
+  return { ...base, resolvable: 'catalog', source: entry.source }
+}
+
+/**
+ * Pure: unmet requirements → what the store can offer for each, in the order given.
+ * One item per id, so a diamond asks once.
+ */
+export function planPluginDependencies(
+  needs: readonly PluginDependencyNeed[],
+  catalog: readonly PluginCatalogEntry[],
+  installed: readonly InstalledPluginFacts[],
+): PluginDependencyPlanItem[] {
+  const catalogById = new Map(catalog.filter((entry) => entry?.id).map((entry) => [entry.id, entry]))
+  const installedById = new Map<string, InstalledPluginFacts>()
+  for (const facts of installed) {
+    if (facts?.id && !installedById.has(facts.id)) installedById.set(facts.id, facts)
+  }
+  return planFrom(needs, catalogById, installedById)
+}
+
+function planFrom(
+  needs: readonly PluginDependencyNeed[],
+  catalogById: ReadonlyMap<string, PluginCatalogEntry>,
+  installedById: ReadonlyMap<string, InstalledPluginFacts>,
+): PluginDependencyPlanItem[] {
+  const plan: PluginDependencyPlanItem[] = []
+  const seen = new Set<string>()
+  for (const need of needs) {
+    if (!need?.id || seen.has(need.id)) continue
+    seen.add(need.id)
+    plan.push(resolveDependencyNeed(need, catalogById, installedById))
+  }
+  return plan
+}
+
+/**
+ * The unmet ids the store has no button for: nothing to install or switch on, or an
+ * `example` source that only a hand-run `walnut-plugin link` can bring in.
+ */
+export function blockedDependencyIds(plan: readonly PluginDependencyPlanItem[]): string[] {
+  return plan
+    .filter((item) => item.resolvable === 'none'
+      || (item.resolvable === 'catalog' && item.source?.kind === 'example'))
+    .map((item) => item.id)
+}
+
+/**
  * The single place that decides what the store lists.
  *
  * Pure: same inputs, same rows, in a stable order — installed first (so the thing
@@ -192,6 +330,12 @@ export function mergePluginRegistry(
 
   const rows: PluginRegistryRow[] = []
   const seen = new Set<string>()
+  // First record for an id wins, exactly as the row loop below does, so the plan and
+  // the row it belongs to can never disagree about which copy is the real one.
+  const installedById = new Map<string, InstalledPluginFacts>()
+  for (const plugin of installed) {
+    if (plugin?.id && !installedById.has(plugin.id)) installedById.set(plugin.id, plugin)
+  }
 
   for (const plugin of installed) {
     if (!plugin?.id || HIDDEN_IDS.has(plugin.id) || seen.has(plugin.id)) continue
@@ -204,6 +348,21 @@ export function mergePluginRegistry(
     const source: PluginCatalogSource = plugin.sourceKind
       ? { kind: plugin.sourceKind }
       : entry?.source ?? { kind: plugin.builtin ? 'builtin' : 'git' }
+    // A blocked row already names what it is missing; the plan says what can be DONE
+    // about it, which is the difference between a dead end and a button.
+    const plan = status === 'needs-dependency'
+      ? planFrom(
+        (plugin.missingDependencies ?? []).map((missing) => ({
+          id: missing.id,
+          range: missing.range,
+          reason: missing.reason,
+          ...(missing.found ? { found: missing.found } : {}),
+        })),
+        catalogById,
+        installedById,
+      )
+      : []
+    const blockedBy = blockedDependencyIds(plan)
     rows.push({
       id: plugin.id,
       name: plugin.name || entry?.name || plugin.id,
@@ -220,6 +379,8 @@ export function mergePluginRegistry(
       ...(plugin.capabilities?.length ? { capabilities: plugin.capabilities } : {}),
       ...(plugin.missingConfig?.length ? { missingConfig: plugin.missingConfig } : {}),
       ...(plugin.missingDependencies?.length ? { missingDependencies: plugin.missingDependencies } : {}),
+      ...(plan.length ? { dependencyPlan: plan } : {}),
+      ...(blockedBy.length ? { blockedBy } : {}),
       ...(plugin.reason ? { reason: plugin.reason } : {}),
       ...(plugin.error ? { error: plugin.error } : {}),
       configurable: plugin.configurable ?? false,
@@ -231,6 +392,29 @@ export function mergePluginRegistry(
 
   for (const entry of catalogById.values()) {
     if (seen.has(entry.id)) continue
+    // Only what is NOT already met: a requirement that is on, at a version the range
+    // accepts, is not something to tell the user about before they install.
+    const plan = planFrom(
+      Object.entries(entry.requires ?? {}).flatMap(([id, range]) => {
+        const facts = installedById.get(id)
+        if (isSatisfiedBy(facts, range)) return []
+        // An installed copy that CANNOT match the range is a version problem, not a
+        // missing plugin: no button fixes it, and the row has to say which version is
+        // in the way instead of quietly installing a dependent that would block.
+        const version = facts?.version
+        const conflict = !!version && !satisfiesDependencyRange(version, range)
+        const reason = conflict ? 'version' as const : facts && !version ? 'unversioned' as const : undefined
+        return [{
+          id,
+          range,
+          ...(reason ? { reason } : {}),
+          ...(conflict && version ? { found: version } : {}),
+        }]
+      }),
+      catalogById,
+      installedById,
+    )
+    const blockedBy = blockedDependencyIds(plan)
     rows.push({
       id: entry.id,
       name: entry.name || entry.id,
@@ -242,6 +426,8 @@ export function mergePluginRegistry(
       installed: false,
       status: 'available',
       builtin: entry.source.kind === 'builtin',
+      ...(plan.length ? { dependencyPlan: plan } : {}),
+      ...(blockedBy.length ? { blockedBy } : {}),
       configurable: false,
       catalog: true,
       toggleable: false,
@@ -258,6 +444,17 @@ export function mergePluginRegistry(
     installedCount: installedRows.length,
     availableCount: availableRows.length,
   }
+}
+
+/** `requires`, or nothing at all — an empty map would make every row carry a field the
+ *  store then has to ignore. Non-string ranges are dropped, same as `adds`. */
+function requiresFrom(raw: unknown): { requires?: Record<string, string> } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const requires: Record<string, string> = {}
+  for (const [id, range] of Object.entries(raw as Record<string, unknown>)) {
+    if (id.trim() && typeof range === 'string') requires[id] = range
+  }
+  return Object.keys(requires).length > 0 ? { requires } : {}
 }
 
 /** Parse a catalog document defensively: a bad entry is skipped, never fatal. */
@@ -289,6 +486,7 @@ export function parsePluginCatalog(raw: unknown): PluginCatalogEntry[] {
       source,
       ...(typeof entry.homepage === 'string' ? { homepage: entry.homepage } : {}),
       ...(typeof entry.docs === 'string' ? { docs: entry.docs } : {}),
+      ...(requiresFrom(entry.requires)),
     })
   }
   return out

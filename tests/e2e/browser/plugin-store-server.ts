@@ -8,10 +8,20 @@
  * What it provisions in a throwaway home:
  *   - walnut-time linked into `plugins/` exactly the way `walnut-plugin link` writes
  *     it, so the Installed list has a real plugin with a real App to lose.
+ *   - `alpha`, plus `beta` and `delta` which both declare `dependencies: { alpha: '^1' }`,
+ *     so the store has a real dependency to break: an OFF on alpha is refused until the
+ *     user agrees, and both dependents must come back on their own when alpha does. TWO
+ *     dependents on purpose: each blocked row offers its own "Turn on Alpha", and one
+ *     shared test id across rows would make the second one unclickable. They register
+ *     nothing, so nothing else in the app moves.
  *   - a USER catalog overlay (`plugin-registry.json` in the data home) adding one git
  *     entry, so the Available list has an entry whose Install button prefills the
- *     real install form. Nothing installs it: the point is that the trust checkbox
- *     still gates the Add button.
+ *     real install form (nothing installs it: the point is that the trust checkbox
+ *     still gates the Add button), plus `gamma`, a git entry that `requires` alpha, so
+ *     an available row can say what installing it would also pull in, plus `zeta`, the
+ *     entry `epsilon` waits for.
+ *   - `epsilon`, a plugin inside a source clone that waits on `zeta`, so a blocked row
+ *     can offer an install and prove that the offer ASKS first.
  *
  * Never :3456 and never the developer's data: OPEN_WALNUT_HOME, HOME and the daemon
  * dirs all point inside one temp directory that is removed on shutdown.
@@ -45,6 +55,14 @@ await fs.rm(tmpBase, { recursive: true, force: true })
 await fs.mkdir(path.join(tmpBase, 'tasks'), { recursive: true })
 await fs.mkdir(path.join(tmpBase, 'plugins'), { recursive: true })
 
+/**
+ * A configured plugin source whose clone already exists on disk (see `epsilon` below).
+ * Nothing is ever fetched from it; `slugForUrl` derives the directory name, which is why
+ * the clone dir and this URL have to agree.
+ */
+const dependencySourceUrl = 'https://example.invalid/epsilon-pack.git'
+const dependencySourceSlug = 'epsilon-pack'
+
 // No live model calls from a fixture: the main agent points at the repo's mock CLI.
 const mockMainAgent = path.join(repoRoot, 'tests/providers/mock-main-agent.mjs')
 await fs.writeFile(path.join(tmpBase, 'config.yaml'), JSON.stringify({
@@ -57,6 +75,7 @@ await fs.writeFile(path.join(tmpBase, 'config.yaml'), JSON.stringify({
     triage: { debounce_minutes: 0 },
   },
   providers: { 'store-cli': { api: 'claude-cli', claude_cli_command: mockMainAgent } },
+  plugin_sources: [{ url: dependencySourceUrl }],
 }, null, 2))
 
 await fs.writeFile(path.join(tmpBase, 'tasks', 'tasks.json'), JSON.stringify({ version: 1, tasks: [] }, null, 2))
@@ -67,6 +86,7 @@ await fs.writeFile(path.join(tmpBase, 'tasks', 'tasks.json'), JSON.stringify({ v
  * the parser accepts.
  */
 const overlayEntryId = 'store-fixture-plugin'
+const requiresEntryId = 'gamma'
 await fs.writeFile(path.join(tmpBase, 'plugin-registry.json'), JSON.stringify({
   version: 1,
   plugins: [
@@ -77,8 +97,66 @@ await fs.writeFile(path.join(tmpBase, 'plugin-registry.json'), JSON.stringify({
       adds: ['App'],
       source: { kind: 'git', url: 'https://example.invalid/store-fixture-plugin.git' },
     },
+    {
+      // Describes a dependency it never installs: the row says "Also needs: Alpha"
+      // whenever alpha is not running, and installing gamma is still a separate yes.
+      id: requiresEntryId,
+      name: 'Gamma',
+      description: 'A catalog entry that needs another plugin.',
+      source: { kind: 'git', url: 'https://example.invalid/gamma.git' },
+      requires: { alpha: '^1' },
+    },
+    {
+      // What `epsilon` is waiting for. It is in the catalog and NOT on this machine, so
+      // epsilon's blocked row can offer an install — through the consent list.
+      id: 'zeta',
+      name: 'Zeta',
+      description: 'A catalog entry another plugin depends on.',
+      source: { kind: 'git', url: 'https://example.invalid/zeta.git' },
+    },
   ],
 }, null, 2))
+
+/**
+ * Linked plugins with a real dependency edge. They activate and register nothing: the
+ * store's dependency behaviour is the subject, so anything else they contributed would be
+ * a second variable in every assertion.
+ */
+async function writeFixturePlugin(
+  id: string,
+  manifest: Record<string, unknown>,
+  baseDir = path.join(tmpBase, 'plugins'),
+): Promise<void> {
+  const dir = path.join(baseDir, id)
+  await fs.mkdir(path.join(dir, 'dist'), { recursive: true })
+  await fs.writeFile(path.join(dir, 'manifest.json'), JSON.stringify({
+    id,
+    version: '1.0.0',
+    apiVersion: 1,
+    engines: { walnut: '>=0.0.0' },
+    server: 'dist/server.mjs',
+    ...manifest,
+  }, null, 2))
+  await fs.writeFile(path.join(dir, 'dist', 'server.mjs'), 'export function activate() {}\nexport function deactivate() {}\n')
+}
+
+await writeFixturePlugin('alpha', { name: 'Alpha' })
+await writeFixturePlugin('beta', { name: 'Beta', dependencies: { alpha: '^1' } })
+await writeFixturePlugin('delta', { name: 'Delta', dependencies: { alpha: '^1' } })
+
+/**
+ * A plugin that came from a SOURCE (a clone dir under plugin-stores/, exactly the shape
+ * `POST /api/plugin-sources` leaves behind) and waits on a dependency only the catalog
+ * can supply. That combination is what puts an "Install Zeta…" button on a blocked row,
+ * and the button opens the consent list rather than cloning: a catalog file naming a URL
+ * is not the user agreeing to run its code. Nothing is ever fetched — the test stops at
+ * the consent panel, which is the whole point of it existing.
+ */
+await writeFixturePlugin(
+  'epsilon',
+  { name: 'Epsilon', dependencies: { zeta: '^1' } },
+  path.join(tmpBase, 'plugin-stores', dependencySourceSlug),
+)
 
 // Install walnut-time the documented author way: a symlink in the data home's
 // plugins/ directory, which is exactly what `walnut-plugin link` writes.
@@ -108,7 +186,14 @@ const viteServer = await createViteServer({
 })
 await viteServer.listen()
 
-const fixture = { port, home: tmpBase, overlayEntryId }
+const fixture = {
+  port,
+  home: tmpBase,
+  overlayEntryId,
+  requiresEntryId,
+  dependencySourceSlug,
+  dependencySourceUrl,
+}
 await fs.writeFile(path.join(tmpBase, 'fixture.json'), JSON.stringify(fixture, null, 2))
 console.log(`PLUGIN_STORE_READY ${JSON.stringify(fixture)}`)
 

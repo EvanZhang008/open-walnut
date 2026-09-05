@@ -29,6 +29,7 @@ import {
   disableLoadedPlugin,
   disposeLoadedPlugins,
   getPluginLifecycleRecords,
+  loadNewPlugins,
   loadPlugins,
   reloadLoadedPlugin,
 } from '../../src/core/integration-loader.js'
@@ -86,7 +87,7 @@ export async function activate(walnut) {
       return plugin
     },
     reload: (pluginId) => reloadLoadedPlugin(registry, pluginId),
-    disable: (pluginId) => disableLoadedPlugin(registry, pluginId),
+    disable: (pluginId, opts) => disableLoadedPlugin(registry, pluginId, opts ?? {}),
     clearQuarantine: async (pluginId) => { await clearPluginQuarantine(registry, pluginId) },
     cloudMode: false,
   }))
@@ -98,6 +99,29 @@ export async function activate(walnut) {
   const address = server.address() as AddressInfo
   setPluginApiBase(`http://127.0.0.1:${address.port}`)
 })
+
+/** A second plugin on disk that runs on another one, discovered without a full reload. */
+async function addDependentPlugin(id: string, dependencies: Record<string, string>): Promise<void> {
+  const dir = path.join(WALNUT_HOME, 'plugins', id)
+  await fs.mkdir(path.join(dir, 'dist'), { recursive: true })
+  await fs.writeFile(path.join(dir, 'manifest.json'), JSON.stringify({
+    id,
+    name: id,
+    version: '1.0.0',
+    apiVersion: 1,
+    engines: { walnut: '>=0.0.0' },
+    server: 'dist/server.mjs',
+    dependencies,
+  }))
+  await fs.writeFile(path.join(dir, 'dist', 'server.mjs'), 'export function activate() {}\n')
+  await loadNewPlugins(registry)
+}
+
+/** id → state for the ids under test, so an assertion reads as the whole picture. */
+function states(...ids: string[]): Record<string, string> {
+  const records = getPluginLifecycleRecords(registry)
+  return Object.fromEntries(ids.map((id) => [id, records.find((record) => record.id === id)?.state]))
+}
 
 afterEach(async () => {
   setPluginApiBase(undefined)
@@ -268,6 +292,33 @@ describe('primary Plugin runtime control relay', () => {
       '__server__',
       { pluginId: 'sample', operation: 'disable' },
     )).resolves.toMatchObject({ ok: true, result: { plugin: { id: 'sample', state: 'disabled' } } })
+  })
+
+  it('refuses a relayed turn-off in an envelope the replica can decode, and honours the cascade', async () => {
+    // The whole chain for real: relay in, loopback POST to the primary's own disable route,
+    // the loader's refusal on the way back out. What crosses the bridge is a message and a
+    // status, so the dependents ride in the envelope both ends agree on.
+    await addDependentPlugin('dependent', { sample: '^1' })
+
+    const refused = await handleSessionControlRelay(
+      'server.plugin-manage',
+      '__server__',
+      { pluginId: 'sample', operation: 'disable' },
+    )
+    expect(refused.ok).toBe(false)
+    expect(String((refused as { error?: unknown }).error)).toMatch(
+      /^has-dependents\[dependent\] Plugin "sample" cannot be turned off/,
+    )
+    // A refusal changes nothing: both are still running.
+    expect(states('sample', 'dependent')).toEqual({ sample: 'active', dependent: 'active' })
+
+    await expect(handleSessionControlRelay(
+      'server.plugin-manage',
+      '__server__',
+      { pluginId: 'sample', operation: 'disable', cascade: true },
+    )).resolves.toMatchObject({ ok: true, result: { plugin: { id: 'sample', state: 'disabled' } } })
+    // The dependent is BLOCKED, not turned off, so bringing sample back brings it back too.
+    expect(states('sample', 'dependent')).toEqual({ sample: 'disabled', dependent: 'needs-dependency' })
   })
 
   it('rejects stale hashes, unsafe ids, oversized bodies, and inactive Plugins precisely', async () => {

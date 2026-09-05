@@ -8,11 +8,13 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
+  blockedDependencyIds,
   isToggleable,
   loadPluginCatalog,
   mergePluginRegistry,
   overlayPluginCatalog,
   parsePluginCatalog,
+  planPluginDependencies,
   storeStatusFor,
   type InstalledPluginFacts,
   type PluginCatalogEntry,
@@ -195,6 +197,233 @@ describe('mergePluginRegistry', () => {
   })
 })
 
+/**
+ * A dependency plan is the difference between a dead-end row ("needs another plugin")
+ * and a row with a button on it. It is computed here, purely, from three facts: what the
+ * row asks for, what the catalog offers, and what is already on this machine.
+ */
+describe('dependency plans', () => {
+  const alphaGit: PluginCatalogEntry = {
+    id: 'alpha',
+    name: 'Alpha',
+    source: { kind: 'git', url: 'https://example.invalid/alpha.git' },
+  }
+  const alphaExample: PluginCatalogEntry = {
+    id: 'alpha',
+    name: 'Alpha',
+    source: { kind: 'example', path: 'examples/plugins/alpha' },
+  }
+  const alphaBuiltin: PluginCatalogEntry = { id: 'alpha', name: 'Alpha', source: { kind: 'builtin' } }
+
+  it('offers the catalog source when the dependency is not on this machine', () => {
+    expect(planPluginDependencies([{ id: 'alpha', range: '^1' }], [alphaGit], [])).toEqual([
+      { id: 'alpha', range: '^1', resolvable: 'catalog', source: alphaGit.source },
+    ])
+  })
+
+  it('offers nothing for a builtin entry that this build does not carry', () => {
+    // "Ships with Walnut" plus "absent from the lifecycle records" means it is not here at
+    // all: turning it on throws "not discovered", and there is no source to install.
+    expect(planPluginDependencies([{ id: 'alpha', range: '^1' }], [alphaBuiltin], [])).toEqual([
+      { id: 'alpha', range: '^1', resolvable: 'none' },
+    ])
+  })
+
+  it('withholds the switch where the plugin manager would refuse the activation', () => {
+    // needs-config / unsupported / quarantined take the config write and land straight back
+    // where they were, so "Turn on jira" would report a success that never happened.
+    for (const state of ['needs-config', 'unsupported', 'quarantined', 'needs-dependency']) {
+      expect(planPluginDependencies(
+        [{ id: 'alpha', range: '^1' }],
+        [alphaGit],
+        [installed({ id: 'alpha', state })],
+      )).toEqual([{ id: 'alpha', range: '^1', resolvable: 'none' }])
+    }
+    // Off, failed and never-activated CAN be switched on.
+    for (const state of ['disabled', 'failed', 'discovered']) {
+      expect(planPluginDependencies(
+        [{ id: 'alpha', range: '^1' }],
+        [alphaGit],
+        [installed({ id: 'alpha', state })],
+      )).toEqual([{ id: 'alpha', range: '^1', resolvable: 'installed' }])
+    }
+  })
+
+  it('says none when nothing on this machine or in the catalog can supply it', () => {
+    expect(planPluginDependencies([{ id: 'alpha', range: '^1' }], [], [])).toEqual([
+      { id: 'alpha', range: '^1', resolvable: 'none' },
+    ])
+  })
+
+  it('says installed when the dependency is here but not running', () => {
+    // The fix is a switch, not an install, so the two must not read the same.
+    expect(planPluginDependencies(
+      [{ id: 'alpha', range: '^1', reason: 'inactive' }],
+      [alphaGit],
+      [installed({ id: 'alpha', state: 'disabled' })],
+    )).toEqual([{ id: 'alpha', range: '^1', resolvable: 'installed' }])
+  })
+
+  it('refuses to promise a fix for a version, unversioned or cycle problem', () => {
+    // The catalog carries no version, so "install it from the catalog" would be a
+    // confident wrong answer; each of these is copy-only.
+    for (const reason of ['version', 'unversioned', 'cycle'] as const) {
+      expect(planPluginDependencies(
+        [{ id: 'alpha', range: '^2', reason }],
+        [alphaGit],
+        [installed({ id: 'alpha', state: 'active', version: '1.2.0' })],
+      )).toEqual([{ id: 'alpha', range: '^2', resolvable: 'none' }])
+    }
+  })
+
+  it('asks once per id and keeps the order it was given', () => {
+    const plan = planPluginDependencies(
+      [{ id: 'beta', range: '^1' }, { id: 'alpha', range: '^1' }, { id: 'alpha', range: '^2' }],
+      [alphaGit],
+      [],
+    )
+    expect(plan.map((item) => item.id)).toEqual(['beta', 'alpha'])
+    expect(plan[1]!.range).toBe('^1')
+  })
+
+  it('counts none and hand-linked example sources as blocking, nothing else', () => {
+    // An example lives in a checkout: only `walnut-plugin link` can install it, so a
+    // button there would be a control that cannot work.
+    expect(blockedDependencyIds(planPluginDependencies(
+      [{ id: 'alpha', range: '^1' }],
+      [alphaExample],
+      [],
+    ))).toEqual(['alpha'])
+    expect(blockedDependencyIds(planPluginDependencies([{ id: 'alpha', range: '^1' }], [], [])))
+      .toEqual(['alpha'])
+    expect(blockedDependencyIds(planPluginDependencies([{ id: 'alpha', range: '^1' }], [alphaGit], [])))
+      .toEqual([])
+  })
+})
+
+describe('mergePluginRegistry dependency plans', () => {
+  const alphaGit: PluginCatalogEntry = {
+    id: 'alpha',
+    name: 'Alpha',
+    source: { kind: 'git', url: 'https://example.invalid/alpha.git' },
+  }
+  const gammaNeedsAlpha: PluginCatalogEntry = {
+    id: 'gamma',
+    name: 'Gamma',
+    source: { kind: 'git', url: 'https://example.invalid/gamma.git' },
+    requires: { alpha: '^1' },
+  }
+
+  it('plans an available row from its requires, without touching row order', () => {
+    const { rows } = mergePluginRegistry(
+      [gammaNeedsAlpha, alphaGit, { id: 'zeta', name: 'Zeta', source: { kind: 'npm', spec: 'zeta' } }],
+      [installed({ id: 'beta', name: 'Beta', state: 'active' })],
+    )
+    expect(rows.map((row) => row.id)).toEqual(['beta', 'alpha', 'gamma', 'zeta'])
+    const gamma = rows.find((row) => row.id === 'gamma')!
+    expect(gamma.dependencyPlan).toEqual([
+      { id: 'alpha', range: '^1', resolvable: 'catalog', source: alphaGit.source },
+    ])
+    expect('blockedBy' in gamma).toBe(false)
+  })
+
+  it('leaves an available row alone when its requires are already running', () => {
+    const { rows } = mergePluginRegistry(
+      [gammaNeedsAlpha],
+      [installed({ id: 'alpha', name: 'Alpha', state: 'active', version: '1.0.0' })],
+    )
+    const gamma = rows.find((row) => row.id === 'gamma')!
+    expect('dependencyPlan' in gamma).toBe(false)
+    expect('blockedBy' in gamma).toBe(false)
+  })
+
+  it('names an available row as blocked when only a hand-run link could supply it', () => {
+    const { rows } = mergePluginRegistry(
+      [gammaNeedsAlpha, { id: 'alpha', name: 'Alpha', source: { kind: 'example', path: 'examples/plugins/alpha' } }],
+      [],
+    )
+    const gamma = rows.find((row) => row.id === 'gamma')!
+    expect(gamma.dependencyPlan).toEqual([
+      { id: 'alpha', range: '^1', resolvable: 'catalog', source: { kind: 'example', path: 'examples/plugins/alpha' } },
+    ])
+    expect(gamma.blockedBy).toEqual(['alpha'])
+  })
+
+  it('gives a blocked installed row a plan beside the reasons it already carries', () => {
+    const { rows } = mergePluginRegistry([alphaGit], [installed({
+      id: 'beta',
+      name: 'Beta',
+      state: 'needs-dependency',
+      reason: 'Missing dependencies: alpha@^1 (not installed)',
+      missingDependencies: [
+        { id: 'alpha', range: '^1', reason: 'absent', note: '"alpha" is not installed' },
+      ],
+    })])
+    const beta = rows.find((row) => row.id === 'beta')!
+    expect(beta.missingDependencies).toHaveLength(1)
+    expect(beta.dependencyPlan).toEqual([
+      { id: 'alpha', range: '^1', resolvable: 'catalog', source: alphaGit.source },
+    ])
+    expect(beta.blockedBy).toBeUndefined()
+  })
+
+  it('plans a blocked row whose dependency is installed but switched off', () => {
+    const { rows } = mergePluginRegistry([], [
+      installed({ id: 'alpha', name: 'Alpha', state: 'disabled', version: '1.0.0' }),
+      installed({
+        id: 'beta',
+        name: 'Beta',
+        state: 'needs-dependency',
+        missingDependencies: [
+          { id: 'alpha', range: '^1', found: '1.0.0', reason: 'inactive', note: '"alpha" was turned off' },
+        ],
+      }),
+    ])
+    expect(rows.find((row) => row.id === 'beta')!.dependencyPlan).toEqual([
+      { id: 'alpha', range: '^1', resolvable: 'installed' },
+    ])
+  })
+
+  it('names the version in the way, and offers nothing that would not fix it', () => {
+    // Alpha 1.0.0 IS here and running; gamma wants ^2. Nothing in the store can change
+    // that, so the row carries the fact and no button.
+    const { rows } = mergePluginRegistry(
+      [{ ...gammaNeedsAlpha, requires: { alpha: '^2' } }, alphaGit],
+      [installed({ id: 'alpha', name: 'Alpha', state: 'active', version: '1.0.0' })],
+    )
+    const gamma = rows.find((row) => row.id === 'gamma')!
+    expect(gamma.dependencyPlan).toEqual([
+      { id: 'alpha', range: '^2', found: '1.0.0', resolvable: 'none' },
+    ])
+    expect(gamma.blockedBy).toEqual(['alpha'])
+  })
+
+  it('treats a dependency with no version in its manifest as unfixable, not as absent', () => {
+    // Nothing to compare the range against, and no `found` to print: copy only, and the
+    // row says so rather than offering an install that would change nothing.
+    const { rows } = mergePluginRegistry(
+      [gammaNeedsAlpha],
+      [installed({ id: 'alpha', name: 'Alpha', state: 'active' })],
+    )
+    const gamma = rows.find((row) => row.id === 'gamma')!
+    expect(gamma.dependencyPlan).toEqual([{ id: 'alpha', range: '^1', resolvable: 'none' }])
+    expect(gamma.blockedBy).toEqual(['alpha'])
+  })
+
+  it('adds nothing at all to rows with no unmet dependencies', () => {
+    // Byte-identical to before the plan existed: a row without dependencies must not
+    // grow a field the store then has to explain away.
+    const before = mergePluginRegistry(
+      [{ id: 'acme-notes', name: 'Acme Notes', source: { kind: 'git', url: 'https://example.invalid/a.git' } }],
+      [installed({ id: 'plain', name: 'Plain', state: 'active' })],
+    )
+    for (const row of before.rows) {
+      expect('dependencyPlan' in row).toBe(false)
+      expect('blockedBy' in row).toBe(false)
+    }
+  })
+})
+
 describe('parsePluginCatalog', () => {
   it('skips junk entries instead of failing the whole catalog', () => {
     const entries = parsePluginCatalog({
@@ -209,6 +438,15 @@ describe('parsePluginCatalog', () => {
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({ id: 'ok', name: 'Ok', adds: ['App'] })
     expect(entries[0]!.source).toEqual({ kind: 'npm', spec: 'ok@1.0.0' })
+  })
+
+  it('reads requires, dropping junk ranges and an empty map', () => {
+    const [entry] = parsePluginCatalog({
+      plugins: [{ id: 'gamma', requires: { alpha: '^1', beta: 7, '  ': '^1' } }],
+    })
+    expect(entry!.requires).toEqual({ alpha: '^1' })
+    expect('requires' in parsePluginCatalog({ plugins: [{ id: 'gamma', requires: {} }] })[0]!).toBe(false)
+    expect('requires' in parsePluginCatalog({ plugins: [{ id: 'gamma', requires: ['alpha'] }] })[0]!).toBe(false)
   })
 
   it('defaults an unknown or absent source kind to git rather than inventing one', () => {

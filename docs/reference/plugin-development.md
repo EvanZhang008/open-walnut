@@ -628,6 +628,8 @@ Git sources record their commit SHA. npm sources record the exact version and in
 
 The REST API accepts `{ "url": "...", "ref": "..." }`, a `walnut_plugin_source` share snippet, or `{ "spec": "@scope/my-plugin@1.2.3" }` at `POST /api/plugin-sources`. List, explicit update, check, and remove operations use `/api/plugin-sources/<slug>`.
 
+A plugin that arrives needing another plugin comes back as `pendingDependencies` on the 201, and nothing else is installed. `POST /api/plugin-sources/<slug>/dependencies` installs that plan after the user has seen the source list (git and npm catalog entries only, three hops at most; an example entry returns its `walnut-plugin link` command instead). Turning off a plugin that others declare in `dependencies` answers 409 `{ code: "has-dependents", dependents }`; `POST /api/plugin-runtime/<id>/disable` with `{ "cascade": true }` turns it off anyway and the dependents move to `needs-dependency` without being switched off themselves.
+
 Because Walnut installs with lifecycle scripts disabled, your published package must already contain its built artifacts. A plugin that expects `postinstall` or `prepare` to build it will install and then fail to load.
 
 ## Troubleshooting

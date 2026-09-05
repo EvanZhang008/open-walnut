@@ -1470,9 +1470,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/notes-v2', notesV2Router)
   app.use('/api/repositories', repositoriesRouter)
   app.use('/api/integrations', integrationsRouter)
+  // ON, shared by the store's switch and its "install the missing dependency" path, so a
+  // dependency is turned on through exactly the steps a manual switch takes.
+  const reloadPlugin = (pluginId: string) => runPluginMutation(async () => {
+    await stopPluginSyncPolling(pluginId)
+    try {
+      const plugin = await reloadLoadedPlugin(registry, pluginId)
+      bus.emit('plugin:runtime-changed', { pluginId, action: 'reloaded' }, ['web-ui'], { source: 'plugin-runtime' })
+      return plugin
+    } finally { startPluginSyncPolling() }
+  })
   // Lazy indirection: pluginSoftReload is assigned later in startup, after the
   // initial loadPlugins — the router must call the CURRENT value, not capture it.
-  app.use('/api/plugin-sources', createPluginSourcesRouter(() => pluginSoftReload()))
+  app.use('/api/plugin-sources', createPluginSourcesRouter(() => pluginSoftReload(), { reloadPlugin }))
   app.use('/api/plugin-runtime', createPluginRuntimeRouter({
     registry,
     list: () => getPluginLifecycleRecords(registry),
@@ -1482,18 +1492,18 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if (!plugin) throw new Error(`Plugin "${pluginId}" was not discovered`)
       return plugin
     },
-    reload: (pluginId) => runPluginMutation(async () => {
-      await stopPluginSyncPolling(pluginId)
+    reload: reloadPlugin,
+    disable: (pluginId, opts) => runPluginMutation(async () => {
+      // A cascade also tears down the DEPENDENTS, and a poll timer whose plugin was just
+      // unregistered keeps calling into code that is gone. The dependency graph lives in
+      // the loader, so this stops every loop rather than guessing which ones; the restart
+      // below is idempotent and only re-arms plugins still in the registry. The cost is
+      // that unrelated sync plugins take their 60s first-tick delay again, which is the
+      // right trade for a rare, deliberate action.
+      if (opts?.cascade) await stopPluginSyncPolling()
+      else await stopPluginSyncPolling(pluginId)
       try {
-        const plugin = await reloadLoadedPlugin(registry, pluginId)
-        bus.emit('plugin:runtime-changed', { pluginId, action: 'reloaded' }, ['web-ui'], { source: 'plugin-runtime' })
-        return plugin
-      } finally { startPluginSyncPolling() }
-    }),
-    disable: (pluginId) => runPluginMutation(async () => {
-      await stopPluginSyncPolling(pluginId)
-      try {
-        const plugin = await disableLoadedPlugin(registry, pluginId)
+        const plugin = await disableLoadedPlugin(registry, pluginId, opts ?? {})
         bus.emit('plugin:runtime-changed', { pluginId, action: 'disabled' }, ['web-ui'], { source: 'plugin-runtime' })
         return plugin
       } finally { startPluginSyncPolling() }

@@ -1,6 +1,9 @@
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import express from 'express'
 import request from 'supertest'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const sourceMocks = vi.hoisted(() => ({
   addSource: vi.fn(),
@@ -23,14 +26,15 @@ vi.mock('../../../src/core/integration-loader.js', () => ({
   getUnsupportedPlugins: vi.fn(() => []),
   getDuplicatePluginIds: vi.fn(() => []),
   getUnmetDependencyPlugins: vi.fn(() => []),
+  getPluginLifecycleRecords: vi.fn(() => []),
 }))
 
-import { createPluginSourcesRouter } from '../../../src/web/routes/plugin-sources.js'
+import { createPluginSourcesRouter, type PluginSourcesRouterDeps } from '../../../src/web/routes/plugin-sources.js'
 
-function app() {
+function app(deps: PluginSourcesRouterDeps = {}, softReload = async () => undefined) {
   const instance = express()
   instance.use(express.json({ strict: false }))
-  instance.use('/api/plugin-sources', createPluginSourcesRouter(async () => undefined))
+  instance.use('/api/plugin-sources', createPluginSourcesRouter(softReload, deps))
   return instance
 }
 
@@ -136,5 +140,294 @@ describe('Plugin sources route boundaries', () => {
     const check = await request(app()).post('/api/plugin-sources/demo/check').expect(500)
     expect(check.type).toBe('application/json')
     expect(check.body).toEqual({ error: 'state unreadable' })
+  })
+})
+
+/**
+ * Installing a source installs THAT source. Anything its plugins turn out to need is
+ * reported, then installed only when the user says yes a second time — the consent is
+ * the point, so both halves are pinned here: the first response must add nothing extra,
+ * and the second must add exactly what it named.
+ */
+describe('Two-phase dependency install', () => {
+  let home = ''
+  /** Sources that really exist, so "nothing else was installed" is a length, not a hope. */
+  let installedSources: Array<Record<string, unknown>> = []
+
+  beforeAll(async () => {
+    home = await fs.mkdtemp(path.join(os.tmpdir(), 'plugin-sources-deps-'))
+  })
+
+  afterAll(async () => {
+    await fs.rm(home, { recursive: true, force: true })
+  })
+
+  /** The user's catalog overlay, re-read on every request, so each test can describe a
+   *  different world without a new server. */
+  async function writeCatalog(plugins: unknown[]): Promise<void> {
+    await fs.writeFile(path.join(home, 'plugin-registry.json'), JSON.stringify({ version: 1, plugins }))
+  }
+
+  function view(slug: string, plugins: Array<{ id: string; name?: string }> = []) {
+    return {
+      slug,
+      kind: 'git' as const,
+      url: `https://example.test/${slug}.git`,
+      enabled: true,
+      cloned: true,
+      plugins: plugins.map((plugin) => ({
+        dir: `/tmp/${plugin.id}`,
+        id: plugin.id,
+        name: plugin.name ?? plugin.id,
+        version: '1.0.0',
+      })),
+    }
+  }
+
+  function blocked(id: string, missing: Array<{ id: string; range: string; reason?: string }>) {
+    return {
+      id,
+      name: id,
+      missing: missing.map((dep) => ({
+        id: dep.id,
+        range: dep.range,
+        reason: dep.reason ?? 'absent',
+        note: `"${dep.id}" is not installed`,
+      })),
+    }
+  }
+
+  async function unmet(plugins: unknown[]): Promise<void> {
+    const loader = await import('../../../src/core/integration-loader.js')
+    vi.mocked(loader.getUnmetDependencyPlugins).mockReturnValue(plugins as never)
+  }
+
+  async function lifecycle(records: unknown[]): Promise<void> {
+    const loader = await import('../../../src/core/integration-loader.js')
+    vi.mocked(loader.getPluginLifecycleRecords).mockReturnValue(records as never)
+  }
+
+  beforeEach(async () => {
+    installedSources = []
+    sourceMocks.listSources.mockImplementation(async () => installedSources)
+    sourceMocks.addSource.mockImplementation(async (url: string) => {
+      const slug = /\/([^/]+)\.git$/.exec(url)?.[1] ?? 'added'
+      const added = view(slug, [{ id: slug }])
+      installedSources.push(added)
+      return added
+    })
+    sourceMocks.addNpmSource.mockImplementation(async (spec: string) => {
+      const added = { ...view(spec, [{ id: spec }]), kind: 'npm' as const, spec }
+      installedSources.push(added)
+      return added
+    })
+    await writeCatalog([])
+    await unmet([])
+    await lifecycle([])
+  })
+
+  it('installs only what was asked for, and names what is still missing', async () => {
+    await writeCatalog([
+      { id: 'alpha', name: 'Alpha', source: { kind: 'git', url: 'https://example.test/alpha.git' } },
+    ])
+    await unmet([blocked('beta', [{ id: 'alpha', range: '^1' }])])
+
+    const response = await request(app({ walnutHome: home }))
+      .post('/api/plugin-sources')
+      .send({ url: 'https://example.test/beta.git' })
+      .expect(201)
+
+    // ONE source, the requested one. The dependency is described, not installed.
+    expect(installedSources).toHaveLength(1)
+    expect(installedSources[0]!.slug).toBe('beta')
+    expect(sourceMocks.addNpmSource).not.toHaveBeenCalled()
+    expect(response.body.pendingDependencies).toEqual([
+      { id: 'alpha', range: '^1', resolvable: 'catalog', source: { kind: 'git', url: 'https://example.test/alpha.git' } },
+    ])
+  })
+
+  it('leaves pendingDependencies off an install that needs nothing', async () => {
+    const response = await request(app({ walnutHome: home }))
+      .post('/api/plugin-sources')
+      .send({ url: 'https://example.test/beta.git' })
+      .expect(201)
+
+    expect('pendingDependencies' in response.body).toBe(false)
+  })
+
+  it('installs the plan through the ordinary installers on the second yes', async () => {
+    await writeCatalog([
+      { id: 'alpha', name: 'Alpha', source: { kind: 'git', url: 'https://example.test/alpha.git' } },
+    ])
+    installedSources.push(view('beta', [{ id: 'beta' }]))
+    await unmet([blocked('beta', [{ id: 'alpha', range: '^1' }])])
+    const softReload = vi.fn(async () => undefined)
+
+    const response = await request(app({ walnutHome: home }, softReload))
+      .post('/api/plugin-sources/beta/dependencies')
+      .expect(200)
+
+    expect(sourceMocks.addSource).toHaveBeenCalledWith('https://example.test/alpha.git', undefined)
+    expect(response.body.installed).toEqual([
+      { id: 'alpha', action: 'installed', kind: 'git', slug: 'alpha', url: 'https://example.test/alpha.git' },
+    ])
+    expect(response.body.skipped).toEqual([])
+    expect(response.body.plugins.slug).toBe('beta')
+    // One reload for the batch: the additive load path brings the dependent back itself.
+    expect(softReload).toHaveBeenCalledTimes(1)
+    expect(installedSources).toHaveLength(2)
+  })
+
+  it('installs an npm dependency through the npm installer', async () => {
+    await writeCatalog([{ id: 'alpha', name: 'Alpha', source: { kind: 'npm', spec: 'alpha@1.0.0' } }])
+    installedSources.push(view('beta', [{ id: 'beta' }]))
+    await unmet([blocked('beta', [{ id: 'alpha', range: '^1' }])])
+
+    const response = await request(app({ walnutHome: home }))
+      .post('/api/plugin-sources/beta/dependencies')
+      .expect(200)
+
+    expect(sourceMocks.addNpmSource).toHaveBeenCalledWith('alpha@1.0.0')
+    expect(response.body.installed).toEqual([
+      { id: 'alpha', action: 'installed', kind: 'npm', slug: 'alpha@1.0.0', spec: 'alpha@1.0.0' },
+    ])
+  })
+
+  it('never installs an example source, and hands back the command that would', async () => {
+    await writeCatalog([
+      { id: 'alpha', name: 'Alpha', source: { kind: 'example', path: 'examples/plugins/alpha' } },
+    ])
+    installedSources.push(view('beta', [{ id: 'beta' }]))
+    await unmet([blocked('beta', [{ id: 'alpha', range: '^1' }])])
+    const softReload = vi.fn(async () => undefined)
+
+    const response = await request(app({ walnutHome: home }, softReload))
+      .post('/api/plugin-sources/beta/dependencies')
+      .expect(200)
+
+    expect(response.body.installed).toEqual([])
+    expect(response.body.skipped).toEqual([
+      { id: 'alpha', reason: 'example', command: 'walnut-plugin link examples/plugins/alpha' },
+    ])
+    expect(sourceMocks.addSource).not.toHaveBeenCalled()
+    expect(softReload).not.toHaveBeenCalled()
+  })
+
+  it('turns a dependency that is already here back on instead of installing it again', async () => {
+    installedSources.push(view('beta', [{ id: 'beta' }]))
+    await lifecycle([{ id: 'alpha', name: 'Alpha', state: 'disabled', builtin: true, failureCount: 0 }])
+    await unmet([blocked('beta', [{ id: 'alpha', range: '^1', reason: 'inactive' }])])
+    const reloadPlugin = vi.fn(async () => ({ state: 'active' }))
+
+    const response = await request(app({ walnutHome: home, reloadPlugin }))
+      .post('/api/plugin-sources/beta/dependencies')
+      .expect(200)
+
+    expect(reloadPlugin).toHaveBeenCalledWith('alpha')
+    expect(response.body.installed).toEqual([{ id: 'alpha', action: 'turned-on' }])
+    expect(sourceMocks.addSource).not.toHaveBeenCalled()
+  })
+
+  it('never claims a turn-on the plugin refused, and says where it landed', async () => {
+    // A plugin can take the config write and come straight back to needs-config. Reporting
+    // "turned on" there is a confident wrong answer the user then acts on.
+    installedSources.push(view('beta', [{ id: 'beta' }]))
+    await lifecycle([{ id: 'alpha', name: 'Alpha', state: 'disabled', builtin: true, failureCount: 0 }])
+    await unmet([blocked('beta', [{ id: 'alpha', range: '^1', reason: 'inactive' }])])
+    const reloadPlugin = vi.fn(async () => ({ state: 'needs-config' }))
+
+    const response = await request(app({ walnutHome: home, reloadPlugin }))
+      .post('/api/plugin-sources/beta/dependencies')
+      .expect(200)
+
+    expect(response.body.installed).toEqual([])
+    expect(response.body.skipped).toEqual([{ id: 'alpha', reason: 'not-active', state: 'needs-config' }])
+  })
+
+  it('counts one repo once when two waiting ids come from it', async () => {
+    // Two unmet ids naming the same source is the common case (one repo, several plugins).
+    // Adding it twice is an error the user did nothing to deserve.
+    await writeCatalog([
+      { id: 'alpha', name: 'Alpha', source: { kind: 'git', url: 'https://example.test/pack.git' } },
+      { id: 'delta', name: 'Delta', source: { kind: 'git', url: 'https://example.test/pack.git' } },
+    ])
+    installedSources.push(view('beta', [{ id: 'beta' }]))
+    await unmet([blocked('beta', [{ id: 'alpha', range: '^1' }, { id: 'delta', range: '^1' }])])
+
+    const response = await request(app({ walnutHome: home }))
+      .post('/api/plugin-sources/beta/dependencies')
+      .expect(200)
+
+    expect(sourceMocks.addSource).toHaveBeenCalledTimes(1)
+    expect(response.body.installed).toEqual([
+      { id: 'alpha', action: 'installed', kind: 'git', slug: 'pack', url: 'https://example.test/pack.git' },
+      { id: 'delta', action: 'already-added', kind: 'git', slug: 'pack', url: 'https://example.test/pack.git' },
+    ])
+    expect(response.body.skipped).toEqual([])
+  })
+
+  it('stops rather than looping when two catalog entries require each other', async () => {
+    await writeCatalog([
+      { id: 'alpha', name: 'Alpha', source: { kind: 'git', url: 'https://example.test/alpha.git' }, requires: { omega: '^1' } },
+      { id: 'omega', name: 'Omega', source: { kind: 'git', url: 'https://example.test/omega.git' }, requires: { alpha: '^1' } },
+    ])
+    installedSources.push(view('beta', [{ id: 'beta' }]))
+    await unmet([blocked('beta', [{ id: 'alpha', range: '^1' }])])
+
+    const response = await request(app({ walnutHome: home }))
+      .post('/api/plugin-sources/beta/dependencies')
+      .expect(200)
+
+    // Each id is visited once, so the walk ends even though the requires do not.
+    expect(response.body.installed.map((entry: { id: string }) => entry.id)).toEqual(['alpha', 'omega'])
+    expect(response.body.skipped).toEqual([])
+  })
+
+  it('follows a dependency chain three hops and refuses the fourth', async () => {
+    await writeCatalog([
+      { id: 'alpha', name: 'Alpha', source: { kind: 'git', url: 'https://example.test/alpha.git' }, requires: { hop2: '^1' } },
+      { id: 'hop2', name: 'Hop 2', source: { kind: 'git', url: 'https://example.test/hop2.git' }, requires: { hop3: '^1' } },
+      { id: 'hop3', name: 'Hop 3', source: { kind: 'git', url: 'https://example.test/hop3.git' }, requires: { hop4: '^1' } },
+      { id: 'hop4', name: 'Hop 4', source: { kind: 'git', url: 'https://example.test/hop4.git' } },
+    ])
+    installedSources.push(view('beta', [{ id: 'beta' }]))
+    await unmet([blocked('beta', [{ id: 'alpha', range: '^1' }])])
+
+    const response = await request(app({ walnutHome: home }))
+      .post('/api/plugin-sources/beta/dependencies')
+      .expect(200)
+
+    expect(response.body.installed.map((entry: { id: string }) => entry.id)).toEqual(['alpha', 'hop2', 'hop3'])
+    expect(response.body.skipped).toEqual([{ id: 'hop4', reason: 'depth' }])
+  })
+
+  it('says unresolvable rather than guessing, and reports an installer failure', async () => {
+    installedSources.push(view('beta', [{ id: 'beta' }]))
+    await unmet([blocked('beta', [{ id: 'ghost', range: '^1' }])])
+
+    const missing = await request(app({ walnutHome: home }))
+      .post('/api/plugin-sources/beta/dependencies')
+      .expect(200)
+    expect(missing.body.skipped).toEqual([{ id: 'ghost', reason: 'unresolvable' }])
+
+    await writeCatalog([
+      { id: 'alpha', name: 'Alpha', source: { kind: 'git', url: 'https://example.test/alpha.git' } },
+    ])
+    await unmet([blocked('beta', [{ id: 'alpha', range: '^1' }])])
+    sourceMocks.addSource.mockRejectedValueOnce(new Error('git clone failed'))
+    const failed = await request(app({ walnutHome: home }))
+      .post('/api/plugin-sources/beta/dependencies')
+      .expect(200)
+    expect(failed.body.skipped).toEqual([{ id: 'alpha', reason: 'error', error: 'git clone failed' }])
+  })
+
+  it('refuses an unknown or traversal-shaped slug before reading a catalog', async () => {
+    await request(app({ walnutHome: home }))
+      .post('/api/plugin-sources/..evil/dependencies')
+      .expect(400, { error: 'invalid slug' })
+    await request(app({ walnutHome: home }))
+      .post('/api/plugin-sources/orphan/dependencies')
+      .expect(404, { error: 'source not found' })
+    expect(sourceMocks.addSource).not.toHaveBeenCalled()
   })
 })
