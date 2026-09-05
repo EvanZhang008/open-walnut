@@ -35,6 +35,7 @@ import path from 'path'
 import { isSessionProcessAlive } from '../../utils/session-liveness.js'
 import { readPlanFromSession, buildPlanExecutionMessage } from '../../utils/plan-message.js'
 import { getFrequentDirs, compileFromSessions, recordLaunchPrefs, scoreFrequentDir } from '../../core/frequent-dirs.js'
+import { getAskWalnutLaunchPrefs, rememberAskWalnutLaunch } from '../../core/sessions/ask-walnut-launch.js'
 import type { SessionRecord, SessionMode, Task, SessionEffort } from '../../core/types.js'
 import { VALID_SESSION_MODEL_IDS, VALID_SESSION_EFFORT_IDS, resolveModelSwitchValue, sessionModelsAsCatalog } from '../../core/types.js'
 import { getHostModelCatalog, listHostModelCatalogs } from '../../core/host-model-catalog.js'
@@ -177,6 +178,19 @@ sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: N
         rawName: alias === h.hostname || undefined,
       }))
     res.json({ dirs: result, hosts: configuredHosts })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/sessions/ask-walnut-launch — the model/effort the user last picked
+// for an Ask Walnut session. The draft's walnut tab seeds its model pill from
+// this so the pill shows what the launch will actually carry (a folder draft
+// gets the same from working-dirs `lastLaunch`; WALNUT_HOME is never in there).
+// Display only: the quick-start route applies both fields itself at spawn.
+sessionsRouter.get('/ask-walnut-launch', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json(await getAskWalnutLaunchPrefs())
   } catch (err) {
     next(err)
   }
@@ -374,6 +388,14 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         }
         model = resolved
       }
+    } else if (isWalnutAgent && rawModel === undefined) {
+      // Ask Walnut names no model → the last one picked FOR an Ask Walnut
+      // session (see core/sessions/ask-walnut-launch). Applied HERE, not on the
+      // client, so a draft that never saw the memory (opened before the pick,
+      // a retry, a non-web caller) still launches on it — and can't erase it:
+      // only an explicit 'default' (the picker's Auto row) means "back to Auto".
+      const remembered = (await getAskWalnutLaunchPrefs()).model
+      if (remembered) model = resolveModelSwitchValue(remembered) ?? undefined
     }
 
     if (mode) {
@@ -540,15 +562,20 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       // fix-walnut launches don't count — that's a repair intent with no
       // model pick, not a preference for the Walnut checkout dir.
       // Ask Walnut doesn't count either: WALNUT_HOME is a server fact, not a
-      // folder preference the user picked.
+      // folder preference the user picked — its pick goes to its OWN memory
+      // (ask-walnut-launch), and only when the body NAMES a model: an absent
+      // key is "whatever is remembered" (applied above), 'default' is the
+      // explicit reset that clears it.
+      const rawPickerModel = typeof rawModel === 'string' && rawModel && rawModel !== 'default' ? rawModel : undefined
       if (!existingTaskId && !isFixWalnut && !isWalnutAgent) {
-        const rawPickerModel = typeof rawModel === 'string' && rawModel && rawModel !== 'default' ? rawModel : undefined
         recordLaunchPrefs(cwd, host ?? null, {
           model: rawPickerModel,
           // LaunchPrefs stores the persisted shape (explicit non-default engine
           // or absent), which is exactly normalizeEngine's contract.
           engine: normalizeEngine(engine),
         }).catch(() => {})
+      } else if (!existingTaskId && isWalnutAgent && rawModel !== undefined) {
+        rememberAskWalnutLaunch({ model: rawPickerModel }).catch(() => {})
       }
       // sessionId is present for native starts (see preassignedSessionId above).
       // Clients MUST treat it as optional — an ACP start omits it.

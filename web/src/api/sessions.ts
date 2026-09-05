@@ -700,6 +700,16 @@ export async function fetchWorkingDirs(): Promise<WorkingDirsResult> {
 /** Invalidate cache (e.g. after starting a new session) */
 export function invalidateWorkingDirsCache(): void { _workingDirsCache = null; _workingDirsFetching = null; }
 
+/** The model/effort the user last picked for an Ask Walnut session — the
+ *  Personal-AI counterpart of a folder's `lastLaunch`. `model` is the raw
+ *  picker value; absent = Auto. NOT cached: a pick made in a running Ask
+ *  Walnut session (its model/effort pill) must show on the very next draft, so
+ *  the walnut tab fetches this on every switch. Effort is applied server-side
+ *  at launch; the draft only displays the model. */
+export async function fetchAskWalnutLaunch(): Promise<{ model?: string; effort?: SessionEffort }> {
+  return apiGet('/api/sessions/ask-walnut-launch');
+}
+
 /**
  * SYNCHRONOUS peek at the working-dirs cache — `null` until a fetch has landed.
  *

@@ -146,7 +146,11 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut }: {
     }, 1_200);
     return () => window.clearTimeout(timer);
   }, [acpModels, engine, cwd]);
-  const selectedLabel = meta.model
+  // 'default' is walnut mode's EXPLICIT Auto (see onSwitch below): shown as
+  // Auto, sent as 'default' so the server can tell "reset to Auto" from "no
+  // pick" (which launches on the Ask Walnut launch memory instead).
+  const isAuto = !meta.model || meta.model === 'default';
+  const selectedLabel = !isAuto
     ? options.find((o) => o.value === meta.model)?.label ?? meta.model
     : autoResolved ? `Auto (${autoResolved})` : 'Auto';
   const acpPillLabel = meta.model ? shortAcpModelName(meta.model) : entry.displayName;
@@ -165,13 +169,17 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut }: {
       </button>
       {open && (
         <ModelPicker
-          currentModel={meta.model}
+          currentModel={isAuto ? undefined : meta.model}
           host={host ?? undefined}
           cwd={cwd}
           engine={engine}
           onSwitch={(model) => {
             setOpen(false);
-            onMetaChange((m) => ({ ...m, model: model || undefined }));
+            // Auto ('' from the picker) is `undefined` on a folder draft. In
+            // walnut mode it is the sentinel 'default': the launch memory is
+            // applied server-side to a launch that names NO model, so a
+            // hand-picked Auto must be spelled out or it could never win.
+            onMetaChange((m) => ({ ...m, model: model || (walnut ? 'default' : undefined) }));
           }}
           onClose={() => setOpen(false)}
           // A draft can still change provider — flipping clears the model: the
@@ -182,7 +190,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut }: {
           providerLockReason={(provider) => (walnut && provider !== 'claude'
             ? 'Ask Walnut runs on the claude engine (the Personal AI profile rides its system prompt)'
             : engineLockReason(engineEntry(catalog, provider), host))}
-          autoRow={{ resolvedLabel: autoResolved, active: !meta.model }}
+          autoRow={{ resolvedLabel: autoResolved, active: isAuto }}
           // ACP draft: selection lands in meta.model (same field the claude
           // pane uses — the launch payload already carries it) and rides the
           // spawn as acpConfig. '' = back to the engine's default.

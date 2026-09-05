@@ -151,7 +151,13 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   if (walnutAgent) {
     const { getConfig } = await import('../config-manager.js');
     const { buildLaneProfile } = await import('./personal-ai-lane.js');
+    const { getAskWalnutLaunchPrefs, resolveAskWalnutEffort } = await import('./ask-walnut-launch.js');
     walnutProfile = await buildLaneProfile(await getConfig(), 'general');
+    // The lane's medium is the FIRST-RUN default only: an effort the user picked
+    // for an earlier Ask Walnut (in its picker, or via config) carries forward,
+    // gated on the model this launch actually spawns being able to take it.
+    const remembered = await getAskWalnutLaunchPrefs();
+    walnutProfile.effort = resolveAskWalnutEffort(remembered.effort, model, walnutProfile.effort);
   }
   const project = params.project?.trim() ?? '';
   // Captured at creation: "the caller did not file this task anywhere" is the

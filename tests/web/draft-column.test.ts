@@ -21,7 +21,7 @@ const { peek } = vi.hoisted(() => ({ peek: vi.fn<() => WorkingDirsResult | null>
 vi.mock('@/api/sessions', () => ({ peekWorkingDirs: peek }));
 
 const {
-  applyDraftParse, clearAiFields, quickDirsFor, projectForFolderPick, suggestDiff,
+  applyDraftParse, clearAiFields, quickDirsFor, projectForFolderPick, suggestDiff, restoreMetaAfterWalnut,
 } = await import('@/components/sessions/draft-column');
 type DraftColumn = import('@/components/sessions/draft-column').DraftColumn;
 
@@ -386,5 +386,38 @@ describe('projectForFolderPick — a folder is a project unless somebody said ot
   it('no-ops on an empty cwd and the filesystem root', () => {
     expect(projectForFolderPick(draft(), '', registry)).toBeNull();
     expect(projectForFolderPick(draft(), '/', registry)).toBeNull();
+  });
+});
+
+describe('restoreMetaAfterWalnut — leaving Ask Walnut undoes only what the mode wrote', () => {
+  const base = { unread: false, pinTier: 'satellite' as const, priority: 'none' as const, model: 'opus' };
+
+  it('reverts the seeded Focus tier to the stash; keeps a tier picked inside walnut mode', () => {
+    const prev = { pinTier: 'satellite' as const };
+    expect(restoreMetaAfterWalnut({ ...base, pinTier: 'focus' }, prev).pinTier).toBe('satellite');
+    expect(restoreMetaAfterWalnut({ ...base, pinTier: 'backlog' }, prev).pinTier).toBe('backlog');
+  });
+
+  it('restores the stashed model when walnut left it on Auto (undefined or the explicit-Auto sentinel)', () => {
+    const prev = { model: 'opus' };
+    expect(restoreMetaAfterWalnut({ ...base, model: undefined }, prev).model).toBe('opus');
+    expect(restoreMetaAfterWalnut({ ...base, model: 'default' }, prev).model).toBe('opus');
+  });
+
+  it("restores the stashed model when the row still carries the launch memory's SEED — never leaks it into a coding draft", () => {
+    const prev = { model: 'opus', seededModel: 'sonnet' };
+    expect(restoreMetaAfterWalnut({ ...base, model: 'sonnet' }, prev).model).toBe('opus');
+    // The stash may hold Auto: the seed then reverts to Auto, not to itself.
+    expect(restoreMetaAfterWalnut({ ...base, model: 'sonnet' }, { seededModel: 'sonnet' }).model).toBeUndefined();
+  });
+
+  it('keeps a model picked by hand inside walnut mode', () => {
+    const prev = { model: 'opus', seededModel: 'sonnet' };
+    expect(restoreMetaAfterWalnut({ ...base, model: 'haiku' }, prev).model).toBe('haiku');
+  });
+
+  it('is the identity without a stash (nothing was written)', () => {
+    const meta = { ...base, pinTier: 'focus' as const, model: 'default' };
+    expect(restoreMetaAfterWalnut(meta, undefined)).toBe(meta);
   });
 });

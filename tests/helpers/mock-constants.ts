@@ -102,6 +102,7 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     DTACH_SOCKET_DIR: path.join(tmpBase, 'logs', 'term'),
     LOG_PREFIX: 'open-walnut-test-',
     FREQUENT_DIRS_FILE: path.join(tmpBase, 'frequent-directories.json'),
+    ASK_WALNUT_LAUNCH_FILE: path.join(tmpBase, 'ask-walnut-launch.json'),
     MENTION_DIRS_FILE: path.join(tmpBase, 'mention-directories.json'),
     HOST_MODEL_CATALOG_FILE: path.join(tmpBase, 'cache', 'host-model-catalogs.json'),
     PROJECTION_CACHE_DIR: path.join(tmpBase, 'cache', 'projections'),

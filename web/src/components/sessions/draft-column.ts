@@ -121,13 +121,41 @@ export interface DraftColumn {
    *  model, tier), restored when the user switches back to Start Task. Without
    *  it a tab round-trip silently converted a human project pick into an AI
    *  guess and downgraded a Focus-seeded tier to Satellite. */
-  walnutPrev?: { project?: string; projectSource?: DraftColumn['projectSource']; model?: string; pinTier?: QuickStartTaskMeta['pinTier'] };
+  walnutPrev?: {
+    project?: string;
+    projectSource?: DraftColumn['projectSource'];
+    model?: string;
+    pinTier?: QuickStartTaskMeta['pinTier'];
+    /** The model Ask Walnut's launch memory seeded onto the row (server: the
+     *  last pick made for an Ask Walnut session). Leaving walnut mode with the
+     *  model still on this value restores the stash — the Personal AI's
+     *  remembered model must not leak into a coding draft. */
+    seededModel?: string;
+  };
   /** This draft FORKS an existing session: Start calls the fork API (continuing
    *  that conversation in a new sibling session) instead of quick-start. Folder,
    *  host and project are the SOURCE session's and can't be changed — a fork
    *  resumes in place; only the message and the model are the user's to pick.
    *  Mutually exclusive with `taskId` (a bound draft) by construction. */
   forkOf?: { sessionId: string; title?: string };
+}
+
+/** Undo what entering walnut mode wrote to `meta`, keeping what the user picked
+ *  INSIDE walnut mode. Tier: the seeded 'focus' reverts to the stash (any other
+ *  tier was a hand pick). Model: the reset to Auto (`undefined`, or walnut's
+ *  explicit-Auto sentinel 'default' — never valid outside walnut mode) and the
+ *  model Ask Walnut's launch memory seeded both revert; a model picked by hand
+ *  stays. Shared by the tab switch and the seeded-rebind teardown so a coding
+ *  draft can never inherit the Personal AI's remembered model. */
+export function restoreMetaAfterWalnut(
+  meta: QuickStartTaskMeta,
+  prev: DraftColumn['walnutPrev'],
+): QuickStartTaskMeta {
+  if (!prev) return meta;
+  const next = { ...meta };
+  if (next.pinTier === 'focus') next.pinTier = prev.pinTier;
+  if (next.model === undefined || next.model === 'default' || next.model === prev.seededModel) next.model = prev.model;
+  return next;
 }
 
 /** Merge a directory's remembered launch config into `meta`.

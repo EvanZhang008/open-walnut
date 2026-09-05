@@ -470,9 +470,12 @@ export async function refreshWalnutSessionProfile(sessionId: string): Promise<vo
     const { getTask } = await import('../task-manager.js');
     const task = await getTask(record.taskId).catch(() => null);
     if (!task?.walnut_agent) return;
-    const { profile, effort } = await buildLaneProfile(await getConfig(), 'general');
+    const { profile } = await buildLaneProfile(await getConfig(), 'general');
     if (record.profile.systemPrompt === profile.systemPrompt) return;
-    await updateSessionRecord(sessionId, { profile, effort });
+    // Persona only. An Ask Walnut session's effort is the user's (its launch
+    // memory or the session picker — see ask-walnut-launch), never the lane
+    // default this builder returns, so the repair must not touch it.
+    await updateSessionRecord(sessionId, { profile });
     log.session.info('Ask Walnut: stale profile refreshed on record', { sessionId, taskId: record.taskId });
   } catch (err) {
     log.session.warn('Ask Walnut: profile refresh failed', {

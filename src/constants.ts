@@ -338,6 +338,10 @@ export const BUILTIN_SKILLS_DIR = (() => {
   return path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'skills');
 })();
 export const FREQUENT_DIRS_FILE = path.join(WALNUT_HOME, 'frequent-directories.json');
+/** The model/effort the user last picked for an "Ask Walnut" session — the
+ *  Personal-AI counterpart of a folder's `lastLaunch` (frequent-directories),
+ *  which deliberately never records WALNUT_HOME. */
+export const ASK_WALNUT_LAUNCH_FILE = path.join(WALNUT_HOME, 'ask-walnut-launch.json');
 /** Folders the user browsed in the "@" file picker — kept SEPARATE from the
  *  session-derived frequent-directories so the /session path picker isn't polluted
  *  by ad-hoc "@" browsing. "@?" searches the union of both; /session reads only the

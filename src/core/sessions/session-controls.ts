@@ -32,6 +32,7 @@ import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { engineCaps } from '../agents/engine-registry.js';
+import { rememberAskWalnutSessionPick } from './ask-walnut-launch.js';
 
 export class SessionControlError extends Error {
   constructor(
@@ -132,6 +133,10 @@ export async function applySessionEffortChange(
   // Persist first so the badge + cold-resume fallback reflect the choice even
   // if the session isn't live right now.
   await updateSessionRecord(sessionId, { effort });
+  // An Ask Walnut session's pick is also the default for the NEXT Ask Walnut
+  // (no-op for every other session; never throws). Awaited, not detached: a
+  // stray task-store open after the caller has moved on is a leak.
+  await rememberAskWalnutSessionPick(sessionId, { effort });
 
   let applied = false;
   let effectiveEffort: string | undefined;
@@ -212,6 +217,7 @@ export async function applySessionModelChange(
 
   let applied = false;
   let effectiveModel: string | undefined;
+  let rejectedByCli = false;
   const session = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined);
   if (session) {
     try {
@@ -225,6 +231,7 @@ export async function applySessionModelChange(
         // report the switch did NOT take.
         if (effectiveModel && !modelReadBackMatches(cliModel, effectiveModel)) {
           applied = false;
+          rejectedByCli = true;
           session.invalidateModelCatalog();
         }
       }
@@ -235,6 +242,11 @@ export async function applySessionModelChange(
       });
     }
   }
+  // Same memory the draft's walnut pill reads back: the RAW picker value, so
+  // the pill re-selects this exact row next time (no-op off Ask Walnut). Not
+  // for a value the CLI just refused — that must not become every future Ask
+  // Walnut's default.
+  if (!rejectedByCli) await rememberAskWalnutSessionPick(sessionId, { model: rawModel });
 
   log.session.info('session model changed', { sessionId, model: rawModel, cliModel, appliedLive: applied, effectiveModel });
   return { model: rawModel, cliModel, appliedLive: applied, effectiveModel };

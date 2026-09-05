@@ -33,7 +33,7 @@ import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import {
-  applyDraftParse, ASK_WALNUT_PROJECT, clearAiFields, draftComposerKey,
+  applyDraftParse, ASK_WALNUT_PROJECT, clearAiFields, draftComposerKey, restoreMetaAfterWalnut,
   withDirLaunchMemory, launchDivergesFromDirMemory, projectForFolderPick, suggestDiff,
   type DraftColumn,
 } from '@/components/sessions/draft-column';
@@ -45,7 +45,7 @@ import {
 import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
 import { PromoteTaskPopover, type PromoteToTaskInput } from '@/components/chat/PromoteToTaskMenu';
 import { TriagePanel } from '@/components/triage/TriagePanel';
-import { fetchSession, fetchSessionsForTask, fetchWorkingDirs, forkSessionInWalnut, quickStartSession } from '@/api/sessions';
+import { fetchAskWalnutLaunch, fetchSession, fetchSessionsForTask, fetchWorkingDirs, forkSessionInWalnut, quickStartSession } from '@/api/sessions';
 import { fetchProjectDetail } from '@/api/projects';
 import { fetchTask, recordSuggestFeedback, type QuickTaskParse } from '@/api/tasks';
 import { fetchConfig, fetchInstallDir } from '@/api/config';
@@ -1149,7 +1149,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             // draft loses its tabs AND double-creates the task on Start).
             // Normally unreachable: the toggle marks the draft userTouched, so
             // a seed opens a fresh column instead. Belt-and-braces.
-            if (next.walnut) { delete next.walnut; delete next.walnutPrev; }
+            if (next.walnut) {
+              next.meta = restoreMetaAfterWalnut(next.meta, next.walnutPrev);
+              delete next.walnut; delete next.walnutPrev;
+            }
             if (seed.project !== undefined) {
               next.project = seed.project;
               // A "+" seed outranks a previous AI guess but NOT the user's own
@@ -1394,6 +1397,27 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    * only what the seed wrote and the user hasn't since touched.
    */
   const handleDraftWalnutToggle = useCallback((draftId: string, walnut: boolean) => {
+    if (walnut) {
+      // Ask Walnut's own launch memory (the model last picked FOR an Ask Walnut
+      // session — at a draft launch or in a running session's picker): seed the
+      // pill with it so it shows what the launch will carry, the same way a
+      // folder chip carries that folder's lastLaunch. Fetched, not cached: a
+      // pick made in a running session a minute ago must show up now. Display
+      // only — the SERVER applies the memory to a launch that names no model,
+      // so a launch that beats this fetch still lands on it (and can't clear
+      // it: only the pill's Auto row, sent as 'default', does). The guards keep
+      // a late landing from overriding a model set since the switch (`undefined`
+      // = untouched; the Auto row leaves 'default'), a draft that left walnut
+      // mode, or a second seed.
+      fetchAskWalnutLaunch().then((mem) => {
+        if (!mem.model) return;
+        setDraftColumns(prev => prev.map(d => (
+          d.id === draftId && d.walnut && d.meta.model === undefined && d.walnutPrev?.seededModel === undefined
+            ? { ...d, meta: { ...d.meta, model: mem.model }, walnutPrev: { ...d.walnutPrev, seededModel: mem.model } }
+            : d
+        )));
+      }).catch(() => { /* pill stays on Auto */ });
+    }
     setDraftColumns(prev => prev.map(d => {
       if (d.id !== draftId) return d;
       if (walnut) {
@@ -1430,13 +1454,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       }
       if (!d.walnut) return d;
       const prev = d.walnutPrev;
-      const meta = { ...d.meta };
-      // Undo only what the seed wrote: 'focus' reverts to the stashed tier (a
-      // non-focus tier picked INSIDE walnut mode is an explicit choice, kept);
-      // same rule for the model reset.
-      if (prev && meta.pinTier === 'focus') meta.pinTier = prev.pinTier;
-      if (prev && meta.model === undefined) meta.model = prev.model;
-      const back: DraftColumn = { ...d, walnut: false, walnutPrev: undefined, meta };
+      // Undo only what walnut mode wrote (tier seed, model reset / memory
+      // seed); a pick made by hand inside walnut mode is kept.
+      const back: DraftColumn = { ...d, walnut: false, walnutPrev: undefined, meta: restoreMetaAfterWalnut(d.meta, prev) };
       if (d.projectSource === 'seed' && d.project === ASK_WALNUT_PROJECT) {
         back.project = prev?.project;
         back.projectSource = prev?.projectSource;
@@ -2287,7 +2307,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // model was picked under: the downgrades above (remote host, Ask
       // Walnut) silently change the engine, and catalogs don't overlap (an
       // opencode id must not ride a claude launch as --model).
-      const pickedUnder = normalizeEngine(metaSnapshot?.engine) ?? 'claude';
+      // Ask Walnut pins the pill to claude (the toggle cleared any other
+      // engine's model, and the picker locks other providers), so a model on a
+      // walnut draft was necessarily picked under claude — a stale meta.engine
+      // left by an earlier folder's launch memory must not drop it here.
+      const pickedUnder = opts?.walnutAgent ? 'claude' : (normalizeEngine(metaSnapshot?.engine) ?? 'claude');
       const model = pickedUnder === (engine ?? 'claude') ? metaSnapshot?.model : undefined;
 
       const settled = quickStartSession({
